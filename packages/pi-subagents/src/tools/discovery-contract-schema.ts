@@ -13,7 +13,6 @@ import {
   MAX_PROFILE_MODEL_SELECTOR_CHARS,
   PROFILE_CANDIDATE_CONTEXTS,
   PROFILE_CANDIDATE_EFFORTS,
-  PROFILE_CANDIDATE_HOSTS,
   PROFILE_CANDIDATE_RUNTIMES,
   PROFILE_CANDIDATE_WRITE_INTENTS,
   PROFILE_IDS,
@@ -30,14 +29,12 @@ export const MAX_DISCOVERY_TEXT_CHARS = 1_024;
 
 const CandidatesSchema = Schema.Array(
   Schema.Struct({
-    host: Schema.Literals(PROFILE_CANDIDATE_HOSTS),
     runtime: Schema.Literals(PROFILE_CANDIDATE_RUNTIMES),
     model: NonEmptyText(MAX_PROFILE_MODEL_SELECTOR_CHARS),
     effort: Schema.Literals(PROFILE_CANDIDATE_EFFORTS),
     context: Schema.Literals(PROFILE_CANDIDATE_CONTEXTS),
     writeIntent: Schema.Literals(PROFILE_CANDIDATE_WRITE_INTENTS),
     openaiFastMode: Schema.Boolean,
-    closeOnReport: Schema.Boolean,
     status: Schema.Literals(["eligible", "skipped"]),
     reason: NonEmptyText(MAX_DISCOVERY_TEXT_CHARS),
   }),

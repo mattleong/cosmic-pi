@@ -64,7 +64,7 @@ const fixture = () => {
 };
 
 describe("profile dashboard actions", () => {
-  effectTest("never applies or selects a saved set containing a retired route", function* () {
+  effectTest("never applies or selects a saved set containing an invalid route", function* () {
     const f = fixture();
     const invalid = profileSettingsInspection({
       globalDocument: {
@@ -73,8 +73,7 @@ describe("profile dashboard actions", () => {
           common: {
             profiles: {
               worker: {
-                host: "herdr",
-                runtime: "codex",
+                runtime: "herdr",
                 model: "native",
                 effort: "default",
                 context: "fresh",

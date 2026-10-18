@@ -19,7 +19,7 @@ import {
   subagentProfileServiceLayerFor,
   type SubagentProfileServiceContract,
 } from "../../../src/profiles/service.ts";
-import type { DeclaredProfileCandidate, ProfileId } from "../../../src/profiles/model.ts";
+import type { ProfileCandidate, ProfileId } from "../../../src/profiles/model.ts";
 import type { SessionProfileOverrideSeed } from "../../../src/profiles/session-overrides.ts";
 import { InvalidSubagentRequestError } from "../../../src/run/errors.ts";
 import type { StartSubagentRequest } from "../../../src/run/model.ts";
@@ -52,12 +52,7 @@ type CapturedTool = Omit<RegisteredTool, "execute"> & {
 
 interface ProfileDocumentInput {
   readonly profiles?: Partial<
-    Readonly<
-      Record<
-        ProfileId,
-        DeclaredProfileCandidate | ReadonlyArray<DeclaredProfileCandidate> | JsonValue
-      >
-    >
+    Readonly<Record<ProfileId, ProfileCandidate | ReadonlyArray<ProfileCandidate> | JsonValue>>
   >;
   readonly nesting?: SubagentNestingPolicy;
   readonly agents?: JsonValue;

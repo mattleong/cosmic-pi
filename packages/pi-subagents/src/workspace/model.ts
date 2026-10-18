@@ -25,7 +25,7 @@ export const WorkspaceHandleSchema = Schema.Struct({
   sourceCwd: Schema.String,
   sourceRoot: Schema.String,
   cwd: Schema.String,
-  /** Original writer-lease identity; absent in records saved before identity retention. */
+  /** Original writer-lease identity; absent until creation has made the worker tree ready. */
   writerCwd: Schema.optional(
     Schema.Struct({
       path: Schema.String,

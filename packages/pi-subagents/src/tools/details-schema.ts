@@ -1,5 +1,4 @@
 import * as Schema from "effect/Schema";
-import * as SchemaGetter from "effect/SchemaGetter";
 import { SUBAGENT_EFFORTS } from "../domain/routing.ts";
 import {
   CUSTOM_AGENT_SCOPES,
@@ -12,7 +11,6 @@ import {
   MAX_PROFILE_MODEL_SELECTOR_CHARS,
   PROFILE_CANDIDATE_CONTEXTS,
   PROFILE_CANDIDATE_EFFORTS,
-  PROFILE_CANDIDATE_HOSTS,
   PROFILE_CANDIDATE_RUNTIMES,
   PROFILE_CANDIDATE_WRITE_INTENTS,
   PROFILE_IDS,
@@ -28,7 +26,6 @@ import {
   PI_SUBAGENT_CAPABILITIES,
   SUBAGENT_RUN_STATES,
   STEERING_DELIVERY_STATES,
-  type SubagentCapability,
 } from "../run/model.ts";
 import { MAX_ERROR_CHARS, MAX_FINAL_TEXT_CHARS, MAX_NAME_CHARS } from "../run/state.ts";
 import { WriterWorkspaceModeSchema } from "../config/schema.ts";
@@ -63,29 +60,10 @@ const nonNegativeInteger = nonNegativeNumber.check(Schema.isInt());
 const boundedArray = <S extends Schema.Constraint>(schema: S, maximum: number) =>
   Schema.Array(schema).check(Schema.isMaxLength(maximum));
 
-// Version-2 cards saved in session history before renaming became root-owned list the retired
-// "rename-display" capability. Decoding drops it so those cards keep rendering; the shim lasts as
-// long as version-2 cards are accepted.
-const RETIRED_CARD_CAPABILITY = "rename-display";
-const HISTORICAL_CARD_CAPABILITIES = [
-  ...PI_SUBAGENT_CAPABILITIES,
-  RETIRED_CARD_CAPABILITY,
-] as const;
-export const MAX_CARD_CAPABILITIES = HISTORICAL_CARD_CAPABILITIES.length;
-const isCurrentCapability = (
-  capability: (typeof HISTORICAL_CARD_CAPABILITIES)[number],
-): capability is SubagentCapability => capability !== RETIRED_CARD_CAPABILITY;
+export const MAX_CARD_CAPABILITIES = PI_SUBAGENT_CAPABILITIES.length;
 const CardCapabilitiesSchema = boundedArray(
-  Schema.Literals(HISTORICAL_CARD_CAPABILITIES),
+  Schema.Literals(PI_SUBAGENT_CAPABILITIES),
   MAX_CARD_CAPABILITIES,
-).pipe(
-  Schema.decodeTo(
-    boundedArray(Schema.Literals(PI_SUBAGENT_CAPABILITIES), PI_SUBAGENT_CAPABILITIES.length),
-    {
-      decode: SchemaGetter.transform((capabilities) => capabilities.filter(isCurrentCapability)),
-      encode: SchemaGetter.transform((capabilities) => capabilities),
-    },
-  ),
 );
 
 const MAX_WORKSPACE_WARNINGS = 6;
@@ -105,25 +83,11 @@ export const WORKSPACE_VERIFICATION_STATUSES = [
   "failed",
 ] as const;
 export const MAX_WORKSPACE_VERIFICATION_TEXT_CHARS = 512;
-// `pi-subagent/` and a slug of at most 64 characters or a workspace ID.
-const MAX_EXPORT_BRANCH_CHARS = 128;
 
 export const WorkspaceToolDetailsSchema = Schema.Struct({
   version: Schema.Literal(1),
   action: Schema.Literal("workspace"),
-  // `integrate` and `export` are no longer produced; version-1 workspace details saved in session
-  // history before apply took over integrating a prepared pair, or before export was retired,
-  // still carry them and keep rendering.
-  operation: Schema.Literals([
-    "list",
-    "review",
-    "prepare",
-    "integrate",
-    "apply",
-    "export",
-    "discard",
-    "revise",
-  ]),
+  operation: Schema.Literals(["list", "review", "prepare", "apply", "discard", "revise"]),
   workspaceId: Schema.optionalKey(NonEmptyText(MAX_PROTOCOL_ID_CHARS)),
   revisionId: Schema.optionalKey(NonEmptyText(MAX_PROTOCOL_ID_CHARS)),
   preparationId: Schema.optionalKey(NonEmptyText(MAX_PROTOCOL_ID_CHARS)),
@@ -150,11 +114,6 @@ export const WorkspaceToolDetailsSchema = Schema.Struct({
   /** A rebasing revise rebuilt the successor's tree; `conflictCount` files kept conflicts. */
   rebased: Schema.optionalKey(Schema.Boolean),
   conflictCount: Schema.optionalKey(nonNegativeInteger),
-  // Decode-only: retired `export` receipts in session history carry these and keep rendering.
-  exportFormat: Schema.optionalKey(Schema.Literals(["patch", "branch"])),
-  /** The exported patch file, or the exported branch's name. */
-  exportPath: Schema.optionalKey(NonEmptyText(1_024)),
-  exportBranch: Schema.optionalKey(NonEmptyText(MAX_EXPORT_BRANCH_CHARS)),
   warnings: Schema.optionalKey(boundedArray(WorkspaceWarningSchema, MAX_WORKSPACE_WARNINGS)),
   displayContent: Schema.optionalKey(
     Schema.Struct({
@@ -165,19 +124,6 @@ export const WorkspaceToolDetailsSchema = Schema.Struct({
 });
 export type WorkspaceToolDetails = typeof WorkspaceToolDetailsSchema.Type;
 
-// Version-2 cards saved before pool-wide admission pauses were retired mark a run that waited on
-// one, which the retired "admission-paused" attention kind described. Decoding accepts the marker
-// so those cards keep rendering; nothing reads or emits it, and it lasts as long as version-2
-// cards are accepted.
-const RetiredCardAttentionFields = {
-  writeAdmissionPaused: Schema.optionalKey(Schema.Literal(true)),
-};
-
-// Retired route fields that cards persisted by earlier versions still carry; never emitted.
-const RetiredCardRouteFields = {
-  host: Schema.optionalKey(Schema.Literals(PROFILE_CANDIDATE_HOSTS)),
-  closeOnReport: Schema.optionalKey(Schema.Boolean),
-};
 const RuntimeSchema = Schema.Literals(PROFILE_CANDIDATE_RUNTIMES);
 const EffortSchema = Schema.Literals(SUBAGENT_EFFORTS);
 const CandidateEffortSchema = Schema.Literals(PROFILE_CANDIDATE_EFFORTS);
@@ -216,49 +162,18 @@ export const ModelOverrideCardSchema = Schema.Struct({
 });
 export type ModelOverrideCard = typeof ModelOverrideCardSchema.Type;
 
-const skippedCandidateSchema = <Candidate extends Schema.Constraint>(candidate: Candidate) =>
-  Schema.Struct({
-    candidate,
-    code: NonEmptyText(MAX_FAILURE_CODE_CHARS),
-    reason: NonEmptyText(MAX_CARD_PROVENANCE_CHARS),
-  });
-
-const selectionSchema = <Candidate extends Schema.Constraint>(candidate: Candidate) =>
-  Schema.Struct({
-    source: Schema.Literals(["profile-candidate", "profile-parent-candidate"] as const),
-    candidateIndex: Schema.optionalKey(nonNegativeInteger),
-    reason: NonEmptyText(MAX_CARD_PROVENANCE_CHARS),
-    skippedCandidates: boundedArray(skippedCandidateSchema(candidate), MAX_CARD_SKIPS),
-    warning: Schema.optionalKey(NonEmptyText(MAX_CARD_PROVENANCE_CHARS)),
-  });
-
-/** A live selection, as a fleet snapshot carries it between processes of one version. */
-export const LiveSelectionSchema = selectionSchema(SkippedCandidateRouteSchema);
-// Cards persisted by earlier versions name a skipped candidate with a label string.
-const SelectionSchema = selectionSchema(
-  Schema.Union([SkippedCandidateRouteSchema, NonEmptyText(MAX_CARD_PROVENANCE_CHARS)]),
-);
-
-// Cards persisted before contract version 3 may carry write-claim fields. They still decode so
-// history replays, but nothing produces or renders them.
-export const MAX_LEGACY_WRITE_CLAIMS = 64;
-const MAX_LEGACY_WRITE_CLAIM_CHARS = 512;
-export const MAX_LEGACY_OBSERVED_WRITE_PATHS = 64;
-export const MAX_LEGACY_WRITE_CLAIM_VIOLATIONS = 16;
-
-const LegacyWriteClaimViolationSchema = Schema.Struct({
-  path: NonEmptyText(MAX_LEGACY_WRITE_CLAIM_CHARS),
-  toolName: NonEmptyText(200),
-  observedAt: nonNegativeNumber,
+const SkippedCandidateSchema = Schema.Struct({
+  candidate: SkippedCandidateRouteSchema,
+  code: NonEmptyText(MAX_FAILURE_CODE_CHARS),
+  reason: NonEmptyText(MAX_CARD_PROVENANCE_CHARS),
 });
 
-const LegacyWriteAuditSchema = Schema.Struct({
-  observedFileWrites: boundedArray(
-    NonEmptyText(MAX_LEGACY_WRITE_CLAIM_CHARS),
-    MAX_LEGACY_OBSERVED_WRITE_PATHS,
-  ),
-  violations: boundedArray(LegacyWriteClaimViolationSchema, MAX_LEGACY_WRITE_CLAIM_VIOLATIONS),
-  bashWriteHints: nonNegativeInteger,
+const SelectionSchema = Schema.Struct({
+  source: Schema.Literals(["profile-candidate", "profile-parent-candidate"] as const),
+  candidateIndex: Schema.optionalKey(nonNegativeInteger),
+  reason: NonEmptyText(MAX_CARD_PROVENANCE_CHARS),
+  skippedCandidates: boundedArray(SkippedCandidateSchema, MAX_CARD_SKIPS),
+  warning: Schema.optionalKey(NonEmptyText(MAX_CARD_PROVENANCE_CHARS)),
 });
 
 export const MAX_CLEANUP_DIAGNOSTIC_MESSAGE_CHARS = 1_024;
@@ -325,7 +240,6 @@ export const SubagentRunCardSchema = Schema.Struct({
   steeringDelivery: Schema.optionalKey(Schema.Literals(STEERING_DELIVERY_STATES)),
   profile: Schema.optionalKey(ProfileIdSchema),
   agent: Schema.optionalKey(AgentNameSchema),
-  ...RetiredCardRouteFields,
   runtime: RuntimeSchema,
   reportGeneration: nonNegativeInteger,
   reportStatus: Schema.optionalKey(
@@ -360,16 +274,6 @@ export const SubagentRunCardSchema = Schema.Struct({
   openaiFastMode: Schema.Boolean,
   context: ContextSchema,
   writeIntent: WriteIntentSchema,
-  writeClaims: Schema.optionalKey(
-    boundedArray(NonEmptyText(MAX_LEGACY_WRITE_CLAIM_CHARS), MAX_LEGACY_WRITE_CLAIMS).check(
-      Schema.isMinLength(1),
-    ),
-  ),
-  writeClaimCount: Schema.optionalKey(nonNegativeInteger),
-  writeClaimsOmitted: Schema.optionalKey(Schema.Literal(true)),
-  writeAudit: Schema.optionalKey(LegacyWriteAuditSchema),
-  writeViolationOffender: Schema.optionalKey(Schema.Literal(true)),
-  ...RetiredCardAttentionFields,
   cleanup: Schema.optionalKey(RunCleanupSchema),
   writerCleanupQuarantined: Schema.optionalKey(Schema.Boolean),
   capabilities: CardCapabilitiesSchema,
@@ -400,7 +304,6 @@ const StartEntryIdentityFields = {
 const SelectedStartEntryFields = {
   ...WorkspaceCardFields,
   routeStatus: Schema.Literal("selected"),
-  host: RetiredCardRouteFields.host,
   runtime: RuntimeSchema,
   model: NonEmptyText(MAX_CARD_MODEL_CHARS),
   effort: EffortSchema,
@@ -459,7 +362,6 @@ const hasValidProfileCandidatePolicy = Schema.makeFilter((candidate: ProfileCand
     : "Profile candidate violates cross-field policy.",
 );
 const ProfileCandidateCardSchema = Schema.Struct({
-  ...RetiredCardRouteFields,
   runtime: RuntimeSchema,
   model: NonEmptyText(MAX_PROFILE_MODEL_SELECTOR_CHARS),
   effort: CandidateEffortSchema,
@@ -542,26 +444,6 @@ export const RUN_DETAILS_ACTIONS = [
 ] as const;
 export type RunDetailsAction = (typeof RUN_DETAILS_ACTIONS)[number];
 
-// Version-2 cards saved in session history by the retired subagent_rename and subagent_claims
-// tools carry these actions; they decode as status cards so those cards keep rendering. Retired
-// subagent_list cards already use "list". The shim lasts as long as version-2 cards are accepted.
-const RETIRED_RUN_DETAILS_ACTIONS = ["rename", "claims"] as const;
-export const HISTORICAL_RUN_DETAILS_ACTIONS = [
-  ...RUN_DETAILS_ACTIONS,
-  ...RETIRED_RUN_DETAILS_ACTIONS,
-] as const;
-const isCurrentRunDetailsAction = (
-  action: (typeof HISTORICAL_RUN_DETAILS_ACTIONS)[number],
-): action is RunDetailsAction => action !== "rename" && action !== "claims";
-const RunDetailsActionSchema = Schema.Literals(HISTORICAL_RUN_DETAILS_ACTIONS).pipe(
-  Schema.decodeTo(Schema.Literals(RUN_DETAILS_ACTIONS), {
-    decode: SchemaGetter.transform((action) =>
-      isCurrentRunDetailsAction(action) ? action : "status",
-    ),
-    encode: SchemaGetter.transform((action) => action),
-  }),
-);
-
 export const RunActionDetailsSchema = Schema.Struct({
   version: Schema.Literal(SUBAGENT_CARD_DETAILS_VERSION),
   cards: boundedArray(SubagentRunCardSchema, MAX_TARGET_RUNS),
@@ -573,7 +455,7 @@ export const RunActionDetailsSchema = Schema.Struct({
   answeredRunIds: Schema.optionalKey(
     boundedArray(NonEmptyText(MAX_PROTOCOL_ID_CHARS), MAX_TARGET_RUNS),
   ),
-  action: RunDetailsActionSchema,
+  action: Schema.Literals(RUN_DETAILS_ACTIONS),
 });
 
 export const SubagentModelsDetailsSchema = Schema.Struct({

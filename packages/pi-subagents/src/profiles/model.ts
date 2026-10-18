@@ -37,7 +37,6 @@ export const isProfileId = (value: string): value is ProfileId =>
 
 export const MAX_PROFILE_CANDIDATES = 32;
 export const MAX_PROFILE_MODEL_SELECTOR_CHARS = 256;
-export const PROFILE_CANDIDATE_HOSTS = ["local"] as const;
 export const PROFILE_CANDIDATE_RUNTIMES = ["pi", "claude", "codex"] as const;
 export const PROFILE_CANDIDATE_CONTEXTS = ["fresh", "fork"] as const;
 export const PROFILE_CANDIDATE_WRITE_INTENTS = ["read-only", "writer"] as const;
@@ -85,18 +84,7 @@ export interface ProfileRoute {
   readonly candidates: ReadonlyArray<ProfileCandidate>;
 }
 
-/**
- * A saved version-6 candidate. The document contract still requires the retired `host: "local"`
- * and accepts `closeOnReport: true`; neither reaches the routing model.
- */
-export interface DeclaredProfileCandidate extends ProfileCandidate {
-  readonly host: (typeof PROFILE_CANDIDATE_HOSTS)[number];
-  readonly closeOnReport?: true | undefined;
-}
-export type DeclaredProfileRoute =
-  | DeclaredProfileCandidate
-  | ReadonlyArray<DeclaredProfileCandidate>
-  | "disabled";
+export type DeclaredProfileRoute = ProfileCandidate | ReadonlyArray<ProfileCandidate> | "disabled";
 
 export const normalizeProfileCandidate = ({
   runtime,
@@ -114,15 +102,6 @@ export const normalizeProfileCandidate = ({
   ...(openaiFastMode !== undefined && { openaiFastMode }),
 });
 
-/** The declaration settings writes for a candidate, spelled out as version-6 documents always were. */
-export const declaredProfileCandidate = (
-  candidate: ProfileCandidate,
-): DeclaredProfileCandidate => ({
-  host: "local",
-  ...normalizeProfileCandidate(candidate),
-  closeOnReport: true,
-});
-
 export const cloneProfileCandidates = (
   candidates: ReadonlyArray<ProfileCandidate>,
 ): ReadonlyArray<ProfileCandidate> => candidates.map(normalizeProfileCandidate);
@@ -133,7 +112,7 @@ export const cloneProfileRoute = (route: ProfileRoute): ProfileRoute => ({
 
 export const isDeclaredCandidateList = (
   route: Exclude<DeclaredProfileRoute, "disabled">,
-): route is ReadonlyArray<DeclaredProfileCandidate> => Array.isArray(route);
+): route is ReadonlyArray<ProfileCandidate> => Array.isArray(route);
 
 export const normalizeDeclaredProfileRoute = (route: DeclaredProfileRoute): ProfileRoute => {
   if (route === "disabled") return { candidates: [] };

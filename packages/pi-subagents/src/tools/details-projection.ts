@@ -329,18 +329,13 @@ const condensed = (text: string): string => safeTextPrefix(text, CONDENSED_TEXT_
 
 /**
  * The report-free fallback when bounded cards still do not fit: drops live activity, skipped
- * route candidates, diffstat path lists, and legacy write-claim fields, and shortens issue text.
+ * route candidates, and diffstat path lists, and shortens issue text.
  * IDs, counts, admission evidence, cleanup, and workspace recovery fields stay complete.
  */
 export const condenseRunCard = (card: SubagentRunCard): SubagentRunCard => {
   const {
     currentTool: _currentTool,
     progress: _progress,
-    writeClaims: _writeClaims,
-    writeClaimCount: _writeClaimCount,
-    writeClaimsOmitted: _writeClaimsOmitted,
-    writeAudit: _writeAudit,
-    writeViolationOffender: _writeViolationOffender,
     selection,
     warning,
     systemWarning,

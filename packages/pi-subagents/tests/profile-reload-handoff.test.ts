@@ -28,15 +28,15 @@ describe("profile reload handoff", () => {
   it("preserves incompatible same-session handoffs across module replacements", () => {
     for (const location of ["override", "baseline"] as const) {
       const baseline = completeBaseline("global");
-      const remote = { ...candidate("openai/remote"), host: "herdr" };
+      const invalid = { ...candidate("openai/invalid"), host: "local" };
       const seed =
         location === "override"
-          ? { ...completeSeed(7), overrides: { worker: { candidates: [remote] } } }
+          ? { ...completeSeed(7), overrides: { worker: { candidates: [invalid] } } }
           : {
               ...completeSeed(7),
               baseline: {
                 ...baseline,
-                profiles: { ...baseline.profiles, worker: { candidates: [remote] } },
+                profiles: { ...baseline.profiles, worker: { candidates: [invalid] } },
               },
             };
       const envelope = { version: 2, sessionKey: "session-one", seed };
@@ -74,57 +74,6 @@ describe("profile reload handoff", () => {
     expect(handoff.capture("session-two")).toBeUndefined();
     expect(handoff.capture("session-one")).toEqual(seed);
     expect(handoff.capture("session-one")).not.toBe(seed);
-  });
-
-  it.each([true])(
-    "restores the previous runtime's profile settings while retiring ultracode=%s",
-    (ultracode) => {
-      const seed = {
-        revision: 7,
-        overrides: { worker: { candidates: [candidate("openai/override")] } },
-        nesting: { maxDirectChildren: 3, maxDepth: 1 },
-        baseline: completeBaseline("project", "openai/baseline"),
-      };
-      writeSlot({
-        value: {
-          version: 2,
-          sessionKey: "session-one",
-          seed: { ...seed, features: { ultracode } },
-        },
-      });
-
-      const restored = handoff.capture("session-one");
-      expect(restored).toEqual(seed);
-      expect(handoff.capture("session-one")).toEqual(seed);
-      expect(restored).not.toHaveProperty("features");
-      handoff.publish("session-one", restored!);
-      expect(slotDescriptor()?.value).toEqual({ version: 2, sessionKey: "session-one", seed });
-    },
-  );
-
-  it("restores candidates that earlier module instances wrote with retired route fields", () => {
-    const legacy = { ...candidate("openai/override"), host: "local", closeOnReport: true };
-    const baseline = completeBaseline("global");
-    writeSlot({
-      value: {
-        version: 2,
-        sessionKey: "session-one",
-        seed: {
-          revision: 3,
-          overrides: { worker: { candidates: [legacy] } },
-          baseline: {
-            ...baseline,
-            profiles: { ...baseline.profiles, scout: { candidates: [legacy] } },
-          },
-        },
-      },
-    });
-
-    const restored = handoff.capture("session-one");
-    expect(restored?.overrides.worker).toEqual({ candidates: [candidate("openai/override")] });
-    expect(restored?.baseline?.profiles.scout).toEqual({
-      candidates: [candidate("openai/override")],
-    });
   });
 
   it("clears conditionally without deleting a different session handoff", () => {

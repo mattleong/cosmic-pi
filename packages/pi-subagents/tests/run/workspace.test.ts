@@ -128,17 +128,17 @@ describe("writer workspace orchestration", () => {
     });
   });
 
-  it.effect("refuses legacy orphan discard without original directory identity", () => {
+  it.effect("refuses orphan discard without original directory identity", () => {
     const f = fixture();
     f.hooks.orphanOwnerEnded = true;
-    const original = record("legacy", "old-session/root", "/repo", "active");
+    const original = record("unready", "old-session/root", "/repo", "active");
     const { writerCwd: _identity, ...handle } = original.handle;
-    f.entries.set("legacy", { ...original, handle });
+    f.entries.set("unready", { ...original, handle });
     return withService(f.layer, function* (service) {
-      expect(yield* service.workspaceDiscard("legacy").pipe(Effect.flip)).toMatchObject({
+      expect(yield* service.workspaceDiscard("unready").pipe(Effect.flip)).toMatchObject({
         code: "workspace_process_unsettled",
       });
-      expect(f.entries.get("legacy")?.status).toBe("active");
+      expect(f.entries.get("unready")?.status).toBe("active");
       expect(f.acquired).toEqual([]);
     });
   });

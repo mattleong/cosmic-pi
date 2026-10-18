@@ -2,8 +2,8 @@ import type { JsonObject } from "pi-cosmic-core";
 import * as Predicate from "effect/Predicate";
 import {
   isDeclaredCandidateList,
-  type DeclaredProfileCandidate,
   type DeclaredProfileRoute,
+  type ProfileCandidate,
 } from "../profiles/model.ts";
 import { decodeDeclaredProfileRoute } from "./schema.ts";
 
@@ -25,15 +25,13 @@ export const captureProfilePatchRoute = (
   return route && { route };
 };
 
-export const candidateJson = (value: DeclaredProfileCandidate): JsonObject => ({
-  host: value.host,
+export const candidateJson = (value: ProfileCandidate): JsonObject => ({
   runtime: value.runtime,
   model: value.model,
   effort: value.effort,
   context: value.context,
   writeIntent: value.writeIntent,
   ...(value.openaiFastMode === true && { openaiFastMode: true }),
-  ...(value.closeOnReport !== undefined && { closeOnReport: value.closeOnReport }),
 });
 
 export const routeJson = (route: DeclaredProfileRoute): JsonObject[string] => {

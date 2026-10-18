@@ -19,25 +19,20 @@ Only configuration version 6 is accepted. Any other version fails activation and
 
 A route is exactly `"disabled"`, one candidate, or an ordered array of 1–32 candidates. Candidate fields:
 
-- `host`: required, `local` only.
 - `runtime`: `pi`, `claude`, or `codex`.
 - `model`: a native selector. Pi uses `parent` or canonical `provider/model`, including registry `@` context variants such as `cursor/gpt-5.5@1m`.
 - `effort`: `default`, `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`.
 - `context`: `fresh` or `fork`.
 - `writeIntent`: `read-only` or `writer`.
 - `openaiFastMode`: optional, default false. When true, eligible Pi or Codex candidates request OpenAI's `priority` service tier.
-- `closeOnReport`: optional, omitted or `true` only.
 
-Decoding validates `host` and `closeOnReport` and drops them from the routing model; settings writes still spell both out. Native selectors share one fail-closed 256-character grammar across configuration, settings, and all adapter preflights: a leading alphanumeric followed by alphanumerics or `._:/@-`, plus Claude's exact long-context suffix such as `[1m]`.
+Native selectors share one fail-closed 256-character grammar across configuration, settings, and all adapter preflights: a leading alphanumeric followed by alphanumerics or `._:/@-`, plus Claude's exact long-context suffix such as `[1m]`.
 
 Cross-field decoding rejects:
 
 - fork or `parent` model selection outside local Pi;
-- `host: "herdr"` anywhere in a route, and `closeOnReport: false`;
 - fast mode for Claude, for an explicit Pi selector outside the `openai` and `openai-codex` providers, or for malformed Codex syntax. Pi `parent` is checked against the active model, and Codex `priority` support against the authenticated catalog, at launch;
 - unknown candidate keys, runtime-incompatible effort, and malformed selectors.
-
-Repair of retired remote or stay-open routes is described in [Explicit configuration repair](settings-workspace.md#explicit-configuration-repair).
 
 ### Profiles
 
@@ -115,7 +110,7 @@ A custom agent is a named role the user declares in a configuration document's r
 ### Provenance and start details
 
 - Selection provenance records the route source (`override` for a [model override](#per-launch-model-override)); the actual runtime and `openaiFastMode` stay in the request and run view.
-- Run cards keep the direct runtime, model, and effort, and record each skipped candidate's runtime, model, and effort as structured fields. Older cards with `host`, `closeOnReport`, or label strings still decode; retired fields are ignored and labels display verbatim.
+- Run cards keep the direct runtime, model, and effort, and record each skipped candidate's runtime, model, and effort as structured fields.
 - Start details contain one request-ordered entry per input: the requested profile with the actual route for success, the attempted route after post-selection failure, or an explicit resolving or no-eligible-route state. They contain no cards.
 - When a start admitted a run and then failed, compensation crosses the full process, backend, harness, supervisor, and writer cleanup barrier before returning. Its `admittedRun` projection reports the run ID, cleanup disposition, retry disposition, and remaining candidate count, taken from settled facts rather than error text.
 - Each start batch captures one immutable profile snapshot, so concurrent edits can't split a batch across revisions.
@@ -179,4 +174,4 @@ Start is always background and nonblocking. `subagent_await` supports `all_finis
 
 ### Model discovery
 
-`subagent_models` projects every resolved candidate as a structured card with `runtime`, `model`, `effort`, `context`, `writeIntent`, `openaiFastMode`, `status`, and `reason`. It also lists each custom agent with its routed profile, overrides, tool lists, and that profile's candidates after the agent's overrides, plus the agents that fail closed. A `profile` filter keeps only agents routed to that profile. Its version-2 orchestration contract also reports `host: "local"` and `closeOnReport: true`. Discovery is static: executable, auth, catalog, service-tier, and harness readiness are checked at launch.
+`subagent_models` projects every resolved candidate as a structured card with `runtime`, `model`, `effort`, `context`, `writeIntent`, `openaiFastMode`, `status`, and `reason`. It also lists each custom agent with its routed profile, overrides, tool lists, and that profile's candidates after the agent's overrides, plus the agents that fail closed. A `profile` filter keeps only agents routed to that profile. Discovery is static: executable, auth, catalog, service-tier, and harness readiness are checked at launch.

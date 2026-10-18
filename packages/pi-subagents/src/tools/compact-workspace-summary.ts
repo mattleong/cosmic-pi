@@ -70,14 +70,8 @@ export function workspaceReceiptLine(details: WorkspaceToolDetails): string | un
       return reviewPosition(details);
     case "prepare":
       return "ready to test";
-    // Saved by versions before apply took over integrating a prepared pair.
-    case "integrate":
-      return "integrated";
     case "apply":
       return applyCounters(details)[0];
-    // Saved by versions before export was retired.
-    case "export":
-      return details.exportFormat === "branch" ? "exported to a branch" : "exported as a patch";
     case "revise":
       return reviseLine(details);
     case "discard":
@@ -139,16 +133,10 @@ type WorkspaceOperationReceipt = WorkspaceToolDetails &
         readonly revisionId: string;
       }
     | {
-        readonly operation: "prepare" | "integrate";
+        readonly operation: "prepare";
         readonly workspaceId: string;
         readonly revisionId: string;
         readonly preparationId: string;
-      }
-    | {
-        readonly operation: "export";
-        readonly workspaceId: string;
-        readonly revisionId: string;
-        readonly exportFormat: NonNullable<WorkspaceToolDetails["exportFormat"]>;
       }
     | {
         readonly operation: "apply";
@@ -168,12 +156,8 @@ type WorkspaceReviewReceipt = Extract<WorkspaceOperationReceipt, { readonly oper
 function hasOperationReceipt(details: WorkspaceToolDetails): details is WorkspaceOperationReceipt {
   if (details.operation === "list") return true;
   if (!details.workspaceId) return false;
-  if (
-    ["review", "prepare", "integrate", "apply", "export"].includes(details.operation) &&
-    !details.revisionId
-  )
+  if (["review", "prepare", "apply"].includes(details.operation) && !details.revisionId)
     return false;
-  if (details.operation === "export" && details.exportFormat === undefined) return false;
   if (
     details.operation === "apply" &&
     (details.changedPathCount === undefined ||
@@ -181,10 +165,7 @@ function hasOperationReceipt(details: WorkspaceToolDetails): details is Workspac
       details.verification === undefined)
   )
     return false;
-  return (
-    !["prepare", "integrate", "apply"].includes(details.operation) ||
-    details.preparationId !== undefined
-  );
+  return !["prepare", "apply"].includes(details.operation) || details.preparationId !== undefined;
 }
 
 const asWarnings = (details: WorkspaceToolDetails): CompactIssue[] =>
@@ -396,9 +377,6 @@ function operationIssues(details: WorkspaceOperationReceipt): CompactIssue[] {
       ];
     case "revise":
       return reviseIssues(details);
-    case "export":
-    case "integrate":
-      return asWarnings(details);
     case "apply":
       return applyIssues(details);
     case "discard":

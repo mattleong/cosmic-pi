@@ -10,7 +10,7 @@ import {
   type SubagentProfileStartSpec,
 } from "../../src/boundary/host-profile-resolution.ts";
 import { SubagentBackendRegistry } from "../../src/backend/service.ts";
-import { type DeclaredProfileCandidate } from "../../src/profiles/model.ts";
+import { type ProfileCandidate } from "../../src/profiles/model.ts";
 import { SubagentProfileService } from "../../src/profiles/service.ts";
 import { SubagentProcessError } from "../../src/run/errors.ts";
 import type { StartSubagentRequest } from "../../src/run/model.ts";
@@ -37,8 +37,7 @@ import {
 } from "./fixtures/tool-harness.ts";
 import { extensionApiFixture } from "pi-cosmic-core/testing";
 
-const route = (overrides: Partial<DeclaredProfileCandidate> = {}): DeclaredProfileCandidate => ({
-  host: "local",
+const route = (overrides: Partial<ProfileCandidate> = {}): ProfileCandidate => ({
   runtime: "pi",
   model: "parent",
   effort: "default",
@@ -134,12 +133,12 @@ describe("subagent tool", () => {
     ]);
   });
 
-  effectTest("rejects remote configuration before readiness or service start", function* () {
+  effectTest("rejects an invalid route before readiness or service start", function* () {
     const requests: StartSubagentRequest[] = [];
     const profiles = profileServiceFor({
       profiles: {
         reviewer: {
-          host: "herdr",
+          host: "local",
           runtime: "codex",
           model: "gpt-5.4",
           effort: "high",

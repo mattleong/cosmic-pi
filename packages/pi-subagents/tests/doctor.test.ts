@@ -9,10 +9,8 @@ import { InvalidSubagentRequestError } from "../src/run/errors.ts";
 import { resolveTestConfig } from "./fixtures/profile-settings-inspection.ts";
 import { profileLayerFor } from "./run/fixtures/service-harness.ts";
 import { temporaryDirectory } from "./workspace/fixtures/repository.ts";
-import { nodeFsPromises as fs, nodePath as path } from "../src/boundary/node-builtins.ts";
 
 const claude = (model: string) => ({
-  host: "local",
   runtime: "claude",
   model,
   effort: "high",
@@ -80,31 +78,7 @@ describe("subagents doctor", () => {
       expect(byLabel.get("Git")?.status).toBe("ok");
       expect(byLabel.get("Activity view")?.status).toBe("warning");
       expect(byLabel.get("Worktree verification")?.detail).toContain("none");
-      expect(byLabel.has("Legacy workspaces")).toBe(false);
     }).pipe(Effect.scoped),
-  );
-
-  it.effect(
-    "warns while an earlier version's workspace registry exists, naming recovery commands",
-    () =>
-      Effect.gen(function* () {
-        const agentDirectory = yield* temporaryDirectory("doctor-");
-        const legacy = path.join(agentDirectory, "git-workspaces");
-        yield* Effect.promise(() =>
-          fs.mkdir(path.join(legacy, "ws-a", "worker"), { recursive: true }),
-        );
-        const checks = yield* runSubagentDoctor({
-          pi: extensionApiFixture(),
-          ctx: extensionContextFixture(),
-          agentDirectory,
-          activityViewAvailable: true,
-          projectTrusted: true,
-        }).pipe(Effect.provide(Layer.merge(profileLayerFor(config), registry([]))));
-        const warning = checks.find((item) => item.label === "Legacy workspaces");
-        expect(warning?.status).toBe("warning");
-        expect(warning?.detail).toContain(`git -C '${path.join(legacy, "ws-a", "worker")}' diff`);
-        expect(warning?.detail).toContain(`rm -rf '${legacy}'`);
-      }).pipe(Effect.scoped),
   );
 
   it.effect("reports a trusted project's worktree verification command", () =>

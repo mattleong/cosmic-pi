@@ -68,4 +68,4 @@ Detailed integration constraints live with their owners:
 | [Directory Models](../../packages/pi-directory-models/ARCHITECTURE.md) | Directory preferences and host model selection                                                                              |
 | [Herdr BTW](../../packages/pi-herdr-btw/ARCHITECTURE.md)               | Parent-session identity, child-session links, and fixed Herdr CLI interaction                                               |
 
-Change these boundaries when it removes coupling or clarifies authority. Preserve supported public behavior, saved data, cancellation, and security guarantees, and update the owning document alongside the change.
+Change these boundaries when it removes coupling or clarifies authority. Preserve cancellation and security guarantees, and update the owning document alongside the change.

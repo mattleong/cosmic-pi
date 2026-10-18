@@ -1,4 +1,3 @@
-import * as Predicate from "effect/Predicate";
 import { type CompactIssue } from "pi-code-previews";
 import { skippedCandidateLabel } from "../profiles/model.ts";
 import { runAttention, runCleanupAttention } from "../run/attention.ts";
@@ -48,17 +47,11 @@ interface RunIssueOptions {
   readonly requestedPause?: boolean | undefined;
 }
 
-type CardSkippedCandidate = SubagentRunCard["selection"]["skippedCandidates"][number]["candidate"];
-
-/** Names a skipped option; cards persisted by earlier versions carry a label string instead. */
-export const skippedOptionLabel = (candidate: CardSkippedCandidate): string =>
-  Predicate.isString(candidate) ? candidate : skippedCandidateLabel(candidate);
-
 const skippedOptionsDetail = (card: SubagentRunCard): string =>
   card.selection.skippedCandidates
     .map(
       (entry) =>
-        `${skippedOptionLabel(entry.candidate)}: ${failureMessage(entry.reason, "skipped", QUOTED_TEXT_LIMIT)}`,
+        `${skippedCandidateLabel(entry.candidate)}: ${failureMessage(entry.reason, "skipped", QUOTED_TEXT_LIMIT)}`,
     )
     .join("\n");
 

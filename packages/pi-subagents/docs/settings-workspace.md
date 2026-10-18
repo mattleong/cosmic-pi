@@ -9,7 +9,7 @@ Part of the [pi-subagents](../README.md) architecture documentation. Routing pol
 - At session start it is a complete seven-profile snapshot resolved from the trusted Project default, Global default, and built-ins. Edits change later launches and `subagent_models` immediately; active runs keep the route captured at launch.
 - Applying a saved set resolves all seven profiles, rejects any invalid route, previews the replacement, and commits it with one expected session revision, clearing earlier per-profile changes. It never changes a Project or Global document.
 - Current Session writes no project, global, or Pi session-history data. It survives `/tree` and `/reload` through the bounded application handoff and clears on `/new`, `/resume`, `/fork`, quit, or restart.
-- If `/reload` finds retired candidates in the handoff, subagents stay inactive rather than inheriting a different route. Start a fresh session after repairing settings.
+- If `/reload` can't decode the session's handoff, subagents stay inactive rather than inheriting a different route. Start a fresh session to recover.
 
 ## Profile editor
 
@@ -60,14 +60,6 @@ The Saved profiles tab groups sets by Project and Global. Untrusted Project rows
 - Invalid sets stay visible and can't be used or made default. Project-set status includes routes inherited from the selected Global set. Route-invalid sets remain editable; structurally invalid sets must be deleted and recreated; a malformed unnamed default appears as a clearable repair row.
 - Saving is available only from Current Session. The dialog takes a name and a destination (Project by default when trusted, otherwise Global). One store action writes all seven effective routes, and refuses fail-closed routes. The profile service holds its revision lock through the transaction, so an interleaved session edit either commits first and rejects the save, or waits.
 
-## Explicit configuration repair
-
-Retired `host: "herdr"` and `closeOnReport: false` declarations are rejected, never rewritten, and a mixed local/remote route fails closed in full. These rejections also apply to Global routes inherited by partial Project sets.
-
-- Repair the source saved set explicitly with reviewed `host: "local"` candidates and omitted or `true` `closeOnReport`. Native selectors need not transfer across runtimes, so review model, effort, context, and write intent.
-- For inherited invalid routes, repair Global or override the Project route.
-- Reload or apply a valid saved set afterward. Credentials and standalone `pi-herdr-btw` settings are never changed or migrated, and there is no automatic local fallback.
-
 ## Delegation settings
 
 `/subagents settings` edits the delegation mode in Session, Global, or trusted Project scope with the same precedence and timing as nesting.
@@ -102,7 +94,6 @@ Custom agents are edited by hand in the root `agents` object of `~/.pi/agent/pi-
 - for every profile, the launch preflight against its first eligible route (each distinct route probed once, bounded to 20 seconds); a failing first route is a warning when a fallback exists;
 - the same route check for every custom agent after its overrides, and a failure for each agent entry or `agents` object that fails closed;
 - each Claude Code or Codex CLI version a route uses, failing below the minimum and warning when missing or unrecognized;
-- whether private agent state is writable, the Git version isolated writers would use, the worktree setup and verification commands and `workspaceInclude` patterns, and whether the shared Activity view is installed;
-- while `<agent-dir>/git-workspaces` exists, a warning that it holds workspaces from an earlier version ([Earlier workspace registry](local-backends.md#earlier-workspace-registry)).
+- whether private agent state is writable, the Git version isolated writers would use, the worktree setup and verification commands and `workspaceInclude` patterns, and whether the shared Activity view is installed.
 
 The report is a user notification and never enters the model's context.

@@ -118,10 +118,5 @@ describe("discovery contracts", () => {
     );
     expect(decodeSubagentContract("subagent_models")(contract)).toEqual(contract);
     expect(JSON.stringify(contract)).not.toContain("abcdefghijklmnopqrstuvwxyz");
-    // The v1 contract keeps reporting the retired route fields as constants.
-    expect(contract.profiles[0]?.candidates[0]).toMatchObject({
-      host: "local",
-      closeOnReport: true,
-    });
   });
 });

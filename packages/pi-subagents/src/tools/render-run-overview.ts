@@ -18,9 +18,9 @@ import {
   composeToolComponent as renderComponent,
   renderExpansionAffordance,
 } from "pi-cosmic-ui/tool";
+import { skippedCandidateLabel } from "../profiles/model.ts";
 import { isAssignmentFinishedRunState } from "../run/model.ts";
 import { aggregateUsage } from "../ui/metrics.ts";
-import { skippedOptionLabel } from "./compact-run-issues.ts";
 import type { SubagentRunCard } from "./details-schema.ts";
 import { attentionRecoveryText, cleanupEvidenceText } from "./format.ts";
 import { DESCENDANTS_OMITTED } from "./render-await.ts";
@@ -153,7 +153,7 @@ const runStateDiagnostics = (run: SubagentRunCard, width: number, theme: Theme):
 const runRouteDiagnostics = (run: SubagentRunCard, width: number, theme: Theme): string[] => [
   ...run.selection.skippedCandidates.flatMap((candidate) =>
     dimLines(
-      `Skipped ${skippedOptionLabel(candidate.candidate)} [${candidate.code}] · ${candidate.reason}`,
+      `Skipped ${skippedCandidateLabel(candidate.candidate)} [${candidate.code}] · ${candidate.reason}`,
       width,
       theme,
     ),

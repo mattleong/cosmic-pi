@@ -36,7 +36,7 @@ Local Claude guidance has a separate optional `steeringDelivery` fact: `pending`
 
 ## Close-on-report lifetime and root shutdown
 
-- Every supported candidate closes after reporting. `closeOnReport` may be omitted or `true`; `false` is rejected at decode.
+- Every run closes after reporting.
 - Completion payloads and exclusive await claims survive process cleanup.
 - `subagent_send` answers or steers active assignments and never starts an idle session. Local Pi supports paused in-place resume and respawn of completed, failed, and stopped sessions; Claude and Codex do not advertise resume. Each resume is a new epoch with session-owned admission.
 - Natural completion or failure closes only that run's backend scope; descendants stay attached to their original run nodes. Cleanup interrupts the run's proxy waits and joins finalizers that release their completion claims, so descendant reports reach a surviving ancestor or the root.
@@ -158,7 +158,7 @@ The decoder accepts the flag on any action failure, so a misplaced flag keeps it
 - A root wait returns only after its claims are released, without stopping children, consuming reports, or retrying.
 - Await and status wait interruptibly for the notification gate, then the run lock. Only claim insertion and its scoped finalizer are masked, and the private scope owns claims only.
 - Proxy cancellation has no root-cleanup acknowledgement. Its result carries `cancellationCleanup: "unconfirmed"`, and an immediate replacement await may fail with `completion_claim_conflict`.
-- Finished observations classify `reportStatus` as `available`, `claimed`, `delivered`, or `missing` without touching claims. Historical cards without it have unknown availability.
+- Finished observations classify `reportStatus` as `available`, `claimed`, `delivered`, or `missing` without touching claims. Cards without it have unknown availability.
 
 ## Run cancellation and cleanup
 
@@ -168,7 +168,6 @@ Cleanup evidence is independent of task state and accepted reports; its fields a
 - Native lifecycle `status: "succeeded"` acknowledges the operation, not cleanup. Compact stop results stay warnings while cleanup is pending or quarantined.
 - Explicit stop may reverify transport cleanup only when `cleanup.recovery` is `stop`, including on terminal runs; Activity and the fleet expose this without restarting the task. Manual recovery covers unknown finalizers, incomplete descendant snapshots, and uncertain lease failures.
 - Cleanup quarantine never recommends stopping healthy pool peers.
-- Cards saved before orchestration contract version 3 may carry `writeClaims`, `writeClaimCount`, `writeClaimsOmitted`, `writeAudit`, and `writeViolationOffender`. They still decode so history replays, but nothing produces or renders them.
 
 Cancellation and ownership:
 
@@ -210,7 +209,7 @@ Shared rules for registration, replay, compact issues, and expansion are in [too
 - Typed projections emit one `CompactIssue` per problem or recovery step. Messages start with a subagent, launch, or profile name, never a run or workspace ID. `tools/compact-action-failures.ts` owns each failure code's message and recovery guidance.
 - Headings name runs by display name and show one combined count without routine IDs or route metadata.
 - Routine facts are `info` issues, such as a stop the call requested, a retry moving past its failed option, or an isolated writer's workspace outcome (`changes ready for review`, or an automatic discard).
-- Workspace rows show whether the diff was reviewed and whether apply verified the change, the parent tested its prepared pair, or nothing was tested. Failed verification is an error; left-out worker files are a warning. Historical `integrate` details still render.
+- Workspace rows show whether the diff was reviewed and whether apply verified the change, the parent tested its prepared pair, or nothing was tested. Failed verification is an error; left-out worker files are a warning.
 - Static discovery counts eligible options and disabled or unavailable profiles without claiming launch readiness.
 - Report-only omissions use the optional `reportsOnlyOmitted: true` flag; other omissions keep warnings and full-status guidance.
 - Compact summaries never derive grant paths, cleanup, or retry authority from bounded cards.

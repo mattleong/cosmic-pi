@@ -120,10 +120,10 @@ const statusTool = () =>
   ).tools.find((tool) => tool.name === "subagent_status")!;
 
 type RunDetails = Exclude<CompactSubagentToolDetails, { readonly action: "models" }>;
-/** Run details as session history stored them, under any action an earlier version used. */
+/** Run details as session history stored them, under any action string. */
 type PersistedDetails = Omit<RunDetails, "action"> & { readonly action: string };
 
-describe("historical version-2 cards", () => {
+describe("saved run cards", () => {
   const run = view({ name: "historic-run", writeIntent: "writer" });
   const status = compactToolDetails({ action: "status", runs: [run] });
   assert(status.action !== "models");
@@ -139,28 +139,16 @@ describe("historical version-2 cards", () => {
     return harness.render().join("\n");
   };
 
-  it.each(["rename", "claims"])("decodes a retired subagent_%s card as a status card", (action) => {
-    const historical = { ...status, action };
-    expect(decodeCompactToolDetails(historical)).toEqual(status);
-    expect(replayed(historical)).toContain("historic-run");
+  it("falls back to the saved text when details no longer decode", () => {
+    const undecodable = { ...status, action: "rename" };
+    expect(decodeCompactToolDetails(undecodable)).toBeUndefined();
+    expect(replayed(undecodable)).toContain("raw history sentinel");
   });
 
-  it("decodes a retired subagent_list card", () => {
+  it("decodes a list card", () => {
     const listed = compactToolDetails({ action: "list", runs: [run] });
     assert(listed.action !== "models");
     expect(decodeCompactToolDetails(listed)).toEqual(listed);
     expect(replayed(listed)).toContain("historic-run");
-  });
-
-  it("decodes a card that waited on a retired admission pause", () => {
-    const historical = {
-      ...status,
-      cards: status.cards.map((card) => Object.assign({}, card, { writeAdmissionPaused: true })),
-    };
-    expect(decodeCompactToolDetails(historical)).toMatchObject({
-      action: "status",
-      cards: [{ id: run.id, writeAdmissionPaused: true }],
-    });
-    expect(replayed(historical)).toContain("historic-run");
   });
 });

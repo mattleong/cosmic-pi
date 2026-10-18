@@ -1,7 +1,6 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
 import * as Effect from "effect/Effect";
-import { Check } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { effectTest } from "../support/effect-test.ts";
 import { InvalidSubagentRequestError } from "../../src/run/errors.ts";
@@ -10,7 +9,6 @@ import type { WorkspaceApplyResult } from "../../src/run/workspace-apply.ts";
 import { createSubagentCompactSummary } from "../../src/tools/compact-summary.ts";
 import type { WorkspaceToolDetails } from "../../src/tools/details-schema.ts";
 import { executeWorkspaceAction } from "../../src/tools/execute-workspace.ts";
-import { WorkspaceParameters } from "../../src/tools/schema.ts";
 import {
   subagentServiceDouble,
   type SubagentServiceDoubleInput,
@@ -257,7 +255,7 @@ describe("workspace apply", () => {
 });
 
 describe("workspace refusals", () => {
-  it.each(["apply", "integrate", "revise"])("renders any refusal of %s as one error", (action) => {
+  it.each(["apply", "revise"])("renders any refusal of %s as one error", (action) => {
     const summary = createSubagentCompactSummary("subagent_workspace")({
       phase: "settled",
       args: { action, workspaceId: "ws-1" },
@@ -294,72 +292,6 @@ const orphan = (workspaceId: string, sourceWorkspaceId?: string) => ({
 });
 
 describe("workspace prepared-pair apply and list", () => {
-  it("still renders integrate results saved by earlier versions", () => {
-    const args = {
-      action: "integrate",
-      workspaceId: "ws-1",
-      revisionId: "rev-1",
-      preparationId: "prep-1",
-    };
-    const summary = createSubagentCompactSummary("subagent_workspace")({
-      phase: "settled",
-      args,
-      result: {
-        content: [{ type: "text", text: "Integrated the exact reviewed and tested revision." }],
-        details: {
-          version: 1,
-          action: "workspace",
-          operation: "integrate",
-          workspaceId: "ws-1",
-          revisionId: "rev-1",
-          preparationId: "prep-1",
-          warnings: [
-            {
-              code: "untested-parent-changes",
-              message: "notes.md changed in the parent after testing",
-              detail: "Rerun relevant tests in the parent checkout.",
-            },
-          ],
-        },
-      },
-      context: renderContextFixture({ isError: false }),
-    });
-    expect(summary?.outcome).toBe("warning");
-    expect(summary?.counters).toEqual(["integrated"]);
-  });
-
-  it("rejects the retired export action but still renders export results saved earlier", () => {
-    expect(Check(WorkspaceParameters, { action: "export", workspaceId: "ws-1" })).toBe(false);
-    const summary = createSubagentCompactSummary("subagent_workspace")({
-      phase: "settled",
-      args: { action: "export", workspaceId: "ws-1", format: "branch" },
-      result: {
-        content: [{ type: "text", text: "Exported workspace ws-1, revision rev-1." }],
-        details: {
-          version: 1,
-          action: "workspace",
-          operation: "export",
-          workspaceId: "ws-1",
-          revisionId: "rev-1",
-          changedPathCount: 2,
-          exportFormat: "branch",
-          exportBranch: "pi-subagent/db-migration",
-          warnings: [
-            {
-              code: "export-placeholder-identity",
-              message: "The branch commit uses a placeholder identity",
-              detail: "Configure your identity, then amend the commit.",
-            },
-          ],
-          displayContent: { offset: 0, length: 0 },
-        },
-      },
-      context: renderContextFixture({ isError: false }),
-    });
-    expect(summary?.outcome).toBe("warning");
-    expect(summary?.issues?.map((issue) => issue.code)).toEqual(["export-placeholder-identity"]);
-  });
-
   effectTest("warns when unresolved child workspaces keep the worker tree", function* () {
     const args = {
       action: "apply",

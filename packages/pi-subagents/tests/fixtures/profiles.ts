@@ -20,13 +20,11 @@ export const profileCandidate = (
 });
 
 export const declaredCandidate = (model: string, overrides: JsonObject = {}): JsonObject => ({
-  host: "local",
   runtime: "pi",
   model,
   effort: "high",
   context: "fresh",
   writeIntent: "read-only",
-  closeOnReport: true,
   ...overrides,
 });
 

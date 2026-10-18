@@ -129,7 +129,6 @@ const selected = {
   ...pending,
   status: "started",
   routeStatus: "selected",
-  host: "local",
   runtime: "pi",
   model: "provider/model",
   effort: "low",

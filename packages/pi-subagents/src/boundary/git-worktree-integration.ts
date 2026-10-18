@@ -621,7 +621,9 @@ export const rollbackPublication = (registry: string, record: WorkspaceRecord) =
     const progress = yield* readPublicationProgress(registry, record.handle.workspaceId);
     const journal = record.journal ?? [];
     const planned = record.plannedDirectories ?? [];
-    // Without progress, as for a record saved by an earlier version, every entry may be touched.
+    // A finished rollback removes progress before discard saves the record, so a discard retried
+    // after a later failure finds none; every entry may then be touched, and each step re-checks
+    // the files on disk.
     const touched = journal.slice(0, progress?.files ?? journal.length);
     const steps = yield* Effect.forEach(touched, (entry) =>
       rollbackStep(root, entry).pipe(Effect.map((step) => ({ entry, step }))),

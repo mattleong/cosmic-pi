@@ -20,7 +20,6 @@ import {
 } from "../src/config/store.ts";
 import { isRecord } from "../src/config/profile-restore.ts";
 import { BUILTIN_PROFILE_ROUTES } from "../src/profiles/definitions.ts";
-import { declaredProfileCandidate } from "../src/profiles/model.ts";
 import { declaredCandidate, profileCandidate } from "./fixtures/profiles.ts";
 import { objectContaining, stringContaining } from "./support/matchers.ts";
 
@@ -73,33 +72,35 @@ const writes = (memory: InMemoryDocuments) =>
   memory.operations.filter((operation) => /^(modify|write):/u.test(operation));
 
 describe("SubagentConfigStore activation", () => {
-  it.effect("fails mixed retired routes closed in every scope without load writes", () =>
-    Effect.gen(function* () {
-      const local = declaredCandidate("openai/local");
-      for (const scope of ["global", "project"] as const)
-        for (const runtime of ["pi", "claude", "codex"])
-          for (const remoteFirst of [true, false]) {
-            const remote = declaredCandidate(runtime === "pi" ? "openai/remote" : "native", {
-              host: "herdr",
-              runtime,
-            });
-            const raw = v6({
-              worker: remoteFirst ? [remote, local] : [local, remote],
-              scout: local,
-            });
-            const { memory, store } = yield* setup(
-              scope === "global"
-                ? { [GLOBAL]: raw }
-                : { [GLOBAL]: v6({ worker: local }), [PROJECT]: raw },
-            );
-            const config = yield* store.load(CWD, AGENT, scope === "project");
-            expect(config.profiles.worker.candidates).toEqual([]);
-            expect(config.profileSources.worker).toBe(`${scope}-invalid`);
-            expect(config.profiles.scout.candidates[0]?.model).toBe("openai/local");
-            expect(config.profileSources.scout).toBe(scope);
-            expect(writes(memory)).toEqual([]);
-          }
-    }),
+  it.effect(
+    "fails a route with an unknown candidate key closed in every scope without load writes",
+    () =>
+      Effect.gen(function* () {
+        const local = declaredCandidate("openai/local");
+        for (const scope of ["global", "project"] as const)
+          for (const runtime of ["pi", "claude", "codex"])
+            for (const invalidFirst of [true, false]) {
+              const invalid = declaredCandidate(runtime === "pi" ? "openai/invalid" : "native", {
+                host: "local",
+                runtime,
+              });
+              const raw = v6({
+                worker: invalidFirst ? [invalid, local] : [local, invalid],
+                scout: local,
+              });
+              const { memory, store } = yield* setup(
+                scope === "global"
+                  ? { [GLOBAL]: raw }
+                  : { [GLOBAL]: v6({ worker: local }), [PROJECT]: raw },
+              );
+              const config = yield* store.load(CWD, AGENT, scope === "project");
+              expect(config.profiles.worker.candidates).toEqual([]);
+              expect(config.profileSources.worker).toBe(`${scope}-invalid`);
+              expect(config.profiles.scout.candidates[0]?.model).toBe("openai/local");
+              expect(config.profileSources.scout).toBe(scope);
+              expect(writes(memory)).toEqual([]);
+            }
+      }),
   );
 
   it.effect("loads routes with nesting defaults and project inheritance", () =>
@@ -197,9 +198,10 @@ describe("SubagentConfigStore profile writes", () => {
       ];
       const initial = v6({ scout: declaredCandidate("parent", { effort: "default" }), reviewer });
       const { memory, store } = yield* setup({ [GLOBAL]: initial });
-      const scout = declaredProfileCandidate(
-        profileCandidate("openai-codex/gpt-5.6-sol", { effort: "low", openaiFastMode: true }),
-      );
+      const scout = profileCandidate("openai-codex/gpt-5.6-sol", {
+        effort: "low",
+        openaiFastMode: true,
+      });
       yield* store.patchProfile(CWD, AGENT, {
         ...at("global", initial),
         profileSet: "default",
@@ -318,27 +320,22 @@ describe("SubagentConfigStore profile sets", () => {
         profileSet: "alpha",
         profiles: BUILTIN_PROFILE_ROUTES,
       });
-      // Saved candidates keep spelling out the version-6 retired fields.
       expect(memory.documents.get(GLOBAL)?.profileSets).toEqual({
         alpha: {
           profiles: objectContaining({
             scout: [
               {
-                host: "local",
                 runtime: "pi",
                 model: "parent",
                 effort: "default",
                 context: "fresh",
                 writeIntent: "read-only",
-                closeOnReport: true,
               },
             ],
           }),
         },
       });
-      const generalist = declaredProfileCandidate(
-        profileCandidate("openai-codex/gpt-5.6-sol", { openaiFastMode: true }),
-      );
+      const generalist = profileCandidate("openai-codex/gpt-5.6-sol", { openaiFastMode: true });
       yield* store.patchProfile(CWD, AGENT, {
         ...current(),
         profileSet: "alpha",
@@ -390,7 +387,6 @@ const savedWorker = (document: JsonObject | undefined): JsonObject[string] | und
 
 describe("profile declaration visit restore", () => {
   const candidate = {
-    host: "local",
     runtime: "pi",
     model: "openai/worker",
     effort: "high",
@@ -421,12 +417,10 @@ describe("profile declaration visit restore", () => {
 
   const reordered = {
     writeIntent: "writer",
-    closeOnReport: true,
     model: "openai/worker",
     effort: "high",
     runtime: "pi",
     context: "fresh",
-    host: "local",
   } as const;
   for (const declaration of [candidate, [reordered, candidate]])
     it.effect(`preserves declaration ${JSON.stringify(declaration)}`, () =>
@@ -450,9 +444,9 @@ describe("profile declaration visit restore", () => {
     Effect.gen(function* () {
       for (const patch of [
         { declaration: [] },
-        { declaration: { ...candidate, host: "herdr" } },
-        { declaration: { ...candidate, closeOnReport: false } },
-        { declaration: [candidate, { ...candidate, host: "herdr" }] },
+        { declaration: { ...candidate, host: "local" } },
+        { declaration: { ...candidate, closeOnReport: true } },
+        { declaration: [candidate, { ...candidate, host: "local" }] },
         { declaration: { ...candidate, unknown: true } },
         { declaration: { ...candidate, openaiFastMode: "false" } },
         { declaration: "broken" },

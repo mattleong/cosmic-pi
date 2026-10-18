@@ -59,7 +59,7 @@ For risky changes:
 
 ### What a worktree writer shares
 
-A worktree writer's workspace is a locked, detached linked worktree of your repository under `<agent-dir>/subagent-worktrees/`, so `git worktree list` shows it and its commits live under `refs/pi/workspaces/`. Discard and integration remove both. The writer's prompt tells it to stay on the detached HEAD and not to create branches, use `git stash`, change Git config, or run `git worktree` commands, because each would reach your repository ([Writer guidance](local-backends.md#writer-guidance)). If `/subagents doctor` reports legacy workspaces, follow its commands to save and remove the earlier version's registry ([Earlier workspace registry](local-backends.md#earlier-workspace-registry)).
+A worktree writer's workspace is a locked, detached linked worktree of your repository under `<agent-dir>/subagent-worktrees/`, so `git worktree list` shows it and its commits live under `refs/pi/workspaces/`. Discard and integration remove both. The writer's prompt tells it to stay on the detached HEAD and not to create branches, use `git stash`, change Git config, or run `git worktree` commands, because each would reach your repository ([Writer guidance](local-backends.md#writer-guidance)).
 
 Ignored and untracked credential files stay in your checkout. When writers need some of them, such as `.env`, a trusted project's `.pi/pi-subagents.json` can name them with gitignore-syntax patterns; matching files are copied into each worker and test tree, but never into a proposal ([Included files](local-backends.md#included-files)). Run `/reload` after changing it.
 

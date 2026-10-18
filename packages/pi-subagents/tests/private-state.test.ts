@@ -187,7 +187,6 @@ describe("private state sweep", () => {
         path.join(root, "local-claude-debug-v1", "claude-0123-4567"),
         path.join(root, "workflow-runs", "wf-1"),
         path.join(root, SESSION, "notes"),
-        path.join(agent, "git-workspaces", "workspace-1"),
         path.join(agent, "subagent-worktrees", "workspace-1"),
       ];
       for (const directory of kept) {

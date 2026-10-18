@@ -1,11 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SubagentConfigScope } from "../src/config/store.ts";
 import { BUILTIN_PROFILE_ROUTES } from "../src/profiles/definitions.ts";
-import {
-  declaredProfileCandidate,
-  type DeclaredProfileRoute,
-  type ProfileId,
-} from "../src/profiles/model.ts";
+import type { DeclaredProfileRoute, ProfileId } from "../src/profiles/model.ts";
 import {
   declaredRouteForDraft,
   disableRouteDraft,
@@ -48,15 +44,14 @@ const threeRoute = [
   candidate("claude-opus-5", { runtime: "claude", effort: "medium" }),
   candidate("gpt-5.6-codex", { runtime: "codex", effort: "xhigh", writeIntent: "writer" }),
 ];
-const declaredThreeRoute = threeRoute.map(declaredProfileCandidate);
 
 describe("ordered profile-route editor state", () => {
   it("loads and declares a three-candidate route without collapse or reorder", () => {
-    const value = inspection({ worker: declaredThreeRoute });
+    const value = inspection({ worker: threeRoute });
     const draft = load(value, "worker");
     expect(draft).toEqual({ kind: "explicit", candidates: threeRoute });
     expect(draft.candidates).not.toBe(threeRoute);
-    expect(declaredRouteForDraft(draft)).toEqual({ valid: true, route: declaredThreeRoute });
+    expect(declaredRouteForDraft(draft)).toEqual({ valid: true, route: threeRoute });
     Object.assign(draft.candidates[0]!, { model: "openai/edited" });
     expect(load(value, "worker").candidates).toEqual(threeRoute);
   });
@@ -64,9 +59,9 @@ describe("ordered profile-route editor state", () => {
   it("models reset, inherit, disabled, and invalid fail-closed declarations distinctly", () => {
     const value = inspection(
       {
-        reviewer: declaredThreeRoute,
+        reviewer: threeRoute,
         scout: "disabled",
-        worker: { ...declaredProfileCandidate(candidate("bare")), model: "bare" },
+        worker: candidate("bare"),
       },
       {},
     );

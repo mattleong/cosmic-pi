@@ -9,11 +9,7 @@ import {
 } from "../backend/local-cli-version.ts";
 import { SubagentBackendRegistry } from "../backend/service.ts";
 import { hostProfileEnvironment } from "../boundary/host-profile-resolution.ts";
-import {
-  nodeFsConstants,
-  nodeFsPromises as fs,
-  nodePath as path,
-} from "../boundary/node-builtins.ts";
+import { nodeFsConstants, nodeFsPromises as fs } from "../boundary/node-builtins.ts";
 import { nodeExecutableProblem } from "../boundary/node-executable.ts";
 import { describeWorkspaceInclude, describeWorkspaceSetup } from "../boundary/workspace-setup.ts";
 import {
@@ -203,8 +199,6 @@ export const runSubagentDoctor = (
           ),
     );
     checks.push(yield* gitCheck);
-    const legacy = yield* legacyWorkspacesCheck(input.agentDirectory);
-    if (legacy) checks.push(legacy);
     if (input.activityViewAvailable !== undefined)
       checks.push(
         input.activityViewAvailable
@@ -231,49 +225,6 @@ const gitCheck: Effect.Effect<DoctorCheck> = gitInstallation.pipe(
     ),
   ),
 );
-
-const MAX_LISTED_LEGACY_WORKSPACES = 20;
-
-const shellQuoted = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-
-// Earlier versions kept each isolated workspace as a private repository under `git-workspaces`.
-// This version never reads them, so the user saves any work there and removes the directory.
-const legacyWorkspacesCheck = (agentDirectory: string): Effect.Effect<DoctorCheck | undefined> =>
-  Effect.gen(function* () {
-    const directory = path.join(agentDirectory, "git-workspaces");
-    const entries = yield* Effect.promise(() =>
-      fs.readdir(directory, { withFileTypes: true }).catch(() => undefined),
-    );
-    if (!entries) return undefined;
-    const workers: string[] = [];
-    for (const entry of entries.toSorted((a, b) => a.name.localeCompare(b.name))) {
-      const worker = path.join(directory, entry.name, "worker");
-      const isWorker = yield* Effect.promise(() =>
-        fs.stat(worker).then(
-          (stat) => stat.isDirectory(),
-          () => false,
-        ),
-      );
-      if (entry.isDirectory() && isWorker) workers.push(entry.name);
-    }
-    const listed = workers.slice(0, MAX_LISTED_LEGACY_WORKSPACES);
-    return check(
-      "Legacy workspaces",
-      "warning",
-      [
-        `${directory} holds isolated workspaces from an earlier pi-subagents version, which this version doesn't read. Once no Pi session runs that version, save any work you want to keep, then remove the directory:`,
-        ...listed.map(
-          (id) =>
-            `  git -C ${shellQuoted(path.join(directory, id, "worker"))} diff HEAD > ${shellQuoted(`${id}.patch`)}`,
-        ),
-        ...(workers.length > listed.length
-          ? [`  (and ${workers.length - listed.length} more workspaces in that directory)`]
-          : []),
-        `  rm -rf ${shellQuoted(directory)}`,
-        "A patch holds tracked changes only; copy any untracked files you need from the worker first.",
-      ].join("\n"),
-    );
-  });
 
 // Readiness runs the same preflight a launch does, bounded so a hung CLI can't stall the report.
 const readinessFailure = (

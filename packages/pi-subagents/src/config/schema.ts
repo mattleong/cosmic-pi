@@ -17,12 +17,10 @@ import {
   MAX_PROFILE_CANDIDATES,
   PROFILE_CANDIDATE_CONTEXTS,
   PROFILE_CANDIDATE_EFFORTS,
-  PROFILE_CANDIDATE_HOSTS,
   PROFILE_CANDIDATE_RUNTIMES,
   PROFILE_CANDIDATE_WRITE_INTENTS,
   PROFILE_IDS,
   profileCandidateValidationIssues,
-  type DeclaredProfileCandidate,
   type DeclaredProfileRoute,
   type ProfileCandidate,
   type ProfileId,
@@ -206,39 +204,27 @@ const hasValidCandidatePolicy = Schema.makeFilter((candidate: ProfileCandidate) 
     : "Profile candidate violates cross-field policy.",
 );
 
-const RetiredHostSchema = Schema.Literals(PROFILE_CANDIDATE_HOSTS);
-const CandidateFields = {
+const ProfileCandidateSchema = Schema.Struct({
   runtime: Schema.Literals(PROFILE_CANDIDATE_RUNTIMES),
   model: Schema.String,
   effort: Schema.Literals(PROFILE_CANDIDATE_EFFORTS),
   context: Schema.Literals(PROFILE_CANDIDATE_CONTEXTS),
   writeIntent: Schema.Literals(PROFILE_CANDIDATE_WRITE_INTENTS),
   openaiFastMode: Schema.optional(Schema.Boolean),
-  closeOnReport: Schema.optional(Schema.Literal(true)),
-};
-const DeclaredProfileCandidateSchema = Schema.Struct({
-  host: RetiredHostSchema,
-  ...CandidateFields,
 }).check(hasValidCandidatePolicy);
-// Earlier module instances also wrote the retired fields into Current Session handoffs.
-const ProfileCandidateInputSchema = Schema.Struct({
-  host: Schema.optional(RetiredHostSchema),
-  ...CandidateFields,
-}).check(hasValidCandidatePolicy);
-/** Decodes to a route whose candidates may still carry retired fields; normalize before use. */
-export const ProfileRouteInputSchema = Schema.Struct({
-  candidates: Schema.Array(ProfileCandidateInputSchema).check(
+export const ProfileRouteSchema = Schema.Struct({
+  candidates: Schema.Array(ProfileCandidateSchema).check(
     Schema.isMaxLength(MAX_PROFILE_CANDIDATES),
   ),
 });
 
 export const decodeDeclaredProfileCandidate = flow(
-  decodeUnknownOrUndefined(DeclaredProfileCandidateSchema, EXACT_FIELDS),
-  (candidate): DeclaredProfileCandidate | undefined => candidate,
+  decodeUnknownOrUndefined(ProfileCandidateSchema, EXACT_FIELDS),
+  (candidate): ProfileCandidate | undefined => candidate,
 );
 
 export const decodeProfileRoute = flow(
-  decodeUnknownOrUndefined(ProfileRouteInputSchema, EXACT_FIELDS),
+  decodeUnknownOrUndefined(ProfileRouteSchema, EXACT_FIELDS),
   (route): ProfileRoute | undefined =>
     route && { candidates: cloneProfileCandidates(route.candidates) },
 );

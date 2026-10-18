@@ -168,34 +168,6 @@ describe("persisted subagent details version 2", () => {
     expect(isDeeplyFrozen(decoded)).toBe(true);
   });
 
-  it("decodes cards persisted with retired route fields and skipped-candidate labels", () => {
-    const wire = awaitWire();
-    const label = "local/pi/openai/x:high:fresh:read-only:openaiFastMode=false:closeOnReport=true";
-    const legacy = {
-      ...wire,
-      cards: wire.cards.map((card) => ({
-        ...card,
-        host: "local",
-        closeOnReport: true,
-        selection: {
-          ...card.selection,
-          skippedCandidates: [{ candidate: label, code: "pi_model_unknown", reason: "Missing." }],
-        },
-      })),
-    };
-    const decoded = decodeStartAwaitCardDetails(legacy);
-    const card = decoded && "cards" in decoded ? decoded.cards[0] : undefined;
-    expect(card?.runtime).toBe(wire.cards[0]?.runtime);
-    expect(card?.selection.skippedCandidates[0]?.candidate).toBe(label);
-    expect(
-      decodeStartAwaitCardDetails({
-        version: 2,
-        action: "start",
-        startEntries: [{ ...startedEntry(), host: "local" }],
-      }),
-    ).toBeDefined();
-  });
-
   it("persists awaited targets with bounded descendant context but never descendant reports", () => {
     const target = {
       ...run(1),
@@ -288,46 +260,6 @@ describe("persisted subagent details version 2", () => {
     ).toBeUndefined();
     expect(decodeStartAwaitCardDetails(null)).toBeUndefined();
     expect(decodeStartAwaitCardDetails([])).toBeUndefined();
-  });
-
-  it("still decodes saved cards that carry retired write-claim fields", () => {
-    const details = compactToolDetails({
-      action: "status",
-      runs: [{ ...run(), writeIntent: "writer" }],
-    });
-    const card = details.action === "models" ? undefined : details.cards[0];
-    expect(card).not.toHaveProperty("writeClaims");
-    const saved = {
-      ...details,
-      cards: [
-        {
-          ...card,
-          writeClaims: ["src/a.ts", "src/b.ts"],
-          writeClaimCount: 2,
-          writeViolationOffender: true,
-          writeAudit: {
-            observedFileWrites: ["src/a.ts", "src/outside.ts"],
-            violations: [{ path: "src/outside.ts", toolName: "edit", observedAt: 3 }],
-            bashWriteHints: 2,
-          },
-        },
-      ],
-    };
-    expect(decodeCompactToolDetails(saved)).toEqual(saved);
-  });
-
-  it("still decodes saved cards that list the retired rename capability", () => {
-    const details = compactToolDetails({ action: "status", runs: [run()] });
-    const cards = details.action === "models" ? [] : details.cards;
-    expect(cards[0]?.capabilities).not.toContain("rename-display");
-    const saved = {
-      ...details,
-      cards: cards.map((card) =>
-        Object.assign({}, card, { capabilities: [...card.capabilities, "rename-display"] }),
-      ),
-    };
-    const decoded = decodeCompactToolDetails(saved);
-    expect(decoded).toEqual(details);
   });
 
   it("persists a worktree writer's workspace outcome", () => {

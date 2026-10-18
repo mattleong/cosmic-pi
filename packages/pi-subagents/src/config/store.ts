@@ -7,7 +7,6 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { JsonDocumentStore, configDocumentErrorFactory, type JsonObject } from "pi-cosmic-core";
 import {
-  declaredProfileCandidate,
   isProfileId,
   PROFILE_IDS,
   type DeclaredProfileRoute,
@@ -296,7 +295,7 @@ const snapshotProfilesJson = (
     profiles[profile] =
       route.candidates.length === 0
         ? "disabled"
-        : route.candidates.map((candidate) => candidateJson(declaredProfileCandidate(candidate)));
+        : route.candidates.map((candidate) => candidateJson(candidate));
   }
   return Effect.succeed(profiles);
 };

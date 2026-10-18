@@ -5,7 +5,6 @@ import { builtinProfileCandidate } from "../profiles/definitions.ts";
 import type { SessionProfileSnapshot } from "../profiles/session-overrides.ts";
 import {
   cloneProfileCandidates as cloneCandidates,
-  declaredProfileCandidate,
   MAX_PROFILE_CANDIDATES,
   normalizeProfileCandidate as cloneCandidate,
   profileCandidateValidationIssues,
@@ -329,7 +328,7 @@ export function declaredRouteForDraft(draft: ProfileRouteDraft): RouteDeclaratio
     const error = candidateValidationError(candidate);
     if (error) return { valid: false, error: `${profileRouteOptionLabel(index)}: ${error}` };
   }
-  const candidates = draft.candidates.map(declaredProfileCandidate);
+  const candidates = cloneCandidates(draft.candidates);
   return {
     valid: true,
     route: candidates.length === 1 ? candidates[0] : candidates,

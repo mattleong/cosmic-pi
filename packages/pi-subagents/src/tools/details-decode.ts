@@ -10,13 +10,10 @@ import { MAX_START_BATCH, MAX_TARGET_RUNS, MAX_TOOL_OUTPUT_CHARS } from "../run/
 import {
   CompactSubagentToolDetailsSchema,
   DETAILS_PARSE_OPTIONS,
-  HISTORICAL_RUN_DETAILS_ACTIONS,
   MAX_CARD_CAPABILITIES,
   MAX_CARD_SKIPS,
   MAX_INVALID_AGENT_ENTRIES,
-  MAX_LEGACY_OBSERVED_WRITE_PATHS,
-  MAX_LEGACY_WRITE_CLAIM_VIOLATIONS,
-  MAX_LEGACY_WRITE_CLAIMS,
+  RUN_DETAILS_ACTIONS,
   RunActionDetailsSchema,
   SubagentAwaitDetailsSchema,
   SubagentModelsDetailsSchema,
@@ -33,7 +30,7 @@ const AWAIT_KEYS = new Set(Object.keys(SubagentAwaitDetailsSchema.fields));
 const MODELS_KEYS = new Set(Object.keys(SubagentModelsDetailsSchema.fields));
 const RUN_ACTION_KEYS = new Set(Object.keys(RunActionDetailsSchema.fields));
 const KNOWN_ROOT_KEYS = new Set([...START_KEYS, ...AWAIT_KEYS, ...MODELS_KEYS, ...RUN_ACTION_KEYS]);
-const RUN_ACTION_SET: ReadonlySet<string> = new Set(HISTORICAL_RUN_DETAILS_ACTIONS);
+const RUN_ACTION_SET: ReadonlySet<string> = new Set(RUN_DETAILS_ACTIONS);
 
 const DetailsFieldsSchema = Schema.Record(Schema.String, Schema.Unknown);
 type DetailsFields = typeof DetailsFieldsSchema.Type;
@@ -68,16 +65,6 @@ const preflightArray = (
 const preflightCard: FieldsVisitor = (card) => {
   if (!card) return true;
   if (!preflightArray(card, "capabilities", MAX_CARD_CAPABILITIES)) return false;
-  if (!preflightArray(card, "writeClaims", MAX_LEGACY_WRITE_CLAIMS)) return false;
-  if (Object.hasOwn(card, "writeAudit")) {
-    const audit = card.writeAudit;
-    if (
-      Predicate.isObject(audit) &&
-      (!preflightArray(audit, "observedFileWrites", MAX_LEGACY_OBSERVED_WRITE_PATHS) ||
-        !preflightArray(audit, "violations", MAX_LEGACY_WRITE_CLAIM_VIOLATIONS))
-    )
-      return false;
-  }
   if (!Object.hasOwn(card, "selection")) return true;
   const selection = card.selection;
   return (
@@ -196,10 +183,6 @@ const validStartRelationships = (details: SubagentStartDetails): boolean => {
   return true;
 };
 
-// Legacy cards name a write-claim offender only for writers.
-const validRunCardRelationships = (card: SubagentRunCard): boolean =>
-  card.writeViolationOffender !== true || card.writeIntent === "writer";
-
 const validReportOmission = (details: {
   readonly reportsOnlyOmitted?: true;
   readonly contentOmitted?: true;
@@ -213,8 +196,7 @@ const validReportOmission = (details: {
     details.cards.every((card) => card.error === undefined && !card.errorTruncated));
 
 const validAwaitRelationships = (details: SubagentAwaitDetails): boolean => {
-  if (!validReportOmission(details) || !details.cards.every(validRunCardRelationships))
-    return false;
+  if (!validReportOmission(details)) return false;
   const awaitedRunIds = details.awaitedRunIds;
   if (!awaitedRunIds) return true;
   const uniqueTargets = new Set(awaitedRunIds);
@@ -252,8 +234,7 @@ const validStartAwaitDetails = (details: typeof SubagentStartAwaitCardDetailsSch
   details.action === "start" ? validStartRelationships(details) : validAwaitRelationships(details);
 
 const validCompactDetails = (details: typeof CompactSubagentToolDetailsSchema.Type) =>
-  details.action === "models" ||
-  (validReportOmission(details) && details.cards.every(validRunCardRelationships));
+  details.action === "models" || validReportOmission(details);
 
 export const decodeStartAwaitCardDetails = safeDecoder(
   SubagentStartAwaitCardDetailsSchema,

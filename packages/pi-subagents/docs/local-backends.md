@@ -177,10 +177,6 @@ A worktree writer's Git commands reach the user's repository, and only guidance 
 
 Captures read the worker's index and files rather than its HEAD, so changes a writer commits anyway still appear in its proposal.
 
-### Earlier workspace registry
-
-Earlier versions kept each isolated workspace as a private repository under `<agent-dir>/git-workspaces/<id>/`. This version neither reads nor removes that registry. While the directory exists, `/subagents doctor` warns and prints, for each workspace, `git -C <dir>/<id>/worker diff HEAD > <id>.patch` to save its tracked changes (untracked files must be copied by hand), then `rm -rf <dir>`. Run those only once no Pi session uses the earlier version.
-
 ### Setup and verification commands
 
 A trusted project's `.pi/pi-subagents.json` may declare `workspaceSetup` and `workspaceVerify`, each `{ "command": [argv...], "timeoutSeconds"?: 1-3600 }` with a 600-second default. Global documents reject both. Changes apply after `/reload`.
@@ -216,7 +212,7 @@ A final report changes no parent files and grants no approval. Only the authenti
 - **Revise** starts a backend-neutral successor assignment whose admission makes the old review and preparation stale. With `rebase`, the engine first commits a capture of the worker, captures the source like a new launch, then moves the worker in place (keeping its directory identity) to the new baseline with a two-tree `read-tree`, which touches only tracked files, and reapplies the changes with `git apply --3way` against the old baseline as the real merge base. Conflicted files keep markers and are listed in the successor's task. A merge that can't run, or would overwrite an untracked or ignored worker file, refuses with `workspace_rebase_refused`, moves the worker's files back, and restores its index. A later failure restores the worker from its capture once the record names the previous baseline again (a rebuilt record whose save failed after landing is first replaced by the previous one); if the previous record can't be put back, the rebuilt worker is kept with its record, and either failure names `refs/pi/workspaces/<id>/rebase-worker`, which holds the captured files.
 - **Discard** deletes an unwanted proposal after cleanup.
 - A frozen revision's patch lives in `revision.diff` beside the record.
-- Persisted details keep IDs, counts, paging metadata, verification status, and bounded command and failure text, never whole patches or command output. Details saved by the retired `integrate` and `export` operations still decode and render.
+- Persisted details keep IDs, counts, paging metadata, verification status, and bounded command and failure text, never whole patches or command output.
 
 ### Binding states and resume
 

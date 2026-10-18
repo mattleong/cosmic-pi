@@ -81,7 +81,6 @@ Most people configure routes in `/subagents profiles`. Saved settings live in `~
       "profiles": {
         "reviewer": [
           {
-            "host": "local",
             "runtime": "claude",
             "model": "opus",
             "effort": "high",
@@ -89,7 +88,6 @@ Most people configure routes in `/subagents profiles`. Saved settings live in `~
             "writeIntent": "read-only"
           },
           {
-            "host": "local",
             "runtime": "pi",
             "model": "openai-codex/gpt-5.6-sol",
             "effort": "high",

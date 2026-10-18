@@ -136,7 +136,6 @@ const profiles = profileLayerFor({
     nested: {
       profiles: {
         oracle: [0, 1].map(() => ({
-          host: "local",
           runtime: "pi",
           model: "parent",
           effort: "default",

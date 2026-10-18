@@ -34,7 +34,7 @@ Keep stale-result validation, state replacement, and context/configuration inval
 
 Core's shared projection primitive keeps preparation and lock waiting interruptible, then commits external publication, its internal snapshot, and authoritative state together. Failed preparation or publication leaves the old state intact. Use this contract rather than rebuilding it inside feature services.
 
-For atomic file replacement, finish creation, writing, validation, and permissions before a narrow uninterruptible rename commit. Nothing fallible follows rename; best-effort cleanup of owned temporary files cannot change the committed result. Preserve supported public interfaces and saved-data contracts deliberately. Avoid accidental internal compatibility layers that leave two owners for the same responsibility.
+For atomic file replacement, finish creation, writing, validation, and permissions before a narrow uninterruptible rename commit. Nothing fallible follows rename; best-effort cleanup of owned temporary files cannot change the committed result. Change contracts and saved formats in place without compatibility layers, as the root `AGENTS.md` describes.
 
 ## Versions and source loading
 

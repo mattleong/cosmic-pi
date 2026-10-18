@@ -9,7 +9,7 @@ import {
   decodeSubagentNesting,
   DelegationModeSchema,
   isProfileSetName,
-  ProfileRouteInputSchema,
+  ProfileRouteSchema,
   SubagentNestingSchema,
   type DelegationMode,
   type SubagentNestingPolicy,
@@ -85,11 +85,9 @@ const SessionProfileOverrideSeedInputSchema = Schema.Struct({
     Schema.isGreaterThanOrEqualTo(0),
     Schema.isLessThanOrEqualTo(MAX_SESSION_PROFILE_REVISION),
   ),
-  overrides: Schema.Struct(mapProfileIds(() => Schema.optionalKey(ProfileRouteInputSchema))),
+  overrides: Schema.Struct(mapProfileIds(() => Schema.optionalKey(ProfileRouteSchema))),
   nesting: Schema.optional(SubagentNestingSchema),
   delegation: Schema.optional(DelegationModeSchema),
-  // Discard the previous runtime's preference until version-2 reload envelopes retire.
-  features: Schema.optional(Schema.Struct({ ultracode: Schema.Boolean })),
   baseline: Schema.optional(
     Schema.Struct({
       origin: Schema.Union([
@@ -100,7 +98,7 @@ const SessionProfileOverrideSeedInputSchema = Schema.Struct({
           invalid: Schema.optional(Schema.Boolean),
         }),
       ]),
-      profiles: Schema.Struct(mapProfileIds(() => ProfileRouteInputSchema)),
+      profiles: Schema.Struct(mapProfileIds(() => ProfileRouteSchema)),
       profileSources: Schema.Record(
         Schema.Literals(PROFILE_IDS),
         Schema.Literals(PROFILE_ROUTE_SOURCES),

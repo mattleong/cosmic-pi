@@ -12,11 +12,7 @@ import {
 } from "../src/config/schema.ts";
 import { SubagentConfigStore, type SubagentConfigStoreContract } from "../src/config/store.ts";
 import { resolvePiModelSelector } from "../src/run/model-catalog.ts";
-import {
-  declaredProfileCandidate,
-  isNativeProfileModelSelector,
-  type ProfileCandidate,
-} from "../src/profiles/model.ts";
+import { isNativeProfileModelSelector, type ProfileCandidate } from "../src/profiles/model.ts";
 import { resolveProfileContinuationPlan, resolveProfilePlan } from "../src/profiles/resolve.ts";
 import {
   SubagentProfileService,
@@ -67,7 +63,7 @@ const document = (value?: {
 };
 
 const candidate = (value: Partial<ProfileCandidate> = {}) =>
-  declaredProfileCandidate(profileCandidate("parent", { effort: "default", ...value }));
+  profileCandidate("parent", { effort: "default", ...value });
 const invalidRoutes = (decoded: DecodedSubagentConfig) =>
   decoded.invalidProfileSetRoutes.default ?? [];
 
@@ -124,8 +120,8 @@ const environment = {
 };
 
 describe("subagent v6 profile configuration and resolution", () => {
-  it("decodes disabled, one candidate, and ordered candidates with optional closeOnReport", () => {
-    const { closeOnReport: _omitted, ...scout } = candidate();
+  it("decodes disabled, one candidate, and ordered candidates", () => {
+    const scout = candidate();
     const worker = [
       candidate({ model: "openai/gpt-review", effort: "medium", writeIntent: "writer" }),
       candidate({ runtime: "claude", model: "sonnet" }),
@@ -142,8 +138,6 @@ describe("subagent v6 profile configuration and resolution", () => {
     expect(config.profiles.scout.candidates).toEqual([
       profileCandidate("parent", { effort: "default" }),
     ]);
-    expect(config.profiles.worker.candidates[1]).not.toHaveProperty("host");
-    expect(config.profiles.worker.candidates[1]).not.toHaveProperty("closeOnReport");
   });
 
   it("bounds and redacts named profile sets and fails invalid defaults closed", () => {
@@ -220,27 +214,19 @@ describe("subagent v6 profile configuration and resolution", () => {
       document({
         profiles: {
           scout: { ...candidate(), execution: "background" },
-          researcher: { ...candidate(), host: "herdr" },
+          researcher: { ...candidate(), host: "local" },
           planner: candidate({ runtime: "claude", model: "sonnet", context: "fork" }),
-          worker: { ...candidate({ writeIntent: "writer" }), closeOnReport: false },
-          reviewer: { ...candidate(), closeOnReport: false },
+          worker: { ...candidate({ writeIntent: "writer" }), closeOnReport: true },
         },
       }),
     );
-    expect(invalidRoutes(decoded)).toEqual([
-      "scout",
-      "researcher",
-      "planner",
-      "worker",
-      "reviewer",
-    ]);
+    expect(invalidRoutes(decoded)).toEqual(["scout", "researcher", "planner", "worker"]);
     expect(decoded.diagnostics).toEqual(
       expect.arrayContaining([
         "global.profileSets[0].profiles.scout",
         "global.profileSets[0].profiles.researcher",
         "global.profileSets[0].profiles.planner",
         "global.profileSets[0].profiles.worker",
-        "global.profileSets[0].profiles.reviewer",
       ]),
     );
   });

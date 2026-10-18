@@ -38,7 +38,7 @@ import {
   STOPPED_RUNS_MESSAGE_TYPE,
   stoppedRunsContent,
 } from "../src/boundary/host-stopped-runs.ts";
-import type { DeclaredProfileCandidate, ProfileRouteContinuation } from "../src/profiles/model.ts";
+import type { ProfileCandidate, ProfileRouteContinuation } from "../src/profiles/model.ts";
 import {
   SubagentProfileService,
   type SubagentProfileServiceContract,
@@ -477,10 +477,7 @@ const awaitScenarios = Effect.gen(function* () {
   return [live, settled, cancelled, userInput, siblingQuestion];
 });
 
-const candidate = (
-  overrides: Partial<DeclaredProfileCandidate> = {},
-): DeclaredProfileCandidate => ({
-  host: "local",
+const candidate = (overrides: Partial<ProfileCandidate> = {}): ProfileCandidate => ({
   runtime: "pi",
   model: "openai-codex/gpt-5.6-sol",
   effort: "high",
@@ -1194,57 +1191,6 @@ const route = {
 } as const;
 
 const receiptScenarios: ReadonlyArray<ToolScenario> = [
-  {
-    tool: "subagent_workspace",
-    title: "integrate saved by an earlier version",
-    args: {
-      action: "integrate",
-      workspaceId: "ws-1",
-      revisionId: "rev-1",
-      preparationId: "prep-1",
-    },
-    result: {
-      content: [
-        {
-          type: "text",
-          text: "Integrated the exact reviewed and tested revision as uncommitted parent edits. The parent index was preserved. Do not stage or commit unless the user asks.",
-        },
-      ],
-      details: {
-        version: 1,
-        action: "workspace",
-        operation: "integrate",
-        workspaceId: "ws-1",
-        revisionId: "rev-1",
-        preparationId: "prep-1",
-        displayContent: { offset: 0, length: 0 },
-      },
-    },
-  },
-  {
-    tool: "subagent_workspace",
-    title: "export saved by an earlier version",
-    args: { action: "export", workspaceId: "ws-1" },
-    result: {
-      content: [
-        {
-          type: "text",
-          text: "Exported workspace ws-1, revision rev-1, with 2 changed files.\nPatch: /project/.git/pi-subagents/ws-1-rev-1.patch",
-        },
-      ],
-      details: {
-        version: 1,
-        action: "workspace",
-        operation: "export",
-        workspaceId: "ws-1",
-        revisionId: "rev-1",
-        changedPathCount: 2,
-        exportFormat: "patch",
-        exportPath: "/project/.git/pi-subagents/ws-1-rev-1.patch",
-        displayContent: { offset: 63, length: 50 },
-      },
-    },
-  },
   {
     tool: "subagent_start",
     title: "expanded writer task",

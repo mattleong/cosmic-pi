@@ -552,7 +552,7 @@ describe("subagent Pi registration", () => {
           revision: 7,
           overrides: {
             worker: {
-              candidates: [{ ...profileCandidate("openai/retired"), host: "herdr" }],
+              candidates: [{ ...profileCandidate("openai/invalid"), host: "local" }],
             },
           },
           baseline: completeBaseline("global"),

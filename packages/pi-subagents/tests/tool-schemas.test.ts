@@ -67,7 +67,7 @@ describe("subagent argument preparation", () => {
     );
   });
 
-  it("rejects retired write claims on a start entry", () => {
+  it("rejects an unknown start-entry key and names it", () => {
     const rejected = () =>
       prepareStart({ agents: [{ task: "Edit", profile: "worker", writes: ["src/a.ts"] }] });
     expect(rejected).toThrow(/\[invalid_arguments\]/u);
