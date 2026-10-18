@@ -37,7 +37,6 @@ import {
   type SubagentContractTool,
   type SubagentLifecycleContract,
   type SubagentStartContract,
-  type SubagentStatusContract,
 } from "./contract-schema.ts";
 import {
   nonNegativeInteger,
@@ -78,18 +77,17 @@ const projectRecovery = (recovery: FailedStartRecovery): ContractRecovery => ({
 });
 
 const projectFailure = (
-  action: string,
-  failure: Pick<SubagentActionFailure, "code" | "message" | "pendingDelivery">,
+  failure: Pick<SubagentActionFailure, "code" | "message">,
 ): ContractFailure => {
   const code = metadata(failure.code, MAX_FAILURE_CODE_CHARS);
   return {
-    disposition: actionFailureDisposition(action, failure),
+    disposition: actionFailureDisposition(failure),
     ...(code !== undefined && { code }),
     message: metadata(failure.message, MAX_CONTRACT_MESSAGE_CHARS) ?? "Action failed.",
   };
 };
 
-const projectAttention = (run: SubagentRunView): ContractAttention | undefined => {
+export const projectAttention = (run: SubagentRunView): ContractAttention | undefined => {
   const attention = runAttention(run);
   if (attention?.kind !== "question") return attention;
   const message = sanitizeDiagnosticContent(stripTerminalControls(attention.message), {
@@ -235,7 +233,7 @@ const failedLaunch = (
     ...(name && { name }),
     ...(profile !== undefined && { profile }),
     ...knownAgent(outcome?.resolvedRoute?.agent ?? spec.agent),
-    failure: projectFailure("start", failure),
+    failure: projectFailure(failure),
     ...(admitted !== undefined && {
       admittedRun: { runId: admitted.runId, ...projectRecovery(admitted) },
     }),
@@ -317,20 +315,6 @@ export const cancelledAwaitContract = (
   };
 };
 
-interface StatusContractInput {
-  readonly observations: ReadonlyArray<SubagentRunObservation>;
-  readonly fullyRenderedIds: ReadonlySet<string>;
-  readonly missingRunIds: ReadonlyArray<string>;
-}
-
-export const statusContract = (input: StatusContractInput): SubagentStatusContract => ({
-  ...envelope(SUBAGENT_TOOL_NAME.status),
-  targets: input.observations.map((observation) =>
-    observedTarget(observation, input.fullyRenderedIds),
-  ),
-  missingRunIds: [...input.missingRunIds],
-});
-
 type LifecycleContractOutcome =
   | { readonly runId: string; readonly run: SubagentRunView }
   | { readonly runId: string; readonly failure: SubagentActionFailure };
@@ -350,7 +334,7 @@ export const lifecycleContract = (
         : {
             requestedRunId: outcome.runId,
             status: "failed",
-            failure: projectFailure(action, outcome.failure),
+            failure: projectFailure(outcome.failure),
           },
   );
   const succeeded = results.filter((result) => result.status === "succeeded").length;

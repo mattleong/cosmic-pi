@@ -37,7 +37,7 @@ const reportSection = (
   kind: RunReportSection["kind"],
 ): RunReportSection | undefined => {
   const name = sanitizeTerminalLine(run.name);
-  const marker = "\n… [content truncated; use subagent_status for this run]";
+  const marker = "\n… [content truncated; use agent_read for this run]";
   const text = kind === "report" ? run.finalText : run.error;
   const truncated = kind === "report" ? run.finalTextTruncated : run.errorTruncated;
   if (text) return { name, kind, text: `${sanitizeTerminalText(text)}${truncated ? marker : ""}` };
@@ -46,7 +46,7 @@ const reportSection = (
   return {
     name,
     kind,
-    text: `This saved card does not include the ${missing}; use subagent_status for this run.`,
+    text: `This saved card does not include the ${missing}; use agent_read for this run.`,
   };
 };
 
@@ -320,23 +320,7 @@ export const renderExpandedRunsResult = (
   runs: ReadonlyArray<SubagentRunCard>,
   theme: Theme,
   counters: string,
-  showReportOutcomes: boolean,
-  hierarchy: RunHierarchy | undefined,
-): Component => {
-  const container = new Container();
-  const sections = showReportOutcomes ? expandedRunReportSections(runs) : [];
-  container.addChild(
-    runOverviewComponent(runs, theme, {
-      expanded: true,
-      reportSections: sections,
-      counters,
-      showReportOutcomes,
-      hierarchy,
-    }),
-  );
-  appendReportSections(container, sections, theme);
-  return container;
-};
+): Component => runOverviewComponent(runs, theme, { expanded: true, reportSections: [], counters });
 
 export const renderExpandedAwaitResult = (
   runs: ReadonlyArray<SubagentRunCard>,

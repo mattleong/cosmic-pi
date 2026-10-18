@@ -65,7 +65,7 @@ const forkedRequest = (): ContextWithSystemEvent["messages"] => [
     content: "",
     sections: { preamble: "child prompt" },
     toolsRemoved: [{ name: "parent_only" }, { name: "shared" }],
-    toolsAdded: [declaration("shared", "child definition"), declaration("contact_parent")],
+    toolsAdded: [declaration("shared", "child definition"), declaration("agent_contact_parent")],
     timestamp: FORKED_AT + 1,
   },
   { role: "user", content: "assigned task", timestamp: FORKED_AT + 2 },
@@ -91,13 +91,13 @@ describe("fork prompt cache sharing", () => {
           role: "system",
           content: "",
           sections: { preamble: "child prompt" },
-          toolsAdded: [declaration("contact_parent")],
+          toolsAdded: [declaration("agent_contact_parent")],
           timestamp: FORKED_AT + 1,
         });
         expect(getCurrentTools(projected?.messages ?? [])).toEqual([
           declaration("parent_only"),
           declaration("shared", "parent definition"),
-          declaration("contact_parent"),
+          declaration("agent_contact_parent"),
         ]);
         expect(messages).toEqual(forkedRequest());
 

@@ -27,7 +27,6 @@ const REFUSAL_MESSAGES: Record<ToolRefusalCode, string> = {
   session_unreachable: "The session isn't answering",
   session_unavailable: "The session is shutting down",
   session_receive_disabled: "The session has turned off incoming messages",
-  session_rate_limited: "Too many messages to this session in the last minute",
   session_message_too_long: "The message is too long",
 };
 

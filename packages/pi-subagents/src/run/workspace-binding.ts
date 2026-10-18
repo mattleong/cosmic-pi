@@ -414,7 +414,7 @@ export function workspaceControlContext(
       if (writer?.cleanupDisposition === "quarantined")
         return yield* invalid(
           "workspace_process_unsettled",
-          "The workspace writer's process cleanup is quarantined. Inspect it with subagent_status and recover it first.",
+          "The workspace writer's process cleanup is quarantined. Inspect it with agent_read and recover it first.",
         );
       if (
         writer &&

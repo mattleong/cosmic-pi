@@ -61,8 +61,7 @@ describe("subagent child process boundary", () => {
         "read",
         "edit",
         "read",
-        "subagent_start",
-        "subagent_future",
+        "agent_start",
         "herdr_agent_start",
         "herdr_agent_future",
         "workflow",
@@ -80,7 +79,7 @@ describe("subagent child process boundary", () => {
         "read",
         "edit",
         "bash",
-        "contact_parent",
+        "agent_contact_parent",
         ...NESTED_SUBAGENT_TOOL_NAMES,
         ...AGENT_TOOL_NAMES,
       ]);
@@ -98,7 +97,7 @@ describe("subagent child process boundary", () => {
         "session_send",
         "session_read",
       ]);
-      expect(policy.excluded).not.toContain("subagent_");
+      expect(policy.excluded.split(",")).not.toContain("agent_start");
       for (const name of AGENT_TOOL_NAMES) expect(policy.excluded.split(",")).not.toContain(name);
     }),
   );

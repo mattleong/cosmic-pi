@@ -7,6 +7,8 @@ import type {
 const DISPOSITIONS: Record<SupervisorAgentSendResult["disposition"], string> = {
   answered: "answered its pending question",
   guided: "delivered as guidance to its current turn",
+  pending:
+    "sent as guidance; delivery confirmation is still pending and it may already have arrived",
   resumed: "resumed the finished run with this message as its assignment",
   woken: "started a new turn for the idle main agent",
   queued: "appended for the busy main agent to read before its turn ends",
@@ -16,7 +18,7 @@ const DISPOSITIONS: Record<SupervisorAgentSendResult["disposition"], string> = {
 const missing = (ids: ReadonlyArray<string>): ReadonlyArray<string> =>
   ids.length === 0 ? [] : [`Not found: ${ids.join(", ")}.`];
 
-/** One line per agent: ID, name, state, role, runtime, and parent. */
+/** One line per agent: ID, name, state, role, model, worktree, attention, and parent. */
 export const agentListText = (result: SupervisorAgentListResult): string =>
   [
     `${result.agents.length} ${result.agents.length === 1 ? "agent" : "agents"}:`,
@@ -25,7 +27,13 @@ export const agentListText = (result: SupervisorAgentListResult): string =>
       const details = [
         entry.state,
         ...(role === undefined ? [] : [role]),
-        ...(entry.runtime === undefined ? [] : [`runtime ${entry.runtime}`]),
+        ...(entry.model !== undefined
+          ? [entry.model]
+          : entry.runtime === undefined
+            ? []
+            : [`runtime ${entry.runtime}`]),
+        ...(entry.worktree === undefined ? [] : [entry.worktree]),
+        ...(entry.attention === undefined ? [] : [entry.attention]),
         ...(entry.parentId === undefined ? [] : [`child of ${entry.parentId}`]),
         ...(entry.self ? ["you"] : []),
       ];
@@ -46,6 +54,7 @@ export const agentReadText = (result: SupervisorAgentReadResult): string =>
       ];
       return [
         `## ${entry.id} ${JSON.stringify(entry.name)} (${notes.join("; ")})`,
+        ...(entry.card === undefined ? [] : [entry.card]),
         entry.text ?? "No message yet.",
       ].join("\n");
     }),
@@ -55,8 +64,5 @@ export const agentReadText = (result: SupervisorAgentReadResult): string =>
 export const agentSendText = (result: SupervisorAgentSendResult): string =>
   [
     `Message ${result.messageId} to ${result.to} ${JSON.stringify(result.name)}: ${result.disposition}, ${DISPOSITIONS[result.disposition]}.`,
-    ...(result.wakeBudgetExhausted
-      ? ["The main agent's wake budget is spent until the user's next prompt."]
-      : []),
     "Do not resend it; any reply arrives as a new message.",
   ].join("\n");

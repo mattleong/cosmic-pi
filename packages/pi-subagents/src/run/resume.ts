@@ -81,7 +81,7 @@ const resumeStateError = (record: RunRecord): InvalidSubagentRequestError | unde
   )
     return invalidRequest(
       "resume_cleanup_unsettled",
-      `Subagent ${id} cleanup is not confirmed; inspect it with subagent_status before resuming.`,
+      `Subagent ${id} cleanup is not confirmed; inspect it with agent_read before resuming.`,
     );
   if (!hasCompletionGenerationCapacity(record))
     return invalidRequest(
@@ -95,7 +95,7 @@ const resumeUnavailableError = (record: RunRecord): InvalidSubagentRequestError 
   const { id, runtime, state } = record.view;
   const recovery =
     state === "failed"
-      ? ` Retry it on its next candidate with subagent_lifecycle({ action: "retry", runIds: ["${id}"] }) or start a new run.`
+      ? ` Retry it on its next candidate with agent_lifecycle({ action: "retry", runIds: ["${id}"] }) or start a new run.`
       : " Start a new run instead.";
   return invalidRequest(
     "backend_resume_unavailable",
@@ -192,7 +192,7 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
             processError(
               "resume",
               "cleanup_timeout",
-              `Subagent ${id} cleanup did not finish within 10 seconds; inspect with subagent_status before retrying resume.`,
+              `Subagent ${id} cleanup did not finish within 10 seconds; inspect it with agent_read before retrying resume.`,
             ),
           ),
       }),

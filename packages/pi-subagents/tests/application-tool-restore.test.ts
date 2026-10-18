@@ -56,7 +56,7 @@ describe("subagent tool activation", () => {
     function* () {
       const { loadout, emit } = yield* restoringApplication(["mcp__docs__search"]);
       yield* emit("session_start", { type: "session_start", reason: "reload" });
-      expect(loadout.active()).toEqual(expect.arrayContaining(["read", "subagent_start"]));
+      expect(loadout.active()).toEqual(expect.arrayContaining(["read", "agent_start"]));
       expect(loadout.restoring.has("mcp__docs__search")).toBe(true);
     },
   );

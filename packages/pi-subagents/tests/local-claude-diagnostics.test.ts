@@ -24,7 +24,7 @@ describe("Claude steering failure metadata", () => {
       const diagnostics = localClaudeDiagnostics(() => [
         "Bash",
         "secret-path-tool",
-        "mcp__pi_subagents_supervisor__supervisor_question",
+        "mcp__pi_subagents_supervisor__agent_contact_parent",
       ]);
       yield* diagnostics.observe("init", "2.1.259");
       yield* TestClock.adjust("298 seconds");
@@ -42,7 +42,7 @@ describe("Claude steering failure metadata", () => {
       expect(error.message).toContain('"activeToolCount":3');
       expect(error.message).toContain('"cliVersion":"2.1.259"');
       expect(error.message).not.toContain("secret");
-      expect(error.message).not.toContain("supervisor_question");
+      expect(error.message).not.toContain("agent_contact_parent");
       expect(error.message).not.toContain("uuid");
     }),
   );

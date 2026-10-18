@@ -2,7 +2,6 @@ import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { absurd } from "effect/Function";
 import type { SubagentRunView } from "../run/model.ts";
 import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
-import { projectRunCardTree, runTreeBranch } from "../ui/run-tree-rows.ts";
 import { encodeSubagentContract, type SubagentContract } from "./contract-schema.ts";
 import { awaitDetails, compactToolDetails, startDetails } from "./details.ts";
 import type { SubagentStartEntry } from "./details-schema.ts";
@@ -10,7 +9,6 @@ import {
   boundToolOutput,
   formatActionFailures,
   formatDetailedRuns,
-  formatRun,
   formatStartResult,
   joinBoundedToolText,
   type RunFormatOptions,
@@ -25,15 +23,16 @@ export interface SubagentExecutionResult {
   readonly startFailures?: ReadonlyArray<SubagentStartFailure>;
   readonly startEntries?: ReadonlyArray<SubagentStartEntry>;
   readonly actionFailures?: ReadonlyArray<SubagentActionFailure>;
-  /** Send targets whose pending question the message answered. */
-  readonly answeredRunIds?: ReadonlyArray<string>;
   readonly attentionRequired?: boolean;
   readonly text?: string;
   readonly contract?: SubagentContract;
 }
 
 export const presentSubagentResult = (
-  input: Exclude<SubagentToolInput, { readonly tool: "subagent_models" | "subagent_workspace" }>,
+  input: Exclude<
+    SubagentToolInput,
+    { readonly tool: typeof SUBAGENT_TOOL_NAME.models | typeof SUBAGENT_TOOL_NAME.workspace }
+  >,
   executionResult: SubagentExecutionResult,
   requestedAwaitIds?: ReadonlyArray<string>,
   formatOptions: RunFormatOptions = {},
@@ -41,7 +40,6 @@ export const presentSubagentResult = (
   const { runs, awaitContextRuns, attentionRequired, text: formattedText } = executionResult;
   const startFailures = executionResult.startFailures ?? [];
   const actionFailures = executionResult.actionFailures ?? [];
-  const answeredRunIds = executionResult.answeredRunIds ?? [];
   const details: unknown =
     input.tool === SUBAGENT_TOOL_NAME.start
       ? startDetails({
@@ -60,32 +58,18 @@ export const presentSubagentResult = (
             action: subagentToolAction(input),
             runs,
             ...(actionFailures.length > 0 && { actionFailures }),
-            ...(answeredRunIds.length > 0 && { answeredRunIds }),
           });
   const detailedText = () => formattedText ?? formatDetailedRuns(runs, "", formatOptions).text;
   const resultText = (): string => {
     if (input.tool === SUBAGENT_TOOL_NAME.start)
       return formattedText ?? formatStartResult(runs, startFailures);
-    const acknowledgement = () =>
-      managementAcknowledgement(subagentToolAction(input), runs, new Set(answeredRunIds));
+    const acknowledgement = () => managementAcknowledgement(subagentToolAction(input), runs);
     if (actionFailures.length > 0)
-      return input.tool === SUBAGENT_TOOL_NAME.status
-        ? detailedText()
-        : joinBoundedToolText([
-            acknowledgement(),
-            formatActionFailures(subagentToolAction(input), actionFailures),
-          ]);
+      return joinBoundedToolText([acknowledgement(), formatActionFailures(actionFailures)]);
     if (runs.length === 0) return "No subagent runs.";
     switch (input.tool) {
-      case SUBAGENT_TOOL_NAME.status:
-        return input.args.runIds === undefined
-          ? projectRunCardTree(runs)
-              .map((row) => `${runTreeBranch(row)}${formatRun(row.run)}`)
-              .join("\n")
-          : detailedText();
       case SUBAGENT_TOOL_NAME.await:
         return detailedText();
-      case SUBAGENT_TOOL_NAME.send:
       case SUBAGENT_TOOL_NAME.lifecycle:
         return acknowledgement();
     }

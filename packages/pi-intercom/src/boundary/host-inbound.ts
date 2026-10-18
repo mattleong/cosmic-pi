@@ -1,5 +1,4 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
 import { invokeHostCallback, latestAssistantText, safeTextPrefix } from "pi-cosmic-core";
@@ -56,9 +55,9 @@ export const hostIntercomInbound = (
   });
 
   const deliver = (message: InboundMessage) =>
-    Effect.flatMap(Clock.currentTimeMillis, (now) => {
+    Effect.suspend(() => {
       const outcome = invokeHostCallback(
-        () => delivery.deliver(message, now, isCurrent),
+        () => delivery.deliver(message, isCurrent),
         Result.fail("session_unavailable" as const),
       );
       return Result.isSuccess(outcome)

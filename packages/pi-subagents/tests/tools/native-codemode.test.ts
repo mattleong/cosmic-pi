@@ -45,7 +45,7 @@ describe("native scripted subagent workflows", () => {
           const h = yield* nativeCodemodeSession(service);
           const result = yield* h.run(
             `
-        const r = await tools.subagent_start({agents:[
+        const r = await tools.agent_start({agents:[
           {task:'Implementation belongs to the main agent',profile:'worker'},
           {task:'Map the entry points',profile:'scout',name:'entry-scout'}
         ]});
@@ -65,7 +65,7 @@ describe("native scripted subagent workflows", () => {
           });
           expect(requests.map((started) => started.writeIntent)).toEqual(["read-only"]);
           yield* h.call(
-            "subagent_start",
+            "agent_start",
             {
               agents: [{ task: "Authorized direct implementation", profile: "worker" }],
             },
@@ -87,19 +87,19 @@ describe("native scripted subagent workflows", () => {
             interrupt: (id) => Effect.succeed(view({ id, state: "paused" })),
           });
           const h = yield* nativeCodemodeSession(service);
-          for (const name of ["subagent_send", "subagent_workspace"])
+          for (const name of ["agent_send", "agent_worktree"])
             expect(h.session.getCallableToolNames()).not.toContain(name);
           expect(h.session.getActiveToolNames()).toEqual(
-            expect.arrayContaining(["subagent_send", "subagent_workspace"]),
+            expect.arrayContaining(["agent_send", "agent_worktree"]),
           );
           const result = yield* h.run(
             `
         const rejected = [];
         for (const action of ['retry','resume','interrupt']) {
-          try { await tools.subagent_lifecycle({action,runIds:['run-1']}); }
+          try { await tools.agent_lifecycle({action,runIds:['run-1']}); }
           catch { rejected.push(action); }
         }
-        const stopped = await tools.subagent_lifecycle({action:'stop',runIds:['run-1','missing']});
+        const stopped = await tools.agent_lifecycle({action:'stop',runIds:['run-1','missing']});
         ${print("{rejected,stopped}")}
       `,
             callId,
@@ -115,7 +115,7 @@ describe("native scripted subagent workflows", () => {
             },
           });
           const direct = yield* h.call(
-            "subagent_lifecycle",
+            "agent_lifecycle",
             {
               action: "interrupt",
               runIds: ["run-1"],
@@ -136,7 +136,7 @@ describe("native scripted subagent workflows", () => {
           const h = yield* nativeCodemodeSession(service);
           const started = yield* h.run(
             `
-            const r = await tools.subagent_start({agents:[{task:"Map the entry points",profile:"scout"}]});
+            const r = await tools.agent_start({agents:[{task:"Map the entry points",profile:"scout"}]});
             ${print("r")}
           `,
             callId,
@@ -150,7 +150,7 @@ describe("native scripted subagent workflows", () => {
           ).toMatchObject({ code: "scripted_subtree_writer_not_supported" });
           expect(yield* service.list).toHaveLength(1);
           const direct = yield* h.call(
-            "subagent_start",
+            "agent_start",
             {
               agents: [{ task: "Separately authorized implementation", profile: "worker" }],
             },
@@ -175,7 +175,7 @@ describe("native scripted subagent workflows", () => {
           const h = yield* nativeCodemodeSession(signalAwaitEntry(service, entered));
           const script = yield* h
             .run(
-              `await tools.subagent_await({runIds:[${JSON.stringify(run.id)}],until:'all_finished'});`,
+              `await tools.agent_await({runIds:[${JSON.stringify(run.id)}],until:'all_finished'});`,
               callId,
             )
             .pipe(Effect.forkScoped);
@@ -189,7 +189,7 @@ describe("native scripted subagent workflows", () => {
             fixture.notifications.some((notification) => notification.type === "question"),
           );
           const direct = yield* h.call(
-            "subagent_await",
+            "agent_await",
             { runIds: [run.id], until: "all_finished" },
             callId,
           );
@@ -210,7 +210,7 @@ describe("native scripted subagent workflows", () => {
         const h = yield* nativeCodemodeSession(signalAwaitEntry(service, entered));
         const script = yield* h
           .run(`
-        await tools.subagent_await({runIds:[${JSON.stringify(run.id)}],until:'all_finished'});
+        await tools.agent_await({runIds:[${JSON.stringify(run.id)}],until:'all_finished'});
         ${print("{discarded:true}")}
       `)
           .pipe(Effect.forkScoped);
@@ -218,15 +218,10 @@ describe("native scripted subagent workflows", () => {
         fixture.fake.controls[0]!.settle("Recoverable workflow report");
         expect(output((yield* Fiber.join(script)).text)).toEqual({ discarded: true });
         const result = yield* h.run(`
-        const status = await tools.subagent_status({runIds:[${JSON.stringify(run.id)}],includeDeliveredReports:true});
-        ${print("status.targets[0].report")}
+        const read = await tools.agent_read({agentIds:[${JSON.stringify(run.id)}]});
+        ${print("{text:read.agents[0].text}")}
       `);
-        expect(output(result.text)).toEqual({
-          status: "read_back",
-          text: "Recoverable workflow report",
-        });
-        const ordinary = yield* h.call("subagent_status", { runIds: [run.id] });
-        expect(ordinary.text).not.toContain("Recoverable workflow report");
+        expect(output(result.text)).toEqual({ text: "Recoverable workflow report" });
         expect(
           fixture.notifications.filter((notification) => notification.type === "completed"),
         ).toEqual([]);
@@ -254,7 +249,7 @@ describe("native scripted subagent workflows", () => {
       });
       const h = yield* nativeCodemodeSession(service);
       const script = yield* h
-        .run("await tools.subagent_await({runIds:['run-1'],until:'all_finished'});")
+        .run("await tools.agent_await({runIds:['run-1'],until:'all_finished'});")
         .pipe(Effect.forkScoped);
       yield* Deferred.await(entered);
       yield* Effect.promise(() => h.session.abort());
@@ -262,7 +257,7 @@ describe("native scripted subagent workflows", () => {
       expect(interrupted).toBe(true);
       wait = false;
       const result = yield* h.run(
-        `const r=await tools.subagent_await({runIds:['run-1'],until:'all_finished'});${print("r.outcome")}`,
+        `const r=await tools.agent_await({runIds:['run-1'],until:'all_finished'});${print("r.outcome")}`,
       );
       expect(output(result.text)).toBe("finished");
     }),

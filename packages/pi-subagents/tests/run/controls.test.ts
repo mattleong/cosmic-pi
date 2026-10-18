@@ -46,7 +46,7 @@ describe("SubagentService", () => {
       });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "waiting_for_parent");
       backend.controls[0]?.offer({
-        type: "supervisor_question_cancelled",
+        type: "parent_question_cancelled",
         assignmentEpoch: 1,
         requestId: "question-cancelled",
       });
@@ -225,9 +225,7 @@ describe("SubagentService", () => {
       expect(paused.state).toBe("paused");
       expect(paused.question).toBeUndefined();
       const guidanceFailure = yield* Effect.flip(service.send(run.id, "Continue."));
-      expect(guidanceFailure.message).toContain(
-        `subagent_lifecycle({ action: "resume", runIds: ["${run.id}"] })`,
-      );
+      expect(guidanceFailure.message).toContain(`agent_send({ to: "${run.id}", message: "..." })`);
 
       const resumed = yield* service.resume(run.id);
       expect(resumed.state).toBe("running");

@@ -24,7 +24,7 @@ const output: AgentToolResult<unknown> = {
 };
 const SAMPLES = [
   {
-    name: "subagent_start",
+    name: "agent_start",
     args: { agents: [{ task: "COMPLETE_TASK_INPUT", profile: "scout" }] },
     evidence: ["COMPLETE_TASK_INPUT", "COMPLETE_OUTPUT recovery /tmp/evidence.txt"],
   },
@@ -103,7 +103,7 @@ describe("subagent tool history replay", () => {
       const lazy = SAMPLES.map((sample) => ({ sample, row: app.coldRow(sample) }));
       const retired = SAMPLES.map((sample) => ({ sample, row: app.coldRow(sample) }));
       yield* app.emit("session_start", { type: "session_start", reason: "startup" });
-      expect(app.host.active()).toContain("subagent_start");
+      expect(app.host.active()).toContain("agent_start");
       const first = new Map(SAMPLES.map((sample) => [sample, app.registeredFrames(sample)]));
       for (const { sample, row, cold } of drawn) {
         const adopted = frames(row, sample);

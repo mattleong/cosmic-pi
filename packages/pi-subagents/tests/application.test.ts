@@ -167,16 +167,20 @@ describe("subagent Pi registration", () => {
         question: { requestId: "current-question", message: "Proceed?" },
       });
       const send = vi.fn(() =>
-        Effect.succeed({ delivery: "answered" as const, run: view({ id: pending.id }) }),
+        Effect.succeed({
+          messageId: "message-1",
+          to: pending.id,
+          name: pending.name,
+          disposition: "answered" as const,
+        }),
       );
       const service = subagentServiceDouble({
         visibleList: () => Effect.succeed([view({ id: "caller" }), pending]),
-        authorizeTargets: () => Effect.void,
-        send,
+        agentSend: send,
       });
       const replyRequest = encodeSubagentProxyInput({
-        tool: "subagent_send",
-        args: { runIds: [pending.id], message: "Yes" },
+        tool: "agent_send",
+        args: { to: pending.id, message: "Yes" },
       });
       const dispatch = (options: SubagentLayers.SubagentLayerOptions) =>
         options
@@ -190,7 +194,7 @@ describe("subagent Pi registration", () => {
       });
       expect(send).not.toHaveBeenCalled();
       yield* dispatch(current).pipe(Effect.orDie);
-      expect(send).toHaveBeenCalledWith(pending.id, "Yes", undefined);
+      expect(send).toHaveBeenCalledWith({ kind: "run", runId: "caller" }, pending.id, "Yes");
       current.notify({
         type: "question",
         id: "current",
@@ -326,10 +330,10 @@ describe("subagent Pi registration", () => {
     const ctx = sessionContext({ isProjectTrusted: () => false });
     const { emit, tools } = applicationFixture();
     yield* settle(() => emit("session_start", ctx));
-    const oldModels = tools.get("subagent_models");
+    const oldModels = tools.get("agent_profiles");
     expect(oldModels).toBeDefined();
     yield* settle(() => emit("session_tree", ctx));
-    const currentModels = tools.get("subagent_models");
+    const currentModels = tools.get("agent_profiles");
     expect(currentModels).not.toBe(oldModels);
     yield* step(() =>
       expect(oldModels!.execute("old-models", {}, undefined, undefined, ctx)).rejects.toThrow(),
@@ -602,7 +606,7 @@ describe("subagent Pi registration", () => {
 
       ctx = contextFor("application-compatible-new-session");
       yield* settle(() => emit("session_start", ctx, { type: "session_start", reason: "new" }));
-      expect(tools.active()).toContain("subagent_start");
+      expect(tools.active()).toContain("agent_start");
       expect(Object.hasOwn(globalThis, reloadSlot)).toBe(false);
     },
   );
@@ -636,7 +640,7 @@ describe("subagent Pi registration", () => {
         );
       const ctx = contextFor("application-reload-session");
       const hasSessionOverride = (context: ExtensionToolContext): Effect.Effect<boolean> => {
-        const tool = tools.get("subagent_models");
+        const tool = tools.get("agent_profiles");
         if (!tool) return Effect.succeed(false);
         return Effect.promise(() => tool.execute("models", {}, undefined, undefined, context)).pipe(
           Effect.map((result) =>

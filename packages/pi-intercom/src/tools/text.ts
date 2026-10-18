@@ -80,8 +80,6 @@ const REFUSAL_TEXT: Record<ToolRefusalCode, (to: string, id: string) => string> 
   session_unavailable: (to) => `${to} is shutting down or being replaced. Nothing was delivered.`,
   session_receive_disabled: (to) =>
     `${to} has turned off messages from other sessions. Nothing was delivered.`,
-  session_rate_limited: (to) =>
-    `${to} refused the message: it is receiving too many messages. Wait at least a minute before sending again.`,
   session_message_too_long: () =>
     `The message is longer than ${MAX_MESSAGE_CHARS} characters. Shorten it and send again.`,
 };

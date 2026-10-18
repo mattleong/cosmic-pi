@@ -56,10 +56,10 @@ const servicesWith = (agents: JsonObject, reviewer: JsonObject | JsonObject[] = 
   profileServiceFor({ profiles: { reviewer }, agents });
 
 const startWith = (requests: StartSubagentRequest[], options: CaptureOptions) =>
-  captureSubagentTools(startCapturingService(requests), options).get("subagent_start");
+  captureSubagentTools(startCapturingService(requests), options).get("agent_start");
 
 const compactIssues = (
-  tool: "subagent_start" | "subagent_models",
+  tool: "agent_start" | "agent_profiles",
   args: JsonObject,
   details: SubagentStartDetails | typeof SubagentModelsDetailsSchema.Type,
 ) =>
@@ -67,7 +67,7 @@ const compactIssues = (
     phase: "settled",
     args,
     result: { content: [{ type: "text", text: "" }], details },
-    context: renderContextFixture({ isError: tool === "subagent_start" }),
+    context: renderContextFixture({ isError: tool === "agent_start" }),
   })?.issues ?? [];
 
 const issueStyleProblems = (issues: ReturnType<typeof compactIssues>) =>
@@ -219,7 +219,7 @@ describe("custom agent launches", () => {
       const requests: StartSubagentRequest[] = [];
       const profiles = servicesWith({
         denied: agentDefinition({
-          tools: { deny: ["bash", "contact_parent", ...AGENT_TOOL_NAMES] },
+          tools: { deny: ["bash", "agent_contact_parent", ...AGENT_TOOL_NAMES] },
         }),
         allowed: agentDefinition({ tools: { allow: ["read", "session_send"] } }),
       });
@@ -230,8 +230,8 @@ describe("custom agent launches", () => {
             "read",
             "bash",
             "grep",
-            "contact_parent",
-            "subagent_start",
+            "agent_contact_parent",
+            "agent_start",
             "agent_send",
             "session_send",
           ],
@@ -245,12 +245,15 @@ describe("custom agent launches", () => {
       );
       const toolsFor = (agent: string) =>
         requests.find((request) => request.agent === agent)?.activeTools;
-      expect(toolsFor("denied")).toEqual(["read", "grep", "contact_parent"]);
-      expect(toolsFor("allowed")).toEqual(["read", "contact_parent"]);
-      // The child launch always enables agent coordination and never cross-session messaging.
+      expect(toolsFor("denied")).toEqual(["read", "grep"]);
+      expect(toolsFor("allowed")).toEqual(["read"]);
+      // The child launch always enables parent contact and agent coordination, and never
+      // cross-session messaging.
       for (const agent of ["denied", "allowed"]) {
         const policy = childToolPolicy(toolsFor(agent) ?? []);
-        expect(policy.enabled).toEqual(expect.arrayContaining([...AGENT_TOOL_NAMES]));
+        expect(policy.enabled).toEqual(
+          expect.arrayContaining(["agent_contact_parent", ...AGENT_TOOL_NAMES]),
+        );
         expect(policy.enabled).not.toContain("session_send");
         expect(policy.excluded.split(",")).toContain("session_send");
       }
@@ -277,7 +280,7 @@ describe("custom agent launches", () => {
       };
       const result = yield* invokeOptionalTool(tool, args);
       expect(requests).toEqual([]);
-      const issues = compactIssues("subagent_start", args, decodeStartDetails(result?.details));
+      const issues = compactIssues("agent_start", args, decodeStartDetails(result?.details));
       expect(issues.length).toBeGreaterThan(0);
       expect(issueStyleProblems(issues)).toEqual([]);
       expect(result?.details).toMatchObject({
@@ -338,19 +341,29 @@ describe("custom agent status", () => {
     function* () {
       const run = view({ id: "agent-7", profile: "reviewer", agent: "auth-reviewer" });
       const service = subagentServiceDouble({
-        withStatusObservations: (_ids, use) => use({ observations: [{ run }], missingIds: [] }),
+        agentRead: () =>
+          Effect.succeed({
+            agents: [
+              {
+                kind: "run",
+                id: run.id,
+                name: run.name,
+                state: run.state,
+                textStatus: "none",
+                truncated: false,
+                reportGeneration: 0,
+                run,
+              },
+            ],
+            missingIds: [],
+          }),
       });
-      const result = yield* invokeOptionalTool(
-        captureSubagentTools(service).get("subagent_status"),
-        {
-          runIds: [run.id],
-        },
-      );
-      expect(result?.details).toMatchObject({
-        cards: [{ id: run.id, agent: "auth-reviewer", profile: "reviewer" }],
+      const result = yield* invokeOptionalTool(captureSubagentTools(service).get("agent_read"), {
+        agentIds: [run.id],
       });
+      expect(result?.content[0]?.text).toContain("auth-reviewer (reviewer)");
       expect(result?.structuredContent).toMatchObject({
-        targets: [{ runId: run.id, agent: "auth-reviewer", profile: "reviewer" }],
+        agents: [{ id: run.id, status: { agent: "auth-reviewer", profile: "reviewer" } }],
       });
     },
   );
@@ -387,7 +400,7 @@ describe("custom agent retry", () => {
       profiles: profileServiceFor(undefined),
       activeTools: ["read", "bash"],
     });
-    yield* invokeOptionalTool(tools.get("subagent_lifecycle"), {
+    yield* invokeOptionalTool(tools.get("agent_lifecycle"), {
       action: "retry",
       runIds: ["agent-1"],
     });
@@ -415,7 +428,7 @@ describe("custom agent discovery", () => {
       },
     });
     const result = yield* invokeOptionalTool(
-      captureSubagentTools(subagentServiceDouble({}), { profiles }).get("subagent_models"),
+      captureSubagentTools(subagentServiceDouble({}), { profiles }).get("agent_profiles"),
       {},
     );
     const details = decodeModelsDetails(result?.details);
@@ -436,7 +449,7 @@ describe("custom agent discovery", () => {
         candidates: [expect.objectContaining({ runtime: "claude", status: "skipped" })],
       }),
     ]);
-    const issues = compactIssues("subagent_models", {}, details);
+    const issues = compactIssues("agent_profiles", {}, details);
     expect(issues.map((issue) => issue.code)).toEqual([
       "agent:claude-only:unavailable",
       "agents:invalid",
@@ -469,8 +482,8 @@ describe("adopted workspaces launched as custom agents", () => {
   const revise = (requests: StartSubagentRequest[], agents: JsonObject) => {
     const tool = captureSubagentTools(adoptedRevision(requests), {
       profiles: profileServiceFor({ profiles: { worker: piParent }, agents }),
-    }).get("subagent_workspace");
-    if (!tool) return Effect.die("subagent_workspace is not registered");
+    }).get("agent_worktree");
+    if (!tool) return Effect.die("agent_worktree is not registered");
     const args = { action: "revise", workspaceId: "orphan", message: "Fix the failing test" };
     return Effect.tryPromise(() => executeTool(tool, args));
   };

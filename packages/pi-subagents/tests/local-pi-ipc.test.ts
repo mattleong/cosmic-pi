@@ -67,7 +67,7 @@ const parentReply = (message = "Proceed."): LocalPiParentControl => ({
 
 const progressContact = (message = "Still working."): LocalPiContact => ({
   channel: "pi-subagents",
-  type: "contact_parent",
+  type: "contact_request",
   requestId: "progress-1",
   kind: "progress",
   message,
@@ -76,9 +76,9 @@ const progressContact = (message = "Still working."): LocalPiContact => ({
 const ignoreParent = { onContact: () => {}, onProtocolError: () => {} };
 
 const isQuestion = (contact: LocalPiContact) =>
-  contact.type === "contact_parent" && contact.kind === "question";
+  contact.type === "contact_request" && contact.kind === "question";
 const hasMessage = (message: string) => (contact: LocalPiContact) =>
-  contact.type === "contact_parent" && contact.message === message;
+  contact.type === "contact_request" && contact.message === message;
 
 describe("Local Pi IPC boundary", () => {
   it("decodes child contacts before exposing them and rejects malformed envelopes", () => {
@@ -174,7 +174,7 @@ describe("Local Pi IPC boundary", () => {
 
       const initial = yield* takeUntil(hasMessage("child-ready"), isQuestion);
       const question = initial.find(isQuestion);
-      if (question?.type !== "contact_parent")
+      if (question?.type !== "contact_request")
         return yield* Effect.die(new Error("The real IPC child did not ask its question."));
 
       yield* ipc.sendControl({

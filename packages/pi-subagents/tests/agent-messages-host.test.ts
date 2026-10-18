@@ -10,14 +10,9 @@ import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
 import { extensionContextFixture, recordingExtensionHost } from "pi-cosmic-core/testing";
 import { vi } from "vitest";
-import {
-  AGENT_MESSAGE_TYPE,
-  agentMainCapabilities,
-  registerAgentMessageBudgetReset,
-} from "../src/boundary/host-agent-messages.ts";
+import { AGENT_MESSAGE_TYPE, agentMainCapabilities } from "../src/boundary/host-agent-messages.ts";
 import { registerParentWake } from "../src/boundary/host-parent-wake.ts";
 import { MAIN_AGENT_ID, type AgentCaller } from "../src/run/agent-messaging.ts";
-import type { SubagentServiceContract } from "../src/run/service.ts";
 import { projectionOf } from "./fixtures/run-view.ts";
 import { localServiceFixture, request, withService } from "./run/fixtures/service-harness.ts";
 
@@ -49,7 +44,6 @@ const settleEvent = (
 const rootSession = () => {
   let idle = true;
   let branch: ReadonlyArray<SessionEntry> = [];
-  let service: SubagentServiceContract | undefined;
   const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>();
   const host = recordingExtensionHost({}, { sendMessage });
   const wake = registerParentWake(host.pi, {
@@ -64,9 +58,6 @@ const rootSession = () => {
   });
   let current = true;
   const main = agentMainCapabilities(host.pi, { wake, session: () => (current ? ctx : undefined) });
-  registerAgentMessageBudgetReset(host.pi, () => {
-    if (service) Effect.runSync(service.resetAgentMessageBudgets);
-  });
   const messages = () =>
     sendMessage.mock.calls.filter(([message]) => message.customType === AGENT_MESSAGE_TYPE);
   return {
@@ -74,9 +65,6 @@ const rootSession = () => {
     ctx,
     main,
     messages,
-    bind: (bound: SubagentServiceContract) => {
-      service = bound;
-    },
     setIdle: (next: boolean) => {
       idle = next;
     },
@@ -100,7 +88,6 @@ describe("agent messages to the main agent", () => {
     const root = rootSession();
     const { layer } = localServiceFixture({ agentMain: root.main });
     return withService(layer, function* (service) {
-      root.bind(service);
       const scout = yield* service.start(request({ name: "api-scout" }));
 
       const woken = yield* service.agentSend(asRun(scout.id), MAIN_AGENT_ID, "Schema found.");
@@ -176,11 +163,10 @@ describe("agent messages to the main agent", () => {
     });
   });
 
-  it.effect("continues a busy main agent for at most its wake budget across settles", () => {
+  it.effect("continues a busy main agent for agent messages at every settle", () => {
     const root = rootSession();
     const { layer } = localServiceFixture({ agentMain: root.main });
     return withService(layer, function* (service) {
-      root.bind(service);
       const scout = yield* service.start(request({ name: "api-scout" }));
       const reviewer = yield* service.start(request({ name: "reviewer" }));
       root.setIdle(false);
@@ -194,7 +180,6 @@ describe("agent messages to the main agent", () => {
       const rounds: Array<{ readonly dispositions: ReadonlyArray<string>; continued: boolean }> =
         [];
       for (let round = 0; round < 5; round += 1) {
-        yield* TestClock.adjust("12 seconds");
         // Two senders' messages during one turn share its single continuation.
         const first = yield* service.agentSend(asRun(scout.id), MAIN_AGENT_ID, "Finding.");
         const second = yield* service.agentSend(asRun(reviewer.id), MAIN_AGENT_ID, "Review.");
@@ -205,15 +190,13 @@ describe("agent messages to the main agent", () => {
           dispositions: [first.disposition, second.disposition],
           continued: settled?.continue === true,
         });
-        if (round === 3)
-          expect(second).toMatchObject({ disposition: "held", wakeBudgetExhausted: true });
       }
       expect(rounds).toEqual([
         { dispositions: ["queued", "queued"], continued: true },
         { dispositions: ["queued", "queued"], continued: true },
         { dispositions: ["queued", "queued"], continued: true },
-        { dispositions: ["held", "held"], continued: false },
-        { dispositions: ["held", "held"], continued: false },
+        { dispositions: ["queued", "queued"], continued: true },
+        { dispositions: ["queued", "queued"], continued: true },
       ]);
       expect(root.messages().every(([, options]) => options?.triggerTurn === false)).toBe(true);
     });
@@ -232,69 +215,6 @@ describe("agent messages to the main agent", () => {
         ],
         missingIds: [],
       });
-    });
-  });
-
-  it.effect("caps a run's messages to a busy main agent until the user sends a prompt", () => {
-    const root = rootSession();
-    const { layer } = localServiceFixture({ agentMain: root.main });
-    return withService(layer, function* (service) {
-      root.bind(service);
-      root.setIdle(false);
-      const scout = yield* service.start(request({ name: "api-scout" }));
-      const send = () =>
-        Effect.gen(function* () {
-          yield* TestClock.adjust("6 seconds");
-          return yield* service.agentSend(asRun(scout.id), MAIN_AGENT_ID, "Status update.");
-        });
-      for (let index = 0; index < 20; index += 1) yield* send();
-      expect(yield* send().pipe(Effect.flip)).toMatchObject({
-        code: "agent_message_budget_exhausted",
-      });
-      expect(root.messages()).toHaveLength(20);
-
-      yield* Effect.promise(() =>
-        root.host.emit("input", root.ctx, { type: "input", text: "go", source: "extension" }),
-      );
-      expect(yield* send().pipe(Effect.flip)).toMatchObject({
-        code: "agent_message_budget_exhausted",
-      });
-
-      yield* Effect.promise(() =>
-        root.host.emit("input", root.ctx, { type: "input", text: "go", source: "interactive" }),
-      );
-      yield* send();
-      expect(root.messages()).toHaveLength(21);
-    });
-  });
-
-  it.effect("starts a new wake budget when the user sends a prompt", () => {
-    const root = rootSession();
-    const { layer } = localServiceFixture({ agentMain: root.main });
-    return withService(layer, function* (service) {
-      root.bind(service);
-      const scout = yield* service.start(request({ name: "api-scout" }));
-      const send = (text: string) =>
-        Effect.gen(function* () {
-          yield* TestClock.adjust("6 seconds");
-          return yield* service.agentSend(asRun(scout.id), MAIN_AGENT_ID, text);
-        });
-      for (const text of ["one", "two", "three"])
-        expect((yield* send(text)).disposition).toBe("woken");
-      expect(yield* send("four")).toMatchObject({
-        disposition: "held",
-        wakeBudgetExhausted: true,
-      });
-
-      yield* Effect.promise(() =>
-        root.host.emit("input", root.ctx, { type: "input", text: "go", source: "extension" }),
-      );
-      expect((yield* send("five")).disposition).toBe("held");
-
-      yield* Effect.promise(() =>
-        root.host.emit("input", root.ctx, { type: "input", text: "go", source: "interactive" }),
-      );
-      expect((yield* send("six")).disposition).toBe("woken");
     });
   });
 });

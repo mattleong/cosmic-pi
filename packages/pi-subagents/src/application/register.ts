@@ -39,10 +39,7 @@ import {
   runsStoppedByReplacement,
 } from "../boundary/host-stopped-runs.ts";
 import { registerParentWake } from "../boundary/host-parent-wake.ts";
-import {
-  agentMainCapabilities,
-  registerAgentMessageBudgetReset,
-} from "../boundary/host-agent-messages.ts";
+import { agentMainCapabilities } from "../boundary/host-agent-messages.ts";
 import { sessionReportArchive, type ReportArchive } from "../boundary/report-archive.ts";
 import { subagentSessionFooter } from "../boundary/host-session-footer.ts";
 import { restoreSessionUsage, sessionUsageRecorder } from "../boundary/host-session-usage.ts";
@@ -168,12 +165,6 @@ export function registerSubagentApplication(
       slot.fork(Effect.sleep(PARENT_IDLE_CHECK_INTERVAL).pipe(Effect.andThen(Effect.sync(check))));
     },
   });
-  registerAgentMessageBudgetReset(pi, () => {
-    if (currentActivation)
-      slot
-        .run(SubagentService.use((service) => service.resetAgentMessageBudgets))
-        .catch(() => undefined);
-  });
   let reportArchive: ReportArchive | undefined;
   const notify = hostNotifier(pi, {
     delivery: wake,
@@ -297,11 +288,17 @@ export function registerSubagentApplication(
               // The authenticated channel names the caller; agent payloads carry no identity.
               const agentInput = decodeAgentProxyRequest(request);
               if (agentInput instanceof InvalidSubagentRequestError) return yield* agentInput;
-              if (agentInput)
-                return yield* executeAgentActionEffect(agentInput, {
-                  kind: "run",
-                  runId: callerRunId,
-                }).pipe(Effect.provideService(SubagentService, service));
+              if (agentInput) {
+                const callerCwd = (yield* service.visibleList(callerRunId)).find(
+                  (run) => run.id === callerRunId,
+                )?.cwd;
+                return yield* executeAgentActionEffect(
+                  agentInput,
+                  { kind: "run", runId: callerRunId },
+                  false,
+                  callerCwd,
+                ).pipe(Effect.provideService(SubagentService, service));
+              }
               const decoded = decodeSubagentProxyParent(request);
               if (decoded instanceof InvalidSubagentRequestError) return yield* decoded;
               const parent = decoded.parentContext

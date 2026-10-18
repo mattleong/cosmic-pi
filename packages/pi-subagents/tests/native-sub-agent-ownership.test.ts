@@ -177,43 +177,40 @@ const startedClaude = Effect.gen(function* () {
 });
 
 describe("native sub-agent report ownership", () => {
-  it.effect("Claude refuses a native sub-agent's report or question before the call runs", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { sent, hookCallback, answerTo } = yield* startedClaude;
-        const registration = sent.find(isHookRegistration);
-        const matchers = registration?.request.hooks.PreToolUse.flatMap((entry) =>
-          entry.matcher.split("|"),
-        );
-        expect(matchers).toEqual(
-          expect.arrayContaining([
-            supervisorTool("supervisor_submit_report"),
-            supervisorTool("supervisor_question"),
-            supervisorTool("agent_send"),
-          ]),
-        );
-        for (const name of [
-          "supervisor_progress",
-          "supervisor_warning",
-          "agent_list",
-          "agent_read",
-        ])
-          expect(matchers).not.toContain(supervisorTool(name));
+  it.effect(
+    "Claude refuses a native sub-agent's report or parent contact before the call runs",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { sent, hookCallback, answerTo } = yield* startedClaude;
+          const registration = sent.find(isHookRegistration);
+          const matchers = registration?.request.hooks.PreToolUse.flatMap((entry) =>
+            entry.matcher.split("|"),
+          );
+          expect(matchers).toEqual(
+            expect.arrayContaining([
+              supervisorTool("agent_submit_report"),
+              supervisorTool("agent_contact_parent"),
+              supervisorTool("agent_send"),
+            ]),
+          );
+          for (const name of ["agent_list", "agent_read"])
+            expect(matchers).not.toContain(supervisorTool(name));
 
-        hookCallback("sub-agent-report", supervisorTool("supervisor_submit_report"), "a6a15e2");
-        const refused = yield* answerTo("sub-agent-report");
-        expect(refused.hookSpecificOutput?.permissionDecision).toBe("deny");
-        expect(refused.hookSpecificOutput?.permissionDecisionReason).toContain("parent");
+          hookCallback("sub-agent-report", supervisorTool("agent_submit_report"), "a6a15e2");
+          const refused = yield* answerTo("sub-agent-report");
+          expect(refused.hookSpecificOutput?.permissionDecision).toBe("deny");
+          expect(refused.hookSpecificOutput?.permissionDecisionReason).toContain("parent");
 
-        hookCallback("sub-agent-send", supervisorTool("agent_send"), "a6a15e2");
-        expect((yield* answerTo("sub-agent-send")).hookSpecificOutput?.permissionDecision).toBe(
-          "deny",
-        );
+          hookCallback("sub-agent-send", supervisorTool("agent_send"), "a6a15e2");
+          expect((yield* answerTo("sub-agent-send")).hookSpecificOutput?.permissionDecision).toBe(
+            "deny",
+          );
 
-        hookCallback("main-report", supervisorTool("supervisor_submit_report"));
-        expect((yield* answerTo("main-report")).hookSpecificOutput).toBeUndefined();
-      }),
-    ),
+          hookCallback("main-report", supervisorTool("agent_submit_report"));
+          expect((yield* answerTo("main-report")).hookSpecificOutput).toBeUndefined();
+        }),
+      ),
   );
 
   it.effect("Claude starts only when the supervisor server lists exactly its tool set", () =>

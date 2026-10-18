@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { FailedStartRecovery, SubagentRunView } from "../../src/run/model.ts";
 import type { SubagentRunObservation } from "../../src/run/service.ts";
-import { cancelledAwaitContract, startContract, statusContract } from "../../src/tools/contract.ts";
+import { awaitContract, cancelledAwaitContract, startContract } from "../../src/tools/contract.ts";
 import {
   decodeSubagentContract,
   type SubagentContract,
@@ -16,6 +16,21 @@ const decoded = <Tool extends SubagentContractTool, Contract extends SubagentCon
   expect(decodeSubagentContract(tool)(contract)).toEqual(contract);
   return contract;
 };
+
+/** Observed targets as an await returns them. */
+const observedTargets = (
+  observations: ReadonlyArray<SubagentRunObservation>,
+  rendered: ReadonlyArray<string> = [],
+) =>
+  decoded(
+    "agent_await",
+    awaitContract({
+      observations,
+      fullyRenderedIds: new Set(rendered),
+      until: "all_finished",
+      requestedRunIds: observations.map((observation) => observation.run.id),
+    }),
+  ).targets;
 
 const receipt = (id: string) => ({ id, generation: 1, claimToken: `claim-${id}` });
 const finished = (id: string, overrides: Partial<SubagentRunView> = {}) =>
@@ -34,7 +49,7 @@ describe("start contract", () => {
   it("keeps request order, full started IDs, and admitted-run recovery for a partial batch", () => {
     const longId = `run-${"x".repeat(300)}`;
     const contract = decoded(
-      "subagent_start",
+      "agent_start",
       startContract(
         [
           { task: "a", name: "first", profile: "worker" },
@@ -92,14 +107,7 @@ describe("start contract", () => {
 
 describe("report disposition", () => {
   const report = (observation: SubagentRunObservation, rendered: ReadonlyArray<string> = []) =>
-    decoded(
-      "subagent_status",
-      statusContract({
-        observations: [observation],
-        fullyRenderedIds: new Set(rendered),
-        missingRunIds: [],
-      }),
-    ).targets[0]!.report;
+    observedTargets([observation], rendered)[0]!.report;
 
   it("delivers text only for a fully rendered owned receipt", () => {
     const run = finished("a", { finalText: "Done.", reportStatus: "available" });
@@ -117,15 +125,8 @@ describe("report disposition", () => {
 describe("run targets", () => {
   it("name the agent whose message resumed the run", () => {
     const resumedBy = 'agent-r1-3 "api-scout" (scout, child of main)';
-    const contract = decoded(
-      "subagent_status",
-      statusContract({
-        observations: [{ run: finished("a", { assignmentEpoch: 2, resumedBy }) }],
-        fullyRenderedIds: new Set(),
-        missingRunIds: [],
-      }),
-    );
-    expect(contract.targets[0]).toMatchObject({ runId: "a", resumedBy });
+    const [target] = observedTargets([{ run: finished("a", { assignmentEpoch: 2, resumedBy }) }]);
+    expect(target).toMatchObject({ runId: "a", resumedBy });
   });
 });
 
@@ -133,7 +134,7 @@ describe("await contract", () => {
   it("cancels without exposing or consuming any report and keeps requested IDs", () => {
     const secretReport = "FINAL REPORT BODY";
     const contract = decoded(
-      "subagent_await",
+      "agent_await",
       cancelledAwaitContract({
         runs: [
           finished("done", { finalText: secretReport, reportStatus: "available" }),
@@ -162,30 +163,23 @@ describe("await contract", () => {
 
 describe("cleanup evidence", () => {
   it("redacts bounded cleanup diagnostics", () => {
-    const target = decoded(
-      "subagent_status",
-      statusContract({
-        observations: [
-          {
-            run: view({
-              writeIntent: "writer",
-              state: "stopped",
-              cleanup: {
-                disposition: "quarantined",
-                recovery: "manual",
-                diagnostic: {
-                  phase: "writer-lease",
-                  code: "x".repeat(100),
-                  message: `token=lease-secret\n${"detail ".repeat(300)}`,
-                },
-              },
-            }),
+    const target = observedTargets([
+      {
+        run: view({
+          writeIntent: "writer",
+          state: "stopped",
+          cleanup: {
+            disposition: "quarantined",
+            recovery: "manual",
+            diagnostic: {
+              phase: "writer-lease",
+              code: "x".repeat(100),
+              message: `token=lease-secret\n${"detail ".repeat(300)}`,
+            },
           },
-        ],
-        fullyRenderedIds: new Set(),
-        missingRunIds: [],
-      }),
-    ).targets[0]!;
+        }),
+      },
+    ])[0]!;
     expect(target.cleanup?.diagnostic?.code?.length).toBeLessThanOrEqual(80);
     expect(target.cleanup?.diagnostic?.message.length).toBeLessThanOrEqual(1_024);
     expect(JSON.stringify(target)).not.toContain("lease-secret");
@@ -213,12 +207,8 @@ describe("privacy and strict decoding", () => {
   });
 
   it("projects only explicit, redacted metadata", () => {
-    const contract = statusContract({
-      observations: [{ run: leakyRun }],
-      fullyRenderedIds: new Set(["a"]),
-      missingRunIds: [],
-    });
-    const serialized = JSON.stringify(decoded("subagent_status", contract));
+    const targets = observedTargets([{ run: leakyRun }], ["a"]);
+    const serialized = JSON.stringify(targets);
     for (const secret of [
       "TASK-SECRET",
       "sk-name-abcdefghijklmnopqrstuvwxyz",
@@ -235,9 +225,6 @@ describe("privacy and strict decoding", () => {
       "\u001b",
     ])
       expect(serialized).not.toContain(secret);
-    expect(contract.targets[0]?.warnings.map((warning) => warning.source)).toEqual([
-      "child",
-      "system",
-    ]);
+    expect(targets[0]?.warnings.map((warning) => warning.source)).toEqual(["child", "system"]);
   });
 });

@@ -35,7 +35,7 @@ it.each(["compact", "preview"] as const)(
   (style) => {
     const tool = withPresentationSettings(
       { toolCallCollapsedStyle: style },
-      () => registered().find((entry) => entry.name === "subagent_start")!,
+      () => registered().find((entry) => entry.name === "agent_start")!,
     );
     const task = `${"Task context. ".repeat(60)}\nTASK_TAIL\n\u009dCONTROL_ADJACENT_EVIDENCE`;
     const input = {
@@ -75,15 +75,15 @@ it("retains malformed and historical evidence through expansion for every root r
 });
 
 it("preserves host-flagged uncertainty, exact input and full output through compact expansion", () => {
-  const tool = registered().find((entry) => entry.name === "subagent_send")!;
+  const tool = registered().find((entry) => entry.name === "agent_lifecycle")!;
   const details = compactToolDetails({
-    action: "send",
+    action: "interrupt",
     runs: [],
     actionFailures: [
       {
-        id: "target",
-        code: "claude_steering_outcome_uncertain",
-        message: "Native input may already have arrived. Do not resend.",
+        id: "exact-unique-target-input",
+        code: "interrupt_outcome_uncertain",
+        message: "The pause request may already have applied. Do not resend.",
       },
     ],
   });
@@ -96,15 +96,15 @@ it("preserves host-flagged uncertainty, exact input and full output through comp
   const original = structuredClone(result);
   const harness = createToolPresentationHarness(tool, { width: 160 });
   for (const { expanded, text } of harness.cycle(
-    { runIds: ["target"], message: "exact unique guidance input" },
+    { action: "interrupt", runIds: ["exact-unique-target-input"] },
     result,
     { overrides: () => ({ isError: true }) },
   )) {
-    expect(text).toContain("unconfirmed");
+    expect(text).toMatch(/confirm/i);
     expect(text).not.toMatch(/\bfail(?:ed|ure)?\b|\bsent\b/i);
-    expect(text.includes("claude_steering_outcome_uncertain")).toBe(expanded);
+    expect(text.includes("interrupt_outcome_uncertain")).toBe(expanded);
     expect(text.includes("Do not resend")).toBe(expanded);
-    expect(text.includes("exact unique guidance input")).toBe(expanded);
+    expect(text.includes("exact-unique-target-input")).toBe(expanded);
     expect(text.includes("full output beyond bounded projection; middleware evidence")).toBe(
       expanded,
     );
@@ -115,11 +115,11 @@ it("animates with the registering owner and releases the ticker on settlement", 
   const scheduler = animationSchedulerProbe();
   const tools = registered(false, { scheduleAnimation: scheduler.schedule });
   const [report] = probeAnimationOwnership(tools, scheduler, {
-    filter: (tool) => tool.name === "subagent_status",
-    args: () => ({ runIds: ["agent-1"] }),
+    filter: (tool) => tool.name === "agent_lifecycle",
+    args: () => ({ action: "stop", runIds: ["agent-1"] }),
     result: () => ({
       content: [],
-      details: compactToolDetails({ action: "status", runs: [] }),
+      details: compactToolDetails({ action: "stop", runs: [] }),
     }),
   });
   expect(report?.scheduled).toBeGreaterThan(0);

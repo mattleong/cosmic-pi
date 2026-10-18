@@ -1,29 +1,29 @@
 export const SUPERVISOR_MCP_REGISTRATION = "pi_subagents_supervisor" as const;
 
-export const SUPERVISOR_MCP_MESSAGE_TOOL_NAMES = [
-  "supervisor_progress",
-  "supervisor_warning",
-  "supervisor_question",
-] as const;
+/** The same name as a Pi child's own tool; `kind` selects progress, a warning, or a question. */
+export const SUPERVISOR_MCP_CONTACT_PARENT_TOOL_NAME = "agent_contact_parent";
+export const SUPERVISOR_MCP_REPORT_TOOL_NAME = "agent_submit_report";
 export const SUPERVISOR_MCP_AGENT_TOOL_NAMES = ["agent_list", "agent_send", "agent_read"] as const;
 export const SUPERVISOR_MCP_TOOL_NAMES = [
-  ...SUPERVISOR_MCP_MESSAGE_TOOL_NAMES,
-  "supervisor_submit_report",
+  SUPERVISOR_MCP_CONTACT_PARENT_TOOL_NAME,
+  SUPERVISOR_MCP_REPORT_TOOL_NAME,
   ...SUPERVISOR_MCP_AGENT_TOOL_NAMES,
 ] as const;
 type SupervisorMcpToolName = (typeof SUPERVISOR_MCP_TOOL_NAMES)[number];
-/** Tools that block on the parent, end the assignment, or speak for the run, so only the child's main agent may call them. */
+/** Tools that reach the parent, end the assignment, or speak for the run, so only the child's main agent may call them. */
 export const SUPERVISOR_MCP_MAIN_AGENT_TOOL_NAMES = [
-  "supervisor_question",
-  "supervisor_submit_report",
+  SUPERVISOR_MCP_CONTACT_PARENT_TOOL_NAME,
+  SUPERVISOR_MCP_REPORT_TOOL_NAME,
   "agent_send",
 ] as const satisfies ReadonlyArray<SupervisorMcpToolName>;
 export const NATIVE_SUB_AGENT_REFUSAL =
-  "Only the main agent can ask the parent a question, message other agents, or submit the final report. You are a native sub-agent: return your findings to the agent that started you instead.";
-export const SUPERVISOR_MCP_MESSAGE_ARGUMENT_KEYS = ["message"] as const;
+  "Only the main agent can contact the parent, message other agents, or submit the final report. You are a native sub-agent: return your findings to the agent that started you instead.";
+export const SUPERVISOR_MCP_CONTACT_KINDS = ["progress", "warning", "question"] as const;
+export const SUPERVISOR_MCP_CONTACT_ARGUMENT_KEYS = ["kind", "message"] as const;
 export const SUPERVISOR_MCP_REPORT_ARGUMENT_KEYS = ["delivery_id", "report"] as const;
 export const SUPERVISOR_MCP_AGENT_SEND_ARGUMENT_KEYS = ["to", "message"] as const;
-export const SUPERVISOR_MCP_AGENT_IDS_ARGUMENT_KEY = "ids" as const;
+export const SUPERVISOR_MCP_AGENT_IDS_ARGUMENT_KEY = "agentIds" as const;
+export const SUPERVISOR_MCP_VERBOSE_ARGUMENT_KEY = "verbose" as const;
 
 export const MAX_SUPERVISOR_MCP_MESSAGE_CHARS = 16_384;
 export const MAX_SUPERVISOR_MCP_REPORT_CHARS = 32_768;

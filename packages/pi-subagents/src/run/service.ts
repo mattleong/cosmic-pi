@@ -241,8 +241,6 @@ export interface SubagentServiceContract extends WorkspaceCoordinatorContract {
     caller: AgentCaller,
     ids: ReadonlyArray<string>,
   ) => Effect.Effect<AgentReadResult, SubagentError>;
-  /** Starts new agent-message and wake budgets; the host calls it on each user prompt. */
-  readonly resetAgentMessageBudgets: Effect.Effect<void>;
   readonly projection: Effect.Effect<SubagentProjection>;
   /** Hands every eligible completion to its notifier now, as a session ends. */
   readonly deliverPendingCompletions: Effect.Effect<void>;
@@ -454,9 +452,11 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     closeExitedScope: cleanup.closeExitedScope,
     failRun: settlement.failRun,
     // Bound to the spawned run, so a child's channel can never name another caller.
-    agentMessagingFor: (runId) => {
+    agentMessagingFor: (runId, cwd) => {
       const caller = { kind: "run", runId } as const;
       return {
+        caller,
+        cwd,
         list: (ids) => Effect.suspend(() => agentMessages.list(caller, ids)),
         send: (to, message) => Effect.suspend(() => agentMessages.send(caller, to, message)),
         read: (ids) => Effect.suspend(() => agentMessages.read(caller, ids)),
@@ -557,7 +557,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     agentList: agentMessages.list,
     agentSend: agentMessages.send,
     agentRead: agentMessages.read,
-    resetAgentMessageBudgets: agentMessages.resetBudgets,
     projection,
     deliverPendingCompletions: delivery.deliverPendingCompletions,
     awaitParentDrain: parentDrainAwaiter({

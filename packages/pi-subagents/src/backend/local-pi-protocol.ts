@@ -83,7 +83,7 @@ const ExtensionUiRequestSchema = Schema.Struct({
   id: ProtocolIdSchema,
   method: ProtocolNameSchema,
 });
-const ContactParentSchema = piSubagentsMessage("contact_parent", {
+const ContactParentSchema = piSubagentsMessage("contact_request", {
   requestId: ProtocolIdSchema,
   kind: Schema.Literals(["progress", "question", "warning"]),
   message: ParentMessageSchema,

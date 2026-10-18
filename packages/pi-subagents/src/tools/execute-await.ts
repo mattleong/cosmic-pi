@@ -121,7 +121,7 @@ export function awaitExecutionFor(
         ? "Root completion-claim cleanup is unconfirmed. Claims may still be held; an immediate replacement await may fail with completion_claim_conflict. This receipt does not acknowledge root cleanup."
         : "Await these IDs again when their results are needed.",
       deliveryAttemptedIds.size > 0
-        ? "Report delivery may have committed before cancellation. Use subagent_status with includeDeliveredReports: true to recover the latest retained delivered reports."
+        ? "Report delivery may have committed before cancellation. Read the latest retained reports with agent_read."
         : "",
       latestRuns.length > 0 ? progressText(latestRuns) : "",
       attentionRecoveryText(latestRuns),

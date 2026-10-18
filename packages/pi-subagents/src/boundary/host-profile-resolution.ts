@@ -312,7 +312,7 @@ const validatedStartInput = (rawInput: SubagentProfileStartSpec) =>
     if (!task)
       return yield* new InvalidSubagentRequestError({
         code: "task_required",
-        message: "subagent_start requires every agent to have a task.",
+        message: "agent_start requires every agent to have a task.",
       });
     const disallowedField = firstDisallowedLaunchOverride(rawInput);
     if (disallowedField)
@@ -440,7 +440,7 @@ const launchedAgent = (
         })
       : new InvalidSubagentRequestError({
           code: "agent_unknown",
-          message: `Unknown agent ${name}\n\nConfigured agents: ${available}. Call subagent_models to list them, or launch a profile instead.`,
+          message: `Unknown agent ${name}\n\nConfigured agents: ${available}. Call agent_profiles to list them, or launch a profile instead.`,
         }),
   );
 };

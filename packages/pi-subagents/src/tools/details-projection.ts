@@ -47,7 +47,6 @@ import {
   type CompactToolActionFailure,
   type InvalidAgentCard,
   type ModelOverrideCard,
-  type RunDetailsAction,
   type SubagentAgentRouteCard,
   type SubagentCardFailure,
   type SubagentProfileRouteCard,
@@ -61,7 +60,6 @@ import type {
   SubagentInvalidAgentView,
   SubagentProfileView,
 } from "./model.ts";
-import { actionFailureDisposition } from "./outcome.ts";
 
 // Collapsed issue messages quote at most 120 characters, so condensed text keeps them complete.
 const CONDENSED_TEXT_CHARS = 256;
@@ -512,26 +510,18 @@ export const condenseProfileRoute = (
   })),
 });
 
-const projectActionFailure = (
-  action: RunDetailsAction,
-  failure: CompactToolActionFailure,
-): CompactToolActionFailure => {
+const projectActionFailure = (failure: CompactToolActionFailure): CompactToolActionFailure => {
   const code = optionalText(failure.code, MAX_ACTION_FAILURE_CODE_CHARS);
-  const pendingDelivery =
-    actionFailureDisposition(action, { code, pendingDelivery: failure.pendingDelivery }) ===
-    "pending";
   return {
     id: requiredText(failure.id, MAX_ACTION_FAILURE_ID_CHARS, "unknown-run"),
     ...(code !== undefined && { code }),
     message: requiredText(failure.message, MAX_ACTION_FAILURE_MESSAGE_CHARS, "Action failed."),
-    ...(pendingDelivery && { pendingDelivery: true as const }),
   };
 };
 
 export const projectActionFailures = (
-  action: RunDetailsAction,
   failures: ReadonlyArray<CompactToolActionFailure> | undefined,
 ): ReadonlyArray<CompactToolActionFailure> | undefined => {
   if (!failures || failures.length === 0) return undefined;
-  return failures.slice(0, MAX_TARGET_RUNS).map((failure) => projectActionFailure(action, failure));
+  return failures.slice(0, MAX_TARGET_RUNS).map(projectActionFailure);
 };

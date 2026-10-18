@@ -60,7 +60,7 @@ const toolTarget = (toolName: string, input: ToolArguments | undefined): string 
     case "find":
     case "glob":
       return [stringField(input, "pattern"), path].filter(Boolean).join(" · ");
-    case "contact_parent":
+    case "agent_contact_parent":
       return [stringField(input, "kind"), stringField(input, "message")].filter(Boolean).join(": ");
     default:
       return fallbackTarget();

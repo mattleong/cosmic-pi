@@ -100,16 +100,16 @@ const setup = function* (cosmicUi?: CosmicUiHostState, delegation?: DelegationMo
     step(
       () => host.commands.get("subagents")?.handler(`settings ${args}`, ctx) ?? Promise.resolve(),
     );
-  const prompt = function* (selectedTools = ["read", "subagent_start"]) {
-    const startGuidelines = host.tools.get("subagent_start")?.promptGuidelines ?? [];
+  const prompt = function* (selectedTools = ["read", "agent_start"]) {
+    const startGuidelines = host.tools.get("agent_start")?.promptGuidelines ?? [];
     const event = beforeAgentStartEvent("Do the work", {
       selectedTools,
-      toolGuidelines: { subagent_start: [...startGuidelines] },
+      toolGuidelines: { agent_start: [...startGuidelines] },
     });
     yield* settle(() => host.emit("before_agent_start", ctx, event));
     return {
       section: event.systemPromptOptions.sections[DELEGATION_PROMPT_SECTION],
-      startGuidelines: event.systemPromptOptions.toolGuidelines.subagent_start ?? [],
+      startGuidelines: event.systemPromptOptions.toolGuidelines.agent_start ?? [],
       registeredGuidelines: startGuidelines,
     };
   };

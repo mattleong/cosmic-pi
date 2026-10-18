@@ -22,7 +22,7 @@ interface RunNotificationRoutingDependencies extends Pick<RunContext, "records" 
 const ancestorMessage = (notification: SubagentNotification): string => {
   if (notification.type === "question")
     return sanitizeOutputText(
-      `Descendant ${notification.name} (${notification.id}) is waiting for a reply.\n\nQuestion: ${notification.message}\n\nAnswer with subagent_send({ runIds: ["${notification.id}"], message: "..." }).`,
+      `Descendant ${notification.name} (${notification.id}) is waiting for a reply.\n\nQuestion: ${notification.message}\n\nAnswer with agent_send({ to: "${notification.id}", message: "..." }).`,
       32 * 1024,
     );
   const run = notification.runs[0];
@@ -36,7 +36,7 @@ const ancestorMessage = (notification: SubagentNotification): string => {
   const warning = run.warning ? `Warning: ${run.warning}\n\n` : "";
   const resumer = resumedByText(run);
   return sanitizeOutputText(
-    `Descendant ${run.name} (${run.id}) ${outcome}.\n\n${resumer ? `${resumer}\n\n` : ""}${warning}${detail}\n\nUse subagent_status or subagent_await for the full run record.`,
+    `Descendant ${run.name} (${run.id}) ${outcome}.\n\n${resumer ? `${resumer}\n\n` : ""}${warning}${detail}\n\nUse agent_read or agent_await for the full run record.`,
     32 * 1024,
   );
 };

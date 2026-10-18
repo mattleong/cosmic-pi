@@ -128,12 +128,12 @@ export function controlOperations(dependencies: RunControlDependencies) {
           if (!steerable)
             return yield* invalidRequest(
               "guidance_outcome_uncertain",
-              `Subagent ${record.view.id} changed state after guidance was sent, so delivery may already have applied. Inspect with subagent_status before retrying.`,
+              `Subagent ${record.view.id} changed state after guidance was sent, so delivery may already have applied. Inspect it with agent_read before retrying.`,
             );
           if (record.replyPendingRequestId)
             return yield* invalidRequest(
               "guidance_outcome_uncertain",
-              `Subagent ${record.view.id} claimed a parent reply after guidance was sent, so delivery may already have applied. Inspect with subagent_status before retrying.`,
+              `Subagent ${record.view.id} claimed a parent reply after guidance was sent, so delivery may already have applied. Inspect it with agent_read before retrying.`,
             );
           message.recordNoticeLocked(record, "guided", now);
           yield* publish;
@@ -186,8 +186,8 @@ export function controlOperations(dependencies: RunControlDependencies) {
       }
       if (record.view.state === "paused" || record.view.state === "completed") {
         const recovery = hasSubagentCapability(record.view, "resume")
-          ? `resume it with subagent_lifecycle({ action: "resume", runIds: ["${id}"] }) before sending guidance`
-          : `this backend cannot resume it; stop it with subagent_lifecycle({ action: "stop", runIds: ["${id}"] }) and start a replacement`;
+          ? `send the message with agent_send({ to: "${id}", message: "..." }) to resume it`
+          : `this backend cannot resume it; stop it with agent_lifecycle({ action: "stop", runIds: ["${id}"] }) and start a replacement`;
         return yield* invalidRequest(
           "run_not_running",
           `Subagent ${id} is ${record.view.state}; ${recovery}.`,
@@ -196,12 +196,12 @@ export function controlOperations(dependencies: RunControlDependencies) {
       if (record.view.state === "starting")
         return yield* invalidRequest(
           "run_starting",
-          `Subagent ${id} is still starting; wait for it to start before retrying subagent_send.`,
+          `Subagent ${id} is still starting; wait for it to start before sending again.`,
         );
       if (record.view.state !== "running")
         return yield* invalidRequest(
           "run_not_running",
-          `Subagent ${id} is ${record.view.state} and cannot receive guidance; inspect it with subagent_status or start a replacement run.`,
+          `Subagent ${id} is ${record.view.state} and cannot receive guidance; inspect it with agent_read or start a replacement run.`,
         );
       if (record.pauseRequested)
         return yield* invalidRequest(
@@ -224,7 +224,7 @@ export function controlOperations(dependencies: RunControlDependencies) {
         if (record.replyPendingRequestId)
           return yield* invalidRequest(
             "reply_in_flight",
-            `Subagent ${id} already has a parent reply in flight; inspect it with subagent_status before sending again.`,
+            `Subagent ${id} already has a parent reply in flight; inspect it with agent_read before sending again.`,
           );
         return mayAnswer && record.view.state === "waiting_for_parent"
           ? yield* claimAnswerLocked(record)
@@ -268,7 +268,7 @@ export function controlOperations(dependencies: RunControlDependencies) {
             ? processError(
                 "reply",
                 "reply_outcome_uncertain",
-                `The reply to subagent ${id} may already have applied. Inspect with subagent_status before retrying. (${error.message})`,
+                `The reply to subagent ${id} may already have applied. Inspect it with agent_read before retrying. (${error.message})`,
               )
             : error,
         );
@@ -407,7 +407,7 @@ export function controlOperations(dependencies: RunControlDependencies) {
                     return yield* processError(
                       "interrupt",
                       "interrupt_outcome_uncertain",
-                      `Subagent ${id} did not confirm interruption in time, but the pause request remains pending and may still apply. Inspect with subagent_status before retrying.`,
+                      `Subagent ${id} did not confirm interruption in time, but the pause request remains pending and may still apply. Inspect it with agent_read before retrying.`,
                     );
                   return yield* error;
                 }),

@@ -20,8 +20,8 @@ const sessionIdle = (ctx: ExtensionContext): boolean =>
 
 /**
  * Reaches the root session's main agent for `agent_*` messages. A message starts a turn only when
- * the session is idle and not held and its wake budget admits one; a busy session continues its
- * settling run for it under the same budget. Otherwise the message is only appended.
+ * the session is idle and not held; a busy session continues its settling run for it. Otherwise the
+ * message is only appended.
  */
 export function agentMainCapabilities(
   pi: ExtensionAPI,
@@ -46,9 +46,9 @@ export function agentMainCapabilities(
       return true;
     }, false);
   return {
-    deliver: (frame, budget) => {
+    deliver: (frame) => {
       if (!host.session()) return "unavailable";
-      const delivery = host.wake.deliver(send(frame), budget);
+      const delivery = host.wake.deliver(send(frame));
       return delivery === "refused" ? "unavailable" : delivery;
     },
     read: () => {
@@ -62,11 +62,4 @@ export function agentMainCapabilities(
       };
     },
   };
-}
-
-/** Each prompt the user sends starts new budgets of agent messages and of their wakes and resumes. */
-export function registerAgentMessageBudgetReset(pi: ExtensionAPI, reset: () => void): void {
-  pi.on("input", (event) => {
-    if (event.source !== "extension") reset();
-  });
 }

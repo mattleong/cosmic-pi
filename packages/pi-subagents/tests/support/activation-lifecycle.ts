@@ -65,7 +65,7 @@ export const describeActivationLifecycle = (
     effectTest("activates after rejected preview loading", function* () {
       const path = makePath(() => Promise.reject(new Error("preview settings rejected")));
       yield* step(path.start);
-      expect(path.activeTools()).toEqual(expect.arrayContaining(["read", "subagent_start"]));
+      expect(path.activeTools()).toEqual(expect.arrayContaining(["read", "agent_start"]));
       yield* step(path.shutdown);
     });
   });

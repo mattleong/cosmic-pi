@@ -118,7 +118,7 @@ export const normalizeParentContact = (
   child: Pick<ChildProcessHandle, "sendContactControl">,
 ): BackendEvent => {
   switch (contact.type) {
-    case "contact_parent":
+    case "contact_request":
       return {
         type: "supervisor_contact",
         assignmentEpoch,
@@ -128,7 +128,7 @@ export const normalizeParentContact = (
       };
     case "contact_cancel":
       return {
-        type: "supervisor_question_cancelled",
+        type: "parent_question_cancelled",
         assignmentEpoch,
         requestId: contact.requestId,
       };

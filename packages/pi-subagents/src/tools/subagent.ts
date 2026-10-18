@@ -47,8 +47,6 @@ import {
   NORMAL_START_GUIDELINE,
 } from "../delegation/prompt.ts";
 
-const quoted = (message: string | undefined) => (message ? `“${message}”` : "");
-
 const targetsLabel = (args: SummaryArguments) =>
   countLabel(requestedRunIds(args)?.length ?? 0, "subagent");
 
@@ -73,9 +71,7 @@ type SubagentToolInputs = {
 const TOOL_INPUTS: SubagentToolInputs = {
   [SUBAGENT_TOOL_NAME.models]: (args) => ({ tool: SUBAGENT_TOOL_NAME.models, args }),
   [SUBAGENT_TOOL_NAME.start]: (args) => ({ tool: SUBAGENT_TOOL_NAME.start, args }),
-  [SUBAGENT_TOOL_NAME.status]: (args) => ({ tool: SUBAGENT_TOOL_NAME.status, args }),
   [SUBAGENT_TOOL_NAME.await]: (args) => ({ tool: SUBAGENT_TOOL_NAME.await, args }),
-  [SUBAGENT_TOOL_NAME.send]: (args) => ({ tool: SUBAGENT_TOOL_NAME.send, args }),
   [SUBAGENT_TOOL_NAME.lifecycle]: (args) => ({ tool: SUBAGENT_TOOL_NAME.lifecycle, args }),
   [SUBAGENT_TOOL_NAME.workspace]: (args) => ({ tool: SUBAGENT_TOOL_NAME.workspace, args }),
 };
@@ -93,21 +89,20 @@ type SubagentArgumentPreparers = {
 const ARGUMENT_PREPARERS: SubagentArgumentPreparers = {
   [SUBAGENT_TOOL_NAME.models]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.models),
   [SUBAGENT_TOOL_NAME.start]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.start),
-  [SUBAGENT_TOOL_NAME.status]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.status),
   [SUBAGENT_TOOL_NAME.await]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.await),
-  [SUBAGENT_TOOL_NAME.send]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.send),
   [SUBAGENT_TOOL_NAME.lifecycle]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.lifecycle),
   [SUBAGENT_TOOL_NAME.workspace]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.workspace),
 };
 
 const SCRIPTED_SUBAGENT_GUIDELINE =
-  "Native codemode can script read-only delegation with subagent_start, subagent_await, subagent_status, subagent_models, and lifecycle stop, which return version-3 structured results. Print run IDs as soon as you have them, await every call, and keep steps bounded. Don't rerun a failed script or loop on parent attention. Leave questions, retries, writers, and integration to the main agent.";
+  "Native codemode can script read-only delegation with agent_start, agent_await, agent_list, agent_read, agent_profiles, and agent_lifecycle stop, which return version-3 structured results. Print run IDs as soon as you have them, await every call, and keep steps bounded. Don't rerun a failed script or loop on parent attention. Leave questions, retries, writers, and integration to the main agent.";
 
 // The audience-specific delegation rule from delegation/prompt.ts is prepended at registration.
 const START_GUIDELINES = [
   "Give each subagent one bounded slice with a concrete deliverable, and choose its profile by that deliverable. Read-only work is not automatically scouting.",
   "Use profile=worker for implementation you hand off. While shared-checkout writers run, coordinate and review instead of editing; worktree writers leave your cwd free. Set isolation: worktree for writers whose change you'll review and apply as a diff or that run while you edit. Shared-checkout writers in one cwd share it without file claims: give each a disjoint task scope and name the files or areas it owns.",
   "If a start fails, follow its Next step or tell the user; don't run claude, codex, or pi from the shell instead.",
+  "agent_start, agent_await, agent_lifecycle, and agent_worktree act on agents you started and their descendants; agent_list, agent_read, and agent_send reach any agent in this session.",
 ];
 
 const TOOL_SPECS: SubagentToolSpecs = {
@@ -134,25 +129,14 @@ const TOOL_SPECS: SubagentToolSpecs = {
       ),
     lease: (presentation, args) => presentation.beginStart(args.agents.length),
   },
-  [SUBAGENT_TOOL_NAME.status]: {
-    label: "Subagent Status",
-    description:
-      "Inspect up to 12 subagent runs: state, warnings, failure, workspace proposal, and final report. Set verbose for route, capability, process, and timing details, or includeDeliveredReports to reread a report you already received. Omit runIds to list your visible runs as a parent-before-child tree, without reports.",
-    renderCall: (args, theme) =>
-      renderSubagentCall(
-        args.runIds === undefined ? "List subagents" : `Inspect ${targetsLabel(args)}`,
-        "",
-        theme,
-      ),
-  },
   [SUBAGENT_TOOL_NAME.await]: {
     label: "Wait for Subagents",
     description:
-      "Wait for selected subagents and return their reports, with live progress. Returns early when a selected run pauses, when any subagent asks you a question, or when the user sends a message; children keep running. Follow the steps in the result, then await again.",
+      "Wait for subagents you started, or their descendants, and return their reports, with live progress. Returns early when a selected run pauses, when any subagent asks you a question, or when the user sends a message; children keep running. Follow the steps in the result, then await again.",
     promptSnippet: "Wait for subagent reports when your next step depends on them",
     promptGuidelines: [
-      "After starting subagents, keep working on parts you didn't delegate; don't redo a subagent's slice while it runs. Call subagent_await only when your next step depends on a report; reports arrive on their own, so don't poll subagent_status.",
-      "When a subagent tool result lists next steps, follow them in order before continuing. Answer a real parent question with subagent_send.",
+      "After starting subagents, keep working on parts you didn't delegate; don't redo a subagent's slice while it runs. Call agent_await only when your next step depends on a report; reports arrive on their own, so don't poll agent_list or agent_read.",
+      "When a subagent tool result lists next steps, follow them in order before continuing. Answer a real parent question with agent_send.",
     ],
     renderCall: (args, theme, context) =>
       renderSubagentCall(
@@ -168,39 +152,31 @@ const TOOL_SPECS: SubagentToolSpecs = {
       ),
     lease: (presentation, args) => presentation.beginAwait(requestedRunIds(args) ?? [], args.until),
   },
-  [SUBAGENT_TOOL_NAME.send]: {
-    label: "Message Subagents",
-    description:
-      "Send the same message to one or more subagents. A target waiting on your question receives it as the answer; a running target receives it as guidance for its current turn. Each target's result says whether it was answered or guided and is reported separately.",
-    renderCall: (args, theme) =>
-      renderSubagentCall(`Message ${targetsLabel(args)}`, quoted(args.message), theme),
-  },
   [SUBAGENT_TOOL_NAME.lifecycle]: {
     label: "Manage Subagents",
     description:
-      "Interrupt, resume, or stop subagents, or retry a failed run on its profile's next configured candidate. Resume continues a paused, completed, failed, or stopped run's own session when its backend kept one; a worktree writer resumes in its workspace and reopens its review. Retry starts a new linked run, never reuses the failed candidate, and refuses when execution or cleanup is uncertain. Each target's result is reported separately.",
-    promptSnippet: "Interrupt, resume, stop, or retry subagents",
+      "Interrupt or stop subagents you started, or their descendants, or retry a failed run on its profile's next configured candidate. Retry starts a new linked run, never reuses the failed candidate, and refuses when execution or cleanup is uncertain. To resume a paused or finished run, send it a message with agent_send. Each target's result is reported separately.",
+    promptSnippet: "Interrupt, stop, or retry subagents",
     promptGuidelines: [
       "If a profiled run fails with route candidates left, retry it with action=retry before starting a generalist replacement, and don't replace a profile the user disabled. Never retry when execution is uncertain.",
-      "Resume a failed run only when its session is worth continuing, such as after a transient error; a deterministic failure repeats, so retry or start a new run instead.",
+      "Resume a paused or failed run with agent_send only when its session is worth continuing, such as after a transient error; a deterministic failure repeats, so retry or start a new run instead.",
     ],
     renderCall: (args, theme) => {
       const verb = args.action ?? "manage";
       const action = `${verb[0]?.toUpperCase() ?? ""}${verb.slice(1)}`;
-      const message = args.action === "resume" ? quoted(args.message) : "";
-      return renderSubagentCall(`${action} ${targetsLabel(args)}`, message, theme);
+      return renderSubagentCall(`${action} ${targetsLabel(args)}`, "", theme);
     },
   },
   [SUBAGENT_TOOL_NAME.workspace]: {
-    label: "Manage Writer Workspace",
+    label: "Manage Writer Worktrees",
     description:
-      "Apply worktree writers' proposals as their direct parent. apply integrates the current proposal as uncommitted edits, keeps your index, and refuses if anything is stale or conflicts; paths limits it to those files and keeps the rest as the proposal. To check first, review pages a summary and the diff, prepare builds a cwd combining it with your current edits for testing, and apply then integrates that preparation. revise asks the writer for another pass, rebase first rebuilding its tree from your current files; discard deletes a proposal. list marks workspaces left by ended sessions; any other action takes over an adoptable one.",
+      "Apply worktree writers' proposals as their direct parent. apply integrates the current proposal as uncommitted edits, keeps your index, and refuses if anything is stale or conflicts; paths limits it to those files and keeps the rest as the proposal. To check first, review pages a summary and the diff, prepare builds a cwd combining it with your current edits for testing, and apply then integrates that preparation. revise asks the writer for another pass, rebase first rebuilding its tree from your current files; discard deletes a proposal. list marks worktrees left by ended sessions; any other action takes over an adoptable one.",
     promptSnippet: "Apply, or review, test, and apply, worktree writers' proposals",
     promptGuidelines: [
       "Nothing applies a worktree writer's proposal automatically, and neither path needs user confirmation: apply small or trusted changes directly; for risky ones, review every page, prepare, run the relevant tests in the prepared cwd without editing it, then apply. Don't stage or commit parent changes.",
       "If review or tests fail, revise with concrete feedback and await the successor. If your files moved on under the proposal, revise with rebase.",
     ],
-    renderCall: (args, theme) => renderSubagentCall("Writer workspace", args.action ?? "", theme),
+    renderCall: (args, theme) => renderSubagentCall("Writer worktree", args.action ?? "", theme),
   },
 };
 
@@ -245,9 +221,7 @@ export function registerSubagentTools(
   const toolParameters: SubagentToolParameterSet = {
     [SUBAGENT_TOOL_NAME.models]: SUBAGENT_TOOL_SCHEMAS[SUBAGENT_TOOL_NAME.models].parameters,
     [SUBAGENT_TOOL_NAME.start]: startParameters,
-    [SUBAGENT_TOOL_NAME.status]: SUBAGENT_TOOL_SCHEMAS[SUBAGENT_TOOL_NAME.status].parameters,
     [SUBAGENT_TOOL_NAME.await]: SUBAGENT_TOOL_SCHEMAS[SUBAGENT_TOOL_NAME.await].parameters,
-    [SUBAGENT_TOOL_NAME.send]: SUBAGENT_TOOL_SCHEMAS[SUBAGENT_TOOL_NAME.send].parameters,
     [SUBAGENT_TOOL_NAME.lifecycle]: SUBAGENT_TOOL_SCHEMAS[SUBAGENT_TOOL_NAME.lifecycle].parameters,
     [SUBAGENT_TOOL_NAME.workspace]: SUBAGENT_TOOL_SCHEMAS[SUBAGENT_TOOL_NAME.workspace].parameters,
   };
@@ -314,7 +288,7 @@ export function registerSubagentTools(
           isError: context.isError,
         }),
     });
-    const project = createSubagentCompactSummary(tool.name);
+    const project = createSubagentCompactSummary(name);
     const wrapped = shell(tool, {
       ...(runtime.scheduleAnimation && { scheduleAnimation: runtime.scheduleAnimation }),
       expandedContent: {
@@ -373,7 +347,10 @@ export function registerSubagentTools(
       pi,
       {
         execute: (input, scripted, signal) =>
-          runtime.run(executeAgentActionEffect(input, { kind: "main" }, scripted), signal),
+          runtime.run(
+            executeAgentActionEffect(input, { kind: "main" }, scripted, runtime.environment.cwd),
+            signal,
+          ),
         isScripted: (id) => receiptOwner?.receipts.isNested(receiptOwner.owner, id) ?? false,
         ...(runtime.scheduleAnimation && { scheduleAnimation: runtime.scheduleAnimation }),
       },

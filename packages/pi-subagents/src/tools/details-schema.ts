@@ -392,13 +392,10 @@ const SubagentAgentRouteCardSchema = Schema.Struct({
   candidates: boundedArray(ProfileCandidateCardSchema, MAX_PROFILE_CANDIDATES),
 });
 
-export const PENDING_DELIVERY_FAILURE_CODE = "steer_outcome_uncertain";
-
 const CompactToolActionFailureSchema = Schema.Struct({
   id: NonEmptyText(MAX_ACTION_FAILURE_ID_CHARS),
   code: Schema.optionalKey(NonEmptyText(MAX_ACTION_FAILURE_CODE_CHARS)),
   message: NonEmptyText(MAX_ACTION_FAILURE_MESSAGE_CHARS),
-  pendingDelivery: Schema.optionalKey(Schema.Literal(true)),
 });
 
 export const SubagentStartDetailsSchema = Schema.Struct({
@@ -428,15 +425,7 @@ export const SubagentAwaitDetailsSchema = Schema.Struct({
   contentOmitted: Schema.optionalKey(Schema.Literal(true)),
 });
 
-export const RUN_DETAILS_ACTIONS = [
-  "list",
-  "status",
-  "send",
-  "retry",
-  "interrupt",
-  "resume",
-  "stop",
-] as const;
+export const RUN_DETAILS_ACTIONS = ["retry", "interrupt", "stop"] as const;
 export type RunDetailsAction = (typeof RUN_DETAILS_ACTIONS)[number];
 
 export const RunActionDetailsSchema = Schema.Struct({
@@ -446,10 +435,6 @@ export const RunActionDetailsSchema = Schema.Struct({
   actionFailures: Schema.optionalKey(boundedArray(CompactToolActionFailureSchema, MAX_TARGET_RUNS)),
   contentOmitted: Schema.optionalKey(Schema.Literal(true)),
   reportsOnlyOmitted: Schema.optionalKey(Schema.Literal(true)),
-  /** Send targets whose pending question this message answered; the others were guided. */
-  answeredRunIds: Schema.optionalKey(
-    boundedArray(NonEmptyText(MAX_PROTOCOL_ID_CHARS), MAX_TARGET_RUNS),
-  ),
   action: Schema.Literals(RUN_DETAILS_ACTIONS),
 });
 
@@ -518,8 +503,15 @@ export const AgentToolDetailsSchema = Schema.Union([
     action: Schema.Literal("agent_send"),
     to: AgentIdSchema,
     name: AgentDetailsNameSchema,
-    disposition: Schema.Literals(["answered", "guided", "resumed", "woken", "queued", "held"]),
-    wakeBudgetExhausted: Schema.optionalKey(Schema.Literal(true)),
+    disposition: Schema.Literals([
+      "answered",
+      "guided",
+      "pending",
+      "resumed",
+      "woken",
+      "queued",
+      "held",
+    ]),
   }),
   Schema.Struct({
     version: Schema.Literal(1),

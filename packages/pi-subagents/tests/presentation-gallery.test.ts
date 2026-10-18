@@ -29,6 +29,7 @@ import {
   MAIN_AGENT_SENDER,
   runSender,
   type AgentListEntry,
+  type AgentReadout,
   type AgentSendResult,
 } from "../src/run/agent-messaging.ts";
 import { executeAgentActionEffect } from "../src/tools/execute-agents.ts";
@@ -59,11 +60,7 @@ import {
   SubagentProcessError,
   UnsupportedSubagentCapabilityError,
 } from "../src/run/errors.ts";
-import type {
-  StartSubagentRequest,
-  SubagentRunView,
-  SubagentSendDelivery,
-} from "../src/run/model.ts";
+import type { StartSubagentRequest, SubagentRunView } from "../src/run/model.ts";
 import { scriptedWriterAdmissionError } from "../src/run/launch-policy.ts";
 import { SubagentService } from "../src/run/service.ts";
 import { awaitDetails, compactToolDetails, startDetails } from "../src/tools/details.ts";
@@ -75,7 +72,7 @@ import {
 } from "../src/tools/render-parent.ts";
 import { executeSubagentActionEffect, type SubagentToolRuntime } from "../src/tools/execute.ts";
 import { awaitExecutionFor } from "../src/tools/execute-await.ts";
-import { decodeSubagentOutcomeDetails, marksSubagentToolError } from "../src/tools/outcome.ts";
+import { decodeSubagentOutcomeDetails, hasSubagentToolFailure } from "../src/tools/outcome.ts";
 import {
   subagentToolAction,
   type AgentToolInput,
@@ -257,7 +254,7 @@ const execute = (input: SubagentToolInput, options: Execution = {}) =>
   ).pipe(
     Effect.map((result) => {
       const details = decodeSubagentOutcomeDetails(subagentToolAction(input), result);
-      return { result, isError: details !== undefined && marksSubagentToolError(details) };
+      return { result, isError: details !== undefined && hasSubagentToolFailure(details) };
     }),
     Effect.catch((error) => Effect.succeed({ result: textResult(error.message), isError: true })),
     Effect.provideService(SubagentService, subagentServiceDouble(options.service ?? {})),
@@ -290,8 +287,8 @@ const launched = (request: StartSubagentRequest, id: string) =>
     ...timing(0),
   });
 
-const startInput: SubagentToolInput<"subagent_start"> = {
-  tool: "subagent_start",
+const startInput: SubagentToolInput<"agent_start"> = {
+  tool: "agent_start",
   args: {
     agents: [
       { name: "auth-review", profile: "reviewer", task: "Review the session refresh flow" },
@@ -329,7 +326,7 @@ const startScenarios = Effect.gen(function* () {
   const blockedWriter = yield* scenario(
     "scripted writer launch is returned to the main agent",
     {
-      tool: "subagent_start",
+      tool: "agent_start",
       args: {
         agents: [{ profile: "worker", name: "script-edit", task: "Implement the change" }],
       },
@@ -339,7 +336,7 @@ const startScenarios = Effect.gen(function* () {
   const blockedDescendant = yield* scenario(
     "script-origin descendant cannot delegate writer work",
     {
-      tool: "subagent_start",
+      tool: "agent_start",
       args: {
         agents: [{ profile: "worker", name: "delegated-edit", task: "Implement the change" }],
       },
@@ -349,7 +346,7 @@ const startScenarios = Effect.gen(function* () {
   const modelOverride = yield* scenario(
     "one launch on a model override, one override unavailable",
     {
-      tool: "subagent_start",
+      tool: "agent_start",
       args: {
         agents: [
           {
@@ -372,7 +369,7 @@ const startScenarios = Effect.gen(function* () {
   const customAgents = yield* scenario(
     "one custom agent launch, one unknown agent",
     {
-      tool: "subagent_start",
+      tool: "agent_start",
       args: {
         agents: [
           { name: "auth-review", agent: "auth-reviewer", task: "Review the session refresh flow" },
@@ -391,7 +388,7 @@ const startScenarios = Effect.gen(function* () {
       yield* scenario(
         uncertain ? "task admission unconfirmed" : "input hook handled the task",
         {
-          tool: "subagent_start",
+          tool: "agent_start",
           args: {
             agents: [{ name: "task-review", profile: "reviewer", task: "Review the change" }],
           },
@@ -424,8 +421,8 @@ const startScenarios = Effect.gen(function* () {
   ];
 });
 
-const awaitInput: SubagentToolInput<"subagent_await"> = {
-  tool: "subagent_await",
+const awaitInput: SubagentToolInput<"agent_await"> = {
+  tool: "agent_await",
   args: { runIds: ["agent-1", "agent-2"], until: "all_finished" },
 };
 
@@ -526,144 +523,18 @@ const agentRoutes = profileServiceFor({
 const modelScenarios = Effect.all([
   scenario(
     "all profile routes",
-    { tool: "subagent_models", args: {} },
+    { tool: "agent_profiles", args: {} },
     { profiles: configuredRoutes },
   ),
   scenario(
     "one profile route",
-    { tool: "subagent_models", args: { profile: "reviewer" } },
+    { tool: "agent_profiles", args: { profile: "reviewer" } },
     { profiles: configuredRoutes },
   ),
   scenario(
     "profile routes with custom agents",
-    { tool: "subagent_models", args: {} },
+    { tool: "agent_profiles", args: {} },
     { profiles: agentRoutes },
-  ),
-]);
-
-const inspectionScenarios = Effect.all([
-  scenario(
-    "fleet with a nested worker",
-    { tool: "subagent_status", args: {} },
-    {
-      service: {
-        list: Effect.succeed([authReview, schemaCheck, docsSweep, apiAudit, migrationReview]),
-      },
-    },
-  ),
-  scenario(
-    "no workers",
-    { tool: "subagent_status", args: {} },
-    { service: { list: Effect.succeed([]) } },
-  ),
-  scenario(
-    "failed worker with a retry option",
-    { tool: "subagent_status", args: { runIds: ["agent-5"] } },
-    { service: { status: lookup } },
-  ),
-  scenario(
-    "one worker not found",
-    { tool: "subagent_status", args: { runIds: ["agent-2", "agent-12"] } },
-    { service: { status: lookup } },
-  ),
-  scenario(
-    "finished worktree writer with verbose details",
-    { tool: "subagent_status", args: { runIds: ["agent-10"], verbose: true } },
-    {
-      service: {
-        status: () => Effect.succeed({ ...worktreeProposal, workspaceOutcome: proposalOutcome }),
-      },
-    },
-  ),
-]);
-
-const guidance = "Also check the refresh-token rotation path.";
-const delivered =
-  (delivery: SubagentSendDelivery) =>
-  <E>(effect: Effect.Effect<SubagentRunView, E>) =>
-    Effect.map(effect, (run) => ({ delivery, run }));
-const guided = delivered("guided");
-const answered = delivered("answered");
-const messagingScenarios = Effect.all([
-  scenario(
-    "guidance delivered",
-    { tool: "subagent_send", args: { runIds: ["agent-1"], message: guidance } },
-    { service: { send: (id) => guided(lookup(id)) } },
-  ),
-  scenario(
-    "guidance for a native worker",
-    { tool: "subagent_send", args: { runIds: ["agent-3"], message: "Now audit the CLI flags." } },
-    {
-      service: {
-        send: (id) => guided(updated(id, { state: "running", finalText: undefined })),
-      },
-    },
-  ),
-  scenario(
-    "delivery awaiting confirmation",
-    { tool: "subagent_send", args: { runIds: ["agent-1"], message: guidance } },
-    {
-      service: {
-        send: () =>
-          Effect.fail(
-            new SubagentProcessError({
-              operation: "steer",
-              code: "steer_outcome_uncertain",
-              pendingDelivery: true,
-              message:
-                "Claude guidance may have been sent, but native replay acknowledgement is still pending. The run remains running and backend-owned; do not resend. Await or inspect status; stop remains available.",
-            }),
-          ),
-      },
-    },
-  ),
-  scenario(
-    "reply delivered",
-    { tool: "subagent_send", args: { runIds: ["agent-6"], message: "Yes, claim src/db/seed.ts." } },
-    { service: { send: (id) => answered(updated(id, { state: "running", question: undefined })) } },
-  ),
-  scenario(
-    "reply and guidance together",
-    { tool: "subagent_send", args: { runIds: ["agent-6", "agent-1"], message: guidance } },
-    {
-      service: {
-        send: (id) =>
-          id === "agent-6"
-            ? answered(updated(id, { state: "running", question: undefined }))
-            : guided(lookup(id)),
-      },
-    },
-  ),
-  scenario(
-    "reply already in flight",
-    { tool: "subagent_send", args: { runIds: ["agent-6"], message: "Yes, go ahead." } },
-    {
-      service: {
-        send: (id) =>
-          Effect.fail(
-            new InvalidSubagentRequestError({
-              code: "reply_in_flight",
-              message: `Subagent ${id} already has a parent reply in flight; inspect it with subagent_status before sending again.`,
-            }),
-          ),
-      },
-    },
-  ),
-  scenario(
-    "reply unconfirmed",
-    { tool: "subagent_send", args: { runIds: ["agent-6"], message: "Yes, claim src/db/seed.ts." } },
-    {
-      service: {
-        send: (id) =>
-          Effect.fail(
-            new SubagentProcessError({
-              operation: "reply",
-              code: "reply_outcome_uncertain",
-              message: `The reply to subagent ${id} may already have applied. Inspect with subagent_status before retrying. (Transport closed before acknowledgement.)`,
-            }),
-          ),
-      },
-    },
   ),
 ]);
 
@@ -678,7 +549,7 @@ const retryRoute: ProfileRouteContinuation = {
 };
 
 const agentScenario = (title: string, input: AgentToolInput, service: SubagentServiceDoubleInput) =>
-  executeAgentActionEffect(input, { kind: "main" }).pipe(
+  executeAgentActionEffect(input, { kind: "main" }, false, runtime.environment.cwd).pipe(
     Effect.map((result) => ({ result, isError: false })),
     Effect.catch((error) => Effect.succeed({ result: textResult(error.message), isError: true })),
     Effect.provideService(SubagentService, subagentServiceDouble(service)),
@@ -698,7 +569,24 @@ const listEntry = (run: SubagentRunView): AgentListEntry => ({
   ...(run.profile && { profile: run.profile }),
   task: run.task,
   self: false,
+  run,
 });
+const runReadout = (run: SubagentRunView, text?: string): AgentReadout => ({
+  kind: "run",
+  id: run.id,
+  name: run.name,
+  state: run.state,
+  ...(text === undefined
+    ? { textStatus: "none" }
+    : { textStatus: "text", text, source: run.finalText === text ? "report" : "assistant" }),
+  truncated: false,
+  reportGeneration: run.reportGeneration,
+  run,
+});
+const read = (agents: ReadonlyArray<AgentReadout>, missingIds: ReadonlyArray<string> = []) => ({
+  agentRead: () => Effect.succeed({ agents, missingIds }),
+});
+const guidance = "Also check the refresh-token rotation path.";
 const sessionAgents: ReadonlyArray<AgentListEntry> = [
   { id: "main", name: "main", kind: "main", state: "busy", self: true },
   ...[authReview, schemaCheck, docsSweep, apiAudit].map(listEntry),
@@ -713,6 +601,21 @@ const agentScenarios = Effect.all([
     "every agent in the session",
     { tool: "agent_list", args: {} },
     { agentList: () => Effect.succeed({ agents: sessionAgents, missingIds: [] }) },
+  ),
+  agentScenario(
+    "fleet with a nested worker, a question, and a proposal",
+    { tool: "agent_list", args: {} },
+    {
+      agentList: () =>
+        Effect.succeed({
+          agents: [
+            { id: "main", name: "main", kind: "main", state: "busy", self: true },
+            ...[authReview, schemaCheck, dbMigration, migrationReview].map(listEntry),
+            listEntry({ ...worktreeProposal, workspaceOutcome: proposalOutcome }),
+          ],
+          missingIds: [],
+        }),
+    },
   ),
   agentScenario(
     "one requested agent is gone",
@@ -756,6 +659,43 @@ const agentScenarios = Effect.all([
     },
   ),
   agentScenario(
+    "reply to a child's question",
+    { tool: "agent_send", args: { to: "agent-6", message: "Yes, claim src/db/seed.ts." } },
+    sent("agent-6", "db-migration", "answered"),
+  ),
+  agentScenario(
+    "delivery awaiting confirmation",
+    { tool: "agent_send", args: { to: "agent-1", message: guidance } },
+    sent("agent-1", "auth-review", "pending"),
+  ),
+  agentScenario(
+    "reply already in flight",
+    { tool: "agent_send", args: { to: "agent-6", message: "Yes, go ahead." } },
+    {
+      agentSend: (_caller, to) =>
+        Effect.fail(
+          new InvalidSubagentRequestError({
+            code: "reply_in_flight",
+            message: `Subagent ${to} already has a parent reply in flight; inspect it with agent_read before sending again.`,
+          }),
+        ),
+    },
+  ),
+  agentScenario(
+    "reply unconfirmed",
+    { tool: "agent_send", args: { to: "agent-6", message: "Yes, claim src/db/seed.ts." } },
+    {
+      agentSend: (_caller, to) =>
+        Effect.fail(
+          new SubagentProcessError({
+            operation: "reply",
+            code: "reply_outcome_uncertain",
+            message: `The reply to subagent ${to} may already have applied. Inspect it with agent_read before retrying. (Transport closed before acknowledgement.)`,
+          }),
+        ),
+    },
+  ),
+  agentScenario(
     "message resumes a finished run",
     { tool: "agent_send", args: { to: "agent-2", message: "Also check docs/cli.md." } },
     sent("agent-2", "docs-sweep", "resumed"),
@@ -774,14 +714,14 @@ const agentScenarios = Effect.all([
     },
   ),
   agentScenario(
-    "too many messages",
+    "agent unavailable",
     { tool: "agent_send", args: { to: "agent-1", message: "Ping again." } },
     {
       agentSend: () =>
         Effect.fail(
           agentMessageRefusal(
-            "agent_rate_limited",
-            "Too many agent messages; wait 4 seconds before messaging agent-1 again.",
+            "agent_unavailable",
+            "Agent agent-1 is stopping and can't receive messages.",
           ),
         ),
     },
@@ -812,6 +752,7 @@ const agentScenarios = Effect.all([
               truncated: false,
               source: "report",
               reportGeneration: 1,
+              run: docsSweep,
             },
           ],
           missingIds: [],
@@ -821,22 +762,38 @@ const agentScenarios = Effect.all([
   agentScenario(
     "running agent without a message yet",
     { tool: "agent_read", args: { agentIds: ["agent-4"] } },
+    read([runReadout(schemaCheck)]),
+  ),
+  agentScenario(
+    "failed worker with a retry option",
+    { tool: "agent_read", args: { agentIds: ["agent-5"] } },
+    read([runReadout(migrationReview, migrationReview.error)]),
+  ),
+  agentScenario(
+    "child waiting on its parent's reply",
+    { tool: "agent_read", args: { agentIds: ["agent-6"] } },
+    read([runReadout(dbMigration, "Which seed file should I extend?")]),
+  ),
+  agentScenario(
+    "one worker not found",
+    { tool: "agent_read", args: { agentIds: ["agent-2", "agent-12"] } },
+    read([runReadout(docsSweep, docsSweep.finalText)], ["agent-12"]),
+  ),
+  agentScenario(
+    "finished worktree writer with verbose details",
+    { tool: "agent_read", args: { agentIds: ["agent-10"], verbose: true } },
     {
+      // The worktree fixtures are declared with the workspace scenarios below.
       agentRead: () =>
-        Effect.succeed({
+        Effect.sync(() => ({
           agents: [
-            {
-              kind: "run",
-              id: schemaCheck.id,
-              name: schemaCheck.name,
-              state: "running",
-              textStatus: "none",
-              truncated: false,
-              reportGeneration: 0,
-            },
+            runReadout(
+              { ...worktreeProposal, workspaceOutcome: proposalOutcome },
+              worktreeProposal.finalText,
+            ),
           ],
           missingIds: [],
-        }),
+        })),
     },
   ),
 ]);
@@ -868,7 +825,7 @@ const agentMessageScenarios: ReadonlyArray<GalleryMessageScenario> = [
 const lifecycleScenarios = Effect.all([
   scenario(
     "retry on the next profile option",
-    { tool: "subagent_lifecycle", args: { action: "retry", runIds: ["agent-5"] } },
+    { tool: "agent_lifecycle", args: { action: "retry", runIds: ["agent-5"] } },
     {
       service: {
         claimRetryContinuation: (id) =>
@@ -890,7 +847,7 @@ const lifecycleScenarios = Effect.all([
   ),
   scenario(
     "retry with no options left",
-    { tool: "subagent_lifecycle", args: { action: "retry", runIds: ["agent-5"] } },
+    { tool: "agent_lifecycle", args: { action: "retry", runIds: ["agent-5"] } },
     {
       service: {
         claimRetryContinuation: () =>
@@ -906,7 +863,7 @@ const lifecycleScenarios = Effect.all([
   ),
   scenario(
     "stop two workers",
-    { tool: "subagent_lifecycle", args: { action: "stop", runIds: ["agent-1", "agent-4"] } },
+    { tool: "agent_lifecycle", args: { action: "stop", runIds: ["agent-1", "agent-4"] } },
     {
       service: {
         stop: (id) => updated(id, { state: id === "agent-4" ? "stopping" : "stopped" }),
@@ -915,46 +872,30 @@ const lifecycleScenarios = Effect.all([
   ),
   scenario(
     "stop a missing worker",
-    { tool: "subagent_lifecycle", args: { action: "stop", runIds: ["agent-1", "agent-12"] } },
+    { tool: "agent_lifecycle", args: { action: "stop", runIds: ["agent-1", "agent-12"] } },
     { service: { stop: (id) => updated(id, { state: "stopped" }) } },
   ),
   scenario(
     "interrupt",
-    { tool: "subagent_lifecycle", args: { action: "interrupt", runIds: ["agent-1"] } },
+    { tool: "agent_lifecycle", args: { action: "interrupt", runIds: ["agent-1"] } },
     { service: { interrupt: (id) => updated(id, { state: "paused" }) } },
   ),
   scenario(
-    "resume with guidance",
-    {
-      tool: "subagent_lifecycle",
-      args: {
-        action: "resume",
-        runIds: ["agent-1"],
-        message: "Continue with the reviewed guidance.",
-      },
-    },
-    { service: { resume: (id) => updated(id, { state: "running" }) } },
-  ),
-  scenario(
-    "resume unsupported",
-    { tool: "subagent_lifecycle", args: { action: "resume", runIds: ["agent-3"] } },
+    "interrupt unsupported",
+    { tool: "agent_lifecycle", args: { action: "interrupt", runIds: ["agent-3"] } },
     {
       service: {
-        resume: (id) =>
+        interrupt: (id) =>
           Effect.fail(
             new UnsupportedSubagentCapabilityError({
               backend: "local/codex",
-              capability: "resume",
-              message: `local/codex subagents do not support resume. Inspect supported operations with subagent_status({ runIds: ["${id}"] }).`,
+              capability: "interrupt",
+              message: `local/codex subagents do not support interruption. Stop with agent_lifecycle({ action: "stop", runIds: ["${id}"] }) or wait with agent_await.`,
             }),
           ),
       },
     },
   ),
-  scenario("guidance on a stop is rejected", {
-    tool: "subagent_lifecycle",
-    args: { action: "stop", runIds: ["agent-1"], message: "Wrap up first." },
-  }),
 ]);
 
 const reviewedPatch = [
@@ -1125,18 +1066,18 @@ const staleWorkspace: SubagentServiceDoubleInput = {
 const workspaceScenarios = Effect.all([
   scenario(
     "list proposals",
-    { tool: "subagent_workspace", args: { action: "list" } },
+    { tool: "agent_worktree", args: { action: "list" } },
     { service: workspaceService },
   ),
   scenario(
     "review the first page, led by its summary",
-    { tool: "subagent_workspace", args: { action: "review", workspaceId: "ws-1" } },
+    { tool: "agent_worktree", args: { action: "review", workspaceId: "ws-1" } },
     { service: workspaceService },
   ),
   scenario(
     "prepare a combined tree",
     {
-      tool: "subagent_workspace",
+      tool: "agent_worktree",
       args: { action: "prepare", workspaceId: "ws-1", revisionId: "rev-1" },
     },
     { service: workspaceService },
@@ -1144,7 +1085,7 @@ const workspaceScenarios = Effect.all([
   scenario(
     "apply the prepared pair you tested",
     {
-      tool: "subagent_workspace",
+      tool: "agent_worktree",
       args: { action: "apply", workspaceId: "ws-1", revisionId: "rev-1", preparationId: "prep-2" },
     },
     { service: workspaceService },
@@ -1152,7 +1093,7 @@ const workspaceScenarios = Effect.all([
   scenario(
     "apply a prepared pair leaving files and the source lock behind",
     {
-      tool: "subagent_workspace",
+      tool: "agent_worktree",
       args: { action: "apply", workspaceId: "ws-1", revisionId: "rev-1", preparationId: "prep-2" },
     },
     { service: leftoverWorkspace },
@@ -1160,7 +1101,7 @@ const workspaceScenarios = Effect.all([
   scenario(
     "apply a prepared pair keeping the working copy for child workspaces",
     {
-      tool: "subagent_workspace",
+      tool: "agent_worktree",
       args: { action: "apply", workspaceId: "ws-1", revisionId: "rev-1", preparationId: "prep-2" },
     },
     {
@@ -1177,12 +1118,12 @@ const workspaceScenarios = Effect.all([
   ),
   scenario(
     "apply an unreviewed, untested proposal",
-    { tool: "subagent_workspace", args: { action: "apply", workspaceId: "ws-1" } },
+    { tool: "agent_worktree", args: { action: "apply", workspaceId: "ws-1" } },
     { service: untestedApply },
   ),
   scenario(
     "apply refused by a failing WorktreeCreate hook",
-    { tool: "subagent_workspace", args: { action: "apply", workspaceId: "ws-1" } },
+    { tool: "agent_worktree", args: { action: "apply", workspaceId: "ws-1" } },
     {
       service: {
         workspaceApply: () =>
@@ -1198,7 +1139,7 @@ const workspaceScenarios = Effect.all([
   ),
   scenario(
     "apply refused while child workspaces are unresolved",
-    { tool: "subagent_workspace", args: { action: "apply", workspaceId: "ws-1" } },
+    { tool: "agent_worktree", args: { action: "apply", workspaceId: "ws-1" } },
     {
       service: {
         workspaceApply: () =>
@@ -1215,7 +1156,7 @@ const workspaceScenarios = Effect.all([
   scenario(
     "apply only some of a proposal's files",
     {
-      tool: "subagent_workspace",
+      tool: "agent_worktree",
       args: { action: "apply", workspaceId: "ws-1", paths: ["db/0007.sql"] },
     },
     {
@@ -1235,18 +1176,18 @@ const workspaceScenarios = Effect.all([
   ),
   scenario(
     "list nested workspaces",
-    { tool: "subagent_workspace", args: { action: "list" } },
+    { tool: "agent_worktree", args: { action: "list" } },
     { service: nestedWorkspaces },
   ),
   scenario(
     "list workspaces left by an ended session",
-    { tool: "subagent_workspace", args: { action: "list" } },
+    { tool: "agent_worktree", args: { action: "list" } },
     { service: orphanedWorkspaces },
   ),
   scenario(
     "request a revision",
     {
-      tool: "subagent_workspace",
+      tool: "agent_worktree",
       args: { action: "revise", workspaceId: "ws-1", message: "Add a down migration." },
     },
     { service: workspaceService },
@@ -1254,7 +1195,7 @@ const workspaceScenarios = Effect.all([
   scenario(
     "request a rebased revision with conflicts",
     {
-      tool: "subagent_workspace",
+      tool: "agent_worktree",
       args: {
         action: "revise",
         workspaceId: "ws-1",
@@ -1283,7 +1224,7 @@ const workspaceScenarios = Effect.all([
   scenario(
     "rebase refused when changes can't be reapplied",
     {
-      tool: "subagent_workspace",
+      tool: "agent_worktree",
       args: { action: "revise", workspaceId: "ws-1", message: "Retry.", rebase: true },
     },
     {
@@ -1301,12 +1242,12 @@ const workspaceScenarios = Effect.all([
   ),
   scenario(
     "discard",
-    { tool: "subagent_workspace", args: { action: "discard", workspaceId: "ws-1" } },
+    { tool: "agent_worktree", args: { action: "discard", workspaceId: "ws-1" } },
     { service: workspaceService },
   ),
   scenario(
     "discard blocked by a reader in an older preparation",
-    { tool: "subagent_workspace", args: { action: "discard", workspaceId: "ws-1" } },
+    { tool: "agent_worktree", args: { action: "discard", workspaceId: "ws-1" } },
     {
       service: {
         workspaceDiscard: () =>
@@ -1323,7 +1264,7 @@ const workspaceScenarios = Effect.all([
   scenario(
     "worktree hook cleanup unconfirmed",
     {
-      tool: "subagent_workspace",
+      tool: "agent_worktree",
       args: { action: "prepare", workspaceId: "ws-1", revisionId: "rev-1" },
     },
     {
@@ -1342,7 +1283,7 @@ const workspaceScenarios = Effect.all([
   scenario(
     "stale revision",
     {
-      tool: "subagent_workspace",
+      tool: "agent_worktree",
       args: { action: "prepare", workspaceId: "ws-1", revisionId: "rev-0" },
     },
     { service: staleWorkspace },
@@ -1354,7 +1295,7 @@ const awaited = (
   runs: Parameters<typeof awaitDetails>[0]["runs"],
   extra: Partial<Parameters<typeof awaitDetails>[0]> = {},
 ): ToolScenario => ({
-  tool: "subagent_await",
+  tool: "agent_await",
   title,
   args: { runIds: runs.map((run) => run.id), until: "all_finished" },
   result: {
@@ -1374,7 +1315,7 @@ const route = {
 
 const receiptScenarios: ReadonlyArray<ToolScenario> = [
   {
-    tool: "subagent_start",
+    tool: "agent_start",
     title: "expanded writer task",
     args: {
       agents: [
@@ -1468,7 +1409,7 @@ const receiptScenarios: ReadonlyArray<ToolScenario> = [
     { attentionRequired: true },
   ),
   {
-    tool: "subagent_lifecycle",
+    tool: "agent_lifecycle",
     title: "stop verified this member but another cleanup still quarantines the pool",
     args: { action: "stop", runIds: ["agent-1"] },
     result: {
@@ -1515,7 +1456,7 @@ const receiptScenarios: ReadonlyArray<ToolScenario> = [
     }),
   ]),
   {
-    tool: "subagent_start",
+    tool: "agent_start",
     title: "one launch fails",
     args: {
       agents: [
@@ -1564,7 +1505,7 @@ const contactParentTool = () =>
   withCodePreviewShell(
     defineTool({
       ...contactParentRenderers,
-      name: "contact_parent",
+      name: "agent_contact_parent",
       label: CONTACT_PARENT_LABEL,
       description: CONTACT_PARENT_LABEL,
       parameters: Type.Object({}),
@@ -1581,7 +1522,7 @@ const contact = (
   kind: string,
   message: string,
   overrides: Partial<GalleryScenario>,
-): ToolScenario => ({ tool: "contact_parent", title, args: { kind, message }, ...overrides });
+): ToolScenario => ({ tool: "agent_contact_parent", title, args: { kind, message }, ...overrides });
 
 const parentScenarios: ReadonlyArray<ToolScenario> = [
   contact("progress", "progress", progressNote, {
@@ -1926,8 +1867,6 @@ describe.skipIf(!directory)("presentation gallery", () => {
         ...(yield* modelScenarios),
         ...(yield* startScenarios),
         ...(yield* awaitScenarios),
-        ...(yield* inspectionScenarios),
-        ...(yield* messagingScenarios),
         ...(yield* lifecycleScenarios),
         ...(yield* workspaceScenarios),
         ...(yield* agentScenarios),

@@ -28,7 +28,7 @@ describe.skipIf(!enabled)("installed local Claude replay smoke", () => {
         "This is an explicit protocol reproduction. Do not edit files.",
         "Use the native Agent tool to launch one short read-only background agent whose whole task is to read package.json and return the package name; tell it not to use any mcp__pi_subagents_supervisor tool.",
         "Use SendMessage once for that agent, then wait for its completion notification.",
-        "Finally call mcp__pi_subagents_supervisor__supervisor_submit_report exactly once with a concise report.",
+        "Finally call mcp__pi_subagents_supervisor__agent_submit_report exactly once with a concise report.",
       ].join(" "),
     });
 

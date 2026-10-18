@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import { WRITER_WORKSPACE_MODES } from "../src/config/schema.ts";
 import { toolDefinitions as supervisorToolDefinitions } from "../src/supervisor/mcp-wire.ts";
 import {
-  statusOperationError,
   subagentArgumentPreparer,
   SUBAGENT_TOOL_SCHEMAS,
   workspaceOperationError,
@@ -22,7 +21,7 @@ const registeredTools = (nested: boolean) =>
     }),
   ).tools;
 
-const prepareStart = subagentArgumentPreparer("subagent_start");
+const prepareStart = subagentArgumentPreparer("agent_start");
 
 describe("model-facing tool schemas", () => {
   it.each([false, true])(
@@ -50,11 +49,11 @@ describe("subagent argument preparation", () => {
     expect(
       validateToolArguments(
         {
-          name: "subagent_start",
+          name: "agent_start",
           description: "",
-          parameters: SUBAGENT_TOOL_SCHEMAS.subagent_start.parameters,
+          parameters: SUBAGENT_TOOL_SCHEMAS.agent_start.parameters,
         },
-        { type: "toolCall", id: "call", name: "subagent_start", arguments: prepared },
+        { type: "toolCall", id: "call", name: "agent_start", arguments: prepared },
       ),
     ).toEqual(prepared);
   });
@@ -76,7 +75,7 @@ describe("subagent argument preparation", () => {
 
   it("suggests isolation for workspace-style start keys", () => {
     const accepted = Object.keys(
-      SUBAGENT_TOOL_SCHEMAS.subagent_start.parameters.properties.agents.items.properties,
+      SUBAGENT_TOOL_SCHEMAS.agent_start.parameters.properties.agents.items.properties,
     );
     for (const key of ["workspace", "worktree", "workspace_mode", "writerWorkspaceMode"])
       expect(replacementField(key, accepted)).toBe("isolation");
@@ -84,7 +83,7 @@ describe("subagent argument preparation", () => {
 });
 
 describe("workspace apply arguments", () => {
-  const prepareWorkspace = subagentArgumentPreparer("subagent_workspace");
+  const prepareWorkspace = subagentArgumentPreparer("agent_worktree");
 
   it("accepts a workspace with an optional revision pin", () => {
     for (const args of [
@@ -109,10 +108,20 @@ describe("workspace apply arguments", () => {
   });
 });
 
-describe("statusOperationError", () => {
-  it("rereads delivered reports only for named runs", () => {
-    expect(statusOperationError({ includeDeliveredReports: true })).toEqual(expect.any(String));
-    expect(statusOperationError({ runIds: ["a"], includeDeliveredReports: true })).toBeUndefined();
-    expect(statusOperationError({})).toBeUndefined();
+describe("lifecycle arguments", () => {
+  const prepareLifecycle = subagentArgumentPreparer("agent_lifecycle");
+
+  it("rejects resume, which is a message to the run, and accepts the other actions", () => {
+    expect(() => prepareLifecycle({ action: "resume", runIds: ["agent-1"] })).toThrow(
+      /\[invalid_arguments\][\s\S]*action/u,
+    );
+    expect(() =>
+      prepareLifecycle({ action: "stop", runIds: ["agent-1"], message: "Continue." }),
+    ).toThrow(/\[invalid_arguments\]/u);
+    for (const action of ["interrupt", "stop", "retry"] as const)
+      expect(prepareLifecycle({ action, runIds: ["agent-1"] })).toEqual({
+        action,
+        runIds: ["agent-1"],
+      });
   });
 });

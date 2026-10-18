@@ -61,11 +61,8 @@ continues while such a notice (`hasUnansweredNotice`) follows the model's latest
 appended after the last settle boundary, or during a compaction, gets one hidden wake message once
 the session is idle. After an interrupt, and after `hold` at shutdown, notices only append until the
 user's next non-extension input. With `holdDuringDialogs`, an open extension dialog also defers the
-wake until it closes, and a run settling under an open dialog leaves its notice owed until then. A
-delivery may carry a `SessionWakeBudget`: every turn its notice would start or continue, including
-deferred wakes after a dialog, a compaction, or a settle boundary, must be available from the budget
-and spends one as it starts; notices joining an admitted continuation are free, and a spent budget
-only appends. Pi chains `agent_before_settle` results across handlers, keeping the last
+wake until it closes, and a run settling under an open dialog leaves its notice owed until then. Pi
+chains `agent_before_settle` results across handlers, keeping the last
 defined `entries` and `continue`, so each owner returns `undefined` when it has nothing to add and
 keeps earlier handlers' entries otherwise; [two owners in one session](tests/host-wake-session.test.ts)
 each get their notices continued.

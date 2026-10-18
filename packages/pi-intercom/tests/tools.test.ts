@@ -347,7 +347,6 @@ layer(nodeFilePlatformLayer)("intercom session tool issues", (it) => {
       const codes: ReadonlyArray<ToolRefusalCode> = [
         "session_unavailable",
         "session_receive_disabled",
-        "session_rate_limited",
         "session_not_found",
         "session_ambiguous",
         "session_unreachable",

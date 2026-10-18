@@ -8,7 +8,6 @@ import type {
 import * as Effect from "effect/Effect";
 import { absurd } from "effect/Function";
 import * as Predicate from "effect/Predicate";
-import * as Match from "effect/Match";
 import type { CompactAnimationScheduler } from "pi-code-previews";
 import { invokeHostCallback } from "pi-cosmic-core";
 import type { SubagentToolPresentation } from "../boundary/host-activity-widget.ts";
@@ -36,14 +35,8 @@ import { SubagentService, type SubagentRunObservation } from "../run/service.ts"
 import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
 import { executeStartBatch, resolveRecordedLaunch } from "./execute-start.ts";
 import { presentSubagentResult, type SubagentExecutionResult } from "./execute-result.ts";
-import { awaitContract, statusContract, startContract, lifecycleContract } from "./contract.ts";
-import { statusListContract } from "./discovery-contract.ts";
-import {
-  attentionRecoveryText,
-  formatActionFailures,
-  formatDetailedRuns,
-  renderedCompletionReceipts,
-} from "./format.ts";
+import { awaitContract, startContract, lifecycleContract } from "./contract.ts";
+import { attentionRecoveryText, formatDetailedRuns, renderedCompletionReceipts } from "./format.ts";
 import {
   awaitExecutionFor,
   observeAwaitInterruption,
@@ -53,10 +46,8 @@ import {
 import { executeModelsAction } from "./execute-models.ts";
 import { executeWorkspaceAction } from "./execute-workspace.ts";
 import type { SubagentActionFailure } from "./model.ts";
-import { isPendingDeliveryError, isUncertainToolFailure } from "./outcome.ts";
+import { isUncertainToolFailure } from "./outcome.ts";
 import {
-  lifecycleMessageError,
-  statusOperationError,
   subagentToolAction,
   type SubagentLifecycleInput,
   type SubagentToolAction,
@@ -88,7 +79,6 @@ export interface SubagentToolRuntime {
 const forEachOutcome = <R>(
   ids: ReadonlyArray<string>,
   operation: (id: string) => Effect.Effect<SubagentRunView, SubagentError, R>,
-  allowPendingDelivery = false,
 ) =>
   Effect.forEach(
     ids,
@@ -103,8 +93,6 @@ const forEachOutcome = <R>(
                 id,
                 message: error.message,
                 code: subagentErrorCode(error),
-                ...(allowPendingDelivery &&
-                  isPendingDeliveryError(error) && { pendingDelivery: true as const }),
               } satisfies SubagentActionFailure,
             }) as const,
         }),
@@ -130,16 +118,6 @@ const withQuestionRuns = (
 };
 
 type AwaitedLifecycleResult = Effect.Success<ReturnType<typeof forEachOutcome>>;
-
-const requiredMessage = (
-  action: SubagentToolAction,
-  value: string,
-): Effect.Effect<string, InvalidSubagentRequestError> => {
-  const trimmed = value.trim();
-  return trimmed
-    ? Effect.succeed(trimmed)
-    : Effect.fail(invalidRequest("message_required", `${action} requires message.`));
-};
 
 const requiredTargetIds = (
   action: SubagentToolAction,
@@ -201,10 +179,7 @@ export const executeSubagentActionEffect = (
         );
 
   const action = subagentToolAction(input);
-  const formatOptions = {
-    parentCwd: environment.cwd,
-    verbose: input.tool === SUBAGENT_TOOL_NAME.status && input.args.verbose === true,
-  };
+  const formatOptions = { parentCwd: environment.cwd };
   const awaitState =
     input.tool === SUBAGENT_TOOL_NAME.await
       ? (awaitExecution ?? awaitExecutionFor(input.args.runIds, input.args.until, onUpdate))
@@ -256,13 +231,7 @@ export const executeSubagentActionEffect = (
                 requestedRunIds: requestedAwaitIds ?? [],
                 questionsElsewhere: questions.length > 0,
               })
-            : input.tool === SUBAGENT_TOOL_NAME.status
-              ? statusContract({
-                  observations,
-                  fullyRenderedIds: formatted.fullyRenderedIds,
-                  missingRunIds: (additional.actionFailures ?? []).map((failure) => failure.id),
-                })
-              : undefined;
+            : undefined;
         const outcome = {
           runs,
           attentionRequired,
@@ -276,39 +245,12 @@ export const executeSubagentActionEffect = (
         yield* service.consumeCompletions(receipts);
         return { result, fullyRenderedIds: formatted.fullyRenderedIds };
       });
-    const finishStatus = (ids: ReadonlyArray<string>) =>
-      authorize(ids).pipe(
-        Effect.andThen(
-          service.withStatusObservations(
-            ids,
-            ({ observations, missingIds }) => {
-              const actionFailures = missingIds.map(
-                (id): SubagentActionFailure => ({
-                  id,
-                  code: "SubagentNotFoundError",
-                  message: `Subagent run not found: ${id}. Call subagent_status without runIds to list current run IDs.`,
-                }),
-              );
-              return completeObservations(
-                observations,
-                [formatActionFailures(action, actionFailures)],
-                () => ({ actionFailures }),
-              );
-            },
-            input.tool === SUBAGENT_TOOL_NAME.status
-              ? { includeDeliveredReports: input.args.includeDeliveredReports }
-              : undefined,
-          ),
-        ),
-        Effect.map(({ result }) => result),
-      );
-
     const executeLifecycle = (args: SubagentLifecycleInput) =>
       Effect.gen(function* () {
         if (scripted && args.action !== "stop")
           return yield* invalidRequest(
             "scripted_lifecycle_not_supported",
-            "Codemode scripts support lifecycle stop only. Hand retry, resume, and interrupt decisions back to the parent agent.",
+            "Codemode scripts support lifecycle stop only. Hand retry and interrupt decisions back to the parent agent.",
           );
         const presentLifecycle = (result: AwaitedLifecycleResult) =>
           present({
@@ -364,18 +306,13 @@ export const executeSubagentActionEffect = (
             }),
           );
         }
-        const messageError = lifecycleMessageError(args);
-        if (messageError !== undefined)
-          return yield* invalidRequest("lifecycle_message_invalid", messageError);
         const ids = yield* requiredTargetIds(action, args.runIds);
         yield* authorize(ids);
         return presentLifecycle(
           yield* forEachOutcome(ids, (id) =>
-            Match.value(args.action).pipe(
-              Match.when("interrupt", () => service.interrupt(id, expected)),
-              Match.when("resume", () => service.resume(id, args.message, expected)),
-              Match.orElse(() => service.stop(id, expected)),
-            ),
+            args.action === "interrupt"
+              ? service.interrupt(id, expected)
+              : service.stop(id, expected),
           ),
         );
       });
@@ -395,16 +332,6 @@ export const executeSubagentActionEffect = (
           ...result,
           contract: startContract(input.args.agents, result.startOutcomes),
         });
-      }
-      case SUBAGENT_TOOL_NAME.status: {
-        const statusError = statusOperationError(input.args);
-        if (statusError !== undefined)
-          return yield* invalidRequest("status_input_invalid", statusError);
-        if (input.args.runIds === undefined) {
-          const runs = yield* callerRunId ? service.visibleList(callerRunId) : service.list;
-          return present({ runs, contract: statusListContract(runs) });
-        }
-        return yield* finishStatus(yield* requiredTargetIds(action, input.args.runIds));
       }
       case SUBAGENT_TOOL_NAME.await: {
         const ids = yield* requiredTargetIds(action, input.args.runIds);
@@ -427,27 +354,6 @@ export const executeSubagentActionEffect = (
             callerRunId,
           )
           .pipe(Effect.map(({ result }) => result));
-      }
-      case SUBAGENT_TOOL_NAME.send: {
-        const ids = yield* requiredTargetIds(action, input.args.runIds);
-        const message = yield* requiredMessage(action, input.args.message);
-        yield* authorize(ids);
-        const answeredRunIds = new Set<string>();
-        const result = yield* forEachOutcome(
-          ids,
-          (id) =>
-            service.send(id, message, expected).pipe(
-              Effect.map(({ delivery, run }) => {
-                if (delivery === "answered") answeredRunIds.add(id);
-                return run;
-              }),
-            ),
-          true,
-        );
-        return present({
-          ...result,
-          answeredRunIds: ids.filter((id) => answeredRunIds.has(id)),
-        });
       }
       case SUBAGENT_TOOL_NAME.lifecycle:
         return yield* executeLifecycle(input.args);

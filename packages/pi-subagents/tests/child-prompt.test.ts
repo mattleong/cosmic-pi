@@ -22,7 +22,7 @@ const writer = (task: string, cwd: string) =>
   });
 
 const ownsChildWorkspaces = (overrides: Partial<StartSubagentRequest>) =>
-  childSystemPrompt(request(overrides)).includes("subagent_workspace");
+  childSystemPrompt(request(overrides)).includes("agent_worktree");
 
 describe("child prompts", () => {
   it("keeps per-run paths out of the system prompt so sibling writers share it", () => {

@@ -67,8 +67,7 @@ test.each(["compact"] as const)(
               : "AGENT_QUESTION",
           ),
         ).toBe(expanded);
-        if (!expanded)
-          expect(text).not.toMatch(/subagent_send|subagent_lifecycle|subagent_workspace/);
+        if (!expanded) expect(text).not.toMatch(/agent_send|agent_lifecycle|agent_worktree/);
         expect(JSON.stringify(message)).toBe(before);
       }
       const history = render(

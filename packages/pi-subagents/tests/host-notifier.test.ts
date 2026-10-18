@@ -127,7 +127,7 @@ describe("subagent host notifier", () => {
       ],
     });
     const sections = content().split("## ").slice(1);
-    expect(sections.map((section) => section.includes("subagent_workspace"))).toEqual([
+    expect(sections.map((section) => section.includes("agent_worktree"))).toEqual([
       true,
       false,
       false,
@@ -160,7 +160,7 @@ describe("subagent host notifier", () => {
       ],
     });
     expect(clipped.content().length).toBeLessThanOrEqual(32 * 1024);
-    expect(clipped.content()).toContain("subagent_workspace");
+    expect(clipped.content()).toContain("agent_worktree");
   });
 
   it("does not retain raw outcome secrets in custom-message metadata", () => {

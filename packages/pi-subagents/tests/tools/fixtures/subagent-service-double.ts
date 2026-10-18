@@ -39,7 +39,6 @@ const unexpectedService: SubagentServiceContract = {
   agentList: () => unexpected("agentList"),
   agentSend: () => unexpected("agentSend"),
   agentRead: () => unexpected("agentRead"),
-  resetAgentMessageBudgets: Effect.void,
   workspaceList: () => unexpected("workspaceList"),
   workspaceReview: () => unexpected("workspaceReview"),
   workspacePrepare: () => unexpected("workspacePrepare"),

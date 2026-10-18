@@ -500,7 +500,7 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
           if (!resolveLaunch)
             return yield* invalid(
               "workspace_launch_unavailable",
-              "This adopted workspace has no writer request to extend; revise it through subagent_workspace.",
+              "This adopted workspace has no writer request to extend; revise it through agent_worktree.",
             );
           const resolved = yield* resolveLaunch(launch, task);
           if (resolved.writeIntent !== "writer")

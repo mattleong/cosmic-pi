@@ -45,10 +45,10 @@ export function workspaceReceiptLine(details: WorkspaceToolDetails): string | un
     case "list": {
       if (details.workspaceCount === undefined || details.listedCount === undefined)
         return undefined;
-      if (details.workspaceCount === 0) return "No workspaces";
+      if (details.workspaceCount === 0) return "No worktrees";
       const listed =
         details.listedCount < details.workspaceCount
-          ? `${details.listedCount} of ${countLabel(details.workspaceCount, "workspace")}`
+          ? `${details.listedCount} of ${countLabel(details.workspaceCount, "worktree")}`
           : countLabel(details.listedCount, "workspace");
       const sourceless = details.sourceUnavailableCount ?? 0;
       const unreadable = (details.unavailableCount ?? 0) - sourceless;
@@ -178,9 +178,9 @@ function listIssues(details: WorkspaceToolDetails): CompactIssue[] {
     issues.push({
       severity: "warning",
       code: "workspace-records-unavailable",
-      message: "Some workspace records are unreadable; ownership and cleanup are unknown",
+      message: "Some worktree records are unreadable; ownership and cleanup are unknown",
       detail:
-        "Incomplete workspace metadata: some recovery records are missing, invalid, or unreadable. Their ownership, source identity, and cleanup are unknown; manual recovery is required.",
+        "Incomplete worktree metadata: some recovery records are missing, invalid, or unreadable. Their ownership, source identity, and cleanup are unknown; manual recovery is required.",
     });
   if (sourceless > 0)
     issues.push({
@@ -188,10 +188,10 @@ function listIssues(details: WorkspaceToolDetails): CompactIssue[] {
       code: "workspace-source-unavailable",
       message:
         sourceless === 1
-          ? "A nested workspace's source workspace is missing or unreadable"
-          : `${sourceless} nested workspaces' source workspaces are missing or unreadable`,
+          ? "A nested worktree's source worktree is missing or unreadable"
+          : `${sourceless} nested worktrees' source worktrees are missing or unreadable`,
       detail:
-        "These nested workspaces name a source workspace whose record is missing or unreadable (source-workspace-unavailable). Their source tree and cleanup are unknown; preserve them and recover manually.",
+        "These nested worktrees name a source worktree whose record is missing or unreadable (source-workspace-unavailable). Their source tree and cleanup are unknown; preserve them and recover manually.",
     });
   const adoptable = details.adoptableCount ?? 0;
   if (adoptable > 0)
@@ -199,8 +199,8 @@ function listIssues(details: WorkspaceToolDetails): CompactIssue[] {
       step(
         "orphans-adoptable",
         adoptable === 1
-          ? "A workspace from an ended session can be adopted"
-          : `${adoptable} workspaces from ended sessions can be adopted`,
+          ? "A worktree from an ended session can be adopted"
+          : `${adoptable} worktrees from ended sessions can be adopted`,
         "Entries marked orphan=adoptable belong to sessions that have ended. Review, prepare, apply, or revise takes one over for this session; discard deletes it.",
       ),
     );
@@ -208,8 +208,8 @@ function listIssues(details: WorkspaceToolDetails): CompactIssue[] {
     issues.push(
       step(
         "list-pagination",
-        "More workspace entries are available",
-        `More workspace metadata: list offset=${details.nextOffset}.`,
+        "More worktree entries are available",
+        `More worktree metadata: list offset=${details.nextOffset}.`,
       ),
     );
   return issues;
@@ -255,9 +255,9 @@ function applyIssues(details: WorkspaceApplyReceipt): CompactIssue[] {
           step(
             "remaining-proposal",
             remaining === 1
-              ? "One changed file stays in the workspace"
-              : `${remaining} changed files stay in the workspace`,
-            `Partial apply integrated only the chosen paths. The revision's ${countLabel(remaining, "other changed file")} ${remaining === 1 ? "stays" : "stay"} in workspace ${details.workspaceId} as an unreviewed proposal; apply, review, revise, or discard ${remaining === 1 ? "it" : "them"} later.`,
+              ? "One changed file stays in the worktree"
+              : `${remaining} changed files stay in the worktree`,
+            `Partial apply integrated only the chosen paths. The revision's ${countLabel(remaining, "other changed file")} ${remaining === 1 ? "stays" : "stay"} in worktree ${details.workspaceId} as an unreviewed proposal; apply, review, revise, or discard ${remaining === 1 ? "it" : "them"} later.`,
           ),
         ]),
     ...(details.reviewed
@@ -349,7 +349,7 @@ export function compactWorkspaceSummary(
     subject: "Proposed changes",
     counters:
       details.operation === "apply" ? applyCounters(details) : line === undefined ? [] : [line],
-    metadata: details.operation === "list" && line === undefined ? ["workspace metadata"] : [],
+    metadata: details.operation === "list" && line === undefined ? ["worktree metadata"] : [],
     issues,
     outcome: compactIssueSeverity(issues) ?? "success",
   };

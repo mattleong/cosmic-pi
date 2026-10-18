@@ -841,7 +841,7 @@ export const contactParentFrame = (
   requestId: string,
   kind: "progress" | "warning" | "question",
   message: string,
-): IpcWireValue => ({ channel: "pi-subagents", type: "contact_parent", requestId, kind, message });
+): IpcWireValue => ({ channel: "pi-subagents", type: "contact_request", requestId, kind, message });
 
 export const askParent = (
   control: FakeChildControl,

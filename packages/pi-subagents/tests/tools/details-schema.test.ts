@@ -4,30 +4,12 @@ import { registerSubagentTools } from "../../src/tools/subagent.ts";
 import { compactToolDetails } from "../../src/tools/details.ts";
 import { decodeCompactToolDetails } from "../../src/tools/details-decode.ts";
 import type { CompactSubagentToolDetails } from "../../src/tools/details-schema.ts";
-import { actionFailureDisposition, marksSubagentToolError } from "../../src/tools/outcome.ts";
+import { actionFailureDisposition, hasSubagentToolFailure } from "../../src/tools/outcome.ts";
 import { view } from "./fixtures/tool-harness.ts";
-
-const pendingFailure = {
-  id: "pending",
-  code: "steer_outcome_uncertain",
-  message: "Guidance may have been sent; acknowledgement is pending. Do not resend.",
-  pendingDelivery: true as const,
-};
-const unflaggedFailure = {
-  id: pendingFailure.id,
-  code: pendingFailure.code,
-  message: pendingFailure.message,
-};
-
-const actionFailuresOf = (value: CompactSubagentToolDetails | undefined) => {
-  const decoded = decodeCompactToolDetails(value);
-  if (!decoded || decoded.action === "models") return undefined;
-  return decoded.actionFailures;
-};
 
 describe("subagent detail evidence", () => {
   it("retains redacted cleanup evidence when fitted without inferring historical cleanup", () => {
-    const historical = compactToolDetails({ action: "status", runs: [view()] });
+    const historical = compactToolDetails({ action: "stop", runs: [view()] });
     expect(decodeCompactToolDetails(historical)).toEqual(historical);
     expect(historical).not.toHaveProperty("cards.0.cleanup");
     expect(historical).not.toHaveProperty("cards.0.writerCleanupQuarantined");
@@ -60,7 +42,7 @@ describe("subagent detail evidence", () => {
       },
     }));
     for (const runs of [[run], oversized]) {
-      const details = compactToolDetails({ action: "status", runs });
+      const details = compactToolDetails({ action: "stop", runs });
       expect(decodeCompactToolDetails(details)).toEqual(details);
       expect(details.action === "models" ? 0 : details.cards.length).toBe(runs.length);
       for (const card of details.action === "models" ? [] : details.cards) {
@@ -73,39 +55,26 @@ describe("subagent detail evidence", () => {
         expect(JSON.stringify(card.cleanup)).not.toContain("cleanup-secret");
       }
     }
-    const details = compactToolDetails({ action: "status", runs: [run] });
+    const details = compactToolDetails({ action: "stop", runs: [run] });
     expect(decodeCompactToolDetails(details)).toEqual(details);
     expect(Object.isFrozen(decodeCompactToolDetails(details))).toBe(true);
   });
 
-  it("keeps typed pending delivery additive, send-scoped, and distinct from uncertainty", () => {
-    const pending = compactToolDetails({
-      action: "send",
-      runs: [view()],
-      actionFailures: [pendingFailure],
-    });
-    expect(decodeCompactToolDetails(pending)).toEqual(pending);
-    expect(actionFailuresOf(pending)).toEqual([expect.objectContaining({ pendingDelivery: true })]);
-    expect(marksSubagentToolError(pending)).toBe(false);
-    const unflagged = compactToolDetails({
-      action: "send",
-      runs: [],
-      actionFailures: [unflaggedFailure],
-    });
-    expect(decodeCompactToolDetails(unflagged)).toEqual(unflagged);
-    expect(actionFailureDisposition("send", unflaggedFailure)).toBe("unconfirmed");
-    expect(marksSubagentToolError(unflagged)).toBe(true);
-    for (const [action, failures] of [
-      ["send", [pendingFailure, { id: "definite", code: "not_running", message: "Not running" }]],
-      ["send", [pendingFailure, { ...unflaggedFailure, id: "unflagged" }]],
-    ] as const) {
-      const mixed = compactToolDetails({ action, runs: [], actionFailures: failures });
-      expect(marksSubagentToolError(mixed)).toBe(true);
+  it("marks unconfirmed and failed targets as tool failures", () => {
+    for (const failure of [
+      { id: "unconfirmed", code: "steer_outcome_uncertain", message: "May have applied." },
+      { id: "definite", code: "not_running", message: "Not running" },
+    ]) {
+      const details = compactToolDetails({ action: "stop", runs: [], actionFailures: [failure] });
+      expect(decodeCompactToolDetails(details)).toEqual(details);
+      expect(hasSubagentToolFailure(details)).toBe(true);
     }
+    expect(actionFailureDisposition({ code: "steer_outcome_uncertain" })).toBe("unconfirmed");
+    expect(actionFailureDisposition({ code: "not_running" })).toBe("failed");
   });
 });
 
-const statusTool = () =>
+const lifecycleTool = () =>
   captureRegistrations((pi) =>
     registerSubagentTools(pi, {
       environment: { cwd: "/project", projectTrusted: false },
@@ -117,7 +86,7 @@ const statusTool = () =>
         isLiveHierarchyAvailable: () => false,
       },
     }),
-  ).tools.find((tool) => tool.name === "subagent_status")!;
+  ).tools.find((tool) => tool.name === "agent_lifecycle")!;
 
 type RunDetails = Exclude<CompactSubagentToolDetails, { readonly action: "models" }>;
 /** Run details as session history stored them, under any action string. */
@@ -125,13 +94,13 @@ type PersistedDetails = Omit<RunDetails, "action"> & { readonly action: string }
 
 describe("saved run cards", () => {
   const run = view({ name: "historic-run", writeIntent: "writer" });
-  const status = compactToolDetails({ action: "status", runs: [run] });
-  assert(status.action !== "models");
+  const stopped = compactToolDetails({ action: "stop", runs: [run] });
+  assert(stopped.action !== "models");
 
-  /** Replays persisted details through the status renderer, expanded, as history redraws them. */
+  /** Replays persisted details through the lifecycle renderer, expanded, as history redraws them. */
   const replayed = (details: PersistedDetails) => {
-    const harness = createToolPresentationHarness(statusTool(), { width: 160 });
-    harness.call({ runIds: [run.id] }, { expanded: true });
+    const harness = createToolPresentationHarness(lifecycleTool(), { width: 160 });
+    harness.call({ action: "stop", runIds: [run.id] }, { expanded: true });
     harness.result(
       { content: [{ type: "text", text: "raw history sentinel" }], details },
       { expanded: true },
@@ -140,15 +109,13 @@ describe("saved run cards", () => {
   };
 
   it("falls back to the saved text when details no longer decode", () => {
-    const undecodable = { ...status, action: "rename" };
+    const undecodable = { ...stopped, action: "rename" };
     expect(decodeCompactToolDetails(undecodable)).toBeUndefined();
     expect(replayed(undecodable)).toContain("raw history sentinel");
   });
 
-  it("decodes a list card", () => {
-    const listed = compactToolDetails({ action: "list", runs: [run] });
-    assert(listed.action !== "models");
-    expect(decodeCompactToolDetails(listed)).toEqual(listed);
-    expect(replayed(listed)).toContain("historic-run");
+  it("decodes a stop card", () => {
+    expect(decodeCompactToolDetails(stopped)).toEqual(stopped);
+    expect(replayed(stopped)).toContain("historic-run");
   });
 });

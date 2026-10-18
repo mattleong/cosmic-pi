@@ -34,6 +34,7 @@ import { clipUtf8Text } from "../run/state.ts";
 import {
   AGENT_TOOL_NAME,
   AGENT_TOOL_NAMES,
+  CONTACT_PARENT_TOOL_NAME,
   isAgentToolName,
   nestedSubagentToolNames,
   SUBAGENT_TOOL_NAMES,
@@ -81,7 +82,7 @@ const MAX_TOOL_REPLY_BYTES = MAX_TOOL_OUTPUT_CHARS - PARENT_REPLY_PREFIX.length;
 const CHILD_PRIVATE_TOOL_NAME_SET: ReadonlySet<string> = new Set([
   ...SUBAGENT_TOOL_NAMES,
   ...AGENT_TOOL_NAMES,
-  "contact_parent",
+  CONTACT_PARENT_TOOL_NAME,
 ]);
 let nextRequest = 1;
 
@@ -110,7 +111,7 @@ const ContactParentParameters = Type.Object(
   { additionalProperties: false },
 );
 const prepareContactParentArguments = toolArgumentPreparer(
-  "contact_parent",
+  CONTACT_PARENT_TOOL_NAME,
   ContactParentParameters,
   (value): value is Static<typeof ContactParentParameters> => Check(ContactParentParameters, value),
 );
@@ -160,7 +161,7 @@ export function registerSubagentChildBridge(
   const proxyToolNames = [
     ...nestedSubagentToolNames(workspaceParent),
     ...AGENT_TOOL_NAMES,
-    "contact_parent",
+    CONTACT_PARENT_TOOL_NAME,
   ];
   const ipc = boundaries.openIpc();
   const pending = parentCorrelations<string>();
@@ -262,7 +263,7 @@ export function registerSubagentChildBridge(
     if (!isActivationCurrent(input, token))
       return Promise.reject(new Error("Subagent proxy is unavailable for this session."));
     const requestId = `proxy-${process.pid}-${nextRequest++}`;
-    // Only subagent_* calls carry this session's native facts; the root binds every caller itself.
+    // Only management calls carry this session's native facts; the root binds every caller itself.
     const request =
       encoded.tool === "ask_user" || isAgentToolName(encoded.tool)
         ? encoded
@@ -315,7 +316,7 @@ export function registerSubagentChildBridge(
       withCodePreviewShell(
         {
           ...contactParentRenderers,
-          name: "contact_parent",
+          name: CONTACT_PARENT_TOOL_NAME,
           label: CONTACT_PARENT_LABEL,
           description:
             "Send progress, record a non-blocking warning in parent-visible run status, or ask a blocking parent question. Repeat warnings in the final report; use a question instead when a risk could invalidate work the parent is doing now.",
@@ -328,7 +329,7 @@ export function registerSubagentChildBridge(
             const requestId = `contact-${process.pid}-${nextRequest++}`;
             const send = ipc.sendContact({
               channel: "pi-subagents",
-              type: "contact_parent",
+              type: "contact_request",
               requestId,
               kind: params.kind,
               message: safeTextPrefix(params.message, MAX_PARENT_MESSAGE_CHARS),

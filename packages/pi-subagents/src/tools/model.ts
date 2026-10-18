@@ -49,7 +49,6 @@ export interface SubagentActionFailure {
   readonly id: string;
   readonly message: string;
   readonly code?: string;
-  readonly pendingDelivery?: true;
 }
 
 export interface ProfileCandidateDiscovery extends ProfileCandidate {

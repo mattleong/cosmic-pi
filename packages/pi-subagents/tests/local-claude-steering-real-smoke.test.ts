@@ -77,7 +77,7 @@ const TOOL_CATEGORIES = {
   Task: "nativeAgent",
   TaskOutput: "taskOutput",
   ToolSearch: "toolSearch",
-  mcp__pi_subagents_supervisor__supervisor_submit_report: "supervisorReport",
+  mcp__pi_subagents_supervisor__agent_submit_report: "supervisorReport",
 } as const;
 type ToolCategory = (typeof TOOL_CATEGORIES)[keyof typeof TOOL_CATEGORIES] | "other";
 const categoryByTool: ReadonlyMap<string, ToolCategory> = new Map(Object.entries(TOOL_CATEGORIES));
@@ -280,7 +280,7 @@ describe.skipIf(!enabled)("installed local Claude steering smoke", () => {
         systemPrompt: [
           "This is a bounded read-only timing probe. Do not edit files, change configuration, access the network, or retry tools.",
           "Follow the single requested scenario. Parent guidance may arrive while you work; do not wait for it before beginning.",
-          "After the bounded work (or an unavailable-tool limitation), call mcp__pi_subagents_supervisor__supervisor_submit_report exactly once with a short report.",
+          "After the bounded work (or an unavailable-tool limitation), call mcp__pi_subagents_supervisor__agent_submit_report exactly once with a short report.",
         ].join(" "),
       });
       yield* driver.preflight(launch);

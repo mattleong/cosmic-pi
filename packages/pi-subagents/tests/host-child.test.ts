@@ -21,7 +21,7 @@ import {
 import { backendLaunchRequest } from "../src/run/launch-records.ts";
 import type { StartSubagentRequest } from "../src/run/model.ts";
 import { AGENT_TOOL_NAMES, SUBAGENT_TOOL_NAME } from "../src/run/tool-policy.ts";
-import { statusContract } from "../src/tools/contract.ts";
+import { lifecycleContract } from "../src/tools/contract.ts";
 import { view } from "./fixtures/run-view.ts";
 import { request as startRequest } from "./run/fixtures/service-harness.ts";
 import { describeActivationLifecycle } from "./support/activation-lifecycle.ts";
@@ -124,7 +124,11 @@ const makeHarness = (options: HarnessOptions = {}) => {
       }),
     );
   const ask = (signal?: AbortSignal) =>
-    execute(latestTool("contact_parent"), { kind: "question", message: "Need input" }, signal);
+    execute(
+      latestTool("agent_contact_parent"),
+      { kind: "question", message: "Need input" },
+      signal,
+    );
   return {
     events,
     activeTools: () => [...active],
@@ -200,16 +204,16 @@ describe("local Pi child bridge", () => {
     );
     second.resolve();
     yield* step(() => secondStart);
-    const winningContact = harness.latestTool("contact_parent");
+    const winningContact = harness.latestTool("agent_contact_parent");
     expect(harness.listeners[0]?.detached).toBe(true);
     expect(harness.activeTools()).toEqual(
-      expect.arrayContaining(["contact_parent", "subagent_start"]),
+      expect.arrayContaining(["agent_contact_parent", "agent_start"]),
     );
 
     first.resolve();
     yield* step(() => firstStart);
     yield* step(() => first.promise);
-    expect(harness.latestTool("contact_parent")).toBe(winningContact);
+    expect(harness.latestTool("agent_contact_parent")).toBe(winningContact);
     yield* settle(harness.shutdown);
   });
 
@@ -230,12 +234,8 @@ describe("local Pi child bridge", () => {
       requestId: request.requestId,
       ok: true,
       payloadJson: JSON.stringify({
-        content: [{ type: "text", text: "Unrelated status" }],
-        structuredContent: statusContract({
-          observations: [{ run: view({ id: "a" }) }],
-          fullyRenderedIds: new Set(),
-          missingRunIds: [],
-        }),
+        content: [{ type: "text", text: "Unrelated stop" }],
+        structuredContent: lifecycleContract("stop", [{ runId: "a", run: view({ id: "a" }) }]),
       }),
     });
     expect(yield* step(() => pending)).toBeDefined();
@@ -245,8 +245,8 @@ describe("local Pi child bridge", () => {
   effectTest("re-registers on reload and rejects stale tool definitions", function* () {
     const harness = makeHarness();
     yield* settle(() => harness.start("/first"));
-    const staleContact = harness.latestTool("contact_parent");
-    const staleProxy = harness.latestTool(SUBAGENT_TOOL_NAME.status);
+    const staleContact = harness.latestTool("agent_contact_parent");
+    const staleProxy = harness.latestTool(SUBAGENT_TOOL_NAME.models);
     const staleListener = harness.currentListener().handlers;
     const staleInFlight = rejection(execute(staleProxy, {}, undefined));
     const staleRequest = yield* harness.awaitContact("proxy_request");
@@ -263,7 +263,7 @@ describe("local Pi child bridge", () => {
       payloadJson: '{"content":[{"type":"text","text":"late"}]}',
     });
     yield* step(eventLoopTurn);
-    const currentContact = harness.latestTool("contact_parent");
+    const currentContact = harness.latestTool("agent_contact_parent");
     expect(currentContact).not.toBe(staleContact);
     const sentBefore = harness.contacts.length;
     yield* step(() =>
@@ -292,7 +292,7 @@ describe("local Pi child bridge", () => {
 
     const proxyAbort = new AbortController();
     const proxyOutcome = rejection(
-      execute(harness.latestTool(SUBAGENT_TOOL_NAME.status), {}, proxyAbort.signal),
+      execute(harness.latestTool(SUBAGENT_TOOL_NAME.models), {}, proxyAbort.signal),
     );
     const proxyRequest = yield* harness.awaitContact("proxy_request");
     proxyAbort.abort();
@@ -301,7 +301,7 @@ describe("local Pi child bridge", () => {
 
     const questionAbort = new AbortController();
     const questionOutcome = rejection(harness.ask(questionAbort.signal));
-    const question = yield* harness.awaitContact("contact_parent");
+    const question = yield* harness.awaitContact("contact_request");
     questionAbort.abort();
     expect(yield* step(() => questionOutcome)).toMatchObject({
       message: "Parent question was cancelled.",
@@ -316,9 +316,9 @@ describe("local Pi child bridge", () => {
       yield* settle(harness.start);
       const questionOutcome = rejection(harness.ask());
       const proxyOutcome = rejection(
-        execute(harness.latestTool(SUBAGENT_TOOL_NAME.status), {}, undefined),
+        execute(harness.latestTool(SUBAGENT_TOOL_NAME.models), {}, undefined),
       );
-      yield* harness.awaitContact("contact_parent");
+      yield* harness.awaitContact("contact_request");
       yield* harness.awaitContact("proxy_request");
 
       if (end === "disconnect") harness.currentListener().handlers.onDisconnect();
@@ -364,7 +364,7 @@ describe("local Pi child bridge", () => {
     yield* harness.awaitContact("turn_input_barrier_ack", { requestId: "current-barrier" });
 
     const result = harness.ask();
-    const question = yield* harness.awaitContact("contact_parent");
+    const question = yield* harness.awaitContact("contact_request");
     const reply: LocalPiParentControl = {
       channel: "pi-subagents",
       type: "parent_reply",
@@ -445,7 +445,7 @@ const nestedSurfaces: ReadonlyArray<
 describe("nested workspace surface", () => {
   for (const [kind, overrides, workspaceParent] of nestedSurfaces)
     effectTest(
-      `${workspaceParent ? "exposes" : "withholds"} subagent_workspace for a ${kind} child`,
+      `${workspaceParent ? "exposes" : "withholds"} agent_worktree for a ${kind} child`,
       function* () {
         const { launch, marker } = childWorkspaceMarker(overrides);
         // Always stub, so a marker inherited from an enclosing subagent can't leak in.
@@ -453,6 +453,20 @@ describe("nested workspace surface", () => {
         const harness = makeHarness();
         yield* settle(harness.start);
         const names = harness.tools.map((tool) => tool.name);
+        // Proxies of the root's agent_* tools, plus the child's own parent contact.
+        expect(new Set(names)).toEqual(
+          new Set([
+            "agent_profiles",
+            "agent_start",
+            "agent_await",
+            "agent_lifecycle",
+            ...(workspaceParent ? ["agent_worktree"] : []),
+            "agent_list",
+            "agent_send",
+            "agent_read",
+            "agent_contact_parent",
+          ]),
+        );
         expect(names.includes(SUBAGENT_TOOL_NAME.workspace)).toBe(workspaceParent);
         expect(harness.activeTools().includes(SUBAGENT_TOOL_NAME.workspace)).toBe(workspaceParent);
         // Every child coordinates with the session's agents, whatever its tool policy.

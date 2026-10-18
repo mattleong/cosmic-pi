@@ -24,11 +24,11 @@ import {
 const decodeStartDetails = Schema.decodeUnknownSync(SubagentStartDetailsSchema);
 
 const startWith = (requests: StartSubagentRequest[], options: CaptureOptions = {}) =>
-  captureSubagentTools(startCapturingService(requests), options).get("subagent_start");
+  captureSubagentTools(startCapturingService(requests), options).get("agent_start");
 
 const startIssueStyleProblems = (args: SubagentStartInput, details: SubagentStartDetails) =>
   (
-    createSubagentCompactSummary("subagent_start")({
+    createSubagentCompactSummary("agent_start")({
       phase: "settled",
       args,
       result: { content: [{ type: "text", text: "" }], details },
@@ -182,14 +182,30 @@ describe("per-launch model override", () => {
       },
     });
     const service = subagentServiceDouble({
-      withStatusObservations: (_ids, use) => use({ observations: [{ run }], missingIds: [] }),
+      agentRead: () =>
+        Effect.succeed({
+          agents: [
+            {
+              kind: "run",
+              id: run.id,
+              name: run.name,
+              state: run.state,
+              textStatus: "none",
+              truncated: false,
+              reportGeneration: 0,
+              run,
+            },
+          ],
+          missingIds: [],
+        }),
     });
-    const result = yield* invokeOptionalTool(captureSubagentTools(service).get("subagent_status"), {
-      runIds: [run.id],
+    const result = yield* invokeOptionalTool(captureSubagentTools(service).get("agent_read"), {
+      agentIds: [run.id],
+      verbose: true,
     });
-    expect(result?.details).toMatchObject({ cards: [{ id: run.id, modelOverride }] });
+    expect(result?.content[0]?.text).toContain("codex/gpt-5.5");
     expect(result?.structuredContent).toMatchObject({
-      targets: [{ runId: run.id, modelOverride }],
+      agents: [{ id: run.id, status: { runId: run.id, modelOverride } }],
     });
   });
 });

@@ -8,7 +8,7 @@ Background subagents for Pi on macOS and Linux. The main agent delegates work to
 - **Custom agents** you define in `pi-subagents.json`: named roles with their own instructions, effort, and tool lists, routed through a profile.
 - **Three local runtimes:** Pi, Claude Code, and Codex, with ordered fallback candidates per profile.
 - **Background by default.** Reports and failures arrive automatically; the agent waits only when it needs a result.
-- **Two-way supervision:** children can ask the parent questions and report progress; the parent can guide, interrupt, resume, retry, or stop them.
+- **Two-way supervision:** children can ask the parent questions and report progress; the parent can answer or guide them, interrupt, resume, retry, or stop them.
 - **Agent messaging:** any agent in the session can list, message, and read any other, including the main agent.
 - **Nesting:** children can launch their own subagents, up to depth 3 with 12 direct children each by default.
 - **Safe parallel writes:** per writer, either share the checkout with other writers on disjoint task scopes, or work in an isolated worktree whose proposal the parent applies in one step (wholly or file by file), or reviews and tests before applying. Proposals can also be revised onto the parent's current files.
@@ -27,7 +27,7 @@ Requires Pi 1.2.0 or later. Claude Code routes need Claude Code 2.1.224 or later
 
 ## Usage
 
-Ask for work that splits into independent pieces, and the agent launches subagents with `subagent_start`:
+Ask for work that splits into independent pieces, and the agent launches subagents with `agent_start`:
 
 ```json
 {
@@ -67,19 +67,26 @@ Ask for work that splits into independent pieces, and the agent launches subagen
 
 The mode only changes prompt guidance; no tools are restricted, and subagents keep the default guidance. Session is the default scope. `global` and `project` persist for new sessions and apply after `/reload`. The footer shows the current profile set, marked `*` when this session has its own route edits, followed by the mode when it isn't `normal`.
 
-The agent's tools are `subagent_start`, `subagent_await`, `subagent_status` (which lists the run tree when called without run IDs), `subagent_send` (which answers a waiting subagent's question or steers a running one), `subagent_lifecycle`, `subagent_models`, and `subagent_workspace`, plus the three agent messaging tools below. Native Pi codemode supports [read-only scripting](docs/native-codemode.md) with ordinary subagents; writer launches and recovery remain main-agent decisions.
+### Tools
+
+The main agent and Pi subagents share one `agent_*` family. `agent_start`, `agent_await`, `agent_lifecycle`, and `agent_worktree` act on agents you started and their descendants; `agent_list`, `agent_read`, and `agent_send` reach any agent in the session, the main agent and subagents at any depth on any runtime:
+
+| Tool              | Does                                                                                                                                  |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent_start`     | Starts background subagents by profile or custom agent                                                                                |
+| `agent_await`     | Waits for runs you started and returns their reports, early when one asks you a question                                              |
+| `agent_lifecycle` | Interrupts, stops, or retries runs you started on their profile's next route candidate                                                |
+| `agent_worktree`  | Reviews, tests, applies, revises, or discards a worktree writer's proposal                                                            |
+| `agent_profiles`  | Shows each profile's route and the configured custom agents                                                                           |
+| `agent_list`      | Lists `main` and every subagent with its state, parent, role, model, worktree proposal, and whether it waits on its parent            |
+| `agent_read`      | Shows each run's status card and latest message or report, and main's latest message, without taking a report from its parent         |
+| `agent_send`      | Messages one agent now: answers your child's question, guides a running agent, wakes an idle main agent, or resumes a finished Pi run |
+
+Subagents also get `agent_contact_parent` to report progress, record a warning, or ask a blocking question, and Claude and Codex subagents submit their final report with `agent_submit_report`. Native Pi codemode supports [read-only scripting](docs/native-codemode.md) with ordinary subagents; writer launches and recovery remain main-agent decisions.
 
 ### Agent messaging
 
-Every agent in the session, the main agent and subagents at any depth on any runtime, can reach every other one, not just its own children:
-
-| Tool         | Does                                                                                                   |
-| ------------ | ------------------------------------------------------------------------------------------------------ |
-| `agent_list` | Lists `main` and every subagent with its state, parent, and role                                       |
-| `agent_send` | Messages one agent now: guides a running agent, wakes an idle main agent, or resumes a finished Pi run |
-| `agent_read` | Reads an agent's latest message, or a finished run's report, without taking the report from its parent |
-
-Nothing is stored for later: each send reports what happened or why it was refused. A resumed run still reports to its own parent, naming who resumed it. Messages are peer requests, never user authority, and rate limits and a per-prompt wake budget keep agents from waking each other in a loop. Details are in [Agent messages](docs/completion-delivery.md#agent-messages). To message other Pi sessions, use [pi-intercom](../pi-intercom/README.md).
+Nothing is stored for later: each send reports what happened or why it was refused. A resumed run still reports to its own parent, naming who resumed it. Messages are peer requests, never user authority. Nothing caps how often agents message each other; press Esc to stop a loop, and set `sessionSpendLimit` to stop resumes past a spend limit. Details are in [Agent messages](docs/completion-delivery.md#agent-messages). To message other Pi sessions, use [pi-intercom](../pi-intercom/README.md).
 
 ## Configuration
 

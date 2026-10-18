@@ -4,30 +4,29 @@ Part of the [pi-subagents](../README.md) documentation. Service-side gates are i
 
 Native Pi `codemode` runs JavaScript that coordinates ordinary subagents inside the main agent's turn. Pi owns the VM, dispatch, cancellation, and model access. Scripts suit short read-only coordination whose receipts the main agent needs in the same turn. Agents launched by a script still run in the background, and the main agent keeps responsibility for recovery, writer handoffs, and synthesis.
 
-These examples are for the root session. Nested Pi children delegate only through their model-only `subagent_*` proxy tools, though their scripts may call `agent_list` and `agent_read`, and Claude and Codex children reach the root only through the supervisor channel. An explicit `profile` always wins; an omitted profile uses `generalist`.
+These examples are for the root session. Nested Pi children delegate only through their model-only proxies of the root's management tools, though their scripts may call `agent_list` and `agent_read`, and Claude and Codex children reach the root only through the supervisor channel. An explicit `profile` always wins; an omitted profile uses `generalist`.
 
 ## Script boundary
 
-- Root scripts can call `subagent_models`, `subagent_start`, `subagent_await`, `subagent_status`, `subagent_lifecycle` with `action: "stop"`, `agent_list`, and `agent_read`. Other coordinator tools, including `agent_send`, are model-only.
+- Root scripts can call `agent_profiles`, `agent_start`, `agent_await`, `agent_lifecycle` with `action: "stop"`, `agent_list`, and `agent_read`. `agent_send` and `agent_worktree` are model-only.
 - Starts must resolve to read-only intent; by default that is every profile except `worker`. A writer entry becomes a failed receipt before admission without discarding independent successful entries.
 - Script-started runs carry an immutable restriction: descendants at every depth, retry successors, and resumed runs stay read-only, even when their delegation or retry is model-issued. The root main agent may still launch separate writer work outside a script-origin tree.
 - The restriction governs what script-origin runs start, not whom they message. A script-started run's model keeps `agent_send`, so it can guide any running agent in the session, including writers, and resume any finished local Pi run, including a writer outside its tree; the resumed run keeps its own write intent and reports to its own parent.
-- A scripted await or status that meets a question or pause rejects before consuming reports, and await leaves questions unacknowledged. End the script and let the main agent handle the attention; don't catch it to re-await in a loop.
-- Messages and answers to questions (`subagent_send`, `agent_send`), worktree review and integration, interrupt, resume, and retry require the main agent.
+- A scripted await that meets a question or pause rejects before consuming reports, and await leaves questions unacknowledged. End the script and let the main agent handle the attention; don't catch it to re-await in a loop.
+- Messages, answers to questions, and resumes (`agent_send`), worktree review and integration, interrupt, and retry require the main agent.
 - A script's stop uses the root's normal target authority, so it can stop any run in the session. Stop only runs the script launched or that the user approved stopping.
 
 These are orchestration safeguards, not capability confinement: read-only Pi agents and native tools keep their cooperative authority.
 
 ## Results and failures
 
-All seven script-callable tools expose `outputSchema` and `structuredContent` with `contract: "pi-subagents/orchestration"`, `version: 3`, and the exact `tool` name, so scripts receive objects rather than presentation text. Use `describeTool()` when the inline listing is too small. Middleware that replaces content may remove structured data, so check the envelope before using a result. Scripts should check `version` and stop rather than guess when it differs.
+All six script-callable tools expose `outputSchema` and `structuredContent` with `contract: "pi-subagents/orchestration"`, `version: 3`, and the exact `tool` name, so scripts receive objects rather than presentation text. Use `describeTool()` when the inline listing is too small. Middleware that replaces content may remove structured data, so check the envelope before using a result. Scripts should check `version` and stop rather than guess when it differs.
 
 - **Models:** `fallbackProfile` and `profiles`, optionally filtered. Each profile has its `id`, description, source, defaults, and declared-order `candidates` with runtime, model, effort, context, write intent, OpenAI fast mode, `status` (`eligible` or `skipped`), and reason. This is static eligibility, not readiness, and doesn't authorize substituting a model.
 - **Start:** `outcome` is `started`, `partial`, or `failed`. Request-ordered `launches` have `index` and `status`; successes add `runId`, the actual `profile`, and `modelOverride` when the item set `model`, and failures add `failure` and, after admitted-failure cleanup settles, optional `admittedRun` cleanup and retry facts.
-- **Await:** `outcome` is `finished`, `attention`, `cancelled`, `timed_out` (after `timeoutSeconds`), or `user_input`, with `requestedRunIds` and `targets`. Finished means the assignment settled, not that it succeeded. Scripted attention rejects instead. Cancellation keeps observed targets, unobserved IDs, and `cleanup`, and stops only the wait. A late abort during delivery yields `report.status: "unknown"`; recover with opt-in status.
-- **Status:** with `runIds`, `targets` and `missingRunIds`. Without `runIds`, a complete `runs` list in parent-before-child order with `parentRunId` and `depth`, never clipped and never reading or consuming reports; check for `runs` versus `targets`. Targets of a run launched on a model override carry `modelOverride`. With `runIds`, `includeDeliveredReports: true` reads the latest retained delivered report without a claim or notification; competing claims still redact it. Compare `reportGeneration` when an assignment may have changed. Eviction or session replacement can make a run unavailable.
+- **Await:** `outcome` is `finished`, `attention`, `cancelled`, `timed_out` (after `timeoutSeconds`), or `user_input`, with `requestedRunIds` and `targets`. Finished means the assignment settled, not that it succeeded. Scripted attention rejects instead. Cancellation keeps observed targets, unobserved IDs, and `cleanup`, and stops only the wait. A late abort during delivery yields `report.status: "unknown"`; recover the report with `agent_read`.
 - **Lifecycle:** `outcome` is `succeeded`, `partial`, or `failed`. Ordered `results` keep `requestedRunId` separate from a retry successor's `target.runId`.
-- **Agent list and read:** `agents` and `missingIds`. List entries cover `main` and every run, parents first, with `state`, `parentId`, and `self`; read entries carry bounded `text` with `textStatus` and `truncated`, plus `source` and `reportGeneration` for runs ([last-message reads](completion-delivery.md#last-message-reads)). Reads never consume reports.
+- **Agent list and read:** `agents` and `missingIds`. List entries cover `main` and every run, parents first, never clipped, with `state`, `parentId`, `depth`, and `self`, and for runs `model`, `writeIntent`, a `worktree` with its `workspaceId` and proposal status, and `attention` when the run waits on its parent. Read entries carry bounded `text` with `textStatus` and `truncated`, plus for runs `source`, `reportGeneration`, and a `status` target whose report is always withheld; the read `text` is the latest message, or a finished run's retained report or error, without a claim or notification ([last-message reads](completion-delivery.md#last-message-reads)). Targets of a run launched on a model override carry `modelOverride`. Compare `reportGeneration` when an assignment may have changed. Eviction or session replacement can make a run unavailable. Reads never consume reports.
 
 Target `report.status` is `delivered` or `read_back` when `text` is present; otherwise `deferred`, `claimed`, `already_delivered`, `missing`, `not_finished`, or `unknown`. A deferred report is not consumed. Don't treat absent text as an empty deliverable, and never treat absent retry facts as permission to retry.
 
@@ -38,7 +37,7 @@ Batch `outcome` and entry `status: "failed"` describe receipts, not rollback or 
 Run this as the first codemode call. It launches two read-only scouts and prints the receipts at once. Store writes commit only when the script succeeds, and tool effects aren't rolled back if it fails.
 
 ```js
-const started = await tools.subagent_start({
+const started = await tools.agent_start({
   agents: [
     {
       name: "tool-map",
@@ -64,7 +63,7 @@ Continue independent main-agent work, if any. At the dependency barrier, use a s
 ```js
 const ids = load("codemode-demo-ids");
 if (!Array.isArray(ids) || ids.length === 0) return "No launched work to await";
-const result = await tools.subagent_await({ runIds: ids, until: "all_finished" });
+const result = await tools.agent_await({ runIds: ids, until: "all_finished" });
 text(result); // Await may consume reports; preserve them before any later call can fail.
 if (result?.contract !== "pi-subagents/orchestration" || result.version !== 3) return result;
 if (
@@ -79,14 +78,17 @@ if (
 let targets = result.targets;
 const missing = targets.filter((t) => !("text" in t.report)).map((t) => t.runId);
 if (missing.length) {
-  const recovered = await tools.subagent_status({ runIds: missing, includeDeliveredReports: true });
+  const recovered = await tools.agent_read({ agentIds: missing });
   text(recovered); // Preserve observed reports even if validation or generation matching fails.
   if (recovered?.contract !== "pi-subagents/orchestration" || recovered.version !== 3)
     return recovered;
-  const byId = new Map(recovered.targets.map((t) => [t.runId, t]));
+  const byId = new Map(recovered.agents.map((a) => [a.id, a]));
   targets = targets.map((t) => {
-    const recovered = byId.get(t.runId);
-    return recovered?.reportGeneration === t.reportGeneration ? recovered : t;
+    const read = byId.get(t.runId);
+    // A finished run's latest message, or its retained report when it has none.
+    return read?.textStatus === "text" && read.reportGeneration === t.reportGeneration
+      ? { ...t, report: { status: "read_back", text: read.text } }
+      : t;
   });
 }
 text({ runIds: ids, targets }); // Keep full evidence available before the follow-up.
@@ -109,7 +111,7 @@ const reports = targets.map((t) => ({
 // The main agent chose reviewer for this existing-implementation assessment.
 const goal =
   "Assess the implemented read-only codemode scripting safeguards for remaining concrete correctness or integration gaps. The implementation already exists; evaluate it against its safety invariants rather than design a new feature.";
-const followup = await tools.subagent_start({
+const followup = await tools.agent_start({
   agents: [
     {
       name: "codemode-followup",
@@ -136,7 +138,7 @@ Each area gets a scout, and as soon as one finishes its area moves to a reviewer
 
 ```js
 const areas = ["packages/pi-subagents/src/run", "packages/pi-subagents/src/tools"];
-const started = await tools.subagent_start({
+const started = await tools.agent_start({
   agents: areas.map((area) => ({
     name: `map-${area.split("/").at(-1)}`,
     profile: "scout",
@@ -150,7 +152,7 @@ const lanes = new Map(
 );
 const reviewers = [];
 for (let round = 0; lanes.size > 0 && round < 10; round += 1) {
-  const result = await tools.subagent_await({
+  const result = await tools.agent_await({
     runIds: [...lanes.keys()],
     until: "any_finished",
     timeoutSeconds: 900,
@@ -162,7 +164,7 @@ for (let round = 0; lanes.size > 0 && round < 10; round += 1) {
   )) {
     const area = lanes.get(target.runId);
     lanes.delete(target.runId);
-    const review = await tools.subagent_start({
+    const review = await tools.agent_start({
       agents: [
         {
           profile: "reviewer",
@@ -191,7 +193,7 @@ When pi-background-task is loaded, `background_task` also returns structured res
 The first call launches a read-only scout and the package tests, prints both receipts, and replaces any older checkpoint.
 
 ```js
-const started = await tools.subagent_start({
+const started = await tools.agent_start({
   agents: [
     {
       name: "contract-map",
@@ -245,7 +247,7 @@ if (current.task?.startedAt !== saved.task.startedAt) {
   return "Task checkpoint removed after timestamp mismatch; agent IDs retained for main-agent recovery";
 }
 const agents = saved.runIds.length
-  ? await tools.subagent_await({ runIds: saved.runIds, until: "all_finished" })
+  ? await tools.agent_await({ runIds: saved.runIds, until: "all_finished" })
   : undefined;
 text(agents); // Preserve full evidence before waiting for the tests.
 // One bounded wait. A timeout leaves the tests running.
@@ -295,7 +297,7 @@ if (!saved?.task || !saved.runIds?.length) return "No recorded launches; hand ba
 text({ runIds: saved.runIds, taskId: saved.task.id });
 store("interrupted-wait-probe", { shouldNotCommit: true });
 const waits = await Promise.allSettled([
-  tools.subagent_await({ runIds: saved.runIds, until: "all_finished" }).then((result) => {
+  tools.agent_await({ runIds: saved.runIds, until: "all_finished" }).then((result) => {
     text(result);
     return result;
   }),
@@ -314,4 +316,4 @@ const waits = await Promise.allSettled([
 text(waits);
 ```
 
-This intentionally fails if a wait is still pending at 1.5 seconds; a fast job finishing first proves nothing. Cancellation stops neither job, and the failed script's store write must not commit. The main agent then inspects the existing IDs with direct `subagent_status` and `background_task` status calls, verifies `load("interrupted-wait-probe")` is `undefined`, and recovers any delivered report with `includeDeliveredReports`. Never replay the launch script, and don't repeat the drill after attention or another failure.
+This intentionally fails if a wait is still pending at 1.5 seconds; a fast job finishing first proves nothing. Cancellation stops neither job, and the failed script's store write must not commit. The main agent then inspects the existing IDs with direct `agent_read` and `background_task` status calls, verifies `load("interrupted-wait-probe")` is `undefined`, and rereads any delivered report with `agent_read`. Never replay the launch script, and don't repeat the drill after attention or another failure.

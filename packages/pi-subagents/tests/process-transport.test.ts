@@ -526,7 +526,7 @@ describe("Pi transport policy", () => {
         channel: "pi-subagents",
         type: "proxy_request",
         requestId: "bounded",
-        tool: "subagent_start",
+        tool: "agent_start",
         argumentsJson: "x".repeat(2 * 1024 * 1024),
       };
       f.child.emit("message", contact);
@@ -561,7 +561,7 @@ describe("Pi transport policy", () => {
         yield* spawnListenerReady(f.child);
         f.child.emit("message", {
           channel: "pi-subagents",
-          type: "contact_parent",
+          type: "contact_request",
           requestId: "early",
           kind: "progress",
           message: "ready",

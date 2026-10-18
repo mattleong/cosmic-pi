@@ -62,7 +62,7 @@ interface RunProcessInitializerDependencies extends Pick<
   readonly closeExitedScope: RunRecordCleanup["closeExitedScope"];
   readonly failRun: RunSettlement["failRun"];
   /** `agent_*` operations bound to the run as their caller, for backends that host the tools. */
-  readonly agentMessagingFor?: ((runId: string) => BackendAgentMessaging) | undefined;
+  readonly agentMessagingFor?: ((runId: string, cwd: string) => BackendAgentMessaging) | undefined;
 }
 
 export function processInitializer(dependencies: RunProcessInitializerDependencies) {
@@ -107,7 +107,7 @@ export function processInitializer(dependencies: RunProcessInitializerDependenci
             `Subagent ${record.view.id} was stopped before backend spawn.`,
           );
         return yield* record.driver
-          .spawn(record.launch, agentMessagingFor?.(record.view.id))
+          .spawn(record.launch, agentMessagingFor?.(record.view.id, record.view.cwd))
           .pipe(Effect.provideService(Scope.Scope, scope));
       }).pipe(
         Effect.ensuring(

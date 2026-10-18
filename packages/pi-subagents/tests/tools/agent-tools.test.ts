@@ -28,6 +28,14 @@ beforeEach(() =>
 );
 
 const scout = view({ id: "agent-1", name: "api-scout", profile: "scout", state: "running" });
+const finishedScout = view({
+  ...scout,
+  state: "completed",
+  parentRunId: "root",
+  depth: 1,
+  pid: 4242,
+  warning: "Schema drift is likely.",
+});
 
 const READ: AgentReadResult = {
   agents: [
@@ -50,6 +58,7 @@ const READ: AgentReadResult = {
       truncated: true,
       source: "report",
       reportGeneration: 1,
+      run: finishedScout,
     },
   ],
   missingIds: ["agent-gone"],
@@ -75,23 +84,40 @@ const agentService = () =>
               profile: "scout",
               task: "Map the API",
               self: false,
+              run: view({
+                ...scout,
+                parentRunId: "root",
+                writeIntent: "writer",
+                writerWorkspaceMode: "worktree",
+                workspaceId: "ws-1",
+                question: { requestId: "q-1", message: "Which API?" },
+                state: "waiting_for_parent",
+              }),
             },
           ],
           missingIds: ids?.filter((id) => id !== MAIN_AGENT_ID && id !== scout.id) ?? [],
         };
       }),
-    agentSend: (caller, to) =>
-      to === "agent-busy"
-        ? Effect.fail(
-            agentMessageRefusal(
-              "agent_rate_limited",
-              "Too many agent messages; wait 5 seconds before messaging agent-busy again.",
-            ),
-          )
-        : Effect.sync(() => {
-            callers.push(caller);
-            return { messageId: "message-1", to, name: scout.name, disposition: "guided" as const };
-          }),
+    agentSend: (caller, to) => {
+      if (to === "agent-slow")
+        return Effect.succeed({
+          messageId: "message-2",
+          to,
+          name: scout.name,
+          disposition: "pending" as const,
+        });
+      if (to === "agent-busy")
+        return Effect.fail(
+          agentMessageRefusal(
+            "agent_unavailable",
+            "Agent agent-busy is starting; try again once it is running.",
+          ),
+        );
+      return Effect.sync(() => {
+        callers.push(caller);
+        return { messageId: "message-1", to, name: scout.name, disposition: "guided" as const };
+      });
+    },
     agentRead: () => Effect.succeed(READ),
   });
 
@@ -128,28 +154,58 @@ describe("agent tools", () => {
         tool: "agent_list",
         agents: [
           { id: "main", kind: "main", state: "idle", self: true },
-          { id: "agent-1", parentId: "main", profile: "scout", task: "Map the API" },
+          {
+            id: "agent-1",
+            parentId: "main",
+            profile: "scout",
+            task: "Map the API",
+            model: "pi/openai-codex/gpt-5.6-sol:high",
+            writeIntent: "writer",
+            worktree: { workspaceId: "ws-1", status: "open" },
+            attention: { kind: "question", message: "Which API?" },
+          },
         ],
         missingIds: ["agent-gone"],
       });
+      expect(listed.content[0]?.text).toContain("ws-1");
 
       const sent = yield* Effect.promise(() =>
         executeTool(tools.get("agent_send")!, { to: "agent-1", message: "Check the schema." }),
       );
       expect(sent.details).toMatchObject({ action: "agent_send", disposition: "guided" });
 
+      const pending = yield* Effect.promise(() =>
+        executeTool(tools.get("agent_send")!, { to: "agent-slow", message: "Check again." }),
+      );
+      expect(pending.details).toMatchObject({ action: "agent_send", disposition: "pending" });
+
       const read = yield* Effect.promise(() =>
         executeTool(tools.get("agent_read")!, { agentIds: ["main", "agent-1", "agent-gone"] }),
       );
-      expect(read.content[0]?.text).toContain("MAIN_TAIL_SENTINEL");
-      expect(read.content[0]?.text).toContain("Found the schema");
+      const readText = read.content[0]?.text ?? "";
+      expect(readText).toContain("MAIN_TAIL_SENTINEL");
+      expect(readText).toContain("Found the schema");
+      // Each run's status card comes before its message.
+      expect(readText).toContain("Schema drift is likely.");
+      expect(readText).not.toContain("pid 4242");
       expect(decodeSubagentContract("agent_read")(read.structuredContent)).toMatchObject({
         agents: [
           { kind: "main", state: "busy", textStatus: "text" },
-          { kind: "run", source: "report", truncated: true, reportGeneration: 1 },
+          {
+            kind: "run",
+            source: "report",
+            truncated: true,
+            reportGeneration: 1,
+            status: { runId: "agent-1", state: "completed", report: { status: "unknown" } },
+          },
         ],
         missingIds: ["agent-gone"],
       });
+
+      const verbose = yield* Effect.promise(() =>
+        executeTool(tools.get("agent_read")!, { agentIds: ["agent-1"], verbose: true }),
+      );
+      expect(verbose.content[0]?.text).toContain("pid 4242");
       expect(callers).toEqual([{ kind: "main" }, { kind: "main" }]);
     }),
   );
@@ -165,10 +221,10 @@ describe("agent tools", () => {
       );
       expect(error).toBeInstanceOf(Error);
       const text = error instanceof Error ? error.message : "";
-      expect(text).toMatch(/^\[agent_rate_limited\] /u);
+      expect(text).toMatch(/^\[agent_unavailable\] /u);
 
       const [issue] = agentFailureIssues(text, "send", "The agent");
-      expect(issue?.code).toBe("agent:agent_rate_limited");
+      expect(issue?.code).toBe("agent:agent_unavailable");
       const harness = createToolPresentationHarness(registeredTool("agent_send"));
       for (const expanded of [false, true]) {
         harness.call({ to: "agent-busy", message: "Again?" }, { expanded, isError: true });
@@ -179,7 +235,7 @@ describe("agent tools", () => {
         const rendered = harness.render(100).join("\n");
         expect(rendered).toContain(issue?.message);
         // The refusal's procedure belongs to expansion.
-        expect(rendered.includes("wait 5 seconds")).toBe(expanded);
+        expect(rendered.includes("Check the agent's state with agent_list")).toBe(expanded);
       }
     }),
   );
@@ -239,7 +295,7 @@ describe("agent tools", () => {
     expect(nested?.name).toBe(root?.name);
     expect(nested?.description).not.toBe(root?.description);
     expect(root?.description).toBe(
-      registered().find((tool) => tool.name === "subagent_status")?.namespace?.description,
+      registered().find((tool) => tool.name === "agent_start")?.namespace?.description,
     );
   });
 

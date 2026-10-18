@@ -23,7 +23,7 @@ describe("subagent tool", () => {
   beforeAll(() => initTheme("dark", false));
 
   effectTest(
-    "keeps native steering evidence in status/list/await without authorizing an uncertain retry",
+    "keeps native steering evidence in await and read without authorizing an uncertain retry",
     function* () {
       for (const steeringDelivery of STEERING_DELIVERY_STATES) {
         const run = view({
@@ -34,24 +34,36 @@ describe("subagent tool", () => {
         });
         const tools = captureSubagentTools(
           subagentServiceDouble({
-            list: Effect.succeed([run]),
-            status: () => Effect.succeed(run),
+            agentRead: () =>
+              Effect.succeed({
+                agents: [
+                  {
+                    kind: "run",
+                    id: run.id,
+                    name: run.name,
+                    state: run.state,
+                    textStatus: "none",
+                    truncated: false,
+                    reportGeneration: 0,
+                    run,
+                  },
+                ],
+                missingIds: [],
+              }),
             withAwaitTerminalObservations: (_ids, _until, _onUpdate, use) => use([{ run }]),
           }),
         );
         for (const [toolName, args] of [
-          ["subagent_status", { runIds: [run.id] }],
-          ["subagent_status", {}],
-          ["subagent_await", { runIds: [run.id], until: "all_finished" }],
+          ["agent_read", { agentIds: [run.id] }],
+          ["agent_await", { runIds: [run.id], until: "all_finished" }],
         ] as const) {
-          const listed = !("runIds" in args);
           const response = yield* step(() => executeTool(tools.get(toolName)!, args));
-          expect(response.details).toMatchObject({
-            cards: [{ steeringDelivery, state: "failed" }],
-          });
+          if (toolName === "agent_await")
+            expect(response.details).toMatchObject({
+              cards: [{ steeringDelivery, state: "failed" }],
+            });
           const text = resultText(response);
           expect(text).toContain(`steeringDelivery=${steeringDelivery}`);
-          if (listed) continue;
           if (hasUnresolvedSteeringDelivery(run)) {
             expect(text).toContain("Do not resend");
             expect(text).not.toContain("action=retry");
@@ -90,7 +102,7 @@ describe("subagent tool", () => {
       });
       const controller = new AbortController();
       const executing = executeTool(
-        captureSubagentTools(service).get("subagent_await")!,
+        captureSubagentTools(service).get("agent_await")!,
         { runIds: ["agent-one"], until: "all_finished" },
         { signal: controller.signal },
       ).then((result) => {
@@ -130,7 +142,7 @@ describe("subagent tool", () => {
             ),
         });
         const executing = executeTool(
-          captureSubagentTools(service).get("subagent_await")!,
+          captureSubagentTools(service).get("agent_await")!,
           { runIds: ["agent-one"], until: "all_finished" },
           { signal: controller.signal },
         );
@@ -142,20 +154,8 @@ describe("subagent tool", () => {
   effectTest(
     "reports per-target management outcomes without hiding successful side effects",
     function* () {
-      const sent: string[] = [];
       const interrupted: string[] = [];
       const service = subagentServiceDouble({
-        send: (id) =>
-          id === "agent-2"
-            ? Effect.fail(
-                new InvalidSubagentRequestError({
-                  code: "not_running",
-                  message: "agent-2 is paused",
-                }),
-              )
-            : Effect.sync(
-                () => (sent.push(id), { delivery: "guided" as const, run: view({ id }) }),
-              ),
         interrupt: (id) =>
           id === "agent-2"
             ? Effect.fail(
@@ -168,76 +168,55 @@ describe("subagent tool", () => {
       });
       const tools = captureSubagentTools(service);
 
-      const sendResult = yield* invokeOptionalTool(tools.get("subagent_send"), {
-        runIds: ["agent-1", "agent-2"],
-        message: "Conclude.",
-      });
-      expect(sent).toEqual(["agent-1"]);
-      expect(sendResult?.content[0]?.text).toContain("Guidance delivered to 1 subagent: agent-1.");
-      expect(sendResult?.content[0]?.text).toContain("Failed targets (1)");
-      expect(sendResult?.content[0]?.text).toContain("agent-2 [not_running]: agent-2 is paused");
-      expect(sendResult?.details).toMatchObject({
-        version: 2,
-        action: "send",
-        runCount: 1,
-        actionFailures: [{ id: "agent-2", code: "not_running" }],
-      });
-
-      const lifecycleResult = yield* invokeOptionalTool(tools.get("subagent_lifecycle"), {
+      const lifecycleResult = yield* invokeOptionalTool(tools.get("agent_lifecycle"), {
         action: "interrupt",
         runIds: ["agent-1", "agent-2"],
       });
       expect(interrupted).toEqual(["agent-1"]);
       expect(lifecycleResult?.content[0]?.text).toContain("Interrupted agent-1; state is paused.");
+      expect(lifecycleResult?.content[0]?.text).toContain("Failed targets (1)");
       expect(lifecycleResult?.content[0]?.text).toContain("agent-2 is already paused");
       expect(lifecycleResult?.details).toMatchObject({
+        version: 2,
         action: "interrupt",
+        runCount: 1,
         actionFailures: [{ id: "agent-2", code: "already_paused" }],
       });
     },
   );
 
-  effectTest("reports which send targets were answered and which were guided", function* () {
+  effectTest("registers one agent_* family and answers questions with agent_send", function* () {
     const service = subagentServiceDouble({
-      send: (id) =>
-        Effect.succeed({
-          delivery: id === "agent-2" ? ("answered" as const) : ("guided" as const),
-          run: view({ id }),
-        }),
+      agentSend: (_caller, to) =>
+        Effect.succeed({ messageId: "message-1", to, name: "worker", disposition: "answered" }),
     });
     const tools = captureSubagentTools(service);
-    // Questions are answered through subagent_send; no separate reply tool is registered.
+    // Questions are answered through agent_send; no separate reply or status tool is registered.
     expect([...tools.keys()].toSorted()).toEqual([
+      "agent_await",
+      "agent_lifecycle",
       "agent_list",
+      "agent_profiles",
       "agent_read",
       "agent_send",
-      "subagent_await",
-      "subagent_lifecycle",
-      "subagent_models",
-      "subagent_send",
-      "subagent_start",
-      "subagent_status",
-      "subagent_workspace",
+      "agent_start",
+      "agent_worktree",
     ]);
-    const result = yield* invokeOptionalTool(tools.get("subagent_send"), {
-      runIds: ["agent-1", "agent-2", "agent-3"],
+    const result = yield* invokeOptionalTool(tools.get("agent_send"), {
+      to: "agent-2",
       message: "Yes, go ahead.",
     });
-    expect(result?.details).toMatchObject({
-      action: "send",
-      runCount: 3,
-      answeredRunIds: ["agent-2"],
-    });
+    expect(result?.details).toMatchObject({ action: "agent_send", disposition: "answered" });
   });
 
   effectTest("propagates defects instead of reporting them as target failures", function* () {
     const service = subagentServiceDouble({
-      send: () => Effect.die(new Error("broken invariant")),
+      stop: () => Effect.die(new Error("broken invariant")),
     });
-    const tool = captureSubagentTools(service).get("subagent_send")!;
+    const tool = captureSubagentTools(service).get("agent_lifecycle")!;
     yield* step(() =>
       expect(
-        executeTool(tool, { runIds: ["agent-1"], message: "Continue" }, { callID: "test" }),
+        executeTool(tool, { action: "stop", runIds: ["agent-1"] }, { callID: "test" }),
       ).rejects.toThrow("broken invariant"),
     );
   });
@@ -248,7 +227,7 @@ describe("subagent tool", () => {
       let entered = false;
       let finalized = false;
       const service = subagentServiceDouble({
-        send: () =>
+        stop: () =>
           Effect.sync(() => {
             entered = true;
           }).pipe(
@@ -261,10 +240,10 @@ describe("subagent tool", () => {
           ),
       });
       const signal = new AbortController();
-      const tool = captureSubagentTools(service).get("subagent_send")!;
+      const tool = captureSubagentTools(service).get("agent_lifecycle")!;
       const promise = executeTool(
         tool,
-        { runIds: ["agent-1"], message: "Continue" },
+        { action: "stop", runIds: ["agent-1"] },
         { callID: "test", signal: signal.signal },
       );
       const settled = Promise.allSettled([promise]);
@@ -286,8 +265,6 @@ describe("subagent tool", () => {
     const receipt = { id: completed.id, generation: 1, claimToken: "claim-1" };
     const consumed: Array<typeof receipt> = [];
     const service = subagentServiceDouble({
-      withStatusObservations: (_ids, use) =>
-        use({ observations: [{ run: completed, completionReceipt: receipt }], missingIds: [] }),
       withAwaitTerminalObservations: (_ids, _until, _onUpdate, use) =>
         use([{ run: completed, completionReceipt: receipt }]),
       consumeCompletions: (receipts) => Effect.sync(() => void consumed.push(...receipts)),
@@ -301,12 +278,7 @@ describe("subagent tool", () => {
     });
     yield* step(() =>
       expect(
-        executeTool(tools.get("subagent_status")!, { runIds: [completed.id] }),
-      ).rejects.toThrow("detail projection failed"),
-    );
-    yield* step(() =>
-      expect(
-        executeTool(tools.get("subagent_await")!, {
+        executeTool(tools.get("agent_await")!, {
           runIds: [completed.id],
           until: "all_finished",
         }),
@@ -315,7 +287,7 @@ describe("subagent tool", () => {
     expect(consumed).toEqual([]);
 
     Object.defineProperty(completed, "warningSource", { value: "child" });
-    const delivered = yield* invokeOptionalTool(tools.get("subagent_await"), {
+    const delivered = yield* invokeOptionalTool(tools.get("agent_await"), {
       runIds: [completed.id],
       until: "all_finished",
     });
@@ -337,27 +309,29 @@ describe("subagent tool", () => {
       );
       const consumed: Array<{ readonly id: string; readonly generation: number }> = [];
       const service = subagentServiceDouble({
-        status: (id) => Effect.succeed(runs.find((run) => run.id === id)!),
-        observeStatus: (id) =>
-          Effect.succeed({
-            run: runs.find((run) => run.id === id)!,
-            completionReceipt: { id, generation: 1, claimToken: `claim-${id}` },
-          }),
+        withAwaitTerminalObservations: (ids, _until, _onUpdate, use) =>
+          use(
+            ids.map((id) => ({
+              run: runs.find((run) => run.id === id)!,
+              completionReceipt: { id, generation: 1, claimToken: `claim-${id}` },
+            })),
+          ),
         consumeCompletions: (receipts) =>
           Effect.sync(() => {
             consumed.push(...receipts);
           }),
       });
-      const tool = captureSubagentTools(service).get("subagent_status")!;
+      const tool = captureSubagentTools(service).get("agent_await")!;
 
       yield* step(() =>
-        expect(executeTool(tool, { runIds: runs.map((run) => run.id) })).rejects.toThrow(
-          "at most 12 targets",
-        ),
+        expect(
+          executeTool(tool, { runIds: runs.map((run) => run.id), until: "all_finished" }),
+        ).rejects.toThrow("at most 12 targets"),
       );
 
       const result = yield* invokeOptionalTool(tool, {
         runIds: runs.slice(0, 12).map((run) => run.id),
+        until: "all_finished",
       });
       const text = result?.content[0]?.text ?? "";
       expect(text.length).toBeLessThanOrEqual(48_000);
@@ -365,7 +339,7 @@ describe("subagent tool", () => {
       expect(text).toContain("[run output truncated]");
       expect(consumed).toEqual([]);
 
-      yield* invokeOptionalTool(tool, { runIds: ["agent-1"] });
+      yield* invokeOptionalTool(tool, { runIds: ["agent-1"], until: "all_finished" });
       expect(consumed).toEqual([{ id: "agent-1", generation: 1, claimToken: "claim-agent-1" }]);
     },
   );

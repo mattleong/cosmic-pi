@@ -39,7 +39,7 @@ const offerProxyRequest = (control: FakeChildControl, requestId: string) => {
     channel: "pi-subagents",
     type: "proxy_request",
     requestId,
-    tool: "subagent_status",
+    tool: "agent_list",
     argumentsJson: "{}",
   });
 };
@@ -176,7 +176,7 @@ describe("SubagentService parent proxy executions", () => {
           channel: "pi-subagents",
           type: "proxy_request",
           requestId: "await-child",
-          tool: "subagent_await",
+          tool: "agent_await",
           argumentsJson: JSON.stringify({ runIds: [child.id], until: "all_finished" }),
         });
         yield* yieldUntil(() => observed);

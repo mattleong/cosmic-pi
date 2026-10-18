@@ -73,7 +73,7 @@ const ModelOverrideParameters = Type.Object(
 // Nested children don't know the root's agents, so their schema accepts any name and the root
 // checks it; the root registers the configured names as an enum instead.
 const NESTED_AGENT_DESCRIPTION =
-  "Optional custom agent the user configured, instead of profile; call subagent_models to list them.";
+  "Optional custom agent the user configured, instead of profile; call agent_profiles to list them.";
 const nestedAgentParameter = () =>
   Type.Unsafe<string>({
     type: "string",
@@ -127,7 +127,7 @@ const RunIdsParameters = Type.Array(RunIdParameter, {
 
 const MessageParameters = nonblankString(
   MAX_PARENT_MESSAGE_CHARS,
-  "Nonblank message to send to the selected subagent or subagents.",
+  "Nonblank feedback for the writer's next pass.",
 );
 
 const ModelsParameters = Type.Object(
@@ -185,31 +185,6 @@ export const startToolParameters = (
   );
 };
 
-const StatusParameters = Type.Object(
-  {
-    runIds: Type.Optional(
-      Type.Array(RunIdParameter, {
-        description: "Target run IDs. Omit to list every visible run as a tree, without reports.",
-        minItems: 1,
-        maxItems: MAX_TARGET_RUNS,
-      }),
-    ),
-    includeDeliveredReports: Type.Optional(
-      Type.Boolean({
-        description:
-          "With runIds, reread the latest report you already received, without another notification.",
-      }),
-    ),
-    verbose: Type.Optional(
-      Type.Boolean({
-        description:
-          "With runIds, add route selection, context, capabilities, process, cwd, and timing details.",
-      }),
-    ),
-  },
-  strictObjectOptions,
-);
-
 const MAX_AWAIT_TIMEOUT_SECONDS = 3_600;
 
 const AwaitParameters = Type.Object(
@@ -231,22 +206,15 @@ const AwaitParameters = Type.Object(
   strictObjectOptions,
 );
 
-const SendParameters = Type.Object(
-  {
-    runIds: RunIdsParameters,
-    message: MessageParameters,
-  },
-  strictObjectOptions,
-);
+export const LIFECYCLE_ACTIONS = ["interrupt", "stop", "retry"] as const;
 
 const LifecycleParameters = Type.Object(
   {
-    action: StringEnum(["resume", "interrupt", "stop", "retry"] as const, {
+    action: StringEnum(LIFECYCLE_ACTIONS, {
       description:
-        "resume and interrupt need the run to support them; resume accepts paused, completed, failed, and stopped runs; stop works on any active run; retry continues a failed run on its next route candidate. message applies only to resume.",
+        "interrupt pauses a running run whose backend supports it; stop works on any active run; retry continues a failed run on its next route candidate.",
     }),
     runIds: RunIdsParameters,
-    message: Type.Optional(MessageParameters),
   },
   strictObjectOptions,
 );
@@ -317,24 +285,24 @@ const WORKSPACE_FIELDS = Object.keys(WorkspaceParameters.properties).filter(
 export const workspaceOperationError = (operation: SubagentWorkspaceInput): string | undefined => {
   const fields = WORKSPACE_ACTION_FIELDS[operation.action];
   const missing = fields.required.find((field) => operation[field] === undefined);
-  if (missing) return `Workspace ${operation.action} requires ${missing}.`;
+  if (missing) return `Worktree ${operation.action} requires ${missing}.`;
   const allowed = new Set<WorkspaceField>([...fields.required, ...fields.optional]);
   const unexpected = WORKSPACE_FIELDS.find(
     (field) => operation[field] !== undefined && !allowed.has(field),
   );
-  if (unexpected) return `Workspace ${operation.action} does not accept ${unexpected}.`;
+  if (unexpected) return `Worktree ${operation.action} does not accept ${unexpected}.`;
   if (
     operation.action === "apply" &&
     operation.preparationId !== undefined &&
     operation.revisionId === undefined
   )
-    return "Workspace apply with preparationId requires the exact revisionId it prepared.";
+    return "Worktree apply with preparationId requires the exact revisionId it prepared.";
   if (
     operation.action === "apply" &&
     operation.preparationId !== undefined &&
     operation.paths !== undefined
   )
-    return "Workspace apply with preparationId integrates that whole preparation and does not accept paths.";
+    return "Worktree apply with preparationId integrates that whole preparation and does not accept paths.";
   return undefined;
 };
 
@@ -342,32 +310,12 @@ export type SubagentStartSpec = Static<typeof StartSpecParameters>;
 export type SubagentModelsInput = Static<typeof ModelsParameters>;
 export type SubagentStartInput = Static<typeof StartParameters>;
 export type SubagentLifecycleInput = Static<typeof LifecycleParameters>;
-type SubagentStatusInput = Static<typeof StatusParameters>;
-
-export const lifecycleMessageError = (input: SubagentLifecycleInput): string | undefined =>
-  input.action !== "resume" && input.message !== undefined
-    ? 'subagent_lifecycle message is valid only when action="resume".'
-    : undefined;
-
-export const statusOperationError = (input: SubagentStatusInput): string | undefined =>
-  input.runIds !== undefined
-    ? undefined
-    : input.includeDeliveredReports !== undefined
-      ? "subagent_status includeDeliveredReports requires runIds."
-      : input.verbose !== undefined
-        ? "subagent_status verbose requires runIds."
-        : undefined;
 
 export const SUBAGENT_TOOL_SCHEMAS = {
   [SUBAGENT_TOOL_NAME.models]: { parameters: ModelsParameters },
   [SUBAGENT_TOOL_NAME.start]: { parameters: NESTED_START_PARAMETERS },
-  [SUBAGENT_TOOL_NAME.status]: { parameters: StatusParameters, validate: statusOperationError },
   [SUBAGENT_TOOL_NAME.await]: { parameters: AwaitParameters },
-  [SUBAGENT_TOOL_NAME.send]: { parameters: SendParameters },
-  [SUBAGENT_TOOL_NAME.lifecycle]: {
-    parameters: LifecycleParameters,
-    validate: lifecycleMessageError,
-  },
+  [SUBAGENT_TOOL_NAME.lifecycle]: { parameters: LifecycleParameters },
   [SUBAGENT_TOOL_NAME.workspace]: {
     parameters: WorkspaceParameters,
     validate: workspaceOperationError,
@@ -386,11 +334,9 @@ type ToolNameAction = keyof typeof SUBAGENT_TOOL_NAME;
 type ToolActions = {
   readonly [N in SubagentToolName]: N extends typeof SUBAGENT_TOOL_NAME.lifecycle
     ? SubagentToolArgs<N>["action"]
-    : N extends typeof SUBAGENT_TOOL_NAME.status
-      ? "status" | "list"
-      : {
-          readonly [A in ToolNameAction]: (typeof SUBAGENT_TOOL_NAME)[A] extends N ? A : never;
-        }[ToolNameAction];
+    : {
+        readonly [A in ToolNameAction]: (typeof SUBAGENT_TOOL_NAME)[A] extends N ? A : never;
+      }[ToolNameAction];
 };
 export type SubagentToolAction = ToolActions[SubagentToolName];
 
@@ -401,10 +347,7 @@ type ToolActionResolvers = {
 const TOOL_ACTIONS: ToolActionResolvers = {
   [SUBAGENT_TOOL_NAME.models]: () => "models",
   [SUBAGENT_TOOL_NAME.start]: () => "start",
-  // Status without run IDs lists the visible run tree.
-  [SUBAGENT_TOOL_NAME.status]: (args) => (args.runIds === undefined ? "list" : "status"),
   [SUBAGENT_TOOL_NAME.await]: () => "await",
-  [SUBAGENT_TOOL_NAME.send]: () => "send",
   [SUBAGENT_TOOL_NAME.lifecycle]: (args) => args.action,
   [SUBAGENT_TOOL_NAME.workspace]: () => "workspace",
 };
@@ -441,7 +384,15 @@ const AgentSendParameters = Type.Object(
 );
 
 const AgentReadParameters = Type.Object(
-  { agentIds: agentIdsParameter("Agents whose latest message to read.") },
+  {
+    agentIds: agentIdsParameter("Agents to read."),
+    verbose: Type.Optional(
+      Type.Boolean({
+        description:
+          "Add route selection, context, capabilities, process, cwd, and timing details to each run's status card.",
+      }),
+    ),
+  },
   strictObjectOptions,
 );
 
@@ -474,11 +425,11 @@ const checkStartAgents = (agents: ReadonlyArray<JsonValue>): void =>
     const disallowedField = firstDisallowedLaunchOverride(agent);
     if (disallowedField)
       throw new Error(
-        disallowedLaunchOverrideMessage(disallowedField, `subagent_start agents[${index}]`),
+        disallowedLaunchOverrideMessage(disallowedField, `agent_start agents[${index}]`),
       );
     if (Object.hasOwn(agent, "agent") && Object.hasOwn(agent, "profile"))
       throw new Error(
-        `[agent_profile_conflict] subagent_start agents[${index}] sets both agent and profile; an agent routes through its own profile, so set only one.`,
+        `[agent_profile_conflict] agent_start agents[${index}] sets both agent and profile; an agent routes through its own profile, so set only one.`,
       );
   });
 
@@ -495,13 +446,13 @@ const inspectStartArguments = (args: JsonObject): void => {
     return replacement ? [`"${replacement}" for "${key}"`] : [];
   });
   throw new Error(
-    `[invalid_start_shape] subagent_start requires { agents: [{ task: "..." }] }; move ${misplaced.map((key) => `"${key}"`).join(", ")} into an agents entry.${renamed.length > 0 ? ` Inside it, use ${renamed.join(", ")}.` : ""}`,
+    `[invalid_start_shape] agent_start requires { agents: [{ task: "..." }] }; move ${misplaced.map((key) => `"${key}"`).join(", ")} into an agents entry.${renamed.length > 0 ? ` Inside it, use ${renamed.join(", ")}.` : ""}`,
   );
 };
 
 /**
  * Pi `prepareArguments` hook for one tool: precise argument errors and nonblank text, plus the
- * launch-shape checks for subagent_start.
+ * launch-shape checks for agent_start.
  */
 export const subagentArgumentPreparer = <N extends SubagentToolName>(
   name: N,

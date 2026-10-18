@@ -155,8 +155,8 @@ function attentionIssues(
         "paused-recovery",
         `${label} is paused`,
         attention.canResume
-          ? `Paused. Review subagent_status, then subagent_lifecycle({ action: "resume", runIds: [${id}], message: "Continue with reviewed guidance." }), then subagent_await again.`
-          : `Paused; this backend cannot resume. Stop with subagent_lifecycle({ action: "stop", runIds: [${id}] }), then launch a corrected replacement and await its run ID.`,
+          ? `Paused. Review it with agent_read, then resume it with agent_send({ to: ${id}, message: "Continue with reviewed guidance." }), then agent_await again.`
+          : `Paused; this backend cannot resume. Stop with agent_lifecycle({ action: "stop", runIds: [${id}] }), then launch a corrected replacement and await its run ID.`,
       );
       return;
     case "question":
@@ -164,7 +164,7 @@ function attentionIssues(
         "warning",
         "parent-question",
         `${label} asks: ${firstLineMessage(attention.message, "a question", QUOTED_TEXT_LIMIT)}`,
-        `Question: ${attention.message}\nRead the full question in expanded details if omitted. Answer with subagent_send({ runIds: [${id}], message: "..." }), then subagent_await again.`,
+        `Question: ${attention.message}\nRead the full question in expanded details if omitted. Answer with agent_send({ to: ${id}, message: "..." }), then agent_await again.`,
       );
       return;
     case "question-unavailable":
@@ -172,7 +172,7 @@ function attentionIssues(
         "warning",
         "question-unavailable",
         `${label} is waiting for a reply, but its question is unavailable`,
-        "Waiting for parent, but no question is projected. Inspect full subagent_status before choosing recovery; do not invent a reply.",
+        "Waiting for parent, but no question is projected. Inspect the run with agent_read before choosing recovery; do not invent a reply.",
       );
   }
 }
@@ -194,7 +194,7 @@ function cleanupIssues(card: SubagentRunCard, label: string, add: AddIssue): voi
 
 function evidenceIssues(card: SubagentRunCard, label: string, add: AddIssue): void {
   const retryGuidance =
-    "Inspect full subagent_status for retry disposition; don't retry when execution is uncertain.";
+    "Inspect the run with agent_read for retry disposition; don't retry when execution is uncertain.";
   if (card.error) {
     const { line, detail } = quoteText(card.error, { limit: QUOTED_TEXT_LIMIT, failure: true });
     add(
@@ -242,7 +242,7 @@ function workspaceOutcomeIssue(card: SubagentRunCard, label: string, add: AddIss
       ...(outcome ? proposalDiffStatLines(outcome) : []),
       card.workspaceId
         ? proposalGuidance(card.workspaceId, outcome)
-        : "Apply it with subagent_workspace apply and its workspaceId from subagent_status.",
+        : "Apply it with agent_worktree apply and its workspaceId from agent_list.",
       ...(outcome?.uncapturedFileCount
         ? [
             "Uncaptured files, such as .env or vendored code, are not part of the proposal and stay in the worker tree.",
@@ -262,6 +262,6 @@ function reportEvidenceIssues(card: SubagentRunCard, label: string, add: AddIssu
       "warning",
       "evidence-omitted",
       `${label}: some details are unavailable in this view`,
-      "Details are bounded; inspect full subagent_status for omitted evidence.",
+      "Details are bounded; inspect the run with agent_read for omitted evidence.",
     );
 }

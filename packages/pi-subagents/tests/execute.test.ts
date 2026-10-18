@@ -61,7 +61,7 @@ describe("retry claim ownership", () => {
               ).pipe(Effect.provideService(References.MaxOpsBeforeYield, 16));
             },
           });
-          const tool = captureSubagentTools(service).get("subagent_lifecycle")!;
+          const tool = captureSubagentTools(service).get("agent_lifecycle")!;
           const waiting = yield* Effect.tryPromise(() =>
             executeTool(
               tool,

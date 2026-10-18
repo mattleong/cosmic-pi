@@ -56,9 +56,6 @@ export const AGENT_MESSAGE_REFUSAL_CODES = [
   "agent_not_found",
   "agent_unavailable",
   "agent_resume_unsupported",
-  "agent_rate_limited",
-  "agent_message_budget_exhausted",
-  "agent_wake_budget_exhausted",
   "agent_spend_limit",
 ] as const;
 export type AgentMessageRefusalCode = (typeof AGENT_MESSAGE_REFUSAL_CODES)[number];
@@ -94,6 +91,9 @@ export const isOutcomeUncertain = (error: { readonly code?: string | undefined }
 export const isCleanupUnconfirmed = (error: { readonly code?: string | undefined }): boolean =>
   error.code?.endsWith("_cleanup_unconfirmed") === true;
 
+/** The code of guidance whose native delivery is still being confirmed. */
+export const PENDING_STEER_DELIVERY_CODE = "steer_outcome_uncertain";
+
 export class SubagentProtocolError extends Schema.TaggedError<SubagentProtocolError>()(
   "SubagentProtocolError",
   { message: Schema.String },
@@ -119,3 +119,9 @@ export type SubagentError =
   | SubagentProtocolError
   | SubagentRuntimeClosedError
   | UnsupportedSubagentCapabilityError;
+
+/** Guidance that may already have arrived while its delivery is still being tracked. */
+export const isPendingSteerDelivery = (error: SubagentError): error is SubagentProcessError =>
+  Predicate.isTagged(error, "SubagentProcessError") &&
+  error.pendingDelivery === true &&
+  error.code === PENDING_STEER_DELIVERY_CODE;

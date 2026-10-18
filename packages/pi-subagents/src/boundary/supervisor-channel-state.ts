@@ -145,7 +145,7 @@ export const failPendingQuestion = (
   if (
     publishCancellation &&
     !Queue.offerUnsafe(state.events, {
-      type: "supervisor_question_cancelled",
+      type: "parent_question_cancelled",
       assignmentEpoch: pending.epoch,
       requestId: pending.requestId,
     })

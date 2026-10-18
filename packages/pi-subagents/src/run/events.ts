@@ -290,7 +290,7 @@ export function backendEventHandler(dependencies: RunEventDependencies) {
             }),
           };
         });
-      case "supervisor_question_cancelled":
+      case "parent_question_cancelled":
         return settlement.mutateEventView(record, event.assignmentEpoch, (current) => {
           const waitingForQuestion =
             current.state === "waiting_for_parent" &&

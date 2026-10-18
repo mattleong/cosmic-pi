@@ -9,9 +9,8 @@ import {
   type SubagentControlExpectation,
   type SubagentRunView,
 } from "../run/model.ts";
-import type { SubagentError } from "../run/errors.ts";
+import { isPendingSteerDelivery, type SubagentError } from "../run/errors.ts";
 import type { SubagentServiceContract } from "../run/service.ts";
-import { isPendingDeliveryError } from "../tools/outcome.ts";
 import type { SubagentProjectionBridge } from "./host-ui.ts";
 import { MAX_NAME_CHARS } from "../run/state.ts";
 import { MAX_PARENT_MESSAGE_CHARS } from "../run/limits.ts";
@@ -58,7 +57,7 @@ const missingActivityInput = (action: string): Error =>
   new Error(`The ${action} activity action needs text input.`);
 
 /**
- * Runs an admitted Activity action. Reply and message share subagent_send's path, which answers
+ * Runs an admitted Activity action. Reply and message share the parent's send path, which answers
  * a pending question or steers by the target's locked state.
  */
 export const runSubagentActivityAction = (
@@ -82,7 +81,7 @@ export const runSubagentActivityAction = (
       if (action === "rename") return service.rename(id, input, expected).pipe(Effect.asVoid);
       return service.send(id, input, expected).pipe(
         Effect.asVoid,
-        Effect.catchIf(isPendingDeliveryError, () => Effect.sync(onPendingGuidance)),
+        Effect.catchIf(isPendingSteerDelivery, () => Effect.sync(onPendingGuidance)),
       );
   }
   return absurd(action);

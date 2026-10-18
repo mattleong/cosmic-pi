@@ -71,15 +71,15 @@ function integrationWarnings(outcome: WorkspaceIntegrationOutcome): WorkspaceWar
       code: "worker-retained-for-children",
       message:
         children.length === 1
-          ? "The working copy was kept for an unresolved child workspace"
-          : `The working copy was kept for ${countLabel(children.length, "unresolved child workspace")}`,
-      detail: `The integration committed, but child workspaces created from the worker tree are still unresolved: ${listedPaths(children)}. The worker tree at ${worker} stays until each child is applied or discarded; then discard this workspace to delete the tree.`,
+          ? "The working copy was kept for an unresolved child worktree"
+          : `The working copy was kept for ${countLabel(children.length, "unresolved child worktree")}`,
+      detail: `The integration committed, but child worktrees created from the worker tree are still unresolved: ${listedPaths(children)}. The worker tree at ${worker} stays until each child is applied or discarded; then discard this worktree to delete the tree.`,
     });
   if (outcome.treeRemovalFailed)
     warnings.push({
       code: "workspace-trees-remain",
       message: "The proposal's working copies couldn't be deleted",
-      detail: `The integration committed, but removing the workspace's worker and test trees failed; the worker tree at ${worker} and any test trees beside it remain on disk. Discard this workspace to retry the removal.`,
+      detail: `The integration committed, but removing the worktree's worker and test trees failed; the worker tree at ${worker} and any test trees beside it remain on disk. Discard this worktree to retry the removal.`,
     });
   const backups = outcome.remainingBackupPaths;
   if (backups.length > 0)
@@ -168,14 +168,14 @@ const executeWorkspaceList = (
         Effect.mapError(() =>
           invalidRequest(
             "workspace_metadata_invalid",
-            "Workspace metadata could not be encoded safely; inspect private workspace state manually.",
+            "Worktree metadata could not be encoded safely; inspect private worktree state manually.",
           ),
         ),
       );
       if (line.length > 32_000)
         return yield* invalidRequest(
           "workspace_metadata_too_large",
-          "Workspace metadata exceeds the safe output bound; inspect private workspace state manually.",
+          "Worktree metadata exceeds the safe output bound; inspect private worktree state manually.",
         );
       if (chars + line.length > 32_000) break;
       chars += line.length;
@@ -193,17 +193,17 @@ const executeWorkspaceList = (
         ...lines,
         ...(listing.unavailable.length > sourceUnavailableCount
           ? [
-              "Incomplete workspace metadata: some recovery records are missing, invalid, or unreadable. Their ownership, source identity, and cleanup are unknown; manual recovery is required.",
+              "Incomplete worktree metadata: some recovery records are missing, invalid, or unreadable. Their ownership, source identity, and cleanup are unknown; manual recovery is required.",
             ]
           : []),
         ...(sourceUnavailableCount > 0
           ? [
-              "Some nested workspaces name a source workspace whose record is missing or unreadable (reason source-workspace-unavailable). Their source tree and cleanup are unknown; preserve them and recover manually.",
+              "Some nested worktrees name a source worktree whose record is missing or unreadable (reason source-workspace-unavailable). Their source tree and cleanup are unknown; preserve them and recover manually.",
             ]
           : []),
         nextOffset === undefined
-          ? "End of workspace list."
-          : `More workspaces: call list with offset=${nextOffset}.`,
+          ? "End of worktree list."
+          : `More worktrees: call list with offset=${nextOffset}.`,
         ...(listing.orphans !== undefined && listing.orphans.size > 0 ? [ORPHAN_GUIDANCE] : []),
       ].join("\n"),
       {
@@ -240,7 +240,7 @@ const executeWorkspaceReview = (
       callerRunId,
     );
     const prefix = [
-      `Workspace ${workspaceId}; immutable revision ${review.revisionId}.`,
+      `Worktree ${workspaceId}; immutable revision ${review.revisionId}.`,
       `Review characters ${review.offset}..${review.offset + review.text.length} of ${review.totalChars}: a summary of changed files and line counts, then the diff.`,
       review.nextOffset !== undefined
         ? `More pages: review workspaceId=${workspaceId} offset=${review.nextOffset}. Read every page before prepare.`
@@ -319,14 +319,14 @@ const executeWorkspaceApply = (
         : { revisionId: operation.revisionId, paths: operation.paths },
       callerRunId,
     );
-    const ids = `workspace ${workspaceId}, revision ${applied.revisionId}, preparationId=${applied.preparationId}`;
+    const ids = `worktree ${workspaceId}, revision ${applied.revisionId}, preparationId=${applied.preparationId}`;
     const changed = `Changed files (${applied.changedPathCount}): ${applied.changedPaths.length > 0 ? listedPaths(applied.changedPaths) : "none listed"}${applied.changedPathCount > applied.changedPaths.length ? ` (${applied.changedPathCount - applied.changedPaths.length} not listed)` : ""}`;
     const remainingCount = applied.remainingPathCount;
     const remaining =
       remainingCount === undefined
         ? []
         : [
-            `Partial apply: ${countLabel(remainingCount, "other changed file")} ${remainingCount === 1 ? "stays" : "stay"} in workspace ${workspaceId} as an unreviewed proposal: ${listedPaths(applied.remainingPaths ?? [])}${remainingCount > (applied.remainingPaths ?? []).length ? ` (${remainingCount - (applied.remainingPaths ?? []).length} not listed)` : ""}. Apply, review, revise, or discard them later.`,
+            `Partial apply: ${countLabel(remainingCount, "other changed file")} ${remainingCount === 1 ? "stays" : "stay"} in worktree ${workspaceId} as an unreviewed proposal: ${listedPaths(applied.remainingPaths ?? [])}${remainingCount > (applied.remainingPaths ?? []).length ? ` (${remainingCount - (applied.remainingPaths ?? []).length} not listed)` : ""}. Apply, review, revise, or discard them later.`,
           ];
     const metadata = {
       ...receipt,
@@ -367,7 +367,7 @@ export const executeWorkspaceAction = (
   Effect.gen(function* () {
     const error = Check(WorkspaceParameters, operation)
       ? workspaceOperationError(operation)
-      : "Workspace arguments failed strict validation.";
+      : "Worktree arguments failed strict validation.";
     if (error !== undefined) return yield* invalidRequest("workspace_input_invalid", error);
     const service = yield* SubagentService;
     const workspaceId = operation.workspaceId ?? "";
@@ -383,7 +383,7 @@ export const executeWorkspaceAction = (
         return yield* executeWorkspaceApply(service, operation, receipt, callerRunId);
       case "discard":
         yield* service.workspaceDiscard(workspaceId, callerRunId);
-        return result("Discarded the workspace proposal; parent files were not changed.", receipt);
+        return result("Discarded the worktree proposal; parent files were not changed.", receipt);
       case "revise": {
         const { run, rebase } = yield* service.workspaceRevise(
           workspaceId,

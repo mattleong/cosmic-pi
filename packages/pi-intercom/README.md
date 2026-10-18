@@ -20,7 +20,7 @@ Interactive (`tui`) and RPC sessions register automatically; print and JSON runs
 | `session_send` | Sends a message of up to 16,384 characters to another session's main agent, by session id        |
 | `session_read` | Reads another session's latest assistant message (up to 32 KB) and whether it is busy            |
 
-A message is delivered at once or not at all; nothing is stored for later. An idle recipient starts a turn to read it, and a busy one reads it when its current turn ends. The recipient holds incoming messages without acting on them while a dialog is open, after you interrupt it with Esc until your next prompt, and once messages have started or continued three of its turns since your last prompt. Each sending session may deliver ten messages a minute to a session. When a send times out or its connection drops, the message may still have arrived, and the agent is told not to resend it.
+A message is delivered at once or not at all; nothing is stored for later. An idle recipient starts a turn to read it, and a busy one reads it when its current turn ends. The recipient holds incoming messages without acting on them while a dialog is open, and after you interrupt it with Esc until your next prompt. Nothing limits how many messages a session receives; press Esc to stop a loop, or turn receiving off with `/intercom receive off`. When a send times out or its connection drops, the message may still have arrived, and the agent is told not to resend it.
 
 Codemode scripts can call `session_list` and `session_read`, which return structured `pi-intercom/session` results; only the agent itself can call `session_send`.
 

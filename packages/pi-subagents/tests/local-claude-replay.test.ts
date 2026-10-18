@@ -1054,7 +1054,7 @@ describe("local Claude task-notification replays", () => {
         if (failure.type !== "protocol_error") return yield* Effect.die("Expected a failure.");
         expect(failure.message).toContain("Still no report.");
         expect(failure.message).not.toContain("Here is my answer");
-        expect(harness.sentTexts().at(-1)).toContain("supervisor_submit_report");
+        expect(harness.sentTexts().at(-1)).toContain("agent_submit_report");
         return undefined;
       }),
     ),

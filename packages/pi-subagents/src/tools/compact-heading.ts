@@ -12,7 +12,6 @@ import {
 } from "./details-schema.ts";
 import { decodeOutcomeDetails } from "./details-decode.ts";
 import { decodeWorkspaceToolDetails } from "./compact-workspace-summary.ts";
-import { countActionFailures } from "./outcome.ts";
 import { rejectedCallIssue } from "./compact-action-failures.ts";
 
 export interface SummaryArguments {
@@ -79,17 +78,9 @@ const retrySuccessor = (
 const displayName = (card: SubagentRunCard | undefined, ids: readonly string[]): string =>
   card && card.name !== card.id && !ids.includes(card.name) ? card.name : "";
 
-const listedSubject = (
-  details: SubagentStartDetails | SubagentAwaitDetails | CompactSubagentToolDetails,
-): string =>
-  details.action === "list" || details.action === "status"
-    ? displayName(details.cards.length === 1 ? details.cards[0] : undefined, [])
-    : "";
-
 export function projectedSubject(
   details: SubagentStartDetails | SubagentAwaitDetails | CompactSubagentToolDetails,
   input: SummaryArguments,
-  phase: CompactPhase,
   subject: string,
   targets?: readonly string[],
 ): string {
@@ -100,37 +91,7 @@ export function projectedSubject(
       details.cards.find((entry) => entry.id === requested[0]) ?? retrySuccessor(details),
       requested,
     );
-  if (subject || phase !== "settled" || requested?.length) return subject;
-  return listedSubject(details) || subject;
-}
-
-type Receipt = readonly [count: number, word: string];
-
-const sendReceipts = (
-  details: Exclude<CompactSubagentToolDetails, { action: "models" }>,
-): ReadonlyArray<Receipt> => {
-  const answered = details.answeredRunIds?.length ?? 0;
-  if (answered === 0) return [[details.runCount, "sent"]];
-  const guided = details.runCount - answered;
-  return [[answered, "answered"], ...(guided > 0 ? [[guided, "guided"] as const] : [])];
-};
-
-function receiptCounter(
-  details: Exclude<CompactSubagentToolDetails, { action: "models" }>,
-  receipts: ReadonlyArray<Receipt>,
-): string {
-  const failures = countActionFailures(details.action, details.actionFailures);
-  const exceptional = [
-    [failures.pending, "awaiting confirmation"],
-    [failures.unconfirmed, "unconfirmed"],
-    [failures.failed, "failed"],
-  ] as const;
-  const problems = exceptional.filter(([count]) => count > 0);
-  const [single] = receipts;
-  if (problems.length === 0 && receipts.length === 1 && single?.[0] === 1) return single[1];
-  return [...receipts.filter(([count]) => count > 0 || problems.length === 0), ...problems]
-    .map(([count, word]) => `${count} ${word}`)
-    .join(", ");
+  return subject;
 }
 
 export function applyArgumentLanes(
@@ -139,14 +100,6 @@ export function applyArgumentLanes(
   phase: CompactPhase,
   lanes: CompactSummary,
 ): void {
-  if (phase === "settled" && details.action === "send") {
-    const count = receiptCounter(details, sendReceipts(details));
-    summary.counters = [
-      details.runCount > details.cards.length
-        ? `${count}, ${details.cards.length}/${details.runCount} shown`
-        : count,
-    ];
-  }
   if (lanes.action) summary.action = lanes.action;
   if (phase !== "settled" && details.action !== "start" && details.action !== "await")
     summary.counters = lanes.counters ?? [];

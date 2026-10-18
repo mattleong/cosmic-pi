@@ -16,10 +16,12 @@ import {
   SUPERVISOR_MCP_AGENT_IDS_ARGUMENT_KEY,
   SUPERVISOR_MCP_AGENT_SEND_ARGUMENT_KEYS,
   SUPERVISOR_MCP_AGENT_TOOL_NAMES,
-  SUPERVISOR_MCP_MESSAGE_ARGUMENT_KEYS,
-  SUPERVISOR_MCP_MESSAGE_TOOL_NAMES,
+  SUPERVISOR_MCP_CONTACT_ARGUMENT_KEYS,
+  SUPERVISOR_MCP_CONTACT_KINDS,
+  SUPERVISOR_MCP_CONTACT_PARENT_TOOL_NAME,
   SUPERVISOR_MCP_REPORT_ARGUMENT_KEYS,
-  SUPERVISOR_MCP_TOOL_NAMES,
+  SUPERVISOR_MCP_REPORT_TOOL_NAME,
+  SUPERVISOR_MCP_VERBOSE_ARGUMENT_KEY,
 } from "./mcp-contract.ts";
 
 const MAX_ID_CHARS = 256;
@@ -97,16 +99,17 @@ const boundedMetadata = (value: Schema.Json | undefined, depth = 0): boolean => 
 const validMeta = (params: Schema.Json | undefined): boolean =>
   params === undefined || exactKeys(params, ["_meta"]);
 
-const messageInputSchema = {
+const contactInputSchema = {
   type: "object",
   properties: {
+    kind: { type: "string", enum: SUPERVISOR_MCP_CONTACT_KINDS },
     message: {
       type: "string",
       minLength: 1,
       maxLength: MAX_SUPERVISOR_MCP_MESSAGE_CHARS,
     },
   },
-  required: SUPERVISOR_MCP_MESSAGE_ARGUMENT_KEYS,
+  required: SUPERVISOR_MCP_CONTACT_ARGUMENT_KEYS,
   additionalProperties: false,
 } as const;
 const toolAnnotations = {
@@ -127,27 +130,16 @@ const agentIdsSchema = (description: string) =>
     items: agentIdSchema,
     maxItems: MAX_SUPERVISOR_MCP_AGENT_IDS,
   }) as const;
-const messageTool = (name: string, description: string) => ({
-  name,
-  description,
-  inputSchema: messageInputSchema,
-  annotations: toolAnnotations,
-});
 export const toolDefinitions = [
-  messageTool(
-    SUPERVISOR_MCP_MESSAGE_TOOL_NAMES[0],
-    "Publish bounded assignment progress to the parent projection.",
-  ),
-  messageTool(
-    SUPERVISOR_MCP_MESSAGE_TOOL_NAMES[1],
-    "Record one bounded non-blocking assignment warning in parent-visible run status; repeat it in the final report. Ask a question instead when the risk could invalidate work the parent is doing now.",
-  ),
-  messageTool(
-    SUPERVISOR_MCP_MESSAGE_TOOL_NAMES[2],
-    "Main agent only: ask the parent this assignment's one correlated blocking question and wait for its exact reply.",
-  ),
   {
-    name: SUPERVISOR_MCP_TOOL_NAMES[3],
+    name: SUPERVISOR_MCP_CONTACT_PARENT_TOOL_NAME,
+    description:
+      "Main agent only: contact your parent. kind=progress publishes bounded assignment progress; kind=warning records a non-blocking warning in parent-visible run status, which you also repeat in the final report; kind=question asks this assignment's one blocking question and waits for the parent's exact reply. Ask a question instead of warning when the risk could invalidate work the parent is doing now.",
+    inputSchema: contactInputSchema,
+    annotations: toolAnnotations,
+  },
+  {
+    name: SUPERVISOR_MCP_REPORT_TOOL_NAME,
     description:
       "Main agent only: submit the complete bounded final report with a stable delivery identity for explicit idempotent retry.",
     inputSchema: {
@@ -172,7 +164,7 @@ export const toolDefinitions = [
   {
     name: SUPERVISOR_MCP_AGENT_TOOL_NAMES[0],
     description:
-      'List the agents in this session: the main agent "main" and every subagent at any depth, with ID, name, state, role, runtime, and parent.',
+      'List every agent in this session: the main agent "main" and every subagent at any depth, with ID, name, state, role, runtime and model, worktree proposal, whether it waits on its parent, and parent.',
     inputSchema: {
       type: "object",
       properties: {
@@ -187,7 +179,7 @@ export const toolDefinitions = [
   {
     name: SUPERVISOR_MCP_AGENT_TOOL_NAMES[1],
     description:
-      "Main agent only: send one bounded message to another agent in this session now. A running agent receives it as guidance, an idle main agent is woken, and a finished Pi run is resumed. Do not resend after an uncertain result.",
+      "Main agent only: send one bounded message now to any other agent in this session. A child waiting on your question receives it as the answer, any other running agent receives it as guidance, an idle main agent is woken, and a paused or finished Pi run is resumed. Do not resend after a pending or uncertain result.",
     inputSchema: {
       type: "object",
       properties: {
@@ -206,13 +198,17 @@ export const toolDefinitions = [
   {
     name: SUPERVISOR_MCP_AGENT_TOOL_NAMES[2],
     description:
-      "Read agents' last assistant messages, or a finished run's report or error, without consuming anything.",
+      "Read up to 12 agents in this session: each run's status card and latest assistant message, or a finished run's report or error, and main's latest message. verbose adds route, capability, process, and timing details. Reading never consumes anything.",
     inputSchema: {
       type: "object",
       properties: {
         [SUPERVISOR_MCP_AGENT_IDS_ARGUMENT_KEY]: {
           ...agentIdsSchema("One to 12 agent IDs from agent_list, or main."),
           minItems: 1,
+        },
+        [SUPERVISOR_MCP_VERBOSE_ARGUMENT_KEY]: {
+          type: "boolean",
+          description: "Add route, capability, process, and timing details to status cards.",
         },
       },
       required: [SUPERVISOR_MCP_AGENT_IDS_ARGUMENT_KEY],

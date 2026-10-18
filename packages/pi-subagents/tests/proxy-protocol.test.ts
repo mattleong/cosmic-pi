@@ -9,12 +9,13 @@ import {
   withSubagentProxyParent,
 } from "../src/tools/proxy-protocol.ts";
 import type { SubagentToolInput } from "../src/tools/schema.ts";
-import { modelsContract, statusListContract } from "../src/tools/discovery-contract.ts";
+import { cancelledAwaitContract, lifecycleContract } from "../src/tools/contract.ts";
+import { modelsContract } from "../src/tools/discovery-contract.ts";
 import { profileCandidate } from "./fixtures/profiles.ts";
 import { view } from "./fixtures/run-view.ts";
 
 const request = (count: number) => ({
-  tool: "subagent_start",
+  tool: "agent_start",
   argumentsJson: JSON.stringify({
     agents: Array.from({ length: count }, (_, index) => ({ task: `Task ${index + 1}` })),
   }),
@@ -32,7 +33,7 @@ describe("nested Pi proxy protocol", () => {
 
   it("keeps bridge parent facts separate from public launch arguments", () => {
     const input: SubagentToolInput = {
-      tool: "subagent_start",
+      tool: "agent_start",
       args: { agents: [{ task: "Inspect the package", profile: "scout" }] },
     };
     const encoded = encodeSubagentProxyInput(input);
@@ -53,7 +54,7 @@ describe("nested Pi proxy protocol", () => {
   ])("rejects malformed parent facts and caller authority %j", (override) => {
     expect(
       decodeSubagentProxyParent({
-        tool: "subagent_start",
+        tool: "agent_start",
         argumentsJson: JSON.stringify({
           parentContext: { ...parentContext, ...override },
           argumentsJson: JSON.stringify({ agents: [{ task: "Inspect" }] }),
@@ -65,13 +66,13 @@ describe("nested Pi proxy protocol", () => {
   it("does not admit parent facts as public start-item fields", () => {
     expect(
       decodeSubagentProxyRequest({
-        tool: "subagent_start",
+        tool: "agent_start",
         argumentsJson: JSON.stringify({ agents: [{ task: "Inspect", parentContext }] }),
       }),
     ).toBeInstanceOf(InvalidSubagentRequestError);
   });
 
-  it("round-trips discovery contracts while rejecting report-text injection", () => {
+  it("round-trips orchestration contracts while rejecting report-text injection", () => {
     const run = view({
       id: "a",
       state: "completed",
@@ -79,8 +80,12 @@ describe("nested Pi proxy protocol", () => {
       reportStatus: "available",
     });
     const contracts = [
-      statusListContract(
-        Array.from({ length: 64 }, (_, index) => ({ ...run, id: `run-${index}` })),
+      lifecycleContract(
+        "stop",
+        Array.from({ length: 12 }, (_, index) => ({
+          runId: `run-${index}`,
+          run: { ...run, id: `run-${index}` },
+        })),
       ),
       modelsContract(
         [
@@ -112,15 +117,23 @@ describe("nested Pi proxy protocol", () => {
       expect(decodeSubagentProxyResult(JSON.stringify(result))).toEqual(result);
       expect(JSON.stringify(result)).not.toContain("PRIVATE-REPORT");
     }
-    const list = statusListContract([run]);
+    // A cancelled await withholds every report, so a proxied one can't carry report text.
+    const cancelled = cancelledAwaitContract({
+      runs: [run],
+      requestedRunIds: [run.id],
+      until: "all_finished",
+      cleanup: "confirmed",
+    });
     expect(
       decodeSubagentProxyResult(
         JSON.stringify({
           content: [],
           details: {},
           structuredContent: {
-            ...list,
-            runs: [{ ...list.runs[0], report: { status: "delivered", text: "PRIVATE-REPORT" } }],
+            ...cancelled,
+            targets: [
+              { ...cancelled.targets[0], report: { status: "delivered", text: "PRIVATE-REPORT" } },
+            ],
           },
         }),
       ),
@@ -134,7 +147,7 @@ describe("nested Pi proxy protocol", () => {
   ])("rejects invalid or forged workspace arguments %j", (args) => {
     expect(
       decodeSubagentProxyRequest({
-        tool: "subagent_workspace",
+        tool: "agent_worktree",
         argumentsJson: JSON.stringify(args),
       }),
     ).toBeInstanceOf(InvalidSubagentRequestError);
@@ -167,7 +180,7 @@ describe("nested Pi proxy protocol", () => {
   });
 
   it.each([
-    ["spoofed ancestry", "subagent_start", { agents: [{ task: "spoof", parentRunId: "sibling" }] }],
+    ["spoofed ancestry", "agent_start", { agents: [{ task: "spoof", parentRunId: "sibling" }] }],
   ])("rejects %s", (_label, tool, args) => {
     expect(decodeSubagentProxyRequest({ tool, argumentsJson: JSON.stringify(args) })).toMatchObject(
       {

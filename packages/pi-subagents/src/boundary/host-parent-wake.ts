@@ -29,7 +29,7 @@ const ROOT_NOTICE_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 const WAKE_TEXT =
-  "Subagent updates or agent messages arrived while you were busy and are shown above. Act on them now: answer any question with subagent_send, review reports, reply to agent messages with agent_send only when it helps, and continue the task.";
+  "Subagent updates or agent messages arrived while you were busy and are shown above. Act on them now: answer any question with agent_send, review reports, reply to agent messages with agent_send only when it helps, and continue the task.";
 
 interface ParentWakeHost {
   readonly projection: () => SubagentProjection;
@@ -63,7 +63,7 @@ const reminderText = (runs: ReadonlyArray<PendingQuestion>): string =>
       ? "A subagent is still waiting for your reply:"
       : `${runs.length} subagents are still waiting for your replies:`,
     ...runs.map((run) => `- ${run.name} (${run.id}): ${run.question.message}`),
-    "Answer with subagent_send within the authority the user has already given you, or ask the user. Don't approve anything on the user's behalf.",
+    "Answer with agent_send within the authority the user has already given you, or ask the user. Don't approve anything on the user's behalf.",
   ].join("\n\n");
 
 const questionReminder = (

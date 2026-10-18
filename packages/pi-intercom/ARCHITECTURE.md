@@ -25,7 +25,7 @@ among the agents of one session belongs to pi-subagents' `agent_*` tools.
   The server delegates every authenticated request to the injected `IntercomInbound` handler;
   [host inbound](src/boundary/host-inbound.ts) answers from the live host session.
 - [Delivery](src/delivery.ts) owns how an inbound message reaches the session: the shared session
-  wake, the wake budget, per-sender rate limits, the receive switch, and the message frame.
+  wake, the receive switch, and the message frame.
 - [Tools](src/tools/register.ts) give main agents `session_list`, `session_send`, and
   `session_read`; [sessions](src/tools/sessions.ts) resolves peers from the registry and calls them
   through the client. [Command](src/command.ts) is `/intercom list` and `/intercom receive`.
@@ -125,18 +125,15 @@ tracing is off on both ends, and delivery logs carry only the disposition or ref
 ## Delivery
 
 An inbound message passes, in one synchronous host callback: the runtime still holds the session
-slot (else `session_unavailable`), receiving is on (`session_receive_disabled`), and the session's
-limits allow it (`session_rate_limited`): at most 10 messages a minute per sender, 30 messages and
-256 KiB of framed text a minute from all senders together, and 20 held messages waiting for a
-turn. It is then sent as
-a displayed `pi-intercom-message` custom message whose details name the advisory sender and message
+slot (else `session_unavailable`) and receiving is on (`session_receive_disabled`). It is then
+sent as a displayed `pi-intercom-message` custom message whose details name the advisory sender and message
 id, with the slot rechecked beside `sendMessage`. Core's `registerSessionWake` decides the
 disposition: an idle session is `woken`, a busy one `queued` and continued at settle, and a session
 with a dialog open or interrupted by its user `held`, appended without a turn until the dialog
-closes or the user prompts again. Core checks a wake budget before every turn it starts or
-continues, including the wake after a dialog closes: once messages have started or continued three
-turns within one user prompt, further messages are held until the next one; messages joining a
-continuation already owed count once. Receiving and the budget reset with each session start; nothing is persisted.
+closes or the user prompts again. Nothing limits how many messages arrive or how many turns they
+start, as with Claude Code's cross-session messages; a loop between sessions runs until the user
+interrupts it or turns receiving off. Receiving resets to on with each session start; nothing is
+persisted.
 The frame tells the model the message comes from another agent session, not its user.
 
 ## Tools and command
@@ -161,8 +158,8 @@ records, listing diagnostics, the evidence-based sweep, and socket path reservat
 [Transport tests](tests/transport.test.ts) cover the handshake against rogue listeners, connection
 bounds, stale sockets, oversized frames, deadlines, shutdown, and telemetry over real sockets. [Application tests](tests/application.test.ts) cover registration modes, the child
 marker, rewrites, replacement, removal, and peers reaching live sessions.
-[Delivery tests](tests/delivery.test.ts) cover dispositions, holds, retirement, the wake budget,
-rate limits, and the receive switch. [Tool tests](tests/tools.test.ts) cover listing, sends
+[Delivery tests](tests/delivery.test.ts) cover dispositions, holds, retirement, and the
+receive switch. [Tool tests](tests/tools.test.ts) cover listing, sends
 between two runtimes, reads, refusals, uncertainty, and issue wording;
 [telemetry tests](tests/telemetry.test.ts) keep content out of logs and spans. User-facing
 behavior is in the [README](README.md).

@@ -57,7 +57,7 @@ const promptHarness = (initial: SubagentProjection) => {
   let branch: ReadonlyArray<SessionEntry> = [];
   const { pi, emit } = recordingExtensionHost();
   registerActiveRunsPrompt(pi, () => projection);
-  const section = (model: ExtensionContext["model"], selectedTools = ["subagent_start"]) =>
+  const section = (model: ExtensionContext["model"], selectedTools = ["agent_start"]) =>
     Effect.gen(function* () {
       const event = beforeAgentStartEvent("go", { selectedTools });
       const ctx = extensionContextFixture({
@@ -120,7 +120,7 @@ describe("active subagents section in a real Pi transcript", () => {
           extensionFactories: [
             (pi) => {
               pi.registerTool({
-                name: "subagent_start",
+                name: "agent_start",
                 label: "Start",
                 description: "Start subagents",
                 parameters: Type.Object({}),

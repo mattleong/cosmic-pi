@@ -49,7 +49,7 @@ const route = (overrides: Partial<ProfileCandidate> = {}): ProfileCandidate => (
 const decodeStartDetails = Schema.decodeUnknownSync(SubagentStartDetailsSchema);
 
 const startTool = (requests: StartSubagentRequest[], options?: CaptureOptions) =>
-  captureSubagentTools(startCapturingService(requests), options).get("subagent_start");
+  captureSubagentTools(startCapturingService(requests), options).get("agent_start");
 
 describe("subagent tool", () => {
   beforeAll(() => initTheme("dark", false));
@@ -81,7 +81,7 @@ describe("subagent tool", () => {
       }),
       { cwd: "/project", projectTrusted: true },
       {
-        tool: "subagent_start",
+        tool: "agent_start",
         args: {
           agents: [
             { task: "Map the entry points", profile: "scout" },
@@ -175,7 +175,7 @@ describe("subagent tool", () => {
       };
       const service = subagentServiceDouble({ start: failStart, startSessionOwned: failStart });
       const result = yield* invokeOptionalTool(
-        captureSubagentTools(service, { profiles }).get("subagent_start"),
+        captureSubagentTools(service, { profiles }).get("agent_start"),
         { agents: [{ profile: "reviewer", task: "Review" }] },
       );
       expect(starts).toBe(1);
@@ -213,7 +213,7 @@ describe("subagent tool", () => {
           return view({ task: input.task });
         }),
     });
-    const tool = captureSubagentTools(service).get("subagent_start");
+    const tool = captureSubagentTools(service).get("agent_start");
 
     const result = yield* invokeOptionalTool(tool, { agents: [{ task: "Review auth" }] });
 
@@ -273,7 +273,7 @@ describe("subagent tool", () => {
           Match.orElse(() => Effect.sync(() => view({ id: "agent-fast", name: "launch-3" }))),
         ),
     });
-    const tool = captureSubagentTools(service).get("subagent_start")!;
+    const tool = captureSubagentTools(service).get("agent_start")!;
     const agents = ["launch-1", "launch-2", "launch-3"].map((name) => ({ task: "Review", name }));
 
     const execution = executeTool(tool, { agents }, { update: recordUpdate });

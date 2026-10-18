@@ -35,7 +35,7 @@ import {
 } from "./details-schema.ts";
 import { ModelsContractFields } from "./discovery-contract-schema.ts";
 import type { ActionFailureDisposition } from "./outcome.ts";
-import { AWAIT_UNTIL, type SubagentLifecycleInput } from "./schema.ts";
+import { AWAIT_UNTIL, LIFECYCLE_ACTIONS } from "./schema.ts";
 
 export const SUBAGENT_CONTRACT_ID = "pi-subagents/orchestration";
 export const SUBAGENT_CONTRACT_VERSION = 3;
@@ -44,12 +44,9 @@ export const MAX_CONTRACT_MESSAGE_CHARS = 1_024;
 export const MAX_CONTRACT_ERROR_CHARS = 2_048;
 export const MAX_CONTRACT_QUESTION_CHARS = MAX_CARD_QUESTION_CHARS;
 export const MAX_CONTRACT_TASK_CHARS = 256;
+export const MAX_CONTRACT_MODEL_CHARS = 256;
 
-const LIFECYCLE_ACTIONS = ["resume", "interrupt", "stop", "retry"] as const satisfies ReadonlyArray<
-  SubagentLifecycleInput["action"]
->;
 const FAILURE_DISPOSITIONS = [
-  "pending",
   "unconfirmed",
   "failed",
 ] as const satisfies ReadonlyArray<ActionFailureDisposition>;
@@ -197,24 +194,6 @@ const AwaitContractSchema = Schema.Union([
   }),
 ]);
 
-const StatusTargetsContractSchema = Schema.Struct({
-  ...envelope(SUBAGENT_TOOL_NAME.status),
-  targets: RunTargetsSchema,
-  missingRunIds: RunIdsSchema,
-});
-// Status without run IDs lists every visible run in parent-before-child order, without reports.
-const StatusListContractSchema = Schema.Struct({
-  ...envelope(SUBAGENT_TOOL_NAME.status),
-  runs: Schema.Array(
-    Schema.Struct({
-      ...WithheldRunTargetSchema.fields,
-      parentRunId: RunIdSchema,
-      depth: count,
-    }),
-  ),
-});
-const StatusContractSchema = Schema.Union([StatusTargetsContractSchema, StatusListContractSchema]);
-
 const LifecycleContractSchema = Schema.Struct({
   ...envelope(SUBAGENT_TOOL_NAME.lifecycle),
   action: Schema.Literals(LIFECYCLE_ACTIONS),
@@ -259,8 +238,20 @@ const AgentListContractSchema = Schema.Struct({
       parentId: Schema.optionalKey(RunIdSchema),
       depth: Schema.optionalKey(count),
       runtime: Schema.optionalKey(Schema.Literals(PROFILE_CANDIDATE_RUNTIMES)),
+      /** The run's runtime, model, and effort, such as `pi/provider/model:high`. */
+      model: Schema.optionalKey(NonEmptyText(MAX_CONTRACT_MODEL_CHARS)),
       profile: Schema.optionalKey(ProfileSchema),
       agent: Schema.optionalKey(AgentNameSchema),
+      writeIntent: Schema.optionalKey(WriteIntentSchema),
+      /** A worktree writer's private tree; its proposal is applied with `agent_worktree`. */
+      worktree: Schema.optionalKey(
+        Schema.Struct({
+          workspaceId: RunIdSchema,
+          status: Schema.Literals(["open", "proposal", "discarded"]),
+          changedFileCount: Schema.optionalKey(count),
+        }),
+      ),
+      attention: Schema.optionalKey(AttentionSchema),
       task: Schema.optionalKey(NonEmptyText(MAX_CONTRACT_TASK_CHARS)),
       self: Schema.Boolean,
     }),
@@ -289,6 +280,8 @@ const AgentReadContractSchema = Schema.Struct({
         text: Schema.optionalKey(NonEmptyText(MAX_RUN_READ_CHARS)),
         source: Schema.optionalKey(Schema.Literals(["assistant", "report", "error"])),
         reportGeneration: count,
+        /** The run's status card; its report text, when retained, is the read `text`. */
+        status: WithheldRunTargetSchema,
       }),
     ]),
   ).check(Schema.isMaxLength(MAX_AGENT_TARGETS)),
@@ -298,7 +291,6 @@ const AgentReadContractSchema = Schema.Struct({
 export const CONTRACT_SCHEMAS = {
   [SUBAGENT_TOOL_NAME.start]: StartContractSchema,
   [SUBAGENT_TOOL_NAME.await]: AwaitContractSchema,
-  [SUBAGENT_TOOL_NAME.status]: StatusContractSchema,
   [SUBAGENT_TOOL_NAME.lifecycle]: LifecycleContractSchema,
   [SUBAGENT_TOOL_NAME.models]: ModelsContractSchema,
   [AGENT_TOOL_NAME.list]: AgentListContractSchema,
@@ -310,8 +302,6 @@ export type SubagentContract<Tool extends SubagentContractTool = SubagentContrac
   (typeof CONTRACT_SCHEMAS)[Tool]["Type"];
 export type SubagentStartContract = SubagentContract<typeof SUBAGENT_TOOL_NAME.start>;
 export type SubagentAwaitContract = SubagentContract<typeof SUBAGENT_TOOL_NAME.await>;
-export type SubagentStatusContract = typeof StatusTargetsContractSchema.Type;
-export type SubagentStatusListContract = typeof StatusListContractSchema.Type;
 export type SubagentLifecycleContract = SubagentContract<typeof SUBAGENT_TOOL_NAME.lifecycle>;
 export type SubagentModelsContract = SubagentContract<typeof SUBAGENT_TOOL_NAME.models>;
 export type AgentListContract = SubagentContract<typeof AGENT_TOOL_NAME.list>;
@@ -332,7 +322,6 @@ const STRICT_PARSE_OPTIONS = { errors: "first", onExcessProperty: "error" } as c
 export const SubagentContractSchema = Schema.Union([
   StartContractSchema,
   AwaitContractSchema,
-  StatusContractSchema,
   LifecycleContractSchema,
   ModelsContractSchema,
   AgentListContractSchema,

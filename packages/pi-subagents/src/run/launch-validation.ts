@@ -23,6 +23,6 @@ export const firstDisallowedLaunchOverride = (
 
 export const disallowedLaunchOverrideMessage = (
   field: DisallowedLaunchOverrideField,
-  target = "subagent_start",
+  target = "agent_start",
 ): string =>
   `[launch_override_not_allowed] ${target} does not accept ${field}. Configure context, writeIntent, and openaiFastMode in the selected profile-set route; a launch may override only its model, as model: { runtime, model, effort }.`;

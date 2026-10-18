@@ -43,7 +43,7 @@ it.live("returns a parent question in the await result without a second notifica
     const child = yield* step(() => runtime.run(service.startSessionOwned(nativeReportRequest())));
     const progress = Deferred.makeUnsafe<void>();
     const pending = executeTool(
-      tools.get("subagent_await")!,
+      tools.get("agent_await")!,
       { runIds: [child.id], until: "all_finished" },
       { callID: "question-await", update: () => Deferred.doneUnsafe(progress, Effect.void) },
     );
@@ -93,7 +93,7 @@ it.live("keeps late-abort delivery uncertain and recoverable after consumption",
     const progress = yield* Deferred.make<void>();
     const controller = new AbortController();
     const pending = executeTool(
-      tools.get("subagent_await")!,
+      tools.get("agent_await")!,
       { runIds: [child.id], until: "all_finished" },
       {
         callID: "late-cancel",
@@ -173,7 +173,7 @@ it.live(
         runtime.run(service.startSessionOwned(nativeReportRequest())),
       );
       expect(child.state).toBe("running");
-      const tool = tools.get("subagent_await")!;
+      const tool = tools.get("agent_await")!;
       const progress = Deferred.makeUnsafe<void>();
       const updates: AgentToolResult<unknown>[] = [];
       const controller = new AbortController();
@@ -256,7 +256,7 @@ it.live("ends a wait at its timeout without stopping the child", () =>
     const child = yield* step(() => runtime.run(service.startSessionOwned(nativeReportRequest())));
     const result = yield* step(() =>
       executeTool(
-        tools.get("subagent_await")!,
+        tools.get("agent_await")!,
         { runIds: [child.id], until: "all_finished", timeoutSeconds: 1 },
         { callID: "timed-await" },
       ),
@@ -280,7 +280,7 @@ it.live("ends a wait for the user's next message without stopping the child", ()
     const child = yield* step(() => runtime.run(service.startSessionOwned(nativeReportRequest())));
     const progress = Deferred.makeUnsafe<void>();
     const pending = executeTool(
-      tools.get("subagent_await")!,
+      tools.get("agent_await")!,
       { runIds: [child.id], until: "all_finished" },
       { callID: "user-input-await", update: () => Deferred.doneUnsafe(progress, Effect.void) },
     );

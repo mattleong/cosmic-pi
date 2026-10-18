@@ -282,7 +282,7 @@ it.effect("Pi keeps RPC and IPC byte owners until normalized consumption or scop
       type: "parent_contact",
       value: {
         channel: "pi-subagents",
-        type: "contact_parent",
+        type: "contact_request",
         kind: "progress",
         requestId: "contact",
         message: "working",

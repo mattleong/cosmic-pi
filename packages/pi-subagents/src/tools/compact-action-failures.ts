@@ -7,7 +7,6 @@ import {
   isUncertainToolFailure,
   NO_ELIGIBLE_ROUTE_CODES,
   noEligibleRouteRecovery,
-  pendingDeliveryEvidence,
   unconfirmedActionRecovery,
   type ActionFailureDisposition,
 } from "./outcome.ts";
@@ -36,7 +35,7 @@ const START_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
   ],
   [
     ["profile", "candidate", "auth", "harness", "model", "unsupported", "confinement", "readiness"],
-    "Inspect the effective route with subagent_models or choose a compatible route in /subagents profiles.",
+    "Inspect the effective route with agent_profiles or choose a compatible route in /subagents profiles.",
   ],
   [
     ["capacity", "writer"],
@@ -45,11 +44,7 @@ const START_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
 ];
 const ACTION_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
   SCRIPTED_WRITER_RECOVERY,
-  [
-    ["notfound", "not_found"],
-    "Refresh run IDs with subagent_status without runIds.",
-    ["not found"],
-  ],
+  [["notfound", "not_found"], "Refresh run IDs with agent_list.", ["not found"]],
   [
     ["completion_claim_conflict"],
     "Wait for or cancel the operation that already owns this completion, then retry.",
@@ -60,38 +55,42 @@ const ACTION_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
   ],
   [
     ["retry_claim", "retry_already", "resume_superseded"],
-    "Inspect the predecessor and its linked successor with subagent_status.",
+    "Inspect the predecessor and its linked successor with agent_read.",
   ],
   [
     ["report_delivery_backlog"],
-    "Wait for automatic outcome delivery or claim the current outcome with subagent_await, then retry.",
+    "Wait for automatic outcome delivery or claim the current outcome with agent_await, then retry.",
   ],
   [
     ["reply_send_failed"],
-    "The reply was never delivered and the question is still pending; resend it with subagent_send.",
+    "The reply was never delivered and the question is still pending; resend it with agent_send.",
   ],
-  [["reply_too_large"], "The question is still pending; send a shorter reply with subagent_send."],
+  [["reply_too_large"], "The question is still pending; send a shorter reply with agent_send."],
   [
     ["reply_in_flight"],
-    "An earlier reply is still being delivered; await the run or inspect subagent_status before sending again.",
+    "An earlier reply is still being delivered; await the run or inspect it with agent_read before sending again.",
   ],
   [
     ["question_transport_closed"],
-    "The helper connection closed and the question was cancelled; inspect subagent_status before taking another action.",
+    "The helper connection closed and the question was cancelled; inspect the run with agent_read before taking another action.",
   ],
   [
     ["question_ownership_mismatch"],
-    "The question is no longer pending; refresh the run with subagent_status before taking another action.",
+    "The question is no longer pending; refresh the run with agent_read before taking another action.",
   ],
   [
     ["waiting_for_parent", "parent_question"],
-    "Answer with subagent_send, then await the run again.",
+    "Answer with agent_send, then await the run again.",
     ["waiting for a parent reply"],
   ],
-  [["capability", "unsupported"], "Inspect the run's capabilities with subagent_status."],
+  [
+    ["interrupt_in_flight"],
+    "An interrupt is still pending; await the run, then send again once it pauses or runs.",
+  ],
+  [["capability", "unsupported"], "Inspect the run's capabilities with agent_read."],
   [
     ["profile", "candidate", "auth", "harness", "model"],
-    "Inspect the effective route with subagent_models or edit it with /subagents profiles.",
+    "Inspect the effective route with agent_profiles or edit it with /subagents profiles.",
   ],
 ];
 const UNCERTAIN_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
@@ -101,7 +100,11 @@ const UNCERTAIN_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
   ],
   [
     ["reply_outcome_uncertain"],
-    "Do not resend the reply automatically; inspect subagent_status and wait for the run's next event.",
+    "Do not resend the reply automatically; inspect the run with agent_read and wait for its next event.",
+  ],
+  [
+    ["guidance_outcome_uncertain", "steer_outcome_uncertain"],
+    "The guidance may already have arrived; do not resend it. Inspect the run with agent_read and wait for its next event.",
   ],
 ];
 
@@ -116,7 +119,7 @@ export const failureRecovery = (
     ? [
         UNCERTAIN_FAILURE_RECOVERY_RULES,
         context === "start"
-          ? "Do not retry the launch automatically; it may already have taken effect. List runs and inspect subagent_status before recovery."
+          ? "Do not retry the launch automatically; it may already have taken effect. List runs with agent_list and inspect them with agent_read before recovery."
           : unconfirmedActionRecovery,
       ]
     : context === "start"
@@ -126,7 +129,7 @@ export const failureRecovery = (
         ]
       : [
           ACTION_FAILURE_RECOVERY_RULES,
-          "Review the failure detail and current subagent_status before retrying.",
+          "Review the failure detail and the run's current state with agent_read before retrying.",
         ];
   const matched = rules.find(
     ([codes, , messages]) =>
@@ -159,18 +162,16 @@ const FAILURE_PHRASES: ReadonlyArray<readonly [ReadonlyArray<string>, Phrase]> =
   [["in_flight"], (subject) => `${subject} is already handling a request`],
   [["state_invalid", "state_reclaimed"], (subject) => `${subject} can't do that right now`],
   [["resume_unavailable"], (subject) => `${subject} can't be resumed`],
-  [["lifecycle_message_invalid"], () => "Guidance can only be sent with a resume"],
   [["capacity"], () => "No subagent capacity is left"],
   [["nesting_depth_limit"], () => "The subagent nesting limit was reached"],
 ];
 
 const VERBS = new Map([
   ["send", "send a message to"],
+  ["read", "read"],
   ["interrupt", "interrupt"],
-  ["resume", "resume"],
   ["stop", "stop"],
   ["retry", "retry"],
-  ["status", "find"],
   ["list", "list"],
   ["await", "wait for"],
   ["start", "start"],
@@ -184,7 +185,7 @@ const VERBS = new Map([
   ["question", "ask"],
 ]);
 
-const AGENT_TEXT = /\bsubagent_[a-z_]+\b|\b\w+\(\s*\{|\b\w+=["\w]|\bagent-[\w-]+/u;
+const AGENT_TEXT = /\bagent_[a-z_]+\b|\b\w+\(\s*\{|\b\w+=["\w]|\bagent-[\w-]+/u;
 
 const readableFailure = (text: string, forbidden: readonly string[]): string | undefined => {
   const line = failureMessage(text, "");
@@ -196,7 +197,6 @@ const readableFailure = (text: string, forbidden: readonly string[]): string | u
 const NOUNS = new Map([
   ["send", "message"],
   ["interrupt", "interrupt"],
-  ["resume", "resume"],
   ["stop", "stop"],
   ["retry", "retry"],
 ]);
@@ -235,16 +235,6 @@ type ActionFailureIssue = (
 };
 
 const ACTION_FAILURE_ISSUES = {
-  pending: (_action, _failure, name) => ({
-    code: "delivery-pending",
-    message: name
-      ? `${name}: guidance is awaiting delivery confirmation`
-      : pendingDeliveryEvidence.message,
-    recovery: {
-      message: "Delivery is still being tracked",
-      detail: pendingDeliveryEvidence.detail,
-    },
-  }),
   unconfirmed: (action, _failure, name) => ({
     code: "action-failed",
     message: unconfirmedMessage(action, name),
@@ -272,7 +262,7 @@ export function actionFailureIssues(
 ): void {
   for (const failure of failures) {
     const name = cards.find((card) => card.id === failure.id)?.name.slice(0, 60);
-    const disposition = actionFailureDisposition(action, failure);
+    const disposition = actionFailureDisposition(failure);
     if (disposition !== "failed") summary.outcome = "uncertain";
     const oneOfMany = failures.length + cards.length > 1;
     const { code, message, recovery } = ACTION_FAILURE_ISSUES[disposition](
@@ -338,21 +328,6 @@ const AGENT_FAILURES = {
     recovery:
       "Finished Claude and Codex runs can't be resumed. Start a new agent with the context it needs, or message its parent.",
   },
-  agent_rate_limited: {
-    message: () => "Too many agent messages were sent; wait before sending again",
-    recovery:
-      "Each agent may send 10 messages a minute, and 3 in a row to one agent before waiting 5 seconds per message. Wait as long as the error says before sending again, and don't resend in a loop.",
-  },
-  agent_message_budget_exhausted: {
-    message: () => "Agents already sent as many messages as allowed",
-    recovery:
-      "Until the user's next prompt, each agent may send another agent 20 messages, and the session's agents 200 in all. Finish with what you have, report to your parent, or leave the rest to the user; don't retry.",
-  },
-  agent_wake_budget_exhausted: {
-    message: (subject) => `${subject} was already resumed by messages as often as allowed`,
-    recovery:
-      "Agent messages may resume each agent 3 times, and the session 12 times, until the user's next prompt. Message an agent that is still running, or leave it to the user.",
-  },
   agent_spend_limit: {
     message: (subject) => `${subject} can't be resumed after the session's spend limit`,
     recovery:
@@ -393,6 +368,21 @@ const CODED_FAILURE = /^\[([a-z][a-z0-9_]*)\] /u;
 export function agentFailureIssues(text: string, action: string, subject: string): CompactIssue[] {
   const code = CODED_FAILURE.exec(text.trimStart())?.[1];
   const known = code === undefined ? undefined : AGENT_FAILURE_CODES.get(code);
+  // A message to a run can also fail delivery, with the same codes and recovery as other actions.
+  if (!known && code !== undefined) {
+    const uncertain = isUncertainToolFailure({ code });
+    const message = text.trimStart().replace(CODED_FAILURE, "");
+    return [
+      {
+        severity: uncertain ? "warning" : "error",
+        code: `agent:${code}`,
+        message: uncertain
+          ? unconfirmedMessage(action, undefined)
+          : failedActionMessage(action, { id: "", code, message }, subject),
+        detail: `${text.trim()}\n${failureRecovery(code, message)}`,
+      },
+    ];
+  }
   if (!known) return [rejectedCallIssue(action, text, subject.toLowerCase())];
   return [
     {

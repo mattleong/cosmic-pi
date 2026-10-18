@@ -5,7 +5,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import { ROOT_TOOL_NAMES, type SubagentToolName } from "../run/tool-policy.ts";
-import { decodeSubagentOutcomeDetails, marksSubagentToolError } from "../tools/outcome.ts";
+import { decodeSubagentOutcomeDetails, hasSubagentToolFailure } from "../tools/outcome.ts";
 
 export const registerSubagentErrorReceipts = (pi: ExtensionAPI) => {
   let activation: symbol | undefined;
@@ -71,7 +71,7 @@ export const registerSubagentErrorReceipts = (pi: ExtensionAPI) => {
     ): void => {
       if (owner !== activation || callId.length > 1_024) return;
       const decoded = decodeSubagentOutcomeDetails(action, result);
-      if (!decoded || !marksSubagentToolError(decoded)) return;
+      if (!decoded || !hasSubagentToolFailure(decoded)) return;
       const { details } = result;
       try {
         if (JSON.stringify(details).length > MAX_TOOL_OUTPUT_CHARS) return;

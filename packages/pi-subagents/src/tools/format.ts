@@ -27,12 +27,10 @@ import {
 } from "../ui/run-presentation.ts";
 import { runStateLabel } from "../ui/run-state.ts";
 import type { SubagentActionFailure, SubagentStartFailure } from "./model.ts";
-import type { SubagentToolAction } from "./schema.ts";
 import {
   actionFailureDisposition,
   NO_ELIGIBLE_ROUTE_CODES,
   noEligibleRouteRecovery,
-  pendingDeliveryEvidence,
   steeringDeliveryEvidence,
   unconfirmedActionRecovery,
   type ActionFailureDisposition,
@@ -88,7 +86,7 @@ export const workspaceOutcomeLabel = (outcome: SubagentWorkspaceOutcome): string
 
 /**
  * The one statement of what to do with a worktree writer's proposal, such as
- * `proposal: 3 files, +12 −4 · subagent_workspace apply workspaceId=ws-1`.
+ * `proposal: 3 files, +12 −4 · agent_worktree apply workspaceId=ws-1`.
  */
 export const proposalGuidance = (
   workspaceId: string,
@@ -96,22 +94,22 @@ export const proposalGuidance = (
 ): string =>
   outcome?.status === "auto-discarded"
     ? workspaceOutcomeLabel(outcome)
-    : `${outcome ? workspaceOutcomeLabel(outcome) : "proposal"} · subagent_workspace apply workspaceId=${sanitizeTerminalLine(workspaceId)}`;
+    : `${outcome ? workspaceOutcomeLabel(outcome) : "proposal"} · agent_worktree apply workspaceId=${sanitizeTerminalLine(workspaceId)}`;
 
 const ordinaryPauseRecovery = (run: AttentionRun): ReadonlyArray<string> => {
   const id = JSON.stringify(run.id);
   if (run.capabilities.includes("resume"))
     return [
       `Paused run ${runTarget(run)} needs a parent decision.`,
-      `1. Review it: subagent_status({ runIds: [${id}] }).`,
-      `2. Resume it with guidance: subagent_lifecycle({ action: "resume", runIds: [${id}], message: "Continue with the reviewed guidance." }).`,
-      `3. Await it again: subagent_await({ runIds: [${id}], until: "all_finished" }).`,
+      `1. Review it: agent_read({ agentIds: [${id}] }).`,
+      `2. Resume it with guidance: agent_send({ to: ${id}, message: "Continue with the reviewed guidance." }).`,
+      `3. Await it again: agent_await({ runIds: [${id}], until: "all_finished" }).`,
     ];
   return [
     `Paused run ${runTarget(run)} cannot resume on its backend.`,
-    `1. Stop it: subagent_lifecycle({ action: "stop", runIds: [${id}] }).`,
-    "2. Launch a corrected replacement with subagent_start.",
-    "3. Await the replacement run ID with subagent_await.",
+    `1. Stop it: agent_lifecycle({ action: "stop", runIds: [${id}] }).`,
+    "2. Launch a corrected replacement with agent_start.",
+    "3. Await the replacement run ID with agent_await.",
   ];
 };
 
@@ -149,13 +147,13 @@ export const cleanupRecoveryText = (run: AttentionRun): ReadonlyArray<string> =>
     return [
       `Writer admission for ${runTarget(run)} is blocked by cleanup quarantine.`,
       evidence,
-      "List runs with subagent_status and inspect the quarantined run's full status. Recover that run's cleanup; do not stop healthy peers to clear the pool.",
+      "List runs with agent_list and inspect the quarantined run with agent_read. Recover that run's cleanup; do not stop healthy peers to clear the pool.",
     ];
   return [
     `Cleanup is unconfirmed for ${runTarget(run)}; its task outcome and accepted report are unchanged.`,
     evidence,
     run.cleanup?.recovery === "stop"
-      ? `Request observational cleanup verification with subagent_lifecycle({ action: "stop", runIds: [${JSON.stringify(run.id)}] }). This also stops any active descendants. Only confirmed cleanup releases held resources.`
+      ? `Request observational cleanup verification with agent_lifecycle({ action: "stop", runIds: [${JSON.stringify(run.id)}] }). This also stops any active descendants. Only confirmed cleanup releases held resources.`
       : "Manual inspection is required. Cleanup cannot safely be reverified automatically; do not retry, delete leases, or reuse held resources.",
   ];
 };
@@ -179,7 +177,7 @@ export const attentionRecoveryText = (runs: ReadonlyArray<AttentionRun>): string
           case "question":
             return [
               `Question from ${sanitizeTerminalLine(run.name)}: ${boundedLine(state.message, 512)}`,
-              `Answer with subagent_send({ runIds: [${JSON.stringify(run.id)}], message: "..." }), then call subagent_await again.`,
+              `Answer with agent_send({ to: ${JSON.stringify(run.id)}, message: "..." }), then call agent_await again.`,
             ];
           case "question-unavailable":
           case undefined:
@@ -204,10 +202,12 @@ export interface RunFormatOptions {
   readonly verbose?: boolean | undefined;
   /** The caller's cwd; a compact card names the run's cwd only when it works elsewhere. */
   readonly parentCwd?: string | undefined;
+  /** Ends the card with the final report's text or availability; on by default. */
+  readonly report?: boolean | undefined;
 }
 
 /** `local/pi · provider/model:effort` as `pi/provider/model:effort`. */
-const runModel = (run: SubagentRunView): string => {
+export const formatRunModel = (run: SubagentRunView): string => {
   const { hostRuntime, model } = projectRunRoutePresentation(run);
   return `${hostRuntime.replace(/^local\//u, "")}/${model}`;
 };
@@ -229,7 +229,7 @@ export const formatStartedRun = (run: SubagentRunView): string =>
   [
     `${sanitizeTerminalLine(run.id)} ${sanitizeTerminalLine(run.name)}`,
     runProfileLabel(run),
-    runModel(run),
+    formatRunModel(run),
     runWorkspaceLabel(run),
   ]
     .filter(Boolean)
@@ -240,7 +240,7 @@ const formatRunHeader = (run: SubagentRunView): string =>
     `${sanitizeTerminalLine(run.id)} ${sanitizeTerminalLine(run.name)}`,
     runStateLabel(run.state),
     runProfileLabel(run),
-    runModel(run),
+    formatRunModel(run),
     runWorkspaceLabel(run),
     run.depth && run.depth > 1 ? `depth ${run.depth}` : undefined,
     run.descendantCount ? countLabel(run.descendantCount, "descendant") : undefined,
@@ -266,7 +266,7 @@ const routeRetryStatus = (run: SubagentRunView): string | undefined => {
   if (remaining === 0 || run.state !== "failed") return undefined;
   return statusField(
     "Route retry",
-    `${remaining} candidate${remaining === 1 ? " remains" : "s remain"}; use subagent_lifecycle action=retry`,
+    `${remaining} candidate${remaining === 1 ? " remains" : "s remain"}; use agent_lifecycle action=retry`,
   );
 };
 
@@ -385,7 +385,7 @@ export const formatRun = (
     header,
     ...compactStatusFields(run, options),
     ...(options.verbose ? verboseStatusFields(run) : []),
-    finalReportStatus(run),
+    options.report === false ? undefined : finalReportStatus(run),
   ]
     .filter((line): line is string => line !== undefined)
     .join("\n");
@@ -441,7 +441,7 @@ export const failedStartRecoveryAction = (recovery: FailedStartRecovery): string
   switch (recovery.retryDisposition) {
     case "eligible":
     case "pending":
-      return `Continue with subagent_lifecycle({ action: "retry", runIds: [${JSON.stringify(recovery.runId)}] }).`;
+      return `Continue with agent_lifecycle({ action: "retry", runIds: [${JSON.stringify(recovery.runId)}] }).`;
     case "blocked":
       return "Do not retry automatically; ownership or execution outcome is uncertain.";
     case "exhausted":
@@ -500,19 +500,13 @@ const actionFailureLine = (failure: SubagentActionFailure): string => {
 };
 
 export const ACTION_FAILURE_SECTIONS = [
-  ["pending", "Guidance awaiting confirmation", pendingDeliveryEvidence.detail],
   ["unconfirmed", "Unconfirmed targets", unconfirmedActionRecovery],
   ["failed", "Failed targets", undefined],
 ] as const satisfies ReadonlyArray<readonly [ActionFailureDisposition, string, string | undefined]>;
 
-export const formatActionFailures = (
-  action: SubagentToolAction,
-  failures: ReadonlyArray<SubagentActionFailure>,
-): string =>
+export const formatActionFailures = (failures: ReadonlyArray<SubagentActionFailure>): string =>
   ACTION_FAILURE_SECTIONS.flatMap(([disposition, title, guidance]) => {
-    const entries = failures.filter(
-      (failure) => actionFailureDisposition(action, failure) === disposition,
-    );
+    const entries = failures.filter((failure) => actionFailureDisposition(failure) === disposition);
     if (entries.length === 0) return [];
     return [
       [

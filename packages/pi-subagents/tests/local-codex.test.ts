@@ -145,7 +145,7 @@ it.effect("Codex reminds once, then fails with the reminded turn's final text", 
       expect(yield* Queue.take(backend.events)).toMatchObject({ type: "assistant_message" });
       expect(yield* Queue.take(backend.events)).toEqual({ type: "activity", assignmentEpoch: 1 });
       yield* yieldUntil(() => turnInputs.length === 2);
-      expect(turnInputs[1]).toContain("supervisor_submit_report");
+      expect(turnInputs[1]).toContain("agent_submit_report");
       finishTurn(childEvents, "Still no report.");
       expect(yield* Queue.take(backend.events)).toMatchObject({ type: "assistant_message" });
       const failure = yield* Queue.take(backend.events);

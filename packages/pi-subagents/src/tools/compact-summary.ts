@@ -16,6 +16,7 @@ import {
   type SubagentAwaitDetails,
   type CompactSubagentToolDetails,
 } from "./details-schema.ts";
+import { SUBAGENT_TOOL_NAME, type SubagentToolName } from "../run/tool-policy.ts";
 import { decodeSubagentOutcomeDetails, hasSubagentToolFailure } from "./outcome.ts";
 import { actionFailureIssues } from "./compact-action-failures.ts";
 import {
@@ -46,17 +47,20 @@ function cardCounters(cards: readonly SubagentRunCard[], singleTarget = false): 
   return [[...counts].map(([label, count]) => `${count} ${label}`).join(", ")].filter(Boolean);
 }
 
-export function createSubagentCompactSummary(toolName: string): CompactSummaryProvider {
-  const action = toolName.replace(/^subagent_/, "");
+const TOOL_ACTIONS: Readonly<Record<SubagentToolName, string>> = {
+  [SUBAGENT_TOOL_NAME.models]: "models",
+  [SUBAGENT_TOOL_NAME.start]: "start",
+  [SUBAGENT_TOOL_NAME.await]: "await",
+  [SUBAGENT_TOOL_NAME.lifecycle]: "lifecycle",
+  [SUBAGENT_TOOL_NAME.workspace]: "workspace",
+};
+
+export function createSubagentCompactSummary(toolName: SubagentToolName): CompactSummaryProvider {
+  const action = TOOL_ACTIONS[toolName];
   return ({ phase, args, result, context }) => {
     if (!Predicate.isObject(args)) return undefined;
     const input: SummaryArguments = args;
-    // Status without run IDs lists the visible run tree.
-    const operation = Predicate.isString(input.action)
-      ? input.action
-      : action === "status" && input.runIds === undefined
-        ? "list"
-        : action;
+    const operation = Predicate.isString(input.action) ? input.action : action;
     const lanes = argumentSummary(input, action, operation);
     if (!result) return context.isError || phase === "settled" ? undefined : lanes;
     if (action === "workspace" && !context.isError)
@@ -84,7 +88,7 @@ function summarizeReceipt(
   const summary = summarizeDetails(
     details,
     phase,
-    projectedSubject(details, input, phase, lanes.subject, targets),
+    projectedSubject(details, input, lanes.subject, targets),
     targets,
     requestedTargets(input),
   );
@@ -121,7 +125,7 @@ function awaitIssues(
       code: "targets-omitted",
       message: "Some requested subagents have no available status",
       detail:
-        "Some requested targets have no projected state; inspect subagent_status before acting.",
+        "Some requested targets have no projected state; inspect them with agent_read before acting.",
     });
     if (summary.outcome === "success") summary.outcome = "uncertain";
   }
@@ -131,7 +135,7 @@ function awaitIssues(
       code: "descendant-context",
       message: "Descendant subagents are shown for context only",
       detail:
-        "Descendants are context only; this await summarizes requested targets. Inspect subagent_status for descendant state.",
+        "Descendants are context only; this await summarizes requested targets. Inspect descendants with agent_read.",
     });
   if (details.cancelled && details.endedByUserInput) {
     issues.push({
@@ -148,7 +152,7 @@ function awaitIssues(
       code: "await-timed-out",
       message: `Stopped waiting after ${details.timedOutSeconds}s; subagents keep running`,
       detail:
-        "Await timed out; child runs were NOT stopped. Await the requested targets again or inspect subagent_status.",
+        "Await timed out; child runs were NOT stopped. Await the requested targets again or inspect them with agent_read.",
     });
   } else if (details.cancelled) {
     summary.outcome = "cancelled";
@@ -180,7 +184,7 @@ function awaitIssues(
       code: "parent-action",
       message: "A subagent needs attention before it can continue",
       detail:
-        "Parent action required; inspect full target subagent_status for the question or pause capabilities before acting.",
+        "Parent action required; inspect the targets with agent_read for the question or pause capabilities before acting.",
     });
   if (details.attentionRequired && !details.cancelled) summary.outcome = "warning";
 }
@@ -201,7 +205,7 @@ function runIssues(
       code: "runs-omitted",
       message: "Only some subagents are shown",
       detail:
-        "Bounded projection, not complete fleet counts. Use subagent_status for omitted runs and their recovery.",
+        "Bounded projection, not complete fleet counts. Use agent_list and agent_read for omitted runs and their recovery.",
     });
   }
   actionFailureIssues(details.action, details.actionFailures ?? [], details.cards, summary, issues);
@@ -268,11 +272,11 @@ function isSingleRequestedRun(
   requested: readonly string[] | undefined,
 ): boolean {
   if (details.action === "await" || details.runCount !== 1) return false;
-  return requested?.length
-    ? requested.length === 1 &&
-        cards.length === 1 &&
-        (cards[0]?.id === requested[0] || details.action === "retry")
-    : details.action === "list" || details.action === "status";
+  return (
+    requested?.length === 1 &&
+    cards.length === 1 &&
+    (cards[0]?.id === requested[0] || details.action === "retry")
+  );
 }
 
 function labelChangesToReview(summary: CompactSummary, cards: readonly SubagentRunCard[]): void {
@@ -313,17 +317,14 @@ function omissionIssue(
 ): void {
   if (!details.contentOmitted || ("reportsOnlyOmitted" in details && details.reportsOnlyOmitted))
     return;
-  const listed = details.action === "list";
   issues.push({
-    severity: listed ? "info" : "warning",
+    severity: "warning",
     code: "evidence-omitted",
-    message: listed
-      ? "Reports and some details are left out of this list"
-      : "Some subagent details are unavailable in this view",
+    message: "Some subagent details are unavailable in this view",
     detail:
-      "Bounded projection: details were omitted. Inspect expanded details and subagent_status for full target state, attention, and recovery before acting.",
+      "Bounded projection: details were omitted. Inspect expanded details and agent_read for full target state, attention, and recovery before acting.",
   });
-  if (!listed) summary.outcome = "uncertain";
+  summary.outcome = "uncertain";
 }
 
 function summarizeDetails(

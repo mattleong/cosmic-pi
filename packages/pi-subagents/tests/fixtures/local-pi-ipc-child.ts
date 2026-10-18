@@ -17,7 +17,7 @@ const fail = (cause: unknown) => {
 };
 
 const sendContact = (requestId: string, kind: "progress" | "question", message: string) =>
-  ipc.sendContact({ channel: "pi-subagents", type: "contact_parent", requestId, kind, message });
+  ipc.sendContact({ channel: "pi-subagents", type: "contact_request", requestId, kind, message });
 
 const finishWhenAnswered = () => {
   if (!peerReceived || !replyReceived) return;

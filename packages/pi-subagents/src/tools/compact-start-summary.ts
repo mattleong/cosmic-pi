@@ -30,7 +30,9 @@ const launchFailureIssue = (
   detail: [
     `${failure.code ? `[${failure.code}] ` : ""}${failure.message}`,
     ...(uncertain && !failure.admittedRun
-      ? ["List runs with subagent_status before retrying or launching a replacement."]
+      ? [
+          "List runs with agent_list and inspect them with agent_read before retrying or launching a replacement.",
+        ]
       : []),
   ].join("\n"),
 });

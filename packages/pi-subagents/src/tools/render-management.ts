@@ -19,17 +19,10 @@ import {
   countActionFailures,
   type ActionFailureCounts,
 } from "./outcome.ts";
-import {
-  expandedRunReportSections,
-  renderExpandedRunsResult,
-  runOverviewComponent,
-} from "./render-run-overview.ts";
+import { renderExpandedRunsResult, runOverviewComponent } from "./render-run-overview.ts";
 
 type ModelsToolDetails = Extract<CompactSubagentToolDetails, { readonly action: "models" }>;
 type RunToolDetails = Exclude<CompactSubagentToolDetails, ModelsToolDetails>;
-
-const PENDING_DELIVERY_RECOVERY =
-  "Delivery is still tracked; do not resend, retry, interrupt, or replace for this. Continue or await; stop remains available.";
 
 const formattedCandidateRoute = (candidate: SubagentProfileCandidateCard): string =>
   `${formatRunRoute({
@@ -117,35 +110,17 @@ export const renderProfileRoutesComponent = (
     );
   });
 
-const failureCounts = (
-  details: RunToolDetails,
-  failures: ActionFailureCounts,
-): ReadonlyArray<string> => [
-  ...(failures.pending > 0 ? [`${failures.pending} awaiting confirmation`] : []),
+const failureCounts = (failures: ActionFailureCounts): ReadonlyArray<string> => [
   ...(failures.unconfirmed > 0 ? [`${failures.unconfirmed} unconfirmed`] : []),
-  ...(failures.failed > 0
-    ? [`${failures.failed} ${details.action === "status" ? "missing" : "failed"}`]
-    : []),
+  ...(failures.failed > 0 ? [`${failures.failed} failed`] : []),
 ];
 
 const primaryCount = (details: RunToolDetails, count: number): string => {
   switch (details.action) {
-    case "list":
-      return count > 0 ? countLabel(count, "subagent") : "No subagents";
-    case "status":
-      return `${count} found`;
-    case "send": {
-      const answered = details.answeredRunIds?.length ?? 0;
-      if (answered === 0) return `${count} delivered`;
-      return count > answered
-        ? `${answered} answered · ${count - answered} guided`
-        : `${answered} answered`;
-    }
     case "interrupt":
       return `${count} paused`;
     case "retry":
       return `${countLabel(count, "retry", "retries")} started`;
-    case "resume":
     case "stop":
       return `${count} updated`;
   }
@@ -153,18 +128,15 @@ const primaryCount = (details: RunToolDetails, count: number): string => {
 };
 
 const countersText = (details: RunToolDetails, count: number, failures: ActionFailureCounts) => {
-  const exceptional = failureCounts(details, failures);
+  const exceptional = failureCounts(failures);
   return [
-    ...(count > 0 || exceptional.length === 0 || details.action === "list"
-      ? [primaryCount(details, count)]
-      : []),
+    ...(count > 0 || exceptional.length === 0 ? [primaryCount(details, count)] : []),
     ...exceptional,
   ].join(" · ");
 };
 
 const failedTargetLines = (
   failures: ReadonlyArray<CompactToolActionFailure>,
-  recovery: (failure: CompactToolActionFailure) => string,
   width: number,
   theme: Theme,
 ): string[] =>
@@ -178,28 +150,25 @@ const failedTargetLines = (
         ),
         width,
       ),
-      ...wrapTextWithAnsi(theme.fg("dim", `  Next: ${recovery(failure)}`), width),
+      ...wrapTextWithAnsi(
+        theme.fg("dim", `  Next: ${failureRecovery(failure.code, failure.message)}`),
+        width,
+      ),
     ];
   });
 
 const failureSections = (details: RunToolDetails, theme: Theme): ReadonlyArray<Component> =>
   ACTION_FAILURE_SECTIONS.flatMap(([disposition, title]) => {
     const failures = (details.actionFailures ?? []).filter(
-      (failure) => actionFailureDisposition(details.action, failure) === disposition,
+      (failure) => actionFailureDisposition(failure) === disposition,
     );
-    const recovery = (failure: CompactToolActionFailure) =>
-      disposition === "pending"
-        ? PENDING_DELIVERY_RECOVERY
-        : failureRecovery(failure.code, failure.message);
     return failures.length === 0
       ? []
       : [
           expandedSection(
             theme,
             title,
-            renderComponent((width) =>
-              failedTargetLines(failures, recovery, Math.max(1, width), theme),
-            ),
+            renderComponent((width) => failedTargetLines(failures, Math.max(1, width), theme)),
           ),
         ];
   });
@@ -212,21 +181,17 @@ export const renderCompactResultComponent = (
   const counters = countersText(
     details,
     details.runCount,
-    countActionFailures(details.action, details.actionFailures),
+    countActionFailures(details.actionFailures),
   );
   const failures = expanded ? failureSections(details, theme) : [];
-  const showReports = details.action === "status";
-  const hierarchy = details.action === "list" ? {} : undefined;
   return renderComponent((width) => {
     const safeWidth = Math.max(1, width);
     const runs = expanded
-      ? renderExpandedRunsResult(details.cards, theme, counters, showReports, hierarchy)
+      ? renderExpandedRunsResult(details.cards, theme, counters)
       : runOverviewComponent(details.cards, theme, {
           expanded: false,
-          reportSections: showReports ? expandedRunReportSections(details.cards) : [],
+          reportSections: [],
           counters,
-          showReportOutcomes: showReports,
-          hierarchy,
         });
     return [runs, ...failures].flatMap((component) => component.render(safeWidth));
   });

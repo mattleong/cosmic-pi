@@ -77,16 +77,16 @@ After `pauseRequested`, new guidance, replies, and ancestor notifications are re
 
 ### Tool snapshot and read-only semantics
 
-- At every launch the root snapshots its current active tool names and project-trust decision. `writeIntent` does not filter them. Competing coordinator and orchestrator tools and pi-intercom's cross-session `session_*` tools are always denied, and a [custom agent](routing.md#declaration)'s `tools.allow` and `tools.deny` filter the snapshot further, always keeping the child's `contact_parent`, `subagent_*`, and `agent_*` tools.
-- The public extension returns before importing the root application when `PI_SUBAGENT_CHILD === "1"`; a packaged private extension registers authenticated `subagent_*` and `agent_*` proxies and `contact_parent`. Nested children have no `/subagents` command; the root fleet shows every descendant.
+- At every launch the root snapshots its current active tool names and project-trust decision. `writeIntent` does not filter them. Competing coordinator and orchestrator tools and pi-intercom's cross-session `session_*` tools are always denied, and a [custom agent](routing.md#declaration)'s `tools.allow` and `tools.deny` filter the snapshot further, always keeping the child's own `agent_*` tools, `agent_contact_parent` included. The root never passes its own `agent_*` tools down; the child registers authenticated proxies for them.
+- The public extension returns before importing the root application when `PI_SUBAGENT_CHILD === "1"`; a packaged private extension registers authenticated proxies of the root's `agent_*` tools and its own `agent_contact_parent`. Nested children have no `/subagents` command; the root fleet shows every descendant.
 - An active name is not an implementation transfer: the child can use it only when its trust mode discovers the provider. A nested start returns to the root for a fresh snapshot, so child-local toggles do not control grandchildren. The snapshot's count, names, and size are validated before ownership.
-- Proxy requests cannot carry ancestry. The root binds them to the channel's run and authorizes `subagent_*` targets against that subtree, while `agent_*` targets may be any agent in the tree; workspace mutations use the stricter direct-parent check, apart from the ancestor discard in [Nested worktree writers](#nested-worktree-writers).
+- Proxy requests cannot carry ancestry. The root binds them to the channel's run and authorizes `agent_await` and `agent_lifecycle` targets against that subtree, while `agent_list`, `agent_read`, and `agent_send` targets may be any agent in the tree; `agent_worktree` mutations use the stricter direct-parent check, apart from the ancestor discard in [Nested worktree writers](#nested-worktree-writers).
 - Pi read-only is a no-mutation prompt and writer-lease policy, not a sandbox or confidentiality boundary. It receives the same tool snapshot as a writer, so native codemode is available to either intent; codemode's nested tool events surface as activity.
 - Native Claude and Codex launches keep their fixed tools and sandboxes and do not consume the snapshot.
 
 ### Child bridge
 
-`boundary/host-child.ts` owns one session-runtime slot for the started child session. A scoped Layer attaches the IPC listener and detaches it on replacement or shutdown. Only the current session identity and slot token may register or execute proxy tools and `contact_parent`; a partial registration removes those names and closes the runtime.
+`boundary/host-child.ts` owns one session-runtime slot for the started child session. A scoped Layer attaches the IPC listener and detaches it on replacement or shutdown. Only the current session identity and slot token may register or execute proxy tools and `agent_contact_parent`; a partial registration removes those names and closes the runtime.
 
 Each question and proxy call owns one exact Deferred entry through `acquireUseRelease`. Release deletes only the same waiter, listener release and shutdown reject all remaining correlations, and a disconnect from a detached listener cannot reject the replacement session's waits.
 
@@ -100,7 +100,7 @@ Each question and proxy call owns one exact Deferred entry through `acquireUseRe
 ## Structured child questionnaires
 
 - Only explicit blocking `ask_user` requests from local Pi children are relayed, through the versioned `pi-ask-user/protocol` root capability. `pi-ask-user` remains the sole registrar and must be discoverable in the child; a missing relay or capability fails closed.
-- Native Claude/Codex, asynchronous questionnaires, `contact_parent` questions, and raw `extension_ui_request` forwarding are not supported.
+- Native Claude/Codex, asynchronous questionnaires, `agent_contact_parent` questions, and raw `extension_ui_request` forwarding are not supported.
 - The root derives owner run, assignment epoch, and request ID from coordinator state. A separate strict 128 KiB decoder keeps questionnaires out of tool input.
 - `run/questionnaire-lifetime.ts` keeps at most 256 request-ID tombstones per assignment, so replayed answered or cancelled identities cannot reopen a dialog.
 - Pause, stop, settlement, and assignment replacement revoke queued, visible, or hidden waits; process cleanup joins their finalizers outside the service lock, and shutdown revokes before leaf-first release. A stalled owned cleanup keeps stop and shutdown waiting.
@@ -211,7 +211,7 @@ A `.worktreeinclude` file at the top level of the source checkout names untracke
 
 ### Review, apply, and revise
 
-A final report changes no parent files. Only the authenticated direct parent integrates, and only through `subagent_workspace apply`. Both paths write uncommitted edits without changing the parent index, branch, or commits. Every operation on a finished writer's workspace first waits, interruptibly, for that writer's process cleanup to settle (up to 30 seconds); a running writer or quarantined cleanup refuses with `workspace_process_unsettled`.
+A final report changes no parent files. Only the authenticated direct parent integrates, and only through `agent_worktree apply`. Both paths write uncommitted edits without changing the parent index, branch, or commits. Every operation on a finished writer's workspace first waits, interruptibly, for that writer's process cleanup to settle (up to 30 seconds); a running writer or quarantined cleanup refuses with `workspace_process_unsettled`.
 
 - **Quick path:** `apply` with only `workspaceId` freezes the current revision (an optional `revisionId` must match, else `workspace_revision_stale`), prepares it against current parent work without running hooks, and integrates that pair. Its result reports whether every review page was read (`reviewed`) and that nothing was tested (`untested`), so the parent runs relevant tests in its checkout.
 - **Careful path:** `review` freezes the proposal and pages its immutable text: a summary (diffstat, changed files, left-out credential files) then the patch, never splitting a character. Paging needs only `offset`; it reads the current revision. `prepare` builds the combined cwd and runs the `WorktreeCreate` hooks there; the parent tests there; then `apply` integrates that preparation without preparing again, reporting `parent-tested`. A plain `apply` uses the parent's preparation when it is the current one (and matches an optional `revisionId`); passing `revisionId` and `preparationId` pins that exact pair.
@@ -276,7 +276,7 @@ After a `completed` worktree writer's cleanup is confirmed, a session-owned fibe
 - With no changed files, no left-out credential files, and no unresolved child workspaces, it discards the workspace and records `workspaceOutcome: auto-discarded`. Resuming that writer fails with `workspace_finished`.
 - Otherwise it records a `proposal` with changed and left-out (`uncapturedFileCount`) counts and a bounded diffstat: line totals and the first 20 files (paths clipped to 256 characters; condensed cards keep only totals).
 - Failed and stopped writers, and workspaces that are busy, resumed, revised, reviewed, prepared, in use, or fail inspection, are kept.
-- This never delays report delivery or `subagent_await`. Resume or revision admission clears a recorded outcome.
+- This never delays report delivery or `agent_await`. Resume or revision admission clears a recorded outcome.
 
 ### Orphans, takeover, and collection
 
@@ -299,7 +299,7 @@ An active local Pi worktree writer may start worktree writers of its own. The co
 
 - Its writer children default to `worktree`; explicit `isolation: "shared-checkout"` starts an ordinary writer in the caller's worker tree.
 - A nested workspace captures the caller's worker tree, uncommitted work included, and belongs to the caller, which applies it into its own worker tree. Integration skips the lease the caller's pool already holds.
-- Only such workspace parents receive `subagent_workspace` and guidance to resolve every child workspace before reporting. `PI_SUBAGENT_WORKSPACE_PARENT=1` is a tool-surface hint, not authority; every proxied call is rechecked.
+- Only such workspace parents receive `agent_worktree` and guidance to resolve every child worktree before reporting. `PI_SUBAGENT_WORKSPACE_PARENT=1` is a tool-surface hint, not authority; every proxied call is rechecked.
 - A private source must be exactly an active workspace's worker tree or a directory in it; prepare trees, workspace directories, other workspaces, and chains deeper than eight are refused. The source worker is a linked worktree of the same repository, captured like any private tree. A child prepares and integrates only while its source is active, frozen, or prepared.
 - While a workspace has unresolved or creating children, its review, prepare, apply, revise, and discard fail with `workspace_children_unresolved`.
 - Once a child's direct parent is terminal with confirmed cleanup, the root or an ancestor of that parent may discard the child, but never review, apply, or revise it; if the parent's record is gone, only the root may. Nothing cascades.
@@ -322,7 +322,7 @@ Local Claude and Codex each acquire one authenticated supervisor channel inside 
 ### Completion
 
 - **Pi:** only `agent_settled` decides the outcome, using the latest assistant attempt's bounded text and stop reason. A successful `stop` with nonempty text completes. Provider errors, unrequested aborts, output limits, tool-use-only endings, and empty reports fail. Before that, the child bridge gives a textless final message one hidden reminder to write its report; earlier messages are never promoted to the report.
-- **Claude and Codex:** completion belongs exclusively to a supervisor `supervisor_submit_report` call. Raw CLI text and native turn completion don't settle the assignment. The channel records exact accepted-report epoch evidence before acknowledging, and Claude results and Codex `turn/completed` query it directly, so causality, not scheduling, decides a missing report.
+- **Claude and Codex:** completion belongs exclusively to a supervisor `agent_submit_report` call. Raw CLI text and native turn completion don't settle the assignment. The channel records exact accepted-report epoch evidence before acknowledging, and Claude results and Codex `turn/completed` query it directly, so causality, not scheduling, decides a missing report.
 - The first turn that ends without an accepted report gets one automatic reminder input in the same assignment. A second miss, or an unsendable reminder, fails with the latest turn's final text, bounded to 2,000 characters.
 - If transport closes before forwarding drains, the adapter reprojects the accepted report. Interruption emits no completion-shaped event.
 - Every candidate closes on report, so acceptance closes the process and channel immediately while keeping bounded projection data. Nothing is written into the project.
@@ -334,15 +334,15 @@ Local Claude and Codex each acquire one authenticated supervisor channel inside 
 - The channel binds only IPv4 loopback on an ephemeral port and writes one 0600 connection document in a 0700 run directory. A 256-bit token authenticates every RPC through HMAC with a non-extractable key; peers are loopback-checked and capped, and every payload, frame, queue, and string is bounded. Malformed frames close the peer.
 - Each connection has an authentication deadline. The channel's single release runs once, uninterruptibly, closing peer sockets and the server before removing private state.
 - Event admission reserves cancellation capacity for the pending question and every admitted proxy RPC.
-- The standalone helper (`supervisor-mcp-helper.mjs`, run through Jiti from installed `node_modules`) exposes only seven tools: `supervisor_progress`, `supervisor_warning`, `supervisor_question`, `supervisor_submit_report`, `agent_list`, `agent_send`, and `agent_read`. It dispatches up to 16 calls concurrently, so a blocked question never blocks other calls. Each call commits exactly one JSON-RPC frame after its operation's exit, and the writer closes before active calls and sockets.
-- The `agent_*` tools reach every agent in the root tree, as the root's tools do. Each spawn hands the channel `agent_*` operations that the root already bound to that run as the caller. RPC payloads authenticate the run but never name the caller, and a mismatched run ID closes the peer. Results return as bounded text: list shows ID, name, state, role, runtime, and parent; read shows the last message or a finished run's report or error, marked when truncated; send shows its disposition. Root refusals return as tool errors that name their code.
+- The standalone helper (`supervisor-mcp-helper.mjs`, run through Jiti from installed `node_modules`) exposes only five tools: `agent_contact_parent` (whose `kind` selects progress, a warning, or a blocking question, as for a Pi child), `agent_submit_report`, `agent_list`, `agent_send`, and `agent_read`. It dispatches up to 16 calls concurrently, so a blocked question never blocks other calls. Each call commits exactly one JSON-RPC frame after its operation's exit, and the writer closes before active calls and sockets.
+- The `agent_*` tools reach every agent in the root tree, as the root's tools do. Each spawn hands the channel `agent_*` operations that the root already bound to that run as the caller. RPC payloads authenticate the run but never name the caller, and a mismatched run ID closes the peer. Results return as bounded text: list shows ID, name, state, role, model, worktree proposal, whether the run waits on its parent, and parent; read shows each run's status card (with `verbose`, its route, capability, process, and timing details) and its last message or a finished run's report or error, marked when truncated; send shows its disposition. Root refusals return as tool errors that name their code.
 - `supervisor/mcp-contract.ts` owns tool names, argument keys, the 16,384/32,768/256-character bounds, and the 12-ID bound for `agent_list` and `agent_read`. Patterns are enforced when decoding, not advertised in input schemas, which some providers reject. A rejected call names the failing argument and rule without echoing values.
 - Config reads and state cleanup stay on the Node boundary because Effect FileSystem lacks `lstat` and `O_NOFOLLOW`. MCP and Codex stdio use the shared byte-bounded line parser, because `Stream.splitLines` has no size bound.
 - Helper metadata contains only the fixed packaged command, the private config path, and Claude JSON/Codex TOML fragments: no profile fields, user configuration, credentials, or environment.
 
 ### Native sub-agents and main-agent-only tools
 
-Native sub-agents can reach the child's supervisor tools: Claude sub-agents share the child's MCP connection, and Codex starts a helper per sub-agent thread. `supervisor_question`, `supervisor_submit_report`, and `agent_send` belong to the child's main agent; a sub-agent's call fails with a tool error telling it to return its findings to the agent that started it. Progress, warnings, `agent_list`, and `agent_read` stay open to sub-agents.
+Native sub-agents can reach the child's supervisor tools: Claude sub-agents share the child's MCP connection, and Codex starts a helper per sub-agent thread. `agent_contact_parent`, `agent_submit_report`, and `agent_send` belong to the child's main agent; a sub-agent's call fails with a tool error telling it to return its findings to the agent that started it. `agent_list` and `agent_read` stay open to sub-agents.
 
 The caller is identified at the call, never from output ordering:
 
@@ -377,7 +377,7 @@ Claude Code keeps temp files in `$CLAUDE_CODE_TMPDIR/claude-<uid>`, which defaul
 
 ### Initialization and input correlation
 
-- Startup sends the initialize control, then one `shouldQuery:false` input to obtain `system/init` without inference. It validates cwd, session, resolved model, MCP errors, and a connected `pi_subagents_supervisor` inventory of exactly the seven supervisor tools. Initialization and start have 60-second deadlines, and initialization failure is post-spawn, never candidate fallback.
+- Startup sends the initialize control, then one `shouldQuery:false` input to obtain `system/init` without inference. It validates cwd, session, resolved model, MCP errors, and a connected `pi_subagents_supervisor` inventory of exactly the five supervisor tools. Initialization and start have 60-second deadlines, and initialization failure is post-spawn, never candidate fallback.
 - Every outbound input carries a fresh UUID, and acknowledgement requires native replay of exactly that UUID from the active session. Delayed duplicates of confirmed UUIDs are acknowledged silently from the same session only.
 - User frames with a non-null `parent_tool_use_id` are native-agent forwarding: their text becomes activity, and forwarded tool results keep their nested tool lifecycle.
 - Claude-owned synthetic `task-notification`, `auto-continuation`, and `peer` messages own a subturn inside the active assignment. Replayed `<task-notification>` commands are accepted only as complete same-session, active-assignment, text-only envelopes; near misses, qualified subkinds, channel or peer origins, and cross-session delivery fail closed.

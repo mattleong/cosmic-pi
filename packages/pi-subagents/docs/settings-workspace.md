@@ -6,7 +6,7 @@ Part of the [pi-subagents](../README.md) architecture documentation. Routing pol
 
 `/subagents profiles` always opens Current Session, the only active working set.
 
-- At session start it is a complete seven-profile snapshot resolved from the trusted Project default, Global default, and built-ins. Edits change later launches and `subagent_models` immediately; active runs keep the route captured at launch.
+- At session start it is a complete seven-profile snapshot resolved from the trusted Project default, Global default, and built-ins. Edits change later launches and `agent_profiles` immediately; active runs keep the route captured at launch.
 - Applying a saved set resolves all seven profiles, rejects any invalid route, previews the replacement, and commits it with one expected session revision, clearing earlier per-profile changes. It never changes a Project or Global document.
 - Current Session writes no project, global, or Pi session-history data. It survives `/tree` and `/reload` through the bounded application handoff and clears on `/new`, `/resume`, `/fork`, quit, or restart.
 - If `/reload` can't decode the session's handoff, subagents stay inactive rather than inheriting a different route. Start a fresh session to recover.
@@ -64,7 +64,7 @@ The Saved profiles tab groups sets by Project and Global. Untrusted Project rows
 
 `/subagents settings` edits the delegation mode in Session, Global, or trusted Project scope with the same precedence and timing as nesting.
 
-- `normal` leaves the system prompt unchanged. `encouraged` and `orchestration` replace the `subagent_start` guideline that decides when to delegate and add a `subagent_delegation` prompt section.
+- `normal` leaves the system prompt unchanged. `encouraged` and `orchestration` replace the `agent_start` guideline that decides when to delegate and add a `subagent_delegation` prompt section.
 - Pi rebuilds prompt options before every run, so switching needs no cleanup. Only the root session applies the mode; nested children keep default guidance, and no mode restricts tools.
 - One save owner serves every row and picker invocation, so rapid choices save in order, including delegation and nesting rows that share a document. Closing doesn't cancel an admitted save, and reopening waits for it. [Delegation integration tests](../tests/delegation.test.ts) cover these races.
 - The `subagents` footer item shows Current Session's profile set, `*` when the session has its own route edits, and the mode when it isn't `normal`. It publishes to the Cosmic UI footer when active and a plain Pi status entry otherwise.
@@ -83,7 +83,7 @@ Custom agents are edited by hand in the root `agents` object of `~/.pi/agent/pi-
 
 - Agents load with the rest of the document at activation, so edits apply after `/reload`. Current Session has no agent layer, and `/tree` keeps the activation's agents.
 - Profile, default-set, nesting, delegation, and writer-workspace writes replace only their own keys, so a document's `agents` object is preserved byte for byte.
-- `subagent_models` and `/subagents doctor` list the loaded agents and the ones that fail closed.
+- `agent_profiles` and `/subagents doctor` list the loaded agents and the ones that fail closed.
 
 ## Doctor
 

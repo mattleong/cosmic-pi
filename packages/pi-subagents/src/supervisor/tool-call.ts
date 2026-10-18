@@ -19,12 +19,15 @@ import {
   SUPERVISOR_MCP_AGENT_IDS_ARGUMENT_KEY,
   SUPERVISOR_MCP_AGENT_SEND_ARGUMENT_KEYS,
   SUPERVISOR_MCP_AGENT_TOOL_NAMES,
+  SUPERVISOR_MCP_CONTACT_ARGUMENT_KEYS,
+  SUPERVISOR_MCP_CONTACT_KINDS,
+  SUPERVISOR_MCP_CONTACT_PARENT_TOOL_NAME,
   SUPERVISOR_MCP_DELIVERY_ID_PATTERN_SOURCE,
-  SUPERVISOR_MCP_MESSAGE_ARGUMENT_KEYS,
-  SUPERVISOR_MCP_MESSAGE_TOOL_NAMES,
   SUPERVISOR_MCP_NONBLANK_PATTERN_SOURCE,
   SUPERVISOR_MCP_REPORT_ARGUMENT_KEYS,
+  SUPERVISOR_MCP_REPORT_TOOL_NAME,
   SUPERVISOR_MCP_TOOL_NAMES,
+  SUPERVISOR_MCP_VERBOSE_ARGUMENT_KEY,
 } from "./mcp-contract.ts";
 import {
   PARENT_REPLY_PREFIX,
@@ -44,7 +47,6 @@ import { agentListText, agentReadText, agentSendText } from "./agent-text.ts";
 const CALL_TIMEOUT_MILLIS = 10_000;
 // Resuming a finished run starts its process before the send settles.
 const AGENT_SEND_TIMEOUT_MILLIS = 60_000;
-const MESSAGE_KINDS = ["progress", "warning", "question"] as const;
 const CONTACTS = {
   progress: { rpc: "SupervisorProgress", text: "Progress delivered to the parent projection." },
   warning: { rpc: "SupervisorWarning", text: "Warning recorded in parent-visible run status." },
@@ -63,11 +65,15 @@ export interface SupervisorToolClient {
 }
 
 type SupervisorToolCall =
-  | { readonly kind: (typeof MESSAGE_KINDS)[number]; readonly message: string }
+  | { readonly kind: (typeof SUPERVISOR_MCP_CONTACT_KINDS)[number]; readonly message: string }
   | { readonly kind: "report"; readonly deliveryId: SupervisorDeliveryId; readonly report: string }
   | { readonly kind: "agent_list"; readonly ids?: ReadonlyArray<string> | undefined }
   | { readonly kind: "agent_send"; readonly to: string; readonly message: string }
-  | { readonly kind: "agent_read"; readonly ids: ReadonlyArray<string> };
+  | {
+      readonly kind: "agent_read";
+      readonly ids: ReadonlyArray<string>;
+      readonly verbose?: boolean | undefined;
+    };
 
 interface SupervisorToolResult {
   readonly text: string;
@@ -76,10 +82,11 @@ interface SupervisorToolResult {
 
 type ArgumentFields<Keys extends ReadonlyArray<string>> = Record<Keys[number], Schema.Top>;
 const exactArguments = { onExcessProperty: "error" } as const;
-const decodeMessageArguments = Schema.decodeUnknownOption(
+const decodeContactArguments = Schema.decodeUnknownOption(
   Schema.Struct({
+    kind: Schema.Literals(SUPERVISOR_MCP_CONTACT_KINDS),
     message: SupervisorMessageSchema,
-  } satisfies ArgumentFields<typeof SUPERVISOR_MCP_MESSAGE_ARGUMENT_KEYS>),
+  } satisfies ArgumentFields<typeof SUPERVISOR_MCP_CONTACT_ARGUMENT_KEYS>),
   exactArguments,
 );
 const decodeReportArguments = Schema.decodeUnknownOption(
@@ -112,9 +119,16 @@ const nonblankRule = (key: string, maximum: number): ArgumentRule => ({
   pattern: new RegExp(SUPERVISOR_MCP_NONBLANK_PATTERN_SOURCE, "u"),
   mismatch: `${key} is blank; provide nonblank text.`,
 });
-const MESSAGE_RULES: ReadonlyArray<ArgumentRule> = SUPERVISOR_MCP_MESSAGE_ARGUMENT_KEYS.map((key) =>
-  nonblankRule(key, MAX_SUPERVISOR_MCP_MESSAGE_CHARS),
-);
+const CONTACT_KIND_PATTERN = new RegExp(`^(?:${SUPERVISOR_MCP_CONTACT_KINDS.join("|")})$`, "u");
+const CONTACT_RULES: ReadonlyArray<ArgumentRule> = [
+  {
+    key: SUPERVISOR_MCP_CONTACT_ARGUMENT_KEYS[0],
+    maximum: 16,
+    pattern: CONTACT_KIND_PATTERN,
+    mismatch: `${SUPERVISOR_MCP_CONTACT_ARGUMENT_KEYS[0]} must be one of ${SUPERVISOR_MCP_CONTACT_KINDS.join(", ")}.`,
+  },
+  nonblankRule(SUPERVISOR_MCP_CONTACT_ARGUMENT_KEYS[1], MAX_SUPERVISOR_MCP_MESSAGE_CHARS),
+];
 const AGENT_ID_PATTERN = new RegExp(SUPERVISOR_MCP_AGENT_ID_PATTERN_SOURCE, "u");
 const AGENT_ID_MISMATCH = "must be an agent ID from agent_list, such as main or a run ID.";
 const AGENT_SEND_RULES: ReadonlyArray<ArgumentRule> = [
@@ -163,19 +177,26 @@ const argumentProblem = (
 
 const UNSUPPORTED_ARGUMENTS = "Tool input is malformed or unsupported.";
 
-// `ids` is optional for agent_list and required, with at least one entry, for agent_read.
+// `agentIds` is optional for agent_list and required, with at least one entry, for agent_read,
+// which also accepts `verbose`.
 const decodeAgentIdsCall = (
   tool: string,
   args: Schema.Json | undefined,
   required: boolean,
 ): Result.Result<ReadonlyArray<string> | undefined, string> => {
   const key = SUPERVISOR_MCP_AGENT_IDS_ARGUMENT_KEY;
+  const accepted: ReadonlyArray<string> = required
+    ? [key, SUPERVISOR_MCP_VERBOSE_ARGUMENT_KEY]
+    : [key];
   if (!isJsonObject(args)) return Result.fail(`${tool} takes an object with ${key}.`);
-  const unexpected = Object.keys(args).find((name) => name !== key);
+  const unexpected = Object.keys(args).find((name) => !accepted.includes(name));
   if (unexpected !== undefined)
     return Result.fail(
-      `Unexpected argument${ECHOABLE_KEY.test(unexpected) ? ` ${unexpected}` : ""}; ${tool} takes only ${key}.`,
+      `Unexpected argument${ECHOABLE_KEY.test(unexpected) ? ` ${unexpected}` : ""}; ${tool} takes only ${accepted.join(" and ")}.`,
     );
+  const verbose = args[SUPERVISOR_MCP_VERBOSE_ARGUMENT_KEY];
+  if (verbose !== undefined && !Predicate.isBoolean(verbose))
+    return Result.fail(`${SUPERVISOR_MCP_VERBOSE_ARGUMENT_KEY} must be true or false.`);
   const ids = args[key];
   if (ids === undefined)
     return required
@@ -216,6 +237,8 @@ const decodeAgentToolCall = (
       return Result.map(decodeAgentIdsCall(name, args, true), (ids) => ({
         kind: "agent_read" as const,
         ids: ids ?? [],
+        ...(isJsonObject(args) &&
+          args[SUPERVISOR_MCP_VERBOSE_ARGUMENT_KEY] === true && { verbose: true }),
       }));
     case "agent_send": {
       const problem = argumentProblem(name, AGENT_SEND_RULES, args);
@@ -238,7 +261,7 @@ export const decodeSupervisorToolCall = (
   args: Schema.Json | undefined,
 ): Result.Result<SupervisorToolCall, string> => {
   if (isAgentToolName(name)) return decodeAgentToolCall(name, args);
-  if (name === SUPERVISOR_MCP_TOOL_NAMES[3]) {
+  if (name === SUPERVISOR_MCP_REPORT_TOOL_NAME) {
     const problem = argumentProblem(name, REPORT_RULES, args);
     if (problem !== undefined) return Result.fail(problem);
     return Option.match(decodeReportArguments(args), {
@@ -247,14 +270,13 @@ export const decodeSupervisorToolCall = (
         Result.succeed({ kind: "report" as const, deliveryId: delivery_id, report }),
     });
   }
-  const kind = MESSAGE_KINDS[SUPERVISOR_MCP_MESSAGE_TOOL_NAMES.findIndex((tool) => tool === name)];
-  if (kind === undefined)
+  if (name !== SUPERVISOR_MCP_CONTACT_PARENT_TOOL_NAME)
     return Result.fail(`Unknown tool; use one of ${SUPERVISOR_MCP_TOOL_NAMES.join(", ")}.`);
-  const problem = argumentProblem(name, MESSAGE_RULES, args);
+  const problem = argumentProblem(name, CONTACT_RULES, args);
   if (problem !== undefined) return Result.fail(problem);
-  return Option.match(decodeMessageArguments(args), {
+  return Option.match(decodeContactArguments(args), {
     onNone: () => Result.fail(UNSUPPORTED_ARGUMENTS),
-    onSome: ({ message }) => Result.succeed({ kind, message }),
+    onSome: ({ kind, message }) => Result.succeed({ kind, message }),
   });
 };
 
@@ -344,13 +366,17 @@ export const runSupervisorTool = (
       case "progress":
       case "warning": {
         const contact = CONTACTS[call.kind];
-        yield* rpc[contact.rpc]({
+        return yield* rpc[contact.rpc]({
           ...auth,
           assignmentEpoch,
           requestId,
           message: call.message,
-        }).pipe(Effect.timeout(CALL_TIMEOUT_MILLIS));
-        return ok(contact.text);
+          ...identity,
+        }).pipe(
+          Effect.timeout(CALL_TIMEOUT_MILLIS),
+          Effect.as(ok(contact.text)),
+          Effect.catchIf(isToolErrorRefusal, (error) => Effect.succeed(ok(error.message, true))),
+        );
       }
       case "agent_list":
         return yield* rpc
@@ -365,11 +391,18 @@ export const runSupervisorTool = (
             Effect.catchIf(isAgentRefusal, refusedResult),
           );
       case "agent_read":
-        return yield* rpc.SupervisorAgentRead({ ...auth, assignmentEpoch, ids: call.ids }).pipe(
-          Effect.timeout(CALL_TIMEOUT_MILLIS),
-          Effect.map((result) => ok(agentReadText(result))),
-          Effect.catchIf(isAgentRefusal, refusedResult),
-        );
+        return yield* rpc
+          .SupervisorAgentRead({
+            ...auth,
+            assignmentEpoch,
+            ids: call.ids,
+            ...(call.verbose === true && { verbose: true }),
+          })
+          .pipe(
+            Effect.timeout(CALL_TIMEOUT_MILLIS),
+            Effect.map((result) => ok(agentReadText(result))),
+            Effect.catchIf(isAgentRefusal, refusedResult),
+          );
       case "agent_send":
         return yield* rpc
           .SupervisorAgentSend({

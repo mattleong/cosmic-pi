@@ -56,7 +56,7 @@ const startSpecs = (
     if (agents.length === 0 || agents.length > MAX_START_BATCH)
       return yield* invalidRequest(
         "agent_count_invalid",
-        `subagent_start requires between 1 and ${MAX_START_BATCH} agents.`,
+        `agent_start requires between 1 and ${MAX_START_BATCH} agents.`,
       );
     for (const agent of agents) {
       const disallowedField = firstDisallowedLaunchOverride(agent);

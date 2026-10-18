@@ -30,21 +30,21 @@ For scoped parallel implementation, give shared-checkout writers disjoint task s
 }
 ```
 
-- Use `subagent_await` rather than polling status. "Finished" means completed, failed, or stopped.
-- A question returns the wait early so the parent can answer it with `subagent_send` and await again.
+- Use `agent_await` rather than polling `agent_list` or `agent_read`. "Finished" means completed, failed, or stopped.
+- A question returns the wait early so the parent can answer it with `agent_send` and await again. A message to a paused or finished Pi run resumes it.
 - Retry only a failed run, and repeat retry only on a failed successor. Use `generalist` only after `retry_route_exhausted`.
 - Set an item's `model` only when the user asks for a specific model. That launch tries only that model, so a failed run has nothing to retry.
 - Shared-checkout writers in one cwd have no file claims and are not isolated from each other; scope their tasks so they don't overlap.
 
 ## Reviewing and applying worktree proposals
 
-Nothing applies a worktree writer's changes automatically. A completed writer that changed nothing has its workspace discarded. Otherwise its notification and status show `proposal: N files, +A −D · subagent_workspace apply workspaceId=…` with line counts for up to 20 files, and its direct parent takes one of two paths without asking for routine user approval. Each operation waits for the finished writer's process cleanup. A worktree writer that started worktree writers does the same into its own worker tree before reporting. The engine contract is in [Isolated workspace lifecycle](local-backends.md#isolated-workspace-lifecycle).
+Nothing applies a worktree writer's changes automatically. A completed writer that changed nothing has its worktree discarded. Otherwise its notification, `agent_list` line, and `agent_read` card show `proposal: N files, +A −D · agent_worktree apply workspaceId=…` with line counts for up to 20 files, and its direct parent takes one of two paths without asking for routine user approval. Each operation waits for the finished writer's process cleanup. A worktree writer that started worktree writers does the same into its own worker tree before reporting. The engine contract is in [Isolated workspace lifecycle](local-backends.md#isolated-workspace-lifecycle).
 
 ### Quick path
 
-For small or trusted changes, call `subagent_workspace` with `{"action":"apply","workspaceId":"..."}`. It freezes, prepares, and integrates as uncommitted edits in one call, testing nothing and running no hooks. The result says whether the diff was read; run relevant tests in the parent checkout afterwards.
+For small or trusted changes, call `agent_worktree` with `{"action":"apply","workspaceId":"..."}`. It freezes, prepares, and integrates as uncommitted edits in one call, testing nothing and running no hooks. The result says whether the diff was read; run relevant tests in the parent checkout afterwards.
 
-To take only part of a proposal, pass `paths` (exact changed paths from the review summary). The remaining changes stay in the workspace as an unreviewed proposal.
+To take only part of a proposal, pass `paths` (exact changed paths from the review summary). The remaining changes stay in the worktree as an unreviewed proposal.
 
 ### Careful path
 

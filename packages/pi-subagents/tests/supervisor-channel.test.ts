@@ -31,6 +31,7 @@ import {
 import { SupervisorChannelError } from "../src/boundary/supervisor-channel-errors.ts";
 import type { BackendAgentMessaging } from "../src/backend/model.ts";
 import { agentMessageRefusal } from "../src/run/errors.ts";
+import { view } from "./fixtures/run-view.ts";
 import {
   SupervisorAuthTokenSchema,
   SupervisorRunIdSchema,
@@ -346,6 +347,8 @@ const RATE_LIMITED_AGENT = "agent-r1-9";
 const recordingAgents = (selfId: string) => {
   const calls: AgentCall[] = [];
   const agents: BackendAgentMessaging = {
+    caller: { kind: "run", runId: selfId },
+    cwd: "/project",
     list: (ids) =>
       Effect.sync(() => {
         calls.push({ kind: "list", ids });
@@ -368,7 +371,12 @@ const recordingAgents = (selfId: string) => {
       }),
     send: (to, message) =>
       to === RATE_LIMITED_AGENT
-        ? Effect.fail(agentMessageRefusal("agent_rate_limited", "Wait 5 seconds, then send."))
+        ? Effect.fail(
+            agentMessageRefusal(
+              "agent_unavailable",
+              "Agent agent-2 is starting; try again once it is running.",
+            ),
+          )
         : Effect.sync(() => {
             calls.push({ kind: "send", to, message });
             return { messageId: "message-r1-1", to, name: "peer", disposition: "guided" };
@@ -387,6 +395,14 @@ const recordingAgents = (selfId: string) => {
             truncated: false,
             source: "report" as const,
             reportGeneration: 1,
+            run: view({
+              id,
+              name: "peer",
+              state: "completed",
+              parentRunId: selfId,
+              warning: `Warning from ${id}.`,
+              pid: 4242,
+            }),
           })),
           missingIds: [],
         };
@@ -590,7 +606,7 @@ describe("private supervisor channel", () => {
     });
 
   liveTest(
-    "refuses the report and question from a native sub-agent thread but keeps its progress",
+    "refuses parent contact and the report from a native sub-agent thread but accepts the main agent's",
     function* () {
       const { handle } = yield* step(() => openChannel("agent-native-thread"));
       const { rpc } = yield* readyHelper(handle);
@@ -605,8 +621,10 @@ describe("private supervisor channel", () => {
       const report = { delivery_id: "delivery-native", report: "Sub-agent findings." };
 
       for (const [id, name, args] of [
-        ["sub-report", "supervisor_submit_report", report],
-        ["sub-question", "supervisor_question", { message: "Which file?" }],
+        ["sub-report", "agent_submit_report", report],
+        ["sub-question", "agent_contact_parent", { kind: "question", message: "Which file?" }],
+        ["sub-progress", "agent_contact_parent", { kind: "progress", message: "Halfway." }],
+        ["sub-warning", "agent_contact_parent", { kind: "warning", message: "Risky." }],
       ] as const) {
         const refused = yield* step(() => fromThread(id, name, args, "sub-agent-thread"));
         expect(refused).toMatchObject({
@@ -616,7 +634,12 @@ describe("private supervisor channel", () => {
       expect(Queue.sizeUnsafe(handle.events)).toBe(0);
 
       yield* step(() =>
-        fromThread("sub-progress", "supervisor_progress", { message: "Halfway." }, "sub-thread"),
+        fromThread(
+          "main-progress",
+          "agent_contact_parent",
+          { kind: "progress", message: "Halfway." },
+          "main-thread",
+        ),
       );
       expect(yield* step(() => takeEvent(handle))).toMatchObject({
         kind: "progress",
@@ -624,7 +647,7 @@ describe("private supervisor channel", () => {
       });
 
       const accepted = yield* step(() =>
-        fromThread("main-report", "supervisor_submit_report", report, "main-thread"),
+        fromThread("main-report", "agent_submit_report", report, "main-thread"),
       );
       expect(accepted).toMatchObject({
         result: { content: [{ text: stringContaining("accepted") }] },
@@ -672,45 +695,49 @@ describe("private supervisor channel", () => {
       const listed = yield* step(() =>
         rpc.request({ jsonrpc: "2.0", id: "list", method: "tools/list", params: {} }),
       );
-      const messageSchema = {
-        properties: { message: {} },
-        required: ["message"],
-        additionalProperties: false,
-      };
       expect(listed).toMatchObject({
         result: {
           tools: [
-            { name: "supervisor_progress", inputSchema: messageSchema },
-            { name: "supervisor_warning", inputSchema: messageSchema },
-            { name: "supervisor_question", inputSchema: messageSchema },
             {
-              name: "supervisor_submit_report",
+              name: "agent_contact_parent",
+              inputSchema: {
+                properties: { kind: {}, message: {} },
+                required: ["kind", "message"],
+                additionalProperties: false,
+              },
+            },
+            {
+              name: "agent_submit_report",
               inputSchema: {
                 properties: { delivery_id: {}, report: {} },
                 required: ["delivery_id", "report"],
                 additionalProperties: false,
               },
             },
-            { name: "agent_list", inputSchema: { properties: { ids: {} } } },
+            { name: "agent_list", inputSchema: { properties: { agentIds: {} } } },
             {
               name: "agent_send",
               inputSchema: { properties: { to: {}, message: {} }, required: ["to", "message"] },
             },
-            { name: "agent_read", inputSchema: { properties: { ids: {} }, required: ["ids"] } },
+            {
+              name: "agent_read",
+              inputSchema: { properties: { agentIds: {}, verbose: {} }, required: ["agentIds"] },
+            },
           ],
         },
       });
 
       expect(
         yield* step(() =>
-          toolCall(rpc, "camel-case-report", "supervisor_submit_report", {
+          toolCall(rpc, "camel-case-report", "agent_submit_report", {
             deliveryId: "delivery-main",
             report: "Bounded final report.",
           }),
         ),
       ).toMatchObject({ result: { isError: true } });
 
-      const questionResponse = toolCall(rpc, "question-1", "supervisor_question", {
+      const questionResponse = toolCall(rpc, "question-1", "agent_contact_parent", {
+        kind: "question",
         message: "Which implementation should I use?",
       });
       const question = yield* step(() => takeEvent(handle));
@@ -726,10 +753,11 @@ describe("private supervisor channel", () => {
       const [ping, progress, report] = yield* step(() =>
         Promise.all([
           rpc.ping("ping-while-blocked"),
-          toolCall(rpc, "progress-while-blocked", "supervisor_progress", {
+          toolCall(rpc, "progress-while-blocked", "agent_contact_parent", {
+            kind: "progress",
             message: "Continuing independent work.",
           }),
-          toolCall(rpc, "report-while-blocked", "supervisor_submit_report", {
+          toolCall(rpc, "report-while-blocked", "agent_submit_report", {
             delivery_id: "delivery-main",
             report: "Bounded final report.",
           }),
@@ -770,7 +798,7 @@ describe("private supervisor channel", () => {
             text: "Bounded final report.",
           }),
           expect.objectContaining({
-            type: "supervisor_question_cancelled",
+            type: "parent_question_cancelled",
             assignmentEpoch: 1,
             requestId: question.requestId,
           }),
@@ -785,14 +813,15 @@ describe("private supervisor channel", () => {
       );
 
       const secondQuestion = yield* step(() =>
-        toolCall(rpc, "question-duplicate", "supervisor_question", {
+        toolCall(rpc, "question-duplicate", "agent_contact_parent", {
+          kind: "question",
           message: "A second question?",
         }),
       );
       expect(secondQuestion).toMatchObject({ error: { code: -32000 } });
 
       const retry = yield* step(() =>
-        toolCall(rpc, "report-retry", "supervisor_submit_report", {
+        toolCall(rpc, "report-retry", "agent_submit_report", {
           delivery_id: "delivery-main",
           report: "Bounded final report.",
         }),
@@ -803,7 +832,7 @@ describe("private supervisor channel", () => {
       const noDuplicateEvent = yield* Queue.poll(handle.events);
       expect(Option.isNone(noDuplicateEvent)).toBe(true);
       const conflict = yield* step(() =>
-        toolCall(rpc, "report-conflict", "supervisor_submit_report", {
+        toolCall(rpc, "report-conflict", "agent_submit_report", {
           delivery_id: "delivery-main",
           report: "Conflicting report.",
         }),
@@ -811,7 +840,7 @@ describe("private supervisor channel", () => {
       expect(conflict).toMatchObject({ error: { code: -32000 } });
 
       const laterReport = yield* step(() =>
-        toolCall(rpc, "report-later", "supervisor_submit_report", {
+        toolCall(rpc, "report-later", "agent_submit_report", {
           delivery_id: "delivery-later",
           report: "Later evidence for the same assignment.",
         }),
@@ -831,13 +860,14 @@ describe("private supervisor channel", () => {
 
       yield* Effect.orDie(handle.setAssignmentEpoch(2));
       const crossEpochRetry = yield* step(() =>
-        toolCall(rpc, "report-cross-epoch", "supervisor_submit_report", {
+        toolCall(rpc, "report-cross-epoch", "agent_submit_report", {
           delivery_id: "delivery-main",
           report: "Bounded final report.",
         }),
       );
       expect(crossEpochRetry).toMatchObject({ error: { code: -32000 } });
-      const cancelledQuestion = toolCall(rpc, "question-cancelled", "supervisor_question", {
+      const cancelledQuestion = toolCall(rpc, "question-cancelled", "agent_contact_parent", {
+        kind: "question",
         message: "Wait for a reply that will be cancelled.",
       });
       const cancellationEvent = yield* step(() => takeEvent(handle));
@@ -849,7 +879,7 @@ describe("private supervisor channel", () => {
       rpc.cancel("question-cancelled");
       expect(yield* step(() => cancelledQuestion)).toMatchObject({ error: { code: -32800 } });
       expect(yield* step(() => takeEvent(handle))).toMatchObject({
-        type: "supervisor_question_cancelled",
+        type: "parent_question_cancelled",
         assignmentEpoch: 2,
         requestId:
           cancellationEvent.type === "supervisor_contact" ? cancellationEvent.requestId : "",
@@ -899,7 +929,8 @@ describe("private supervisor channel", () => {
       expect(Option.isNone(yield* Queue.poll(handle.events))).toBe(true);
 
       const many = Array.from({ length: 12 }, (_, index) =>
-        toolCall(rpc, `concurrent-${index}`, "supervisor_progress", {
+        toolCall(rpc, `concurrent-${index}`, "agent_contact_parent", {
+          kind: "progress",
           message: `Concurrent progress ${index}`,
         }),
       );
@@ -953,7 +984,8 @@ describe("private supervisor channel", () => {
       const { handle } = yield* step(() => openChannel("agent-supervisor-one-response"));
       const { child, rpc } = yield* readyHelper(handle);
 
-      const response = toolCall(rpc, "question-after-reply", "supervisor_question", {
+      const response = toolCall(rpc, "question-after-reply", "agent_contact_parent", {
+        kind: "question",
         message: "Choose after stdout is backpressured.",
       });
       const question = yield* step(() => takeEvent(handle));
@@ -999,7 +1031,8 @@ describe("private supervisor channel", () => {
       const { handle } = yield* step(() => openChannel("agent-supervisor-disconnect"));
       const { child, rpc } = yield* readyHelper(handle);
 
-      const pending = toolCall(rpc, "question-before-disconnect", "supervisor_question", {
+      const pending = toolCall(rpc, "question-before-disconnect", "agent_contact_parent", {
+        kind: "question",
         message: "Should I continue?",
       });
       void pending.catch(() => undefined);
@@ -1015,7 +1048,7 @@ describe("private supervisor channel", () => {
       child.kill("SIGKILL");
       yield* step(() => exited);
       expect(yield* step(() => takeEvent(handle))).toMatchObject({
-        type: "supervisor_question_cancelled",
+        type: "parent_question_cancelled",
         assignmentEpoch: 1,
         requestId: questionEvent.requestId,
       });
@@ -1046,14 +1079,16 @@ describe("private supervisor channel", () => {
       );
       expect(excessTopLevel).toMatchObject({ error: { code: -32600 } });
       const excessTool = yield* step(() =>
-        toolCall(rpc, "excess-tool", "supervisor_progress", {
+        toolCall(rpc, "excess-tool", "agent_contact_parent", {
+          kind: "progress",
           message: "valid",
           unexpected: true,
         }),
       );
       expect(excessTool).toMatchObject({ result: { isError: true } });
       const oversizedString = yield* step(() =>
-        toolCall(rpc, "oversized-tool", "supervisor_progress", {
+        toolCall(rpc, "oversized-tool", "agent_contact_parent", {
+          kind: "progress",
           message: "x".repeat(16 * 1024 + 1),
         }),
       );
@@ -1093,10 +1128,21 @@ describe("private supervisor channel", () => {
       expect(listed?.text).toMatch(/scout; runtime claude; child of main; you/u);
 
       const read = toolText(
-        yield* step(() => toolCall(rpc, "read", "agent_read", { ids: ["agent-r1-2", "main"] })),
+        yield* step(() =>
+          toolCall(rpc, "read", "agent_read", { agentIds: ["agent-r1-2", "main"] }),
+        ),
       );
       expect(read?.text).toContain("Findings from agent-r1-2.");
       expect(read?.text).toContain("from its report");
+      // Each run's status card comes with its message; verbose adds process details.
+      expect(read?.text).toContain("Warning from agent-r1-2.");
+      expect(read?.text).not.toContain("pid 4242");
+      const verbose = toolText(
+        yield* step(() =>
+          toolCall(rpc, "read-verbose", "agent_read", { agentIds: ["agent-r1-2"], verbose: true }),
+        ),
+      );
+      expect(verbose?.text).toContain("pid 4242");
 
       const sent = toolText(
         yield* step(() =>
@@ -1111,11 +1157,12 @@ describe("private supervisor channel", () => {
       );
       expect(refused).toMatchObject({
         isError: true,
-        text: stringContaining("agent_rate_limited"),
+        text: stringContaining("agent_unavailable"),
       });
       expect(fixture.calls).toEqual([
         { kind: "list", ids: undefined },
         { kind: "read", ids: ["agent-r1-2", "main"] },
+        { kind: "read", ids: ["agent-r1-2"] },
         { kind: "send", to: "agent-r1-2", message: "Compare notes." },
       ]);
 
@@ -1134,7 +1181,7 @@ describe("private supervisor channel", () => {
       // The channel refuses the identity and closes the peer, so the reply may never arrive.
       expect(Exit.isFailure(forged)).toBe(true);
       yield* step(() => direct.close());
-      expect(fixture.calls).toHaveLength(3);
+      expect(fixture.calls).toHaveLength(4);
     },
     20_000,
   );
@@ -1166,7 +1213,7 @@ describe("private supervisor channel", () => {
         isError: false,
       });
       expect(
-        yield* fromThread("sub-read", "agent_read", { ids: ["main"] }, "sub-thread"),
+        yield* fromThread("sub-read", "agent_read", { agentIds: ["main"] }, "sub-thread"),
       ).toMatchObject({ isError: false });
       expect(fixture.calls.map((call) => call.kind)).toEqual(["list", "read"]);
 
@@ -1189,10 +1236,10 @@ describe("private supervisor channel", () => {
       ["long", "agent_send", { to: "main", message: "x".repeat(16_385) }, "16,384"],
       ["blank", "agent_send", { to: "main", message: "  " }, "message"],
       ["bad-to", "agent_send", { to: "../main", message: "Hi." }, "agent ID"],
-      ["many-read", "agent_read", { ids: tooMany }, "the limit is 12"],
-      ["many-list", "agent_list", { ids: tooMany }, "the limit is 12"],
-      ["empty-read", "agent_read", { ids: [] }, "at least one"],
-      ["extra", "agent_list", { ids: [], all: true }, "Unexpected argument all"],
+      ["many-read", "agent_read", { agentIds: tooMany }, "the limit is 12"],
+      ["many-list", "agent_list", { agentIds: tooMany }, "the limit is 12"],
+      ["empty-read", "agent_read", { agentIds: [] }, "at least one"],
+      ["extra", "agent_list", { agentIds: [], all: true }, "Unexpected argument all"],
     ] as const)
       expect(toolText(yield* step(() => toolCall(rpc, id, name, args)))).toMatchObject({
         isError: true,

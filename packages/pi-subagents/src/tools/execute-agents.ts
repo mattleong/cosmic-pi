@@ -16,20 +16,36 @@ import {
 } from "../run/agent-messaging.ts";
 import {
   invalidRequest,
+  SubagentProcessError,
   type InvalidSubagentRequestError,
   type SubagentError,
 } from "../run/errors.ts";
+import {
+  isAssignmentFinishedRunState,
+  SUBAGENT_ROOT_RUN_ID,
+  type SubagentRunView,
+  type SubagentWorkspaceOutcome,
+} from "../run/model.ts";
 import { SubagentService } from "../run/service.ts";
 import { AGENT_TOOL_NAME } from "../run/tool-policy.ts";
 import {
   encodeSubagentContract,
+  MAX_CONTRACT_MODEL_CHARS,
   MAX_CONTRACT_TASK_CHARS,
   type AgentListContract,
   type AgentReadContract,
 } from "./contract-schema.ts";
-import { envelope, metadata, projectName } from "./contract.ts";
+import { envelope, metadata, projectAttention, projectName, withheldTarget } from "./contract.ts";
 import type { AgentToolDetails } from "./details-schema.ts";
-import { boundToolOutput } from "./format.ts";
+import {
+  attentionRecoveryText,
+  boundToolOutput,
+  formatRun,
+  formatRunModel,
+  proposalGuidance,
+  type RunFormatOptions,
+} from "./format.ts";
+import { pendingDeliveryEvidence } from "./outcome.ts";
 import type { AgentToolInput } from "./schema.ts";
 
 const AGENT_DETAILS_VERSION = 1;
@@ -46,14 +62,32 @@ const missingText = (missingIds: ReadonlyArray<string>): string =>
     ? ""
     : `Not in this session: ${missingIds.map(sanitizeTerminalLine).join(", ")}. Call agent_list without agentIds for current agent IDs.`;
 
+// A worktree writer's proposal, once its assignment finished, names how to apply it.
+export const agentWorktreeFact = (run: SubagentRunView | undefined): string | undefined =>
+  run?.workspaceId === undefined
+    ? undefined
+    : isAssignmentFinishedRunState(run.state) || run.workspaceOutcome !== undefined
+      ? proposalGuidance(run.workspaceId, run.workspaceOutcome)
+      : `worktree ${sanitizeTerminalLine(run.workspaceId)}`;
+
+export const agentAttentionFact = (run: SubagentRunView | undefined): string | undefined => {
+  const kind = run && projectAttention(run)?.kind;
+  if (kind === undefined) return undefined;
+  return kind === "paused" ? "paused for its parent" : "waiting for its parent's reply";
+};
+
 // Lists parents before children, indented by depth.
 const listLine = (entry: AgentListEntry): string => {
   if (entry.kind === "main")
     return `- ${MAIN_AGENT_ID}: ${entry.state}${entry.self ? " (you)" : ""}`;
   const role = entry.agent ?? entry.profile;
+  const model = entry.run ? formatRunModel(entry.run) : entry.runtime && `local/${entry.runtime}`;
   const facts = [
     entry.state,
-    [role, entry.runtime && `local/${entry.runtime}`].filter(Boolean).join(" on "),
+    [role, model].filter(Boolean).join(" on "),
+    entry.run?.writeIntent === "writer" && entry.run.workspaceId === undefined && "writer",
+    agentWorktreeFact(entry.run),
+    agentAttentionFact(entry.run),
     entry.parentId && `child of ${sanitizeTerminalLine(entry.parentId)}`,
     entry.self && "you",
   ].filter(Boolean);
@@ -75,11 +109,20 @@ const listText = (result: AgentListResult): string =>
 
 const knownProfile = (profile: string | undefined) => PROFILE_IDS.find((id) => id === profile);
 
+const WORKTREE_STATUS = {
+  proposal: "proposal",
+  "auto-discarded": "discarded",
+} as const satisfies Record<SubagentWorkspaceOutcome["status"], string>;
+
 const listContract = (result: AgentListResult): AgentListContract => ({
   ...envelope(AGENT_TOOL_NAME.list),
   agents: result.agents.map((entry) => {
     const profile = knownProfile(entry.profile);
     const task = metadata(entry.task, MAX_CONTRACT_TASK_CHARS);
+    const { run } = entry;
+    const model = run && metadata(formatRunModel(run), MAX_CONTRACT_MODEL_CHARS);
+    const attention = run && projectAttention(run);
+    const outcome = run?.workspaceOutcome;
     return {
       id: entry.id,
       name: agentName(entry),
@@ -88,8 +131,18 @@ const listContract = (result: AgentListResult): AgentListContract => ({
       ...(entry.parentId !== undefined && { parentId: entry.parentId }),
       ...(entry.depth !== undefined && { depth: entry.depth }),
       ...(entry.runtime !== undefined && { runtime: entry.runtime }),
+      ...(model !== undefined && { model }),
       ...(profile !== undefined && { profile }),
       ...(entry.agent !== undefined && isCustomAgentName(entry.agent) && { agent: entry.agent }),
+      ...(run !== undefined && { writeIntent: run.writeIntent }),
+      ...(run?.workspaceId !== undefined && {
+        worktree: {
+          workspaceId: run.workspaceId,
+          status: outcome === undefined ? "open" : WORKTREE_STATUS[outcome.status],
+          ...(outcome?.status === "proposal" && { changedFileCount: outcome.changedFileCount }),
+        },
+      }),
+      ...(attention !== undefined && { attention }),
       ...(task !== undefined && { task }),
       self: entry.self,
     };
@@ -114,6 +167,8 @@ const listDetails = (result: AgentListResult): AgentToolDetails => {
 const SEND_TEXT: Record<AgentSendResult["disposition"], (label: string) => string> = {
   answered: (label) => `Answered ${label}'s pending question with your message.`,
   guided: (label) => `Delivered your message to ${label} as guidance for its current work.`,
+  pending: (label) =>
+    `Sent your message to ${label} as guidance; ${pendingDeliveryEvidence.message.toLowerCase()}. ${pendingDeliveryEvidence.detail}`,
   resumed: (label) =>
     `Resumed ${label} with your message as its next assignment. Its report goes to its own parent.`,
   woken: () => "The main agent was idle; your message started its turn.",
@@ -123,9 +178,7 @@ const SEND_TEXT: Record<AgentSendResult["disposition"], (label: string) => strin
 };
 
 const sendText = (result: AgentSendResult): string =>
-  result.wakeBudgetExhausted
-    ? "Agent messages already woke the main agent as often as allowed until the user's next prompt; your message waits in its conversation."
-    : SEND_TEXT[result.disposition](agentLabel({ id: result.to, name: result.name }));
+  SEND_TEXT[result.disposition](agentLabel({ id: result.to, name: result.name }));
 
 const sendDetails = (result: AgentSendResult): AgentToolDetails => ({
   version: AGENT_DETAILS_VERSION,
@@ -133,7 +186,6 @@ const sendDetails = (result: AgentSendResult): AgentToolDetails => ({
   to: result.to,
   name: agentName(result),
   disposition: result.disposition,
-  ...(result.wakeBudgetExhausted && { wakeBudgetExhausted: true as const }),
 });
 
 const readText = (text: string | undefined): string | undefined => {
@@ -142,30 +194,63 @@ const readText = (text: string | undefined): string | undefined => {
 };
 
 const READ_SOURCES = {
-  assistant: "latest assistant message",
-  report: "report",
-  error: "error",
+  assistant: "Latest assistant message",
+  report: "Report",
+  error: "Error",
 } as const;
 
-const readSection = (readout: AgentReadout): string => {
+const mainReadSection = (readout: Extract<AgentReadout, { readonly kind: "main" }>): string => {
   const text = readText(readout.text);
-  const facts =
-    readout.kind === "main"
-      ? readout.state
-      : [readout.state, readout.reportGeneration > 0 && `report ${readout.reportGeneration}`]
-          .filter(Boolean)
-          .join(", ");
-  const heading = `${readout.kind === "main" ? MAIN_AGENT_ID : agentLabel(readout)} (${facts})`;
-  if (readout.kind === "main" && readout.state === "unavailable")
+  const heading = `${MAIN_AGENT_ID} (${readout.state})`;
+  if (readout.state === "unavailable")
     return `${heading}: the session that owned the main agent was replaced, so it can't be read.`;
   if (text === undefined) return `${heading}: no assistant message yet.`;
-  const source =
-    readout.kind === "main" ? READ_SOURCES.assistant : READ_SOURCES[readout.source ?? "assistant"];
-  return `${heading}, ${source}${readout.truncated ? " (truncated)" : ""}:\n${text}`;
+  return `${heading}, latest assistant message${readout.truncated ? " (truncated)" : ""}:\n${text}`;
 };
 
-const readBody = (result: AgentReadResult): string =>
-  [...result.agents.map(readSection), missingText(result.missingIds)].filter(Boolean).join("\n\n");
+export interface AgentReadOptions extends RunFormatOptions {
+  readonly caller: AgentCaller;
+}
+
+const isParentOf = (caller: AgentCaller, run: SubagentRunView): boolean =>
+  (run.parentRunId ?? SUBAGENT_ROOT_RUN_ID) ===
+  (caller.kind === "main" ? SUBAGENT_ROOT_RUN_ID : caller.runId);
+
+/** A run's status card, then its parent's next steps when the reader is that parent. */
+export const agentReadCard = (
+  run: SubagentRunView,
+  { caller, ...options }: AgentReadOptions,
+): string =>
+  [
+    formatRun(run, true, { ...options, report: false }),
+    isParentOf(caller, run) ? attentionRecoveryText([run]) : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+// A run's status card, then its latest message or retained report.
+const runReadSection = (
+  readout: Extract<AgentReadout, { readonly kind: "run" }>,
+  options: AgentReadOptions,
+): string => {
+  const text = readText(readout.text);
+  const source = READ_SOURCES[readout.source ?? "assistant"];
+  const message =
+    text === undefined
+      ? "No assistant message yet."
+      : `${source}${readout.reportGeneration > 0 ? ` (report ${readout.reportGeneration})` : ""}${readout.truncated ? " (truncated)" : ""}:\n${text}`;
+  return `${agentReadCard(readout.run, options)}\n${message}`;
+};
+
+const readBody = (result: AgentReadResult, options: AgentReadOptions): string =>
+  [
+    ...result.agents.map((readout) =>
+      readout.kind === "main" ? mainReadSection(readout) : runReadSection(readout, options),
+    ),
+    missingText(result.missingIds),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 
 const readContract = (result: AgentReadResult): AgentReadContract => ({
   ...envelope(AGENT_TOOL_NAME.read),
@@ -186,6 +271,7 @@ const readContract = (result: AgentReadResult): AgentReadContract => ({
           ...fields,
           ...(readout.source !== undefined && text !== undefined && { source: readout.source }),
           reportGeneration: readout.reportGeneration,
+          status: withheldTarget(readout.run),
         };
   }),
   missingIds: [...result.missingIds],
@@ -215,9 +301,22 @@ const codedRefusal = (error: InvalidSubagentRequestError): InvalidSubagentReques
     ? invalidRequest(error.code, `[${error.code}] ${error.message}`)
     : error;
 
-/** Refusals carry their code in the text, the only part of a thrown tool error Pi keeps. */
-const codedFailure = (error: SubagentError): SubagentError =>
-  Predicate.isTagged(error, "InvalidSubagentRequestError") ? codedRefusal(error) : error;
+/** Failures carry their code in the text, the only part of a thrown tool error Pi keeps. */
+const codedFailure = (error: SubagentError): SubagentError => {
+  if (Predicate.isTagged(error, "InvalidSubagentRequestError")) return codedRefusal(error);
+  if (
+    Predicate.isTagged(error, "SubagentProcessError") &&
+    error.code !== undefined &&
+    !error.message.startsWith(`[${error.code}]`)
+  )
+    return new SubagentProcessError({
+      operation: error.operation,
+      code: error.code,
+      message: `[${error.code}] ${error.message}`,
+      ...(error.pendingDelivery !== undefined && { pendingDelivery: error.pendingDelivery }),
+    });
+  return error;
+};
 
 /** Scripts can't send agent messages; each agent refuses its own scripted sends. */
 export const scriptedAgentSendRefusal = (): InvalidSubagentRequestError =>
@@ -229,13 +328,15 @@ export const scriptedAgentSendRefusal = (): InvalidSubagentRequestError =>
   );
 
 /**
- * Runs an `agent_*` tool for an authenticated caller. List and read results carry structured
- * contracts for scripts; scripts can't send.
+ * Runs `agent_list`, `agent_read`, or `agent_send` for an authenticated caller, whose cwd decides
+ * when a status card names a run's own cwd. List and read results carry structured contracts for
+ * scripts; scripts can't send.
  */
 export const executeAgentActionEffect = (
   input: AgentToolInput,
   caller: AgentCaller,
   scripted = false,
+  callerCwd?: string,
 ): Effect.Effect<AgentToolResult<unknown>, SubagentError, SubagentService> =>
   Effect.gen(function* () {
     const service = yield* SubagentService;
@@ -258,8 +359,9 @@ export const executeAgentActionEffect = (
       }
       case AGENT_TOOL_NAME.read: {
         const result = yield* service.agentRead(caller, input.args.agentIds);
+        const options = { caller, parentCwd: callerCwd, verbose: input.args.verbose === true };
         return {
-          content: [{ type: "text", text: boundToolOutput(readBody(result)) }],
+          content: [{ type: "text", text: boundToolOutput(readBody(result, options)) }],
           details: readDetails(result),
           structuredContent: encodeSubagentContract(readContract(result)),
         } satisfies AgentToolResult<unknown>;

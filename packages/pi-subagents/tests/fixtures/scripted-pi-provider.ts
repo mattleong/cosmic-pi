@@ -56,7 +56,7 @@ const reply = (messages: ReadonlyArray<Message>): Effect.Effect<AssistantMessage
   if (prompt.includes(SCRIPT.progressTask))
     return Effect.succeed(
       fauxAssistantMessage(
-        fauxToolCall("contact_parent", { kind: "progress", message: SCRIPT.progressMessage }),
+        fauxToolCall("agent_contact_parent", { kind: "progress", message: SCRIPT.progressMessage }),
         { stopReason: "toolUse" },
       ),
     );

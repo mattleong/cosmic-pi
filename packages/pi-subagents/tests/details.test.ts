@@ -276,7 +276,7 @@ describe("persisted subagent details version 2", () => {
         workspaceOutcome,
       };
       for (const runs of [[writer], oversizedBatch(writer)]) {
-        const details = compactToolDetails({ action: "status", runs });
+        const details = compactToolDetails({ action: "stop", runs });
         const decoded = decodeCompactToolDetails(details);
         expect(
           decoded?.action === "models" ? undefined : decoded?.cards[0]?.workspaceOutcome,
@@ -308,7 +308,7 @@ describe("proposal diffstat evidence", () => {
       workspaceOutcome,
     };
     const outcomes = [[writer], oversizedBatch(writer)].map((runs) => {
-      const decoded = decodeCompactToolDetails(compactToolDetails({ action: "status", runs }));
+      const decoded = decodeCompactToolDetails(compactToolDetails({ action: "stop", runs }));
       return decoded?.action === "models" ? undefined : decoded?.cards[0]?.workspaceOutcome;
     });
     expect(outcomes).toEqual([
@@ -344,7 +344,7 @@ describe("persisted subagent detail fitting", () => {
       writerWorkspaceMode: "worktree",
       workspaceId: "ws-oversized",
     });
-    for (const action of ["status", "list"] as const) {
+    for (const action of ["stop", "interrupt"] as const) {
       const details = compactToolDetails({
         action,
         runs,
@@ -421,9 +421,9 @@ describe("persisted subagent detail fitting", () => {
       }),
     );
     const bounded = runs.flatMap((item) =>
-      runCards(compactToolDetails({ action: "status", runs: [item] })),
+      runCards(compactToolDetails({ action: "stop", runs: [item] })),
     );
-    const details = compactToolDetails({ action: "status", runs });
+    const details = compactToolDetails({ action: "stop", runs });
     expect(details.contentOmitted).toBe(true);
     const condensed = issueMessages(runCards(details));
     expect(condensed).toEqual(issueMessages(bounded));

@@ -60,7 +60,6 @@ type CompactToolDetailsInput =
       readonly action: RunDetailsAction;
       readonly runs: ReadonlyArray<SubagentRunView>;
       readonly actionFailures?: ReadonlyArray<CompactToolActionFailure> | undefined;
-      readonly answeredRunIds?: ReadonlyArray<string> | undefined;
     };
 
 /**
@@ -182,19 +181,15 @@ const runDetailsCandidate = (
   input: Extract<CompactToolDetailsInput, { readonly action: RunDetailsAction }>,
   stage: FitStage,
 ): Exclude<CompactSubagentToolDetails, { readonly action: "models" }> => {
-  const orderedRuns =
-    input.action === "list" ? projectRunCardTree(input.runs).map((row) => row.run) : input.runs;
-  const source = orderedRuns.slice(0, MAX_TARGET_RUNS);
+  const source = input.runs.slice(0, MAX_TARGET_RUNS);
   const cards = projectedCards(source, stage);
-  const failures = projectActionFailures(input.action, input.actionFailures);
+  const failures = projectActionFailures(input.actionFailures);
   const reportsOmitted = stage === "report-free" && reportsWereOmitted(source);
-  const answeredRunIds = (input.answeredRunIds ?? []).slice(0, MAX_TARGET_RUNS);
   return {
     version: SUBAGENT_CARD_DETAILS_VERSION,
     action: input.action,
     cards,
     runCount: input.runs.length,
-    ...(answeredRunIds.length > 0 && { answeredRunIds }),
     ...(failures !== undefined && failures.length > 0 && { actionFailures: failures }),
     ...((reportsOmitted || stage === "condensed") && { contentOmitted: true as const }),
     ...(reportsOmitted &&
@@ -231,7 +226,7 @@ export const compactToolDetails = (input: CompactToolDetailsInput): CompactSubag
       decodeCompactToolDetails,
     );
   return semanticCandidate(
-    input.action === "status" ? REPORT_STAGES : REPORT_FREE_STAGES,
+    REPORT_FREE_STAGES,
     (stage) => runDetailsCandidate(input, stage),
     decodeCompactToolDetails,
   );

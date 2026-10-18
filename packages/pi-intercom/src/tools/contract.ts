@@ -100,7 +100,6 @@ const SessionSendUncertainSchema = Schema.Struct({
 export const ToolRefusalCodeSchema = Schema.Literals([
   "session_unavailable",
   "session_receive_disabled",
-  "session_rate_limited",
   "session_not_found",
   "session_ambiguous",
   "session_unreachable",

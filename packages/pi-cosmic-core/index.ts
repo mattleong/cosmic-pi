@@ -77,7 +77,6 @@ export {
   hasUnansweredNotice,
   registerSessionWake,
   type SessionWake,
-  type SessionWakeBudget,
   type SessionWakeDelivery,
   type SessionWakeOptions,
   type SessionWakeSettle,

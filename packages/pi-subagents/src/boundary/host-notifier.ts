@@ -110,7 +110,7 @@ const completionBody = (run: SubagentCompletionNotification, archived?: Archived
         ? reportText(report, archived)
         : "Completed without a final report.";
   const retry = run.retryAvailable
-    ? `Next: ${run.remainingCandidateCount ?? 1} configured ${run.profile ?? "profile"} candidate${(run.remainingCandidateCount ?? 1) === 1 ? " remains" : "s remain"}. Continue this exact task with subagent_lifecycle({ action: "retry", runIds: ["${run.id}"] }) before launching any generalist replacement.`
+    ? `Next: ${run.remainingCandidateCount ?? 1} configured ${run.profile ?? "profile"} candidate${(run.remainingCandidateCount ?? 1) === 1 ? " remains" : "s remain"}. Continue this exact task with agent_lifecycle({ action: "retry", runIds: ["${run.id}"] }) before launching any generalist replacement.`
     : undefined;
   // The workspace outcome and resumer lead so that truncating a long report can't drop them.
   return [
@@ -140,7 +140,7 @@ const boundedCompletion = (
 ): string => {
   if (text.length <= maximumLength) return clip(text, maximumLength);
   const noun = run.outcome === "failed" ? "Outcome" : "Report";
-  const marker = `\n\n[${noun} truncated; use subagent_status or subagent_await for ${run.id}.]`;
+  const marker = `\n\n[${noun} truncated; use agent_read or agent_await for ${run.id}.]`;
   return `${clip(text, Math.max(0, maximumLength - marker.length))}${marker}`;
 };
 
@@ -207,8 +207,8 @@ const completionChunks = (
 const questionContent = (
   notification: Extract<SubagentNotification, { readonly type: "question" }>,
 ): string => {
-  const reply = `subagent_send({ runIds: ["${notification.id}"], message: "..." })`;
-  return `Subagent ${notification.name} (${notification.id}) is waiting for a parent reply.\n\nQuestion: ${notification.message}\n\nReply with ${reply}, then call subagent_await again.`;
+  const reply = `agent_send({ to: "${notification.id}", message: "..." })`;
+  return `Subagent ${notification.name} (${notification.id}) is waiting for a parent reply.\n\nQuestion: ${notification.message}\n\nReply with ${reply}, then call agent_await again.`;
 };
 
 const displayName = (name: string): string => clipText(sanitizeTerminalLine(name), 60);

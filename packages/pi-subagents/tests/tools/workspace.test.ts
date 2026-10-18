@@ -27,7 +27,7 @@ const summarize = (
   args: Parameters<typeof executeWorkspaceAction>[0],
   result: AgentToolResult<WorkspaceToolDetails>,
 ) =>
-  createSubagentCompactSummary("subagent_workspace")({
+  createSubagentCompactSummary("agent_worktree")({
     phase: "settled",
     args,
     result,
@@ -199,7 +199,7 @@ describe("workspace apply", () => {
 
 describe("workspace refusals", () => {
   it.each(["apply", "revise"])("renders any refusal of %s as one error", (action) => {
-    const summary = createSubagentCompactSummary("subagent_workspace")({
+    const summary = createSubagentCompactSummary("agent_worktree")({
       phase: "settled",
       args: { action, workspaceId: "ws-1" },
       result: {

@@ -20,6 +20,7 @@ import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import {
   AGENT_TOOL_NAMES,
+  CONTACT_PARENT_TOOL_NAME,
   nestedSubagentToolNames,
   PI_CHILD_EXCLUDED_TOOL_ARGUMENT,
 } from "../run/tool-policy.ts";
@@ -127,7 +128,7 @@ export const childToolPolicy = (
   enabled: [
     ...new Set([
       ...rootActiveTools,
-      "contact_parent",
+      CONTACT_PARENT_TOOL_NAME,
       ...nestedSubagentToolNames(workspaceParent),
       ...AGENT_TOOL_NAMES,
     ]),

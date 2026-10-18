@@ -201,15 +201,15 @@ const unsupportedCapabilityMessage = (
 ): string => {
   switch (capability) {
     case "steer":
-      return `${backend} subagents do not support mid-turn guidance. Await with subagent_await({ runIds: ["${id}"], until: "all_finished" }), inspect with subagent_status({ runIds: ["${id}"] }), or stop with subagent_lifecycle({ action: "stop", runIds: ["${id}"] }).`;
+      return `${backend} subagents do not support mid-turn guidance. Await with agent_await({ runIds: ["${id}"], until: "all_finished" }), inspect with agent_read({ agentIds: ["${id}"] }), or stop with agent_lifecycle({ action: "stop", runIds: ["${id}"] }).`;
     case "interrupt":
-      return `${backend} subagents do not support interruption. Stop with subagent_lifecycle({ action: "stop", runIds: ["${id}"] }) or wait with subagent_await.`;
+      return `${backend} subagents do not support interruption. Stop with agent_lifecycle({ action: "stop", runIds: ["${id}"] }) or wait with agent_await.`;
     case "parent-contact":
-      return `${backend} subagents do not support parent questions; use subagent_await or subagent_status instead.`;
+      return `${backend} subagents do not support parent questions; use agent_await or agent_read instead.`;
     case "native-fork":
     case "peer-notice":
     case "resume":
-      return `${backend} subagents do not support ${capability}. Inspect supported operations with subagent_status({ runIds: ["${id}"] }).`;
+      return `${backend} subagents do not support ${capability}. Inspect supported operations with agent_read({ agentIds: ["${id}"] }).`;
   }
   return absurd(capability);
 };

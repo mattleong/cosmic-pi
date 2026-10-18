@@ -1,10 +1,8 @@
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
-import * as Predicate from "effect/Predicate";
-import { invokeHostCallback, type SessionWakeBudget } from "pi-cosmic-core";
+import { invokeHostCallback } from "pi-cosmic-core";
 import {
   agentMessageContent,
-  AgentMessageLimits,
   type AgentCaller,
   type AgentListResult,
   type AgentMainCapabilities,
@@ -23,11 +21,11 @@ import {
   runReadout,
   runSender,
   unavailableMainReadout,
-  type WakeReservation,
 } from "./agent-messaging.ts";
 import {
   agentMessageRefusal,
   invalidRequest,
+  isPendingSteerDelivery,
   type InvalidSubagentRequestError,
   runNotFound,
   type SubagentError,
@@ -110,16 +108,23 @@ type ClaimedSend =
       readonly sender: AgentSender;
       readonly record: RunRecord;
     }
-  | {
-      readonly kind: "resume";
-      readonly sender: AgentSender;
-      readonly record: RunRecord;
-      readonly wake: WakeReservation;
-    };
+  | { readonly kind: "resume"; readonly sender: AgentSender; readonly record: RunRecord };
 
-// The run may be running after an uncertain resume, so its wake stays spent.
-const resumeMayHaveStarted = (error: SubagentError): boolean =>
-  Predicate.isTagged(error, "SubagentProcessError") && error.code === "resume_outcome_uncertain";
+const deliverToMain = (
+  claimed: Extract<ClaimedSend, { kind: "main" }>,
+  frame: Parameters<AgentMainCapabilities["deliver"]>[0],
+) =>
+  Effect.gen(function* () {
+    const disposition = yield* Effect.sync(() =>
+      invokeHostCallback(() => claimed.main.deliver(frame), "unavailable" as const),
+    );
+    if (disposition === "unavailable")
+      return yield* agentMessageRefusal(
+        "agent_unavailable",
+        "The main agent's session is no longer accepting messages.",
+      );
+    return { disposition };
+  });
 
 /**
  * `agent_*` messaging: any authenticated agent reaches every agent in the root tree plus `main`.
@@ -127,14 +132,6 @@ const resumeMayHaveStarted = (error: SubagentError): boolean =>
  */
 export function agentMessageOperations(dependencies: AgentMessageDependencies) {
   const { ownerScope, withLock, publish, records, main } = dependencies;
-  const limits = new AgentMessageLimits();
-  // The main agent's wakes and continuations, spent where the host actually starts each turn.
-  const mainWakeBudget: SessionWakeBudget = {
-    available: () => limits.canWake(MAIN_AGENT_ID),
-    spend: () => {
-      limits.chargeWake(MAIN_AGENT_ID);
-    },
-  };
 
   // Only the root binds the caller, so a run cannot speak as another agent.
   const resolveSenderLocked = (
@@ -189,11 +186,13 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
       return yield* withLock(
         Effect.gen(function* () {
           yield* resolveSenderLocked(caller);
+          const views = new Map(projectRunTree(records).map((view) => [view.id, view]));
           const agents: Array<AgentReadResult["agents"][number]> = [];
           const missingIds: string[] = [];
           for (const id of selected) {
             const record = id === MAIN_AGENT_ID ? undefined : records.get(id);
-            if (record) agents.push(runReadout(record));
+            const view = views.get(id);
+            if (record && view) agents.push(runReadout(record, view));
             else if (id === MAIN_AGENT_ID)
               agents.push(mainRead ? mainReadout(mainRead) : unavailableMainReadout);
             else missingIds.push(id);
@@ -203,7 +202,7 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
       );
     });
 
-  const claimSend = (caller: AgentCaller, to: string, now: number) =>
+  const claimSend = (caller: AgentCaller, to: string) =>
     withLock(
       Effect.gen(function* () {
         const sender = yield* resolveSenderLocked(caller);
@@ -231,32 +230,12 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
             );
           const plan = planRunMessage(record, sender.id);
           if (plan.kind === "refuse") return yield* agentMessageRefusal(plan.code, plan.message);
-          if (plan.kind === "resume" && !limits.canWake(to))
-            return yield* agentMessageRefusal(
-              "agent_wake_budget_exhausted",
-              `Agent ${to} was already resumed by agent messages as often as allowed until the user's next prompt.`,
-            );
           target = { kind: plan.kind, record };
         }
-        const admission = limits.admitSend(sender.id, to, now);
-        if (!admission.admitted && admission.reason === "budget")
-          return yield* agentMessageRefusal(
-            "agent_message_budget_exhausted",
-            admission.scope === "pair"
-              ? `This agent already sent ${to} as many agent messages as allowed until the user's next prompt.`
-              : "Agents in this session already sent as many agent messages as allowed until the user's next prompt.",
-          );
-        if (!admission.admitted)
-          return yield* agentMessageRefusal(
-            "agent_rate_limited",
-            `Too many agent messages; wait ${Math.ceil(admission.retryAfterMillis / 1_000)} seconds before messaging ${to} again.`,
-          );
-        let claimed: ClaimedSend;
-        if (target.kind === "main") claimed = { kind: "main", sender, main: target.main };
-        // The resume's wake is reserved with the claim and refunded if the resume never started.
-        else if (target.kind === "resume")
-          claimed = { kind: "resume", sender, record: target.record, wake: limits.chargeWake(to) };
-        else claimed = { kind: target.kind, sender, record: target.record };
+        const claimed: ClaimedSend =
+          target.kind === "main"
+            ? { kind: "main", sender, main: target.main }
+            : { kind: target.kind, sender, record: target.record };
         return claimed;
       }),
     );
@@ -267,28 +246,6 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
       if (!record) return;
       recordMessageLocked(record, "out", to, text, now);
       yield* publish;
-    });
-
-  const deliverToMain = (
-    claimed: Extract<ClaimedSend, { kind: "main" }>,
-    frame: Parameters<AgentMainCapabilities["deliver"]>[0],
-  ) =>
-    Effect.gen(function* () {
-      const disposition = yield* Effect.sync(() =>
-        invokeHostCallback(
-          () => claimed.main.deliver(frame, mainWakeBudget),
-          "unavailable" as const,
-        ),
-      );
-      if (disposition === "unavailable")
-        return yield* agentMessageRefusal(
-          "agent_unavailable",
-          "The main agent's session is no longer accepting messages.",
-        );
-      // A spent budget appends the message without starting or continuing a turn.
-      if (disposition === "held" && !limits.canWake(MAIN_AGENT_ID))
-        return { disposition, wakeBudgetExhausted: true as const };
-      return { disposition };
     });
 
   const commitSend = (
@@ -315,26 +272,32 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
           })),
         };
       } else if (claimed.kind === "resume") {
-        const run = yield* dependencies
-          .resume(to, content, undefined, {
-            resumedBy: sender.label,
-            recordNoticeLocked: recordReceived,
-          })
-          .pipe(
-            Effect.tapError((error) =>
-              resumeMayHaveStarted(error)
-                ? Effect.void
-                : Effect.sync(() => limits.refundWake(claimed.wake)),
-            ),
-          );
+        const run = yield* dependencies.resume(to, content, undefined, {
+          resumedBy: sender.label,
+          recordNoticeLocked: recordReceived,
+        });
         delivered = { name: run.name, disposition: "resumed", run };
       } else {
-        const outcome = yield* dependencies.deliverToRun(to, {
-          ...(claimed.kind === "answer" && { answer: text }),
-          guidance: content,
-          recordNoticeLocked: (record, _delivery, now) => recordReceived(record, now),
-        });
-        delivered = { name: outcome.run.name, disposition: outcome.delivery, run: outcome.run };
+        const { record } = claimed;
+        // Guidance still being confirmed may already have arrived, so it is reported, not failed.
+        delivered = yield* dependencies
+          .deliverToRun(to, {
+            ...(claimed.kind === "answer" && { answer: text }),
+            guidance: content,
+            recordNoticeLocked: (received, _delivery, now) => recordReceived(received, now),
+          })
+          .pipe(
+            Effect.map(
+              (outcome): Omit<AgentSendResult, "messageId" | "to"> => ({
+                name: outcome.run.name,
+                disposition: outcome.delivery,
+                run: outcome.run,
+              }),
+            ),
+            Effect.catchIf(isPendingSteerDelivery, () =>
+              Effect.succeed({ name: record.view.name, disposition: "pending" as const }),
+            ),
+          );
       }
       const now = yield* Clock.currentTimeMillis;
       yield* withLock(recordSentLocked(sender, to, text, now));
@@ -350,13 +313,10 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
   ): Effect.Effect<AgentSendResult, SubagentError> =>
     Effect.gen(function* () {
       const text = yield* validateAgentMessage(message);
-      const now = yield* Clock.currentTimeMillis;
-      return yield* runSessionOwned(ownerScope, claimSend(caller, to, now), (claimed) =>
+      return yield* runSessionOwned(ownerScope, claimSend(caller, to), (claimed) =>
         commitSend(claimed, to, text, dependencies.allocateMessageId()),
       );
     });
 
-  const resetBudgets = Effect.sync(() => limits.resetBudgets());
-
-  return { list, read, send, resetBudgets };
+  return { list, read, send };
 }

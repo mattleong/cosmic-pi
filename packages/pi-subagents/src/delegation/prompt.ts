@@ -4,19 +4,19 @@ import type { DelegationMode } from "../config/schema.ts";
 export const DELEGATION_PROMPT_SECTION = "subagent_delegation";
 
 /**
- * The root session's `subagent_start` guideline that decides when to delegate. Each mode
+ * The root session's `agent_start` guideline that decides when to delegate. Each mode
  * supplies its own replacement so the prompt never pairs orchestration with the default
  * batch-size advice.
  */
 export const NORMAL_START_GUIDELINE =
-  "Before substantial work, check for independent workstreams. When two or more exist, use subagent_start early to launch one to three read-only subagents in one batch; skip subagent_start only for trivial or tightly serial tasks.";
+  "Before substantial work, check for independent workstreams. When two or more exist, use agent_start early to launch one to three read-only subagents in one batch; skip agent_start only for trivial or tightly serial tasks.";
 
 /** Nested children already hold a bounded slice, so their delegation rule is restrained. */
 export const NESTED_START_GUIDELINE =
   "Your parent assigned you a bounded task. Start subagents only for clearly independent slices that are worth briefing; most assignments need none.";
 
 /** Nested worktree writers may also split implementation into worktree writers they apply. */
-export const NESTED_WORKSPACE_PARENT_START_GUIDELINE = `${NESTED_START_GUIDELINE} For parallel implementation slices, you may start worktree writers (isolation: worktree); you own their workspaces and must apply or discard each one with subagent_workspace before you report.`;
+export const NESTED_WORKSPACE_PARENT_START_GUIDELINE = `${NESTED_START_GUIDELINE} For parallel implementation slices, you may start worktree writers (isolation: worktree); you own their worktrees and must apply or discard each one with agent_worktree before you report.`;
 
 /** Added to the root's start guidelines when the user configured custom agents. */
 export const CUSTOM_AGENT_START_GUIDELINE =
@@ -31,13 +31,13 @@ const DELEGATION_PROMPTS = {
   normal: { startGuideline: NORMAL_START_GUIDELINE },
   encouraged: {
     startGuideline:
-      "Answer directly when a quick search and a read or two will do, such as finding where something is defined or checking a value, and make small edits yourself. For anything larger, find the slices that can run independently and launch them together with subagent_start. Also work directly when the task is tightly serial, needs the user, or is faster to do than to brief.",
+      "Answer directly when a quick search and a read or two will do, such as finding where something is defined or checking a value, and make small edits yourself. For anything larger, find the slices that can run independently and launch them together with agent_start. Also work directly when the task is tightly serial, needs the user, or is faster to do than to brief.",
     section:
       "The user wants more delegation in this session, but not for quick questions: if a search and a read or two will answer it, answer it yourself. Hand exploration, research, planning, review, and well-scoped implementation to subagents, and keep the main thread for decisions, integration, and conversation with the user.",
   },
   orchestration: {
     startGuideline:
-      "Answer directly when a quick search and a read or two will do, such as finding where something is defined or checking a value. Otherwise delegate by default: break each request into self-contained assignments and launch them with subagent_start, in parallel where they are independent.",
+      "Answer directly when a quick search and a read or two will do, such as finding where something is defined or checking a value. Otherwise delegate by default: break each request into self-contained assignments and launch them with agent_start, in parallel where they are independent.",
     section: [
       "You are the orchestrator for this session. Delegate nearly all substantive work, including exploration, research, planning, implementation, and review, to subagents. Keep your own context for decomposition, coordination, verification, and conversation with the user.",
       "- Answer quick questions yourself: if a search and a read or two will answer it, don't delegate.",

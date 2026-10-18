@@ -1,12 +1,10 @@
-import { isCleanupUnconfirmed, isOutcomeUncertain, type SubagentError } from "../run/errors.ts";
+import { isCleanupUnconfirmed, isOutcomeUncertain } from "../run/errors.ts";
 import type { SteeringDeliveryState } from "../run/model.ts";
-import {
-  PENDING_DELIVERY_FAILURE_CODE,
-  type CompactSubagentToolDetails,
-  type SubagentStartAwaitCardDetails,
+import type {
+  CompactSubagentToolDetails,
+  SubagentStartAwaitCardDetails,
 } from "./details-schema.ts";
 import { flow } from "effect/Function";
-import * as Predicate from "effect/Predicate";
 import { decodeOutcomeDetails } from "./details-decode.ts";
 
 type SubagentOutcomeDetails = SubagentStartAwaitCardDetails | CompactSubagentToolDetails;
@@ -32,49 +30,25 @@ export const hasReturnedFailureEvidence = flow(
 export const isUncertainToolFailure = (failure: { readonly code?: string | undefined }): boolean =>
   isOutcomeUncertain(failure) || isCleanupUnconfirmed(failure);
 
-export const isPendingDeliveryError = (error: SubagentError): boolean =>
-  Predicate.isTagged(error, "SubagentProcessError") &&
-  actionFailureDisposition("send", error) === "pending";
+export type ActionFailureDisposition = "unconfirmed" | "failed";
 
-export type ActionFailureDisposition = "pending" | "unconfirmed" | "failed";
-
-export const actionFailureDisposition = (
-  action: string,
-  failure: { readonly code?: string | undefined; readonly pendingDelivery?: boolean | undefined },
-): ActionFailureDisposition =>
-  action === "send" &&
-  failure.pendingDelivery === true &&
-  failure.code === PENDING_DELIVERY_FAILURE_CODE
-    ? "pending"
-    : isUncertainToolFailure(failure)
-      ? "unconfirmed"
-      : "failed";
+export const actionFailureDisposition = (failure: {
+  readonly code?: string | undefined;
+}): ActionFailureDisposition => (isUncertainToolFailure(failure) ? "unconfirmed" : "failed");
 
 export const countActionFailures = (
-  action: string,
-  failures: ReadonlyArray<Parameters<typeof actionFailureDisposition>[1]> = [],
+  failures: ReadonlyArray<Parameters<typeof actionFailureDisposition>[0]> = [],
 ) => {
-  const counts = { pending: 0, unconfirmed: 0, failed: 0 } satisfies Record<
-    ActionFailureDisposition,
-    number
-  >;
-  for (const failure of failures) counts[actionFailureDisposition(action, failure)] += 1;
+  const counts = { unconfirmed: 0, failed: 0 } satisfies Record<ActionFailureDisposition, number>;
+  for (const failure of failures) counts[actionFailureDisposition(failure)] += 1;
   return counts;
 };
 export type ActionFailureCounts = Readonly<ReturnType<typeof countActionFailures>>;
 
-export const marksSubagentToolError = (details: SubagentOutcomeDetails): boolean =>
-  details.action === "start"
-    ? (details.startFailures?.length ?? 0) > 0
-    : "actionFailures" in details &&
-      (details.actionFailures ?? []).some(
-        (failure) => actionFailureDisposition(details.action, failure) !== "pending",
-      );
-
 export const pendingDeliveryEvidence = {
   message: "Guidance is awaiting delivery confirmation",
   detail:
-    "Delivery was still being tracked when this call returned; the guidance may already have arrived. Do not resend, retry, interrupt, or replace the worker merely because confirmation is pending. Continue other work or await the worker; stop remains available. Status reports the tracked steeringDelivery state.",
+    "Delivery was still being tracked when this call returned; the guidance may already have arrived. Do not resend, retry, interrupt, or replace the worker merely because confirmation is pending. Continue other work or await the worker; stop remains available. agent_read reports the tracked steeringDelivery state.",
 } as const;
 
 /** Start failures where no configured route candidate can run at all. */
@@ -87,7 +61,7 @@ export const noEligibleRouteRecovery =
   "No configured candidate for this profile can start. Tell the user: /subagents doctor diagnoses runtimes and authentication, and /subagents profiles edits the route. Don't run claude, codex, or pi from the shell instead.";
 
 export const unconfirmedActionRecovery =
-  "The action may already have taken effect. Do not resend, retry, or launch a replacement while the outcome or cleanup is unconfirmed; inspect full subagent_status before choosing recovery.";
+  "The action may already have taken effect. Do not resend, retry, or launch a replacement while the outcome or cleanup is unconfirmed; inspect the run with agent_read before choosing recovery.";
 
 export const steeringDeliveryEvidence = {
   pending: {

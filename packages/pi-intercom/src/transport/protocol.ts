@@ -71,14 +71,11 @@ export class IntercomUnauthorized extends Schema.TaggedError<IntercomUnauthorize
 
 /**
  * `session_unavailable`: the runtime is retired or Pi didn't take the message;
- * `session_receive_disabled`: the user turned receiving off; `session_rate_limited`: this sender,
- * or all senders together, exceeded the session's message or byte limits, or too many held
- * messages are waiting for a turn.
+ * `session_receive_disabled`: the user turned receiving off.
  */
 export const RefusalCodeSchema = Schema.Literals([
   "session_unavailable",
   "session_receive_disabled",
-  "session_rate_limited",
 ]);
 export type RefusalCode = typeof RefusalCodeSchema.Type;
 

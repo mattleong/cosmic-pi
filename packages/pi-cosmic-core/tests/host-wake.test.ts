@@ -9,11 +9,7 @@ import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { vi } from "vitest";
-import {
-  registerSessionWake,
-  type SessionWakeBudget,
-  type SessionWakeOptions,
-} from "../src/host-wake.ts";
+import { registerSessionWake, type SessionWakeOptions } from "../src/host-wake.ts";
 import { extensionContextFixture } from "../src/testing/host.ts";
 import { recordingExtensionHost } from "../src/testing/extension-host.ts";
 
@@ -65,18 +61,6 @@ const inputEvent = (source: InputEvent["source"]): InputEvent => ({
 
 const dialog = { reason: "ui_prompt", kind: "confirm" } as const;
 
-/** A budget of `turns` turns; `spent` counts the turns it paid for. */
-const turnBudget = (turns: number) => {
-  let spent = 0;
-  const budget: SessionWakeBudget = {
-    available: () => spent < turns,
-    spend: () => {
-      spent += 1;
-    },
-  };
-  return { budget, spent: () => spent };
-};
-
 const harness = (options: Partial<SessionWakeOptions> = {}) => {
   let idle = true;
   const checks: Array<() => void> = [];
@@ -94,11 +78,11 @@ const harness = (options: Partial<SessionWakeOptions> = {}) => {
   const ctx = extensionContextFixture({});
   // Records whether each delivered notice was told to start a turn.
   const turns: Array<boolean> = [];
-  const deliver = (budget?: SessionWakeBudget) =>
+  const deliver = () =>
     wake.deliver((startTurn) => {
       turns.push(startTurn);
       return true;
-    }, budget);
+    });
   const settle = (event: AgentBeforeSettleEvent) => {
     const [handler] = host.handlers.get("agent_before_settle");
     return Promise.resolve(handler?.(event, ctx));
@@ -295,69 +279,6 @@ describe("session wake", () => {
         test.emit("ui_prompt_end", test.ctx, { type: "ui_prompt_end", ...dialog }),
       );
       expect(test.wakes()).toHaveLength(1);
-    }),
-  );
-
-  it.effect("starts at most the budget's turns for notices deferred by dialogs", () =>
-    Effect.gen(function* () {
-      const test = harness({ holdDuringDialogs: true });
-      const { budget, spent } = turnBudget(3);
-      for (let cycle = 0; cycle < 5; cycle += 1) {
-        yield* Effect.promise(() =>
-          test.emit("ui_prompt_start", test.ctx, { type: "ui_prompt_start", ...dialog }),
-        );
-        expect(test.deliver(budget)).toBe("held");
-        yield* Effect.promise(() =>
-          test.emit("ui_prompt_end", test.ctx, { type: "ui_prompt_end", ...dialog }),
-        );
-      }
-      expect(test.wakes()).toHaveLength(3);
-      expect(spent()).toBe(3);
-    }),
-  );
-
-  it.effect("charges one turn per continuation and appends once the budget is spent", () =>
-    Effect.gen(function* () {
-      const test = harness();
-      const { budget, spent } = turnBudget(3);
-      test.setIdle(false);
-      const continued: Array<boolean> = [];
-      for (let round = 0; round < 5; round += 1) {
-        // A second message joins the continuation the first one admitted, for free.
-        const deliveries = [test.deliver(budget), test.deliver(budget)];
-        expect(deliveries).toEqual(round < 3 ? ["queued", "queued"] : ["held", "held"]);
-        const result = yield* Effect.promise(() =>
-          test.settle(settleEvent([reply()], [notice(), notice()])),
-        );
-        continued.push(result?.continue === true);
-      }
-      expect(continued).toEqual([true, true, true, false, false]);
-      expect(spent()).toBe(3);
-      yield* Effect.promise(() => test.emit("agent_settled", test.ctx));
-      expect(test.wakes()).toHaveLength(0);
-
-      // An idle session with a spent budget only appends.
-      test.setIdle(true);
-      expect(test.deliver(budget)).toBe("held");
-      expect(test.turns.at(-1)).toBe(false);
-    }),
-  );
-
-  it.effect("checks the budget before waking for a notice after the settle boundary", () =>
-    Effect.gen(function* () {
-      const test = harness();
-      const { budget, spent } = turnBudget(1);
-      test.setIdle(false);
-      yield* Effect.promise(() => test.settle(settleEvent([reply()])));
-      expect(test.deliver(budget)).toBe("queued");
-      yield* Effect.promise(() => test.emit("agent_settled", test.ctx));
-      expect(test.wakes()).toHaveLength(1);
-
-      yield* Effect.promise(() => test.settle(settleEvent([reply()])));
-      expect(test.deliver(budget)).toBe("held");
-      yield* Effect.promise(() => test.emit("agent_settled", test.ctx));
-      expect(test.wakes()).toHaveLength(1);
-      expect(spent()).toBe(1);
     }),
   );
 });

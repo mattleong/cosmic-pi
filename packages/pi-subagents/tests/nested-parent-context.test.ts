@@ -282,7 +282,7 @@ describe("authenticated immediate-parent context", () => {
               return tool.execute("nested-call", input.args, undefined, undefined, liveCtx);
             });
           yield* call({
-            tool: "subagent_start",
+            tool: "agent_start",
             args: { agents: [{ task: "Reconstruct decisions", profile: "oracle" }] },
           });
           const oracle = backend.launches[1];
@@ -316,7 +316,7 @@ describe("authenticated immediate-parent context", () => {
           selectedModel = changedChildModel;
           effort = "minimal";
           yield* call({
-            tool: "subagent_start",
+            tool: "agent_start",
             args: { agents: [{ task: "Continue bounded analysis" }] },
           });
           expect(backend.launches[2]).toMatchObject({
@@ -325,7 +325,7 @@ describe("authenticated immediate-parent context", () => {
           });
           tokens = 900;
           const oversized = yield* call({
-            tool: "subagent_start",
+            tool: "agent_start",
             args: { agents: [{ task: "Too much context", profile: "oracle" }] },
           });
           expect(oversized.structuredContent).toMatchObject({
@@ -335,7 +335,7 @@ describe("authenticated immediate-parent context", () => {
           expect(backend.launches).toHaveLength(3);
           tokens = 10;
           // Refresh native facts without launching, then let the root retry the failed grandchild.
-          yield* call({ tool: "subagent_models", args: {} });
+          yield* call({ tool: "agent_profiles", args: {} });
           const oracleControl = backend.controls[1];
           if (!oracleControl) return yield* Effect.die("Missing oracle control");
           oracleControl.offer({ type: "protocol_error", message: "Fixture oracle failure" });
@@ -350,7 +350,7 @@ describe("authenticated immediate-parent context", () => {
           const retried = yield* executeSubagentActionEffect(
             rootHost.pi,
             { cwd: directory, projectTrusted: true },
-            { tool: "subagent_lifecycle", args: { action: "retry", runIds: [oracle.runId] } },
+            { tool: "agent_lifecycle", args: { action: "retry", runIds: [oracle.runId] } },
             undefined,
             rootCtx,
           );
@@ -365,7 +365,7 @@ describe("authenticated immediate-parent context", () => {
           });
           selectedModel = undefined;
           const missingModel = yield* call({
-            tool: "subagent_start",
+            tool: "agent_start",
             args: { agents: [{ task: "No selected parent model" }] },
           });
           expect(missingModel.structuredContent).toMatchObject({ outcome: "failed" });
@@ -374,7 +374,7 @@ describe("authenticated immediate-parent context", () => {
             rootHost.pi,
             { cwd: directory, projectTrusted: true },
             {
-              tool: "subagent_start",
+              tool: "agent_start",
               args: { agents: [{ task: "Root still inherits its own context" }] },
             },
             undefined,
@@ -452,7 +452,7 @@ describe("authenticated immediate-parent context", () => {
         const bare = yield* activation.proxyHandler(service, parent.id, {
           requestId: "no-parent-context",
           ...encodeSubagentProxyInput({
-            tool: "subagent_start",
+            tool: "agent_start",
             args: { agents: [{ task: "Missing context", profile: "oracle" }] },
           }),
         });
@@ -464,7 +464,7 @@ describe("authenticated immediate-parent context", () => {
           .proxyHandler(service, parent.id, {
             requestId: "foreign-session",
             ...withSubagentProxyParent(
-              encodeSubagentProxyInput({ tool: "subagent_models", args: {} }),
+              encodeSubagentProxyInput({ tool: "agent_profiles", args: {} }),
               { ...childContext, sessionId: root.getSessionId() },
             ),
           })

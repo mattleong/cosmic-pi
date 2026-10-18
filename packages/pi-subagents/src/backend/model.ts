@@ -15,7 +15,12 @@ import type {
   SubagentUsage,
   SubagentCleanupDiagnostic,
 } from "../run/model.ts";
-import type { AgentListResult, AgentReadResult, AgentSendResult } from "../run/agent-messaging.ts";
+import type {
+  AgentCaller,
+  AgentListResult,
+  AgentReadResult,
+  AgentSendResult,
+} from "../run/agent-messaging.ts";
 import type { LocalCliVersion } from "./local-cli-version.ts";
 
 export type BackendResumeToken = object;
@@ -57,6 +62,9 @@ export interface BackendLaunchRequest {
 
 /** `agent_*` operations the root has already bound to the launched run as their caller. */
 export interface BackendAgentMessaging {
+  /** The bound caller and its cwd, which decide what its status cards show. */
+  readonly caller: AgentCaller;
+  readonly cwd: string;
   readonly list: (ids?: ReadonlyArray<string>) => Effect.Effect<AgentListResult, SubagentError>;
   readonly send: (to: string, message: string) => Effect.Effect<AgentSendResult, SubagentError>;
   readonly read: (ids: ReadonlyArray<string>) => Effect.Effect<AgentReadResult, SubagentError>;
@@ -145,7 +153,7 @@ export type BackendEvent =
       readonly message: string;
     }
   | {
-      readonly type: "supervisor_question_cancelled";
+      readonly type: "parent_question_cancelled";
       readonly assignmentEpoch: number;
       readonly requestId: string;
     }

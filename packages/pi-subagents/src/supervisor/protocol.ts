@@ -150,7 +150,11 @@ const SupervisorAcknowledgeAssignmentRpc = Rpc.make("SupervisorAcknowledgeAssign
 });
 
 const contactRpc = <const Tag extends string>(tag: Tag) =>
-  Rpc.make(tag, { payload: MessagePayload, success: Schema.String, error: SupervisorRpcFailure });
+  Rpc.make(tag, {
+    payload: { ...MessagePayload, ...MainAgentCallPayload },
+    success: Schema.String,
+    error: SupervisorRpcFailure,
+  });
 export const SupervisorProgressRpc = contactRpc("SupervisorProgress");
 const SupervisorWarningRpc = contactRpc("SupervisorWarning");
 
@@ -187,7 +191,7 @@ const SupervisorReportRpc = Rpc.make("SupervisorReport", {
   error: SupervisorRpcFailure,
 });
 
-/** A refusal the child's model can act on, such as a rate limit or an unknown agent. */
+/** A refusal the child's model can act on, such as an unknown agent. */
 export class SupervisorAgentRefusal extends Schema.TaggedError<SupervisorAgentRefusal>()(
   "SupervisorAgentRefusal",
   {
@@ -198,6 +202,12 @@ export class SupervisorAgentRefusal extends Schema.TaggedError<SupervisorAgentRe
 
 export const MAX_SUPERVISOR_AGENT_NAME_CHARS = 128;
 export const MAX_SUPERVISOR_AGENT_READ_CHARS = 32 * 1024;
+export const MAX_SUPERVISOR_AGENT_FACT_CHARS = 512;
+export const MAX_SUPERVISOR_AGENT_CARD_CHARS = 8 * 1024;
+const boundedFact = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(MAX_SUPERVISOR_AGENT_FACT_CHARS),
+);
 const boundedLabel = Schema.String.check(
   Schema.isMinLength(1),
   Schema.isMaxLength(MAX_SUPERVISOR_AGENT_NAME_CHARS),
@@ -224,8 +234,13 @@ const SupervisorAgentListRpc = Rpc.make("SupervisorAgentList", {
         state: AgentStateSchema,
         parentId: Schema.optional(SupervisorAgentIdSchema),
         runtime: Schema.optional(boundedLabel),
+        model: Schema.optional(boundedFact),
         profile: Schema.optional(boundedLabel),
         agent: Schema.optional(boundedLabel),
+        /** A worktree writer's tree or proposal, with how its parent applies it. */
+        worktree: Schema.optional(boundedFact),
+        /** Whether the run waits on its parent. */
+        attention: Schema.optional(boundedFact),
         self: Schema.Boolean,
       }),
     ),
@@ -245,8 +260,15 @@ const SupervisorAgentSendRpc = Rpc.make("SupervisorAgentSend", {
     messageId: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128)),
     to: SupervisorAgentIdSchema,
     name: boundedLabel,
-    disposition: Schema.Literals(["answered", "guided", "resumed", "woken", "queued", "held"]),
-    wakeBudgetExhausted: Schema.optional(Schema.Literal(true)),
+    disposition: Schema.Literals([
+      "answered",
+      "guided",
+      "pending",
+      "resumed",
+      "woken",
+      "queued",
+      "held",
+    ]),
   }),
   error: AgentRefusalError,
 });
@@ -255,6 +277,7 @@ const SupervisorAgentReadRpc = Rpc.make("SupervisorAgentRead", {
   payload: {
     ...AssignedPayload,
     ids: AgentIdsSchema.check(Schema.isMinLength(1)),
+    verbose: Schema.optional(Schema.Boolean),
   },
   success: Schema.Struct({
     agents: Schema.Array(
@@ -262,6 +285,10 @@ const SupervisorAgentReadRpc = Rpc.make("SupervisorAgentRead", {
         id: SupervisorAgentIdSchema,
         name: boundedLabel,
         state: AgentStateSchema,
+        /** A run's status card. */
+        card: Schema.optional(
+          Schema.String.check(Schema.isMaxLength(MAX_SUPERVISOR_AGENT_CARD_CHARS)),
+        ),
         text: Schema.optional(
           Schema.String.check(Schema.isMaxLength(MAX_SUPERVISOR_AGENT_READ_CHARS)),
         ),
@@ -295,7 +322,7 @@ export type SupervisorAgentReadResult = typeof SupervisorAgentReadRpc.successSch
 export type SupervisorEvent = Extract<
   BackendEvent,
   {
-    readonly type: "supervisor_contact" | "supervisor_question_cancelled" | "report";
+    readonly type: "supervisor_contact" | "parent_question_cancelled" | "report";
   }
 >;
 

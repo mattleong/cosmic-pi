@@ -4,11 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import { yieldUntil } from "pi-cosmic-core/testing";
-import {
-  AgentMessageLimits,
-  type AgentCaller,
-  MAIN_AGENT_ID,
-} from "../../src/run/agent-messaging.ts";
+import { type AgentCaller, MAIN_AGENT_ID } from "../../src/run/agent-messaging.ts";
 import { SubagentNotFoundError } from "../../src/run/errors.ts";
 import type { SubagentProjection, SubagentRunView } from "../../src/run/model.ts";
 import { objectContaining, stringContaining } from "../support/matchers.ts";
@@ -265,104 +261,42 @@ describe("agent messaging", () => {
   });
 
   it.effect(
-    "wakes the main agent within its budget, then holds until the user's next prompt",
+    "wakes an idle main agent, queues for a busy one, and refuses a replaced session",
     () => {
       const main = fakeAgentMain();
       const { layer } = localServiceFixture({ agentMain: main.capabilities });
       return withService(layer, function* (service) {
         const run = yield* service.start(request({ name: "reporter" }));
-        const send = (text: string) =>
-          service
-            .agentSend(asRun(run), MAIN_AGENT_ID, text)
-            .pipe(Effect.tap(() => TestClock.adjust("5 seconds")));
-        for (const text of ["one", "two", "three"])
+        const send = (text: string) => service.agentSend(asRun(run), MAIN_AGENT_ID, text);
+        for (const text of ["one", "two", "three", "four", "five"])
           expect((yield* send(text)).disposition).toBe("woken");
-        expect(yield* send("four")).toMatchObject({
-          disposition: "held",
-          wakeBudgetExhausted: true,
-        });
-        expect(main.delivered.map((delivery) => delivery.startTurn)).toEqual([
-          true,
-          true,
-          true,
-          false,
-        ]);
+        expect(main.delivered.every((delivery) => delivery.startTurn)).toBe(true);
         expect(main.delivered[0]?.frame).toMatchObject({ from: run.id, to: MAIN_AGENT_ID });
         expect(main.delivered[0]?.frame.content).toContain("one");
 
-        // A busy main agent past its budget isn't continued either.
         main.control.state = "busy";
-        expect(yield* send("five")).toMatchObject({
-          disposition: "held",
-          wakeBudgetExhausted: true,
-        });
-        main.control.state = "idle";
-        yield* service.resetAgentMessageBudgets;
-        expect((yield* send("six")).disposition).toBe("woken");
+        expect((yield* send("six")).disposition).toBe("queued");
+        main.control.held = true;
+        expect((yield* send("seven")).disposition).toBe("held");
 
         main.control.retired = true;
-        expect(yield* send("seven").pipe(Effect.flip)).toMatchObject({ code: "agent_unavailable" });
+        expect(yield* send("eight").pipe(Effect.flip)).toMatchObject({ code: "agent_unavailable" });
       });
     },
   );
 
-  it.effect("limits resumes of one run per prompt and resets on user input", () => {
+  it.effect("resumes a finished run from a peer's messages as often as it is sent one", () => {
     const { fake, layer } = localServiceFixture();
     return withService(layer, function* (service) {
       const worker = yield* service.start(request({ name: "worker" }));
       const peer = yield* service.start(request({ name: "peer" }));
       yield* completeLocalRun(service, fake.controls[0]!, worker.id);
-      for (let round = 0; round < 3; round += 1) {
-        yield* TestClock.adjust("5 seconds");
+      for (let round = 0; round < 5; round += 1) {
         expect((yield* service.agentSend(asRun(peer), worker.id, "Again.")).disposition).toBe(
           "resumed",
         );
         yield* completeLocalRun(service, fake.controls.at(-1)!, worker.id);
       }
-      yield* TestClock.adjust("5 seconds");
-      expect(
-        yield* service.agentSend(asRun(peer), worker.id, "Again.").pipe(Effect.flip),
-      ).toMatchObject({ code: "agent_wake_budget_exhausted" });
-      // Guidance never spends the budget.
-      expect((yield* service.agentSend(MAIN, peer.id, "Stop resuming.")).disposition).toBe(
-        "guided",
-      );
-
-      yield* service.resetAgentMessageBudgets;
-      expect((yield* service.agentSend(asRun(peer), worker.id, "Again.")).disposition).toBe(
-        "resumed",
-      );
-    });
-  });
-
-  it.effect("keeps a resume's wake spent when the resume may have started", () => {
-    const fake = fakeChildLayer(Effect.void, {
-      initialTransportFailures: [
-        { spawnIndex: 2, type: "prompt", code: "transport_outcome_uncertain" },
-      ],
-    });
-    const { layer } = localServiceFixture({}, fake);
-    return withService(layer, function* (service) {
-      const worker = yield* service.start(request({ name: "worker" }));
-      const peer = yield* service.start(request({ name: "peer" }));
-      yield* completeLocalRun(service, fake.controls[0]!, worker.id);
-      expect(
-        yield* service.agentSend(asRun(peer), worker.id, "Again.").pipe(Effect.flip),
-      ).toMatchObject({ code: "resume_outcome_uncertain" });
-      // The uncertain prompt did apply: the run works on it and reports.
-      fake.controls[2]!.offer({ type: "agent_start" });
-      yield* completeLocalRun(service, fake.controls[2]!, worker.id);
-      for (let round = 0; round < 2; round += 1) {
-        yield* TestClock.adjust("5 seconds");
-        expect((yield* service.agentSend(asRun(peer), worker.id, "Again.")).disposition).toBe(
-          "resumed",
-        );
-        yield* completeLocalRun(service, fake.controls.at(-1)!, worker.id);
-      }
-      yield* TestClock.adjust("5 seconds");
-      expect(
-        yield* service.agentSend(asRun(peer), worker.id, "Again.").pipe(Effect.flip),
-      ).toMatchObject({ code: "agent_wake_budget_exhausted" });
     });
   });
 
@@ -400,43 +334,38 @@ describe("agent messaging", () => {
     });
   });
 
-  it.effect("rate-limits bursts to one target", () => {
+  it.effect("never limits messages up, down, or across the tree", () => {
     const { layer } = localServiceFixture();
     return withService(layer, function* (service) {
-      const run = yield* service.start(request({ name: "target" }));
-      for (let index = 0; index < 3; index += 1)
-        expect((yield* service.agentSend(MAIN, run.id, `Note ${index}.`)).disposition).toBe(
-          "guided",
-        );
-      expect(yield* service.agentSend(MAIN, run.id, "Note 3.").pipe(Effect.flip)).toMatchObject({
-        code: "agent_rate_limited",
-      });
-      yield* TestClock.adjust("5 seconds");
-      expect((yield* service.agentSend(MAIN, run.id, "Note 4.")).disposition).toBe("guided");
+      const parent = yield* service.start(request({ name: "parent", nestingPolicy: nesting }));
+      const child = yield* service.startSessionOwnedFrom(
+        parent.id,
+        request({ name: "child", nestingPolicy: nesting }),
+      );
+      const peer = yield* service.start(request({ name: "peer" }));
+      for (let index = 0; index < 30; index += 1) {
+        for (const [caller, to] of [
+          [MAIN, child.id],
+          [asRun(parent), child.id],
+          [asRun(peer), child.id],
+          [asRun(child), parent.id],
+        ] as const)
+          expect((yield* service.agentSend(caller, to, `Note ${index}.`)).disposition).toBe(
+            "guided",
+          );
+      }
     });
   });
 
-  it.effect("caps one sender's messages to one target per prompt, steering included", () => {
+  it.effect("lets the main agent resume its own paused run any number of times", () => {
     const { layer } = localServiceFixture();
     return withService(layer, function* (service) {
-      const busy = yield* service.start(request({ name: "busy" }));
-      const other = yield* service.start(request({ name: "other" }));
-      const send = (caller: AgentCaller, to: string) =>
-        Effect.gen(function* () {
-          yield* TestClock.adjust("6 seconds");
-          return yield* service.agentSend(caller, to, "Keep going.");
-        });
-      for (let index = 0; index < 20; index += 1)
-        expect((yield* send(MAIN, busy.id)).disposition).toBe("guided");
-      expect(yield* send(MAIN, busy.id).pipe(Effect.flip)).toMatchObject({
-        code: "agent_message_budget_exhausted",
-      });
-      // Other pairs keep their own budgets.
-      expect((yield* send(MAIN, other.id)).disposition).toBe("guided");
-      expect((yield* send(asRun(other), busy.id)).disposition).toBe("guided");
-
-      yield* service.resetAgentMessageBudgets;
-      expect((yield* send(MAIN, busy.id)).disposition).toBe("guided");
+      const run = yield* service.start(request({ name: "worker" }));
+      for (let round = 0; round < 5; round += 1) {
+        expect((yield* service.interrupt(run.id)).state).toBe("paused");
+        expect((yield* service.agentSend(MAIN, run.id, "Continue.")).disposition).toBe("resumed");
+      }
+      expect((yield* service.status(run.id)).state).toBe("running");
     });
   });
 
@@ -509,59 +438,5 @@ describe("agent messaging", () => {
         { direction: "out", peer: target.id, text: "Finish the migration." },
       ]);
     });
-  });
-});
-
-describe("agent message limits", () => {
-  it("allows ten sends a minute per sender across targets", () => {
-    const limits = new AgentMessageLimits();
-    for (let index = 0; index < 10; index += 1)
-      expect(limits.admitSend("a", `t${index}`, 0).admitted).toBe(true);
-    expect(limits.admitSend("a", "t10", 1_000)).toMatchObject({
-      admitted: false,
-      retryAfterMillis: 59_000,
-    });
-    expect(limits.admitSend("b", "t0", 1_000).admitted).toBe(true);
-    expect(limits.admitSend("a", "t10", 60_000).admitted).toBe(true);
-  });
-
-  it("caps the tree's messages per prompt until the budgets reset", () => {
-    const limits = new AgentMessageLimits();
-    // Twenty senders each send ten targets one message: within every rate limit.
-    for (let sender = 0; sender < 20; sender += 1)
-      for (let target = 0; target < 10; target += 1)
-        expect(limits.admitSend(`s${sender}`, `t${target}`, 0).admitted).toBe(true);
-    expect(limits.admitSend("fresh", "t0", 0)).toMatchObject({
-      admitted: false,
-      reason: "budget",
-      scope: "tree",
-    });
-    limits.resetBudgets();
-    expect(limits.admitSend("fresh", "t0", 0).admitted).toBe(true);
-  });
-
-  it("caps tree wakes per prompt and refunds failed ones", () => {
-    const limits = new AgentMessageLimits();
-    const reservations = Array.from({ length: 12 }, (_, index) => {
-      const target = `t${index % 4}`;
-      expect(limits.canWake(target)).toBe(true);
-      return limits.chargeWake(target);
-    });
-    expect(limits.canWake("fresh")).toBe(false);
-    limits.refundWake(reservations[0]!);
-    expect(limits.canWake("fresh")).toBe(true);
-    expect(limits.canWake("t1")).toBe(false);
-    limits.resetBudgets();
-    expect(limits.canWake("t1")).toBe(true);
-  });
-
-  it("never refunds a wake charged before the budget was reset", () => {
-    const limits = new AgentMessageLimits();
-    const earlier = limits.chargeWake("t0");
-    limits.resetBudgets();
-    for (let index = 0; index < 3; index += 1) limits.chargeWake("t0");
-    expect(limits.canWake("t0")).toBe(false);
-    limits.refundWake(earlier);
-    expect(limits.canWake("t0")).toBe(false);
   });
 });

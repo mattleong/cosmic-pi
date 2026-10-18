@@ -101,7 +101,7 @@ function host() {
     dispatch("tool_execution_start", {
       type: "tool_execution_start",
       toolCallId,
-      toolName: "subagent_start",
+      toolName: "agent_start",
       args: {},
       ...extra,
     });
@@ -112,7 +112,7 @@ function host() {
     dispatch("tool_call", {
       type: "tool_call",
       toolCallId,
-      toolName: "subagent_start",
+      toolName: "agent_start",
       input: {},
       ...extra,
     });
@@ -142,7 +142,7 @@ const proxiedTools = (
 
 const event = (
   response: AgentToolResult<unknown>,
-  toolName = "subagent_send",
+  toolName = "agent_lifecycle",
   toolCallId = "call",
 ): ToolResultEvent => ({
   type: "tool_result",
@@ -159,7 +159,7 @@ const failure = (code = "claude_steering_outcome_uncertain", id = "uncertain") =
 });
 const failed = () => ({
   content: [{ type: "text" as const, text: "exact failure and no-resend evidence" }],
-  details: compactToolDetails({ action: "send", runs: [], actionFailures: [failure()] }),
+  details: compactToolDetails({ action: "stop", runs: [], actionFailures: [failure()] }),
 });
 
 function ownedTools(service = subagentServiceDouble({}), earlierResult?: ToolResultHandler) {
@@ -202,7 +202,7 @@ effectTest("fails closed on unknown origin and releases aborted call provenance"
   expect(yield* admit("over-cap", false)).toMatchObject({ block: true });
   yield* dispatch("tool_execution_end", {
     type: "tool_execution_end",
-    toolName: "subagent_start",
+    toolName: "agent_start",
     toolCallId: "pending-0",
     isError: true,
     result: {},
@@ -248,23 +248,20 @@ effectTest(
   function* () {
     const h = ownedTools(
       subagentServiceDouble({
-        send: (id) =>
+        stop: (id) =>
           id === "good"
-            ? Effect.succeed({ delivery: "guided" as const, run: view({ id }) })
+            ? Effect.succeed(view({ id, state: "stopped" }))
             : Effect.fail(
                 new InvalidSubagentRequestError(
-                  failure(
-                    id === "uncertain" ? "claude_steering_outcome_uncertain" : "not_running",
-                    id,
-                  ),
+                  failure(id === "uncertain" ? "stop_cleanup_unconfirmed" : "not_running", id),
                 ),
               ),
       }),
     );
     for (const ids of [["bad"], ["uncertain"], ["good", "uncertain"], ["good", "bad"], ["good"]]) {
-      const response = yield* execute(h.tools.get("subagent_send")!, {
+      const response = yield* execute(h.tools.get("agent_lifecycle")!, {
+        action: "stop",
         runIds: ids,
-        message: "guidance",
       });
       const patchedContent = [
         { type: "text" as const, text: "prior middleware content" },
@@ -285,9 +282,9 @@ effectTest("retains only final resolved results and rejects stale late completio
   const pending = deferredPromise<AgentToolResult<unknown>>();
   proxiedTools(h, () => pending.promise);
   const response = failed();
-  const executing = executeTool(h.tools.get("subagent_send")!, {
+  const executing = executeTool(h.tools.get("agent_lifecycle")!, {
+    action: "stop",
     runIds: ["uncertain"],
-    message: "once",
   });
   expect((yield* h.result(event(response))).isError).toBe(false);
   h.receipts.activate();
@@ -303,13 +300,13 @@ effectTest(
     const { receipts } = h;
     let owner = h.owner;
     const response = failed();
-    const retain = (id = "call") => receipts.retain(owner, "subagent_send", id, "send", response);
+    const retain = (id = "call") => receipts.retain(owner, "agent_lifecycle", id, "stop", response);
     retain();
     expect(
       (yield* h.result(event({ ...response, details: structuredClone(response.details) }))).isError,
     ).toBe(false);
-    expect((yield* h.result(event(response, "subagent_status"))).isError).toBe(false);
-    expect((yield* h.result(event(response, "subagent_send", "wrong"))).isError).toBe(false);
+    expect((yield* h.result(event(response, "agent_await"))).isError).toBe(false);
+    expect((yield* h.result(event(response, "agent_lifecycle", "wrong"))).isError).toBe(false);
     expect((yield* h.result(event(response))).isError).toBe(true);
     retain();
     yield* h.emit("agent_end");
@@ -318,11 +315,11 @@ effectTest(
     owner = receipts.activate();
     expect((yield* h.result(event(response))).isError).toBe(false);
     for (let index = 0; index <= 256; index++) retain(String(index));
-    expect((yield* h.result(event(response, "subagent_send", "0"))).isError).toBe(false);
-    expect((yield* h.result(event(response, "subagent_send", "1"))).isError).toBe(true);
-    expect((yield* h.result(event(response, "subagent_send", "256"))).isError).toBe(true);
+    expect((yield* h.result(event(response, "agent_lifecycle", "0"))).isError).toBe(false);
+    expect((yield* h.result(event(response, "agent_lifecycle", "1"))).isError).toBe(true);
+    expect((yield* h.result(event(response, "agent_lifecycle", "256"))).isError).toBe(true);
     retain("x".repeat(1025));
-    expect((yield* h.result(event(response, "subagent_send", "x".repeat(1025)))).isError).toBe(
+    expect((yield* h.result(event(response, "agent_lifecycle", "x".repeat(1025)))).isError).toBe(
       false,
     );
     retain();

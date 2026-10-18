@@ -3,6 +3,7 @@ import { issueMessageStyleProblems, renderContextFixture } from "pi-code-preview
 import type * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
 import { createSubagentCompactSummary } from "../../src/tools/compact-summary.ts";
+import { SUBAGENT_TOOL_NAME } from "../../src/run/tool-policy.ts";
 import { compactToolDetails } from "../../src/tools/details.ts";
 import type { SubagentRunView } from "../../src/run/model.ts";
 import type {
@@ -22,7 +23,7 @@ type SummarizedDetails =
   | undefined;
 
 function summarize(
-  action: string,
+  action: keyof typeof SUBAGENT_TOOL_NAME,
   details: SummarizedDetails,
   phase: "running" | "settled" = "settled",
   args: {
@@ -33,7 +34,7 @@ function summarize(
   } = {},
   isError = false,
 ) {
-  const provider = createSubagentCompactSummary(`subagent_${action}`);
+  const provider = createSubagentCompactSummary(SUBAGENT_TOOL_NAME[action]);
   return provider({
     phase,
     args,
@@ -62,13 +63,10 @@ it("treats cleanup quarantine as warning rather than failed work or successful s
     },
     writerCleanupQuarantined: true,
   });
-  for (const action of ["status", "stop"] as const) {
-    const summary = summarize(
-      action === "stop" ? "lifecycle" : action,
-      compactToolDetails({ action, runs: [run] }),
-      "settled",
-      { action },
-    );
+  for (const action of ["interrupt", "stop"] as const) {
+    const summary = summarize("lifecycle", compactToolDetails({ action, runs: [run] }), "settled", {
+      action,
+    });
     expect(summary?.outcome).toBe("warning");
     expect(summary?.issues?.some((issue) => issue.severity === "error")).toBe(false);
     expect(
@@ -135,14 +133,14 @@ const selected = {
   openaiFastMode: false,
 };
 
-const statusOf = (...runs: ReadonlyArray<Partial<SubagentRunView>>) =>
-  compactToolDetails({ action: "status", runs: runs.map((run) => view(run)) });
+const stoppedOf = (...runs: ReadonlyArray<Partial<SubagentRunView>>) =>
+  compactToolDetails({ action: "stop", runs: runs.map((run) => view(run)) });
 
 const awaitReceipt = (
   runs: ReadonlyArray<SubagentRunView>,
   extra: Partial<SubagentAwaitDetails> = {},
 ) => {
-  const projected = statusOf(...runs);
+  const projected = stoppedOf(...runs);
   if (projected.action === "models") throw new Error("Expected cards");
   return {
     version: 2,
@@ -162,14 +160,14 @@ const worktreeWriter = (workspaceOutcome?: SubagentRunView["workspaceOutcome"]) 
     workspaceId: "ws-1",
     ...(workspaceOutcome && { workspaceOutcome }),
   });
-const statusSummary = (run: SubagentRunView) =>
-  summarize("status", statusOf(run), "settled", { runIds: [run.id] });
+const stopSummary = (run: SubagentRunView) =>
+  summarize("lifecycle", stoppedOf(run), "settled", { action: "stop", runIds: [run.id] });
 
 describe("worktree writer workspace outcomes", () => {
   it("presents both outcomes as information, and only a proposal as changes to review", () => {
-    const discarded = statusSummary(worktreeWriter({ status: "auto-discarded" }));
-    const proposal = statusSummary(worktreeWriter({ status: "proposal", changedFileCount: 2 }));
-    const plain = statusSummary(view({ state: "completed", finalText: "Done" }));
+    const discarded = stopSummary(worktreeWriter({ status: "auto-discarded" }));
+    const proposal = stopSummary(worktreeWriter({ status: "proposal", changedFileCount: 2 }));
+    const plain = stopSummary(view({ state: "completed", finalText: "Done" }));
     for (const summary of [discarded, proposal]) {
       expect(summary?.outcome).toBe("success");
       expect(summary?.issues?.every((issue) => issue.severity === "info")).toBe(true);
@@ -186,8 +184,10 @@ describe("subagent compact semantic policy", () => {
     for (const steeringDelivery of ["pending", "unresolved"] as const) {
       for (const state of ["running", "completed"] as const) {
         const run = view({ steeringDelivery, state });
-        const status = statusOf(run);
-        const summary = summarize("status", status, "settled", { runIds: [run.id] });
+        const summary = summarize("lifecycle", stoppedOf(run), "settled", {
+          action: "stop",
+          runIds: [run.id],
+        });
         expect(summary?.outcome).toBe("uncertain");
         expect(compactIssueSeverity(summary?.issues)).toBe("warning");
         expect(issueDetails(summary?.issues)).toContain(`steeringDelivery=${steeringDelivery}`);
@@ -196,40 +196,35 @@ describe("subagent compact semantic policy", () => {
       }
     }
     for (const steeringDelivery of ["confirmed", "not-sent", "report-unconfirmed"] as const) {
-      const summary = summarize("status", statusOf({ steeringDelivery }), "settled", {
+      const summary = summarize("lifecycle", stoppedOf({ steeringDelivery }), "settled", {
+        action: "stop",
         runIds: ["agent-1"],
       });
       expect(summary?.outcome).toBe(steeringDelivery === "confirmed" ? "success" : "warning");
       expect(issueDetails(summary?.issues)).toContain(`steeringDelivery=${steeringDelivery}`);
     }
   });
-  it("never advises resending or retrying an unconfirmed or pending action", () => {
+  it("never advises resending or retrying an unconfirmed action", () => {
     for (const code of [
-      "steer_outcome_uncertain",
+      "interrupt_outcome_uncertain",
       "claude_steering_outcome_uncertain",
       "stop_cleanup_unconfirmed",
       "writer_lease_cleanup_unconfirmed",
     ]) {
-      for (const pendingDelivery of [false, true]) {
-        const summary = summarize(
-          "send",
-          compactToolDetails({
-            action: "send",
-            runs: [],
-            actionFailures: [
-              {
-                id: "target",
-                code,
-                message: "Evidence",
-                ...(pendingDelivery && { pendingDelivery: true as const }),
-              },
-            ],
-          }),
-        );
-        for (const issue of summary?.issues ?? []) {
-          const advice = (issue.detail ?? "").replace(/Do not resend, retry[^.;]*/g, "");
-          expect(advice).not.toMatch(/\b(resend|retry)\b/i);
-        }
+      const summary = summarize(
+        "lifecycle",
+        compactToolDetails({
+          action: "stop",
+          runs: [],
+          actionFailures: [{ id: "target", code, message: "Evidence" }],
+        }),
+        "settled",
+        { action: "stop", runIds: ["target"] },
+      );
+      expect(summary?.issues?.length).toBeGreaterThan(0);
+      for (const issue of summary?.issues ?? []) {
+        const advice = (issue.detail ?? "").replace(/Do not resend, retry[^.;]*/g, "");
+        expect(advice).not.toMatch(/\b(resend|retry)\b/i);
       }
     }
   });
@@ -299,7 +294,8 @@ describe("subagent compact semantic policy", () => {
     const issues = runs.flatMap((overrides) => {
       const run = view({ id, ...overrides });
       return [
-        ...(summarize("status", statusOf(run), "settled", { runIds: [run.id] })?.issues ?? []),
+        ...(summarize("lifecycle", stoppedOf(run), "settled", { action: "stop", runIds: [run.id] })
+          ?.issues ?? []),
         ...(summarize("await", awaitReceipt([run], { awaitedRunIds: [id] }))?.issues ?? []),
       ];
     });

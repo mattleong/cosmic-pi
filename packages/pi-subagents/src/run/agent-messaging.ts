@@ -1,5 +1,5 @@
 import { absurd } from "effect/Function";
-import { safeTextPrefix, type SessionWakeBudget } from "pi-cosmic-core";
+import { safeTextPrefix } from "pi-cosmic-core";
 import type { SubagentRuntime } from "../domain/routing.ts";
 import type { AgentMessageRefusalCode } from "./errors.ts";
 import type { RunRecord } from "./internal.ts";
@@ -21,15 +21,6 @@ export const MAX_MAIN_READ_CHARS = 32 * 1024;
 export const MAX_RUN_READ_CHARS = 16 * 1024;
 const MAX_LIST_TASK_CHARS = 200;
 
-const SENDS_PER_MINUTE = 10;
-const SEND_WINDOW_MILLIS = 60_000;
-const PAIR_BURST = 3;
-const PAIR_INTERVAL_MILLIS = 5_000;
-const WAKES_PER_AGENT = 3;
-const WAKES_PER_TREE = 12;
-const MESSAGES_PER_PAIR = 20;
-const MESSAGES_PER_TREE = 200;
-
 /** The authenticated caller; tools bind it from the session or a run's own channel. */
 export type AgentCaller =
   | { readonly kind: "main" }
@@ -38,6 +29,7 @@ export type AgentCaller =
 export type AgentMessageDisposition =
   | "answered"
   | "guided"
+  | "pending"
   | "resumed"
   | "woken"
   | "queued"
@@ -67,11 +59,8 @@ export interface AgentMainReadout {
 
 /** Synchronous host capabilities through which agents reach the root session's main agent. */
 export interface AgentMainCapabilities {
-  /**
-   * Appends the message. It starts or continues a turn only while `budget` admits one, including a
-   * turn the host starts later for it; a spent budget leaves it `held`.
-   */
-  readonly deliver: (frame: AgentMessageFrame, budget: SessionWakeBudget) => AgentMainDelivery;
+  /** Appends the message, waking an idle main agent or continuing a busy one at its settle boundary. */
+  readonly deliver: (frame: AgentMessageFrame) => AgentMainDelivery;
   /** The last assistant message on the root's current branch. */
   readonly read: () => AgentMainReadout;
 }
@@ -90,6 +79,8 @@ export interface AgentListEntry {
   readonly task?: string | undefined;
   /** The caller itself. */
   readonly self: boolean;
+  /** A run's projected view, for its model, writer workspace, and attention. */
+  readonly run?: SubagentRunView | undefined;
 }
 
 export interface AgentListResult {
@@ -119,6 +110,8 @@ export type AgentReadout =
       /** Where the text came from: the latest assistant message, a retained report, or an error. */
       readonly source?: "assistant" | "report" | "error" | undefined;
       readonly reportGeneration: number;
+      /** The run's projected view, for its status card; reading never claims its report. */
+      readonly run: SubagentRunView;
     });
 
 export interface AgentReadResult {
@@ -131,8 +124,6 @@ export interface AgentSendResult {
   readonly to: string;
   readonly name: string;
   readonly disposition: AgentMessageDisposition;
-  /** The main agent's wake budget was spent, so the message waits for its next turn. */
-  readonly wakeBudgetExhausted?: true | undefined;
   readonly run?: SubagentRunView | undefined;
 }
 
@@ -234,6 +225,7 @@ export const runListEntry = (view: SubagentRunView, callerId: string): AgentList
   ...(view.agent && { agent: view.agent }),
   task: safeTextPrefix(view.task, MAX_LIST_TASK_CHARS),
   self: view.id === callerId,
+  run: view,
 });
 
 export const mainListEntry = (
@@ -289,7 +281,7 @@ const latestRetainedReport = (record: RunRecord): string | undefined => {
  * The run's latest assistant message in its current or last assignment, falling back to a finished
  * run's retained report or error. Reading never claims or consumes the report.
  */
-export const runReadout = (record: RunRecord): AgentReadout => {
+export const runReadout = (record: RunRecord, projected: SubagentRunView): AgentReadout => {
   const { view } = record;
   const base = {
     kind: "run" as const,
@@ -297,6 +289,7 @@ export const runReadout = (record: RunRecord): AgentReadout => {
     name: view.name,
     state: view.state,
     reportGeneration: view.reportGeneration,
+    run: projected,
   };
   const assistant = boundedText(record.latestAssistantText, MAX_RUN_READ_CHARS);
   if (assistant.textStatus === "text") return { ...base, ...assistant, source: "assistant" };
@@ -309,99 +302,3 @@ export const runReadout = (record: RunRecord): AgentReadout => {
     ? { ...base, ...error, source: "error" }
     : { ...base, ...error };
 };
-
-type AdmitSend =
-  | { readonly admitted: true }
-  | { readonly admitted: false; readonly reason: "rate"; readonly retryAfterMillis: number }
-  | { readonly admitted: false; readonly reason: "budget"; readonly scope: "pair" | "tree" };
-
-/** One wake charged to an agent within the wake budget epoch that was current when it was charged. */
-export interface WakeReservation {
-  readonly epoch: number;
-  readonly targetId: string;
-}
-
-/**
- * Loop and storm protection for agent messages. Each sender may send 10 messages a minute, and 3
- * at once to one target before waiting 5 seconds per message. Until the user's next prompt, each
- * sender may send one target 20 messages and the whole tree may send 200, so busy agents can't
- * steer each other indefinitely, and agent messages may wake or resume each agent 3 times and the
- * whole tree 12 times.
- */
-export class AgentMessageLimits {
-  readonly #sends = new Map<string, Array<number>>();
-  readonly #pairs = new Map<string, { tokens: number; at: number }>();
-  readonly #pairMessages = new Map<string, number>();
-  #treeMessages = 0;
-  readonly #wakes = new Map<string, number>();
-  #treeWakes = 0;
-  // Each user prompt starts a new epoch; refunds only return wakes charged within it.
-  #epoch = 0;
-
-  /** Admits one send and spends it from the rate limits and the prompt's message budget. */
-  admitSend(senderId: string, targetId: string, now: number): AdmitSend {
-    const pairKey = JSON.stringify([senderId, targetId]);
-    const pairMessages = this.#pairMessages.get(pairKey) ?? 0;
-    if (pairMessages >= MESSAGES_PER_PAIR)
-      return { admitted: false, reason: "budget", scope: "pair" };
-    if (this.#treeMessages >= MESSAGES_PER_TREE)
-      return { admitted: false, reason: "budget", scope: "tree" };
-    this.#prune(now);
-    const sent = this.#sends.get(senderId) ?? [];
-    const pair = this.#pairs.get(pairKey);
-    const tokens = pair
-      ? Math.min(PAIR_BURST, pair.tokens + (now - pair.at) / PAIR_INTERVAL_MILLIS)
-      : PAIR_BURST;
-    const senderWait =
-      sent.length >= SENDS_PER_MINUTE ? (sent[0] ?? now) + SEND_WINDOW_MILLIS - now : 0;
-    const pairWait = tokens < 1 ? Math.ceil((1 - tokens) * PAIR_INTERVAL_MILLIS) : 0;
-    const retryAfterMillis = Math.max(senderWait, pairWait);
-    if (retryAfterMillis > 0) return { admitted: false, reason: "rate", retryAfterMillis };
-    this.#sends.set(senderId, [...sent, now]);
-    this.#pairs.set(pairKey, { tokens: tokens - 1, at: now });
-    this.#pairMessages.set(pairKey, pairMessages + 1);
-    this.#treeMessages += 1;
-    return { admitted: true };
-  }
-
-  canWake(targetId: string): boolean {
-    return this.#treeWakes < WAKES_PER_TREE && (this.#wakes.get(targetId) ?? 0) < WAKES_PER_AGENT;
-  }
-
-  chargeWake(targetId: string): WakeReservation {
-    this.#treeWakes += 1;
-    this.#wakes.set(targetId, (this.#wakes.get(targetId) ?? 0) + 1);
-    return { epoch: this.#epoch, targetId };
-  }
-
-  /** Returns a wake whose resume did not happen, unless a new budget began since it was charged. */
-  refundWake(reservation: WakeReservation): void {
-    if (reservation.epoch !== this.#epoch) return;
-    const { targetId } = reservation;
-    const spent = this.#wakes.get(targetId) ?? 0;
-    if (spent === 0) return;
-    this.#treeWakes = Math.max(0, this.#treeWakes - 1);
-    if (spent === 1) this.#wakes.delete(targetId);
-    else this.#wakes.set(targetId, spent - 1);
-  }
-
-  /** Starts new message and wake budgets, as the user sends a prompt. */
-  resetBudgets(): void {
-    this.#epoch += 1;
-    this.#pairMessages.clear();
-    this.#treeMessages = 0;
-    this.#wakes.clear();
-    this.#treeWakes = 0;
-  }
-
-  #prune(now: number): void {
-    for (const [senderId, sent] of this.#sends) {
-      const recent = sent.filter((at) => now - at < SEND_WINDOW_MILLIS);
-      if (recent.length === 0) this.#sends.delete(senderId);
-      else if (recent.length !== sent.length) this.#sends.set(senderId, recent);
-    }
-    for (const [key, pair] of this.#pairs)
-      if (pair.tokens + (now - pair.at) / PAIR_INTERVAL_MILLIS >= PAIR_BURST)
-        this.#pairs.delete(key);
-  }
-}

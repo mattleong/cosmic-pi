@@ -11,8 +11,12 @@ import {
   type BackendReport,
 } from "../backend/model.ts";
 import type { AgentListResult, AgentReadResult } from "../run/agent-messaging.ts";
+import { agentAttentionFact, agentReadCard, agentWorktreeFact } from "../tools/execute-agents.ts";
+import { formatRunModel } from "../tools/format.ts";
 import { subagentErrorCode, type SubagentError } from "../run/errors.ts";
 import {
+  MAX_SUPERVISOR_AGENT_CARD_CHARS,
+  MAX_SUPERVISOR_AGENT_FACT_CHARS,
   MAX_SUPERVISOR_AGENT_NAME_CHARS,
   MAX_SUPERVISOR_AGENT_READ_CHARS,
   SUPERVISOR_CHANNEL_VERSION,
@@ -50,14 +54,18 @@ const dispatchContact = (
   payload: SupervisorContactPayload,
   clientId: number,
 ): Effect.Effect<string, SupervisorRpcFailure> =>
-  Effect.flatMap(authorizeAssignment(state, clientId, payload), () =>
-    offerContact(state, kind, payload)
-      ? Effect.succeed(
-          kind === "progress"
-            ? "Progress delivered to the parent projection."
-            : "Warning recorded in parent-visible run status.",
-        )
-      : Effect.fail(eventQueueFull()),
+  Effect.flatMap(
+    authorizeAssignment(state, clientId, payload).pipe(
+      Effect.andThen(refuseNativeSubAgent(state, payload)),
+    ),
+    () =>
+      offerContact(state, kind, payload)
+        ? Effect.succeed(
+            kind === "progress"
+              ? "Progress delivered to the parent projection."
+              : "Warning recorded in parent-visible run status.",
+          )
+        : Effect.fail(eventQueueFull()),
   );
 
 const agentMessaging = (
@@ -77,12 +85,17 @@ const agentName = (name: string, id: string): string =>
   safeTextPrefix(name.trim() || id, MAX_SUPERVISOR_AGENT_NAME_CHARS);
 const label = (value: string | undefined): string | undefined =>
   value?.trim() ? safeTextPrefix(value, MAX_SUPERVISOR_AGENT_NAME_CHARS) : undefined;
+const fact = (value: string | undefined): string | undefined =>
+  value?.trim() ? safeTextPrefix(value, MAX_SUPERVISOR_AGENT_FACT_CHARS) : undefined;
 
 const wireAgentList = (result: AgentListResult): SupervisorAgentListResult => ({
   agents: result.agents.map((entry) => {
     const runtime = label(entry.runtime);
+    const model = fact(entry.run && formatRunModel(entry.run));
     const profile = label(entry.profile);
     const agent = label(entry.agent);
+    const worktree = fact(agentWorktreeFact(entry.run));
+    const attention = fact(agentAttentionFact(entry.run));
     return {
       id: entry.id,
       name: agentName(entry.name, entry.id),
@@ -90,25 +103,40 @@ const wireAgentList = (result: AgentListResult): SupervisorAgentListResult => ({
       state: entry.state,
       ...(entry.parentId !== undefined && { parentId: entry.parentId }),
       ...(runtime !== undefined && { runtime }),
+      ...(model !== undefined && { model }),
       ...(profile !== undefined && { profile }),
       ...(agent !== undefined && { agent }),
+      ...(worktree !== undefined && { worktree }),
+      ...(attention !== undefined && { attention }),
       self: entry.self,
     };
   }),
   missingIds: result.missingIds,
 });
 
-const wireAgentRead = (result: AgentReadResult): SupervisorAgentReadResult => ({
+const wireAgentRead = (
+  result: AgentReadResult,
+  agents: BackendAgentMessaging,
+  verbose: boolean,
+): SupervisorAgentReadResult => ({
   agents: result.agents.map((entry) => {
     const text =
       entry.textStatus === "text" && entry.text !== undefined
         ? safeTextPrefix(entry.text, MAX_SUPERVISOR_AGENT_READ_CHARS)
         : undefined;
     const source = entry.kind === "run" ? entry.source : undefined;
+    const card =
+      entry.kind === "run"
+        ? safeTextPrefix(
+            agentReadCard(entry.run, { caller: agents.caller, parentCwd: agents.cwd, verbose }),
+            MAX_SUPERVISOR_AGENT_CARD_CHARS,
+          )
+        : undefined;
     return {
       id: entry.id,
       name: agentName(entry.name, entry.id),
       state: entry.state,
+      ...(card !== undefined && { card }),
       ...(text !== undefined && { text }),
       truncated: entry.truncated || (text !== undefined && text.length < (entry.text?.length ?? 0)),
       ...(source !== undefined && { source }),
@@ -341,7 +369,6 @@ export const supervisorChannelHandlers = (state: SupervisorChannelState) =>
                 to: sent.to,
                 name: agentName(sent.name, sent.to),
                 disposition: sent.disposition,
-                ...(sent.wakeBudgetExhausted && { wakeBudgetExhausted: true as const }),
               })),
             ),
           refuseNativeSubAgent(state, payload),
@@ -349,7 +376,9 @@ export const supervisorChannelHandlers = (state: SupervisorChannelState) =>
 
       SupervisorAgentRead: (payload, options) =>
         dispatchAgent(state, options.client.id, payload, (agents) =>
-          agents.read(payload.ids).pipe(Effect.map(wireAgentRead)),
+          agents
+            .read(payload.ids)
+            .pipe(Effect.map((result) => wireAgentRead(result, agents, payload.verbose === true))),
         ),
     }),
   );

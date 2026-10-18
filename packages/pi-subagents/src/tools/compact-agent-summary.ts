@@ -1,3 +1,4 @@
+import { absurd } from "effect/Function";
 import {
   getTextContent,
   type CompactIssue,
@@ -16,6 +17,7 @@ import { SUBAGENT_RUN_STATES } from "../run/model.ts";
 import { AGENT_TOOL_NAME, type AgentToolName } from "../run/tool-policy.ts";
 import { runStateLabel } from "../ui/run-state.ts";
 import { agentFailureIssues } from "./compact-action-failures.ts";
+import { pendingDeliveryEvidence } from "./outcome.ts";
 import { AgentToolDetailsSchema, type AgentToolDetails } from "./details-schema.ts";
 
 export const decodeAgentToolDetails = decodeUnknownOrUndefined(AgentToolDetailsSchema, {
@@ -87,33 +89,53 @@ const DISPOSITIONS: Record<
 > = {
   answered: "answered",
   guided: "delivered as guidance",
+  pending: "awaiting delivery confirmation",
   resumed: "resumed",
   woken: "woke the main agent",
   queued: "queued for the main agent",
   held: "held until the user's next prompt",
 };
 
-const summarizeSend = (
-  details: Extract<AgentToolDetails, { readonly action: "agent_send" }>,
-): CompactSummary =>
+type SendDetails = Extract<AgentToolDetails, { readonly action: "agent_send" }>;
+
+const sendIssues = (details: SendDetails): CompactIssue[] => {
+  switch (details.disposition) {
+    case "pending":
+      return [
+        {
+          severity: "warning",
+          code: "agent-message-pending",
+          message: pendingDeliveryEvidence.message,
+          detail: pendingDeliveryEvidence.detail,
+        },
+      ];
+    case "held":
+      return [
+        {
+          severity: "info",
+          code: "agent-message-held",
+          message: "The main agent was interrupted and waits for the user",
+          detail:
+            "The message is in the main agent's conversation and reaches the model on the user's next prompt.",
+        },
+      ];
+    case "answered":
+    case "guided":
+    case "resumed":
+    case "woken":
+    case "queued":
+      return [];
+  }
+  return absurd(details.disposition);
+};
+
+const summarizeSend = (details: SendDetails): CompactSummary =>
   settled(
     {
       subject: details.to === MAIN_AGENT_ID ? "main" : displayName(details.name),
       counters: [DISPOSITIONS[details.disposition]],
     },
-    details.disposition === "held"
-      ? [
-          {
-            severity: "info",
-            code: "agent-message-held",
-            message: details.wakeBudgetExhausted
-              ? "Messages already woke the main agent as often as allowed"
-              : "The main agent was interrupted and waits for the user",
-            detail:
-              "The message is in the main agent's conversation and reaches the model on the user's next prompt.",
-          },
-        ]
-      : [],
+    sendIssues(details),
   );
 
 const summarizeRead = (

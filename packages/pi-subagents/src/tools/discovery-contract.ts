@@ -1,10 +1,8 @@
 import { MAX_CUSTOM_AGENT_DESCRIPTION_CHARS } from "../profiles/agents.ts";
 import { MAX_PROFILE_MODEL_SELECTOR_CHARS, type ProfileId } from "../profiles/model.ts";
-import type { SubagentRunView } from "../run/model.ts";
 import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
-import { projectRunCardTree } from "../ui/run-tree-rows.ts";
-import type { SubagentModelsContract, SubagentStatusListContract } from "./contract-schema.ts";
-import { envelope, metadata, withheldTarget } from "./contract.ts";
+import type { SubagentModelsContract } from "./contract-schema.ts";
+import { envelope, metadata } from "./contract.ts";
 import { MAX_DISCOVERY_TEXT_CHARS } from "./discovery-contract-schema.ts";
 import type {
   ProfileCandidateDiscovery,
@@ -12,18 +10,6 @@ import type {
   SubagentInvalidAgentView,
   SubagentProfileView,
 } from "./model.ts";
-
-export const statusListContract = (
-  runs: ReadonlyArray<SubagentRunView>,
-): SubagentStatusListContract => ({
-  ...envelope(SUBAGENT_TOOL_NAME.status),
-  runs: projectRunCardTree(runs).map(({ run }) =>
-    Object.assign({}, withheldTarget(run), {
-      parentRunId: run.parentRunId ?? "root",
-      depth: run.depth ?? 1,
-    }),
-  ),
-});
 
 const contractCandidates = (candidates: ReadonlyArray<ProfileCandidateDiscovery>) =>
   candidates.map((candidate) => ({

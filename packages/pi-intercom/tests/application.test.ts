@@ -203,7 +203,7 @@ layer(nodeFilePlatformLayer)("intercom host inbound", (it) => {
         extensionContextFixture({ cwd: "/project", sessionManager: { getSessionId: () => "s" } }),
         () => current,
         {
-          deliver: (_message, _now, isCurrent) =>
+          deliver: (_message, isCurrent) =>
             isCurrent() ? Result.succeed("woken") : Result.fail("session_unavailable"),
         },
       );
