@@ -107,7 +107,7 @@ const SHARED_CHECKOUT_SCOPES =
 // The audience-specific delegation rule from delegation/prompt.ts is prepended at registration.
 const START_GUIDELINES = [
   DELIVERABLE_GUIDELINE,
-  `Use profile=worker for implementation you hand off. While shared-checkout writers run, coordinate and review instead of editing; worktree writers leave your cwd free. Set isolation: worktree for writers whose change you'll review and apply as a diff or that run while you edit. ${SHARED_CHECKOUT_SCOPES}`,
+  `Use profile=worker for implementation you hand off. While shared-checkout writers run, coordinate and review instead of editing; worktree writers leave your cwd free. Omit isolation so each writer uses the session's workspace setting; set it only when the user asks for a shared checkout or a worktree. ${SHARED_CHECKOUT_SCOPES}`,
   FAILED_START_GUIDELINE,
 ];
 
@@ -130,7 +130,7 @@ const TOOL_SPECS: SubagentToolSpecs = {
   [SUBAGENT_TOOL_NAME.start]: {
     label: "Start Subagents",
     description:
-      "Start background subagents, up to your direct-child limit. Returns run IDs immediately; each report is delivered to you when its run finishes, and runs end after reporting. Give every agent a self-contained task with the relevant paths, constraints, and deliverable. The profile sets the role and model route (default generalist). Writers use the shared checkout or a private worktree: set isolation per writer, or omit it for the session default; only the main session and worktree writers can start worktree writers. Several shared-checkout writers may run in one cwd; give them disjoint task scopes because nothing enforces file ownership. Subagents started from a codemode script, and their descendants, stay read-only. A failed start says whether retry is available.",
+      "Start background subagents, up to your direct-child limit. Returns run IDs immediately; each report is delivered to you when its run finishes, and runs end after reporting. Give every agent a self-contained task with the relevant paths, constraints, and deliverable. The profile sets the role and model route (default generalist). Writers use the shared checkout or a private worktree: omit isolation to use the session's workspace setting, and set it only when the user asks; only the main session and worktree writers can start worktree writers. Several shared-checkout writers may run in one cwd; give them disjoint task scopes because nothing enforces file ownership. Subagents started from a codemode script, and their descendants, stay read-only. A failed start says whether retry is available.",
     promptSnippet: "Run bounded, independent tasks in background subagents",
     renderCall: (args, theme, context) =>
       renderSubagentStartCall(

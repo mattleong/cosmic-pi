@@ -101,7 +101,7 @@ const StartSpecOptionFields = {
   isolation: Type.Optional(
     StringEnum(WRITER_WORKSPACE_MODES, {
       description:
-        "Writers only (profile worker, or an agent or route with writer intent): shared-checkout edits your checkout; worktree edits a private copy whose proposal you apply. Omit for the session default; a read-only run rejects it.",
+        "Writers only (profile worker, or an agent or route with writer intent): shared-checkout edits your checkout; worktree edits a private copy whose proposal you apply. Omit to use the session's workspace setting; set it only when the user asks for one. A read-only run rejects it.",
     }),
   ),
   model: Type.Optional(ModelOverrideParameters),
