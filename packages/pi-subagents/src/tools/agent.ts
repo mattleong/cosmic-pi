@@ -53,6 +53,7 @@ const COORDINATION_GUIDELINES = [
 
 const SEND_GUIDELINES = [
   "Send one self-contained message and don't resend: each send is delivered at once and reports what happened, and a pending or uncertain result may already have arrived. Resuming a finished run starts work its own parent will review, so do it only when the work needs that run's context.",
+  "Don't reply only to acknowledge or thank, and don't message a finished agent unless you need its work.",
 ];
 
 const quoted = (message: string | undefined): string =>
