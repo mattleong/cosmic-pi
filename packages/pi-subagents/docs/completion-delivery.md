@@ -54,6 +54,7 @@ The service stores every committed run mutation as one immutable `{ revision, ru
 The root TUI installs one read-only widget above the editor from the same projection.
 
 - It shows every starting, running, stopping, waiting, or paused run plus the ancestors needed to keep the tree, marks active await targets, and emits nothing for terminal-only state. The ordinary footer is suppressed only while the widget has content.
+- Each row counts the agent messages its run sent or received (`messageCount` on the run view, since session events are bounded). For eight seconds after a tracked run's latest message, the message replaces the run's tool activity; the widget's existing refresh ticker, which runs while any tracked run is shown, clears it.
 - Root start and await executions hold a presentation lease, so their partial results emit no duplicate hierarchy. Non-TUI, nested, and widget-failure paths keep the bounded live card.
 - Await leases are presentation only; descendant changes repaint the widget without changing completion semantics.
 - Session replacement and shutdown clear the exact widget, subscribers, ticker, and leases.

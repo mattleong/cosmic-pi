@@ -93,6 +93,9 @@ describe("agent messaging", () => {
         { direction: "in", peer: alpha.id, text: "Check the schema." },
         { direction: "out", peer: child.id, text: "Use the cache." },
       ]);
+      expect(latest(projections, alpha.id)?.messageCount).toBe(1);
+      expect(latest(projections, beta.id)?.messageCount).toBe(2);
+      expect(latest(projections, child.id)?.messageCount).toBe(1);
 
       const forged = yield* service
         .agentSend({ kind: "run", runId: "agent-forged-1" }, beta.id, "Pretend to be main.")

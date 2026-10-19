@@ -1844,9 +1844,72 @@ const stalledRuns: ReadonlyArray<SubagentRunView> = [
   }),
 ];
 
-const widgetLines = (): ReadonlyArray<string> => {
-  const panel = projectSubagentActivityPanel({ revision: 1, runs: stalledRuns });
-  return ["── widget · stalled children (tool open, silent, failing tools)"].concat(
+const messagingRuns: ReadonlyArray<SubagentRunView> = [
+  view({
+    id: "agent-r1-1",
+    name: "pinger",
+    state: "running",
+    startedAt: minutesAgo(4),
+    lastActivityAt: now - 2_000,
+    currentTool: "read src/app.ts",
+    messageCount: 3,
+    sessionEvents: [
+      {
+        type: "notice",
+        kind: "message",
+        direction: "out",
+        peer: "agent-r1-2",
+        text: "hello from pinger",
+        createdAt: now - 2_000,
+      },
+    ],
+  }),
+  view({
+    id: "agent-r1-2",
+    name: "ponger",
+    state: "running",
+    startedAt: minutesAgo(4),
+    lastActivityAt: now - 2_000,
+    currentTool: "grep /TODO/ src",
+    messageCount: 2,
+    sessionEvents: [
+      {
+        type: "notice",
+        kind: "message",
+        direction: "in",
+        peer: "agent-r1-1",
+        text: "hello from pinger",
+        createdAt: now - 2_000,
+      },
+    ],
+  }),
+  view({
+    id: "agent-r1-3",
+    name: "quiet-peer",
+    state: "running",
+    startedAt: minutesAgo(3),
+    lastActivityAt: now,
+    currentTool: "bash pnpm test",
+    messageCount: 1,
+    sessionEvents: [
+      {
+        type: "notice",
+        kind: "message",
+        direction: "in",
+        peer: "main",
+        text: "an older message past the recent window",
+        createdAt: minutesAgo(2),
+      },
+    ],
+  }),
+];
+
+const widgetFrames = (
+  title: string,
+  runs: ReadonlyArray<SubagentRunView>,
+): ReadonlyArray<string> => {
+  const panel = projectSubagentActivityPanel({ revision: 1, runs });
+  return [`── widget · ${title}`].concat(
     [60, 100].flatMap((width) =>
       [`width ${width}`].concat(
         renderProjectedSubagentActivityPanel(panel, width, plainTheme, now),
@@ -1855,6 +1918,11 @@ const widgetLines = (): ReadonlyArray<string> => {
     ),
   );
 };
+
+const widgetLines = (): ReadonlyArray<string> => [
+  ...widgetFrames("stalled children (tool open, silent, failing tools)", stalledRuns),
+  ...widgetFrames("agent messages (recent message, counts, expired message)", messagingRuns),
+];
 
 const directory = galleryDirectory(process.env) ?? "";
 

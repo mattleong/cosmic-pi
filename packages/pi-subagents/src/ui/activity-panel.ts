@@ -2,6 +2,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { formatElapsed, sanitizeTerminalLine } from "pi-cosmic-core";
 import { absurd } from "effect/Function";
+import { MAIN_AGENT_ID } from "../run/agent-messaging.ts";
 import { runStall, type RunStall } from "../run/stall.ts";
 import {
   managerLayoutTier,
@@ -44,6 +45,28 @@ export const EMPTY_ACTIVITY_PRESENTATION: SubagentActivityPresentationSnapshot =
   awaits: [],
 });
 
+/**
+ * How long a run's latest agent message replaces its tool activity. Eight seconds leaves time to
+ * read a one-line preview across several refreshes without hiding tool activity for long.
+ */
+export const RECENT_MESSAGE_WINDOW_MS = 8_000;
+const MESSAGE_PREVIEW_CHARS = 240;
+const MIN_CLIPPED_MESSAGE_WIDTH = 16;
+
+export interface RunMessagePreview {
+  readonly direction: "in" | "out";
+  /** The other agent's display name, `main`, or its run ID once evicted; terminal-safe. */
+  readonly peer: string;
+  /** Terminal-safe single-line text, bounded but not yet fitted to a row. */
+  readonly text: string;
+  readonly createdAt: number;
+}
+
+interface RunMessageSummary {
+  readonly count: number;
+  readonly latest?: RunMessagePreview | undefined;
+}
+
 const PANEL_RUN_STATES: ReadonlySet<SubagentRunState> = new Set([
   "starting",
   "running",
@@ -58,8 +81,54 @@ export interface SubagentActivityPanelProjection {
   readonly trackedRunIds: ReadonlySet<string>;
   readonly awaitedRunIds: ReadonlySet<string>;
   readonly awaitedRuns: ReadonlyArray<SubagentRunView>;
+  /** Message counts and latest previews for included runs that sent or received any. */
+  readonly messages: ReadonlyMap<string, RunMessageSummary>;
   readonly presentation: SubagentActivityPresentationSnapshot;
 }
+
+const latestMessagePreview = (
+  run: SubagentRunView,
+  runsById: ReadonlyMap<string, SubagentRunView>,
+): RunMessagePreview | undefined => {
+  const event = run.sessionEvents.findLast(
+    (candidate) => candidate.type === "notice" && candidate.kind === "message",
+  );
+  if (event?.type !== "notice" || event.kind !== "message") return undefined;
+  const peer =
+    event.peer === MAIN_AGENT_ID ? MAIN_AGENT_ID : (runsById.get(event.peer)?.name ?? event.peer);
+  return {
+    direction: event.direction,
+    peer: sanitizeTerminalLine(peer),
+    text: sanitizeTerminalLine(event.text.slice(0, MESSAGE_PREVIEW_CHARS)),
+    createdAt: event.createdAt,
+  };
+};
+
+const projectRunMessages = (
+  runs: ReadonlyArray<SubagentRunView>,
+  runsById: ReadonlyMap<string, SubagentRunView>,
+): ReadonlyMap<string, RunMessageSummary> => {
+  const messages = new Map<string, RunMessageSummary>();
+  for (const run of runs) {
+    const latest = latestMessagePreview(run, runsById);
+    const count = run.messageCount ?? 0;
+    if (count > 0 || latest) messages.set(run.id, { count, ...(latest && { latest }) });
+  }
+  return messages;
+};
+
+/** The run's latest message while it is recent; small clock differences count as recent. */
+export const recentRunMessage = (
+  panel: SubagentActivityPanelProjection,
+  runId: string,
+  now: number,
+): RunMessagePreview | undefined => {
+  const latest = panel.messages.get(runId)?.latest;
+  return latest && Math.abs(now - latest.createdAt) < RECENT_MESSAGE_WINDOW_MS ? latest : undefined;
+};
+
+export const runMessageCount = (panel: SubagentActivityPanelProjection, runId: string): number =>
+  panel.messages.get(runId)?.count ?? 0;
 
 export const projectSubagentActivityPanel = (
   projection: SubagentProjection,
@@ -94,6 +163,7 @@ export const projectSubagentActivityPanel = (
     trackedRunIds: new Set(trackedRuns.map((run) => run.id)),
     awaitedRunIds,
     awaitedRuns: projection.runs.filter((run) => awaitedRunIds.has(run.id)),
+    messages: projectRunMessages(includedRuns, runsById),
     presentation,
   };
 };
@@ -106,6 +176,8 @@ export const hasSubagentActivityPanelContent = (
   presentation.starts.length > 0 ||
   presentation.awaits.length > 0;
 
+// Recent messages need no cadence of their own: only tracked runs show them, and every tracked
+// state refreshes at least once a second, so a message leaves its row within a second of expiring.
 export const subagentActivityPanelCadence = (
   panel: SubagentActivityPanelProjection,
 ): SubagentUiRefreshCadence | undefined =>
@@ -245,8 +317,14 @@ const activityIdentity = (
         shortRunId(sanitizeTerminalLine(run.id)),
       )}`
     : "";
-  return `${theme.fg("success", branch)}${theme.fg(identityColor, stateIdentity)}${id}`;
+  const messageCount = runMessageCount(panel, run.id);
+  const messages =
+    messageCount > 0 ? theme.fg(ancestorOnly ? "dim" : "muted", ` ✉ ${messageCount}`) : "";
+  return `${theme.fg("success", branch)}${theme.fg(identityColor, stateIdentity)}${id}${messages}`;
 };
+
+const messageActivity = (message: RunMessagePreview): string =>
+  `↔ ${message.direction === "out" ? "to" : "from"} ${message.peer}: "${message.text}"`;
 
 const stallLabel = (stall: RunStall): string => {
   switch (stall.kind) {
@@ -260,32 +338,66 @@ const stallLabel = (stall: RunStall): string => {
   return absurd(stall);
 };
 
+interface ActivityMetadataVariant {
+  readonly parts: ReadonlyArray<string>;
+  /** A lone message preview may be clipped to fit the row. */
+  readonly clippable?: boolean | undefined;
+}
+
 const activityMetadataVariants = (
   run: FleetTreeRow["run"],
+  panel: SubagentActivityPanelProjection,
   route: string,
   theme: Theme,
   now: number,
   ancestorOnly: boolean,
-  separator: string,
-): string[] => {
+): ActivityMetadataVariant[] => {
   const stall = ancestorOnly ? undefined : runStall(run, now);
-  const activity = stall ? stallLabel(stall) : ancestorOnly ? "" : runActivity(run);
+  const message = stall || ancestorOnly ? undefined : recentRunMessage(panel, run.id, now);
+  const activity = stall
+    ? stallLabel(stall)
+    : message
+      ? messageActivity(message)
+      : ancestorOnly
+        ? ""
+        : runActivity(run);
   const attention =
-    stall !== undefined || run.state === "waiting_for_parent" || run.state === "paused";
+    stall !== undefined ||
+    (message === undefined && (run.state === "waiting_for_parent" || run.state === "paused"));
   const themedActivity = activity ? theme.fg(attention ? "warning" : "accent", activity) : "";
   const elapsed = ancestorOnly ? "" : runElapsed(run, now);
   const themedElapsed = elapsed ? theme.fg("dim", elapsed) : "";
-  return [
-    [route, themedActivity, themedElapsed],
-    [route, themedActivity],
-    // A stall warning outranks the route when the row is too narrow for both.
-    ...(stall ? [[themedActivity, themedElapsed], [themedActivity]] : []),
-    [route, themedElapsed],
-    [route],
-  ].flatMap((parts) => {
-    const row = parts.filter(Boolean).join(separator);
-    return row ? [row] : [];
+  const variants: ActivityMetadataVariant[] = [
+    { parts: [route, themedActivity, themedElapsed] },
+    { parts: [route, themedActivity] },
+    // A stall warning or recent message outranks the route when the row is too narrow for both.
+    ...(stall
+      ? [{ parts: [themedActivity, themedElapsed] }, { parts: [themedActivity] }]
+      : message
+        ? [{ parts: [themedActivity], clippable: true }]
+        : []),
+    { parts: [route, themedElapsed] },
+    { parts: [route] },
+  ];
+  return variants.flatMap((variant) => {
+    const parts = variant.parts.filter(Boolean);
+    return parts.length > 0 ? [{ ...variant, parts }] : [];
   });
+};
+
+const fitActivityMetadata = (
+  identity: string,
+  variant: ActivityMetadataVariant,
+  width: number,
+  separator: string,
+): string | undefined => {
+  const metadata = variant.parts.join(separator);
+  const prefix = `${identity}${separator}`;
+  if (visibleWidth(prefix + metadata) <= width) return prefix + metadata;
+  const available = width - visibleWidth(prefix);
+  return variant.clippable && available >= MIN_CLIPPED_MESSAGE_WIDTH
+    ? `${prefix}${clipToWidth(metadata, available)}`
+    : undefined;
 };
 
 const clippedActivityRow = (
@@ -320,16 +432,9 @@ const renderActivityRow = (
   const compactRoute =
     tier === "wide" ? renderRunRoute(run, theme, "compact", ancestorOnly) : route;
   const separator = theme.fg("dim", " · ");
-  for (const metadata of activityMetadataVariants(
-    run,
-    route,
-    theme,
-    now,
-    ancestorOnly,
-    separator,
-  )) {
-    const combined = `${identity}${separator}${metadata}`;
-    if (visibleWidth(combined) <= width) return combined;
+  for (const variant of activityMetadataVariants(run, panel, route, theme, now, ancestorOnly)) {
+    const fitted = fitActivityMetadata(identity, variant, width, separator);
+    if (fitted !== undefined) return fitted;
   }
   return clippedActivityRow(identity, compactRoute, width, tier, separator);
 };

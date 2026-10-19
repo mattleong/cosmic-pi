@@ -98,6 +98,7 @@ const recordMessageLocked = (
     ...record.view,
     lastActivityAt: now,
     sessionEvents: appendMessageSessionEvent(record.view.sessionEvents, direction, peer, text, now),
+    messageCount: Math.min(Number.MAX_SAFE_INTEGER, (record.view.messageCount ?? 0) + 1),
   };
 };
 

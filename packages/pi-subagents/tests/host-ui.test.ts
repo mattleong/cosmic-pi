@@ -7,6 +7,7 @@ import type { Component, TUI } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { subagentProjectionBridge } from "../src/boundary/host-ui.ts";
 import { extensionContextFixture, plainTheme, tuiFixture } from "pi-cosmic-core/testing";
+import { RECENT_MESSAGE_WINDOW_MS } from "../src/ui/activity-panel.ts";
 import { projectionOf, view } from "./fixtures/run-view.ts";
 
 type WidgetFactory = (tui: TUI, theme: Theme) => Component & { dispose?(): void };
@@ -121,6 +122,50 @@ describe("subagent activity widget host", () => {
     expect(component?.render(100)).not.toEqual(current);
     expect(first.setWidget.mock.calls.some(([, content]) => content === undefined)).toBe(true);
     bridge.clear();
+  });
+
+  it("drops an expired message on refresh ticks alone and stops ticking when cleared", () => {
+    const { getFactory, setWidget } = captureFactory();
+    let now = 10_000;
+    const ticks: Array<() => void> = [];
+    const stopTicker = vi.fn();
+    const bridge = subagentProjectionBridge(undefined, {
+      startTicker: (_intervalMs, tick) => {
+        ticks.push(tick);
+        return stopTicker;
+      },
+      getNow: () => now,
+    });
+    bridge.publish(
+      projectionOf([
+        view({
+          id: "talker",
+          state: "waiting_for_parent",
+          messageCount: 1,
+          sessionEvents: [
+            {
+              type: "notice",
+              kind: "message",
+              direction: "out",
+              peer: "main",
+              text: "ping from talker",
+              createdAt: now,
+            },
+          ],
+        }),
+      ]),
+    );
+    bridge.setContext(context(setWidget));
+    const component = getFactory()?.(tui(), plainTheme);
+    const shows = () => component?.render(120).some((line) => line.includes("ping from talker"));
+
+    expect(shows()).toBe(true);
+    now += RECENT_MESSAGE_WINDOW_MS + 1_000;
+    for (const tick of ticks) tick();
+    expect(shows()).toBe(false);
+
+    bridge.clear();
+    expect(stopTicker).toHaveBeenCalled();
   });
 
   it("falls back when widget installation throws", () => {

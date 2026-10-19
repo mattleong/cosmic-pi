@@ -218,6 +218,8 @@ export interface SubagentRunView {
   readonly error?: string | undefined;
   readonly usage: SubagentUsage;
   readonly toolUses?: number | undefined;
+  /** Agent messages this run sent or received; `sessionEvents` keeps only the newest. */
+  readonly messageCount?: number | undefined;
 }
 
 export type SubagentControlExpectation = Pick<
