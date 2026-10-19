@@ -1,6 +1,6 @@
 import * as Effect from "effect/Effect";
 import type { SubagentError } from "./errors.ts";
-import type { RunContext } from "./internal.ts";
+import type { RunContext, RunRecord } from "./internal.ts";
 import type { SubagentControlExpectation, SubagentRunView } from "./model.ts";
 import { runSessionOwned } from "./session-owned.ts";
 import { snapshotView } from "./state.ts";
@@ -27,21 +27,35 @@ export const subtreeStopper =
         Effect.gen(function* () {
           const root = yield* requireRecord(id);
           yield* requireControlExpectation(root, expected);
-          const ordered = [...descendantRunIds(records, id), root.view.id];
-          for (const targetId of ordered) {
-            const target = records.get(targetId);
-            if (target) target.stoppedByParent = true;
+          const ordered = [...descendantRunIds(records, id), root.view.id].flatMap(
+            (targetId): ReadonlyArray<RunRecord> => {
+              const target = records.get(targetId);
+              return target ? [target] : [];
+            },
+          );
+          for (const target of ordered) {
+            target.stoppedByParent = true;
+            target.subtreeStopsInProgress += 1;
           }
           return ordered;
         }),
       ),
-      (orderedIds) =>
+      (ordered) =>
         Effect.gen(function* () {
-          const [stopped, failures] = yield* Effect.partition(orderedIds, (targetId) =>
-            stopRun(targetId),
+          const [stopped, failures] = yield* Effect.partition(ordered, (target) =>
+            stopRun(target.view.id),
           );
           if (failures[0]) return yield* failures[0];
           return stopped.at(-1) ?? snapshotView((yield* requireRecord(id)).view);
-        }),
+        }).pipe(
+          // Once the whole subtree is stopped, an agent message may resume any of its runs again.
+          Effect.ensuring(
+            withLock(
+              Effect.sync(() => {
+                for (const target of ordered) target.subtreeStopsInProgress -= 1;
+              }),
+            ),
+          ),
+        ),
     );
   };

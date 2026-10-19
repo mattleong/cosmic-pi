@@ -132,6 +132,30 @@ const inheritedNesting = (
     : ((scope === "project" ? inspection.global.file.nesting : undefined) ??
       DEFAULT_SUBAGENT_NESTING_POLICY);
 
+const nestingValue = (policy: SubagentNestingPolicy, field: NestingField): number =>
+  policy[field] ?? DEFAULT_MAX_ACTIVE_RUNS;
+
+/**
+ * A scope's own policy after one field inherits: its other limits stay, and the scope inherits
+ * the whole policy (undefined) once every field matches what it would inherit.
+ */
+const inheritNestingField = (
+  own: SubagentNestingPolicy,
+  inherited: SubagentNestingPolicy,
+  field: NestingField,
+): SubagentNestingPolicy | undefined => {
+  const source = (id: NestingField) => (id === field ? inherited : own);
+  const maxActiveRuns = source("maxActiveRuns").maxActiveRuns;
+  const next: SubagentNestingPolicy = {
+    maxDirectChildren: source("maxDirectChildren").maxDirectChildren,
+    maxDepth: source("maxDepth").maxDepth,
+    ...(maxActiveRuns !== undefined && { maxActiveRuns }),
+  };
+  return NESTING_FIELD_IDS.every((id) => nestingValue(next, id) === nestingValue(inherited, id))
+    ? undefined
+    : next;
+};
+
 const parseLimit = (field: NestingField, value: string): number | undefined => {
   const { minimum, maximum } = NESTING_FIELDS[field];
   const parsed = /^(?:0|[1-9][0-9]*)$/u.test(value) ? Number(value) : Number.NaN;
@@ -274,15 +298,13 @@ function subagentSettingsCommand(
       ctx,
       scope,
       "save the nesting limits",
-      (inspection) =>
-        limit === undefined
-          ? {}
-          : {
-              nesting: {
-                ...(scopeNesting(inspection, scope) ?? inheritedNesting(inspection, scope)),
-                [field]: limit,
-              },
-            },
+      (inspection) => {
+        const own = scopeNesting(inspection, scope);
+        const inherited = inheritedNesting(inspection, scope);
+        if (limit !== undefined) return { nesting: { ...(own ?? inherited), [field]: limit } };
+        const next = own && inheritNestingField(own, inherited, field);
+        return next ? { nesting: next } : {};
+      },
       { session: actions.patchSessionNesting, saved: actions.patchNesting },
     );
   };

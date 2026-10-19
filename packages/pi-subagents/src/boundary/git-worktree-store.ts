@@ -209,14 +209,6 @@ export const readWorkspaceRecord = (root: string, id: string) =>
     return record;
   });
 
-/** When the record last changed; records saved without the field use the record file's mtime. */
-export const recordChangedAt = (root: string, record: WorkspaceRecord) =>
-  record.lastChangedAt !== undefined
-    ? Effect.succeed(record.lastChangedAt)
-    : workspaceIO("registry", () =>
-        fs.stat(path.join(workspaceDirectory(root, record.handle.workspaceId), "record.json")),
-      ).pipe(Effect.map((stat) => stat.mtimeMs));
-
 /** How long a workspace operation waits for another session's operation on the same checkout. */
 const WORKSPACE_LOCK_WAIT = Duration.minutes(2);
 const WORKSPACE_LOCK_POLL = Duration.millis(200);

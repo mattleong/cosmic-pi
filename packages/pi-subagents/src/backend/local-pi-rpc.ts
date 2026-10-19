@@ -32,8 +32,8 @@ const mapTransportUncertainty = (command: RpcCommand, error: SubagentError): Sub
         code: rpcOutcomeCode(command),
         message:
           command.type === "clear_queue"
-            ? `${error.message} Queue clearing could not be confirmed; abort was not sent. Inspect subagent status before retrying interrupt.`
-            : `${error.message} Inspect subagent status before retrying ${commandLabel(command)}.`,
+            ? `${error.message} Queue clearing could not be confirmed; abort was not sent. Inspect the run with agent_read before retrying interrupt.`
+            : `${error.message} Inspect the run with agent_read before retrying ${commandLabel(command)}.`,
       })
     : error;
 
@@ -82,8 +82,8 @@ export const localPiRpc = (child: Pick<ChildProcessHandle, "send" | "sendContact
           code: rpcOutcomeCode(command),
           message:
             command.type === "clear_queue"
-              ? "Subagent did not answer clear_queue; queue clearing may already have applied, but abort was not sent. Inspect subagent status before retrying interrupt."
-              : `Subagent did not answer ${commandLabel(command)}; the command may already have applied. Inspect subagent status before retrying.`,
+              ? "Subagent did not answer clear_queue; queue clearing may already have applied, but abort was not sent. Inspect the run with agent_read before retrying interrupt."
+              : `Subagent did not answer ${commandLabel(command)}; the command may already have applied. Inspect the run with agent_read before retrying.`,
         }),
       awaitEarlyResponse: true,
     }).pipe(

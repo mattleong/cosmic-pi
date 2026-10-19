@@ -232,6 +232,8 @@ const orphan = (workspaceId: string, sourceWorkspaceId?: string) => ({
   },
   status: "active" as const,
   baseline: "abc",
+  ownerLease: "ended-owner",
+  lastChangedAt: 0,
 });
 
 describe("workspace prepared-pair apply and list", () => {
@@ -279,6 +281,8 @@ describe("workspace prepared-pair apply and list", () => {
               },
               status: "active",
               baseline: "abc",
+              ownerLease: "owner",
+              lastChangedAt: 0,
             },
           ],
           unavailable: [

@@ -21,7 +21,6 @@ export const SUBAGENT_RUN_STATES = [
   "running",
   "waiting_for_parent",
   "paused",
-  "reported",
   "completed",
   "failed",
   "stopping",
@@ -136,8 +135,9 @@ interface SubagentCleanup {
  * What became of a completed worktree writer's workspace once its cleanup was confirmed. Absent
  * while unknown, including when inspection failed or a run still used the tree.
  */
+/** A finished worktree writer's workspace: its proposal, or how the workspace was resolved. */
 export type SubagentWorkspaceOutcome =
-  | { readonly status: "auto-discarded" }
+  | { readonly status: "auto-discarded" | "integrated" | "discarded" }
   | {
       readonly status: "proposal";
       readonly changedFileCount: number;
@@ -345,7 +345,6 @@ const ACTIVE_RUN_STATES: ReadonlySet<SubagentRunState> = new Set([
   "running",
   "waiting_for_parent",
   "paused",
-  "reported",
   "stopping",
 ]);
 
@@ -370,9 +369,6 @@ const RESUMABLE_RUN_STATES: ReadonlySet<SubagentRunState> = new Set([
 
 export const isResumableRunState = (state: SubagentRunState): boolean =>
   RESUMABLE_RUN_STATES.has(state);
-
-export const isAssignmentFinishedRunState = (state: SubagentRunState): boolean =>
-  state === "reported" || isTerminalRunState(state);
 
 export const emptyUsage = (): SubagentUsage => ({
   input: 0,

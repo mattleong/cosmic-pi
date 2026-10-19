@@ -95,9 +95,9 @@ const settleResult = (
 /**
  * Owns when finished children may wake the root session, on the shared session wake: a notice
  * starts a turn only while the parent is idle, appends while it is busy and continues the settling
- * run, and holds after a user interrupt until the user's next prompt. A pending child question gets
- * one reminder before the turn settles, and a headless parent waits for running children instead of
- * exiting under them.
+ * run, holds while a dialog is open until it closes, and holds after a user interrupt until the
+ * user's next prompt. A pending child question gets one reminder before the turn settles, and a
+ * headless parent waits for running children instead of exiting under them.
  */
 export function registerParentWake(pi: ExtensionAPI, host: ParentWakeHost): SessionWake {
   const reminded = new Set<string>();
@@ -114,6 +114,7 @@ export function registerParentWake(pi: ExtensionAPI, host: ParentWakeHost): Sess
     wakeMessage: { customType: WAKE_MESSAGE_TYPE, content: WAKE_TEXT },
     isIdle: host.isIdle,
     later: host.later,
+    holdDuringDialogs: true,
     onInterrupt: (ctx) => {
       const active = host.projection().runs.filter((run) => isActiveRunState(run.state)).length;
       if (active > 0 && hasUi(ctx))

@@ -142,6 +142,25 @@ describe("parent wake policy", () => {
       }),
   );
 
+  it.effect("holds a notice behind an open dialog and wakes the parent once it closes", () =>
+    Effect.gen(function* () {
+      const test = harness();
+      const context = test.ctx();
+      const dialog = { reason: "ui_prompt", kind: "confirm" } as const;
+      yield* Effect.promise(() =>
+        test.emit("ui_prompt_start", context, { type: "ui_prompt_start", ...dialog }),
+      );
+      expect(test.wake.deliver(() => true)).toBe("held");
+      expect(test.wakes()).toHaveLength(0);
+
+      yield* Effect.promise(() =>
+        test.emit("ui_prompt_end", context, { type: "ui_prompt_end", ...dialog }),
+      );
+      expect(test.wakes()).toHaveLength(1);
+      expect(test.wakes()[0]?.[1]).toMatchObject({ triggerTurn: true });
+    }),
+  );
+
   it.effect("appends notices to a busy parent and continues its run so the model sees them", () =>
     Effect.gen(function* () {
       const test = harness();

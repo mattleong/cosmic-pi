@@ -34,7 +34,10 @@ export interface WorktreeHookInput {
 
 interface WorktreeHookOptions {
   readonly environment?: NodeJS.ProcessEnv;
-  /** Reports whether the process group was confirmed stopped, including after interruption. */
+  /**
+   * Reports once, as the hook settles, whether its process group was confirmed stopped, including
+   * after interruption. A hook that never started reports nothing or true.
+   */
   readonly onCleanup?: (confirmed: boolean) => void;
 }
 
@@ -95,49 +98,64 @@ export const runWorktreeHook = (
   if (executable === undefined)
     return Effect.fail(new WorktreeHookError({ message: `${input.event} hook has no command.` }));
   const timeoutSeconds = hook.timeout ?? DEFAULT_WORKTREE_HOOK_TIMEOUT_SECONDS[input.event];
-  return runBoundedProcessNode({
-    executable,
-    args,
-    cwd: input.worktreePath,
-    environment: hookEnvironment(options.environment ?? process.env),
-    stdin: stdinPayload(input),
-    stdoutLimitBytes: STDOUT_LIMIT_BYTES,
-    stderrLimitBytes: STDERR_LIMIT_BYTES,
-    timeoutMillis: timeoutSeconds * 1000,
-    cleanupTimeoutMillis: CLEANUP_TIMEOUT_MILLIS,
-    detached: true,
-    sweepProcessTreeOnExit: true,
-    ...(options.onCleanup !== undefined && { onCleanup: options.onCleanup }),
-  }).pipe(
-    Effect.mapError((error) => {
-      // A hook that never spawned left no process behind, so its cleanup is confirmed; this
-      // report follows the runner's own, which can't tell that case apart.
-      const neverStarted = error.operation === "spawn";
-      if (neverStarted) options.onCleanup?.(true);
-      return new WorktreeHookError({
-        message: neverStarted
-          ? `${label} couldn't start; check that the command exists on PATH.`
-          : `${label} couldn't be read to completion.`,
-        cleanupUnconfirmed: !neverStarted,
-      });
-    }),
-    Effect.flatMap((result) => {
-      if (result.code === 0 && !result.timedOut && !result.overflowed && !result.cleanupUnconfirmed)
-        return Effect.void;
-      const reason = result.timedOut
-        ? `timed out after ${timeoutSeconds}s`
-        : result.overflowed
-          ? "produced too much output"
-          : result.cleanupUnconfirmed
-            ? "left processes that couldn't be confirmed stopped"
-            : `exited with ${result.code === null ? `signal ${result.signal ?? "unknown"}` : `code ${result.code}`}`;
-      const line = lastLine(result.stdout, result.stderr);
-      return Effect.fail(
-        new WorktreeHookError({
-          message: `${label} ${reason}${line ? `: ${line}` : "."}`,
-          cleanupUnconfirmed: result.cleanupUnconfirmed,
+  return Effect.suspend(() => {
+    // The runner's report is held until the hook settles, because the runner can't tell a hook
+    // that never spawned, which left no process behind, from one whose cleanup is unknown.
+    let cleanupConfirmed: boolean | undefined;
+    return runBoundedProcessNode({
+      executable,
+      args,
+      cwd: input.worktreePath,
+      environment: hookEnvironment(options.environment ?? process.env),
+      stdin: stdinPayload(input),
+      stdoutLimitBytes: STDOUT_LIMIT_BYTES,
+      stderrLimitBytes: STDERR_LIMIT_BYTES,
+      timeoutMillis: timeoutSeconds * 1000,
+      cleanupTimeoutMillis: CLEANUP_TIMEOUT_MILLIS,
+      detached: true,
+      sweepProcessTreeOnExit: true,
+      onCleanup: (confirmed) => {
+        cleanupConfirmed = confirmed;
+      },
+    }).pipe(
+      Effect.mapError((error) => {
+        const neverStarted = error.operation === "spawn";
+        if (neverStarted) cleanupConfirmed = true;
+        return new WorktreeHookError({
+          message: neverStarted
+            ? `${label} couldn't start; check that the command exists on PATH.`
+            : `${label} couldn't be read to completion.`,
+          cleanupUnconfirmed: !neverStarted,
+        });
+      }),
+      Effect.flatMap((result) => {
+        if (
+          result.code === 0 &&
+          !result.timedOut &&
+          !result.overflowed &&
+          !result.cleanupUnconfirmed
+        )
+          return Effect.void;
+        const reason = result.timedOut
+          ? `timed out after ${timeoutSeconds}s`
+          : result.overflowed
+            ? "produced too much output"
+            : result.cleanupUnconfirmed
+              ? "left processes that couldn't be confirmed stopped"
+              : `exited with ${result.code === null ? `signal ${result.signal ?? "unknown"}` : `code ${result.code}`}`;
+        const line = lastLine(result.stdout, result.stderr);
+        return Effect.fail(
+          new WorktreeHookError({
+            message: `${label} ${reason}${line ? `: ${line}` : "."}`,
+            cleanupUnconfirmed: result.cleanupUnconfirmed,
+          }),
+        );
+      }),
+      Effect.ensuring(
+        Effect.sync(() => {
+          if (cleanupConfirmed !== undefined) options.onCleanup?.(cleanupConfirmed);
         }),
-      );
-    }),
-  );
+      ),
+    );
+  });
 };

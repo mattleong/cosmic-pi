@@ -26,6 +26,7 @@ it.effect("process usage rechecks handle ownership inside the mutation lock", ()
     const record = yield* runRecordFixture({
       process: original,
       stoppedByParent: false,
+      subtreeStopsInProgress: 0,
       view: view({ state: "running", usage: emptyUsage() }),
     });
     const settlement = yield* makeTestSettlement({ withLock: lock.withPermits(1) });

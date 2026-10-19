@@ -31,7 +31,12 @@ import { SubagentService } from "../src/run/service.ts";
 import { executeSubagentActionEffect } from "../src/tools/execute.ts";
 import { encodeSubagentProxyInput, withSubagentProxyParent } from "../src/tools/proxy-protocol.ts";
 import type { SubagentToolInput } from "../src/tools/schema.ts";
-import { fakeWriterLeaseLayer, profileLayerFor, request } from "./run/fixtures/service-harness.ts";
+import {
+  fakeWriterLeaseLayer,
+  profileLayerFor,
+  request,
+  runViews,
+} from "./run/fixtures/service-harness.ts";
 
 const rootModel = modelFixture({
   provider: "openai",
@@ -304,9 +309,9 @@ describe("authenticated immediate-parent context", () => {
           expect(inherited).toContain("CHILD-FINDINGS");
           expect(inherited).toContain("CHILD-VERIFICATION");
           expect(inherited).not.toContain("ROOT-ONLY-HISTORY");
-          expect((yield* service.list).find((run) => run.id === oracle.runId)?.parentRunId).toBe(
-            parent.id,
-          );
+          expect(
+            (yield* runViews(service)).find((run) => run.id === oracle.runId)?.parentRunId,
+          ).toBe(parent.id);
 
           const latestLeaf = child.appendMessage({
             role: "user",

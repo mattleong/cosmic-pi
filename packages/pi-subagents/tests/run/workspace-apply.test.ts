@@ -4,7 +4,12 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import type { SubagentServiceContract } from "../../src/run/service.ts";
 import { WorkspaceError } from "../../src/workspace/model.ts";
-import { completeLocalRun, waitForCompleted, withService } from "./fixtures/service-harness.ts";
+import {
+  completeLocalRun,
+  runViews,
+  waitForCompleted,
+  withService,
+} from "./fixtures/service-harness.ts";
 import {
   pauseAt,
   repoWriter,
@@ -278,6 +283,69 @@ describe("one-step workspace apply", () => {
         code: "workspace_review_incomplete",
       });
       expect(f.entries.get(id)?.preparation).toBeUndefined();
+    });
+  });
+});
+
+const outcomeOf = (service: SubagentServiceContract, id: string) =>
+  runViews(service).pipe(Effect.map((runs) => runs.find((run) => run.id === id)?.workspaceOutcome));
+const settledOutcome = (service: SubagentServiceContract, id: string) =>
+  Effect.gen(function* () {
+    for (let turn = 0; turn < 200; turn++) {
+      const outcome = yield* outcomeOf(service, id);
+      if (outcome) return outcome;
+      yield* Effect.yieldNow;
+    }
+    return yield* Effect.die(new Error(`Workspace outcome of ${id} never settled.`));
+  });
+
+describe("a worktree writer's workspace outcome", () => {
+  it.effect("stops offering a proposal once it is applied or discarded", () => {
+    const f = workspaceFixture();
+    return withService(f.layer, function* (service) {
+      const applied = yield* completedWriter(service, f);
+      expect(yield* settledOutcome(service, applied.id)).toMatchObject({ status: "proposal" });
+      yield* service.workspaceApply(applied.workspaceId!);
+      expect(yield* outcomeOf(service, applied.id)).toEqual({ status: "integrated" });
+
+      const discarded = yield* completedWriter(service, f);
+      expect(yield* settledOutcome(service, discarded.id)).toMatchObject({ status: "proposal" });
+      yield* service.workspaceDiscard(discarded.workspaceId!);
+      expect(yield* outcomeOf(service, discarded.id)).toEqual({ status: "discarded" });
+    });
+  });
+
+  it.effect("narrows the proposal to the changes a partial apply left", () => {
+    const f = workspaceFixture();
+    const changed = ["a.ts", "b.ts", "c.ts"];
+    f.hooks.changedPaths = changed;
+    f.hooks.workerChanges = {
+      changedPaths: changed,
+      uncapturedPaths: [],
+      diffStat: changed.map((path, index) => ({
+        path,
+        change: "modified" as const,
+        binary: false,
+        addedLines: index + 1,
+        deletedLines: 1,
+      })),
+    };
+    return withService(f.layer, function* (service) {
+      const writer = yield* completedWriter(service, f);
+      expect(yield* settledOutcome(service, writer.id)).toMatchObject({
+        status: "proposal",
+        changedFileCount: 3,
+      });
+      yield* service.workspaceApply(writer.workspaceId!, { paths: ["a.ts", "c.ts"] });
+      expect(yield* outcomeOf(service, writer.id)).toEqual({
+        status: "proposal",
+        changedFileCount: 1,
+        diffStat: {
+          addedLines: 2,
+          deletedLines: 1,
+          files: [{ path: "b.ts", addedLines: 2, deletedLines: 1 }],
+        },
+      });
     });
   });
 });

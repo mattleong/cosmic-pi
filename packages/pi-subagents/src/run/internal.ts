@@ -118,6 +118,8 @@ export interface RunRecord {
   pauseRequested: boolean;
   pausedAssignmentEpoch?: number | undefined;
   stoppedByParent: boolean;
+  /** Subtree stops covering this run that are still in progress; agent messages can't resume it. */
+  subtreeStopsInProgress: number;
   cleanupPending: boolean;
   runStateReclaimState: "pending" | "running" | "reclaimed";
   evictionClaim?: { readonly parentRunId?: string | undefined } | undefined;

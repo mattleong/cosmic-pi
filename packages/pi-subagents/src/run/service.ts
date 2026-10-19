@@ -20,7 +20,6 @@ import type {
 } from "../boundary/host-notifier.ts";
 import { WriterLeaseService } from "../boundary/writer-lease.ts";
 import {
-  type InvalidSubagentRequestError,
   runNotFound,
   type SubagentError,
   type SubagentNotFoundError,
@@ -129,15 +128,6 @@ export interface SubagentRunObservation {
   readonly recovery?: FailedStartRecovery | undefined;
 }
 
-interface SubagentStatusObservations {
-  readonly observations: ReadonlyArray<SubagentRunObservation>;
-  readonly missingIds: ReadonlyArray<string>;
-}
-
-export interface SubagentStatusObservationOptions {
-  readonly includeDeliveredReports?: boolean | undefined;
-}
-
 export interface SubagentServiceContract extends WorkspaceCoordinatorContract {
   readonly start: (request: StartSubagentRequest) => Effect.Effect<SubagentRunView, SubagentError>;
   readonly startSessionOwned: (
@@ -191,13 +181,6 @@ export interface SubagentServiceContract extends WorkspaceCoordinatorContract {
     /** The awaiting run, or undefined for the root session. */
     callerRunId?: string,
   ) => Effect.Effect<A, SubagentError | E, R>;
-  readonly list: Effect.Effect<ReadonlyArray<SubagentRunView>>;
-  readonly status: (id: string) => Effect.Effect<SubagentRunView, SubagentNotFoundError>;
-  readonly withStatusObservations: <A, E, R>(
-    ids: ReadonlyArray<string>,
-    use: (selection: SubagentStatusObservations) => Effect.Effect<A, E, R>,
-    options?: SubagentStatusObservationOptions,
-  ) => Effect.Effect<A, InvalidSubagentRequestError | E, R>;
   readonly consumeCompletions: (
     receipts: ReadonlyArray<SubagentCompletionReceipt>,
   ) => Effect.Effect<void>;
@@ -501,7 +484,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     ...runContext,
     main: options.agentMain,
     deliverToRun: controls.deliver,
-    resume: resume.resume,
+    resume: (id, message, agentMessage) => resume.resume(id, message, undefined, agentMessage),
     allocateMessageId,
   });
 
@@ -512,20 +495,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     redactCompletionReport: observations.redactCompletionReport,
     releaseRetryClaim: retry.releaseRetryClaim,
   });
-  const list = SubscriptionRef.get(projectionRef).pipe(Effect.map((current) => current.runs));
-  const status: SubagentServiceContract["status"] = (id) =>
-    observations
-      .withStatusObservations([id], ({ observations: selected }) => {
-        const observation = selected[0];
-        if (!observation) return Effect.fail(runNotFound(id));
-        return (
-          observation.completionReceipt
-            ? observations.consumeCompletions([observation.completionReceipt])
-            : Effect.void
-        ).pipe(Effect.as(observation.run));
-      })
-      .pipe(Effect.catchTag("InvalidSubagentRequestError", () => Effect.fail(runNotFound(id))));
-
   const projection = SubscriptionRef.get(projectionRef);
 
   const service: SubagentServiceContract = {
@@ -547,8 +516,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     captureLaunchParent: starts.captureLaunchParent,
     ...visibilityOperations(runContext),
     startRetrySessionOwned: starts.startRetrySessionOwned,
-    list,
-    status,
     send: controls.send,
     interrupt: controls.interrupt,
     resume: resume.resume,

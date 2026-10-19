@@ -25,7 +25,6 @@ import {
   projectedSubject,
   rejectedCall,
   requestedRunIds,
-  requestedTargets,
   type SummaryArguments,
 } from "./compact-heading.ts";
 import {
@@ -90,7 +89,7 @@ function summarizeReceipt(
     phase,
     projectedSubject(details, input, lanes.subject, targets),
     targets,
-    requestedTargets(input),
+    requestedRunIds(input),
   );
   applyArgumentLanes(summary, details, phase, lanes);
   return summary;
@@ -138,6 +137,8 @@ function awaitIssues(
         "Descendants are context only; this await summarizes requested targets. Inspect descendants with agent_read.",
     });
   if (details.cancelled && details.endedByUserInput) {
+    // The wait ended for the user, not because the targets succeeded.
+    if (summary.outcome === "success") summary.outcome = "returned";
     issues.push({
       severity: "info",
       code: "await-user-input",

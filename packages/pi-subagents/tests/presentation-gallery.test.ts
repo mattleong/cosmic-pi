@@ -401,7 +401,7 @@ const startScenarios = Effect.gen(function* () {
                   operation: "start",
                   code: uncertain ? "prompt_outcome_uncertain" : "prompt_not_delivered",
                   message: uncertain
-                    ? "Subagent did not confirm task admission.\nThe task may already have started; inspect subagent status before retrying."
+                    ? "Subagent did not confirm task admission.\nThe task may already have started; inspect the run with agent_read before retrying."
                     : "Subagent did not admit the task.\nAn input hook or slash command handled it before it reached the model.",
                 }),
               ),
@@ -640,23 +640,9 @@ const agentScenarios = Effect.all([
     sent("main", "main", "queued"),
   ),
   agentScenario(
-    "main agent holds messages after an interrupt",
+    "main agent holds messages behind a dialog or after an interrupt",
     { tool: "agent_send", args: { to: "main", message: "Done with the audit." } },
     sent("main", "main", "held"),
-  ),
-  agentScenario(
-    "main agent's wake budget is spent",
-    { tool: "agent_send", args: { to: "main", message: "One more finding." } },
-    {
-      agentSend: () =>
-        Effect.succeed({
-          messageId: "message-4",
-          to: "main",
-          name: "main",
-          disposition: "held",
-          wakeBudgetExhausted: true,
-        }),
-    },
   ),
   agentScenario(
     "reply to a child's question",
@@ -925,6 +911,8 @@ const workspaceRecord: WorkspaceRecord = {
   },
   status: "frozen",
   baseline: "4f2a9c1",
+  ownerLease: "owner-1",
+  lastChangedAt: 0,
   revision: { revisionId: "rev-1", changedPaths: ["db/0007.sql"] },
 };
 const proposalOutcome = {
@@ -1446,6 +1434,18 @@ const receiptScenarios: ReadonlyArray<ToolScenario> = [
       finalText: "No changes were needed; the timeout is already configured.",
     }),
   ]),
+  ...(["integrated", "discarded"] as const).map((status) =>
+    awaited(`writer's proposal was ${status === "integrated" ? "applied" : "discarded"}`, [
+      view({
+        state: "completed",
+        writeIntent: "writer",
+        writerWorkspaceMode: "worktree",
+        workspaceId: "ws-1",
+        workspaceOutcome: { status },
+        finalText: "Implemented.",
+      }),
+    ]),
+  ),
   awaited("writer changes ready for review", [
     view({
       state: "completed",

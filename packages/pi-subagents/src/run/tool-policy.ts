@@ -135,19 +135,18 @@ export const piRootActiveToolSnapshot = (
   return Effect.succeed(Object.freeze(inherited));
 };
 
-// The child registers its supervision and coordination tools itself; no agent tool list can
-// remove them.
-
-/** Narrows a Pi child's inherited tools by a custom agent's allow and deny lists. */
+/**
+ * Narrows a Pi child's inherited tools by a custom agent's allow and deny lists. The inherited
+ * snapshot never holds coordination tools, which the child registers itself, so no list can
+ * remove them.
+ */
 export const customAgentToolSnapshot = (
   inherited: ReadonlyArray<string>,
   tools: CustomAgentTools | undefined,
 ): ReadonlyArray<string> =>
   Object.freeze(
     inherited.filter(
-      (name) =>
-        isCoordinationTool(name) ||
-        ((tools?.allow?.includes(name) ?? true) && !(tools?.deny?.includes(name) ?? false)),
+      (name) => (tools?.allow?.includes(name) ?? true) && !(tools?.deny?.includes(name) ?? false),
     ),
   );
 

@@ -812,13 +812,27 @@ describe("private supervisor channel", () => {
         ).rejects.toMatchObject({ code: "question_ownership_mismatch" }),
       );
 
-      const secondQuestion = yield* step(() =>
-        toolCall(rpc, "question-duplicate", "agent_contact_parent", {
+      // An assignment may ask again once its earlier question settled, one at a time.
+      const secondQuestion = toolCall(rpc, "question-second", "agent_contact_parent", {
+        kind: "question",
+        message: "A second question?",
+      });
+      const second = yield* step(() => takeEvent(handle));
+      if (second.type !== "supervisor_contact") throw new Error("expected question");
+      expect(second).toMatchObject({ kind: "question", assignmentEpoch: 1 });
+      const concurrent = yield* step(() =>
+        toolCall(rpc, "question-concurrent", "agent_contact_parent", {
           kind: "question",
-          message: "A second question?",
+          message: "A question while another waits?",
         }),
       );
-      expect(secondQuestion).toMatchObject({ error: { code: -32000 } });
+      expect(concurrent).toMatchObject({ error: { code: -32000 } });
+      yield* step(() =>
+        Effect.runPromise(handle.reply(second.requestId, "Use the second answer.")),
+      );
+      expect(yield* step(() => secondQuestion)).toMatchObject({
+        result: { content: [{ text: "Parent reply: Use the second answer." }] },
+      });
 
       const retry = yield* step(() =>
         toolCall(rpc, "report-retry", "agent_submit_report", {

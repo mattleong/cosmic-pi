@@ -5,6 +5,7 @@ import {
   captureRegistrations,
   createToolPresentationHarness,
   issueMessageStyleProblems,
+  renderContextFixture,
 } from "pi-code-previews/testing";
 import {
   MAIN_AGENT_ID,
@@ -13,8 +14,11 @@ import {
 } from "../../src/run/agent-messaging.ts";
 import { AGENT_MESSAGE_REFUSAL_CODES, agentMessageRefusal } from "../../src/run/errors.ts";
 import { agentFailureIssues } from "../../src/tools/compact-action-failures.ts";
+import { createAgentCompactSummary } from "../../src/tools/compact-agent-summary.ts";
+import { stringContaining } from "../support/matchers.ts";
 import { decodeSubagentContract } from "../../src/tools/contract-schema.ts";
 import { executeAgentActionEffect } from "../../src/tools/execute-agents.ts";
+import type { SubagentRunView } from "../../src/run/model.ts";
 import { SubagentService } from "../../src/run/service.ts";
 import { registerAgentTools } from "../../src/tools/agent.ts";
 import { registerSubagentTools } from "../../src/tools/subagent.ts";
@@ -63,6 +67,17 @@ const READ: AgentReadResult = {
   ],
   missingIds: ["agent-gone"],
 };
+
+const readout = (run: SubagentRunView) => ({
+  kind: "run" as const,
+  id: run.id,
+  name: run.name,
+  state: run.state,
+  textStatus: "none" as const,
+  truncated: false,
+  reportGeneration: 0,
+  run,
+});
 
 const callers: AgentCaller[] = [];
 const agentService = () =>
@@ -261,6 +276,52 @@ describe("agent tools", () => {
       ).toEqual([]);
     }
   });
+
+  it.effect("raises each read run's status issues without failing the read", () =>
+    Effect.gen(function* () {
+      const asking = view({
+        id: "agent-1",
+        name: "auth-review",
+        state: "waiting_for_parent",
+        warning: "Credentials were exposed",
+        question: { requestId: "q-1", message: "May I continue?" },
+      });
+      const failed = view({
+        id: "agent-2",
+        name: "fixer",
+        state: "failed",
+        error: "Tests failed.",
+      });
+      const tools = captureSubagentTools(
+        subagentServiceDouble({
+          agentRead: () =>
+            Effect.succeed({ agents: [readout(asking), readout(failed)], missingIds: [] }),
+        }),
+      );
+      const args = { agentIds: [asking.id, failed.id] };
+      const read = yield* Effect.promise(() => executeTool(tools.get("agent_read")!, args));
+      const summary = createAgentCompactSummary("agent_read")({
+        phase: "settled",
+        args,
+        result: {
+          content: [{ type: "text", text: read.content[0]?.text ?? "" }],
+          details: read.details,
+        },
+        context: renderContextFixture({}),
+      });
+      expect(summary?.outcome).toBe("warning");
+      const issues = summary?.issues ?? [];
+      expect(issues.map((issue) => issue.message)).toEqual(
+        expect.arrayContaining([
+          stringContaining("May I continue?"),
+          stringContaining("Credentials were exposed"),
+          stringContaining("Tests failed"),
+        ]),
+      );
+      expect(issues.filter((issue) => issue.severity === "error")).toEqual([]);
+      expect(issues.flatMap((issue) => issueMessageStyleProblems(issue.message))).toEqual([]);
+    }),
+  );
 
   it("shows every argument once a call is expanded", () => {
     const harness = createToolPresentationHarness(registeredTool("agent_read"));

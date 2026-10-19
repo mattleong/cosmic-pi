@@ -17,7 +17,13 @@ import {
   SCRIPTED_OBSERVATIONS_FILE,
   ScriptedObservation,
 } from "./fixtures/scripted-pi-provider.ts";
-import { awaitRuns, request, serviceLayer, withService } from "./run/fixtures/service-harness.ts";
+import {
+  awaitRuns,
+  request,
+  runView,
+  serviceLayer,
+  withService,
+} from "./run/fixtures/service-harness.ts";
 import { nodeFsPromises as fs, nodePath as path } from "./support/node-builtins.ts";
 import { processAlive } from "./support/process-liveness.ts";
 
@@ -146,11 +152,14 @@ describe("installed Pi child through the local launch path", () => {
           const descendant = yield* service.start(
             scripted("scripted-descendant", SCRIPT.holdTask, parent.id),
           );
-          const running = [yield* service.status(parent.id), yield* service.status(descendant.id)];
+          const running = [
+            yield* runView(service, parent.id),
+            yield* runView(service, descendant.id),
+          ];
           expect(running.map((run) => run.state)).toEqual(["running", "running"]);
           yield* service.stop(parent.id);
-          expect((yield* service.status(parent.id)).state).toBe("stopped");
-          expect((yield* service.status(descendant.id)).state).toBe("stopped");
+          expect((yield* runView(service, parent.id)).state).toBe("stopped");
+          expect((yield* runView(service, descendant.id)).state).toBe("stopped");
           for (const run of running) expect(yield* exited(run.pid)).toBe(true);
         });
       }).pipe(Effect.timeout("45 seconds"), Effect.scoped),

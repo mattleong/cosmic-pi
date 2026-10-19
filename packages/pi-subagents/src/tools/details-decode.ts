@@ -4,7 +4,7 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { freezeSnapshot } from "pi-cosmic-core";
-import { MAX_CUSTOM_AGENTS } from "../profiles/agents.ts";
+import { MAX_RESOLVED_CUSTOM_AGENTS } from "../profiles/agents.ts";
 import { MAX_PROFILE_CANDIDATES, PROFILE_IDS } from "../profiles/model.ts";
 import { MAX_START_BATCH, MAX_TARGET_RUNS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import {
@@ -93,7 +93,7 @@ const preflightRecord = (record: DetailsFields): boolean => {
     return (
       rootKeysAllowed(record, MODELS_KEYS) &&
       preflightArray(record, "profiles", PROFILE_IDS.length, preflightProfile) &&
-      preflightArray(record, "agents", MAX_CUSTOM_AGENTS, preflightProfile) &&
+      preflightArray(record, "agents", MAX_RESOLVED_CUSTOM_AGENTS, preflightProfile) &&
       preflightArray(record, "invalidAgents", MAX_INVALID_AGENT_ENTRIES)
     );
   if (Predicate.isString(action) && RUN_ACTION_SET.has(action))

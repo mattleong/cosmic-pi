@@ -3,6 +3,7 @@ import { yieldUntil } from "pi-cosmic-core/testing";
 import {
   nativeReportRequest,
   nativeReportServiceFixture,
+  runViews,
   withService,
 } from "./fixtures/service-harness.ts";
 
@@ -22,14 +23,14 @@ describe("runtime-native agent projection", () => {
         });
       activity("running");
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.nativeActivity?.active === 1, 200);
-      const active = yield* service.list;
+      const active = yield* runViews(service);
       expect(active).toHaveLength(1);
       expect(active[0]?.nativeActivity).toMatchObject({ active: 1, total: 1 });
       expect(active[0]?.directChildCount).toBe(0);
 
       activity("completed");
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.nativeActivity?.active === 0, 200);
-      expect((yield* service.list)[0]?.nativeActivity).toMatchObject({ active: 0, total: 1 });
+      expect((yield* runViews(service))[0]?.nativeActivity).toMatchObject({ active: 0, total: 1 });
     });
   });
 });

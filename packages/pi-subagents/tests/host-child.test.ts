@@ -350,6 +350,7 @@ describe("local Pi child bridge", () => {
       channel: "pi-subagents",
       type: "proxy_notification",
       requestId: "stale-notification",
+      key: "agent-1:1",
       message: "old",
     });
     yield* step(eventLoopTurn);
@@ -386,6 +387,36 @@ describe("local Pi child bridge", () => {
     yield* harness.awaitContact("parent_reply_ack", { requestId: "reply-ack", ok: true });
     yield* settle(harness.shutdown);
   });
+
+  effectTest(
+    "shows a retried descendant notice once after its acknowledgement was lost",
+    function* () {
+      const harness = makeHarness();
+      yield* settle(() => harness.start("/repo"));
+      const { handlers } = harness.currentListener();
+      for (const requestId of ["notice-1", "notice-retry"]) {
+        handlers.onControl({
+          channel: "pi-subagents",
+          type: "proxy_notification",
+          requestId,
+          key: "agent-1:1",
+          message: "Descendant reported.",
+        });
+        yield* harness.awaitContact("proxy_notification_ack", { requestId, ok: true });
+      }
+      expect(harness.sendMessage).toHaveBeenCalledOnce();
+      handlers.onControl({
+        channel: "pi-subagents",
+        type: "proxy_notification",
+        requestId: "notice-2",
+        key: "agent-1:2",
+        message: "Descendant reported again.",
+      });
+      yield* harness.awaitContact("proxy_notification_ack", { requestId: "notice-2", ok: true });
+      expect(harness.sendMessage).toHaveBeenCalledTimes(2);
+      yield* settle(harness.shutdown);
+    },
+  );
 
   effectTest("removes proxy names and shuts down after partial registration", function* () {
     const harness = makeHarness({ throwAtRegistration: 2 });

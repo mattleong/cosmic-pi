@@ -5,7 +5,7 @@ import * as Exit from "effect/Exit";
 import * as Match from "effect/Match";
 import { MAX_TARGET_RUNS } from "../run/limits.ts";
 import {
-  isAssignmentFinishedRunState,
+  isTerminalRunState,
   isParentActionRequiredRun,
   type SubagentRunView,
 } from "../run/model.ts";
@@ -99,7 +99,7 @@ export function awaitExecutionFor(
     proxyCleanupUnconfirmed = false,
     ending: AwaitEnding = { kind: "cancelled" },
   ): AgentToolResult<unknown> => {
-    const unfinished = latestRuns.filter((run) => !isAssignmentFinishedRunState(run.state)).length;
+    const unfinished = latestRuns.filter((run) => !isTerminalRunState(run.state)).length;
     const timedOutSeconds = ending.kind === "timed_out" ? ending.seconds : undefined;
     const ended = Match.value(ending).pipe(
       Match.when({ kind: "timed_out" }, ({ seconds }) => `Await timed out after ${seconds}s`),

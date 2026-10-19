@@ -9,6 +9,7 @@ import {
   fakeChildLayer,
   localServiceFixture,
   request,
+  runView,
   withService,
 } from "./fixtures/service-harness.ts";
 import { SubagentProcessError } from "../../src/run/errors.ts";
@@ -97,7 +98,7 @@ describe("local Pi startup deadline", () => {
         expectDiagnostic(failure.message);
         const run = projections.at(-1)!.runs[0]!;
         expect(run.state).toBe("failed");
-        expectDiagnostic((yield* service.status(run.id)).error);
+        expectDiagnostic((yield* runView(service, run.id)).error);
         expect(child.released()).toBe(1);
         expect(fake.reclaimedRunIds).toEqual([]);
         expect(child.sent("prompt")).toBe(false);

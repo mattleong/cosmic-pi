@@ -8,6 +8,8 @@ import {
   localServiceFixture,
   request,
   reviewerContinuation,
+  runView,
+  runViews,
   withService,
 } from "./fixtures/service-harness.ts";
 
@@ -22,7 +24,7 @@ const failedReviewer = (
     const control = fake.controls.at(-1)!;
     control.exit(1);
     yield* yieldUntil(() => control.released() === 1);
-    expect((yield* service.status(run.id)).state).toBe("failed");
+    expect((yield* runView(service, run.id)).state).toBe("failed");
     return run;
   });
 
@@ -37,7 +39,7 @@ describe("resuming finished runs", () => {
       expect(fake.controls).toHaveLength(2);
       expect(fake.controls[1]!.launch.resumeSessionFile).toBe("/tmp/child-session.jsonl");
       yield* completeLocalRun(service, fake.controls[1]!, run.id, "Recovered report.");
-      expect(yield* service.status(run.id)).toMatchObject({ state: "completed" });
+      expect(yield* runView(service, run.id)).toMatchObject({ state: "completed" });
     });
   });
 
@@ -51,7 +53,7 @@ describe("resuming finished runs", () => {
       expect(fake.controls[1]!.launch.resumeSessionFile).toBe("/tmp/child-session.jsonl");
       // A stop no longer marks the resumed run inactive: its next report settles normally.
       yield* completeLocalRun(service, fake.controls[1]!, run.id, "Finished after the stop.");
-      expect(yield* service.status(run.id)).toMatchObject({ state: "completed" });
+      expect(yield* runView(service, run.id)).toMatchObject({ state: "completed" });
     });
   });
 
@@ -67,13 +69,13 @@ describe("resuming finished runs", () => {
         .start(request({ profile: "reviewer", routeContinuation: reviewerContinuation(0) }))
         .pipe(Effect.flip);
       yield* yieldUntil(() => fake.controls[0]?.released() === 1);
-      const failed = (yield* service.list)[0]!;
+      const failed = (yield* runViews(service))[0]!;
       expect(failed.state).toBe("failed");
       const refusal = yield* service.resume(failed.id).pipe(Effect.flip);
       expect(refusal).toMatchObject({ code: "backend_resume_unavailable" });
       expect(refusal.message).toContain(`action: "retry"`);
       expect(fake.controls).toHaveLength(1);
-      expect((yield* service.status(failed.id)).state).toBe("failed");
+      expect((yield* runView(service, failed.id)).state).toBe("failed");
     });
   });
 
@@ -92,8 +94,8 @@ describe("resuming finished runs", () => {
       expect(yield* service.resume(failed.id).pipe(Effect.flip)).toMatchObject({
         code: "resume_superseded",
       });
-      expect((yield* service.status(failed.id)).state).toBe("failed");
-      expect((yield* service.status(successor.id)).state).toBe("running");
+      expect((yield* runView(service, failed.id)).state).toBe("failed");
+      expect((yield* runView(service, successor.id)).state).toBe("running");
       expect(fake.controls).toHaveLength(2);
     });
   });
@@ -108,7 +110,7 @@ describe("resuming finished runs", () => {
       });
       fake.controls[1]!.exit(1);
       yield* yieldUntil(() => fake.controls[1]!.released() === 1);
-      expect((yield* service.status(failed.id)).state).toBe("failed");
+      expect((yield* runView(service, failed.id)).state).toBe("failed");
       // The resumed assignment may differ from the launch task, so it is never replayed.
       expect(yield* service.claimRetryContinuation(failed.id).pipe(Effect.flip)).toMatchObject({
         code: "retry_assignment_not_initial",

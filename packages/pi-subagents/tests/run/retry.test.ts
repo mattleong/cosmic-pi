@@ -11,16 +11,18 @@ import { getFailedStartRecovery } from "../../src/run/launch.ts";
 import type { StartSubagentRequest } from "../../src/run/model.ts";
 import type { SubagentServiceContract } from "../../src/run/service.ts";
 import {
+  awaitRuns,
   fakeChildLayer,
   fakeNativeReportBackendLayer,
   inputDeliveryFrame,
-  nativeReportServiceFixture,
-  nativeReportRequest,
-  request,
   localServiceFixture,
+  nativeReportRequest,
+  nativeReportServiceFixture,
+  request,
   reviewerContinuation,
+  runView,
+  runViews,
   withService,
-  awaitRuns,
 } from "./fixtures/service-harness.ts";
 
 const reviewerNative = () =>
@@ -105,7 +107,7 @@ describe("explicit profile-route retry", () => {
             notifications.some((notification) => notification.type === "completed"),
           );
           yield* service.stop(run.id);
-          expect(yield* service.status(run.id)).toMatchObject({
+          expect(yield* runView(service, run.id)).toMatchObject({
             state: "failed",
             steeringDelivery: "unresolved",
             error: "Primary acknowledgement watchdog failure.",
@@ -114,7 +116,7 @@ describe("explicit profile-route retry", () => {
             code: "retry_outcome_uncertain",
           });
           if (cleanupFailure)
-            expect((yield* service.status(run.id)).cleanup?.disposition).toBe("quarantined");
+            expect((yield* runView(service, run.id)).cleanup?.disposition).toBe("quarantined");
           else expect(control.released()).toBe(1);
           expect(
             notifications.some(
@@ -157,15 +159,15 @@ describe("explicit profile-route retry", () => {
       yield* Fiber.interrupt(waiting);
       yield* Deferred.succeed(promptGate, undefined);
       yield* yieldUntil(() => fake.controls.length === 2);
-      const successorId = (yield* service.status(failed.id)).supersededByRunId!;
+      const successorId = (yield* runView(service, failed.id)).supersededByRunId!;
       yield* yieldUntil(
         () =>
           projections
             .at(-1)
             ?.runs.some((run) => run.id === successorId && run.state === "running") === true,
       );
-      expect((yield* service.status(successorId)).state).toBe("running");
-      expect((yield* service.status(failed.id)).supersededByRunId).toBe(successorId);
+      expect((yield* runView(service, successorId)).state).toBe("running");
+      expect((yield* runView(service, failed.id)).supersededByRunId).toBe(successorId);
     });
   });
 
@@ -198,7 +200,7 @@ describe("explicit profile-route retry", () => {
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
       fake.controls[0]?.exit(0);
       yield* yieldUntil(() => fake.controls[0]?.released() === 1);
-      const [failed] = yield* service.list;
+      const [failed] = yield* runViews(service);
       expect(failed).toMatchObject({
         state: "failed",
         reportGeneration: 0,
@@ -242,7 +244,7 @@ describe("explicit profile-route retry", () => {
         remainingCandidateCount: 0,
         selection: { candidateIndex: 1 },
       });
-      expect(yield* service.status(failedRun.id)).toMatchObject({
+      expect(yield* runView(service, failedRun.id)).toMatchObject({
         state: "failed",
         supersededByRunId: successor.id,
       });
@@ -291,7 +293,7 @@ describe("explicit profile-route retry", () => {
         .start(request({ profile: "reviewer", routeContinuation: reviewerContinuation(0) }))
         .pipe(Effect.flip);
       yield* yieldUntil(() => fake.controls[0]?.released() === 1);
-      const failedRun = (yield* service.list)[0]!;
+      const failedRun = (yield* runViews(service))[0]!;
       expect(getFailedStartRecovery(failure)).toMatchObject({
         runId: failedRun.id,
         cleanupDisposition: "confirmed",
@@ -323,8 +325,11 @@ describe("explicit profile-route retry", () => {
       expect(yield* Effect.flip(service.claimRetryContinuation(run.id))).toMatchObject({
         code: "retry_assignment_not_initial",
       });
-      const observed = yield* service.withStatusObservations([run.id], ({ observations }) =>
-        Effect.succeed(observations[0]),
+      const observed = yield* service.withAwaitTerminalObservations(
+        [run.id],
+        "all_finished",
+        undefined,
+        (observations) => Effect.succeed(observations[0]),
       );
       expect(observed?.recovery).toMatchObject({
         cleanupDisposition: "confirmed",
@@ -371,7 +376,7 @@ describe("explicit profile-route retry", () => {
           candidates: [reviewerContinuation(0).candidates[0]!],
         },
       });
-      expect(yield* service.status(failedRun.id)).toMatchObject({
+      expect(yield* runView(service, failedRun.id)).toMatchObject({
         state: "failed",
         modelOverride,
         remainingCandidateCount: 0,
@@ -387,7 +392,7 @@ describe("explicit profile-route retry", () => {
       const failedRun = yield* startFailedReviewer(service, fake);
       const claim = yield* service.claimRetryContinuation(failedRun.id);
       yield* service.exhaustRetryClaim(failedRun.id, claim.claimToken);
-      expect(yield* service.status(failedRun.id)).toMatchObject({ retryExhausted: true });
+      expect(yield* runView(service, failedRun.id)).toMatchObject({ retryExhausted: true });
       const exhausted = yield* service.claimRetryContinuation(failedRun.id).pipe(Effect.flip);
       expect(exhausted).toMatchObject({ code: "retry_route_exhausted" });
     });

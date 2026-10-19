@@ -191,8 +191,9 @@ export interface BackendControls {
   readonly interrupt: Effect.Effect<void, SubagentError>;
   readonly reply: (requestId: string, message: string) => Effect.Effect<void, SubagentError>;
   readonly notifyPeers: (message: string) => Effect.Effect<void, SubagentError>;
+  /** `key` is the notice's stable identity; the receiving parent shows each key once. */
   readonly deliverNotification?:
-    | ((message: string) => Effect.Effect<void, SubagentError>)
+    | ((message: string, key: string) => Effect.Effect<void, SubagentError>)
     | undefined;
   /** False once turn input restarted the child after it emitted this `run_settled` event. */
   readonly isSettlementCurrent?: ((event: BackendEvent) => boolean) | undefined;

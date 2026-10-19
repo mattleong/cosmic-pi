@@ -271,6 +271,89 @@ test("rollback removes created files and the directories made for them", functio
   expect(yield* readText(root, "src/main.ts")).toBe("baseline\n");
 });
 
+test("rolls back a mode-only change to an empty file, keeping its real backup", function* (service, root) {
+  // An empty original's backup holds the same bytes as the empty reservation publication makes.
+  yield* writeFile(path.join(root, "empty.sh"), "");
+  yield* io(() => fs.chmod(path.join(root, "empty.sh"), 0o644));
+  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+  yield* io(() => fs.chmod(path.join(handle.cwd, "empty.sh"), 0o755));
+  yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
+  const { integration } = yield* prepareIntegration(handle);
+  const spy = vi
+    .spyOn(files, "publishWorkspaceFile")
+    .mockImplementation((request, hooks) =>
+      request.name === "main.ts"
+        ? Effect.succeed({ status: "uncertain", reason: "io-failure" })
+        : originalPublish(request, hooks),
+    );
+  yield* failureOf(service.integrate(integration)).pipe(
+    Effect.ensuring(Effect.sync(() => spy.mockRestore())),
+  );
+  const permissions = io(() => fs.stat(path.join(root, "empty.sh"))).pipe(
+    Effect.map((stat) => stat.mode & 0o777),
+  );
+  expect(yield* permissions).toBe(0o755);
+  yield* service.discard(workspaceTarget(handle));
+  expect(yield* permissions).toBe(0o644);
+  expect(yield* readText(root, "empty.sh")).toBe("");
+  expect(yield* publicationArtifacts(root)).toEqual([]);
+});
+
+test("publishes over a parent file with a setuid bit, which the new content doesn't keep", function* (service, root) {
+  yield* io(() => fs.chmod(path.join(root, "src/main.ts"), 0o4755));
+  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+  yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
+  const { integration } = yield* prepareIntegration(handle);
+  const integrated = yield* service.integrate(integration);
+  expect(integrated.record.status).toBe("integrated");
+  expect(yield* readText(root, "src/main.ts")).toBe("worker\n");
+  expect((yield* io(() => fs.stat(path.join(root, "src/main.ts")))).mode & 0o7777).toBe(0o755);
+  expect(yield* publicationArtifacts(root)).toEqual([]);
+});
+
+// Makes `name` look `bytes` long to every lstat while the spy is installed; its bytes are unchanged.
+const appearLarge = (name: string, bytes: number) => {
+  const lstat = fs.lstat;
+  return vi.spyOn(fs, "lstat").mockImplementation((target, options) =>
+    lstat(target, options).then((stat) => {
+      if (path.basename(String(target)) === name) stat.size = bytes;
+      return stat;
+    }),
+  );
+};
+
+test("refuses a proposal whose files are too large to integrate together", function* (service, root) {
+  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+  yield* writeFile(path.join(handle.cwd, "other.txt"), "worker\n");
+  const revision = yield* service.freeze(workspaceTarget(handle));
+  const target = { ...workspaceTarget(handle), revisionId: revision.revisionId };
+  const mebibytes = 1024 * 1024;
+
+  // Each side of the change counts: 600 MiB in the parent and 600 MiB in the tested tree.
+  const preparing = appearLarge("other.txt", 600 * mebibytes);
+  const refused = yield* failureOf(service.prepare(target)).pipe(
+    Effect.ensuring(Effect.sync(() => preparing.mockRestore())),
+  );
+  expect(refused.code).toBe("workspace_publication_oversized");
+  expect((yield* service.inspect(workspaceTarget(handle))).status).toBe("frozen");
+  expect(
+    (yield* io(() => fs.readdir(path.dirname(handle.cwd)))).filter((name) =>
+      name.startsWith("prepare-"),
+    ),
+  ).toEqual([]);
+
+  const prepared = yield* service.prepare(target);
+  const integrating = appearLarge("other.txt", 1100 * mebibytes);
+  const tooLarge = yield* failureOf(
+    service.integrate({ ...target, preparationId: prepared.preparationId }),
+  ).pipe(Effect.ensuring(Effect.sync(() => integrating.mockRestore())));
+  expect(tooLarge.code).toBe("workspace_publication_oversized");
+  expect(yield* readText(root, "other.txt")).toBe("other\n");
+  expect((yield* service.inspect(workspaceTarget(handle))).status).toBe("prepared");
+  yield* service.integrate({ ...target, preparationId: prepared.preparationId });
+  expect(yield* readText(root, "other.txt")).toBe("worker\n");
+});
+
 test("keeps a frozen revision's patch out of its record and reads it back", function* (service, root, agent) {
   const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
   yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker change\n");

@@ -30,7 +30,6 @@ const RUN_STATUS = {
   running: "running",
   waiting_for_parent: "blocked",
   paused: "blocked",
-  reported: "done",
   completed: "done",
   failed: "failed",
   stopping: "stopping",

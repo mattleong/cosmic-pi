@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import type { SafeFile } from "pi-cosmic-core";
 import { WorkspaceError } from "../workspace/model.ts";
 import type { WorkspaceRecord } from "../workspace/model.ts";
 import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
@@ -101,23 +102,26 @@ export const removeWorkspaceTree = (
 
 /**
  * Best effort: a tree that can't be removed stays for integrate or discard to clean up. A
- * failing `beforeRemove` keeps it too.
+ * failing `beforeRemove` keeps it too. Returns the failure that kept the tree, or undefined once
+ * it is gone; one with `cleanupUnconfirmed` from a WorktreeRemove hook has quarantined the
+ * workspace, which callers report.
  */
 export const removePreparation = (
   registry: string,
   record: WorkspaceRecord,
   preparationId: string,
   beforeRemove?: BeforeTreeRemoval,
-) => {
+): Effect.Effect<WorkspaceError | undefined, never, SafeFile> => {
   const tree = preparationTree(registry, record, preparationId);
   return (beforeRemove ? beforeRemove(record, tree) : Effect.void).pipe(
     Effect.andThen(removeWorkspaceTree(registry, record, tree)),
+    Effect.as(undefined),
     Effect.catchTag("WorkspaceError", (error) =>
       Effect.logWarning(`Failed preparation tree remains on disk: ${error.message}`).pipe(
         Effect.annotateLogs({ workspaceId: record.handle.workspaceId, tree }),
+        Effect.as(error),
       ),
     ),
-    Effect.asVoid,
     Effect.uninterruptible,
   );
 };
@@ -129,4 +133,5 @@ export const withOutcome = (error: WorkspaceError, outcome: string) =>
     operation: error.operation,
     message: error.message,
     detail: [error.detail, outcome].filter((line) => line !== undefined).join("\n"),
+    ...(error.cleanupUnconfirmed && { cleanupUnconfirmed: true }),
   });

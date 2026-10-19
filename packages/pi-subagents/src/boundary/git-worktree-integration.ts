@@ -16,6 +16,7 @@ import {
 import {
   contentDigest,
   createWorkspaceDirectory,
+  filePermissions,
   MAX_PUBLISHED_FILE_BYTES,
   inspectPublishedFile,
   publicationBackupPrefix,
@@ -41,7 +42,14 @@ import {
 } from "./git-worktree-store.ts";
 
 type JournalEntry = NonNullable<WorkspaceRecord["journal"]>[number];
+type JournalFile = NonNullable<JournalEntry["before"]>;
 const EMPTY_DIGEST = contentDigest(new Uint8Array());
+
+/** Whether a file holds exactly one side of a journal entry, its permissions included. */
+const sameImage = (
+  file: { readonly digest: string; readonly permissions: number },
+  side: JournalFile | undefined,
+) => side !== undefined && file.digest === side.digest && file.permissions === side.permissions;
 
 /** A regular file's content as publication reads, installs, and backs it up. */
 interface PublishedFile {
@@ -52,6 +60,52 @@ interface PublishedFile {
 }
 /** Files by path relative to their tree's root; a missing path is absent there. */
 type PublishedFiles = ReadonlyMap<string, PublishedFile>;
+
+/**
+ * The most bytes one integration holds in memory: the parent's and the tested tree's copies of
+ * every file it publishes. Twice the per-file limit, so one file at that limit still integrates.
+ */
+const MAX_PUBLISHED_TOTAL_BYTES = 2 * MAX_PUBLISHED_FILE_BYTES;
+
+/** The bytes an integration may still read; both sides of one publication share it. */
+export interface PublicationBudget {
+  remaining: number;
+}
+export const publicationBudget = (): PublicationBudget => ({
+  remaining: MAX_PUBLISHED_TOTAL_BYTES,
+});
+
+const MEBIBYTE = 1024 * 1024;
+
+const oversizedPublication = (operation: string, bytes: number) =>
+  new WorkspaceError({
+    operation,
+    code: "workspace_publication_oversized",
+    message: "The proposal's changed files are too large to integrate together.",
+    detail: [
+      `Rule: integration reads the parent's and the tested tree's copies of every changed file into memory, at most ${MAX_PUBLISHED_TOTAL_BYTES / MEBIBYTE} MiB in all; these hold at least ${Math.floor(bytes / MEBIBYTE)} MiB`,
+      "Remedy: apply the proposal in parts with `paths`, or revise the workspace so the writer changes fewer large files.",
+    ].join("\n"),
+  });
+
+/**
+ * Refuses a preparation whose changed files, in `roots` together, exceed what integration may
+ * hold in memory. Integration enforces the same cap as it reads, since the files may grow.
+ */
+export const refuseOversizedPublication = (
+  roots: ReadonlyArray<string>,
+  paths: ReadonlyArray<string>,
+) =>
+  Effect.gen(function* () {
+    let bytes = 0;
+    for (const root of roots)
+      for (const name of paths) {
+        const stat = yield* workspaceIOIfPresent("prepare", () => fs.lstat(path.join(root, name)));
+        if (stat?.isFile()) bytes += stat.size;
+      }
+    if (bytes > MAX_PUBLISHED_TOTAL_BYTES) return yield* oversizedPublication("prepare", bytes);
+    return undefined;
+  });
 
 const unpublishable = (relative: string, message: string, rule: string) =>
   workspaceRefusal("integrate", message, {
@@ -64,8 +118,9 @@ const unpublishable = (relative: string, message: string, rule: string) =>
 /**
  * The regular file at `relative` in `root`, or undefined when nothing is there. Publication
  * moves files aside and installs regular files only, so anything else at a changed path refuses.
+ * A `budget` refuses a file larger than what remains of it, and is charged for the bytes read.
  */
-const readPublishedFile = (root: string, relative: string) =>
+const readPublishedFile = (root: string, relative: string, budget?: PublicationBudget) =>
   Effect.gen(function* () {
     const full = path.join(root, relative);
     yield* checkDirectory(path.dirname(full), true);
@@ -83,6 +138,11 @@ const readPublishedFile = (root: string, relative: string) =>
         "A changed file is hard-linked.",
         "integration replaces a file only while it has exactly one link, so its backup stays the only copy",
       );
+    if (budget !== undefined && before.size > budget.remaining)
+      return yield* oversizedPublication(
+        "integrate",
+        MAX_PUBLISHED_TOTAL_BYTES - budget.remaining + before.size,
+      );
     const unstable = () =>
       workspaceRefusal("integrate", "A changed file changed while it was being read.", {
         path: relative,
@@ -91,7 +151,11 @@ const readPublishedFile = (root: string, relative: string) =>
       });
     const safe = yield* SafeFile;
     const { bytes } = yield* safe
-      .readContainedRegularFile(full, root, MAX_PUBLISHED_FILE_BYTES)
+      .readContainedRegularFile(
+        full,
+        root,
+        Math.min(MAX_PUBLISHED_FILE_BYTES, budget?.remaining ?? MAX_PUBLISHED_FILE_BYTES),
+      )
       .pipe(Effect.mapError(unstable));
     const after = yield* workspaceIO("integrate", () => fs.lstat(full));
     if (
@@ -102,20 +166,25 @@ const readPublishedFile = (root: string, relative: string) =>
       after.mode !== before.mode
     )
       return yield* unstable();
+    if (budget !== undefined) budget.remaining -= bytes.byteLength;
     return {
       digest: contentDigest(bytes),
       mode: (before.mode & 0o111) !== 0 ? "100755" : "100644",
-      permissions: before.mode & 0o777,
+      permissions: filePermissions(before.mode),
       bytes,
     } satisfies PublishedFile;
   });
 
-/** The files at `paths` in `root`, absent ones left out. */
-export const readPublishedFiles = (root: string, paths: ReadonlyArray<string>) =>
+/** The files at `paths` in `root`, absent ones left out, charged to `budget`. */
+export const readPublishedFiles = (
+  root: string,
+  paths: ReadonlyArray<string>,
+  budget: PublicationBudget,
+) =>
   Effect.gen(function* () {
     const files = new Map<string, PublishedFile>();
     for (const name of paths) {
-      const file = yield* readPublishedFile(root, name);
+      const file = yield* readPublishedFile(root, name, budget);
       if (file) files.set(name, file);
     }
     return files satisfies PublishedFiles;
@@ -570,24 +639,24 @@ const rollbackStep = (root: string, entry: JournalEntry) =>
     const saved = yield* inspectPublishedFile(backup);
     const staged = yield* workspaceIOIfPresent("rollback", () => fs.lstat(temporary));
     if (staged && !staged.isFile()) return refuse("its temporary path holds something else");
-    const installed =
-      entry.after !== undefined && current.kind === "file" && current.digest === entry.after.digest;
+    const installed = current.kind === "file" && sameImage(current, entry.after);
     const steps: Array<Effect.Effect<void, WorkspaceError>> = staged
       ? [workspaceIO("rollback", () => fs.unlink(temporary))]
       : [];
     // Publication reserves the backup name with an empty file before moving the target there; a
-    // stop between the two leaves that reservation beside the untouched original.
+    // stop between the two leaves that reservation beside the untouched original. An empty
+    // original's real backup holds the same bytes, so only a target that is still exactly the
+    // original, permissions included, marks the backup as a reservation.
     const reservation =
-      entry.before !== undefined &&
       saved.kind === "file" &&
       saved.digest === EMPTY_DIGEST &&
       current.kind === "file" &&
-      current.digest === entry.before.digest &&
+      sameImage(current, entry.before) &&
       (current.dev !== saved.dev || current.ino !== saved.ino);
     if (reservation) steps.push(unlinkIdentified(backup, saved));
     else if (entry.before === undefined) {
       if (installed) steps.push(unlinkIdentified(target, current));
-    } else if (saved.kind === "file" && saved.digest === entry.before.digest) {
+    } else if (saved.kind === "file" && sameImage(saved, entry.before)) {
       if (current.kind === "file" && current.dev === saved.dev && current.ino === saved.ino)
         steps.push(workspaceIO("rollback", () => fs.unlink(backup)));
       else if (current.kind === "absent") steps.push(restoreBackup(backup, target));
@@ -595,8 +664,7 @@ const rollbackStep = (root: string, entry: JournalEntry) =>
         steps.push(unlinkIdentified(target, current), restoreBackup(backup, target));
       else return refuse("it changed after publication replaced it");
     } else if (saved.kind !== "absent") return refuse("its backup no longer holds the original");
-    else if (installed && entry.after?.digest !== entry.before.digest)
-      return refuse("its backup is missing");
+    else if (installed && !sameImage(current, entry.before)) return refuse("its backup is missing");
     if (steps.length === 0) return keep;
     return {
       kind: "undo",

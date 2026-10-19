@@ -1,13 +1,8 @@
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import type { SubagentNotFoundError } from "../../../src/run/errors.ts";
-import type { SubagentRunObservation, SubagentServiceContract } from "../../../src/run/service.ts";
+import type { SubagentServiceContract } from "../../../src/run/service.ts";
 
-export type SubagentServiceDoubleInput = Partial<SubagentServiceContract> & {
-  readonly observeStatus?: (
-    id: string,
-  ) => Effect.Effect<SubagentRunObservation, SubagentNotFoundError>;
-};
+export type SubagentServiceDoubleInput = Partial<SubagentServiceContract>;
 
 const unexpected = (method: keyof SubagentServiceContract): Effect.Effect<never> =>
   Effect.die(new Error(`Unexpected SubagentService.${method} call in test fixture.`));
@@ -26,9 +21,6 @@ const unexpectedService: SubagentServiceContract = {
   blockRetryClaim: () => unexpected("blockRetryClaim"),
   startRetrySessionOwned: () => unexpected("startRetrySessionOwned"),
   withAwaitTerminalObservations: () => unexpected("withAwaitTerminalObservations"),
-  list: unexpected("list"),
-  status: () => unexpected("status"),
-  withStatusObservations: () => unexpected("withStatusObservations"),
   consumeCompletions: (receipts) =>
     receipts.length === 0 ? Effect.void : unexpected("consumeCompletions"),
   send: () => unexpected("send"),
@@ -53,55 +45,15 @@ const unexpectedService: SubagentServiceContract = {
   deliverPendingCompletions: unexpected("deliverPendingCompletions"),
 };
 
-const statusObservations =
-  (
-    observeStatus: (id: string) => Effect.Effect<SubagentRunObservation, SubagentNotFoundError>,
-  ): SubagentServiceContract["withStatusObservations"] =>
-  (ids, use) =>
-    Effect.forEach(
-      ids,
-      (id) =>
-        observeStatus(id).pipe(
-          Effect.match({
-            onFailure: () => ({ missingId: id }) as const,
-            onSuccess: (observation) => ({ observation }) as const,
-          }),
-        ),
-      { concurrency: 8 },
-    ).pipe(
-      Effect.flatMap((outcomes) =>
-        use({
-          observations: outcomes.flatMap((outcome) =>
-            "observation" in outcome ? [outcome.observation] : [],
-          ),
-          missingIds: outcomes.flatMap((outcome) =>
-            "missingId" in outcome ? [outcome.missingId] : [],
-          ),
-        }),
-      ),
-    );
-
-export function subagentServiceDouble({
-  observeStatus,
-  ...base
-}: SubagentServiceDoubleInput): SubagentServiceContract {
+export function subagentServiceDouble(base: SubagentServiceDoubleInput): SubagentServiceContract {
   const start = base.start ?? unexpectedService.start;
   const startSessionOwned = base.startSessionOwned ?? start;
-  const list = base.list ?? unexpectedService.list;
-  const status = base.status ?? unexpectedService.status;
   return {
     ...unexpectedService,
     start,
     startSessionOwned,
     startScriptSessionOwned: startSessionOwned,
     startSessionOwnedFrom: (_callerRunId, request) => startSessionOwned(request),
-    visibleList: () => list,
-    list,
-    status,
-    withStatusObservations: statusObservations(
-      observeStatus ??
-        ((id) => status(id).pipe(Effect.map((run): SubagentRunObservation => ({ run })))),
-    ),
     ...base,
   };
 }

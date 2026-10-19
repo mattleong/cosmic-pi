@@ -96,13 +96,13 @@ export function assignmentOperations(dependencies: RunAssignmentDependencies) {
             ? new SubagentProcessError({
                 operation,
                 code: "resume_outcome_uncertain",
-                message: `The resume prompt may already have applied. Inspect subagent status before retrying. (${error.message})`,
+                message: `The resume prompt may already have applied. Inspect the run with agent_read before retrying. (${error.message})`,
               })
             : record.view.writeIntent === "writer"
               ? new SubagentProcessError({
                   operation,
                   code: "start_outcome_uncertain",
-                  message: `The writer task may have been accepted, but startup could not confirm the outcome. Inspect the workspace and subagent status before starting another writer. (${error.message})`,
+                  message: `The writer task may have been accepted, but startup could not confirm the outcome. Inspect the workspace and the run with agent_read before starting another writer. (${error.message})`,
                 })
               : error;
         return withLock(

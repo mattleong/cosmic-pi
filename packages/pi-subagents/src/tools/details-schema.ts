@@ -1,10 +1,12 @@
 import * as Schema from "effect/Schema";
+import { createBoundedCompactIssuesSchema } from "pi-code-previews";
 import { SUBAGENT_EFFORTS } from "../domain/routing.ts";
 import {
   CUSTOM_AGENT_SCOPES,
   MAX_CUSTOM_AGENT_DESCRIPTION_CHARS,
   MAX_CUSTOM_AGENT_NAME_CHARS,
   MAX_CUSTOM_AGENTS,
+  MAX_RESOLVED_CUSTOM_AGENTS,
 } from "../profiles/agents.ts";
 import {
   MAX_PROFILE_CANDIDATES,
@@ -217,7 +219,7 @@ const WorkspaceDiffStatCardSchema = Schema.Struct({
 export type WorkspaceDiffStatCard = typeof WorkspaceDiffStatCardSchema.Type;
 
 const WorkspaceOutcomeCardSchema = Schema.Union([
-  Schema.Struct({ status: Schema.Literal("auto-discarded") }),
+  Schema.Struct({ status: Schema.Literals(["auto-discarded", "integrated", "discarded"]) }),
   Schema.Struct({
     status: Schema.Literal("proposal"),
     changedFileCount: nonNegativeInteger,
@@ -442,7 +444,9 @@ export const SubagentModelsDetailsSchema = Schema.Struct({
   version: Schema.Literal(SUBAGENT_CARD_DETAILS_VERSION),
   action: Schema.Literal("models"),
   profiles: boundedArray(SubagentProfileRouteCardSchema, PROFILE_IDS.length),
-  agents: Schema.optionalKey(boundedArray(SubagentAgentRouteCardSchema, MAX_CUSTOM_AGENTS)),
+  agents: Schema.optionalKey(
+    boundedArray(SubagentAgentRouteCardSchema, MAX_RESOLVED_CUSTOM_AGENTS),
+  ),
   invalidAgents: Schema.optionalKey(
     boundedArray(InvalidAgentCardSchema, MAX_INVALID_AGENT_ENTRIES),
   ),
@@ -478,16 +482,24 @@ export const DETAILS_PARSE_OPTIONS = {
   reportInput: false,
 } as const;
 
+export const AGENT_DETAILS_VERSION = 1;
+
 const AGENT_DETAILS_STATES = [...SUBAGENT_RUN_STATES, "idle", "busy", "unavailable"] as const;
 const AgentDetailsStateSchema = Schema.Literals(AGENT_DETAILS_STATES);
 const AgentIdSchema = NonEmptyText(MAX_PROTOCOL_ID_CHARS);
 const AgentDetailsIdsSchema = boundedArray(AgentIdSchema, MAX_TARGET_RUNS);
 const AgentDetailsNameSchema = NonEmptyText(MAX_NAME_CHARS);
+export const MAX_AGENT_READ_ISSUES = 6;
+export const MAX_AGENT_READ_ISSUE_TEXT_CHARS = 400;
+const AgentReadIssuesSchema = createBoundedCompactIssuesSchema({
+  maxTextLength: MAX_AGENT_READ_ISSUE_TEXT_CHARS,
+  maxEntries: MAX_AGENT_READ_ISSUES,
+});
 
 /** Presentation receipts of `agent_list`, `agent_send`, and `agent_read`; text stays in content. */
 export const AgentToolDetailsSchema = Schema.Union([
   Schema.Struct({
-    version: Schema.Literal(1),
+    version: Schema.Literal(AGENT_DETAILS_VERSION),
     action: Schema.Literal("agent_list"),
     agentCount: nonNegativeInteger,
     states: boundedArray(
@@ -499,7 +511,7 @@ export const AgentToolDetailsSchema = Schema.Union([
     missingIds: AgentDetailsIdsSchema,
   }),
   Schema.Struct({
-    version: Schema.Literal(1),
+    version: Schema.Literal(AGENT_DETAILS_VERSION),
     action: Schema.Literal("agent_send"),
     to: AgentIdSchema,
     name: AgentDetailsNameSchema,
@@ -514,7 +526,7 @@ export const AgentToolDetailsSchema = Schema.Union([
     ]),
   }),
   Schema.Struct({
-    version: Schema.Literal(1),
+    version: Schema.Literal(AGENT_DETAILS_VERSION),
     action: Schema.Literal("agent_read"),
     agents: boundedArray(
       Schema.Struct({
@@ -524,6 +536,8 @@ export const AgentToolDetailsSchema = Schema.Union([
         textStatus: Schema.Literals(["text", "none"]),
         truncated: Schema.Boolean,
         source: Schema.optionalKey(Schema.Literals(["assistant", "report", "error"])),
+        /** A run's status card issues: attention, warnings, failure, cleanup, and its worktree. */
+        issues: Schema.optionalKey(AgentReadIssuesSchema),
       }),
       MAX_TARGET_RUNS,
     ),

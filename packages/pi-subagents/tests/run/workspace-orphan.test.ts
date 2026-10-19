@@ -45,6 +45,8 @@ const orphan = (
   },
   status,
   baseline: "baseline",
+  ownerLease: "ended-owner",
+  lastChangedAt: 0,
   ...extra,
 });
 

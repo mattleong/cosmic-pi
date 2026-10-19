@@ -34,7 +34,7 @@ import {
 import type { RunContext, RunRecord } from "./internal.ts";
 import type { RunControlMessage } from "./control.ts";
 import type { AgentMessageResume } from "./resume.ts";
-import type { SubagentControlExpectation, SubagentRunView, SubagentSendOutcome } from "./model.ts";
+import type { SubagentRunView, SubagentSendOutcome } from "./model.ts";
 import { sortRuns } from "./projection.ts";
 import { appendMessageSessionEvent } from "./session-events.ts";
 import { runSessionOwned } from "./session-owned.ts";
@@ -52,7 +52,6 @@ interface AgentMessageDependencies extends Pick<
   readonly resume: (
     id: string,
     message: string,
-    expected: SubagentControlExpectation | undefined,
     agentMessage: AgentMessageResume,
   ) => Effect.Effect<SubagentRunView, SubagentError>;
   readonly allocateMessageId: () => string;
@@ -73,10 +72,11 @@ const validateAgentMessage = (
   return Effect.succeed(normalized);
 };
 
+// IDs are trimmed like the call headings that show them, so " main" still names main.
 const validateTargets = (
   ids: ReadonlyArray<string>,
 ): Effect.Effect<ReadonlyArray<string>, InvalidSubagentRequestError> => {
-  const unique = [...new Set(ids)];
+  const unique = [...new Set(ids.map((id) => id.trim()))];
   return unique.length > MAX_AGENT_TARGETS
     ? Effect.fail(
         invalidRequest(
@@ -104,11 +104,10 @@ const recordMessageLocked = (
 type ClaimedSend =
   | { readonly kind: "main"; readonly sender: AgentSender; readonly main: AgentMainCapabilities }
   | {
-      readonly kind: "answer" | "guide";
+      readonly kind: "answer" | "guide" | "resume";
       readonly sender: AgentSender;
       readonly record: RunRecord;
-    }
-  | { readonly kind: "resume"; readonly sender: AgentSender; readonly record: RunRecord };
+    };
 
 const deliverToMain = (
   claimed: Extract<ClaimedSend, { kind: "main" }>,
@@ -204,39 +203,30 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
 
   const claimSend = (caller: AgentCaller, to: string) =>
     withLock(
-      Effect.gen(function* () {
+      Effect.gen(function* (): Effect.fn.Return<ClaimedSend, SubagentError> {
         const sender = yield* resolveSenderLocked(caller);
         if (to === sender.id)
           return yield* agentMessageRefusal(
             "agent_self_target",
             "An agent cannot message itself; name another agent from agent_list.",
           );
-        let target:
-          | { readonly kind: "main"; readonly main: AgentMainCapabilities }
-          | { readonly kind: "answer" | "guide" | "resume"; readonly record: RunRecord };
         if (to === MAIN_AGENT_ID) {
           if (!main)
             return yield* agentMessageRefusal(
               "agent_unavailable",
               "The main agent cannot receive agent messages in this session.",
             );
-          target = { kind: "main", main };
-        } else {
-          const record = records.get(to);
-          if (!record)
-            return yield* agentMessageRefusal(
-              "agent_not_found",
-              `Agent ${to} is not in this session; call agent_list for current agent IDs.`,
-            );
-          const plan = planRunMessage(record, sender.id);
-          if (plan.kind === "refuse") return yield* agentMessageRefusal(plan.code, plan.message);
-          target = { kind: plan.kind, record };
+          return { kind: "main", sender, main };
         }
-        const claimed: ClaimedSend =
-          target.kind === "main"
-            ? { kind: "main", sender, main: target.main }
-            : { kind: target.kind, sender, record: target.record };
-        return claimed;
+        const record = records.get(to);
+        if (!record)
+          return yield* agentMessageRefusal(
+            "agent_not_found",
+            `Agent ${to} is not in this session; call agent_list for current agent IDs.`,
+          );
+        const plan = planRunMessage(records, record, sender.id);
+        if (plan.kind === "refuse") return yield* agentMessageRefusal(plan.code, plan.message);
+        return { kind: plan.kind, sender, record };
       }),
     );
 
@@ -272,14 +262,15 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
           })),
         };
       } else if (claimed.kind === "resume") {
-        const run = yield* dependencies.resume(to, content, undefined, {
+        const run = yield* dependencies.resume(to, content, {
           resumedBy: sender.label,
           recordNoticeLocked: recordReceived,
         });
         delivered = { name: run.name, disposition: "resumed", run };
       } else {
         const { record } = claimed;
-        // Guidance still being confirmed may already have arrived, so it is reported, not failed.
+        // Guidance still being confirmed may already have arrived, so it is reported, not failed,
+        // and recorded on the receiver as the sender records it.
         delivered = yield* dependencies
           .deliverToRun(to, {
             ...(claimed.kind === "answer" && { answer: text }),
@@ -295,7 +286,17 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
               }),
             ),
             Effect.catchIf(isPendingSteerDelivery, () =>
-              Effect.succeed({ name: record.view.name, disposition: "pending" as const }),
+              Clock.currentTimeMillis.pipe(
+                Effect.flatMap((now) =>
+                  withLock(
+                    Effect.suspend(() => {
+                      recordReceived(record, now);
+                      return publish;
+                    }),
+                  ),
+                ),
+                Effect.as({ name: record.view.name, disposition: "pending" as const }),
+              ),
             ),
           );
       }
@@ -308,11 +309,12 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
   // session scope so a cancelled sender never abandons it halfway.
   const send = (
     caller: AgentCaller,
-    to: string,
+    rawTo: string,
     message: string,
   ): Effect.Effect<AgentSendResult, SubagentError> =>
     Effect.gen(function* () {
       const text = yield* validateAgentMessage(message);
+      const to = rawTo.trim();
       return yield* runSessionOwned(ownerScope, claimSend(caller, to), (claimed) =>
         commitSend(claimed, to, text, dependencies.allocateMessageId()),
       );

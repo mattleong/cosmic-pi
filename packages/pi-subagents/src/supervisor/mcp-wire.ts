@@ -4,6 +4,7 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import type * as Schema from "effect/Schema";
 import { isJsonObject, runtimeTypeName, type JsonObject, type JsonValue } from "pi-cosmic-core";
+import { AGENT_TOOL_NAME, CONTACT_PARENT_TOOL_NAME } from "../run/tool-policy.ts";
 import type { SupervisorRpcFailure } from "./protocol.ts";
 import type { SupervisorToolFailure } from "./tool-call.ts";
 import {
@@ -15,10 +16,8 @@ import {
   MAX_SUPERVISOR_MCP_THREAD_ID_CHARS,
   SUPERVISOR_MCP_AGENT_IDS_ARGUMENT_KEY,
   SUPERVISOR_MCP_AGENT_SEND_ARGUMENT_KEYS,
-  SUPERVISOR_MCP_AGENT_TOOL_NAMES,
   SUPERVISOR_MCP_CONTACT_ARGUMENT_KEYS,
   SUPERVISOR_MCP_CONTACT_KINDS,
-  SUPERVISOR_MCP_CONTACT_PARENT_TOOL_NAME,
   SUPERVISOR_MCP_REPORT_ARGUMENT_KEYS,
   SUPERVISOR_MCP_REPORT_TOOL_NAME,
   SUPERVISOR_MCP_VERBOSE_ARGUMENT_KEY,
@@ -132,9 +131,9 @@ const agentIdsSchema = (description: string) =>
   }) as const;
 export const toolDefinitions = [
   {
-    name: SUPERVISOR_MCP_CONTACT_PARENT_TOOL_NAME,
+    name: CONTACT_PARENT_TOOL_NAME,
     description:
-      "Main agent only: contact your parent. kind=progress publishes bounded assignment progress; kind=warning records a non-blocking warning in parent-visible run status, which you also repeat in the final report; kind=question asks this assignment's one blocking question and waits for the parent's exact reply. Ask a question instead of warning when the risk could invalidate work the parent is doing now.",
+      "Main agent only: contact your parent. kind=progress publishes bounded assignment progress; kind=warning records a non-blocking warning in parent-visible run status, which you also repeat in the final report; kind=question asks a blocking question and waits for the parent's exact reply; only one question waits at a time. Ask a question instead of warning when the risk could invalidate work the parent is doing now.",
     inputSchema: contactInputSchema,
     annotations: toolAnnotations,
   },
@@ -162,7 +161,7 @@ export const toolDefinitions = [
     annotations: { ...toolAnnotations, idempotentHint: true },
   },
   {
-    name: SUPERVISOR_MCP_AGENT_TOOL_NAMES[0],
+    name: AGENT_TOOL_NAME.list,
     description:
       'List every agent in this session: the main agent "main" and every subagent at any depth, with ID, name, state, role, runtime and model, worktree proposal, whether it waits on its parent, and parent.',
     inputSchema: {
@@ -177,9 +176,9 @@ export const toolDefinitions = [
     annotations: { ...toolAnnotations, readOnlyHint: true, idempotentHint: true },
   },
   {
-    name: SUPERVISOR_MCP_AGENT_TOOL_NAMES[1],
+    name: AGENT_TOOL_NAME.send,
     description:
-      "Main agent only: send one bounded message now to any other agent in this session. A child waiting on your question receives it as the answer, any other running agent receives it as guidance, an idle main agent is woken, and a paused or finished Pi run is resumed. Do not resend after a pending or uncertain result.",
+      "Main agent only: send one bounded message now to any other agent in this session. A running agent receives it as guidance, an idle main agent is woken, and a paused or finished Pi run is resumed. Do not resend after a pending or uncertain result.",
     inputSchema: {
       type: "object",
       properties: {
@@ -196,7 +195,7 @@ export const toolDefinitions = [
     annotations: toolAnnotations,
   },
   {
-    name: SUPERVISOR_MCP_AGENT_TOOL_NAMES[2],
+    name: AGENT_TOOL_NAME.read,
     description:
       "Read up to 12 agents in this session: each run's status card and latest assistant message, or a finished run's report or error, and main's latest message. verbose adds route, capability, process, and timing details. Reading never consumes anything.",
     inputSchema: {

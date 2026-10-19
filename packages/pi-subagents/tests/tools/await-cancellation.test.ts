@@ -13,9 +13,11 @@ import { SubagentService } from "../../src/run/service.ts";
 import type { SubagentToolRuntime } from "../../src/tools/execute.ts";
 import { registerSubagentTools } from "../../src/tools/subagent.ts";
 import {
+  awaitObservations,
+  awaitRuns,
   nativeReportRequest,
   nativeReportServiceFixture,
-  awaitRuns,
+  runView,
 } from "../run/fixtures/service-harness.ts";
 import { recordingExtensionHost } from "pi-cosmic-core/testing";
 import { step } from "../support/effect-test.ts";
@@ -121,17 +123,11 @@ it.live("keeps late-abort delivery uncertain and recoverable after consumption",
     expect(
       yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(result.structuredContent),
     ).not.toContain("Recover after late abort");
-    const observations = yield* step(() =>
-      runtime.run(
-        service.withStatusObservations([child.id], (scope) => Effect.succeed(scope.observations), {
-          includeDeliveredReports: true,
-        }),
-      ),
-    );
-    expect(observations[0]).toMatchObject({
-      run: { reportStatus: "delivered", finalText: "Recover after late abort" },
-    });
-    expect(observations[0]?.completionReceipt).toBeUndefined();
+    const read = yield* step(() => runtime.run(service.agentRead({ kind: "main" }, [child.id])));
+    expect(read.agents[0]).toMatchObject({ text: "Recover after late abort" });
+    const [observed] = yield* step(() => runtime.run(awaitObservations(service, [child.id])));
+    expect(observed).toMatchObject({ run: { reportStatus: "delivered" } });
+    expect(observed?.completionReceipt).toBeUndefined();
   }),
 );
 
@@ -213,7 +209,7 @@ it.live(
       const cancelledUpdateCount = updates.length;
       expect(activePresentations).toBe(0);
       expect(fixture.backend.controls[0]!.terminations).toEqual([]);
-      expect((yield* step(() => runtime.run(service.status(child.id)))).state).toBe("running");
+      expect((yield* step(() => runtime.run(runView(service, child.id)))).state).toBe("running");
 
       const replacementProgress = Deferred.makeUnsafe<void>();
       const replacement = executeTool(
@@ -263,7 +259,7 @@ it.live("ends a wait at its timeout without stopping the child", () =>
     );
     expect(result.structuredContent).toMatchObject({ outcome: "timed_out" });
     expect(result.content[0]).toMatchObject({ text: stringContaining("timed out after 1s") });
-    const status = yield* step(() => runtime.run(service.status(child.id)));
+    const status = yield* step(() => runtime.run(runView(service, child.id)));
     expect(status.state).toBe("running");
   }),
 );
@@ -290,7 +286,7 @@ it.live("ends a wait for the user's next message without stopping the child", ()
     expect(result.structuredContent).toMatchObject({ outcome: "user_input" });
     expect(result.details).toMatchObject({ cancelled: true, endedByUserInput: true });
     expect(result.content[0]).toMatchObject({ text: stringContaining("user sent a message") });
-    const status = yield* step(() => runtime.run(service.status(child.id)));
+    const status = yield* step(() => runtime.run(runView(service, child.id)));
     expect(status.state).toBe("running");
   }),
 );

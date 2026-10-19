@@ -88,6 +88,7 @@ export function notificationRouter(dependencies: RunNotificationRoutingDependenc
   const deliverToNearestAncestor = (
     sourceRunId: string,
     message: string,
+    key: string,
   ): Effect.Effect<boolean | "uncertain"> =>
     Effect.suspend(() => {
       const candidates = notifiableAncestors(records, sourceRunId);
@@ -107,7 +108,7 @@ export function notificationRouter(dependencies: RunNotificationRoutingDependenc
           ),
           (admission) =>
             admission
-              ? admission.deliverNotification(message).pipe(Effect.as(true))
+              ? admission.deliverNotification(message, key).pipe(Effect.as(true))
               : Effect.succeed(false),
           (admission) => (admission ? releaseTurnInput(admission.record) : Effect.void),
         ).pipe(
@@ -133,7 +134,11 @@ export function notificationRouter(dependencies: RunNotificationRoutingDependenc
     )
       return Effect.succeed(notifyRoot(notification));
     if (notification.type === "question")
-      return deliverToNearestAncestor(notification.id, ancestorMessage(notification)).pipe(
+      return deliverToNearestAncestor(
+        notification.id,
+        ancestorMessage(notification),
+        `${notification.id}:question:${notification.generation}`,
+      ).pipe(
         Effect.map((delivered) =>
           delivered === "uncertain"
             ? { actionAccepted: false }
@@ -145,9 +150,15 @@ export function notificationRouter(dependencies: RunNotificationRoutingDependenc
     return Effect.forEach(
       notification.runs,
       (run) =>
-        deliverToNearestAncestor(run.id, ancestorMessage({ type: "completed", runs: [run] })).pipe(
+        deliverToNearestAncestor(
+          run.id,
+          ancestorMessage({ type: "completed", runs: [run] }),
+          completionNotificationKey(run.id, run.generation),
+        ).pipe(
           Effect.map((delivered) => {
             const key = completionNotificationKey(run.id, run.generation);
+            // An uncertain send stays unacknowledged for retry, never falling through to the root.
+            if (delivered === "uncertain") return undefined;
             if (delivered) return key;
             const runs = [run];
             const rootDelivery = notifyRoot({ type: "completed", runs });

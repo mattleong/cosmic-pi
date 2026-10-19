@@ -326,7 +326,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
                     processError(
                       "start",
                       "prompt_outcome_uncertain",
-                      "Subagent did not confirm task admission.\nThe task may already have started; inspect subagent status before retrying.",
+                      "Subagent did not confirm task admission.\nThe task may already have started; inspect the run with agent_read before retrying.",
                     ),
                   ),
                 ),
@@ -368,7 +368,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
                 processError(
                   "deliver guidance to",
                   "guidance_outcome_uncertain",
-                  "Subagent returned an unreadable guidance disposition; the guidance may already have applied. Inspect subagent status before retrying.",
+                  "Subagent returned an unreadable guidance disposition; the guidance may already have applied. Inspect the run with agent_read before retrying.",
                 ),
               ),
             ),
@@ -431,7 +431,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
     notifyPeers: (message: string) =>
       child.sendContactControl({ channel: "pi-subagents", type: "peer_notice", message }),
     isSettlementCurrent: (event: BackendEvent) => event === offeredSettlement,
-    deliverNotification: (message: string) =>
+    deliverNotification: (message: string, key: string) =>
       withTurnControl(
         ipcAck(
           "notification",
@@ -439,6 +439,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
             channel: "pi-subagents",
             type: "proxy_notification",
             requestId,
+            key,
             message,
           }),
           () =>

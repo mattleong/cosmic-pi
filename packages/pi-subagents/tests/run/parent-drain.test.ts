@@ -10,6 +10,7 @@ import {
   contactParentFrame,
   localServiceFixture,
   request,
+  runViews,
   withService,
 } from "./fixtures/service-harness.ts";
 
@@ -56,7 +57,9 @@ describe("headless parent drain", () => {
 
       expect(drain.pollUnsafe()).toBeDefined();
       yield* Fiber.join(drain);
-      expect((yield* service.list).find((run) => run.id === sibling.id)?.state).toBe("running");
+      expect((yield* runViews(service)).find((run) => run.id === sibling.id)?.state).toBe(
+        "running",
+      );
     });
   });
 

@@ -1,5 +1,5 @@
 import type { RunRecord } from "./internal.ts";
-import { emptyUsage, isAssignmentFinishedRunState, type SubagentUsage } from "./model.ts";
+import { emptyUsage, isTerminalRunState, type SubagentUsage } from "./model.ts";
 import { addUsage } from "./state.ts";
 
 /**
@@ -79,7 +79,7 @@ export const takeUnrecordedUsageLocked = (
   const taken: SubagentUsage[] = [];
   for (const record of records) {
     const { state, usage } = record.view;
-    if (!includeActive && !isAssignmentFinishedRunState(state) && state !== "paused") continue;
+    if (!includeActive && !isTerminalRunState(state) && state !== "paused") continue;
     const delta = usageSince(usage, ledger.recorded.get(record) ?? emptyUsage());
     if (isEmptyUsage(delta)) continue;
     ledger.recorded.set(record, withoutContext(usage));

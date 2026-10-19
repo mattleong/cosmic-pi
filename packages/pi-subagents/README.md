@@ -71,16 +71,16 @@ The mode only changes prompt guidance; no tools are restricted, and subagents ke
 
 The main agent and Pi subagents share one `agent_*` family. `agent_start`, `agent_await`, `agent_lifecycle`, and `agent_worktree` act on agents you started and their descendants; `agent_list`, `agent_read`, and `agent_send` reach any agent in the session, the main agent and subagents at any depth on any runtime:
 
-| Tool              | Does                                                                                                                                  |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `agent_start`     | Starts background subagents by profile or custom agent                                                                                |
-| `agent_await`     | Waits for runs you started and returns their reports, early when one asks you a question                                              |
-| `agent_lifecycle` | Interrupts, stops, or retries runs you started on their profile's next route candidate                                                |
-| `agent_worktree`  | Reviews, tests, applies, revises, or discards a worktree writer's proposal                                                            |
-| `agent_profiles`  | Shows each profile's route and the configured custom agents                                                                           |
-| `agent_list`      | Lists `main` and every subagent with its state, parent, role, model, worktree proposal, and whether it waits on its parent            |
-| `agent_read`      | Shows each run's status card and latest message or report, and main's latest message, without taking a report from its parent         |
-| `agent_send`      | Messages one agent now: answers your child's question, guides a running agent, wakes an idle main agent, or resumes a finished Pi run |
+| Tool              | Does                                                                                                                                                |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent_start`     | Starts background subagents by profile or custom agent                                                                                              |
+| `agent_await`     | Waits for runs you started and returns their reports, early when one asks you a question                                                            |
+| `agent_lifecycle` | Interrupts, stops, or retries runs you started on their profile's next route candidate                                                              |
+| `agent_worktree`  | Reviews, tests, applies, revises, or discards a worktree writer's proposal                                                                          |
+| `agent_profiles`  | Shows each profile's route and the configured custom agents                                                                                         |
+| `agent_list`      | Lists `main` and every subagent with its state, parent, role, model, worktree proposal, and whether it waits on its parent                          |
+| `agent_read`      | Shows each run's status card and latest message or report, and main's latest message, without taking a report from its parent                       |
+| `agent_send`      | Messages one agent now: answers a question from a run you supervise, guides a running agent, wakes an idle main agent, or resumes a finished Pi run |
 
 Subagents also get `agent_contact_parent` to report progress, record a warning, or ask a blocking question, and Claude and Codex subagents submit their final report with `agent_submit_report`. Native Pi codemode supports [read-only scripting](docs/native-codemode.md) with ordinary subagents; writer launches and recovery remain main-agent decisions.
 

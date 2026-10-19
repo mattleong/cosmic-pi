@@ -17,6 +17,7 @@ import {
   reviewProgress,
   runHoldsCwd,
   runsWithin,
+  recordWorkspaceOutcomeLocked,
   settleBinding,
   settledState,
   updateKnowledge,
@@ -144,7 +145,10 @@ const withPreparation =
     };
   };
 
-export function workspaceReviewOperations(context: WorkspaceControlContext) {
+export function workspaceReviewOperations(
+  context: WorkspaceControlContext,
+  publish: Effect.Effect<void>,
+) {
   const { records, withLock, state, requireBinding, requireEngine, operations, worktreeCreate } =
     context;
   const { requireChildrenResolved } = context;
@@ -322,6 +326,8 @@ export function workspaceReviewOperations(context: WorkspaceControlContext) {
       const settled = settledState(binding);
       const leases = settled?.phase === "stopped-integration" ? settled.leases : [];
       settleBinding(binding, { phase: "finished", outcome });
+      recordWorkspaceOutcomeLocked(binding, { status: outcome });
+      yield* publish;
       for (const lease of leases.toReversed())
         yield* context.writerLeases.release(lease).pipe(
           Effect.catch((error) =>

@@ -7,7 +7,7 @@ import {
 } from "pi-cosmic-core";
 import { PROFILE_IDS, type ProfileId } from "../profiles/model.ts";
 import {
-  isAssignmentFinishedRunState,
+  isTerminalRunState,
   isParentActionRequiredRun,
   type FailedStartRecovery,
   type SubagentRunView,
@@ -118,7 +118,7 @@ const WITHHELD_REPORT_STATUS = {
 >;
 
 const withheldReport = (run: SubagentRunView): ContractWithheldReport => ({
-  status: !isAssignmentFinishedRunState(run.state)
+  status: !isTerminalRunState(run.state)
     ? "not_finished"
     : run.reportStatus === undefined
       ? "unknown"
@@ -134,15 +134,14 @@ const observedReport = (
   { run, completionReceipt }: SubagentRunObservation,
   fullyRenderedIds: ReadonlySet<string>,
 ): ContractReport => {
-  if (!isAssignmentFinishedRunState(run.state)) return { status: "not_finished" };
+  if (!isTerminalRunState(run.state)) return { status: "not_finished" };
   if (completionReceipt !== undefined) {
     if (!fullyRenderedIds.has(run.id)) return { status: "deferred" };
     if (!stripTerminalControls(run.finalText ?? "").trim()) return { status: "missing" };
     const text = reportText(run.finalText);
     return text === undefined ? { status: "deferred" } : { status: "delivered", text };
   }
-  const readBack = run.reportStatus === "delivered" ? reportText(run.finalText) : undefined;
-  return readBack === undefined ? withheldReport(run) : { status: "read_back", text: readBack };
+  return withheldReport(run);
 };
 
 const targetFields = (
@@ -164,7 +163,7 @@ const targetFields = (
     ...(profile !== undefined && { profile }),
     ...knownAgent(run.agent),
     state: run.state,
-    finished: isAssignmentFinishedRunState(run.state),
+    finished: isTerminalRunState(run.state),
     reportGeneration: nonNegativeInteger(run.reportGeneration),
     writeIntent: run.writeIntent,
     ...projectModelOverride(run.modelOverride),

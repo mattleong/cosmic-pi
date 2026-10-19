@@ -1,20 +1,20 @@
+import { AGENT_TOOL_NAME, AGENT_TOOL_NAMES, CONTACT_PARENT_TOOL_NAME } from "../run/tool-policy.ts";
+
 export const SUPERVISOR_MCP_REGISTRATION = "pi_subagents_supervisor" as const;
 
-/** The same name as a Pi child's own tool; `kind` selects progress, a warning, or a question. */
-export const SUPERVISOR_MCP_CONTACT_PARENT_TOOL_NAME = "agent_contact_parent";
 export const SUPERVISOR_MCP_REPORT_TOOL_NAME = "agent_submit_report";
-export const SUPERVISOR_MCP_AGENT_TOOL_NAMES = ["agent_list", "agent_send", "agent_read"] as const;
+/** A Pi child's own contact tool and the agent tools, plus the report tool Pi children don't need. */
 export const SUPERVISOR_MCP_TOOL_NAMES = [
-  SUPERVISOR_MCP_CONTACT_PARENT_TOOL_NAME,
+  CONTACT_PARENT_TOOL_NAME,
   SUPERVISOR_MCP_REPORT_TOOL_NAME,
-  ...SUPERVISOR_MCP_AGENT_TOOL_NAMES,
+  ...AGENT_TOOL_NAMES,
 ] as const;
 type SupervisorMcpToolName = (typeof SUPERVISOR_MCP_TOOL_NAMES)[number];
 /** Tools that reach the parent, end the assignment, or speak for the run, so only the child's main agent may call them. */
 export const SUPERVISOR_MCP_MAIN_AGENT_TOOL_NAMES = [
-  SUPERVISOR_MCP_CONTACT_PARENT_TOOL_NAME,
+  CONTACT_PARENT_TOOL_NAME,
   SUPERVISOR_MCP_REPORT_TOOL_NAME,
-  "agent_send",
+  AGENT_TOOL_NAME.send,
 ] as const satisfies ReadonlyArray<SupervisorMcpToolName>;
 export const NATIVE_SUB_AGENT_REFUSAL =
   "Only the main agent can contact the parent, message other agents, or submit the final report. You are a native sub-agent: return your findings to the agent that started you instead.";

@@ -5,7 +5,7 @@ import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import type { SubagentNotification } from "../../src/boundary/host-notifier.ts";
-import { localServiceFixture, request, withService } from "./fixtures/service-harness.ts";
+import { localServiceFixture, request, runView, withService } from "./fixtures/service-harness.ts";
 
 const yieldTurns = Effect.gen(function* () {
   for (let turn = 0; turn < 25; turn += 1) yield* Effect.yieldNow;
@@ -37,7 +37,7 @@ describe("guidance that reaches a finishing local Pi child", () => {
       });
       yield* Deferred.succeed(statsGate, undefined);
       yield* yieldTurns;
-      expect((yield* service.status(run.id)).state).toBe("running");
+      expect((yield* runView(service, run.id)).state).toBe("running");
 
       control.offer({ type: "agent_start" });
       control.settle("New report.");
@@ -65,12 +65,12 @@ describe("guidance that reaches a finishing local Pi child", () => {
       control.settle("Old report.");
       yield* yieldUntil(() => control.commandTypes("get_session_stats").length > stats);
       yield* yieldTurns;
-      expect((yield* service.status(run.id)).state).toBe("running");
+      expect((yield* runView(service, run.id)).state).toBe("running");
 
       yield* Deferred.succeed(steerGate, undefined);
       expect((yield* Fiber.join(sending)).run.state).toBe("running");
       yield* yieldTurns;
-      expect((yield* service.status(run.id)).state).toBe("running");
+      expect((yield* runView(service, run.id)).state).toBe("running");
 
       control.offer({ type: "agent_start" });
       control.settle("New report.");
@@ -89,7 +89,7 @@ describe("guidance that reaches a finishing local Pi child", () => {
 
       const failure = yield* service.send(run.id, "/compact").pipe(Effect.flip);
       expect(failure).toMatchObject({ code: "guidance_not_delivered" });
-      const { state, sessionEvents } = yield* service.status(run.id);
+      const { state, sessionEvents } = yield* runView(service, run.id);
       expect(state).toBe("running");
       expect(sessionEvents.some((event) => event.type === "notice")).toBe(false);
     });

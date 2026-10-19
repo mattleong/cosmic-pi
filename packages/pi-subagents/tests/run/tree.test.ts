@@ -11,10 +11,12 @@ import {
   fakeChildLayer,
   localServiceFixture,
   request,
+  runView,
   waitForCompleted,
   withService,
 } from "./fixtures/service-harness.ts";
 import { InvalidSubagentRequestError, SubagentNotFoundError } from "../../src/run/errors.ts";
+import { objectContaining } from "../support/matchers.ts";
 
 const policy = (maxDirectChildren: number, maxDepth: number) => ({
   maxDirectChildren,
@@ -81,7 +83,7 @@ describe("root-owned subagent run tree", () => {
       const sibling = yield* service.start(
         request({ name: "sibling", nestingPolicy: policy(12, 2) }),
       );
-      expect(yield* service.status(parent.id)).toMatchObject({
+      expect(yield* runView(service, parent.id)).toMatchObject({
         directChildCount: 1,
         descendantCount: 1,
       });
@@ -135,7 +137,7 @@ describe("root-owned subagent run tree", () => {
     });
   });
 
-  it.effect("does not duplicate an outcome after notification acknowledgment uncertainty", () => {
+  it.effect("retries a report whose ancestor acknowledgement was lost, under the same key", () => {
     const { fake, notifications, layer } = localServiceFixture({ notify: acknowledgeCompletions });
     return withService(layer, function* (service) {
       const parent = yield* service.start(request({ name: "uncertain-parent" }));
@@ -143,22 +145,45 @@ describe("root-owned subagent run tree", () => {
         parent.id,
         request({ name: "uncertain-child" }),
       );
-      const deliveryGate = yield* Deferred.make<void>();
-      fake.controls[0]?.gateNextIpcType("proxy_notification", deliveryGate);
+      const notices = () =>
+        (fake.controls[0]?.ipc ?? []).flatMap((message) =>
+          message.type === "proxy_notification" ? [message] : [],
+        );
+      fake.controls[0]?.loseNextNotificationAck();
       fake.controls[1]?.settle();
       yield* waitForCompleted(service, child.id);
       yield* TestClock.adjust("100 millis");
-      yield* yieldUntil(
-        () =>
-          fake.controls[0]?.sentIpc("proxy_notification", (notice) =>
-            notice.message.includes(child.id),
-          ) === true,
-      );
+      yield* yieldUntil(() => notices().length === 1);
 
+      // The lost acknowledgement leaves the outcome uncertain, so the same notice goes again.
       yield* TestClock.adjust("10 seconds");
       yield* Effect.yieldNow;
       yield* TestClock.adjust("30 seconds");
+      yield* yieldUntil(() => notices().length === 2);
+      yield* TestClock.adjust("30 seconds");
+      expect(notices().map((notice) => notice.key)).toEqual([`${child.id}:1`, `${child.id}:1`]);
+      expect(notices()[0]?.requestId).not.toBe(notices()[1]?.requestId);
       expect(notifications).toEqual([]);
+    });
+  });
+
+  it.effect("falls back past an ancestor that refuses a report", () => {
+    const { fake, notifications, layer } = localServiceFixture({ notify: acknowledgeCompletions });
+    return withService(layer, function* (service) {
+      const parent = yield* service.start(request({ name: "refusing-parent" }));
+      const child = yield* service.startSessionOwnedFrom(
+        parent.id,
+        request({ name: "refused-child" }),
+      );
+      fake.controls[0]?.refuseNextNotification();
+      fake.controls[1]?.settle("Child report.");
+      yield* waitForCompleted(service, child.id);
+      yield* TestClock.adjust("100 millis");
+      yield* yieldUntil(() => notifications.some((notice) => notice.type === "completed"));
+      expect(notifications).toEqual([
+        objectContaining({ type: "completed", runs: [objectContaining({ id: child.id })] }),
+      ]);
+      yield* TestClock.adjust("30 seconds");
       expect(
         fake.controls[0]?.ipc.filter((message) => message.type === "proxy_notification"),
       ).toHaveLength(1);

@@ -9,7 +9,7 @@ import {
 } from "pi-cosmic-core";
 import {
   isActiveRunState,
-  isAssignmentFinishedRunState,
+  isTerminalRunState,
   isParentActionRequiredRun,
   hasUnresolvedSteeringDelivery,
   type SubagentRunView,
@@ -75,9 +75,15 @@ export const proposalDiffStatLines = (outcome: ProposalDiffStat): ReadonlyArray<
   ];
 };
 
+const RESOLVED_WORKSPACE_LABELS = {
+  "auto-discarded": "workspace discarded: no changes",
+  integrated: "workspace applied",
+  discarded: "workspace discarded",
+} as const;
+
 /** The short outcome of a finished worktree writer's workspace, such as `proposal: 3 files, +12 −4`. */
 export const workspaceOutcomeLabel = (outcome: SubagentWorkspaceOutcome): string => {
-  if (outcome.status === "auto-discarded") return "workspace discarded: no changes";
+  if (outcome.status !== "proposal") return RESOLVED_WORKSPACE_LABELS[outcome.status];
   const uncaptured = outcome.uncapturedFileCount
     ? ` (+${outcome.uncapturedFileCount} uncaptured)`
     : "";
@@ -92,7 +98,7 @@ export const proposalGuidance = (
   workspaceId: string,
   outcome: SubagentWorkspaceOutcome | undefined,
 ): string =>
-  outcome?.status === "auto-discarded"
+  outcome !== undefined && outcome.status !== "proposal"
     ? workspaceOutcomeLabel(outcome)
     : `${outcome ? workspaceOutcomeLabel(outcome) : "proposal"} · agent_worktree apply workspaceId=${sanitizeTerminalLine(workspaceId)}`;
 
@@ -272,7 +278,7 @@ const routeRetryStatus = (run: SubagentRunView): string | undefined => {
 
 const workspaceStatusFields = (run: SubagentRunView): ReadonlyArray<string | undefined> => {
   const outcome = run.workspaceOutcome;
-  if (!run.workspaceId || (!outcome && !isAssignmentFinishedRunState(run.state))) return [];
+  if (!run.workspaceId || (!outcome && !isTerminalRunState(run.state))) return [];
   const files = outcome?.status === "proposal" ? proposalDiffStatLines(outcome) : [];
   return [
     statusField("Workspace", proposalGuidance(run.workspaceId, outcome)),

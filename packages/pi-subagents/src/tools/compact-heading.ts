@@ -16,8 +16,6 @@ import { rejectedCallIssue } from "./compact-action-failures.ts";
 
 export interface SummaryArguments {
   action?: unknown;
-  message?: unknown;
-  runId?: unknown;
   runIds?: unknown;
   agents?: unknown;
   profile?: unknown;
@@ -33,9 +31,6 @@ const targetIds = flow(
 
 export const requestedRunIds = (input: SummaryArguments): string[] | undefined =>
   targetIds(input.runIds);
-
-export const requestedTargets = (input: SummaryArguments): string[] | undefined =>
-  Predicate.isString(input.runId) ? targetIds([input.runId]) : requestedRunIds(input);
 
 function startSubject(input: SummaryArguments): string {
   if (!Array.isArray(input.agents) || input.agents.length !== 1) return "";
@@ -85,7 +80,7 @@ export function projectedSubject(
   targets?: readonly string[],
 ): string {
   if (details.action === "models" && Predicate.isString(input.profile)) return input.profile;
-  const requested = targets ?? requestedTargets(input);
+  const requested = targets ?? requestedRunIds(input);
   if (requested?.length === 1 && "cards" in details)
     return displayName(
       details.cards.find((entry) => entry.id === requested[0]) ?? retrySuccessor(details),
@@ -112,7 +107,6 @@ export const isTypedReceipt = (result: { readonly details?: unknown }): boolean 
 function rejectedTarget(input: SummaryArguments, action: string): string {
   if (action === "workspace") return "the proposed changes";
   if (action === "models") return "profile routes";
-  if (action === "status" && input.runIds === undefined) return "subagents";
   const ids = requestedRunIds(input);
   return (ids?.length ?? 0) > 1 || Array.isArray(input.agents) ? "the subagents" : "the subagent";
 }
@@ -125,22 +119,12 @@ export function rejectedCall(
   result: { readonly content: Parameters<typeof getTextContent>[0]; readonly details?: unknown },
 ): CompactSummary | undefined {
   if (isTypedReceipt(result)) return undefined;
-  const misplacedGuidance =
-    action === "lifecycle" &&
-    operation !== "resume" &&
-    operation !== "retry" &&
-    Predicate.isString(input.message);
-  const issue = rejectedCallIssue(
-    operation,
-    getTextContent(result.content),
-    rejectedTarget(input, action),
-  );
   return {
     ...lanes,
     counters: [],
     outcome: "error",
     issues: [
-      misplacedGuidance ? { ...issue, message: "Guidance can only be sent with a resume" } : issue,
+      rejectedCallIssue(operation, getTextContent(result.content), rejectedTarget(input, action)),
     ],
   };
 }

@@ -3,7 +3,7 @@ import { SUBAGENT_EFFORTS } from "../domain/routing.ts";
 import {
   MAX_CUSTOM_AGENT_DESCRIPTION_CHARS,
   MAX_CUSTOM_AGENT_NAME_CHARS,
-  MAX_CUSTOM_AGENTS,
+  MAX_RESOLVED_CUSTOM_AGENTS,
 } from "../profiles/agents.ts";
 import {
   MAX_PROFILE_CANDIDATES,
@@ -475,7 +475,7 @@ const projectAgentRouteCard = (agent: SubagentAgentView): SubagentAgentRouteCard
 export const projectSubagentAgentRoutes = (
   agents: ReadonlyArray<SubagentAgentView>,
 ): ReadonlyArray<SubagentAgentRouteCard> =>
-  agents.slice(0, MAX_CUSTOM_AGENTS).map(projectAgentRouteCard);
+  agents.slice(0, MAX_RESOLVED_CUSTOM_AGENTS).map(projectAgentRouteCard);
 
 export const projectInvalidAgents = (
   invalid: ReadonlyArray<SubagentInvalidAgentView>,

@@ -10,17 +10,18 @@ import { view } from "../tools/fixtures/tool-harness.ts";
 import { emptyUsage } from "../../src/run/model.ts";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import {
+  assistantMessageEndFrame,
   awaitObservations,
+  awaitRuns,
   fakeNativeReportBackendLayer,
   inputDeliveryFrame,
-  assistantMessageEndFrame,
-  request,
   localServiceFixture,
+  nativeReportFrame,
   nativeReportRequest,
   nativeReportServiceFixture,
-  nativeReportFrame,
+  request,
+  runView,
   withService,
-  awaitRuns,
 } from "./fixtures/service-harness.ts";
 import { anyString } from "../support/matchers.ts";
 
@@ -46,12 +47,8 @@ describe("local Pi terminal evidence", () => {
             });
           fake.controls[0]!.offer({ type: "agent_settled" });
           yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
-          const result = yield* service.status(run.id);
-          expect(result).toMatchObject({
-            state: "failed",
-            reportGeneration: 0,
-            reportStatus: "missing",
-          });
+          const result = yield* runView(service, run.id);
+          expect(result).toMatchObject({ state: "failed", reportGeneration: 0 });
           expect(result.finalText).toBeUndefined();
           expect(result.error).toContain("writes may already exist");
           expect(result.error).not.toContain("\u001b");
@@ -83,15 +80,14 @@ describe("local Pi terminal evidence", () => {
       fake.controls[0]!.offer({ type: "turn_end" });
       fake.controls[0]!.offer({ type: "agent_end", willRetry: true });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.usage.totalTokens === 1);
-      expect((yield* service.status(run.id)).state).toBe("running");
+      expect((yield* runView(service, run.id)).state).toBe("running");
       fake.controls[0]!.offer({ type: "agent_start" });
       fake.controls[0]!.settle("Recovered report.");
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
-      expect(yield* service.status(run.id)).toMatchObject({
+      expect(yield* runView(service, run.id)).toMatchObject({
         state: "completed",
         reportGeneration: 1,
         finalText: "Recovered report.",
-        reportStatus: "available",
       });
     });
   });
@@ -125,7 +121,7 @@ describe("primary failure privacy", () => {
             : { type: "exit", exitCode: null, diagnostic: "generic exit", failure: primary },
         );
         yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
-        expectSanitized((yield* service.status(run.id)).error);
+        expectSanitized((yield* runView(service, run.id)).error);
         for (const projection of projections) {
           const error = projection.runs[0]?.error;
           if (error) expectSanitized(error);
@@ -153,10 +149,10 @@ describe("SubagentService", () => {
         message: "After stale evidence",
       });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.progress === "After stale evidence");
-      expect((yield* service.status(run.id)).steeringDelivery).toBe("pending");
+      expect((yield* runView(service, run.id)).steeringDelivery).toBe("pending");
       control.offer(inputDeliveryFrame(1, 2, "confirmed"));
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.steeringDelivery === "confirmed");
-      expect((yield* service.status(run.id)).state).toBe("running");
+      expect((yield* runView(service, run.id)).state).toBe("running");
     });
   });
   it.effect(
@@ -209,7 +205,6 @@ describe("SubagentService", () => {
 
         yield* TestClock.adjust("1 second");
         expect(notifications).toEqual([]);
-        expect(yield* service.status(started.id)).not.toHaveProperty("finalText");
       });
     },
   );
@@ -229,7 +224,6 @@ describe("SubagentService", () => {
           completionReceipt: { id: run.id, generation: 1, claimToken: anyString() },
         });
         yield* yieldUntil(() => fake.controls[0]!.released() === 1);
-        expect(yield* service.status(run.id)).not.toHaveProperty("finalText");
         expect(projections.at(-1)?.runs[0]?.finalText).toBe("First report.");
         const resumed = yield* service.resume(run.id, "Investigate the follow-up.");
         expect(resumed).toMatchObject({ state: "running", reportGeneration: 1 });
@@ -264,7 +258,10 @@ describe("SubagentService", () => {
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
       control.offer(nativeReportFrame(run.id, 1, 1, "late", "Must not resurrect the run."));
       for (let i = 0; i < 10; i++) yield* Effect.yieldNow;
-      expect(yield* service.status(run.id)).toMatchObject({ state: "failed", reportGeneration: 0 });
+      expect(yield* runView(service, run.id)).toMatchObject({
+        state: "failed",
+        reportGeneration: 0,
+      });
     });
   });
 
@@ -298,6 +295,7 @@ describe("SubagentService", () => {
       const record = yield* runRecordFixture({
         view: view({ state: "running" }),
         stoppedByParent: false,
+        subtreeStopsInProgress: 0,
         warningSlots: {},
         assignment: runningAssignment(2),
         lastBackendReport: first,

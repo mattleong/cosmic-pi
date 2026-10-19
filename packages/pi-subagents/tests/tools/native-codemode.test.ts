@@ -11,10 +11,11 @@ import type { StartSubagentRequest } from "../../src/run/model.ts";
 import { SubagentNotFoundError } from "../../src/run/errors.ts";
 import {
   acknowledgeCompletions,
+  contactParentFrame,
   localServiceFixture,
   nativeReportServiceFixture,
   request,
-  contactParentFrame,
+  runViews,
   withService,
 } from "../run/fixtures/service-harness.ts";
 import { nativeCodemodeSession } from "../support/native-codemode-session.ts";
@@ -142,13 +143,13 @@ describe("native scripted subagent workflows", () => {
             callId,
           );
           expect(output(started.text)).toMatchObject({ outcome: "started" });
-          const parent = (yield* service.list)[0]!;
+          const parent = (yield* runViews(service))[0]!;
           expect(
             yield* service
               .startSessionOwnedFrom(parent.id, request({ writeIntent: "writer" }))
               .pipe(Effect.flip),
           ).toMatchObject({ code: "scripted_subtree_writer_not_supported" });
-          expect(yield* service.list).toHaveLength(1);
+          expect(yield* runViews(service)).toHaveLength(1);
           const direct = yield* h.call(
             "agent_start",
             {
@@ -157,9 +158,9 @@ describe("native scripted subagent workflows", () => {
             callId,
           );
           expect(direct.isError).toBe(false);
-          expect((yield* service.list).filter((run) => run.writeIntent === "writer")).toHaveLength(
-            1,
-          );
+          expect(
+            (yield* runViews(service)).filter((run) => run.writeIntent === "writer"),
+          ).toHaveLength(1);
         });
       },
     );

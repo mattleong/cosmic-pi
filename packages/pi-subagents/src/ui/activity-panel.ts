@@ -10,7 +10,7 @@ import {
   spinnerFrameAt,
 } from "pi-cosmic-ui/manager";
 import {
-  isAssignmentFinishedRunState,
+  isTerminalRunState,
   type SubagentProjection,
   type SubagentRunState,
   type SubagentRunView,
@@ -172,7 +172,7 @@ const panelHeader = (
   const paused = trackedRuns.filter((run) => run.state === "paused").length;
   const usage = aggregateUsage(trackedRuns, "compact");
   const finishedIds = new Set(
-    panel.awaitedRuns.filter((run) => isAssignmentFinishedRunState(run.state)).map((run) => run.id),
+    panel.awaitedRuns.filter((run) => isTerminalRunState(run.state)).map((run) => run.id),
   );
   const startCount = presentation.starts.reduce(
     (total, starting) => total + starting.requestedCount,

@@ -447,6 +447,13 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
               : attest("process-exit", cleanupUnconfirmed());
         }
         if (detachedSnapshotFailure) return yield* failAttested(detachedSnapshotFailure);
+        // A child that exited on its own was never snapshotted, and its descendants have
+        // reparented, so nothing can show they are gone.
+        if (!detachedSnapshotComplete)
+          return yield* attest(
+            "descendant-snapshot",
+            cleanupUnconfirmed("No complete pre-exit descendant snapshot was retained."),
+          );
         yield* attest(
           "process-group",
           runtime

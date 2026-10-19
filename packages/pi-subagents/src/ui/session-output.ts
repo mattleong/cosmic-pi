@@ -21,7 +21,7 @@ import { composeToolComponent } from "pi-cosmic-ui/tool";
 import {
   hasSubagentCapability,
   isActiveRunState,
-  isAssignmentFinishedRunState,
+  isTerminalRunState,
   type SubagentRunState,
   type SubagentRunView,
   type SubagentSessionEvent,
@@ -195,7 +195,6 @@ const EMPTY_ACTIVITY_LABELS = {
   starting: liveLabel("pending"),
   running: liveLabel("running"),
   waiting_for_parent: "Waiting for parent…",
-  reported: "Report delivered; retained backend is idle.",
   stopping: liveLabel("stopping"),
   completed: "Finished without tool activity.",
   failed: "No tool activity before failure.",
@@ -223,7 +222,7 @@ const addLiveActivity = (
 ): void => {
   const items = activityItems(
     run.sessionEvents,
-    isAssignmentFinishedRunState(run.state) ? run.finalText : undefined,
+    isTerminalRunState(run.state) ? run.finalText : undefined,
   );
   const frame = spinnerFrameAt(now);
   for (const item of items) {
@@ -254,7 +253,7 @@ const MISSING_REPORT_STATUS = {
 } satisfies Readonly<Record<NonNullable<SubagentRunView["reportStatus"]>, string>>;
 
 const addAssistantConclusion = (container: Container, run: SubagentRunView, theme: Theme): void => {
-  const output = isAssignmentFinishedRunState(run.state) ? run.finalText : undefined;
+  const output = isTerminalRunState(run.state) ? run.finalText : undefined;
   if (output) {
     addBlock(container, theme.fg("accent", theme.bold("Final report")));
     container.addChild(markdownBlock(output, theme));

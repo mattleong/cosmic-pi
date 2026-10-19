@@ -24,11 +24,11 @@ import {
   renderSubagentCall,
   renderSubagentResult,
   renderSubagentExpandedContent,
-  decodeInputEvidence,
+  decodeCallArguments,
   renderSubagentInputContent,
 } from "./render.ts";
 import { renderSubagentStartCall } from "./render-start.ts";
-import { registerAgentTools } from "./agent.ts";
+import { registerAgentTools, ROOT_SCRIPT_NAMESPACE } from "./agent.ts";
 import { executeAgentActionEffect } from "./execute-agents.ts";
 import {
   startToolParameters,
@@ -97,12 +97,25 @@ const ARGUMENT_PREPARERS: SubagentArgumentPreparers = {
 const SCRIPTED_SUBAGENT_GUIDELINE =
   "Native codemode can script read-only delegation with agent_start, agent_await, agent_list, agent_read, agent_profiles, and agent_lifecycle stop, which return version-3 structured results. Print run IDs as soon as you have them, await every call, and keep steps bounded. Don't rerun a failed script or loop on parent attention. Leave questions, retries, writers, and integration to the main agent.";
 
+const DELIVERABLE_GUIDELINE =
+  "Give each subagent one bounded slice with a concrete deliverable, and choose its profile by that deliverable. Read-only work is not automatically scouting.";
+const FAILED_START_GUIDELINE =
+  "If a start fails, follow its Next step or tell the user; don't run claude, codex, or pi from the shell instead.";
+const SHARED_CHECKOUT_SCOPES =
+  "Shared-checkout writers in one cwd share it without file claims: give each a disjoint task scope and name the files or areas it owns.";
+
 // The audience-specific delegation rule from delegation/prompt.ts is prepended at registration.
 const START_GUIDELINES = [
-  "Give each subagent one bounded slice with a concrete deliverable, and choose its profile by that deliverable. Read-only work is not automatically scouting.",
-  "Use profile=worker for implementation you hand off. While shared-checkout writers run, coordinate and review instead of editing; worktree writers leave your cwd free. Set isolation: worktree for writers whose change you'll review and apply as a diff or that run while you edit. Shared-checkout writers in one cwd share it without file claims: give each a disjoint task scope and name the files or areas it owns.",
-  "If a start fails, follow its Next step or tell the user; don't run claude, codex, or pi from the shell instead.",
-  "agent_start, agent_await, agent_lifecycle, and agent_worktree act on agents you started and their descendants; agent_list, agent_read, and agent_send reach any agent in this session.",
+  DELIVERABLE_GUIDELINE,
+  `Use profile=worker for implementation you hand off. While shared-checkout writers run, coordinate and review instead of editing; worktree writers leave your cwd free. Set isolation: worktree for writers whose change you'll review and apply as a diff or that run while you edit. ${SHARED_CHECKOUT_SCOPES}`,
+  FAILED_START_GUIDELINE,
+];
+
+// Only the root and worktree writers can start worktree writers or apply their proposals.
+const NESTED_START_GUIDELINES = [
+  DELIVERABLE_GUIDELINE,
+  `Use profile=worker for implementation you hand off. You can't start worktree writers, so set isolation: "shared-checkout" on each writer when the session default is worktree. ${SHARED_CHECKOUT_SCOPES}`,
+  FAILED_START_GUIDELINE,
 ];
 
 const TOOL_SPECS: SubagentToolSpecs = {
@@ -110,6 +123,7 @@ const TOOL_SPECS: SubagentToolSpecs = {
     label: "Inspect Profile Routes",
     description:
       "Show each profile's configured route: its model candidates in fallback order, with runtime, effort, context, write intent, and fast mode, plus the user's custom agents and the candidates their overrides leave eligible. Launches use these routes by default; a start item's model overrides one launch, only when the user asks for a specific model. Authentication is checked only at launch.",
+    promptSnippet: "Show subagent profile routes and custom agents",
     renderCall: (args, theme) =>
       renderSubagentCall("Inspect profile routes", args.profile ?? "all profiles", theme),
   },
@@ -118,7 +132,6 @@ const TOOL_SPECS: SubagentToolSpecs = {
     description:
       "Start background subagents, up to your direct-child limit. Returns run IDs immediately; each report is delivered to you when its run finishes, and runs end after reporting. Give every agent a self-contained task with the relevant paths, constraints, and deliverable. The profile sets the role and model route (default generalist). Writers use the shared checkout or a private worktree: set isolation per writer, or omit it for the session default; only the main session and worktree writers can start worktree writers. Several shared-checkout writers may run in one cwd; give them disjoint task scopes because nothing enforces file ownership. Subagents started from a codemode script, and their descendants, stay read-only. A failed start says whether retry is available.",
     promptSnippet: "Run bounded, independent tasks in background subagents",
-    promptGuidelines: START_GUIDELINES,
     renderCall: (args, theme, context) =>
       renderSubagentStartCall(
         Array.isArray(args.agents) ? args.agents : [],
@@ -136,7 +149,7 @@ const TOOL_SPECS: SubagentToolSpecs = {
     promptSnippet: "Wait for subagent reports when your next step depends on them",
     promptGuidelines: [
       "After starting subagents, keep working on parts you didn't delegate; don't redo a subagent's slice while it runs. Call agent_await only when your next step depends on a report; reports arrive on their own, so don't poll agent_list or agent_read.",
-      "When a subagent tool result lists next steps, follow them in order before continuing. Answer a real parent question with agent_send.",
+      "When a subagent tool result lists next steps, follow them in order before continuing. When a subagent asks you a question, answer it with agent_send.",
     ],
     renderCall: (args, theme, context) =>
       renderSubagentCall(
@@ -231,8 +244,8 @@ export function registerSubagentTools(
   };
   const buildTool = <N extends SubagentToolName>(name: N) => {
     const { lease, ...spec }: SubagentToolSpec<N> = TOOL_SPECS[name];
-    const rootContract = !nested && isSubagentContractTool(name);
-    const scriptable = rootContract;
+    // Root contract tools are the script-callable ones.
+    const scriptable = !nested && isSubagentContractTool(name);
     const tool = defineTool<SubagentToolParameters<N>>({
       ...spec,
       ...(name === SUBAGENT_TOOL_NAME.start && {
@@ -242,19 +255,18 @@ export function registerSubagentTools(
               ? NESTED_WORKSPACE_PARENT_START_GUIDELINE
               : NESTED_START_GUIDELINE
             : NORMAL_START_GUIDELINE,
-          ...(spec.promptGuidelines ?? []),
+          ...(nested && !nestedSurface.workspaceParent
+            ? NESTED_START_GUIDELINES
+            : START_GUIDELINES),
           ...(agents && agents.length > 0 ? [CUSTOM_AGENT_START_GUIDELINE] : []),
           ...(scriptable ? [SCRIPTED_SUBAGENT_GUIDELINE] : []),
         ],
       }),
       name,
       exposure: scriptable ? "direct" : "model-only",
-      ...(rootContract && { outputSchema: toPiToolOutputSchema(CONTRACT_SCHEMAS[name]) }),
       ...(scriptable && {
-        namespace: {
-          name: "subagents",
-          description: "Root-session read-only subagent orchestration",
-        },
+        outputSchema: toPiToolOutputSchema(CONTRACT_SCHEMAS[name]),
+        namespace: ROOT_SCRIPT_NAMESPACE,
       }),
       parameters: toolParameters[name],
       prepareArguments: argumentPreparers[name],
@@ -295,7 +307,7 @@ export function registerSubagentTools(
         renderCall: (args, theme) =>
           tool.name === SUBAGENT_TOOL_NAME.start && "agents" in args && Array.isArray(args.agents)
             ? renderSubagentStartCall(args.agents, theme, true, true)
-            : renderSubagentInputContent(decodeInputEvidence(args), theme),
+            : renderSubagentInputContent(decodeCallArguments(args), theme),
         renderResult: (result, options, theme, context) => {
           const panelOwnsLiveHierarchy = panelOwnsHierarchy(result, options.isPartial, context);
           const summary = project({

@@ -34,7 +34,7 @@ import {
 } from "../../../src/boundary/child-process.ts";
 import type { OversizedLine } from "../../../src/boundary/bounded-line-parser.ts";
 import type { ProcessExit } from "../../../src/boundary/process-transport.ts";
-import { SubagentProcessError } from "../../../src/run/errors.ts";
+import { runNotFound, SubagentProcessError } from "../../../src/run/errors.ts";
 import type {
   StartSubagentRequest,
   SteeringDeliveryState,
@@ -87,10 +87,23 @@ export const awaitRuns = (...args: Parameters<typeof awaitObservations>) =>
     Effect.map((observations) => observations.map((observation) => observation.run)),
   );
 
+/** Every run's projected view; reading never claims or consumes a report. */
+export const runViews = (service: SubagentServiceContract) =>
+  service.projection.pipe(Effect.map((projection) => projection.runs));
+
+/** One run's projected view; reading never claims or consumes its report. */
+export const runView = (service: SubagentServiceContract, id: string) =>
+  runViews(service).pipe(
+    Effect.flatMap((runs) => {
+      const run = runs.find((candidate) => candidate.id === id);
+      return run ? Effect.succeed(run) : Effect.fail(runNotFound(id));
+    }),
+  );
+
 export const waitForCompleted = (service: SubagentServiceContract, id: string) =>
   Effect.gen(function* () {
     for (let attempt = 0; attempt < 200; attempt++) {
-      if ((yield* service.list).some((run) => run.id === id && run.state === "completed"))
+      if ((yield* runViews(service)).some((run) => run.id === id && run.state === "completed"))
         return undefined;
       yield* Effect.yieldNow;
     }
@@ -216,6 +229,10 @@ export interface FakeChildControl {
   readonly commandTypes: (...only: FakeCommandType[]) => FakeCommandType[];
   readonly settle: (text?: string) => void;
   readonly failNextIpc: (code: string) => void;
+  /** The next descendant notification is received but its acknowledgement never arrives. */
+  readonly loseNextNotificationAck: () => void;
+  /** The next descendant notification is acknowledged with `ok: false`. */
+  readonly refuseNextNotification: () => void;
   readonly gateNextSend: (type: FakeCommandType, gate: Deferred.Deferred<void>) => void;
   readonly answerNextGuidance: (disposition: GuidanceDisposition) => void;
   readonly gateNextIpcType: (
@@ -376,6 +393,8 @@ export function fakeChildLayer(
           };
           const offerIpc = (value: IpcWireValue) =>
             Queue.offerUnsafe(events, { type: "parent_contact", value });
+          let lostNotificationAcks = 0;
+          let refusedNotifications = 0;
           const emitNormalIpcAck = (message: LocalPiParentControl) => {
             if (message.type === "parent_reply")
               offerIpc({
@@ -384,13 +403,20 @@ export function fakeChildLayer(
                 requestId: message.ackId,
                 ok: true,
               });
-            if (message.type === "proxy_notification")
+            if (message.type === "proxy_notification") {
+              if (lostNotificationAcks > 0) {
+                lostNotificationAcks -= 1;
+                return;
+              }
+              const refused = refusedNotifications > 0;
+              if (refused) refusedNotifications -= 1;
               offerIpc({
                 channel: "pi-subagents",
                 type: "proxy_notification_ack",
                 requestId: message.requestId,
-                ok: true,
+                ok: !refused,
               });
+            }
             if (message.type === "turn_input_barrier")
               offerIpc({
                 channel: "pi-subagents",
@@ -507,6 +533,12 @@ export function fakeChildLayer(
               offer({ type: "agent_settled" });
             },
             failNextIpc: (code) => void ipcFailures.push(code),
+            loseNextNotificationAck: () => {
+              lostNotificationAcks += 1;
+            },
+            refuseNextNotification: () => {
+              refusedNotifications += 1;
+            },
             gateNextSend: (type, gate) => void sendGates.push({ type, gate }),
             answerNextGuidance: (disposition) => void guidanceDispositions.push(disposition),
             gateNextIpcType: (type, gate) => void ipcGates.push({ type, gate }),
@@ -680,6 +712,8 @@ export function fakeNativeReportBackendLayer(
     readonly interruptGate?: Deferred.Deferred<void> | undefined;
     readonly capabilities?: BackendDriver["capabilities"] | undefined;
     readonly releaseGate?: Deferred.Deferred<void> | undefined;
+    /** Replaces recorded guidance delivery, such as with a still-pending confirmation. */
+    readonly steer?: ((message: string) => Effect.Effect<void, SubagentProcessError>) | undefined;
   } = {},
 ) {
   const controls: FakeNativeReportControl[] = [];
@@ -741,7 +775,9 @@ export function fakeNativeReportBackendLayer(
                     return undefined;
                   }),
                 steer: (message: string) =>
-                  Effect.sync(() => void prompts.push(`steer:${message}`)),
+                  Effect.sync(() => void prompts.push(`steer:${message}`)).pipe(
+                    Effect.andThen(options.steer?.(message) ?? Effect.void),
+                  ),
                 interrupt: options.interruptGate
                   ? Deferred.await(options.interruptGate)
                   : Effect.void,

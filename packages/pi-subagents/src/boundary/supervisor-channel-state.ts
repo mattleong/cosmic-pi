@@ -71,7 +71,6 @@ export interface SupervisorChannelState {
   readonly events: Queue.Queue<SupervisorEvent, Cause.Done>;
   readonly peers: Map<number, RpcPeer>;
   readonly assignmentEpochs: Set<number>;
-  readonly questionEpochs: Set<number>;
   readonly reports: Map<SupervisorDeliveryId, BackendReport>;
   readonly epochAcknowledgements: Map<SupervisorChannelId, PendingEpochAcknowledgement>;
   readonly readiness: Latch.Latch;
@@ -97,7 +96,6 @@ export const supervisorChannelState = (
     events,
     peers: new Map(),
     assignmentEpochs: new Set(),
-    questionEpochs: new Set(),
     reports: new Map(),
     epochAcknowledgements: new Map(),
     readiness,

@@ -32,7 +32,7 @@ const cardLabel = (card: Pick<SubagentRunCard, "id" | "name">) =>
   (card.name === card.id ? "Subagent" : card.name).slice(0, 60);
 
 export const hasChangesToReview = (card: SubagentRunCard): boolean =>
-  card.workspaceOutcome?.status !== "auto-discarded" &&
+  (card.workspaceOutcome === undefined || card.workspaceOutcome.status === "proposal") &&
   (Boolean(card.finalText) || card.finalTextTruncated === true) &&
   card.writeIntent === "writer" &&
   (card.writerWorkspaceMode === "worktree" || Boolean(card.workspaceId));
@@ -220,15 +220,26 @@ function evidenceIssues(card: SubagentRunCard, label: string, add: AddIssue): vo
   reportEvidenceIssues(card, label, add);
 }
 
+const RESOLVED_WORKSPACE_ISSUES = {
+  "auto-discarded": {
+    message: "no changes; workspace discarded",
+    detail: "The writer changed no files, so its workspace was discarded. Nothing needs review.",
+  },
+  integrated: {
+    message: "workspace applied",
+    detail: "The proposal was applied to the parent's files. Nothing is left to review.",
+  },
+  discarded: {
+    message: "workspace discarded",
+    detail: "The proposal was discarded without being applied.",
+  },
+} as const;
+
 function workspaceOutcomeIssue(card: SubagentRunCard, label: string, add: AddIssue): void {
   const outcome = card.workspaceOutcome;
-  if (outcome?.status === "auto-discarded") {
-    add(
-      "info",
-      "workspace-outcome",
-      `${label}: no changes; workspace discarded`,
-      "The writer changed no files, so its workspace was discarded. Nothing needs review.",
-    );
+  if (outcome !== undefined && outcome.status !== "proposal") {
+    const { message, detail } = RESOLVED_WORKSPACE_ISSUES[outcome.status];
+    add("info", "workspace-outcome", `${label}: ${message}`, detail);
     return;
   }
   if (outcome === undefined && !hasChangesToReview(card)) return;
@@ -245,7 +256,7 @@ function workspaceOutcomeIssue(card: SubagentRunCard, label: string, add: AddIss
         : "Apply it with agent_worktree apply and its workspaceId from agent_list.",
       ...(outcome?.uncapturedFileCount
         ? [
-            "Uncaptured files, such as .env or vendored code, are not part of the proposal and stay in the worker tree.",
+            "Credential files the writer created, such as .env, are not part of the proposal and stay in the worker tree.",
           ]
         : []),
     ].join("\n"),

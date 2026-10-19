@@ -13,6 +13,7 @@ import {
   type StartSubagentRequest,
   SUBAGENT_ROOT_RUN_ID,
   type SubagentRunView,
+  type SubagentWorkspaceOutcome,
 } from "./model.ts";
 import { isRunInSubtree } from "./tree.ts";
 
@@ -279,6 +280,44 @@ export const reopenBindingLocked = (binding: WorkspaceBinding) => {
   const record = binding.record;
   if (record?.view.workspaceOutcome) record.view = { ...record.view, workspaceOutcome: undefined };
   binding.state = { phase: "idle", knowledge: { kind: "reopened" } };
+};
+
+/** Records how the workspace was resolved on its writer's view; callers publish under the run lock. */
+export const recordWorkspaceOutcomeLocked = (
+  binding: WorkspaceBinding,
+  workspaceOutcome: SubagentWorkspaceOutcome,
+) => {
+  const record = binding.record;
+  if (record) record.view = { ...record.view, workspaceOutcome };
+};
+
+/**
+ * The proposal a partial integration leaves: exactly the remaining paths. Line totals stay only
+ * when the bounded diffstat listed every file.
+ */
+export const narrowProposalLocked = (
+  binding: WorkspaceBinding,
+  remainingPaths: ReadonlyArray<string>,
+) => {
+  const current = binding.record?.view.workspaceOutcome;
+  const proposal = current?.status === "proposal" ? current : undefined;
+  const remaining = new Set(remainingPaths);
+  const stat = proposal?.diffStat;
+  const files = stat?.files.filter((file) => remaining.has(file.path)) ?? [];
+  const complete = stat !== undefined && stat.files.length === proposal?.changedFileCount;
+  recordWorkspaceOutcomeLocked(binding, {
+    status: "proposal",
+    changedFileCount: remainingPaths.length,
+    ...(proposal?.uncapturedFileCount && { uncapturedFileCount: proposal.uncapturedFileCount }),
+    ...(complete &&
+      files.length > 0 && {
+        diffStat: {
+          addedLines: files.reduce((total, file) => total + file.addedLines, 0),
+          deletedLines: files.reduce((total, file) => total + file.deletedLines, 0),
+          files,
+        },
+      }),
+  });
 };
 
 export const workspaceBusyError = () =>

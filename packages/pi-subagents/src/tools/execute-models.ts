@@ -17,7 +17,7 @@ import type { ProfileResolution } from "../profiles/resolve.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
 import { encodeSubagentContract } from "./contract-schema.ts";
 import { modelsContract } from "./discovery-contract.ts";
-import { compactToolDetails } from "./details.ts";
+import { modelDetails } from "./details.ts";
 import { boundToolOutput } from "./format.ts";
 import type {
   ProfileCandidateDiscovery,
@@ -197,13 +197,7 @@ export const executeModelsAction = (
           ),
         },
       ],
-      details: compactToolDetails({
-        action: "models",
-        profiles,
-        agents,
-        invalidAgents,
-        fallbackProfile,
-      }),
+      details: modelDetails({ profiles, agents, invalidAgents, fallbackProfile }),
       structuredContent: encodeSubagentContract(
         modelsContract(profiles, fallbackProfile, agents, invalidAgents),
       ),

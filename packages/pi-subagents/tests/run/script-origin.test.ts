@@ -9,6 +9,8 @@ import {
   leaseCounts,
   localServiceFixture,
   request,
+  runView,
+  runViews,
   withService,
 } from "./fixtures/service-harness.ts";
 
@@ -49,7 +51,7 @@ describe("immutable script-origin subtree policy", () => {
         expect(denied).toMatchObject({ code: "scripted_subtree_writer_not_supported" });
         expect(getFailedStartRecovery(denied)).toBeUndefined();
       }
-      expect((yield* service.list).map((run) => run.id)).toEqual([
+      expect((yield* runViews(service)).map((run) => run.id)).toEqual([
         scripted.id,
         unrelated.id,
         reader.id,
@@ -116,14 +118,14 @@ describe("immutable script-origin subtree policy", () => {
               depth: failed.depth,
               writeIntent: "writer",
             });
-            expect((yield* service.status(failed.id)).supersededByRunId).toBe(successor.id);
+            expect((yield* runView(service, failed.id)).supersededByRunId).toBe(successor.id);
             return;
           }
           expect(yield* retry.pipe(Effect.flip)).toMatchObject({
             code: "scripted_subtree_writer_not_supported",
           });
-          expect((yield* service.status(failed.id)).supersededByRunId).toBeUndefined();
-          expect(yield* service.list).toHaveLength(1);
+          expect((yield* runView(service, failed.id)).supersededByRunId).toBeUndefined();
+          expect(yield* runViews(service)).toHaveLength(1);
           expect(f.fake.controls).toHaveLength(1);
           expect(counts.acquire).toBe(0);
           expect(counts.canonicalize).toBe(0);

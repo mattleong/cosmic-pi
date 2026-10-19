@@ -17,6 +17,8 @@ import {
   localServiceFixture,
   profileLayerFor,
   request,
+  runView,
+  runViews,
   withService,
 } from "./fixtures/service-harness.ts";
 
@@ -164,7 +166,7 @@ describe("SubagentService", () => {
 
       const resumed = yield* service.resume(first.id, "Make another edit");
       expect(resumed.state).toBe("running");
-      expect((yield* service.status(second.id)).state).toBe("running");
+      expect((yield* runView(service, second.id)).state).toBe("running");
     });
   });
 
@@ -212,7 +214,7 @@ describe("SubagentService", () => {
       expect(failure).toMatchObject({ code: "writer_lease_mark_failed" });
       expect(order).toEqual(["lease-acquire", "lease-mark-attempt", "lease-release"]);
       expect(fake.controls).toHaveLength(0);
-      expect(yield* service.list).toEqual([
+      expect(yield* runViews(service)).toEqual([
         expect.objectContaining({ name: "mark-failure-writer", state: "failed" }),
       ]);
     });

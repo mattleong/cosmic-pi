@@ -18,10 +18,8 @@ import {
   SUPERVISOR_MCP_AGENT_ID_PATTERN_SOURCE,
   SUPERVISOR_MCP_AGENT_IDS_ARGUMENT_KEY,
   SUPERVISOR_MCP_AGENT_SEND_ARGUMENT_KEYS,
-  SUPERVISOR_MCP_AGENT_TOOL_NAMES,
   SUPERVISOR_MCP_CONTACT_ARGUMENT_KEYS,
   SUPERVISOR_MCP_CONTACT_KINDS,
-  SUPERVISOR_MCP_CONTACT_PARENT_TOOL_NAME,
   SUPERVISOR_MCP_DELIVERY_ID_PATTERN_SOURCE,
   SUPERVISOR_MCP_NONBLANK_PATTERN_SOURCE,
   SUPERVISOR_MCP_REPORT_ARGUMENT_KEYS,
@@ -29,6 +27,11 @@ import {
   SUPERVISOR_MCP_TOOL_NAMES,
   SUPERVISOR_MCP_VERBOSE_ARGUMENT_KEY,
 } from "./mcp-contract.ts";
+import {
+  CONTACT_PARENT_TOOL_NAME,
+  isAgentToolName,
+  type AgentToolName,
+} from "../run/tool-policy.ts";
 import {
   PARENT_REPLY_PREFIX,
   SupervisorAgentIdSchema,
@@ -224,7 +227,7 @@ const decodeAgentIdsCall = (
 };
 
 const decodeAgentToolCall = (
-  name: (typeof SUPERVISOR_MCP_AGENT_TOOL_NAMES)[number],
+  name: AgentToolName,
   args: Schema.Json | undefined,
 ): Result.Result<SupervisorToolCall, string> => {
   switch (name) {
@@ -252,9 +255,6 @@ const decodeAgentToolCall = (
   return absurd<Result.Result<SupervisorToolCall, string>>(name);
 };
 
-const isAgentToolName = (name: string): name is (typeof SUPERVISOR_MCP_AGENT_TOOL_NAMES)[number] =>
-  SUPERVISOR_MCP_AGENT_TOOL_NAMES.some((tool) => tool === name);
-
 /** Decodes a tool call, or explains which argument to fix. */
 export const decodeSupervisorToolCall = (
   name: string,
@@ -270,7 +270,7 @@ export const decodeSupervisorToolCall = (
         Result.succeed({ kind: "report" as const, deliveryId: delivery_id, report }),
     });
   }
-  if (name !== SUPERVISOR_MCP_CONTACT_PARENT_TOOL_NAME)
+  if (name !== CONTACT_PARENT_TOOL_NAME)
     return Result.fail(`Unknown tool; use one of ${SUPERVISOR_MCP_TOOL_NAMES.join(", ")}.`);
   const problem = argumentProblem(name, CONTACT_RULES, args);
   if (problem !== undefined) return Result.fail(problem);

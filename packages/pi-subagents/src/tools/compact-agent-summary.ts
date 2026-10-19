@@ -93,7 +93,7 @@ const DISPOSITIONS: Record<
   resumed: "resumed",
   woken: "woke the main agent",
   queued: "queued for the main agent",
-  held: "held until the user's next prompt",
+  held: "held for the user",
 };
 
 type SendDetails = Extract<AgentToolDetails, { readonly action: "agent_send" }>;
@@ -114,9 +114,9 @@ const sendIssues = (details: SendDetails): CompactIssue[] => {
         {
           severity: "info",
           code: "agent-message-held",
-          message: "The main agent was interrupted and waits for the user",
+          message: "The main agent is waiting on the user",
           detail:
-            "The message is in the main agent's conversation and reaches the model on the user's next prompt.",
+            "The message is in the main agent's conversation. It reaches the model when an open dialog closes, or after an interrupt, on the user's next prompt.",
         },
       ];
     case "answered":
@@ -145,6 +145,8 @@ const summarizeRead = (
   const single = details.agents.length === 1 && only !== undefined;
   const empty = details.agents.filter((agent) => agent.textStatus === "none").length;
   const truncated = details.agents.filter((agent) => agent.truncated).length;
+  // Each run's status card raises its own attention; reading it still succeeded.
+  const statusIssues = details.agents.flatMap((agent) => agent.issues ?? []);
   return settled(
     {
       subject: single ? displayName(only.name) : "",
@@ -156,7 +158,7 @@ const summarizeRead = (
         ...(single && only.source === "error" ? ["error"] : []),
       ],
     },
-    missingIssue(details.missingIds),
+    [...statusIssues, ...missingIssue(details.missingIds)],
   );
 };
 

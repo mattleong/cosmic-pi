@@ -18,11 +18,12 @@ import type { BackendProxyResult } from "../../src/backend/model.ts";
 import type { LocalPiParentControl } from "../../src/backend/local-pi-protocol.ts";
 import {
   acknowledgeCompletions,
+  type FakeChildControl,
   fakeChildLayer,
   localServiceFixture,
   request,
+  runView,
   serviceLayer,
-  type FakeChildControl,
   waitForCompleted,
   withService,
 } from "./fixtures/service-harness.ts";
@@ -183,7 +184,7 @@ describe("SubagentService parent proxy executions", () => {
         if (ending === "crash") caller.exit(1);
         else caller.settle("Parent report.");
         yield* yieldUntil(() => finalized && caller.released() === 1);
-        expect((yield* service.status(child.id)).state).toBe("running");
+        expect((yield* runView(service, child.id)).state).toBe("running");
         expect(fake.controls[1]!.released()).toBe(0);
 
         let rootObserved = false;
@@ -216,8 +217,11 @@ describe("SubagentService parent proxy executions", () => {
         );
         expect(responseFor(caller, "await-child")).toBeUndefined();
         expect(
-          yield* service.withStatusObservations([child.id], ({ observations }) =>
-            Effect.succeed(observations[0]?.run.reportStatus),
+          yield* service.withAwaitTerminalObservations(
+            [child.id],
+            "all_finished",
+            undefined,
+            (observations) => Effect.succeed(observations[0]?.run.reportStatus),
           ),
         ).toBe("delivered");
       });

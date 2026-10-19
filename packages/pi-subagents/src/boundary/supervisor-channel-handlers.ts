@@ -241,11 +241,6 @@ export const supervisorChannelHandlers = (state: SupervisorChannelState) =>
               "question_pending",
               "A blocking supervisor question is already pending.",
             );
-          if (state.questionEpochs.has(payload.assignmentEpoch))
-            return yield* rpcFailure(
-              "question_already_used",
-              "This assignment already used its blocking supervisor question.",
-            );
           const pending: PendingQuestion = {
             requestId: payload.requestId,
             epoch: payload.assignmentEpoch,
@@ -259,7 +254,6 @@ export const supervisorChannelHandlers = (state: SupervisorChannelState) =>
             state.pendingQuestion = undefined;
             return yield* eventQueueFull();
           }
-          state.questionEpochs.add(payload.assignmentEpoch);
           return yield* Deferred.await(pending.response).pipe(
             Effect.onExit((exit) =>
               Effect.sync(() => {

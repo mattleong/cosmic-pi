@@ -29,6 +29,7 @@ it.live(
         },
         status: "frozen",
         baseline: "baseline",
+        ownerLease: "owner",
         revision: { revisionId: "revision", changedPaths: [""] },
         // Saving stamps the current time, which has as many digits as this one.
         lastChangedAt: yield* Clock.currentTimeMillis,

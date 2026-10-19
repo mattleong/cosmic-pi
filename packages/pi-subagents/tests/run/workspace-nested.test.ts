@@ -15,6 +15,8 @@ import {
   profileLayerFor,
   request,
   reviewerContinuation,
+  runView,
+  runViews,
   withService,
 } from "./fixtures/service-harness.ts";
 import {
@@ -91,12 +93,14 @@ const nestedRecord = (
   },
   status,
   baseline: "baseline",
+  ownerLease: "owner",
+  lastChangedAt: 0,
 });
 
 const outcomeOf = (service: SubagentServiceContract, id: string) =>
   Effect.gen(function* () {
     for (let turn = 0; turn < 200; turn++) {
-      const run = (yield* service.list).find((entry) => entry.id === id);
+      const run = (yield* runViews(service)).find((entry) => entry.id === id);
       if (run?.workspaceOutcome) return run.workspaceOutcome;
       yield* Effect.yieldNow;
     }
@@ -260,7 +264,7 @@ describe("nested worktree writers", () => {
       // The parent's own lease covers its worker tree; other directories are leased as usual.
       expect(leases.acquired.filter((cwd) => cwd === parent.cwd)).toHaveLength(1);
       expect(leases.acquired).toContain(`${parent.cwd}/packages/b`);
-      expect((yield* service.status(parent.id)).state).toBe("running");
+      expect((yield* runView(service, parent.id)).state).toBe("running");
       // With its child resolved, the parent's own workspace proceeds once it stops.
       yield* service.stop(parent.id);
       expect((yield* service.workspaceReview(parentWorkspace)).revisionId).toBeDefined();

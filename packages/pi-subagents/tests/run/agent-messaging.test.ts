@@ -5,7 +5,11 @@ import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import { type AgentCaller, MAIN_AGENT_ID } from "../../src/run/agent-messaging.ts";
-import { SubagentNotFoundError } from "../../src/run/errors.ts";
+import {
+  PENDING_STEER_DELIVERY_CODE,
+  SubagentNotFoundError,
+  SubagentProcessError,
+} from "../../src/run/errors.ts";
 import type { SubagentProjection, SubagentRunView } from "../../src/run/model.ts";
 import { objectContaining, stringContaining } from "../support/matchers.ts";
 import { fakeAgentMain } from "./fixtures/agent-main.ts";
@@ -14,13 +18,15 @@ import {
   assistantMessageEndFrame,
   completeLocalRun,
   contactParentFrame,
-  fakeChildLayer,
   type FakeChildControl,
+  fakeChildLayer,
+  fakeNativeReportBackendLayer,
   localServiceFixture,
   nativeReportRequest,
   nativeReportServiceFixture,
   profileLayerFor,
   request,
+  runView,
   withService,
 } from "./fixtures/service-harness.ts";
 
@@ -102,7 +108,7 @@ describe("agent messaging", () => {
     });
   });
 
-  it.effect("lets only the direct parent answer a waiting run; others guide it", () => {
+  it.effect("lets any ancestor answer a waiting run; other agents guide it", () => {
     const { fake, projections, layer } = localServiceFixture();
     return withService(layer, function* (service) {
       const parent = yield* service.start(request({ name: "parent", nestingPolicy: nesting }));
@@ -114,8 +120,6 @@ describe("agent messaging", () => {
       const childControl = fake.controls[2]!;
       yield* askQuestion(childControl, projections, child.id, "question-1");
 
-      const fromMain = yield* service.agentSend(MAIN, child.id, "Use v2.");
-      expect(fromMain.disposition).toBe("guided");
       const fromSibling = yield* service.agentSend(asRun(sibling), child.id, "Prefer v1.");
       expect(fromSibling.disposition).toBe("guided");
       expect(childControl.sentIpc("parent_reply")).toBe(false);
@@ -126,12 +130,47 @@ describe("agent messaging", () => {
       expect(
         childControl.sentIpc("parent_reply", (reply) => reply.message === "Use the public API."),
       ).toBe(true);
-      expect(steerMessages(childControl)).toHaveLength(2);
+      expect(steerMessages(childControl)).toHaveLength(1);
 
-      // The main agent is the direct parent of top-level runs.
-      yield* askQuestion(fake.controls[1]!, projections, sibling.id, "question-2");
-      expect((yield* service.agentSend(MAIN, sibling.id, "Go ahead.")).disposition).toBe(
-        "answered",
+      yield* askQuestion(childControl, projections, child.id, "question-2");
+      expect(yield* service.agentSend(MAIN, child.id, "Use v2.")).toMatchObject({
+        disposition: "answered",
+        run: { state: "running" },
+      });
+      expect(childControl.sentIpc("parent_reply", (reply) => reply.message === "Use v2.")).toBe(
+        true,
+      );
+    });
+  });
+
+  it.effect("lets the ancestor a question reached answer it once the parent finished", () => {
+    const { fake, projections, notifications, layer } = localServiceFixture({
+      notify: (notification) =>
+        notification.type === "completed"
+          ? acknowledgeCompletions(notification)
+          : { actionAccepted: true },
+    });
+    return withService(layer, function* (service) {
+      const parent = yield* service.start(request({ name: "parent", nestingPolicy: nesting }));
+      const child = yield* service.startSessionOwnedFrom(
+        parent.id,
+        request({ name: "child", nestingPolicy: nesting }),
+      );
+      yield* completeLocalRun(service, fake.controls[0]!, parent.id, "Parent done.");
+      const childControl = fake.controls[1]!;
+      yield* askQuestion(childControl, projections, child.id, "question-routed");
+      yield* TestClock.adjust("200 millis");
+      yield* yieldUntil(() => notifications.some((notice) => notice.type === "question"));
+      expect(notifications.find((notice) => notice.type === "question")).toMatchObject({
+        id: child.id,
+      });
+
+      expect(yield* service.agentSend(MAIN, child.id, "Use v2.")).toMatchObject({
+        disposition: "answered",
+        run: { state: "running" },
+      });
+      expect(childControl.sentIpc("parent_reply", (reply) => reply.message === "Use v2.")).toBe(
+        true,
       );
     });
   });
@@ -157,7 +196,7 @@ describe("agent messaging", () => {
         run: { id: worker.id, state: "running", assignmentEpoch: 2 },
       });
       // A parent awaiting the run sees who resumed it.
-      expect((yield* service.status(worker.id)).resumedBy).toEqual(stringContaining(peer.id));
+      expect((yield* runView(service, worker.id)).resumedBy).toEqual(stringContaining(peer.id));
       const resumedControl = fake.controls[2]!;
       expect(resumedControl.launch.resumeSessionFile).toBe("/tmp/child-session.jsonl");
       expect(promptMessages(resumedControl)).toEqual([stringContaining(peer.id)]);
@@ -326,7 +365,7 @@ describe("agent messaging", () => {
       expect(
         yield* service.agentSend(asRun(peer), worker.id, "One more pass.").pipe(Effect.flip),
       ).toMatchObject({ code: "agent_spend_limit" });
-      expect(yield* service.status(worker.id)).toMatchObject({
+      expect(yield* runView(service, worker.id)).toMatchObject({
         state: "completed",
         assignmentEpoch: 1,
       });
@@ -365,7 +404,7 @@ describe("agent messaging", () => {
         expect((yield* service.interrupt(run.id)).state).toBe("paused");
         expect((yield* service.agentSend(MAIN, run.id, "Continue.")).disposition).toBe("resumed");
       }
-      expect((yield* service.status(run.id)).state).toBe("running");
+      expect((yield* runView(service, run.id)).state).toBe("running");
     });
   });
 
@@ -414,6 +453,98 @@ describe("agent messaging", () => {
       expect((yield* service.agentRead(MAIN, ["agent-missing-1", done.id])).missingIds).toEqual([
         "agent-missing-1",
       ]);
+    });
+  });
+
+  it.effect("refuses a message resume while a covering subtree stop runs, then allows it", () => {
+    const { fake, projections, layer } = localServiceFixture();
+    return withService(layer, function* (service) {
+      const parent = yield* service.start(request({ name: "parent", nestingPolicy: nesting }));
+      const finished = yield* service.startSessionOwnedFrom(
+        parent.id,
+        request({ name: "finished", nestingPolicy: nesting }),
+      );
+      const running = yield* service.startSessionOwnedFrom(
+        parent.id,
+        request({ name: "running", nestingPolicy: nesting }),
+      );
+      yield* completeLocalRun(service, fake.controls[1]!, finished.id, "Finished report.");
+      const release = yield* Deferred.make<void>();
+      fake.controls[2]!.gateRelease(release);
+      const stopping = yield* service.stop(parent.id).pipe(Effect.forkScoped);
+      yield* yieldUntil(() => latest(projections, running.id)?.state === "stopping");
+
+      expect(
+        yield* service.agentSend(MAIN, finished.id, "Keep going.").pipe(Effect.flip),
+      ).toMatchObject({ code: "agent_unavailable" });
+      expect(latest(projections, finished.id)?.state).toBe("completed");
+
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(stopping);
+      expect(yield* service.agentSend(MAIN, finished.id, "Keep going.")).toMatchObject({
+        disposition: "resumed",
+        run: { state: "running" },
+      });
+    });
+  });
+
+  it.effect("reads a resumed run's own failure, never its earlier assignment's report", () => {
+    const { fake, projections, layer } = localServiceFixture();
+    return withService(layer, function* (service) {
+      const run = yield* service.start(request({ name: "worker" }));
+      yield* completeLocalRun(service, fake.controls[0]!, run.id, "First assignment succeeded.");
+      expect((yield* service.agentSend(MAIN, run.id, "Second assignment.")).disposition).toBe(
+        "resumed",
+      );
+      fake.controls[1]!.exit(1);
+      yield* yieldUntil(() => latest(projections, run.id)?.state === "failed");
+
+      const [readout] = (yield* service.agentRead(MAIN, [run.id])).agents;
+      expect(readout).toMatchObject({ kind: "run", state: "failed", source: "error" });
+      expect(readout?.text).not.toContain("First assignment succeeded.");
+    });
+  });
+
+  it.effect("records guidance still awaiting confirmation on both sender and receiver", () => {
+    const backend = fakeNativeReportBackendLayer({
+      steer: () =>
+        Effect.fail(
+          new SubagentProcessError({
+            operation: "steer",
+            code: PENDING_STEER_DELIVERY_CODE,
+            pendingDelivery: true,
+            message: "Guidance delivery is still being confirmed.",
+          }),
+        ),
+    });
+    const { projections, layer } = nativeReportServiceFixture(backend);
+    return withService(layer, function* (service) {
+      const sender = yield* service.start(nativeReportRequest({ name: "sender" }));
+      const receiver = yield* service.start(nativeReportRequest({ name: "receiver" }));
+      expect(
+        (yield* service.agentSend(asRun(sender), receiver.id, "Check the schema.")).disposition,
+      ).toBe("pending");
+      expect(messageNotices(latest(projections, receiver.id))).toEqual([
+        { direction: "in", peer: sender.id, text: "Check the schema." },
+      ]);
+      expect(messageNotices(latest(projections, sender.id))).toEqual([
+        { direction: "out", peer: receiver.id, text: "Check the schema." },
+      ]);
+    });
+  });
+
+  it.effect("trims agent IDs, as call headings show them", () => {
+    const main = fakeAgentMain();
+    const { layer } = localServiceFixture({ agentMain: main.capabilities });
+    return withService(layer, function* (service) {
+      const run = yield* service.start(request({ name: "reporter" }));
+      expect((yield* service.agentSend(asRun(run), ` ${MAIN_AGENT_ID} `, "Hi.")).to).toBe(
+        MAIN_AGENT_ID,
+      );
+      expect(main.delivered).toHaveLength(1);
+      const read = yield* service.agentRead(MAIN, [` ${run.id}`, `${MAIN_AGENT_ID} `]);
+      expect(read.agents.map((agent) => agent.id)).toEqual([run.id, MAIN_AGENT_ID]);
+      expect(read.missingIds).toEqual([]);
     });
   });
 

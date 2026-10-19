@@ -12,7 +12,7 @@ const DISPOSITIONS: Record<SupervisorAgentSendResult["disposition"], string> = {
   resumed: "resumed the finished run with this message as its assignment",
   woken: "started a new turn for the idle main agent",
   queued: "appended for the busy main agent to read before its turn ends",
-  held: "held for the main agent until its user's next prompt",
+  held: "held for the main agent until its open dialog closes or its user's next prompt after an interrupt",
 };
 
 const missing = (ids: ReadonlyArray<string>): ReadonlyArray<string> =>

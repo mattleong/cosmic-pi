@@ -82,7 +82,7 @@ const WITHHELD_REPORT_STATUSES = [
 const WithheldReportSchema = Schema.Struct({ status: Schema.Literals(WITHHELD_REPORT_STATUSES) });
 const ReportSchema = Schema.Union([
   Schema.Struct({
-    status: Schema.Literals(["delivered", "read_back"]),
+    status: Schema.Literal("delivered"),
     text: NonEmptyText(MAX_CONTRACT_REPORT_CHARS),
   }),
   WithheldReportSchema,
@@ -247,7 +247,7 @@ const AgentListContractSchema = Schema.Struct({
       worktree: Schema.optionalKey(
         Schema.Struct({
           workspaceId: RunIdSchema,
-          status: Schema.Literals(["open", "proposal", "discarded"]),
+          status: Schema.Literals(["open", "proposal", "applied", "discarded"]),
           changedFileCount: Schema.optionalKey(count),
         }),
       ),

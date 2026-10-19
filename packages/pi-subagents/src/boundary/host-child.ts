@@ -168,6 +168,9 @@ export function registerSubagentChildBridge(
   const pendingProxy = parentCorrelations<AgentToolResult<unknown>>();
   let currentSession: ChildSessionInput | undefined;
   const deliverNotice = registerChildSettle(pi, () => currentSession?.isIdle() ?? false);
+  // Descendant notice keys shown by this process. Only in memory: a parent process that dies takes
+  // its connection to its children with it.
+  const shownNotices = new Set<string>();
 
   const removeProxyNames = (): void =>
     invokeHostCallback(() => {
@@ -214,7 +217,9 @@ export function registerSubagentChildBridge(
       return;
     }
     if (message.type === "proxy_notification") {
-      const ok = deliverNotice(message.message);
+      // A repeat is a retry after an uncertain acknowledgement; it was already shown.
+      const ok = shownNotices.has(message.key) || deliverNotice(message.message);
+      if (ok) shownNotices.add(message.key);
       forkContact(input, {
         channel: "pi-subagents",
         type: "proxy_notification_ack",
@@ -463,6 +468,7 @@ export function registerSubagentChildBridge(
           isScripted: (id) => receipts.isNested(owner, id),
           scheduleAnimation,
           nested: true,
+          worktrees: workspaceParent,
         });
         registerContactParent(input, token, scheduleAnimation);
         if (!isActivationCurrent(input, token)) throw new Error("Stale child activation.");

@@ -14,6 +14,8 @@ import {
   completeLocalRun,
   fakeWriterLeaseLayer,
   request,
+  runView,
+  runViews,
   withService,
 } from "./fixtures/service-harness.ts";
 import {
@@ -48,6 +50,8 @@ const record = (
   },
   status,
   baseline: "baseline",
+  ownerLease: "owner",
+  lastChangedAt: 0,
 });
 
 const sourceLeases = (cwds: ReadonlyArray<string>) =>
@@ -95,7 +99,7 @@ describe("writer workspace orchestration", () => {
       expect(yield* service.start(repoWriter()).pipe(Effect.flip)).toMatchObject({
         code: "writer_cwd_identity_changed",
       });
-      expect(yield* service.list).toEqual([]);
+      expect(yield* runViews(service)).toEqual([]);
     });
   });
   it.effect("retains an unadmitted workspace when hook cleanup is unconfirmed", () => {
@@ -109,7 +113,7 @@ describe("writer workspace orchestration", () => {
       expect(yield* service.start(repoWriter()).pipe(Effect.flip)).toMatchObject({
         code: "workspace_hook_cleanup_unconfirmed",
       });
-      expect(yield* service.list).toEqual([]);
+      expect(yield* runViews(service)).toEqual([]);
       const workspaceId = [...f.entries.keys()][0]!;
       expect(f.entries.get(workspaceId)?.status).toBe("active");
       for (const operation of [
@@ -212,7 +216,7 @@ describe("writer workspace orchestration", () => {
       expect(f.entries.size).toBe(0);
       expect(f.acquired).toEqual([]);
       expect(f.canonicalized).toEqual([]);
-      expect(yield* service.list).toHaveLength(1);
+      expect(yield* runViews(service)).toHaveLength(1);
     });
   });
 
@@ -421,7 +425,7 @@ describe("writer workspace orchestration", () => {
       expect(writer.cwd).toBe("/repo");
       expect(writer.writerWorkspaceMode).toBe("shared-checkout");
       yield* service.setWriterWorkspaceMode("worktree", Effect.void);
-      expect(yield* service.status(writer.id)).toMatchObject({
+      expect(yield* runView(service, writer.id)).toMatchObject({
         cwd: "/repo",
         writerWorkspaceMode: "shared-checkout",
       });

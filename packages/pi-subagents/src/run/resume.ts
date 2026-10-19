@@ -419,6 +419,12 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
             yield* requireCapability(selected, "resume");
             const stateFailure = resumeStateError(selected);
             if (stateFailure) return yield* stateFailure;
+            // An explicit stop of a subtree outranks agent messages until it finishes.
+            if (agentMessage && selected.subtreeStopsInProgress > 0)
+              return yield* agentMessageRefusal(
+                "agent_unavailable",
+                `Agent ${id} is being stopped with its subtree; send again once the stop finishes.`,
+              );
             // Like a new start, a resume by an agent message spends under the session's limit.
             const spent = spentAtLimitLocked(sessionUsage, records, spendLimit);
             if (spendLimit !== undefined && spent !== undefined)

@@ -334,6 +334,7 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
               routeContinuation: request.routeContinuation,
               pauseRequested: false,
               stoppedByParent: false,
+              subtreeStopsInProgress: 0,
               cleanupPending: false,
               runStateReclaimState: "pending",
               ...(canonicalWriterCwd && { canonicalWriterCwd, writerPool }),

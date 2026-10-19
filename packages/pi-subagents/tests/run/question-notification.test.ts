@@ -9,6 +9,7 @@ import {
   contactParentFrame,
   localServiceFixture,
   request,
+  runView,
   withService,
 } from "./fixtures/service-harness.ts";
 
@@ -127,7 +128,7 @@ describe("question notification ownership", () => {
       ]);
       yield* TestClock.adjust("30 seconds");
       expect(attempts).toBe(2);
-      expect((yield* service.status(run.id)).state).toBe("waiting_for_parent");
+      expect((yield* runView(service, run.id)).state).toBe("waiting_for_parent");
     });
   });
 });

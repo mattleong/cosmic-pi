@@ -12,6 +12,8 @@ import {
   fakeChildLayer,
   localServiceFixture,
   request,
+  runView,
+  runViews,
   withService,
 } from "./fixtures/service-harness.ts";
 import {
@@ -50,7 +52,7 @@ describe("SubagentService", () => {
       });
       const result = yield* withService(localServiceFixture().layer, function* (service) {
         const second = yield* service.start(request());
-        const stale = yield* service.status(first.id).pipe(Effect.flip);
+        const stale = yield* runView(service, first.id).pipe(Effect.flip);
         return { second, stale };
       });
 
@@ -140,7 +142,7 @@ describe("SubagentService", () => {
       const blocked = yield* service.start(request({ name: "blocked" })).pipe(Effect.flip);
       expect(blocked).toBeInstanceOf(SubagentProcessError);
       expect(blocked).toMatchObject({ code: "fixture_reclaim_failed" });
-      const afterFailure = yield* service.list;
+      const afterFailure = yield* runViews(service);
       const secondId = afterFailure[1]?.id ?? "";
       const thirdId = afterFailure[2]?.id ?? "";
       expect(afterFailure).toHaveLength(50);
@@ -157,7 +159,7 @@ describe("SubagentService", () => {
       reclaimFails = false;
       const recovered = yield* service.start(request({ name: "recovered" }));
       expect(recovered.state).toBe("running");
-      const retained = yield* service.list;
+      const retained = yield* runViews(service);
       expect(retained).toHaveLength(50);
       expect(retained.some((run) => run.id === firstId)).toBe(true);
       expect(retained.some((run) => run.id === secondId)).toBe(true);
@@ -190,7 +192,7 @@ describe("SubagentService", () => {
       yield* Deferred.succeed(gate, undefined);
       expect((yield* Fiber.join(startA)).state).toBe("running");
       expect((yield* Fiber.join(startB)).state).toBe("running");
-      expect(yield* service.list).toHaveLength(60);
+      expect(yield* runViews(service)).toHaveLength(60);
     });
   });
 });

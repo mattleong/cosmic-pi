@@ -167,7 +167,7 @@ export function workspaceFixture({
       const entry = entries.get(target.workspaceId);
       if (!entry || entry.handle.ownerId !== target.ownerId)
         return yield* new WorkspaceError({ operation: "inspect", message: "Unknown owner" });
-      if (entry.setupCleanupPending !== undefined)
+      if (entry.hookCleanupPending !== undefined)
         return yield* new WorkspaceError({
           operation: "hook",
           message: "Worktree hook cleanup is unconfirmed.",
@@ -183,7 +183,7 @@ export function workspaceFixture({
         Effect.sync(() => {
           const entry = entries.get(workspaceId);
           if (error.cleanupUnconfirmed && entry)
-            entries.set(workspaceId, { ...entry, setupCleanupPending: entry.handle.cwd });
+            entries.set(workspaceId, { ...entry, hookCleanupPending: entry.handle.cwd });
         }),
       ),
     );
@@ -240,8 +240,8 @@ export function workspaceFixture({
   const sweepable = (entry: WorkspaceRecord, minimumAgeMillis: number, now: number) =>
     orphaned(entry) &&
     isOpen(entry) &&
-    entry.setupCleanupPending === undefined &&
-    now - (entry.lastChangedAt ?? now) >= minimumAgeMillis;
+    entry.hookCleanupPending === undefined &&
+    now - entry.lastChangedAt >= minimumAgeMillis;
   const depth = (entry: WorkspaceRecord): number => {
     const source = entry.handle.sourceWorkspaceId;
     const parent = source === undefined ? undefined : entries.get(source);
@@ -282,6 +282,8 @@ export function workspaceFixture({
               handle,
               status: "active",
               baseline: "original-base",
+              ownerLease: "fixture-owner",
+              lastChangedAt: yield* Clock.currentTimeMillis,
               ...(input.launch && { launch: input.launch }),
             });
             input.onAcquired?.(handle);
@@ -329,7 +331,7 @@ export function workspaceFixture({
         ),
       unresolvedChildren: ({ workspaceId }) => Effect.sync(() => childrenOf(workspaceId)),
       hookCleanupPending: ({ workspaceId }) =>
-        Effect.sync(() => entries.get(workspaceId)?.setupCleanupPending !== undefined),
+        Effect.sync(() => entries.get(workspaceId)?.hookCleanupPending !== undefined),
       list: ({ ownerId }) =>
         Effect.sync(() =>
           [...entries.values()].filter((entry) => entry.handle.ownerId === ownerId),

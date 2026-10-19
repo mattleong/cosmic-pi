@@ -15,7 +15,7 @@ import {
   runningAssignment,
   runRecordFixture,
 } from "./fixtures/run-context.ts";
-import { localServiceFixture, request, withService } from "./fixtures/service-harness.ts";
+import { localServiceFixture, request, runView, withService } from "./fixtures/service-harness.ts";
 
 const fixture = Effect.gen(function* () {
   const deliveries: string[] = [];
@@ -129,7 +129,7 @@ describe("captured fleet control authority", () => {
       ).toMatchObject({
         code: "run_control_changed",
       });
-      expect((yield* service.status(run.id)).state).toBe("paused");
+      expect((yield* runView(service, run.id)).state).toBe("paused");
       expect((yield* service.resume(run.id)).state).toBe("running");
     });
   });

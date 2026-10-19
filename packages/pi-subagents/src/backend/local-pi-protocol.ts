@@ -121,6 +121,11 @@ const ProxyResponseSchema = piSubagentsMessage("proxy_response", {
 });
 const ProxyNotificationSchema = piSubagentsMessage("proxy_notification", {
   requestId: ProtocolIdSchema,
+  /**
+   * The notice's stable identity across retries: a completion's run ID and generation, or a
+   * question's run ID and notification generation. The parent shows each key once.
+   */
+  key: ProtocolIdSchema,
   message: Schema.String.check(Schema.isMaxLength(MAX_PARENT_MESSAGE_CHARS)),
 });
 const TurnInputBarrierSchema = piSubagentsMessage("turn_input_barrier", {

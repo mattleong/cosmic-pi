@@ -59,7 +59,7 @@ const recordParentNoticeLocked = (record: RunRecord, text: string, now: number) 
 
 /** A message for a run, decided under the run lock as an answer or as guidance. */
 export interface RunControlMessage {
-  /** Answers a pending question; only the run's direct parent may, so others leave it unset. */
+  /** Answers a pending question; only the run's ancestors may, so others leave it unset. */
   readonly answer?: string | undefined;
   /** Steers the turn, including a turn waiting on a question when `answer` is unset. */
   readonly guidance: string;

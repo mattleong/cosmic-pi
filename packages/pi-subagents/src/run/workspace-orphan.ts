@@ -48,7 +48,7 @@ export const orphanDisposition = (
   if (!listing.endedOwners?.includes(workspaceId)) return undefined;
   if (
     record.handle.writerCwd === undefined ||
-    record.setupCleanupPending !== undefined ||
+    record.hookCleanupPending !== undefined ||
     listing.records.some(
       (child) =>
         child.handle.sourceWorkspaceId === workspaceId &&

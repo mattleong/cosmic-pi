@@ -46,6 +46,9 @@ export interface CustomAgentDefinition {
 export const CUSTOM_AGENT_SCOPES = ["global", "project"] as const;
 export type CustomAgentScope = (typeof CUSTOM_AGENT_SCOPES)[number];
 
+/** Distinct agents the global and project layers can resolve to, each layer holding its maximum. */
+export const MAX_RESOLVED_CUSTOM_AGENTS = CUSTOM_AGENT_SCOPES.length * MAX_CUSTOM_AGENTS;
+
 /**
  * A resolved agent, frozen into each launch and its retry continuation: its instructions replace
  * the routed profile's guidance, and its effort, context, and write intent override every

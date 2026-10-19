@@ -21,7 +21,6 @@ import type { BeforeTreeRemoval } from "./git-worktree-hooks.ts";
 import { workspaceArtifact } from "./git-worktree-trees.ts";
 import {
   ownerLockNamespace,
-  recordChangedAt,
   revisionDiffFile,
   saveWorkspaceRecord,
   withFreeLock,
@@ -89,6 +88,9 @@ const requireOriginalWorker = (record: WorkspaceRecord, operation: string) =>
     return undefined;
   });
 
+const oldEnough = (record: WorkspaceRecord, now: number, minimumAgeMillis: number) =>
+  now - record.lastChangedAt >= minimumAgeMillis;
+
 // How many source-workspace links separate a record from its real checkout.
 const sourceDepth = (record: WorkspaceRecord, listed: ReadonlyMap<string, WorkspaceRecord>) => {
   let depth = 0;
@@ -116,11 +118,6 @@ export const orphanWorkspaceOperations = (engine: OrphanEngine) => {
         return yield* workspaceFailure(
           "authorization",
           "This session owns the workspace; discard it as its parent.",
-        );
-      if (record.ownerLease === undefined)
-        return yield* workspaceFailure(
-          "authorization",
-          "The workspace has no owner evidence, so its session can't be shown to have ended.",
         );
       const result = yield* ownerEnded(record.ownerLease, effect);
       if (Option.isNone(result))
@@ -214,7 +211,6 @@ export const orphanWorkspaceOperations = (engine: OrphanEngine) => {
   // Unfinished records another session created whose owner lease is free right now.
   const endedOwners = (records: ReadonlyArray<WorkspaceRecord>) =>
     Effect.forEach(records, (record) =>
-      record.ownerLease === undefined ||
       owned.has(record.handle.workspaceId) ||
       record.status === "integrated" ||
       record.status === "discarded"
@@ -224,10 +220,6 @@ export const orphanWorkspaceOperations = (engine: OrphanEngine) => {
             Effect.orElseSucceed((): ReadonlyArray<string> => []),
           ),
     ).pipe(Effect.map((ids) => ids.flat()));
-  const oldEnough = (record: WorkspaceRecord, now: number, minimumAgeMillis: number) =>
-    recordChangedAt(registry, record).pipe(
-      Effect.map((changedAt) => now - changedAt >= minimumAgeMillis),
-    );
   /**
    * Records the orphan sweep may discard, children before their source workspaces so a pass can
    * resolve a whole chain. A plain candidate scan: `sweepOrphan` rechecks each one under its
@@ -243,12 +235,8 @@ export const orphanWorkspaceOperations = (engine: OrphanEngine) => {
         if (
           !owned.has(record.handle.workspaceId) &&
           openStatuses.has(record.status) &&
-          record.ownerLease !== undefined &&
-          record.handle.writerCwd !== undefined &&
-          record.setupCleanupPending === undefined &&
-          (yield* oldEnough(record, now, input.minimumAgeMillis).pipe(
-            Effect.orElseSucceed(() => false),
-          ))
+          record.hookCleanupPending === undefined &&
+          oldEnough(record, now, input.minimumAgeMillis)
         )
           candidates.push(record);
       return candidates.toSorted(
@@ -269,8 +257,7 @@ export const orphanWorkspaceOperations = (engine: OrphanEngine) => {
     if (
       owned.has(target.workspaceId) ||
       !openStatuses.has(record.status) ||
-      record.ownerLease === undefined ||
-      !(yield* oldEnough(record, now, target.minimumAgeMillis)) ||
+      !oldEnough(record, now, target.minimumAgeMillis) ||
       (yield* unresolvedChildWorkspaces(registry, target.workspaceId)).length > 0
     )
       return undefined;

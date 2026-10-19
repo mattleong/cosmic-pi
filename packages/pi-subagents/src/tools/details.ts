@@ -48,19 +48,20 @@ interface AwaitDetailsInput {
   readonly cancellationCleanup?: "unconfirmed" | undefined;
 }
 
-type CompactToolDetailsInput =
-  | {
-      readonly action: "models";
-      readonly profiles: ReadonlyArray<SubagentProfileView>;
-      readonly agents?: ReadonlyArray<SubagentAgentView> | undefined;
-      readonly invalidAgents?: ReadonlyArray<SubagentInvalidAgentView> | undefined;
-      readonly fallbackProfile: ProfileId;
-    }
-  | {
-      readonly action: RunDetailsAction;
-      readonly runs: ReadonlyArray<SubagentRunView>;
-      readonly actionFailures?: ReadonlyArray<CompactToolActionFailure> | undefined;
-    };
+interface ModelDetailsInput {
+  readonly profiles: ReadonlyArray<SubagentProfileView>;
+  readonly agents?: ReadonlyArray<SubagentAgentView> | undefined;
+  readonly invalidAgents?: ReadonlyArray<SubagentInvalidAgentView> | undefined;
+  readonly fallbackProfile: ProfileId;
+}
+
+interface RunDetailsInput {
+  readonly action: RunDetailsAction;
+  readonly runs: ReadonlyArray<SubagentRunView>;
+  readonly actionFailures?: ReadonlyArray<CompactToolActionFailure> | undefined;
+}
+
+type ModelDetails = Extract<CompactSubagentToolDetails, { readonly action: "models" }>;
 
 /**
  * Fitting stages, tried in order until details decode within their persisted bound: bounded cards
@@ -70,15 +71,25 @@ type FitStage = "reports" | "report-free" | "condensed";
 const REPORT_STAGES: ReadonlyArray<FitStage> = ["reports", "report-free", "condensed"];
 const REPORT_FREE_STAGES: ReadonlyArray<FitStage> = ["report-free", "condensed"];
 
+const fittedCandidate = <Stage, Candidate, Details>(
+  stages: ReadonlyArray<Stage>,
+  project: (stage: Stage) => Candidate,
+  decode: (candidate: Candidate) => Details | undefined,
+): Details | undefined => {
+  for (const stage of stages) {
+    const decoded = decode(project(stage));
+    if (decoded !== undefined) return decoded;
+  }
+  return undefined;
+};
+
 const semanticCandidate = <Stage, Candidate, Details>(
   stages: ReadonlyArray<Stage>,
   project: (stage: Stage) => Candidate,
   decode: (candidate: Candidate) => Details | undefined,
 ): Details => {
-  for (const stage of stages) {
-    const decoded = decode(project(stage));
-    if (decoded !== undefined) return decoded;
-  }
+  const fitted = fittedCandidate(stages, project, decode);
+  if (fitted !== undefined) return fitted;
   throw new Error("Unable to construct bounded persisted subagent details.");
 };
 
@@ -178,7 +189,7 @@ export const awaitDetails = (input: AwaitDetailsInput): SubagentAwaitDetails =>
   );
 
 const runDetailsCandidate = (
-  input: Extract<CompactToolDetailsInput, { readonly action: RunDetailsAction }>,
+  input: RunDetailsInput,
   stage: FitStage,
 ): Exclude<CompactSubagentToolDetails, { readonly action: "models" }> => {
   const source = input.runs.slice(0, MAX_TARGET_RUNS);
@@ -198,14 +209,11 @@ const runDetailsCandidate = (
   };
 };
 
-const modelDetailsCandidate = (
-  input: Extract<CompactToolDetailsInput, { readonly action: "models" }>,
-  stage: FitStage,
-): Extract<CompactSubagentToolDetails, { readonly action: "models" }> => {
+const modelDetailsCandidate = (input: ModelDetailsInput, stage: FitStage): ModelDetails => {
   const profiles = projectSubagentProfileRoutes(input.profiles);
   const agents = projectSubagentAgentRoutes(input.agents ?? []);
   const invalidAgents = projectInvalidAgents(input.invalidAgents ?? []);
-  const base: Extract<CompactSubagentToolDetails, { readonly action: "models" }> = {
+  const base: ModelDetails = {
     version: SUBAGENT_CARD_DETAILS_VERSION,
     action: "models",
     profiles: stage === "condensed" ? profiles.map(condenseProfileRoute) : profiles,
@@ -218,16 +226,20 @@ const modelDetailsCandidate = (
   return stage === "condensed" ? { ...base, contentOmitted: true as const } : base;
 };
 
-export const compactToolDetails = (input: CompactToolDetailsInput): CompactSubagentToolDetails => {
-  if (input.action === "models")
-    return semanticCandidate(
-      REPORT_FREE_STAGES,
-      (stage) => modelDetailsCandidate(input, stage),
-      decodeCompactToolDetails,
-    );
-  return semanticCandidate(
+export const compactToolDetails = (input: RunDetailsInput): CompactSubagentToolDetails =>
+  semanticCandidate(
     REPORT_FREE_STAGES,
     (stage) => runDetailsCandidate(input, stage),
     decodeCompactToolDetails,
   );
-};
+
+/**
+ * `agent_profiles` details, condensed when needed. Routes too large even condensed leave no
+ * details, so the call keeps its full text with generic presentation instead of failing.
+ */
+export const modelDetails = (input: ModelDetailsInput): CompactSubagentToolDetails | undefined =>
+  fittedCandidate(
+    REPORT_FREE_STAGES,
+    (stage) => modelDetailsCandidate(input, stage),
+    decodeCompactToolDetails,
+  );

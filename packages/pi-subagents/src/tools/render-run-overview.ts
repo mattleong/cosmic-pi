@@ -19,7 +19,7 @@ import {
   renderExpansionAffordance,
 } from "pi-cosmic-ui/tool";
 import { skippedCandidateLabel } from "../profiles/model.ts";
-import { isAssignmentFinishedRunState } from "../run/model.ts";
+import { isTerminalRunState } from "../run/model.ts";
 import { aggregateUsage } from "../ui/metrics.ts";
 import type { SubagentRunCard } from "./details-schema.ts";
 import { attentionRecoveryText, cleanupEvidenceText } from "./format.ts";
@@ -138,7 +138,7 @@ const exceptionalRunDiagnostics = (run: SubagentRunCard, width: number, theme: T
 const runStateDiagnostics = (run: SubagentRunCard, width: number, theme: Theme): string[] => {
   const writer = runWriterSummary(run);
   return [
-    ...(run.progress && !isAssignmentFinishedRunState(run.state)
+    ...(run.progress && !isTerminalRunState(run.state)
       ? wrapTextWithAnsi(theme.fg("accent", sanitizeTerminalLine(run.progress)), width)
       : []),
     ...(writer ? dimLines(writer, width, theme) : []),

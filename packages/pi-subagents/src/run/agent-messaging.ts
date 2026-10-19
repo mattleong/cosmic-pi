@@ -11,6 +11,7 @@ import {
   type SubagentRunView,
 } from "./model.ts";
 import { sanitizeOutputText } from "./state.ts";
+import { isRunInSubtree } from "./tree.ts";
 
 /** Addresses the root session's main agent. */
 export const MAIN_AGENT_ID = "main";
@@ -176,8 +177,16 @@ const refuse = (code: AgentMessageRefusalCode, message: string): AgentRunMessage
   message,
 });
 
-/** Decides under the run lock how a message reaches a run, from its state and the sender. */
-export const planRunMessage = (record: RunRecord, senderId: string): AgentRunMessagePlan => {
+/**
+ * Decides under the run lock how a message reaches a run, from its state and the sender. Any
+ * ancestor, including main, answers a waiting run's question, since the question goes to the
+ * nearest ancestor that can take it.
+ */
+export const planRunMessage = (
+  records: ReadonlyMap<string, RunRecord>,
+  record: RunRecord,
+  senderId: string,
+): AgentRunMessagePlan => {
   const { id, state } = record.view;
   if (record.evictionClaim || record.runStateReclaimState === "reclaimed")
     return refuse(
@@ -186,7 +195,10 @@ export const planRunMessage = (record: RunRecord, senderId: string): AgentRunMes
     );
   switch (state) {
     case "waiting_for_parent":
-      return { kind: senderId === parentIdOf(record.view) ? "answer" : "guide" };
+      return {
+        kind:
+          senderId === MAIN_AGENT_ID || isRunInSubtree(records, senderId, id) ? "answer" : "guide",
+      };
     case "running":
       return { kind: "guide" };
     case "starting":
@@ -196,19 +208,16 @@ export const planRunMessage = (record: RunRecord, senderId: string): AgentRunMes
       );
     case "stopping":
       return refuse("agent_unavailable", `Agent ${id} is stopping and cannot receive messages.`);
-    case "reported":
     case "paused":
     case "completed":
     case "failed":
     case "stopped":
-      if (!hasSubagentCapability(record.view, "resume"))
-        return refuse(
-          "agent_resume_unsupported",
-          `Agent ${id} on local/${record.view.runtime} is ${state} and cannot be resumed.`,
-        );
-      return state === "reported"
-        ? refuse("agent_unavailable", `Agent ${id} is finishing its report; read it instead.`)
-        : { kind: "resume" };
+      return hasSubagentCapability(record.view, "resume")
+        ? { kind: "resume" }
+        : refuse(
+            "agent_resume_unsupported",
+            `Agent ${id} on local/${record.view.runtime} is ${state} and cannot be resumed.`,
+          );
   }
   return absurd(state);
 };
@@ -270,16 +279,10 @@ export const unavailableMainReadout: AgentReadout = {
   truncated: false,
 };
 
-const latestRetainedReport = (record: RunRecord): string | undefined => {
-  const generations = [...record.completionGenerations.values()].toSorted(
-    (left, right) => right.generation - left.generation,
-  );
-  return generations.find((completion) => completion.finalText)?.finalText;
-};
-
 /**
- * The run's latest assistant message in its current or last assignment, falling back to a finished
- * run's retained report or error. Reading never claims or consumes the report.
+ * The run's latest assistant message in its current or last assignment, falling back to that
+ * finished assignment's report or error, never an earlier assignment's. Reading never claims or
+ * consumes the report.
  */
 export const runReadout = (record: RunRecord, projected: SubagentRunView): AgentReadout => {
   const { view } = record;
@@ -293,9 +296,8 @@ export const runReadout = (record: RunRecord, projected: SubagentRunView): Agent
   };
   const assistant = boundedText(record.latestAssistantText, MAX_RUN_READ_CHARS);
   if (assistant.textStatus === "text") return { ...base, ...assistant, source: "assistant" };
-  if (!isTerminalRunState(view.state) && view.state !== "reported")
-    return { ...base, ...assistant };
-  const report = boundedText(view.finalText ?? latestRetainedReport(record), MAX_RUN_READ_CHARS);
+  if (!isTerminalRunState(view.state)) return { ...base, ...assistant };
+  const report = boundedText(view.finalText, MAX_RUN_READ_CHARS);
   if (report.textStatus === "text") return { ...base, ...report, source: "report" };
   const error = boundedText(view.error, MAX_RUN_READ_CHARS);
   return error.textStatus === "text"

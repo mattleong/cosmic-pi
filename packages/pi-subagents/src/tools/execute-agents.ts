@@ -2,7 +2,13 @@ import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { absurd } from "effect/Function";
 import * as Predicate from "effect/Predicate";
-import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core";
+import type { CompactIssue } from "pi-code-previews";
+import {
+  clipText,
+  MESSAGE_TEXT_LIMIT,
+  sanitizeTerminalLine,
+  stripTerminalControls,
+} from "pi-cosmic-core";
 import { isCustomAgentName } from "../profiles/agents.ts";
 import { PROFILE_IDS } from "../profiles/model.ts";
 import {
@@ -21,7 +27,7 @@ import {
   type SubagentError,
 } from "../run/errors.ts";
 import {
-  isAssignmentFinishedRunState,
+  isTerminalRunState,
   SUBAGENT_ROOT_RUN_ID,
   type SubagentRunView,
   type SubagentWorkspaceOutcome,
@@ -36,7 +42,14 @@ import {
   type AgentReadContract,
 } from "./contract-schema.ts";
 import { envelope, metadata, projectAttention, projectName, withheldTarget } from "./contract.ts";
-import type { AgentToolDetails } from "./details-schema.ts";
+import { compactRunIssues } from "./compact-run-issues.ts";
+import { projectSubagentRunCard } from "./details-projection.ts";
+import {
+  AGENT_DETAILS_VERSION,
+  MAX_AGENT_READ_ISSUE_TEXT_CHARS,
+  MAX_AGENT_READ_ISSUES,
+  type AgentToolDetails,
+} from "./details-schema.ts";
 import {
   attentionRecoveryText,
   boundToolOutput,
@@ -47,8 +60,6 @@ import {
 } from "./format.ts";
 import { pendingDeliveryEvidence } from "./outcome.ts";
 import type { AgentToolInput } from "./schema.ts";
-
-const AGENT_DETAILS_VERSION = 1;
 
 const agentName = (entry: { readonly name: string }): string => projectName(entry.name) || "agent";
 
@@ -66,7 +77,7 @@ const missingText = (missingIds: ReadonlyArray<string>): string =>
 export const agentWorktreeFact = (run: SubagentRunView | undefined): string | undefined =>
   run?.workspaceId === undefined
     ? undefined
-    : isAssignmentFinishedRunState(run.state) || run.workspaceOutcome !== undefined
+    : isTerminalRunState(run.state) || run.workspaceOutcome !== undefined
       ? proposalGuidance(run.workspaceId, run.workspaceOutcome)
       : `worktree ${sanitizeTerminalLine(run.workspaceId)}`;
 
@@ -111,6 +122,8 @@ const knownProfile = (profile: string | undefined) => PROFILE_IDS.find((id) => i
 
 const WORKTREE_STATUS = {
   proposal: "proposal",
+  integrated: "applied",
+  discarded: "discarded",
   "auto-discarded": "discarded",
 } as const satisfies Record<SubagentWorkspaceOutcome["status"], string>;
 
@@ -174,7 +187,7 @@ const SEND_TEXT: Record<AgentSendResult["disposition"], (label: string) => strin
   woken: () => "The main agent was idle; your message started its turn.",
   queued: () => "The main agent is busy; it sees your message before its current turn ends.",
   held: () =>
-    "The main agent holds agent messages until the user's next prompt; your message waits in its conversation.",
+    "The main agent is waiting on the user, behind an open dialog or after an interrupt; your message waits in its conversation and wakes it when the dialog closes or on the user's next prompt.",
 };
 
 const sendText = (result: AgentSendResult): string =>
@@ -238,7 +251,7 @@ const runReadSection = (
   const message =
     text === undefined
       ? "No assistant message yet."
-      : `${source}${readout.reportGeneration > 0 ? ` (report ${readout.reportGeneration})` : ""}${readout.truncated ? " (truncated)" : ""}:\n${text}`;
+      : `${source}${readout.source === "report" ? ` (report ${readout.reportGeneration})` : ""}${readout.truncated ? " (truncated)" : ""}:\n${text}`;
   return `${agentReadCard(readout.run, options)}\n${message}`;
 };
 
@@ -277,11 +290,28 @@ const readContract = (result: AgentReadResult): AgentReadContract => ({
   missingIds: [...result.missingIds],
 });
 
+/**
+ * The issues a run's status card raises, bounded for persisted details. A failed worker is the
+ * reader's attention, not a failed read, so failures become warnings.
+ */
+const boundedReadIssue = ({ severity, code, message, detail }: CompactIssue): CompactIssue => ({
+  severity: severity === "error" ? "warning" : severity,
+  code: clipText(code, MAX_AGENT_READ_ISSUE_TEXT_CHARS),
+  message: clipText(message, MESSAGE_TEXT_LIMIT),
+  ...(detail !== undefined && { detail: clipText(detail, MAX_AGENT_READ_ISSUE_TEXT_CHARS) }),
+});
+
+const readIssues = (run: SubagentRunView): ReadonlyArray<CompactIssue> => {
+  const { finalText: _finalText, ...card } = projectSubagentRunCard(run);
+  return compactRunIssues([card]).slice(0, MAX_AGENT_READ_ISSUES).map(boundedReadIssue);
+};
+
 const readDetails = (result: AgentReadResult): AgentToolDetails => ({
   version: AGENT_DETAILS_VERSION,
   action: AGENT_TOOL_NAME.read,
   agents: result.agents.map((readout) => {
     const hasText = readText(readout.text) !== undefined;
+    const issues = readout.kind === "run" ? readIssues(readout.run) : [];
     return {
       id: readout.id,
       name: agentName(readout),
@@ -291,6 +321,7 @@ const readDetails = (result: AgentReadResult): AgentToolDetails => ({
       ...(readout.kind === "run" &&
         hasText &&
         readout.source !== undefined && { source: readout.source }),
+      ...(issues.length > 0 && { issues: [...issues] }),
     };
   }),
   missingIds: [...result.missingIds],

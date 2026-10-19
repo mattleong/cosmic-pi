@@ -50,7 +50,7 @@ export const worktreeRemoveHooks = (
           if (!present?.isDirectory()) return undefined;
           const { workspaceId } = record.handle;
           const current = yield* readWorkspaceRecord(registry, workspaceId);
-          yield* saveWorkspaceRecord(registry, { ...current, setupCleanupPending: tree }).pipe(
+          yield* saveWorkspaceRecord(registry, { ...current, hookCleanupPending: tree }).pipe(
             Effect.mapError((error) =>
               quarantined(
                 "WorktreeRemove couldn't record its quarantine marker; the tree is kept.",
@@ -69,7 +69,7 @@ export const worktreeRemoveHooks = (
           };
           const clearMarker = Effect.gen(function* () {
             const marked = yield* readWorkspaceRecord(registry, workspaceId);
-            const { setupCleanupPending: _pending, ...cleared } = marked;
+            const { hookCleanupPending: _pending, ...cleared } = marked;
             yield* saveWorkspaceRecord(registry, cleared);
           }).pipe(
             Effect.mapError((error) =>

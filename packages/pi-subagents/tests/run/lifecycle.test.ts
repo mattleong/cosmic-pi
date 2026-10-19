@@ -12,6 +12,8 @@ import {
   localServiceFixture,
   profileLayerFor,
   request,
+  runView,
+  runViews,
   withService,
 } from "./fixtures/service-harness.ts";
 import { stringContaining } from "../support/matchers.ts";
@@ -61,13 +63,13 @@ describe("SubagentService", () => {
       return withService(layer, function* (service) {
         const run = yield* service.start(request({ writeIntent: "writer" }));
         yield* completeLocalRun(service, fake.controls[0]!, run.id, "Done.");
-        const before = yield* service.status(run.id);
+        const before = yield* runView(service, run.id);
         gate = true;
         const waiter = yield* service.resume(run.id).pipe(Effect.forkChild);
         yield* yieldUntil(() => entered);
         yield* service.rename(run.id, "lock-reused");
         yield* Fiber.interrupt(waiter);
-        expect(yield* service.status(run.id)).toMatchObject({
+        expect(yield* runView(service, run.id)).toMatchObject({
           state: "completed",
           reportGeneration: before.reportGeneration,
         });
@@ -143,12 +145,12 @@ describe("SubagentService", () => {
       });
       fake.controls[0]?.offer({ type: "turn_end" });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.usage.totalTokens === 12);
-      expect((yield* service.status(started.id)).finalText).toBeUndefined();
+      expect((yield* runView(service, started.id)).finalText).toBeUndefined();
 
       fake.controls[0]?.offer({ type: "agent_settled" });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
 
-      const completed = yield* service.status(started.id);
+      const completed = yield* runView(service, started.id);
       expect(completed.finalText).toBe("Review complete.");
       expect(completed.reportGeneration).toBe(1);
       expect(completed.usage.totalTokens).toBe(12);
@@ -212,7 +214,7 @@ describe("SubagentService", () => {
             ?.runs.some((run) => run.id === failedRun.id && run.state === "failed") === true,
       );
       yield* yieldUntil(() => fake.controls[0]?.released() === 1);
-      const failed = yield* service.status(failedRun.id);
+      const failed = yield* runView(service, failedRun.id);
       expect(failed).toMatchObject({
         state: "failed",
         error: stringContaining("Fixture awaitExit failure"),
@@ -235,7 +237,7 @@ describe("SubagentService", () => {
       fake.controls[0]?.exit(0);
 
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
-      const completed = yield* service.status(run.id);
+      const completed = yield* runView(service, run.id);
       expect(completed.state).toBe("completed");
       expect(completed.finalText).toBe("Final output before exit.");
     });
@@ -267,7 +269,7 @@ describe("SubagentService", () => {
         yield* Deferred.succeed(spawnGate, undefined);
         expect((yield* Fiber.join(stopping)).state).toBe("stopped");
         yield* Fiber.await(starting);
-        expect((yield* service.status(id!)).state).toBe("stopped");
+        expect((yield* runView(service, id!)).state).toBe("stopped");
         expect(fake.reclaimedRunIds).toEqual([]);
         expect(cleanupOrder).toEqual(["backend", "lease"]);
       });
@@ -285,7 +287,7 @@ describe("SubagentService", () => {
       fake.controls[0]?.offer({ type: "agent_start" });
       fake.controls[0]?.offer({ type: "agent_settled" });
       yield* Effect.yieldNow;
-      expect((yield* service.list)[0]?.state).toBe("failed");
+      expect((yield* runViews(service))[0]?.state).toBe("failed");
     });
   });
 

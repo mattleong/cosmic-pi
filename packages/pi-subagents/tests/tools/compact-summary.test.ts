@@ -2,6 +2,7 @@ import { compactIssueSeverity, type CompactIssue } from "pi-code-previews";
 import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
 import type * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
+import { agentFailureIssues, failureRecovery } from "../../src/tools/compact-action-failures.ts";
 import { createSubagentCompactSummary } from "../../src/tools/compact-summary.ts";
 import { SUBAGENT_TOOL_NAME } from "../../src/run/tool-policy.ts";
 import { compactToolDetails } from "../../src/tools/details.ts";
@@ -164,18 +165,34 @@ const stopSummary = (run: SubagentRunView) =>
   summarize("lifecycle", stoppedOf(run), "settled", { action: "stop", runIds: [run.id] });
 
 describe("worktree writer workspace outcomes", () => {
-  it("presents both outcomes as information, and only a proposal as changes to review", () => {
-    const discarded = stopSummary(worktreeWriter({ status: "auto-discarded" }));
+  it("presents every outcome as information, and only a proposal as changes to review", () => {
     const proposal = stopSummary(worktreeWriter({ status: "proposal", changedFileCount: 2 }));
     const plain = stopSummary(view({ state: "completed", finalText: "Done" }));
-    for (const summary of [discarded, proposal]) {
+    expect(proposal?.counters).not.toEqual(plain?.counters);
+    expect(issueDetails(proposal?.issues)).toContain("ws-1");
+    for (const status of ["auto-discarded", "integrated", "discarded"] as const) {
+      const resolved = stopSummary(worktreeWriter({ status }));
+      expect(resolved?.counters).toEqual(plain?.counters);
+      expect(issueDetails(resolved?.issues)).not.toContain("agent_worktree apply");
+      expect(messages(resolved?.issues)).not.toBe(messages(proposal?.issues));
+    }
+    for (const summary of [proposal, stopSummary(worktreeWriter({ status: "integrated" }))]) {
       expect(summary?.outcome).toBe("success");
       expect(summary?.issues?.every((issue) => issue.severity === "info")).toBe(true);
     }
-    expect(discarded?.counters).toEqual(plain?.counters);
-    expect(proposal?.counters).not.toEqual(plain?.counters);
-    expect(issueDetails(proposal?.issues)).toContain("ws-1");
-    expect(messages(discarded?.issues)).not.toBe(messages(proposal?.issues));
+  });
+});
+
+describe("await outcomes", () => {
+  it("returns neutrally when the user's message ends the wait", () => {
+    const run = view({ id: "agent-1", state: "running" });
+    const summary = summarize(
+      "await",
+      awaitReceipt([run], { awaitedRunIds: [run.id], cancelled: true, endedByUserInput: true }),
+      "settled",
+      { runIds: [run.id] },
+    );
+    expect(summary?.outcome).toBe("returned");
   });
 });
 
@@ -270,6 +287,8 @@ describe("subagent compact semantic policy", () => {
       ...(
         [
           { status: "auto-discarded" },
+          { status: "integrated" },
+          { status: "discarded" },
           { status: "proposal", changedFileCount: 1 },
           { status: "proposal", changedFileCount: 4, uncapturedFileCount: 2 },
           {
@@ -333,5 +352,26 @@ describe("subagent compact semantic policy", () => {
         issueMessageStyleProblems(issue.message, { forbidden: [id, "ws-7f3a"], maxLength: 160 }),
         issue.message,
       ).toEqual([]);
+  });
+});
+
+describe("failure recovery routing", () => {
+  it("routes a start failure by its exact code before broader code fragments", () => {
+    for (const [code, knob] of [
+      ["workspace_nested_writer_unsupported", "shared-checkout"],
+      ["isolation_requires_writer", "isolation"],
+      ["session_spend_limit", "sessionSpendLimit"],
+    ] as const)
+      expect(failureRecovery(code, "Refused.", "start"), code).toContain(knob);
+  });
+
+  it("recovers a paused run that can't resume by stopping and replacing it", () => {
+    const [issue] = agentFailureIssues(
+      "[agent_resume_unsupported] Agent agent-r1-7 on local/claude is paused and cannot be resumed.",
+      "send",
+      "The agent",
+    );
+    expect(issue?.detail).toContain("agent_lifecycle");
+    expect(issueMessageStyleProblems(issue?.message ?? "")).toEqual([]);
   });
 });

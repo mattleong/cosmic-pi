@@ -5,7 +5,7 @@ import { claimCompletion, completionClaimOwner, releaseCompletionClaim } from ".
 import { invalidRequest, type SubagentRuntimeClosedError } from "./errors.ts";
 import { type RunContext, type RunRecord, type WithRunLock } from "./internal.ts";
 import {
-  isAssignmentFinishedRunState,
+  isTerminalRunState,
   isParentActionRequiredRun,
   type SubagentProjection,
   type SubagentRunView,
@@ -17,7 +17,6 @@ import type {
   SubagentAwaitUntil,
   SubagentRunObservation,
   SubagentServiceContract,
-  SubagentStatusObservationOptions,
 } from "./service.ts";
 import { snapshotView } from "./state.ts";
 
@@ -49,17 +48,6 @@ const startRecoveryOf = (record: RunRecord) =>
   record.view.state === "failed" && record.view.reportGeneration === 0
     ? failedStartRecoveryForRecord(record)
     : undefined;
-
-const visibleRun = (
-  observed: SubagentRunView,
-  redacted: SubagentRunView | undefined,
-  readBack: boolean,
-): SubagentRunView =>
-  redacted === undefined
-    ? snapshotView(observed)
-    : readBack
-      ? snapshotView({ ...redacted, finalText: observed.finalText })
-      : redacted;
 
 const redactCompletionReport = (view: SubagentRunView): SubagentRunView => {
   const { finalText: _finalText, ...withoutReport } = view;
@@ -95,35 +83,24 @@ export function completionObservationOperations(
     });
   };
 
-  const observeRecord = (
-    record: RunRecord,
-    claimToken?: string,
-    options?: SubagentStatusObservationOptions,
-  ): SubagentRunObservation => {
+  const observeRecord = (record: RunRecord, claimToken: string): SubagentRunObservation => {
     const generation = record.completionGeneration;
     const view = withTreeMetadata(record.view);
-    if (!isAssignmentFinishedRunState(view.state))
+    if (!isTerminalRunState(view.state))
       return {
         run: view,
-        ...(claimToken && {
-          questionReceipt: delivery.questionReceiptLocked(record, claimToken),
-        }),
+        questionReceipt: delivery.questionReceiptLocked(record, claimToken),
       };
     const unresolved = record.completionGenerations.has(generation);
     const claimOwner = completionClaimOwner(record, generation);
-    const owns = unresolved && claimToken !== undefined && claimOwner === claimToken;
+    const owns = unresolved && claimOwner === claimToken;
     const observed: SubagentRunView = {
       ...view,
       reportStatus: reportStatusOf(view.finalText, unresolved, owns || claimOwner === undefined),
     };
-    const readBack =
-      options?.includeDeliveredReports === true &&
-      observed.reportStatus === "delivered" &&
-      [...record.completionClaims.values()].every((owner) => owner === claimToken);
-    const redacted = owns ? undefined : redactCompletionReport(observed);
     const recovery = startRecoveryOf(record);
     return {
-      run: visibleRun(observed, redacted, readBack),
+      run: owns ? snapshotView(observed) : redactCompletionReport(observed),
       ...(owns && {
         completionReceipt: {
           id: record.view.id,
@@ -158,10 +135,9 @@ export function completionObservationOperations(
       readonly record: RunRecord;
       readonly generation: number;
     }>;
-    readonly missingIds: ReadonlyArray<string>;
-    readonly ownsQuestions: boolean;
   }
-  const acquireCompletionClaims = (ids: ReadonlyArray<string>, claimAll: boolean) =>
+  // An await claims every target's current or next outcome and its questions.
+  const acquireCompletionClaims = (ids: ReadonlyArray<string>) =>
     withCompletionGate(
       withLock(
         Effect.acquireRelease(
@@ -171,40 +147,32 @@ export function completionObservationOperations(
               return record ? [record] : [];
             });
             const missingIds = ids.filter((id) => !records.has(id));
-            if (claimAll && missingIds.length > 0)
+            if (missingIds.length > 0)
               return yield* invalidRequest(
                 "subagent_runs_not_found",
                 `Subagent runs not found: ${missingIds.join(", ")}. Call agent_list for current run IDs.`,
               );
             const claimToken = allocateClaimToken();
             const desired = selected.flatMap((record) => {
-              const finished = isAssignmentFinishedRunState(record.view.state);
+              const finished = isTerminalRunState(record.view.state);
               const generation = record.completionGeneration + (finished ? 0 : 1);
-              return (finished ? record.completionGenerations.has(generation) : claimAll)
+              return !finished || record.completionGenerations.has(generation)
                 ? [{ record, generation }]
                 : [];
             });
-            if (claimAll) {
-              const conflict = desired.find(
-                ({ record, generation }) => completionClaimOwner(record, generation) !== undefined,
+            const conflict = desired.find(
+              ({ record, generation }) => completionClaimOwner(record, generation) !== undefined,
+            );
+            if (conflict)
+              return yield* invalidRequest(
+                "completion_claim_conflict",
+                `Completion report ${conflict.record.view.id} generation ${conflict.generation} is already owned by another operation; wait for that operation to finish or cancel before retrying.`,
               );
-              if (conflict)
-                return yield* invalidRequest(
-                  "completion_claim_conflict",
-                  `Completion report ${conflict.record.view.id} generation ${conflict.generation} is already owned by another operation; wait for that operation to finish or cancel before retrying.`,
-                );
-            }
             const claimed = desired.filter(({ record, generation }) =>
               claimCompletion(record, generation, claimToken),
             );
-            if (claimAll) delivery.claimQuestionsLocked(selected, claimToken);
-            return {
-              claimToken,
-              selected,
-              claimed,
-              missingIds,
-              ownsQuestions: claimAll,
-            } satisfies CompletionClaim;
+            delivery.claimQuestionsLocked(selected, claimToken);
+            return { claimToken, selected, claimed } satisfies CompletionClaim;
           }),
           releaseCompletionClaims,
         ),
@@ -216,17 +184,15 @@ export function completionObservationOperations(
         for (const claimed of claim.claimed)
           if (releaseCompletionClaim(claimed.record, claimed.generation, claim.claimToken))
             delivery.wakeCompletionLocked();
-        if (claim.ownsQuestions)
-          delivery.releaseQuestionClaimsLocked(claim.selected, claim.claimToken);
+        delivery.releaseQuestionClaimsLocked(claim.selected, claim.claimToken);
       }),
     );
   const withCompletionClaims = <A, E, R>(
     ids: ReadonlyArray<string>,
-    claimAll: boolean,
     use: (claim: CompletionClaim) => Effect.Effect<A, E, R>,
   ) =>
     Effect.scopedWith((scope) =>
-      acquireCompletionClaims(ids, claimAll).pipe(Scope.provide(scope), Effect.flatMap(use)),
+      acquireCompletionClaims(ids).pipe(Scope.provide(scope), Effect.flatMap(use)),
     );
 
   // Questions from runs the caller is not awaiting, which nonetheless reach this caller first.
@@ -270,9 +236,7 @@ export function completionObservationOperations(
             observeRecord(record, claim.claimToken),
           );
           const runs = observations.map((observation) => observation.run);
-          const terminalCount = runs.filter((run) =>
-            isAssignmentFinishedRunState(run.state),
-          ).length;
+          const terminalCount = runs.filter((run) => isTerminalRunState(run.state)).length;
           const questions = questionsForCallerLocked(claim, callerRunId);
           const parentActionRequired = runs.some(isParentActionRequiredRun) || questions.length > 0;
           const done =
@@ -303,7 +267,7 @@ export function completionObservationOperations(
       return Effect.fail(
         invalidRequest("run_ids_required", "Await requires at least one subagent run ID."),
       );
-    return withCompletionClaims(ids, true, (claim) =>
+    return withCompletionClaims(ids, (claim) =>
       waitForTerminalObservations(claim, until, callerRunId, onUpdate).pipe(
         Effect.flatMap(({ observations, questions }) =>
           use(observations, questions).pipe(
@@ -327,23 +291,9 @@ export function completionObservationOperations(
       ),
     );
   };
-  const withStatusObservations: SubagentServiceContract["withStatusObservations"] = (
-    ids,
-    use,
-    options,
-  ) =>
-    withCompletionClaims(ids, false, (claim) =>
-      withLock(
-        Effect.sync(() =>
-          claim.selected.map((record) => observeRecord(record, claim.claimToken, options)),
-        ),
-      ).pipe(Effect.flatMap((observations) => use({ observations, missingIds: claim.missingIds }))),
-    );
-
   return {
     redactCompletionReport,
     consumeCompletions,
     withAwaitTerminalObservations,
-    withStatusObservations,
   };
 }

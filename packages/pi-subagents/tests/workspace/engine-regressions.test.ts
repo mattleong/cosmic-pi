@@ -162,7 +162,7 @@ test("stops at the first failing WorktreeCreate hook and reports project files h
   );
   expect(failure.cleanupUnconfirmed).not.toBe(true);
   expect(yield* exists(path.join(signals, "second-ran"))).toBe(false);
-  expect((yield* service.inspect(workspaceTarget(handle))).setupCleanupPending).toBeUndefined();
+  expect((yield* service.inspect(workspaceTarget(handle))).hookCleanupPending).toBeUndefined();
 
   yield* service.runCreateHooks({
     ...workspaceTarget(handle),
@@ -199,7 +199,7 @@ test("runs WorktreeCreate hooks without holding the service permit or the checko
   yield* writeFile(release, "");
   yield* Fiber.join(running);
   const record = yield* service.inspect(workspaceTarget(handle));
-  expect(record.setupCleanupPending).toBeUndefined();
+  expect(record.hookCleanupPending).toBeUndefined();
   expect(yield* service.hookChanges(workspaceTarget(handle))).toEqual([]);
 });
 
@@ -210,7 +210,7 @@ test("clears the marker once interrupted WorktreeCreate hooks are confirmed stop
   );
   expect(processAlive(pid)).toBe(false);
   const record = yield* service.inspect(workspaceTarget(handle));
-  expect(record.setupCleanupPending).toBeUndefined();
+  expect(record.hookCleanupPending).toBeUndefined();
   expect(record.status).toBe("active");
   // The workspace stays usable: hooks run again and the worker can be proposed.
   yield* service.runCreateHooks({ ...workspaceTarget(handle), hooks: [shellHook("true")] });
@@ -235,7 +235,7 @@ test("keeps a workspace quarantined when interrupted hook cleanup is unconfirmed
   const failure = yield* failureOf(service.inspect(workspaceTarget(handle)));
   expect(failure.cleanupUnconfirmed).toBe(true);
   expect(yield* fails(service.discard(workspaceTarget(handle)))).toBe(true);
-  expect((yield* service.listAll).records[0]?.setupCleanupPending).toBe(handle.cwd);
+  expect((yield* service.listAll).records[0]?.hookCleanupPending).toBe(handle.cwd);
 });
 
 test("withdraws a preparation whose WorktreeCreate hooks were interrupted", function* (service, root) {
@@ -251,7 +251,7 @@ test("withdraws a preparation whose WorktreeCreate hooks were interrupted", func
   );
   const record = yield* service.inspect(workspaceTarget(handle));
   expect(record.status).toBe("frozen");
-  expect(record.setupCleanupPending).toBeUndefined();
+  expect(record.hookCleanupPending).toBeUndefined();
   expect(yield* exists(prepared.cwd)).toBe(false);
   expect(yield* fails(service.integrate(integration))).toBe(true);
 });
@@ -265,7 +265,7 @@ test("a WorktreeCreate hook that can't start leaves no quarantine", function* (s
     }),
   );
   expect(failure.cleanupUnconfirmed).not.toBe(true);
-  expect((yield* service.inspect(workspaceTarget(handle))).setupCleanupPending).toBeUndefined();
+  expect((yield* service.inspect(workspaceTarget(handle))).hookCleanupPending).toBeUndefined();
   yield* service.discard(workspaceTarget(handle));
   expect(yield* exists(handle.cwd)).toBe(false);
 });

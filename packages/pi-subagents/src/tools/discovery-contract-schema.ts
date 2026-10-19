@@ -6,7 +6,7 @@ import {
   MAX_CUSTOM_AGENT_DESCRIPTION_CHARS,
   MAX_CUSTOM_AGENT_TOOL_NAME_CHARS,
   MAX_CUSTOM_AGENT_TOOL_NAMES,
-  MAX_CUSTOM_AGENTS,
+  MAX_RESOLVED_CUSTOM_AGENTS,
 } from "../profiles/agents.ts";
 import {
   MAX_PROFILE_CANDIDATES,
@@ -78,7 +78,7 @@ export const ModelsContractFields = {
         ),
         candidates: CandidatesSchema,
       }),
-    ).check(Schema.isMaxLength(MAX_CUSTOM_AGENTS)),
+    ).check(Schema.isMaxLength(MAX_RESOLVED_CUSTOM_AGENTS)),
   ),
   /** Agents that fail closed; an entry without a name stands for a whole invalid `agents` object. */
   invalidAgents: Schema.optionalKey(

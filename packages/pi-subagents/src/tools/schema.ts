@@ -1,4 +1,5 @@
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { JsonObject, JsonValue } from "pi-cosmic-core";
 import { Type, type Static } from "typebox";
@@ -427,7 +428,8 @@ const checkStartAgents = (agents: ReadonlyArray<JsonValue>): void =>
       throw new Error(
         disallowedLaunchOverrideMessage(disallowedField, `agent_start agents[${index}]`),
       );
-    if (Object.hasOwn(agent, "agent") && Object.hasOwn(agent, "profile"))
+    // Pi drops optional nulls before validation, so only set selectors conflict.
+    if (Predicate.isNotNullish(agent.agent) && Predicate.isNotNullish(agent.profile))
       throw new Error(
         `[agent_profile_conflict] agent_start agents[${index}] sets both agent and profile; an agent routes through its own profile, so set only one.`,
       );

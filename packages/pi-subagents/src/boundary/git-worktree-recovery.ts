@@ -263,7 +263,7 @@ interface WorkspaceCollection {
 const abandonCreate = (registry: string, workspaceId: string, collection: WorkspaceCollection) =>
   Effect.gen(function* () {
     const record = yield* readWorkspaceRecord(registry, workspaceId);
-    if (record.status !== "creating" || record.ownerLease === undefined) return false;
+    if (record.status !== "creating") return false;
     const removed = yield* collection.whenOwnerEnded(
       record.ownerLease,
       Effect.gen(function* () {
@@ -291,12 +291,7 @@ const removeRetainedTrees = (
   Effect.gen(function* () {
     const record = yield* readWorkspaceRecord(registry, workspaceId);
     // A hook whose cleanup is unconfirmed quarantines the trees until manual recovery.
-    if (
-      !finished(record) ||
-      record.ownerLease === undefined ||
-      record.setupCleanupPending !== undefined
-    )
-      return false;
+    if (!finished(record) || record.hookCleanupPending !== undefined) return false;
     yield* checkDirectory(workspaceDirectory(registry, workspaceId));
     if (!(yield* hasEditableTree(registry, workspaceId))) return false;
     // Rechecked under the checkout's lock; an unreadable record might be an unresolved child.

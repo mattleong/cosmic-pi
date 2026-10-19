@@ -8,18 +8,15 @@ import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import type { SubagentProjection } from "../../src/run/model.ts";
-import {
-  SubagentService,
-  type SubagentServiceContract,
-  type SubagentStatusObservationOptions,
-} from "../../src/run/service.ts";
+import { SubagentService, type SubagentServiceContract } from "../../src/run/service.ts";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import {
   askParent,
+  awaitRuns,
   localServiceFixture,
   request,
+  runView,
   withService,
-  awaitRuns,
 } from "./fixtures/service-harness.ts";
 import { InvalidSubagentRequestError, SubagentRuntimeClosedError } from "../../src/run/errors.ts";
 
@@ -54,44 +51,26 @@ const completionRetryFixture = (policy: CompletionPolicy) => {
   return { notifications, layer, attempts: () => attempts, firstAttempt };
 };
 
-const includeDeliveredReports: SubagentStatusObservationOptions = {
-  includeDeliveredReports: true,
-};
-
-const observeStatus = (
-  service: SubagentServiceContract,
-  id: string,
-  options?: SubagentStatusObservationOptions,
-) =>
-  service.withStatusObservations(
-    [id],
-    ({ observations }) => Effect.succeed(observations[0]),
-    options,
-  );
-
 describe("SubagentService", () => {
-  for (const operation of ["await", "status"] as const)
-    it.effect(`preserves the caller resource scope through ${operation} observations`, () => {
-      const { layer } = localServiceFixture();
-      return withService(layer, function* (service) {
-        const run = yield* service.start(request());
-        yield* service.stop(run.id);
-        let released = false;
-        const use = () =>
-          Effect.addFinalizer(() =>
-            Effect.sync(() => {
-              released = true;
-            }),
-          );
-        yield* Effect.gen(function* () {
-          if (operation === "await")
-            yield* service.withAwaitTerminalObservations([run.id], "all_finished", undefined, use);
-          else yield* service.withStatusObservations([run.id], use);
-          expect(released).toBe(false);
-        }).pipe(Effect.scoped);
-        expect(released).toBe(true);
-      });
+  it.effect("preserves the caller resource scope through await observations", () => {
+    const { layer } = localServiceFixture();
+    return withService(layer, function* (service) {
+      const run = yield* service.start(request());
+      yield* service.stop(run.id);
+      let released = false;
+      const use = () =>
+        Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            released = true;
+          }),
+        );
+      yield* Effect.gen(function* () {
+        yield* service.withAwaitTerminalObservations([run.id], "all_finished", undefined, use);
+        expect(released).toBe(false);
+      }).pipe(Effect.scoped);
+      expect(released).toBe(true);
     });
+  });
 
   it.effect("rejects parallel await ownership and releases only the cancelled claim", () => {
     const { fake, notifications, layer } = localServiceFixture();
@@ -110,9 +89,6 @@ describe("SubagentService", () => {
       yield* yieldUntil(() => updates.length > 0);
       fake.controls[0]?.settle("Exclusively delivered.");
       yield* Deferred.await(enteredRender);
-      const competing = yield* service.status(run.id);
-      expect(competing.reportStatus).toBe("claimed");
-      expect(competing.finalText).toBeUndefined();
       expect(updates.at(-1)?.[0]?.reportStatus).toBe("available");
 
       const conflict = yield* awaitRuns(service, [run.id], "all_finished").pipe(Effect.flip);
@@ -126,9 +102,9 @@ describe("SubagentService", () => {
       expect(yield* Fiber.join(replacement)).toMatchObject([
         { state: "completed", finalText: "Exclusively delivered.", reportStatus: "available" },
       ]);
-      const delivered = yield* service.status(run.id);
-      expect(delivered.reportStatus).toBe("delivered");
-      expect(delivered.finalText).toBeUndefined();
+      const [delivered] = yield* awaitRuns(service, [run.id], "all_finished");
+      expect(delivered?.reportStatus).toBe("delivered");
+      expect(delivered?.finalText).toBeUndefined();
       yield* TestClock.adjust("1 second");
       expect(notifications).toEqual([]);
     });
@@ -153,53 +129,30 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped);
   });
 
-  it.effect("redacts an await-owned report from default and opt-in status", () => {
+  it.effect("consumes an await-owned report only with that await's claim", () => {
     const { fake, notifications, layer } = localServiceFixture();
     return withService(layer, function* (service) {
-      const run = yield* service.start(request({ name: "await-status-race" }));
+      const run = yield* service.start(request({ name: "await-claim-owner" }));
       const entered = yield* Deferred.make<void>();
-      const releaseRender = yield* Deferred.make<void>();
       const awaiting = yield* service
-        .withAwaitTerminalObservations([run.id], "all_finished", undefined, (observations) =>
-          Effect.gen(function* () {
-            yield* Deferred.succeed(entered, undefined);
-            yield* Deferred.await(releaseRender);
-            const receipt = observations[0]?.completionReceipt;
-            if (receipt) yield* service.consumeCompletions([receipt]);
-            return observations;
-          }),
+        .withAwaitTerminalObservations([run.id], "all_finished", undefined, () =>
+          Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
         )
         .pipe(Effect.forkScoped);
 
       fake.controls[0]?.settle("Owned report text.");
       yield* Deferred.await(entered);
-
-      const expectRedacted = Effect.gen(function* () {
-        const competingStatus = yield* service.status(run.id);
-        expect(competingStatus).not.toHaveProperty("finalText");
-        expect(competingStatus.sessionEvents).not.toEqual(
-          expect.arrayContaining([expect.objectContaining({ text: "Owned report text." })]),
-        );
-        const competing = yield* observeStatus(service, run.id, includeDeliveredReports);
-        expect(competing).not.toHaveProperty("completionReceipt");
-        expect(competing?.run.reportStatus).toBe("claimed");
-        expect(competing?.run).not.toHaveProperty("finalText");
-      });
-      yield* expectRedacted;
       yield* service.consumeCompletions([
         { id: run.id, generation: 1, claimToken: "forged-owner" },
       ]);
-      yield* expectRedacted;
-
-      yield* Deferred.succeed(releaseRender, undefined);
-      const observations = yield* Fiber.join(awaiting);
-      expect(observations[0]?.run.finalText).toBe("Owned report text.");
-      expect((yield* observeStatus(service, run.id, includeDeliveredReports))?.run).toMatchObject({
-        reportStatus: "delivered",
-        finalText: "Owned report text.",
+      // Released unconsumed, the report still reaches the parent.
+      yield* Fiber.interrupt(awaiting);
+      yield* TestClock.adjust("100 millis");
+      yield* yieldUntil(() => notifications.length === 1);
+      expect(notifications[0]).toMatchObject({
+        type: "completed",
+        runs: [{ id: run.id, finalText: "Owned report text." }],
       });
-      yield* TestClock.adjust("1 second");
-      expect(notifications).toEqual([]);
     });
   });
 
@@ -299,7 +252,7 @@ describe("SubagentService", () => {
       const acquired = yield* Deferred.make<void>();
       const releaseUse = yield* Deferred.make<void>();
       const observing = yield* service
-        .withStatusObservations([run.id], ({ observations }) =>
+        .withAwaitTerminalObservations([run.id], "all_finished", undefined, (observations) =>
           Effect.gen(function* () {
             yield* Deferred.succeed(acquired, undefined);
             yield* Deferred.await(releaseUse);
@@ -372,7 +325,7 @@ describe("SubagentService", () => {
       yield* TestClock.adjust("100 millis");
       yield* yieldUntil(() => notifications.length > 0);
       yield* Effect.yieldNow;
-      expect((yield* service.status(run.id)).state).toBe("completed");
+      expect((yield* runView(service, run.id)).state).toBe("completed");
       expect(
         notifications.filter((notification) => notification.type === "completed"),
       ).toHaveLength(1);

@@ -5,10 +5,12 @@ import type { JsonObject } from "pi-cosmic-core";
 import { describe, expect, vi } from "vitest";
 import { childToolPolicy } from "../../src/boundary/child-process.ts";
 import { PROFILE_DEFINITIONS } from "../../src/profiles/definitions.ts";
+import { PROFILE_IDS } from "../../src/profiles/model.ts";
 import type { CustomAgent } from "../../src/profiles/agents.ts";
 import type { StartSubagentRequest } from "../../src/run/model.ts";
 import { AGENT_TOOL_NAMES } from "../../src/run/tool-policy.ts";
 import { createSubagentCompactSummary } from "../../src/tools/compact-summary.ts";
+import { decodeSubagentContract } from "../../src/tools/contract-schema.ts";
 import {
   SubagentModelsDetailsSchema,
   SubagentStartDetailsSchema,
@@ -18,6 +20,7 @@ import type { TSchema } from "typebox";
 import { declaredCandidate } from "../fixtures/profiles.ts";
 import { reviewerContinuation } from "../run/fixtures/service-harness.ts";
 import { effectTest } from "../support/effect-test.ts";
+import { objectContaining, stringContaining } from "../support/matchers.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import {
   captureSubagentTools,
@@ -270,6 +273,12 @@ describe("custom agent launches", () => {
       const tool = startWith(requests, { profiles });
       const conflicting = { agents: [{ task: "Review", agent: "ok", profile: "reviewer" }] };
       expect(() => tool?.prepareArguments?.(conflicting)).toThrow(/agent_profile_conflict/u);
+      // An omitted selector sent as null doesn't conflict.
+      for (const agents of [
+        [{ task: "Review", agent: null, profile: "reviewer" }],
+        [{ task: "Review", agent: "ok", profile: null }],
+      ])
+        expect(() => tool?.prepareArguments?.({ agents })).not.toThrow();
 
       const args = {
         agents: [
@@ -460,6 +469,41 @@ describe("custom agent discovery", () => {
       agents: [{ name: "restricted", tools: { deny: ["bash"] } }, { name: "claude-only" }],
       invalidAgents: [{ scope: "global", name: "broken" }],
     });
+  });
+});
+
+const discover = (profiles: ReturnType<typeof profileServiceFor>) =>
+  invokeOptionalTool(
+    captureSubagentTools(subagentServiceDouble({}), { profiles }).get("agent_profiles"),
+    {},
+  );
+
+const longModel = (index: number) => `provider/${"m".repeat(230)}-${index}`;
+
+describe("route discovery bounds", () => {
+  effectTest("lists every agent the global and project layers resolve", function* () {
+    const layer = (scope: string) =>
+      Object.fromEntries(
+        Array.from({ length: 32 }, (_, index) => [`${scope}-${index}`, agentDefinition()]),
+      );
+    const profiles = profileServiceFor(
+      { profiles: { reviewer: piParent }, agents: layer("global") },
+      { agents: layer("project") },
+    );
+    const result = yield* discover(profiles);
+    const contract = decodeSubagentContract("agent_profiles")(result?.structuredContent);
+    expect(contract?.agents).toHaveLength(64);
+  });
+
+  effectTest("keeps routes too large for bounded details as plain text", function* () {
+    const route = Array.from({ length: 32 }, (_, index) => declaredCandidate(longModel(index)));
+    const profiles = profileServiceFor({
+      profiles: Object.fromEntries(PROFILE_IDS.map((id) => [id, route])),
+    });
+    const result = yield* discover(profiles);
+    expect(result?.details).toBeUndefined();
+    expect(result?.content).toEqual([objectContaining({ text: stringContaining(longModel(31)) })]);
+    expect(decodeSubagentContract("agent_profiles")(result?.structuredContent)).toBeDefined();
   });
 });
 

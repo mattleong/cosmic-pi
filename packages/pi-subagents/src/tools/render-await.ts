@@ -7,7 +7,7 @@ import {
   countLabel,
 } from "pi-cosmic-core";
 import { clipToWidth, spinnerFrameAt, SPINNER_FRAME_MS } from "pi-cosmic-ui/manager";
-import { isAssignmentFinishedRunState } from "../run/model.ts";
+import { isTerminalRunState } from "../run/model.ts";
 import type { SubagentAwaitUntil } from "../run/service.ts";
 import { aggregateUsage } from "../ui/metrics.ts";
 import { runStateGlyph, runStateLabel } from "../ui/run-state.ts";
@@ -41,7 +41,7 @@ const firstFinishedRun = (
 ): AwaitProgressRun | undefined =>
   until === "any_finished"
     ? runs
-        .filter((run) => isAssignmentFinishedRunState(run.state))
+        .filter((run) => isTerminalRunState(run.state))
         .toSorted((left, right) => (left.endedAt ?? Infinity) - (right.endedAt ?? Infinity))[0]
     : undefined;
 
@@ -84,7 +84,7 @@ export const formatAwaitProgress = (
   const awaitedIds = new Set(runs.map((run) => run.id));
   const allRuns = [...runs, ...contextRuns.filter((run) => !awaitedIds.has(run.id))];
   const usage = aggregateUsage(allRuns, "compact");
-  const finished = runs.filter((run) => isAssignmentFinishedRunState(run.state)).length;
+  const finished = runs.filter((run) => isTerminalRunState(run.state)).length;
   const first = firstFinishedRun(runs, until);
   const descendantCount = allRuns.length - runs.length;
   const summary = [

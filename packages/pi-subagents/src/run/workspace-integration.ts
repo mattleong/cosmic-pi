@@ -7,6 +7,8 @@ import { fullyReviewed } from "./workspace-review.ts";
 import {
   isWithin,
   mapWorkspaceError,
+  narrowProposalLocked,
+  recordWorkspaceOutcomeLocked,
   revisionKnowledge,
   runHoldsCwd,
   runsWithin,
@@ -44,7 +46,10 @@ export interface WorkspaceIntegrationResult extends WorkspaceIntegrationOutcome 
 }
 
 /** Integration of an exact prepared pair, which apply composes; see `integrateLocked`. */
-export function workspaceIntegrationOperations(context: WorkspaceControlContext) {
+export function workspaceIntegrationOperations(
+  context: WorkspaceControlContext,
+  publish: Effect.Effect<void>,
+) {
   const { records, writerLeases: leases, state, requireBinding, requireEngine } = context;
   const { requireChildrenResolved } = context;
   /**
@@ -159,12 +164,14 @@ export function workspaceIntegrationOperations(context: WorkspaceControlContext)
               .pipe(Effect.mapError(mapWorkspaceError));
             applying = false;
             // A partial integration leaves the rest of the proposal for a later review or apply.
-            settleBinding(
-              binding,
-              integration.remainingPaths === undefined
-                ? { phase: "finished", outcome: "integrated" }
-                : UNREVIEWED,
-            );
+            if (integration.remainingPaths === undefined) {
+              settleBinding(binding, { phase: "finished", outcome: "integrated" });
+              recordWorkspaceOutcomeLocked(binding, { status: "integrated" });
+            } else {
+              settleBinding(binding, UNREVIEWED);
+              narrowProposalLocked(binding, integration.remainingPaths);
+            }
+            yield* publish;
             return integration;
           }).pipe(
             Effect.ensuring(

@@ -125,3 +125,38 @@ it("animates with the registering owner and releases the ticker on settlement", 
   expect(report?.scheduled).toBeGreaterThan(0);
   expect(report).toMatchObject({ invalidated: true, stops: 1 });
 });
+
+it("shows every call argument once a management call is expanded", () => {
+  const cases = [
+    ["agent_lifecycle", { action: "stop", runIds: ["RUN_ID_SENTINEL"] }, ["RUN_ID_SENTINEL"]],
+    [
+      "agent_await",
+      { runIds: ["AWAITED_SENTINEL"], until: "any_finished", timeoutSeconds: 90 },
+      ["AWAITED_SENTINEL", "90"],
+    ],
+    [
+      "agent_worktree",
+      {
+        action: "apply",
+        workspaceId: "WORKSPACE_SENTINEL",
+        revisionId: "REVISION_SENTINEL",
+        preparationId: "PREPARATION_SENTINEL",
+      },
+      ["WORKSPACE_SENTINEL", "REVISION_SENTINEL", "PREPARATION_SENTINEL"],
+    ],
+    [
+      "agent_worktree",
+      { action: "review", workspaceId: "ws-1", offset: 16000, limit: 4000 },
+      ["16000", "4000"],
+    ],
+  ] as const;
+  for (const [name, args, evidence] of cases) {
+    const harness = createToolPresentationHarness(
+      registered().find((entry) => entry.name === name)!,
+      { width: 160 },
+    );
+    harness.call(args, { expanded: true });
+    const text = harness.render().join("\n");
+    for (const value of evidence) expect(text, `${name} ${value}`).toContain(value);
+  }
+});

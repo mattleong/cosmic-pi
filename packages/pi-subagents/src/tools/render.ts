@@ -1,3 +1,4 @@
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
@@ -46,20 +47,19 @@ const rawResultSection = (content: ToolTextContent, theme: Theme, label = "Raw r
 export const renderSubagentCall = (name: string, target: string, theme: Theme): Component =>
   new Text(renderToolHeader({ title: name, subtitle: target }, theme), 0, 0);
 
-const InputEvidenceSchema = Schema.Struct({
-  message: Schema.optionalKey(Schema.String),
-  name: Schema.optionalKey(Schema.String),
-  paths: Schema.optionalKey(Schema.Array(Schema.String)),
-});
+const CallArgumentsSchema = Schema.Record(Schema.String, Schema.Json);
 
-export const decodeInputEvidence = decodeUnknownOrUndefined(InputEvidenceSchema);
+export const decodeCallArguments = decodeUnknownOrUndefined(CallArgumentsSchema);
 
+/** Every argument of a call, one per line, so expansion shows what the heading can't. */
 export const renderSubagentInputContent = (
-  input: typeof InputEvidenceSchema.Type | undefined,
+  args: typeof CallArgumentsSchema.Type | undefined,
   theme: Theme,
 ): Component => {
-  if (!input) return new Text("", 0, 0);
-  const lines = [input.message, input.name, ...(input.paths ?? [])].filter(Boolean);
+  if (!args) return new Text("", 0, 0);
+  const lines = Object.entries(args).map(
+    ([key, value]) => `${key}: ${Predicate.isString(value) ? value : JSON.stringify(value)}`,
+  );
   return new Text(theme.fg("toolOutput", escapeControlChars(lines.join("\n"))), 0, 0);
 };
 

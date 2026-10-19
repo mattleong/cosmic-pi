@@ -29,6 +29,8 @@ const record = (workspaceId: string): WorkspaceRecord => ({
   },
   status: "active",
   baseline: "baseline",
+  ownerLease: "owner",
+  lastChangedAt: 0,
 });
 const fixture = <A, E, R>(test: (root: string, registry: string) => Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
@@ -79,8 +81,9 @@ it.live(
         yield* io(() => fs.writeFile(path.join(registry, id(11)), "not a directory"));
         const before = yield* io(() => fs.readdir(registry));
         const listing = yield* listWorkspaceRecords(registry);
+        const { lastChangedAt: _stamped, ...unstamped } = healthy;
         expect(listing.records.map(({ lastChangedAt: _changed, ...saved }) => saved)).toEqual([
-          healthy,
+          unstamped,
         ]);
         expect(listing.unavailable).toEqual(
           Array.from({ length: 10 }, (_, index) => ({

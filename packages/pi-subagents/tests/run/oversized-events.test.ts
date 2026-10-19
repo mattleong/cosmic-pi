@@ -5,6 +5,7 @@ import {
   assistantMessageEndFrame,
   localServiceFixture,
   request,
+  runView,
   withService,
 } from "./fixtures/service-harness.ts";
 
@@ -43,7 +44,7 @@ describe("oversized Pi child events", () => {
       );
       control.offer({ type: "agent_settled" });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
-      expect(yield* service.status(run.id)).toMatchObject({
+      expect(yield* runView(service, run.id)).toMatchObject({
         state: "completed",
         finalText: "Screenshot reviewed.",
       });
@@ -62,7 +63,7 @@ describe("oversized Pi child events", () => {
         }),
       );
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
-      expect((yield* service.status(run.id)).state).toBe("failed");
+      expect((yield* runView(service, run.id)).state).toBe("failed");
     });
   });
 });

@@ -11,6 +11,7 @@ import {
   completeLocalRun,
   request,
   reviewerContinuation,
+  runViews,
   withService,
 } from "./fixtures/service-harness.ts";
 import {
@@ -32,7 +33,7 @@ const completedWriter = (service: SubagentServiceContract, f: Fixture) =>
   });
 
 const outcomeOf = (service: SubagentServiceContract, id: string) =>
-  service.list.pipe(Effect.map((runs) => runs.find((run) => run.id === id)?.workspaceOutcome));
+  runViews(service).pipe(Effect.map((runs) => runs.find((run) => run.id === id)?.workspaceOutcome));
 
 const settledOutcome = (service: SubagentServiceContract, id: string) =>
   Effect.gen(function* () {

@@ -11,6 +11,7 @@ import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
+import { signalProcessGroup } from "pi-cosmic-core";
 import { temporaryDirectory, yieldUntil } from "pi-cosmic-core/testing";
 import { localPiBackendDriver } from "../src/backend/local-pi.ts";
 import { ChildProcess } from "../src/boundary/child-process.ts";
@@ -22,6 +23,7 @@ import {
 } from "../src/boundary/process-transport.ts";
 import { backendLaunch } from "./fixtures/backend-supervisor.ts";
 import { stringMatching } from "./support/matchers.ts";
+import { processAlive } from "./support/process-liveness.ts";
 
 const boundary = {
   spawn: vi.fn<ProcessTransportRuntime["spawn"]>(),
@@ -465,6 +467,46 @@ describe("shared process transport", () => {
         });
         return undefined;
       }),
+  );
+});
+
+describe("writer process exit", () => {
+  // The command's own process group survives the leader, whose exit reparents it.
+  const detachThenExit = `const { spawn } = require("node:child_process");
+const command = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { detached: true, stdio: "ignore" });
+command.unref();
+process.stderr.write(String(command.pid));`;
+
+  it.live(
+    "keeps cleanup unconfirmed after a writer exits on its own, leaving a detached command",
+    () =>
+      Effect.gen(function* () {
+        const scope = yield* Scope.make();
+        const handle = yield* acquireLocalCliTransport({
+          executable: process.execPath,
+          args: ["-e", detachThenExit],
+          env: { PATH: "/usr/bin:/bin" },
+          cwd: process.cwd(),
+          writer: true,
+        }).pipe(Scope.provide(scope));
+        const commandPid = Number((yield* handle.awaitExit).stderr);
+        expect(Number.isSafeInteger(commandPid) && commandPid > 0).toBe(true);
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => signalProcessGroup(commandPid, "SIGKILL")),
+        );
+        expect(processAlive(commandPid)).toBe(true);
+
+        const cause = yield* Scope.close(scope, Exit.void).pipe(Effect.sandbox, Effect.flip);
+        expect(Cause.squash(cause)).toMatchObject({ code: "cleanup_unconfirmed" });
+        const verifier = handle.cleanupVerifier;
+        if (!verifier) return yield* Effect.die("Missing cleanup verifier");
+        expect(
+          cause.reasons.map(verifier.diagnostic).find((diagnostic) => diagnostic !== undefined),
+        ).toMatchObject({ phase: "descendant-snapshot" });
+        expect(verifier.canVerify()).toBe(false);
+        expect(processAlive(commandPid)).toBe(true);
+        return undefined;
+      }).pipe(Effect.scoped),
   );
 });
 

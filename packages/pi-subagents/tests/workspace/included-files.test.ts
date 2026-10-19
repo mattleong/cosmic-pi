@@ -104,6 +104,33 @@ describe(".worktreeinclude", () => {
     expect((yield* service.inspect(target)).includedPaths).toEqual([".env"]);
   });
 
+  test("keeps a staged included file through a refused and a successful rebase", function* (service, root) {
+    yield* writeFile(path.join(root, ".env"), "TOKEN=parent\n");
+    yield* includeFile(root, ".env\n");
+    const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+    const target = workspaceTarget(handle);
+    yield* writeFile(path.join(handle.cwd, ".env"), "TOKEN=writer\n");
+    yield* git(handle.cwd, ["add", "--force", "--", ".env"]);
+    yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
+    const staged = () => git(handle.cwd, ["ls-files", "--", ".env"]);
+
+    // The parent deleted the file the worker changed, which a three-way merge can't resolve.
+    yield* io(() => fs.unlink(path.join(root, "src/main.ts")));
+    expect((yield* failureOf(service.rebase(target))).code).toBe("workspace_rebase_refused");
+    expect(yield* readText(handle.cwd, ".env")).toBe("TOKEN=writer\n");
+    expect(yield* staged()).toBe(".env\n");
+
+    yield* writeFile(path.join(root, "src/main.ts"), "baseline\n");
+    yield* writeFile(path.join(root, "src/parent.ts"), "parent\n");
+    expect((yield* service.rebase(target)).reappliedPaths).toEqual(["src/main.ts"]);
+    expect(yield* readText(handle.cwd, ".env")).toBe("TOKEN=writer\n");
+    expect(yield* readText(handle.cwd, "src/parent.ts")).toBe("parent\n");
+    expect(yield* staged()).toBe("");
+    const revision = yield* service.freeze(target);
+    expect(revision.changedPaths).toEqual(["src/main.ts"]);
+    expect(revision.diff).not.toContain("TOKEN");
+  });
+
   test("includes credential-named untracked files the baseline leaves out, never tracked or captured ones", function* (service, root) {
     yield* writeFile(path.join(root, "credentials.json"), '{"key":"secret"}\n');
     // Untracked and not ignored: the baseline already carries it.

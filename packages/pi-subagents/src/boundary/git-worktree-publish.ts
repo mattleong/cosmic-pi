@@ -16,6 +16,12 @@ import {
 /** The largest file publication reads into memory, on either side of a change. */
 export const MAX_PUBLISHED_FILE_BYTES = 512 * 1024 * 1024;
 
+/**
+ * The permission bits publication records, compares, and installs. Setuid, setgid, and sticky
+ * bits are never carried to new content; a backup keeps the original's.
+ */
+export const filePermissions = (mode: number) => mode & 0o777;
+
 /** The journal's content identity for a file, the same in SHA-1 and SHA-256 repositories. */
 export const contentDigest = (bytes: Uint8Array) =>
   nodeCreateHash("sha256").update(bytes).digest("hex");
@@ -127,7 +133,7 @@ const captureMatches = (backup: string, before: PublicationImage) =>
             bytesRead === bytes.length &&
             final.size === opened.size &&
             bytes.equals(before.bytes) &&
-            (final.mode & 0o7777) === before.mode &&
+            filePermissions(final.mode) === before.mode &&
             final.nlink === 1 &&
             final.mtimeMs === opened.mtimeMs &&
             final.ctimeMs === opened.ctimeMs
@@ -302,6 +308,7 @@ type PublishedFileState =
   | {
       readonly kind: "file";
       readonly digest: string;
+      readonly permissions: number;
       readonly dev: number;
       readonly ino: number;
     };
@@ -325,6 +332,7 @@ export const inspectPublishedFile = (file: string) =>
           return {
             kind: "file",
             digest: contentDigest(bytes),
+            permissions: filePermissions(opened.mode),
             dev: opened.dev,
             ino: opened.ino,
           } satisfies PublishedFileState;

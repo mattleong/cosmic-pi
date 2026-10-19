@@ -3,13 +3,10 @@ import * as Effect from "effect/Effect";
 import type { SubagentError } from "./errors.ts";
 import type { RunRecord } from "./internal.ts";
 import { diffStatTotals, type WorkspaceDiffStatFile } from "../workspace/diffstat.ts";
-import {
-  MAX_OUTCOME_DIFFSTAT_FILES,
-  type SubagentWorkspaceDiffStat,
-  type SubagentWorkspaceOutcome,
-} from "./model.ts";
+import { MAX_OUTCOME_DIFFSTAT_FILES, type SubagentWorkspaceDiffStat } from "./model.ts";
 import {
   mapWorkspaceError,
+  recordWorkspaceOutcomeLocked,
   runHoldsCwd,
   runsWithin,
   workspaceArtifactDirectory,
@@ -68,11 +65,6 @@ export function workspaceSettleOperations(
       return undefined;
     return binding;
   };
-  const recordOutcomeLocked = (record: RunRecord, workspaceOutcome: SubagentWorkspaceOutcome) =>
-    Effect.suspend(() => {
-      record.view = { ...record.view, workspaceOutcome };
-      return publish;
-    });
   const settle = (record: RunRecord, assignmentEpoch: number) =>
     Effect.gen(function* () {
       if (!engine) return;
@@ -106,6 +98,7 @@ export function workspaceSettleOperations(
                 // Child workspaces created from this worker tree, including any still being
                 // created, keep it as their integration target.
                 const children = unresolvedChildrenLocked(binding);
+                // Discard records the auto-discarded outcome itself.
                 if (
                   changedFileCount === 0 &&
                   uncapturedFileCount === 0 &&
@@ -114,20 +107,17 @@ export function workspaceSettleOperations(
                   children.creating === 0
                 ) {
                   yield* discardLocked(engine, binding, "auto-discarded");
+                  return;
                 }
-                yield* recordOutcomeLocked(
-                  record,
-                  binding.state.phase === "finished"
-                    ? { status: "auto-discarded" }
-                    : {
-                        status: "proposal",
-                        changedFileCount,
-                        ...(uncapturedFileCount > 0 && { uncapturedFileCount }),
-                        ...(changes.diffStat.length > 0 && {
-                          diffStat: outcomeDiffStat(changes.diffStat),
-                        }),
-                      },
-                );
+                recordWorkspaceOutcomeLocked(binding, {
+                  status: "proposal",
+                  changedFileCount,
+                  ...(uncapturedFileCount > 0 && { uncapturedFileCount }),
+                  ...(changes.diffStat.length > 0 && {
+                    diffStat: outcomeDiffStat(changes.diffStat),
+                  }),
+                });
+                yield* publish;
               }),
             ),
           );

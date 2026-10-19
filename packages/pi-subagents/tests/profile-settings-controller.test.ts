@@ -388,6 +388,32 @@ describe("profile settings controller", () => {
     expect(fixture.ui.notify).not.toHaveBeenCalled();
   });
 
+  effectTest("keeps a scope's other nesting limits when one limit inherits", function* () {
+    const sessionWith = (nesting: { maxDirectChildren: number; maxDepth: number }) =>
+      setup({
+        value: profileSettingsInspection(
+          {
+            globalDocument: inspectionDocument("global", "global"),
+            projectDocument: inspectionDocument("project", "project"),
+            projectTrusted: true,
+          },
+          { revision: 0, overrides: {}, nesting },
+        ),
+      });
+    const partial = sessionWith({ maxDirectChildren: 4, maxDepth: 2 });
+    yield* step(() => partial.settings("session maxDepth inherit"));
+    expect(partial.managerActions.patchSessionNesting).toHaveBeenCalledWith(
+      expect.objectContaining({ nesting: { maxDirectChildren: 4, maxDepth: 3 } }),
+    );
+
+    // Once every limit matches what the scope inherits, it inherits the whole policy.
+    const last = sessionWith({ maxDirectChildren: 12, maxDepth: 2 });
+    yield* step(() => last.settings("session maxDepth inherit"));
+    expect(
+      vi.mocked(last.managerActions.patchSessionNesting).mock.calls[0]?.[0],
+    ).not.toHaveProperty("nesting");
+  });
+
   effectTest("rechecks Project trust before a Project delegation write", function* () {
     const fixture = setup();
     onNextInspection(fixture, () => fixture.setProjectTrusted(false));

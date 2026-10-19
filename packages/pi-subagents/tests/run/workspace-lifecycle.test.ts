@@ -12,6 +12,7 @@ import {
   profileLayerFor,
   request,
   reviewerContinuation,
+  runView,
   withService,
 } from "./fixtures/service-harness.ts";
 import {
@@ -121,7 +122,7 @@ describe("writer workspace lifecycle", () => {
         mode: "shared-checkout",
         unresolvedWorkspaceCount: 3,
       });
-      expect(yield* service.status(active.id)).toMatchObject({
+      expect(yield* runView(service, active.id)).toMatchObject({
         writerWorkspaceMode: "worktree",
         workspaceId: active.workspaceId,
       });

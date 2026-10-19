@@ -20,7 +20,6 @@ const RUN_STATE_KINDS = {
   running: "running",
   waiting_for_parent: "waiting",
   paused: "paused",
-  reported: "done",
   completed: "done",
   failed: "failed",
   stopping: "stopping",

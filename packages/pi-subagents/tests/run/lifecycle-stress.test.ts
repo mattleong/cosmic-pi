@@ -11,14 +11,15 @@ import * as TestClock from "effect/testing/TestClock";
 import { interruptingScheduler, yieldUntil } from "pi-cosmic-core/testing";
 import { SubagentService } from "../../src/run/service.ts";
 import {
+  awaitRuns,
   contactParentFrame,
   fakeChildLayer,
   fakeWriterLeaseLayer,
   leaseCounts,
   localServiceFixture,
   request,
+  runView,
   withService,
-  awaitRuns,
 } from "./fixtures/service-harness.ts";
 import { SubagentRuntimeClosedError } from "../../src/run/errors.ts";
 
@@ -146,7 +147,7 @@ describe("SubagentService lifecycle stress", () => {
                 projections.at(-1)?.runs.find((run) => run.id === parent.id)?.state === "stopped",
             );
             for (const id of [parent.id, child.id, leaf.id]) {
-              expect(yield* service.status(id)).toMatchObject({
+              expect(yield* runView(service, id)).toMatchObject({
                 state: "stopped",
                 question: undefined,
               });
@@ -155,7 +156,7 @@ describe("SubagentService lifecycle stress", () => {
             expect(
               [parentControl, childControl, leafControl].map((control) => control.released()),
             ).toEqual([1, 1, 1]);
-            expect(yield* service.status(sibling.id)).toMatchObject({
+            expect(yield* runView(service, sibling.id)).toMatchObject({
               state: "running",
               reportGeneration: 1,
             });

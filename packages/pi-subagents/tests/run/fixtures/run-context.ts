@@ -134,6 +134,7 @@ export const runRecordFixture = (overrides: Partial<RunRecord> = {}) =>
       cleanupDisposition: "pending",
       pauseRequested: false,
       stoppedByParent: false,
+      subtreeStopsInProgress: 0,
       cleanupPending: false,
       runStateReclaimState: "pending",
       initializationPending: false,

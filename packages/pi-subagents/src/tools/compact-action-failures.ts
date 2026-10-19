@@ -23,6 +23,18 @@ const SCRIPTED_WRITER_RECOVERY: FailureRecoveryRule = [
 ];
 const START_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
   SCRIPTED_WRITER_RECOVERY,
+  [
+    ["workspace_nested_writer_unsupported"],
+    'Set isolation: "shared-checkout" for this writer, or ask the root to launch it in a worktree.',
+  ],
+  [
+    ["isolation_requires_writer"],
+    "Omit isolation for read-only work, or launch it on a writer route such as profile worker.",
+  ],
+  [
+    ["session_spend_limit"],
+    "This session's subagents reached its sessionSpendLimit; leave the work to the user or ask them to raise the limit.",
+  ],
   [["node_executable"], "Restart Pi so it runs on the installed Node, then retry the launch."],
   [NO_ELIGIBLE_ROUTE_CODES, noEligibleRouteRecovery],
   [
@@ -65,7 +77,6 @@ const ACTION_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
     ["reply_send_failed"],
     "The reply was never delivered and the question is still pending; resend it with agent_send.",
   ],
-  [["reply_too_large"], "The question is still pending; send a shorter reply with agent_send."],
   [
     ["reply_in_flight"],
     "An earlier reply is still being delivered; await the run or inspect it with agent_read before sending again.",
@@ -131,11 +142,14 @@ export const failureRecovery = (
           ACTION_FAILURE_RECOVERY_RULES,
           "Review the failure detail and the run's current state with agent_read before retrying.",
         ];
-  const matched = rules.find(
-    ([codes, , messages]) =>
-      codes.some((needle) => normalizedCode.includes(needle)) ||
-      messages?.some((needle) => normalizedMessage.includes(needle)),
-  );
+  // An exact code wins over a rule whose broader code fragment it happens to contain.
+  const matched =
+    rules.find(([codes]) => codes.includes(normalizedCode)) ??
+    rules.find(
+      ([codes, , messages]) =>
+        codes.some((needle) => normalizedCode.includes(needle)) ||
+        messages?.some((needle) => normalizedMessage.includes(needle)),
+    );
   return matched?.[1] ?? fallback;
 };
 
@@ -147,7 +161,6 @@ const FAILURE_PHRASES: ReadonlyArray<readonly [ReadonlyArray<string>, Phrase]> =
   [["question_ownership_mismatch"], (subject) => `${subject}'s question is no longer waiting`],
   [["question_transport_closed"], (subject) => `${subject}'s question was cancelled`],
   [["reply_send_failed"], (subject) => `${subject} didn't receive the reply`],
-  [["too_large"], () => "The message is too long"],
   [["retry_route_exhausted"], (subject) => `${subject} has no profile options left to retry`],
   [["retry_claim", "retry_already"], (subject) => `${subject} is already being retried`],
   [["resume_superseded"], (subject) => `${subject} was already replaced by a retry`],
@@ -321,12 +334,12 @@ const AGENT_FAILURES = {
   agent_unavailable: {
     message: (subject) => `${subject} can't receive messages right now`,
     recovery:
-      "Check the agent's state with agent_list. A starting agent accepts messages once it runs; a stopping or removed one never does. Read a finishing run's report with agent_read instead.",
+      "Check the agent's state with agent_list. A starting agent accepts messages once it runs. A stopping Pi agent, or one inside a subtree being stopped, can be resumed with a message once the stop finishes. A removed agent can't receive messages.",
   },
   agent_resume_unsupported: {
-    message: (subject) => `${subject} has finished and can't be resumed`,
+    message: (subject) => `${subject} can't be resumed`,
     recovery:
-      "Finished Claude and Codex runs can't be resumed. Start a new agent with the context it needs, or message its parent.",
+      "Claude and Codex runs can't be resumed. Stop a paused one with agent_lifecycle and start a replacement; a finished one closed on its report, so start a new agent with the context it needs, or message its parent.",
   },
   agent_spend_limit: {
     message: (subject) => `${subject} can't be resumed after the session's spend limit`,

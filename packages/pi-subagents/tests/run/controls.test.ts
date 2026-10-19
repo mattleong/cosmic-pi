@@ -6,9 +6,10 @@ import { yieldUntil } from "pi-cosmic-core/testing";
 import {
   askParent,
   localServiceFixture,
-  request,
   nativeReportRequest,
   nativeReportServiceFixture,
+  request,
+  runView,
   withService,
 } from "./fixtures/service-harness.ts";
 import { anyString } from "../support/matchers.ts";
@@ -20,7 +21,7 @@ describe("SubagentService", () => {
     return withService(layer, function* (service) {
       const run = yield* service.startSessionOwned(nativeReportRequest({ name: "first-name" }));
       expect((yield* service.rename(run.id, "  second-name  ")).name).toBe("second-name");
-      expect(yield* service.status(run.id)).toMatchObject({
+      expect(yield* runView(service, run.id)).toMatchObject({
         state: "running",
         name: "second-name",
       });
@@ -51,7 +52,7 @@ describe("SubagentService", () => {
         requestId: "question-cancelled",
       });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "running");
-      expect(yield* service.status(run.id)).toMatchObject({
+      expect(yield* runView(service, run.id)).toMatchObject({
         state: "running",
         question: undefined,
       });
@@ -75,7 +76,7 @@ describe("SubagentService", () => {
       });
       yield* askParent(fake.controls[0]!, projections, "question-1", "Which API should I use?");
 
-      const waiting = yield* service.status(first.id);
+      const waiting = yield* runView(service, first.id);
       expect(waiting.question?.message).toBe("Which API should I use?");
       const replied = yield* service.send(first.id, "Use the public API.");
       expect(replied).toMatchObject({ delivery: "answered", run: { state: "running" } });
@@ -100,7 +101,7 @@ describe("SubagentService", () => {
       const asking = yield* service.start(request({ name: "asking" }));
       const working = yield* service.start(request({ name: "working", task: "Review tests" }));
       yield* askParent(fake.controls[0]!, projections, "question-1");
-      expect((yield* service.status(working.id)).state).toBe("running");
+      expect((yield* runView(service, working.id)).state).toBe("running");
 
       const outcomes = yield* Effect.forEach(
         [asking.id, working.id],
@@ -210,7 +211,7 @@ describe("SubagentService", () => {
       yield* Fiber.interrupt(interrupting);
       yield* Deferred.succeed(gate, undefined);
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "paused");
-      expect((yield* service.status(run.id)).state).toBe("paused");
+      expect((yield* runView(service, run.id)).state).toBe("paused");
     });
   });
 
@@ -280,7 +281,7 @@ describe("SubagentService", () => {
       expect(yield* service.send(run.id, "Proceed.").pipe(Effect.flip)).toMatchObject({
         code: "reply_send_failed",
       });
-      const status = yield* service.status(run.id);
+      const status = yield* runView(service, run.id);
       expect(status.state).toBe("waiting_for_parent");
       expect(status.question).toMatchObject({ requestId: "unsent-question" });
       expect(status.warning).toBeUndefined();

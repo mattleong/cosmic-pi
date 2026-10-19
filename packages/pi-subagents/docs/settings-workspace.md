@@ -71,7 +71,7 @@ The Saved profiles tab groups sets by Project and Global. Untrusted Project rows
 
 ## Nesting settings
 
-`/subagents settings` edits nesting in Session, Global, or trusted Project scope. Direct children accept integers 1–32 per parent, and depth 0–8. Invalid input is rejected, not clamped. Session changes apply to later batches immediately; persistent changes require `/reload`. Lowering a limit never stops admitted runs.
+`/subagents settings` edits nesting in Session, Global, or trusted Project scope. Direct children accept integers 1–32 per parent, and depth 0–8. Invalid input is rejected, not clamped. Setting one limit to `inherit` keeps the scope's other limits, and the scope inherits its whole policy once every limit matches what it would inherit. Session changes apply to later batches immediately; persistent changes require `/reload`. Lowering a limit never stops admitted runs.
 
 ## Writer workspace default
 

@@ -97,19 +97,14 @@ const savedRecord = (agent: string, workspaceId: string) =>
     Effect.provide(SafeFile.layer.pipe(Layer.provide(nodeFilePlatformLayer))),
   );
 
-/**
- * Makes a record look last changed `days` ago; `withoutField` drops the stamp, as for a record
- * saved before it existed, and dates the record file instead.
- */
-const ageRecord = (agent: string, workspaceId: string, days: number, withoutField = false) =>
+/** Makes a record look last changed `days` ago. */
+const ageRecord = (agent: string, workspaceId: string, days: number) =>
   Effect.gen(function* () {
-    const { lastChangedAt: _changed, ...record } = yield* savedRecord(agent, workspaceId);
+    const record = yield* savedRecord(agent, workspaceId);
     const changedAt = (yield* Clock.currentTimeMillis) - Duration.toMillis(Duration.days(days));
-    const aged: WorkspaceRecord = withoutField ? record : { ...record, lastChangedAt: changedAt };
-    const file = path.join(registryOf(agent), workspaceId, "record.json");
+    const aged: WorkspaceRecord = { ...record, lastChangedAt: changedAt };
     const text = yield* encodeRecord(aged);
-    yield* io(() => fs.writeFile(file, text));
-    if (withoutField) yield* io(() => fs.utimes(file, changedAt / 1000, changedAt / 1000));
+    yield* io(() => fs.writeFile(path.join(registryOf(agent), workspaceId, "record.json"), text));
   });
 
 // Publication stops at src/main.ts because an editor saved it after the preimage check, so
@@ -273,9 +268,8 @@ it.live(
       const chainParent = yield* create;
       const chainChild = yield* nested(creator.service, chainParent);
       yield* creator.close;
-      for (const handle of [old, integrating, busyParent, chainParent])
+      for (const handle of [old, integrating, busyParent, chainParent, chainChild])
         yield* ageRecord(agent, handle.workspaceId, 31);
-      yield* ageRecord(agent, chainChild.workspaceId, 31, true);
       yield* ageRecord(agent, young.workspaceId, 29);
       yield* ageRecord(agent, youngChild.workspaceId, 1);
 

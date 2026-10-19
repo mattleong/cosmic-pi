@@ -175,6 +175,8 @@ export function workspaceControl(
         repository: record.repository,
         status: "active",
         baseline: record.baseline,
+        ownerLease: record.ownerLease,
+        lastChangedAt: record.lastChangedAt,
       };
     // A preparation whose WorktreeCreate hooks failed or are still running cannot be integrated.
     if (
@@ -228,8 +230,8 @@ export function workspaceControl(
         }),
       );
     });
-  const review = workspaceReviewOperations(context);
-  const integrateLocked = workspaceIntegrationOperations(context);
+  const review = workspaceReviewOperations(context, dependencies.publish);
+  const integrateLocked = workspaceIntegrationOperations(context, dependencies.publish);
   const orphans = workspaceOrphanOperations(context, sourceRecords);
   const isOrphan = (workspaceId: string, caller: string) =>
     caller === SUBAGENT_ROOT_RUN_ID && !state.bindings.has(workspaceId);

@@ -38,7 +38,7 @@ For scoped parallel implementation, give shared-checkout writers disjoint task s
 
 ## Reviewing and applying worktree proposals
 
-Nothing applies a worktree writer's changes automatically. A completed writer that changed nothing has its worktree discarded. Otherwise its notification, `agent_list` line, and `agent_read` card show `proposal: N files, +A −D · agent_worktree apply workspaceId=…` with line counts for up to 20 files, and its direct parent takes one of two paths without asking for routine user approval. Each operation waits for the finished writer's process cleanup. A worktree writer that started worktree writers does the same into its own worker tree before reporting. The engine contract is in [Isolated workspace lifecycle](local-backends.md#isolated-workspace-lifecycle).
+Nothing applies a worktree writer's changes automatically. A completed writer that changed nothing has its worktree discarded. Otherwise its notification, `agent_list` line, and `agent_read` card show `proposal: N files, +A −D · agent_worktree apply workspaceId=…` with line counts for up to 20 files until it is applied or discarded, and its direct parent takes one of two paths without asking for routine user approval. Each operation waits for the finished writer's process cleanup. A worktree writer that started worktree writers does the same into its own worker tree before reporting. The engine contract is in [Isolated workspace lifecycle](local-backends.md#isolated-workspace-lifecycle).
 
 ### Quick path
 

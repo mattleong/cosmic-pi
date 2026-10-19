@@ -8,6 +8,7 @@ const WORKSPACE_ERROR_CODES = [
   "workspace_rollback_refused",
   "workspace_rebase_refused",
   "workspace_local_override",
+  "workspace_publication_oversized",
 ] as const;
 
 export class WorkspaceError extends Schema.TaggedError<WorkspaceError>()("WorkspaceError", {
@@ -94,12 +95,12 @@ export const WorkspaceRecordSchema = Schema.Struct({
   ]),
   baseline: Schema.String,
   /** Names the lease the creating session holds while it runs; a free lease proves it ended. */
-  ownerLease: Schema.optional(Schema.String),
+  ownerLease: Schema.String,
   /**
    * A worktree hook may still own processes in this tree. Cleared only after confirmed cleanup;
    * while set, the artifact is quarantined.
    */
-  setupCleanupPending: Schema.optional(Schema.String),
+  hookCleanupPending: Schema.optional(Schema.String),
   revision: Schema.optional(WorkspaceRevisionMetadataSchema),
   preparation: Schema.optional(WorkspacePreparationSchema),
   preparedTree: Schema.optional(Schema.String),
@@ -124,8 +125,8 @@ export const WorkspaceRecordSchema = Schema.Struct({
    * WorktreeCreate hooks run in it may change nothing else. Freeze and revise drop it.
    */
   rebasedTree: Schema.optional(Schema.String),
-  /** Epoch milliseconds of the last record save; absent records use the record file's mtime. */
-  lastChangedAt: Schema.optional(Schema.Finite),
+  /** Epoch milliseconds of the last record save. */
+  lastChangedAt: Schema.Finite,
   launch: Schema.optional(WorkspaceLaunchSchema),
   /**
    * Untracked files `.worktreeinclude` copied into the worker tree, relative to its root. Every
