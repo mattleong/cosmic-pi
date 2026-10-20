@@ -9,6 +9,7 @@ import type { LocalClaudeDebugEntry } from "../boundary/local-claude-debug.ts";
 import type { LocalCliWireEvent } from "../boundary/local-cli-transport.ts";
 import type { SupervisorChannelHandle } from "../boundary/supervisor-channel.ts";
 import { processError, type SubagentError } from "../run/errors.ts";
+import { boundOutputText } from "../run/state.ts";
 import type { SupervisorEvent } from "../supervisor/protocol.ts";
 import { localCliInterrupts } from "./local-cli-interruption.ts";
 import type { BackendLaunchRequest, BackendReport } from "./model.ts";
@@ -221,11 +222,12 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
           message:
             "Claude reported a regressing cumulative assistant usage total; accounting stays monotone and the regression was ignored.",
         });
+      const { text, originalSize } = boundOutputText(event.text ?? "");
       yield* offer(
         {
           type: "assistant_message" as const,
           assignmentEpoch: handleState.assignmentEpoch,
-          ...(event.text !== undefined && event.text.length > 0 && { text: event.text }),
+          ...(text && { text, ...(originalSize && { originalSize }) }),
           usage: { ...delta, totalTokens: usageComponentsTotal(delta) },
         },
         raw,

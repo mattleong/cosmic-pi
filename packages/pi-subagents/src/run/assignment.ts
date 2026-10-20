@@ -1,7 +1,12 @@
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import { isOutcomeUncertain, SubagentProcessError } from "./errors.ts";
-import { isInactiveRunRecord, type RunContext, type RunRecord } from "./internal.ts";
+import {
+  isInactiveRunRecord,
+  recordLatestAssistantText,
+  type RunContext,
+  type RunRecord,
+} from "./internal.ts";
 import type { SubagentRunView } from "./model.ts";
 import type { RunProcessControls } from "./process-lifecycle.ts";
 import type { RunSettlement } from "./settlement.ts";
@@ -27,7 +32,7 @@ export const beginNextAssignmentLocked = (
   resumedBy?: string,
 ): void => {
   record.pausedAssignmentEpoch = undefined;
-  record.latestAssistantText = undefined;
+  recordLatestAssistantText(record, undefined);
   record.warningSlots = {};
   record.assignment = {
     epoch: record.nextAssignmentEpoch++,
@@ -46,6 +51,8 @@ export const beginNextAssignmentLocked = (
     state: "starting",
     // Older report payloads remain owned by their completion generations.
     finalText: undefined,
+    finalTextTruncation: undefined,
+    reportArchive: undefined,
     endedAt: undefined,
     warning: undefined,
     warningSource: undefined,

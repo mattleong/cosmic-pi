@@ -40,7 +40,6 @@ import {
 } from "../boundary/host-stopped-runs.ts";
 import { registerParentWake } from "../boundary/host-parent-wake.ts";
 import { agentMainCapabilities } from "../boundary/host-agent-messages.ts";
-import { sessionReportArchive, type ReportArchive } from "../boundary/report-archive.ts";
 import { subagentSessionFooter } from "../boundary/host-session-footer.ts";
 import { restoreSessionUsage, sessionUsageRecorder } from "../boundary/host-session-usage.ts";
 import { registerSubagentErrorReceipts } from "../boundary/host-tool-result.ts";
@@ -165,11 +164,7 @@ export function registerSubagentApplication(
       slot.fork(Effect.sleep(PARENT_IDLE_CHECK_INTERVAL).pipe(Effect.andThen(Effect.sync(check))));
     },
   });
-  let reportArchive: ReportArchive | undefined;
-  const notify = hostNotifier(pi, {
-    delivery: wake,
-    archive: () => reportArchive,
-  });
+  const notify = hostNotifier(pi, { delivery: wake });
   let startupFailureTools: ReadonlyArray<string> = [];
   let hasRegisteredTools = false;
   let incompatibleReload = false;
@@ -396,8 +391,6 @@ export function registerSubagentApplication(
         if (activation.trigger !== "tree") replay.publish();
         bridge.publish(prepared.projection);
         currentActivation = activation;
-        if (activation.sessionKey)
-          reportArchive = sessionReportArchive(activation.agentDirectory, activation.sessionKey);
         showSessionFooter();
         if (activation.trigger === "reload" && activation.sessionKey)
           profileReloadHandoff.clear(activation.sessionKey);

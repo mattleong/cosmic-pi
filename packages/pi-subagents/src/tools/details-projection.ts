@@ -1,4 +1,9 @@
-import { safeTextPrefix, sanitizeDiagnosticContent, stripTerminalControls } from "pi-cosmic-core";
+import {
+  safeTextPrefix,
+  sanitizeDiagnosticContent,
+  sanitizeTerminalLine,
+  stripTerminalControls,
+} from "pi-cosmic-core";
 import { SUBAGENT_EFFORTS } from "../domain/routing.ts";
 import {
   MAX_CUSTOM_AGENT_DESCRIPTION_CHARS,
@@ -29,6 +34,7 @@ import {
   MAX_CLEANUP_DIAGNOSTIC_MESSAGE_CHARS,
   MAX_CARD_DIFFSTAT_PATH_CHARS,
   MAX_CARD_MODEL_CHARS,
+  MAX_CARD_PATH_CHARS,
   MAX_CARD_PROVENANCE_CHARS,
   MAX_CARD_QUESTION_CHARS,
   MAX_CARD_SKIPS,
@@ -260,12 +266,42 @@ const projectNativeActivity = (
   };
 };
 
+/** A cut report's retained size and its saved file, shared by cards and the tool contract. */
+export const projectReportRetention = (
+  run: SubagentRunView,
+): Pick<SubagentRunCard, "reportTruncation" | "reportArchive"> => {
+  const truncation = run.finalTextTruncation;
+  const archive = run.reportArchive;
+  const path = archive === undefined ? "" : sanitizeTerminalLine(archive.path);
+  return {
+    ...(truncation !== undefined && {
+      reportTruncation: {
+        retainedChars: nonNegativeInteger(truncation.retainedChars),
+        originalChars: nonNegativeInteger(truncation.originalChars),
+        originalLines: nonNegativeInteger(truncation.originalLines),
+      },
+    }),
+    // A clipped path names no file, so an oversized one is left out.
+    ...(archive !== undefined &&
+      path &&
+      path.length <= MAX_CARD_PATH_CHARS && {
+        reportArchive: {
+          path,
+          lines: nonNegativeInteger(archive.lines),
+          complete: archive.complete,
+        },
+      }),
+  };
+};
+
 const projectReportCardFields = (run: SubagentRunView): Partial<SubagentRunCard> => {
   const finalText = optionalText(run.finalText, MAX_FINAL_TEXT_CHARS);
   const error = optionalText(run.error, MAX_ERROR_CHARS);
+  // Capture may already have cut the report before this projection bounds it again.
   const finalTextTruncated =
     run.finalText !== undefined &&
-    finalText?.length !== stripTerminalControls(run.finalText).length;
+    (run.finalTextTruncation !== undefined ||
+      finalText?.length !== stripTerminalControls(run.finalText).length);
   const errorTruncated =
     run.error !== undefined && error?.length !== stripTerminalControls(run.error).length;
   return {
@@ -273,6 +309,7 @@ const projectReportCardFields = (run: SubagentRunView): Partial<SubagentRunCard>
     ...(error !== undefined && { error }),
     ...(finalTextTruncated && { finalTextTruncated: true as const }),
     ...(errorTruncated && { errorTruncated: true as const }),
+    ...(run.finalText !== undefined && projectReportRetention(run)),
   };
 };
 

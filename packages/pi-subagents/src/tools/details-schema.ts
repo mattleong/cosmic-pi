@@ -50,6 +50,7 @@ export const MAX_FAILURE_MESSAGE_CHARS = 512;
 export const MAX_CURRENT_TOOL_CHARS = 256;
 export const MAX_PROGRESS_CHARS = 512;
 export const MAX_WARNING_CHARS = 512;
+export const MAX_CARD_PATH_CHARS = 4_096;
 
 export const NonEmptyText = (maximum: number) =>
   Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(maximum));
@@ -289,6 +290,22 @@ const SubagentRunCardSchema = Schema.Struct({
   error: Schema.optionalKey(NonEmptyText(MAX_ERROR_CHARS)),
   finalTextTruncated: Schema.optionalKey(Schema.Literal(true)),
   errorTruncated: Schema.optionalKey(Schema.Literal(true)),
+  /** Capture kept only the first `retainedChars` of the report. */
+  reportTruncation: Schema.optionalKey(
+    Schema.Struct({
+      retainedChars: nonNegativeInteger,
+      originalChars: nonNegativeInteger,
+      originalLines: nonNegativeInteger,
+    }),
+  ),
+  /** The private file holding this assignment's report, the recovery path for a cut one. */
+  reportArchive: Schema.optionalKey(
+    Schema.Struct({
+      path: NonEmptyText(MAX_CARD_PATH_CHARS),
+      lines: nonNegativeInteger,
+      complete: Schema.Boolean,
+    }),
+  ),
   question: Schema.optionalKey(Schema.Struct({ message: NonEmptyText(MAX_CARD_QUESTION_CHARS) })),
 });
 

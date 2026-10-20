@@ -8,6 +8,7 @@ import {
 } from "pi-cosmic-core";
 import { clipToWidth, spinnerFrameAt, SPINNER_FRAME_MS } from "pi-cosmic-ui/manager";
 import { isTerminalRunState } from "../run/model.ts";
+import { clipWithMarker } from "../run/state.ts";
 import type { SubagentAwaitUntil } from "../run/service.ts";
 import { aggregateUsage } from "../ui/metrics.ts";
 import { runStateGlyph, runStateLabel } from "../ui/run-state.ts";
@@ -76,6 +77,9 @@ export const formatAwaitCounters = (
   ].join(" · ");
 };
 
+/** Each progress line's bound, which `REPORT_FRAMING_CHARS` reserves for the summary and 12 rows. */
+const MAX_AWAIT_PROGRESS_LINE_CHARS = 256;
+
 export const formatAwaitProgress = (
   runs: ReadonlyArray<AwaitProgressRun>,
   until: SubagentAwaitUntil,
@@ -104,7 +108,9 @@ export const formatAwaitProgress = (
       );
       return `${runTreeBranch(row)}${awaitedIds.has(row.run.id) ? "◎ " : ""}${runStateGlyph(row.run.state)} ${sanitizeTerminalLine(row.run.name)} (${sanitizeTerminalLine(row.run.id)})${status ? ` · ${status}` : ""}`;
     }),
-  ].join("\n");
+  ]
+    .map((line) => clipWithMarker(line, MAX_AWAIT_PROGRESS_LINE_CHARS, "…"))
+    .join("\n");
 };
 
 interface SubagentToolRendererState extends Record<string, unknown> {

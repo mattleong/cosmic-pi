@@ -18,6 +18,7 @@ import type {
   SubagentNotification,
   SubagentNotificationDelivery,
 } from "../boundary/host-notifier.ts";
+import type { ReportArchive } from "../boundary/report-archive.ts";
 import { WriterLeaseService } from "../boundary/writer-lease.ts";
 import {
   runNotFound,
@@ -94,6 +95,8 @@ export interface SubagentServiceOptions {
   readonly notify?: (
     notification: SubagentNotification,
   ) => SubagentNotificationDelivery | undefined | void;
+  /** Saves each completed report in full at settlement; the session's private report archive. */
+  readonly archiveReport?: ReportArchive | undefined;
   /** Reaches the root session's main agent for `agent_*` messages; without it `main` is unavailable. */
   readonly agentMain?: AgentMainCapabilities | undefined;
   readonly questionnaireHandler?: (
@@ -379,6 +382,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     closeRecordScope,
     claimTurnInputDrain,
     settleCompletedWorkspace: workspaces.settleCompletedWorkspace,
+    archiveReport: options.archiveReport,
   });
 
   const processControls = processControlOperations(withLock);

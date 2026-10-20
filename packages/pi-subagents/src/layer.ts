@@ -10,7 +10,7 @@ import { ChildProcess } from "./boundary/child-process.ts";
 import { LocalCliProcess } from "./boundary/local-cli-process.ts";
 import { NativeModelCatalog } from "./boundary/native-model-catalog.ts";
 import { sweepAbandonedPrivateState } from "./boundary/private-state.ts";
-import { pruneReportArchive } from "./boundary/report-archive.ts";
+import { pruneReportArchive, sessionReportArchive } from "./boundary/report-archive.ts";
 import { SupervisorChannel } from "./boundary/supervisor-channel.ts";
 import { WriterLeaseService } from "./boundary/writer-lease.ts";
 import { WorkspaceService } from "./workspace/service.ts";
@@ -91,6 +91,9 @@ export const subagentApplicationLayer = (options: SubagentLayerOptions) => {
         restoredSessionUsage: options.restoredSessionUsage,
         recordSessionUsage: options.recordSessionUsage,
         notify: options.notify,
+        ...(options.sessionKey && {
+          archiveReport: sessionReportArchive(options.agentDirectory, options.sessionKey),
+        }),
         agentMain: options.agentMain,
         questionnaireHandler: options.questionnaireHandler,
         writerWorkspaceMode: inspection.config.writerWorkspaceMode,

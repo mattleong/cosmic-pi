@@ -12,6 +12,7 @@ import type { LocalCliWireEvent } from "../boundary/local-cli-transport.ts";
 import type { SupervisorChannelHandle } from "../boundary/supervisor-channel.ts";
 import { isOutcomeUncertain, processError, type SubagentError } from "../run/errors.ts";
 import { emptyUsage, type SubagentUsage } from "../run/model.ts";
+import { boundOutputText } from "../run/state.ts";
 import {
   decodeCodexEnvelope,
   decodeCodexNotification,
@@ -149,13 +150,13 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
 
   const onItemCompleted = (event: CodexItemEvent, raw: LocalCliWireEvent) => {
     if (event.item.type === "agentMessage") {
-      turnFinalText = event.item.text;
+      const { text, originalSize } = boundOutputText(event.item.text ?? "");
+      turnFinalText = text || undefined;
       return offer(
         {
           type: "assistant_message" as const,
           assignmentEpoch,
-          ...(event.item.text !== undefined &&
-            event.item.text.length > 0 && { text: event.item.text }),
+          ...(text && { text, ...(originalSize && { originalSize }) }),
           usage: emptyUsage(),
         },
         raw,

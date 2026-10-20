@@ -22,12 +22,14 @@ import type {
   AgentSendResult,
 } from "../run/agent-messaging.ts";
 import type { LocalCliVersion } from "./local-cli-version.ts";
+import { MAX_FINAL_TEXT_CHARS, type OriginalTextSize } from "../run/state.ts";
 
 export type BackendResumeToken = object;
 
 export const MAX_BACKEND_REPORT_ID_CHARS = 256;
 export const MAX_BACKEND_REPORT_EVIDENCE_CHARS = 2_048;
-export const MAX_BACKEND_REPORT_TEXT_CHARS = 32 * 1024;
+/** A submitted report fits the run's in-memory report cap, so acceptance never cuts it. */
+export const MAX_BACKEND_REPORT_TEXT_CHARS = MAX_FINAL_TEXT_CHARS;
 
 export interface BackendReport {
   readonly runId: string;
@@ -93,7 +95,10 @@ export interface BackendProxyResult {
 
 export interface BackendAssistantTerminal {
   readonly stopReason?: "stop" | "length" | "toolUse" | "error" | "aborted" | undefined;
+  /** Sanitized and bounded by `boundOutputText`. */
   readonly text?: string | undefined;
+  /** The text's size before the archive cap cut it. */
+  readonly originalSize?: OriginalTextSize | undefined;
   readonly errorMessage?: string | undefined;
 }
 
@@ -124,7 +129,10 @@ export type BackendEvent =
   | {
       readonly type: "assistant_message";
       readonly assignmentEpoch: number;
+      /** Sanitized and bounded by `boundOutputText`. */
       readonly text?: string | undefined;
+      /** The text's size before the archive cap cut it. */
+      readonly originalSize?: OriginalTextSize | undefined;
       /** The model that produced the reply, when the runtime reports one per message. */
       readonly model?: string | undefined;
       readonly usage: SubagentUsage;

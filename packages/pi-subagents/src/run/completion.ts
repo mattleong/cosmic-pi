@@ -60,6 +60,10 @@ const completionNotification = (
     generation: completion.generation,
     outcome: completion.outcome,
     ...(completion.finalText && { finalText: completion.finalText }),
+    ...(completion.finalTextTruncation && {
+      finalTextTruncation: completion.finalTextTruncation,
+    }),
+    ...(completion.reportArchive && { reportArchive: completion.reportArchive }),
     ...(completion.error && { error: completion.error }),
     ...(completion.warning && { warning: completion.warning }),
     ...(completion.resumedBy !== undefined && { resumedBy: completion.resumedBy }),

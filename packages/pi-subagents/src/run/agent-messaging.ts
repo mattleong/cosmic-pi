@@ -294,11 +294,24 @@ export const runReadout = (record: RunRecord, projected: SubagentRunView): Agent
     reportGeneration: view.reportGeneration,
     run: projected,
   };
+  // `truncated` also covers text that capture already cut below what the run produced.
   const assistant = boundedText(record.latestAssistantText, MAX_RUN_READ_CHARS);
-  if (assistant.textStatus === "text") return { ...base, ...assistant, source: "assistant" };
+  if (assistant.textStatus === "text")
+    return {
+      ...base,
+      ...assistant,
+      truncated: assistant.truncated || record.latestAssistantTruncation !== undefined,
+      source: "assistant",
+    };
   if (!isTerminalRunState(view.state)) return { ...base, ...assistant };
   const report = boundedText(view.finalText, MAX_RUN_READ_CHARS);
-  if (report.textStatus === "text") return { ...base, ...report, source: "report" };
+  if (report.textStatus === "text")
+    return {
+      ...base,
+      ...report,
+      truncated: report.truncated || view.finalTextTruncation !== undefined,
+      source: "report",
+    };
   const error = boundedText(view.error, MAX_RUN_READ_CHARS);
   return error.textStatus === "text"
     ? { ...base, ...error, source: "error" }

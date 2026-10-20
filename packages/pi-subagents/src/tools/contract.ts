@@ -41,6 +41,7 @@ import {
 import {
   nonNegativeInteger,
   projectModelOverride,
+  projectReportRetention,
   projectRunCleanup,
 } from "./details-projection.ts";
 import { MAX_FAILURE_CODE_CHARS } from "./details-schema.ts";
@@ -176,6 +177,7 @@ const targetFields = (
     ...(recovery?.runId === run.id && { retry: projectRecovery(recovery) }),
     warnings: projectWarnings(run),
     ...(error !== undefined && { error }),
+    ...projectReportRetention(run),
   };
 };
 

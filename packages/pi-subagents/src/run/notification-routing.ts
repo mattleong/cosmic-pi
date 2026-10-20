@@ -8,8 +8,9 @@ import { resumedByText } from "./agent-messaging.ts";
 import { completionNotificationKey, deliveredCompletionKeys } from "./completion.ts";
 import { isOutcomeUncertain } from "./errors.ts";
 import type { RunContext, RunRecord } from "./internal.ts";
+import { MAX_PARENT_MESSAGE_CHARS } from "./limits.ts";
 import { isActiveRunState, SUBAGENT_ROOT_RUN_ID } from "./model.ts";
-import { sanitizeOutputText } from "./state.ts";
+import { reportArchiveText, reportTruncationText, sanitizeOutputText } from "./state.ts";
 
 interface RunNotificationRoutingDependencies extends Pick<RunContext, "records" | "withLock"> {
   readonly admitTurnInput: (record: RunRecord) => void;
@@ -35,10 +36,17 @@ const ancestorMessage = (notification: SubagentNotification): string => {
   // Put qualifications before the report so bounding a long report cannot drop them.
   const warning = run.warning ? `Warning: ${run.warning}\n\n` : "";
   const resumer = resumedByText(run);
-  return sanitizeOutputText(
-    `Descendant ${run.name} (${run.id}) ${outcome}.\n\n${resumer ? `${resumer}\n\n` : ""}${warning}${detail}\n\nUse agent_read or agent_await for the full run record.`,
-    32 * 1024,
-  );
+  const saved =
+    run.outcome === "completed"
+      ? (reportTruncationText(run.finalTextTruncation, run.reportArchive) ??
+        (run.reportArchive && reportArchiveText(run.reportArchive)))
+      : undefined;
+  // A whole retained report fits the IPC message bound beside its framing; the hint stays last.
+  const hint = "\n\nUse agent_read or agent_await for the full run record.";
+  return `${sanitizeOutputText(
+    `Descendant ${run.name} (${run.id}) ${outcome}.\n\n${resumer ? `${resumer}\n\n` : ""}${warning}${saved ? `${saved}\n\n` : ""}${detail}`,
+    MAX_PARENT_MESSAGE_CHARS - hint.length,
+  )}${hint}`;
 };
 
 const canAcceptNotification = (record: RunRecord): boolean =>

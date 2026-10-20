@@ -9,33 +9,39 @@ import {
   nodePath as path,
   nodeWriteFileSync,
 } from "./node-builtins.ts";
+import type { SubagentReportArchive } from "../run/model.ts";
 import {
   PRIVATE_STATE_RETENTION_MILLIS,
   REPORT_ARCHIVE_ROOT,
   SUBAGENT_STATE_ROOT,
 } from "./private-state.ts";
 
-export interface ArchivedReport {
-  readonly path: string;
-  readonly lines: number;
-}
-
-interface ReportArchiveEntry {
+export interface ReportArchiveEntry {
   readonly id: string;
   readonly generation: number;
   readonly text: string;
+  /** The whole report's length when `text` holds only its start. */
+  readonly originalChars?: number | undefined;
 }
 
-export type ReportArchive = (entry: ReportArchiveEntry) => ArchivedReport | undefined;
+export type ReportArchive = (entry: ReportArchiveEntry) => SubagentReportArchive | undefined;
 
 const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
 
 export const reportArchiveRoot = (agentDirectory: string): string =>
   path.join(agentDirectory, SUBAGENT_STATE_ROOT, REPORT_ARCHIVE_ROOT);
 
+const countLines = (text: string): number => text.split("\n").length;
+
+// A report cut by the archive cap says so in its own file, not only in the notice that links it.
+const archivedContent = (entry: ReportArchiveEntry): string =>
+  entry.originalChars !== undefined && entry.originalChars > entry.text.length
+    ? `${entry.text}\n\n[Report truncated: this file holds the first ${entry.text.length.toLocaleString("en-US")} of ${entry.originalChars.toLocaleString("en-US")} characters.]`
+    : entry.text;
+
 /**
- * Writes each delivered report to a private file keyed by the Pi session, so the parent can
- * re-read it after compaction, `/reload`, or a resumed session.
+ * Writes each completed report to a private file keyed by the Pi session, so the parent can
+ * read all of it, and re-read it after compaction, `/reload`, or a resumed session.
  */
 export const sessionReportArchive = (agentDirectory: string, sessionKey: string): ReportArchive => {
   const directory = path.join(
@@ -50,9 +56,10 @@ export const sessionReportArchive = (agentDirectory: string, sessionKey: string)
         `${safeSubagentDirectorySegment(entry.id)}-${entry.generation}-${synchronousRandomUuid()}.md`,
       );
       // Run ids restart in every process. Exclusive creation also preserves an old link if the
-      // archive identity ever collides; the notifier can fall back to an inline report.
-      nodeWriteFileSync(file, entry.text, { mode: 0o600, flag: "wx" });
-      return { path: file, lines: entry.text.split("\n").length };
+      // archive identity ever collides; the report then reaches the parent inline.
+      const content = archivedContent(entry);
+      nodeWriteFileSync(file, content, { mode: 0o600, flag: "wx" });
+      return { path: file, lines: countLines(entry.text), complete: content === entry.text };
     } catch {
       return undefined;
     }

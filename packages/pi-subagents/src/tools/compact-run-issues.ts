@@ -1,6 +1,7 @@
 import { type CompactIssue } from "pi-code-previews";
 import { skippedCandidateLabel } from "../profiles/model.ts";
 import { runAttention, runCleanupAttention } from "../run/attention.ts";
+import { reportArchiveText, reportTruncationText } from "../run/state.ts";
 import type { SubagentRunCard } from "./details-schema.ts";
 import { steeringDeliveryEvidence } from "./outcome.ts";
 import { cleanupRecoveryText, proposalDiffStatLines, proposalGuidance } from "./format.ts";
@@ -265,8 +266,25 @@ function workspaceOutcomeIssue(card: SubagentRunCard, label: string, add: AddIss
 
 function reportEvidenceIssues(card: SubagentRunCard, label: string, add: AddIssue): void {
   workspaceOutcomeIssue(card, label, add);
+  const reportCut = card.finalTextTruncated === true && card.finalText !== undefined;
+  const archive = card.reportArchive;
+  // A whole saved report is a usable recovery path, so the cut is routine information.
+  if (reportCut && archive?.complete === true)
+    add(
+      "info",
+      "report-saved",
+      `${label}: full report saved to a file`,
+      reportTruncationText(card.reportTruncation, archive) ?? reportArchiveText(archive),
+    );
+  if (reportCut && archive?.complete === false)
+    add(
+      "warning",
+      "report-cut",
+      `${label}: report too long to save in full`,
+      reportTruncationText(card.reportTruncation, archive) ?? reportArchiveText(archive),
+    );
   const clipped =
-    (card.finalTextTruncated === true && card.finalText !== undefined) ||
+    (reportCut && archive === undefined) ||
     (card.errorTruncated === true && card.error !== undefined);
   if (clipped)
     add(

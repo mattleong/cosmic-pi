@@ -14,6 +14,9 @@ import {
 } from "pi-cosmic-core/testing";
 import { describe, expect, vi } from "vitest";
 import { registerSubagentApplication } from "../src/application/register.ts";
+import { awaitDetails } from "../src/tools/details.ts";
+import { formatDetailedRuns } from "../src/tools/format.ts";
+import { view } from "./tools/fixtures/tool-harness.ts";
 import { sessionContextFixture } from "./fixtures/pi-host.ts";
 import { effectTest, settle, step } from "./support/effect-test.ts";
 import { nodePath } from "./support/node-builtins.ts";
@@ -22,17 +25,44 @@ const output: AgentToolResult<unknown> = {
   content: [{ type: "text", text: "COMPLETE_OUTPUT recovery /tmp/evidence.txt" }],
   details: undefined,
 };
+const ARCHIVE_PATH = "/agent/subagents/reports/session-1/agent-1-1-replay.md";
+const cutRun = view({
+  id: "agent-1",
+  state: "completed",
+  reportGeneration: 1,
+  finalText: "Report start.",
+  finalTextTruncation: { retainedChars: 13, originalChars: 90_000, originalLines: 900 },
+  reportArchive: { path: ARCHIVE_PATH, lines: 900, complete: true },
+});
+// Raw history shows the result text, which names the saved file; adopted rows also read it from
+// the persisted card.
+const cutReport: AgentToolResult<unknown> = {
+  content: [{ type: "text", text: formatDetailedRuns([cutRun]).text }],
+  details: awaitDetails({
+    runs: [cutRun],
+    awaitedRunIds: ["agent-1"],
+    awaitUntil: "all_finished",
+  }),
+};
+const archiveMentions = (text: string) => text.replace(/\s+/gu, "").split(ARCHIVE_PATH).length - 1;
 const SAMPLES = [
   {
     name: "agent_start",
     args: { agents: [{ task: "COMPLETE_TASK_INPUT", profile: "scout" }] },
+    result: output,
     evidence: ["COMPLETE_TASK_INPUT", "COMPLETE_OUTPUT recovery /tmp/evidence.txt"],
+  },
+  {
+    name: "agent_await",
+    args: { runIds: ["agent-1"], until: "all_finished" },
+    result: cutReport,
+    evidence: [ARCHIVE_PATH],
   },
 ] as const;
 type Sample = (typeof SAMPLES)[number];
 
 const frames = (row: ToolPresentationHarness, sample: Sample) =>
-  row.cycle(sample.args, output, { states: [true, false, true] });
+  row.cycle(sample.args, sample.result, { states: [true, false, true] });
 
 const context = (signal?: AbortSignal) =>
   sessionContextFixture({ signal, isProjectTrusted: () => false });
@@ -72,7 +102,8 @@ const replayApplication = (loadSettings: () => Promise<void> = () => Promise.res
 
 const expectEvidence = (rendered: ReturnType<typeof frames>, sample: Sample) => {
   for (const { text } of rendered.filter((frame) => frame.expanded))
-    for (const evidence of sample.evidence) expect(text).toContain(evidence);
+    for (const evidence of sample.evidence)
+      expect(text.replace(/\s+/gu, "")).toContain(evidence.replace(/\s+/gu, ""));
 };
 
 const compactSettings = Effect.acquireRelease(
@@ -111,6 +142,9 @@ describe("subagent tool history replay", () => {
         expect(adopted).not.toEqual(cold);
         expectEvidence(cold, sample);
         expectEvidence(adopted, sample);
+        if (sample.name === "agent_await")
+          for (const { expanded, text } of adopted)
+            if (expanded) expect(archiveMentions(text)).toBeGreaterThan(1);
       }
 
       treeStyle = true;

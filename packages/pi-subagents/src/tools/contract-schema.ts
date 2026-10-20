@@ -27,6 +27,7 @@ import { MAX_NAME_CHARS } from "../run/state.ts";
 import { AGENT_TOOL_NAME, SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
 import {
   AgentNameSchema,
+  MAX_CARD_PATH_CHARS,
   MAX_CARD_QUESTION_CHARS,
   MAX_FAILURE_CODE_CHARS,
   ModelOverrideCardSchema,
@@ -138,6 +139,18 @@ const runTargetSchema = <Report extends Schema.Top>(report: Report) =>
       }),
     ).check(Schema.isMaxLength(2)),
     error: Schema.optionalKey(NonEmptyText(MAX_CONTRACT_ERROR_CHARS)),
+    /** Capture kept only the first `retainedChars` of the report; `reportArchive` holds the rest. */
+    reportTruncation: Schema.optionalKey(
+      Schema.Struct({ retainedChars: count, originalChars: count, originalLines: count }),
+    ),
+    /** The private file holding this assignment's report; `complete` is false past the archive cap. */
+    reportArchive: Schema.optionalKey(
+      Schema.Struct({
+        path: NonEmptyText(MAX_CARD_PATH_CHARS),
+        lines: count,
+        complete: Schema.Boolean,
+      }),
+    ),
     report,
   });
 

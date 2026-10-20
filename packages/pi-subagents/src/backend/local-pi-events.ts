@@ -5,12 +5,7 @@ import type * as Schema from "effect/Schema";
 import type { ChildProcessHandle } from "../boundary/child-process.ts";
 import { SubagentProcessError, type SubagentError } from "../run/errors.ts";
 import { emptyUsage } from "../run/model.ts";
-import {
-  MAX_ERROR_CHARS,
-  MAX_FINAL_TEXT_CHARS,
-  sanitizeDiagnosticText,
-  sanitizeOutputText,
-} from "../run/state.ts";
+import { boundOutputText, MAX_ERROR_CHARS, sanitizeDiagnosticText } from "../run/state.ts";
 import {
   assistantModel,
   assistantText,
@@ -40,17 +35,20 @@ export const normalizeRpcEvent = (
       return decodeAssistantMessage(envelope.message).pipe(
         Effect.map((message): BackendEvent | undefined => {
           if (!message) return undefined;
-          const text = sanitizeOutputText(assistantText(message), MAX_FINAL_TEXT_CHARS);
+          // Bounded once here, to the archive cap: the run keeps less in memory and archives up to
+          // this much of a final report.
+          const { text, originalSize } = boundOutputText(assistantText(message));
           const model = assistantModel(message);
           return {
             type: "assistant_message",
             assignmentEpoch,
-            ...(text && { text }),
+            ...(text && { text, ...(originalSize && { originalSize }) }),
             ...(model && { model }),
             usage: emptyUsage(),
             terminal: {
               stopReason: message.stopReason,
               text,
+              ...(originalSize && { originalSize }),
               ...(message.errorMessage && {
                 errorMessage: sanitizeDiagnosticText(message.errorMessage, MAX_ERROR_CHARS),
               }),

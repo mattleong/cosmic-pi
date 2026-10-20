@@ -1,3 +1,4 @@
+import { MAX_FINAL_TEXT_CHARS } from "../run/state.ts";
 import { AGENT_TOOL_NAME, AGENT_TOOL_NAMES, CONTACT_PARENT_TOOL_NAME } from "../run/tool-policy.ts";
 
 export const SUPERVISOR_MCP_REGISTRATION = "pi_subagents_supervisor" as const;
@@ -26,7 +27,8 @@ export const SUPERVISOR_MCP_AGENT_IDS_ARGUMENT_KEY = "agentIds" as const;
 export const SUPERVISOR_MCP_VERBOSE_ARGUMENT_KEY = "verbose" as const;
 
 export const MAX_SUPERVISOR_MCP_MESSAGE_CHARS = 16_384;
-export const MAX_SUPERVISOR_MCP_REPORT_CHARS = 32_768;
+/** Claude and Codex reports get the same in-memory budget as a Pi child's final message. */
+export const MAX_SUPERVISOR_MCP_REPORT_CHARS = MAX_FINAL_TEXT_CHARS;
 export const MAX_SUPERVISOR_MCP_DELIVERY_ID_CHARS = 256;
 export const MAX_SUPERVISOR_MCP_THREAD_ID_CHARS = 256;
 /** Matches the root's `agent_list` and `agent_read` target bound. */

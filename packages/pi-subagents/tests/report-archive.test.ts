@@ -36,15 +36,21 @@ describe("subagent report archive", () => {
       const agent = yield* temporaryAgent;
       const archive = sessionReportArchive(agent, "session-1");
       const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>();
-      const notify = hostNotifier(extensionApiFixture({ sendMessage }), {
-        archive: () => archive,
-      });
+      const notify = hostNotifier(extensionApiFixture({ sendMessage }));
       const report = Array.from({ length: 2_000 }, (_, line) => `finding ${line}`).join("\n");
+      const reportArchive = archive({ id: "agent-1", generation: 2, text: report });
 
       notify({
         type: "completed",
         runs: [
-          { id: "agent-1", name: "reader", generation: 2, outcome: "completed", finalText: report },
+          {
+            id: "agent-1",
+            name: "reader",
+            generation: 2,
+            outcome: "completed",
+            finalText: report,
+            reportArchive,
+          },
         ],
       });
 
@@ -106,6 +112,30 @@ describe("subagent report archive", () => {
       } finally {
         uuid.mockRestore();
       }
+      return undefined;
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("says in the file itself when a report exceeded the archive cap", () =>
+    Effect.gen(function* () {
+      const agent = yield* temporaryAgent;
+      const archive = sessionReportArchive(agent, "session-1");
+      const whole = archive({ id: "agent-1", generation: 1, text: "whole", originalChars: 5 });
+      const bounded = archive({
+        id: "agent-1",
+        generation: 2,
+        text: "start",
+        originalChars: 9_000,
+      });
+      if (!whole || !bounded) return yield* Effect.die("archive write failed");
+
+      expect(whole.complete).toBe(true);
+      expect(yield* Effect.promise(() => fs.readFile(whole.path, "utf8"))).toBe("whole");
+      expect(bounded.complete).toBe(false);
+      const saved = yield* Effect.promise(() => fs.readFile(bounded.path, "utf8"));
+      expect(saved.startsWith("start")).toBe(true);
+      // The file itself says it was cut, beyond the text it keeps.
+      expect(saved.length).toBeGreaterThan("start".length);
       return undefined;
     }).pipe(Effect.scoped),
   );

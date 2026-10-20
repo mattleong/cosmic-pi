@@ -25,9 +25,11 @@ import {
   isTerminalRunState,
   type SubagentCapability,
   type SubagentParentContext,
+  type SubagentReportArchive,
+  type SubagentReportTruncation,
   type SubagentRunView,
 } from "./model.ts";
-import { snapshotView } from "./state.ts";
+import { type CapturedOutputText, snapshotView } from "./state.ts";
 import type { RunWarningSlots } from "./warnings.ts";
 import type { WriterPoolEntry, WriterPools } from "./writer-pool.ts";
 
@@ -60,6 +62,8 @@ export interface CompletionGenerationRecord {
   readonly generation: number;
   readonly outcome: "completed" | "failed";
   readonly finalText?: string | undefined;
+  readonly finalTextTruncation?: SubagentReportTruncation | undefined;
+  readonly reportArchive?: SubagentReportArchive | undefined;
   readonly error?: string | undefined;
   readonly warning?: string | undefined;
   /** The agent whose message resumed the run for this outcome's assignment. */
@@ -115,6 +119,9 @@ export interface RunRecord {
   retryClaim?: { readonly token: string } | undefined;
   pauseOutcome?: Deferred.Deferred<SubagentRunView, SubagentError> | undefined;
   latestAssistantText?: string | undefined;
+  latestAssistantTruncation?: SubagentReportTruncation | undefined;
+  /** The latest assistant text up to the archive cap while the retained text is cut; released at settlement. */
+  latestAssistantFullText?: string | undefined;
   pauseRequested: boolean;
   pausedAssignmentEpoch?: number | undefined;
   stoppedByParent: boolean;
@@ -142,6 +149,16 @@ export interface RunRecord {
   steeringDeliveryOwner?: { readonly epoch: number; readonly sequence: number } | undefined;
   backendFailure?: SubagentError | undefined;
 }
+
+/** Replaces the run's latest assistant text, releasing a superseded message's full copy. */
+export const recordLatestAssistantText = (
+  record: RunRecord,
+  captured: CapturedOutputText | undefined,
+): void => {
+  record.latestAssistantText = captured?.text;
+  record.latestAssistantTruncation = captured?.truncation;
+  record.latestAssistantFullText = captured?.fullText;
+};
 
 export const clearRunActivity = (record: RunRecord): void => {
   record.activeTools.clear();

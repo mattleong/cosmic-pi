@@ -485,7 +485,36 @@ const awaitScenarios = Effect.gen(function* () {
         ),
     },
   });
-  return [live, settled, cancelled, userInput, siblingQuestion];
+  const cutReport = yield* scenario(
+    "a long report is cut and saved to a file",
+    { tool: "agent_await", args: { runIds: ["agent-1"], until: "all_finished" } },
+    {
+      service: {
+        withAwaitTerminalObservations: (_ids, _until, _onUpdate, use) =>
+          use([
+            {
+              run: {
+                ...authReview,
+                state: "completed" as const,
+                finalText: "Finding 1: session.ts:118 swallows a timeout.\n".repeat(800),
+                finalTextTruncation: {
+                  retainedChars: 38_400,
+                  originalChars: 152_310,
+                  originalLines: 3_172,
+                },
+                reportArchive: {
+                  path: "/home/me/.pi/agent/subagents/reports/session-1/agent-1-1-4f1c.md",
+                  lines: 3_172,
+                  complete: true,
+                },
+                ...timing(4, 0.5),
+              },
+            },
+          ]),
+      },
+    },
+  );
+  return [live, settled, cancelled, userInput, siblingQuestion, cutReport];
 });
 
 const candidate = (overrides: Partial<ProfileCandidate> = {}): ProfileCandidate => ({

@@ -3,7 +3,7 @@ import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import type { BackendEvent, BackendHandle } from "../backend/model.ts";
 import { type SubagentError, SubagentProcessError, SubagentProtocolError } from "./errors.ts";
-import { isInactiveRunRecord, type RunRecord } from "./internal.ts";
+import { isInactiveRunRecord, recordLatestAssistantText, type RunRecord } from "./internal.ts";
 import type { SubagentRunView } from "./model.ts";
 import type { RunNotificationDelivery } from "./notification-delivery.ts";
 import type { RunProxyExecution } from "./proxy-execution.ts";
@@ -14,13 +14,7 @@ import {
   finishToolSessionEvent,
   startToolSessionEvent,
 } from "./session-events.ts";
-import {
-  addUsage,
-  MAX_ERROR_CHARS,
-  MAX_FINAL_TEXT_CHARS,
-  sanitizeDiagnosticText,
-  sanitizeOutputText,
-} from "./state.ts";
+import { addUsage, captureOutputText, MAX_ERROR_CHARS, sanitizeDiagnosticText } from "./state.ts";
 import { recordRunWarning } from "./warnings.ts";
 import { samePiModel } from "./model-catalog.ts";
 
@@ -117,12 +111,17 @@ export function backendEventHandler(dependencies: RunEventDependencies) {
     record: RunRecord,
     event: Extract<BackendEvent, { readonly type: "assistant_message" }>,
   ) => {
-    const latestAssistantText = event.text
-      ? sanitizeOutputText(event.text, MAX_FINAL_TEXT_CHARS)
-      : undefined;
+    // Only the bounded text and its cut are kept: a Pi report is recaptured from its settlement,
+    // and submitted reports fit the in-memory cap, so no intermediate message needs a full copy.
+    const captured = captureOutputText({
+      text: event.text ?? "",
+      originalSize: event.originalSize,
+    });
+    const retained = captured && { text: captured.text, truncation: captured.truncation };
+    const latestAssistantText = retained?.text;
     const replyModel = event.model;
     return mutateAt(record, event.assignmentEpoch, (current, now) => {
-      record.latestAssistantText = latestAssistantText;
+      recordLatestAssistantText(record, retained);
       return {
         ...current,
         ...(replyModel && !samePiModel(replyModel, current.model) && { model: replyModel }),

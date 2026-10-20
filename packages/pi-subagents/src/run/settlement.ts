@@ -1,4 +1,5 @@
 import { absurd } from "effect/Function";
+import { invokeHostCallback } from "pi-cosmic-core";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -10,11 +11,13 @@ import {
   type BackendHandle,
   type BackendReport,
 } from "../backend/model.ts";
+import type { ReportArchive } from "../boundary/report-archive.ts";
 import { processError, type SubagentError, SubagentProcessError } from "./errors.ts";
 import {
   clearRunActivity,
   commitRunPauseLocked,
   isInactiveRunRecord,
+  recordLatestAssistantText,
   type RunContext,
   type RunRecord,
 } from "./internal.ts";
@@ -24,6 +27,7 @@ import type { RunNotificationDelivery } from "./notification-delivery.ts";
 import type { RunRecordCleanup } from "./record-cleanup.ts";
 import {
   addUsage,
+  captureOutputText,
   MAX_ERROR_CHARS,
   sanitizeDiagnosticText,
   sanitizeOutputText,
@@ -34,6 +38,7 @@ import {
   settledFailureMessage,
   settlementBlocked,
   viewForSettlement,
+  type SettledReport,
   type SettlementState,
 } from "./settlement-outcome.ts";
 import { foldRunWarnings, recordRunWarning } from "./warnings.ts";
@@ -49,6 +54,8 @@ interface RunSettlementDependencies extends Pick<
   readonly settleCompletedWorkspace?:
     | ((record: RunRecord, assignmentEpoch: number) => Effect.Effect<void>)
     | undefined;
+  /** Saves each completed report in full; without it, reports reach the parent only inline. */
+  readonly archiveReport?: ReportArchive | undefined;
 }
 
 type AssignmentActivationReplay =
@@ -76,6 +83,12 @@ const reportPairStatus = (record: RunRecord, report: BackendReport) => {
   return report.sequence <= watermark.sequence ? "invalid" : "new";
 };
 
+/** The outcome's completion generation, or undefined when the run's outbox is full. */
+const allocateCompletionLocked = (record: RunRecord, state: SettlementState) =>
+  state === "stopped" || record.completionGenerations.size >= MAX_UNRESOLVED_REPORT_GENERATIONS
+    ? undefined
+    : ++record.completionGeneration;
+
 export function settlementOperations(dependencies: RunSettlementDependencies) {
   const {
     ownerScope,
@@ -86,6 +99,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
     sendPeerNotices,
     claimTurnInputDrain,
     settleCompletedWorkspace,
+    archiveReport,
   } = dependencies;
 
   const mergeUsageLocked = (record: RunRecord, usage: SubagentUsage) => {
@@ -165,24 +179,45 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
         return view;
       }),
     );
+  // Only an admitted generation is archived, so every file names the generation that delivers it.
+  const archiveReportLocked = (
+    record: RunRecord,
+    finalText: string,
+    generation: number | undefined,
+  ): SettledReport => {
+    const truncation = record.latestAssistantTruncation;
+    const entry = generation !== undefined && {
+      id: record.view.id,
+      generation,
+      text: record.latestAssistantFullText ?? finalText,
+      ...(truncation && { originalChars: truncation.originalChars }),
+    };
+    const reportArchive =
+      archiveReport && entry
+        ? invokeHostCallback(() => archiveReport(entry), undefined)
+        : undefined;
+    return {
+      ...(truncation && { finalTextTruncation: truncation }),
+      ...(reportArchive && { reportArchive }),
+    };
+  };
+
   const queueCompletionLocked = (
     record: RunRecord,
     state: SettlementState,
+    generation: number | undefined,
     finalText: string | undefined,
     settledError: string | undefined,
+    report: SettledReport,
   ) => {
-    if (
-      state === "stopped" ||
-      record.completionGenerations.size >= MAX_UNRESOLVED_REPORT_GENERATIONS
-    )
-      return;
+    if (generation === undefined || state === "stopped") return;
     const warning = foldRunWarnings(record.warningSlots);
     const resumedBy = record.assignment.resumedBy;
     delivery.insertCompletionLocked(record, {
       outcome: state,
-      ...(finalText && { finalText }),
+      ...(finalText && { finalText, ...report }),
       ...(state === "failed" && { error: settledError }),
-      generation: ++record.completionGeneration,
+      generation,
       ...(warning && { warning }),
       ...(resumedBy !== undefined && { resumedBy }),
     });
@@ -199,8 +234,11 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
       if (
         settlementBlocked(record, state) ||
         (assignmentEpoch !== undefined && record.assignment.epoch !== assignmentEpoch)
-      )
+      ) {
+        // This settlement never reports, so its full text is never archived.
+        record.latestAssistantFullText = undefined;
         return { notifyPeers: false, view: snapshotView(record.view) };
+      }
       if (record.initializationPending && state !== "stopped") {
         record.pendingInitializationSettlement = { state, ...(error && { error }) };
         return { notifyPeers: false, view: snapshotView(record.view) };
@@ -213,13 +251,16 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
       record.pauseRequested = false;
       clearRunActivity(record);
       const finalText = state === "completed" ? record.latestAssistantText : undefined;
+      const generation = allocateCompletionLocked(record, state);
+      const report = finalText ? archiveReportLocked(record, finalText, generation) : {};
+      record.latestAssistantFullText = undefined;
       const settledError = state === "failed" ? (error ?? "Run failed.") : error;
-      queueCompletionLocked(record, state, finalText, settledError);
+      queueCompletionLocked(record, state, generation, finalText, settledError, report);
       record.notificationGeneration += 1;
       delivery.discardQuestionLocked(record.view.id);
       record.replyPendingRequestId = undefined;
       if (state === "completed") record.assignment.phase = "reported";
-      record.view = viewForSettlement(record, state, now, finalText, settledError);
+      record.view = viewForSettlement(record, state, now, finalText, settledError, report);
       yield* publish;
       const view = snapshotView(record.view);
       if (pauseOutcome) Deferred.doneUnsafe(pauseOutcome, Effect.succeed(view));
@@ -315,7 +356,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
 
   const commitReportLocked = (record: RunRecord, report: BackendReport, now: number) =>
     Effect.gen(function* () {
-      record.latestAssistantText = report.text;
+      recordLatestAssistantText(record, captureOutputText({ text: report.text ?? "" }));
       record.lastBackendReport = {
         assignmentEpoch: report.assignmentEpoch,
         sequence: report.sequence,
@@ -523,7 +564,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
       if (record.stoppedByParent) return;
       const finalText =
         terminal?.stopReason === "stop" && terminal.text
-          ? sanitizeOutputText(terminal.text, MAX_BACKEND_REPORT_TEXT_CHARS).trim()
+          ? captureOutputText({ text: terminal.text, originalSize: terminal.originalSize })
           : undefined;
       const outcome = yield* withLock(
         Effect.sync(() => {
@@ -534,7 +575,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
           )
             return "ignored";
           if (!finalText) return "failed";
-          record.latestAssistantText = finalText;
+          recordLatestAssistantText(record, finalText);
           record.pausedAssignmentEpoch = undefined;
           return "completed";
         }),

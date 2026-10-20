@@ -33,6 +33,7 @@ import {
   type SubagentWorkspaceOutcome,
 } from "../run/model.ts";
 import { SubagentService } from "../run/service.ts";
+import { reportArchiveText } from "../run/state.ts";
 import { AGENT_TOOL_NAME } from "../run/tool-policy.ts";
 import {
   encodeSubagentContract,
@@ -252,7 +253,16 @@ const runReadSection = (
     text === undefined
       ? "No assistant message yet."
       : `${source}${readout.source === "report" ? ` (report ${readout.reportGeneration})` : ""}${readout.truncated ? " (truncated)" : ""}:\n${text}`;
-  return `${agentReadCard(readout.run, options)}\n${message}`;
+  // The card names a capture-cut report's saved copy; a read-bounded one is named here.
+  const { reportArchive, finalTextTruncation } = readout.run;
+  const saved =
+    readout.truncated &&
+    reportArchive !== undefined &&
+    finalTextTruncation === undefined &&
+    readout.run.state === "completed"
+      ? `\n[${reportArchiveText(reportArchive)}]`
+      : "";
+  return `${agentReadCard(readout.run, options)}\n${message}${saved}`;
 };
 
 const readBody = (result: AgentReadResult, options: AgentReadOptions): string =>

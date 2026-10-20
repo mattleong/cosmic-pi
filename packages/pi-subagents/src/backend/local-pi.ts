@@ -122,8 +122,9 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
   let usageDirty = false;
   let usageReady = false;
   let pendingSettlement: Extract<BackendEvent, { type: "run_settled" }> | undefined;
-  // The settlement last handed to the run, until a new child turn makes it stale.
-  let offeredSettlement: BackendEvent | undefined;
+  // The settlement last handed to the run, until a new child turn makes it stale. Held weakly so
+  // the handle never keeps a settled report alive after the run is done with it.
+  let offeredSettlement: WeakRef<BackendEvent> | undefined;
   const restartTurn = () => {
     latestTerminal = undefined;
     pendingSettlement = undefined;
@@ -152,8 +153,10 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
       if (settlement && settlement === pendingSettlement) {
         pendingSettlement = undefined;
         if (settlement.assignmentEpoch === assignmentEpoch) {
-          offeredSettlement = settlement;
+          offeredSettlement = new WeakRef(settlement);
           yield* offer(settlement);
+          // The run owns the settled text now; a repeat settlement of this turn needs none.
+          if (latestTerminal === settlement.terminal) latestTerminal = undefined;
         }
       }
     }
@@ -430,7 +433,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
       ),
     notifyPeers: (message: string) =>
       child.sendContactControl({ channel: "pi-subagents", type: "peer_notice", message }),
-    isSettlementCurrent: (event: BackendEvent) => event === offeredSettlement,
+    isSettlementCurrent: (event: BackendEvent) => event === offeredSettlement?.deref(),
     deliverNotification: (message: string, key: string) =>
       withTurnControl(
         ipcAck(

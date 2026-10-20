@@ -8,9 +8,13 @@ import {
   type SessionWakeDelivery,
 } from "pi-cosmic-core";
 import { resumedByText } from "../run/agent-messaging.ts";
-import type { SubagentWorkspaceOutcome } from "../run/model.ts";
+import type {
+  SubagentReportArchive,
+  SubagentReportTruncation,
+  SubagentWorkspaceOutcome,
+} from "../run/model.ts";
+import { reportArchiveText } from "../run/state.ts";
 import { proposalDiffStatLines, proposalGuidance } from "../tools/format.ts";
-import type { ArchivedReport, ReportArchive } from "./report-archive.ts";
 
 export interface SubagentCompletionNotification {
   readonly id: string;
@@ -18,6 +22,10 @@ export interface SubagentCompletionNotification {
   readonly generation: number;
   readonly outcome: "completed" | "failed";
   readonly finalText?: string | undefined;
+  /** `finalText` holds only the start of a longer report. */
+  readonly finalTextTruncation?: SubagentReportTruncation | undefined;
+  /** Where the report was saved at settlement; absent when it couldn't be written. */
+  readonly reportArchive?: SubagentReportArchive | undefined;
   readonly error?: string | undefined;
   readonly warning?: string | undefined;
   /** The agent whose message resumed this run; the report still comes to its parent. */
@@ -85,11 +93,20 @@ const reportPreview = (text: string): string => {
   return lineEnd > REPORT_PREVIEW_CHARS / 2 ? cut.slice(0, lineEnd) : cut;
 };
 
-const reportText = (report: string, archived: ArchivedReport | undefined): string => {
-  if (!archived) return report;
-  if (report.length <= REPORT_PREVIEW_CHARS) return `${report}\n\n[Full report: ${archived.path}]`;
+const characters = (count: number): string => count.toLocaleString("en-US");
+
+const reportText = (report: string, run: SubagentCompletionNotification): string => {
+  const { reportArchive: archive, finalTextTruncation: truncation } = run;
+  // Without a saved copy the retained text is all there is; the cut note leads so bounding the
+  // notice can't drop it.
+  if (!archive)
+    return truncation
+      ? `[Report cut to ${characters(truncation.retainedChars)} of ${characters(truncation.originalChars)} characters; no full copy was saved.]\n\n${report}`
+      : report;
+  if (report.length <= REPORT_PREVIEW_CHARS) return `${report}\n\n[${reportArchiveText(archive)}]`;
   const preview = reportPreview(report);
-  return `${preview}\n\n[Preview: ${preview.length.toLocaleString("en-US")} of ${report.length.toLocaleString("en-US")} characters. Full report (${archived.lines} lines): ${archived.path}]`;
+  const total = truncation?.originalChars ?? report.length;
+  return `${preview}\n\n[Preview: ${characters(preview.length)} of ${characters(total)} characters. ${reportArchiveText(archive)}]`;
 };
 
 const workspaceText = (run: SubagentCompletionNotification): string | undefined => {
@@ -100,14 +117,14 @@ const workspaceText = (run: SubagentCompletionNotification): string | undefined 
   return [proposalGuidance(workspaceId, outcome), ...files.map((line) => `  ${line}`)].join("\n");
 };
 
-const completionBody = (run: SubagentCompletionNotification, archived?: ArchivedReport): string => {
+const completionBody = (run: SubagentCompletionNotification): string => {
   const warning = run.warning?.trim();
   const report = run.finalText?.trim() ?? "";
   const primary =
     run.outcome === "failed"
       ? failureText(run.error)
       : report
-        ? reportText(report, archived)
+        ? reportText(report, run)
         : "Completed without a final report.";
   const retry = run.retryAvailable
     ? `Next: ${run.remainingCandidateCount ?? 1} configured ${run.profile ?? "profile"} candidate${(run.remainingCandidateCount ?? 1) === 1 ? " remains" : "s remain"}. Continue this exact task with agent_lifecycle({ action: "retry", runIds: ["${run.id}"] }) before launching any generalist replacement.`
@@ -127,11 +144,8 @@ const completionBody = (run: SubagentCompletionNotification, archived?: Archived
 const completionHeading = (run: SubagentCompletionNotification): string =>
   run.outcome === "failed" ? `failed outcome ${run.generation}` : `report ${run.generation}`;
 
-const completionSection = (
-  run: SubagentCompletionNotification,
-  archived: ArchivedReport | undefined,
-): string =>
-  `## ${run.name} (${run.id}) · ${completionHeading(run)}\n\n${completionBody(run, archived)}`;
+const completionSection = (run: SubagentCompletionNotification): string =>
+  `## ${run.name} (${run.id}) · ${completionHeading(run)}\n\n${completionBody(run)}`;
 
 const boundedCompletion = (
   run: SubagentCompletionNotification,
@@ -146,14 +160,7 @@ const boundedCompletion = (
 
 const completionChunks = (
   runs: ReadonlyArray<SubagentCompletionNotification>,
-  archive: ReportArchive | undefined,
 ): ReadonlyArray<CompletionChunk> => {
-  const archived = new Map<SubagentCompletionNotification, ArchivedReport>();
-  for (const run of runs) {
-    const text = run.outcome === "completed" ? run.finalText?.trim() : undefined;
-    const saved = text ? archive?.({ id: run.id, generation: run.generation, text }) : undefined;
-    if (saved) archived.set(run, saved);
-  }
   const [single] = runs;
   if (runs.length === 1 && single !== undefined) {
     const prefix =
@@ -161,7 +168,7 @@ const completionChunks = (
         ? `Background subagent ${single.name} (${single.id}) failed.`
         : `Background subagent ${single.name} (${single.id}) completed.`;
     const maximumBodyLength = Math.max(0, MAX_NOTIFICATION_CHARS - prefix.length - 2);
-    const content = `${prefix}\n\n${boundedCompletion(single, completionBody(single, archived.get(single)), maximumBodyLength)}`;
+    const content = `${prefix}\n\n${boundedCompletion(single, completionBody(single), maximumBodyLength)}`;
     return [{ content: clip(content), runs: [single] }];
   }
 
@@ -195,7 +202,7 @@ const completionChunks = (
     sections.join("\n\n").length -
     (sections.length > 0 ? 2 : 0);
   for (const run of runs) {
-    const section = completionSection(run, archived.get(run));
+    const section = completionSection(run);
     if (sections.length > 0 && section.length > room()) flush();
     chunkRuns.push(run);
     sections.push(boundedCompletion(run, section, Math.max(0, room())));
@@ -239,8 +246,6 @@ const STARTS_TURN: NoticeDelivery = {
 interface HostNotifierOptions {
   /** The parent wake policy; without one every notice starts or steers a turn. */
   readonly delivery?: NoticeDelivery;
-  /** The current session's report archive, if subagents are active. */
-  readonly archive?: () => ReportArchive | undefined;
 }
 
 export function hostNotifier(
@@ -250,7 +255,7 @@ export function hostNotifier(
   const delivery = options.delivery ?? STARTS_TURN;
   return (notification) => {
     if (notification.type === "completed") {
-      const chunks = completionChunks(notification.runs, options.archive?.());
+      const chunks = completionChunks(notification.runs);
       const deliveredCompletionKeys: string[] = [];
       delivery.deliver((startTurn) => {
         for (const [index, chunk] of chunks.entries()) {

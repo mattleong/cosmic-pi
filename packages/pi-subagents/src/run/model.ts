@@ -161,6 +161,21 @@ export interface SubagentWorkspaceDiffStat {
   }>;
 }
 
+/** A captured report longer than the in-memory cap; `finalText` keeps only its start. */
+export interface SubagentReportTruncation {
+  readonly retainedChars: number;
+  readonly originalChars: number;
+  readonly originalLines: number;
+}
+
+/** A completed assignment's report, saved to a private file the parent can read. */
+export interface SubagentReportArchive {
+  readonly path: string;
+  readonly lines: number;
+  /** False when the report exceeded the archive cap, so the file holds only its start. */
+  readonly complete: boolean;
+}
+
 export interface SubagentRunView {
   readonly cleanup?: SubagentCleanup | undefined;
   readonly writerCleanupQuarantined?: boolean | undefined;
@@ -214,6 +229,8 @@ export interface SubagentRunView {
   readonly question?: PendingParentQuestion | undefined;
   readonly sessionEvents: ReadonlyArray<SubagentSessionEvent>;
   readonly finalText?: string | undefined;
+  readonly finalTextTruncation?: SubagentReportTruncation | undefined;
+  readonly reportArchive?: SubagentReportArchive | undefined;
   readonly reportStatus?: "available" | "claimed" | "delivered" | "missing" | undefined;
   readonly error?: string | undefined;
   readonly usage: SubagentUsage;

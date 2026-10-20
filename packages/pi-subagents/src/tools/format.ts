@@ -1,4 +1,5 @@
 import { absurd } from "effect/Function";
+import * as Predicate from "effect/Predicate";
 import { runAttention, runCleanupAttention, type AttentionRun } from "../run/attention.ts";
 import {
   sanitizeTerminalLine,
@@ -17,7 +18,7 @@ import {
 } from "../run/model.ts";
 import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import type { SubagentRunObservation } from "../run/service.ts";
-import { clipWithMarker } from "../run/state.ts";
+import { clipWithMarker, reportTruncationText } from "../run/state.ts";
 import { aggregateUsage } from "../ui/metrics.ts";
 import {
   formatRunRoute,
@@ -276,13 +277,28 @@ const routeRetryStatus = (run: SubagentRunView): string | undefined => {
   );
 };
 
-const workspaceStatusFields = (run: SubagentRunView): ReadonlyArray<string | undefined> => {
+/**
+ * A card line. Diagnostics, such as warnings, cwd, and diff-stat paths, may be shortened so a lone
+ * report card keeps its whole report; identity, lineage, and guidance lines never are.
+ */
+interface CardField {
+  readonly text: string;
+  readonly diagnostic?: true | undefined;
+}
+
+const kept = (text: string | undefined): CardField | undefined =>
+  text === undefined ? undefined : { text };
+
+const diagnostic = (text: string | undefined): CardField | undefined =>
+  text ? { text, diagnostic: true } : undefined;
+
+const workspaceStatusFields = (run: SubagentRunView): ReadonlyArray<CardField | undefined> => {
   const outcome = run.workspaceOutcome;
   if (!run.workspaceId || (!outcome && !isTerminalRunState(run.state))) return [];
   const files = outcome?.status === "proposal" ? proposalDiffStatLines(outcome) : [];
   return [
-    statusField("Workspace", proposalGuidance(run.workspaceId, outcome)),
-    ...files.map((line) => `    ${line}`),
+    kept(statusField("Workspace", proposalGuidance(run.workspaceId, outcome))),
+    ...files.map((line) => diagnostic(`    ${line}`)),
   ];
 };
 
@@ -290,30 +306,42 @@ const workspaceStatusFields = (run: SubagentRunView): ReadonlyArray<string | und
 const compactStatusFields = (
   run: SubagentRunView,
   options: RunFormatOptions,
-): ReadonlyArray<string | undefined> => [
-  optionalStatusField("Parent", run.parentRunId),
+): ReadonlyArray<CardField | undefined> => [
+  kept(optionalStatusField("Parent", run.parentRunId)),
   // A worktree writer's cwd is its private copy of the parent's.
   options.verbose || (run.sourceCwd ?? run.cwd) === options.parentCwd
     ? undefined
-    : statusField("Cwd", run.cwd),
-  optionalStatusField("Predecessor", run.predecessorRunId),
-  optionalStatusField("Superseded by", run.supersededByRunId),
-  optionalStatusField("Resumed by", run.resumedBy),
-  routeRetryStatus(run),
-  optionalStatusField("Route warning", run.selection.warning),
+    : diagnostic(statusField("Cwd", run.cwd)),
+  kept(optionalStatusField("Predecessor", run.predecessorRunId)),
+  kept(optionalStatusField("Superseded by", run.supersededByRunId)),
+  kept(optionalStatusField("Resumed by", run.resumedBy)),
+  kept(routeRetryStatus(run)),
+  diagnostic(optionalStatusField("Route warning", run.selection.warning)),
   ...workspaceStatusFields(run),
-  cleanupEvidenceText(run) || undefined,
+  diagnostic(cleanupEvidenceText(run)),
   run.steeringDelivery
-    ? statusField(
-        "Steering",
-        `steeringDelivery=${run.steeringDelivery}. ${steeringDeliveryEvidence[run.steeringDelivery].detail}`,
+    ? kept(
+        statusField(
+          "Steering",
+          `steeringDelivery=${run.steeringDelivery}. ${steeringDeliveryEvidence[run.steeringDelivery].detail}`,
+        ),
       )
     : undefined,
-  isActiveRunState(run.state) ? optionalStatusField("Current tool", run.currentTool) : undefined,
-  isActiveRunState(run.state) ? optionalStatusField("Progress", run.progress) : undefined,
-  optionalStatusField("Warning", run.warning),
-  run.question ? statusField("Needs reply", run.question.message) : undefined,
-  optionalStatusField("Failure", run.error),
+  isActiveRunState(run.state)
+    ? diagnostic(optionalStatusField("Current tool", run.currentTool))
+    : undefined,
+  isActiveRunState(run.state)
+    ? diagnostic(optionalStatusField("Progress", run.progress))
+    : undefined,
+  kept(
+    optionalStatusField(
+      "Report cut",
+      reportTruncationText(run.finalTextTruncation, run.reportArchive),
+    ),
+  ),
+  diagnostic(optionalStatusField("Warning", run.warning)),
+  run.question ? kept(statusField("Needs reply", run.question.message)) : undefined,
+  diagnostic(optionalStatusField("Failure", run.error)),
 ];
 
 const verboseStatusFields = (run: SubagentRunView): ReadonlyArray<string | undefined> => {
@@ -379,22 +407,72 @@ const finalReportStatus = (run: SubagentRunView): string | undefined => {
   return "Final report\nAvailability unknown in this observation; report text is not included.";
 };
 
+interface RunCard {
+  readonly header: string;
+  readonly fields: ReadonlyArray<CardField>;
+  readonly report?: string | undefined;
+}
+
+const runCard = (run: SubagentRunView, options: RunFormatOptions): RunCard => ({
+  header: formatRunHeader(run),
+  fields: [
+    ...compactStatusFields(run, options),
+    ...(options.verbose ? verboseStatusFields(run).map(diagnostic) : []),
+  ].filter(Predicate.isNotUndefined),
+  report: options.report === false ? undefined : finalReportStatus(run),
+});
+
+const joinRunCard = (card: RunCard): string =>
+  [card.header, ...card.fields.map((field) => field.text), card.report]
+    .filter(Predicate.isNotUndefined)
+    .join("\n");
+
 /** A run's status card; without `detailed`, its one-line header. */
 export const formatRun = (
   run: SubagentRunView,
   detailed = false,
   options: RunFormatOptions = {},
-): string => {
-  const header = formatRunHeader(run);
-  if (!detailed) return header;
-  return [
+): string => (detailed ? joinRunCard(runCard(run, options)) : formatRunHeader(run));
+
+/** A fitted card's header keeps the run's identity and state, which lead it. */
+const MAX_FITTED_HEADER_CHARS = 512;
+/** Shorter room than this drops a diagnostic rather than leave a stub of it. */
+const MIN_SHORTENED_FIELD_CHARS = 64;
+
+/**
+ * The card with its whole report, shortening or dropping diagnostics in order to fit `budget`;
+ * undefined when the report and the lines that are never shortened alone don't fit.
+ */
+const fittedReportCard = (
+  run: SubagentRunView,
+  options: RunFormatOptions,
+  budget: number,
+): string | undefined => {
+  const card = runCard(run, options);
+  if (!run.finalText || card.report === undefined) return undefined;
+  const header = clipWithMarker(card.header, MAX_FITTED_HEADER_CHARS, "…");
+  const marker = `  … [Some status fields were shortened to fit the whole report; agent_read({ agentIds: [${JSON.stringify(run.id)}] }) shows them in full.]`;
+  const fixedLength = [
     header,
-    ...compactStatusFields(run, options),
-    ...(options.verbose ? verboseStatusFields(run) : []),
-    options.report === false ? undefined : finalReportStatus(run),
-  ]
-    .filter((line): line is string => line !== undefined)
-    .join("\n");
+    ...card.fields.flatMap((field) => (field.diagnostic ? [] : [field.text])),
+    marker,
+    card.report,
+  ].join("\n").length;
+  let room = budget - fixedLength;
+  if (room < 0) return undefined;
+  const fields = card.fields.flatMap((field): ReadonlyArray<CardField> => {
+    if (!field.diagnostic) return [field];
+    // Each kept line adds its text and a newline.
+    if (field.text.length + 1 <= room) {
+      room -= field.text.length + 1;
+      return [field];
+    }
+    if (room - 1 < MIN_SHORTENED_FIELD_CHARS) return [];
+    const text = clipWithMarker(field.text, room - 1, "…");
+    room -= text.length + 1;
+    return [{ text }];
+  });
+  return joinRunCard({ header, fields: [...fields, { text: marker }], report: card.report });
 };
 
 interface DetailedRunsFormat {
@@ -415,9 +493,10 @@ export const formatDetailedRuns = (
   const fullyRenderedIds = new Set<string>();
   const formatted = runs.map((run) => {
     const value = formatRun(run, true, options);
-    if (value.length <= perRun) {
+    const fitted = value.length <= perRun ? value : fittedReportCard(run, options, perRun);
+    if (fitted !== undefined) {
       fullyRenderedIds.add(run.id);
-      return value;
+      return fitted;
     }
     return clipWithMarker(value, perRun, "\n… [run output truncated]");
   });
