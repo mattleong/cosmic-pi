@@ -6,6 +6,7 @@ import { beforeAll, describe, expect } from "vitest";
 import { effectTest, step } from "../support/effect-test.ts";
 import { InvalidSubagentRequestError } from "../../src/run/errors.ts";
 import { STEERING_DELIVERY_STATES, hasUnresolvedSteeringDelivery } from "../../src/run/model.ts";
+import { decodeSubagentContract } from "../../src/tools/contract-schema.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import {
   captureSubagentTools,
@@ -64,12 +65,15 @@ describe("subagent tool", () => {
             });
           const text = resultText(response);
           expect(text).toContain(`steeringDelivery=${steeringDelivery}`);
+          // An await block carries the state and its rule; agent_read has the full evidence.
+          const detail = toolName === "agent_read";
           if (hasUnresolvedSteeringDelivery(run)) {
-            expect(text).toContain("Do not resend");
+            if (detail) expect(text).toContain("Do not resend");
             expect(text).not.toContain("action=retry");
+            expect(text).not.toContain('action: "retry"');
             expect(text).not.toContain("consider a generalist replacement");
           }
-          if (steeringDelivery === "confirmed")
+          if (steeringDelivery === "confirmed" && detail)
             expect(text).toContain("does not prove the model incorporated");
         }
       }
@@ -173,7 +177,9 @@ describe("subagent tool", () => {
         runIds: ["agent-1", "agent-2"],
       });
       expect(interrupted).toEqual(["agent-1"]);
-      expect(lifecycleResult?.content[0]?.text).toContain("Interrupted agent-1; state is paused.");
+      expect(
+        decodeSubagentContract("agent_lifecycle")(lifecycleResult?.structuredContent)?.results,
+      ).toMatchObject([{ status: "succeeded", target: { runId: "agent-1", state: "paused" } }, {}]);
       expect(lifecycleResult?.content[0]?.text).toContain("Failed targets (1)");
       expect(lifecycleResult?.content[0]?.text).toContain("agent-2 is already paused");
       expect(lifecycleResult?.details).toMatchObject({
@@ -336,11 +342,8 @@ describe("subagent tool", () => {
       const text = result?.content[0]?.text ?? "";
       expect(text.length).toBeLessThanOrEqual(48_000);
       for (const run of runs.slice(0, 12)) expect(text).toContain(run.id);
-      // Only reports shown whole are consumed; the rest stay for a later await.
-      expect(consumed.map((receipt) => receipt.id)).toEqual(["agent-1"]);
-
-      yield* invokeOptionalTool(tool, { runIds: ["agent-2"], until: "all_finished" });
-      expect(consumed.map((receipt) => receipt.id)).toEqual(["agent-1", "agent-2"]);
+      // Every run's block fits, so every claimed report is delivered and consumed.
+      expect(consumed.map((receipt) => receipt.id)).toEqual(runs.slice(0, 12).map((run) => run.id));
     },
   );
 });

@@ -65,6 +65,7 @@ const completionNotification = (
     }),
     ...(completion.reportArchive && { reportArchive: completion.reportArchive }),
     ...(completion.error && { error: completion.error }),
+    ...(completion.errorArchive && { errorArchive: completion.errorArchive }),
     ...(completion.warning && { warning: completion.warning }),
     ...(completion.resumedBy !== undefined && { resumedBy: completion.resumedBy }),
     ...(record.view.profile && { profile: record.view.profile }),

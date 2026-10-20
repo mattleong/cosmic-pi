@@ -1,18 +1,10 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
-import { absurd } from "effect/Function";
 import type { SubagentRunView } from "../run/model.ts";
 import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
 import { encodeSubagentContract, type SubagentContract } from "./contract-schema.ts";
 import { awaitDetails, compactToolDetails, startDetails } from "./details.ts";
 import type { SubagentStartEntry } from "./details-schema.ts";
-import {
-  boundToolOutput,
-  formatActionFailures,
-  formatDetailedRuns,
-  formatStartResult,
-  joinBoundedToolText,
-  type RunFormatOptions,
-} from "./format.ts";
+import { boundToolOutput, formatActionFailures, formatStartResult } from "./format.ts";
 import { managementAcknowledgement } from "./format-acknowledgement.ts";
 import type { SubagentActionFailure, SubagentStartFailure } from "./model.ts";
 import { subagentToolAction, type SubagentToolInput } from "./schema.ts";
@@ -35,7 +27,6 @@ export const presentSubagentResult = (
   >,
   executionResult: SubagentExecutionResult,
   requestedAwaitIds?: ReadonlyArray<string>,
-  formatOptions: RunFormatOptions = {},
 ): AgentToolResult<unknown> => {
   const { runs, awaitContextRuns, attentionRequired, text: formattedText } = executionResult;
   const startFailures = executionResult.startFailures ?? [];
@@ -59,21 +50,19 @@ export const presentSubagentResult = (
             runs,
             ...(actionFailures.length > 0 && { actionFailures }),
           });
-  const detailedText = () => formattedText ?? formatDetailedRuns(runs, "", formatOptions).text;
+  // Each part bounds every run's share, so the guard below never cuts a delivered outcome.
   const resultText = (): string => {
     if (input.tool === SUBAGENT_TOOL_NAME.start)
       return formattedText ?? formatStartResult(runs, startFailures);
-    const acknowledgement = () => managementAcknowledgement(subagentToolAction(input), runs);
+    if (formattedText !== undefined) return formattedText;
+    // An await always brings its text, so only a lifecycle result is composed here.
+    const acknowledgement =
+      input.tool === SUBAGENT_TOOL_NAME.lifecycle
+        ? managementAcknowledgement(input.args.action, runs)
+        : "";
     if (actionFailures.length > 0)
-      return joinBoundedToolText([acknowledgement(), formatActionFailures(actionFailures)]);
-    if (runs.length === 0) return "No subagent runs.";
-    switch (input.tool) {
-      case SUBAGENT_TOOL_NAME.await:
-        return detailedText();
-      case SUBAGENT_TOOL_NAME.lifecycle:
-        return acknowledgement();
-    }
-    return absurd(input);
+      return [acknowledgement, formatActionFailures(actionFailures)].filter(Boolean).join("\n\n");
+    return acknowledgement || "No subagent runs.";
   };
   return {
     content: [{ type: "text", text: boundToolOutput(resultText()) }],

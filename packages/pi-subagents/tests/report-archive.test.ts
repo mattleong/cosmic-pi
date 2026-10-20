@@ -12,7 +12,9 @@ import {
 } from "../src/boundary/report-archive.ts";
 import { extensionApiFixture } from "pi-cosmic-core/testing";
 import { vi } from "vitest";
+import { MAX_OUTCOME_FILE_PATH_CHARS } from "../src/run/limits.ts";
 import { MAX_FINAL_TEXT_CHARS } from "../src/run/state.ts";
+import { MAX_RUN_BLOCK_CHARS } from "../src/tools/run-block.ts";
 import { temporaryDirectory } from "./workspace/fixtures/repository.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
@@ -79,10 +81,15 @@ describe("subagent report archive", () => {
         sessionReportArchive(agent, "session-1")({ id: "agent-1", generation: 1, text: "report" }),
       ).toBeUndefined();
       expect(yield* exists(reportArchiveRoot(agent))).toBe(false);
+      // Each run's model-facing block has room for a path of bounded length only.
+      const deep = path.join(yield* temporaryAgent, "d".repeat(MAX_OUTCOME_FILE_PATH_CHARS));
+      expect(
+        sessionReportArchive(deep, "session-1")({ id: "agent-1", generation: 1, text: "report" }),
+      ).toBeUndefined();
     }).pipe(Effect.scoped),
   );
 
-  it("fits a report without a file in its notice, keeping the lines after it", () => {
+  it("previews a report without a file, keeping its actions and pointing to agent_read", () => {
     const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>();
     const report = "r".repeat(MAX_FINAL_TEXT_CHARS);
     const warning = "Check the migration before merging.".repeat(200);
@@ -107,11 +114,26 @@ describe("subagent report archive", () => {
     });
 
     const text = sentText(sendMessage);
-    expect(text.length).toBeLessThanOrEqual(32 * 1024);
-    expect(text).toContain(`Warning: ${warning}`);
-    expect(text).toContain("r".repeat(1_000));
-    expect(text).not.toContain("agent_read");
+    expect(text.length).toBeLessThanOrEqual(MAX_RUN_BLOCK_CHARS + 200);
+    expect(text).toContain("Check the migration before merging.");
+    expect(text).toContain("planner");
+    expect(text).toContain("r".repeat(100));
+    expect(text).not.toContain("r".repeat(1_000));
+    expect(text).toContain("agent_read");
   });
+
+  it.effect("saves a failure only when it is longer than its preview", () =>
+    Effect.gen(function* () {
+      const agent = yield* temporaryAgent;
+      const archive = sessionReportArchive(agent, "session-1");
+      const failure = `Build failed.\n${"detail ".repeat(500)}`;
+      const saved = archive({ id: "agent-1", generation: 1, kind: "failure", text: failure });
+      expect(saved?.path).toContain("failure");
+      expect(yield* Effect.promise(() => fs.readFile(saved?.path ?? "missing", "utf8"))).toBe(
+        failure,
+      );
+    }).pipe(Effect.scoped),
+  );
 
   it.effect("preserves earlier links when an archive owner or a delivery is replaced", () =>
     Effect.gen(function* () {

@@ -9,13 +9,46 @@ import {
   isParentActionRequiredRun,
   type SubagentRunView,
 } from "../run/model.ts";
-import type { SubagentAwaitUntil } from "../run/service.ts";
+import type { SubagentAwaitUntil, SubagentRunObservation } from "../run/service.ts";
 import { projectRunCardTree } from "../ui/run-tree-rows.ts";
 import { awaitDetails } from "./details.ts";
-import { attentionRecoveryText, joinBoundedToolText } from "./format.ts";
-import { formatAwaitProgress } from "./render-await.ts";
+import { formatAwaitProgress, formatAwaitSummary } from "./render-await.ts";
 import { cancelledAwaitContract } from "./contract.ts";
 import { encodeSubagentContract } from "./contract-schema.ts";
+import { formatRunBlocks, runViewBlock, runViewOutcome } from "./run-block.ts";
+
+const attentionHeadline = (runs: ReadonlyArray<SubagentRunView>): string =>
+  runs.some(isParentActionRequiredRun)
+    ? "Parent action required; other unfinished subagents continue independently."
+    : "";
+
+/**
+ * A finished wait's model text: its summary, then one block per awaited run, which hands over
+ * every claimed report, and one per other run whose question ended the wait, while slots remain.
+ */
+export const awaitResultText = (
+  summary: string,
+  observations: ReadonlyArray<SubagentRunObservation>,
+  questions: ReadonlyArray<SubagentRunView>,
+): string => {
+  const shownQuestions = questions.slice(0, Math.max(0, MAX_TARGET_RUNS - observations.length));
+  const unshown = questions.length - shownQuestions.length;
+  return formatRunBlocks(
+    [
+      summary,
+      attentionHeadline([...observations.map(({ run }) => run), ...questions]),
+      unshown > 0
+        ? `${unshown} more subagent${unshown === 1 ? " waits" : "s wait"} for your reply; each question arrives in its own notice, and agent_list shows them.`
+        : "",
+    ],
+    [
+      ...observations.map(({ run, completionReceipt }) =>
+        runViewBlock(run, runViewOutcome(run, completionReceipt !== undefined)),
+      ),
+      ...shownQuestions.map((run) => runViewBlock(run, runViewOutcome(run, false))),
+    ],
+  );
+};
 
 export const observeAwaitInterruption = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
@@ -57,14 +90,15 @@ export function awaitExecutionFor(
   let lastUpdate = "";
   let interrupted = false;
   const deliveryAttemptedIds = new Set<string>();
+  const visibleContextRuns = (runs: ReadonlyArray<SubagentRunView>) =>
+    projectRunCardTree(contextRuns)
+      .map((row) => row.run)
+      .slice(0, Math.max(0, MAX_TARGET_RUNS - runs.length));
+  // Partial results show the awaited hierarchy; only the summary reaches the model.
   const progressText = (runs: ReadonlyArray<SubagentRunView>) =>
-    formatAwaitProgress(
-      runs,
-      until,
-      projectRunCardTree(contextRuns)
-        .map((row) => row.run)
-        .slice(0, Math.max(0, MAX_TARGET_RUNS - runs.length)),
-    );
+    formatAwaitProgress(runs, until, visibleContextRuns(runs));
+  const progressSummary = (runs: ReadonlyArray<SubagentRunView>) =>
+    formatAwaitSummary(runs, until, contextRuns);
   const update = (
     runs: ReadonlyArray<SubagentRunView>,
     projection?: ReadonlyArray<SubagentRunView>,
@@ -113,19 +147,30 @@ export function awaitExecutionFor(
       latestRuns.length === 0
         ? `${ended} before progress was observed; selected run states are unobserved.`
         : `${ended}; ${unfinished} subagent${unfinished === 1 ? " is" : "s are"} unfinished in the latest observation.`;
-    const text = joinBoundedToolText([
-      summary,
-      `Requested runs: ${requestedIds.join(", ")}.`,
-      "Only this local wait ended. Children continue; it did not stop or retry any run.",
-      proxyCleanupUnconfirmed
-        ? "Root completion-claim cleanup is unconfirmed. Claims may still be held; an immediate replacement await may fail with completion_claim_conflict. This receipt does not acknowledge root cleanup."
-        : "Await these IDs again when their results are needed.",
-      deliveryAttemptedIds.size > 0
-        ? "Report delivery may have committed before cancellation. Read the latest retained reports with agent_read."
-        : "",
-      latestRuns.length > 0 ? progressText(latestRuns) : "",
-      attentionRecoveryText(latestRuns),
-    ]);
+    const text = formatRunBlocks(
+      [
+        summary,
+        "Only this local wait ended. Children continue; it did not stop or retry any run.",
+        proxyCleanupUnconfirmed
+          ? "Root completion-claim cleanup is unconfirmed. Claims may still be held; an immediate replacement await may fail with completion_claim_conflict. This receipt does not acknowledge root cleanup."
+          : "Await these IDs again when their results are needed.",
+        deliveryAttemptedIds.size > 0
+          ? "Report delivery may have committed before cancellation. Read the latest retained reports with agent_read."
+          : "",
+        latestRuns.length > 0 ? progressSummary(latestRuns) : "",
+        attentionHeadline(latestRuns),
+        // Last, so a long ID list is what the header bound cuts.
+        `Requested runs: ${requestedIds.join(", ")}.`,
+      ],
+      latestRuns.map((run) =>
+        runViewBlock(
+          run,
+          run.state === "completed" && deliveryAttemptedIds.has(run.id)
+            ? { kind: "note", text: "Report delivery may have committed; agent_read gives it." }
+            : runViewOutcome(run, false),
+        ),
+      ),
+    );
     return {
       content: [{ type: "text", text }],
       structuredContent: encodeSubagentContract(
@@ -153,7 +198,7 @@ export function awaitExecutionFor(
   };
   return {
     requestedIds,
-    progressText,
+    progressSummary,
     update,
     contextRuns: () => contextRuns,
     markInterrupted: () => {

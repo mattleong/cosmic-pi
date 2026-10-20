@@ -25,14 +25,7 @@ interface RunCompletionObservationDependencies extends Pick<RunContext, "records
   readonly currentProjection: () => SubagentProjection;
   readonly waitForRevision: (after: number) => Effect.Effect<void, SubagentRuntimeClosedError>;
   readonly allocateClaimToken: () => string;
-  readonly delivery: Pick<
-    RunNotificationDelivery,
-    | "wakeCompletionLocked"
-    | "claimQuestionsLocked"
-    | "questionReceiptLocked"
-    | "acknowledgeQuestionsLocked"
-    | "releaseQuestionClaimsLocked"
-  >;
+  readonly delivery: Pick<RunNotificationDelivery, "wakeCompletionLocked">;
 }
 
 const reportStatusOf = (finalText: string | undefined, unresolved: boolean, available: boolean) =>
@@ -91,11 +84,7 @@ export function completionObservationOperations(
   const observeRecord = (record: RunRecord, claimToken: string): SubagentRunObservation => {
     const generation = record.completionGeneration;
     const view = withTreeMetadata(record.view);
-    if (!isTerminalRunState(view.state))
-      return {
-        run: view,
-        questionReceipt: delivery.questionReceiptLocked(record, claimToken),
-      };
+    if (!isTerminalRunState(view.state)) return { run: view };
     const unresolved = record.completionGenerations.has(generation);
     const claimOwner = completionClaimOwner(record, generation);
     const owns = unresolved && claimOwner === claimToken;
@@ -141,7 +130,7 @@ export function completionObservationOperations(
       readonly generation: number;
     }>;
   }
-  // An await claims every target's current or next outcome and its questions.
+  // An await claims every target's current or next outcome. Questions stay with their notices.
   const acquireCompletionClaims = (ids: ReadonlyArray<string>) =>
     withCompletionGate(
       withLock(
@@ -176,7 +165,6 @@ export function completionObservationOperations(
             const claimed = desired.filter(({ record, generation }) =>
               claimCompletion(record, generation, claimToken),
             );
-            delivery.claimQuestionsLocked(selected, claimToken);
             return { claimToken, selected, claimed } satisfies CompletionClaim;
           }),
           releaseCompletionClaims,
@@ -189,7 +177,6 @@ export function completionObservationOperations(
         for (const claimed of claim.claimed)
           if (releaseCompletionClaim(claimed.record, claimed.generation, claim.claimToken))
             delivery.wakeCompletionLocked();
-        delivery.releaseQuestionClaimsLocked(claim.selected, claim.claimToken);
       }),
     );
   const withCompletionClaims = <A, E, R>(
@@ -265,7 +252,6 @@ export function completionObservationOperations(
     until,
     onUpdate,
     use,
-    questionCoverage,
     callerRunId,
   ) => {
     if (ids.length === 0)
@@ -274,25 +260,7 @@ export function completionObservationOperations(
       );
     return withCompletionClaims(ids, (claim) =>
       waitForTerminalObservations(claim, until, callerRunId, onUpdate).pipe(
-        Effect.flatMap(({ observations, questions }) =>
-          use(observations, questions).pipe(
-            Effect.flatMap((result) => {
-              const covered = questionCoverage?.(result);
-              return withLock(
-                Effect.sync(() =>
-                  delivery.acknowledgeQuestionsLocked(
-                    observations.flatMap((observation) =>
-                      observation.questionReceipt &&
-                      (covered === undefined || covered.has(observation.run.id))
-                        ? [observation.questionReceipt]
-                        : [],
-                    ),
-                  ),
-                ),
-              ).pipe(Effect.as(result), Effect.uninterruptible);
-            }),
-          ),
-        ),
+        Effect.flatMap(({ observations, questions }) => use(observations, questions)),
       ),
     );
   };

@@ -76,18 +76,29 @@ export const formatAwaitCounters = (
   ].join(" · ");
 };
 
-export const formatAwaitProgress = (
+const progressRuns = (
+  runs: ReadonlyArray<AwaitProgressRun>,
+  contextRuns: ReadonlyArray<AwaitProgressRun>,
+) => {
+  const awaitedIds = new Set(runs.map((run) => run.id));
+  return {
+    awaitedIds,
+    allRuns: [...runs, ...contextRuns.filter((run) => !awaitedIds.has(run.id))],
+  };
+};
+
+/** One line: how many awaited runs finished, their states, usage, and descendants. */
+export const formatAwaitSummary = (
   runs: ReadonlyArray<AwaitProgressRun>,
   until: SubagentAwaitUntil,
   contextRuns: ReadonlyArray<AwaitProgressRun> = [],
 ): string => {
-  const awaitedIds = new Set(runs.map((run) => run.id));
-  const allRuns = [...runs, ...contextRuns.filter((run) => !awaitedIds.has(run.id))];
+  const { awaitedIds, allRuns } = progressRuns(runs, contextRuns);
   const usage = aggregateUsage(allRuns, "compact");
   const finished = runs.filter((run) => isTerminalRunState(run.state)).length;
   const first = firstFinishedRun(runs, until);
   const descendantCount = allRuns.length - runs.length;
-  const summary = [
+  return [
     until === "all_finished" ? "Waiting for subagents" : "Waiting for first subagent",
     ...(awaitedIds.size > 0 ? [`${finished}/${awaitedIds.size}`] : []),
     ...(first ? [firstFinishedSummary(first)] : []),
@@ -96,8 +107,17 @@ export const formatAwaitProgress = (
     `◎${countLabel(awaitedIds.size, "target")}`,
     ...(descendantCount > 0 ? [countLabel(descendantCount, "descendant")] : []),
   ].join(" · ");
+};
+
+/** The summary, then one row per run of the awaited hierarchy. */
+export const formatAwaitProgress = (
+  runs: ReadonlyArray<AwaitProgressRun>,
+  until: SubagentAwaitUntil,
+  contextRuns: ReadonlyArray<AwaitProgressRun> = [],
+): string => {
+  const { awaitedIds, allRuns } = progressRuns(runs, contextRuns);
   return [
-    summary,
+    formatAwaitSummary(runs, until, contextRuns),
     ...projectRunCardTree(allRuns).map((row) => {
       const status = sanitizeTerminalLine(
         [row.run.currentTool, runTiming(row.run)].filter(Boolean).join(" · "),

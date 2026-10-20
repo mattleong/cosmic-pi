@@ -56,8 +56,10 @@ export const beginNextAssignmentLocked = (
     endedAt: undefined,
     warning: undefined,
     warningSource: undefined,
+    childWarning: undefined,
     systemWarning: undefined,
     error: undefined,
+    errorArchive: undefined,
     lastActivityAt: now,
   };
 };

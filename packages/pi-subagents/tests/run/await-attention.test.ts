@@ -65,7 +65,6 @@ describe("await and questions the caller is not awaiting", () => {
           "all_finished",
           undefined,
           summarize,
-          undefined,
           parent.id,
         )
         .pipe(Effect.forkScoped);

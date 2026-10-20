@@ -7,6 +7,7 @@ import {
   stripTerminalControls as sanitizeTerminalText,
   synchronousNow,
   countLabel,
+  clipText,
 } from "pi-cosmic-core";
 import {
   isActiveRunState,
@@ -16,9 +17,9 @@ import {
   type SubagentRunView,
   type SubagentWorkspaceOutcome,
 } from "../run/model.ts";
-import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
-import type { SubagentRunObservation } from "../run/service.ts";
-import { clipWithMarker, reportFileText, unsavedReportNote } from "../run/state.ts";
+import { MAX_CONTACT_TEXT_CHARS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
+import { clipWithMarker, MAX_ERROR_CHARS } from "../run/state.ts";
+import { distinctRunWarnings } from "../run/warnings.ts";
 import { aggregateUsage } from "../ui/metrics.ts";
 import {
   formatRunRoute,
@@ -27,7 +28,6 @@ import {
   projectRunRoutePresentation,
 } from "../ui/run-presentation.ts";
 import { runStateLabel } from "../ui/run-state.ts";
-import { projectReportFile } from "./details-projection.ts";
 import type { SubagentActionFailure, SubagentStartFailure } from "./model.ts";
 import {
   actionFailureDisposition,
@@ -44,9 +44,6 @@ export const boundToolOutput = (text: string): string =>
     MAX_TOOL_OUTPUT_CHARS,
     "\n… [tool output truncated; narrow the request or query individual run IDs for the omitted content]",
   );
-
-export const joinBoundedToolText = (parts: ReadonlyArray<string>): string =>
-  boundToolOutput(parts.filter(Boolean).join("\n\n"));
 
 export const boundedLine = (value: string, maximum: number): string =>
   clipWithMarker(sanitizeTerminalLine(value), maximum, "… [truncated]");
@@ -198,20 +195,31 @@ export const attentionRecoveryText = (runs: ReadonlyArray<AttentionRun>): string
   ].join("\n");
 };
 
-const statusField = (label: string, value: string): string =>
-  `  ${label.padEnd(10)} ${sanitizeTerminalLine(value)}`;
+/** Bounds each status card field other than its recovery text. */
+const MAX_CARD_FIELD_CHARS = 512;
+/**
+ * Bounds a status card's fields other than its recovery text, together, so the card's header,
+ * whole question, failure, and warnings plus these fields fit one tool result.
+ */
+const MAX_CARD_DETAIL_CHARS = 4_096;
 
-const optionalStatusField = (label: string, value: string | undefined): string | undefined =>
-  value ? statusField(label, value) : undefined;
+const statusField = (label: string, value: string, maximum = MAX_CARD_FIELD_CHARS): string =>
+  `  ${label.padEnd(10)} ${clipText(sanitizeTerminalLine(value), maximum)}`;
 
-/** Options for status and await cards. */
+const optionalStatusField = (
+  label: string,
+  value: string | undefined,
+  maximum?: number,
+): string | undefined => (value ? statusField(label, value, maximum) : undefined);
+
+/** Options for status cards. */
 export interface RunFormatOptions {
   /** Adds route selection, context, capabilities, process, cwd, and timing fields. */
   readonly verbose?: boolean | undefined;
   /** The caller's cwd; a compact card names the run's cwd only when it works elsewhere. */
   readonly parentCwd?: string | undefined;
-  /** Ends the card with the final report's text or availability; on by default. */
-  readonly report?: boolean | undefined;
+  /** The reader is the run's parent, so the card adds its next steps. */
+  readonly readerIsParent?: boolean | undefined;
 }
 
 /** `local/pi · provider/model:effort` as `pi/provider/model:effort`. */
@@ -220,7 +228,7 @@ export const formatRunModel = (run: SubagentRunView): string => {
   return `${hostRuntime.replace(/^local\//u, "")}/${model}`;
 };
 
-const runProfileLabel = (run: SubagentRunView): string =>
+export const runProfileLabel = (run: Pick<SubagentRunView, "agent" | "profile">): string =>
   run.agent
     ? `${sanitizeTerminalLine(run.agent)} (${sanitizeTerminalLine(run.profile ?? "generalist")})`
     : sanitizeTerminalLine(run.profile ?? "generalist");
@@ -278,7 +286,7 @@ const routeRetryStatus = (run: SubagentRunView): string | undefined => {
   );
 };
 
-/** Lineage and what to do next, which a card never clips. */
+/** Lineage and what to do next. */
 const actionFields = (run: SubagentRunView): ReadonlyArray<string | undefined> => [
   optionalStatusField("Parent", run.parentRunId),
   optionalStatusField("Predecessor", run.predecessorRunId),
@@ -296,7 +304,7 @@ const actionFields = (run: SubagentRunView): ReadonlyArray<string | undefined> =
     : undefined,
 ];
 
-/** Diagnostics every card shows when present, after its actions; these may be clipped. */
+/** Diagnostics every card shows when present, after its actions. */
 const compactStatusFields = (
   run: SubagentRunView,
   options: RunFormatOptions,
@@ -313,7 +321,6 @@ const compactStatusFields = (
   cleanupEvidenceText(run) || undefined,
   isActiveRunState(run.state) ? optionalStatusField("Current tool", run.currentTool) : undefined,
   isActiveRunState(run.state) ? optionalStatusField("Progress", run.progress) : undefined,
-  optionalStatusField("Warning", run.warning),
 ];
 
 const verboseStatusFields = (run: SubagentRunView): ReadonlyArray<string | undefined> => {
@@ -367,123 +374,52 @@ const verboseStatusFields = (run: SubagentRunView): ReadonlyArray<string | undef
   ];
 };
 
-/** A saved report is a pointer to its file; only a report without one is inlined. */
-const finalReportStatus = (run: SubagentRunView): string | undefined => {
-  const reportFile = projectReportFile(run.reportArchive);
-  if (run.finalText)
-    return reportFile
-      ? `Final report\n${reportFileText(reportFile)}`
-      : `Final report\n${unsavedReportNote(run.finalTextTruncation)}\n${sanitizeTerminalText(run.finalText)}`;
-  if (run.reportStatus === "missing")
-    return "Final report\nMissing: no accepted final report for this assignment.";
-  if (run.reportStatus === "claimed")
-    return "Final report\nClaimed by another operation; report text is withheld here.";
-  if (run.reportStatus === "delivered")
-    return "Final report\nAlready delivered; report text is withheld here. agent_read gives its file, or the report when none was saved.";
-  if (run.state !== "completed") return undefined;
-  return "Final report\nAvailability unknown in this observation; report text is not included.";
-};
-
-interface RunCard {
-  /** The header, lineage, and what to do next, which a card always shows. */
-  readonly head: string;
-  /** Diagnostics and verbose fields, which may be clipped. */
-  readonly status: string | undefined;
-  /** The pending question, failure, and report, which a card shows whole or not at all. */
-  readonly outcome: string | undefined;
-}
-
-const joinLines = (lines: ReadonlyArray<string | undefined>): string | undefined => {
-  const present = lines.filter(Predicate.isNotUndefined);
-  return present.length > 0 ? present.join("\n") : undefined;
-};
-
-const runCard = (run: SubagentRunView, options: RunFormatOptions): RunCard => ({
-  head: [formatRunHeader(run), ...actionFields(run)].filter(Predicate.isNotUndefined).join("\n"),
-  status: joinLines([
-    ...compactStatusFields(run, options),
-    ...(options.verbose ? verboseStatusFields(run) : []),
-  ]),
-  outcome: joinLines([
-    run.question ? statusField("Needs reply", run.question.message) : undefined,
-    optionalStatusField("Failure", run.error),
-    options.report === false ? undefined : finalReportStatus(run),
-  ]),
-});
-
-const joinRunCard = ({ head, status, outcome }: RunCard): string =>
-  [head, status, outcome].filter(Predicate.isNotUndefined).join("\n");
-
-/** A run's status card; without `detailed`, its one-line header. */
-export const formatRun = (
-  run: SubagentRunView,
-  detailed = false,
-  options: RunFormatOptions = {},
-): string => (detailed ? joinRunCard(runCard(run, options)) : formatRunHeader(run));
-
-interface DetailedRunsFormat {
-  readonly text: string;
-  /** Runs whose pending question, failure, and report appear whole, so they count as delivered. */
-  readonly deliveredIds: ReadonlySet<string>;
-}
-
-/** The room each card's clippable status keeps, even when outcomes fill the rest. */
-const MIN_CARD_STATUS_CHARS = 256;
-const CLIPPED_STATUS_MARKER = "\n… [status truncated; agent_read shows this run's full status]";
-const DEFERRED_OUTCOME_LINE =
-  "… [question, failure, or report withheld to fit this result; call agent_await again for it]";
+/** A question's indentation stays within this; a question with more lines folds into one. */
+const MAX_QUESTION_INDENT_CHARS = 2_048;
 
 /**
- * Cards bounded to the tool output. Outcomes of `pendingIds`, the runs holding an undelivered
- * completion or question, are reserved first, then every other run's, so neither diagnostics nor
- * already-delivered outcomes can withhold them. An outcome that doesn't fit is replaced by a
- * fixed deferral line and leaves its run undelivered for a later await.
+ * Indents every line of a child's question, so none can pass for a card field, an action line, or
+ * the instructions that follow it.
  */
-export const formatDetailedRuns = (
-  runs: ReadonlyArray<SubagentRunView>,
-  prefix = "",
-  options: RunFormatOptions = {},
-  pendingIds: ReadonlySet<string> = new Set(),
-): DetailedRunsFormat => {
-  if (runs.length === 0) return { text: prefix || "No subagent runs.", deliveredIds: new Set() };
-  const cards = runs.map((run) => ({ id: run.id, card: runCard(run, options) }));
-  let room =
-    MAX_TOOL_OUTPUT_CHARS -
-    prefix.length -
-    (runs.length - 1) * 2 -
-    cards.reduce((total, { card }) => total + card.head.length + 1 + MIN_CARD_STATUS_CHARS, 0);
-  const kept = new Set<string>();
-  const reserve = ({ id, card }: (typeof cards)[number]) => {
-    const length = card.outcome === undefined ? 0 : card.outcome.length + 1;
-    if (length > room) return;
-    room -= length;
-    kept.add(id);
-  };
-  cards.filter(({ id }) => pendingIds.has(id)).forEach(reserve);
-  cards.filter(({ id }) => !pendingIds.has(id)).forEach(reserve);
-  const perRun = MIN_CARD_STATUS_CHARS + Math.max(0, Math.floor(room / runs.length));
-  const formatted = cards.map(({ id, card }) => {
-    const deferred = card.outcome !== undefined && !kept.has(id);
-    const statusRoom = deferred ? perRun - DEFERRED_OUTCOME_LINE.length - 1 : perRun;
-    return joinRunCard({
-      head: card.head,
-      status:
-        card.status === undefined
-          ? undefined
-          : clipWithMarker(card.status, statusRoom, CLIPPED_STATUS_MARKER),
-      outcome: deferred ? DEFERRED_OUTCOME_LINE : card.outcome,
-    });
-  });
-  const output = `${prefix}${formatted.join("\n\n")}`;
-  if (output.length <= MAX_TOOL_OUTPUT_CHARS) return { text: output, deliveredIds: kept };
-  return {
-    text: clipWithMarker(
-      output,
-      MAX_TOOL_OUTPUT_CHARS,
-      "\n… [additional run output omitted; query individual run IDs]",
-    ),
-    deliveredIds: new Set(),
-  };
+export const indentQuestionLines = (question: string, indent: string): string => {
+  const lines = question.split(/[\n\u2028\u2029]/u);
+  if (lines.length * indent.length > MAX_QUESTION_INDENT_CHARS)
+    return `${indent}${lines.join(" ")}`;
+  return lines.map((line) => (line ? `${indent}${line}` : line)).join("\n");
+};
+
+/**
+ * A run's full status card, the detail surface that `agent_read` shows: everything multi-run
+ * blocks leave out. Its recovery text (the whole pending question, failure, and both retained
+ * warnings) leads, and the bounded remaining fields follow, so one run's card always fits a tool
+ * result whole. The report follows separately.
+ *
+ * That bound relies on a question and a failure never being present together: settlement clears
+ * the question, and a new assignment clears the failure.
+ */
+export const formatRunCard = (run: SubagentRunView, options: RunFormatOptions = {}): string => {
+  const details = [
+    options.readerIsParent ? attentionRecoveryText([run]) || undefined : undefined,
+    ...actionFields(run),
+    ...compactStatusFields(run, options),
+    ...(options.verbose ? verboseStatusFields(run) : []),
+  ]
+    .filter(Predicate.isNotUndefined)
+    .join("\n");
+  const question = run.question && sanitizeTerminalText(run.question.message).trim();
+  const warnings = distinctRunWarnings(run);
+  return [
+    clipText(formatRunHeader(run), MAX_CARD_FIELD_CHARS),
+    question
+      ? `  Needs reply:\n${indentQuestionLines(clipText(question, MAX_CONTACT_TEXT_CHARS), "    ")}`
+      : undefined,
+    optionalStatusField("Failure", run.error, MAX_ERROR_CHARS),
+    optionalStatusField("Warning", warnings.child, MAX_CONTACT_TEXT_CHARS),
+    optionalStatusField("System warning", warnings.system, MAX_ERROR_CHARS),
+    details && clipWithMarker(details, MAX_CARD_DETAIL_CHARS, "\n  … [more fields omitted]"),
+  ]
+    .filter(Boolean)
+    .join("\n");
 };
 
 type FailedStartRecovery = NonNullable<SubagentStartFailure["admittedRun"]>;
@@ -511,51 +447,67 @@ export const failedStartRecoveryAction = (recovery: FailedStartRecovery): string
   return absurd(recovery.retryDisposition);
 };
 
-const formatStartFailures = (failures: ReadonlyArray<SubagentStartFailure>): string =>
-  failures.length === 0
-    ? ""
-    : [
-        `Failed starts (${failures.length})`,
-        ...failures.map((failure) => {
-          const target = failure.name ? ` ${sanitizeTerminalLine(failure.name)}` : "";
-          const message = boundedLine(failure.message, 2_048);
-          const code = failure.code ? ` [${sanitizeTerminalLine(failure.code)}]` : "";
-          const recovery = failure.admittedRun;
-          const noEligibleRoute = NO_ELIGIBLE_ROUTE_CODES.includes(failure.code ?? "");
-          return [
-            `  #${failure.index + 1}${target}${code}: ${message}`,
-            recovery ? `    ${formatFailedStartRecovery(recovery)}` : undefined,
-            recovery ? `    Next: ${failedStartRecoveryAction(recovery)}` : undefined,
-            !recovery && noEligibleRoute ? `    Next: ${noEligibleRouteRecovery}` : undefined,
-          ]
-            .filter((line): line is string => line !== undefined)
-            .join("\n");
-        }),
-      ].join("\n");
+/** A start result line, such as a started run or a failed launch's recovery step. */
+const MAX_START_LINE_CHARS = 320;
+/** A failed launch's index, name, code, and message. */
+const MAX_START_FAILURE_LINE_CHARS = 640;
+/**
+ * Each launch of a start batch is at most two lines: a started run and its route warning, or a
+ * failed launch and up to two recovery lines; so a full batch always fits the tool output.
+ */
+export const MAX_START_ENTRY_CHARS = MAX_START_FAILURE_LINE_CHARS + 2 * MAX_START_LINE_CHARS + 2;
+/** The `Failed starts (N)` heading. */
+export const MAX_START_HEADER_CHARS = 64;
 
+const startLine = (text: string, maximum = MAX_START_LINE_CHARS): string => clipText(text, maximum);
+
+const formatStartFailure = (failure: SubagentStartFailure): string => {
+  const target = failure.name ? ` ${sanitizeTerminalLine(failure.name)}` : "";
+  const code = failure.code ? ` [${sanitizeTerminalLine(failure.code)}]` : "";
+  const recovery = failure.admittedRun;
+  const noEligibleRoute = NO_ELIGIBLE_ROUTE_CODES.includes(failure.code ?? "");
+  return [
+    startLine(
+      `  #${failure.index + 1}${target}${code}: ${sanitizeTerminalLine(failure.message)}`,
+      MAX_START_FAILURE_LINE_CHARS,
+    ),
+    recovery ? startLine(`    ${formatFailedStartRecovery(recovery)}`) : undefined,
+    recovery ? startLine(`    Next: ${failedStartRecoveryAction(recovery)}`) : undefined,
+    !recovery && noEligibleRoute ? startLine(`    Next: ${noEligibleRouteRecovery}`) : undefined,
+  ]
+    .filter(Predicate.isNotUndefined)
+    .join("\n");
+};
+
+const formatStartedEntry = (run: SubagentRunView): string =>
+  [
+    startLine(formatStartedRun(run)),
+    ...(run.selection.warning
+      ? [startLine(`  Warning: ${sanitizeTerminalLine(run.selection.warning)}`)]
+      : []),
+  ].join("\n");
+
+/** One bounded entry per launch, so every launch of a full batch is listed. */
 export const formatStartResult = (
   runs: ReadonlyArray<SubagentRunView>,
   failures: ReadonlyArray<SubagentStartFailure>,
 ): string =>
-  boundToolOutput(
-    [
-      ...runs.map((run) =>
-        [
-          formatStartedRun(run),
-          ...(run.selection.warning
-            ? [`  Warning: ${boundedLine(run.selection.warning, 512)}`]
-            : []),
-        ].join("\n"),
-      ),
-      formatStartFailures(failures),
-    ]
-      .filter(Boolean)
-      .join("\n"),
-  );
+  [
+    ...runs.map(formatStartedEntry),
+    ...(failures.length === 0
+      ? []
+      : [`Failed starts (${failures.length})`, ...failures.map(formatStartFailure)]),
+  ].join("\n");
+
+/** A lifecycle target's failure: its ID, code, and message on one line. */
+export const MAX_ACTION_FAILURE_LINE_CHARS = 400;
 
 const actionFailureLine = (failure: SubagentActionFailure): string => {
   const code = failure.code ? ` [${sanitizeTerminalLine(failure.code)}]` : "";
-  return `  ${sanitizeTerminalLine(failure.id)}${code}: ${boundedLine(failure.message, 320)}`;
+  return clipText(
+    `  ${sanitizeTerminalLine(failure.id)}${code}: ${sanitizeTerminalLine(failure.message)}`,
+    MAX_ACTION_FAILURE_LINE_CHARS,
+  );
 };
 
 export const ACTION_FAILURE_SECTIONS = [
@@ -575,13 +527,3 @@ export const formatActionFailures = (failures: ReadonlyArray<SubagentActionFailu
       ].join("\n"),
     ];
   }).join("\n\n");
-
-export const renderedCompletionReceipts = (
-  observations: ReadonlyArray<SubagentRunObservation>,
-  deliveredIds: ReadonlySet<string>,
-) =>
-  observations.flatMap((observation) =>
-    observation.completionReceipt && deliveredIds.has(observation.run.id)
-      ? [observation.completionReceipt]
-      : [],
-  );

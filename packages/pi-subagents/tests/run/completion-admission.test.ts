@@ -37,10 +37,6 @@ describe("completion admission", () => {
         allocateClaimToken: () => `claim-${++token}`,
         delivery: {
           wakeCompletionLocked: () => undefined,
-          claimQuestionsLocked: () => undefined,
-          questionReceiptLocked: () => undefined,
-          acknowledgeQuestionsLocked: () => undefined,
-          releaseQuestionClaimsLocked: () => undefined,
         },
       });
       const probe = useProbe();

@@ -11,19 +11,24 @@ import {
   MAX_MAIN_READ_CHARS,
   MAX_RUN_READ_CHARS,
 } from "../run/agent-messaging.ts";
-import { MAX_PROTOCOL_ID_CHARS, MAX_START_BATCH, MAX_TARGET_RUNS } from "../run/limits.ts";
+import {
+  MAX_CONTACT_TEXT_CHARS,
+  MAX_OUTCOME_FILE_PATH_CHARS,
+  MAX_OUTCOME_PREVIEW_CHARS,
+  MAX_PROTOCOL_ID_CHARS,
+  MAX_START_BATCH,
+  MAX_TARGET_RUNS,
+} from "../run/limits.ts";
 import {
   FAILED_START_CLEANUP_DISPOSITIONS,
   FAILED_START_RETRY_DISPOSITIONS,
   PI_SUBAGENT_CAPABILITIES,
   SUBAGENT_RUN_STATES,
 } from "../run/model.ts";
-import { MAX_FINAL_TEXT_CHARS, MAX_NAME_CHARS } from "../run/state.ts";
+import { MAX_NAME_CHARS } from "../run/state.ts";
 import { AGENT_TOOL_NAME, SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
 import {
   AgentNameSchema,
-  MAX_CARD_PATH_CHARS,
-  MAX_CARD_QUESTION_CHARS,
   MAX_FAILURE_CODE_CHARS,
   ModelOverrideCardSchema,
   NonEmptyText,
@@ -35,10 +40,12 @@ import { AWAIT_UNTIL, LIFECYCLE_ACTIONS } from "./schema.ts";
 
 export const SUBAGENT_CONTRACT_ID = "pi-subagents/orchestration";
 export const SUBAGENT_CONTRACT_VERSION = 3;
-export const MAX_CONTRACT_REPORT_CHARS = MAX_FINAL_TEXT_CHARS;
+/**
+ * A target's report text without a file, error, question, and warnings are previews, so each
+ * target stays bounded; agent_read returns the rest, and a read's status carries them whole.
+ */
+export const MAX_CONTRACT_PREVIEW_CHARS = MAX_OUTCOME_PREVIEW_CHARS;
 export const MAX_CONTRACT_MESSAGE_CHARS = 1_024;
-export const MAX_CONTRACT_ERROR_CHARS = 2_048;
-export const MAX_CONTRACT_QUESTION_CHARS = MAX_CARD_QUESTION_CHARS;
 export const MAX_CONTRACT_TASK_CHARS = 256;
 export const MAX_CONTRACT_MODEL_CHARS = 256;
 
@@ -67,6 +74,7 @@ const envelope = <Tool extends string>(tool: Tool) => ({
 });
 
 const WITHHELD_REPORT_STATUSES = [
+  // A wait ended (cancelled, timed out, or by user input) before delivering a report it held.
   "deferred",
   "claimed",
   "already_delivered",
@@ -78,7 +86,7 @@ const WITHHELD_REPORT_STATUSES = [
 const WithheldReportSchema = Schema.Struct({ status: Schema.Literals(WITHHELD_REPORT_STATUSES) });
 /** The private file holding an assignment's report; `complete` is false past the 1 MiB archive cap. */
 const ReportFileFields = {
-  path: NonEmptyText(MAX_CARD_PATH_CHARS),
+  path: NonEmptyText(MAX_OUTCOME_FILE_PATH_CHARS),
   chars: count,
   lines: count,
   complete: Schema.Boolean,
@@ -86,23 +94,24 @@ const ReportFileFields = {
 const ReportSchema = Schema.Union([
   // Delivering a report hands over its file; the parent reads the report from it.
   Schema.Struct({ status: Schema.Literal("delivered"), ...ReportFileFields }),
-  // Only a report whose file couldn't be saved arrives inline, cut when `truncated`.
+  // Only a report whose file couldn't be saved arrives inline, as a preview cut when `truncated`;
+  // agent_read returns the retained report.
   Schema.Struct({
     status: Schema.Literal("delivered"),
-    text: NonEmptyText(MAX_CONTRACT_REPORT_CHARS),
+    text: NonEmptyText(MAX_CONTRACT_PREVIEW_CHARS),
     truncated: Schema.Boolean,
   }),
   WithheldReportSchema,
 ]);
 
-const AttentionSchema = Schema.Union([
-  Schema.Struct({ kind: Schema.Literal("question-unavailable") }),
-  Schema.Struct({ kind: Schema.Literal("paused"), canResume: Schema.Boolean }),
-  Schema.Struct({
-    kind: Schema.Literal("question"),
-    message: NonEmptyText(MAX_CONTRACT_QUESTION_CHARS),
-  }),
-]);
+const attentionSchema = (questionChars: number) =>
+  Schema.Union([
+    Schema.Struct({ kind: Schema.Literal("question-unavailable") }),
+    Schema.Struct({ kind: Schema.Literal("paused"), canResume: Schema.Boolean }),
+    Schema.Struct({ kind: Schema.Literal("question"), message: NonEmptyText(questionChars) }),
+  ]);
+/** A question's preview; its notice delivers the whole question. */
+const AttentionSchema = attentionSchema(MAX_CONTRACT_PREVIEW_CHARS);
 
 const RecoveryFields = {
   cleanup: Schema.Literals(FAILED_START_CLEANUP_DISPOSITIONS),
@@ -116,7 +125,8 @@ const FailureSchema = Schema.Struct({
   message: NonEmptyText(MAX_CONTRACT_MESSAGE_CHARS),
 });
 
-const runTargetSchema = <Report extends Schema.Top>(report: Report) =>
+/** `detailChars` bounds the question, warnings, and error: previews, or a read's whole text. */
+const runTargetSchema = <Report extends Schema.Top>(report: Report, detailChars: number) =>
   Schema.Struct({
     runId: RunIdSchema,
     name: NameSchema,
@@ -132,24 +142,28 @@ const runTargetSchema = <Report extends Schema.Top>(report: Report) =>
     ),
     predecessorRunId: Schema.optionalKey(RunIdSchema),
     successorRunId: Schema.optionalKey(RunIdSchema),
-    resumedBy: Schema.optionalKey(NonEmptyText(MAX_CONTRACT_MESSAGE_CHARS)),
+    resumedBy: Schema.optionalKey(NonEmptyText(MAX_CONTRACT_PREVIEW_CHARS)),
     parentActionRequired: Schema.Boolean,
     cleanup: Schema.optionalKey(RunCleanupSchema),
     writerCleanupQuarantined: Schema.optionalKey(Schema.Boolean),
-    attention: Schema.optionalKey(AttentionSchema),
+    attention: Schema.optionalKey(attentionSchema(detailChars)),
     retry: Schema.optionalKey(Schema.Struct(RecoveryFields)),
     warnings: Schema.Array(
       Schema.Struct({
         source: Schema.optionalKey(Schema.Literals(["child", "system"])),
-        message: NonEmptyText(MAX_CONTRACT_MESSAGE_CHARS),
+        message: NonEmptyText(detailChars),
       }),
     ).check(Schema.isMaxLength(2)),
-    error: Schema.optionalKey(NonEmptyText(MAX_CONTRACT_ERROR_CHARS)),
+    error: Schema.optionalKey(NonEmptyText(detailChars)),
+    /** The saved failure when `error` is a cut preview. */
+    errorFile: Schema.optionalKey(Schema.Struct(ReportFileFields)),
     report,
   });
 
-const RunTargetSchema = runTargetSchema(ReportSchema);
-const WithheldRunTargetSchema = runTargetSchema(WithheldReportSchema);
+const RunTargetSchema = runTargetSchema(ReportSchema, MAX_CONTRACT_PREVIEW_CHARS);
+const WithheldRunTargetSchema = runTargetSchema(WithheldReportSchema, MAX_CONTRACT_PREVIEW_CHARS);
+/** A read's status carries the whole pending question, both retained warnings, and the error. */
+const ReadStatusSchema = runTargetSchema(WithheldReportSchema, MAX_CONTACT_TEXT_CHARS);
 const RunTargetsSchema = Schema.Array(RunTargetSchema).check(Schema.isMaxLength(MAX_TARGET_RUNS));
 
 const StartContractSchema = Schema.Struct({
@@ -290,7 +304,7 @@ const AgentReadContractSchema = Schema.Struct({
         reportFile: Schema.optionalKey(Schema.Struct(ReportFileFields)),
         reportGeneration: count,
         /** The run's status card; its report is the read's `reportFile` or `text`. */
-        status: WithheldRunTargetSchema,
+        status: ReadStatusSchema,
       }),
     ]),
   ).check(Schema.isMaxLength(MAX_AGENT_TARGETS)),
@@ -317,6 +331,7 @@ export type AgentListContract = SubagentContract<typeof AGENT_TOOL_NAME.list>;
 export type AgentReadContract = SubagentContract<typeof AGENT_TOOL_NAME.read>;
 export type ContractRunTarget = typeof RunTargetSchema.Type;
 export type ContractWithheldRunTarget = typeof WithheldRunTargetSchema.Type;
+export type ContractReadStatus = typeof ReadStatusSchema.Type;
 export type ContractReport = typeof ReportSchema.Type;
 export type ContractWithheldReport = typeof WithheldReportSchema.Type;
 export type ContractAttention = typeof AttentionSchema.Type;

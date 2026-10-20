@@ -65,6 +65,7 @@ export interface CompletionGenerationRecord {
   readonly finalTextTruncation?: SubagentReportTruncation | undefined;
   readonly reportArchive?: SubagentReportArchive | undefined;
   readonly error?: string | undefined;
+  readonly errorArchive?: SubagentReportArchive | undefined;
   readonly warning?: string | undefined;
   /** The agent whose message resumed the run for this outcome's assignment. */
   readonly resumedBy?: string | undefined;

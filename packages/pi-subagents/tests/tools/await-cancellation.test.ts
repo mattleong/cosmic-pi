@@ -35,7 +35,7 @@ const managedTools = Effect.gen(function* () {
   return { fixture, tools, pi, runtime, service };
 });
 
-it.live("returns a parent question in the await result without a second notification", () =>
+it.live("returns a question's preview in the await result while its notice delivers it once", () =>
   Effect.gen(function* () {
     const { fixture, tools, pi, runtime, service } = yield* managedTools;
     registerSubagentTools(pi, {
@@ -66,7 +66,9 @@ it.live("returns a parent question in the await result without a second notifica
       text: stringContaining("Which change should I make?"),
     });
     yield* Effect.sleep(Duration.millis(50));
-    expect(fixture.notifications.filter((item) => item.type === "question")).toHaveLength(0);
+    expect(
+      fixture.notifications.flatMap((item) => (item.type === "question" ? [item.message] : [])),
+    ).toEqual(["Which change should I make?"]);
   }),
 );
 

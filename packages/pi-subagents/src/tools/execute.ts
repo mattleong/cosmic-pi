@@ -31,14 +31,19 @@ import {
   type SubagentRunView,
 } from "../run/model.ts";
 import { MAX_TARGET_RUNS } from "../run/limits.ts";
-import { SubagentService, type SubagentRunObservation } from "../run/service.ts";
+import {
+  SubagentService,
+  type SubagentAwaitUntil,
+  type SubagentRunObservation,
+} from "../run/service.ts";
 import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
 import { executeStartBatch, resolveRecordedLaunch } from "./execute-start.ts";
 import { presentSubagentResult, type SubagentExecutionResult } from "./execute-result.ts";
 import { awaitContract, startContract, lifecycleContract } from "./contract.ts";
-import { attentionRecoveryText, formatDetailedRuns, renderedCompletionReceipts } from "./format.ts";
+import { attentionRecoveryText } from "./format.ts";
 import {
   awaitExecutionFor,
+  awaitResultText,
   observeAwaitInterruption,
   type AwaitEnding,
   type AwaitExecution,
@@ -179,14 +184,13 @@ export const executeSubagentActionEffect = (
         );
 
   const action = subagentToolAction(input);
-  const formatOptions = { parentCwd: environment.cwd };
   const awaitState =
     input.tool === SUBAGENT_TOOL_NAME.await
       ? (awaitExecution ?? awaitExecutionFor(input.args.runIds, input.args.until, onUpdate))
       : undefined;
   const requestedAwaitIds = awaitState?.requestedIds;
   const present = (result: SubagentExecutionResult) =>
-    presentSubagentResult(input, result, requestedAwaitIds, formatOptions);
+    presentSubagentResult(input, result, requestedAwaitIds);
   return Effect.gen(function* () {
     const service = yield* SubagentService;
     const launchEnvironment =
@@ -201,13 +205,12 @@ export const executeSubagentActionEffect = (
         : scripted
           ? service.startScriptSessionOwned(request)
           : service.startSessionOwned(request);
+    // Every awaited run's block fits, so the result delivers every claimed report.
     const completeObservations = (
+      until: SubagentAwaitUntil,
       observations: ReadonlyArray<SubagentRunObservation>,
-      sections: ReadonlyArray<string>,
-      extra: () => {
-        readonly actionFailures?: ReadonlyArray<SubagentActionFailure>;
-        readonly awaitContextRuns?: ReadonlyArray<SubagentRunView>;
-      } = () => ({}),
+      summary: string,
+      contextRuns: ReadonlyArray<SubagentRunView>,
       questions: ReadonlyArray<SubagentRunView> = [],
     ) =>
       Effect.gen(function* () {
@@ -219,43 +222,25 @@ export const executeSubagentActionEffect = (
             "scripted_parent_attention_required",
             `Subagents need parent attention\n\nEnd the script and handle this directly.\n\n${attentionRecoveryText(attention)}`,
           );
-        const prefix = [...sections, attentionRecoveryText(attention)].filter(Boolean).join("\n\n");
-        const pendingIds = new Set(
-          observations.flatMap((observation) =>
-            observation.completionReceipt || observation.questionReceipt
-              ? [observation.run.id]
-              : [],
-          ),
-        );
-        const formatted = formatDetailedRuns(
-          runs,
-          prefix ? `${prefix}\n\n` : "",
-          formatOptions,
-          pendingIds,
-        );
-        const additional = extra();
-        const contract =
-          input.tool === SUBAGENT_TOOL_NAME.await
-            ? awaitContract({
-                observations,
-                deliveredIds: formatted.deliveredIds,
-                until: input.args.until,
-                requestedRunIds: requestedAwaitIds ?? [],
-                questionsElsewhere: questions.length > 0,
-              })
-            : undefined;
         const outcome = {
           runs,
           attentionRequired,
-          text: formatted.text,
-          ...additional,
-          ...(contract && { contract }),
+          text: awaitResultText(summary, observations, questions),
+          awaitContextRuns: contextRuns,
+          contract: awaitContract({
+            observations,
+            until,
+            requestedRunIds: requestedAwaitIds ?? [],
+            questionsElsewhere: questions.length > 0,
+          }),
         };
         const result = yield* Effect.sync(() => present(outcome));
-        const receipts = renderedCompletionReceipts(observations, formatted.deliveredIds);
+        const receipts = observations.flatMap((observation) =>
+          observation.completionReceipt ? [observation.completionReceipt] : [],
+        );
         awaitState?.markDeliveryAttempt(receipts.map((receipt) => receipt.id));
         yield* service.consumeCompletions(receipts);
-        return { result, deliveredIds: formatted.deliveredIds };
+        return result;
       });
     const executeLifecycle = (args: SubagentLifecycleInput) =>
       Effect.gen(function* () {
@@ -350,22 +335,20 @@ export const executeSubagentActionEffect = (
         yield* authorize(ids);
         const state =
           awaitState ?? (yield* Effect.die(new Error("Await execution state is missing.")));
-        return yield* service
-          .withAwaitTerminalObservations(
-            ids,
-            input.args.until,
-            state.update,
-            (observations, questions = []) =>
-              completeObservations(
-                observations,
-                [state.progressText(observations.map((observation) => observation.run))],
-                () => ({ awaitContextRuns: withQuestionRuns(state.contextRuns(), questions) }),
-                questions,
-              ),
-            (outcome) => outcome.deliveredIds,
-            callerRunId,
-          )
-          .pipe(Effect.map(({ result }) => result));
+        return yield* service.withAwaitTerminalObservations(
+          ids,
+          input.args.until,
+          state.update,
+          (observations, questions = []) =>
+            completeObservations(
+              input.args.until,
+              observations,
+              state.progressSummary(observations.map((observation) => observation.run)),
+              withQuestionRuns(state.contextRuns(), questions),
+              questions,
+            ),
+          callerRunId,
+        );
       }
       case SUBAGENT_TOOL_NAME.lifecycle:
         return yield* executeLifecycle(input.args);

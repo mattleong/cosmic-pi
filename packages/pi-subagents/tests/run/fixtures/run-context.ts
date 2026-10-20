@@ -55,10 +55,6 @@ const unexpectedDelivery = (): never => {
 const inertDelivery: RunNotificationDelivery = {
   deliverPendingCompletions: Effect.sync(unexpectedDelivery),
   queueActionNotificationLocked: unexpectedDelivery,
-  claimQuestionsLocked: unexpectedDelivery,
-  questionReceiptLocked: unexpectedDelivery,
-  acknowledgeQuestionsLocked: unexpectedDelivery,
-  releaseQuestionClaimsLocked: unexpectedDelivery,
   insertCompletionLocked: unexpectedDelivery,
   wakeCompletionLocked: unexpectedDelivery,
   discardQuestionLocked: unexpectedDelivery,

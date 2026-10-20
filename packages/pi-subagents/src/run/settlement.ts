@@ -21,8 +21,8 @@ import {
   type RunContext,
   type RunRecord,
 } from "./internal.ts";
-import type { SubagentRunView, SubagentUsage } from "./model.ts";
-import { MAX_UNRESOLVED_REPORT_GENERATIONS } from "./limits.ts";
+import type { SubagentReportArchive, SubagentRunView, SubagentUsage } from "./model.ts";
+import { MAX_OUTCOME_PREVIEW_CHARS, MAX_UNRESOLVED_REPORT_GENERATIONS } from "./limits.ts";
 import type { RunNotificationDelivery } from "./notification-delivery.ts";
 import type { RunRecordCleanup } from "./record-cleanup.ts";
 import {
@@ -54,7 +54,10 @@ interface RunSettlementDependencies extends Pick<
   readonly settleCompletedWorkspace?:
     | ((record: RunRecord, assignmentEpoch: number) => Effect.Effect<void>)
     | undefined;
-  /** Saves each completed report in full; without it, reports reach the parent only inline. */
+  /**
+   * Saves each completed report, and each failure longer than its preview, in full; without it,
+   * the parent gets previews and agent_read.
+   */
   readonly archiveReport?: ReportArchive | undefined;
 }
 
@@ -202,6 +205,19 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
     };
   };
 
+  // Like a report, only an admitted failure generation is archived.
+  const archiveFailureLocked = (
+    record: RunRecord,
+    error: string,
+    generation: number | undefined,
+  ): SubagentReportArchive | undefined =>
+    archiveReport && generation !== undefined && error.length > MAX_OUTCOME_PREVIEW_CHARS
+      ? invokeHostCallback(
+          () => archiveReport({ id: record.view.id, generation, kind: "failure", text: error }),
+          undefined,
+        )
+      : undefined;
+
   const queueCompletionLocked = (
     record: RunRecord,
     state: SettlementState,
@@ -216,7 +232,10 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
     delivery.insertCompletionLocked(record, {
       outcome: state,
       ...(finalText && { finalText, ...report }),
-      ...(state === "failed" && { error: settledError }),
+      ...(state === "failed" && {
+        error: settledError,
+        ...(report.errorArchive && { errorArchive: report.errorArchive }),
+      }),
       generation,
       ...(warning && { warning }),
       ...(resumedBy !== undefined && { resumedBy }),
@@ -252,9 +271,14 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
       clearRunActivity(record);
       const finalText = state === "completed" ? record.latestAssistantText : undefined;
       const generation = allocateCompletionLocked(record, state);
-      const report = finalText ? archiveReportLocked(record, finalText, generation) : {};
+      const reportArchive = finalText ? archiveReportLocked(record, finalText, generation) : {};
       record.latestAssistantFullText = undefined;
       const settledError = state === "failed" ? (error ?? "Run failed.") : error;
+      const errorArchive =
+        state === "failed" && settledError !== undefined
+          ? archiveFailureLocked(record, settledError, generation)
+          : undefined;
+      const report: SettledReport = { ...reportArchive, ...(errorArchive && { errorArchive }) };
       queueCompletionLocked(record, state, generation, finalText, settledError, report);
       record.notificationGeneration += 1;
       delivery.discardQuestionLocked(record.view.id);

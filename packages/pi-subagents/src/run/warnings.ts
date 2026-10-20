@@ -22,9 +22,21 @@ export const recordRunWarning = (
   return {
     warning,
     warningSource: source,
+    childWarning: record.warningSlots.child,
     systemWarning: record.warningSlots.system,
     sessionEvents: appendNoticeSessionEvent(sessionEvents, "warning", notice, now),
   };
+};
+
+/** The retained child and system warnings; an identical pair shows once, under the latest source. */
+export const distinctRunWarnings = (
+  run: Pick<SubagentRunView, "childWarning" | "systemWarning" | "warningSource">,
+): RunWarningSlots => {
+  if (run.childWarning === undefined || run.childWarning !== run.systemWarning)
+    return { child: run.childWarning, system: run.systemWarning };
+  return run.warningSource === "system"
+    ? { system: run.systemWarning }
+    : { child: run.childWarning };
 };
 
 export const foldRunWarnings = (slots: RunWarningSlots): string | undefined => {

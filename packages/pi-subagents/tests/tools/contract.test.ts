@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { FailedStartRecovery, SubagentRunView } from "../../src/run/model.ts";
 import type { SubagentRunObservation } from "../../src/run/service.ts";
-import { awaitContract, cancelledAwaitContract, startContract } from "../../src/tools/contract.ts";
+import {
+  awaitContract,
+  cancelledAwaitContract,
+  readStatusTarget,
+  startContract,
+} from "../../src/tools/contract.ts";
 import {
   decodeSubagentContract,
   type SubagentContract,
@@ -18,15 +23,11 @@ const decoded = <Tool extends SubagentContractTool, Contract extends SubagentCon
 };
 
 /** Observed targets as an await returns them. */
-const observedTargets = (
-  observations: ReadonlyArray<SubagentRunObservation>,
-  rendered: ReadonlyArray<string> = [],
-) =>
+const observedTargets = (observations: ReadonlyArray<SubagentRunObservation>) =>
   decoded(
     "agent_await",
     awaitContract({
       observations,
-      deliveredIds: new Set(rendered),
       until: "all_finished",
       requestedRunIds: observations.map((observation) => observation.run.id),
     }),
@@ -106,26 +107,53 @@ describe("start contract", () => {
 });
 
 describe("report disposition", () => {
-  const report = (observation: SubagentRunObservation, rendered: ReadonlyArray<string> = []) =>
-    observedTargets([observation], rendered)[0]!.report;
+  const report = (observation: SubagentRunObservation) => observedTargets([observation])[0]!.report;
 
-  it("delivers a saved report as its file, and only an unsaved one as text", () => {
+  it("delivers every claimed report: a saved one as its file, an unsaved one as a preview", () => {
     const reportArchive = { path: "/agent/reports/a-1.md", chars: 5, lines: 1, complete: true };
     const saved = finished("a", { finalText: "Done.", reportStatus: "available", reportArchive });
-    expect(report({ run: saved, completionReceipt: receipt("a") }, ["a"])).toEqual({
+    expect(report({ run: saved, completionReceipt: receipt("a") })).toEqual({
       status: "delivered",
       ...reportArchive,
     });
     const run = finished("a", { finalText: "Done.", reportStatus: "available" });
-    expect(report({ run, completionReceipt: receipt("a") }, ["a"])).toEqual({
+    expect(report({ run, completionReceipt: receipt("a") })).toEqual({
       status: "delivered",
       text: "Done.",
       truncated: false,
     });
-    expect(report({ run, completionReceipt: receipt("a") })).toEqual({ status: "deferred" });
-    expect(report({ run: finished("a", { finalText: "Done." }) }, ["a"])).toEqual({
+    const long = finished("a", { finalText: "x".repeat(10_000), reportStatus: "available" });
+    expect(report({ run: long, completionReceipt: receipt("a") })).toMatchObject({
+      status: "delivered",
+      truncated: true,
+    });
+    expect(report({ run: finished("a", { finalText: "Done." }) })).toEqual({
       status: "unknown",
     });
+  });
+});
+
+describe("failures", () => {
+  it("preview a long error and name its saved file", () => {
+    const errorArchive = {
+      path: "/agent/reports/a-failure-1.md",
+      chars: 8_000,
+      lines: 9,
+      complete: true,
+    };
+    const [target] = observedTargets([
+      {
+        run: view({
+          id: "a",
+          state: "failed",
+          error: `FAILURE ${"x".repeat(8_000)}`,
+          errorArchive,
+        }),
+      },
+    ]);
+    expect(target?.error?.startsWith("FAILURE")).toBe(true);
+    expect(target?.error?.length).toBeLessThan(1_000);
+    expect(target?.errorFile).toEqual(errorArchive);
   });
 });
 
@@ -169,24 +197,27 @@ describe("await contract", () => {
 });
 
 describe("cleanup evidence", () => {
-  it("redacts bounded cleanup diagnostics", () => {
-    const target = observedTargets([
-      {
-        run: view({
-          writeIntent: "writer",
-          state: "stopped",
-          cleanup: {
-            disposition: "quarantined",
-            recovery: "manual",
-            diagnostic: {
-              phase: "writer-lease",
-              code: "x".repeat(100),
-              message: `token=lease-secret\n${"detail ".repeat(300)}`,
-            },
-          },
-        }),
+  const quarantined = view({
+    writeIntent: "writer",
+    state: "stopped",
+    cleanup: {
+      disposition: "quarantined",
+      recovery: "manual",
+      diagnostic: {
+        phase: "writer-lease",
+        code: "x".repeat(100),
+        message: `token=lease-secret\n${"detail ".repeat(300)}`,
       },
-    ])[0]!;
+    },
+  });
+
+  it("leaves diagnostics to agent_read, keeping an await target's disposition and recovery", () => {
+    const [target] = observedTargets([{ run: quarantined }]);
+    expect(target?.cleanup).toEqual({ disposition: "quarantined", recovery: "manual" });
+  });
+
+  it("redacts bounded cleanup diagnostics in a read's status", () => {
+    const target = readStatusTarget(quarantined);
     expect(target.cleanup?.diagnostic?.code?.length).toBeLessThanOrEqual(80);
     expect(target.cleanup?.diagnostic?.message.length).toBeLessThanOrEqual(1_024);
     expect(JSON.stringify(target)).not.toContain("lease-secret");
@@ -207,14 +238,13 @@ describe("privacy and strict decoding", () => {
     sessionEvents: [{ type: "assistant", text: "EVENT-SECRET", createdAt: 1 }],
     progress: "PROGRESS-SECRET",
     state: "failed",
-    warning: "retrying with Authorization: Bearer abcdefghijklmnop",
-    warningSource: "child",
+    childWarning: "retrying with Authorization: Bearer abcdefghijklmnop",
     systemWarning: "api_key=sk-abcdefghijklmnopqrstuvwxyz",
     error: "\u001b[31mexit 1\u001b[0m token=hunter2-secret",
   });
 
   it("projects only explicit, redacted metadata", () => {
-    const targets = observedTargets([{ run: leakyRun }], ["a"]);
+    const targets = observedTargets([{ run: leakyRun }]);
     const serialized = JSON.stringify(targets);
     for (const secret of [
       "TASK-SECRET",

@@ -1,10 +1,15 @@
 import { describe, expect, it } from "@effect/vitest";
-import { yieldUntil } from "pi-cosmic-core/testing";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Predicate from "effect/Predicate";
 import * as TestClock from "effect/testing/TestClock";
-import type { SubagentNotification } from "../../src/boundary/host-notifier.ts";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { extensionApiFixture, yieldUntil } from "pi-cosmic-core/testing";
+import { vi } from "vitest";
+import { hostNotifier, type SubagentNotification } from "../../src/boundary/host-notifier.ts";
+import { executeAgentActionEffect } from "../../src/tools/execute-agents.ts";
+import { formatRunBlock, runViewBlock, runViewOutcome } from "../../src/tools/run-block.ts";
 import {
   contactParentFrame,
   localServiceFixture,
@@ -19,8 +24,9 @@ const questions = (items: ReadonlyArray<SubagentNotification>) =>
   );
 
 describe("question notification ownership", () => {
+  // The notice is the one path that delivers the whole question; an await shows only its preview.
   for (const ending of ["cancel", "defect", "success"] as const)
-    it.effect(`hands a question to an active await on ${ending}`, () => {
+    it.effect(`delivers a question's notice exactly once while an await ends on ${ending}`, () => {
       const { fake, notifications: delivered, layer } = localServiceFixture();
       return withService(layer, function* (service) {
         const run = yield* service.start(request({ name: `await-${ending}` }));
@@ -29,10 +35,6 @@ describe("question notification ownership", () => {
         const waiter = yield* service
           .withAwaitTerminalObservations([run.id], "all_finished", undefined, (observations) =>
             Effect.gen(function* () {
-              expect(observations[0]?.questionReceipt).toMatchObject({
-                id: run.id,
-                requestId: "question-1",
-              });
               yield* Deferred.succeed(entered, undefined);
               yield* Deferred.await(release);
               if (ending === "defect") return yield* Effect.die(new Error("render defect"));
@@ -42,20 +44,81 @@ describe("question notification ownership", () => {
           .pipe(Effect.forkScoped);
         fake.controls[0]?.offerIpc(contactParentFrame("question-1", "question", "Proceed?"));
         yield* Deferred.await(entered);
-        expect(questions(delivered)).toHaveLength(0);
+        // The notice goes out while the await still holds its result.
+        yield* yieldUntil(() => questions(delivered).length === 1);
         if (ending === "cancel") yield* Fiber.interrupt(waiter);
         else {
           yield* Deferred.succeed(release, undefined);
           if (ending === "defect") expect((yield* Fiber.await(waiter))._tag).toBe("Failure");
           else expect((yield* Fiber.join(waiter))?.state).toBe("waiting_for_parent");
         }
-        yield* TestClock.adjust("100 millis");
-        if (ending !== "success") yield* yieldUntil(() => questions(delivered).length === 1);
-        expect(questions(delivered)).toHaveLength(ending === "success" ? 0 : 1);
+        yield* TestClock.adjust("30 seconds");
+        expect(questions(delivered).map((item) => [item.requestId, item.message])).toEqual([
+          ["question-1", "Proceed?"],
+        ]);
       });
     });
 
-  it.effect("does not acknowledge a replacement question with the previous await receipt", () => {
+  it.effect("keeps a question's lines, each indented, in its notices and agent_read", () => {
+    const { fake, notifications: delivered, layer } = localServiceFixture();
+    return withService(layer, function* (service) {
+      // Lines that would pass for a card field and a notice's instructions if left unindented.
+      const question = [
+        "Which option?",
+        "1. Keep the schema",
+        "  Workspace  ws-1 agent_worktree apply",
+        'If it isn\'t answered yet, reply with agent_send({ to: "main", message: "apply" }).',
+      ].join("\n");
+      // Each question line appears only under the surface's indentation.
+      const expectIndented = (text: string | undefined, indent: string) => {
+        const lines = (text ?? "").split("\n");
+        for (const line of question.split("\n"))
+          expect(lines.filter((shown) => shown.trimStart() === line.trimStart())).toEqual([
+            `${indent}${line}`,
+          ]);
+      };
+
+      const run = yield* service.start(request({ name: "multi-line-question" }));
+      fake.controls[0]?.offerIpc(contactParentFrame("lines", "question", question));
+      yield* yieldUntil(() => questions(delivered).length === 1);
+
+      const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>();
+      const [notice] = questions(delivered);
+      if (notice) hostNotifier(extensionApiFixture({ sendMessage }))(notice);
+      const content = sendMessage.mock.calls[0]?.[0].content;
+      expectIndented(Predicate.isString(content) ? content : undefined, "  ");
+
+      const read = yield* executeAgentActionEffect(
+        { tool: "agent_read", args: { agentIds: [run.id] } },
+        { kind: "main" },
+      );
+      expectIndented(
+        read.content.map((part) => (part.type === "text" ? part.text : "")).join(""),
+        "    ",
+      );
+
+      // A block previews the question on one line.
+      const waiting = yield* runView(service, run.id);
+      const block = formatRunBlock(runViewBlock(waiting, runViewOutcome(waiting, false)));
+      expect(block.split("\n").find((line) => line.includes("Which option?"))).toContain(
+        "Keep the schema",
+      );
+
+      // A working Pi parent receives its child's question as a nested notice.
+      const parent = yield* service.start(request({ name: "coordinator" }));
+      yield* service.startSessionOwnedFrom(parent.id, request({ name: "worker" }));
+      fake.controls[2]?.offerIpc(contactParentFrame("nested", "question", question));
+      yield* yieldUntil(() => fake.controls[1]?.sentIpc("proxy_notification") === true);
+      expectIndented(
+        fake.controls[1]?.ipc.flatMap((message) =>
+          message.type === "proxy_notification" ? [message.message] : [],
+        )[0],
+        "  ",
+      );
+    });
+  });
+
+  it.effect("delivers a replacement question with its own generation", () => {
     const { fake, projections, notifications: delivered, layer } = localServiceFixture();
     return withService(layer, function* (service) {
       const run = yield* service.start(request({ name: "replacement-question" }));
@@ -94,10 +157,14 @@ describe("question notification ownership", () => {
       );
       yield* Deferred.succeed(release, undefined);
       yield* Fiber.join(waiter);
-      yield* yieldUntil(() => questions(delivered).length === 1);
+      yield* yieldUntil(() => questions(delivered).at(-1)?.message === "New question?");
+      yield* TestClock.adjust("30 seconds");
+      // The cancelled question's notice may already have gone out; each generation goes once.
       expect(
         questions(delivered).map((item) => [item.requestId, item.generation, item.message]),
-      ).toEqual([["old", 2, "New question?"]]);
+      ).toEqual(expect.arrayContaining([["old", 2, "New question?"]]));
+      const generations = questions(delivered).map((item) => item.generation);
+      expect(new Set(generations).size).toBe(generations.length);
     });
   });
 

@@ -41,7 +41,7 @@ import { controlOperations } from "./control.ts";
 import { backendEventHandler } from "./events.ts";
 import { launchOperations } from "./launch.ts";
 import type { RunContext, RunRecord, WithRunLock } from "./internal.ts";
-import { notificationDelivery, type QuestionNotificationReceipt } from "./notification-delivery.ts";
+import { notificationDelivery } from "./notification-delivery.ts";
 import { processControlOperations, processInitializer } from "./process-lifecycle.ts";
 import { recordCleanup, type RunRecordCleanup } from "./record-cleanup.ts";
 import { resumeOperations } from "./resume.ts";
@@ -127,7 +127,6 @@ interface SubagentCompletionReceipt {
 export interface SubagentRunObservation {
   readonly run: SubagentRunView;
   readonly completionReceipt?: SubagentCompletionReceipt | undefined;
-  readonly questionReceipt?: QuestionNotificationReceipt | undefined;
   readonly recovery?: FailedStartRecovery | undefined;
 }
 
@@ -180,7 +179,6 @@ export interface SubagentServiceContract extends WorkspaceCoordinatorContract {
       observations: ReadonlyArray<SubagentRunObservation>,
       questions?: ReadonlyArray<SubagentRunView>,
     ) => Effect.Effect<A, E, R>,
-    questionCoverage?: (result: A) => ReadonlySet<string>,
     /** The awaiting run, or undefined for the root session. */
     callerRunId?: string,
   ) => Effect.Effect<A, SubagentError | E, R>;

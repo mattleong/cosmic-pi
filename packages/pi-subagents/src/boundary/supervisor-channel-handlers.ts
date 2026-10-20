@@ -14,7 +14,7 @@ import type { AgentListResult, AgentReadResult } from "../run/agent-messaging.ts
 import { agentAttentionFact, agentReadCard, agentWorktreeFact } from "../tools/execute-agents.ts";
 import { formatRunModel } from "../tools/format.ts";
 import { subagentErrorCode, type SubagentError } from "../run/errors.ts";
-import { reportFileText } from "../run/state.ts";
+import { clipWithMarker, reportFileText } from "../run/state.ts";
 import {
   MAX_SUPERVISOR_AGENT_CARD_CHARS,
   MAX_SUPERVISOR_AGENT_FACT_CHARS,
@@ -131,9 +131,10 @@ const wireAgentRead = (
     const source = entry.kind === "run" ? entry.source : undefined;
     const card =
       entry.kind === "run"
-        ? safeTextPrefix(
+        ? clipWithMarker(
             agentReadCard(entry.run, { caller: agents.caller, parentCwd: agents.cwd, verbose }),
             MAX_SUPERVISOR_AGENT_CARD_CHARS,
+            "\n… [status card truncated]",
           )
         : undefined;
     return {

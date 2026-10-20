@@ -38,7 +38,7 @@ const finishedScout = view({
   parentRunId: "root",
   depth: 1,
   pid: 4242,
-  warning: "Schema drift is likely.",
+  childWarning: "Schema drift is likely.",
 });
 
 const READ: AgentReadResult = {

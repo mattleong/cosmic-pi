@@ -33,10 +33,6 @@ const messageEnd = (text: string) => ({
 const quietDelivery: RunNotificationDelivery = {
   deliverPendingCompletions: Effect.void,
   queueActionNotificationLocked: () => undefined,
-  claimQuestionsLocked: () => undefined,
-  questionReceiptLocked: () => undefined,
-  acknowledgeQuestionsLocked: () => undefined,
-  releaseQuestionClaimsLocked: () => undefined,
   insertCompletionLocked: () => undefined,
   wakeCompletionLocked: () => undefined,
   discardQuestionLocked: () => undefined,

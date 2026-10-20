@@ -9,8 +9,11 @@ import { isTerminalRunState, type SubagentRunView } from "./model.ts";
 
 export type SettlementState = PendingInitializationSettlement["state"];
 
-/** What settlement learned about a completed report beyond its retained text. */
-export type SettledReport = Pick<SubagentRunView, "finalTextTruncation" | "reportArchive">;
+/** What settlement learned about a report or failure beyond its retained text: cuts and files. */
+export type SettledReport = Pick<
+  SubagentRunView,
+  "finalTextTruncation" | "reportArchive" | "errorArchive"
+>;
 
 const terminalFailureMessage = (terminal?: BackendAssistantTerminal): string => {
   const stopReason = terminal?.stopReason;
@@ -74,7 +77,7 @@ export const viewForSettlement = (
   now: number,
   finalText: string | undefined,
   error: string | undefined,
-  report: SettledReport,
+  { errorArchive, ...report }: SettledReport,
 ): SubagentRunView => ({
   ...record.view,
   state,
@@ -88,5 +91,5 @@ export const viewForSettlement = (
   }),
   ...(state === "completed" && { reportGeneration: record.completionGeneration }),
   ...(finalText && { finalText, ...report }),
-  ...(error !== undefined && { error }),
+  ...(error !== undefined && { error, ...(errorArchive && { errorArchive }) }),
 });

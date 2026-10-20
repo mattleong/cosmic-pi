@@ -18,11 +18,12 @@ import {
   MAX_FINAL_TEXT_CHARS,
   unsavedReportNote,
 } from "../../src/run/state.ts";
-import { awaitContract } from "../../src/tools/contract.ts";
+import { awaitContract, readStatusTarget } from "../../src/tools/contract.ts";
 import { decodeSubagentContract, encodeSubagentContract } from "../../src/tools/contract-schema.ts";
 import { executeAgentActionEffect } from "../../src/tools/execute-agents.ts";
 import { projectSubagentRunCard } from "../../src/tools/details-projection.ts";
-import { formatDetailedRuns } from "../../src/tools/format.ts";
+import { awaitResultText } from "../../src/tools/execute-await.ts";
+import { MAX_OUTCOME_PREVIEW_CHARS } from "../../src/run/limits.ts";
 import { temporaryDirectory } from "../workspace/fixtures/repository.ts";
 import {
   acknowledgeCompletions,
@@ -118,23 +119,22 @@ describe("report retention", () => {
         expect(readText.join("\n")).not.toContain("finding 0\n");
 
         const observations = yield* awaitObservations(service, [run.id]);
-        const formatted = formatDetailedRuns(observations.map((observation) => observation.run));
+        const text = awaitResultText("", observations, []);
         const contract = awaitContract({
           observations,
-          deliveredIds: formatted.deliveredIds,
           until: "all_finished",
           requestedRunIds: [run.id],
         });
         expect(() => encodeSubagentContract(contract)).not.toThrow();
         const [target] = contract.targets;
         expect(target?.report).toEqual({ status: "delivered", ...reportFile });
-        expect(formatted.text).toContain(reportFile?.path);
-        expect(formatted.text).not.toContain("finding 0\n");
+        expect(text).toContain(reportFile?.path);
+        expect(text).not.toContain("finding 0\n");
       });
     }).pipe(Effect.scoped),
   );
 
-  it.effect("inlines the bounded retained report only when the archive can't be written", () =>
+  it.effect("previews the report and points to agent_read when the archive can't be written", () =>
     Effect.gen(function* () {
       const agent = yield* temporaryDirectory("report-retention-");
       // A file where the archive directory belongs makes every write fail.
@@ -168,15 +168,17 @@ describe("report retention", () => {
         const observations = yield* awaitObservations(service, [run.id]);
         const [target] = awaitContract({
           observations,
-          deliveredIds: new Set([run.id]),
           until: "all_finished",
           requestedRunIds: [run.id],
         }).targets;
         const delivered = target?.report;
         expect(delivered && "text" in delivered && delivered.truncated).toBe(true);
         expect(delivered && "text" in delivered && delivered.text.length).toBeLessThanOrEqual(
-          MAX_FINAL_TEXT_CHARS,
+          MAX_OUTCOME_PREVIEW_CHARS,
         );
+        const text = awaitResultText("", observations, []);
+        expect(text).toContain("finding 0 finding 1");
+        expect(text).toContain("agent_read");
       });
 
       const notified = blockedFixture();
@@ -189,8 +191,9 @@ describe("report retention", () => {
         const notice = completedRun(notified.notifications[0]);
         expect(notice?.reportArchive).toBeUndefined();
         const text = noticeText(notice);
-        expect(text).toContain("finding 0\nfinding 1\n");
-        expect(text.length).toBeLessThanOrEqual(32 * 1024);
+        expect(text).toContain("finding 0 finding 1");
+        expect(text).toContain("agent_read");
+        expect(text).not.toContain("finding 11999");
         expect(text).not.toContain(blocked);
       });
     }).pipe(Effect.scoped),
@@ -227,6 +230,53 @@ describe("report retention", () => {
       });
     }).pipe(Effect.scoped),
   );
+
+  for (const long of [false, true])
+    it.effect(
+      long
+        ? "saves a failure longer than its preview and names its file in the notice"
+        : "saves no file for a failure that fits its preview",
+      () =>
+        Effect.gen(function* () {
+          const agent = yield* temporaryDirectory("report-retention-");
+          const { fake, projections, notifications, layer } = localServiceFixture({
+            archiveReport: sessionReportArchive(agent, "session-1"),
+          });
+          yield* withService(layer, function* (service) {
+            const run = yield* service.start(request());
+            fake.controls[0]!.offer({ type: "message_start", message: { role: "assistant" } });
+            fake.controls[0]!.offer({
+              type: "message_end",
+              message: {
+                role: "assistant",
+                stopReason: "error",
+                errorMessage: `Provider unavailable.${long ? ` ${"detail ".repeat(100)}` : ""}`,
+                content: [{ type: "text", text: "Partial work." }],
+              },
+            });
+            fake.controls[0]!.offer({ type: "agent_settled" });
+            yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
+
+            const failed = yield* runView(service, run.id);
+            expect((failed.error?.length ?? 0) > MAX_OUTCOME_PREVIEW_CHARS).toBe(long);
+            expect(readStatusTarget(failed).errorFile !== undefined).toBe(long);
+            yield* TestClock.adjust("100 millis");
+            yield* yieldUntil(() => notifications.length > 0);
+            const notified = completedRun(notifications[0]);
+            expect(notified?.errorArchive).toEqual(failed.errorArchive);
+            const notice = noticeText(notified);
+            if (!long) {
+              expect(failed.errorArchive).toBeUndefined();
+              expect(notice).toContain("Provider unavailable.");
+              return;
+            }
+            expect(failed.errorArchive?.path).toContain("failure");
+            expect(yield* readFile(failed.errorArchive?.path ?? "missing")).toBe(failed.error);
+            expect(notice).toContain(failed.errorArchive?.path ?? "missing");
+            expect(notice).not.toContain("detail ".repeat(100));
+          });
+        }).pipe(Effect.scoped),
+    );
 
   it.effect("completes the run when the archive capability throws", () => {
     const { fake, projections, layer } = localServiceFixture({
@@ -268,7 +318,6 @@ describe("report retention", () => {
 
         const [target] = awaitContract({
           observations: yield* awaitObservations(service, [run.id]),
-          deliveredIds: new Set([run.id]),
           until: "all_finished",
           requestedRunIds: [run.id],
         }).targets;

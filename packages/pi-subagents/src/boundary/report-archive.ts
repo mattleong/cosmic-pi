@@ -9,8 +9,8 @@ import {
   nodePath as path,
   nodeWriteFileSync,
 } from "./node-builtins.ts";
+import { MAX_OUTCOME_FILE_PATH_CHARS } from "../run/limits.ts";
 import type { SubagentReportArchive } from "../run/model.ts";
-import { MAX_CARD_PATH_CHARS } from "../tools/details-schema.ts";
 import {
   PRIVATE_STATE_RETENTION_MILLIS,
   REPORT_ARCHIVE_ROOT,
@@ -20,6 +20,8 @@ import {
 export interface ReportArchiveEntry {
   readonly id: string;
   readonly generation: number;
+  /** A failure's file; a report's when absent. */
+  readonly kind?: "failure" | undefined;
   readonly text: string;
   /** The whole report's length when `text` holds only its start. */
   readonly originalChars?: number | undefined;
@@ -41,8 +43,9 @@ const archivedContent = (entry: ReportArchiveEntry): string =>
     : entry.text;
 
 /**
- * Writes each completed report to a private file keyed by the Pi session. The parent reads the
- * report from this file, and can re-read it after compaction, `/reload`, or a resumed session.
+ * Writes each completed report, and each failure too long to preview, to a private file keyed by
+ * the Pi session. The parent reads the text from this file, and can re-read it after
+ * compaction, `/reload`, or a resumed session.
  */
 export const sessionReportArchive = (agentDirectory: string, sessionKey: string): ReportArchive => {
   const directory = path.join(
@@ -52,11 +55,12 @@ export const sessionReportArchive = (agentDirectory: string, sessionKey: string)
   return (entry) => {
     const file = path.join(
       directory,
-      `${safeSubagentDirectorySegment(entry.id)}-${entry.generation}-${synchronousRandomUuid()}.md`,
+      `${safeSubagentDirectorySegment(entry.id)}-${entry.kind ? `${entry.kind}-` : ""}${entry.generation}-${synchronousRandomUuid()}.md`,
     );
-    // Every surface names the file by its path verbatim, so one they can't carry saves nothing
-    // and the report reaches the parent inline.
-    if (file.length > MAX_CARD_PATH_CHARS || sanitizeTerminalLine(file) !== file) return undefined;
+    // Every surface names the file by its path verbatim within a fixed per-run budget, so a path
+    // they can't carry saves nothing and the parent gets a preview and agent_read instead.
+    if (file.length > MAX_OUTCOME_FILE_PATH_CHARS || sanitizeTerminalLine(file) !== file)
+      return undefined;
     try {
       nodeMkdirSync(directory, { recursive: true, mode: 0o700 });
       // Run ids restart in every process. Exclusive creation also preserves an old link if the

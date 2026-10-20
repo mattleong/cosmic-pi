@@ -17,17 +17,18 @@ import type { SubagentAwaitUntil, SubagentRunObservation } from "../run/service.
 import { MAX_NAME_CHARS, sanitizeName } from "../run/state.ts";
 import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
 import { runAttention } from "../run/attention.ts";
+import { MAX_CONTACT_TEXT_CHARS } from "../run/limits.ts";
+import { distinctRunWarnings } from "../run/warnings.ts";
 import {
-  MAX_CONTRACT_ERROR_CHARS,
   MAX_CONTRACT_MESSAGE_CHARS,
-  MAX_CONTRACT_QUESTION_CHARS,
-  MAX_CONTRACT_REPORT_CHARS,
+  MAX_CONTRACT_PREVIEW_CHARS,
   SUBAGENT_CONTRACT_ID,
   SUBAGENT_CONTRACT_VERSION,
   type ContractAttention,
   type ContractFailure,
   type ContractLifecycleAction,
   type ContractLifecycleResult,
+  type ContractReadStatus,
   type ContractRecovery,
   type ContractReport,
   type ContractRunTarget,
@@ -89,24 +90,31 @@ const projectFailure = (
   };
 };
 
-export const projectAttention = (run: SubagentRunView): ContractAttention | undefined => {
+/** A question's preview, or with `questionChars` its whole retained text. */
+export const projectAttention = (
+  run: SubagentRunView,
+  questionChars = MAX_CONTRACT_PREVIEW_CHARS,
+): ContractAttention | undefined => {
   const attention = runAttention(run);
   if (attention?.kind !== "question") return attention;
   const message = sanitizeDiagnosticContent(stripTerminalControls(attention.message), {
-    maximumLength: MAX_CONTRACT_QUESTION_CHARS,
+    maximumLength: questionChars,
   }).trim();
   return message ? { kind: "question", message } : { kind: "question-unavailable" };
 };
 
-const projectWarnings = (run: SubagentRunView): ContractRunTarget["warnings"] => {
-  const warnings: Array<ContractRunTarget["warnings"][number]> = [];
-  const warning = metadata(run.warning, MAX_CONTRACT_MESSAGE_CHARS);
-  const system = metadata(run.systemWarning, MAX_CONTRACT_MESSAGE_CHARS);
-  if (warning !== undefined)
-    warnings.push({ ...(run.warningSource && { source: run.warningSource }), message: warning });
-  const repeatsCurrent = run.warningSource === "system" && run.systemWarning === run.warning;
-  if (system !== undefined && !repeatsCurrent) warnings.push({ source: "system", message: system });
-  return warnings;
+/** The retained child and system warnings. */
+const projectWarnings = (run: SubagentRunView, chars: number): ContractRunTarget["warnings"] => {
+  const warnings = distinctRunWarnings(run);
+  return (
+    [
+      ["child", warnings.child],
+      ["system", warnings.system],
+    ] as const
+  ).flatMap(([source, warning]) => {
+    const message = metadata(warning, chars);
+    return message === undefined ? [] : [{ source, message }];
+  });
 };
 
 const WITHHELD_REPORT_STATUS = {
@@ -127,13 +135,10 @@ const withheldReport = (run: SubagentRunView): ContractWithheldReport => ({
       : WITHHELD_REPORT_STATUS[run.reportStatus],
 });
 
-const observedReport = (
-  { run, completionReceipt }: SubagentRunObservation,
-  deliveredIds: ReadonlySet<string>,
-): ContractReport => {
+/** Every claimed report an await observes is delivered: its result always shows the outcome. */
+const observedReport = ({ run, completionReceipt }: SubagentRunObservation): ContractReport => {
   if (!isTerminalRunState(run.state)) return { status: "not_finished" };
   if (completionReceipt === undefined) return withheldReport(run);
-  if (!deliveredIds.has(run.id)) return { status: "deferred" };
   const text = stripTerminalControls(run.finalText ?? "");
   if (!text.trim()) return { status: "missing" };
   const file = projectReportFile(run.reportArchive);
@@ -141,20 +146,28 @@ const observedReport = (
     ? { status: "delivered", ...file }
     : {
         status: "delivered",
-        text: safeTextPrefix(text, MAX_CONTRACT_REPORT_CHARS),
-        truncated: run.finalTextTruncation !== undefined || text.length > MAX_CONTRACT_REPORT_CHARS,
+        text: safeTextPrefix(text, MAX_CONTRACT_PREVIEW_CHARS),
+        truncated:
+          run.finalTextTruncation !== undefined || text.length > MAX_CONTRACT_PREVIEW_CHARS,
       };
 };
 
+/** `detailChars` bounds the question, warnings, and error: previews, or a read's whole text. */
 const targetFields = (
   run: SubagentRunView,
   recovery?: FailedStartRecovery,
+  detailChars = MAX_CONTRACT_PREVIEW_CHARS,
 ): Omit<ContractRunTarget, "report"> => {
   const profile = knownProfile(run.profile);
-  const attention = projectAttention(run);
-  const error = metadata(run.error, MAX_CONTRACT_ERROR_CHARS);
-  const cleanup = projectRunCleanup(run.cleanup);
-  const resumedBy = metadata(run.resumedBy, MAX_CONTRACT_MESSAGE_CHARS);
+  const attention = projectAttention(run, detailChars);
+  const error = metadata(run.error, detailChars);
+  const errorFile = error === undefined ? undefined : projectReportFile(run.errorArchive);
+  // Cleanup diagnostics are evidence for agent_read; a target keeps its disposition and recovery.
+  const cleanup = run.cleanup && {
+    disposition: run.cleanup.disposition,
+    ...(run.cleanup.recovery !== undefined && { recovery: run.cleanup.recovery }),
+  };
+  const resumedBy = metadata(run.resumedBy, MAX_CONTRACT_PREVIEW_CHARS);
   return {
     ...(cleanup !== undefined && { cleanup }),
     ...(run.writerCleanupQuarantined !== undefined && {
@@ -176,22 +189,33 @@ const targetFields = (
     parentActionRequired: isParentActionRequiredRun(run),
     ...(attention !== undefined && { attention }),
     ...(recovery?.runId === run.id && { retry: projectRecovery(recovery) }),
-    warnings: projectWarnings(run),
+    warnings: projectWarnings(run, detailChars),
     ...(error !== undefined && { error }),
+    ...(errorFile !== undefined && { errorFile }),
   };
 };
 
-export const withheldTarget = (run: SubagentRunView): ContractWithheldRunTarget => ({
+const withheldTarget = (run: SubagentRunView): ContractWithheldRunTarget => ({
   ...targetFields(run),
   report: withheldReport(run),
 });
 
-const observedTarget = (
-  observation: SubagentRunObservation,
-  deliveredIds: ReadonlySet<string>,
-): ContractRunTarget => ({
+/**
+ * A read's status, the detail surface, which carries the whole pending question, both retained
+ * warnings, the error, and cleanup diagnostics.
+ */
+export const readStatusTarget = (run: SubagentRunView): ContractReadStatus => {
+  const cleanup = projectRunCleanup(run.cleanup);
+  return {
+    ...targetFields(run, undefined, MAX_CONTACT_TEXT_CHARS),
+    report: withheldReport(run),
+    ...(cleanup !== undefined && { cleanup }),
+  };
+};
+
+const observedTarget = (observation: SubagentRunObservation): ContractRunTarget => ({
   ...targetFields(observation.run, observation.recovery),
-  report: observedReport(observation, deliveredIds),
+  report: observedReport(observation),
 });
 
 const UNOBSERVED_LAUNCH: SubagentStartFailure = {
@@ -266,7 +290,6 @@ export const startContract = (
 
 interface AwaitContractInput {
   readonly observations: ReadonlyArray<SubagentRunObservation>;
-  readonly deliveredIds: ReadonlySet<string>;
   readonly until: SubagentAwaitUntil;
   readonly requestedRunIds: ReadonlyArray<string>;
   /** Another run that the caller did not await asked it a question. */
@@ -274,9 +297,7 @@ interface AwaitContractInput {
 }
 
 export const awaitContract = (input: AwaitContractInput): SubagentAwaitContract => {
-  const targets = input.observations.map((observation) =>
-    observedTarget(observation, input.deliveredIds),
-  );
+  const targets = input.observations.map(observedTarget);
   return {
     ...envelope(SUBAGENT_TOOL_NAME.await),
     outcome:

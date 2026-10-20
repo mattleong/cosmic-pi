@@ -87,26 +87,12 @@ const tagged = (tag: string): string => `${tag}:${"x".repeat(MAX_ERROR_CHARS - t
 
 const receipt = (id: string) => ({ id, generation: 1, claimToken: `claim-${id}` });
 
-/** Awaits observations through a double that acknowledges only the questions the await covered. */
 const awaitObservations = (observations: ReadonlyArray<SubagentRunObservation>) =>
   Effect.gen(function* () {
     const consumed: Array<string> = [];
-    const acknowledged: Array<string> = [];
     const tool = captureSubagentTools(
       subagentServiceDouble({
-        withAwaitTerminalObservations: (_ids, _until, _onUpdate, use, questionCoverage) =>
-          use(observations).pipe(
-            Effect.tap((result) =>
-              Effect.sync(() => {
-                const covered = questionCoverage?.(result);
-                acknowledged.push(
-                  ...observations.flatMap(({ run, questionReceipt }) =>
-                    questionReceipt && covered?.has(run.id) ? [run.id] : [],
-                  ),
-                );
-              }),
-            ),
-          ),
+        withAwaitTerminalObservations: (_ids, _until, _onUpdate, use) => use(observations),
         consumeCompletions: (receipts) =>
           Effect.sync(() => {
             consumed.push(...receipts.map((item) => item.id));
@@ -123,24 +109,22 @@ const awaitObservations = (observations: ReadonlyArray<SubagentRunObservation>) 
       text: resultText(response),
       contract: decodeSubagentContract("agent_await")(response.structuredContent),
       consumed,
-      acknowledged,
     };
   });
 
-describe("await outcome reservation", () => {
-  effectTest("pending reports outlast long diagnostics and consumed failures", function* () {
-    const consumedFailures = Array.from({ length: 5 }, (_, index) => ({
+describe("await outcomes", () => {
+  effectTest("delivers every claimed outcome beside long failures and warnings", function* () {
+    const failures = Array.from({ length: 5 }, (_, index) => ({
       run: view({
         id: `failed-${index}`,
         state: "failed",
-        reportStatus: "delivered",
-        error: tagged(`OLD-FAILURE-${index}`),
+        error: tagged(`FAILURE-${index}`),
         warning: tagged(`WARNING-${index}`),
       }),
+      completionReceipt: receipt(`failed-${index}`),
     }));
-    const pendingReports = Array.from({ length: 6 }, (_, index) => {
+    const reports = Array.from({ length: 6 }, (_, index) => {
       const id = `done-${index}`;
-      const reportFile = { ...REPORT_FILE, path: `${ARCHIVE_PATH}.${index}` };
       return {
         run: view({
           id,
@@ -148,70 +132,38 @@ describe("await outcome reservation", () => {
           reportGeneration: 1,
           warning: tagged(`WARNING-${id}`),
           finalText: "REPORT BODY",
-          reportArchive: reportFile,
+          reportArchive: { ...REPORT_FILE, path: `${ARCHIVE_PATH}.${index}` },
         }),
         completionReceipt: receipt(id),
       };
     });
-
-    // Listed after the failures, whose outcomes alone would fill the room it needs.
-    const inlineReport = {
-      run: view({
-        id: "inline",
-        state: "completed",
-        reportGeneration: 1,
-        finalText: tagged("INLINE-REPORT"),
-      }),
-      completionReceipt: receipt("inline"),
-    };
-    const pending = [inlineReport, ...pendingReports];
-
-    const { text, contract, consumed } = yield* awaitObservations([
-      ...consumedFailures,
-      ...pending,
-    ]);
-
-    expect(text.length).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_CHARS);
-    expect(text).toContain(inlineReport.run.finalText);
-    for (const { run } of pendingReports) expect(text).toContain(run.reportArchive?.path);
-    expect(consumed).toEqual(pending.map(({ run }) => run.id));
-    expect(
-      contract?.targets.slice(consumedFailures.length).map((target) => target.report.status),
-    ).toEqual(pending.map(() => "delivered"));
-  });
-
-  effectTest("an outcome that doesn't fit is withheld whole and stays pending", function* () {
-    const failures = Array.from({ length: 11 }, (_, index) => ({
-      run: view({ id: `failed-${index}`, state: "failed", error: tagged(`FAILURE-${index}`) }),
-      completionReceipt: receipt(`failed-${index}`),
-    }));
     const question = {
       run: view({
         id: "asking",
         state: "waiting_for_parent",
         question: { requestId: "q-1", message: tagged("QUESTION") },
       }),
-      questionReceipt: { ...receipt("asking"), requestId: "q-1" },
     };
 
-    const { text, contract, consumed, acknowledged } = yield* awaitObservations([
+    const { text, contract, consumed } = yield* awaitObservations([
       ...failures,
+      ...reports,
       question,
     ]);
 
     expect(text.length).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_CHARS);
-    const shown = failures.filter(({ run }) => text.includes(run.error ?? ""));
-    expect(shown.length).toBeGreaterThan(0);
-    expect(shown.length).toBeLessThan(failures.length);
-    for (const [index, { run }] of failures.entries()) {
-      const whole = shown.some((item) => item.run.id === run.id);
-      // An outcome is never cut: a withheld failure leaves no part of itself behind.
-      if (!whole) expect(text).not.toContain(`FAILURE-${index}:`);
-      expect(contract?.targets[index]?.report.status).toBe(whole ? "missing" : "deferred");
-    }
-    expect(consumed).toEqual(shown.map(({ run }) => run.id));
+    for (const { run } of failures) expect(text).toContain(run.error?.slice(0, 12) ?? "missing");
+    for (const { run } of reports) expect(text).toContain(run.reportArchive?.path);
+    // A question shows its preview; its own notice delivers the whole question.
+    expect(text).toContain("QUESTION:");
     expect(text).not.toContain(question.run.question?.message);
-    expect(acknowledged).toEqual([]);
+    expect(text).toContain("agent_read");
+    expect(consumed).toEqual([...failures, ...reports].map(({ run }) => run.id));
+    expect(
+      contract?.targets
+        .slice(failures.length, -1)
+        .map(({ report }) => ("path" in report ? report.path : report.status)),
+    ).toEqual(reports.map(({ run }) => run.reportArchive?.path));
   });
 });
 

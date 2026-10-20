@@ -168,10 +168,13 @@ export interface SubagentReportTruncation {
   readonly originalLines: number;
 }
 
-/** A completed assignment's report, saved to a private file: the report the parent reads. */
+/**
+ * A completed assignment's report, saved to a private file: the report the parent reads. A failure
+ * longer than its preview is saved the same way.
+ */
 export interface SubagentReportArchive {
   readonly path: string;
-  /** The saved report's size. */
+  /** The saved text's size. */
   readonly chars: number;
   readonly lines: number;
   /** False when the report exceeded the archive cap, so the file holds only its start. */
@@ -225,8 +228,11 @@ export interface SubagentRunView {
   readonly lastActivityAt: number;
   readonly currentTool?: string | undefined;
   readonly progress?: string | undefined;
+  /** The latest warning from either source. */
   readonly warning?: string | undefined;
   readonly warningSource?: "child" | "system" | undefined;
+  /** The latest child warning and the latest system warning, each kept for this assignment. */
+  readonly childWarning?: string | undefined;
   readonly systemWarning?: string | undefined;
   readonly question?: PendingParentQuestion | undefined;
   readonly sessionEvents: ReadonlyArray<SubagentSessionEvent>;
@@ -235,6 +241,8 @@ export interface SubagentRunView {
   readonly reportArchive?: SubagentReportArchive | undefined;
   readonly reportStatus?: "available" | "claimed" | "delivered" | "missing" | undefined;
   readonly error?: string | undefined;
+  /** The saved failure, when `error` is longer than the model-facing preview. */
+  readonly errorArchive?: SubagentReportArchive | undefined;
   readonly usage: SubagentUsage;
   readonly toolUses?: number | undefined;
   /** Agent messages this run sent or received; `sessionEvents` keeps only the newest. */

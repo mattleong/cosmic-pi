@@ -1,16 +1,18 @@
 import { hasObjectRuntimeType, invokeHostCallback } from "pi-cosmic-core";
 import * as Effect from "effect/Effect";
-import type {
-  SubagentNotification,
-  SubagentNotificationDelivery,
+import {
+  completionBlock,
+  type SubagentNotification,
+  type SubagentNotificationDelivery,
 } from "../boundary/host-notifier.ts";
-import { resumedByText } from "./agent-messaging.ts";
+import { indentQuestionLines } from "../tools/format.ts";
+import { formatRunBlock } from "../tools/run-block.ts";
 import { completionNotificationKey, deliveredCompletionKeys } from "./completion.ts";
 import { isOutcomeUncertain } from "./errors.ts";
 import type { RunContext, RunRecord } from "./internal.ts";
 import { MAX_PARENT_MESSAGE_CHARS } from "./limits.ts";
 import { isActiveRunState, SUBAGENT_ROOT_RUN_ID } from "./model.ts";
-import { reportFileText, sanitizeOutputText, unsavedReportNote } from "./state.ts";
+import { sanitizeOutputText } from "./state.ts";
 
 interface RunNotificationRoutingDependencies extends Pick<RunContext, "records" | "withLock"> {
   readonly admitTurnInput: (record: RunRecord) => void;
@@ -23,29 +25,16 @@ interface RunNotificationRoutingDependencies extends Pick<RunContext, "records" 
 const ancestorMessage = (notification: SubagentNotification): string => {
   if (notification.type === "question")
     return sanitizeOutputText(
-      `Descendant ${notification.name} (${notification.id}) is waiting for a reply.\n\nQuestion: ${notification.message}\n\nAnswer with agent_send({ to: "${notification.id}", message: "..." }).`,
+      `Descendant ${notification.name} (${notification.id}) is waiting for a reply.\n\nQuestion:\n${indentQuestionLines(notification.message, "  ")}\n\nIf it isn't answered yet, answer with agent_send({ to: "${notification.id}", message: "..." }).`,
       32 * 1024,
     );
   const run = notification.runs[0];
   if (!run) return "A descendant subagent finished.";
-  const outcome = run.outcome === "failed" ? "failed" : "reported";
-  // A saved report reaches the parent as its file; only a report without one is inlined.
-  const detail =
-    run.outcome === "failed"
-      ? (run.error ?? "No failure detail.")
-      : run.reportArchive
-        ? reportFileText(run.reportArchive)
-        : run.finalText
-          ? `${unsavedReportNote(run.finalTextTruncation)}\n\n${run.finalText}`
-          : "No final report.";
-  // Put qualifications before the report so bounding a long report cannot drop them.
-  const warning = run.warning ? `Warning: ${run.warning}\n\n` : "";
-  const resumer = resumedByText(run);
-  const hint = "\n\nUse agent_read or agent_await for the full run record.";
-  return `${sanitizeOutputText(
-    `Descendant ${run.name} (${run.id}) ${outcome}.\n\n${resumer ? `${resumer}\n\n` : ""}${warning}${detail}`,
-    MAX_PARENT_MESSAGE_CHARS - hint.length,
-  )}${hint}`;
+  // The same bounded block a root notice shows, so it always fits the parent message.
+  return sanitizeOutputText(
+    `Descendant subagent ${run.outcome === "failed" ? "failed" : "reported"}.\n\n${formatRunBlock(completionBlock(run))}\n\nUse agent_read for the full run record.`,
+    MAX_PARENT_MESSAGE_CHARS,
+  );
 };
 
 const canAcceptNotification = (record: RunRecord): boolean =>

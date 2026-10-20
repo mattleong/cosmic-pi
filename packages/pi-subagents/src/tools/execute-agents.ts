@@ -32,6 +32,7 @@ import {
   type SubagentRunView,
   type SubagentWorkspaceOutcome,
 } from "../run/model.ts";
+import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import { SubagentService } from "../run/service.ts";
 import { reportFileText } from "../run/state.ts";
 import { AGENT_TOOL_NAME } from "../run/tool-policy.ts";
@@ -42,7 +43,7 @@ import {
   type AgentListContract,
   type AgentReadContract,
 } from "./contract-schema.ts";
-import { envelope, metadata, projectAttention, projectName, withheldTarget } from "./contract.ts";
+import { envelope, metadata, projectAttention, projectName, readStatusTarget } from "./contract.ts";
 import { compactRunIssues } from "./compact-run-issues.ts";
 import { projectReportFile, projectSubagentRunCard } from "./details-projection.ts";
 import {
@@ -52,9 +53,8 @@ import {
   type AgentToolDetails,
 } from "./details-schema.ts";
 import {
-  attentionRecoveryText,
   boundToolOutput,
-  formatRun,
+  formatRunCard,
   formatRunModel,
   proposalGuidance,
   type RunFormatOptions,
@@ -230,32 +230,34 @@ const isParentOf = (caller: AgentCaller, run: SubagentRunView): boolean =>
   (run.parentRunId ?? SUBAGENT_ROOT_RUN_ID) ===
   (caller.kind === "main" ? SUBAGENT_ROOT_RUN_ID : caller.runId);
 
-/** A run's status card, then its parent's next steps when the reader is that parent. */
+/** A run's status card, with its parent's next steps when the reader is that parent. */
 export const agentReadCard = (
   run: SubagentRunView,
   { caller, ...options }: AgentReadOptions,
-): string =>
-  [
-    formatRun(run, true, { ...options, report: false }),
-    isParentOf(caller, run) ? attentionRecoveryText([run]) : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
+): string => formatRunCard(run, { ...options, readerIsParent: isParentOf(caller, run) });
 
-// A run's status card, then its latest message, its report's file, or its retained report.
+/** The heading before a read's message, such as `Report (report 3) (truncated):`. */
+const MAX_READ_HEADING_CHARS = 64;
+
+/**
+ * A run's status card, then its latest message, its report's file, or its retained report. The
+ * card fits whole, and so does a retained report beside it; a latest message or error too long
+ * for the rest of one tool result is cut.
+ */
 const runReadSection = (
   readout: Extract<AgentReadout, { readonly kind: "run" }>,
   options: AgentReadOptions,
 ): string => {
+  const card = agentReadCard(readout.run, options);
   const text = readText(readout.text);
   const source = READ_SOURCES[readout.source ?? "assistant"];
   const generation = readout.source === "report" ? ` (report ${readout.reportGeneration})` : "";
-  const message = readout.reportFile
-    ? `${source}${generation}:\n${reportFileText(readout.reportFile)}`
-    : text === undefined
-      ? "No assistant message yet."
-      : `${source}${generation}${readout.truncated ? " (truncated)" : ""}:\n${text}`;
-  return `${agentReadCard(readout.run, options)}\n${message}`;
+  if (readout.reportFile)
+    return `${card}\n${source}${generation}:\n${reportFileText(readout.reportFile)}`;
+  if (text === undefined) return `${card}\nNo assistant message yet.`;
+  const shown = clipText(text, MAX_TOOL_OUTPUT_CHARS - card.length - MAX_READ_HEADING_CHARS);
+  const truncated = readout.truncated || shown !== text;
+  return `${card}\n${source}${generation}${truncated ? " (truncated)" : ""}:\n${shown}`;
 };
 
 const readBody = (result: AgentReadResult, options: AgentReadOptions): string =>
@@ -290,7 +292,7 @@ const readContract = (result: AgentReadResult): AgentReadContract => ({
             (text !== undefined || reportFile !== undefined) && { source: readout.source }),
           ...(reportFile !== undefined && { reportFile }),
           reportGeneration: readout.reportGeneration,
-          status: withheldTarget(readout.run),
+          status: readStatusTarget(readout.run),
         };
   }),
   missingIds: [...result.missingIds],

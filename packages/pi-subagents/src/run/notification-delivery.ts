@@ -27,13 +27,6 @@ interface RunNotificationDeliveryDependencies extends Pick<
   ) => Effect.Effect<SubagentNotificationDelivery | undefined>;
 }
 
-export interface QuestionNotificationReceipt {
-  readonly id: string;
-  readonly generation: number;
-  readonly requestId: string;
-  readonly claimToken: string;
-}
-
 const nextRetryDelay = (delayMillis: number, reset: boolean): number =>
   reset ? COMPLETION_RETRY_INITIAL_MILLIS : Math.min(COMPLETION_RETRY_MAX_MILLIS, delayMillis * 2);
 
@@ -47,8 +40,9 @@ export const notificationDelivery = Effect.fn("RunNotificationDelivery.acquire")
   dependencies: RunNotificationDeliveryDependencies,
 ) {
   const { ownerScope, records, withLock, withCompletionGate, notify } = dependencies;
+  // Each question reaches the model whole only through its notice, even while an await shows
+  // its preview, so nothing claims or acknowledges it elsewhere.
   const pendingActionNotifications = new Map<string, SubagentQuestionNotification>();
-  const questionClaims = new Map<string, string>();
   const completionWake = yield* Latch.make();
   const actionWake = yield* Latch.make();
   let completionRetryDelayMillis = COMPLETION_RETRY_INITIAL_MILLIS;
@@ -114,7 +108,6 @@ export const notificationDelivery = Effect.fn("RunNotificationDelivery.acquire")
       Effect.sync(() => {
         Latch.closeUnsafe(actionWake);
         const notifications = [...pendingActionNotifications.values()].filter((notification) => {
-          if (questionClaims.has(notification.id)) return false;
           if (actionRelevant(notification)) return true;
           if (pendingActionNotifications.get(notification.id) === notification)
             pendingActionNotifications.delete(notification.id);
@@ -156,9 +149,7 @@ export const notificationDelivery = Effect.fn("RunNotificationDelivery.acquire")
                     if (pendingActionNotifications.size === 0) return ActionDeliveryState.Idle();
                     const immediate = [...pendingActionNotifications.values()].some(
                       (notification) =>
-                        !attempted.has(notification) &&
-                        actionRelevant(notification) &&
-                        !questionClaims.has(notification.id),
+                        !attempted.has(notification) && actionRelevant(notification),
                     );
                     return ActionDeliveryState.Retry({
                       immediate,
@@ -207,51 +198,9 @@ export const notificationDelivery = Effect.fn("RunNotificationDelivery.acquire")
     pendingActionNotifications.set(record.view.id, queued);
     Latch.openUnsafe(actionWake);
   };
-  const claimQuestionsLocked = (claimed: ReadonlyArray<RunRecord>, token: string): void => {
-    for (const record of claimed) questionClaims.set(record.view.id, token);
-  };
-  const questionReceiptLocked = (
-    record: RunRecord,
-    token: string,
-  ): QuestionNotificationReceipt | undefined => {
-    const pending = pendingActionNotifications.get(record.view.id);
-    return questionClaims.get(record.view.id) === token && pending && actionRelevant(pending)
-      ? {
-          id: pending.id,
-          generation: pending.generation,
-          requestId: pending.requestId,
-          claimToken: token,
-        }
-      : undefined;
-  };
-  const acknowledgeQuestionsLocked = (
-    receipts: ReadonlyArray<QuestionNotificationReceipt>,
-  ): void => {
-    for (const receipt of receipts) {
-      const pending = pendingActionNotifications.get(receipt.id);
-      if (
-        questionClaims.get(receipt.id) === receipt.claimToken &&
-        pending?.generation === receipt.generation &&
-        pending.requestId === receipt.requestId
-      )
-        pendingActionNotifications.delete(receipt.id);
-    }
-  };
-  const releaseQuestionClaimsLocked = (claimed: ReadonlyArray<RunRecord>, token: string): void => {
-    for (const record of claimed) {
-      if (questionClaims.get(record.view.id) !== token) continue;
-      questionClaims.delete(record.view.id);
-      if (pendingActionNotifications.has(record.view.id)) Latch.openUnsafe(actionWake);
-    }
-  };
-
   return {
     deliverPendingCompletions,
     queueActionNotificationLocked,
-    claimQuestionsLocked,
-    questionReceiptLocked,
-    acknowledgeQuestionsLocked,
-    releaseQuestionClaimsLocked,
     insertCompletionLocked: (record: RunRecord, completion: CompletionGenerationRecord): void => {
       record.completionGenerations.set(completion.generation, completion);
       Latch.openUnsafe(completionWake);

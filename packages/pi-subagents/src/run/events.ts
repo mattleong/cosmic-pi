@@ -1,6 +1,7 @@
 import { absurd } from "effect/Function";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import { clipText, sanitizeDiagnosticContent } from "pi-cosmic-core";
 import type { BackendEvent, BackendHandle } from "../backend/model.ts";
 import { type SubagentError, SubagentProcessError, SubagentProtocolError } from "./errors.ts";
 import { isInactiveRunRecord, recordLatestAssistantText, type RunRecord } from "./internal.ts";
@@ -16,6 +17,7 @@ import {
 } from "./session-events.ts";
 import { addUsage, captureOutputText, MAX_ERROR_CHARS, sanitizeDiagnosticText } from "./state.ts";
 import { recordRunWarning } from "./warnings.ts";
+import { MAX_CONTACT_TEXT_CHARS } from "./limits.ts";
 import { samePiModel } from "./model-catalog.ts";
 
 const ACTIVITY_PUBLISH_INTERVAL_MILLIS = 1_000;
@@ -71,7 +73,16 @@ export function backendEventHandler(dependencies: RunEventDependencies) {
     record: RunRecord,
     envelope: Extract<BackendEvent, { readonly type: "supervisor_contact" }>,
   ) => {
-    const message = sanitizeDiagnosticText(envelope.message, 16 * 1024);
+    // A question keeps its line breaks: its notice and agent_read deliver it whole.
+    const message =
+      envelope.kind === "question"
+        ? clipText(
+            sanitizeDiagnosticContent(envelope.message, {
+              maximumLength: MAX_CONTACT_TEXT_CHARS + 2,
+            }).trim(),
+            MAX_CONTACT_TEXT_CHARS,
+          )
+        : sanitizeDiagnosticText(envelope.message, MAX_CONTACT_TEXT_CHARS);
     return mutateAt(record, envelope.assignmentEpoch, (current, now) => {
       if (envelope.kind !== "question" && current.state === "paused") return undefined;
       if (envelope.kind === "progress")

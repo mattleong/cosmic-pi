@@ -20,11 +20,10 @@ import type {
 export const MAX_NAME_CHARS = 80;
 export const MAX_TASK_CHARS = 128 * 1024;
 /**
- * The report text each run keeps in memory and in saved details, for human rendering and the
- * inline fallback when no report file was saved. It leaves 2 KiB of a 32 KiB root notice for the
- * lines around that fallback; a notice whose other lines need more cuts the report and says so.
+ * The report text each run keeps in memory and in saved details, for human rendering and for
+ * `agent_read`, which returns it whole when no report file was saved.
  */
-export const MAX_FINAL_TEXT_CHARS = 30 * 1024;
+export const MAX_FINAL_TEXT_CHARS = 16 * 1024;
 /** The most of one report the archive saves; the parent reads reports from that file. */
 export const MAX_ARCHIVED_REPORT_CHARS = 1024 * 1024;
 export const MAX_ERROR_CHARS = 8 * 1024;
@@ -139,14 +138,24 @@ export const captureOutputText = ({
 
 const characterCount = (count: number): string => count.toLocaleString("en-US");
 
+const savedFileText = (label: string, archive: SubagentReportArchive): string =>
+  `${label}: ${sanitizeTerminalLine(archive.path)} (${characterCount(archive.chars)} characters, ${countLabel(archive.lines, "line")})`;
+
 /**
  * The one pointer to a saved report, wherever a report reaches a parent, such as
  * `Read the full report: <path> (5,120 characters, 120 lines)`.
  */
 export const reportFileText = (archive: SubagentReportArchive): string =>
-  `${archive.complete ? "Read the full report" : "Read the report, cut at the 1 MiB archive limit"}: ${sanitizeTerminalLine(archive.path)} (${characterCount(archive.chars)} characters, ${countLabel(archive.lines, "line")})`;
+  savedFileText(
+    archive.complete ? "Read the full report" : "Read the report, cut at the 1 MiB archive limit",
+    archive,
+  );
 
-/** How much of a cut report the run kept in memory, such as `30,720 of 90,000 characters kept`. */
+/** The pointer to a failure too long to preview, such as `Read the full failure: <path> (…)`. */
+export const failureFileText = (archive: SubagentReportArchive): string =>
+  savedFileText("Read the full failure", archive);
+
+/** How much of a cut report the run kept in memory, such as `16,384 of 90,000 characters kept`. */
 export const reportTruncationText = (truncation: SubagentReportTruncation): string =>
   `${characterCount(truncation.retainedChars)} of ${characterCount(truncation.originalChars)} characters kept`;
 

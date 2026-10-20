@@ -344,6 +344,19 @@ type AgentCall =
 const RATE_LIMITED_AGENT = "agent-r1-9";
 const SAVED_REPORT_AGENT = "agent-r1-8";
 const SAVED_REPORT_PATH = "/agent/subagents/reports/session-1/agent-r1-8-1-file.md";
+const ASKING_AGENT = "agent-r1-7";
+// A whole retained question, then warnings long enough to push the card past its bound.
+const ASKING_QUESTION = `${"Which schema? ".repeat(1_160)}QUESTION-END`;
+const askingRun = (selfId: string) =>
+  view({
+    id: ASKING_AGENT,
+    name: "peer",
+    state: "waiting_for_parent",
+    parentRunId: selfId,
+    question: { requestId: "q-1", message: ASKING_QUESTION },
+    childWarning: `${"child ".repeat(2_700)}CHILD-END`,
+    systemWarning: `${"system ".repeat(1_160)}SYSTEM-END`,
+  });
 
 // Stands in for the root's operations, already bound to the channel's run as the caller.
 const recordingAgents = (selfId: string) => {
@@ -387,29 +400,47 @@ const recordingAgents = (selfId: string) => {
       Effect.sync(() => {
         calls.push({ kind: "read", ids });
         return {
-          agents: ids.map((id) => ({
-            kind: "run" as const,
-            id,
-            name: "peer",
-            state: "completed" as const,
-            ...(id === SAVED_REPORT_AGENT
+          agents: ids.map((id) =>
+            id === ASKING_AGENT
               ? {
+                  kind: "run" as const,
+                  id,
+                  name: "peer",
+                  state: "waiting_for_parent" as const,
                   textStatus: "none" as const,
-                  reportFile: { path: SAVED_REPORT_PATH, chars: 90, lines: 3, complete: true },
+                  truncated: false,
+                  reportGeneration: 0,
+                  run: askingRun(selfId),
                 }
-              : { textStatus: "text" as const, text: `Findings from ${id}.` }),
-            truncated: false,
-            source: "report" as const,
-            reportGeneration: 1,
-            run: view({
-              id,
-              name: "peer",
-              state: "completed",
-              parentRunId: selfId,
-              warning: `Warning from ${id}.`,
-              pid: 4242,
-            }),
-          })),
+              : {
+                  kind: "run" as const,
+                  id,
+                  name: "peer",
+                  state: "completed" as const,
+                  ...(id === SAVED_REPORT_AGENT
+                    ? {
+                        textStatus: "none" as const,
+                        reportFile: {
+                          path: SAVED_REPORT_PATH,
+                          chars: 90,
+                          lines: 3,
+                          complete: true,
+                        },
+                      }
+                    : { textStatus: "text" as const, text: `Findings from ${id}.` }),
+                  truncated: false,
+                  source: "report" as const,
+                  reportGeneration: 1,
+                  run: view({
+                    id,
+                    name: "peer",
+                    state: "completed",
+                    parentRunId: selfId,
+                    childWarning: `Warning from ${id}.`,
+                    pid: 4242,
+                  }),
+                },
+          ),
           missingIds: [],
         };
       }),
@@ -1170,6 +1201,13 @@ describe("private supervisor channel", () => {
         ),
       );
       expect(verbose?.text).toContain("pid 4242");
+      // A card too long for the channel keeps its whole question and says it was cut.
+      const asking = toolText(
+        yield* step(() => toolCall(rpc, "read-asking", "agent_read", { agentIds: [ASKING_AGENT] })),
+      );
+      expect(asking?.text).toContain(ASKING_QUESTION);
+      expect(asking?.text).not.toContain("SYSTEM-END");
+      expect(asking?.text).toContain("truncated");
 
       const sent = toolText(
         yield* step(() =>
@@ -1191,6 +1229,7 @@ describe("private supervisor channel", () => {
         { kind: "read", ids: ["agent-r1-2", "main"] },
         { kind: "read", ids: [SAVED_REPORT_AGENT] },
         { kind: "read", ids: ["agent-r1-2"] },
+        { kind: "read", ids: [ASKING_AGENT] },
         { kind: "send", to: "agent-r1-2", message: "Compare notes." },
       ]);
 
@@ -1209,7 +1248,7 @@ describe("private supervisor channel", () => {
       // The channel refuses the identity and closes the peer, so the reply may never arrive.
       expect(Exit.isFailure(forged)).toBe(true);
       yield* step(() => direct.close());
-      expect(fixture.calls).toHaveLength(5);
+      expect(fixture.calls).toHaveLength(6);
     },
     20_000,
   );

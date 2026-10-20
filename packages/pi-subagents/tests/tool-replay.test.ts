@@ -15,7 +15,7 @@ import {
 import { describe, expect, vi } from "vitest";
 import { registerSubagentApplication } from "../src/application/register.ts";
 import { awaitDetails } from "../src/tools/details.ts";
-import { formatDetailedRuns } from "../src/tools/format.ts";
+import { awaitResultText } from "../src/tools/execute-await.ts";
 import { view } from "./tools/fixtures/tool-harness.ts";
 import { sessionContextFixture } from "./fixtures/pi-host.ts";
 import { effectTest, settle, step } from "./support/effect-test.ts";
@@ -37,7 +37,16 @@ const cutRun = view({
 // Raw history shows the result text, which names the saved file; adopted rows also read it, and
 // the retained report, from the persisted card.
 const cutReport: AgentToolResult<unknown> = {
-  content: [{ type: "text", text: formatDetailedRuns([cutRun]).text }],
+  content: [
+    {
+      type: "text",
+      text: awaitResultText(
+        "",
+        [{ run: cutRun, completionReceipt: { id: "agent-1", generation: 1, claimToken: "c" } }],
+        [],
+      ),
+    },
+  ],
   details: awaitDetails({
     runs: [cutRun],
     awaitedRunIds: ["agent-1"],

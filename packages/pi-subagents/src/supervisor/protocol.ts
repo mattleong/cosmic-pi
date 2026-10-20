@@ -2,6 +2,7 @@ import * as Schema from "effect/Schema";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import type { BackendEvent } from "../backend/model.ts";
+import { MAX_RUN_READ_CHARS } from "../run/agent-messaging.ts";
 import { MAX_PARENT_MESSAGE_CHARS } from "../run/limits.ts";
 import {
   MAX_SUPERVISOR_MCP_AGENT_ID_CHARS,
@@ -201,9 +202,17 @@ export class SupervisorAgentRefusal extends Schema.TaggedError<SupervisorAgentRe
 ) {}
 
 export const MAX_SUPERVISOR_AGENT_NAME_CHARS = 128;
-export const MAX_SUPERVISOR_AGENT_READ_CHARS = 32 * 1024;
+/** A run's whole retained message or report; main's longer message is cut here. */
+export const MAX_SUPERVISOR_AGENT_READ_CHARS = MAX_RUN_READ_CHARS;
 export const MAX_SUPERVISOR_AGENT_FACT_CHARS = 512;
-export const MAX_SUPERVISOR_AGENT_CARD_CHARS = 8 * 1024;
+/**
+ * A card leads with its header and whole pending question, so this keeps them; a longer card is
+ * cut with a marker. JSON spends up to six bytes on one UTF-16 unit, since a lone surrogate
+ * survives sanitizing and is written as `\ud800`. Twelve cards and texts, 12 × (24,576 + 16,640)
+ * × 6 bytes ≈ 2.83 MiB, leave room for names, IDs, and envelopes below both the 3 MiB channel
+ * line and the 4 MiB CLI stdout line, where Claude stream-json and Codex items echo the result.
+ */
+export const MAX_SUPERVISOR_AGENT_CARD_CHARS = 24 * 1024;
 const boundedFact = Schema.String.check(
   Schema.isMinLength(1),
   Schema.isMaxLength(MAX_SUPERVISOR_AGENT_FACT_CHARS),

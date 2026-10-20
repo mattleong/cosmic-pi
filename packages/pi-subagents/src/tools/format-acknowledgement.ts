@@ -1,34 +1,26 @@
-import { absurd } from "effect/Function";
 import type { SubagentRunView } from "../run/model.ts";
-import { runStateLabel } from "../ui/run-state.ts";
-import { cleanupRecoveryText, formatRun } from "./format.ts";
-import type { SubagentToolAction } from "./schema.ts";
+import { formatRunBlocks, runViewBlock, type RunBlockOutcome } from "./run-block.ts";
+import type { SubagentLifecycleInput } from "./schema.ts";
 
-const stopAcknowledgement = (run: SubagentRunView): string =>
-  [`${run.id}: ${runStateLabel(run.state)}.`, ...cleanupRecoveryText(run)].join("\n");
+const retriedOutcome = (run: SubagentRunView): RunBlockOutcome => ({
+  kind: "note",
+  text: `Started profile ${run.profile ?? "generalist"} candidate ${(run.selection.candidateIndex ?? 0) + 1}.`,
+});
 
+const ACKNOWLEDGEMENT_HEADINGS = {
+  retry: "Continued on the next profile candidate.",
+  interrupt: "Interrupted; these runs are paused.",
+  stop: "Stop requested.",
+} as const satisfies Record<SubagentLifecycleInput["action"], string>;
+
+/** One block per target, without its report, which only an await or notice delivers. */
 export const managementAcknowledgement = (
-  action: Exclude<SubagentToolAction, "models" | "start">,
+  action: SubagentLifecycleInput["action"],
   runs: ReadonlyArray<SubagentRunView>,
-): string => {
-  if (runs.length === 0) return "";
-  const ids = runs.map((run) => run.id).join(", ");
-  switch (action) {
-    case "retry":
-      return runs
-        .map((run) =>
-          run.predecessorRunId
-            ? `Continued ${run.predecessorRunId} as ${run.id} on profile ${run.profile ?? "generalist"} candidate ${(run.selection.candidateIndex ?? 0) + 1}.`
-            : `Started next profile candidate as ${run.id}.`,
-        )
-        .join("\n");
-    case "interrupt":
-      return `Interrupted ${ids}; state is paused.`;
-    case "stop":
-      return runs.map(stopAcknowledgement).join("\n");
-    case "await":
-    case "workspace":
-      return runs.map((run) => formatRun(run, true)).join("\n\n");
-  }
-  return absurd(action);
-};
+): string =>
+  runs.length === 0
+    ? ""
+    : formatRunBlocks(
+        [ACKNOWLEDGEMENT_HEADINGS[action]],
+        runs.map((run) => runViewBlock(run, action === "retry" ? retriedOutcome(run) : undefined)),
+      );
