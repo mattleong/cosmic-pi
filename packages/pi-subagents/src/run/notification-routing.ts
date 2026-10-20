@@ -10,7 +10,7 @@ import { isOutcomeUncertain } from "./errors.ts";
 import type { RunContext, RunRecord } from "./internal.ts";
 import { MAX_PARENT_MESSAGE_CHARS } from "./limits.ts";
 import { isActiveRunState, SUBAGENT_ROOT_RUN_ID } from "./model.ts";
-import { reportArchiveText, reportTruncationText, sanitizeOutputText } from "./state.ts";
+import { reportFileText, sanitizeOutputText, unsavedReportNote } from "./state.ts";
 
 interface RunNotificationRoutingDependencies extends Pick<RunContext, "records" | "withLock"> {
   readonly admitTurnInput: (record: RunRecord) => void;
@@ -29,22 +29,21 @@ const ancestorMessage = (notification: SubagentNotification): string => {
   const run = notification.runs[0];
   if (!run) return "A descendant subagent finished.";
   const outcome = run.outcome === "failed" ? "failed" : "reported";
+  // A saved report reaches the parent as its file; only a report without one is inlined.
   const detail =
     run.outcome === "failed"
       ? (run.error ?? "No failure detail.")
-      : (run.finalText ?? "No final report.");
+      : run.reportArchive
+        ? reportFileText(run.reportArchive)
+        : run.finalText
+          ? `${unsavedReportNote(run.finalTextTruncation)}\n\n${run.finalText}`
+          : "No final report.";
   // Put qualifications before the report so bounding a long report cannot drop them.
   const warning = run.warning ? `Warning: ${run.warning}\n\n` : "";
   const resumer = resumedByText(run);
-  const saved =
-    run.outcome === "completed"
-      ? (reportTruncationText(run.finalTextTruncation, run.reportArchive) ??
-        (run.reportArchive && reportArchiveText(run.reportArchive)))
-      : undefined;
-  // A whole retained report fits the IPC message bound beside its framing; the hint stays last.
   const hint = "\n\nUse agent_read or agent_await for the full run record.";
   return `${sanitizeOutputText(
-    `Descendant ${run.name} (${run.id}) ${outcome}.\n\n${resumer ? `${resumer}\n\n` : ""}${warning}${saved ? `${saved}\n\n` : ""}${detail}`,
+    `Descendant ${run.name} (${run.id}) ${outcome}.\n\n${resumer ? `${resumer}\n\n` : ""}${warning}${detail}`,
     MAX_PARENT_MESSAGE_CHARS - hint.length,
   )}${hint}`;
 };

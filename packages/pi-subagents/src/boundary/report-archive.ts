@@ -1,4 +1,4 @@
-import { synchronousRandomUuid } from "pi-cosmic-core";
+import { sanitizeTerminalLine, synchronousRandomUuid } from "pi-cosmic-core";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -10,6 +10,7 @@ import {
   nodeWriteFileSync,
 } from "./node-builtins.ts";
 import type { SubagentReportArchive } from "../run/model.ts";
+import { MAX_CARD_PATH_CHARS } from "../tools/details-schema.ts";
 import {
   PRIVATE_STATE_RETENTION_MILLIS,
   REPORT_ARCHIVE_ROOT,
@@ -40,8 +41,8 @@ const archivedContent = (entry: ReportArchiveEntry): string =>
     : entry.text;
 
 /**
- * Writes each completed report to a private file keyed by the Pi session, so the parent can
- * read all of it, and re-read it after compaction, `/reload`, or a resumed session.
+ * Writes each completed report to a private file keyed by the Pi session. The parent reads the
+ * report from this file, and can re-read it after compaction, `/reload`, or a resumed session.
  */
 export const sessionReportArchive = (agentDirectory: string, sessionKey: string): ReportArchive => {
   const directory = path.join(
@@ -49,17 +50,25 @@ export const sessionReportArchive = (agentDirectory: string, sessionKey: string)
     safeSubagentDirectorySegment(sessionKey),
   );
   return (entry) => {
+    const file = path.join(
+      directory,
+      `${safeSubagentDirectorySegment(entry.id)}-${entry.generation}-${synchronousRandomUuid()}.md`,
+    );
+    // Every surface names the file by its path verbatim, so one they can't carry saves nothing
+    // and the report reaches the parent inline.
+    if (file.length > MAX_CARD_PATH_CHARS || sanitizeTerminalLine(file) !== file) return undefined;
     try {
       nodeMkdirSync(directory, { recursive: true, mode: 0o700 });
-      const file = path.join(
-        directory,
-        `${safeSubagentDirectorySegment(entry.id)}-${entry.generation}-${synchronousRandomUuid()}.md`,
-      );
       // Run ids restart in every process. Exclusive creation also preserves an old link if the
       // archive identity ever collides; the report then reaches the parent inline.
       const content = archivedContent(entry);
       nodeWriteFileSync(file, content, { mode: 0o600, flag: "wx" });
-      return { path: file, lines: countLines(entry.text), complete: content === entry.text };
+      return {
+        path: file,
+        chars: entry.text.length,
+        lines: countLines(entry.text),
+        complete: content === entry.text,
+      };
     } catch {
       return undefined;
     }

@@ -496,14 +496,15 @@ const awaitScenarios = Effect.gen(function* () {
               run: {
                 ...authReview,
                 state: "completed" as const,
-                finalText: "Finding 1: session.ts:118 swallows a timeout.\n".repeat(800),
+                finalText: "Finding 1: session.ts:118 swallows a timeout.\n".repeat(600),
                 finalTextTruncation: {
-                  retainedChars: 38_400,
+                  retainedChars: 28_200,
                   originalChars: 152_310,
                   originalLines: 3_172,
                 },
                 reportArchive: {
                   path: "/home/me/.pi/agent/subagents/reports/session-1/agent-1-1-4f1c.md",
+                  chars: 152_310,
                   lines: 3_172,
                   complete: true,
                 },

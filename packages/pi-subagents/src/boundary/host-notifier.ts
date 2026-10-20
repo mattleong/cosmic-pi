@@ -13,7 +13,7 @@ import type {
   SubagentReportTruncation,
   SubagentWorkspaceOutcome,
 } from "../run/model.ts";
-import { reportArchiveText } from "../run/state.ts";
+import { reportFileText, unsavedReportNote } from "../run/state.ts";
 import { proposalDiffStatLines, proposalGuidance } from "../tools/format.ts";
 
 export interface SubagentCompletionNotification {
@@ -24,7 +24,7 @@ export interface SubagentCompletionNotification {
   readonly finalText?: string | undefined;
   /** `finalText` holds only the start of a longer report. */
   readonly finalTextTruncation?: SubagentReportTruncation | undefined;
-  /** Where the report was saved at settlement; absent when it couldn't be written. */
+  /** The report's file, saved at settlement; absent when it couldn't be written. */
   readonly reportArchive?: SubagentReportArchive | undefined;
   readonly error?: string | undefined;
   readonly warning?: string | undefined;
@@ -84,31 +84,6 @@ const failureText = (error: string | undefined): string => {
   return ERROR_LABELLED.test(text) ? text : `Error: ${text}`;
 };
 
-const REPORT_PREVIEW_CHARS = 4_000;
-
-// Keeps whole lines where possible so the preview never ends mid-sentence without a marker.
-const reportPreview = (text: string): string => {
-  const cut = text.slice(0, REPORT_PREVIEW_CHARS);
-  const lineEnd = cut.lastIndexOf("\n");
-  return lineEnd > REPORT_PREVIEW_CHARS / 2 ? cut.slice(0, lineEnd) : cut;
-};
-
-const characters = (count: number): string => count.toLocaleString("en-US");
-
-const reportText = (report: string, run: SubagentCompletionNotification): string => {
-  const { reportArchive: archive, finalTextTruncation: truncation } = run;
-  // Without a saved copy the retained text is all there is; the cut note leads so bounding the
-  // notice can't drop it.
-  if (!archive)
-    return truncation
-      ? `[Report cut to ${characters(truncation.retainedChars)} of ${characters(truncation.originalChars)} characters; no full copy was saved.]\n\n${report}`
-      : report;
-  if (report.length <= REPORT_PREVIEW_CHARS) return `${report}\n\n[${reportArchiveText(archive)}]`;
-  const preview = reportPreview(report);
-  const total = truncation?.originalChars ?? report.length;
-  return `${preview}\n\n[Preview: ${characters(preview.length)} of ${characters(total)} characters. ${reportArchiveText(archive)}]`;
-};
-
 const workspaceText = (run: SubagentCompletionNotification): string | undefined => {
   const { workspaceId, workspaceOutcome: outcome } = run;
   if (workspaceId === undefined) return undefined;
@@ -117,35 +92,46 @@ const workspaceText = (run: SubagentCompletionNotification): string | undefined 
   return [proposalGuidance(workspaceId, outcome), ...files.map((line) => `  ${line}`)].join("\n");
 };
 
-const completionBody = (run: SubagentCompletionNotification): string => {
+const UNSAVED_REPORT_CUT_MARKER = "\n\n[Report cut to fit this notice; no file holds the rest.]";
+
+/**
+ * A run's notice body within `maximumLength`. A report without a file is the only copy the parent
+ * gets, so it alone gives up room to the lines around it.
+ */
+const completionBody = (run: SubagentCompletionNotification, maximumLength: number): string => {
   const warning = run.warning?.trim();
-  const report = run.finalText?.trim() ?? "";
-  const primary =
-    run.outcome === "failed"
-      ? failureText(run.error)
-      : report
-        ? reportText(report, run)
-        : "Completed without a final report.";
   const retry = run.retryAvailable
     ? `Next: ${run.remainingCandidateCount ?? 1} configured ${run.profile ?? "profile"} candidate${(run.remainingCandidateCount ?? 1) === 1 ? " remains" : "s remain"}. Continue this exact task with agent_lifecycle({ action: "retry", runIds: ["${run.id}"] }) before launching any generalist replacement.`
     : undefined;
   // The workspace outcome and resumer lead so that truncating a long report can't drop them.
-  return [
-    resumedByText(run),
-    workspaceText(run),
-    primary,
-    warning && warning !== run.error?.trim() ? `Warning: ${warning}` : undefined,
-    retry,
-  ]
-    .filter(Predicate.isNotUndefined)
-    .join("\n\n");
+  const body = (primary: string): string =>
+    [
+      resumedByText(run),
+      workspaceText(run),
+      primary,
+      warning && warning !== run.error?.trim() ? `Warning: ${warning}` : undefined,
+      retry,
+    ]
+      .filter(Predicate.isNotUndefined)
+      .join("\n\n");
+  if (run.outcome === "failed") return body(failureText(run.error));
+  const report = run.finalText?.trim() ?? "";
+  if (!report) return body("Completed without a final report.");
+  if (run.reportArchive) return body(reportFileText(run.reportArchive));
+  const note = `${unsavedReportNote(run.finalTextTruncation)}\n\n`;
+  const room = maximumLength - body(note).length;
+  return body(
+    `${note}${report.length <= room ? report : `${clip(report, Math.max(0, room - UNSAVED_REPORT_CUT_MARKER.length))}${UNSAVED_REPORT_CUT_MARKER}`}`,
+  );
 };
 
 const completionHeading = (run: SubagentCompletionNotification): string =>
   run.outcome === "failed" ? `failed outcome ${run.generation}` : `report ${run.generation}`;
 
-const completionSection = (run: SubagentCompletionNotification): string =>
-  `## ${run.name} (${run.id}) · ${completionHeading(run)}\n\n${completionBody(run)}`;
+const completionSection = (run: SubagentCompletionNotification, maximumLength: number): string => {
+  const heading = `## ${run.name} (${run.id}) · ${completionHeading(run)}\n\n`;
+  return `${heading}${completionBody(run, maximumLength - heading.length)}`;
+};
 
 const boundedCompletion = (
   run: SubagentCompletionNotification,
@@ -153,8 +139,12 @@ const boundedCompletion = (
   maximumLength: number,
 ): string => {
   if (text.length <= maximumLength) return clip(text, maximumLength);
-  const noun = run.outcome === "failed" ? "Outcome" : "Report";
-  const marker = `\n\n[${noun} truncated; use agent_read or agent_await for ${run.id}.]`;
+  // agent_read gives a failure and a report's file; a report without a file has no other copy.
+  const recovery =
+    run.outcome === "failed" || run.reportArchive
+      ? `agent_read shows ${run.id} in full`
+      : "no report file holds the rest";
+  const marker = `\n\n[Notice truncated; ${recovery}.]`;
   return `${clip(text, Math.max(0, maximumLength - marker.length))}${marker}`;
 };
 
@@ -168,7 +158,8 @@ const completionChunks = (
         ? `Background subagent ${single.name} (${single.id}) failed.`
         : `Background subagent ${single.name} (${single.id}) completed.`;
     const maximumBodyLength = Math.max(0, MAX_NOTIFICATION_CHARS - prefix.length - 2);
-    const content = `${prefix}\n\n${boundedCompletion(single, completionBody(single), maximumBodyLength)}`;
+    const body = completionBody(single, maximumBodyLength);
+    const content = `${prefix}\n\n${boundedCompletion(single, body, maximumBodyLength)}`;
     return [{ content: clip(content), runs: [single] }];
   }
 
@@ -202,7 +193,11 @@ const completionChunks = (
     sections.join("\n\n").length -
     (sections.length > 0 ? 2 : 0);
   for (const run of runs) {
-    const section = completionSection(run);
+    // Sized for a fresh chunk, whose continued header is never shorter than the current one.
+    const section = completionSection(
+      run,
+      MAX_NOTIFICATION_CHARS - headerFor(chunks.length + 1).length - 2,
+    );
     if (sections.length > 0 && section.length > room()) flush();
     chunkRuns.push(run);
     sections.push(boundedCompletion(run, section, Math.max(0, room())));

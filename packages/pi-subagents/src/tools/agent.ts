@@ -110,7 +110,7 @@ const TOOL_SPECS: AgentToolSpecs = {
   [AGENT_TOOL_NAME.read]: {
     label: "Read Agent Messages",
     description:
-      "Read up to 12 agents in this session, including \"main\". Each run shows its status card (state, warnings, failure, worktree proposal, and its parent's next steps; verbose adds route, capability, process, and timing details) and its latest assistant message, or a finished run's report or error; main shows its state and latest assistant message. Reading never claims or consumes a report, so each parent still receives its own.",
+      "Read up to 12 agents in this session, including \"main\". Each run shows its status card (state, warnings, failure, worktree proposal, and its parent's next steps; verbose adds route, capability, process, and timing details) and its latest assistant message, or a finished run's saved report file or error; main shows its state and latest assistant message. Reading never claims or consumes a report, so each parent still receives its own.",
     promptSnippet: "Read any agent's status and latest message without consuming its report",
     title: (args) => [`Read ${idsLabel(args.agentIds)}`, ""],
   },

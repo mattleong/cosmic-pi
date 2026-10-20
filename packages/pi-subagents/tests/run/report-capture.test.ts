@@ -106,7 +106,12 @@ describe("report capture", () => {
         claimTurnInputDrain: (_record, drained) => Deferred.doneUnsafe(drained, Effect.void),
         archiveReport: (entry) => {
           archived.push(entry);
-          return { path: `/archive/${entry.generation}.md`, lines: 1, complete: true };
+          return {
+            path: `/archive/${entry.generation}.md`,
+            chars: entry.text.length,
+            lines: 1,
+            complete: true,
+          };
         },
       });
       const settle = (completionGenerations: Map<number, CompletionGenerationRecord>) =>

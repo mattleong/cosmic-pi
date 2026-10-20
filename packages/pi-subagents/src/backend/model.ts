@@ -22,14 +22,15 @@ import type {
   AgentSendResult,
 } from "../run/agent-messaging.ts";
 import type { LocalCliVersion } from "./local-cli-version.ts";
-import { MAX_FINAL_TEXT_CHARS, type OriginalTextSize } from "../run/state.ts";
+import type { OriginalTextSize } from "../run/state.ts";
+import { MAX_SUPERVISOR_MCP_REPORT_CHARS } from "../supervisor/mcp-contract.ts";
 
 export type BackendResumeToken = object;
 
 export const MAX_BACKEND_REPORT_ID_CHARS = 256;
 export const MAX_BACKEND_REPORT_EVIDENCE_CHARS = 2_048;
-/** A submitted report fits the run's in-memory report cap, so acceptance never cuts it. */
-export const MAX_BACKEND_REPORT_TEXT_CHARS = MAX_FINAL_TEXT_CHARS;
+/** A submitted report is archived whole; the run keeps only its in-memory cap of it. */
+export const MAX_BACKEND_REPORT_TEXT_CHARS = MAX_SUPERVISOR_MCP_REPORT_CHARS;
 
 export interface BackendReport {
   readonly runId: string;

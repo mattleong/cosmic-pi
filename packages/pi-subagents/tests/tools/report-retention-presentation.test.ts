@@ -31,7 +31,12 @@ const cutRun = (complete: boolean | undefined): SubagentRunView =>
       originalLines: 15_000,
     },
     ...(complete !== undefined && {
-      reportArchive: { path: ARCHIVE_PATH, lines: 15_000, complete },
+      reportArchive: {
+        path: ARCHIVE_PATH,
+        chars: MAX_FINAL_TEXT_CHARS * 3,
+        lines: 15_000,
+        complete,
+      },
     }),
   });
 
@@ -104,10 +109,37 @@ describe("cut report presentation", () => {
       });
       expect(frames.some(({ expanded }) => expanded)).toBe(true);
       for (const { expanded, text } of frames) {
-        // Both the issue detail and the report's own cut marker name the file.
+        // Both the issue detail and the report section name the file beside the retained report.
         const mentions = text.replace(/\s+/gu, "").split(ARCHIVE_PATH).length - 1;
-        if (expanded) expect(mentions).toBeGreaterThanOrEqual(2);
+        if (expanded) {
+          expect(mentions).toBeGreaterThanOrEqual(2);
+          expect(text).toContain("finding");
+        }
       }
     },
   );
+
+  it("shows a saved report's text and its file in expansion when nothing was cut", () => {
+    const tool = withPresentationSettings({ toolCallCollapsedStyle: "compact" }, awaitTool);
+    const harness = createToolPresentationHarness(tool, { width: 160 });
+    const run = view({
+      id: "agent-1",
+      name: "reader",
+      state: "completed",
+      reportGeneration: 1,
+      finalText: "Whole retained report.",
+      reportArchive: { path: ARCHIVE_PATH, chars: 22, lines: 1, complete: true },
+    });
+    const frames = harness.cycle(
+      { runIds: ["agent-1"], until: "all_finished" },
+      { content: [{ type: "text" as const, text: "await output" }], details: detailsFor(run) },
+      { states: [false, true] },
+    );
+    const expanded = frames.filter((frame) => frame.expanded).map((frame) => frame.text);
+    expect(expanded.length).toBeGreaterThan(0);
+    for (const text of expanded) {
+      expect(text).toContain("Whole retained report.");
+      expect(text.replace(/\s+/gu, "")).toContain(ARCHIVE_PATH);
+    }
+  });
 });

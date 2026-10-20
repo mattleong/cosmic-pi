@@ -130,7 +130,7 @@ const TOOL_SPECS: SubagentToolSpecs = {
   [SUBAGENT_TOOL_NAME.start]: {
     label: "Start Subagents",
     description:
-      "Start background subagents, up to your direct-child limit. Returns run IDs immediately; each report is delivered to you when its run finishes, and runs end after reporting. Give every agent a self-contained task with the relevant paths, constraints, and deliverable. The profile sets the role and model route (default generalist). Writers use the shared checkout or a private worktree: omit isolation to use the session's workspace setting, and set it only when the user asks; only the main session and worktree writers can start worktree writers. Several shared-checkout writers may run in one cwd; give them disjoint task scopes because nothing enforces file ownership. Subagents started from a codemode script, and their descendants, stay read-only. A failed start says whether retry is available.",
+      "Start background subagents, up to your direct-child limit. Returns run IDs immediately; each report is delivered to you as a saved file when its run finishes, and runs end after reporting. Give every agent a self-contained task with the relevant paths, constraints, and deliverable. The profile sets the role and model route (default generalist). Writers use the shared checkout or a private worktree: omit isolation to use the session's workspace setting, and set it only when the user asks; only the main session and worktree writers can start worktree writers. Several shared-checkout writers may run in one cwd; give them disjoint task scopes because nothing enforces file ownership. Subagents started from a codemode script, and their descendants, stay read-only. A failed start says whether retry is available.",
     promptSnippet: "Run bounded, independent tasks in background subagents",
     renderCall: (args, theme, context) =>
       renderSubagentStartCall(
@@ -145,11 +145,12 @@ const TOOL_SPECS: SubagentToolSpecs = {
   [SUBAGENT_TOOL_NAME.await]: {
     label: "Wait for Subagents",
     description:
-      "Wait for subagents you started, or their descendants, and return their reports, with live progress. Returns early when a selected run pauses, when any subagent asks you a question, or when the user sends a message; children keep running. Follow the steps in the result, then await again.",
+      "Wait for subagents you started, or their descendants, and return their report files, with live progress. Returns early when a selected run pauses, when any subagent asks you a question, or when the user sends a message; children keep running. Follow the steps in the result, then await again.",
     promptSnippet: "Wait for subagent reports when your next step depends on them",
     promptGuidelines: [
       "After starting subagents, keep working on parts you didn't delegate; don't redo a subagent's slice while it runs. Call agent_await only when your next step depends on a report; reports arrive on their own, so don't poll agent_list or agent_read.",
       "When a subagent tool result lists next steps, follow them in order before continuing. When a subagent asks you a question, answer it with agent_send.",
+      "A finished subagent's report arrives as the path of a saved file. Read that file with your read tool before relying on the report.",
     ],
     renderCall: (args, theme, context) =>
       renderSubagentCall(

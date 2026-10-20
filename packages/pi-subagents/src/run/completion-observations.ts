@@ -50,7 +50,12 @@ const startRecoveryOf = (record: RunRecord) =>
     : undefined;
 
 const redactCompletionReport = (view: SubagentRunView): SubagentRunView => {
-  const { finalText: _finalText, ...withoutReport } = view;
+  const {
+    finalText: _finalText,
+    finalTextTruncation: _finalTextTruncation,
+    reportArchive: _reportArchive,
+    ...withoutReport
+  } = view;
   return snapshotView({
     ...withoutReport,
     sessionEvents: withoutReport.sessionEvents.map((event) =>

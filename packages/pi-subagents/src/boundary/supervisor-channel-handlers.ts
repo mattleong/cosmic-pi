@@ -14,6 +14,7 @@ import type { AgentListResult, AgentReadResult } from "../run/agent-messaging.ts
 import { agentAttentionFact, agentReadCard, agentWorktreeFact } from "../tools/execute-agents.ts";
 import { formatRunModel } from "../tools/format.ts";
 import { subagentErrorCode, type SubagentError } from "../run/errors.ts";
+import { reportFileText } from "../run/state.ts";
 import {
   MAX_SUPERVISOR_AGENT_CARD_CHARS,
   MAX_SUPERVISOR_AGENT_FACT_CHARS,
@@ -120,8 +121,11 @@ const wireAgentRead = (
   verbose: boolean,
 ): SupervisorAgentReadResult => ({
   agents: result.agents.map((entry) => {
-    const text =
-      entry.textStatus === "text" && entry.text !== undefined
+    // A saved report's text is its file pointer, which the reader opens with its file tools.
+    const reportFile = entry.kind === "run" ? entry.reportFile : undefined;
+    const text = reportFile
+      ? reportFileText(reportFile)
+      : entry.textStatus === "text" && entry.text !== undefined
         ? safeTextPrefix(entry.text, MAX_SUPERVISOR_AGENT_READ_CHARS)
         : undefined;
     const source = entry.kind === "run" ? entry.source : undefined;

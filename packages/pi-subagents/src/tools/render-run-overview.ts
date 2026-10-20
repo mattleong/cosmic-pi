@@ -20,7 +20,7 @@ import {
 } from "pi-cosmic-ui/tool";
 import { skippedCandidateLabel } from "../profiles/model.ts";
 import { isTerminalRunState } from "../run/model.ts";
-import { reportArchiveText, reportTruncationText } from "../run/state.ts";
+import { reportFileText, reportTruncationText } from "../run/state.ts";
 import { aggregateUsage } from "../ui/metrics.ts";
 import type { SubagentRunCard } from "./details-schema.ts";
 import { attentionRecoveryText, cleanupEvidenceText } from "./format.ts";
@@ -38,21 +38,23 @@ const reportSection = (
   kind: RunReportSection["kind"],
 ): RunReportSection | undefined => {
   const name = sanitizeTerminalLine(run.name);
-  // agent_read is bounded too, so a saved report file is the only full copy of a cut report.
+  // The parent reads a saved report from its file, so the reader sees which file that is.
   const archive = kind === "report" ? run.reportArchive : undefined;
+  const saved = archive ? `\n[${reportFileText(archive)}]` : "";
   const marker = archive
-    ? `\n… [${reportTruncationText(run.reportTruncation, archive) ?? reportArchiveText(archive)}]`
+    ? `\n… [${run.reportTruncation ? reportTruncationText(run.reportTruncation) : "content truncated"}]`
     : "\n… [content truncated; use agent_read for this run]";
   const text = kind === "report" ? run.finalText : run.error;
   const truncated = kind === "report" ? run.finalTextTruncated : run.errorTruncated;
-  if (text) return { name, kind, text: `${sanitizeTerminalText(text)}${truncated ? marker : ""}` };
-  if (!truncated) return undefined;
-  if (archive)
+  if (text)
     return {
       name,
       kind,
-      text: `This saved card does not include the report content. ${reportArchiveText(archive)}`,
+      text: `${sanitizeTerminalText(text)}${truncated ? marker : ""}${saved}`,
     };
+  if (!truncated) return undefined;
+  if (archive)
+    return { name, kind, text: `This saved card does not include the report content.${saved}` };
   const missing = kind === "report" ? "report content" : "failure detail";
   return {
     name,

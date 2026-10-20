@@ -13,7 +13,11 @@ import {
 import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-builtins.ts";
 import { sessionReportArchive } from "../../src/boundary/report-archive.ts";
 import { SubagentService } from "../../src/run/service.ts";
-import { MAX_ARCHIVED_REPORT_CHARS, MAX_FINAL_TEXT_CHARS } from "../../src/run/state.ts";
+import {
+  MAX_ARCHIVED_REPORT_CHARS,
+  MAX_FINAL_TEXT_CHARS,
+  unsavedReportNote,
+} from "../../src/run/state.ts";
 import { awaitContract } from "../../src/tools/contract.ts";
 import { decodeSubagentContract, encodeSubagentContract } from "../../src/tools/contract-schema.ts";
 import { executeAgentActionEffect } from "../../src/tools/execute-agents.ts";
@@ -21,6 +25,7 @@ import { projectSubagentRunCard } from "../../src/tools/details-projection.ts";
 import { formatDetailedRuns } from "../../src/tools/format.ts";
 import { temporaryDirectory } from "../workspace/fixtures/repository.ts";
 import {
+  acknowledgeCompletions,
   awaitObservations,
   localServiceFixture,
   nativeReportRequest,
@@ -77,14 +82,16 @@ describe("report retention", () => {
         const notified = completedRun(notifications[0]);
         expect(notified?.reportArchive).toEqual(archive);
         expect(notified?.finalTextTruncation?.originalChars).toBe(report.length);
+        // The notice hands over the file, never the report body.
         const notice = noticeText(notified);
         expect(notice).toContain(archive?.path ?? "missing");
+        expect(notice).not.toContain("finding 0\n");
         expect(notice).not.toContain("finding 11999");
       });
     }).pipe(Effect.scoped),
   );
 
-  it.effect("tells agent_await and agent_read that capture cut the report, and where it is", () =>
+  it.effect("delivers a report to agent_await and agent_read as its file, without the body", () =>
     Effect.gen(function* () {
       const agent = yield* temporaryDirectory("report-retention-");
       const { fake, projections, layer } = localServiceFixture({
@@ -102,73 +109,121 @@ describe("report retention", () => {
         ).pipe(Effect.provideService(SubagentService, service));
         const readContract = decodeSubagentContract("agent_read")(read.structuredContent);
         const [readout] = readContract?.agents ?? [];
-        expect(readout?.truncated).toBe(true);
-        const archivePath =
-          readout?.kind === "run" ? readout.status.reportArchive?.path : undefined;
-        expect(archivePath).toBeDefined();
-        expect(yield* readFile(archivePath ?? "missing")).toBe(report);
+        const reportFile = readout?.kind === "run" ? readout.reportFile : undefined;
+        expect(reportFile).toMatchObject({ chars: report.length, lines: 12_000, complete: true });
+        expect(readout?.text).toBeUndefined();
+        expect(yield* readFile(reportFile?.path ?? "missing")).toBe(report);
         const readText = read.content.flatMap((part) => (part.type === "text" ? [part.text] : []));
-        expect(readText.join("\n")).toContain(archivePath);
+        expect(readText.join("\n")).toContain(reportFile?.path);
+        expect(readText.join("\n")).not.toContain("finding 0\n");
 
         const observations = yield* awaitObservations(service, [run.id]);
         const formatted = formatDetailedRuns(observations.map((observation) => observation.run));
         const contract = awaitContract({
           observations,
-          fullyRenderedIds: formatted.fullyRenderedIds,
+          deliveredIds: formatted.deliveredIds,
           until: "all_finished",
           requestedRunIds: [run.id],
         });
         expect(() => encodeSubagentContract(contract)).not.toThrow();
         const [target] = contract.targets;
-        // The retained report still fits one await, so it's delivered rather than deferred.
-        expect(target?.report.status).toBe("delivered");
-        expect(target?.reportTruncation).toMatchObject({
-          originalChars: report.length,
-          originalLines: 12_000,
-        });
-        expect(target?.reportArchive).toMatchObject({ path: archivePath, complete: true });
-        expect(formatted.text).toContain(archivePath);
+        expect(target?.report).toEqual({ status: "delivered", ...reportFile });
+        expect(formatted.text).toContain(reportFile?.path);
+        expect(formatted.text).not.toContain("finding 0\n");
       });
     }).pipe(Effect.scoped),
   );
 
-  it.effect("delivers the retained report inline when the archive can't be written", () =>
+  it.effect("inlines the bounded retained report only when the archive can't be written", () =>
     Effect.gen(function* () {
       const agent = yield* temporaryDirectory("report-retention-");
       // A file where the archive directory belongs makes every write fail.
       const blocked = path.join(agent, "blocked");
       yield* Effect.promise(() => fs.writeFile(blocked, ""));
-      const { fake, projections, notifications, layer } = localServiceFixture({
-        archiveReport: sessionReportArchive(blocked, "session-1"),
-      });
       const report = findings(12_000);
-      yield* withService(layer, function* (service) {
+      const blockedFixture = () =>
+        localServiceFixture({ archiveReport: sessionReportArchive(blocked, "session-1") });
+
+      // One report is awaited and the other reaches its parent as a notice.
+      const awaited = blockedFixture();
+      yield* withService(awaited.layer, function* (service) {
         const run = yield* service.start(request());
-        fake.controls[0]!.settle(report);
-        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
+        awaited.fake.controls[0]!.settle(report);
+        yield* yieldUntil(() => awaited.projections.at(-1)?.runs[0]?.state === "completed");
 
         const completed = yield* runView(service, run.id);
         expect(completed.reportArchive).toBeUndefined();
         expect(completed.finalTextTruncation?.originalChars).toBe(report.length);
-
-        yield* TestClock.adjust("100 millis");
-        yield* yieldUntil(() => notifications.length > 0);
-        const notified = completedRun(notifications[0]);
-        expect(notified?.reportArchive).toBeUndefined();
-        expect(notified?.finalTextTruncation?.originalChars).toBe(report.length);
-        const notice = noticeText(notified);
-        expect(notice).toContain("finding 0\nfinding 1\n");
-        expect(notice).not.toContain(blocked);
-
+        // agent_read gives the same unsaved report, under the same note, without consuming it.
+        const read = yield* executeAgentActionEffect(
+          { tool: "agent_read", args: { agentIds: [run.id] } },
+          { kind: "main" },
+        ).pipe(Effect.provideService(SubagentService, service));
+        const [readout] =
+          decodeSubagentContract("agent_read")(read.structuredContent)?.agents ?? [];
+        expect(readout?.text?.startsWith(unsavedReportNote(completed.finalTextTruncation))).toBe(
+          true,
+        );
+        expect(readout?.text).toContain("finding 0\nfinding 1\n");
         const observations = yield* awaitObservations(service, [run.id]);
         const [target] = awaitContract({
           observations,
-          fullyRenderedIds: new Set([run.id]),
+          deliveredIds: new Set([run.id]),
           until: "all_finished",
           requestedRunIds: [run.id],
         }).targets;
-        expect(target?.reportTruncation?.originalChars).toBe(report.length);
-        expect(target?.reportArchive).toBeUndefined();
+        const delivered = target?.report;
+        expect(delivered && "text" in delivered && delivered.truncated).toBe(true);
+        expect(delivered && "text" in delivered && delivered.text.length).toBeLessThanOrEqual(
+          MAX_FINAL_TEXT_CHARS,
+        );
+      });
+
+      const notified = blockedFixture();
+      yield* withService(notified.layer, function* (service) {
+        yield* service.start(request());
+        notified.fake.controls[0]!.settle(report);
+        yield* yieldUntil(() => notified.projections.at(-1)?.runs[0]?.state === "completed");
+        yield* TestClock.adjust("100 millis");
+        yield* yieldUntil(() => notified.notifications.length > 0);
+        const notice = completedRun(notified.notifications[0]);
+        expect(notice?.reportArchive).toBeUndefined();
+        const text = noticeText(notice);
+        expect(text).toContain("finding 0\nfinding 1\n");
+        expect(text.length).toBeLessThanOrEqual(32 * 1024);
+        expect(text).not.toContain(blocked);
+      });
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("hands a nested Pi parent the report's file, not its body", () =>
+    Effect.gen(function* () {
+      const agent = yield* temporaryDirectory("report-retention-");
+      const { fake, projections, notifications, layer } = localServiceFixture({
+        archiveReport: sessionReportArchive(agent, "session-1"),
+        notify: acknowledgeCompletions,
+      });
+      const report = findings(3_000);
+      yield* withService(layer, function* (service) {
+        const parent = yield* service.start(request({ name: "parent" }));
+        const child = yield* service.startSessionOwnedFrom(parent.id, request({ name: "child" }));
+        fake.controls[1]!.settle(report);
+        yield* yieldUntil(
+          () => projections.at(-1)?.runs.find((run) => run.id === child.id)?.state === "completed",
+        );
+        yield* TestClock.adjust("100 millis");
+        const notices = () =>
+          (fake.controls[0]?.ipc ?? []).flatMap((message) =>
+            message.type === "proxy_notification" ? [message.message] : [],
+          );
+        yield* yieldUntil(() => notices().length > 0);
+
+        const archive = (yield* runView(service, child.id)).reportArchive;
+        const [notice] = notices();
+        expect(notice).toContain(archive?.path ?? "missing");
+        expect(notice).not.toContain("finding 0\n");
+        expect(yield* readFile(archive?.path ?? "missing")).toBe(report);
+        expect(notifications).toEqual([]);
       });
     }).pipe(Effect.scoped),
   );
@@ -210,25 +265,39 @@ describe("report retention", () => {
         expect(saved.startsWith(report.slice(0, MAX_ARCHIVED_REPORT_CHARS))).toBe(true);
         expect(saved).not.toContain("finding 109999");
         expect(saved.length).toBeLessThan(MAX_ARCHIVED_REPORT_CHARS + 1_000);
+
+        const [target] = awaitContract({
+          observations: yield* awaitObservations(service, [run.id]),
+          deliveredIds: new Set([run.id]),
+          until: "all_finished",
+          requestedRunIds: [run.id],
+        }).targets;
+        expect(target?.report).toMatchObject({
+          status: "delivered",
+          path: completed.reportArchive?.path,
+          complete: false,
+        });
       });
     }).pipe(Effect.scoped),
   );
 
-  it.effect("keeps and archives a runtime-submitted report up to the in-memory cap whole", () =>
+  it.effect("archives a runtime-submitted report longer than the in-memory cap whole", () =>
     Effect.gen(function* () {
       const agent = yield* temporaryDirectory("report-retention-");
       const { backend, projections, layer } = nativeReportServiceFixture(undefined, {
         archiveReport: sessionReportArchive(agent, "session-1"),
       });
-      const report = `${findings(10_000).slice(0, MAX_FINAL_TEXT_CHARS - 1)}!`;
+      const report = `${findings(20_000)}!`;
+      expect(report.length).toBeGreaterThan(MAX_FINAL_TEXT_CHARS);
       yield* withService(layer, function* (service) {
         const run = yield* service.start(nativeReportRequest());
-        backend.controls[0]?.report(run.id, 1, "full-cap", report);
+        backend.controls[0]?.report(run.id, 1, "long-report", report);
         yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
 
         const completed = yield* runView(service, run.id);
-        expect(completed.finalText).toBe(report);
-        expect(completed.finalTextTruncation).toBeUndefined();
+        expect(completed.finalText?.length).toBeLessThanOrEqual(MAX_FINAL_TEXT_CHARS);
+        expect(completed.finalTextTruncation?.originalChars).toBe(report.length);
+        expect(completed.reportArchive?.complete).toBe(true);
         expect(yield* readFile(completed.reportArchive?.path ?? "missing")).toBe(report);
       });
     }).pipe(Effect.scoped),

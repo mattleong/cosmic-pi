@@ -197,7 +197,7 @@ export const toolDefinitions = [
   {
     name: AGENT_TOOL_NAME.read,
     description:
-      "Read up to 12 agents in this session: each run's status card and latest assistant message, or a finished run's report or error, and main's latest message. verbose adds route, capability, process, and timing details. Reading never consumes anything.",
+      "Read up to 12 agents in this session: each run's status card and latest assistant message, or a finished run's saved report file or error, and main's latest message. verbose adds route, capability, process, and timing details. Reading never consumes anything.",
     inputSchema: {
       type: "object",
       properties: {

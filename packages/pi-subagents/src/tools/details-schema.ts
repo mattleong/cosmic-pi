@@ -298,10 +298,11 @@ const SubagentRunCardSchema = Schema.Struct({
       originalLines: nonNegativeInteger,
     }),
   ),
-  /** The private file holding this assignment's report, the recovery path for a cut one. */
+  /** The private file holding this assignment's report, which the parent reads. */
   reportArchive: Schema.optionalKey(
     Schema.Struct({
       path: NonEmptyText(MAX_CARD_PATH_CHARS),
+      chars: nonNegativeInteger,
       lines: nonNegativeInteger,
       complete: Schema.Boolean,
     }),

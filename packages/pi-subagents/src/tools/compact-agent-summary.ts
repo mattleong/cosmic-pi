@@ -143,7 +143,10 @@ const summarizeRead = (
 ): CompactSummary => {
   const [only] = details.agents;
   const single = details.agents.length === 1 && only !== undefined;
-  const empty = details.agents.filter((agent) => agent.textStatus === "none").length;
+  // A saved report's readout carries its file, not text.
+  const empty = details.agents.filter(
+    (agent) => agent.textStatus === "none" && agent.source !== "report",
+  ).length;
   const truncated = details.agents.filter((agent) => agent.truncated).length;
   // Each run's status card raises its own attention; reading it still succeeded.
   const statusIssues = details.agents.flatMap((agent) => agent.issues ?? []);

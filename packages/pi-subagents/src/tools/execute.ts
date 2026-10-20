@@ -220,13 +220,25 @@ export const executeSubagentActionEffect = (
             `Subagents need parent attention\n\nEnd the script and handle this directly.\n\n${attentionRecoveryText(attention)}`,
           );
         const prefix = [...sections, attentionRecoveryText(attention)].filter(Boolean).join("\n\n");
-        const formatted = formatDetailedRuns(runs, prefix ? `${prefix}\n\n` : "", formatOptions);
+        const pendingIds = new Set(
+          observations.flatMap((observation) =>
+            observation.completionReceipt || observation.questionReceipt
+              ? [observation.run.id]
+              : [],
+          ),
+        );
+        const formatted = formatDetailedRuns(
+          runs,
+          prefix ? `${prefix}\n\n` : "",
+          formatOptions,
+          pendingIds,
+        );
         const additional = extra();
         const contract =
           input.tool === SUBAGENT_TOOL_NAME.await
             ? awaitContract({
                 observations,
-                fullyRenderedIds: formatted.fullyRenderedIds,
+                deliveredIds: formatted.deliveredIds,
                 until: input.args.until,
                 requestedRunIds: requestedAwaitIds ?? [],
                 questionsElsewhere: questions.length > 0,
@@ -240,10 +252,10 @@ export const executeSubagentActionEffect = (
           ...(contract && { contract }),
         };
         const result = yield* Effect.sync(() => present(outcome));
-        const receipts = renderedCompletionReceipts(observations, formatted.fullyRenderedIds);
+        const receipts = renderedCompletionReceipts(observations, formatted.deliveredIds);
         awaitState?.markDeliveryAttempt(receipts.map((receipt) => receipt.id));
         yield* service.consumeCompletions(receipts);
-        return { result, fullyRenderedIds: formatted.fullyRenderedIds };
+        return { result, deliveredIds: formatted.deliveredIds };
       });
     const executeLifecycle = (args: SubagentLifecycleInput) =>
       Effect.gen(function* () {
@@ -350,7 +362,7 @@ export const executeSubagentActionEffect = (
                 () => ({ awaitContextRuns: withQuestionRuns(state.contextRuns(), questions) }),
                 questions,
               ),
-            (outcome) => outcome.fullyRenderedIds,
+            (outcome) => outcome.deliveredIds,
             callerRunId,
           )
           .pipe(Effect.map(({ result }) => result));

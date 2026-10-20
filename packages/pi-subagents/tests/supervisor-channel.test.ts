@@ -342,6 +342,8 @@ type AgentCall =
   | { readonly kind: "read"; readonly ids: ReadonlyArray<string> };
 
 const RATE_LIMITED_AGENT = "agent-r1-9";
+const SAVED_REPORT_AGENT = "agent-r1-8";
+const SAVED_REPORT_PATH = "/agent/subagents/reports/session-1/agent-r1-8-1-file.md";
 
 // Stands in for the root's operations, already bound to the channel's run as the caller.
 const recordingAgents = (selfId: string) => {
@@ -390,8 +392,12 @@ const recordingAgents = (selfId: string) => {
             id,
             name: "peer",
             state: "completed" as const,
-            textStatus: "text" as const,
-            text: `Findings from ${id}.`,
+            ...(id === SAVED_REPORT_AGENT
+              ? {
+                  textStatus: "none" as const,
+                  reportFile: { path: SAVED_REPORT_PATH, chars: 90, lines: 3, complete: true },
+                }
+              : { textStatus: "text" as const, text: `Findings from ${id}.` }),
             truncated: false,
             source: "report" as const,
             reportGeneration: 1,
@@ -1148,6 +1154,13 @@ describe("private supervisor channel", () => {
       );
       expect(read?.text).toContain("Findings from agent-r1-2.");
       expect(read?.text).toContain("from its report");
+      // A saved report reaches the reader as its file.
+      const saved = toolText(
+        yield* step(() =>
+          toolCall(rpc, "read-saved", "agent_read", { agentIds: [SAVED_REPORT_AGENT] }),
+        ),
+      );
+      expect(saved?.text).toContain(SAVED_REPORT_PATH);
       // Each run's status card comes with its message; verbose adds process details.
       expect(read?.text).toContain("Warning from agent-r1-2.");
       expect(read?.text).not.toContain("pid 4242");
@@ -1176,6 +1189,7 @@ describe("private supervisor channel", () => {
       expect(fixture.calls).toEqual([
         { kind: "list", ids: undefined },
         { kind: "read", ids: ["agent-r1-2", "main"] },
+        { kind: "read", ids: [SAVED_REPORT_AGENT] },
         { kind: "read", ids: ["agent-r1-2"] },
         { kind: "send", to: "agent-r1-2", message: "Compare notes." },
       ]);
@@ -1195,7 +1209,7 @@ describe("private supervisor channel", () => {
       // The channel refuses the identity and closes the peer, so the reply may never arrive.
       expect(Exit.isFailure(forged)).toBe(true);
       yield* step(() => direct.close());
-      expect(fixture.calls).toHaveLength(4);
+      expect(fixture.calls).toHaveLength(5);
     },
     20_000,
   );

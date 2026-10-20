@@ -1,5 +1,6 @@
 import { isCustomAgentName } from "../profiles/agents.ts";
 import {
+  safeTextPrefix,
   sanitizeDiagnosticContent,
   sanitizeDiagnosticError,
   sanitizeTerminalLine,
@@ -41,7 +42,7 @@ import {
 import {
   nonNegativeInteger,
   projectModelOverride,
-  projectReportRetention,
+  projectReportFile,
   projectRunCleanup,
 } from "./details-projection.ts";
 import { MAX_FAILURE_CODE_CHARS } from "./details-schema.ts";
@@ -126,23 +127,23 @@ const withheldReport = (run: SubagentRunView): ContractWithheldReport => ({
       : WITHHELD_REPORT_STATUS[run.reportStatus],
 });
 
-const reportText = (value: string | undefined): string | undefined => {
-  const cleaned = value === undefined ? "" : stripTerminalControls(value);
-  return cleaned.trim() && cleaned.length <= MAX_CONTRACT_REPORT_CHARS ? cleaned : undefined;
-};
-
 const observedReport = (
   { run, completionReceipt }: SubagentRunObservation,
-  fullyRenderedIds: ReadonlySet<string>,
+  deliveredIds: ReadonlySet<string>,
 ): ContractReport => {
   if (!isTerminalRunState(run.state)) return { status: "not_finished" };
-  if (completionReceipt !== undefined) {
-    if (!fullyRenderedIds.has(run.id)) return { status: "deferred" };
-    if (!stripTerminalControls(run.finalText ?? "").trim()) return { status: "missing" };
-    const text = reportText(run.finalText);
-    return text === undefined ? { status: "deferred" } : { status: "delivered", text };
-  }
-  return withheldReport(run);
+  if (completionReceipt === undefined) return withheldReport(run);
+  if (!deliveredIds.has(run.id)) return { status: "deferred" };
+  const text = stripTerminalControls(run.finalText ?? "");
+  if (!text.trim()) return { status: "missing" };
+  const file = projectReportFile(run.reportArchive);
+  return file
+    ? { status: "delivered", ...file }
+    : {
+        status: "delivered",
+        text: safeTextPrefix(text, MAX_CONTRACT_REPORT_CHARS),
+        truncated: run.finalTextTruncation !== undefined || text.length > MAX_CONTRACT_REPORT_CHARS,
+      };
 };
 
 const targetFields = (
@@ -177,7 +178,6 @@ const targetFields = (
     ...(recovery?.runId === run.id && { retry: projectRecovery(recovery) }),
     warnings: projectWarnings(run),
     ...(error !== undefined && { error }),
-    ...projectReportRetention(run),
   };
 };
 
@@ -188,10 +188,10 @@ export const withheldTarget = (run: SubagentRunView): ContractWithheldRunTarget 
 
 const observedTarget = (
   observation: SubagentRunObservation,
-  fullyRenderedIds: ReadonlySet<string>,
+  deliveredIds: ReadonlySet<string>,
 ): ContractRunTarget => ({
   ...targetFields(observation.run, observation.recovery),
-  report: observedReport(observation, fullyRenderedIds),
+  report: observedReport(observation, deliveredIds),
 });
 
 const UNOBSERVED_LAUNCH: SubagentStartFailure = {
@@ -266,7 +266,7 @@ export const startContract = (
 
 interface AwaitContractInput {
   readonly observations: ReadonlyArray<SubagentRunObservation>;
-  readonly fullyRenderedIds: ReadonlySet<string>;
+  readonly deliveredIds: ReadonlySet<string>;
   readonly until: SubagentAwaitUntil;
   readonly requestedRunIds: ReadonlyArray<string>;
   /** Another run that the caller did not await asked it a question. */
@@ -275,7 +275,7 @@ interface AwaitContractInput {
 
 export const awaitContract = (input: AwaitContractInput): SubagentAwaitContract => {
   const targets = input.observations.map((observation) =>
-    observedTarget(observation, input.fullyRenderedIds),
+    observedTarget(observation, input.deliveredIds),
   );
   return {
     ...envelope(SUBAGENT_TOOL_NAME.await),

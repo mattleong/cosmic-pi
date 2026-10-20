@@ -18,6 +18,7 @@ import {
 } from "../profiles/model.ts";
 import {
   MAX_OUTCOME_DIFFSTAT_FILES,
+  type SubagentReportArchive,
   type SubagentRunView,
   type SubagentUsage,
   type SubagentWorkspaceDiffStat,
@@ -266,13 +267,27 @@ const projectNativeActivity = (
   };
 };
 
-/** A cut report's retained size and its saved file, shared by cards and the tool contract. */
-export const projectReportRetention = (
+/** A saved report's file, as cards and the tool contract carry it; a clipped path names no file. */
+export const projectReportFile = (
+  archive: SubagentReportArchive | undefined,
+): SubagentReportArchive | undefined => {
+  const path = archive === undefined ? "" : sanitizeTerminalLine(archive.path);
+  return archive !== undefined && path && path.length <= MAX_CARD_PATH_CHARS
+    ? {
+        path,
+        chars: nonNegativeInteger(archive.chars),
+        lines: nonNegativeInteger(archive.lines),
+        complete: archive.complete,
+      }
+    : undefined;
+};
+
+/** A report's file and any cut capture made to the text the card keeps. */
+const projectReportRetention = (
   run: SubagentRunView,
 ): Pick<SubagentRunCard, "reportTruncation" | "reportArchive"> => {
   const truncation = run.finalTextTruncation;
-  const archive = run.reportArchive;
-  const path = archive === undefined ? "" : sanitizeTerminalLine(archive.path);
+  const reportArchive = projectReportFile(run.reportArchive);
   return {
     ...(truncation !== undefined && {
       reportTruncation: {
@@ -281,16 +296,7 @@ export const projectReportRetention = (
         originalLines: nonNegativeInteger(truncation.originalLines),
       },
     }),
-    // A clipped path names no file, so an oversized one is left out.
-    ...(archive !== undefined &&
-      path &&
-      path.length <= MAX_CARD_PATH_CHARS && {
-        reportArchive: {
-          path,
-          lines: nonNegativeInteger(archive.lines),
-          complete: archive.complete,
-        },
-      }),
+    ...(reportArchive !== undefined && { reportArchive }),
   };
 };
 

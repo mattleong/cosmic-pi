@@ -16,26 +16,16 @@ import type {
   SubagentRunView,
   SubagentUsage,
 } from "./model.ts";
-import { MAX_TOOL_OUTPUT_CHARS } from "./limits.ts";
 
 export const MAX_NAME_CHARS = 80;
 export const MAX_TASK_CHARS = 128 * 1024;
 /**
- * What a lone `agent_await` result keeps beside its report that a fitted card never clips: the
- * progress summary and at most 12 run rows (13 × 257), a quarantined run's cleanup guidance
- * (about 1,700), the card header (512), its lineage, resume, retry, workspace-proposal, and
- * steering lines (about 900), the shortened-fields marker and labels (about 200), and the
- * report-cut line, leaving about 1,300 for its archive path. Warnings, route warnings, cwd, and
- * diff-stat lines are diagnostics, clipped to the room that remains.
+ * The report text each run keeps in memory and in saved details, for human rendering and the
+ * inline fallback when no report file was saved. It leaves 2 KiB of a 32 KiB root notice for the
+ * lines around that fallback; a notice whose other lines need more cuts the report and says so.
  */
-export const REPORT_FRAMING_CHARS = 8_000;
-/**
- * The report text each run keeps in memory and in saved details: the tool output that remains
- * after that framing, so a single-run `agent_await` always delivers a whole retained report.
- * Longer reports are archived, and Claude and Codex reports are limited to it.
- */
-export const MAX_FINAL_TEXT_CHARS = MAX_TOOL_OUTPUT_CHARS - REPORT_FRAMING_CHARS;
-/** The most of one report the archive saves; the in-memory cap only clips what stays in context. */
+export const MAX_FINAL_TEXT_CHARS = 30 * 1024;
+/** The most of one report the archive saves; the parent reads reports from that file. */
 export const MAX_ARCHIVED_REPORT_CHARS = 1024 * 1024;
 export const MAX_ERROR_CHARS = 8 * 1024;
 
@@ -147,21 +137,22 @@ export const captureOutputText = ({
   };
 };
 
-/** Where a completed report was saved, such as `Full report (120 lines): <path>`. */
-export const reportArchiveText = (archive: SubagentReportArchive): string =>
-  `${archive.complete ? "Full report" : "Report saved up to the archive limit"} (${countLabel(archive.lines, "line")}): ${sanitizeTerminalLine(archive.path)}`;
-
 const characterCount = (count: number): string => count.toLocaleString("en-US");
 
-/** How much of a cut report the run kept, and where the rest can be read. */
-export const reportTruncationText = (
-  truncation: SubagentReportTruncation | undefined,
-  archive: SubagentReportArchive | undefined,
-): string | undefined => {
-  if (truncation === undefined) return undefined;
-  const kept = `${characterCount(truncation.retainedChars)} of ${characterCount(truncation.originalChars)} characters kept`;
-  return `${kept}. ${archive ? reportArchiveText(archive) : "No full copy was saved."}`;
-};
+/**
+ * The one pointer to a saved report, wherever a report reaches a parent, such as
+ * `Read the full report: <path> (5,120 characters, 120 lines)`.
+ */
+export const reportFileText = (archive: SubagentReportArchive): string =>
+  `${archive.complete ? "Read the full report" : "Read the report, cut at the 1 MiB archive limit"}: ${sanitizeTerminalLine(archive.path)} (${characterCount(archive.chars)} characters, ${countLabel(archive.lines, "line")})`;
+
+/** How much of a cut report the run kept in memory, such as `30,720 of 90,000 characters kept`. */
+export const reportTruncationText = (truncation: SubagentReportTruncation): string =>
+  `${characterCount(truncation.retainedChars)} of ${characterCount(truncation.originalChars)} characters kept`;
+
+/** Leads a report inlined because its file couldn't be saved. */
+export const unsavedReportNote = (truncation: SubagentReportTruncation | undefined): string =>
+  `[No report file was saved, so the report is inline${truncation ? `; ${reportTruncationText(truncation)}` : ""}.]`;
 
 const isValidUsage = (usage: SubagentUsage): boolean =>
   [usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.totalTokens].every(

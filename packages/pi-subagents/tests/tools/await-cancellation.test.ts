@@ -124,7 +124,7 @@ it.live("keeps late-abort delivery uncertain and recoverable after consumption",
       yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(result.structuredContent),
     ).not.toContain("Recover after late abort");
     const read = yield* step(() => runtime.run(service.agentRead({ kind: "main" }, [child.id])));
-    expect(read.agents[0]).toMatchObject({ text: "Recover after late abort" });
+    expect(read.agents[0]).toMatchObject({ text: stringContaining("Recover after late abort") });
     const [observed] = yield* step(() => runtime.run(awaitObservations(service, [child.id])));
     expect(observed).toMatchObject({ run: { reportStatus: "delivered" } });
     expect(observed?.completionReceipt).toBeUndefined();

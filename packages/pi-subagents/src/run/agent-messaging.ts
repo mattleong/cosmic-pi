@@ -7,10 +7,11 @@ import {
   hasSubagentCapability,
   isTerminalRunState,
   SUBAGENT_ROOT_RUN_ID,
+  type SubagentReportArchive,
   type SubagentRunState,
   type SubagentRunView,
 } from "./model.ts";
-import { sanitizeOutputText } from "./state.ts";
+import { sanitizeOutputText, unsavedReportNote } from "./state.ts";
 import { isRunInSubtree } from "./tree.ts";
 
 /** Addresses the root session's main agent. */
@@ -110,6 +111,8 @@ export type AgentReadout =
       readonly state: SubagentRunState;
       /** Where the text came from: the latest assistant message, a retained report, or an error. */
       readonly source?: "assistant" | "report" | "error" | undefined;
+      /** A completed run's saved report, read instead of any text. */
+      readonly reportFile?: SubagentReportArchive | undefined;
       readonly reportGeneration: number;
       /** The run's projected view, for its status card; reading never claims its report. */
       readonly run: SubagentRunView;
@@ -281,8 +284,8 @@ export const unavailableMainReadout: AgentReadout = {
 
 /**
  * The run's latest assistant message in its current or last assignment, falling back to that
- * finished assignment's report or error, never an earlier assignment's. Reading never claims or
- * consumes the report.
+ * finished assignment's report or error, never an earlier assignment's. A completed run gives its
+ * report: its file, or the report itself when none was saved. Reading never claims or consumes it.
  */
 export const runReadout = (record: RunRecord, projected: SubagentRunView): AgentReadout => {
   const { view } = record;
@@ -294,6 +297,27 @@ export const runReadout = (record: RunRecord, projected: SubagentRunView): Agent
     reportGeneration: view.reportGeneration,
     run: projected,
   };
+  if (view.state === "completed" && view.reportArchive)
+    return {
+      ...base,
+      textStatus: "none",
+      truncated: false,
+      source: "report",
+      reportFile: view.reportArchive,
+    };
+  // A completed report without a file is read inline, led by the note its notice carries.
+  if (view.state === "completed" && view.finalText?.trim()) {
+    const report = boundedText(
+      `${unsavedReportNote(view.finalTextTruncation)}\n\n${view.finalText}`,
+      MAX_RUN_READ_CHARS,
+    );
+    return {
+      ...base,
+      ...report,
+      truncated: report.truncated || view.finalTextTruncation !== undefined,
+      source: "report",
+    };
+  }
   // `truncated` also covers text that capture already cut below what the run produced.
   const assistant = boundedText(record.latestAssistantText, MAX_RUN_READ_CHARS);
   if (assistant.textStatus === "text")

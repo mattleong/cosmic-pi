@@ -12,6 +12,7 @@ import {
 } from "../src/boundary/report-archive.ts";
 import { extensionApiFixture } from "pi-cosmic-core/testing";
 import { vi } from "vitest";
+import { MAX_FINAL_TEXT_CHARS } from "../src/run/state.ts";
 import { temporaryDirectory } from "./workspace/fixtures/repository.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
@@ -31,7 +32,7 @@ const exists = (file: string) =>
   );
 
 describe("subagent report archive", () => {
-  it.effect("keeps a long report out of context behind a preview and its private file", () =>
+  it.effect("delivers a report as its private file and keeps the body out of the notice", () =>
     Effect.gen(function* () {
       const agent = yield* temporaryAgent;
       const archive = sessionReportArchive(agent, "session-1");
@@ -55,9 +56,11 @@ describe("subagent report archive", () => {
       });
 
       const text = sentText(sendMessage);
-      expect(text.length).toBeLessThan(5_000);
-      expect(text).toContain("finding 0");
+      expect(text).not.toContain("finding 0");
       expect(text).not.toContain("finding 1999");
+      expect(reportArchive?.chars).toBe(report.length);
+      expect(reportArchive?.lines).toBe(2_000);
+      expect(reportArchive?.complete).toBe(true);
       const directory = path.join(reportArchiveRoot(agent), "session-1");
       const files = yield* Effect.promise(() => fs.readdir(directory));
       expect(files).toHaveLength(1);
@@ -68,6 +71,47 @@ describe("subagent report archive", () => {
       expect((yield* Effect.promise(() => fs.stat(directory))).mode & 0o777).toBe(0o700);
     }).pipe(Effect.scoped),
   );
+
+  it.effect("saves nothing under a path that a report reference can't name verbatim", () =>
+    Effect.gen(function* () {
+      const agent = path.join(yield* temporaryAgent, "two  spaces");
+      expect(
+        sessionReportArchive(agent, "session-1")({ id: "agent-1", generation: 1, text: "report" }),
+      ).toBeUndefined();
+      expect(yield* exists(reportArchiveRoot(agent))).toBe(false);
+    }).pipe(Effect.scoped),
+  );
+
+  it("fits a report without a file in its notice, keeping the lines after it", () => {
+    const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>();
+    const report = "r".repeat(MAX_FINAL_TEXT_CHARS);
+    const warning = "Check the migration before merging.".repeat(200);
+    hostNotifier(extensionApiFixture({ sendMessage }))({
+      type: "completed",
+      runs: [
+        {
+          id: "agent-1",
+          name: "reader",
+          generation: 1,
+          outcome: "completed",
+          finalText: report,
+          finalTextTruncation: {
+            retainedChars: report.length,
+            originalChars: 90_000,
+            originalLines: 1,
+          },
+          warning,
+          resumedBy: 'agent-r1-2 "planner"',
+        },
+      ],
+    });
+
+    const text = sentText(sendMessage);
+    expect(text.length).toBeLessThanOrEqual(32 * 1024);
+    expect(text).toContain(`Warning: ${warning}`);
+    expect(text).toContain("r".repeat(1_000));
+    expect(text).not.toContain("agent_read");
+  });
 
   it.effect("preserves earlier links when an archive owner or a delivery is replaced", () =>
     Effect.gen(function* () {

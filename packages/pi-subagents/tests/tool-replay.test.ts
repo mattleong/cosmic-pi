@@ -32,10 +32,10 @@ const cutRun = view({
   reportGeneration: 1,
   finalText: "Report start.",
   finalTextTruncation: { retainedChars: 13, originalChars: 90_000, originalLines: 900 },
-  reportArchive: { path: ARCHIVE_PATH, lines: 900, complete: true },
+  reportArchive: { path: ARCHIVE_PATH, chars: 90_000, lines: 900, complete: true },
 });
-// Raw history shows the result text, which names the saved file; adopted rows also read it from
-// the persisted card.
+// Raw history shows the result text, which names the saved file; adopted rows also read it, and
+// the retained report, from the persisted card.
 const cutReport: AgentToolResult<unknown> = {
   content: [{ type: "text", text: formatDetailedRuns([cutRun]).text }],
   details: awaitDetails({
@@ -144,7 +144,10 @@ describe("subagent tool history replay", () => {
         expectEvidence(adopted, sample);
         if (sample.name === "agent_await")
           for (const { expanded, text } of adopted)
-            if (expanded) expect(archiveMentions(text)).toBeGreaterThan(1);
+            if (expanded) {
+              expect(archiveMentions(text)).toBeGreaterThan(1);
+              expect(text).toContain("Report start.");
+            }
       }
 
       treeStyle = true;

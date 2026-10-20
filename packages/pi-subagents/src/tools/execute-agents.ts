@@ -33,7 +33,7 @@ import {
   type SubagentWorkspaceOutcome,
 } from "../run/model.ts";
 import { SubagentService } from "../run/service.ts";
-import { reportArchiveText } from "../run/state.ts";
+import { reportFileText } from "../run/state.ts";
 import { AGENT_TOOL_NAME } from "../run/tool-policy.ts";
 import {
   encodeSubagentContract,
@@ -44,7 +44,7 @@ import {
 } from "./contract-schema.ts";
 import { envelope, metadata, projectAttention, projectName, withheldTarget } from "./contract.ts";
 import { compactRunIssues } from "./compact-run-issues.ts";
-import { projectSubagentRunCard } from "./details-projection.ts";
+import { projectReportFile, projectSubagentRunCard } from "./details-projection.ts";
 import {
   AGENT_DETAILS_VERSION,
   MAX_AGENT_READ_ISSUE_TEXT_CHARS,
@@ -242,27 +242,20 @@ export const agentReadCard = (
     .filter(Boolean)
     .join("\n");
 
-// A run's status card, then its latest message or retained report.
+// A run's status card, then its latest message, its report's file, or its retained report.
 const runReadSection = (
   readout: Extract<AgentReadout, { readonly kind: "run" }>,
   options: AgentReadOptions,
 ): string => {
   const text = readText(readout.text);
   const source = READ_SOURCES[readout.source ?? "assistant"];
-  const message =
-    text === undefined
+  const generation = readout.source === "report" ? ` (report ${readout.reportGeneration})` : "";
+  const message = readout.reportFile
+    ? `${source}${generation}:\n${reportFileText(readout.reportFile)}`
+    : text === undefined
       ? "No assistant message yet."
-      : `${source}${readout.source === "report" ? ` (report ${readout.reportGeneration})` : ""}${readout.truncated ? " (truncated)" : ""}:\n${text}`;
-  // The card names a capture-cut report's saved copy; a read-bounded one is named here.
-  const { reportArchive, finalTextTruncation } = readout.run;
-  const saved =
-    readout.truncated &&
-    reportArchive !== undefined &&
-    finalTextTruncation === undefined &&
-    readout.run.state === "completed"
-      ? `\n[${reportArchiveText(reportArchive)}]`
-      : "";
-  return `${agentReadCard(readout.run, options)}\n${message}${saved}`;
+      : `${source}${generation}${readout.truncated ? " (truncated)" : ""}:\n${text}`;
+  return `${agentReadCard(readout.run, options)}\n${message}`;
 };
 
 const readBody = (result: AgentReadResult, options: AgentReadOptions): string =>
@@ -279,6 +272,7 @@ const readContract = (result: AgentReadResult): AgentReadContract => ({
   ...envelope(AGENT_TOOL_NAME.read),
   agents: result.agents.map((readout) => {
     const text = readText(readout.text);
+    const reportFile = readout.kind === "run" ? projectReportFile(readout.reportFile) : undefined;
     const fields = {
       id: readout.id,
       name: agentName(readout),
@@ -292,7 +286,9 @@ const readContract = (result: AgentReadResult): AgentReadContract => ({
           kind: "run",
           state: readout.state,
           ...fields,
-          ...(readout.source !== undefined && text !== undefined && { source: readout.source }),
+          ...(readout.source !== undefined &&
+            (text !== undefined || reportFile !== undefined) && { source: readout.source }),
+          ...(reportFile !== undefined && { reportFile }),
           reportGeneration: readout.reportGeneration,
           status: withheldTarget(readout.run),
         };
@@ -321,6 +317,7 @@ const readDetails = (result: AgentReadResult): AgentToolDetails => ({
   action: AGENT_TOOL_NAME.read,
   agents: result.agents.map((readout) => {
     const hasText = readText(readout.text) !== undefined;
+    const hasReportFile = readout.kind === "run" && readout.reportFile !== undefined;
     const issues = readout.kind === "run" ? readIssues(readout.run) : [];
     return {
       id: readout.id,
@@ -329,7 +326,7 @@ const readDetails = (result: AgentReadResult): AgentToolDetails => ({
       textStatus: hasText ? "text" : "none",
       truncated: readout.truncated,
       ...(readout.kind === "run" &&
-        hasText &&
+        (hasText || hasReportFile) &&
         readout.source !== undefined && { source: readout.source }),
       ...(issues.length > 0 && { issues: [...issues] }),
     };

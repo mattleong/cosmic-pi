@@ -26,7 +26,7 @@ const observedTargets = (
     "agent_await",
     awaitContract({
       observations,
-      fullyRenderedIds: new Set(rendered),
+      deliveredIds: new Set(rendered),
       until: "all_finished",
       requestedRunIds: observations.map((observation) => observation.run.id),
     }),
@@ -109,11 +109,18 @@ describe("report disposition", () => {
   const report = (observation: SubagentRunObservation, rendered: ReadonlyArray<string> = []) =>
     observedTargets([observation], rendered)[0]!.report;
 
-  it("delivers text only for a fully rendered owned receipt", () => {
+  it("delivers a saved report as its file, and only an unsaved one as text", () => {
+    const reportArchive = { path: "/agent/reports/a-1.md", chars: 5, lines: 1, complete: true };
+    const saved = finished("a", { finalText: "Done.", reportStatus: "available", reportArchive });
+    expect(report({ run: saved, completionReceipt: receipt("a") }, ["a"])).toEqual({
+      status: "delivered",
+      ...reportArchive,
+    });
     const run = finished("a", { finalText: "Done.", reportStatus: "available" });
     expect(report({ run, completionReceipt: receipt("a") }, ["a"])).toEqual({
       status: "delivered",
       text: "Done.",
+      truncated: false,
     });
     expect(report({ run, completionReceipt: receipt("a") })).toEqual({ status: "deferred" });
     expect(report({ run: finished("a", { finalText: "Done." }) }, ["a"])).toEqual({

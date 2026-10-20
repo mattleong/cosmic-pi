@@ -440,7 +440,8 @@ describe("agent messaging", () => {
           objectContaining({
             id: done.id,
             state: "completed",
-            text: "Done report.",
+            source: "report",
+            text: stringContaining("Done report."),
             reportGeneration: 1,
           }),
         ]);

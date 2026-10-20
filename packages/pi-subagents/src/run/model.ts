@@ -168,9 +168,11 @@ export interface SubagentReportTruncation {
   readonly originalLines: number;
 }
 
-/** A completed assignment's report, saved to a private file the parent can read. */
+/** A completed assignment's report, saved to a private file: the report the parent reads. */
 export interface SubagentReportArchive {
   readonly path: string;
+  /** The saved report's size. */
+  readonly chars: number;
   readonly lines: number;
   /** False when the report exceeded the archive cap, so the file holds only its start. */
   readonly complete: boolean;

@@ -1,4 +1,3 @@
-import { MAX_FINAL_TEXT_CHARS } from "../run/state.ts";
 import { AGENT_TOOL_NAME, AGENT_TOOL_NAMES, CONTACT_PARENT_TOOL_NAME } from "../run/tool-policy.ts";
 
 export const SUPERVISOR_MCP_REGISTRATION = "pi_subagents_supervisor" as const;
@@ -27,14 +26,20 @@ export const SUPERVISOR_MCP_AGENT_IDS_ARGUMENT_KEY = "agentIds" as const;
 export const SUPERVISOR_MCP_VERBOSE_ARGUMENT_KEY = "verbose" as const;
 
 export const MAX_SUPERVISOR_MCP_MESSAGE_CHARS = 16_384;
-/** Claude and Codex reports get the same in-memory budget as a Pi child's final message. */
-export const MAX_SUPERVISOR_MCP_REPORT_CHARS = MAX_FINAL_TEXT_CHARS;
+/**
+ * A submitted report travels as JSON, which can spend six bytes on one character (`\u0001`), on two
+ * bounded lines: the 3 MiB supervisor channel line, and the 4 MiB CLI stdout line, because Claude
+ * stream-json and Codex item arguments echo the submission. This cap fits the smaller with room for
+ * the envelope, below the 1 MiB archive cap.
+ */
+export const MAX_SUPERVISOR_MCP_REPORT_CHARS = 480 * 1024;
 export const MAX_SUPERVISOR_MCP_DELIVERY_ID_CHARS = 256;
 export const MAX_SUPERVISOR_MCP_THREAD_ID_CHARS = 256;
 /** Matches the root's `agent_list` and `agent_read` target bound. */
 export const MAX_SUPERVISOR_MCP_AGENT_IDS = 12;
 export const MAX_SUPERVISOR_MCP_AGENT_ID_CHARS = 80;
-export const SUPERVISOR_MCP_NONBLANK_PATTERN_SOURCE = ".*\\S.*";
+/** Unanchored, so a check stays linear even on a long blank line. */
+export const SUPERVISOR_MCP_NONBLANK_PATTERN_SOURCE = "\\S";
 export const SUPERVISOR_MCP_DELIVERY_ID_PATTERN_SOURCE = "^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$";
 /** Run IDs and `main`. */
 export const SUPERVISOR_MCP_AGENT_ID_PATTERN_SOURCE = "^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$";

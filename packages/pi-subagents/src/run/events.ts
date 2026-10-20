@@ -112,7 +112,7 @@ export function backendEventHandler(dependencies: RunEventDependencies) {
     event: Extract<BackendEvent, { readonly type: "assistant_message" }>,
   ) => {
     // Only the bounded text and its cut are kept: a Pi report is recaptured from its settlement,
-    // and submitted reports fit the in-memory cap, so no intermediate message needs a full copy.
+    // and a submitted report carries its own text, so no intermediate message needs a full copy.
     const captured = captureOutputText({
       text: event.text ?? "",
       originalSize: event.originalSize,

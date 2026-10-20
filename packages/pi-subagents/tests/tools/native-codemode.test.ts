@@ -18,6 +18,7 @@ import {
   runViews,
   withService,
 } from "../run/fixtures/service-harness.ts";
+import { stringContaining } from "../support/matchers.ts";
 import { nativeCodemodeSession } from "../support/native-codemode-session.ts";
 import { signalAwaitEntry, subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import { startCapturingService, view } from "./fixtures/tool-harness.ts";
@@ -222,7 +223,9 @@ describe("native scripted subagent workflows", () => {
         const read = await tools.agent_read({agentIds:[${JSON.stringify(run.id)}]});
         ${print("{text:read.agents[0].text}")}
       `);
-        expect(output(result.text)).toEqual({ text: "Recoverable workflow report" });
+        expect(output(result.text)).toEqual({
+          text: stringContaining("Recoverable workflow report"),
+        });
         expect(
           fixture.notifications.filter((notification) => notification.type === "completed"),
         ).toEqual([]);

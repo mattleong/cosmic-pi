@@ -336,11 +336,11 @@ describe("subagent tool", () => {
       const text = result?.content[0]?.text ?? "";
       expect(text.length).toBeLessThanOrEqual(48_000);
       for (const run of runs.slice(0, 12)) expect(text).toContain(run.id);
-      expect(text).toContain("[run output truncated]");
-      expect(consumed).toEqual([]);
+      // Only reports shown whole are consumed; the rest stay for a later await.
+      expect(consumed.map((receipt) => receipt.id)).toEqual(["agent-1"]);
 
-      yield* invokeOptionalTool(tool, { runIds: ["agent-1"], until: "all_finished" });
-      expect(consumed).toEqual([{ id: "agent-1", generation: 1, claimToken: "claim-agent-1" }]);
+      yield* invokeOptionalTool(tool, { runIds: ["agent-2"], until: "all_finished" });
+      expect(consumed.map((receipt) => receipt.id)).toEqual(["agent-1", "agent-2"]);
     },
   );
 });

@@ -11,19 +11,14 @@ import {
   MAX_MAIN_READ_CHARS,
   MAX_RUN_READ_CHARS,
 } from "../run/agent-messaging.ts";
-import {
-  MAX_PROTOCOL_ID_CHARS,
-  MAX_START_BATCH,
-  MAX_TARGET_RUNS,
-  MAX_TOOL_OUTPUT_CHARS,
-} from "../run/limits.ts";
+import { MAX_PROTOCOL_ID_CHARS, MAX_START_BATCH, MAX_TARGET_RUNS } from "../run/limits.ts";
 import {
   FAILED_START_CLEANUP_DISPOSITIONS,
   FAILED_START_RETRY_DISPOSITIONS,
   PI_SUBAGENT_CAPABILITIES,
   SUBAGENT_RUN_STATES,
 } from "../run/model.ts";
-import { MAX_NAME_CHARS } from "../run/state.ts";
+import { MAX_FINAL_TEXT_CHARS, MAX_NAME_CHARS } from "../run/state.ts";
 import { AGENT_TOOL_NAME, SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
 import {
   AgentNameSchema,
@@ -40,7 +35,7 @@ import { AWAIT_UNTIL, LIFECYCLE_ACTIONS } from "./schema.ts";
 
 export const SUBAGENT_CONTRACT_ID = "pi-subagents/orchestration";
 export const SUBAGENT_CONTRACT_VERSION = 3;
-export const MAX_CONTRACT_REPORT_CHARS = MAX_TOOL_OUTPUT_CHARS;
+export const MAX_CONTRACT_REPORT_CHARS = MAX_FINAL_TEXT_CHARS;
 export const MAX_CONTRACT_MESSAGE_CHARS = 1_024;
 export const MAX_CONTRACT_ERROR_CHARS = 2_048;
 export const MAX_CONTRACT_QUESTION_CHARS = MAX_CARD_QUESTION_CHARS;
@@ -81,10 +76,21 @@ const WITHHELD_REPORT_STATUSES = [
 ] as const;
 
 const WithheldReportSchema = Schema.Struct({ status: Schema.Literals(WITHHELD_REPORT_STATUSES) });
+/** The private file holding an assignment's report; `complete` is false past the 1 MiB archive cap. */
+const ReportFileFields = {
+  path: NonEmptyText(MAX_CARD_PATH_CHARS),
+  chars: count,
+  lines: count,
+  complete: Schema.Boolean,
+};
 const ReportSchema = Schema.Union([
+  // Delivering a report hands over its file; the parent reads the report from it.
+  Schema.Struct({ status: Schema.Literal("delivered"), ...ReportFileFields }),
+  // Only a report whose file couldn't be saved arrives inline, cut when `truncated`.
   Schema.Struct({
     status: Schema.Literal("delivered"),
     text: NonEmptyText(MAX_CONTRACT_REPORT_CHARS),
+    truncated: Schema.Boolean,
   }),
   WithheldReportSchema,
 ]);
@@ -139,18 +145,6 @@ const runTargetSchema = <Report extends Schema.Top>(report: Report) =>
       }),
     ).check(Schema.isMaxLength(2)),
     error: Schema.optionalKey(NonEmptyText(MAX_CONTRACT_ERROR_CHARS)),
-    /** Capture kept only the first `retainedChars` of the report; `reportArchive` holds the rest. */
-    reportTruncation: Schema.optionalKey(
-      Schema.Struct({ retainedChars: count, originalChars: count, originalLines: count }),
-    ),
-    /** The private file holding this assignment's report; `complete` is false past the archive cap. */
-    reportArchive: Schema.optionalKey(
-      Schema.Struct({
-        path: NonEmptyText(MAX_CARD_PATH_CHARS),
-        lines: count,
-        complete: Schema.Boolean,
-      }),
-    ),
     report,
   });
 
@@ -292,8 +286,10 @@ const AgentReadContractSchema = Schema.Struct({
         ...AgentTextFields,
         text: Schema.optionalKey(NonEmptyText(MAX_RUN_READ_CHARS)),
         source: Schema.optionalKey(Schema.Literals(["assistant", "report", "error"])),
+        /** A finished run's saved report, given instead of its text; read the file for the report. */
+        reportFile: Schema.optionalKey(Schema.Struct(ReportFileFields)),
         reportGeneration: count,
-        /** The run's status card; its report text, when retained, is the read `text`. */
+        /** The run's status card; its report is the read's `reportFile` or `text`. */
         status: WithheldRunTargetSchema,
       }),
     ]),
