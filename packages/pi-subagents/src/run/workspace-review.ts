@@ -274,27 +274,9 @@ export function workspaceReviewOperations(
       yield* service
         .discard({ workspaceId, ownerId, processCleanupConfirmed: true })
         .pipe(Effect.mapError(mapWorkspaceError));
-      // A stopped integration was rolled back, so the source leases it kept are released.
-      const settled = settledState(binding);
-      const leases = settled?.phase === "stopped-integration" ? settled.leases : [];
       settleBinding(binding, { phase: "finished", outcome });
       recordWorkspaceOutcomeLocked(binding, { status: outcome });
       yield* publish;
-      for (const lease of leases.toReversed())
-        yield* context.writerLeases.release(lease).pipe(
-          Effect.catch((error) =>
-            Effect.logWarning(
-              `Rolled-back integration lease release is unconfirmed: ${error.message}`,
-            ).pipe(
-              Effect.annotateLogs("workspaceId", workspaceId),
-              Effect.andThen(
-                Effect.sync(() => {
-                  state.integrationQuarantined = true;
-                }),
-              ),
-            ),
-          ),
-        );
       return undefined;
     });
   const workspaceReview = (

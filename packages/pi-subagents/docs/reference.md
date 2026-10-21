@@ -82,7 +82,7 @@ Ignored dependencies are absent too. A `WorktreeCreate` hook in `pi-subagents.js
 - Ignored worker files never enter a proposal. Untracked credential files a writer created (`.env*`, `.npmrc`, `*.pem`, SSH keys) are left out on purpose; review lists them and prepare and apply warn.
 - A conflicting patch fails prepare with `workspace_conflict`; a parent edit to a proposal file fails apply with `workspace_parent_changed`. Both name the files.
 - A proposal file the parent index marks skip-worktree or assume-unchanged fails prepare and apply with `workspace_local_override`, naming the files; clear the bit with `git update-index` or revise the workspace.
-- If integration stops partway, `discard` rolls back what it published.
+- If integration stops partway, only `discard` may follow. It puts back each touched file that still holds the parent's or the proposal's content; if any holds something else, it refuses with `workspace_rollback_refused`, naming the files, and changes nothing.
 - A refusal names the file, rule, and remedy.
 
 ### Revise and discard

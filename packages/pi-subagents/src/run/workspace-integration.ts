@@ -20,7 +20,6 @@ export interface WorkspaceIntegrationOutcome {
   /** Parent files the proposal doesn't touch that changed after preparation; they were kept. */
   readonly untouchedDriftPaths: ReadonlyArray<string>;
   readonly treeRemovalFailed: boolean;
-  readonly remainingBackupPaths: ReadonlyArray<string>;
   readonly leaseReleaseUnconfirmed: boolean;
 }
 
@@ -97,7 +96,9 @@ export function workspaceIntegrationOperations(
         leftOutPaths: artifact.revision.uncapturedPaths ?? [],
         preparedCwd: artifact.preparation.cwd,
       };
-      const roots = yield* Effect.forEach(artifact.preparation.leaseDirectories, (cwd) =>
+      // The checkout's writer pool leases, so no shared-checkout writer of another session edits
+      // it while the files are written.
+      const roots = yield* Effect.forEach([sourceRoot, binding.handle.sourceCwd], (cwd) =>
         leases.canonicalize(cwd).pipe(Effect.mapError(mapWorkspaceError)),
       );
       const sources = [...new Map(roots.map((cwd) => [cwd.digest, cwd])).values()].toSorted(
@@ -149,12 +150,9 @@ export function workspaceIntegrationOperations(
                     settleBinding(binding, { phase: "finished", outcome: "unknown" });
                     return;
                   }
-                  // Its leases stay held so no writer edits the half-published files before
-                  // discard rolls them back.
-                  if (current.value.status === "integrating") {
-                    settleBinding(binding, { phase: "stopped-integration", leases: [...owned] });
-                    return;
-                  }
+                  // Only discard, which rolls the touched files back, may follow.
+                  if (current.value.status === "integrating")
+                    settleBinding(binding, { phase: "stopped-integration" });
                 }
                 for (const lease of owned.toReversed())
                   yield* leases.release(lease).pipe(

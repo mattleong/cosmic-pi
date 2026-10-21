@@ -69,7 +69,7 @@ interface EngineHooks {
   workerChanges: WorkspaceWorkerChanges | WorkspaceError;
   before: { [Operation in GatedOperation]?: Effect.Effect<void> | undefined };
   failDiscard: boolean;
-  /** Integration stops mid-publication, leaving the record integrating. */
+  /** Integration stops partway, leaving the record integrating. */
   integrateStops?: boolean;
   revisionDiff?: string;
   /** The changed paths each frozen revision lists. */
@@ -299,7 +299,6 @@ export function workspaceFixture({
               preparationId,
               revisionId: target.revisionId,
               cwd: `/private/${target.workspaceId}/prepare-${preparationId}`,
-              leaseDirectories: [entry.handle.sourceRoot, `${entry.handle.sourceRoot}/packages/b`],
             };
             entries.set(target.workspaceId, { ...entry, status: "prepared", preparation });
             return preparation;
@@ -311,7 +310,7 @@ export function workspaceFixture({
             hooks.integrateStops
               ? Effect.sync(() =>
                   entries.set(target.workspaceId, { ...entry, status: "integrating" }),
-                ).pipe(Effect.andThen(refuse("integrate", "Publication stopped partway.")))
+                ).pipe(Effect.andThen(refuse("integrate", "Integration stopped partway.")))
               : Effect.void,
           ),
           Effect.map((entry) => {
@@ -323,7 +322,6 @@ export function workspaceFixture({
               workerRoot: entry.handle.cwd,
               untouchedDriftPaths: [],
               treeRemovalFailed: false,
-              remainingBackupPaths: [],
             };
           }),
         ),
@@ -345,11 +343,9 @@ export function workspaceFixture({
             return Effect.succeed(hooks.rebase);
           }),
         ),
-      discardOrphan: ({ workspaceId, sourceLeasesHeld }) =>
+      discardOrphan: ({ workspaceId }) =>
         Effect.suspend(() => {
           const entry = entries.get(workspaceId);
-          if (entry?.status === "integrating" && !sourceLeasesHeld)
-            return refuse("discard", "The workspace was left mid-integration.");
           if (!entry || !hooks.orphanOwnerEnded) return ownerRunning();
           if (entry.status === "integrating") rollbacks.push(workspaceId);
           entries.set(workspaceId, { ...entry, status: "discarded" });

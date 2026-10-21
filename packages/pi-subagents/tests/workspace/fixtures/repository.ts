@@ -74,6 +74,44 @@ export const workspaceTarget = (handle: WorkspaceHandle) => ({
   processCleanupConfirmed: true as const,
 });
 
+/** Freezes and prepares the worker's changes, returning the request that integrates them. */
+export const prepareIntegration = (service: WorkspaceServiceContract, handle: WorkspaceHandle) =>
+  Effect.gen(function* () {
+    const revision = yield* service.freeze(workspaceTarget(handle));
+    const prepared = yield* service.prepare({
+      ...workspaceTarget(handle),
+      revisionId: revision.revisionId,
+    });
+    const integration = {
+      ...workspaceTarget(handle),
+      revisionId: revision.revisionId,
+      preparationId: prepared.preparationId,
+    };
+    return { revision, prepared, integration };
+  });
+
+/**
+ * Runs `integration` with the removal of `file` from the parent checkout failing, as a crash after
+ * the checkout step would: new and changed files already hold the proposal. Returns the failure.
+ */
+export const integrateFailingRemoval = (
+  service: WorkspaceServiceContract,
+  integration: Parameters<WorkspaceServiceContract["integrate"]>[0],
+  file: string,
+) => {
+  const rm = fs.rm;
+  const spy = vi
+    .spyOn(fs, "rm")
+    .mockImplementation((target, options) =>
+      String(target) === file
+        ? Promise.reject(Object.assign(new Error("injected"), { code: "EIO" }))
+        : rm(target, options),
+    );
+  return failureOf(service.integrate(integration)).pipe(
+    Effect.ensuring(Effect.sync(() => spy.mockRestore())),
+  );
+};
+
 /**
  * Commits `files`, then untracks `untrack` so those paths stay in history and on disk only. `layer`
  * configures the engine, such as its WorktreeRemove hooks.

@@ -128,62 +128,6 @@ export const readRevisionDiff = (root: string, id: string) =>
     return bytes;
   });
 
-/**
- * How far a mid-integration publication got: the planned directories and journal entries it
- * started, in order. Later ones were never touched. Small, so it is rewritten before every step
- * while the record, with its journal, is written once.
- */
-const PublicationProgressSchema = Schema.Struct({
-  directories: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-  files: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-});
-type PublicationProgress = typeof PublicationProgressSchema.Type;
-const MAX_PROGRESS_BYTES = 4096;
-const encodeProgress = Schema.encodeEffect(Schema.fromJsonString(PublicationProgressSchema));
-const decodeProgress = Schema.decodeUnknownEffect(Schema.fromJsonString(PublicationProgressSchema));
-const progressFile = (root: string, id: string) =>
-  path.join(workspaceDirectory(root, id), "publication.json");
-
-export const savePublicationProgress = (root: string, id: string, progress: PublicationProgress) =>
-  Effect.gen(function* () {
-    const directory = workspaceDirectory(root, id);
-    const temporary = path.join(directory, `${yield* newWorkspaceId}.tmp`);
-    const data = yield* encodeProgress(progress).pipe(
-      Effect.mapError(() => workspaceFailure("registry", "Invalid publication progress.")),
-    );
-    yield* writeWorkspaceFile(temporary, new TextEncoder().encode(data), 0o600);
-    yield* Effect.gen(function* () {
-      yield* workspaceIO("registry", () => fs.rename(temporary, progressFile(root, id)));
-      yield* syncWorkspaceDirectory(directory);
-    }).pipe(Effect.uninterruptible);
-  });
-
-/** The saved progress, or undefined when publication never recorded any. */
-export const readPublicationProgress = (root: string, id: string) =>
-  Effect.gen(function* () {
-    const safe = yield* SafeFile;
-    const file = progressFile(root, id);
-    if (!(yield* workspaceIOIfPresent("registry", () => fs.lstat(file)))) return undefined;
-    const { bytes } = yield* safe
-      .readContainedRegularFile(file, root, MAX_PROGRESS_BYTES)
-      .pipe(
-        Effect.mapError(() => workspaceFailure("registry", "Cannot read publication progress.")),
-      );
-    return yield* decodeProgress(new TextDecoder().decode(bytes)).pipe(
-      Effect.mapError(() => workspaceFailure("registry", "Invalid publication progress.")),
-    );
-  });
-
-export const removePublicationProgress = (root: string, id: string) =>
-  Effect.gen(function* () {
-    yield* workspaceIO("registry", () =>
-      fs.unlink(progressFile(root, id)).catch((cause: unknown) => {
-        if (nodeErrorCode(cause) !== "ENOENT") throw cause;
-      }),
-    );
-    yield* syncWorkspaceDirectory(workspaceDirectory(root, id));
-  });
-
 export const readWorkspaceRecord = (root: string, id: string) =>
   Effect.gen(function* () {
     if (!validWorkspaceId(id))

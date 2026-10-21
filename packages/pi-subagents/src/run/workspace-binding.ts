@@ -2,7 +2,6 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Semaphore from "effect/Semaphore";
 import type { WorktreeHook, WriterWorkspaceMode } from "../config/schema.ts";
-import type { WriterLease } from "../boundary/writer-lease.ts";
 import type { WorkspaceHandle, WorkspaceLaunch } from "../workspace/model.ts";
 import type { WorkspaceServiceContract } from "../workspace/service.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
@@ -53,8 +52,8 @@ export type RevisionKnowledge =
 /** States outside any launch or revision; a root operation may hold the binding in one. */
 type SettledBindingState =
   | { readonly phase: "idle"; readonly knowledge: RevisionKnowledge }
-  /** Integration stopped mid-publication; discard rolls it back, then releases these leases. */
-  | { readonly phase: "stopped-integration"; readonly leases: ReadonlyArray<WriterLease> }
+  /** Integration stopped partway; only discard, which rolls it back, may follow. */
+  | { readonly phase: "stopped-integration" }
   | {
       readonly phase: "finished";
       /** `unknown` when the integration's outcome couldn't be read afterwards. */

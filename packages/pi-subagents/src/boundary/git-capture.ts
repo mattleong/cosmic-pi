@@ -40,6 +40,20 @@ const unmergedRefusal = (name: string) =>
     remedy: "Resolve the conflicts and stage the results.",
   });
 
+/** Runs `use` with a temporary index in `scratch`, so Git never reads or writes a real one. */
+export const withScratchIndex = <A, E, R>(
+  scratch: string,
+  use: (environment: { readonly GIT_INDEX_FILE: string }) => Effect.Effect<A, E, R>,
+) =>
+  Effect.gen(function* () {
+    const index = path.join(scratch, `${yield* newWorkspaceId}.index`);
+    return yield* use({ GIT_INDEX_FILE: index }).pipe(
+      Effect.ensuring(
+        workspaceIO("index", () => fs.rm(index, { force: true })).pipe(Effect.ignore),
+      ),
+    );
+  });
+
 // Git trusts an entry's cached stat data only when the file's mtime is older than the index
 // file's, so a copy keeps the original's mtime, a second earlier: a file rewritten with the same
 // size just after the index was written must still be rehashed. A checkout without an index file
@@ -68,12 +82,10 @@ export const captureTree = (
   leaveOut: (name: string) => boolean,
   included: ReadonlyArray<string> = [],
 ) =>
-  Effect.gen(function* () {
-    const index = path.join(scratch, `${yield* newWorkspaceId}.index`);
-    const environment = { GIT_INDEX_FILE: index };
-    return yield* Effect.gen(function* () {
+  withScratchIndex(scratch, (environment) =>
+    Effect.gen(function* () {
       const real = yield* gitPath(root, "index");
-      yield* copyIndex(real, index);
+      yield* copyIndex(real, environment.GIT_INDEX_FILE);
       const [unmerged] = yield* gitFields(root, ["ls-files", "--unmerged", "-z"], {
         environment,
       });
@@ -100,12 +112,8 @@ export const captureTree = (
         });
       const tree = yield* git(root, ["write-tree"], { environment }).pipe(Effect.flatMap(oid));
       return { tree, droppedPaths: droppedPaths.toSorted() } satisfies TreeCapture;
-    }).pipe(
-      Effect.ensuring(
-        workspaceIO("snapshot", () => fs.rm(index, { force: true })).pipe(Effect.ignore),
-      ),
-    );
-  });
+    }),
+  );
 
 /** Commits `tree` unsigned with the placeholder identity; the nonce keeps every capture distinct. */
 export const commitTree = (
@@ -190,21 +198,32 @@ export const treeEntries = (repository: string, tree: string) =>
     ),
   );
 
-interface ChangedEntry {
+export interface ChangedEntry {
   readonly path: string;
   /** `000000` where the path is absent on that side. */
   readonly from: string;
   readonly to: string;
+  /** Each side's object, all zeros where the path is absent. */
+  readonly fromObject: string;
+  readonly toObject: string;
 }
 
-/** The paths that differ between two stored trees, with each side's mode. */
+/** The paths that differ between two stored trees, with each side's mode and object. */
 export const changedEntries = (repository: string, from: string, to: string) =>
   repositoryGitFields(repository, ["diff-tree", "-r", "-z", "--no-renames", from, to]).pipe(
     Effect.map((fields) => {
       const entries: ChangedEntry[] = [];
       for (let index = 0; index + 1 < fields.length; index += 2) {
-        const [fromMode = "", toMode = ""] = (fields[index] ?? "").slice(1).split(" ");
-        entries.push({ path: fields[index + 1] ?? "", from: fromMode, to: toMode });
+        const [fromMode = "", toMode = "", fromObject = "", toObject = ""] = (fields[index] ?? "")
+          .slice(1)
+          .split(" ");
+        entries.push({
+          path: fields[index + 1] ?? "",
+          from: fromMode,
+          to: toMode,
+          fromObject,
+          toObject,
+        });
       }
       return entries;
     }),
@@ -216,7 +235,7 @@ export const changedPaths = (repository: string, from: string, to: string) =>
     Effect.map((entries) => entries.map((entry) => entry.path)),
   );
 
-const ABSENT_MODE = "000000";
+export const ABSENT_MODE = "000000";
 
 /** One `--numstat -z` line as a diffstat file, its change kind read from both sides' modes. */
 const numstatFile = (

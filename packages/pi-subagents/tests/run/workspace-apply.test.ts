@@ -40,7 +40,6 @@ describe("one-step workspace apply", () => {
         changedPathCount: 1,
         testing: "untested",
         untouchedDriftPaths: [],
-        remainingBackupPaths: [],
         leaseReleaseUnconfirmed: false,
       });
       expect(f.integrations).toMatchObject([

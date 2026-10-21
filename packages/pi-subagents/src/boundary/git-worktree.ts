@@ -54,6 +54,7 @@ import {
   treeEntries,
   treeHolds,
   treeOf,
+  withScratchIndex,
   workerLeftOut,
 } from "./git-capture.ts";
 import { commitRevisionPatch, revisionText } from "./git-worktree-patch.ts";
@@ -95,24 +96,23 @@ import {
   removeWorkspaceTrees,
 } from "./git-worktree-recovery.ts";
 import {
-  commitPublication,
-  finishPublication,
-  publishedMidIntegration,
-  publicationBudget,
-  publishWorkspace,
-  readPublishedFiles,
-  refuseOversizedPublication,
-  removeEmptiedDirectories,
-  removePublicationBackups,
-  requiredLeaseDirectories,
-  rollbackPublication,
+  refuseUntestedTargets,
+  rollbackIntegration,
   touchedParentDrift,
+  writeChanges,
 } from "./git-worktree-integration.ts";
 
 const subdirectory = workspaceSubdirectory;
 
-// Publication installs regular files only, so freeze refuses links and submodules that change.
-const unpublishableMode = (mode: string) => mode === "120000" || mode === "160000";
+// A checkout leaves a submodule's own repository alone, so freeze refuses submodules that change.
+const isSubmodule = (mode: string) => mode === "160000";
+
+// Files may already hold the proposal, so the record stays mid-integration for discard to undo.
+const stoppedMidIntegration = (error: WorkspaceError) =>
+  withOutcome(
+    error,
+    "The parent checkout may hold part of the proposal; the workspace stays mid-integration. Discard it to put the touched files back.",
+  );
 
 interface CreateWorkspaceInput {
   readonly sourceCwd: string;
@@ -429,12 +429,10 @@ export const gitWorkspaceEngine = (
         );
         yield* setWorkspaceRef(repository, workspaceId, "revision", revisionId);
         const changes = yield* changedEntries(repository, record.baseline, revisionId);
-        if (
-          changes.some((change) => unpublishableMode(change.from) || unpublishableMode(change.to))
-        )
+        if (changes.some((change) => isSubmodule(change.from) || isSubmodule(change.to)))
           return yield* workspaceFailure(
             "freeze",
-            "Creating, removing or changing symlinks or submodules is unsupported. Existing links and submodules must remain unchanged.",
+            "Adding, removing or changing submodules is unsupported. Existing submodules must remain unchanged.",
           );
         const changedPaths = changes.map((change) => change.path);
         // The patch is kept beside the record, never inside it.
@@ -469,29 +467,16 @@ export const gitWorkspaceEngine = (
         return { ...frozen, diff: revisionText(bytes) } satisfies WorkspaceRevision;
       });
 
-    // Runs plumbing against a temporary index in the workspace's directory, never the real one.
-    const withScratchIndex = <A, E, R>(
-      record: WorkspaceRecord,
-      use: (environment: { readonly GIT_INDEX_FILE: string }) => Effect.Effect<A, E, R>,
-    ) =>
-      Effect.gen(function* () {
-        const index = path.join(directory(record), `${yield* newWorkspaceId}.index`);
-        return yield* use({ GIT_INDEX_FILE: index }).pipe(
-          Effect.ensuring(
-            workspaceIO("index", () => fs.rm(index, { force: true })).pipe(Effect.ignore),
-          ),
-        );
-      });
-
     // The parent's captured files with the patch applied, as Git objects: the patch meets the
-    // repository's form of each file, whatever filters and line endings checkouts use.
+    // repository's form of each file, whatever filters and line endings checkouts use. Plumbing
+    // runs against a temporary index in the workspace's directory, never the real one.
     const combinedTree = (
       record: WorkspaceRecord,
       parent: string,
       patch: Uint8Array,
       changed: ReadonlyArray<string>,
     ) =>
-      withScratchIndex(record, (environment) =>
+      withScratchIndex(directory(record), (environment) =>
         Effect.gen(function* () {
           const { repository } = record;
           yield* repositoryGit(repository, ["read-tree", parent], { environment });
@@ -537,10 +522,10 @@ export const gitWorkspaceEngine = (
       const parent = yield* captureSource(record);
       const parentCommit = yield* commitTree(repository, parent.tree, [head], "parent");
       const parentEntries = yield* treeEntries(repository, parentCommit);
-      if (selected.some((name) => unpublishableMode(parentEntries.get(name)?.mode ?? "")))
+      if (selected.some((name) => isSubmodule(parentEntries.get(name)?.mode ?? "")))
         return yield* workspaceFailure(
           "prepare",
-          "A changed path is now a source symlink or submodule; integration refused.",
+          "A changed path is now a source submodule; integration refused.",
         );
       const patch = yield* readRevisionDiff(registry, target.workspaceId);
       const combined = yield* combinedTree(record, parentCommit, patch, selected);
@@ -555,13 +540,10 @@ export const gitWorkspaceEngine = (
         yield* addWorkspaceTree(record, sourceRoot, preparedRoot, preparedCommit);
         // The parent's current copies, so the tested tree runs with the parent's local files.
         yield* copyIncludedFiles("prepare", sourceRoot, preparedRoot, record.includedPaths ?? []);
-        const leaseDirectories = yield* requiredLeaseDirectories(record, selected);
-        yield* refuseOversizedPublication([sourceRoot, preparedRoot], selected);
         const result = {
           preparationId,
           revisionId: target.revisionId,
           cwd: path.join(preparedRoot, subdirectory(record)),
-          leaseDirectories,
         };
         yield* checkDirectory(result.cwd);
         yield* saveWorkspaceRecord(
@@ -611,17 +593,19 @@ export const gitWorkspaceEngine = (
       const reviewedTree = yield* treeOf(repository, target.revisionId);
       const workerTree = yield* captureWorker(record);
       const preparedRoot = prepared(record, target.preparationId);
-      const preparedTree = yield* captureWorker(
+      const preparedCapture = yield* captureWorker(
         record,
         preparedRoot,
         record.preparedTree ?? record.baseline,
       );
       const before = yield* captureSource(record);
       const identity = yield* sourceIdentity(sourceRoot);
+      const { parentTree, preparedTree } = record;
       if (
         workerTree.tree !== reviewedTree ||
-        preparedTree.tree !== record.preparedTree ||
-        record.parentTree === undefined ||
+        preparedTree === undefined ||
+        preparedCapture.tree !== preparedTree ||
+        parentTree === undefined ||
         identity.head !== record.sourceHead ||
         identity.index !== record.sourceIndex
       )
@@ -632,63 +616,23 @@ export const gitWorkspaceEngine = (
       // Parent edits to files the proposal doesn't touch are kept as they are; edits to a touched
       // file would be overwritten or merged untested, so they refuse.
       const drifted =
-        before.tree === record.parentTree
+        before.tree === parentTree
           ? []
-          : yield* changedBetween(repository, record.parentTree, before.tree);
+          : yield* changedBetween(repository, parentTree, before.tree);
       const touched = new Set(selected);
       const touchedDrift = drifted.filter((name) => touched.has(name));
       if (touchedDrift.length > 0) return yield* touchedParentDrift(touchedDrift);
       const untouchedDriftPaths = drifted.filter((name) => !touched.has(name));
-      const required = yield* requiredLeaseDirectories(record, selected);
-      if (required.some((ancestor) => !preparation.leaseDirectories.includes(ancestor)))
-        return yield* workspaceFailure(
-          "integrate",
-          "Changed-file ancestors changed; prepare and test again before integration.",
-        );
-      // Publication works on the bytes on disk: the parent's current files and the tested
-      // tree's checkout of the proposal. A parent file the capture left out, such as an ignored
-      // one, would be replaced untested, so it refuses like a drifted file.
-      // Both sides share one memory budget, refused before anything is published.
-      const budget = publicationBudget();
-      const previous = yield* readPublishedFiles(sourceRoot, selected, budget);
-      const captured = yield* treeEntries(repository, before.tree);
-      const hidden = selected.filter((name) => previous.has(name) !== captured.has(name));
-      if (hidden.length > 0) return yield* touchedParentDrift(hidden);
-      const next = yield* readPublishedFiles(preparedRoot, selected, budget);
-      // Only the proposal's own changes are published, so untouched parent edits stay.
-      const changed = selected.filter((name) => {
-        const current = previous.get(name),
-          published = next.get(name);
-        return current?.digest !== published?.digest || current?.mode !== published?.mode;
-      });
-      const publication = yield* publishWorkspace(
-        registry,
-        record,
-        previous,
-        next,
-        changed,
-        preparation,
+      // Only what the tested tree changes in the parent's files is written, through a scratch
+      // index, so untouched parent edits and the parent's index stay as they are.
+      const changes = yield* changedEntries(repository, parentTree, preparedTree);
+      yield* refuseUntestedTargets(sourceRoot, changes);
+      yield* saveWorkspaceRecord(registry, { ...record, status: "integrating" });
+      const integrated: WorkspaceRecord = { ...record, status: "integrated" };
+      yield* writeChanges(record, directory(record), preparedTree, changes).pipe(
+        Effect.andThen(saveWorkspaceRecord(registry, integrated)),
+        Effect.mapError(stoppedMidIntegration),
       );
-      const after = yield* sourceIdentity(record.handle.sourceRoot);
-      // Every file is already written, so the record stays mid-integration with its journal and
-      // every backup; discard rolls the files back once the user has reconciled the branch or index.
-      if (after.head !== identity.head || after.index !== identity.index) {
-        const changedParts = [
-          ...(after.head === identity.head ? [] : ["HEAD"]),
-          ...(after.index === identity.index ? [] : ["index"]),
-        ];
-        return yield* publishedMidIntegration(
-          registry,
-          publication.record,
-          `The source ${changedParts.join(" and ")} changed during publication; the workspace stays mid-integration.`,
-          "inspect the source branch and staged changes, then discard the workspace to roll the published files back, or keep them and delete the backups manually.",
-        );
-      }
-      const integrated: WorkspaceRecord = { ...publication.record, status: "integrated" };
-      yield* commitPublication(registry, publication.record, integrated);
-      yield* finishPublication(registry, integrated);
-      const remainingBackupPaths = yield* removePublicationBackups(publication.backups);
-      yield* removeEmptiedDirectories(publication.emptiedDirectories);
       const treeRemovalFailed = target.retainTrees
         ? false
         : yield* removeWorkspaceTrees(registry, integrated, { beforeRemove }).pipe(
@@ -705,7 +649,6 @@ export const gitWorkspaceEngine = (
         workerRoot: worker(record),
         untouchedDriftPaths,
         treeRemovalFailed,
-        remainingBackupPaths,
       };
     }, locked);
 
@@ -737,8 +680,8 @@ export const gitWorkspaceEngine = (
       Effect.gen(function* () {
         yield* settled(target);
         const record = yield* checked(target);
-        // A stopped publication is undone first; until that succeeds the record stays mid-integration.
-        if (record.status === "integrating") yield* rollbackPublication(registry, record);
+        // A stopped integration is undone first; until that succeeds the record stays mid-integration.
+        if (record.status === "integrating") yield* rollbackIntegration(record, directory(record));
         yield* removeWorkspaceTrees(registry, record, { beforeRemove });
         yield* saveWorkspaceRecord(registry, { ...record, status: "discarded" });
         owned.delete(target.workspaceId);

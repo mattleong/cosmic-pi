@@ -55,9 +55,6 @@ const record = (
   lastChangedAt: 0,
 });
 
-const sourceLeases = (cwds: ReadonlyArray<string>) =>
-  cwds.filter((cwd) => cwd === "/repo" || cwd === "/repo/packages/b").toSorted();
-
 const sharedWriter = (overrides: Partial<StartSubagentRequest> = {}) =>
   repoWriter({ writerWorkspaceModeOverride: "shared-checkout", ...overrides });
 
@@ -219,7 +216,7 @@ describe("writer workspace orchestration", () => {
     });
   });
 
-  it.effect("integrates a tested preparation under the source leases", () => {
+  it.effect("integrates a tested preparation under the checkout's lease", () => {
     const f = fixture();
     return withService(f.layer, function* (service) {
       const id = (yield* stoppedWriter(service)).workspaceId!;
@@ -230,9 +227,7 @@ describe("writer workspace orchestration", () => {
       expect(prepared.cwd).not.toBe("/repo");
       yield* service.workspaceApply(id, { revisionId: page.revisionId });
       expect(f.acquired).toContain("/repo");
-      expect(f.acquired).toContain("/repo/packages/b");
       expect(f.released).toContain("/repo");
-      expect(f.released).toContain("/repo/packages/b");
       expect(f.entries.get(id)?.status).toBe("integrated");
       expect(yield* service.inspectWriterWorkspace).toEqual({ mode: "worktree" });
     });
@@ -271,24 +266,32 @@ describe("writer workspace orchestration", () => {
     });
   });
 
-  it.effect("keeps a stopped integration's source leases until discard rolls it back", () => {
-    const f = fixture();
-    f.hooks.integrateStops = true;
-    return withService(f.layer, function* (service) {
-      const id = (yield* stoppedWriter(service)).workspaceId!;
-      const tested = yield* reviewAndPrepare(service, id);
-      yield* service.workspaceApply(id, { revisionId: tested.revisionId }).pipe(Effect.flip);
-      expect(f.entries.get(id)?.status).toBe("integrating");
-      expect(sourceLeases(f.acquired)).toEqual(["/repo", "/repo/packages/b"]);
-      expect(sourceLeases(f.released)).toEqual([]);
-      // Only this workspace is stuck: other worktree writers still start.
-      const other = yield* stoppedWriter(service);
-      expect(other.workspaceId).toBeDefined();
-      yield* service.workspaceDiscard(id);
-      expect(f.entries.get(id)?.status).toBe("discarded");
-      expect(sourceLeases(f.released)).toEqual(["/repo", "/repo/packages/b"]);
-    });
-  });
+  it.effect(
+    "lets only discard follow a stopped integration, releasing the checkout's lease",
+    () => {
+      const f = fixture();
+      f.hooks.integrateStops = true;
+      return withService(f.layer, function* (service) {
+        const writer = yield* service.start(repoWriter());
+        const id = writer.workspaceId!;
+        yield* completeLocalRun(service, f.children.controls[0]!, writer.id, "Done.");
+        const tested = yield* reviewAndPrepare(service, id);
+        yield* service.workspaceApply(id, { revisionId: tested.revisionId }).pipe(Effect.flip);
+        expect(f.entries.get(id)?.status).toBe("integrating");
+        expect(f.released).toContain("/repo");
+        expect(yield* service.resume(writer.id).pipe(Effect.flip)).toMatchObject({
+          code: "workspace_finished",
+        });
+        expect(
+          yield* service.workspaceApply(id, { revisionId: tested.revisionId }).pipe(Effect.flip),
+        ).toMatchObject({ code: "workspace_finished" });
+        // Only this workspace is stuck: other worktree writers still start.
+        expect((yield* stoppedWriter(service)).workspaceId).toBeDefined();
+        yield* service.workspaceDiscard(id);
+        expect(f.entries.get(id)?.status).toBe("discarded");
+      });
+    },
+  );
 
   it.effect("pages a review without splitting a character", () => {
     const f = fixture();

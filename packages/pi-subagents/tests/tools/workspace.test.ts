@@ -50,7 +50,6 @@ const integrated = {
   workerRoot: "/agent/ws-1/worker",
   untouchedDriftPaths: [],
   treeRemovalFailed: false,
-  remainingBackupPaths: [],
   leaseReleaseUnconfirmed: false,
 } as const;
 
@@ -125,7 +124,6 @@ describe("workspace apply", () => {
           preparationId: "prep-1",
           revisionId: "rev-1",
           cwd: "/agent/ws-1/prepared",
-          leaseDirectories: [],
           leftOutPaths: leftOut,
         }),
     };
@@ -174,14 +172,13 @@ describe("workspace apply", () => {
           applied({
             untouchedDriftPaths: ["src/notes.md"],
             treeRemovalFailed: true,
-            remainingBackupPaths: ["/project/.backup"],
             leaseReleaseUnconfirmed: true,
           }),
         ),
     }).pipe(Effect.orDie);
     const summary = summarize(args, result);
     expect(summary?.outcome).toBe("warning");
-    expect(summary?.issues?.filter((issue) => issue.severity === "warning")).toHaveLength(4);
+    expect(summary?.issues?.filter((issue) => issue.severity === "warning")).toHaveLength(3);
     expectStyledIssues(summary);
   });
 });

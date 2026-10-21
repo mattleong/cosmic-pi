@@ -104,6 +104,25 @@ describe(".worktreeinclude", () => {
     expect((yield* service.inspect(target)).includedPaths).toEqual([".env"]);
   });
 
+  test("never integrates a writer's edit to an included file, even un-ignored", function* (service, root) {
+    yield* writeFile(path.join(root, ".env"), "TOKEN=parent\n");
+    yield* includeFile(root, ".env\n");
+    const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+    yield* writeFile(path.join(handle.cwd, ".env"), "TOKEN=writer\n");
+    yield* writeFile(path.join(handle.cwd, ".gitignore"), "*.local\n");
+    yield* writeFile(path.join(handle.cwd, "src/main.ts"), "edited\n");
+    const { revision, preparation } = yield* prepareAndIntegrate(service, handle);
+    expect(revision.changedPaths).toEqual([".gitignore", "src/main.ts"]);
+    yield* service.integrate({
+      ...workspaceTarget(handle),
+      revisionId: revision.revisionId,
+      preparationId: preparation.preparationId,
+    });
+    expect(yield* readText(root, "src/main.ts")).toBe("edited\n");
+    expect(yield* readText(root, ".gitignore")).toBe("*.local\n");
+    expect(yield* readText(root, ".env")).toBe("TOKEN=parent\n");
+  });
+
   test("keeps a staged included file through a refused and a successful rebase", function* (service, root) {
     yield* writeFile(path.join(root, ".env"), "TOKEN=parent\n");
     yield* includeFile(root, ".env\n");

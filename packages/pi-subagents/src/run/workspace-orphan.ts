@@ -1,6 +1,5 @@
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import type { WriterLease } from "../boundary/writer-lease.ts";
 import {
   isOriginalWorker,
   OPEN_WORKSPACE_STATUSES,
@@ -123,69 +122,6 @@ export function workspaceOrphanOperations(
                 ),
               ),
         );
-  /**
-   * Fresh writer leases on a mid-integration orphan's lease directories, so no writer edits the
-   * half-published files while discard rolls them back. Released after the rollback; a failed
-   * release quarantines integration like any other.
-   */
-  const withSourceLeases = <A>(
-    record: WorkspaceRecord,
-    use: Effect.Effect<A, SubagentError>,
-  ): Effect.Effect<A, SubagentError> =>
-    Effect.acquireUseRelease(
-      Effect.gen(function* () {
-        const { handle } = record;
-        const directories = record.preparation?.leaseDirectories ?? [
-          handle.sourceRoot,
-          handle.sourceCwd,
-        ];
-        const roots = yield* Effect.forEach(directories, (cwd) =>
-          writerLeases.canonicalize(cwd).pipe(Effect.mapError(mapWorkspaceError)),
-        );
-        const owned: WriterLease[] = [];
-        const sources = [...new Map(roots.map((cwd) => [cwd.digest, cwd])).values()].toSorted(
-          (left, right) => left.digest.localeCompare(right.digest),
-        );
-        return yield* Effect.gen(function* () {
-          for (const cwd of sources)
-            owned.push(
-              yield* writerLeases
-                .acquire({ cwd, runId: `orphan-rollback-${handle.workspaceId}` })
-                .pipe(
-                  Effect.mapError((error) =>
-                    invalid(
-                      "workspace_target_busy",
-                      `A writer holds a directory the interrupted integration published into.\n${error.message}`,
-                    ),
-                  ),
-                ),
-            );
-          return owned;
-        }).pipe(Effect.onError(() => releaseAll(owned, record.handle.workspaceId)));
-      }),
-      () => use,
-      (owned) => releaseAll(owned, record.handle.workspaceId),
-    );
-  const releaseAll = (owned: ReadonlyArray<WriterLease>, workspaceId: string) =>
-    Effect.forEach(
-      owned.toReversed(),
-      (lease) =>
-        writerLeases.release(lease).pipe(
-          Effect.catch((error) =>
-            Effect.logWarning(
-              `Orphan rollback lease release is unconfirmed: ${error.message}`,
-            ).pipe(
-              Effect.annotateLogs("workspaceId", workspaceId),
-              Effect.andThen(
-                Effect.sync(() => {
-                  state.integrationQuarantined = true;
-                }),
-              ),
-            ),
-          ),
-        ),
-      { discard: true },
-    );
   /** Finds the orphan among this checkout's records. */
   const orphanRecord = (
     service: WorkspaceServiceContract,
@@ -204,18 +140,12 @@ export function workspaceOrphanOperations(
     Effect.gen(function* () {
       const service = yield* requireEngine;
       const record = yield* orphanRecord(service, workspaceId);
-      const discard = withStoppedWriter(
-        workspaceId,
-        record.handle,
-        service
-          .discardOrphan({
-            workspaceId,
-            ...(record.status === "integrating" && { sourceLeasesHeld: true }),
-          })
-          .pipe(Effect.mapError(orphanError)),
-      );
       return yield* operations.withPermits(1)(
-        record.status === "integrating" ? withSourceLeases(record, discard) : discard,
+        withStoppedWriter(
+          workspaceId,
+          record.handle,
+          service.discardOrphan({ workspaceId }).pipe(Effect.mapError(orphanError)),
+        ),
       );
     });
   /**

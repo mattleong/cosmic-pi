@@ -1,5 +1,4 @@
 import { expect, it } from "@effect/vitest";
-import { vi } from "vitest";
 import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -7,7 +6,6 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import { nodeFilePlatformLayer, SafeFile } from "pi-cosmic-core";
-import * as files from "../../src/boundary/git-worktree-publish.ts";
 import { readWorkspaceRecord } from "../../src/boundary/git-worktree-store.ts";
 import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-builtins.ts";
 import { WriterLeaseService } from "../../src/boundary/writer-lease.ts";
@@ -21,13 +19,13 @@ import type { WorkspaceServiceContract } from "../../src/workspace/service.ts";
 import {
   commitRepository,
   exists,
-  failureOf,
+  integrateFailingRemoval,
   io,
   openWorkspaceService,
+  prepareIntegration,
   readText,
   registryOf,
   temporaryDirectory,
-  workspaceTarget,
   writeFile,
 } from "./fixtures/repository.ts";
 
@@ -100,37 +98,18 @@ const ageRecord = (agent: string, workspaceId: string, days: number) =>
     yield* io(() => fs.writeFile(path.join(registryOf(agent), workspaceId, "record.json"), text));
   });
 
-// Publication stops at src/main.ts because an editor saved it after the preimage check, so
-// other.txt is already published with its original in a backup.
-const originalPublish = files.publishWorkspaceFile;
-const stopPublicationAtMain = (
+// The integration stops before it removes other.txt, after it wrote src/main.ts.
+const stopIntegrationMidway = (
   service: WorkspaceServiceContract,
   handle: WorkspaceHandle,
   root: string,
 ) =>
   Effect.gen(function* () {
-    yield* writeFile(path.join(handle.cwd, "other.txt"), "published first\n");
-    yield* writeFile(path.join(handle.cwd, "src/main.ts"), "never published\n");
-    const revision = yield* service.freeze(workspaceTarget(handle));
-    const prepared = yield* service.prepare({
-      ...workspaceTarget(handle),
-      revisionId: revision.revisionId,
-    });
-    const spy = vi.spyOn(files, "publishWorkspaceFile").mockImplementation((request, hooks) =>
-      Effect.gen(function* () {
-        if (request.name === "main.ts")
-          yield* writeFile(path.join(request.directory, request.name), "editor save\n");
-        return yield* originalPublish(request, hooks);
-      }).pipe(Effect.orDie),
-    );
-    yield* failureOf(
-      service.integrate({
-        ...workspaceTarget(handle),
-        revisionId: revision.revisionId,
-        preparationId: prepared.preparationId,
-      }),
-    ).pipe(Effect.ensuring(Effect.sync(() => spy.mockRestore())));
-    expect(yield* readText(root, "other.txt")).toBe("published first\n");
+    yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker main\n");
+    yield* io(() => fs.unlink(path.join(handle.cwd, "other.txt")));
+    const { integration } = yield* prepareIntegration(service, handle);
+    yield* integrateFailingRemoval(service, integration, path.join(root, "other.txt"));
+    expect(yield* readText(root, "src/main.ts")).toBe("worker main\n");
   });
 
 it.live(
@@ -186,14 +165,14 @@ it.live(
 );
 
 it.live(
-  "rolls back a mid-integration orphan once it holds fresh source leases",
+  "only discards a mid-integration orphan, rolling it back",
   () =>
     Effect.gen(function* () {
       const { source, agent, creator } = yield* orphanScenario("pi-orphan-rollback-");
       const handle = yield* creator.service.create({ sourceCwd: source, ownerId: "old/root" });
-      yield* stopPublicationAtMain(creator.service, handle, source);
+      yield* stopIntegrationMidway(creator.service, handle, source);
       yield* creator.close;
-      const { control, leases, successor } = yield* laterSession(agent, source);
+      const { control, successor } = yield* laterSession(agent, source);
       expect((yield* control.workspaceList()).orphans?.get(handle.workspaceId)).toBe(
         "discard-only",
       );
@@ -203,26 +182,12 @@ it.live(
       expect(
         yield* control.revise(neverStarts)(handle.workspaceId, "Continue").pipe(Effect.flip),
       ).toMatchObject({ code: "workspace_orphan_discard_only" });
-      // A writer in the checkout keeps the half-published files as they are.
-      const writer = yield* leases.acquire({
-        cwd: yield* leases.canonicalize(source),
-        runId: "checkout-writer",
-      });
-      expect(yield* control.workspaceDiscard(handle.workspaceId).pipe(Effect.flip)).toMatchObject({
-        code: "workspace_target_busy",
-      });
-      expect(yield* readText(source, "other.txt")).toBe("published first\n");
-      yield* leases.release(writer);
 
       yield* control.workspaceDiscard(handle.workspaceId);
+      expect(yield* readText(source, "src/main.ts")).toBe("baseline\n");
       expect(yield* readText(source, "other.txt")).toBe("other\n");
-      expect(yield* readText(source, "src/main.ts")).toBe("editor save\n");
       expect(yield* exists(handle.cwd)).toBe(false);
       expect((yield* successor.service.listAll).records[0]?.status).toBe("discarded");
-      // The rollback released its source leases.
-      yield* leases.release(
-        yield* leases.acquire({ cwd: yield* leases.canonicalize(source), runId: "after" }),
-      );
       yield* successor.close;
     }).pipe(Effect.scoped),
   60_000,
@@ -238,7 +203,7 @@ it.live(
       yield* writeFile(path.join(old.cwd, "src/main.ts"), "month-old work\n");
       const young = yield* create;
       const integrating = yield* create;
-      yield* stopPublicationAtMain(creator.service, integrating, source);
+      yield* stopIntegrationMidway(creator.service, integrating, source);
       yield* creator.close;
       for (const handle of [old, integrating]) yield* ageRecord(agent, handle.workspaceId, 31);
       yield* ageRecord(agent, young.workspaceId, 29);

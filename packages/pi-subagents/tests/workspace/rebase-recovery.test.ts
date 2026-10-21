@@ -1,8 +1,6 @@
 import * as Effect from "effect/Effect";
 import { expect, vi } from "vitest";
-import * as files from "../../src/boundary/git-worktree-publish.ts";
 import * as gitProcess from "../../src/boundary/git-worktree-process.ts";
-import * as store from "../../src/boundary/git-worktree-store.ts";
 import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-builtins.ts";
 import type { WorkspaceHandle, WorkspaceRecord } from "../../src/workspace/model.ts";
 import type { WorkspaceServiceContract } from "../../src/workspace/service.ts";
@@ -31,28 +29,6 @@ const editWorker = (handle: WorkspaceHandle) =>
     yield* writeFile(path.join(handle.cwd, "src/a.ts"), "a\nworker\nc\n");
     yield* writeFile(path.join(handle.cwd, "src/new.ts"), "new\n");
     yield* io(() => fs.unlink(path.join(handle.cwd, "src/gone.ts")));
-  });
-
-const publicationArtifacts = (root: string) =>
-  io(() => fs.readdir(root, { recursive: true })).pipe(
-    Effect.map((names) =>
-      names.filter((name) => path.basename(name).startsWith(".pi-workspace-")).toSorted(),
-    ),
-  );
-
-const freezeAndPrepare = (service: WorkspaceServiceContract, handle: WorkspaceHandle) =>
-  Effect.gen(function* () {
-    const target = workspaceTarget(handle);
-    const revision = yield* service.freeze(target);
-    const prepared = yield* service.prepare({ ...target, revisionId: revision.revisionId });
-    return {
-      revision,
-      integration: {
-        ...target,
-        revisionId: revision.revisionId,
-        preparationId: prepared.preparationId,
-      },
-    };
   });
 
 /** Runs `effect` while `spy` is installed, restoring it however `effect` ends. */
@@ -198,90 +174,4 @@ test("names the rebase-worker ref when restoring the worker fails, and it holds 
   expect(failure.detail).toContain(ref);
   expect(yield* gitProcess.git(root, ["show", `${ref}:src/a.ts`])).toBe("a\nworker\nc\n");
   expect(yield* gitProcess.git(root, ["show", `${ref}:src/new.ts`])).toBe("new\n");
-});
-
-const isIntegrated = (text: string) => text.includes('"status":"integrated"');
-
-test("keeps an integration mid-integration, its backups tracked, when its record can't be saved", function* (service, root, agent) {
-  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  yield* editWorker(handle);
-  const { integration } = yield* freezeAndPrepare(service, handle);
-  const failure = yield* spied(
-    failRecordSave(artifactOf(agent, handle), { matches: isIntegrated, failRename: true }),
-    failureOf(service.integrate(integration)),
-  );
-  const record = yield* service.inspect(workspaceTarget(handle));
-  expect(record.status).toBe("integrating");
-  const backups = (record.journal ?? []).flatMap((entry) =>
-    entry.before ? [entry.backupPath] : [],
-  );
-  expect(backups.toSorted()).toEqual(yield* publicationArtifacts(root));
-  for (const backup of backups) expect(failure.detail).toContain(backup);
-  yield* service.discard(workspaceTarget(handle));
-  expect(yield* readText(root, "src/a.ts")).toBe("a\nb\nc\n");
-  expect(yield* readText(root, "src/gone.ts")).toBe("gone\n");
-  expect(yield* exists(path.join(root, "src/new.ts"))).toBe(false);
-  expect(yield* publicationArtifacts(root)).toEqual([]);
-});
-
-test("completes an integration whose record landed though its directory sync failed", function* (service, root, agent) {
-  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  yield* editWorker(handle);
-  const { integration } = yield* freezeAndPrepare(service, handle);
-  const integrated = yield* spied(
-    failRecordSave(artifactOf(agent, handle), { matches: isIntegrated, failSync: true }),
-    service.integrate(integration),
-  );
-  expect(integrated.remainingBackupPaths).toEqual([]);
-  expect((yield* service.inspect(workspaceTarget(handle))).status).toBe("integrated");
-  expect(yield* publicationArtifacts(root)).toEqual([]);
-  expect(yield* readText(root, "src/a.ts")).toBe("a\nworker\nc\n");
-  expect(yield* readText(root, "src/new.ts")).toBe("new\n");
-});
-
-test("discard drops a backup reservation left by a stop before the file moved there", function* (service, root) {
-  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  yield* writeFile(path.join(handle.cwd, "src/a.ts"), "a\nworker\nc\n");
-  const { integration } = yield* freezeAndPrepare(service, handle);
-  const rename = fs.rename;
-  const spy = vi
-    .spyOn(fs, "rename")
-    .mockImplementation((from, to) =>
-      path.basename(String(to)).startsWith(files.publicationBackupPrefix)
-        ? ioFailure()
-        : rename(from, to),
-    );
-  yield* spied(spy, failureOf(service.integrate(integration)));
-  const reservation = (yield* publicationArtifacts(root)).find((name) =>
-    path.basename(name).startsWith(files.publicationBackupPrefix),
-  );
-  expect(reservation).toBeDefined();
-  expect((yield* io(() => fs.stat(path.join(root, reservation ?? "")))).size).toBe(0);
-  yield* service.discard(workspaceTarget(handle));
-  expect((yield* service.inspect(workspaceTarget(handle))).status).toBe("discarded");
-  expect(yield* readText(root, "src/a.ts")).toBe("a\nb\nc\n");
-  expect(yield* publicationArtifacts(root)).toEqual([]);
-});
-
-test("resets leftover publication progress before saving a new publication's journal", function* (service, root, agent) {
-  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  yield* editWorker(handle);
-  const { integration } = yield* freezeAndPrepare(service, handle);
-  const progress = path.join(artifactOf(agent, handle), "publication.json");
-  // An earlier publication's progress whose best-effort removal failed.
-  yield* writeFile(progress, JSON.stringify({ directories: 2, files: 3 }));
-  const original = store.savePublicationProgress;
-  const spy = vi
-    .spyOn(store, "savePublicationProgress")
-    .mockImplementation((registry, id, saved) =>
-      saved.files > 0
-        ? Effect.fail(gitProcess.workspaceFailure("registry", "injected"))
-        : original(registry, id, saved),
-    );
-  yield* spied(spy, failureOf(service.integrate(integration)));
-  expect((yield* service.inspect(workspaceTarget(handle))).status).toBe("integrating");
-  expect(JSON.parse(yield* readText(progress))).toEqual({ directories: 0, files: 0 });
-  yield* service.discard(workspaceTarget(handle));
-  expect(yield* readText(root, "src/a.ts")).toBe("a\nb\nc\n");
-  expect(yield* exists(path.join(root, "src/new.ts"))).toBe(false);
 });

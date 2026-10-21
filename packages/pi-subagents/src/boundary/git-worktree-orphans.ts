@@ -7,7 +7,6 @@ import type {
   WorkspaceAdoptTarget,
   WorkspaceError,
   WorkspaceHandle,
-  WorkspaceOrphanDiscardTarget,
   WorkspaceOrphanTarget,
   WorkspaceRecord,
   WorkspaceSweepTarget,
@@ -29,7 +28,7 @@ import {
   removeWorkspaceTrees,
   requireOriginalWorker,
 } from "./git-worktree-recovery.ts";
-import { rollbackPublication } from "./git-worktree-integration.ts";
+import { rollbackIntegration } from "./git-worktree-integration.ts";
 
 /** The engine state and operations orphan takeover and the sweep share with the engine. */
 export interface OrphanEngine {
@@ -87,27 +86,15 @@ export const orphanWorkspaceOperations = (engine: OrphanEngine) => {
   // An orphan's creating session has ended (its owner lease is free); the caller separately
   // proves no writer still holds the worker tree.
   const discardOrphan = Effect.fn("GitWorkspaceEngine.discardOrphan")(function* (
-    target: WorkspaceOrphanDiscardTarget,
+    target: WorkspaceOrphanTarget,
   ) {
     const record = yield* managedRecord(target.workspaceId);
-    // Rolling back needs fresh writer leases on the publication's directories, which only the
-    // caller can take: the integrating session's leases ended with it.
-    if (record.status === "integrating" && target.sourceLeasesHeld !== true)
-      return yield* workspaceRefusal(
-        "discard",
-        "The workspace was left mid-integration by a session that has ended.",
-        {
-          path: path.join(workspaceArtifact(registry, record), "record.json"),
-          rule: "rolling back another session's integration needs fresh writer leases on the parent checkout's directories it published into",
-          remedy:
-            "Discard it from the root session of its checkout, which takes those leases, or compare the journal's paths with the parent checkout, restore each file from its backup (paths relative to the source root) or keep the published content, delete the backup and temporary files, then remove the private workspace directory.",
-        },
-      );
     yield* whileOwnerEnded(
       record,
       Effect.gen(function* () {
         // Until the rollback succeeds the record stays mid-integration.
-        if (record.status === "integrating") yield* rollbackPublication(registry, record);
+        if (record.status === "integrating")
+          yield* rollbackIntegration(record, workspaceArtifact(registry, record));
         yield* removeWorkspaceTrees(registry, record, {
           requireOriginalWorker: true,
           beforeRemove,

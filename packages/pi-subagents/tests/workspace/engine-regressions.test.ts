@@ -4,7 +4,6 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import { CrossProcessLock } from "pi-cosmic-core";
 import { git } from "../../src/boundary/git-worktree-process.ts";
-import * as files from "../../src/boundary/git-worktree-publish.ts";
 import {
   sourceLockNamespace,
   workspaceLockDirectory,
@@ -277,8 +276,7 @@ test("removes directories that deleting their last file left empty", function* (
   yield* io(() => fs.unlink(path.join(handle.cwd, "feature/deep/only.ts")));
   yield* io(() => fs.unlink(path.join(handle.cwd, "shared/drop.ts")));
   const { integration } = yield* freezeAndPrepare(service, handle);
-  const integrated = yield* service.integrate(integration);
-  expect(integrated.remainingBackupPaths).toEqual([]);
+  yield* service.integrate(integration);
   expect(yield* exists(path.join(root, "feature"))).toBe(false);
   expect(yield* io(() => fs.readdir(path.join(root, "shared")))).toEqual(["keep.ts"]);
   expect(yield* exists(path.join(root, "src/main.ts"))).toBe(true);
@@ -295,34 +293,4 @@ test("refuses integration after a staged-only source change", function* (service
   expect(yield* fails(service.integrate(integration))).toBe(true);
   expect(yield* readText(root, "src/main.ts")).toBe("baseline\n");
   expect((yield* service.inspect(workspaceTarget(handle))).status).toBe("prepared");
-});
-
-test("leaves journal evidence when the index changes during publication", function* (service, root, agent) {
-  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
-  const { integration } = yield* freezeAndPrepare(service, handle);
-  const original = files.publishWorkspaceFile;
-  const spy = vi
-    .spyOn(files, "publishWorkspaceFile")
-    .mockImplementation((request) =>
-      original(request).pipe(
-        Effect.tap(() => git(root, ["add", "--", "src/main.ts"]).pipe(Effect.orDie)),
-      ),
-    );
-  const failure = yield* failureOf(service.integrate(integration)).pipe(
-    Effect.ensuring(Effect.sync(() => spy.mockRestore())),
-  );
-  expect(failure.message).toContain("mid-integration");
-  const record = yield* service.inspect(workspaceTarget(handle));
-  expect(record.status).toBe("integrating");
-  const backup = record.journal?.[0]?.backupPath ?? "";
-  expect(failure.detail).toContain(backup);
-  expect(yield* readText(root, backup)).toBe("baseline\n");
-  expect(yield* readText(root, "src/main.ts")).toBe("worker\n");
-  const registry = yield* registryOf(agent);
-  expect(failure.detail).toContain(path.join(registry, handle.workspaceId, "record.json"));
-  // Once the user has dealt with the staged change, discard rolls the publication back.
-  yield* service.discard(workspaceTarget(handle));
-  expect(yield* readText(root, "src/main.ts")).toBe("baseline\n");
-  expect(yield* exists(path.join(root, backup))).toBe(false);
 });

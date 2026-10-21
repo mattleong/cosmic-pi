@@ -15,7 +15,7 @@ import type {
   WorkspaceIntegrationTarget,
   WorkspaceLaunch,
   WorkspaceListing,
-  WorkspaceOrphanDiscardTarget,
+  WorkspaceOrphanTarget,
   WorkspacePreparation,
   WorkspacePreparationTarget,
   WorkspaceRebase,
@@ -48,7 +48,10 @@ export interface WorkspaceServiceContract {
   readonly prepare: (
     target: WorkspacePreparationTarget,
   ) => Effect.Effect<WorkspacePreparation, WorkspaceError>;
-  /** Publishes the prepared changes. */
+  /**
+   * Writes the prepared changes into the parent checkout's files through a scratch index. A write
+   * that stops partway leaves the record `integrating` until discard rolls it back.
+   */
   readonly integrate: (
     target: WorkspaceIntegrationTarget,
   ) => Effect.Effect<WorkspaceIntegration, WorkspaceError>;
@@ -66,12 +69,9 @@ export interface WorkspaceServiceContract {
   readonly discard: (target: WorkspaceSettledTarget) => Effect.Effect<void, WorkspaceError>;
   /**
    * Discards a workspace whose creating session provably ended; the caller proves its writer
-   * stopped. A mid-integration orphan is rolled back first, only once the caller holds fresh
-   * writer leases on its lease directories.
+   * stopped. A mid-integration orphan is rolled back first.
    */
-  readonly discardOrphan: (
-    target: WorkspaceOrphanDiscardTarget,
-  ) => Effect.Effect<void, WorkspaceError>;
+  readonly discardOrphan: (target: WorkspaceOrphanTarget) => Effect.Effect<void, WorkspaceError>;
   /**
    * Takes over an active, frozen, or prepared orphan whose creating session provably ended; the
    * caller proves its writer stopped. Returns the handle naming the new owner.

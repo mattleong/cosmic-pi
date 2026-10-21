@@ -71,16 +71,6 @@ function integrationWarnings(outcome: WorkspaceIntegrationOutcome): WorkspaceWar
       message: "The proposal's working copies couldn't be deleted",
       detail: `The integration committed, but removing the worktree's worker and test trees failed; the worker tree at ${worker} and any test trees beside it remain on disk. Discard this worktree to retry the removal.`,
     });
-  const backups = outcome.remainingBackupPaths;
-  if (backups.length > 0)
-    warnings.push({
-      code: "integration-backups-remain",
-      message:
-        backups.length === 1
-          ? "A backup of a replaced file couldn't be deleted from the checkout"
-          : `${countLabel(backups.length, "backup")} of replaced files couldn't be deleted from the checkout`,
-      detail: `The integration committed, but deleting these backups from the parent checkout failed: ${listedPaths(backups)}. Each holds a file's content from before the integration; delete them once that content is no longer needed.`,
-    });
   if (outcome.leaseReleaseUnconfirmed)
     warnings.push({
       code: "integration-lease-unconfirmed",

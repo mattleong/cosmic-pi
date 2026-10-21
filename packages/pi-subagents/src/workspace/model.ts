@@ -8,7 +8,6 @@ const WORKSPACE_ERROR_CODES = [
   "workspace_rollback_refused",
   "workspace_rebase_refused",
   "workspace_local_override",
-  "workspace_publication_oversized",
 ] as const;
 
 export class WorkspaceError extends Schema.TaggedError<WorkspaceError>()("WorkspaceError", {
@@ -63,15 +62,8 @@ const WorkspacePreparationSchema = Schema.Struct({
   preparationId: Schema.String,
   revisionId: Schema.String,
   cwd: Schema.String,
-  leaseDirectories: Schema.Array(Schema.String),
 });
 export type WorkspacePreparation = typeof WorkspacePreparationSchema.Type;
-const WorkspaceJournalFileSchema = Schema.Struct({
-  /** SHA-256 of the file's bytes. */
-  digest: Schema.String,
-  mode: Schema.String,
-  permissions: Schema.Finite,
-});
 /** What the writer that created a workspace was launched as, so an adopting session can revise it. */
 const WorkspaceLaunchSchema = Schema.Struct({
   profile: Schema.optional(Schema.String),
@@ -101,23 +93,14 @@ export const WorkspaceRecordSchema = Schema.Struct({
   ownerLease: Schema.String,
   revision: Schema.optional(WorkspaceRevisionMetadataSchema),
   preparation: Schema.optional(WorkspacePreparationSchema),
+  /**
+   * The preparation's tested tree and the parent capture it was built on. Integration writes the
+   * paths where they differ; discarding an `integrating` record puts those paths back.
+   */
   preparedTree: Schema.optional(Schema.String),
   parentTree: Schema.optional(Schema.String),
   sourceHead: Schema.optional(Schema.String),
   sourceIndex: Schema.optional(Schema.String),
-  journal: Schema.optional(
-    Schema.Array(
-      Schema.Struct({
-        path: Schema.String,
-        temporaryPath: Schema.String,
-        backupPath: Schema.String,
-        before: Schema.optional(WorkspaceJournalFileSchema),
-        after: Schema.optional(WorkspaceJournalFileSchema),
-      }),
-    ),
-  ),
-  /** Missing ancestor directories publication creates, shallowest first. */
-  plannedDirectories: Schema.optional(Schema.Array(Schema.String)),
   /**
    * The worker tree a rebase rebuilt, which differs from the baseline by the reapplied changes;
    * WorktreeCreate hooks run in it may change nothing else. Freeze and revise drop it.
@@ -176,13 +159,6 @@ export interface WorkspaceWorkerChanges {
 export interface WorkspaceOrphanTarget {
   readonly workspaceId: string;
 }
-export interface WorkspaceOrphanDiscardTarget extends WorkspaceOrphanTarget {
-  /**
-   * The caller holds fresh writer leases on a mid-integration record's lease directories, so
-   * discard may roll its publication back.
-   */
-  readonly sourceLeasesHeld?: true | undefined;
-}
 /** Takes over an orphan whose creating session ended; the caller proves its writer stopped. */
 export interface WorkspaceAdoptTarget extends WorkspaceOrphanTarget {
   readonly ownerId: string;
@@ -221,7 +197,5 @@ export interface WorkspaceIntegration {
   /** Parent files the proposal doesn't touch that changed after preparation; they were kept. */
   readonly untouchedDriftPaths: ReadonlyArray<string>;
   readonly treeRemovalFailed: boolean;
-  /** Preimage backups left in the source checkout because deleting them failed. */
-  readonly remainingBackupPaths: ReadonlyArray<string>;
 }
 export type WorkspaceAcquired = (handle: WorkspaceHandle) => void;

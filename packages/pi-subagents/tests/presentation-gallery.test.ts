@@ -934,7 +934,6 @@ const appliedWorkspace = {
   workerRoot: "/agent/subagent-worktrees/ws-1/worker",
   untouchedDriftPaths: [],
   treeRemovalFailed: false,
-  remainingBackupPaths: [],
   leaseReleaseUnconfirmed: false,
 } as const;
 const workspaceService: SubagentServiceDoubleInput = {
@@ -959,7 +958,6 @@ const workspaceService: SubagentServiceDoubleInput = {
       preparationId: "prep-1",
       revisionId,
       cwd: "/project/.pi-subagents/prepared/prep-1",
-      leaseDirectories: [],
       leftOutPaths: [],
     }),
   workspaceApply: () =>
@@ -979,7 +977,6 @@ const leftoverWorkspace: SubagentServiceDoubleInput = {
       ...appliedWorkspace,
       testing: "parent-tested",
       untouchedDriftPaths: ["src/billing.ts", "README.md"],
-      remainingBackupPaths: ["/project/db/.pi-workspace-old-4f1c2a9e-0d3b-4e7a-9c55-1b2d3e4f5a6b"],
       leaseReleaseUnconfirmed: true,
     }),
 };
