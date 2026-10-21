@@ -146,7 +146,7 @@ export function workspaceFixture({
   const gated = <A, E>(operation: GatedOperation, effect: Effect.Effect<A, E>) =>
     Effect.suspend(() => hooks.before[operation] ?? Effect.void).pipe(Effect.andThen(effect));
   const integrations: WorkspaceIntegrationTarget[] = [];
-  /** Each mid-integration orphan whose publication discard rolled back. */
+  /** Each mid-integration workspace whose integration discard rolled back. */
   const rollbacks: string[] = [];
   /** Each rebase's workspace, in order. */
   const rebases: string[] = [];
@@ -394,6 +394,7 @@ export function workspaceFixture({
                   new WorkspaceError({ operation: "discard", message: "Fixture failure" }),
                 )
               : Effect.sync(() => {
+                  if (entry.status === "integrating") rollbacks.push(target.workspaceId);
                   entries.set(target.workspaceId, { ...entry, status: "discarded" });
                 }),
           ),

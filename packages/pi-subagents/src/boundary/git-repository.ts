@@ -159,7 +159,7 @@ export const sourceIdentity = (root: string) =>
 /**
  * Refuses when the real index of the tree at `root` marks a path in `paths` skip-worktree or
  * assume-unchanged. Git then reads the indexed blob instead of the file, so captures can't see a
- * local edit there and publication would overwrite it.
+ * local edit there and integration would overwrite it.
  */
 export const refuseHiddenLocalEdits = (
   root: string,
@@ -184,7 +184,7 @@ export const refuseHiddenLocalEdits = (
           : `The parent index hides local edits to ${hidden.length} files the proposal changes.`,
       detail: [
         `Hidden: ${listedPaths(hidden)}`,
-        "Rule: Git skips the files of skip-worktree and assume-unchanged entries (`git ls-files -v` tags them `S` or lowercase), so their local edits can't be checked and publication would overwrite them.",
+        "Rule: Git skips the files of skip-worktree and assume-unchanged entries (`git ls-files -v` tags them `S` or lowercase), so their local edits can't be checked and integration would overwrite them.",
         "Nothing was changed.",
         `Remedy: in ${root}, clear the bit with \`git update-index --no-skip-worktree -- <path>\` or \`git update-index --no-assume-unchanged -- <path>\`, then prepare again; or revise the workspace so the writer leaves these files unchanged.`,
       ].join("\n"),

@@ -1,8 +1,7 @@
-import { afterAll, describe, expect, vi } from "vitest";
+import { afterAll, describe, expect } from "vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as os from "node:os";
-import * as hookRunner from "../../src/boundary/worktree-hook.ts";
 import {
   nodeFsPromises as fs,
   nodeMkdirSync,
@@ -10,6 +9,7 @@ import {
 } from "../../src/boundary/node-builtins.ts";
 import type { WorkspaceHandle } from "../../src/workspace/model.ts";
 import type { WorkspaceServiceContract } from "../../src/workspace/service.ts";
+import { unconfirmedShellCleanup } from "../support/unconfirmed-hook-cleanup.ts";
 import {
   exists,
   failureOf,
@@ -62,21 +62,6 @@ const removals = (workspaceId: string) =>
     ),
     Effect.map((inputs) => inputs.filter((input) => input.workspaceId === workspaceId)),
     Effect.orDie,
-  );
-
-const originalHook = hookRunner.runWorktreeHook;
-// Every WorktreeRemove hook fails with its process cleanup unconfirmed while the spy is installed;
-// WorktreeCreate hooks run as usual.
-const unconfirmedRemoval = () =>
-  vi.spyOn(hookRunner, "runWorktreeHook").mockImplementation((hook, input, options) =>
-    input.event === "WorktreeCreate"
-      ? originalHook(hook, input, options)
-      : Effect.fail(
-          new hookRunner.WorktreeHookError({
-            message: "Left processes.",
-            cleanupUnconfirmed: true,
-          }),
-        ),
   );
 
 const prepareEdit = (service: WorkspaceServiceContract, handle: WorkspaceHandle) =>
@@ -157,7 +142,7 @@ describe("WorktreeRemove hooks", () => {
 
   test("unconfirmed hook cleanup never blocks removal", function* (service, root) {
     const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-    const spy = unconfirmedRemoval();
+    const spy = unconfirmedShellCleanup();
     yield* service
       .discard(workspaceTarget(handle))
       .pipe(Effect.ensuring(Effect.sync(() => spy.mockRestore())));

@@ -182,7 +182,7 @@ const TOOL_SPECS: SubagentToolSpecs = {
   [SUBAGENT_TOOL_NAME.workspace]: {
     label: "Manage Writer Worktrees",
     description:
-      "Apply worktree writers' proposals as their direct parent. apply integrates the current proposal as uncommitted edits, keeps your index, and refuses if anything is stale or conflicts. To check first, review pages a summary and the diff, prepare builds a cwd combining it with your current edits for testing, and apply then integrates that preparation. revise asks the writer for another pass, rebase first rebuilding its tree from your current files; discard deletes a proposal. list marks worktrees left by ended sessions; any other action takes over an adoptable one.",
+      "Apply worktree writers' proposals as their direct parent. apply integrates the current proposal as uncommitted edits, keeps your index, and refuses if anything is stale or conflicts. To check first, review pages a summary and the diff, prepare builds a cwd combining it with your current edits for testing, and apply then integrates that preparation. revise asks the writer for another pass, rebase first rebuilding its tree from your current files; discard deletes a proposal. list marks worktrees left by ended sessions; review, prepare, apply, or revise takes over an adoptable one, and discard works on any orphan.",
     promptSnippet: "Apply, or review, test, and apply, worktree writers' proposals",
     promptGuidelines: [
       "Nothing applies a worktree writer's proposal automatically, and neither path needs user confirmation: apply small or trusted changes directly; for risky ones, review every page, prepare, run the relevant tests in the prepared cwd without editing it, then apply. Don't stage or commit parent changes.",

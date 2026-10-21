@@ -6,7 +6,11 @@ import * as Layer from "effect/Layer";
 import * as Exit from "effect/Exit";
 import { temporaryDirectory } from "pi-cosmic-core/testing";
 import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-builtins.ts";
-import { WriterLeaseReleaseError, WriterLeaseService } from "../../src/boundary/writer-lease.ts";
+import {
+  WriterLeaseConflictError,
+  WriterLeaseReleaseError,
+  WriterLeaseService,
+} from "../../src/boundary/writer-lease.ts";
 import { revisionSummary } from "../../src/workspace/diffstat.ts";
 import { WorkspaceError, type WorkspaceRecord } from "../../src/workspace/model.ts";
 import type { StartSubagentRequest } from "../../src/run/model.ts";
@@ -288,6 +292,51 @@ describe("writer workspace orchestration", () => {
         // Only this workspace is stuck: other worktree writers still start.
         expect((yield* stoppedWriter(service)).workspaceId).toBeDefined();
         yield* service.workspaceDiscard(id);
+        expect(f.entries.get(id)?.status).toBe("discarded");
+      });
+    },
+  );
+
+  it.effect(
+    "rolls a stopped integration back only while no shared-checkout writer edits the checkout",
+    () => {
+      // Directories whose writer-pool lease another session's shared-checkout writer holds.
+      const heldElsewhere = new Set<string>();
+      const f = fixture({
+        writerLeases: leasesWith((base) => ({
+          acquire: (input) =>
+            heldElsewhere.has(input.cwd.path)
+              ? Effect.fail(
+                  new WriterLeaseConflictError({
+                    reason: "live",
+                    message: "Another live writer already owns this filesystem directory identity.",
+                  }),
+                )
+              : base.acquire(input),
+        })),
+      });
+      f.hooks.integrateStops = true;
+      return withService(f.layer, function* (service) {
+        const id = (yield* stoppedWriter(service)).workspaceId!;
+        const tested = yield* reviewAndPrepare(service, id);
+        yield* service.workspaceApply(id, { revisionId: tested.revisionId }).pipe(Effect.flip);
+        expect(f.entries.get(id)?.status).toBe("integrating");
+
+        const writer = yield* service.start(sharedWriter({ cwd: "/repo/packages/a" }));
+        expect(yield* service.workspaceDiscard(id).pipe(Effect.flip)).toMatchObject({
+          code: "workspace_target_busy",
+        });
+        yield* service.stop(writer.id);
+        heldElsewhere.add("/repo");
+        expect(yield* service.workspaceDiscard(id).pipe(Effect.flip)).toMatchObject({
+          code: "workspace_target_busy",
+        });
+        expect(f.entries.get(id)?.status).toBe("integrating");
+        expect(f.rollbacks).toEqual([]);
+
+        heldElsewhere.delete("/repo");
+        yield* service.workspaceDiscard(id);
+        expect(f.rollbacks).toEqual([id]);
         expect(f.entries.get(id)?.status).toBe("discarded");
       });
     },

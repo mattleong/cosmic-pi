@@ -114,6 +114,33 @@ test("applies added, changed, deleted, mode-changed, and symlink paths without t
   expect(yield* indexEntries).toBe(before);
 });
 
+const readTexts = (directory: string, names: ReadonlyArray<string>) =>
+  Effect.forEach(names, (name) => io(() => fs.readFile(path.join(directory, name), "utf8")));
+
+test("checks out a changed .gitattributes before the files whose line endings it sets", function* (service, root) {
+  // Integrates `.gitattributes` and two text files, one sorting before it, then returns each
+  // file's parent bytes beside the prepared tree's, a `git worktree add` checkout of the proposal.
+  const integrateWith = (attributes: string, text: string) =>
+    Effect.gen(function* () {
+      const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+      yield* writeFile(path.join(handle.cwd, ".gitattributes"), attributes);
+      for (const name of ["-a.txt", "z.txt"]) yield* writeFile(path.join(handle.cwd, name), text);
+      const { prepared, integration } = yield* prepareIntegration(service, handle);
+      const checkedOut = yield* readTexts(prepared.cwd, ["-a.txt", "z.txt"]);
+      yield* service.integrate(integration);
+      return { integrated: yield* readTexts(root, ["-a.txt", "z.txt"]), checkedOut };
+    });
+  const added = yield* integrateWith("*.txt text eol=crlf\n", "one\ntwo\n");
+  expect(added.checkedOut).toEqual(["one\r\ntwo\r\n", "one\r\ntwo\r\n"]);
+  expect(added.integrated).toEqual(added.checkedOut);
+
+  yield* git(root, ["add", "--", ".gitattributes", "-a.txt", "z.txt"]);
+  yield* git(root, ["commit", "-q", "-m", "crlf text"]);
+  const changed = yield* integrateWith("*.txt text eol=lf\n", "one\ntwo\nthree\n");
+  expect(changed.checkedOut).toEqual(["one\ntwo\nthree\n", "one\ntwo\nthree\n"]);
+  expect(changed.integrated).toEqual(changed.checkedOut);
+});
+
 test("snapshots current edits without HEAD secrets and publishes binary/mode/deletes without staging", function* (service, root) {
   yield* writeFile(path.join(root, "src/main.ts"), "staged\n");
   yield* git(root, ["add", "--", "src/main.ts"]);

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import { WriterLeaseConflictError } from "../../src/boundary/writer-lease.ts";
 import type { WorkspaceLaunch, WorkspaceRecord } from "../../src/workspace/model.ts";
 import { withService } from "./fixtures/service-harness.ts";
 import {
@@ -64,6 +65,45 @@ describe("orphaned workspace takeover", () => {
         integrating: "discard-only",
       });
       expect(orphans?.has(own.workspaceId ?? "")).toBe(false);
+    });
+  });
+
+  it.effect("rolls a mid-integration orphan back only while no writer holds the checkout", () => {
+    let heldElsewhere = true;
+    const f = fixture({
+      writerLeases: leasesWith((base) => ({
+        canonicalize: (cwd) =>
+          base
+            .canonicalize(cwd)
+            .pipe(
+              Effect.map((identity) =>
+                cwd.startsWith("/private/orphan/")
+                  ? { ...identity, digest: ORPHAN_DIGEST }
+                  : identity,
+              ),
+            ),
+        acquire: (input) =>
+          heldElsewhere && input.cwd.path === "/repo"
+            ? Effect.fail(
+                new WriterLeaseConflictError({
+                  reason: "live",
+                  message: "Another live writer already owns this filesystem directory identity.",
+                }),
+              )
+            : base.acquire(input),
+      })),
+    });
+    f.hooks.orphanOwnerEnded = true;
+    f.entries.set("orphan", orphan("orphan", "integrating"));
+    return withService(f.layer, function* (service) {
+      expect(yield* service.workspaceDiscard("orphan").pipe(Effect.flip)).toMatchObject({
+        code: "workspace_target_busy",
+      });
+      expect(f.entries.get("orphan")?.status).toBe("integrating");
+      heldElsewhere = false;
+      yield* service.workspaceDiscard("orphan");
+      expect(f.rollbacks).toEqual(["orphan"]);
+      expect(f.entries.get("orphan")?.status).toBe("discarded");
     });
   });
 

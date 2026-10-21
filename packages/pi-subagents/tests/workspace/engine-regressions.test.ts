@@ -11,6 +11,7 @@ import {
 import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-builtins.ts";
 import type { WorkspaceError, WorkspaceHandle } from "../../src/workspace/model.ts";
 import type { WorkspaceServiceContract } from "../../src/workspace/service.ts";
+import { capturedWarnings, unconfirmedShellCleanup } from "../support/unconfirmed-hook-cleanup.ts";
 import {
   exists,
   failureOf,
@@ -166,6 +167,27 @@ test("stops at the first failing WorktreeCreate hook and reports project files h
     hooks: [shellHook("echo changed > other.txt")],
   });
   expect(yield* service.hookChanges(workspaceTarget(handle))).toEqual(["other.txt"]);
+});
+
+test("keeps a preparation whose WorktreeCreate hook exited 0 with its cleanup unconfirmed", function* (service, root) {
+  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+  yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
+  const { prepared, integration } = yield* freezeAndPrepare(service, handle);
+  const { workspaceIds, layer } = capturedWarnings();
+  const spy = unconfirmedShellCleanup();
+  yield* service
+    .runCreateHooks({
+      ...workspaceTarget(handle),
+      preparationId: prepared.preparationId,
+      hooks: [shellHook("exit 0")],
+    })
+    .pipe(Effect.provide(layer), Effect.ensuring(Effect.sync(() => spy.mockRestore())));
+  expect(workspaceIds).toEqual([handle.workspaceId]);
+  const record = yield* service.inspect(workspaceTarget(handle));
+  expect(record.status).toBe("prepared");
+  expect(record.preparation?.preparationId).toBe(prepared.preparationId);
+  yield* service.integrate(integration);
+  expect(yield* readText(root, "src/main.ts")).toBe("worker\n");
 });
 
 test("runs WorktreeCreate hooks without holding the service permit or the checkout lock", function* (service, root, agent) {

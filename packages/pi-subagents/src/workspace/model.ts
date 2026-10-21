@@ -111,7 +111,7 @@ export const WorkspaceRecordSchema = Schema.Struct({
   launch: Schema.optional(WorkspaceLaunchSchema),
   /**
    * Untracked files `.worktreeinclude` copied into the worker tree, relative to its root. Every
-   * capture leaves them out, so they never reach a revision or publication.
+   * capture leaves them out, so they never reach a revision or integration.
    */
   includedPaths: Schema.optional(Schema.Array(Schema.String)),
   /** Set on a record the orphan sweep discarded, which keeps its revision patch until collection. */

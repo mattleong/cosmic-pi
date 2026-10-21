@@ -757,7 +757,8 @@ export const gitWorkspaceEngine = (
      * to an hour each, so they hold neither this process's operation gate nor the checkout's store
      * lock; the coordinator keeps the workspace busy meanwhile. The runner kills a hook's process
      * group once it times out or is interrupted, and a group it can't confirm stopped is a logged
-     * warning. A failed or interrupted run in a prepared tree withdraws the preparation.
+     * warning that fails no hook. A failed or interrupted run in a prepared tree withdraws the
+     * preparation.
      */
     const runCreateHooks = (
       target: WorkspaceHookTarget & {
@@ -777,17 +778,6 @@ export const gitWorkspaceEngine = (
               kind: worktreeKind(root),
               runId: target.runId,
             }).pipe(
-              Effect.tapError((error) =>
-                error.cleanupUnconfirmed
-                  ? Effect.logWarning(error.message).pipe(
-                      Effect.annotateLogs({
-                        workspaceId: target.workspaceId,
-                        tree: root,
-                        ...(target.runId !== undefined && { runId: target.runId }),
-                      }),
-                    )
-                  : Effect.void,
-              ),
               Effect.mapError(
                 (error) => new WorkspaceError({ operation: "hook", message: error.message }),
               ),

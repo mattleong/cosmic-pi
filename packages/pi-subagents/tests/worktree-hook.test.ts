@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 import * as os from "node:os";
 import { nodeFsPromises as fs, nodePath as path } from "../src/boundary/node-builtins.ts";
 import { runWorktreeHook, type WorktreeHookInput } from "../src/boundary/worktree-hook.ts";
+import { capturedWarnings, unconfirmedShellCleanup } from "./support/unconfirmed-hook-cleanup.ts";
 
 const environment = { PATH: "/usr/bin:/bin", GIT_DIR: "/parent/.git" };
 const input = (worktreePath: string): WorktreeHookInput => ({
@@ -40,11 +41,10 @@ describe("worktree hook", () => {
 
   it.effect("succeeds without reading its stdin", () => run("exit 0"));
 
-  it.effect("fails with confirmed cleanup when it exits non-zero", () =>
+  it.effect("fails when it exits non-zero", () =>
     Effect.gen(function* () {
       const error = yield* Effect.flip(run("echo 'missing lockfile' >&2; exit 3"));
       expect(error.message).toContain("missing lockfile");
-      expect(error.cleanupUnconfirmed).not.toBe(true);
     }),
   );
 
@@ -56,15 +56,28 @@ describe("worktree hook", () => {
         }),
       );
       expect(error.message).toContain("couldn't start");
-      expect(error.cleanupUnconfirmed).not.toBe(true);
     }),
+  );
+
+  it.effect(
+    "warns about a group it can't confirm stopped without changing the hook's outcome",
+    () =>
+      Effect.gen(function* () {
+        const { workspaceIds, layer } = capturedWarnings();
+        const spy = unconfirmedShellCleanup();
+        const outcomes = yield* Effect.all([
+          run("exit 0").pipe(Effect.exit),
+          run("exit 3").pipe(Effect.exit),
+        ]).pipe(Effect.provide(layer), Effect.ensuring(Effect.sync(() => spy.mockRestore())));
+        expect(outcomes.map((exit) => exit._tag)).toEqual(["Success", "Failure"]);
+        expect(workspaceIds).toEqual(["workspace-1", "workspace-1"]);
+      }),
   );
 
   it.live("stops a hook that runs past its timeout", () =>
     Effect.gen(function* () {
       const error = yield* Effect.flip(run("sleep 30", 1));
       expect(error.message).toContain("timed out after 1s");
-      expect(error.cleanupUnconfirmed).not.toBe(true);
     }),
   );
 });

@@ -78,9 +78,13 @@ export const refuseUntestedTargets = (root: string, changes: ReadonlyArray<Chang
     return undefined;
   });
 
+const isAttributesFile = (name: string) => path.basename(name) === ".gitattributes";
+
 /**
  * Writes `paths` from the stored `tree` into the checkout at `root` as checking it out would, with
  * filters, line endings, executable bits, and symlinks, through a scratch index in `scratch`.
+ * `checkout-index` reads attributes from the files already in the checkout, so `.gitattributes`
+ * files go first, in their own run, and the rest follow under their rules.
  */
 const checkoutPaths = (root: string, scratch: string, tree: string, paths: ReadonlyArray<string>) =>
   paths.length === 0
@@ -88,13 +92,19 @@ const checkoutPaths = (root: string, scratch: string, tree: string, paths: Reado
     : withScratchIndex(scratch, (environment) =>
         git(root, ["read-tree", tree], { environment }).pipe(
           Effect.andThen(
-            git(root, ["checkout-index", "-f", "-z", "--stdin"], {
-              environment,
-              stdin: nulTerminated(paths),
-              timeoutMillis: CHECKOUT_TIMEOUT_MILLIS,
-            }),
+            Effect.forEach(
+              [paths.filter(isAttributesFile), paths.filter((name) => !isAttributesFile(name))],
+              (batch) =>
+                batch.length === 0
+                  ? Effect.void
+                  : git(root, ["checkout-index", "-f", "-z", "--stdin"], {
+                      environment,
+                      stdin: nulTerminated(batch),
+                      timeoutMillis: CHECKOUT_TIMEOUT_MILLIS,
+                    }),
+              { discard: true },
+            ),
           ),
-          Effect.asVoid,
         ),
       );
 

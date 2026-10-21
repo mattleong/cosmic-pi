@@ -410,7 +410,14 @@ export function registerSubagentApplication(
         if (activation.trigger === "reload" && activation.sessionKey)
           profileReloadHandoff.clear(activation.sessionKey);
         bridge.setContext(activation.ctx);
-        reactivateSubagentTools(pi, startupFailureTools);
+        // A new session declares agent_worktree only once it has a worktree, which the orphan
+        // check below or the first worktree writer supplies; reload and tree keep it.
+        reactivateSubagentTools(
+          pi,
+          activation.trigger === "start"
+            ? startupFailureTools.filter((name) => name !== SUBAGENT_TOOL_NAME.workspace)
+            : startupFailureTools,
+        );
         startupFailureTools = [];
         const isCurrent = () => slot.isCurrent(token) && currentActivation === activation;
         // Once per session start, in the background; the notice reaches only the user. Worktrees

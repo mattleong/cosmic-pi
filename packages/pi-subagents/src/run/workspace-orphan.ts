@@ -18,6 +18,7 @@ import {
   type WorkspaceBinding,
   type WorkspaceControlContext,
 } from "./workspace-binding.ts";
+import { integrationTarget } from "./workspace-integration.ts";
 
 const ORPHAN_UNAVAILABLE =
   "This session can only adopt or discard an orphaned workspace of its own checkout whose session has ended.";
@@ -71,6 +72,7 @@ export function workspaceOrphanOperations(
   visibleRecords: (listing: WorkspaceListing) => Effect.Effect<WorkspaceListing, SubagentError>,
 ) {
   const { requireEngine, writerLeases, operations, state, withLock, ownerFor } = context;
+  const checkout = integrationTarget(context);
   const withStoppedWriter = <A>(
     workspaceId: string,
     handle: WorkspaceHandle,
@@ -140,11 +142,20 @@ export function workspaceOrphanOperations(
     Effect.gen(function* () {
       const service = yield* requireEngine;
       const record = yield* orphanRecord(service, workspaceId);
+      const discard = service.discardOrphan({ workspaceId }).pipe(Effect.mapError(orphanError));
+      // A mid-integration record stays so until its discard, whose rollback writes the parent's
+      // files like integration.
       return yield* operations.withPermits(1)(
         withStoppedWriter(
           workspaceId,
           record.handle,
-          service.discardOrphan({ workspaceId }).pipe(Effect.mapError(orphanError)),
+          record.status === "integrating"
+            ? withLock(
+                checkout
+                  .requireIdleLocked(record.handle.sourceRoot)
+                  .pipe(Effect.andThen(checkout.holdLocked(workspaceId, record.handle, discard))),
+              ).pipe(Effect.asVoid)
+            : discard,
         ),
       );
     });

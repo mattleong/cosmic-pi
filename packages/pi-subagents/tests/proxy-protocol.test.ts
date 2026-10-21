@@ -143,7 +143,7 @@ describe("nested Pi proxy protocol", () => {
   it.each([
     { action: "list", callerRunId: "root" },
     { action: "discard", workspaceId: "w", ownerId: "root" },
-    { action: "apply", workspaceId: "w", revisionId: "r", preparationId: "p", approved: true },
+    { action: "apply", workspaceId: "w", revisionId: "r", parentRunId: "root" },
   ])("rejects invalid or forged workspace arguments %j", (args) => {
     expect(
       decodeSubagentProxyRequest({

@@ -24,6 +24,7 @@ import {
   type WorkspaceControlContext,
 } from "./workspace-binding.ts";
 import { runWorktreeCreateHooks } from "./workspace-hooks.ts";
+import { integrationTarget } from "./workspace-integration.ts";
 
 /**
  * One page of a revision's review text: its summary followed by its patch. `text` is the page;
@@ -120,6 +121,7 @@ export function workspaceReviewOperations(
 ) {
   const { records, withLock, state, requireBinding, requireEngine, operations, worktreeCreate } =
     context;
+  const checkout = integrationTarget(context);
   /** Marks the binding busy for `use`, so resume, revise, and other operations refuse it. */
   const hold = <A>(
     workspaceId: string,
@@ -253,8 +255,9 @@ export function workspaceReviewOperations(
     );
   /**
    * Like integration, destructive cleanup holds admission closed from the cwd check through
-   * removal, so callers run this under the run lock. Natural writer completion does not stop its
-   * read-only descendants.
+   * removal, so callers run this under the run lock. A stopped integration's rollback writes the
+   * parent's files, so it also holds the integration target. Natural writer completion does not
+   * stop its read-only descendants.
    */
   const discardLocked = (
     service: WorkspaceServiceContract,
@@ -271,9 +274,13 @@ export function workspaceReviewOperations(
           "workspace_process_unsettled",
           "A run still uses this workspace. Stop it and confirm cleanup before discard.",
         );
-      yield* service
+      const discard = service
         .discard({ workspaceId, ownerId, processCleanupConfirmed: true })
         .pipe(Effect.mapError(mapWorkspaceError));
+      if (artifact.status === "integrating") {
+        yield* checkout.requireIdleLocked(artifact.handle.sourceRoot);
+        yield* checkout.holdLocked(workspaceId, artifact.handle, discard);
+      } else yield* discard;
       settleBinding(binding, { phase: "finished", outcome });
       recordWorkspaceOutcomeLocked(binding, { status: outcome });
       yield* publish;

@@ -15,10 +15,7 @@ import { isGitLocalEnvironmentKey } from "./git-local-environment.ts";
 
 export class WorktreeHookError extends Schema.TaggedError<WorktreeHookError>()(
   "WorktreeHookError",
-  {
-    message: Schema.String,
-    cleanupUnconfirmed: Schema.optional(Schema.Boolean),
-  },
+  { message: Schema.String },
 ) {}
 
 /** The JSON object a hook reads on stdin. */
@@ -82,7 +79,8 @@ const stdinPayload = (input: WorktreeHookInput) =>
  * Runs one configured hook at `input.worktreePath` without a shell, in its own process group with
  * the user's environment minus Git variables that would redirect it to the parent repository, and
  * the event's JSON object on stdin. A timeout or interruption kills the whole group, SIGTERM then
- * SIGKILL; `cleanupUnconfirmed` marks a failure whose group couldn't be confirmed stopped.
+ * SIGKILL. A group that can't be confirmed stopped is a logged warning naming the workspace and
+ * changes no outcome: a hook that exited 0 still succeeds.
  */
 export const runWorktreeHook = (
   hook: WorktreeHook,
@@ -94,6 +92,15 @@ export const runWorktreeHook = (
   if (executable === undefined)
     return Effect.fail(new WorktreeHookError({ message: `${input.event} hook has no command.` }));
   const timeoutSeconds = hook.timeout ?? DEFAULT_WORKTREE_HOOK_TIMEOUT_SECONDS[input.event];
+  const cleanupWarning = Effect.logWarning(
+    `${label}'s process group couldn't be confirmed stopped.`,
+  ).pipe(
+    Effect.annotateLogs({
+      workspaceId: input.workspaceId,
+      tree: input.worktreePath,
+      ...(input.runId !== undefined && { runId: input.runId }),
+    }),
+  );
   return runBoundedProcessNode({
     executable,
     args,
@@ -107,31 +114,38 @@ export const runWorktreeHook = (
     detached: true,
     sweepProcessTreeOnExit: true,
   }).pipe(
-    Effect.mapError((error) => {
-      const neverStarted = error.operation === "spawn";
-      return new WorktreeHookError({
-        message: neverStarted
-          ? `${label} couldn't start; check that the command exists on PATH.`
-          : `${label} couldn't be read to completion.`,
-        cleanupUnconfirmed: !neverStarted,
-      });
+    Effect.catch((error) => {
+      // A hook that never started left nothing behind; any other read failure leaves its group
+      // unconfirmed.
+      if (error.operation === "spawn")
+        return Effect.fail(
+          new WorktreeHookError({
+            message: `${label} couldn't start; check that the command exists on PATH.`,
+          }),
+        );
+      return cleanupWarning.pipe(
+        Effect.andThen(
+          Effect.fail(
+            new WorktreeHookError({ message: `${label} couldn't be read to completion.` }),
+          ),
+        ),
+      );
     }),
     Effect.flatMap((result) => {
-      if (result.code === 0 && !result.timedOut && !result.overflowed && !result.cleanupUnconfirmed)
-        return Effect.void;
+      const warned = result.cleanupUnconfirmed ? cleanupWarning : Effect.void;
+      if (result.code === 0 && !result.timedOut && !result.overflowed) return warned;
       const reason = result.timedOut
         ? `timed out after ${timeoutSeconds}s`
         : result.overflowed
           ? "produced too much output"
-          : result.cleanupUnconfirmed
-            ? "left processes that couldn't be confirmed stopped"
-            : `exited with ${result.code === null ? `signal ${result.signal ?? "unknown"}` : `code ${result.code}`}`;
+          : `exited with ${result.code === null ? `signal ${result.signal ?? "unknown"}` : `code ${result.code}`}`;
       const line = lastLine(result.stdout, result.stderr);
-      return Effect.fail(
-        new WorktreeHookError({
-          message: `${label} ${reason}${line ? `: ${line}` : "."}`,
-          cleanupUnconfirmed: result.cleanupUnconfirmed,
-        }),
+      return warned.pipe(
+        Effect.andThen(
+          Effect.fail(
+            new WorktreeHookError({ message: `${label} ${reason}${line ? `: ${line}` : "."}` }),
+          ),
+        ),
       );
     }),
   );

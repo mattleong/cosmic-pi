@@ -859,4 +859,52 @@ describe("worktree tool activation", () => {
     yield* step(() => vi.waitFor(() => expect(tools.active()).toContain("agent_worktree")));
     yield* settle(() => emit("session_shutdown", ctx));
   });
+
+  effectTest(
+    "a new session in the same process declares agent_worktree only beside an orphan",
+    function* () {
+      let orphans = new Map<string, "adoptable">();
+      let listings = 0;
+      const captured = yield* withServiceDouble({
+        workspaceList: () =>
+          Effect.sync(() => {
+            listings += 1;
+            return { records: [], unavailable: [], orphans };
+          }),
+      });
+      const tools = activeToolTracker();
+      const { emit } = applicationFixture(tools.overrides);
+      const replace = (from: ReturnType<typeof sessionContext>, key: string) =>
+        Effect.gen(function* () {
+          const listed = listings;
+          yield* settle(() =>
+            emit("session_shutdown", from, { type: "session_shutdown", reason: "new" }),
+          );
+          const next = sessionContext({}, key);
+          yield* settle(() =>
+            emit("session_start", next, { type: "session_start", reason: "new" }),
+          );
+          yield* step(() => vi.waitFor(() => expect(listings).toBe(listed + 1)));
+          yield* settle(() => Promise.resolve());
+          return next;
+        });
+
+      const first = sessionContext({}, "worktree-first-session");
+      yield* settle(() => emit("session_start", first));
+      captured.at(-1)!.publish({
+        revision: 1,
+        runs: [view({ id: "writer", writeIntent: "writer", workspaceId: "workspace-1" })],
+      });
+      expect(tools.active()).toContain("agent_worktree");
+
+      const second = yield* replace(first, "worktree-second-session");
+      expect(tools.active()).toContain("agent_start");
+      expect(tools.active()).not.toContain("agent_worktree");
+
+      orphans = new Map([["orphan-1", "adoptable"]]);
+      const third = yield* replace(second, "worktree-third-session");
+      yield* step(() => vi.waitFor(() => expect(tools.active()).toContain("agent_worktree")));
+      yield* settle(() => emit("session_shutdown", third));
+    },
+  );
 });
