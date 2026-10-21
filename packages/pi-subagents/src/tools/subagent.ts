@@ -264,7 +264,15 @@ export function registerSubagentTools(
         ],
       }),
       name,
-      exposure: scriptable ? "direct" : "model-only",
+      // The root declares agent_profiles only once tool search loads it, and agent_worktree once a
+      // worktree exists (application/register.ts); scripts still reach agent_profiles.
+      exposure:
+        !nested && name === SUBAGENT_TOOL_NAME.models
+          ? "deferred"
+          : scriptable
+            ? "direct"
+            : "model-only",
+      ...(!nested && name === SUBAGENT_TOOL_NAME.workspace && { defaultActive: false }),
       ...(scriptable && {
         outputSchema: toPiToolOutputSchema(CONTRACT_SCHEMAS[name]),
         namespace: ROOT_SCRIPT_NAMESPACE,

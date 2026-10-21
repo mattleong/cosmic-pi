@@ -91,9 +91,10 @@ describe("native scripted subagent workflows", () => {
           const h = yield* nativeCodemodeSession(service);
           for (const name of ["agent_send", "agent_worktree"])
             expect(h.session.getCallableToolNames()).not.toContain(name);
-          expect(h.session.getActiveToolNames()).toEqual(
-            expect.arrayContaining(["agent_send", "agent_worktree"]),
-          );
+          expect(h.session.getActiveToolNames()).toContain("agent_send");
+          // Scripts reach agent_profiles, which the root declares only once tool search loads it.
+          expect(h.session.getCallableToolNames()).toContain("agent_profiles");
+          expect(h.session.getActiveToolNames()).not.toContain("agent_profiles");
           const result = yield* h.run(
             `
         const rejected = [];

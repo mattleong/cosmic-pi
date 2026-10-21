@@ -249,6 +249,7 @@ Shared rules for registration, replay, compact issues, and expansion are in [too
 - Preview settings load as an interruptible best-effort bootstrap. The shared session-runtime slot owns replacement, and only its current token may register tools or publish activation state.
 - Factory-time `registerCodePreviewReplay`, anchored to `/subagents`, owns historical coordinator rows; adoption publishes only after registration succeeds. Child proxies use the plain shell.
 - Pi drops its pending tool-restore list whenever a tool is deactivated, so subagent tools stay active through `/tree` and the outgoing `/reload` shutdown. A later registration deactivates only tools it activated that the session hadn't kept active.
+- The root registers `agent_profiles` as deferred: scripts call it and tool search loads it, but it isn't declared until loaded. `agent_worktree` stays model-only and inactive until a runtime first publishes a run with a worktree, or a session start finds a worktree left by an ended session; then it is activated once.
 - Each runtime composes its own `CodePreviewSchedulerService.layer`; replacement and shutdown revoke stale scheduling.
 
 ### Arguments and results

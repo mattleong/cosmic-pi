@@ -39,7 +39,16 @@ import { pickQuestionnaire } from "./support/questionnaire.ts";
 import { subagentServiceDouble } from "./tools/fixtures/subagent-service-double.ts";
 import { fallbackProfileService, testBackendRegistry } from "./tools/fixtures/tool-harness.ts";
 
-type RegisteredToolSummary = { readonly name: string; readonly defaultActive?: boolean };
+type RegisteredToolSummary = {
+  readonly name: string;
+  readonly exposure?: string;
+  readonly defaultActive?: boolean;
+};
+
+// Pi activates direct and model-only tools on registration unless they opt out.
+const activatesOnRegistration = (tool: RegisteredToolSummary): boolean =>
+  (tool.exposure === undefined || tool.exposure === "direct" || tool.exposure === "model-only") &&
+  tool.defaultActive !== false;
 
 const testAgentDirectory = () => nodePath.join(tmpdir(), "pi-subagents-application-tests");
 
@@ -82,6 +91,8 @@ const applicationFixture = (
 const activeToolTracker = (onRegister?: (tool: RegisteredToolSummary) => void) => {
   let active: ReadonlyArray<string> = ["read"];
   const registered: string[] = [];
+  /** Registered tools that registration activates. */
+  const declared: string[] = [];
   const setActive = (names: ReadonlyArray<string>) => {
     active = [...names];
   };
@@ -89,10 +100,14 @@ const activeToolTracker = (onRegister?: (tool: RegisteredToolSummary) => void) =
     active: () => [...active],
     setActive,
     registered,
+    declared,
     overrides: {
       registerTool: (tool: RegisteredToolSummary) => {
         registered.push(tool.name);
-        if (tool.defaultActive !== false) active = [...new Set([...active, tool.name])];
+        if (activatesOnRegistration(tool)) {
+          declared.push(tool.name);
+          active = [...new Set([...active, tool.name])];
+        }
         onRegister?.(tool);
       },
       getActiveTools: () => [...active],
@@ -487,7 +502,7 @@ describe("subagent Pi registration", () => {
       callInActivation = 0;
       throwAt = Number.POSITIVE_INFINITY;
       yield* settle(start);
-      expect(tools.active()).toEqual(["read", ...new Set(tools.registered)]);
+      expect(tools.active()).toEqual(["read", ...new Set(tools.declared)]);
       yield* settle(() => emit("session_shutdown", ctx));
     },
   );
@@ -507,11 +522,11 @@ describe("subagent Pi registration", () => {
       });
 
       yield* settle(() => emit("session_start", signalledContext()));
-      expect(tools.registered.length).toBeGreaterThan(1);
-      const disabledName = tools.registered[0]!;
+      expect(tools.declared.length).toBeGreaterThan(1);
+      const disabledName = tools.declared[0]!;
       const expectedActive = () => [
         "read",
-        ...new Set(tools.registered.filter((name) => name !== disabledName)),
+        ...new Set(tools.declared.filter((name) => name !== disabledName)),
       ];
       tools.setActive(tools.active().filter((name) => name !== disabledName));
 
@@ -777,4 +792,70 @@ describe("orphaned workspace sweep notice", () => {
       );
     },
   );
+});
+
+// Gives each runtime a service double and returns the layer options each runtime received.
+const withServiceDouble = (service: Parameters<typeof subagentServiceDouble>[0]) => {
+  const captured: SubagentLayers.SubagentLayerOptions[] = [];
+  const makeLayer = SubagentLayers.subagentApplicationLayer;
+  const capture = vi
+    .spyOn(SubagentLayers, "subagentApplicationLayer")
+    .mockImplementation((options) => {
+      captured.push(options);
+      return makeLayer(options).pipe(
+        Layer.merge(
+          Layer.succeed(
+            SubagentService,
+            subagentServiceDouble({
+              projection: Effect.succeed({ revision: 0, runs: [] }),
+              deliverPendingCompletions: Effect.void,
+              ...service,
+            }),
+          ),
+        ),
+      );
+    });
+  return Effect.addFinalizer(() => Effect.sync(() => capture.mockRestore())).pipe(
+    Effect.as(captured),
+  );
+};
+
+describe("worktree tool activation", () => {
+  effectTest("declares agent_worktree once a worktree writer runs", function* () {
+    const captured = yield* withServiceDouble({});
+    const tools = activeToolTracker();
+    const { emit } = applicationFixture(tools.overrides);
+    const ctx = sessionContext({}, "worktree-launch-session");
+    yield* settle(() => emit("session_start", ctx));
+    expect(tools.registered).toEqual(expect.arrayContaining(["agent_profiles", "agent_worktree"]));
+    expect(tools.active()).toContain("agent_start");
+    expect(tools.active()).not.toContain("agent_worktree");
+    expect(tools.active()).not.toContain("agent_profiles");
+
+    captured.at(-1)!.publish({ revision: 1, runs: [view({ id: "reader" })] });
+    expect(tools.active()).not.toContain("agent_worktree");
+    captured.at(-1)!.publish({
+      revision: 2,
+      runs: [view({ id: "writer", writeIntent: "writer", workspaceId: "workspace-1" })],
+    });
+    expect(tools.active()).toContain("agent_worktree");
+    yield* settle(() => emit("session_shutdown", ctx));
+  });
+
+  effectTest("declares agent_worktree when a session starts beside an orphan", function* () {
+    yield* withServiceDouble({
+      workspaceList: () =>
+        Effect.succeed({
+          records: [],
+          unavailable: [],
+          orphans: new Map([["orphan-1", "adoptable" as const]]),
+        }),
+    });
+    const tools = activeToolTracker();
+    const { emit } = applicationFixture(tools.overrides);
+    const ctx = sessionContext({}, "worktree-orphan-session");
+    yield* settle(() => emit("session_start", ctx));
+    yield* step(() => vi.waitFor(() => expect(tools.active()).toContain("agent_worktree")));
+    yield* settle(() => emit("session_shutdown", ctx));
+  });
 });

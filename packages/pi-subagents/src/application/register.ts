@@ -55,7 +55,7 @@ import type { SubagentProjection } from "../run/model.ts";
 import { InvalidSubagentRequestError } from "../run/errors.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
 import { SubagentService } from "../run/service.ts";
-import { ROOT_TOOL_NAMES } from "../run/tool-policy.ts";
+import { ROOT_TOOL_NAMES, SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
 import { executeAgentActionEffect } from "../tools/execute-agents.ts";
 import { executeSubagentActionEffect, type SubagentToolRuntime } from "../tools/execute.ts";
 import {
@@ -130,6 +130,14 @@ function reactivateSubagentTools(pi: ExtensionAPI, names: ReadonlyArray<string>)
     undefined,
   );
 }
+
+/** The root registers agent_worktree inactive and declares it once there is a worktree to act on. */
+const activateWorktreeTool = (pi: ExtensionAPI): void =>
+  invokeHostCallback(() => {
+    const active = pi.getActiveTools();
+    if (!active.includes(SUBAGENT_TOOL_NAME.workspace))
+      pi.setActiveTools([...active, SUBAGENT_TOOL_NAME.workspace]);
+  }, undefined);
 
 function notifyActivationFailure(ctx: ExtensionContext, message: string): void {
   if (invokeHostCallback(() => ctx.hasUI, false)) notifyAtHostBoundary(ctx, message, "warning");
@@ -227,6 +235,7 @@ export function registerSubagentApplication(
         }
         if (restoredReload) profileOverrideHandoff.publish(owner, restoredReload);
         const sessionBaseConfig = profileOverrideHandoff.captureBaseConfig();
+        let worktreeSeen = false;
         const layer = subagentApplicationLayer({
           sessionKey: activation.sessionKey,
           sweepPrivateState: activation.trigger === "start",
@@ -242,7 +251,13 @@ export function registerSubagentApplication(
             if (ownsActivation() && currentActivation === activation) showSessionFooter();
           },
           publish: (projection) => {
-            if (ownsActivation()) bridge.publish(projection);
+            if (!ownsActivation()) return;
+            bridge.publish(projection);
+            // Once per runtime, so a user who disables the tool afterwards keeps it disabled.
+            if (!worktreeSeen && projection.runs.some((run) => run.workspaceId !== undefined)) {
+              worktreeSeen = true;
+              activateWorktreeTool(pi);
+            }
           },
           restoredSessionUsage: restoreSessionUsage(activation.ctx),
           // Not gated on activation authority: runs closed while this runtime is replaced still
@@ -398,7 +413,8 @@ export function registerSubagentApplication(
         reactivateSubagentTools(pi, startupFailureTools);
         startupFailureTools = [];
         const isCurrent = () => slot.isCurrent(token) && currentActivation === activation;
-        // Once per session start, in the background; the notice reaches only the user.
+        // Once per session start, in the background; the notice reaches only the user. Worktrees
+        // the sweep keeps from ended sessions need agent_worktree to adopt or discard them.
         if (activation.trigger === "start")
           run(SubagentService.use((service) => service.sweepOrphanedWorkspaces))
             .then((swept) => {
@@ -408,6 +424,12 @@ export function registerSubagentApplication(
                 invokeHostCallback(() => activation.ctx.hasUI, false)
               )
                 notifyAtHostBoundary(activation.ctx, orphanSweepNotice(swept), "info");
+              return undefined;
+            })
+            .catch(() => undefined)
+            .then(() => run(SubagentService.use((service) => service.workspaceList())))
+            .then((listing) => {
+              if ((listing.orphans?.size ?? 0) > 0 && isCurrent()) activateWorktreeTool(pi);
               return undefined;
             })
             .catch(() => undefined);
