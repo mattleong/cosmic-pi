@@ -288,7 +288,7 @@ const AgentReadContractSchema = Schema.Struct({
         ...AgentTextFields,
         text: Schema.optionalKey(NonEmptyText(MAX_RUN_READ_CHARS)),
         source: Schema.optionalKey(Schema.Literals(["assistant", "report", "error"])),
-        /** A finished run's saved report, given instead of its text; read the file for the report. */
+        /** A finished run's saved report; `text` is the copy it retained, cut when `truncated`. */
         reportFile: Schema.optionalKey(Schema.Struct(ReportFileFields)),
         reportGeneration: count,
         /** The run's status card; its report is the read's `reportFile` or `text`. */

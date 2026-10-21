@@ -266,15 +266,18 @@ const formatRunHeader = (run: SubagentRunView): string =>
     .filter(Boolean)
     .join(" · ");
 
+/** A route candidate as `runtime/model:effort`, without a default effort. */
+const candidateLabel = ({ runtime, model, effort }: Exclude<SubagentNextCandidate, "none">) =>
+  sanitizeTerminalLine(`${runtime}/${model}${effort === "default" ? "" : `:${effort}`}`);
+
 /**
  * Where a failed run's frozen route goes next, such as
  * `pi/openai/gpt-5.5:high; start a new run with that model`.
  */
-export const nextCandidateText = (next: SubagentNextCandidate): string => {
-  if (next === "none") return "none; its route has no further candidates";
-  const effort = next.effort === "default" ? "" : `:${next.effort}`;
-  return `${sanitizeTerminalLine(`${next.runtime}/${next.model}${effort}`)}; start a new run with that model`;
-};
+export const nextCandidateText = (next: SubagentNextCandidate): string =>
+  next === "none"
+    ? "none; its route has no further candidates"
+    : `${candidateLabel(next)}; start a new run with that model`;
 
 const nextCandidateField = (run: SubagentRunView): string | undefined => {
   const next = run.state === "failed" ? failedRunNextCandidate(run) : undefined;
@@ -422,9 +425,9 @@ export const formatFailedStartRecovery = (recovery: FailedStartRecovery): string
 export const failedStartRecoveryAction = (recovery: FailedStartRecovery): string =>
   recovery.cleanupDisposition === "quarantined"
     ? `Inspect ${sanitizeTerminalLine(recovery.runId)} with agent_read before starting a replacement; its cleanup is unconfirmed.`
-    : recovery.nextCandidate
-      ? `Next candidate: ${nextCandidateText(recovery.nextCandidate)}.`
-      : "Review the failure, then start a new run if the work still needs one.";
+    : recovery.nextCandidate === undefined || recovery.nextCandidate === "none"
+      ? "Review the failure, then start a new run if the work still needs one."
+      : `Start a new run with its route's next candidate, ${candidateLabel(recovery.nextCandidate)}.`;
 
 /** A start result line, such as a started run or a failed launch's recovery step. */
 const MAX_START_LINE_CHARS = 320;

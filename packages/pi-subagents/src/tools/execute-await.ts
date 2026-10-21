@@ -3,7 +3,7 @@ import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Match from "effect/Match";
-import { MAX_TARGET_RUNS } from "../run/limits.ts";
+import { MAX_TARGET_RUNS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import {
   isTerminalRunState,
   isParentActionRequiredRun,
@@ -15,7 +15,13 @@ import { awaitDetails } from "./details.ts";
 import { formatAwaitProgress, formatAwaitSummary } from "./render-await.ts";
 import { cancelledAwaitContract } from "./contract.ts";
 import { encodeSubagentContract } from "./contract-schema.ts";
-import { formatRunBlocks, runViewBlock, runViewOutcome } from "./run-block.ts";
+import {
+  formatRunBlocks,
+  runViewBlock,
+  runViewOutcome,
+  wholeSavedReport,
+  withInlineReports,
+} from "./run-block.ts";
 
 const attentionHeadline = (runs: ReadonlyArray<SubagentRunView>): string =>
   runs.some(isParentActionRequiredRun)
@@ -25,6 +31,7 @@ const attentionHeadline = (runs: ReadonlyArray<SubagentRunView>): string =>
 /**
  * A finished wait's model text: its summary, then one block per awaited run, which hands over
  * every claimed report, and one per other run whose question ended the wait, while slots remain.
+ * Delivered reports whose retained copy is whole follow the blocks while they fit.
  */
 export const awaitResultText = (
   summary: string,
@@ -33,7 +40,7 @@ export const awaitResultText = (
 ): string => {
   const shownQuestions = questions.slice(0, Math.max(0, MAX_TARGET_RUNS - observations.length));
   const unshown = questions.length - shownQuestions.length;
-  return formatRunBlocks(
+  const blocks = formatRunBlocks(
     [
       summary,
       attentionHeadline([...observations.map(({ run }) => run), ...questions]),
@@ -47,6 +54,15 @@ export const awaitResultText = (
       ),
       ...shownQuestions.map((run) => runViewBlock(run, runViewOutcome(run, false))),
     ],
+  );
+  return withInlineReports(
+    blocks,
+    observations.map(({ run, completionReceipt }) =>
+      completionReceipt !== undefined && run.state === "completed"
+        ? wholeSavedReport(run)
+        : undefined,
+    ),
+    MAX_TOOL_OUTPUT_CHARS,
   );
 };
 

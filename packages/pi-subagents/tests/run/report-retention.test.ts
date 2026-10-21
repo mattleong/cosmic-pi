@@ -92,7 +92,7 @@ describe("report retention", () => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect("delivers a report to agent_await and agent_read as its file, without the body", () =>
+  it.effect("delivers a long report to agent_await as its file and to agent_read beside it", () =>
     Effect.gen(function* () {
       const agent = yield* temporaryDirectory("report-retention-");
       const { fake, projections, layer } = localServiceFixture({
@@ -112,11 +112,14 @@ describe("report retention", () => {
         const [readout] = readContract?.agents ?? [];
         const reportFile = readout?.kind === "run" ? readout.reportFile : undefined;
         expect(reportFile).toMatchObject({ chars: report.length, lines: 12_000, complete: true });
-        expect(readout?.text).toBeUndefined();
+        // agent_read returns the retained start of the report beside its file.
+        expect(readout).toMatchObject({ truncated: true });
+        expect(readout?.text?.length).toBeLessThanOrEqual(MAX_FINAL_TEXT_CHARS);
+        expect(readout?.text).toMatch(/^finding 0\nfinding 1\n/u);
         expect(yield* readFile(reportFile?.path ?? "missing")).toBe(report);
         const readText = read.content.flatMap((part) => (part.type === "text" ? [part.text] : []));
         expect(readText.join("\n")).toContain(reportFile?.path);
-        expect(readText.join("\n")).not.toContain("finding 0\n");
+        expect(readText.join("\n")).toContain("finding 0\n");
 
         const observations = yield* awaitObservations(service, [run.id]);
         const text = awaitResultText("", observations, []);

@@ -251,36 +251,68 @@ export const agentReadCard = (
 /** The heading before a read's message, such as `Report (report 3) (truncated):`. */
 const MAX_READ_HEADING_CHARS = 64;
 
+/** A read section, and the retained copy of a saved report that may follow it. */
+interface ReadSection {
+  readonly text: string;
+  readonly retained?: string | undefined;
+}
+
 /**
- * A run's status card, then its latest message, its report's file, or its retained report. The
- * card fits whole, and so does a retained report beside it; a latest message or error too long
- * for the rest of one tool result is cut.
+ * A run's status card, then its latest message, its report's file and retained copy, or its
+ * unsaved report. The card fits whole, and so does a retained report beside it; a latest message
+ * or error too long for the rest of one tool result is cut.
  */
 const runReadSection = (
   readout: Extract<AgentReadout, { readonly kind: "run" }>,
   options: AgentReadOptions,
-): string => {
+): ReadSection => {
   const card = agentReadCard(readout.run, options);
   const text = readText(readout.text);
   const source = READ_SOURCES[readout.source ?? "assistant"];
   const generation = readout.source === "report" ? ` (report ${readout.reportGeneration})` : "";
   if (readout.reportFile)
-    return `${card}\n${source}${generation}:\n${reportFileText(readout.reportFile)}`;
-  if (text === undefined) return `${card}\nNo assistant message yet.`;
+    return {
+      text: `${card}\n${source}${generation}:\n${reportFileText(readout.reportFile)}`,
+      ...(text !== undefined && {
+        retained: `Retained copy${readout.truncated ? " (truncated; the file has the whole report)" : ""}:\n${text}`,
+      }),
+    };
+  if (text === undefined) return { text: `${card}\nNo assistant message yet.` };
   const shown = clipText(text, MAX_TOOL_OUTPUT_CHARS - card.length - MAX_READ_HEADING_CHARS);
   const truncated = readout.truncated || shown !== text;
-  return `${card}\n${source}${generation}${truncated ? " (truncated)" : ""}:\n${shown}`;
+  return { text: `${card}\n${source}${generation}${truncated ? " (truncated)" : ""}:\n${shown}` };
 };
 
-const readBody = (result: AgentReadResult, options: AgentReadOptions): string =>
-  [
+/**
+ * Every section, then the retained copies of saved reports beside their files in what the result
+ * has left, smallest first; one run's always fits.
+ */
+const readBody = (result: AgentReadResult, options: AgentReadOptions): string => {
+  const sections: ReadonlyArray<ReadSection> = [
     ...result.agents.map((readout) =>
-      readout.kind === "main" ? mainReadSection(readout) : runReadSection(readout, options),
+      readout.kind === "main"
+        ? { text: mainReadSection(readout) }
+        : runReadSection(readout, options),
     ),
-    missingText(result.missingIds),
-  ]
-    .filter(Boolean)
+    { text: missingText(result.missingIds) },
+  ].filter((section) => section.text);
+  let room = MAX_TOOL_OUTPUT_CHARS - sections.map((section) => section.text).join("\n\n").length;
+  const shown = new Map<ReadSection, string>();
+  for (const section of sections.toSorted(
+    (left, right) => (left.retained?.length ?? 0) - (right.retained?.length ?? 0),
+  )) {
+    if (section.retained === undefined) continue;
+    if (section.retained.length + 1 > room) break;
+    room -= section.retained.length + 1;
+    shown.set(section, section.retained);
+  }
+  return sections
+    .map((section) => {
+      const retained = shown.get(section);
+      return retained === undefined ? section.text : `${section.text}\n${retained}`;
+    })
     .join("\n\n");
+};
 
 const readContract = (result: AgentReadResult): AgentReadContract => ({
   ...envelope(AGENT_TOOL_NAME.read),

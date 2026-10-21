@@ -121,13 +121,12 @@ const wireAgentRead = (
   verbose: boolean,
 ): SupervisorAgentReadResult => ({
   agents: result.agents.map((entry) => {
-    // A saved report's text is its file pointer, which the reader opens with its file tools.
+    // A saved report leads with its file pointer, which the reader opens with its file tools.
     const reportFile = entry.kind === "run" ? entry.reportFile : undefined;
-    const text = reportFile
-      ? reportFileText(reportFile)
-      : entry.textStatus === "text" && entry.text !== undefined
-        ? safeTextPrefix(entry.text, MAX_SUPERVISOR_AGENT_READ_CHARS)
-        : undefined;
+    const body = entry.textStatus === "text" ? entry.text : undefined;
+    const pointer = reportFile && reportFileText(reportFile);
+    const whole = pointer && body ? `${pointer}\n\nRetained copy:\n${body}` : (pointer ?? body);
+    const text = whole && safeTextPrefix(whole, MAX_SUPERVISOR_AGENT_READ_CHARS);
     const source = entry.kind === "run" ? entry.source : undefined;
     const card =
       entry.kind === "run"
@@ -143,7 +142,7 @@ const wireAgentRead = (
       state: entry.state,
       ...(card !== undefined && { card }),
       ...(text !== undefined && { text }),
-      truncated: entry.truncated || (text !== undefined && text.length < (entry.text?.length ?? 0)),
+      truncated: entry.truncated || (text !== undefined && text.length < (whole?.length ?? 0)),
       ...(source !== undefined && { source }),
     };
   }),

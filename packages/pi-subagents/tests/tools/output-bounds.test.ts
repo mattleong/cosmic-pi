@@ -211,6 +211,28 @@ const resultText = (result: {
   readonly content: ReadonlyArray<{ readonly type: string; readonly text?: string }>;
 }): string => result.content.map((part) => part.text ?? "").join("\n");
 
+/** Whole retained reports from 2 KiB up to the retained cap, each saved to its file. */
+const wholeReportRuns = (count: number): ReadonlyArray<SubagentRunView> =>
+  Array.from({ length: count }, (_, index) => {
+    const finalText = longText(
+      `WHOLE-${index}`,
+      Math.min(MAX_FINAL_TEXT_CHARS, 2_048 * (count - index)),
+    );
+    return view({
+      id: `agent-r1-${index}`,
+      name: longText(`worker-${index}`, MAX_NAME_CHARS),
+      state: "completed",
+      reportGeneration: 1,
+      finalText,
+      reportArchive: {
+        path: maxPath(index),
+        chars: finalText.length,
+        lines: 1,
+        complete: true,
+      },
+    });
+  });
+
 describe("worst-case model-facing output", () => {
   it("bounds every kind of run block", () => {
     for (const { run } of worstObservations(8))
@@ -293,6 +315,57 @@ describe("worst-case model-facing output", () => {
     for (const run of runs) expect(text).toContain(run.id);
     const contract = decodeSubagentContract("agent_lifecycle")(result.structuredContent);
     expect(JSON.stringify(contract).length).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_CHARS);
+  });
+
+  effectTest("keeps a full await of large whole reports within the tool output", function* () {
+    const runs = wholeReportRuns(MAX_TARGET_RUNS);
+    const tool = captureSubagentTools(
+      subagentServiceDouble({
+        withAwaitTerminalObservations: (_ids, _until, _onUpdate, use) =>
+          use(
+            runs.map((run) => ({
+              run,
+              completionReceipt: { id: run.id, generation: 1, claimToken: `claim-${run.id}` },
+            })),
+          ),
+        consumeCompletions: () => Effect.void,
+      }),
+    ).get("agent_await")!;
+
+    const text = resultText(
+      yield* step(() =>
+        executeTool(tool, { runIds: runs.map((run) => run.id), until: "all_finished" }),
+      ),
+    );
+
+    expect(text.length).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_CHARS);
+    for (const run of runs) expect(text).toContain(run.reportArchive?.path);
+    const inlined = runs.filter((run) => text.includes(run.finalText ?? "missing"));
+    // The smallest report fits whole after the blocks; the largest can't.
+    expect(inlined.map((run) => run.id)).toContain(runs.at(-1)?.id);
+    expect(inlined.map((run) => run.id)).not.toContain(runs[0]?.id);
+  });
+
+  it("keeps a full batch of large whole reports within one notice", () => {
+    const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>();
+    const runs = wholeReportRuns(MAX_COMPLETION_DELIVERY_BATCH);
+    hostNotifier(extensionApiFixture({ sendMessage }))({
+      type: "completed",
+      runs: runs.map((run) => ({
+        id: run.id,
+        name: run.name,
+        generation: 1,
+        outcome: "completed",
+        finalText: run.finalText,
+        reportArchive: run.reportArchive,
+      })),
+    });
+
+    const content = sendMessage.mock.calls[0]?.[0].content;
+    const text = Predicate.isString(content) ? content : "";
+    expect(text.length).toBeLessThanOrEqual(MAX_NOTIFICATION_CHARS);
+    for (const run of runs) expect(text).toContain(run.reportArchive?.path);
+    expect(text).toContain(runs.at(-1)?.finalText);
   });
 
   it("names every run of a full worst-case completion batch in one notice", () => {
@@ -465,6 +538,31 @@ const worstReadRun = (
   return absurd(state);
 };
 
+describe("multi-run agent_read", () => {
+  effectTest("keeps every card of a full read and adds retained copies that fit", function* () {
+    const runs = wholeReportRuns(MAX_TARGET_RUNS);
+    const readouts = yield* Effect.forEach(runs, (run) =>
+      runRecordFixture({ view: run }).pipe(Effect.map((record) => runReadout(record, run))),
+    );
+    const tool = captureSubagentTools(
+      subagentServiceDouble({
+        agentRead: () => Effect.succeed({ agents: readouts, missingIds: [] }),
+      }),
+    ).get("agent_read")!;
+
+    const text = resultText(
+      yield* step(() => executeTool(tool, { agentIds: runs.map((run) => run.id) })),
+    );
+
+    expect(text.length).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_CHARS);
+    for (const run of runs) {
+      expect(text).toContain(`${run.id} `);
+      expect(text).toContain(run.reportArchive?.path);
+    }
+    expect(text).toContain(runs.at(-1)?.finalText);
+  });
+});
+
 /** A question at its retained bound in `count` lines, the last ending with its marker. */
 const questionOfLines = (count: number): string => {
   const width = Math.floor((MAX_CONTACT_TEXT_CHARS + 1) / count) - 1;
@@ -497,7 +595,8 @@ describe("worst-case single-run agent_read", () => {
           expect(text.length).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_CHARS);
           const recovery = [
             run.question?.message,
-            run.finalText && !run.reportArchive ? run.finalText : undefined,
+            // A saved report's retained copy follows its file, whole.
+            run.finalText,
             run.reportArchive?.path,
             run.error,
             run.childWarning,

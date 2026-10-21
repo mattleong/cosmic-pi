@@ -112,7 +112,7 @@ export type AgentReadout =
       readonly state: SubagentRunState;
       /** Where the text came from: the latest assistant message, a retained report, or an error. */
       readonly source?: "assistant" | "report" | "error" | undefined;
-      /** A completed run's saved report, read instead of any text. */
+      /** A completed run's saved report; `text` is the copy the run retained beside it. */
       readonly reportFile?: SubagentReportArchive | undefined;
       readonly reportGeneration: number;
       /** The run's projected view, for its status card; reading never claims its report. */
@@ -335,7 +335,8 @@ export const unavailableMainReadout: AgentReadout = {
 /**
  * The run's latest assistant message in its current or last assignment, falling back to that
  * finished assignment's report or error, never an earlier assignment's. A completed run gives its
- * report: its file, or the report itself when none was saved. Reading never claims or consumes it.
+ * report: its file with the retained copy, or the report itself when none was saved. Reading never
+ * claims or consumes it.
  */
 export const runReadout = (record: RunRecord, projected: SubagentRunView): AgentReadout => {
   const { view } = record;
@@ -347,14 +348,16 @@ export const runReadout = (record: RunRecord, projected: SubagentRunView): Agent
     reportGeneration: view.reportGeneration,
     run: projected,
   };
-  if (view.state === "completed" && view.reportArchive)
+  if (view.state === "completed" && view.reportArchive) {
+    const retained = boundedText(view.finalText, MAX_RUN_READ_CHARS);
     return {
       ...base,
-      textStatus: "none",
-      truncated: false,
+      ...retained,
+      truncated: retained.truncated || view.finalTextTruncation !== undefined,
       source: "report",
       reportFile: view.reportArchive,
     };
+  }
   // A completed report without a file is read inline, led by the note its notice carries.
   if (view.state === "completed" && view.finalText?.trim()) {
     const report = boundedText(

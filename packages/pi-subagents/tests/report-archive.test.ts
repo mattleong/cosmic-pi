@@ -34,7 +34,7 @@ const exists = (file: string) =>
   );
 
 describe("subagent report archive", () => {
-  it.effect("delivers a report as its private file and keeps the body out of the notice", () =>
+  it.effect("delivers a long report as its private file and keeps the body out of the notice", () =>
     Effect.gen(function* () {
       const agent = yield* temporaryAgent;
       const archive = sessionReportArchive(agent, "session-1");
@@ -51,7 +51,13 @@ describe("subagent report archive", () => {
             name: "reader",
             generation: 2,
             outcome: "completed",
-            finalText: report,
+            // The run retains only the start of a report this long.
+            finalText: report.slice(0, MAX_FINAL_TEXT_CHARS),
+            finalTextTruncation: {
+              retainedChars: MAX_FINAL_TEXT_CHARS,
+              originalChars: report.length,
+              originalLines: 2_000,
+            },
             reportArchive,
           },
         ],

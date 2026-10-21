@@ -2,11 +2,12 @@ import { hasObjectRuntimeType, invokeHostCallback } from "pi-cosmic-core";
 import * as Effect from "effect/Effect";
 import {
   completionBlock,
+  inlineCompletionReport,
   type SubagentNotification,
   type SubagentNotificationDelivery,
 } from "../boundary/host-notifier.ts";
 import { indentQuestionLines } from "../tools/format.ts";
-import { formatRunBlock } from "../tools/run-block.ts";
+import { formatRunBlock, withInlineReports } from "../tools/run-block.ts";
 import { completionNotificationKey, deliveredCompletionKeys } from "./completion.ts";
 import { isOutcomeUncertain } from "./errors.ts";
 import type { RunContext, RunRecord } from "./internal.ts";
@@ -30,9 +31,14 @@ const ancestorMessage = (notification: SubagentNotification): string => {
     );
   const run = notification.runs[0];
   if (!run) return "A descendant subagent finished.";
-  // The same bounded block a root notice shows, so it always fits the parent message.
+  // The same bounded block a root notice shows, so it always fits the parent message, and the
+  // whole report when it fits too.
   return sanitizeOutputText(
-    `Descendant subagent ${run.outcome === "failed" ? "failed" : "reported"}.\n\n${formatRunBlock(completionBlock(run))}\n\nUse agent_read for the full run record.`,
+    withInlineReports(
+      `Descendant subagent ${run.outcome === "failed" ? "failed" : "reported"}.\n\n${formatRunBlock(completionBlock(run))}\n\nUse agent_read for the full run record.`,
+      [inlineCompletionReport(run)],
+      MAX_PARENT_MESSAGE_CHARS,
+    ),
     MAX_PARENT_MESSAGE_CHARS,
   );
 };

@@ -15,7 +15,14 @@ import type {
   SubagentWorkspaceOutcome,
 } from "../run/model.ts";
 import { indentQuestionLines, proposalGuidance } from "../tools/format.ts";
-import { formatRunBlocks, nextCandidateAction, type RunBlock } from "../tools/run-block.ts";
+import {
+  formatRunBlocks,
+  nextCandidateAction,
+  wholeSavedReport,
+  withInlineReports,
+  type InlineReport,
+  type RunBlock,
+} from "../tools/run-block.ts";
 import { runStateLabel } from "../ui/run-state.ts";
 
 export interface SubagentCompletionNotification {
@@ -117,7 +124,15 @@ export const completionBlock = (run: SubagentCompletionNotification): RunBlock =
   };
 };
 
-/** One notice for the whole batch: every run's block fits, so nothing is chunked or cut. */
+/** A completed run's whole retained report, which a notice repeats when it fits. */
+export const inlineCompletionReport = (
+  run: SubagentCompletionNotification,
+): InlineReport | undefined => (run.outcome === "completed" ? wholeSavedReport(run) : undefined);
+
+/**
+ * One notice for the whole batch: every run's block fits, so nothing is chunked or cut, and the
+ * whole reports that fit what remains follow.
+ */
 const completionContent = (runs: ReadonlyArray<SubagentCompletionNotification>): string => {
   const failed = runs.filter((run) => run.outcome === "failed").length;
   const completed = runs.length - failed;
@@ -131,7 +146,13 @@ const completionContent = (runs: ReadonlyArray<SubagentCompletionNotification>):
         ]
           .filter(Predicate.isNotUndefined)
           .join(" · ")}.`;
-  return clip(formatRunBlocks([heading], runs.map(completionBlock)));
+  return clip(
+    withInlineReports(
+      formatRunBlocks([heading], runs.map(completionBlock)),
+      runs.map(inlineCompletionReport),
+      MAX_NOTIFICATION_CHARS,
+    ),
+  );
 };
 
 const questionContent = (

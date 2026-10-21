@@ -5,6 +5,7 @@ import {
   safeTextPrefix,
   sanitizeDiagnosticError,
   sanitizeTerminalLine,
+  stripTerminalControls,
 } from "pi-cosmic-core";
 import { runAttention, runCleanupAttention } from "../run/attention.ts";
 import { MAX_OUTCOME_FILE_PATH_CHARS, MAX_OUTCOME_PREVIEW_CHARS } from "../run/limits.ts";
@@ -210,6 +211,53 @@ export const formatRunBlocks = (
 ): string => {
   const heading = clipText(header.filter(Boolean).join("\n"), MAX_RESULT_HEADER_CHARS);
   return [heading, ...blocks.map(formatRunBlock)].filter(Boolean).join(RUN_BLOCK_SEPARATOR);
+};
+
+/** A delivered report the run retained whole, which output may repeat after its blocks. */
+export interface InlineReport {
+  readonly id: string;
+  readonly name: string;
+  readonly text: string;
+}
+
+/** A delivered report with a file whose retained copy is the whole report. */
+export const wholeSavedReport = (report: {
+  readonly id: string;
+  readonly name: string;
+  readonly finalText?: string | undefined;
+  readonly finalTextTruncation?: SubagentReportTruncation | undefined;
+  readonly reportArchive?: SubagentReportArchive | undefined;
+}): InlineReport | undefined => {
+  const text = report.finalText?.trim();
+  return text && report.reportArchive && !report.finalTextTruncation
+    ? { id: report.id, name: report.name, text }
+    : undefined;
+};
+
+const inlineReportSection = ({ id, name, text }: InlineReport): string =>
+  `Report from ${sanitizeTerminalLine(id)} ${freeText(name, MAX_BLOCK_NAME_CHARS)}, the same as its file:\n${stripTerminalControls(text)}`;
+
+/**
+ * Follows the blocks with the reports that fit in what `maximum` leaves, chosen smallest first and
+ * shown in block order. The blocks are unchanged, and a report left out stays in its file.
+ */
+export const withInlineReports = (
+  blocks: string,
+  reports: ReadonlyArray<InlineReport | undefined>,
+  maximum: number,
+): string => {
+  const sections = reports.flatMap((report) => (report ? [inlineReportSection(report)] : []));
+  let room = maximum - blocks.length;
+  const shown = new Set<string>();
+  for (const section of sections.toSorted((left, right) => left.length - right.length)) {
+    const cost = RUN_BLOCK_SEPARATOR.length + section.length;
+    if (cost > room) break;
+    room -= cost;
+    shown.add(section);
+  }
+  return [blocks, ...sections.filter((section) => shown.has(section))]
+    .filter(Boolean)
+    .join(RUN_BLOCK_SEPARATOR);
 };
 
 // Action items from a run's projected view.

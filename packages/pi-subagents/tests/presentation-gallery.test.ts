@@ -1579,6 +1579,19 @@ const completedReports = notified("one worker reports", {
 });
 const messageScenarios: ReadonlyArray<GalleryMessageScenario> = [
   ...completedReports,
+  ...notified("one worker reports a short saved report", {
+    type: "completed",
+    runs: [
+      completion(docsSweep, {
+        reportArchive: {
+          path: "/home/me/.pi/agent/subagents/reports/session-1/agent-2-1-9b2e.md",
+          chars: docsSweep.finalText?.length ?? 0,
+          lines: 5,
+          complete: true,
+        },
+      }),
+    ],
+  }),
   ...notified("one worker fails with a next candidate", {
     type: "completed",
     runs: [completion(migrationReview, { nextCandidate: migrationReview.nextCandidate })],

@@ -195,7 +195,7 @@ function cleanupIssues(card: SubagentRunCard, label: string, add: AddIssue): voi
 
 function evidenceIssues(card: SubagentRunCard, label: string, add: AddIssue): void {
   const retryGuidance =
-    "agent_read shows its next route candidate; don't start a replacement while its outcome is uncertain.";
+    "The run's agent_read card names its next route candidate; don't start a replacement while its outcome is uncertain.";
   if (card.error) {
     const { line, detail } = quoteText(card.error, { limit: QUOTED_TEXT_LIMIT, failure: true });
     add(
