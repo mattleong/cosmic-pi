@@ -117,7 +117,7 @@ A custom agent is a named role the user declares in a configuration document's r
 
 ## Per-launch model override
 
-A start item's optional `model: { runtime, model, effort? }` replaces the profile's route for that launch with one candidate. It is always available; there is no configuration switch.
+A root start item's optional `model: { runtime, model, effort? }` replaces the profile's route for that launch with one candidate. It is always available to the root; there is no configuration switch. Nested children's start schema omits it.
 
 - The profile still supplies the role guidance, context, and write intent, or a [custom agent](#custom-agents) its instructions and overrides. Fast mode is off. An omitted `effort` is `default`, resolved like a route candidate's ([Effort](#effort)).
 - Before any readiness check or service ownership, the override is checked with the shared selector grammar and candidate cross-field policy. A malformed selector, `parent` outside Pi, a runtime-incompatible explicit effort, or a forking profile such as `oracle` on Claude or Codex fails with `model_override_invalid`.
@@ -157,7 +157,7 @@ A start item's optional `model: { runtime, model, effort? }` replaces the profil
 - `agent`, optional: a [custom agent](#custom-agents), never combined with `profile`;
 - `name`, optional;
 - `isolation`, optional: `shared-checkout` or `worktree`, for writers only (profile `worker`, or an agent or route with writer intent). An item whose selected candidate is read-only fails with `isolation_requires_writer` before admission, as does an item whose [custom agent](#launch-planning) sets `isolation`;
-- `model`, optional: a [per-launch model override](#per-launch-model-override).
+- `model`, optional and root only: a [per-launch model override](#per-launch-model-override). Nested children launch on profile routes, because only the root talks to the user who asks for a model.
 
 The schema is strict, and the service independently rejects other launch overrides, such as a top-level `effort`, `context`, or `writeIntent`, with `launch_override_not_allowed`. Model-facing schemas declare no `pattern` keyword, which some providers reject. Task-tool-shaped top-level fields fail with `[invalid_start_shape]` instead of being renamed.
 

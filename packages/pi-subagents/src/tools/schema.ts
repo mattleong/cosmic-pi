@@ -119,6 +119,15 @@ const StartSpecWithoutAgentParameters = Type.Object(
   { ...StartSpecBaseFields, ...StartSpecOptionFields },
   strictObjectOptions,
 );
+// A model override is for a model the user asks for, and only the root talks to the user.
+const NestedStartSpecParameters = Type.Object(
+  {
+    ...StartSpecBaseFields,
+    agent: Type.Optional(nestedAgentParameter()),
+    isolation: StartSpecOptionFields.isolation,
+  },
+  strictObjectOptions,
+);
 
 const RunIdsParameters = Type.Array(RunIdParameter, {
   description: "Target run IDs.",
@@ -143,7 +152,10 @@ const ModelsParameters = Type.Object(
 );
 
 const startParameters = <
-  Spec extends typeof StartSpecParameters | typeof StartSpecWithoutAgentParameters,
+  Spec extends
+    | typeof StartSpecParameters
+    | typeof StartSpecWithoutAgentParameters
+    | typeof NestedStartSpecParameters,
 >(
   spec: Spec,
 ) =>
@@ -160,8 +172,11 @@ const startParameters = <
 
 const StartParameters = startParameters(StartSpecParameters);
 const StartWithoutAgentParameters = startParameters(StartSpecWithoutAgentParameters);
-type StartToolParameters = typeof StartParameters | typeof StartWithoutAgentParameters;
-const NESTED_START_PARAMETERS: StartToolParameters = StartParameters;
+const NESTED_START_PARAMETERS = startParameters(NestedStartSpecParameters);
+type StartToolParameters =
+  | typeof StartParameters
+  | typeof StartWithoutAgentParameters
+  | typeof NESTED_START_PARAMETERS;
 
 /**
  * The root's start schema: configured agents become an enum with their descriptions, and the
@@ -314,7 +329,8 @@ export type SubagentLifecycleInput = Static<typeof LifecycleParameters>;
 
 export const SUBAGENT_TOOL_SCHEMAS = {
   [SUBAGENT_TOOL_NAME.models]: { parameters: ModelsParameters },
-  [SUBAGENT_TOOL_NAME.start]: { parameters: NESTED_START_PARAMETERS },
+  // Nested requests decode against the nested schema; the root registers its own.
+  [SUBAGENT_TOOL_NAME.start]: { parameters: startToolParameters(undefined) },
   [SUBAGENT_TOOL_NAME.await]: { parameters: AwaitParameters },
   [SUBAGENT_TOOL_NAME.lifecycle]: { parameters: LifecycleParameters },
   [SUBAGENT_TOOL_NAME.workspace]: {
