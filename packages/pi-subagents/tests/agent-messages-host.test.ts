@@ -91,7 +91,7 @@ describe("agent messages to the main agent", () => {
       const scout = yield* service.start(request({ name: "api-scout" }));
 
       const woken = yield* service.agentSend(asRun(scout.id), MAIN_AGENT_ID, "Schema found.");
-      expect(woken.disposition).toBe("woken");
+      expect(woken).toMatchObject({ disposition: "guided", mainState: "idle" });
       const [message, options] = root.messages()[0] ?? [];
       expect(options).toMatchObject({ triggerTurn: true });
       expect(message).toMatchObject({
@@ -102,7 +102,7 @@ describe("agent messages to the main agent", () => {
 
       root.setIdle(false);
       const queued = yield* service.agentSend(asRun(scout.id), MAIN_AGENT_ID, "Also the CLI.");
-      expect(queued.disposition).toBe("queued");
+      expect(queued.mainState).toBe("busy");
       expect(root.messages()[1]?.[1]).toMatchObject({ triggerTurn: false });
       // The busy run continues at its settle boundary so the model sees the message.
       const settled = yield* Effect.promise(() =>
@@ -127,7 +127,7 @@ describe("agent messages to the main agent", () => {
       root.setIdle(true);
       yield* TestClock.adjust("5 seconds");
       const held = yield* service.agentSend(asRun(scout.id), MAIN_AGENT_ID, "Done.");
-      expect(held.disposition).toBe("held");
+      expect(held.mainState).toBe("held");
       expect(root.messages()[2]?.[1]).toMatchObject({ triggerTurn: false });
 
       root.retire();
@@ -177,8 +177,10 @@ describe("agent messages to the main agent", () => {
         display: true,
         timestamp: 0,
       };
-      const rounds: Array<{ readonly dispositions: ReadonlyArray<string>; continued: boolean }> =
-        [];
+      const rounds: Array<{
+        readonly mainStates: ReadonlyArray<string | undefined>;
+        continued: boolean;
+      }> = [];
       for (let round = 0; round < 5; round += 1) {
         // Two senders' messages during one turn share its single continuation.
         const first = yield* service.agentSend(asRun(scout.id), MAIN_AGENT_ID, "Finding.");
@@ -187,16 +189,16 @@ describe("agent messages to the main agent", () => {
           root.settle(settleEvent([fauxAssistantMessage("Working."), messageInContext])),
         );
         rounds.push({
-          dispositions: [first.disposition, second.disposition],
+          mainStates: [first.mainState, second.mainState],
           continued: settled?.continue === true,
         });
       }
       expect(rounds).toEqual([
-        { dispositions: ["queued", "queued"], continued: true },
-        { dispositions: ["queued", "queued"], continued: true },
-        { dispositions: ["queued", "queued"], continued: true },
-        { dispositions: ["queued", "queued"], continued: true },
-        { dispositions: ["queued", "queued"], continued: true },
+        { mainStates: ["busy", "busy"], continued: true },
+        { mainStates: ["busy", "busy"], continued: true },
+        { mainStates: ["busy", "busy"], continued: true },
+        { mainStates: ["busy", "busy"], continued: true },
+        { mainStates: ["busy", "busy"], continued: true },
       ]);
       expect(root.messages().every(([, options]) => options?.triggerTurn === false)).toBe(true);
     });

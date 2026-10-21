@@ -43,6 +43,7 @@ import type {
   SubagentSendOutcome,
 } from "./model.ts";
 import { sortRuns } from "./projection.ts";
+import { snapshotView } from "./state.ts";
 import { appendMessageSessionEvent, appendNoticeSessionEvent } from "./session-events.ts";
 import { runSessionOwned } from "./session-owned.ts";
 import { projectRunTree } from "./tree.ts";
@@ -94,6 +95,10 @@ const recordMessageLocked = (
   };
 };
 
+// Guidance that steers a turn blocked on the run's own question waits behind that question.
+const parked = (delivery: SubagentSendDelivery, run: SubagentRunView): boolean =>
+  delivery === "guided" && run.state === "waiting_for_parent";
+
 // The user's messages show as parent notices, apart from the agent messages a run counts.
 const recordUserMessageLocked = (
   record: RunRecord,
@@ -138,7 +143,7 @@ const deliverToMain = (
         "agent_unavailable",
         "The main agent's session is no longer accepting messages.",
       );
-    return { disposition };
+    return { disposition: "guided" as const, confirmed: true, mainState: disposition };
   });
 
 /**
@@ -299,6 +304,8 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
           (outcome): Omit<AgentSendResult, "messageId" | "to"> => ({
             name: outcome.run.name,
             disposition: outcome.delivery,
+            confirmed: true,
+            ...(parked(outcome.delivery, outcome.run) && { parked: true }),
             run: outcome.run,
           }),
         ),
@@ -306,13 +313,20 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
           Clock.currentTimeMillis.pipe(
             Effect.flatMap((now) =>
               withLock(
-                Effect.suspend(() => {
+                Effect.gen(function* () {
                   recordReceived(record, "guided", now);
-                  return publish;
+                  yield* publish;
+                  const run = snapshotView(record.view);
+                  return {
+                    name: run.name,
+                    disposition: "guided" as const,
+                    confirmed: false,
+                    ...(parked("guided", run) && { parked: true as const }),
+                    run,
+                  };
                 }),
               ),
             ),
-            Effect.as({ name: record.view.name, disposition: "pending" as const }),
           ),
         ),
       );
@@ -346,7 +360,7 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
           recordNoticeLocked: (record, now) =>
             recordMessageLocked(record, "in", sender.id, text, now),
         });
-        delivered = { name: run.name, disposition: "resumed", run };
+        delivered = { name: run.name, disposition: "resumed", confirmed: true, run };
       } else delivered = yield* deliverRunMessage(claimed, to, text);
       const { sender } = claimed;
       if (sender) {

@@ -621,8 +621,14 @@ const sessionAgents: ReadonlyArray<AgentListEntry> = [
   { id: "main", name: "main", kind: "main", state: "busy", self: true },
   ...[authReview, schemaCheck, docsSweep, apiAudit].map(listEntry),
 ];
-const sent = (to: string, name: string, disposition: AgentSendResult["disposition"]) => ({
-  agentSend: () => Effect.succeed({ messageId: "message-1", to, name, disposition }),
+const sent = (
+  to: string,
+  name: string,
+  disposition: AgentSendResult["disposition"],
+  delivery: Partial<Pick<AgentSendResult, "confirmed" | "mainState" | "parked">> = {},
+) => ({
+  agentSend: () =>
+    Effect.succeed({ messageId: "message-1", to, name, disposition, confirmed: true, ...delivery }),
 });
 const peerNote = "The refresh test fixtures moved to tests/auth/fixtures; update your imports.";
 
@@ -662,17 +668,22 @@ const agentScenarios = Effect.all([
   agentScenario(
     "message wakes the idle main agent",
     { tool: "agent_send", args: { to: "main", message: "Schema check finished; see my report." } },
-    sent("main", "main", "woken"),
+    sent("main", "main", "guided", { mainState: "idle" }),
   ),
   agentScenario(
     "message queued for the busy main agent",
     { tool: "agent_send", args: { to: "main", message: "The CLI flags changed too." } },
-    sent("main", "main", "queued"),
+    sent("main", "main", "guided", { mainState: "busy" }),
   ),
   agentScenario(
     "main agent holds messages behind a dialog or after an interrupt",
     { tool: "agent_send", args: { to: "main", message: "Done with the audit." } },
-    sent("main", "main", "held"),
+    sent("main", "main", "guided", { mainState: "held" }),
+  ),
+  agentScenario(
+    "guidance waits behind another agent's question",
+    { tool: "agent_send", args: { to: "agent-6", message: peerNote } },
+    sent("agent-6", "db-migration", "guided", { parked: true }),
   ),
   agentScenario(
     "reply to a child's question",
@@ -682,7 +693,7 @@ const agentScenarios = Effect.all([
   agentScenario(
     "delivery awaiting confirmation",
     { tool: "agent_send", args: { to: "agent-1", message: guidance } },
-    sent("agent-1", "auth-review", "pending"),
+    sent("agent-1", "auth-review", "guided", { confirmed: false }),
   ),
   agentScenario(
     "reply already in flight",

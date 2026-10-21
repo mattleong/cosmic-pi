@@ -1,8 +1,14 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { invokeHostCallback, latestAssistantText, type SessionWake } from "pi-cosmic-core";
+import {
+  invokeHostCallback,
+  latestAssistantText,
+  type SessionWake,
+  type SessionWakeDelivery,
+} from "pi-cosmic-core";
 import {
   MAX_MAIN_READ_CHARS,
   type AgentMainCapabilities,
+  type AgentMainDelivery,
   type AgentMessageFrame,
 } from "../run/agent-messaging.ts";
 
@@ -14,6 +20,14 @@ interface AgentMessageHost {
   /** The session that receives messages; undefined once it was replaced or retired. */
   readonly session: () => ExtensionContext | undefined;
 }
+
+// What the wake did tells the main agent's state: it woke idle, appended for busy, or held.
+const MAIN_DELIVERY: Record<SessionWakeDelivery, AgentMainDelivery> = {
+  woken: "idle",
+  queued: "busy",
+  held: "held",
+  refused: "unavailable",
+};
 
 const sessionIdle = (ctx: ExtensionContext): boolean =>
   invokeHostCallback(() => ctx.isIdle(), false);
@@ -48,8 +62,7 @@ export function agentMainCapabilities(
   return {
     deliver: (frame) => {
       if (!host.session()) return "unavailable";
-      const delivery = host.wake.deliver(send(frame));
-      return delivery === "refused" ? "unavailable" : delivery;
+      return MAIN_DELIVERY[host.wake.deliver(send(frame))];
     },
     read: () => {
       const ctx = host.session();

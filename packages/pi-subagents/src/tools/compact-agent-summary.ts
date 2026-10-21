@@ -83,57 +83,57 @@ const summarizeList = (
   );
 };
 
-const DISPOSITIONS: Record<
-  Extract<AgentToolDetails, { readonly action: "agent_send" }>["disposition"],
-  string
-> = {
-  answered: "answered",
-  guided: "delivered as guidance",
-  pending: "awaiting delivery confirmation",
-  resumed: "resumed",
-  woken: "woke the main agent",
-  queued: "queued for the main agent",
+type SendDetails = Extract<AgentToolDetails, { readonly action: "agent_send" }>;
+
+const MAIN_DELIVERIES: Record<NonNullable<SendDetails["mainState"]>, string> = {
+  idle: "woke the main agent",
+  busy: "queued for the main agent",
   held: "held for the user",
 };
 
-type SendDetails = Extract<AgentToolDetails, { readonly action: "agent_send" }>;
-
-const sendIssues = (details: SendDetails): CompactIssue[] => {
+const sendCounter = (details: SendDetails): string => {
   switch (details.disposition) {
-    case "pending":
-      return [
+    case "answered":
+      return "answered";
+    case "resumed":
+      return "resumed";
+    case "guided":
+      if (details.mainState !== undefined) return MAIN_DELIVERIES[details.mainState];
+      if (!details.confirmed) return "awaiting delivery confirmation";
+      return details.parked ? "waiting behind its question" : "delivered as guidance";
+  }
+  return absurd(details.disposition);
+};
+
+const sendIssues = (details: SendDetails): CompactIssue[] => [
+  ...(details.confirmed
+    ? []
+    : [
         {
-          severity: "warning",
+          severity: "warning" as const,
           code: "agent-message-pending",
           message: pendingDeliveryEvidence.message,
           detail: pendingDeliveryEvidence.detail,
         },
-      ];
-    case "held":
-      return [
+      ]),
+  ...(details.mainState === "held"
+    ? [
         {
-          severity: "info",
+          severity: "info" as const,
           code: "agent-message-held",
           message: "The main agent is waiting on the user",
           detail:
             "The message is in the main agent's conversation. It reaches the model when an open dialog closes, or after an interrupt, on the user's next prompt.",
         },
-      ];
-    case "answered":
-    case "guided":
-    case "resumed":
-    case "woken":
-    case "queued":
-      return [];
-  }
-  return absurd(details.disposition);
-};
+      ]
+    : []),
+];
 
 const summarizeSend = (details: SendDetails): CompactSummary =>
   settled(
     {
       subject: details.to === MAIN_AGENT_ID ? "main" : displayName(details.name),
-      counters: [DISPOSITIONS[details.disposition]],
+      counters: [sendCounter(details)],
     },
     sendIssues(details),
   );

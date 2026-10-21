@@ -119,7 +119,8 @@ const agentService = () =>
           messageId: "message-2",
           to,
           name: scout.name,
-          disposition: "pending" as const,
+          disposition: "guided" as const,
+          confirmed: false,
         });
       if (to === "agent-busy")
         return Effect.fail(
@@ -130,7 +131,13 @@ const agentService = () =>
         );
       return Effect.sync(() => {
         callers.push(caller);
-        return { messageId: "message-1", to, name: scout.name, disposition: "guided" as const };
+        return {
+          messageId: "message-1",
+          to,
+          name: scout.name,
+          disposition: "guided" as const,
+          confirmed: true,
+        };
       });
     },
     agentRead: () => Effect.succeed(READ),
@@ -192,7 +199,11 @@ describe("agent tools", () => {
       const pending = yield* Effect.promise(() =>
         executeTool(tools.get("agent_send")!, { to: "agent-slow", message: "Check again." }),
       );
-      expect(pending.details).toMatchObject({ action: "agent_send", disposition: "pending" });
+      expect(pending.details).toMatchObject({
+        action: "agent_send",
+        disposition: "guided",
+        confirmed: false,
+      });
 
       const read = yield* Effect.promise(() =>
         executeTool(tools.get("agent_read")!, { agentIds: ["main", "agent-1", "agent-gone"] }),

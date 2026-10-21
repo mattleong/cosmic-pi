@@ -106,8 +106,7 @@ export function registerApplicationCommands(pi: ExtensionAPI, host: ApplicationC
             .send(id, message, expected)
             .pipe(
               Effect.map(
-                (sent): FleetMessageDelivery =>
-                  sent.disposition === "pending" ? "pending" : "delivered",
+                (sent): FleetMessageDelivery => (sent.confirmed ? "delivered" : "pending"),
               ),
             ),
         ),

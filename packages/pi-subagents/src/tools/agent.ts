@@ -55,7 +55,7 @@ const coordinationGuidelines = (worktrees: boolean) => [
 ];
 
 const SEND_GUIDELINES = [
-  "Send one self-contained message and don't resend: each send is delivered at once and reports what happened, and a pending or uncertain result may already have arrived.",
+  "Send one self-contained message and don't resend: each send is delivered at once and reports what happened, and an unconfirmed or uncertain result may already have arrived.",
   "Message a paused or finished run only when the work needs that run's context, such as continuing after a transient error: the message resumes it, and its own parent reviews the result.",
 ];
 
@@ -99,7 +99,7 @@ const TOOL_SPECS: AgentToolSpecs = {
   },
   [AGENT_TOOL_NAME.send]: {
     label: "Message Agent",
-    description: `Send one message now to any other agent in this session: "main" or a run ID from agent_list. An agent you started, or one of its descendants, waiting on a question receives it as the answer; any other running agent gets it as guidance. An idle main agent starts a turn; a busy one sees it before its turn ends. A paused or finished local Pi run resumes with the message as its next assignment and still reports to its own parent; finished Claude and Codex runs can't resume. The result says whether the message was answered, guided, pending delivery confirmation, resumed, woken, queued, or held; nothing is stored for later delivery. A message has at most ${MAX_AGENT_MESSAGE_CHARS.toLocaleString("en-US")} characters.`,
+    description: `Send one message now to any other agent in this session: "main" or a run ID from agent_list. An agent you started, or one of its descendants, waiting on a question receives it as the answer; any other running agent gets it as guidance, which another agent's waiting run sees only after its question is answered. An idle main agent starts a turn; a busy one sees it before its turn ends. A paused or finished local Pi run resumes with the message as its next assignment and still reports to its own parent; finished Claude and Codex runs can't resume. The result says whether the message was answered, guided, or resumed, and how guidance arrived; nothing is stored for later delivery. A message has at most ${MAX_AGENT_MESSAGE_CHARS.toLocaleString("en-US")} characters.`,
     promptSnippet: "Message any agent in this session, including main",
     promptGuidelines: SEND_GUIDELINES,
     title: (args) => [

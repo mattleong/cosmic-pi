@@ -394,7 +394,13 @@ const recordingAgents = (selfId: string) => {
           )
         : Effect.sync(() => {
             calls.push({ kind: "send", to, message });
-            return { messageId: "message-r1-1", to, name: "peer", disposition: "guided" };
+            return {
+              messageId: "message-r1-1",
+              to,
+              name: "peer",
+              disposition: "guided",
+              confirmed: true,
+            };
           }),
     read: (ids) =>
       Effect.sync(() => {

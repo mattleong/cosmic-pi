@@ -271,7 +271,11 @@ describe("Pi child agent messaging through the root coordinator", () => {
           tool: "agent_send",
           args: { to: "main", message: "Found the session table." },
         });
-        expect(woken.details).toMatchObject({ to: "main", disposition: "woken" });
+        expect(woken.details).toMatchObject({
+          to: "main",
+          disposition: "guided",
+          mainState: "idle",
+        });
         const [delivered, delivery] = sendMessage.mock.calls[0] ?? [];
         expect(delivered).toMatchObject({ details: { from: caller.id, to: "main" } });
         expect(delivered?.content).toContain(caller.id);

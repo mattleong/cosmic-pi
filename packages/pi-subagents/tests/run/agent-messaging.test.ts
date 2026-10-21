@@ -132,13 +132,15 @@ describe("agent messaging", () => {
       const childControl = fake.controls[2]!;
       yield* askQuestion(childControl, projections, child.id, "question-1");
 
+      // The sibling's guidance waits behind the question until an ancestor answers it.
       const fromSibling = yield* service.agentSend(asRun(sibling), child.id, "Prefer v1.");
-      expect(fromSibling.disposition).toBe("guided");
+      expect(fromSibling).toMatchObject({ disposition: "guided", confirmed: true, parked: true });
       expect(childControl.sentIpc("parent_reply")).toBe(false);
       expect(latest(projections, child.id)?.state).toBe("waiting_for_parent");
 
       const fromParent = yield* service.agentSend(asRun(parent), child.id, "Use the public API.");
       expect(fromParent).toMatchObject({ disposition: "answered", run: { state: "running" } });
+      expect(fromParent.parked).toBeUndefined();
       expect(
         childControl.sentIpc("parent_reply", (reply) => reply.message === "Use the public API."),
       ).toBe(true);
@@ -320,15 +322,15 @@ describe("agent messaging", () => {
         const run = yield* service.start(request({ name: "reporter" }));
         const send = (text: string) => service.agentSend(asRun(run), MAIN_AGENT_ID, text);
         for (const text of ["one", "two", "three", "four", "five"])
-          expect((yield* send(text)).disposition).toBe("woken");
+          expect(yield* send(text)).toMatchObject({ disposition: "guided", mainState: "idle" });
         expect(main.delivered.every((delivery) => delivery.startTurn)).toBe(true);
         expect(main.delivered[0]?.frame).toMatchObject({ from: run.id, to: MAIN_AGENT_ID });
         expect(main.delivered[0]?.frame.content).toContain("one");
 
         main.control.state = "busy";
-        expect((yield* send("six")).disposition).toBe("queued");
+        expect((yield* send("six")).mainState).toBe("busy");
         main.control.held = true;
-        expect((yield* send("seven")).disposition).toBe("held");
+        expect((yield* send("seven")).mainState).toBe("held");
 
         main.control.retired = true;
         expect(yield* send("eight").pipe(Effect.flip)).toMatchObject({ code: "agent_unavailable" });
@@ -535,8 +537,8 @@ describe("agent messaging", () => {
       const sender = yield* service.start(nativeReportRequest({ name: "sender" }));
       const receiver = yield* service.start(nativeReportRequest({ name: "receiver" }));
       expect(
-        (yield* service.agentSend(asRun(sender), receiver.id, "Check the schema.")).disposition,
-      ).toBe("pending");
+        yield* service.agentSend(asRun(sender), receiver.id, "Check the schema."),
+      ).toMatchObject({ disposition: "guided", confirmed: false });
       expect(messageNotices(latest(projections, receiver.id))).toEqual([
         { direction: "in", peer: sender.id, text: "Check the schema." },
       ]);

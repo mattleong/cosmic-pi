@@ -82,9 +82,7 @@ export const runSubagentActivityAction = (
       return service
         .send(id, input, expected)
         .pipe(
-          Effect.flatMap((sent) =>
-            sent.disposition === "pending" ? Effect.sync(onPendingGuidance) : Effect.void,
-          ),
+          Effect.flatMap((sent) => (sent.confirmed ? Effect.void : Effect.sync(onPendingGuidance))),
         );
   }
   return absurd(action);

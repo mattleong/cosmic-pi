@@ -16,6 +16,7 @@ import {
   type AgentCaller,
   type AgentListEntry,
   type AgentListResult,
+  type AgentMainDeliveryState,
   type AgentReadout,
   type AgentReadResult,
   type AgentSendResult,
@@ -178,21 +179,34 @@ const listDetails = (result: AgentListResult): AgentToolDetails => {
   };
 };
 
-const SEND_TEXT: Record<AgentSendResult["disposition"], (label: string) => string> = {
-  answered: (label) => `Answered ${label}'s pending question with your message.`,
-  guided: (label) => `Delivered your message to ${label} as guidance for its current work.`,
-  pending: (label) =>
-    `Sent your message to ${label} as guidance; ${pendingDeliveryEvidence.message.toLowerCase()}. ${pendingDeliveryEvidence.detail}`,
-  resumed: (label) =>
-    `Resumed ${label} with your message as its next assignment. Its report goes to its own parent.`,
-  woken: () => "The main agent was idle; your message started its turn.",
-  queued: () => "The main agent is busy; it sees your message before its current turn ends.",
-  held: () =>
-    "The main agent is waiting on the user, behind an open dialog or after an interrupt; your message waits in its conversation and wakes it when the dialog closes or on the user's next prompt.",
+const MAIN_SEND_TEXT: Record<AgentMainDeliveryState, string> = {
+  idle: "The main agent was idle; your message started its turn.",
+  busy: "The main agent is busy; it sees your message before its current turn ends.",
+  held: "The main agent is waiting on the user, behind an open dialog or after an interrupt; your message waits in its conversation and wakes it when the dialog closes or on the user's next prompt.",
 };
 
-const sendText = (result: AgentSendResult): string =>
-  SEND_TEXT[result.disposition](agentLabel({ id: result.to, name: result.name }));
+const guidedText = (result: AgentSendResult, label: string): string => {
+  if (result.mainState !== undefined) return MAIN_SEND_TEXT[result.mainState];
+  const sent = result.confirmed
+    ? `Delivered your message to ${label} as guidance for its current work.`
+    : `Sent your message to ${label} as guidance; ${pendingDeliveryEvidence.message.toLowerCase()}. ${pendingDeliveryEvidence.detail}`;
+  return result.parked
+    ? `${sent} It is waiting on an answer to its own question, which only its ancestors can give, so it sees your message once one of them answers.`
+    : sent;
+};
+
+const sendText = (result: AgentSendResult): string => {
+  const label = agentLabel({ id: result.to, name: result.name });
+  switch (result.disposition) {
+    case "answered":
+      return `Answered ${label}'s pending question with your message.`;
+    case "guided":
+      return guidedText(result, label);
+    case "resumed":
+      return `Resumed ${label} with your message as its next assignment. Its report goes to its own parent.`;
+  }
+  return absurd(result.disposition);
+};
 
 const sendDetails = (result: AgentSendResult): AgentToolDetails => ({
   version: AGENT_DETAILS_VERSION,
@@ -200,6 +214,9 @@ const sendDetails = (result: AgentSendResult): AgentToolDetails => ({
   to: result.to,
   name: agentName(result),
   disposition: result.disposition,
+  confirmed: result.confirmed,
+  ...(result.mainState !== undefined && { mainState: result.mainState }),
+  ...(result.parked && { parked: true }),
 });
 
 const readText = (text: string | undefined): string | undefined => {

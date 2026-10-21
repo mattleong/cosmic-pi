@@ -35,19 +35,20 @@ export type AgentCaller =
   | { readonly kind: "main" }
   | { readonly kind: "run"; readonly runId: string };
 
-export type AgentMessageDisposition =
-  | "answered"
-  | "guided"
-  | "pending"
-  | "resumed"
-  | "woken"
-  | "queued"
-  | "held";
+/** A message answers a waiting run's question, guides an agent's work, or resumes a run. */
+export type AgentMessageDisposition = "answered" | "guided" | "resumed";
 
 export type AgentMainState = "idle" | "busy";
 
+/**
+ * The main agent's state when a message reached it: an idle one starts a turn, a busy one sees the
+ * message before its turn ends, and a held one waits for the user, behind an open dialog or after
+ * an interrupt.
+ */
+export type AgentMainDeliveryState = AgentMainState | "held";
+
 /** What the host did with a message for the main agent; `unavailable` once the session retired. */
-export type AgentMainDelivery = "woken" | "queued" | "held" | "unavailable";
+export type AgentMainDelivery = AgentMainDeliveryState | "unavailable";
 
 export interface AgentMessageFrame {
   readonly messageId: string;
@@ -135,6 +136,15 @@ export interface AgentSendResult {
   readonly to: string;
   readonly name: string;
   readonly disposition: AgentMessageDisposition;
+  /** False while guidance's native delivery is still being confirmed; it may already have arrived. */
+  readonly confirmed: boolean;
+  /** The main agent's state when guidance reached it. */
+  readonly mainState?: AgentMainDeliveryState | undefined;
+  /**
+   * Guidance to a run blocked on its own question, which a sender outside its ancestry can't
+   * answer: the run sees it only once one of its ancestors answers.
+   */
+  readonly parked?: true | undefined;
   readonly run?: SubagentRunView | undefined;
 }
 

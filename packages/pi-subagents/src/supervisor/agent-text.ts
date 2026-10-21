@@ -1,18 +1,33 @@
+import { absurd } from "effect/Function";
 import type {
   SupervisorAgentListResult,
   SupervisorAgentReadResult,
   SupervisorAgentSendResult,
 } from "./protocol.ts";
 
-const DISPOSITIONS: Record<SupervisorAgentSendResult["disposition"], string> = {
-  answered: "answered its pending question",
-  guided: "delivered as guidance to its current turn",
-  pending:
-    "sent as guidance; delivery confirmation is still pending and it may already have arrived",
-  resumed: "resumed the finished run with this message as its assignment",
-  woken: "started a new turn for the idle main agent",
-  queued: "appended for the busy main agent to read before its turn ends",
+const MAIN_DELIVERIES: Record<NonNullable<SupervisorAgentSendResult["mainState"]>, string> = {
+  idle: "started a new turn for the idle main agent",
+  busy: "appended for the busy main agent to read before its turn ends",
   held: "held for the main agent until its open dialog closes or its user's next prompt after an interrupt",
+};
+
+const sendOutcome = (result: SupervisorAgentSendResult): string => {
+  switch (result.disposition) {
+    case "answered":
+      return "answered its pending question";
+    case "resumed":
+      return "resumed the finished run with this message as its assignment";
+    case "guided": {
+      if (result.mainState !== undefined) return MAIN_DELIVERIES[result.mainState];
+      const guided = result.confirmed
+        ? "delivered as guidance to its current turn"
+        : "sent as guidance; delivery confirmation is still pending and it may already have arrived";
+      return result.parked
+        ? `${guided}; it is waiting on an answer to its own question, which only its ancestors can give, and sees the message once one of them answers`
+        : guided;
+    }
+  }
+  return absurd(result.disposition);
 };
 
 const missing = (ids: ReadonlyArray<string>): ReadonlyArray<string> =>
@@ -63,6 +78,6 @@ export const agentReadText = (result: SupervisorAgentReadResult): string =>
 
 export const agentSendText = (result: SupervisorAgentSendResult): string =>
   [
-    `Message ${result.messageId} to ${result.to} ${JSON.stringify(result.name)}: ${result.disposition}, ${DISPOSITIONS[result.disposition]}.`,
+    `Message ${result.messageId} to ${result.to} ${JSON.stringify(result.name)}: ${result.disposition}, ${sendOutcome(result)}.`,
     "Do not resend it; any reply arrives as a new message.",
   ].join("\n");

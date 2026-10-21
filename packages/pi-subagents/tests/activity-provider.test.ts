@@ -278,7 +278,8 @@ describe("subagent activity provider", () => {
         messageId: "message-1",
         to: id,
         name: id,
-        disposition: id === "pending" ? ("pending" as const) : ("answered" as const),
+        disposition: id === "pending" ? ("guided" as const) : ("answered" as const),
+        confirmed: id !== "pending",
       }),
     );
     const service = subagentServiceDouble({ send });

@@ -42,9 +42,9 @@ export function fakeAgentMain(
       const idle = control.state === "idle";
       delivered.push({ frame, startTurn: !control.held && idle });
       if (control.held) return "held";
-      if (idle) return "woken";
+      if (idle) return "idle";
       control.continuing = true;
-      return "queued";
+      return "busy";
     },
     read: () => ({ text: control.text, truncated: control.truncated, state: control.state }),
   };

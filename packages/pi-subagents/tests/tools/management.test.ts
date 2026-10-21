@@ -194,7 +194,13 @@ describe("subagent tool", () => {
   effectTest("registers one agent_* family and answers questions with agent_send", function* () {
     const service = subagentServiceDouble({
       agentSend: (_caller, to) =>
-        Effect.succeed({ messageId: "message-1", to, name: "worker", disposition: "answered" }),
+        Effect.succeed({
+          messageId: "message-1",
+          to,
+          name: "worker",
+          disposition: "answered",
+          confirmed: true,
+        }),
     });
     const tools = captureSubagentTools(service);
     // Questions are answered through agent_send; no separate reply or status tool is registered.

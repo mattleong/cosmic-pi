@@ -533,15 +533,13 @@ export const AgentToolDetailsSchema = Schema.Union([
     action: Schema.Literal("agent_send"),
     to: AgentIdSchema,
     name: AgentDetailsNameSchema,
-    disposition: Schema.Literals([
-      "answered",
-      "guided",
-      "pending",
-      "resumed",
-      "woken",
-      "queued",
-      "held",
-    ]),
+    disposition: Schema.Literals(["answered", "guided", "resumed"]),
+    /** False while guidance's native delivery is still being confirmed. */
+    confirmed: Schema.Boolean,
+    /** The main agent's state when guidance reached it. */
+    mainState: Schema.optionalKey(Schema.Literals(["idle", "busy", "held"])),
+    /** Guidance waiting behind the run's own question until an ancestor answers. */
+    parked: Schema.optionalKey(Schema.Literal(true)),
   }),
   Schema.Struct({
     version: Schema.Literal(AGENT_DETAILS_VERSION),
