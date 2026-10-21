@@ -57,8 +57,7 @@ describe("native scripted subagent workflows", () => {
           );
           expect(result.isError).toBe(false);
           expect(output(result.text), result.text).toMatchObject({
-            contract: "pi-subagents/orchestration",
-            version: 3,
+            tool: "agent_start",
             outcome: "partial",
             launches: [
               { index: 0, status: "failed", failure: { code: "scripted_writer_not_supported" } },

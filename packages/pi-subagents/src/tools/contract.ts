@@ -22,8 +22,6 @@ import { distinctRunWarnings } from "../run/warnings.ts";
 import {
   MAX_CONTRACT_MESSAGE_CHARS,
   MAX_CONTRACT_PREVIEW_CHARS,
-  SUBAGENT_CONTRACT_ID,
-  SUBAGENT_CONTRACT_VERSION,
   type ContractAttention,
   type ContractFailure,
   type ContractLifecycleAction,
@@ -51,8 +49,7 @@ import type { SubagentActionFailure, SubagentStartFailure, SubagentStartOutcome 
 import { actionFailureDisposition } from "./outcome.ts";
 import type { SubagentStartSpec } from "./schema.ts";
 
-export const envelope = <Tool extends SubagentContractTool>(tool: Tool) =>
-  ({ contract: SUBAGENT_CONTRACT_ID, version: SUBAGENT_CONTRACT_VERSION, tool }) as const;
+export const envelope = <Tool extends SubagentContractTool>(tool: Tool) => ({ tool }) as const;
 
 const batchOutcome = <Success extends string>(succeeded: number, total: number, success: Success) =>
   succeeded === 0 ? ("failed" as const) : succeeded === total ? success : ("partial" as const);
@@ -162,14 +159,8 @@ const targetFields = (
   const attention = projectAttention(run, detailChars);
   const error = metadata(run.error, detailChars);
   const errorFile = error === undefined ? undefined : projectReportFile(run.errorArchive);
-  // Cleanup diagnostics are evidence for agent_read; a target keeps its disposition and recovery.
-  const cleanup = run.cleanup && {
-    disposition: run.cleanup.disposition,
-    ...(run.cleanup.recovery !== undefined && { recovery: run.cleanup.recovery }),
-  };
   const resumedBy = metadata(run.resumedBy, MAX_CONTRACT_PREVIEW_CHARS);
   return {
-    ...(cleanup !== undefined && { cleanup }),
     ...(run.writerCleanupQuarantined !== undefined && {
       writerCleanupQuarantined: run.writerCleanupQuarantined,
     }),
@@ -179,10 +170,8 @@ const targetFields = (
     ...knownAgent(run.agent),
     state: run.state,
     finished: isTerminalRunState(run.state),
-    reportGeneration: nonNegativeInteger(run.reportGeneration),
     writeIntent: run.writeIntent,
     ...projectModelOverride(run.modelOverride),
-    capabilities: [...new Set(run.capabilities)],
     ...(hasId(run.predecessorRunId) && { predecessorRunId: run.predecessorRunId }),
     ...(hasId(run.supersededByRunId) && { successorRunId: run.supersededByRunId }),
     ...(resumedBy !== undefined && { resumedBy }),
@@ -202,13 +191,14 @@ const withheldTarget = (run: SubagentRunView): ContractWithheldRunTarget => ({
 
 /**
  * A read's status, the detail surface, which carries the whole pending question, both retained
- * warnings, the error, and cleanup diagnostics.
+ * warnings, the error, the run's capabilities, and cleanup diagnostics.
  */
 export const readStatusTarget = (run: SubagentRunView): ContractReadStatus => {
   const cleanup = projectRunCleanup(run.cleanup);
   return {
     ...targetFields(run, undefined, MAX_CONTACT_TEXT_CHARS),
     report: withheldReport(run),
+    capabilities: [...new Set(run.capabilities)],
     ...(cleanup !== undefined && { cleanup }),
   };
 };

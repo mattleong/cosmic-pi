@@ -191,7 +191,7 @@ Each tool completion carries a bounded output preview (seven lines, at most 1,00
 
 The script-facing contract is in [Native Pi codemode scripting](native-codemode.md). Service rules:
 
-- Root profiles, start, await, lifecycle, list, and read declare version-3 orchestration results from Effect Schema, separate from persisted details. The contract is encoded inside the claim scope before consumption, and only completely returned reports are consumed.
+- Root profiles, start, await, lifecycle, list, and read declare structured results from Effect Schema, separate from persisted details. The contract is encoded inside the claim scope before consumption, and only completely returned reports are consumed.
 - Scripted execution is identified from native `parentToolCallId` provenance on execution-start and admission events. Script evidence cannot be downgraded, model origin requires both observations, and missing evidence fails closed.
 - Scripted starts enforce read-only intent after route resolution and before admission; lifecycle permits only stop. Scripted await rejects parent attention before consumption; questions stay with their notices.
 - Scripted root starts seed an immutable, record-only `scriptOrigin`, inherited by descendants and retry successors. Validation rejects such writers before workspace acquisition, admission rechecks before eviction or pool creation, resume keeps it, and revise cannot admit a script-origin writer.
@@ -225,7 +225,7 @@ Root and local Pi registrations keep bounded activation-owned receipts. A matchi
 
 Cleanup evidence is independent of task state and accepted reports; its fields are described in [Cleanup ordering and quarantine](local-backends.md#cleanup-ordering-and-quarantine).
 
-- `cleanup` and `writerCleanupQuarantined` are optional additive fields in version-2 details cards and version-3 orchestration targets. Absence is unknown, not confirmed cleanup.
+- `cleanup` and `writerCleanupQuarantined` are optional fields in version-2 details cards; script results carry `writerCleanupQuarantined` on every run target and `cleanup` only on a read's status. Absence is unknown, not confirmed cleanup.
 - Native lifecycle `status: "succeeded"` acknowledges the operation, not cleanup. Compact stop results stay warnings while cleanup is pending or quarantined.
 - Explicit stop may reverify transport cleanup only when `cleanup.recovery` is `stop`, including on terminal runs; Activity and the fleet expose this without restarting the task. Manual recovery covers unknown finalizers, incomplete descendant snapshots, and uncertain lease failures.
 - Cleanup quarantine never recommends stopping healthy pool peers.
@@ -256,7 +256,7 @@ Shared rules for registration, replay, compact issues, and expansion are in [too
 
 - `tools/schema.ts` holds the tool catalogs: the management tools' parameter schemas plus any cross-field validator, and the agent tools' schemas. Root execution and the nested-Pi wire carry the same `{ tool, args }` input.
 - Each `prepareArguments` hook validates and coerces as Pi does, rejects blank strings, and returns `[invalid_arguments]` lists naming allowed values and likely replacements for unknown fields.
-- `execute-result.ts` separates model text, persisted details, and version-3 script results.
+- `execute-result.ts` separates model text, persisted details, and script results.
 - Model text is compact. A start lists one bounded entry per launch (`id name · profile · runtime/model:effort`, plus `worktree <id>` for an isolated writer, and its route warning), or the launch's failure and recovery. Await and lifecycle results give one [run block](#model-facing-run-blocks) per run. A read is the detail surface: its card is a header line, then the fields that need attention (parent, a cwd other than the caller's, retry, route warnings, worktree proposal with its files, quarantined cleanup, warnings, the whole failure and pending question), followed by the latest message, the report's file, or an unsaved report. `agent_read` with `verbose` adds route selection, context, capabilities, process, cwd, and timing. Pending cleanup is never reported; only quarantine is.
 - A worktree writer's proposal is stated once, as `proposal: N files, +A −D · agent_worktree apply workspaceId=…`, in cards, `agent_list` lines, issue details, and notifications. A partial apply narrows it to the remaining files; once applied or discarded, it reads `workspace applied` or `workspace discarded`.
 - `agent_worktree` pages complete immutable diffs and keeps patches out of persisted details. Its producers record display spans while composing output, so expansion never parses text.

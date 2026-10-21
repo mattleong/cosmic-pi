@@ -38,8 +38,6 @@ import { ModelsContractFields } from "./discovery-contract-schema.ts";
 import type { ActionFailureDisposition } from "./outcome.ts";
 import { AWAIT_UNTIL, LIFECYCLE_ACTIONS } from "./schema.ts";
 
-export const SUBAGENT_CONTRACT_ID = "pi-subagents/orchestration";
-export const SUBAGENT_CONTRACT_VERSION = 3;
 /**
  * A target's report text without a file, error, question, and warnings are previews, so each
  * target stays bounded; agent_read returns the rest, and a read's status carries them whole.
@@ -67,11 +65,7 @@ const StateSchema = Schema.Literals(SUBAGENT_RUN_STATES);
 const WriteIntentSchema = Schema.Literals(PROFILE_CANDIDATE_WRITE_INTENTS);
 const UntilSchema = Schema.Literals(AWAIT_UNTIL);
 
-const envelope = <Tool extends string>(tool: Tool) => ({
-  contract: Schema.Literal(SUBAGENT_CONTRACT_ID),
-  version: Schema.Literal(SUBAGENT_CONTRACT_VERSION),
-  tool: Schema.Literal(tool),
-});
+const envelope = <Tool extends string>(tool: Tool) => ({ tool: Schema.Literal(tool) });
 
 const WITHHELD_REPORT_STATUSES = [
   // A wait ended (cancelled, timed out, or by user input) before delivering a report it held.
@@ -126,44 +120,49 @@ const FailureSchema = Schema.Struct({
 });
 
 /** `detailChars` bounds the question, warnings, and error: previews, or a read's whole text. */
-const runTargetSchema = <Report extends Schema.Top>(report: Report, detailChars: number) =>
-  Schema.Struct({
-    runId: RunIdSchema,
-    name: NameSchema,
-    profile: Schema.optionalKey(ProfileSchema),
-    agent: Schema.optionalKey(AgentNameSchema),
-    state: StateSchema,
-    finished: Schema.Boolean,
-    reportGeneration: count,
-    writeIntent: WriteIntentSchema,
-    modelOverride: Schema.optionalKey(ModelOverrideCardSchema),
-    capabilities: Schema.Array(Schema.Literals(PI_SUBAGENT_CAPABILITIES)).check(
-      Schema.isMaxLength(PI_SUBAGENT_CAPABILITIES.length),
-    ),
-    predecessorRunId: Schema.optionalKey(RunIdSchema),
-    successorRunId: Schema.optionalKey(RunIdSchema),
-    resumedBy: Schema.optionalKey(NonEmptyText(MAX_CONTRACT_PREVIEW_CHARS)),
-    parentActionRequired: Schema.Boolean,
-    cleanup: Schema.optionalKey(RunCleanupSchema),
-    writerCleanupQuarantined: Schema.optionalKey(Schema.Boolean),
-    attention: Schema.optionalKey(attentionSchema(detailChars)),
-    retry: Schema.optionalKey(Schema.Struct(RecoveryFields)),
-    warnings: Schema.Array(
-      Schema.Struct({
-        source: Schema.optionalKey(Schema.Literals(["child", "system"])),
-        message: NonEmptyText(detailChars),
-      }),
-    ).check(Schema.isMaxLength(2)),
-    error: Schema.optionalKey(NonEmptyText(detailChars)),
-    /** The saved failure when `error` is a cut preview. */
-    errorFile: Schema.optionalKey(Schema.Struct(ReportFileFields)),
-    report,
-  });
+const runTargetFields = <Report extends Schema.Top>(report: Report, detailChars: number) => ({
+  runId: RunIdSchema,
+  name: NameSchema,
+  profile: Schema.optionalKey(ProfileSchema),
+  agent: Schema.optionalKey(AgentNameSchema),
+  state: StateSchema,
+  finished: Schema.Boolean,
+  writeIntent: WriteIntentSchema,
+  modelOverride: Schema.optionalKey(ModelOverrideCardSchema),
+  predecessorRunId: Schema.optionalKey(RunIdSchema),
+  successorRunId: Schema.optionalKey(RunIdSchema),
+  resumedBy: Schema.optionalKey(NonEmptyText(MAX_CONTRACT_PREVIEW_CHARS)),
+  parentActionRequired: Schema.Boolean,
+  writerCleanupQuarantined: Schema.optionalKey(Schema.Boolean),
+  attention: Schema.optionalKey(attentionSchema(detailChars)),
+  retry: Schema.optionalKey(Schema.Struct(RecoveryFields)),
+  warnings: Schema.Array(
+    Schema.Struct({
+      source: Schema.optionalKey(Schema.Literals(["child", "system"])),
+      message: NonEmptyText(detailChars),
+    }),
+  ).check(Schema.isMaxLength(2)),
+  error: Schema.optionalKey(NonEmptyText(detailChars)),
+  /** The saved failure when `error` is a cut preview. */
+  errorFile: Schema.optionalKey(Schema.Struct(ReportFileFields)),
+  report,
+});
 
-const RunTargetSchema = runTargetSchema(ReportSchema, MAX_CONTRACT_PREVIEW_CHARS);
-const WithheldRunTargetSchema = runTargetSchema(WithheldReportSchema, MAX_CONTRACT_PREVIEW_CHARS);
-/** A read's status carries the whole pending question, both retained warnings, and the error. */
-const ReadStatusSchema = runTargetSchema(WithheldReportSchema, MAX_CONTACT_TEXT_CHARS);
+const RunTargetSchema = Schema.Struct(runTargetFields(ReportSchema, MAX_CONTRACT_PREVIEW_CHARS));
+const WithheldRunTargetSchema = Schema.Struct(
+  runTargetFields(WithheldReportSchema, MAX_CONTRACT_PREVIEW_CHARS),
+);
+/**
+ * A read's status, the detail surface, carries the whole pending question, both retained warnings,
+ * and the error, plus the run's capabilities and cleanup evidence.
+ */
+const ReadStatusSchema = Schema.Struct({
+  ...runTargetFields(WithheldReportSchema, MAX_CONTACT_TEXT_CHARS),
+  capabilities: Schema.Array(Schema.Literals(PI_SUBAGENT_CAPABILITIES)).check(
+    Schema.isMaxLength(PI_SUBAGENT_CAPABILITIES.length),
+  ),
+  cleanup: Schema.optionalKey(RunCleanupSchema),
+});
 const RunTargetsSchema = Schema.Array(RunTargetSchema).check(Schema.isMaxLength(MAX_TARGET_RUNS));
 
 const StartContractSchema = Schema.Struct({

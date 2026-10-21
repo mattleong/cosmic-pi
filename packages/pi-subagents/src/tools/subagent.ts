@@ -95,7 +95,7 @@ const ARGUMENT_PREPARERS: SubagentArgumentPreparers = {
 };
 
 const SCRIPTED_SUBAGENT_GUIDELINE =
-  "Native codemode can script read-only delegation with agent_start, agent_await, agent_list, agent_read, agent_profiles, and agent_lifecycle stop, which return version-3 structured results. Print run IDs as soon as you have them, await every call, and keep steps bounded. Don't rerun a failed script or loop on parent attention. Leave questions, retries, writers, and integration to the main agent.";
+  "Native codemode can script read-only delegation with agent_start, agent_await, agent_list, agent_read, agent_profiles, and agent_lifecycle stop, which return structured results. Print run IDs as soon as you have them, await every call, and keep steps bounded. Don't rerun a failed script or loop on parent attention. Leave questions, retries, writers, and integration to the main agent.";
 
 const DELIVERABLE_GUIDELINE =
   "Give each subagent one bounded slice with a concrete deliverable, and choose its profile by that deliverable. Read-only work is not automatically scouting.";

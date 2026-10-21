@@ -211,11 +211,6 @@ describe("cleanup evidence", () => {
     },
   });
 
-  it("leaves diagnostics to agent_read, keeping an await target's disposition and recovery", () => {
-    const [target] = observedTargets([{ run: quarantined }]);
-    expect(target?.cleanup).toEqual({ disposition: "quarantined", recovery: "manual" });
-  });
-
   it("redacts bounded cleanup diagnostics in a read's status", () => {
     const target = readStatusTarget(quarantined);
     expect(target.cleanup?.diagnostic?.code?.length).toBeLessThanOrEqual(80);

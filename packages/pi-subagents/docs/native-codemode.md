@@ -20,13 +20,13 @@ These are orchestration safeguards, not capability confinement: read-only Pi age
 
 ## Results and failures
 
-All six script-callable tools expose `outputSchema` and `structuredContent` with `contract: "pi-subagents/orchestration"`, `version: 3`, and the exact `tool` name, so scripts receive objects rather than presentation text. Use `describeTool()` when the inline listing is too small. Middleware that replaces content may remove structured data, so check the envelope before using a result. Scripts should check `version` and stop rather than guess when it differs.
+All six script-callable tools expose `outputSchema` and `structuredContent` with the exact `tool` name, so scripts receive objects rather than presentation text. Use `describeTool()` when the inline listing is too small. Middleware that replaces content may remove structured data, so check `tool` before using a result, and stop rather than guess when it is missing.
 
 - **Models:** `fallbackProfile`, `profiles`, and any custom `agents` and fail-closed `invalidAgents`, optionally filtered. Each profile has its `id`, description, source, defaults, and declared-order `candidates` with runtime, model, effort, context, write intent, OpenAI fast mode, `status` (`eligible` or `skipped`), and reason. This is static eligibility, not readiness, and doesn't authorize substituting a model.
 - **Start:** `outcome` is `started`, `partial`, or `failed`. Request-ordered `launches` have `index` and `status`; successes add `runId`, the actual `profile`, and `modelOverride` when the item set `model`, and failures add `failure` and, after admitted-failure cleanup settles, optional `admittedRun` cleanup and retry facts.
 - **Await:** `outcome` is `finished`, `attention`, `cancelled`, `timed_out` (after `timeoutSeconds`), or `user_input`, with `requestedRunIds` and `targets`; branch on it. Finished means the assignment settled, not that it succeeded. Scripted attention rejects instead. Only the three ended outcomes carry `unobservedRunIds` and `cleanup`; they keep observed targets with withheld reports and stop only the wait. A late abort during delivery yields `report.status: "unknown"`; recover the report with `agent_read`.
 - **Lifecycle:** `outcome` is `succeeded`, `partial`, or `failed`. Ordered `results` keep `requestedRunId` separate from a retry successor's `target.runId`.
-- **Agent list and read:** `agents` and `missingIds`. List entries cover `main` and every run, parents first, never clipped, with `state`, `parentId`, `depth`, and `self`, and for runs `model`, `writeIntent`, a `worktree` with its `workspaceId` and status (`open`, `proposal`, `applied`, or `discarded`), and `attention` when the run waits on its parent. Read entries carry bounded `text` with `textStatus` and `truncated`, plus for runs `source`, `reportGeneration`, and a `status` target whose report is always withheld: a read's `status.report.status` is only `not_finished` or `unknown`. The read `text` is the latest message, or a finished run's report or error for its last assignment. A completed run gives its report instead: its saved file as `reportFile` (`path`, `chars`, `lines`, `complete`), or, when no file was saved, `text` holding the whole retained report under a note saying so. Either comes without a claim or notification ([last-message reads](completion-delivery.md#last-message-reads)). Targets of a run launched on a model override carry `modelOverride`. Compare `reportGeneration` when an assignment may have changed. Eviction or session replacement can make a run unavailable. Reads never consume reports.
+- **Agent list and read:** `agents` and `missingIds`. List entries cover `main` and every run, parents first, never clipped, with `state`, `parentId`, `depth`, and `self`, and for runs `model`, `writeIntent`, a `worktree` with its `workspaceId` and status (`open`, `proposal`, `applied`, or `discarded`), and `attention` when the run waits on its parent. Read entries carry bounded `text` with `textStatus` and `truncated`, plus for runs `source`, `reportGeneration`, and a `status` target whose report is always withheld: a read's `status.report.status` is only `not_finished` or `unknown`. Only a read's `status` carries the run's `capabilities` and `cleanup` evidence. The read `text` is the latest message, or a finished run's report or error for its last assignment. A completed run gives its report instead: its saved file as `reportFile` (`path`, `chars`, `lines`, `complete`), or, when no file was saved, `text` holding the whole retained report under a note saying so. Either comes without a claim or notification ([last-message reads](completion-delivery.md#last-message-reads)). Targets of a run launched on a model override carry `modelOverride`. Compare `reportGeneration` when an assignment may have changed. Eviction or session replacement can make a run unavailable. Reads never consume reports.
 
 Target `report.status` is `delivered` with the report's file (`path`, `chars`, `lines`, and `complete`, false past the 1 MiB archive cap), or, only when no file was saved, with a `text` preview of at most 240 characters and `truncated`; `agent_read` returns the retained report. Otherwise it is `deferred` (the result didn't deliver it: a cancelled, timed-out, or user-ended wait held it, or a newer generation appeared unclaimed during the wait), `claimed`, `already_delivered`, `missing`, `not_finished`, or `unknown`. A finished await delivers every report it claimed. Read a delivered file with `tools.read`, or hand its path to the next subagent. A deferred report is not consumed. A target's `error`, question `attention.message`, and `warnings` are previews; a longer failure's file is `errorFile`, and a read's `status` carries the whole pending question, both retained warnings, and the whole error. Don't treat an absent report as an empty deliverable, and never treat absent retry facts as permission to retry.
 
@@ -52,7 +52,7 @@ const started = await tools.agent_start({
   ],
 });
 text(started); // Preserve successful IDs even if a later step fails.
-if (started?.contract !== "pi-subagents/orchestration" || started.version !== 3)
+if (started?.tool !== "agent_start")
   throw new Error("Structured orchestration results are unavailable; hand back to the main agent.");
 const ids = started.launches.filter((x) => x.status === "started").map((x) => x.runId);
 store("codemode-demo-ids", ids);
@@ -65,7 +65,7 @@ const ids = load("codemode-demo-ids");
 if (!Array.isArray(ids) || ids.length === 0) return "No launched work to await";
 const result = await tools.agent_await({ runIds: ids, until: "all_finished" });
 text(result); // Await may consume reports; preserve them before any later call can fail.
-if (result?.contract !== "pi-subagents/orchestration" || result.version !== 3) return result;
+if (result?.tool !== "agent_await") return result;
 if (
   result.outcome !== "finished" ||
   result.targets.some(
@@ -81,14 +81,13 @@ let targets = result.targets;
 const missing = targets.filter((t) => !hasReport(t.report)).map((t) => t.runId);
 if (missing.length) {
   const recovered = await tools.agent_read({ agentIds: missing });
-  text(recovered); // Preserve observed reports even if validation or generation matching fails.
-  if (recovered?.contract !== "pi-subagents/orchestration" || recovered.version !== 3)
-    return recovered;
+  text(recovered); // Preserve observed reports even if validation fails.
+  if (recovered?.tool !== "agent_read") return recovered;
   const byId = new Map(recovered.agents.map((a) => [a.id, a]));
   targets = targets.map((t) => {
     const read = byId.get(t.runId);
-    if (read?.reportGeneration !== t.reportGeneration) return t;
-    // A completed run's report file, or its latest message or retained report.
+    if (read?.state !== "completed") return t;
+    // A completed run's report file, or its retained report.
     if (read.reportFile) return { ...t, report: { status: "read_back", ...read.reportFile } };
     return read.textStatus === "text"
       ? { ...t, report: { status: "read_back", text: read.text } }
@@ -109,7 +108,6 @@ if (
 // The follow-up reads the report files itself; only an unsaved report travels as an excerpt.
 const reports = targets.map((t) => ({
   runId: t.runId,
-  generation: t.reportGeneration,
   ...("path" in t.report ? { file: t.report.path } : { excerpt: t.report.text.slice(0, 6000) }),
 }));
 
@@ -126,7 +124,7 @@ const followup = await tools.agent_start({
   ],
 });
 text(followup); // Print the receipt and run ID before anything else can fail.
-if (followup?.contract !== "pi-subagents/orchestration" || followup.version !== 3) return followup;
+if (followup?.tool !== "agent_start") return followup;
 // Hand failed or partial launches back to the main agent; do not retry from the script.
 if (followup.outcome !== "started")
   return { reports, followup, handoff: "Main-agent judgment needed" };
@@ -151,7 +149,7 @@ const started = await tools.agent_start({
   })),
 });
 text(started);
-if (started?.contract !== "pi-subagents/orchestration" || started.version !== 3) return started;
+if (started?.tool !== "agent_start") return started;
 const lanes = new Map(
   started.launches.filter((x) => x.status === "started").map((x) => [x.runId, areas[x.index]]),
 );
@@ -219,8 +217,7 @@ const tests = await tools.background_task({
 });
 text(tests);
 if (
-  started?.contract !== "pi-subagents/orchestration" ||
-  started.version !== 3 ||
+  started?.tool !== "agent_start" ||
   tests?.contract !== "pi-background-task/task" ||
   tests.version !== 1
 )
