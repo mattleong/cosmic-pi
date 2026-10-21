@@ -144,29 +144,6 @@ describe("one-step workspace apply", () => {
     });
   });
 
-  it.effect("unconfirmed hook cleanup quarantines the workspace", () => {
-    const f = hooked();
-    return withService(f.layer, function* (service) {
-      const writer = yield* completedWriter(service, f);
-      const id = writer.workspaceId!;
-      f.hooks.createHookFailure = new WorkspaceError({
-        operation: "hook",
-        message: "Hook cleanup is unconfirmed.",
-        cleanupUnconfirmed: true,
-      });
-      expect(yield* reviewAndPrepare(service, id).pipe(Effect.flip)).toMatchObject({
-        code: "workspace_hook_cleanup_unconfirmed",
-      });
-      expect(yield* service.workspaceApply(id).pipe(Effect.flip)).toMatchObject({
-        code: "workspace_process_unsettled",
-      });
-      expect(yield* service.resume(writer.id).pipe(Effect.flip)).toMatchObject({
-        code: "workspace_process_unsettled",
-      });
-      expect(f.integrations).toEqual([]);
-    });
-  });
-
   it.effect("keeps the workspace busy for resume and revision until apply finishes", () => {
     const f = workspaceFixture();
     return withService(f.layer, function* (service) {

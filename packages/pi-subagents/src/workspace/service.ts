@@ -16,7 +16,6 @@ import type {
   WorkspaceLaunch,
   WorkspaceListing,
   WorkspaceOrphanDiscardTarget,
-  WorkspaceOrphanTarget,
   WorkspacePreparation,
   WorkspacePreparationTarget,
   WorkspaceRebase,
@@ -90,10 +89,9 @@ export interface WorkspaceServiceContract {
     target: WorkspaceSweepTarget,
   ) => Effect.Effect<WorkspaceSwept | undefined, WorkspaceError>;
   /**
-   * Runs WorktreeCreate hooks in order with durable process-cleanup quarantine, including across
-   * owner shutdown. A failure without `cleanupUnconfirmed` leaves no quarantine; a failed or
-   * interrupted run in a prepared tree withdraws that preparation. `hookCleanupPending` reports
-   * the quarantine.
+   * Runs WorktreeCreate hooks in order, stopping at the first failure; a timed-out or interrupted
+   * hook's process group is killed. A failed or interrupted run in a prepared tree withdraws that
+   * preparation.
    */
   readonly runCreateHooks: (
     target: WorkspaceHookTarget & {
@@ -115,13 +113,6 @@ export interface WorkspaceServiceContract {
   readonly revision: (
     target: WorkspaceTarget,
   ) => Effect.Effect<WorkspaceRevision | undefined, WorkspaceError>;
-  /**
-   * Whether the durable hook marker is set: a worktree hook is running in one of the workspace's
-   * trees, or its process cleanup is unconfirmed.
-   */
-  readonly hookCleanupPending: (
-    target: WorkspaceOrphanTarget,
-  ) => Effect.Effect<boolean, WorkspaceError>;
   readonly list: (input: {
     readonly ownerId: string;
   }) => Effect.Effect<ReadonlyArray<WorkspaceRecord>, WorkspaceError>;
@@ -196,7 +187,6 @@ export class WorkspaceService extends Context.Service<WorkspaceService, Workspac
           revision: (input) => run(engine.revision(input)),
           // Lock-free reads: callers check them under the run lock, so they never wait behind
           // engine work, and this process's in-flight creates are tracked by their launches.
-          hookCleanupPending: (input) => provided(engine.hookCleanupPending(input)),
           list: (input) => run(engine.list(input)),
           listRecords: run(engine.listRecords),
           listAll: run(engine.listAll),

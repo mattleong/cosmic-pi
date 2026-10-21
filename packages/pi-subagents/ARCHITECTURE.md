@@ -8,7 +8,7 @@
 - `config/store.ts` is the configuration persistence entrypoint. `profiles/` owns route planning, custom agent resolution, and the revisioned Current Session working set. `domain/` holds pure routing policy.
 - `run/` owns `SubagentService`: authoritative run records under one shared lock, admission and writer pools, process lifecycle, assignment transitions, completion claims, agent messaging, and immutable fleet projections. Factories receive only the capabilities they need from the service's composition root. The root session's main agent is reached through host capabilities in `boundary/host-agent-messages.ts`.
 - `backend/` translates Pi, Claude, and Codex behavior into normalized handles, controls, and events. `boundary/` and `supervisor/` own host integration, processes, files, leases, and authenticated transport. Run orchestration never interprets native wire protocols.
-- `workspace/` owns isolated-writer artifacts, Git operations, and worktree hooks with their process-cleanup quarantine. Run-level bindings keep parent authority and cleanup evidence; workspace operations serialize separately from ordinary run activity.
+- `workspace/` owns isolated-writer artifacts, Git operations, and worktree hooks. Run-level bindings keep parent authority and cleanup evidence; workspace operations serialize separately from ordinary run activity.
 - `delegation/` owns each delegation mode's prompt guidance, applied to the root session through `boundary/host-delegation-prompt.ts`.
 - `tools/` owns public contracts, execution, and compact presentation. `settings/` owns commands and editors. `ui/` and settings rendering consume immutable projections, and Activity actions recheck activation, revision, and capabilities before reaching services.
 

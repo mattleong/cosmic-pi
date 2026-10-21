@@ -251,24 +251,6 @@ export const workspaceBusyError = () =>
     "Another operation on this workspace is still running. Retry once it finishes.",
   );
 
-/**
- * Refuses a workspace whose worktree hook may still own processes, from the engine's durable
- * marker. The read takes no engine lock, so callers may hold the run lock.
- */
-export const requireHooksSettled = (
-  engine: WorkspaceServiceContract | undefined,
-  binding: WorkspaceBinding,
-  message: string,
-): Effect.Effect<void, SubagentError> =>
-  engine
-    ? engine.hookCleanupPending({ workspaceId: binding.handle.workspaceId }).pipe(
-        Effect.mapError(mapWorkspaceError),
-        Effect.flatMap((pending) =>
-          pending ? Effect.fail(invalid("workspace_process_unsettled", message)) : Effect.void,
-        ),
-      )
-    : Effect.void;
-
 export function workspaceControlContext(
   dependencies: WorkspaceControlDependencies,
 ): WorkspaceControlContext {
@@ -332,11 +314,6 @@ export function workspaceControlContext(
           "workspace_process_unsettled",
           "A writer still works in this workspace's tree. Await or stop it first.",
         );
-      yield* requireHooksSettled(
-        engine,
-        binding,
-        "Worktree hook cleanup is unconfirmed. Independently confirm the hook's process and all descendants have stopped, preserve the proposal and recovery record, then recover the private trees manually. Restarting Pi does not clear this quarantine.",
-      );
       return binding;
     });
   const awaitWriterCleanup = (workspaceId: string) =>

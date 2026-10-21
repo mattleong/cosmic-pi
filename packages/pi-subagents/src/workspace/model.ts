@@ -99,11 +99,6 @@ export const WorkspaceRecordSchema = Schema.Struct({
   baseline: Schema.String,
   /** Names the lease the creating session holds while it runs; a free lease proves it ended. */
   ownerLease: Schema.String,
-  /**
-   * A worktree hook may still own processes in this tree. Cleared only after confirmed cleanup;
-   * while set, the artifact is quarantined.
-   */
-  hookCleanupPending: Schema.optional(Schema.String),
   revision: Schema.optional(WorkspaceRevisionMetadataSchema),
   preparation: Schema.optional(WorkspacePreparationSchema),
   preparedTree: Schema.optional(Schema.String),

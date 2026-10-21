@@ -19,7 +19,6 @@ import {
   type LaunchSlot,
   mapWorkspaceError,
   reopenBindingLocked,
-  requireHooksSettled,
   type RevisionHold,
   runHoldsCwd,
   runsWithin,
@@ -153,9 +152,7 @@ const releaseRevisionLocked = ({ binding, revision }: Succession) => {
 
 export function workspaceLaunchOperations(context: WorkspaceControlContext) {
   const { records, withLock, isClosed, state, ownerFor, requireEngine, requireBinding } = context;
-  const { engine } = context;
-  const { worktreeCreate } = context;
-  const { operations, ownerScope } = context;
+  const { worktreeCreate, operations, ownerScope } = context;
   const releaseSlotLocked = (slot: LaunchSlot | undefined) => {
     if (!slot || !state.launchSlots.delete(slot)) return;
     const released = state.slotReleased;
@@ -235,7 +232,6 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
           return binding.record === undefined;
         }),
       );
-      // The engine refuses a workspace whose hook cleanup is unconfirmed, which then stays.
       if (!unadmitted) return;
       const service = yield* requireEngine;
       yield* service
@@ -433,11 +429,6 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
       if (phase === "busy") return yield* workspaceBusyError();
       if (isBindingFinished(binding)) return yield* workspaceFinishedError(binding);
       if (state.integrationQuarantined) return yield* integrationQuarantinedError();
-      yield* requireHooksSettled(
-        engine,
-        binding,
-        "Worktree hook cleanup is unconfirmed; this artifact requires manual recovery.",
-      );
       if (record.process !== undefined) return () => {};
       return () => reopenBindingLocked(binding);
     });

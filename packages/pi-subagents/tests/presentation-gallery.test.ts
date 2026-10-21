@@ -1158,7 +1158,7 @@ const workspaceScenarios = Effect.all([
     },
   ),
   scenario(
-    "worktree hook cleanup unconfirmed",
+    "prepare refused by a timed-out WorktreeCreate hook",
     {
       tool: "agent_worktree",
       args: { action: "prepare", workspaceId: "ws-1", revisionId: "rev-1" },
@@ -1168,9 +1168,9 @@ const workspaceScenarios = Effect.all([
         workspacePrepare: () =>
           Effect.fail(
             new InvalidSubagentRequestError({
-              code: "workspace_hook_cleanup_unconfirmed",
+              code: "workspace_hook_failed",
               message:
-                "Worktree hook cleanup is unconfirmed; the artifact is quarantined.\nIndependently confirm the hook's process and every descendant have stopped. Preserve the proposal and recovery record before manually recovering the private trees; restarting Pi does not clear this quarantine.",
+                "WorktreeCreate hook `pnpm install --offline --frozen-lockfile` timed out after 600s: Progress: resolved 412, reused 398",
             }),
           ),
       },

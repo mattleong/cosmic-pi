@@ -48,18 +48,15 @@ describe("worktree hook", () => {
     }),
   );
 
-  it.effect("reports a hook that couldn't start as stopped, once", () =>
+  it.effect("fails a hook that couldn't start, which left no process behind", () =>
     Effect.gen(function* () {
-      const reports: boolean[] = [];
       const error = yield* Effect.flip(
         runWorktreeHook({ command: ["pi-worktree-hook-missing-command"] }, input(process.cwd()), {
           environment,
-          onCleanup: (confirmed) => reports.push(confirmed),
         }),
       );
       expect(error.message).toContain("couldn't start");
       expect(error.cleanupUnconfirmed).not.toBe(true);
-      expect(reports).toEqual([true]);
     }),
   );
 

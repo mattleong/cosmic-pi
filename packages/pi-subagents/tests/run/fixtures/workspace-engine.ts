@@ -155,32 +155,13 @@ export function workspaceFixture({
   const entries = new Map<string, WorkspaceRecord>();
   const diffs = new Map<string, string>();
   const unavailable: UnavailableWorkspaceArtifact[] = [];
-  // Like the real engine, a quarantined record refuses every operation on it.
   const requireEntry = (target: WorkspaceTarget) =>
     Effect.gen(function* () {
       const entry = entries.get(target.workspaceId);
       if (!entry || entry.handle.ownerId !== target.ownerId)
         return yield* new WorkspaceError({ operation: "inspect", message: "Unknown owner" });
-      if (entry.hookCleanupPending !== undefined)
-        return yield* new WorkspaceError({
-          operation: "hook",
-          message: "Worktree hook cleanup is unconfirmed.",
-          cleanupUnconfirmed: true,
-        });
       return entry;
     });
-  // Like the real engine, a hook's durable marker stays only when its cleanup is unconfirmed;
-  // an interrupted hook is modeled as confirmed stopped.
-  const quarantined = <A>(workspaceId: string, effect: Effect.Effect<A, WorkspaceError>) =>
-    effect.pipe(
-      Effect.tapError((error) =>
-        Effect.sync(() => {
-          const entry = entries.get(workspaceId);
-          if (error.cleanupUnconfirmed && entry)
-            entries.set(workspaceId, { ...entry, hookCleanupPending: entry.handle.cwd });
-        }),
-      ),
-    );
   // Like the real engine, a source inside private workspace storage is refused.
   const checkoutSource = (input: Parameters<WorkspaceServiceContract["create"]>[0]) =>
     input.sourceCwd.startsWith("/private/")
@@ -192,10 +173,7 @@ export function workspaceFixture({
     !finished(entry) &&
     !entry.handle.ownerId.startsWith("session-1/");
   const sweepable = (entry: WorkspaceRecord, minimumAgeMillis: number, now: number) =>
-    orphaned(entry) &&
-    isOpen(entry) &&
-    entry.hookCleanupPending === undefined &&
-    now - entry.lastChangedAt >= minimumAgeMillis;
+    orphaned(entry) && isOpen(entry) && now - entry.lastChangedAt >= minimumAgeMillis;
   let ordinal = 0;
   let revisions = 0;
   let preparations = 0;
@@ -245,17 +223,14 @@ export function workspaceFixture({
     return {
       create,
       runCreateHooks: (input) =>
-        quarantined(
-          input.workspaceId,
-          Effect.sync(() =>
-            hookRuns.push({ tree: input.preparationId ?? "worker", runId: input.runId }),
-          ).pipe(
-            Effect.andThen(
-              gated(
-                "createHooks",
-                Effect.suspend(() =>
-                  hooks.createHookFailure ? Effect.fail(hooks.createHookFailure) : Effect.void,
-                ),
+        Effect.sync(() =>
+          hookRuns.push({ tree: input.preparationId ?? "worker", runId: input.runId }),
+        ).pipe(
+          Effect.andThen(
+            gated(
+              "createHooks",
+              Effect.suspend(() =>
+                hooks.createHookFailure ? Effect.fail(hooks.createHookFailure) : Effect.void,
               ),
             ),
           ),
@@ -279,8 +254,6 @@ export function workspaceFixture({
             return revision && diff !== undefined ? { ...revision, diff } : undefined;
           }),
         ),
-      hookCleanupPending: ({ workspaceId }) =>
-        Effect.sync(() => entries.get(workspaceId)?.hookCleanupPending !== undefined),
       list: ({ ownerId }) =>
         Effect.sync(() =>
           [...entries.values()].filter((entry) => entry.handle.ownerId === ownerId),

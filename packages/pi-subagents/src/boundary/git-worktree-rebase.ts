@@ -283,8 +283,8 @@ export const rebaseWorkspace = (
       ),
       Effect.uninterruptible,
     );
-    // The rebuilt record has no preparation, so an earlier test tree is only clutter now, unless
-    // its WorktreeRemove hooks quarantined the workspace.
+    // The rebuilt record has no preparation, so an earlier test tree is only clutter now; a Git
+    // process whose cleanup is unconfirmed keeps it.
     const kept = record.preparation
       ? yield* removePreparation(registry, record, record.preparation.preparationId, beforeRemove)
       : undefined;

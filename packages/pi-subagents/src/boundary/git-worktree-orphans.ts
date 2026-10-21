@@ -181,7 +181,6 @@ export const orphanWorkspaceOperations = (engine: OrphanEngine) => {
         (record) =>
           !owned.has(record.handle.workspaceId) &&
           OPEN_WORKSPACE_STATUSES.has(record.status) &&
-          record.hookCleanupPending === undefined &&
           oldEnough(record, now, input.minimumAgeMillis),
       );
     });

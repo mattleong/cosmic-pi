@@ -10,7 +10,6 @@ const MAX_LISTED_CHANGES = 5;
 /**
  * Runs the WorktreeCreate hooks at the root of an isolated tree, then requires that they changed
  * only ignored or credential files so dependencies never become part of a proposal or test tree.
- * Unconfirmed cleanup leaves the engine's durable marker, which keeps the workspace quarantined.
  */
 export const runWorktreeCreateHooks = (
   service: WorkspaceServiceContract,
@@ -30,9 +29,7 @@ export const runWorktreeCreateHooks = (
       .pipe(
         Effect.mapError((error) =>
           invalid(
-            error.cleanupUnconfirmed
-              ? "workspace_hook_cleanup_unconfirmed"
-              : "workspace_hook_failed",
+            "workspace_hook_failed",
             error.detail === undefined ? error.message : `${error.message}\n${error.detail}`,
           ),
         ),

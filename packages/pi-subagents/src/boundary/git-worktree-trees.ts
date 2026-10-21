@@ -103,8 +103,7 @@ export const removeWorkspaceTree = (
 /**
  * Best effort: a tree that can't be removed stays for integrate or discard to clean up. A
  * failing `beforeRemove` keeps it too. Returns the failure that kept the tree, or undefined once
- * it is gone; one with `cleanupUnconfirmed` from a WorktreeRemove hook has quarantined the
- * workspace, which callers report.
+ * it is gone.
  */
 export const removePreparation = (
   registry: string,

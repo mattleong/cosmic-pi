@@ -228,8 +228,7 @@ const removeRetainedTrees = (
 ) =>
   Effect.gen(function* () {
     const record = yield* readWorkspaceRecord(registry, workspaceId);
-    // A hook whose cleanup is unconfirmed quarantines the trees until manual recovery.
-    if (!finished(record) || record.hookCleanupPending !== undefined) return false;
+    if (!finished(record)) return false;
     yield* checkDirectory(workspaceDirectory(registry, workspaceId));
     if (!(yield* hasEditableTree(registry, workspaceId))) return false;
     const removed = yield* collection.whenOwnerEnded(

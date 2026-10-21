@@ -1,6 +1,5 @@
 import { afterAll, describe, expect, vi } from "vitest";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import * as os from "node:os";
 import * as hookRunner from "../../src/boundary/worktree-hook.ts";
@@ -72,15 +71,11 @@ const unconfirmedRemoval = () =>
   vi.spyOn(hookRunner, "runWorktreeHook").mockImplementation((hook, input, options) =>
     input.event === "WorktreeCreate"
       ? originalHook(hook, input, options)
-      : Effect.sync(() => options?.onCleanup?.(false)).pipe(
-          Effect.andThen(
-            Effect.fail(
-              new hookRunner.WorktreeHookError({
-                message: "Left processes.",
-                cleanupUnconfirmed: true,
-              }),
-            ),
-          ),
+      : Effect.fail(
+          new hookRunner.WorktreeHookError({
+            message: "Left processes.",
+            cleanupUnconfirmed: true,
+          }),
         ),
   );
 
@@ -158,81 +153,77 @@ describe("WorktreeRemove hooks", () => {
       (entry) => entry.handle.workspaceId === handle.workspaceId,
     );
     expect(record?.status).toBe("discarded");
-    expect(record?.hookCleanupPending).toBeUndefined();
   });
 
-  test("keep the tree and quarantine the workspace when hook cleanup is unconfirmed", function* (service, root) {
+  test("unconfirmed hook cleanup never blocks removal", function* (service, root) {
     const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
     const spy = unconfirmedRemoval();
-    const failure = yield* failureOf(service.discard(workspaceTarget(handle))).pipe(
-      Effect.ensuring(Effect.sync(() => spy.mockRestore())),
-    );
-    expect(failure.cleanupUnconfirmed).toBe(true);
-    expect(yield* exists(handle.cwd)).toBe(true);
-    expect((yield* failureOf(service.inspect(workspaceTarget(handle)))).cleanupUnconfirmed).toBe(
-      true,
-    );
-    expect((yield* service.listAll).records[0]?.hookCleanupPending).toBe(handle.cwd);
+    yield* service
+      .discard(workspaceTarget(handle))
+      .pipe(Effect.ensuring(Effect.sync(() => spy.mockRestore())));
+    expect(yield* exists(handle.cwd)).toBe(false);
+    expect((yield* service.inspect(workspaceTarget(handle))).status).toBe("discarded");
   });
 
-  test("a failed WorktreeCreate hook reports the quarantine of the preparation it withdrew", function* (service, root) {
+  test("a failed WorktreeCreate hook withdraws its preparation, removing the test tree", function* (service, root) {
     const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-    const { prepared } = yield* prepareEdit(service, handle);
-    const spy = unconfirmedRemoval();
+    const { revision, prepared } = yield* prepareEdit(service, handle);
     const failure = yield* failureOf(
       service.runCreateHooks({
         ...workspaceTarget(handle),
         preparationId: prepared.preparationId,
         hooks: [{ command: ["/bin/sh", "-c", "exit 3"] }],
       }),
-    ).pipe(Effect.ensuring(Effect.sync(() => spy.mockRestore())));
-    expect(failure.cleanupUnconfirmed).toBe(true);
-    expect(yield* exists(prepared.cwd)).toBe(true);
-    expect((yield* failureOf(service.inspect(workspaceTarget(handle)))).cleanupUnconfirmed).toBe(
-      true,
     );
-  });
-
-  test("a rebase fails with the quarantine its earlier test tree's hook left", function* (service, root) {
-    const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-    const { prepared } = yield* prepareEdit(service, handle);
-    yield* writeFile(path.join(root, "src/parent.ts"), "parent\n");
-    const spy = unconfirmedRemoval();
-    const failure = yield* failureOf(service.rebase(workspaceTarget(handle))).pipe(
-      Effect.ensuring(Effect.sync(() => spy.mockRestore())),
-    );
-    expect(failure.cleanupUnconfirmed).toBe(true);
-    expect(yield* readText(handle.cwd, "src/parent.ts")).toBe("parent\n");
-    expect(yield* exists(prepared.cwd)).toBe(true);
-    expect((yield* failureOf(service.inspect(workspaceTarget(handle)))).cleanupUnconfirmed).toBe(
-      true,
-    );
+    expect(failure.cleanupUnconfirmed).not.toBe(true);
+    expect((yield* removals(handle.workspaceId)).map((input) => input.kind)).toEqual(["prepare"]);
+    expect(yield* exists(prepared.cwd)).toBe(false);
+    const record = yield* service.inspect(workspaceTarget(handle));
+    expect(record.status).toBe("frozen");
+    expect(record.preparation).toBeUndefined();
+    const integration = {
+      ...workspaceTarget(handle),
+      revisionId: revision.revisionId,
+      processCleanupConfirmed: true as const,
+    };
+    expect(
+      (yield* failureOf(
+        service.integrate({ ...integration, preparationId: prepared.preparationId }),
+      )).operation,
+    ).toBe("integrate");
+    expect(yield* readText(root, "src/main.ts")).toBe("baseline\n");
+    // The reviewed revision can still be prepared again.
+    const again = yield* service.prepare({ ...integration });
+    yield* service.integrate({ ...integration, preparationId: again.preparationId });
+    expect(yield* readText(root, "src/main.ts")).toBe("worker\n");
   });
 });
 
-// The first hook can't start; the second runs until interrupted.
-const interruptible = workspaceTests([["src/main.ts", "baseline\n"]], [], {
+const hungPid = path.join(logs, "hung-remove.pid");
+// The first hook can't start; the second outlives its timeout.
+const hung = workspaceTests([["src/main.ts", "baseline\n"]], [], {
   worktreeRemove: [
     { command: ["pi-worktree-remove-missing-command"] },
-    { command: ["/bin/sh", "-c", "touch hook-started; exec sleep 30"] },
+    { command: ["/bin/sh", "-c", 'echo $$ > "$1"; exec sleep 30', "sh", hungPid], timeout: 1 },
   ],
 });
 
-describe("WorktreeRemove hooks after one couldn't start", () => {
-  interruptible(
-    "clear their marker once an interrupted later hook stops",
-    function* (service, root) {
-      const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-      const discarding = yield* Effect.forkChild(service.discard(workspaceTarget(handle)));
-      const started = path.join(handle.cwd, "hook-started");
-      for (let attempt = 0; attempt < 1_000 && !(yield* exists(started)); attempt++)
-        yield* Effect.sleep("10 millis");
-      expect(yield* exists(started)).toBe(true);
-      yield* Fiber.interrupt(discarding);
-      const record = yield* service.inspect(workspaceTarget(handle));
-      expect(record.status).toBe("active");
-      expect(record.hookCleanupPending).toBeUndefined();
-      expect(yield* exists(handle.cwd)).toBe(true);
-    },
-  );
+const processAlive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+describe("WorktreeRemove hooks that fail or hang", () => {
+  hung("are killed at their timeout, and the tree is removed anyway", function* (service, root) {
+    const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+    yield* service.discard(workspaceTarget(handle));
+    const pid = Number((yield* readText(hungPid)).trim());
+    expect(processAlive(pid)).toBe(false);
+    expect(yield* exists(handle.cwd)).toBe(false);
+    expect((yield* service.inspect(workspaceTarget(handle))).status).toBe("discarded");
+  });
 });

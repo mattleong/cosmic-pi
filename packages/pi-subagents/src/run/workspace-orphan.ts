@@ -42,8 +42,7 @@ export const orphanDisposition = (
 ): OrphanDisposition | undefined => {
   const { workspaceId } = record.handle;
   if (!listing.endedOwners?.includes(workspaceId)) return undefined;
-  if (record.handle.writerCwd === undefined || record.hookCleanupPending !== undefined)
-    return undefined;
+  if (record.handle.writerCwd === undefined) return undefined;
   return OPEN_WORKSPACE_STATUSES.has(record.status) ? "adoptable" : "discard-only";
 };
 

@@ -103,33 +103,19 @@ describe("writer workspace orchestration", () => {
       expect(yield* runViews(service)).toEqual([]);
     });
   });
-  it.effect("retains an unadmitted workspace when hook cleanup is unconfirmed", () => {
+  it.effect("never launches a writer whose WorktreeCreate hook failed", () => {
     const f = fixture({ worktreeCreate: [{ command: ["setup"] }] });
     f.hooks.createHookFailure = new WorkspaceError({
       operation: "hook",
-      message: "Hook descendants may remain.",
-      cleanupUnconfirmed: true,
+      message: "WorktreeCreate hook `setup` timed out after 600s.",
     });
     return withService(f.layer, function* (service) {
       expect(yield* service.start(repoWriter()).pipe(Effect.flip)).toMatchObject({
-        code: "workspace_hook_cleanup_unconfirmed",
+        code: "workspace_hook_failed",
       });
       expect(yield* runViews(service)).toEqual([]);
-      const workspaceId = [...f.entries.keys()][0]!;
-      expect(f.entries.get(workspaceId)?.status).toBe("active");
-      for (const operation of [
-        service.workspaceDiscard(workspaceId),
-        service.workspaceReview(workspaceId),
-        service.workspaceRevise(workspaceId, "Try again"),
-      ])
-        expect(yield* operation.pipe(Effect.flip)).toMatchObject({
-          code: "workspace_process_unsettled",
-        });
-      yield* service.setWriterWorkspaceMode("shared-checkout", Effect.void);
-      expect(yield* service.inspectWriterWorkspace).toEqual({
-        mode: "shared-checkout",
-        unresolvedWorkspaceCount: 1,
-      });
+      expect(f.children.controls).toHaveLength(0);
+      expect([...f.entries.values()].map((entry) => entry.status)).toEqual(["discarded"]);
     });
   });
 
