@@ -67,14 +67,10 @@ export interface CompletionGenerationRecord {
   readonly error?: string | undefined;
   readonly errorArchive?: SubagentReportArchive | undefined;
   readonly warning?: string | undefined;
-  /** The agent whose message resumed the run for this outcome's assignment. */
-  readonly resumedBy?: string | undefined;
 }
 
 interface AssignmentState {
   readonly epoch: number;
-  /** Labels the agent whose message resumed the run for this assignment. */
-  readonly resumedBy?: string | undefined;
   phase: "preparing" | "issuing" | "running" | "reported";
   readonly attemptToken: string;
   startedObserved: boolean;
@@ -126,8 +122,6 @@ export interface RunRecord {
   pauseRequested: boolean;
   pausedAssignmentEpoch?: number | undefined;
   stoppedByParent: boolean;
-  /** Subtree stops covering this run that are still in progress; agent messages can't resume it. */
-  subtreeStopsInProgress: number;
   cleanupPending: boolean;
   runStateReclaimState: "pending" | "running" | "reclaimed";
   evictionClaim?: { readonly parentRunId?: string | undefined } | undefined;

@@ -82,7 +82,6 @@ const processFixture = () =>
           cleanupDisposition: "pending",
           pauseRequested: false,
           stoppedByParent: false,
-          subtreeStopsInProgress: 0,
           cleanupPending: false,
           runStateReclaimState: "pending",
           canonicalWriterCwd: cwd,

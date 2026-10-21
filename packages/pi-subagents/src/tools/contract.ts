@@ -159,7 +159,6 @@ const targetFields = (
   const attention = projectAttention(run, detailChars);
   const error = metadata(run.error, detailChars);
   const errorFile = error === undefined ? undefined : projectReportFile(run.errorArchive);
-  const resumedBy = metadata(run.resumedBy, MAX_CONTRACT_PREVIEW_CHARS);
   return {
     ...(run.writerCleanupQuarantined !== undefined && {
       writerCleanupQuarantined: run.writerCleanupQuarantined,
@@ -174,7 +173,6 @@ const targetFields = (
     ...projectModelOverride(run.modelOverride),
     ...(hasId(run.predecessorRunId) && { predecessorRunId: run.predecessorRunId }),
     ...(hasId(run.supersededByRunId) && { successorRunId: run.supersededByRunId }),
-    ...(resumedBy !== undefined && { resumedBy }),
     parentActionRequired: isParentActionRequiredRun(run),
     ...(attention !== undefined && { attention }),
     ...(recovery?.runId === run.id && { retry: projectRecovery(recovery) }),

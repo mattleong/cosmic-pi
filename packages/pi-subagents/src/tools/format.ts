@@ -291,7 +291,6 @@ const actionFields = (run: SubagentRunView): ReadonlyArray<string | undefined> =
   optionalStatusField("Parent", run.parentRunId),
   optionalStatusField("Predecessor", run.predecessorRunId),
   optionalStatusField("Superseded by", run.supersededByRunId),
-  optionalStatusField("Resumed by", run.resumedBy),
   routeRetryStatus(run),
   run.steeringDelivery
     ? statusField(

@@ -216,7 +216,10 @@ export interface SubagentServiceContract extends WorkspaceCoordinatorContract {
     caller: AgentCaller,
     ids?: ReadonlyArray<string>,
   ) => Effect.Effect<AgentListResult, SubagentError>;
-  /** Delivers one message to another agent in the root tree now, waking or resuming it if idle. */
+  /**
+   * Delivers one message to another agent in the root tree now: it wakes an idle main agent, and
+   * resumes a paused or finished run when the sender is its ancestor or main.
+   */
   readonly agentSend: (
     caller: AgentCaller,
     to: string,

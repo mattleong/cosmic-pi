@@ -139,7 +139,7 @@ A root start item's optional `model: { runtime, model, effort? }` replaces the p
 
 ## Resume admission
 
-`agent_send({ to, message })` to a paused, completed, failed, or stopped run continues its own session with the message as its next assignment, whoever sends it; the Activity manager's resume action does the same for the user. Only local Pi advertises resume.
+`agent_send({ to, message })` from one of a paused, completed, failed, or stopped run's ancestors, including `main`, continues the run's own session with the message as its next assignment; the Activity manager's resume action does the same for the user. Only local Pi advertises resume.
 
 - Paused runs resume in place. Completed, failed, and stopped runs respawn from their session file once cleanup is confirmed (`resume_cleanup_unsettled` otherwise). A run without continuation state fails with `backend_resume_unavailable`; for a failed run the recovery points to retry or a new run.
 - An explicit resume overrides an earlier stop; descendants a stop closed stay stopped. An agent message can't resume a run while a stop of that run or one of its ancestors is still in progress (`agent_unavailable`); once that stop finishes, a message resumes it like any other stopped run. Resume refuses a run whose private state was reclaimed or is being evicted, a run a retry has claimed (`resume_retry_claimed`) or superseded (`resume_superseded`), and a run with a full report-delivery backlog.

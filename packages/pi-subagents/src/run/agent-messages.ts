@@ -356,7 +356,6 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
         const { sender } = claimed;
         const run = yield* dependencies.resume(to, {
           prompt: agentMessageContent(sender, text),
-          resumedBy: sender.label,
           recordNoticeLocked: (record, now) =>
             recordMessageLocked(record, "in", sender.id, text, now),
         });

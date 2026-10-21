@@ -200,8 +200,6 @@ export interface SubagentRunView {
   readonly nativeActivity?: SubagentNativeActivity | undefined;
   readonly predecessorRunId?: string | undefined;
   readonly supersededByRunId?: string | undefined;
-  /** Labels the agent whose message resumed the run for its current or last assignment. */
-  readonly resumedBy?: string | undefined;
   readonly remainingCandidateCount?: number | undefined;
   readonly retryExhausted?: boolean | undefined;
   readonly retryBlocked?: boolean | undefined;

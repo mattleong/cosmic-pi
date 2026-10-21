@@ -108,7 +108,6 @@ describe("subagent report archive", () => {
             originalLines: 1,
           },
           warning,
-          resumedBy: 'agent-r1-2 "planner"',
         },
       ],
     });
@@ -116,7 +115,6 @@ describe("subagent report archive", () => {
     const text = sentText(sendMessage);
     expect(text.length).toBeLessThanOrEqual(MAX_RUN_BLOCK_CHARS + 200);
     expect(text).toContain("Check the migration before merging.");
-    expect(text).toContain("planner");
     expect(text).toContain("r".repeat(100));
     expect(text).not.toContain("r".repeat(1_000));
     expect(text).toContain("agent_read");

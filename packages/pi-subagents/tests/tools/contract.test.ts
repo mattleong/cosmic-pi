@@ -157,14 +157,6 @@ describe("failures", () => {
   });
 });
 
-describe("run targets", () => {
-  it("name the agent whose message resumed the run", () => {
-    const resumedBy = 'agent-r1-3 "api-scout" (scout, child of main)';
-    const [target] = observedTargets([{ run: finished("a", { assignmentEpoch: 2, resumedBy }) }]);
-    expect(target).toMatchObject({ runId: "a", resumedBy });
-  });
-});
-
 describe("await contract", () => {
   it("cancels without exposing or consuming any report and keeps requested IDs", () => {
     const secretReport = "FINAL REPORT BODY";

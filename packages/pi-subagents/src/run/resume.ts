@@ -47,6 +47,7 @@ import { appendNoticeSessionEvent } from "./session-events.ts";
 import { spentAtLimitLocked } from "./session-usage.ts";
 import { runSessionOwned } from "./session-owned.ts";
 import { snapshotView } from "./state.ts";
+import { isStopInProgress } from "./tree.ts";
 import type { RunWorkspaceControl } from "./workspace-control.ts";
 import { requireControlExpectation } from "./control-admission.ts";
 
@@ -103,12 +104,10 @@ const resumeUnavailableError = (record: RunRecord): InvalidSubagentRequestError 
   );
 };
 
-/** An agent message that resumes a run; any agent in the tree may send one. */
+/** An agent message that resumes a run; only its ancestors and main may send one. */
 export interface AgentMessageResume {
   /** The framed message, validated before framing, that becomes the next assignment. */
   readonly prompt: string;
-  /** Labels the sender in the resumed assignment's report notice. */
-  readonly resumedBy: string;
   /** Records the message in the run's session events, in place of the parent's resume notice. */
   readonly recordNoticeLocked: (record: RunRecord, now: number) => void;
 }
@@ -422,7 +421,7 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
             const stateFailure = resumeStateError(selected);
             if (stateFailure) return yield* stateFailure;
             // An explicit stop of a subtree outranks agent messages until it finishes.
-            if (agentMessage && selected.subtreeStopsInProgress > 0)
+            if (agentMessage && isStopInProgress(records, selected))
               return yield* agentMessageRefusal(
                 "agent_unavailable",
                 `Agent ${id} is being stopped with its subtree; send again once the stop finishes.`,
@@ -472,13 +471,10 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
                     ? Deferred.makeUnsafe<void>()
                     : undefined;
                   selected.pendingInitializationSettlement = undefined;
-                  beginNextAssignmentLocked(
-                    selected,
-                    attemptToken,
-                    now,
-                    { question: undefined, currentTool: undefined },
-                    agentMessage?.resumedBy,
-                  );
+                  beginNextAssignmentLocked(selected, attemptToken, now, {
+                    question: undefined,
+                    currentTool: undefined,
+                  });
                   invalidateWorkspace();
                   yield* publish;
                   return { record: selected, needsRespawn, attemptToken };

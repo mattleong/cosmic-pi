@@ -131,7 +131,6 @@ const runTargetFields = <Report extends Schema.Top>(report: Report, detailChars:
   modelOverride: Schema.optionalKey(ModelOverrideCardSchema),
   predecessorRunId: Schema.optionalKey(RunIdSchema),
   successorRunId: Schema.optionalKey(RunIdSchema),
-  resumedBy: Schema.optionalKey(NonEmptyText(MAX_CONTRACT_PREVIEW_CHARS)),
   parentActionRequired: Schema.Boolean,
   writerCleanupQuarantined: Schema.optionalKey(Schema.Boolean),
   attention: Schema.optionalKey(attentionSchema(detailChars)),

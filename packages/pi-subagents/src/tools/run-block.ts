@@ -255,14 +255,13 @@ const retryAction = (run: SubagentRunView): string | undefined => {
   return `Route retry: ${remaining} candidate${remaining === 1 ? " remains" : "s remain"}; agent_lifecycle({ action: "retry", runIds: [${callArgument(run.id)}] }).`;
 };
 
-/** A run's lineage, such as `Lineage: continues agent-1; resumed by …`. */
-export const lineageAction = (
-  links: Pick<SubagentRunView, "predecessorRunId" | "supersededByRunId" | "resumedBy">,
+/** A run's lineage, such as `Lineage: continues agent-1.` */
+const lineageAction = (
+  links: Pick<SubagentRunView, "predecessorRunId" | "supersededByRunId">,
 ): string | undefined => {
   const parts = [
     links.predecessorRunId && `continues ${sanitizeTerminalLine(links.predecessorRunId)}`,
     links.supersededByRunId && `superseded by ${sanitizeTerminalLine(links.supersededByRunId)}`,
-    links.resumedBy && `resumed by an agent message from ${freeText(links.resumedBy, 80)}`,
   ].filter(Boolean);
   return parts.length > 0 ? `Lineage: ${parts.join("; ")}.` : undefined;
 };

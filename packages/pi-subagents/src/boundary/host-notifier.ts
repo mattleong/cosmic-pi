@@ -14,7 +14,7 @@ import type {
   SubagentWorkspaceOutcome,
 } from "../run/model.ts";
 import { indentQuestionLines, proposalGuidance } from "../tools/format.ts";
-import { formatRunBlocks, lineageAction, type RunBlock } from "../tools/run-block.ts";
+import { formatRunBlocks, type RunBlock } from "../tools/run-block.ts";
 import { runStateLabel } from "../ui/run-state.ts";
 
 export interface SubagentCompletionNotification {
@@ -31,8 +31,6 @@ export interface SubagentCompletionNotification {
   /** The failure's file, saved at settlement when the error is longer than its preview. */
   readonly errorArchive?: SubagentReportArchive | undefined;
   readonly warning?: string | undefined;
-  /** The agent whose message resumed this run; the report still comes to its parent. */
-  readonly resumedBy?: string | undefined;
   readonly retryAvailable?: boolean | undefined;
   readonly profile?: string | undefined;
   readonly remainingCandidateCount?: number | undefined;
@@ -119,7 +117,6 @@ export const completionBlock = (run: SubagentCompletionNotification): RunBlock =
     actions: {
       retry: retryAction(run),
       workspace: workspaceAction(run),
-      lineage: lineageAction(run),
       warning: warning && warning !== error ? warning : undefined,
     },
   };

@@ -33,10 +33,7 @@ export const subtreeStopper =
               return target ? [target] : [];
             },
           );
-          for (const target of ordered) {
-            target.stoppedByParent = true;
-            target.subtreeStopsInProgress += 1;
-          }
+          for (const target of ordered) target.stoppedByParent = true;
           return ordered;
         }),
       ),
@@ -47,15 +44,6 @@ export const subtreeStopper =
           );
           if (failures[0]) return yield* failures[0];
           return stopped.at(-1) ?? snapshotView((yield* requireRecord(id)).view);
-        }).pipe(
-          // Once the whole subtree is stopped, an agent message may resume any of its runs again.
-          Effect.ensuring(
-            withLock(
-              Effect.sync(() => {
-                for (const target of ordered) target.subtreeStopsInProgress -= 1;
-              }),
-            ),
-          ),
-        ),
+        }),
     );
   };

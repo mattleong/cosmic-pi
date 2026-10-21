@@ -228,7 +228,6 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
   ) => {
     if (generation === undefined || state === "stopped") return;
     const warning = foldRunWarnings(record.warningSlots);
-    const resumedBy = record.assignment.resumedBy;
     delivery.insertCompletionLocked(record, {
       outcome: state,
       ...(finalText && { finalText, ...report }),
@@ -238,7 +237,6 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
       }),
       generation,
       ...(warning && { warning }),
-      ...(resumedBy !== undefined && { resumedBy }),
     });
   };
 

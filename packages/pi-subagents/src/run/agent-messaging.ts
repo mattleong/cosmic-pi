@@ -213,7 +213,7 @@ const refuse = (code: AgentMessageRefusalCode, message: string): AgentMessageRef
 /**
  * Decides under the run lock how a message reaches a run, from its state and the sender. Any
  * ancestor, including main, answers a waiting run's question, since the question goes to the
- * nearest ancestor that can take it.
+ * nearest ancestor that can take it, and only an ancestor resumes a paused or finished run.
  */
 export const planRunMessage = (
   records: ReadonlyMap<string, RunRecord>,
@@ -221,6 +221,7 @@ export const planRunMessage = (
   senderId: string,
 ): AgentRunMessagePlan => {
   const { id, state } = record.view;
+  const fromAncestor = senderId === MAIN_AGENT_ID || isRunInSubtree(records, senderId, id);
   if (record.evictionClaim || record.runStateReclaimState === "reclaimed")
     return refuse(
       "agent_unavailable",
@@ -228,10 +229,7 @@ export const planRunMessage = (
     );
   switch (state) {
     case "waiting_for_parent":
-      return {
-        kind:
-          senderId === MAIN_AGENT_ID || isRunInSubtree(records, senderId, id) ? "answer" : "guide",
-      };
+      return { kind: fromAncestor ? "answer" : "guide" };
     case "running":
       return { kind: "guide" };
     case "starting":
@@ -245,11 +243,16 @@ export const planRunMessage = (
     case "completed":
     case "failed":
     case "stopped":
-      return hasSubagentCapability(record.view, "resume")
+      if (!hasSubagentCapability(record.view, "resume"))
+        return refuse(
+          "agent_resume_unsupported",
+          `Agent ${id} on local/${record.view.runtime} is ${state} and cannot be resumed.`,
+        );
+      return fromAncestor
         ? { kind: "resume" }
         : refuse(
-            "agent_resume_unsupported",
-            `Agent ${id} on local/${record.view.runtime} is ${state} and cannot be resumed.`,
+            "agent_unavailable",
+            `Agent ${id} is ${state}, and only its ancestors and main can resume it; message its parent ${parentIdOf(record.view)} if the work needs it.`,
           );
   }
   return absurd(state);

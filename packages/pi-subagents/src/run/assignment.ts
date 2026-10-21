@@ -29,7 +29,6 @@ export const beginNextAssignmentLocked = (
   attemptToken: string,
   now: number,
   viewPatch: Partial<SubagentRunView>,
-  resumedBy?: string,
 ): void => {
   record.pausedAssignmentEpoch = undefined;
   recordLatestAssistantText(record, undefined);
@@ -41,13 +40,11 @@ export const beginNextAssignmentLocked = (
     startedObserved: false,
     outcomeUncertain: false,
     pendingRunSettled: false,
-    ...(resumedBy !== undefined && { resumedBy }),
   };
   record.view = {
     ...record.view,
     ...viewPatch,
     assignmentEpoch: record.assignment.epoch,
-    resumedBy,
     state: "starting",
     // Older report payloads remain owned by their completion generations.
     finalText: undefined,

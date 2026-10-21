@@ -295,7 +295,6 @@ describe("SubagentService", () => {
       const record = yield* runRecordFixture({
         view: view({ state: "running" }),
         stoppedByParent: false,
-        subtreeStopsInProgress: 0,
         warningSlots: {},
         assignment: runningAssignment(2),
         lastBackendReport: first,

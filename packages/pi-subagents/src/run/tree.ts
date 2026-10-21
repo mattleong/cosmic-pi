@@ -1,5 +1,5 @@
 import type { RunRecord } from "./internal.ts";
-import { SUBAGENT_ROOT_RUN_ID, type SubagentRunView } from "./model.ts";
+import { isTerminalRunState, SUBAGENT_ROOT_RUN_ID, type SubagentRunView } from "./model.ts";
 import { snapshotView } from "./state.ts";
 
 const parentIdOf = (view: SubagentRunView): string => view.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
@@ -17,6 +17,21 @@ export const isRunInSubtree = (
   let current = records.get(candidateRunId);
   while (current) {
     if (current.view.id === rootRunId) return true;
+    const parentRunId = parentIdOf(current.view);
+    if (parentRunId === SUBAGENT_ROOT_RUN_ID) return false;
+    current = records.get(parentRunId);
+  }
+  return false;
+};
+
+/** Whether an explicit stop of the run or one of its ancestors is still closing it. */
+export const isStopInProgress = (
+  records: ReadonlyMap<string, RunRecord>,
+  record: RunRecord,
+): boolean => {
+  let current: RunRecord | undefined = record;
+  while (current) {
+    if (current.stoppedByParent && !isTerminalRunState(current.view.state)) return true;
     const parentRunId = parentIdOf(current.view);
     if (parentRunId === SUBAGENT_ROOT_RUN_ID) return false;
     current = records.get(parentRunId);

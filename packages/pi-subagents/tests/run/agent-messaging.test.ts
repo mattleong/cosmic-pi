@@ -189,49 +189,55 @@ describe("agent messaging", () => {
     });
   });
 
-  it.effect("resumes a finished Pi run from any sender and names the resumer to its parent", () => {
-    const { fake, projections, notifications, layer } = localServiceFixture({
-      notify: acknowledgeCompletions,
-    });
-    return withService(layer, function* (service) {
-      const worker = yield* service.start(request({ name: "worker" }));
-      const peer = yield* service.start(request({ name: "peer" }));
-      yield* completeLocalRun(service, fake.controls[0]!, worker.id, "First report.");
-      yield* TestClock.adjust("100 millis");
-      yield* yieldUntil(() => notifications.length === 1);
-      expect(notifications[0]).toMatchObject({ runs: [{ id: worker.id }] });
-      expect(notifications[0]?.type === "completed" && notifications[0].runs[0]?.resumedBy).toBe(
-        undefined,
-      );
+  it.effect(
+    "resumes a finished Pi run only for its ancestors, and it reports to its parent",
+    () => {
+      const { fake, projections, notifications, layer } = localServiceFixture({
+        notify: acknowledgeCompletions,
+      });
+      return withService(layer, function* (service) {
+        const worker = yield* service.start(request({ name: "worker" }));
+        const peer = yield* service.start(request({ name: "peer" }));
+        yield* completeLocalRun(service, fake.controls[0]!, worker.id, "First report.");
+        yield* TestClock.adjust("100 millis");
+        yield* yieldUntil(() => notifications.length === 1);
 
-      const resumed = yield* service.agentSend(asRun(peer), worker.id, "Also cover retries.");
-      expect(resumed).toMatchObject({
-        disposition: "resumed",
-        run: { id: worker.id, state: "running", assignmentEpoch: 2 },
-      });
-      // A parent awaiting the run sees who resumed it.
-      expect((yield* runView(service, worker.id)).resumedBy).toEqual(stringContaining(peer.id));
-      const resumedControl = fake.controls[2]!;
-      expect(resumedControl.launch.resumeSessionFile).toBe("/tmp/child-session.jsonl");
-      expect(promptMessages(resumedControl)).toEqual([stringContaining(peer.id)]);
-      expect(messageNotices(latest(projections, worker.id))).toContainEqual({
-        direction: "in",
-        peer: peer.id,
-        text: "Also cover retries.",
-      });
+        // A sibling is outside the worker's ancestry, so it can't give the worker a new assignment.
+        expect(
+          yield* service.agentSend(asRun(peer), worker.id, "Also cover retries.").pipe(Effect.flip),
+        ).toMatchObject({ code: "agent_unavailable", message: stringContaining("ancestors") });
+        expect(yield* runView(service, worker.id)).toMatchObject({
+          state: "completed",
+          assignmentEpoch: 1,
+        });
+        expect(fake.controls).toHaveLength(2);
+        expect(messageNotices(latest(projections, peer.id))).toEqual([]);
 
-      yield* completeLocalRun(service, resumedControl, worker.id, "Second report.");
-      yield* TestClock.adjust("100 millis");
-      yield* yieldUntil(() => notifications.length === 2);
-      const second = notifications[1];
-      expect(second?.type === "completed" && second.runs[0]).toMatchObject({
-        id: worker.id,
-        generation: 2,
-        finalText: "Second report.",
-        resumedBy: stringContaining(peer.id),
+        const resumed = yield* service.agentSend(MAIN, worker.id, "Also cover retries.");
+        expect(resumed).toMatchObject({
+          disposition: "resumed",
+          run: { id: worker.id, state: "running", assignmentEpoch: 2 },
+        });
+        const resumedControl = fake.controls[2]!;
+        expect(resumedControl.launch.resumeSessionFile).toBe("/tmp/child-session.jsonl");
+        expect(promptMessages(resumedControl)).toEqual([stringContaining("Also cover retries.")]);
+        expect(messageNotices(latest(projections, worker.id))).toContainEqual({
+          direction: "in",
+          peer: MAIN_AGENT_ID,
+          text: "Also cover retries.",
+        });
+
+        yield* completeLocalRun(service, resumedControl, worker.id, "Second report.");
+        yield* TestClock.adjust("100 millis");
+        yield* yieldUntil(() => notifications.length === 2);
+        expect(notifications[1]?.type === "completed" && notifications[1].runs[0]).toMatchObject({
+          id: worker.id,
+          generation: 2,
+          finalText: "Second report.",
+        });
       });
-    });
-  });
+    },
+  );
 
   it.effect("refuses finished native runs and runs being removed from the session", () => {
     const { backend, projections, layer } = nativeReportServiceFixture();
@@ -338,20 +344,26 @@ describe("agent messaging", () => {
     },
   );
 
-  it.effect("resumes a finished run from a peer's messages as often as it is sent one", () => {
-    const { fake, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const worker = yield* service.start(request({ name: "worker" }));
-      const peer = yield* service.start(request({ name: "peer" }));
-      yield* completeLocalRun(service, fake.controls[0]!, worker.id);
-      for (let round = 0; round < 5; round += 1) {
-        expect((yield* service.agentSend(asRun(peer), worker.id, "Again.")).disposition).toBe(
-          "resumed",
+  it.effect(
+    "resumes a finished child from its parent's messages as often as it is sent one",
+    () => {
+      const { fake, layer } = localServiceFixture();
+      return withService(layer, function* (service) {
+        const parent = yield* service.start(request({ name: "parent", nestingPolicy: nesting }));
+        const child = yield* service.startSessionOwnedFrom(
+          parent.id,
+          request({ name: "child", nestingPolicy: nesting }),
         );
-        yield* completeLocalRun(service, fake.controls.at(-1)!, worker.id);
-      }
-    });
-  });
+        yield* completeLocalRun(service, fake.controls[1]!, child.id);
+        for (let round = 0; round < 5; round += 1) {
+          expect((yield* service.agentSend(asRun(parent), child.id, "Again.")).disposition).toBe(
+            "resumed",
+          );
+          yield* completeLocalRun(service, fake.controls.at(-1)!, child.id);
+        }
+      });
+    },
+  );
 
   it.effect("refuses resumes by agent messages once the session reached its spend limit", () => {
     const fake = fakeChildLayer();
@@ -362,7 +374,6 @@ describe("agent messaging", () => {
     );
     return withService(layer, function* (service) {
       const worker = yield* service.start(request({ name: "worker" }));
-      const peer = yield* service.start(request({ name: "peer" }));
       fake.controls[0]!.offer({
         type: "message_end",
         message: {
@@ -377,13 +388,13 @@ describe("agent messaging", () => {
       yield* completeLocalRun(service, fake.controls[0]!, worker.id);
 
       expect(
-        yield* service.agentSend(asRun(peer), worker.id, "One more pass.").pipe(Effect.flip),
+        yield* service.agentSend(MAIN, worker.id, "One more pass.").pipe(Effect.flip),
       ).toMatchObject({ code: "agent_spend_limit" });
       expect(yield* runView(service, worker.id)).toMatchObject({
         state: "completed",
         assignmentEpoch: 1,
       });
-      expect(fake.controls).toHaveLength(2);
+      expect(fake.controls).toHaveLength(1);
     });
   });
 

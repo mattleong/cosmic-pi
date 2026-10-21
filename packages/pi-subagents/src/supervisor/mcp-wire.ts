@@ -178,7 +178,7 @@ export const toolDefinitions = [
   {
     name: AGENT_TOOL_NAME.send,
     description:
-      "Main agent only: send one bounded message now to any other agent in this session. A running agent receives it as guidance, an idle main agent is woken, and a paused or finished Pi run is resumed. Do not resend after an unconfirmed or uncertain result.",
+      "Main agent only: send one bounded message now to any other agent in this session. A running agent receives it as guidance and an idle main agent is woken; only a run's ancestors can resume it once it has paused or finished. Do not resend after an unconfirmed or uncertain result.",
     inputSchema: {
       type: "object",
       properties: {
