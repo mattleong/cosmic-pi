@@ -10,7 +10,6 @@ import { PROFILE_IDS, type ProfileId } from "../profiles/model.ts";
 import {
   isTerminalRunState,
   isParentActionRequiredRun,
-  type FailedStartRecovery,
   type SubagentRunView,
 } from "../run/model.ts";
 import type { SubagentAwaitUntil, SubagentRunObservation } from "../run/service.ts";
@@ -27,7 +26,6 @@ import {
   type ContractLifecycleAction,
   type ContractLifecycleResult,
   type ContractReadStatus,
-  type ContractRecovery,
   type ContractReport,
   type ContractRunTarget,
   type ContractStartLaunch,
@@ -39,7 +37,6 @@ import {
   type SubagentStartContract,
 } from "./contract-schema.ts";
 import {
-  nonNegativeInteger,
   projectModelOverride,
   projectReportFile,
   projectRunCleanup,
@@ -67,14 +64,6 @@ const knownProfile = (profile: string | undefined): ProfileId | undefined =>
 
 const knownAgent = (agent: string | undefined): { readonly agent?: string } =>
   agent !== undefined && isCustomAgentName(agent) ? { agent } : {};
-
-const hasId = (id: string | undefined): id is string => id !== undefined && id.length > 0;
-
-const projectRecovery = (recovery: FailedStartRecovery): ContractRecovery => ({
-  cleanup: recovery.cleanupDisposition,
-  disposition: recovery.retryDisposition,
-  remainingCandidateCount: nonNegativeInteger(recovery.remainingCandidateCount),
-});
 
 const projectFailure = (
   failure: Pick<SubagentActionFailure, "code" | "message">,
@@ -152,7 +141,6 @@ const observedReport = ({ run, completionReceipt }: SubagentRunObservation): Con
 /** `detailChars` bounds the question, warnings, and error: previews, or a read's whole text. */
 const targetFields = (
   run: SubagentRunView,
-  recovery?: FailedStartRecovery,
   detailChars = MAX_CONTRACT_PREVIEW_CHARS,
 ): Omit<ContractRunTarget, "report"> => {
   const profile = knownProfile(run.profile);
@@ -171,11 +159,8 @@ const targetFields = (
     finished: isTerminalRunState(run.state),
     writeIntent: run.writeIntent,
     ...projectModelOverride(run.modelOverride),
-    ...(hasId(run.predecessorRunId) && { predecessorRunId: run.predecessorRunId }),
-    ...(hasId(run.supersededByRunId) && { successorRunId: run.supersededByRunId }),
     parentActionRequired: isParentActionRequiredRun(run),
     ...(attention !== undefined && { attention }),
-    ...(recovery?.runId === run.id && { retry: projectRecovery(recovery) }),
     warnings: projectWarnings(run, detailChars),
     ...(error !== undefined && { error }),
     ...(errorFile !== undefined && { errorFile }),
@@ -194,7 +179,7 @@ const withheldTarget = (run: SubagentRunView): ContractWithheldRunTarget => ({
 export const readStatusTarget = (run: SubagentRunView): ContractReadStatus => {
   const cleanup = projectRunCleanup(run.cleanup);
   return {
-    ...targetFields(run, undefined, MAX_CONTACT_TEXT_CHARS),
+    ...targetFields(run, MAX_CONTACT_TEXT_CHARS),
     report: withheldReport(run),
     capabilities: [...new Set(run.capabilities)],
     ...(cleanup !== undefined && { cleanup }),
@@ -202,7 +187,7 @@ export const readStatusTarget = (run: SubagentRunView): ContractReadStatus => {
 };
 
 const observedTarget = (observation: SubagentRunObservation): ContractRunTarget => ({
-  ...targetFields(observation.run, observation.recovery),
+  ...targetFields(observation.run),
   report: observedReport(observation),
 });
 
@@ -248,7 +233,7 @@ const failedLaunch = (
     ...knownAgent(outcome?.resolvedRoute?.agent ?? spec.agent),
     failure: projectFailure(failure),
     ...(admitted !== undefined && {
-      admittedRun: { runId: admitted.runId, ...projectRecovery(admitted) },
+      admittedRun: { runId: admitted.runId, cleanup: admitted.cleanupDisposition },
     }),
   };
 };

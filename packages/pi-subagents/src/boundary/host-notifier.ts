@@ -9,12 +9,13 @@ import {
 } from "pi-cosmic-core";
 import { MAX_NOTIFICATION_CHARS } from "../run/limits.ts";
 import type {
+  SubagentNextCandidate,
   SubagentReportArchive,
   SubagentReportTruncation,
   SubagentWorkspaceOutcome,
 } from "../run/model.ts";
 import { indentQuestionLines, proposalGuidance } from "../tools/format.ts";
-import { formatRunBlocks, type RunBlock } from "../tools/run-block.ts";
+import { formatRunBlocks, nextCandidateAction, type RunBlock } from "../tools/run-block.ts";
 import { runStateLabel } from "../ui/run-state.ts";
 
 export interface SubagentCompletionNotification {
@@ -31,9 +32,9 @@ export interface SubagentCompletionNotification {
   /** The failure's file, saved at settlement when the error is longer than its preview. */
   readonly errorArchive?: SubagentReportArchive | undefined;
   readonly warning?: string | undefined;
-  readonly retryAvailable?: boolean | undefined;
   readonly profile?: string | undefined;
-  readonly remainingCandidateCount?: number | undefined;
+  /** A failure's next frozen route candidate. */
+  readonly nextCandidate?: SubagentNextCandidate | undefined;
   /** A worktree writer's workspace; its outcome is known once the writer's cleanup settled. */
   readonly workspaceId?: string | undefined;
   readonly workspaceOutcome?: SubagentWorkspaceOutcome | undefined;
@@ -69,12 +70,6 @@ const sanitizeNotificationContent = (
 
 const clip = (value: string, maximumLength = MAX_NOTIFICATION_CHARS): string =>
   clipText(sanitizeNotificationContent(value, maximumLength + 2), maximumLength);
-
-const retryAction = (run: SubagentCompletionNotification): string | undefined => {
-  if (!run.retryAvailable) return undefined;
-  const remaining = run.remainingCandidateCount ?? 1;
-  return `Route retry: agent_lifecycle({ action: "retry", runIds: [${JSON.stringify(run.id)}] }) continues this task (${remaining} candidate${remaining === 1 ? "" : "s"} left); prefer it to a replacement.`;
-};
 
 const workspaceAction = (run: SubagentCompletionNotification): string | undefined => {
   const { workspaceId, workspaceOutcome } = run;
@@ -115,7 +110,7 @@ export const completionBlock = (run: SubagentCompletionNotification): RunBlock =
             truncation: run.finalTextTruncation,
           },
     actions: {
-      retry: retryAction(run),
+      candidate: nextCandidateAction(run.nextCandidate),
       workspace: workspaceAction(run),
       warning: warning && warning !== error ? warning : undefined,
     },

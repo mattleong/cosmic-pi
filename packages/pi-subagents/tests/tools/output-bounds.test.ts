@@ -23,7 +23,12 @@ import {
 } from "../../src/run/limits.ts";
 import { InvalidSubagentRequestError } from "../../src/run/errors.ts";
 import { runReadout } from "../../src/run/agent-messaging.ts";
-import type { SubagentReportArchive, SubagentRunView } from "../../src/run/model.ts";
+import { MAX_PROFILE_MODEL_SELECTOR_CHARS } from "../../src/profiles/model.ts";
+import type {
+  SubagentNextCandidate,
+  SubagentReportArchive,
+  SubagentRunView,
+} from "../../src/run/model.ts";
 import type { SubagentRunObservation } from "../../src/run/service.ts";
 import { MAX_ERROR_CHARS, MAX_FINAL_TEXT_CHARS, MAX_NAME_CHARS } from "../../src/run/state.ts";
 import { agentReadText } from "../../src/supervisor/agent-text.ts";
@@ -113,6 +118,12 @@ const archive = (path: string): SubagentReportArchive => ({
   complete: false,
 });
 
+const worstCandidate: SubagentNextCandidate = {
+  runtime: "pi",
+  model: "m".repeat(MAX_PROFILE_MODEL_SELECTOR_CHARS),
+  effort: "xhigh",
+};
+
 const worstRun = (index: number): SubagentRunView => {
   const id = `agent-r1-${index}`;
   const common = {
@@ -121,8 +132,8 @@ const worstRun = (index: number): SubagentRunView => {
     profile: "reviewer" as const,
     agent: "a".repeat(64),
     warning: longText(`WARNING-${index}`, MAX_CONTACT_TEXT_CHARS),
-    predecessorRunId: `agent-r1-${index + 100}`,
-    supersededByRunId: `agent-r1-${index + 200}`,
+    parentRunId: "root",
+    nextCandidate: worstCandidate,
     steeringDelivery: "unresolved" as const,
     writeIntent: "writer" as const,
     writerWorkspaceMode: "worktree" as const,
@@ -173,7 +184,6 @@ const worstRun = (index: number): SubagentRunView => {
       return view({
         ...common,
         state: "failed",
-        remainingCandidateCount: 99,
         error: longText(`FAILURE-${index}`, MAX_ERROR_CHARS),
         ...(index % 8 === 2 && { errorArchive: archive(maxPath(index, "failure")) }),
       });
@@ -302,9 +312,8 @@ describe("worst-case model-facing output", () => {
           error: run.error,
           errorArchive: run.errorArchive,
           warning: run.warning,
-          retryAvailable: run.state === "failed",
           profile: run.profile,
-          remainingCandidateCount: 99,
+          nextCandidate: run.state === "failed" ? worstCandidate : undefined,
           workspaceId: run.workspaceId,
           workspaceOutcome: run.workspaceOutcome,
         };
@@ -340,9 +349,7 @@ describe("worst-case model-facing output", () => {
         admittedRun: {
           runId: `agent-r1-${index}`,
           cleanupDisposition: "quarantined",
-          retryDisposition: "eligible",
-          remainingCandidateCount: 99,
-          hasRemainingCandidate: true,
+          nextCandidate: worstCandidate,
         },
       }),
     );
@@ -451,7 +458,7 @@ const worstReadRun = (
       return view({
         ...common,
         state: "failed",
-        remainingCandidateCount: 99,
+        nextCandidate: worstCandidate,
         error: withTail("FAILURE", MAX_ERROR_CHARS),
       });
   }

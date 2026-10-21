@@ -273,11 +273,7 @@ function isSingleRequestedRun(
   requested: readonly string[] | undefined,
 ): boolean {
   if (details.action === "await" || details.runCount !== 1) return false;
-  return (
-    requested?.length === 1 &&
-    cards.length === 1 &&
-    (cards[0]?.id === requested[0] || details.action === "retry")
-  );
+  return requested?.length === 1 && cards.length === 1 && cards[0]?.id === requested[0];
 }
 
 function labelChangesToReview(summary: CompactSummary, cards: readonly SubagentRunCard[]): void {

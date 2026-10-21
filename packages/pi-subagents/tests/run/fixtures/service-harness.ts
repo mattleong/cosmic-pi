@@ -911,13 +911,7 @@ export const request = (overrides: Partial<StartSubagentRequest> = {}): StartSub
 export const nativeReportRequest = (overrides: Partial<StartSubagentRequest> = {}) =>
   request({ runtime: "claude", model: "claude-native", effortWasExplicit: false, ...overrides });
 
-export const reviewerContinuation = (
-  selectedCandidateIndex: number,
-  skippedCandidates: ProfileRouteContinuation["skippedCandidates"] = [],
-): ProfileRouteContinuation => ({
-  profile: "reviewer",
-  routeSource: "global",
+export const reviewerContinuation = (selectedCandidateIndex: number): ProfileRouteContinuation => ({
   candidates: [profileCandidate("openai-codex/gpt-5.6-sol"), profileCandidate("parent")],
   selectedCandidateIndex,
-  skippedCandidates,
 });

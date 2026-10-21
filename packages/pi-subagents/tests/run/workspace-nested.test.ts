@@ -14,7 +14,6 @@ import {
   nativeReportRequest,
   profileLayerFor,
   request,
-  reviewerContinuation,
   runView,
   runViews,
   withService,
@@ -271,37 +270,25 @@ describe("nested worktree writers", () => {
     });
   });
 
-  it.effect("the parent revises its child in place and retries from its own tree", () => {
+  it.effect("the parent revises its failed child in place", () => {
     const f = fixture();
     return withService(f.layer, function* (service) {
       const parent = yield* service.start(repoWriter());
-      const failed = yield* service.startSessionOwnedFrom(
-        parent.id,
-        repoWriter({ profile: "reviewer", routeContinuation: reviewerContinuation(0) }),
-      );
+      const failed = yield* service.startSessionOwnedFrom(parent.id, repoWriter());
       const control = f.children.controls.at(-1)!;
       control.exit(1);
       yield* yieldUntil(() => control.released() === 1);
-      const claim = yield* service.claimRetryContinuation(failed.id);
-      const retried = yield* service.startRetrySessionOwned({
-        ...repoWriter({ profile: "reviewer", routeContinuation: reviewerContinuation(1) }),
-        cwd: parent.cwd,
-        parentRunId: parent.id,
-        supersedes: { runId: failed.id, claimToken: claim.claimToken },
-      });
-      expect(retried.workspaceId).not.toBe(failed.workspaceId);
-      expect(f.entries.get(retried.workspaceId!)?.handle).toMatchObject({
+      expect(f.entries.get(failed.workspaceId!)?.handle).toMatchObject({
         ownerId: `session-1/${parent.id}`,
         sourceWorkspaceId: parent.workspaceId,
       });
-      yield* service.stop(retried.id);
       const { run: successor } = yield* service.workspaceRevise(
-        retried.workspaceId!,
+        failed.workspaceId!,
         "Also cover the edge case.",
         parent.id,
       );
       expect(successor).toMatchObject({
-        workspaceId: retried.workspaceId,
+        workspaceId: failed.workspaceId,
         parentRunId: parent.id,
         writerWorkspaceMode: "worktree",
       });

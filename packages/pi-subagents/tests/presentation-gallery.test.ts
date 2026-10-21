@@ -48,7 +48,7 @@ import {
   STOPPED_RUNS_MESSAGE_TYPE,
   stoppedRunsContent,
 } from "../src/boundary/host-stopped-runs.ts";
-import type { ProfileCandidate, ProfileRouteContinuation } from "../src/profiles/model.ts";
+import type { ProfileCandidate } from "../src/profiles/model.ts";
 import {
   SubagentProfileService,
   type SubagentProfileServiceContract,
@@ -180,7 +180,8 @@ const migrationReview = view({
   profile: "reviewer",
   state: "failed",
   error: "Error: 429 Too Many Requests: rate limit exceeded\n    at Client.request",
-  remainingCandidateCount: 1,
+  parentRunId: "root",
+  nextCandidate: { runtime: "claude", model: "claude-opus-4-7", effort: "high" },
   selection: {
     source: "profile-candidate",
     reason: "Profile model selection.",
@@ -568,16 +569,6 @@ const modelScenarios = Effect.all([
   ),
 ]);
 
-const retryRoute: ProfileRouteContinuation = {
-  profile: "reviewer",
-  routeSource: "global",
-  candidates: [candidate({ model: "anthropic/claude-opus-4-7" }), candidate()].map((entry) =>
-    Object.assign({}, entry, { openaiFastMode: false }),
-  ),
-  selectedCandidateIndex: 0,
-  skippedCandidates: [],
-};
-
 const agentScenario = (title: string, input: AgentToolInput, service: SubagentServiceDoubleInput) =>
   executeAgentActionEffect(input, { kind: "main" }, false, runtime.environment.cwd).pipe(
     Effect.map((result) => ({ result, isError: false })),
@@ -792,7 +783,7 @@ const agentScenarios = Effect.all([
     read([runReadout(schemaCheck)]),
   ),
   agentScenario(
-    "failed worker with a retry option",
+    "failed worker with a next candidate",
     { tool: "agent_read", args: { agentIds: ["agent-5"] } },
     read([runReadout(migrationReview, migrationReview.error)]),
   ),
@@ -850,44 +841,6 @@ const agentMessageScenarios: ReadonlyArray<GalleryMessageScenario> = [
 ];
 
 const lifecycleScenarios = Effect.all([
-  scenario(
-    "retry on the next profile option",
-    { tool: "agent_lifecycle", args: { action: "retry", runIds: ["agent-5"] } },
-    {
-      service: {
-        claimRetryContinuation: (id) =>
-          lookup(id).pipe(
-            Effect.map((source) => ({ source, continuation: retryRoute, claimToken: "claim-1" })),
-          ),
-        releaseRetryClaim: () => Effect.void,
-        startRetrySessionOwned: (request, onOwned) =>
-          Effect.sync(() => {
-            onOwned?.();
-            return {
-              ...launched(request, "agent-7"),
-              name: "migration-review",
-              predecessorRunId: request.supersedes?.runId,
-            };
-          }),
-      },
-    },
-  ),
-  scenario(
-    "retry with no options left",
-    { tool: "agent_lifecycle", args: { action: "retry", runIds: ["agent-5"] } },
-    {
-      service: {
-        claimRetryContinuation: () =>
-          Effect.fail(
-            new InvalidSubagentRequestError({
-              code: "retry_route_exhausted",
-              message:
-                "Profile reviewer has no configured candidate after candidate 2. Only now may the parent choose a generalist replacement.",
-            }),
-          ),
-      },
-    },
-  ),
   scenario(
     "stop two workers",
     { tool: "agent_lifecycle", args: { action: "stop", runIds: ["agent-1", "agent-4"] } },
@@ -1531,9 +1484,7 @@ const receiptScenarios: ReadonlyArray<ToolScenario> = [
             admittedRun: {
               runId: "agent-1",
               cleanupDisposition: "confirmed",
-              retryDisposition: "eligible",
-              remainingCandidateCount: 1,
-              hasRemainingCandidate: true,
+              nextCandidate: { runtime: "pi", model: "anthropic/claude-opus-4-7", effort: "high" },
             },
           },
         ],
@@ -1628,9 +1579,9 @@ const completedReports = notified("one worker reports", {
 });
 const messageScenarios: ReadonlyArray<GalleryMessageScenario> = [
   ...completedReports,
-  ...notified("one worker fails with a retry option", {
+  ...notified("one worker fails with a next candidate", {
     type: "completed",
-    runs: [completion(migrationReview, { retryAvailable: true, remainingCandidateCount: 1 })],
+    runs: [completion(migrationReview, { nextCandidate: migrationReview.nextCandidate })],
   }),
   ...notified("native worker reports", {
     type: "completed",

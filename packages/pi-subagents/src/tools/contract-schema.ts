@@ -21,7 +21,6 @@ import {
 } from "../run/limits.ts";
 import {
   FAILED_START_CLEANUP_DISPOSITIONS,
-  FAILED_START_RETRY_DISPOSITIONS,
   PI_SUBAGENT_CAPABILITIES,
   SUBAGENT_RUN_STATES,
 } from "../run/model.ts";
@@ -107,12 +106,6 @@ const attentionSchema = (questionChars: number) =>
 /** A question's preview; its notice delivers the whole question. */
 const AttentionSchema = attentionSchema(MAX_CONTRACT_PREVIEW_CHARS);
 
-const RecoveryFields = {
-  cleanup: Schema.Literals(FAILED_START_CLEANUP_DISPOSITIONS),
-  disposition: Schema.Literals(FAILED_START_RETRY_DISPOSITIONS),
-  remainingCandidateCount: count,
-};
-
 const FailureSchema = Schema.Struct({
   disposition: Schema.Literals(FAILURE_DISPOSITIONS),
   code: Schema.optionalKey(NonEmptyText(MAX_FAILURE_CODE_CHARS)),
@@ -129,12 +122,9 @@ const runTargetFields = <Report extends Schema.Top>(report: Report, detailChars:
   finished: Schema.Boolean,
   writeIntent: WriteIntentSchema,
   modelOverride: Schema.optionalKey(ModelOverrideCardSchema),
-  predecessorRunId: Schema.optionalKey(RunIdSchema),
-  successorRunId: Schema.optionalKey(RunIdSchema),
   parentActionRequired: Schema.Boolean,
   writerCleanupQuarantined: Schema.optionalKey(Schema.Boolean),
   attention: Schema.optionalKey(attentionSchema(detailChars)),
-  retry: Schema.optionalKey(Schema.Struct(RecoveryFields)),
   warnings: Schema.Array(
     Schema.Struct({
       source: Schema.optionalKey(Schema.Literals(["child", "system"])),
@@ -187,7 +177,12 @@ const StartContractSchema = Schema.Struct({
         profile: Schema.optionalKey(ProfileSchema),
         agent: Schema.optionalKey(AgentNameSchema),
         failure: FailureSchema,
-        admittedRun: Schema.optionalKey(Schema.Struct({ runId: RunIdSchema, ...RecoveryFields })),
+        admittedRun: Schema.optionalKey(
+          Schema.Struct({
+            runId: RunIdSchema,
+            cleanup: Schema.Literals(FAILED_START_CLEANUP_DISPOSITIONS),
+          }),
+        ),
       }),
     ]),
   ).check(Schema.isMaxLength(MAX_START_BATCH)),
@@ -329,7 +324,6 @@ export type ContractReport = typeof ReportSchema.Type;
 export type ContractWithheldReport = typeof WithheldReportSchema.Type;
 export type ContractAttention = typeof AttentionSchema.Type;
 export type ContractFailure = typeof FailureSchema.Type;
-export type ContractRecovery = Schema.Struct<typeof RecoveryFields>["Type"];
 export type ContractStartLaunch = SubagentStartContract["launches"][number];
 export type ContractLifecycleResult = SubagentLifecycleContract["results"][number];
 export type ContractLifecycleAction = SubagentLifecycleContract["action"];

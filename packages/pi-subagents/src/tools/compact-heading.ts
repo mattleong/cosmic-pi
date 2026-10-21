@@ -65,11 +65,6 @@ export function argumentSummary(
   return summary;
 }
 
-const retrySuccessor = (
-  details: SubagentStartDetails | SubagentAwaitDetails | CompactSubagentToolDetails,
-): SubagentRunCard | undefined =>
-  details.action === "retry" && details.cards.length === 1 ? details.cards[0] : undefined;
-
 const displayName = (card: SubagentRunCard | undefined, ids: readonly string[]): string =>
   card && card.name !== card.id && !ids.includes(card.name) ? card.name : "";
 
@@ -83,7 +78,7 @@ export function projectedSubject(
   const requested = targets ?? requestedRunIds(input);
   if (requested?.length === 1 && "cards" in details)
     return displayName(
-      details.cards.find((entry) => entry.id === requested[0]) ?? retrySuccessor(details),
+      details.cards.find((entry) => entry.id === requested[0]),
       requested,
     );
   return subject;

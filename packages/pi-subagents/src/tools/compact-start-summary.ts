@@ -9,13 +9,15 @@ import { failureMessage } from "pi-cosmic-core";
 type AdmittedRun = NonNullable<
   NonNullable<SubagentStartDetails["startFailures"]>[number]["admittedRun"]
 >;
-const retryMessages = {
-  eligible: "the launch can be retried",
-  pending: "the launch can be retried",
-  blocked: "automatic retry is blocked",
-  exhausted: "no profile options remain to retry",
-  unavailable: "no route is left to retry",
-} satisfies Record<AdmittedRun["retryDisposition"], string>;
+
+const admittedRunMessage = ({ cleanupDisposition, nextCandidate }: AdmittedRun): string =>
+  cleanupDisposition === "quarantined"
+    ? "cleanup is quarantined"
+    : nextCandidate === undefined
+      ? "it was admitted before failing"
+      : nextCandidate === "none"
+        ? "its route has no other model"
+        : "its route has another model to try";
 
 const launchFailureIssue = (
   failure: SubagentCardFailure,
@@ -67,8 +69,8 @@ export function summarizeStart(
     const quarantined = recovery.cleanupDisposition === "quarantined";
     issues.push({
       severity: quarantined ? "warning" : "info",
-      code: `run:${recovery.runId}:retry-receipt`,
-      message: `${label}: ${quarantined ? "cleanup is quarantined" : retryMessages[recovery.retryDisposition]}`,
+      code: `run:${recovery.runId}:admitted-run`,
+      message: `${label}: ${admittedRunMessage(recovery)}`,
       detail: [formatFailedStartRecovery(recovery), failedStartRecoveryAction(recovery)].join("\n"),
     });
   }

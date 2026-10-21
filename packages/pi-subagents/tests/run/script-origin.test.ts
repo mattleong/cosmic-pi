@@ -1,29 +1,14 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { yieldUntil } from "pi-cosmic-core/testing";
-import type { ProfileRouteContinuation } from "../../src/profiles/model.ts";
 import { getFailedStartRecovery } from "../../src/run/launch.ts";
-import { profileCandidate } from "../fixtures/profiles.ts";
 import {
   fakeWriterLeaseLayer,
   leaseCounts,
   localServiceFixture,
   request,
-  runView,
   runViews,
   withService,
 } from "./fixtures/service-harness.ts";
-
-const route = (index: number, intent: "read-only" | "writer"): ProfileRouteContinuation => ({
-  profile: "reviewer",
-  routeSource: "global",
-  candidates: [
-    profileCandidate("openai-codex/gpt-5.6-sol"),
-    profileCandidate("parent", { writeIntent: intent }),
-  ],
-  selectedCandidateIndex: index,
-  skippedCandidates: [],
-});
 
 describe("immutable script-origin subtree policy", () => {
   it.effect("inherits through authenticated readers and ignores spoofed parent ancestry", () => {
@@ -86,52 +71,4 @@ describe("immutable script-origin subtree policy", () => {
       });
     });
   });
-
-  for (const scripted of [true, false])
-    it.effect(
-      `${scripted ? "refuses script-origin" : "preserves model-origin"} writer retry successors`,
-      () => {
-        const counts = leaseCounts();
-        const f = localServiceFixture({}, undefined, undefined, fakeWriterLeaseLayer({ counts }));
-        return withService(f.layer, function* (service) {
-          const initial = request({ profile: "reviewer", routeContinuation: route(0, "writer") });
-          const failed = yield* scripted
-            ? service.startScriptSessionOwned(initial)
-            : service.startSessionOwned(initial);
-          f.fake.controls[0]!.exit(1);
-          yield* yieldUntil(() => f.fake.controls[0]?.released() === 1);
-          const claim = yield* service.claimRetryContinuation(failed.id);
-          const retry = service.startRetrySessionOwned({
-            ...request({
-              profile: "reviewer",
-              writeIntent: "writer",
-              parentRunId: failed.parentRunId,
-              routeContinuation: route(1, "writer"),
-            }),
-            supersedes: { runId: failed.id, claimToken: claim.claimToken },
-          });
-          if (!scripted) {
-            const successor = yield* retry;
-            expect(successor).toMatchObject({
-              predecessorRunId: failed.id,
-              parentRunId: failed.parentRunId,
-              depth: failed.depth,
-              writeIntent: "writer",
-            });
-            expect((yield* runView(service, failed.id)).supersededByRunId).toBe(successor.id);
-            return;
-          }
-          expect(yield* retry.pipe(Effect.flip)).toMatchObject({
-            code: "scripted_subtree_writer_not_supported",
-          });
-          expect((yield* runView(service, failed.id)).supersededByRunId).toBeUndefined();
-          expect(yield* runViews(service)).toHaveLength(1);
-          expect(f.fake.controls).toHaveLength(1);
-          expect(counts.acquire).toBe(0);
-          expect(counts.canonicalize).toBe(0);
-          const availableAgain = yield* service.claimRetryContinuation(failed.id);
-          yield* service.releaseRetryClaim(failed.id, availableAgain.claimToken);
-        });
-      },
-    );
 });

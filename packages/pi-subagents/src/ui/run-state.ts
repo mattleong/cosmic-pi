@@ -57,7 +57,6 @@ export const canStopRun = (run: SubagentRunView): boolean =>
 
 export const canResumeRun = (run: SubagentRunView): boolean =>
   isResumableRunState(run.state) &&
-  run.supersededByRunId === undefined &&
   runCleanupAttention(run) === undefined &&
   hasSubagentCapability(run, "resume");
 

@@ -15,11 +15,6 @@ const unexpectedService: SubagentServiceContract = {
   captureLaunchParent: () => unexpected("captureLaunchParent"),
   visibleList: () => unexpected("visibleList"),
   authorizeTargets: () => unexpected("authorizeTargets"),
-  claimRetryContinuation: () => unexpected("claimRetryContinuation"),
-  releaseRetryClaim: () => unexpected("releaseRetryClaim"),
-  exhaustRetryClaim: () => unexpected("exhaustRetryClaim"),
-  blockRetryClaim: () => unexpected("blockRetryClaim"),
-  startRetrySessionOwned: () => unexpected("startRetrySessionOwned"),
   withAwaitTerminalObservations: () => unexpected("withAwaitTerminalObservations"),
   consumeCompletions: (receipts) =>
     receipts.length === 0 ? Effect.void : unexpected("consumeCompletions"),

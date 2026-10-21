@@ -6,7 +6,6 @@ import { describe, expect, vi } from "vitest";
 import { childToolPolicy } from "../../src/boundary/child-process.ts";
 import { PROFILE_DEFINITIONS } from "../../src/profiles/definitions.ts";
 import { PROFILE_IDS } from "../../src/profiles/model.ts";
-import type { CustomAgent } from "../../src/profiles/agents.ts";
 import type { StartSubagentRequest } from "../../src/run/model.ts";
 import { AGENT_TOOL_NAMES } from "../../src/run/tool-policy.ts";
 import { createSubagentCompactSummary } from "../../src/tools/compact-summary.ts";
@@ -18,7 +17,6 @@ import {
 } from "../../src/tools/details-schema.ts";
 import type { TSchema } from "typebox";
 import { declaredCandidate } from "../fixtures/profiles.ts";
-import { reviewerContinuation } from "../run/fixtures/service-harness.ts";
 import { effectTest } from "../support/effect-test.ts";
 import { objectContaining, stringContaining } from "../support/matchers.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
@@ -110,10 +108,6 @@ describe("custom agent launches", () => {
         effortWasExplicit: true,
         writeIntent: "writer",
         writerWorkspaceModeOverride: "worktree",
-        routeContinuation: {
-          profile: "reviewer",
-          agent: { name: "auth-reviewer", profile: "reviewer", effort: "low" },
-        },
       });
       expect(request?.profileGuidance).not.toContain(PROFILE_DEFINITIONS.reviewer.guidance);
       expect(decodeStartDetails(result?.details).startEntries[0]).toMatchObject({
@@ -376,54 +370,6 @@ describe("custom agent status", () => {
       });
     },
   );
-});
-
-describe("custom agent retry", () => {
-  effectTest("keeps the frozen agent snapshot after the configuration changes", function* () {
-    const frozen: CustomAgent = {
-      name: "auth-reviewer",
-      source: "global",
-      description: "Frozen reviewer.",
-      instructions: "Frozen launch-time instructions.",
-      profile: "reviewer",
-      effort: "low",
-      tools: { deny: ["bash"] },
-    };
-    const retried: StartSubagentRequest[] = [];
-    const service = subagentServiceDouble({
-      claimRetryContinuation: () =>
-        Effect.succeed({
-          source: view({ state: "failed", profile: "reviewer", agent: "auth-reviewer" }),
-          continuation: { ...reviewerContinuation(0), agent: frozen },
-          claimToken: "claim",
-        }),
-      startRetrySessionOwned: (request, onOwned) =>
-        Effect.sync(() => {
-          retried.push(request);
-          onOwned?.();
-          return view({ id: "successor", agent: request.agent });
-        }),
-    });
-    // The current configuration no longer declares the agent at all.
-    const tools = captureSubagentTools(service, {
-      profiles: profileServiceFor(undefined),
-      activeTools: ["read", "bash"],
-    });
-    yield* invokeOptionalTool(tools.get("agent_lifecycle"), {
-      action: "retry",
-      runIds: ["agent-1"],
-    });
-
-    expect(retried).toHaveLength(1);
-    expect(retried[0]).toMatchObject({
-      agent: "auth-reviewer",
-      profile: "reviewer",
-      profileGuidance: "Frozen launch-time instructions.",
-      effort: "low",
-      activeTools: ["read"],
-      routeContinuation: { agent: frozen, selectedCandidateIndex: 1 },
-    });
-  });
 });
 
 describe("custom agent discovery", () => {

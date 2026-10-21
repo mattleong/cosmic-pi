@@ -3,7 +3,7 @@ import type {
   SubagentNotificationDelivery,
 } from "../boundary/host-notifier.ts";
 import type { CompletionGenerationRecord, RunRecord } from "./internal.ts";
-import { hasUnresolvedSteeringDelivery } from "./model.ts";
+import { failedRunNextCandidate } from "./model.ts";
 import { MAX_COMPLETION_DELIVERY_BATCH, MAX_UNRESOLVED_REPORT_GENERATIONS } from "./limits.ts";
 
 export const completionNotificationKey = (id: string, generation: number): string =>
@@ -44,16 +44,8 @@ const completionNotification = (
   record: RunRecord,
   completion: CompletionGenerationRecord,
 ): SubagentCompletionNotification => {
-  const remainingCandidateCount = record.view.remainingCandidateCount ?? 0;
-  const retryAvailable =
-    completion.outcome === "failed" &&
-    record.assignment.epoch === 1 &&
-    remainingCandidateCount > 0 &&
-    record.view.retryExhausted !== true &&
-    record.view.retryBlocked !== true &&
-    record.view.supersededByRunId === undefined &&
-    !record.assignment.outcomeUncertain &&
-    !hasUnresolvedSteeringDelivery(record.view);
+  const nextCandidate =
+    completion.outcome === "failed" ? failedRunNextCandidate(record.view) : undefined;
   return {
     id: record.view.id,
     name: record.view.name,
@@ -68,7 +60,7 @@ const completionNotification = (
     ...(completion.errorArchive && { errorArchive: completion.errorArchive }),
     ...(completion.warning && { warning: completion.warning }),
     ...(record.view.profile && { profile: record.view.profile }),
-    ...(retryAvailable && { retryAvailable: true, remainingCandidateCount }),
+    ...(nextCandidate && { nextCandidate }),
     ...(record.view.workspaceId !== undefined && { workspaceId: record.view.workspaceId }),
     ...(record.view.workspaceOutcome && { workspaceOutcome: record.view.workspaceOutcome }),
   };

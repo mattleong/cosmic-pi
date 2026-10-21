@@ -67,7 +67,7 @@ const ModelOverrideParameters = Type.Object(
   {
     ...strictObjectOptions,
     description:
-      "Run this launch on exactly this model instead of the profile's route, only when the user asks for a specific model. No fallback: an unavailable model fails the launch and retry. The profile still sets role, context, and write intent.",
+      "Run this launch on exactly this model instead of the profile's route, only when the user asks for a specific model or a failed run names its next candidate. No fallback: an unavailable model fails the launch. The profile still sets role, context, and write intent.",
   },
 );
 
@@ -222,13 +222,13 @@ const AwaitParameters = Type.Object(
   strictObjectOptions,
 );
 
-export const LIFECYCLE_ACTIONS = ["interrupt", "stop", "retry"] as const;
+export const LIFECYCLE_ACTIONS = ["interrupt", "stop"] as const;
 
 const LifecycleParameters = Type.Object(
   {
     action: StringEnum(LIFECYCLE_ACTIONS, {
       description:
-        "interrupt pauses a running run whose backend supports it; stop works on any active run; retry continues a failed run on its next route candidate.",
+        "interrupt pauses a running run whose backend supports it; stop works on any active run.",
     }),
     runIds: RunIdsParameters,
   },

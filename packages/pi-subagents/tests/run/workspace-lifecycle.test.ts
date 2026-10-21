@@ -4,14 +4,13 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import { WriterLeaseReleaseError } from "../../src/boundary/writer-lease.ts";
-import { emptyUsage, type SubagentRunView } from "../../src/run/model.ts";
+import { emptyUsage } from "../../src/run/model.ts";
 import type { SubagentServiceContract } from "../../src/run/service.ts";
 import { WorkspaceError } from "../../src/workspace/model.ts";
 import {
   completeLocalRun,
   profileLayerFor,
   request,
-  reviewerContinuation,
   runView,
   withService,
 } from "./fixtures/service-harness.ts";
@@ -35,25 +34,12 @@ const nesting = (limits: {
 
 const failedWriter = (service: SubagentServiceContract, f: Fixture) =>
   Effect.gen(function* () {
-    const run = yield* service.start(
-      repoWriter({ profile: "reviewer", routeContinuation: reviewerContinuation(0) }),
-    );
+    const run = yield* service.start(repoWriter());
     const control = f.children.controls.at(-1)!;
     control.exit(1);
     yield* yieldUntil(() => control.released() === 1);
     return run;
   });
-
-const retryWith = (service: SubagentServiceContract, failed: SubagentRunView, claimToken: string) =>
-  service.startRetrySessionOwned({
-    ...repoWriter({ profile: "reviewer", routeContinuation: reviewerContinuation(1) }),
-    supersedes: { runId: failed.id, claimToken },
-  });
-
-const retry = (service: SubagentServiceContract, failed: SubagentRunView) =>
-  service
-    .claimRetryContinuation(failed.id)
-    .pipe(Effect.flatMap((claim) => retryWith(service, failed, claim.claimToken)));
 
 const completedWriter = (service: SubagentServiceContract, f: Fixture) =>
   Effect.gen(function* () {
@@ -72,29 +58,18 @@ const listed = (service: SubagentServiceContract, workspaceId: string) =>
     );
 
 describe("writer workspace lifecycle", () => {
-  it.effect(
-    "route retry snapshots the parent afresh and keeps the failed writer's proposal",
-    () => {
-      const f = workspaceFixture();
-      return withService(f.layer, function* (service) {
-        const failed = yield* failedWriter(service, f);
-        const successor = yield* retry(service, failed);
-        expect(successor.workspaceId).toBeDefined();
-        expect(successor.workspaceId).not.toBe(failed.workspaceId);
-        expect(f.entries.get(successor.workspaceId!)?.handle).toMatchObject({
-          sourceCwd: "/repo",
-          sourceRoot: "/repo",
-        });
-        // The failed writer's workspace stays an ordinary proposal for its parent.
-        const tested = yield* reviewAndPrepare(service, failed.workspaceId!);
-        yield* service.workspaceApply(failed.workspaceId!, {
-          revisionId: tested.revisionId,
-          preparationId: tested.preparationId,
-        });
-        expect(f.entries.get(failed.workspaceId!)?.status).toBe("integrated");
+  it.effect("keeps a failed writer's workspace an ordinary proposal for its parent", () => {
+    const f = workspaceFixture();
+    return withService(f.layer, function* (service) {
+      const failed = yield* failedWriter(service, f);
+      const tested = yield* reviewAndPrepare(service, failed.workspaceId!);
+      yield* service.workspaceApply(failed.workspaceId!, {
+        revisionId: tested.revisionId,
+        preparationId: tested.preparationId,
       });
-    },
-  );
+      expect(f.entries.get(failed.workspaceId!)?.status).toBe("integrated");
+    });
+  });
 
   it.effect("counts unresolved workspaces without probing other sessions' owner leases", () => {
     const f = workspaceFixture();
@@ -111,16 +86,15 @@ describe("writer workspace lifecycle", () => {
     });
   });
 
-  it.effect("a mode switch leaves existing writers' revisions and retries in worktrees", () => {
+  it.effect("a mode switch leaves existing writers and their revisions in worktrees", () => {
     const f = workspaceFixture();
     return withService(f.layer, function* (service) {
       const active = yield* service.start(repoWriter());
       const completed = yield* completedWriter(service, f);
-      const failed = yield* failedWriter(service, f);
       yield* service.setWriterWorkspaceMode("shared-checkout", Effect.void);
       expect(yield* service.inspectWriterWorkspace).toEqual({
         mode: "shared-checkout",
-        unresolvedWorkspaceCount: 3,
+        unresolvedWorkspaceCount: 2,
       });
       expect(yield* runView(service, active.id)).toMatchObject({
         writerWorkspaceMode: "worktree",
@@ -135,43 +109,11 @@ describe("writer workspace lifecycle", () => {
         workspaceId: completed.workspaceId,
         writerWorkspaceMode: "worktree",
       });
-      const retried = yield* retry(service, failed);
-      expect(retried.writerWorkspaceMode).toBe("worktree");
-      expect(retried.workspaceId).toBeDefined();
-      expect(retried.workspaceId).not.toBe(failed.workspaceId);
-      expect(f.entries.size).toBe(4);
+      expect(f.entries.size).toBe(2);
       expect(yield* service.start(repoWriter())).toMatchObject({
         cwd: "/repo",
         writerWorkspaceMode: "shared-checkout",
       });
-    });
-  });
-
-  it.effect("route retry ignores what became of the failed writer's workspace", () => {
-    const f = workspaceFixture();
-    return withService(f.layer, function* (service) {
-      const integrated = yield* failedWriter(service, f);
-      const tested = yield* reviewAndPrepare(service, integrated.workspaceId!);
-      yield* service.workspaceApply(integrated.workspaceId!, {
-        revisionId: tested.revisionId,
-        preparationId: tested.preparationId,
-      });
-      const revised = yield* failedWriter(service, f);
-      yield* service.workspaceRevise(revised.workspaceId!, "Finish the change.");
-      for (const failed of [integrated, revised])
-        expect((yield* retry(service, failed)).workspaceId).not.toBe(failed.workspaceId);
-      expect(f.entries.size).toBe(4);
-    });
-  });
-
-  it.effect("a stale retry claim fails before any workspace is created", () => {
-    const f = workspaceFixture();
-    return withService(f.layer, function* (service) {
-      const failed = yield* failedWriter(service, f);
-      expect(yield* retryWith(service, failed, "stale-claim").pipe(Effect.flip)).toMatchObject({
-        code: "retry_claim_stale",
-      });
-      expect(f.entries.size).toBe(1);
     });
   });
 

@@ -12,6 +12,7 @@ import {
   fakeChildLayer,
   localServiceFixture,
   request,
+  reviewerContinuation,
   runView,
   runViews,
   withService,
@@ -45,6 +46,17 @@ const completeHistory = (
   });
 
 describe("SubagentService", () => {
+  it.effect("records each launch's next frozen route candidate", () =>
+    withService(localServiceFixture().layer, function* (service) {
+      const first = yield* service.start(request({ routeContinuation: reviewerContinuation(0) }));
+      const last = yield* service.start(request({ routeContinuation: reviewerContinuation(1) }));
+      const unrouted = yield* service.start(request());
+      expect(first.nextCandidate).toEqual({ runtime: "pi", model: "parent", effort: "high" });
+      expect(last.nextCandidate).toBe("none");
+      expect(unrouted.nextCandidate).toBeUndefined();
+    }),
+  );
+
   it.effect("namespaces run IDs across runtime replacement and rejects stale IDs", () =>
     Effect.gen(function* () {
       const first = yield* withService(localServiceFixture().layer, function* (service) {

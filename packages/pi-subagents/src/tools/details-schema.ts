@@ -24,7 +24,6 @@ import { MAX_PROTOCOL_ID_CHARS, MAX_START_BATCH, MAX_TARGET_RUNS } from "../run/
 import {
   MAX_OUTCOME_DIFFSTAT_FILES,
   FAILED_START_CLEANUP_DISPOSITIONS,
-  FAILED_START_RETRY_DISPOSITIONS,
   PI_SUBAGENT_CAPABILITIES,
   SUBAGENT_RUN_STATES,
   STEERING_DELIVERY_STATES,
@@ -358,9 +357,16 @@ const SubagentStartEntrySchema = Schema.Union([
 const FailedStartRecoverySchema = Schema.Struct({
   runId: NonEmptyText(MAX_PROTOCOL_ID_CHARS),
   cleanupDisposition: Schema.Literals(FAILED_START_CLEANUP_DISPOSITIONS),
-  retryDisposition: Schema.Literals(FAILED_START_RETRY_DISPOSITIONS),
-  remainingCandidateCount: nonNegativeInteger,
-  hasRemainingCandidate: Schema.Boolean,
+  nextCandidate: Schema.optionalKey(
+    Schema.Union([
+      Schema.Literal("none"),
+      Schema.Struct({
+        runtime: RuntimeSchema,
+        model: NonEmptyText(MAX_CARD_MODEL_CHARS),
+        effort: CandidateEffortSchema,
+      }),
+    ]),
+  ),
 });
 
 const SubagentCardFailureSchema = Schema.Struct({
@@ -445,7 +451,7 @@ export const SubagentAwaitDetailsSchema = Schema.Struct({
   contentOmitted: Schema.optionalKey(Schema.Literal(true)),
 });
 
-export const RUN_DETAILS_ACTIONS = ["retry", "interrupt", "stop"] as const;
+export const RUN_DETAILS_ACTIONS = ["interrupt", "stop"] as const;
 export type RunDetailsAction = (typeof RUN_DETAILS_ACTIONS)[number];
 
 export const RunActionDetailsSchema = Schema.Struct({

@@ -11,12 +11,9 @@ import * as Predicate from "effect/Predicate";
 import type { CompactAnimationScheduler } from "pi-code-previews";
 import { invokeHostCallback } from "pi-cosmic-core";
 import type { SubagentToolPresentation } from "../boundary/host-activity-widget.ts";
-import {
-  resolveProfileRetry,
-  type SubagentSessionEnvironment,
-} from "../boundary/host-profile-resolution.ts";
+import type { SubagentSessionEnvironment } from "../boundary/host-profile-resolution.ts";
 import type { SubagentBackendRegistry } from "../backend/service.ts";
-import { SubagentProfileService } from "../profiles/service.ts";
+import type { SubagentProfileService } from "../profiles/service.ts";
 import {
   invalidRequest,
   subagentErrorCode,
@@ -25,7 +22,6 @@ import {
 } from "../run/errors.ts";
 import {
   isParentActionRequiredRun,
-  SUBAGENT_ROOT_RUN_ID,
   type StartSubagentRequest,
   type SubagentControlExpectation,
   type SubagentRunView,
@@ -51,7 +47,6 @@ import {
 import { executeModelsAction } from "./execute-models.ts";
 import { executeWorkspaceAction } from "./execute-workspace.ts";
 import type { SubagentActionFailure } from "./model.ts";
-import { isUncertainToolFailure } from "./outcome.ts";
 import {
   subagentToolAction,
   type SubagentLifecycleInput,
@@ -247,62 +242,13 @@ export const executeSubagentActionEffect = (
         if (scripted && args.action !== "stop")
           return yield* invalidRequest(
             "scripted_lifecycle_not_supported",
-            "Codemode scripts support lifecycle stop only. Hand retry and interrupt decisions back to the parent agent.",
+            "Codemode scripts support lifecycle stop only. Hand interrupt decisions back to the parent agent.",
           );
         const presentLifecycle = (result: AwaitedLifecycleResult) =>
           present({
             ...result,
             contract: lifecycleContract(args.action, result.outcomes),
           });
-        if (args.action === "retry") {
-          const ids = yield* requiredTargetIds(action, args.runIds);
-          const profileService = yield* SubagentProfileService;
-          const policySnapshot = yield* profileService.capture;
-          yield* authorize(ids);
-          return presentLifecycle(
-            yield* forEachOutcome(ids, (id) => {
-              let handedOff = false;
-              return Effect.acquireUseRelease(
-                service.claimRetryContinuation(id),
-                (claim) =>
-                  Effect.gen(function* () {
-                    const parentId = claim.source.parentRunId;
-                    const parent =
-                      parentId && parentId !== SUBAGENT_ROOT_RUN_ID
-                        ? yield* service.captureLaunchParent(parentId)
-                        : undefined;
-                    return yield* resolveProfileRetry(pi, claim, ctx, {
-                      ...environment,
-                      parentContext: undefined,
-                      ...parent,
-                    });
-                  }).pipe(
-                    Effect.tapError((error) =>
-                      subagentErrorCode(error) === "retry_route_exhausted"
-                        ? service.exhaustRetryClaim(id, claim.claimToken)
-                        : isUncertainToolFailure({ code: subagentErrorCode(error) })
-                          ? service.blockRetryClaim(id, claim.claimToken)
-                          : Effect.void,
-                    ),
-                    Effect.flatMap((request) =>
-                      service.startRetrySessionOwned(
-                        {
-                          ...request,
-                          parentRunId: claim.source.parentRunId,
-                          nestingPolicy: policySnapshot.effectiveConfig.nesting,
-                        },
-                        () => {
-                          handedOff = true;
-                        },
-                      ),
-                    ),
-                  ),
-                (claim) =>
-                  handedOff ? Effect.void : service.releaseRetryClaim(id, claim.claimToken),
-              );
-            }),
-          );
-        }
         const ids = yield* requiredTargetIds(action, args.runIds);
         yield* authorize(ids);
         return presentLifecycle(

@@ -9,15 +9,16 @@ import {
 import { runAttention, runCleanupAttention } from "../run/attention.ts";
 import { MAX_OUTCOME_FILE_PATH_CHARS, MAX_OUTCOME_PREVIEW_CHARS } from "../run/limits.ts";
 import {
-  hasUnresolvedSteeringDelivery,
+  failedRunNextCandidate,
   isTerminalRunState,
+  type SubagentNextCandidate,
   type SubagentReportArchive,
   type SubagentReportTruncation,
   type SubagentRunView,
 } from "../run/model.ts";
 import { failureFileText, reportFileText, reportTruncationText } from "../run/state.ts";
 import { runStateLabel } from "../ui/run-state.ts";
-import { proposalGuidance, runProfileLabel } from "./format.ts";
+import { nextCandidateText, proposalGuidance, runProfileLabel } from "./format.ts";
 import { steeringDeliveryEvidence } from "./outcome.ts";
 
 /**
@@ -40,7 +41,7 @@ const MAX_PREVIEW_LINE_CHARS =
 /** A label, an archived path, and the file's size. */
 const MAX_FILE_LINE_CHARS = MAX_OUTCOME_FILE_PATH_CHARS + 112;
 
-const ACTION_KINDS = ["attention", "retry", "steering", "workspace", "lineage", "warning"] as const;
+const ACTION_KINDS = ["attention", "candidate", "steering", "workspace", "warning"] as const;
 
 /** The one-line action items a block may carry, at most one of each kind. */
 export type RunBlockActions = Partial<Record<(typeof ACTION_KINDS)[number], string | undefined>>;
@@ -243,32 +244,13 @@ const attentionAction = (run: SubagentRunView): string | undefined => {
   return absurd(attention);
 };
 
-const retryAction = (run: SubagentRunView): string | undefined => {
-  if (hasUnresolvedSteeringDelivery(run))
-    return "Route retry: blocked by unresolved guidance delivery; don't retry or replace it automatically.";
-  if (run.retryBlocked)
-    return "Route retry: blocked by uncertain execution or cleanup; inspect it with agent_read.";
-  if (run.retryExhausted)
-    return "Route retry: exhausted; only now consider a generalist replacement.";
-  const remaining = run.remainingCandidateCount ?? 0;
-  if (remaining === 0 || run.state !== "failed") return undefined;
-  return `Route retry: ${remaining} candidate${remaining === 1 ? " remains" : "s remain"}; agent_lifecycle({ action: "retry", runIds: [${callArgument(run.id)}] }).`;
-};
-
-/** A run's lineage, such as `Lineage: continues agent-1.` */
-const lineageAction = (
-  links: Pick<SubagentRunView, "predecessorRunId" | "supersededByRunId">,
-): string | undefined => {
-  const parts = [
-    links.predecessorRunId && `continues ${sanitizeTerminalLine(links.predecessorRunId)}`,
-    links.supersededByRunId && `superseded by ${sanitizeTerminalLine(links.supersededByRunId)}`,
-  ].filter(Boolean);
-  return parts.length > 0 ? `Lineage: ${parts.join("; ")}.` : undefined;
-};
+/** A failed run's next frozen route candidate, which a new run may take as its model. */
+export const nextCandidateAction = (next: SubagentNextCandidate | undefined): string | undefined =>
+  next && `Next candidate: ${nextCandidateText(next)}.`;
 
 const runViewActions = (run: SubagentRunView): RunBlockActions => ({
   attention: attentionAction(run),
-  retry: retryAction(run),
+  candidate: nextCandidateAction(run.state === "failed" ? failedRunNextCandidate(run) : undefined),
   steering: run.steeringDelivery
     ? `Steering: ${steeringDeliveryEvidence[run.steeringDelivery].message} (steeringDelivery=${run.steeringDelivery}); agent_read has the detail.`
     : undefined,
@@ -276,7 +258,6 @@ const runViewActions = (run: SubagentRunView): RunBlockActions => ({
     run.workspaceId && (run.workspaceOutcome || isTerminalRunState(run.state))
       ? `Workspace: ${proposalGuidance(run.workspaceId, run.workspaceOutcome)}`
       : undefined,
-  lineage: lineageAction(run),
   warning: run.warning ?? run.systemWarning,
 });
 

@@ -90,7 +90,6 @@ A custom agent is a named role the user declares in a configuration document's r
 - An item's `isolation` wins over the agent's; the agent's wins over nested and session defaults. Either one on a launch whose selected candidate is read-only fails with `isolation_requires_writer` before admission.
 - A [model override](#per-launch-model-override) launched with an agent takes the agent's effort, context, and write intent defaults, and fails with `model_override_invalid` when the agent's tool lists need Pi.
 - The child's system prompt names the agent and carries its instructions in place of the profile guidance. Run cards, start entries, status, and the orchestration contract report `agent` alongside the routed `profile`.
-- The launch freezes the resolved agent into its route continuation, so [retry](#explicit-route-continuation) keeps its instructions, overrides, and tool lists even after the configuration changes or drops the agent.
 
 ## Candidate planning and host resolution
 
@@ -112,7 +111,7 @@ A custom agent is a named role the user declares in a configuration document's r
 - Selection provenance records the route source (`override` for a [model override](#per-launch-model-override)); the actual runtime and `openaiFastMode` stay in the request and run view.
 - Run cards keep the direct runtime, model, and effort, and record each skipped candidate's runtime, model, and effort as structured fields.
 - Start details contain one request-ordered entry per input: the requested profile with the actual route for success, the attempted route after post-selection failure, or an explicit resolving or no-eligible-route state. They contain no cards.
-- When a start admitted a run and then failed, compensation crosses the full process, backend, harness, supervisor, and writer cleanup barrier before returning. Its `admittedRun` projection reports the run ID, cleanup disposition, retry disposition, and remaining candidate count, taken from settled facts rather than error text.
+- When a start admitted a run and then failed, compensation crosses the full process, backend, harness, supervisor, and writer cleanup barrier before returning. Its `admittedRun` projection reports the run ID, cleanup disposition, and the frozen route's [next candidate](#explicit-route-continuation), taken from settled facts rather than error text.
 - Each start batch captures one immutable profile snapshot, so concurrent edits can't split a batch across revisions.
 
 ## Per-launch model override
@@ -122,31 +121,28 @@ A root start item's optional `model: { runtime, model, effort? }` replaces the p
 - The profile still supplies the role guidance, context, and write intent, or a [custom agent](#custom-agents) its instructions and overrides. Fast mode is off. An omitted `effort` is `default`, resolved like a route candidate's ([Effort](#effort)).
 - Before any readiness check or service ownership, the override is checked with the shared selector grammar and candidate cross-field policy. A malformed selector, `parent` outside Pi, a runtime-incompatible explicit effort, or a forking profile such as `oracle` on Claude or Codex fails with `model_override_invalid`.
 - Planning and the full host preflight then run as for any candidate. Any skip fails the launch with `model_override_unavailable`; the profile's route is never tried.
-- Selection provenance records route source `override`, and the frozen continuation holds only the override, so lifecycle `retry` fails with `retry_route_exhausted`.
+- Selection provenance records route source `override`, and the frozen route holds only the override, so a failed run names no further candidate.
 - Start entries, run cards, and status show the requested override as `modelOverride` alongside the actual route.
 
 ## Explicit route continuation
 
-`agent_lifecycle({ action: "retry", runIds })` continues a failed run on its next configured candidate. It is a new launch and run ID, never implicit fallthrough or resurrection. Resume, by contrast, continues the failed run's own session on the same candidate ([resume admission](#resume-admission)).
+A launch freezes its route, the declared candidates and the one it selected, so later edits never change what a failed run reports. Nothing continues a failed run on another candidate: fallback ends when service ownership begins, and resume continues the failed run's own session on the same candidate ([resume admission](#resume-admission)).
 
-- It keeps the original task, profile guidance or custom agent, route source, and a deeply frozen copy of the launch-time route; later edits don't alter it. Planning starts strictly after the predecessor's selected candidate, keeps the original candidate indexes, and repeats the full preflight.
-- Retry claims the predecessor exclusively. After cleanup is confirmed, admission atomically revalidates, marks the predecessor with its successor ID, and admits the linked run. Concurrent retries have one winner, and retry-claimed records can't be evicted.
-- A plan with no remaining candidate records every skip and marks the route exhausted (`retry_route_exhausted`); only then should the parent choose a `generalist` replacement.
-- Retry refuses non-failed, later-assignment, already-superseded, exhausted, outcome-uncertain, cleanup-quarantined, eviction-claimed, and concurrently claimed records, so no uncertainty launches duplicate work automatically.
-- Writers start a fresh execution and may repeat partial side effects. A worktree writer's successor gets a fresh workspace from its parent's current tree, and the failed writer's workspace stays a proposal. Parent guidance permits writer continuation only when the original handoff and current user intent allow it.
-- Claim transfer is acknowledged only after the session-owned commit is forked. Cancellation before transfer releases the claim; afterward it stops only the waiter.
-- Successors keep their predecessor's parent, while existing descendants stay attached to the predecessor. Resolution uses that parent's cwd and latest native-fact snapshot, even when the root requests the retry. A changed native session invalidates the captured branch rather than falling back to root context.
+- A failed root child's run block, completion notice, and `agent_read` card name the frozen route's next candidate, `Next candidate: runtime/model:effort; start a new run with that model`, or say the route has no further candidates. A start that admitted a run and then failed names it in its recovery line.
+- The parent decides. A new run on that candidate is an ordinary launch with a [model override](#per-launch-model-override), its own task, and a new run ID; its planning and preflight check the candidate, which the hint doesn't.
+- Only root children get the hint, because nested start items take no model. Unresolved guidance delivery suppresses it, since the run may have acted on that guidance.
+- Writers may have left partial side effects, and a worktree writer's workspace stays a proposal its parent applies or discards.
 
 ## Resume admission
 
 `agent_send({ to, message })` from one of a paused, completed, failed, or stopped run's ancestors, including `main`, continues the run's own session with the message as its next assignment; the Activity manager's resume action does the same for the user. Only local Pi advertises resume.
 
-- Paused runs resume in place. Completed, failed, and stopped runs respawn from their session file once cleanup is confirmed (`resume_cleanup_unsettled` otherwise). A run without continuation state fails with `backend_resume_unavailable`; for a failed run the recovery points to retry or a new run.
-- An explicit resume overrides an earlier stop; descendants a stop closed stay stopped. An agent message can't resume a run while a stop of that run or one of its ancestors is still in progress (`agent_unavailable`); once that stop finishes, a message resumes it like any other stopped run. Resume refuses a run whose private state was reclaimed or is being evicted, a run a retry has claimed (`resume_retry_claimed`) or superseded (`resume_superseded`), and a run with a full report-delivery backlog.
-- A resumed failed run is active, so retry refuses it (`retry_source_not_failed`). If it fails again, the later assignment still blocks replaying the launch task (`retry_assignment_not_initial`). Resuming a deterministic failure repeats it; guidance points to retry instead.
+- Paused runs resume in place. Completed, failed, and stopped runs respawn from their session file once cleanup is confirmed (`resume_cleanup_unsettled` otherwise). A run without continuation state fails with `backend_resume_unavailable`, and the recovery points to a new run.
+- An explicit resume overrides an earlier stop; descendants a stop closed stay stopped. An agent message can't resume a run while a stop of that run or one of its ancestors is still in progress (`agent_unavailable`); once that stop finishes, a message resumes it like any other stopped run. Resume refuses a run whose private state was reclaimed or is being evicted, and a run with a full report-delivery backlog.
+- Resuming a deterministic failure repeats it; a new run on the [next candidate](#explicit-route-continuation) is the alternative.
 - A worktree writer resumes in its own worktree and reopens its review; a worktree that was integrated, discarded (including automatically), or left mid-integration refuses with `workspace_finished`.
 - Respawn checks direct-child policy, including held worktree launch slots, under the admission lock. In-place paused resume keeps its slot and is allowed at capacity.
-- Writer respawn recanonicalizes the cwd before taking the lock. One locked claim then validates the run, assignment, process, cwd identity, retry state, report backlog, writer conflict, capacity, and workspace binding before rollover. Refusal leaves the workspace unchanged ([binding rules](local-backends.md#binding-states-and-resume)).
+- Writer respawn recanonicalizes the cwd before taking the lock. One locked claim then validates the run, assignment, process, cwd identity, report backlog, writer conflict, capacity, and workspace binding before rollover. Refusal leaves the workspace unchanged ([binding rules](local-backends.md#binding-states-and-resume)).
 
 ## Public launch contract
 
@@ -161,9 +157,9 @@ A root start item's optional `model: { runtime, model, effort? }` replaces the p
 
 The schema is strict, and the service independently rejects other launch overrides, such as a top-level `effort`, `context`, or `writeIntent`, with `launch_override_not_allowed`. Model-facing schemas declare no `pattern` keyword, which some providers reject. Task-tool-shaped top-level fields fail with `[invalid_start_shape]` instead of being renamed.
 
-A writer's workspace mode is, in order: a retry predecessor's recorded mode, the item's `isolation`, a custom agent's `isolation`, `worktree` when the caller is an active Pi worktree writer, then the session's `writerWorkspaceMode` (default `shared-checkout`). Admission records the mode. The root and active Pi worktree writers may start worktree writers; other nested callers fail with `workspace_nested_writer_unsupported` ([Nested worktree writers](local-backends.md#nested-worktree-writers)). Launch and status projections include the mode, workspace identity, actual cwd, and source cwd.
+A writer's workspace mode is, in order: the item's `isolation`, a custom agent's `isolation`, `worktree` when the caller is an active Pi worktree writer, then the session's `writerWorkspaceMode` (default `shared-checkout`). Admission records the mode. The root and active Pi worktree writers may start worktree writers; other nested callers fail with `workspace_nested_writer_unsupported` ([Nested worktree writers](local-backends.md#nested-worktree-writers)). Launch and status projections include the mode, workspace identity, actual cwd, and source cwd.
 
-Start is always background and nonblocking. `agent_await` supports `all_finished` and `any_finished`. Lifecycle `retry` accepts only failed run IDs, never task, model, candidate, or route overrides.
+Start is always background and nonblocking. `agent_await` supports `all_finished` and `any_finished`. `agent_lifecycle` takes `interrupt` or `stop` and run IDs, never task or route overrides.
 
 ### Model-facing guidance
 

@@ -143,13 +143,12 @@ The parent's review and apply procedure is in the [reference](reference.md#revie
 
 ### Mode and admission
 
-- A writer's mode is chosen at admission ([Public launch contract](routing.md#public-launch-contract)) and recorded; retries and revision successors keep it. Changing the session default affects only later launches, and settings show how many workspaces in this checkout remain unresolved.
+- A writer's mode is chosen at admission ([Public launch contract](routing.md#public-launch-contract)) and recorded; revision successors keep it. Changing the session default affects only later launches, and settings show how many workspaces in this checkout remain unresolved.
 - A `worktree` writer launches in a detached, locked linked worktree of the user's repository at `<agent-dir>/subagent-worktrees/<id>/worker`. Its cwd lease protects that directory, not the parent checkout.
 - The root and active Pi worktree writers may start worktree writers ([Nested worktree writers](#nested-worktree-writers)); any other nested caller whose writer resolves to `worktree` fails with `workspace_nested_writer_unsupported`.
 - Read-only runs never acquire workspaces, and nested readers inherit their parent's effective cwd, including a worktree.
-- A worktree launch checks retry claim, parent, spend limit, and tree and direct-child capacity first, then holds one parent direct-child slot until admission or failure. Held slots count toward direct-child and tree limits. If running runs alone fill a limit, the launch fails at once; if only creating launches fill it, it waits interruptibly, holding nothing.
+- A worktree launch checks parent, spend limit, and tree and direct-child capacity first, then holds one parent direct-child slot until admission or failure. Held slots count toward direct-child and tree limits. If running runs alone fill a limit, the launch fails at once; if only creating launches fill it, it waits interruptibly, holding nothing.
 - The binding is recorded as soon as the engine acquires the workspace. A start that is never admitted frees its slot and discards the workspace; if that discard fails, the binding remains for the parent to discard. Admitted starts that fail keep their workspace as an ordinary proposal.
-- A route retry of a worktree writer acquires a fresh workspace from its parent's current tree and never touches the failed writer's workspace.
 
 ### Worktrees and captures
 
@@ -326,7 +325,7 @@ Local Claude and Codex each acquire one authenticated supervisor channel inside 
 - The first turn that ends without an accepted report gets one automatic reminder input in the same assignment. A second miss, or an unsendable reminder, fails with the latest turn's final text, bounded to 2,000 characters.
 - If transport closes before forwarding drains, the adapter reprojects the accepted report. Interruption emits no completion-shaped event.
 - Every candidate closes on report: forwarding an accepted report closes the process and channel while keeping bounded projection data. Codex forwards it at once; Claude normally holds it until Claude's own result for that assignment arrives, for at most 10 seconds. Nothing is written into the project.
-- Failures can leave completed writes behind; continuation is an explicit frozen-route retry after confirmed cleanup.
+- Failures can leave completed writes behind; the parent continues by resuming the run or starting a new one.
 
 ### Report events and channel
 
@@ -392,7 +391,7 @@ Claude Code ends a turn while background agents or shells run and starts a new o
 - The ten-second caller wait is separate from backend-owned delivery. A timeout returns `steer_outcome_uncertain` with the typed `pendingDelivery` flag, without terminating Claude ([Tool result certainty](completion-delivery.md#tool-result-certainty)).
 - While unresolved, further input and queue-cancelling interrupts are rejected; stop remains available. Only an exact same-session replay confirms guidance, and a monotonic sequence keeps stale events from resolving newer input.
 - An absolute five-minute watchdog from delivery ownership checks for an accepted report, then closes admission and terminates the backend. This bounds liveness; it does not prove Claude unhealthy. Nothing resends input.
-- An accepted report takes precedence over unconfirmed guidance and completes with `report-unconfirmed`. Failed or stopped runs with pending guidance keep `unresolved`, which blocks retry and retry hints.
+- An accepted report takes precedence over unconfirmed guidance and completes with `report-unconfirmed`. Failed or stopped runs with pending guidance keep `unresolved`, which suppresses the next-candidate hint.
 - Typed primary failures survive exit. A failure snapshot holds only timing, frame and tool categories, a validated CLI version, and the termination reason.
 
 ### Native results and interruption

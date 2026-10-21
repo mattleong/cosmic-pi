@@ -8,7 +8,7 @@ Background subagents for Pi on macOS and Linux. The main agent delegates work to
 - **Custom agents** you define in `pi-subagents.json`: named roles with their own instructions, effort, and tool lists, routed through a profile.
 - **Three local runtimes:** Pi, Claude Code, and Codex, with ordered fallback candidates per profile.
 - **Background by default.** Reports and failures arrive automatically; the agent waits only when it needs a result.
-- **Two-way supervision:** children can ask the parent questions and report progress; the parent can answer or guide them, interrupt, resume, retry, or stop them.
+- **Two-way supervision:** children can ask the parent questions and report progress; the parent can answer or guide them, interrupt, resume, or stop them.
 - **Agent messaging:** any agent in the session can list, message, and read any other, including the main agent.
 - **Nesting:** children can launch their own subagents, up to depth 3 with 12 direct children each by default.
 - **Safe parallel writes:** per writer, either share the checkout with other writers on disjoint task scopes, or work in an isolated worktree whose proposal the parent applies in one step (wholly or file by file), or reviews and tests before applying. Proposals can also be revised onto the parent's current files.
@@ -75,7 +75,7 @@ The main agent and Pi subagents share one `agent_*` family. `agent_start`, `agen
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `agent_start`     | Starts background subagents by profile or custom agent                                                                                              |
 | `agent_await`     | Waits for runs you started and returns their reports, early when one asks you a question                                                            |
-| `agent_lifecycle` | Interrupts, stops, or retries runs you started on their profile's next route candidate                                                              |
+| `agent_lifecycle` | Interrupts or stops runs you started                                                                                                                |
 | `agent_worktree`  | Reviews, tests, applies, revises, or discards a worktree writer's proposal                                                                          |
 | `agent_profiles`  | Shows each profile's route and the configured custom agents                                                                                         |
 | `agent_list`      | Lists `main` and every subagent with its state, parent, role, model, worktree proposal, and whether it waits on its parent                          |
@@ -127,7 +127,7 @@ Most people configure routes in `/subagents profiles`. Saved settings live in `~
 }
 ```
 
-If a candidate is unavailable at launch, such as an unauthenticated CLI, the next one is tried. After a run has started, fallback happens only through an explicit `retry`.
+If a candidate is unavailable at launch, such as an unauthenticated CLI, the next one is tried. After a run has started, nothing falls back: a failed run names its route's next candidate, and the parent may start a new run with that model.
 
 `hooks` mirror Claude Code's `WorktreeCreate` and `WorktreeRemove`, but run after the engine creates an isolated tree and before it removes one rather than replacing either. A `.worktreeinclude` file at the checkout's top level names ignored local files, such as `.env`, to copy into isolated trees. See [Worktree hooks](docs/local-backends.md#worktree-hooks) and [Included files](docs/local-backends.md#included-files).
 

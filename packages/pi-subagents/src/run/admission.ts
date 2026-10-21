@@ -70,7 +70,6 @@ export const writerConflictError = (
   pools: WriterPoolLookup,
   canonicalCwd: CanonicalWriterCwd,
   excluded?: RunRecord,
-  additionallyExcluded?: RunRecord,
 ): SubagentWriterConflictError | undefined => {
   const pool = pools.get(canonicalCwd.digest);
   const unavailable = pool === undefined ? undefined : writerPoolUnavailableConflict(pool);
@@ -85,7 +84,7 @@ export const writerConflictError = (
   }
 
   for (const record of records.values()) {
-    if (record === excluded || record === additionallyExcluded) continue;
+    if (record === excluded) continue;
     const conflict = writerConflict(record, canonicalCwd);
     if (conflict === undefined) continue;
     return new SubagentWriterConflictError({

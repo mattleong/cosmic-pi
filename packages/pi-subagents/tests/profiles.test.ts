@@ -13,7 +13,7 @@ import {
 import { SubagentConfigStore, type SubagentConfigStoreContract } from "../src/config/store.ts";
 import { resolvePiModelSelector } from "../src/run/model-catalog.ts";
 import { isNativeProfileModelSelector, type ProfileCandidate } from "../src/profiles/model.ts";
-import { resolveProfileContinuationPlan, resolveProfilePlan } from "../src/profiles/resolve.ts";
+import { resolveProfilePlan } from "../src/profiles/resolve.ts";
 import {
   SubagentProfileService,
   subagentProfileServiceLayer,
@@ -253,50 +253,6 @@ describe("subagent v6 profile configuration and resolution", () => {
       false,
     );
     expect(untrusted.profiles.worker.candidates).toHaveLength(2);
-  });
-
-  it("continues a frozen route strictly after the failed candidate and preserves original indexes", () => {
-    const config = resolveTestConfig(
-      document({
-        profiles: {
-          reviewer: [
-            candidate(),
-            candidate({ model: "openai/missing" }),
-            candidate({ model: "openai/gpt-review", effort: "medium" }),
-          ],
-        },
-      }),
-    );
-    const continuation = {
-      profile: "reviewer" as const,
-      routeSource: config.profileSources.reviewer,
-      candidates: config.profiles.reviewer.candidates,
-      selectedCandidateIndex: 0,
-      skippedCandidates: [],
-    };
-    expect(resolveProfileContinuationPlan(continuation, environment)).toMatchObject({
-      kind: "resolved",
-      attempts: [
-        {
-          candidateIndex: 2,
-          model: "openai/gpt-review",
-          skippedBefore: [{ candidateIndex: 1, code: "pi_model_unknown" }],
-        },
-      ],
-    });
-    expect(
-      resolveProfileContinuationPlan(continuation, {
-        ...environment,
-        availablePiModels: environment.availablePiModels.slice(0, 1),
-      }),
-    ).toMatchObject({
-      kind: "failed",
-      code: "retry_route_exhausted",
-      skippedCandidates: [
-        { candidateIndex: 1, code: "pi_model_unknown" },
-        { candidateIndex: 2, code: "pi_model_unknown" },
-      ],
-    });
   });
 
   it("moves soft efforts to the nearest level the runtime and model support", () => {

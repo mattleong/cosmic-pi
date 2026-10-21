@@ -50,7 +50,7 @@ export type CustomAgentScope = (typeof CUSTOM_AGENT_SCOPES)[number];
 export const MAX_RESOLVED_CUSTOM_AGENTS = CUSTOM_AGENT_SCOPES.length * MAX_CUSTOM_AGENTS;
 
 /**
- * A resolved agent, frozen into each launch and its retry continuation: its instructions replace
+ * A resolved agent, frozen into each launch: its instructions replace
  * the routed profile's guidance, and its effort, context, and write intent override every
  * candidate of that profile's route.
  */

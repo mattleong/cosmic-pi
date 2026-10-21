@@ -2,7 +2,7 @@ import { absurd } from "effect/Function";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import { expandedSection } from "pi-code-previews";
-import { countLabel, sanitizeTerminalLine } from "pi-cosmic-core";
+import { sanitizeTerminalLine } from "pi-cosmic-core";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { formatRunRoute } from "../ui/run-presentation.ts";
 import { composeToolComponent as renderComponent } from "pi-cosmic-ui/tool";
@@ -119,8 +119,6 @@ const primaryCount = (details: RunToolDetails, count: number): string => {
   switch (details.action) {
     case "interrupt":
       return `${count} paused`;
-    case "retry":
-      return `${countLabel(count, "retry", "retries")} started`;
     case "stop":
       return `${count} updated`;
   }

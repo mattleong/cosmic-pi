@@ -67,8 +67,6 @@ describe("per-launch model override", () => {
         modelOverride,
         selection: { routeSource: "override", candidateIndex: 0 },
         routeContinuation: {
-          profile: "worker",
-          routeSource: "override",
           selectedCandidateIndex: 0,
           candidates: [
             {

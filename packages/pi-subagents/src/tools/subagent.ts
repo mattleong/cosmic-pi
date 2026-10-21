@@ -101,6 +101,8 @@ const DELIVERABLE_GUIDELINE =
   "Give each subagent one bounded slice with a concrete deliverable, and choose its profile by that deliverable. Read-only work is not automatically scouting.";
 const FAILED_START_GUIDELINE =
   "If a start fails, follow its Next step or tell the user; don't run claude, codex, or pi from the shell instead.";
+const FAILED_RUN_GUIDELINE =
+  "If a profiled run fails and names its next candidate, start a new run with that model before a generalist replacement; don't replace a profile the user disabled or relaunch work whose outcome is uncertain.";
 const SHARED_CHECKOUT_SCOPES =
   "Shared-checkout writers in one cwd share it without file claims: give each a disjoint task scope and name the files or areas it owns.";
 
@@ -109,6 +111,7 @@ const START_GUIDELINES = [
   DELIVERABLE_GUIDELINE,
   `Use profile=worker for implementation you hand off. While shared-checkout writers run, coordinate and review instead of editing; worktree writers leave your cwd free. Omit isolation so each writer uses the session's workspace setting; set it only when the user asks for a shared checkout or a worktree. ${SHARED_CHECKOUT_SCOPES}`,
   FAILED_START_GUIDELINE,
+  FAILED_RUN_GUIDELINE,
 ];
 
 // Only the root and worktree writers can start worktree writers or apply their proposals.
@@ -122,7 +125,7 @@ const TOOL_SPECS: SubagentToolSpecs = {
   [SUBAGENT_TOOL_NAME.models]: {
     label: "Inspect Profile Routes",
     description:
-      "Show each profile's configured route: its model candidates in fallback order, with runtime, effort, context, write intent, and fast mode, plus the user's custom agents and the candidates their overrides leave eligible. Launches use these routes by default; a start item's model overrides one launch, only when the user asks for a specific model. Authentication is checked only at launch.",
+      "Show each profile's configured route: its model candidates in fallback order, with runtime, effort, context, write intent, and fast mode, plus the user's custom agents and the candidates their overrides leave eligible. Launches use these routes by default; a start item's model overrides one launch, only when the user asks for a specific model or a failed run names its next candidate. Authentication is checked only at launch.",
     promptSnippet: "Show subagent profile routes and custom agents",
     renderCall: (args, theme) =>
       renderSubagentCall("Inspect profile routes", args.profile ?? "all profiles", theme),
@@ -130,7 +133,7 @@ const TOOL_SPECS: SubagentToolSpecs = {
   [SUBAGENT_TOOL_NAME.start]: {
     label: "Start Subagents",
     description:
-      "Start background subagents, up to your direct-child limit. Returns run IDs immediately; each report is delivered to you as a saved file when its run finishes, and runs end after reporting. Give every agent a self-contained task with the relevant paths, constraints, and deliverable. The profile sets the role and model route (default generalist). Only the main session and worktree writers can start worktree writers. Subagents started from a codemode script, and their descendants, stay read-only. A failed start says whether retry is available.",
+      "Start background subagents, up to your direct-child limit. Returns run IDs immediately; each report is delivered to you as a saved file when its run finishes, and runs end after reporting. Give every agent a self-contained task with the relevant paths, constraints, and deliverable. The profile sets the role and model route (default generalist). Only the main session and worktree writers can start worktree writers. Subagents started from a codemode script, and their descendants, stay read-only.",
     promptSnippet: "Run bounded, independent tasks in background subagents",
     renderCall: (args, theme, context) =>
       renderSubagentStartCall(
@@ -169,11 +172,8 @@ const TOOL_SPECS: SubagentToolSpecs = {
   [SUBAGENT_TOOL_NAME.lifecycle]: {
     label: "Manage Subagents",
     description:
-      "Interrupt or stop subagents you started, or their descendants, or retry a failed run on its profile's next configured candidate. Retry starts a new linked run, never reuses the failed candidate, and refuses when execution or cleanup is uncertain. Each target's result is reported separately.",
-    promptSnippet: "Interrupt, stop, or retry subagents",
-    promptGuidelines: [
-      "If a profiled run fails with route candidates left, retry it with action=retry before starting a generalist replacement, and don't replace a profile the user disabled. Never retry when execution is uncertain.",
-    ],
+      "Interrupt or stop subagents you started, or their descendants. Each target's result is reported separately.",
+    promptSnippet: "Interrupt or stop subagents",
     renderCall: (args, theme) => {
       const verb = args.action ?? "manage";
       const action = `${verb[0]?.toUpperCase() ?? ""}${verb.slice(1)}`;

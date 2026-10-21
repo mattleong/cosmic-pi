@@ -8,6 +8,7 @@ import type {
 import type { SubagentNestingPolicy, WriterWorkspaceMode } from "../config/schema.ts";
 import type { WorkspaceHandle } from "../workspace/model.ts";
 import type {
+  ProfileCandidate,
   ProfileId,
   ProfileRouteContinuation,
   SubagentModelOverride,
@@ -113,6 +114,17 @@ export const hasUnresolvedSteeringDelivery = (run: {
   readonly steeringDelivery?: SteeringDeliveryState | undefined;
 }): boolean => run.steeringDelivery === "pending" || run.steeringDelivery === "unresolved";
 
+/**
+ * The candidate to suggest once a run failed: only the root's start takes a model, and unresolved
+ * guidance leaves it unclear whether the run acted on that guidance.
+ */
+export const failedRunNextCandidate = (
+  run: Pick<SubagentRunView, "nextCandidate" | "parentRunId" | "steeringDelivery">,
+): SubagentNextCandidate | undefined =>
+  run.parentRunId === SUBAGENT_ROOT_RUN_ID && !hasUnresolvedSteeringDelivery(run)
+    ? run.nextCandidate
+    : undefined;
+
 export interface SubagentCleanupDiagnostic {
   readonly phase:
     | "backend-scope"
@@ -169,6 +181,20 @@ export interface SubagentReportTruncation {
 }
 
 /**
+ * The frozen launch route's candidate after the one a run used, which a failed run's parent may
+ * start a new run on, or `none` when the route has no other.
+ */
+export type SubagentNextCandidate = Pick<ProfileCandidate, "runtime" | "model" | "effort"> | "none";
+
+export const nextRouteCandidate = ({
+  candidates,
+  selectedCandidateIndex,
+}: ProfileRouteContinuation): SubagentNextCandidate => {
+  const next = candidates[selectedCandidateIndex + 1];
+  return next ? { runtime: next.runtime, model: next.model, effort: next.effort } : "none";
+};
+
+/**
  * A completed assignment's report, saved to a private file: the report the parent reads. A failure
  * longer than its preview is saved the same way.
  */
@@ -198,11 +224,8 @@ export interface SubagentRunView {
   readonly directChildCount?: number | undefined;
   readonly descendantCount?: number | undefined;
   readonly nativeActivity?: SubagentNativeActivity | undefined;
-  readonly predecessorRunId?: string | undefined;
-  readonly supersededByRunId?: string | undefined;
-  readonly remainingCandidateCount?: number | undefined;
-  readonly retryExhausted?: boolean | undefined;
-  readonly retryBlocked?: boolean | undefined;
+  /** The frozen launch route's next candidate; absent for a run launched without a route. */
+  readonly nextCandidate?: SubagentNextCandidate | undefined;
   readonly cwd: string;
   readonly writerWorkspaceMode?: WriterWorkspaceMode | undefined;
   readonly workspaceId?: string | undefined;
@@ -281,26 +304,10 @@ export interface SubagentProjection {
 export const FAILED_START_CLEANUP_DISPOSITIONS = ["pending", "confirmed", "quarantined"] as const;
 type FailedStartCleanupDisposition = (typeof FAILED_START_CLEANUP_DISPOSITIONS)[number];
 
-export const FAILED_START_RETRY_DISPOSITIONS = [
-  "eligible",
-  "pending",
-  "blocked",
-  "exhausted",
-  "unavailable",
-] as const;
-type FailedStartRetryDisposition = (typeof FAILED_START_RETRY_DISPOSITIONS)[number];
-
 export interface FailedStartRecovery {
   readonly runId: string;
   readonly cleanupDisposition: FailedStartCleanupDisposition;
-  readonly retryDisposition: FailedStartRetryDisposition;
-  readonly remainingCandidateCount: number;
-  readonly hasRemainingCandidate: boolean;
-}
-
-export interface SubagentRetrySupersession {
-  readonly runId: string;
-  readonly claimToken: string;
+  readonly nextCandidate?: SubagentNextCandidate;
 }
 
 /** Native facts captured by the immediate Pi parent, never launch authority or credentials. */
@@ -331,7 +338,6 @@ export interface StartSubagentRequest {
   readonly selection?: SubagentSelectionProvenance | undefined;
   readonly modelOverride?: SubagentModelOverride | undefined;
   readonly routeContinuation?: ProfileRouteContinuation | undefined;
-  readonly supersedes?: SubagentRetrySupersession | undefined;
   readonly workspace?: WorkspaceHandle | undefined;
   readonly writerWorkspaceMode?: WriterWorkspaceMode | undefined;
   readonly writerWorkspaceModeOverride?: WriterWorkspaceMode | undefined;

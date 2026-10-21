@@ -1,5 +1,5 @@
 import * as Arr from "effect/Array";
-import { flow, absurd } from "effect/Function";
+import { flow } from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
@@ -133,29 +133,12 @@ const collectStartRelationships = (
 
 type FailedStartRecovery = NonNullable<SubagentCardFailure["admittedRun"]>;
 
-const validRetryDisposition = (recovery: FailedStartRecovery): boolean => {
-  switch (recovery.retryDisposition) {
-    case "eligible":
-      return recovery.cleanupDisposition === "confirmed" && recovery.hasRemainingCandidate;
-    case "pending":
-      return recovery.cleanupDisposition === "pending" && recovery.hasRemainingCandidate;
-    case "blocked":
-      return recovery.hasRemainingCandidate;
-    case "exhausted":
-    case "unavailable":
-      return !recovery.hasRemainingCandidate;
-  }
-  return absurd(recovery.retryDisposition);
-};
-
 const registerRecovery = (
   entry: SubagentStartDetails["startEntries"][number] | undefined,
   recovery: FailedStartRecovery,
   runIds: Set<string>,
 ): boolean => {
   if (entry?.routeStatus !== "selected" || runIds.has(recovery.runId)) return false;
-  if (recovery.hasRemainingCandidate !== recovery.remainingCandidateCount > 0) return false;
-  if (!validRetryDisposition(recovery)) return false;
   runIds.add(recovery.runId);
   return true;
 };

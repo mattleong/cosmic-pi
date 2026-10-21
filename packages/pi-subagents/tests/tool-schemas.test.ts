@@ -118,7 +118,7 @@ describe("lifecycle arguments", () => {
     expect(() =>
       prepareLifecycle({ action: "stop", runIds: ["agent-1"], message: "Continue." }),
     ).toThrow(/\[invalid_arguments\]/u);
-    for (const action of ["interrupt", "stop", "retry"] as const)
+    for (const action of ["interrupt", "stop"] as const)
       expect(prepareLifecycle({ action, runIds: ["agent-1"] })).toEqual({
         action,
         runIds: ["agent-1"],

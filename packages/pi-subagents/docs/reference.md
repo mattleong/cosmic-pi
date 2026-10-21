@@ -2,7 +2,7 @@
 
 Procedures and safety notes behind the [README](../README.md). [ARCHITECTURE.md](../ARCHITECTURE.md) covers ownership and lifecycle; the other files in this directory own the detailed contracts:
 
-- [Routing](routing.md): configuration schema, candidate planning, launch contract, and retry.
+- [Routing](routing.md): configuration schema, candidate planning, launch contract, and route continuation.
 - [Local backends](local-backends.md): Pi, Claude, and Codex drivers, writer pools, worktrees, and the supervisor channel.
 - [Completion and delivery](completion-delivery.md): reports, waits, cancellation, presentation, and Activity.
 - [Settings workspace](settings-workspace.md): profile editor, saved sets, delegation, nesting, and doctor.
@@ -32,8 +32,8 @@ For scoped parallel implementation, give shared-checkout writers disjoint task s
 
 - Use `agent_await` rather than polling `agent_list` or `agent_read`. "Finished" means completed, failed, or stopped.
 - A question returns the wait early so the parent can answer it with `agent_send` and await again. A message to a paused or finished Pi run resumes it.
-- Retry only a failed run, and repeat retry only on a failed successor. Use `generalist` only after `retry_route_exhausted`.
-- Set an item's `model` only when the user asks for a specific model. That launch tries only that model, so a failed run has nothing to retry.
+- When a failed run names its next candidate, start a new run with that model before choosing a `generalist` replacement.
+- Set an item's `model` only when the user asks for a specific model or a failed run names its next candidate. That launch tries only that model, so its failure names no further candidate.
 - Shared-checkout writers in one cwd have no file claims and are not isolated from each other; scope their tasks so they don't overlap.
 
 ## Reviewing and applying worktree proposals

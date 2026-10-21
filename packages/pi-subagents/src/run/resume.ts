@@ -65,16 +65,6 @@ const resumeStateError = (record: RunRecord): InvalidSubagentRequestError | unde
     );
   if (!isResumableRunState(state))
     return invalidRequest("resume_state_invalid", `Subagent ${id} cannot resume while ${state}.`);
-  if (record.view.supersededByRunId)
-    return invalidRequest(
-      "resume_superseded",
-      `Subagent ${id} was already continued as ${record.view.supersededByRunId}; follow that run instead.`,
-    );
-  if (record.retryClaim)
-    return invalidRequest(
-      "resume_retry_claimed",
-      `Subagent ${id} has a next-candidate retry in progress and cannot resume.`,
-    );
   // A finished run respawns from its session file only after its last process is gone.
   if (
     isTerminalRunState(state) &&
@@ -93,14 +83,10 @@ const resumeStateError = (record: RunRecord): InvalidSubagentRequestError | unde
 };
 
 const resumeUnavailableError = (record: RunRecord): InvalidSubagentRequestError => {
-  const { id, runtime, state } = record.view;
-  const recovery =
-    state === "failed"
-      ? ` Retry it on its next candidate with agent_lifecycle({ action: "retry", runIds: ["${id}"] }) or start a new run.`
-      : " Start a new run instead.";
+  const { id, runtime } = record.view;
   return invalidRequest(
     "backend_resume_unavailable",
-    `Subagent ${id} cannot resume because local/${runtime} did not provide continuation state.${recovery}`,
+    `Subagent ${id} cannot resume because local/${runtime} did not provide continuation state. Start a new run instead.`,
   );
 };
 

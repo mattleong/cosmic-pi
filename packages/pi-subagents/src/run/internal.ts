@@ -14,7 +14,6 @@ import type {
   BackendStartupState,
 } from "../backend/model.ts";
 import type { CanonicalWriterCwd, WriterLeaseContract } from "../boundary/writer-lease.ts";
-import type { ProfileRouteContinuation } from "../profiles/model.ts";
 import {
   type SubagentError,
   type SubagentNotFoundError,
@@ -112,8 +111,6 @@ export interface RunRecord {
         readonly settled: Deferred.Deferred<void>;
       }
     | undefined;
-  readonly routeContinuation?: ProfileRouteContinuation | undefined;
-  retryClaim?: { readonly token: string } | undefined;
   pauseOutcome?: Deferred.Deferred<SubagentRunView, SubagentError> | undefined;
   latestAssistantText?: string | undefined;
   latestAssistantTruncation?: SubagentReportTruncation | undefined;

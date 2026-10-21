@@ -1,14 +1,8 @@
 import type { SubagentRunView } from "../run/model.ts";
-import { formatRunBlocks, runViewBlock, type RunBlockOutcome } from "./run-block.ts";
+import { formatRunBlocks, runViewBlock } from "./run-block.ts";
 import type { SubagentLifecycleInput } from "./schema.ts";
 
-const retriedOutcome = (run: SubagentRunView): RunBlockOutcome => ({
-  kind: "note",
-  text: `Started profile ${run.profile ?? "generalist"} candidate ${(run.selection.candidateIndex ?? 0) + 1}.`,
-});
-
 const ACKNOWLEDGEMENT_HEADINGS = {
-  retry: "Continued on the next profile candidate.",
   interrupt: "Interrupted; these runs are paused.",
   stop: "Stop requested.",
 } as const satisfies Record<SubagentLifecycleInput["action"], string>;
@@ -22,5 +16,5 @@ export const managementAcknowledgement = (
     ? ""
     : formatRunBlocks(
         [ACKNOWLEDGEMENT_HEADINGS[action]],
-        runs.map((run) => runViewBlock(run, action === "retry" ? retriedOutcome(run) : undefined)),
+        runs.map((run) => runViewBlock(run, undefined)),
       );

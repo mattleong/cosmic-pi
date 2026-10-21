@@ -338,9 +338,7 @@ describe("subagent compact semantic policy", () => {
               admittedRun: {
                 runId: id,
                 cleanupDisposition,
-                retryDisposition: "eligible",
-                hasRemainingCandidate: true,
-                remainingCandidateCount: 1,
+                nextCandidate: { runtime: "pi", model: "openai/next", effort: "high" },
               },
             },
           ],

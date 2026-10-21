@@ -5,7 +5,6 @@ import type {
   StartSubagentRequest,
   SubagentLaunchParent,
   SubagentParentContext,
-  SubagentRetrySupersession,
   SubagentRunView,
 } from "./model.ts";
 import { invalidRequest } from "./errors.ts";
@@ -19,19 +18,11 @@ interface RunSessionStartDependencies extends Pick<
   readonly launch: Pick<ReturnType<typeof launchOperations>, "validate" | "start">;
   readonly workspaces: Pick<RunWorkspaceControl, "withLaunch">;
   readonly redactCompletionReport: (view: SubagentRunView) => SubagentRunView;
-  readonly releaseRetryClaim: (id: string, claimToken: string) => Effect.Effect<void>;
 }
 
 export function sessionStartOperations(dependencies: RunSessionStartDependencies) {
-  const {
-    ownerScope,
-    withLock,
-    requireRecord,
-    launch,
-    workspaces,
-    redactCompletionReport,
-    releaseRetryClaim,
-  } = dependencies;
+  const { ownerScope, withLock, requireRecord, launch, workspaces, redactCompletionReport } =
+    dependencies;
 
   const startWithWorkspace = (request: StartSubagentRequest, scriptedRoot = false) =>
     launch
@@ -45,21 +36,6 @@ export function sessionStartOperations(dependencies: RunSessionStartDependencies
     runSessionOwned(ownerScope, Effect.void, () => startWithWorkspace(request, scriptedRoot)).pipe(
       Effect.map((view) => redactCompletionReport(view)),
     );
-  const startRetrySessionOwned = (
-    request: StartSubagentRequest & { readonly supersedes: SubagentRetrySupersession },
-    onOwned?: () => void,
-  ) =>
-    runSessionOwned(
-      ownerScope,
-      Effect.void,
-      () =>
-        startWithWorkspace(request).pipe(
-          Effect.ensuring(
-            releaseRetryClaim(request.supersedes.runId, request.supersedes.claimToken),
-          ),
-        ),
-      onOwned,
-    ).pipe(Effect.map((view) => redactCompletionReport(view)));
   const captureLaunchParent = (runId: string, nativeContext?: SubagentParentContext) =>
     withLock(
       Effect.gen(function* () {
@@ -119,6 +95,5 @@ export function sessionStartOperations(dependencies: RunSessionStartDependencies
       startWorkspaceSessionOwned(request, true),
     startSessionOwnedFrom,
     captureLaunchParent,
-    startRetrySessionOwned,
   };
 }

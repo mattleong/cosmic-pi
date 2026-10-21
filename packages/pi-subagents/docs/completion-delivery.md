@@ -33,7 +33,7 @@ Every assignment has a monotonic, never-reused epoch and a `preparing`/`issuing`
 
 ### Claude guidance delivery
 
-Local Claude guidance has a separate optional `steeringDelivery` fact: `pending`, `confirmed`, `not-sent`, `report-unconfirmed`, or `unresolved`, bound to the handle, epoch, and delivery sequence. A matching accepted report completes with a warning that guidance stayed unconfirmed. Terminal pending guidance becomes `unresolved` and blocks route retry and retry hints, even after cleanup. Details are in [Local Claude](local-backends.md#local-claude).
+Local Claude guidance has a separate optional `steeringDelivery` fact: `pending`, `confirmed`, `not-sent`, `report-unconfirmed`, or `unresolved`, bound to the handle, epoch, and delivery sequence. A matching accepted report completes with a warning that guidance stayed unconfirmed. Terminal pending guidance becomes `unresolved` and suppresses a failed run's next-candidate hint, even after cleanup. Details are in [Local Claude](local-backends.md#local-claude).
 
 ## Close-on-report lifetime and root shutdown
 
@@ -42,7 +42,7 @@ Local Claude guidance has a separate optional `steeringDelivery` fact: `pending`
 - `agent_send` answers or steers active assignments, and from an ancestor may [resume](#resume-by-ancestors) a paused or finished local Pi run, as do the user's Activity and `/subagents` resume actions. Local Pi supports paused in-place resume and respawn of completed, failed, and stopped sessions; Claude and Codex do not advertise resume. Each resume is a new epoch with session-owned admission.
 - Natural completion or failure closes only that run's backend scope; descendants stay attached to their original run nodes. Cleanup interrupts the run's proxy waits and joins finalizers that release their completion claims, so descendant reports reach a surviving ancestor or the root.
 - Explicit stop marks the subtree against new admission and closes it leaf-first. Root shutdown, replacement, tree navigation, and reload close all children leaf-first, detach confirmed pool members, then release each safely releasable final lease.
-- Local Pi run directories, transcripts included, stay until eviction or runtime end, so a stopped run's `Session:` link keeps working. A paused, completed, failed, or stopped run can resume until its state is reclaimed or a retry claims or supersedes it ([resume admission](routing.md#resume-admission)).
+- Local Pi run directories, transcripts included, stay until eviction or runtime end, so a stopped run's `Session:` link keeps working. A paused, completed, failed, or stopped run can resume until its state is reclaimed ([resume admission](routing.md#resume-admission)).
 - Graceful shutdown is not crash recovery: parent death after `spawn-started` leaves a manual-recovery lock.
 
 ## Projection and delivery
@@ -86,7 +86,7 @@ The root TUI installs one read-only widget above the editor from the same projec
 - If no Pi ancestor accepts, the root notifier sends the batch as one sanitized, redacted notice of [run blocks](#model-facing-run-blocks). An accept-then-throw root result is uncertain and retried.
 - Questions use a separate run-keyed map and latch worker, queued in the same transition that publishes `waiting_for_parent`. The question notice is the one path that delivers a whole question, line breaks included; it and the `agent_read` card indent every question line, so child text can't pass for a card field or an instruction. Awaits never claim or acknowledge it, so it goes out once even while an await returns early on it and shows only its preview (a root send that throws after Pi accepted it is retried, so that notice may repeat). A notice that can't be delivered is retried, and `agent_read` returns the whole pending question meanwhile.
 - Each ancestor send carries a stable key: a report's run ID and generation, or a question's run ID and notification generation. Uncertain sends, of questions and reports alike, stay unacknowledged and are retried to the same ancestor with the same key, never falling through to another recipient; the receiving Pi process keeps the keys it showed in memory for its lifetime and acknowledges a repeat without showing it again. A definite refusal still falls through to the next ancestor or the root.
-- A definite failure whose frozen route still has candidates includes one `agent_lifecycle` retry hint; uncertain or exhausted runs don't.
+- A root child's failure names its frozen route's next candidate, or says none is left, unless unresolved guidance leaves its outcome unclear ([route continuation](routing.md#explicit-route-continuation)).
 
 ### Retention
 
@@ -170,7 +170,7 @@ The saved file is the report: parents read it with their read tool, and model-fa
 
 `tools/run-block.ts` gives every run in multi-run model output (`agent_await`, `agent_lifecycle`, and root and nested completion notices) one block of fixed lines, each clipped to a fixed bound, so a block never exceeds `MAX_RUN_BLOCK_CHARS` and a full batch fits by construction: `tests/tools/output-bounds.test.ts` checks that a header allowance plus `MAX_TARGET_RUNS` blocks fit `MAX_TOOL_OUTPUT_CHARS`, `MAX_COMPLETION_DELIVERY_BATCH` blocks fit a 32 KiB root notice, and `MAX_START_BATCH` start entries fit a start result.
 
-- A block is an identity line (ID, name, state, profile), the outcome, and at most one line for each action item: attention (reply, paused, or quarantined cleanup), route retry, steering, workspace proposal, lineage (predecessor, successor), and the latest warning, cut with a pointer to `agent_read`.
+- A block is an identity line (ID, name, state, profile), the outcome, and at most one line for each action item: attention (reply, paused, or quarantined cleanup), a failed root child's next candidate, steering, workspace proposal, and the latest warning, cut with a pointer to `agent_read`.
 - The outcome is a report's file reference, or a preview of at most 240 characters of a failure, a question, or a report without a file, followed by the failure's file or a pointer to where the rest is. A question's notice delivers the whole question; `agent_read` returns it if that notice hasn't arrived.
 - Diff-stat files, cwd, route warnings, cleanup evidence, live activity, and verbose fields stay out of blocks; `agent_read` shows them.
 - Because every block fits, an await always shows every outcome it claimed and consumes every claimed report. The contract's `deferred` report status marks a report the result didn't deliver: a newer generation that appeared unclaimed during the wait, or one held by a wait that ended (cancelled, timed out, or by user input) before delivering it.
@@ -194,7 +194,7 @@ The script-facing contract is in [Native Pi codemode scripting](native-codemode.
 - Root profiles, start, await, lifecycle, list, and read declare structured results from Effect Schema, separate from persisted details. The contract is encoded inside the claim scope before consumption, and only completely returned reports are consumed.
 - Scripted execution is identified from native `parentToolCallId` provenance on execution-start and admission events. Script evidence cannot be downgraded, model origin requires both observations, and missing evidence fails closed.
 - Scripted starts enforce read-only intent after route resolution and before admission; lifecycle permits only stop. Scripted await rejects parent attention before consumption; questions stay with their notices.
-- Scripted root starts seed an immutable, record-only `scriptOrigin`, inherited by descendants and retry successors. Validation rejects such writers before workspace acquisition, admission rechecks before eviction or pool creation, resume keeps it, and revise cannot admit a script-origin writer.
+- Scripted root starts seed an immutable, record-only `scriptOrigin`, inherited by descendants. Validation rejects such writers before workspace acquisition, admission rechecks before eviction or pool creation, resume keeps it, and revise cannot admit a script-origin writer.
 - `agent_send`, `agent_worktree`, and every nested-Pi management proxy are model-only; `agent_list` and `agent_read` are script-callable at every Pi depth. These gates don't confine native tools or child capability.
 - `agent_read` reveals a finished run's report file or final text for its last assignment without a claim, receipt, or outbox entry; it is bounded read-back, not history. Await targets never read back reports they don't own.
 
@@ -232,7 +232,7 @@ Cleanup evidence is independent of task state and accepted reports; its fields a
 
 Cancellation and ownership:
 
-- `session-owned.ts` owns the one claim-then-owner-scoped-commit mask shared by launch, retry, interrupt, stop, and resume (a send that answers a question uses the same owner-scoped commit), so cancelling a waiter never abandons ownership while owner-scope closure still interrupts the commit.
+- `session-owned.ts` owns the one claim-then-owner-scoped-commit mask shared by launch, interrupt, stop, and resume (a send that answers a question uses the same owner-scoped commit), so cancelling a waiter never abandons ownership while owner-scope closure still interrupts the commit.
 - Subtree stop claims every target and its parent-stop flag, then forks the leaf-first traversal into the session scope. It joins descendant cleanup, including already-stopping and terminal descendants, before closing ancestors, and leaves terminal outcomes unchanged.
 - Writer lease preparation masks its shared ownership claim through finalizer installation; pre-ownership checks stay interruptible.
 - Process lifecycle installs its settlement handler before spawn admission, so unclaimed cancellation is a no-op and claimed cleanup settles its latch.
@@ -257,7 +257,7 @@ Shared rules for registration, replay, compact issues, and expansion are in [too
 - `tools/schema.ts` holds the tool catalogs: the management tools' parameter schemas plus any cross-field validator, and the agent tools' schemas. Root execution and the nested-Pi wire carry the same `{ tool, args }` input.
 - Each `prepareArguments` hook validates and coerces as Pi does, rejects blank strings, and returns `[invalid_arguments]` lists naming allowed values and likely replacements for unknown fields.
 - `execute-result.ts` separates model text, persisted details, and script results.
-- Model text is compact. A start lists one bounded entry per launch (`id name · profile · runtime/model:effort`, plus `worktree <id>` for an isolated writer, and its route warning), or the launch's failure and recovery. Await and lifecycle results give one [run block](#model-facing-run-blocks) per run. A read is the detail surface: its card is a header line, then the fields that need attention (parent, a cwd other than the caller's, retry, route warnings, worktree proposal with its files, quarantined cleanup, warnings, the whole failure and pending question), followed by the latest message, the report's file, or an unsaved report. `agent_read` with `verbose` adds route selection, context, capabilities, process, cwd, and timing. Pending cleanup is never reported; only quarantine is.
+- Model text is compact. A start lists one bounded entry per launch (`id name · profile · runtime/model:effort`, plus `worktree <id>` for an isolated writer, and its route warning), or the launch's failure and recovery. Await and lifecycle results give one [run block](#model-facing-run-blocks) per run. A read is the detail surface: its card is a header line, then the fields that need attention (parent, a failed run's next candidate, a cwd other than the caller's, route warnings, worktree proposal with its files, quarantined cleanup, warnings, the whole failure and pending question), followed by the latest message, the report's file, or an unsaved report. `agent_read` with `verbose` adds route selection, context, capabilities, process, cwd, and timing. Pending cleanup is never reported; only quarantine is.
 - A worktree writer's proposal is stated once, as `proposal: N files, +A −D · agent_worktree apply workspaceId=…`, in cards, `agent_list` lines, issue details, and notifications. A partial apply narrows it to the remaining files; once applied or discarded, it reads `workspace applied` or `workspace discarded`.
 - `agent_worktree` pages complete immutable diffs and keeps patches out of persisted details. Its producers record display spans while composing output, so expansion never parses text.
 - `boundary/host-tool-result.ts` owns the receipts that set Pi's error flag, including decoded child-proxy results, and tracks call provenance from native events, never arguments. Unknown provenance fails closed.
@@ -272,11 +272,11 @@ Shared rules for registration, replay, compact issues, and expansion are in [too
 
 - Typed projections emit one `CompactIssue` per problem or recovery step. Messages start with a subagent, launch, or profile name, never a run or workspace ID. `tools/compact-action-failures.ts` owns each failure code's message and recovery guidance.
 - Headings name runs by display name and show one combined count without routine IDs or route metadata.
-- Routine facts are `info` issues, such as a stop the call requested, a retry moving past its failed option, or an isolated writer's workspace outcome (`ready to apply`, applied, or discarded, including automatically).
+- Routine facts are `info` issues, such as a stop the call requested or an isolated writer's workspace outcome (`ready to apply`, applied, or discarded, including automatically).
 - Workspace rows show whether the diff was reviewed and whether the parent tested its prepared pair or nothing was tested. Left-out worker files are a warning.
 - Static discovery counts eligible options and disabled or unavailable profiles without claiming launch readiness.
 - Report-only omissions use the optional `reportsOnlyOmitted: true` flag; other omissions keep warnings and full-status guidance.
-- Compact summaries never derive grant paths, cleanup, or retry authority from bounded cards.
+- Compact summaries never derive grant paths or cleanup from bounded cards.
 
 ### Notification rows
 

@@ -57,7 +57,7 @@ describe("resuming finished runs", () => {
     });
   });
 
-  it.effect("refuses a failed run without continuation state and points to retry", () => {
+  it.effect("refuses a failed run without continuation state", () => {
     const { fake, layer } = localServiceFixture(
       {},
       fakeChildLayer(Effect.void, {
@@ -65,56 +65,14 @@ describe("resuming finished runs", () => {
       }),
     );
     return withService(layer, function* (service) {
-      yield* service
-        .start(request({ profile: "reviewer", routeContinuation: reviewerContinuation(0) }))
-        .pipe(Effect.flip);
+      yield* service.start(request()).pipe(Effect.flip);
       yield* yieldUntil(() => fake.controls[0]?.released() === 1);
       const failed = (yield* runViews(service))[0]!;
       expect(failed.state).toBe("failed");
       const refusal = yield* service.resume(failed.id).pipe(Effect.flip);
       expect(refusal).toMatchObject({ code: "backend_resume_unavailable" });
-      expect(refusal.message).toContain(`action: "retry"`);
       expect(fake.controls).toHaveLength(1);
       expect((yield* runView(service, failed.id)).state).toBe("failed");
-    });
-  });
-
-  it.effect("refuses a run whose retry is claimed or already superseded it", () => {
-    const { fake, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const failed = yield* failedReviewer(service, fake);
-      const claim = yield* service.claimRetryContinuation(failed.id);
-      expect(yield* service.resume(failed.id).pipe(Effect.flip)).toMatchObject({
-        code: "resume_retry_claimed",
-      });
-      const successor = yield* service.startRetrySessionOwned({
-        ...request({ profile: "reviewer", routeContinuation: reviewerContinuation(1) }),
-        supersedes: { runId: failed.id, claimToken: claim.claimToken },
-      });
-      expect(yield* service.resume(failed.id).pipe(Effect.flip)).toMatchObject({
-        code: "resume_superseded",
-      });
-      expect((yield* runView(service, failed.id)).state).toBe("failed");
-      expect((yield* runView(service, successor.id)).state).toBe("running");
-      expect(fake.controls).toHaveLength(2);
-    });
-  });
-
-  it.effect("refuses retry while a resumed failed run is active", () => {
-    const { fake, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const failed = yield* failedReviewer(service, fake);
-      yield* service.resume(failed.id, "Try once more.");
-      expect(yield* service.claimRetryContinuation(failed.id).pipe(Effect.flip)).toMatchObject({
-        code: "retry_source_not_failed",
-      });
-      fake.controls[1]!.exit(1);
-      yield* yieldUntil(() => fake.controls[1]!.released() === 1);
-      expect((yield* runView(service, failed.id)).state).toBe("failed");
-      // The resumed assignment may differ from the launch task, so it is never replayed.
-      expect(yield* service.claimRetryContinuation(failed.id).pipe(Effect.flip)).toMatchObject({
-        code: "retry_assignment_not_initial",
-      });
     });
   });
 });

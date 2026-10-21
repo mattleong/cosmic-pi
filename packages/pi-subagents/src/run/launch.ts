@@ -39,6 +39,7 @@ import {
 import { MAX_RETAINED_RUNS } from "./limits.ts";
 import { samePiModel } from "./model-catalog.ts";
 import {
+  failedRunNextCandidate,
   isActiveRunState,
   isTerminalRunState,
   SUBAGENT_ROOT_RUN_ID,
@@ -54,7 +55,6 @@ import type { RunRecordCleanup } from "./record-cleanup.ts";
 import { cleanupFailureDiagnostic } from "./cleanup-diagnostic.ts";
 import type { RunSettlement } from "./settlement.ts";
 import { MAX_ERROR_CHARS, sanitizeDiagnosticText, sanitizeName, snapshotView } from "./state.ts";
-import { failedStartRecoveryForRecord } from "./retry.ts";
 import { scriptOriginForStart, scriptedWriterAdmissionError } from "./launch-policy.ts";
 import type { RunWorkspaceControl } from "./workspace-control.ts";
 import {
@@ -124,23 +124,7 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
       return undefined;
     });
 
-  const retryPredecessorLocked = (request: StartSubagentRequest) =>
-    Effect.gen(function* () {
-      const predecessor = request.supersedes ? records.get(request.supersedes.runId) : undefined;
-      if (
-        request.supersedes &&
-        (predecessor?.view.state !== "failed" ||
-          predecessor.retryClaim?.token !== request.supersedes.claimToken ||
-          predecessor.view.supersededByRunId !== undefined)
-      )
-        return yield* invalidRequest(
-          "retry_claim_stale",
-          `Failed predecessor ${request.supersedes.runId} no longer owns this next-candidate retry claim.`,
-        );
-      return predecessor;
-    });
-
-  const parentLocked = (request: StartSubagentRequest, predecessor: RunRecord | undefined) =>
+  const parentLocked = (request: StartSubagentRequest) =>
     Effect.gen(function* () {
       const parentRunId = request.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
       const { maxDepth } = request.nestingPolicy ?? DEFAULT_SUBAGENT_NESTING_POLICY;
@@ -160,15 +144,6 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
         return yield* invalidRequest(
           "nesting_depth_limit",
           `Subagent nesting depth reached (${maxDepth}); ${parentRunId} cannot spawn another Pi run node.`,
-        );
-      if (
-        request.supersedes &&
-        predecessor &&
-        (predecessor.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID) !== parentRunId
-      )
-        return yield* invalidRequest(
-          "retry_parent_mismatch",
-          "A retry successor must keep its predecessor's parent.",
         );
       return parent;
     });
@@ -196,7 +171,7 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
                 withLock(
                   Effect.gen(function* () {
                     yield* enforceScriptedAdmissionLocked(request, scriptedRoot);
-                    yield* parentLocked(request, yield* retryPredecessorLocked(request));
+                    yield* parentLocked(request);
                     yield* spendLimitLocked(spendLimit);
                   }),
                 ),
@@ -257,10 +232,7 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
             }),
           );
 
-        const validateCapacityLocked = (
-          ownReservation: RunRecord | undefined,
-          predecessor: RunRecord | undefined,
-        ) =>
+        const validateCapacityLocked = (ownReservation: RunRecord | undefined) =>
           Effect.gen(function* () {
             const capacityFailure = processCapacityError(
               records,
@@ -284,7 +256,6 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
               writerPools,
               canonicalWriterCwd,
               ownReservation,
-              predecessor,
             );
             if (writerFailure) return yield* writerFailure;
             return undefined;
@@ -293,19 +264,15 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
         const checkAdmissionLocked = (ownReservation?: RunRecord) =>
           Effect.gen(function* () {
             yield* enforceScriptedAdmissionLocked(request, scriptedRoot);
-            const predecessor = yield* retryPredecessorLocked(request);
-            const parent = yield* parentLocked(request, predecessor);
-            yield* validateCapacityLocked(ownReservation, predecessor);
-            return { parent, predecessor };
+            const parent = yield* parentLocked(request);
+            yield* validateCapacityLocked(ownReservation);
+            return parent;
           });
 
         const plan: LaunchPlan = { request, parentRunId, cwd };
         const evictionEligible = (record: RunRecord) => isEvictionEligible({ records }, record);
 
-        const admitLocked = (
-          evicted: RunRecord | undefined,
-          { parent, predecessor }: Effect.Success<ReturnType<typeof checkAdmissionLocked>>,
-        ) =>
+        const admitLocked = (evicted: RunRecord | undefined, parent: RunRecord | undefined) =>
           Effect.gen(function* () {
             if (evicted) {
               evicted.evictionClaim = undefined;
@@ -331,7 +298,6 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
               nativeAgents: new Set(),
               cleanupSettlement,
               cleanupDisposition: "pending",
-              routeContinuation: request.routeContinuation,
               pauseRequested: false,
               stoppedByParent: false,
               cleanupPending: false,
@@ -354,10 +320,6 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
               },
               nextAssignmentEpoch: 2,
             };
-            if (predecessor) {
-              predecessor.retryClaim = undefined;
-              predecessor.view = { ...predecessor.view, supersededByRunId: id };
-            }
             records.set(id, record);
             workspaces.bind(request, record);
             yield* publish;
@@ -367,7 +329,7 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
           withLock(
             Effect.gen(function* () {
               if (isClosed()) return yield* runtimeClosedError();
-              const admission = yield* checkAdmissionLocked();
+              const parent = yield* checkAdmissionLocked();
               const history = [...records.values()].filter((record) =>
                 isTerminalRunState(record.view.state),
               );
@@ -393,7 +355,7 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
               }
               return {
                 kind: "reserved" as const,
-                record: yield* admitLocked(candidate, admission),
+                record: yield* admitLocked(candidate, parent),
               };
             }),
           );
@@ -521,7 +483,12 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
           Effect.tapError((error) =>
             withLock(
               Effect.sync(() => {
-                failedStartRecoveries.set(error, failedStartRecoveryForRecord(reserved));
+                const nextCandidate = failedRunNextCandidate(reserved.view);
+                failedStartRecoveries.set(error, {
+                  runId: reserved.view.id,
+                  cleanupDisposition: reserved.cleanupDisposition,
+                  ...(nextCandidate && { nextCandidate }),
+                });
               }),
             ),
           ),

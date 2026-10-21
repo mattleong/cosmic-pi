@@ -12,7 +12,6 @@ import {
 } from "./model.ts";
 import type { RunNotificationDelivery } from "./notification-delivery.ts";
 import { questionRecipientRunId } from "./notification-routing.ts";
-import { failedStartRecoveryForRecord } from "./retry.ts";
 import type {
   SubagentAwaitUntil,
   SubagentRunObservation,
@@ -36,11 +35,6 @@ const reportStatusOf = (finalText: string | undefined, unresolved: boolean, avai
       : available
         ? ("available" as const)
         : ("claimed" as const);
-
-const startRecoveryOf = (record: RunRecord) =>
-  record.view.state === "failed" && record.view.reportGeneration === 0
-    ? failedStartRecoveryForRecord(record)
-    : undefined;
 
 const redactCompletionReport = (view: SubagentRunView): SubagentRunView => {
   const {
@@ -92,7 +86,6 @@ export function completionObservationOperations(
       ...view,
       reportStatus: reportStatusOf(view.finalText, unresolved, owns || claimOwner === undefined),
     };
-    const recovery = startRecoveryOf(record);
     return {
       run: owns ? snapshotView(observed) : redactCompletionReport(observed),
       ...(owns && {
@@ -102,7 +95,6 @@ export function completionObservationOperations(
           claimToken,
         },
       }),
-      ...(recovery && { recovery }),
     };
   };
 

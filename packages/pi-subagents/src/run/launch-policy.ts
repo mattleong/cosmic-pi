@@ -8,9 +8,7 @@ export const scriptOriginForStart = (
   scriptedRoot: boolean,
 ): boolean =>
   scriptedRoot ||
-  (request.parentRunId !== undefined && records.get(request.parentRunId)?.scriptOrigin === true) ||
-  (request.supersedes !== undefined &&
-    records.get(request.supersedes.runId)?.scriptOrigin === true);
+  (request.parentRunId !== undefined && records.get(request.parentRunId)?.scriptOrigin === true);
 
 export const scriptedWriterAdmissionError = () =>
   invalidRequest(

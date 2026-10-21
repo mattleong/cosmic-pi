@@ -410,13 +410,21 @@ export const projectFailure = (failure: SubagentCardFailure): SubagentCardFailur
   const code = optionalText(failure.code, MAX_FAILURE_CODE_CHARS);
   const message = requiredText(failure.message, MAX_FAILURE_MESSAGE_CHARS, "Launch failed.");
   const recovery = failure.admittedRun;
+  const next = recovery?.nextCandidate;
   const admittedRun = recovery
     ? {
         runId: requiredText(recovery.runId, MAX_PROTOCOL_ID_CHARS, "unknown-run"),
         cleanupDisposition: recovery.cleanupDisposition,
-        retryDisposition: recovery.retryDisposition,
-        remainingCandidateCount: nonNegativeInteger(recovery.remainingCandidateCount),
-        hasRemainingCandidate: recovery.hasRemainingCandidate,
+        ...(next !== undefined && {
+          nextCandidate:
+            next === "none"
+              ? next
+              : {
+                  runtime: next.runtime,
+                  model: requiredText(next.model, MAX_CARD_MODEL_CHARS, "unknown-model"),
+                  effort: next.effort,
+                },
+        }),
       }
     : undefined;
   return {

@@ -243,14 +243,10 @@ export interface SkippedProfileCandidate {
   readonly reason: string;
 }
 
+/** The launch-time route, frozen so later edits never change what a run reports as its next candidate. */
 export interface ProfileRouteContinuation {
-  readonly profile: ProfileId;
-  /** The launch-time agent, so a retry keeps its instructions and overrides despite later edits. */
-  readonly agent?: CustomAgent | undefined;
-  readonly routeSource: LaunchRouteSource;
   readonly candidates: ReadonlyArray<ProfileCandidate>;
   readonly selectedCandidateIndex: number;
-  readonly skippedCandidates: ReadonlyArray<SkippedProfileCandidate>;
 }
 
 export type SubagentSelectionSource = "profile-candidate" | "profile-parent-candidate";

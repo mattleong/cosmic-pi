@@ -40,9 +40,6 @@ const recovery = (runId: string, overrides: Partial<FailedStartRecovery> = {}) =
   ({
     runId,
     cleanupDisposition: "confirmed",
-    retryDisposition: "eligible",
-    remainingCandidateCount: 1,
-    hasRemainingCandidate: true,
     ...overrides,
   }) satisfies FailedStartRecovery;
 
@@ -94,12 +91,7 @@ describe("start contract", () => {
       name: "second",
       profile: "reviewer",
       failure: { disposition: "failed", code: "SubagentProcessError" },
-      admittedRun: {
-        runId: "run-2",
-        cleanup: "confirmed",
-        disposition: "eligible",
-        remainingCandidateCount: 1,
-      },
+      admittedRun: { runId: "run-2", cleanup: "confirmed" },
     });
     expect(contract.launches[2]).toMatchObject({ failure: { disposition: "unconfirmed" } });
     expect(contract.launches[2]).not.toHaveProperty("admittedRun");

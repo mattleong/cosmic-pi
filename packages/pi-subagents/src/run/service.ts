@@ -45,14 +45,11 @@ import { notificationDelivery } from "./notification-delivery.ts";
 import { processControlOperations, processInitializer } from "./process-lifecycle.ts";
 import { recordCleanup, type RunRecordCleanup } from "./record-cleanup.ts";
 import { resumeOperations } from "./resume.ts";
-import { retryOperations, type SubagentRetryClaim } from "./retry.ts";
 import { settlementOperations } from "./settlement.ts";
 import {
-  type FailedStartRecovery,
   type StartSubagentRequest,
   type SubagentLaunchParent,
   type SubagentParentContext,
-  type SubagentRetrySupersession,
   type SubagentProjection,
   type SubagentRunView,
   type SubagentControlExpectation,
@@ -126,7 +123,6 @@ interface SubagentCompletionReceipt {
 export interface SubagentRunObservation {
   readonly run: SubagentRunView;
   readonly completionReceipt?: SubagentCompletionReceipt | undefined;
-  readonly recovery?: FailedStartRecovery | undefined;
 }
 
 export interface SubagentServiceContract extends WorkspaceCoordinatorContract {
@@ -150,17 +146,6 @@ export interface SubagentServiceContract extends WorkspaceCoordinatorContract {
     callerRunId: string,
     ids: ReadonlyArray<string>,
   ) => Effect.Effect<void, SubagentNotFoundError>;
-  readonly claimRetryContinuation: (id: string) => Effect.Effect<SubagentRetryClaim, SubagentError>;
-  readonly releaseRetryClaim: (id: string, claimToken: string) => Effect.Effect<void>;
-  readonly exhaustRetryClaim: (
-    id: string,
-    claimToken: string,
-  ) => Effect.Effect<void, SubagentError>;
-  readonly blockRetryClaim: (id: string, claimToken: string) => Effect.Effect<void, SubagentError>;
-  readonly startRetrySessionOwned: (
-    request: StartSubagentRequest & { readonly supersedes: SubagentRetrySupersession },
-    onOwned?: () => void,
-  ) => Effect.Effect<SubagentRunView, SubagentError>;
   readonly withAwaitTerminalObservations: <A, E, R>(
     ids: ReadonlyArray<string>,
     until: SubagentAwaitUntil,
@@ -278,7 +263,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const { admitTurnInput, releaseTurnInput, claimTurnInputDrain } = turnInputGates(withLock);
   const {
     allocateClaimToken,
-    allocateRetryClaimToken,
     allocateAssignmentAttemptToken,
     allocateMessageId,
     allocateRunIdentity,
@@ -365,8 +349,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     allocateClaimToken,
     delivery,
   });
-
-  const retry = retryOperations({ ...runContext, allocateClaimToken: allocateRetryClaimToken });
 
   const prepareWriterLeaseForSpawn = writerSpawnPreparation(runContext);
   const ownedCleanup = recordCleanup(runContext);
@@ -500,12 +482,10 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     launch,
     workspaces,
     redactCompletionReport: observations.redactCompletionReport,
-    releaseRetryClaim: retry.releaseRetryClaim,
   });
   const projection = SubscriptionRef.get(projectionRef);
 
   const service: SubagentServiceContract = {
-    ...retry,
     ...observations,
     start: starts.start,
     startSessionOwned: starts.startSessionOwned,
@@ -522,7 +502,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     startSessionOwnedFrom: starts.startSessionOwnedFrom,
     captureLaunchParent: starts.captureLaunchParent,
     ...visibilityOperations(runContext),
-    startRetrySessionOwned: starts.startRetrySessionOwned,
     send: agentMessages.sendFromUser,
     interrupt: controls.interrupt,
     resume: resume.resume,

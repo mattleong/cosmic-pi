@@ -5,11 +5,11 @@ import type { RunContext, RunRecord } from "./internal.ts";
 import {
   emptyUsage,
   isTerminalRunState,
+  nextRouteCandidate,
   type StartSubagentRequest,
   type SubagentCapability,
   type SubagentRunView,
 } from "./model.ts";
-import { remainingRouteCandidates } from "./retry.ts";
 import { MAX_TASK_CHARS } from "./state.ts";
 import { childSystemPrompt, isWorkspaceParentRequest } from "./tool-policy.ts";
 import { descendantRunIds } from "./tree.ts";
@@ -52,9 +52,8 @@ export const initialRunView = (
   task: request.task.trim(),
   ...(request.profile && { profile: request.profile }),
   ...(request.agent && { agent: request.agent }),
-  ...(request.supersedes && { predecessorRunId: request.supersedes.runId }),
   ...(request.routeContinuation && {
-    remainingCandidateCount: remainingRouteCandidates(request.routeContinuation),
+    nextCandidate: nextRouteCandidate(request.routeContinuation),
   }),
   parentRunId,
   depth: (parent?.view.depth ?? 0) + 1,
@@ -118,7 +117,6 @@ export const isEvictionEligible = (
   !record.cleanupPending &&
   record.process === undefined &&
   descendantRunIds(records, record.view.id).length === 0 &&
-  record.retryClaim === undefined &&
   record.completionClaims.size === 0 &&
   record.completionGenerations.size === 0 &&
   isTerminalRunState(record.view.state);

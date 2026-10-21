@@ -62,14 +62,6 @@ const ACTION_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
     "Wait for or cancel the operation that already owns this completion, then retry.",
   ],
   [
-    ["retry_route_exhausted"],
-    "The original profile route is exhausted; only now consider a generalist replacement.",
-  ],
-  [
-    ["retry_claim", "retry_already", "resume_superseded"],
-    "Inspect the predecessor and its linked successor with agent_read.",
-  ],
-  [
     ["report_delivery_backlog"],
     "Wait for automatic outcome delivery or claim the current outcome with agent_await, then retry.",
   ],
@@ -105,10 +97,6 @@ const ACTION_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
   ],
 ];
 const UNCERTAIN_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
-  [
-    ["retry_cleanup_unconfirmed", "retry_outcome_uncertain"],
-    "Do not retry automatically; inspect the failed run and resolve the reported ownership uncertainty.",
-  ],
   [
     ["reply_outcome_uncertain"],
     "Do not resend the reply automatically; inspect the run with agent_read and wait for its next event.",
@@ -161,9 +149,6 @@ const FAILURE_PHRASES: ReadonlyArray<readonly [ReadonlyArray<string>, Phrase]> =
   [["question_ownership_mismatch"], (subject) => `${subject}'s question is no longer waiting`],
   [["question_transport_closed"], (subject) => `${subject}'s question was cancelled`],
   [["reply_send_failed"], (subject) => `${subject} didn't receive the reply`],
-  [["retry_route_exhausted"], (subject) => `${subject} has no profile options left to retry`],
-  [["retry_claim", "retry_already"], (subject) => `${subject} is already being retried`],
-  [["resume_superseded"], (subject) => `${subject} was already replaced by a retry`],
   [["completion_claim_conflict"], (subject) => `${subject}'s outcome is claimed by another wait`],
   [
     ["report_delivery_backlog"],
@@ -184,7 +169,6 @@ const VERBS = new Map([
   ["read", "read"],
   ["interrupt", "interrupt"],
   ["stop", "stop"],
-  ["retry", "retry"],
   ["list", "list"],
   ["await", "wait for"],
   ["start", "start"],
@@ -211,7 +195,6 @@ const NOUNS = new Map([
   ["send", "message"],
   ["interrupt", "interrupt"],
   ["stop", "stop"],
-  ["retry", "retry"],
 ]);
 
 const unconfirmedMessage = (action: string, name: string | undefined): string => {

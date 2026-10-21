@@ -186,213 +186,177 @@ const openRoot = (ctx: ExtensionContext, directory: string) =>
   });
 
 describe("authenticated immediate-parent context", () => {
-  it.live(
-    "uses the child model, effort and findings through public proxy wiring and root-issued retry",
-    () =>
-      Effect.gen(function* () {
-        const directory = yield* temporaryDirectory("pi-nested-parent-");
-        const root = SessionManager.create(directory, directory);
-        root.appendMessage({ role: "user", content: "ROOT-ONLY-HISTORY", timestamp: 1 });
-        root.appendMessage(fauxAssistantMessage("Root answer"));
-        const child = SessionManager.create(directory, directory);
-        child.appendMessage({ role: "user", content: "Child assignment", timestamp: 2 });
-        child.appendMessage(fauxAssistantMessage("CHILD-FINDINGS"));
-        const findingsLeaf = child.appendMessage({
-          role: "toolResult",
-          toolCallId: "inspect",
-          toolName: "read",
-          content: [{ type: "text", text: "CHILD-VERIFICATION" }],
-          isError: false,
-          timestamp: 3,
-        });
-        child.appendMessage(fauxAssistantMessage(""));
-        const rootCtx = contextFor(root);
-        const { host: rootHost, activation } = yield* openRoot(rootCtx, directory);
-        const backend = backendFixture(child);
-        const layer = SubagentService.layer({ proxyHandler: activation.proxyHandler }).pipe(
-          Layer.provideMerge(backend.layer),
-          Layer.provideMerge(profiles),
-          Layer.provide(fakeWriterLeaseLayer()),
+  it.live("uses the child model, effort and findings through public proxy wiring", () =>
+    Effect.gen(function* () {
+      const directory = yield* temporaryDirectory("pi-nested-parent-");
+      const root = SessionManager.create(directory, directory);
+      root.appendMessage({ role: "user", content: "ROOT-ONLY-HISTORY", timestamp: 1 });
+      root.appendMessage(fauxAssistantMessage("Root answer"));
+      const child = SessionManager.create(directory, directory);
+      child.appendMessage({ role: "user", content: "Child assignment", timestamp: 2 });
+      child.appendMessage(fauxAssistantMessage("CHILD-FINDINGS"));
+      const findingsLeaf = child.appendMessage({
+        role: "toolResult",
+        toolCallId: "inspect",
+        toolName: "read",
+        content: [{ type: "text", text: "CHILD-VERIFICATION" }],
+        isError: false,
+        timestamp: 3,
+      });
+      child.appendMessage(fauxAssistantMessage(""));
+      const rootCtx = contextFor(root);
+      const { host: rootHost, activation } = yield* openRoot(rootCtx, directory);
+      const backend = backendFixture(child);
+      const layer = SubagentService.layer({ proxyHandler: activation.proxyHandler }).pipe(
+        Layer.provideMerge(backend.layer),
+        Layer.provideMerge(profiles),
+        Layer.provide(fakeWriterLeaseLayer()),
+      );
+      yield* Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const parent = yield* service.start(
+          request({ cwd: directory, model: "openai/child-model", effort: "medium" }),
         );
-        yield* Effect.gen(function* () {
-          const service = yield* SubagentService;
-          const parent = yield* service.start(
-            request({ cwd: directory, model: "openai/child-model", effort: "medium" }),
-          );
-          const parentControl = backend.controls[0];
-          if (!parentControl) return yield* Effect.die("Parent did not launch");
-          let listener: LocalPiChildIpcHandlers | undefined;
-          let selectedModel: ReturnType<typeof modelFixture> | undefined = childModel;
-          let effort: "medium" | "minimal" = "medium";
-          let tokens = 10;
-          const childCtx = contextFor(child, childModel);
-          const liveCtx = extensionContextFixture({
-            ...childCtx,
-            get model() {
-              return selectedModel;
+        const parentControl = backend.controls[0];
+        if (!parentControl) return yield* Effect.die("Parent did not launch");
+        let listener: LocalPiChildIpcHandlers | undefined;
+        let selectedModel: ReturnType<typeof modelFixture> | undefined = childModel;
+        let effort: "medium" | "minimal" = "medium";
+        let tokens = 10;
+        const childCtx = contextFor(child, childModel);
+        const liveCtx = extensionContextFixture({
+          ...childCtx,
+          get model() {
+            return selectedModel;
+          },
+          getContextUsage: () => ({
+            tokens,
+            contextWindow: selectedModel?.contextWindow ?? 1_000,
+            percent: 1,
+          }),
+        });
+        const childTools = new Map<string, ToolDefinition>();
+        const childHost = recordingExtensionHost(
+          {},
+          {
+            getThinkingLevel: () => effort,
+            getActiveTools: () => ["child-only-tool"],
+            registerTool: (tool) => void childTools.set(tool.name, defineTool(tool)),
+          },
+        );
+        registerSubagentChildBridge(childHost.pi, {
+          loadSettings: () => Promise.resolve(),
+          openIpc: () => ({
+            listen: (handlers) => {
+              listener = handlers;
+              return () => {
+                listener = undefined;
+              };
             },
-            getContextUsage: () => ({
-              tokens,
-              contextWindow: selectedModel?.contextWindow ?? 1_000,
-              percent: 1,
-            }),
+            sendContact: (contact) =>
+              Effect.sync(() => {
+                if (contact.type !== "proxy_request") return;
+                parentControl.offer({
+                  ...contact,
+                  respond: (ok, payloadJson) =>
+                    Effect.sync(() => {
+                      listener?.onControl({
+                        channel: "pi-subagents",
+                        type: "proxy_response",
+                        requestId: contact.requestId,
+                        ok,
+                        payloadJson,
+                      });
+                    }),
+                });
+              }),
+          }),
+        });
+        yield* Effect.addFinalizer(() =>
+          Effect.tryPromise(() =>
+            Promise.resolve(childHost.emit("session_shutdown", liveCtx)),
+          ).pipe(Effect.ignore),
+        );
+        yield* Effect.tryPromise(() => Promise.resolve(childHost.emit("session_start", liveCtx)));
+        const call = (input: SubagentToolInput) =>
+          Effect.tryPromise(() => {
+            const tool = childTools.get(input.tool);
+            if (!tool) throw new Error(`Missing child tool ${input.tool}`);
+            return tool.execute("nested-call", input.args, undefined, undefined, liveCtx);
           });
-          const childTools = new Map<string, ToolDefinition>();
-          const childHost = recordingExtensionHost(
-            {},
-            {
-              getThinkingLevel: () => effort,
-              getActiveTools: () => ["child-only-tool"],
-              registerTool: (tool) => void childTools.set(tool.name, defineTool(tool)),
-            },
-          );
-          registerSubagentChildBridge(childHost.pi, {
-            loadSettings: () => Promise.resolve(),
-            openIpc: () => ({
-              listen: (handlers) => {
-                listener = handlers;
-                return () => {
-                  listener = undefined;
-                };
-              },
-              sendContact: (contact) =>
-                Effect.sync(() => {
-                  if (contact.type !== "proxy_request") return;
-                  parentControl.offer({
-                    ...contact,
-                    respond: (ok, payloadJson) =>
-                      Effect.sync(() => {
-                        listener?.onControl({
-                          channel: "pi-subagents",
-                          type: "proxy_response",
-                          requestId: contact.requestId,
-                          ok,
-                          payloadJson,
-                        });
-                      }),
-                  });
-                }),
-            }),
-          });
-          yield* Effect.addFinalizer(() =>
-            Effect.tryPromise(() =>
-              Promise.resolve(childHost.emit("session_shutdown", liveCtx)),
-            ).pipe(Effect.ignore),
-          );
-          yield* Effect.tryPromise(() => Promise.resolve(childHost.emit("session_start", liveCtx)));
-          const call = (input: SubagentToolInput) =>
-            Effect.tryPromise(() => {
-              const tool = childTools.get(input.tool);
-              if (!tool) throw new Error(`Missing child tool ${input.tool}`);
-              return tool.execute("nested-call", input.args, undefined, undefined, liveCtx);
-            });
-          yield* call({
-            tool: "agent_start",
-            args: { agents: [{ task: "Reconstruct decisions", profile: "oracle" }] },
-          });
-          const oracle = backend.launches[1];
-          if (!oracle) return yield* Effect.die("Oracle did not launch");
-          expect(oracle).toMatchObject({
-            model: "openai/child-model",
-            effort: "high",
-            context: "fork",
-            parentSessionId: child.getSessionId(),
-            parentSessionFile: child.getSessionFile(),
-            parentLeafId: findingsLeaf,
-            sharesParentPromptCache: true,
-            activeTools: ["read", "bash"],
-          });
-          const fork = SessionManager.open(yield* createForkedSession(oracle, directory));
-          const inherited = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(
-            fork.buildSessionContext().messages,
-          );
-          expect(inherited).toContain("CHILD-FINDINGS");
-          expect(inherited).toContain("CHILD-VERIFICATION");
-          expect(inherited).not.toContain("ROOT-ONLY-HISTORY");
-          expect(
-            (yield* runViews(service)).find((run) => run.id === oracle.runId)?.parentRunId,
-          ).toBe(parent.id);
+        yield* call({
+          tool: "agent_start",
+          args: { agents: [{ task: "Reconstruct decisions", profile: "oracle" }] },
+        });
+        const oracle = backend.launches[1];
+        if (!oracle) return yield* Effect.die("Oracle did not launch");
+        expect(oracle).toMatchObject({
+          model: "openai/child-model",
+          effort: "high",
+          context: "fork",
+          parentSessionId: child.getSessionId(),
+          parentSessionFile: child.getSessionFile(),
+          parentLeafId: findingsLeaf,
+          sharesParentPromptCache: true,
+          activeTools: ["read", "bash"],
+        });
+        const fork = SessionManager.open(yield* createForkedSession(oracle, directory));
+        const inherited = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(
+          fork.buildSessionContext().messages,
+        );
+        expect(inherited).toContain("CHILD-FINDINGS");
+        expect(inherited).toContain("CHILD-VERIFICATION");
+        expect(inherited).not.toContain("ROOT-ONLY-HISTORY");
+        expect((yield* runViews(service)).find((run) => run.id === oracle.runId)?.parentRunId).toBe(
+          parent.id,
+        );
 
-          const latestLeaf = child.appendMessage({
-            role: "user",
-            content: "LATEST-CHILD-FINDING",
-            timestamp: 4,
-          });
-          selectedModel = changedChildModel;
-          effort = "minimal";
-          yield* call({
+        selectedModel = changedChildModel;
+        effort = "minimal";
+        yield* call({
+          tool: "agent_start",
+          args: { agents: [{ task: "Continue bounded analysis" }] },
+        });
+        expect(backend.launches[2]).toMatchObject({
+          model: "openai/changed-child-model",
+          effort: "minimal",
+        });
+        tokens = 900;
+        const oversized = yield* call({
+          tool: "agent_start",
+          args: { agents: [{ task: "Too much context", profile: "oracle" }] },
+        });
+        expect(oversized.structuredContent).toMatchObject({
+          outcome: "failed",
+          launches: [{ failure: { code: "profile_no_eligible_model" } }],
+        });
+        expect(backend.launches).toHaveLength(3);
+        tokens = 10;
+        selectedModel = undefined;
+        const missingModel = yield* call({
+          tool: "agent_start",
+          args: { agents: [{ task: "No selected parent model" }] },
+        });
+        expect(missingModel.structuredContent).toMatchObject({ outcome: "failed" });
+        expect(backend.launches).toHaveLength(3);
+        yield* executeSubagentActionEffect(
+          rootHost.pi,
+          { cwd: directory, projectTrusted: true },
+          {
             tool: "agent_start",
-            args: { agents: [{ task: "Continue bounded analysis" }] },
-          });
-          expect(backend.launches[2]).toMatchObject({
-            model: "openai/changed-child-model",
-            effort: "minimal",
-          });
-          tokens = 900;
-          const oversized = yield* call({
-            tool: "agent_start",
-            args: { agents: [{ task: "Too much context", profile: "oracle" }] },
-          });
-          expect(oversized.structuredContent).toMatchObject({
-            outcome: "failed",
-            launches: [{ failure: { code: "profile_no_eligible_model" } }],
-          });
-          expect(backend.launches).toHaveLength(3);
-          tokens = 10;
-          // Refresh native facts without launching, then let the root retry the failed grandchild.
-          yield* call({ tool: "agent_profiles", args: {} });
-          const oracleControl = backend.controls[1];
-          if (!oracleControl) return yield* Effect.die("Missing oracle control");
-          oracleControl.offer({ type: "protocol_error", message: "Fixture oracle failure" });
-          yield* service.withAwaitTerminalObservations(
-            [oracle.runId],
-            "all_finished",
-            undefined,
-            () => Effect.void,
-          );
-          yield* service.stop(oracle.runId);
-          expect(oracleControl.released).toBe(true);
-          const retried = yield* executeSubagentActionEffect(
-            rootHost.pi,
-            { cwd: directory, projectTrusted: true },
-            { tool: "agent_lifecycle", args: { action: "retry", runIds: [oracle.runId] } },
-            undefined,
-            rootCtx,
-          );
-          expect(retried.isError).not.toBe(true);
-          expect(backend.launches[3]).toMatchObject({
-            model: "openai/changed-child-model",
-            effort: "high",
-            parentSessionId: child.getSessionId(),
-            parentSessionFile: child.getSessionFile(),
-            parentLeafId: latestLeaf,
-            sharesParentPromptCache: true,
-          });
-          selectedModel = undefined;
-          const missingModel = yield* call({
-            tool: "agent_start",
-            args: { agents: [{ task: "No selected parent model" }] },
-          });
-          expect(missingModel.structuredContent).toMatchObject({ outcome: "failed" });
-          expect(backend.launches).toHaveLength(4);
-          yield* executeSubagentActionEffect(
-            rootHost.pi,
-            { cwd: directory, projectTrusted: true },
-            {
-              tool: "agent_start",
-              args: { agents: [{ task: "Root still inherits its own context" }] },
-            },
-            undefined,
-            rootCtx,
-          );
-          expect(backend.launches[4]).toMatchObject({
-            model: "openai/root-model",
-            effort: "low",
-            parentSessionId: root.getSessionId(),
-          });
-          return undefined;
-        }).pipe(Effect.provide(layer));
-      }),
+            args: { agents: [{ task: "Root still inherits its own context" }] },
+          },
+          undefined,
+          rootCtx,
+        );
+        expect(backend.launches[3]).toMatchObject({
+          model: "openai/root-model",
+          effort: "low",
+          parentSessionId: root.getSessionId(),
+        });
+        return undefined;
+      }).pipe(Effect.provide(layer));
+    }),
   );
 
   it.live("never substitutes root fork context for an uncaptured Pi or non-Pi parent", () =>

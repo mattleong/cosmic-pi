@@ -33,11 +33,7 @@ const run = (index = 1, cost?: number): SubagentRunView =>
         },
       ],
     },
-    predecessorRunId: "private-predecessor",
-    supersededByRunId: "private-successor",
-    remainingCandidateCount: 2,
-    retryExhausted: true,
-    retryBlocked: true,
+    nextCandidate: { runtime: "pi", model: "private/next-model", effort: "high" },
     cwd: "/private/project",
     state: "completed",
     runtime: "claude",
@@ -144,8 +140,7 @@ describe("persisted subagent details version 2", () => {
     expect(serialized).not.toContain("/private/project");
     expect(serialized).not.toContain("private-session");
     expect(serialized).not.toContain("private transcript");
-    expect(serialized).not.toContain("private-predecessor");
-    expect(serialized).not.toContain("private-successor");
+    expect(serialized).not.toContain("private/next-model");
     expect(serialized).not.toContain("routeSource");
     expect(serialized).not.toContain('candidateIndex":0');
     expect(details.cards[0]).toMatchObject({
@@ -394,9 +389,7 @@ describe("persisted subagent detail fitting", () => {
         admittedRun: {
           runId: `agent-admitted-${entry.index}`,
           cleanupDisposition: "confirmed" as const,
-          retryDisposition: "eligible" as const,
-          remainingCandidateCount: 1,
-          hasRemainingCandidate: true,
+          nextCandidate: { runtime: "pi" as const, model: "openai/next", effort: "high" as const },
         },
       }));
     const details = startDetails({ startEntries: entries, startFailures: failures });

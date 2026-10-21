@@ -97,7 +97,6 @@ const successorRequest = (
 ): StartSubagentRequest => ({
   ...request,
   task: `${request.task}\n\nParent revision request:\n${message}`,
-  supersedes: undefined,
 });
 
 /** An adopted workspace's first successor: a new run with the parent's message as its task. */
@@ -108,7 +107,6 @@ const adoptedSuccessor = (
 ): StartSubagentRequest => ({
   ...bindingRequest(resolved, binding.handle, "worktree"),
   task: message,
-  supersedes: undefined,
 });
 
 const launchFacts = (request: StartSubagentRequest): WorkspaceLaunch => ({
@@ -245,15 +243,10 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
       if (isClosed())
         return yield* invalid("workspace_runtime_closed", "The subagent session is closed.");
       if (state.integrationQuarantined) return yield* integrationQuarantinedError();
-      const predecessor = request.supersedes ? records.get(request.supersedes.runId) : undefined;
       const caller = request.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
       const parent = caller === SUBAGENT_ROOT_RUN_ID ? undefined : workspaceParentLocked(caller);
-      // A retry keeps its predecessor's mode; otherwise the start item's isolation wins, and a
-      // worktree writer's own writers default to worktrees.
-      const mode =
-        predecessor?.view.writerWorkspaceMode ??
-        request.writerWorkspaceModeOverride ??
-        (parent ? "worktree" : state.mode);
+      // The start item's isolation wins, and a worktree writer's own writers default to worktrees.
+      const mode = request.writerWorkspaceModeOverride ?? (parent ? "worktree" : state.mode);
       if (mode !== "worktree") return { mode };
       if (caller !== SUBAGENT_ROOT_RUN_ID && !parent)
         return yield* invalid(
@@ -344,8 +337,6 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
             );
             return succession.binding.handle;
           }
-          // A route retry starts from a fresh snapshot like any launch; the failed writer's
-          // workspace stays an ordinary proposal.
           const service = yield* requireEngine;
           const handle = yield* restore(
             service

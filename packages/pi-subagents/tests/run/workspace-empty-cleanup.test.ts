@@ -10,7 +10,6 @@ import {
   awaitRuns,
   completeLocalRun,
   request,
-  reviewerContinuation,
   runViews,
   withService,
 } from "./fixtures/service-harness.ts";
@@ -141,35 +140,23 @@ describe("empty worktree proposal cleanup", () => {
     });
   });
 
-  it.effect(
-    "never probes failed or stopped writers, and a retry keeps the failed one's workspace",
-    () => {
-      const f = workspaceFixture();
-      f.hooks.workerChanges = unchanged;
-      const counter = countInspections(f);
-      return withService(f.layer, function* (service) {
-        const failed = yield* service.start(
-          repoWriter({ profile: "reviewer", routeContinuation: reviewerContinuation(0) }),
-        );
-        const control = f.children.controls.at(-1)!;
-        control.exit(1);
-        yield* yieldUntil(() => control.released() === 1);
-        const stopped = yield* stoppedWriter(service);
-        yield* settleTurns;
-        expect(counter.inspected).toBe(0);
-        expect(yield* outcomeOf(service, failed.id)).toBeUndefined();
-        expect(yield* outcomeOf(service, stopped.id)).toBeUndefined();
-        expect(f.statuses()).toEqual(["active", "active"]);
-        const claim = yield* service.claimRetryContinuation(failed.id);
-        const retried = yield* service.startRetrySessionOwned({
-          ...repoWriter({ profile: "reviewer", routeContinuation: reviewerContinuation(1) }),
-          supersedes: { runId: failed.id, claimToken: claim.claimToken },
-        });
-        expect(retried.workspaceId).not.toBe(failed.workspaceId);
-        expect(f.entries.size).toBe(3);
-      });
-    },
-  );
+  it.effect("never probes failed or stopped writers", () => {
+    const f = workspaceFixture();
+    f.hooks.workerChanges = unchanged;
+    const counter = countInspections(f);
+    return withService(f.layer, function* (service) {
+      const failed = yield* service.start(repoWriter());
+      const control = f.children.controls.at(-1)!;
+      control.exit(1);
+      yield* yieldUntil(() => control.released() === 1);
+      const stopped = yield* stoppedWriter(service);
+      yield* settleTurns;
+      expect(counter.inspected).toBe(0);
+      expect(yield* outcomeOf(service, failed.id)).toBeUndefined();
+      expect(yield* outcomeOf(service, stopped.id)).toBeUndefined();
+      expect(f.statuses()).toEqual(["active", "active"]);
+    });
+  });
 
   it.effect("keeps an unchanged workspace a read-only descendant still uses", () => {
     const f = workspaceFixture();

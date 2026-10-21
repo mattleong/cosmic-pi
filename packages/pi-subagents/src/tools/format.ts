@@ -10,10 +10,11 @@ import {
   clipText,
 } from "pi-cosmic-core";
 import {
+  failedRunNextCandidate,
   isActiveRunState,
   isTerminalRunState,
   isParentActionRequiredRun,
-  hasUnresolvedSteeringDelivery,
+  type SubagentNextCandidate,
   type SubagentRunView,
   type SubagentWorkspaceOutcome,
 } from "../run/model.ts";
@@ -265,33 +266,25 @@ const formatRunHeader = (run: SubagentRunView): string =>
     .filter(Boolean)
     .join(" · ");
 
-const routeRetryStatus = (run: SubagentRunView): string | undefined => {
-  if (hasUnresolvedSteeringDelivery(run))
-    return statusField(
-      "Route retry",
-      "blocked by unresolved guidance delivery; do not retry or launch a replacement automatically",
-    );
-  if (run.retryBlocked)
-    return statusField(
-      "Route retry",
-      "blocked by uncertain execution or cleanup; inspect manually",
-    );
-  if (run.retryExhausted)
-    return statusField("Route retry", "exhausted; only now consider a generalist replacement");
-  const remaining = run.remainingCandidateCount ?? 0;
-  if (remaining === 0 || run.state !== "failed") return undefined;
-  return statusField(
-    "Route retry",
-    `${remaining} candidate${remaining === 1 ? " remains" : "s remain"}; use agent_lifecycle action=retry`,
-  );
+/**
+ * Where a failed run's frozen route goes next, such as
+ * `pi/openai/gpt-5.5:high; start a new run with that model`.
+ */
+export const nextCandidateText = (next: SubagentNextCandidate): string => {
+  if (next === "none") return "none; its route has no further candidates";
+  const effort = next.effort === "default" ? "" : `:${next.effort}`;
+  return `${sanitizeTerminalLine(`${next.runtime}/${next.model}${effort}`)}; start a new run with that model`;
 };
 
-/** Lineage and what to do next. */
+const nextCandidateField = (run: SubagentRunView): string | undefined => {
+  const next = run.state === "failed" ? failedRunNextCandidate(run) : undefined;
+  return next && statusField("Candidate", nextCandidateText(next));
+};
+
+/** The parent and what to do next. */
 const actionFields = (run: SubagentRunView): ReadonlyArray<string | undefined> => [
   optionalStatusField("Parent", run.parentRunId),
-  optionalStatusField("Predecessor", run.predecessorRunId),
-  optionalStatusField("Superseded by", run.supersededByRunId),
-  routeRetryStatus(run),
+  nextCandidateField(run),
   run.steeringDelivery
     ? statusField(
         "Steering",
@@ -341,7 +334,7 @@ const verboseStatusFields = (run: SubagentRunView): ReadonlyArray<string | undef
     run.modelOverride
       ? statusField(
           "Model override",
-          `${run.modelOverride.runtime}/${run.modelOverride.model}:${run.modelOverride.effort ?? "profile default"}; no fallback or retry candidate`,
+          `${run.modelOverride.runtime}/${run.modelOverride.model}:${run.modelOverride.effort ?? "profile default"}; no fallback candidate`,
         )
       : undefined,
     statusField("Reason", run.selection.reason),
@@ -423,28 +416,15 @@ export const formatRunCard = (run: SubagentRunView, options: RunFormatOptions = 
 
 type FailedStartRecovery = NonNullable<SubagentStartFailure["admittedRun"]>;
 
-export const formatFailedStartRecovery = (recovery: FailedStartRecovery): string => {
-  const remaining = recovery.hasRemainingCandidate
-    ? ` · ${countLabel(recovery.remainingCandidateCount, "candidate")} remains`
-    : " · no candidate remains";
-  const cleanup = recovery.cleanupDisposition === "quarantined" ? " · cleanup quarantined" : "";
-  return `admitted ${sanitizeTerminalLine(recovery.runId)}${cleanup} · retry ${recovery.retryDisposition === "pending" ? "eligible" : recovery.retryDisposition}${remaining}`;
-};
+export const formatFailedStartRecovery = (recovery: FailedStartRecovery): string =>
+  `admitted ${sanitizeTerminalLine(recovery.runId)}${recovery.cleanupDisposition === "quarantined" ? " · cleanup quarantined" : ""}`;
 
-export const failedStartRecoveryAction = (recovery: FailedStartRecovery): string => {
-  switch (recovery.retryDisposition) {
-    case "eligible":
-    case "pending":
-      return `Continue with agent_lifecycle({ action: "retry", runIds: [${JSON.stringify(recovery.runId)}] }).`;
-    case "blocked":
-      return "Do not retry automatically; ownership or execution outcome is uncertain.";
-    case "exhausted":
-      return "The frozen profile route is exhausted; only now consider a generalist replacement.";
-    case "unavailable":
-      return "This run has no frozen route continuation; start a new profiled run if appropriate.";
-  }
-  return absurd(recovery.retryDisposition);
-};
+export const failedStartRecoveryAction = (recovery: FailedStartRecovery): string =>
+  recovery.cleanupDisposition === "quarantined"
+    ? `Inspect ${sanitizeTerminalLine(recovery.runId)} with agent_read before starting a replacement; its cleanup is unconfirmed.`
+    : recovery.nextCandidate
+      ? `Next candidate: ${nextCandidateText(recovery.nextCandidate)}.`
+      : "Review the failure, then start a new run if the work still needs one.";
 
 /** A start result line, such as a started run or a failed launch's recovery step. */
 const MAX_START_LINE_CHARS = 320;

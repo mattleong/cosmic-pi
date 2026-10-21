@@ -24,14 +24,14 @@ describe("subagent tool", () => {
   beforeAll(() => initTheme("dark", false));
 
   effectTest(
-    "keeps native steering evidence in await and read without authorizing an uncertain retry",
+    "keeps native steering evidence in await and read and names no next candidate while it is unresolved",
     function* () {
       for (const steeringDelivery of STEERING_DELIVERY_STATES) {
         const run = view({
           state: "failed",
+          parentRunId: "root",
           steeringDelivery,
-          remainingCandidateCount: 2,
-          retryExhausted: true,
+          nextCandidate: { runtime: "pi", model: "openai/next-model", effort: "high" },
         });
         const tools = captureSubagentTools(
           subagentServiceDouble({
@@ -69,10 +69,8 @@ describe("subagent tool", () => {
           const detail = toolName === "agent_read";
           if (hasUnresolvedSteeringDelivery(run)) {
             if (detail) expect(text).toContain("Do not resend");
-            expect(text).not.toContain("action=retry");
-            expect(text).not.toContain('action: "retry"');
-            expect(text).not.toContain("consider a generalist replacement");
-          }
+            expect(text).not.toContain("openai/next-model");
+          } else expect(text).toContain("pi/openai/next-model:high");
           if (steeringDelivery === "confirmed" && detail)
             expect(text).toContain("does not prove the model incorporated");
         }

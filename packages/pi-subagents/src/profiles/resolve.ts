@@ -20,7 +20,6 @@ import {
   type ProfileDefinition,
   type ProfileId,
   type ProfileRoute,
-  type ProfileRouteContinuation,
   type SkippedProfileCandidate,
   type SubagentSelectionSource,
 } from "./model.ts";
@@ -67,11 +66,7 @@ export interface ProfileResolutionPlan {
 
 interface ProfileResolutionFailure {
   readonly kind: "failed";
-  readonly code:
-    | "profile_unknown"
-    | "profile_no_eligible_model"
-    | "fork_context_unavailable"
-    | "retry_route_exhausted";
+  readonly code: "profile_unknown" | "profile_no_eligible_model" | "fork_context_unavailable";
   readonly message: string;
   readonly skippedCandidates: ReadonlyArray<SkippedProfileCandidate>;
 }
@@ -230,7 +225,6 @@ const resolveKnownProfileRoute = (
   route: ProfileRoute,
   routeSource: LaunchRouteSource,
   environment: ProfileResolutionEnvironment,
-  startCandidateIndex: number,
   agent?: CustomAgent,
 ): ProfileResolution => {
   const { defaultEffort }: ProfileDefinition = PROFILE_DEFINITIONS[profile];
@@ -245,7 +239,6 @@ const resolveKnownProfileRoute = (
   const skippedCandidates: SkippedProfileCandidate[] = [];
   let pendingSkipped: SkippedProfileCandidate[] = [];
   route.candidates.forEach((candidate, candidateIndex) => {
-    if (candidateIndex < startCandidateIndex) return;
     const result = resolveRouteCandidate(
       candidate,
       candidateIndex,
@@ -274,13 +267,6 @@ const resolveKnownProfileRoute = (
       attempts,
       skippedCandidates,
       trailingSkippedCandidates: pendingSkipped,
-    };
-  if (startCandidateIndex > 0)
-    return {
-      kind: "failed",
-      code: "retry_route_exhausted",
-      message: `${subject} has no eligible remaining candidate after candidate ${startCandidateIndex}.${skippedReasons}`,
-      skippedCandidates,
     };
   const forkUnavailable =
     skippedCandidates.length > 0 &&
@@ -332,23 +318,9 @@ export function resolveProfilePlan(
     route,
     config.profileSources[profile],
     environment,
-    0,
     agent,
   );
 }
-
-export const resolveProfileContinuationPlan = (
-  continuation: ProfileRouteContinuation,
-  environment: ProfileResolutionEnvironment,
-): ProfileResolution =>
-  resolveKnownProfileRoute(
-    continuation.profile,
-    { candidates: continuation.candidates },
-    continuation.routeSource,
-    environment,
-    continuation.selectedCandidateIndex + 1,
-    continuation.agent,
-  );
 
 /**
  * Plans a launch whose only candidate is its per-launch model override, which already carries any
@@ -359,4 +331,4 @@ export const resolveProfileOverridePlan = (
   candidate: ProfileCandidate,
   environment: ProfileResolutionEnvironment,
 ): ProfileResolution =>
-  resolveKnownProfileRoute(profile, { candidates: [candidate] }, "override", environment, 0);
+  resolveKnownProfileRoute(profile, { candidates: [candidate] }, "override", environment);

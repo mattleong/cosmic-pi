@@ -97,7 +97,7 @@ describe("native scripted subagent workflows", () => {
           const result = yield* h.run(
             `
         const rejected = [];
-        for (const action of ['retry','resume','interrupt']) {
+        for (const action of ['resume','interrupt']) {
           try { await tools.agent_lifecycle({action,runIds:['run-1']}); }
           catch { rejected.push(action); }
         }
@@ -107,7 +107,7 @@ describe("native scripted subagent workflows", () => {
             callId,
           );
           expect(output(result.text)).toMatchObject({
-            rejected: ["retry", "resume", "interrupt"],
+            rejected: ["resume", "interrupt"],
             stopped: {
               outcome: "partial",
               results: [
