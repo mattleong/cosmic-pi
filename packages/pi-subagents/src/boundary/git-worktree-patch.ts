@@ -9,9 +9,6 @@ import {
 } from "./git-worktree-store.ts";
 import { workspaceArtifact } from "./git-worktree-trees.ts";
 
-// Git pathspec magic that matches the path exactly, whatever characters it holds.
-const literalPathspec = (name: string) => `:(literal)${name}`;
-
 interface PatchRange {
   readonly from: string;
   readonly to: string;
@@ -21,7 +18,7 @@ interface PatchRange {
  * Git's stdout reaches us decoded as UTF-8, which would silently replace the bytes of a text
  * file that isn't UTF-8, so a patch goes through a private file, bounded like a revision's.
  * Plumbing with explicit prefixes keeps the user's diff settings out of a patch `git apply`
- * reads back. `paths` limits it to those exact paths.
+ * reads back.
  */
 const withPatchFile = <A, R>(
   registry: string,
@@ -29,7 +26,6 @@ const withPatchFile = <A, R>(
   range: PatchRange,
   operation: string,
   use: (file: string) => Effect.Effect<A, WorkspaceError, R>,
-  paths: ReadonlyArray<string> = [],
 ) =>
   Effect.gen(function* () {
     const output = path.join(workspaceArtifact(registry, record), `${yield* newWorkspaceId}.diff`);
@@ -49,8 +45,6 @@ const withPatchFile = <A, R>(
         `--output=${output}`,
         range.from,
         range.to,
-        "--",
-        ...paths.map(literalPathspec),
       ]);
       const size = (yield* workspaceIO(operation, () => fs.lstat(output))).size;
       if (size > MAX_REVISION_DIFF_BYTES)
@@ -68,15 +62,9 @@ export const patchBytes = (
   record: WorkspaceRecord,
   range: PatchRange,
   operation: string,
-  paths?: ReadonlyArray<string>,
 ) =>
-  withPatchFile(
-    registry,
-    record,
-    range,
-    operation,
-    (file) => workspaceIO(operation, () => fs.readFile(file)),
-    paths,
+  withPatchFile(registry, record, range, operation, (file) =>
+    workspaceIO(operation, () => fs.readFile(file)),
   );
 
 /**

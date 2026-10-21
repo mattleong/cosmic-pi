@@ -101,10 +101,6 @@ export const WorkspaceToolDetailsSchema = Schema.Struct({
   /** Listed workspaces of sessions that have ended which the root may adopt. */
   adoptableCount: Schema.optionalKey(nonNegativeInteger),
   changedPathCount: Schema.optionalKey(nonNegativeInteger),
-  /** A partial apply's changed paths left in the workspace as its proposal. */
-  remainingPathCount: Schema.optionalKey(nonNegativeInteger),
-  /** Whether the parent had read every diff page of the applied revision. */
-  reviewed: Schema.optionalKey(Schema.Boolean),
   testing: Schema.optionalKey(Schema.Literals(WORKSPACE_APPLY_TESTING)),
   preparedCwd: Schema.optionalKey(NonEmptyText(1_024)),
   successorRunId: Schema.optionalKey(NonEmptyText(MAX_PROTOCOL_ID_CHARS)),

@@ -101,7 +101,7 @@ describe("workspace apply arguments", () => {
     );
     for (const args of [
       { action: "apply" },
-      { action: "apply", workspaceId: "ws-1", preparationId: "prep-1" },
+      { action: "list", offset: 8 },
       { action: "apply", workspaceId: "ws-1", message: "Ship it." },
     ] as const)
       expect(workspaceOperationError(args)).toEqual(expect.any(String));

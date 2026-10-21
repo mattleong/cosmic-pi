@@ -49,14 +49,10 @@ export interface WorkspaceServiceContract {
   readonly freeze: (
     target: WorkspaceSettledTarget,
   ) => Effect.Effect<WorkspaceRevision, WorkspaceError>;
-  /** Prepares the revision, or with `paths` only those of its changes. */
   readonly prepare: (
     target: WorkspacePreparationTarget,
   ) => Effect.Effect<WorkspacePreparation, WorkspaceError>;
-  /**
-   * Publishes the prepared changes. A partial preparation's integration leaves the workspace
-   * active, proposing its remaining changes against an advanced baseline.
-   */
+  /** Publishes the prepared changes. */
   readonly integrate: (
     target: WorkspaceIntegrationTarget,
   ) => Effect.Effect<WorkspaceIntegration, WorkspaceError>;

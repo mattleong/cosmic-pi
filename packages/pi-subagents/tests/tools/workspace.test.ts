@@ -61,17 +61,15 @@ const applied = (overrides: Partial<WorkspaceApplyResult> = {}): WorkspaceApplyR
   changedPaths: ["src/a.ts", "src/b.ts"],
   changedPathCount: 2,
   leftOutPaths: [],
-  reviewed: false,
   ...integrated,
   testing: "untested",
   ...overrides,
 });
 
 describe("workspace apply", () => {
-  effectTest("requires a workspace, and a preparation only with its exact revision", function* () {
+  effectTest("requires a workspace and refuses review paging", function* () {
     for (const operation of [
       { action: "apply" },
-      { action: "apply", workspaceId: "ws-1", preparationId: "prep-1" },
       { action: "apply", workspaceId: "ws-1", offset: 1 },
     ] as const) {
       const failed = yield* run(operation).pipe(Effect.flip, Effect.orDie);
@@ -79,7 +77,7 @@ describe("workspace apply", () => {
     }
   });
 
-  effectTest("forwards the caller, the optional revision pin, and a prepared pair", function* () {
+  effectTest("forwards the caller and the optional revision pin", function* () {
     const calls: Array<readonly [string, unknown, string | undefined]> = [];
     const workspaceApply: SubagentServiceDoubleInput["workspaceApply"] = (
       workspaceId,
@@ -92,30 +90,22 @@ describe("workspace apply", () => {
     for (const operation of [
       { action: "apply", workspaceId: "ws-1" },
       { action: "apply", workspaceId: "ws-1", revisionId: "rev-1" },
-      { action: "apply", workspaceId: "ws-1", revisionId: "rev-1", preparationId: "prep-1" },
     ] as const)
       yield* run(operation, "parent", { workspaceApply }).pipe(Effect.orDie);
     expect(calls).toEqual([
       ["ws-1", { revisionId: undefined }, "parent"],
       ["ws-1", { revisionId: "rev-1" }, "parent"],
-      ["ws-1", { revisionId: "rev-1", preparationId: "prep-1" }, "parent"],
     ]);
   });
 
-  effectTest("reports a prepared pair as tested by the parent", function* () {
-    const args = {
-      action: "apply",
-      workspaceId: "ws-1",
-      revisionId: "rev-1",
-      preparationId: "prep-1",
-    } as const;
+  effectTest("reports the parent's own preparation as tested by the parent", function* () {
+    const args = { action: "apply", workspaceId: "ws-1" } as const;
     const result = yield* run(args, "parent", {
-      workspaceApply: () => Effect.succeed(applied({ reviewed: true, testing: "parent-tested" })),
+      workspaceApply: () => Effect.succeed(applied({ testing: "parent-tested" })),
     }).pipe(Effect.orDie);
     expect(result.details).toMatchObject({
       operation: "apply",
       preparationId: "prep-1",
-      reviewed: true,
       testing: "parent-tested",
     });
     const summary = summarize(args, result);
@@ -151,12 +141,12 @@ describe("workspace apply", () => {
     }
   });
 
-  effectTest("reports whether an applied change was reviewed and tested", function* () {
+  effectTest("reports whether an applied change was tested", function* () {
     const cases = [
-      [applied(), false, "untested"],
-      [applied({ reviewed: true, testing: "parent-tested" }), true, "parent-tested"],
+      [applied(), "untested"],
+      [applied({ testing: "parent-tested" }), "parent-tested"],
     ] as const;
-    for (const [outcome, reviewed, testing] of cases) {
+    for (const [outcome, testing] of cases) {
       const args = { action: "apply", workspaceId: "ws-1" } as const;
       const result = yield* run(args, "parent", {
         workspaceApply: () => Effect.succeed(outcome),
@@ -167,7 +157,6 @@ describe("workspace apply", () => {
         revisionId: "rev-1",
         preparationId: "prep-1",
         changedPathCount: 2,
-        reviewed,
         testing,
       });
       expect(resultText(result)).toContain("src/b.ts");
@@ -237,19 +226,13 @@ const orphan = (workspaceId: string, sourceWorkspaceId?: string) => ({
   lastChangedAt: 0,
 });
 
-describe("workspace prepared-pair apply and list", () => {
+describe("workspace apply leftovers and list", () => {
   effectTest("warns when unresolved child workspaces keep the worker tree", function* () {
-    const args = {
-      action: "apply",
-      workspaceId: "ws-1",
-      revisionId: "rev-1",
-      preparationId: "prep-1",
-    } as const;
+    const args = { action: "apply", workspaceId: "ws-1", revisionId: "rev-1" } as const;
     const result = yield* run(args, "parent", {
       workspaceApply: () =>
         Effect.succeed(
           applied({
-            reviewed: true,
             testing: "parent-tested",
             retainedForChildren: ["ws-child-1", "ws-child-2"],
           }),
@@ -336,14 +319,14 @@ describe("workspace tool", () => {
       const service = {
         workspaceReview: (
           workspaceId: string,
-          options: { revisionId?: string; offset?: number; limit?: number } = {},
+          options: { revisionId?: string; offset?: number } = {},
           caller?: string,
         ) => {
           expect(caller).toBe("parent");
           expect(workspaceId).toBe("workspace");
           if (options.offset) expect(options.revisionId).toBe("immutable");
           const offset = options.offset ?? 0;
-          const next = Math.min(diff.length, offset + (options.limit ?? 16_000));
+          const next = Math.min(diff.length, offset + 16_000);
           return Effect.succeed({
             revisionId: "immutable",
             changedPaths: ["file"],
@@ -386,26 +369,18 @@ describe("workspace tool", () => {
   );
 
   effectTest(
-    "passes authenticated caller and exact tested identifiers to the coordinator",
+    "passes the authenticated caller and the revision pin to the coordinator",
     function* () {
       const denial = new InvalidSubagentRequestError({
         code: "workspace_owner_unavailable",
         message: "Direct parent required.",
       });
-      const failed = yield* run(
-        { action: "apply", workspaceId: "w", revisionId: "r", preparationId: "p" },
-        "child",
-        {
-          workspaceApply: (workspaceId, options, caller) => {
-            expect([workspaceId, options, caller]).toEqual([
-              "w",
-              { revisionId: "r", preparationId: "p" },
-              "child",
-            ]);
-            return Effect.fail(denial);
-          },
+      const failed = yield* run({ action: "apply", workspaceId: "w", revisionId: "r" }, "child", {
+        workspaceApply: (workspaceId, options, caller) => {
+          expect([workspaceId, options, caller]).toEqual(["w", { revisionId: "r" }, "child"]);
+          return Effect.fail(denial);
         },
-      ).pipe(Effect.flip, Effect.orDie);
+      }).pipe(Effect.flip, Effect.orDie);
       expect(failed).toBe(denial);
     },
   );

@@ -63,10 +63,7 @@ describe("writer workspace lifecycle", () => {
     return withService(f.layer, function* (service) {
       const failed = yield* failedWriter(service, f);
       const tested = yield* reviewAndPrepare(service, failed.workspaceId!);
-      yield* service.workspaceApply(failed.workspaceId!, {
-        revisionId: tested.revisionId,
-        preparationId: tested.preparationId,
-      });
+      yield* service.workspaceApply(failed.workspaceId!, { revisionId: tested.revisionId });
       expect(f.entries.get(failed.workspaceId!)?.status).toBe("integrated");
     });
   });
@@ -175,13 +172,8 @@ describe("writer workspace lifecycle", () => {
       yield* completeLocalRun(service, f.children.controls[1]!, writer.id, "Renamed.");
       expect(yield* listed(service, id)).toMatchObject({ status: "active" });
       expect(
-        yield* service
-          .workspaceApply(id, {
-            revisionId: tested.revisionId,
-            preparationId: tested.preparationId,
-          })
-          .pipe(Effect.flip),
-      ).toMatchObject({ code: "workspace_preparation_stale" });
+        yield* service.workspaceApply(id, { revisionId: tested.revisionId }).pipe(Effect.flip),
+      ).toMatchObject({ code: "workspace_revision_stale" });
       expect(
         yield* service.workspaceReview(id, { revisionId: tested.revisionId }).pipe(Effect.flip),
       ).toMatchObject({ code: "workspace_revision_stale" });
@@ -202,10 +194,7 @@ describe("writer workspace lifecycle", () => {
       const integrated = yield* completedWriter(service, f);
       const kept = yield* completedWriter(service, f);
       const tested = yield* reviewAndPrepare(service, integrated.workspaceId!);
-      yield* service.workspaceApply(integrated.workspaceId!, {
-        revisionId: tested.revisionId,
-        preparationId: tested.preparationId,
-      });
+      yield* service.workspaceApply(integrated.workspaceId!, { revisionId: tested.revisionId });
       expect(yield* service.resume(kept.id).pipe(Effect.flip)).toMatchObject({
         code: "workspace_integration_quarantined",
       });
@@ -230,19 +219,11 @@ describe("writer workspace lifecycle", () => {
         yield* service.workspaceReview(id, { revisionId: tested.revisionId }).pipe(Effect.flip),
       ).toMatchObject({ code: "workspace_revision_stale" });
       expect(
-        yield* service
-          .workspaceApply(id, {
-            revisionId: tested.revisionId,
-            preparationId: tested.preparationId,
-          })
-          .pipe(Effect.flip),
-      ).toMatchObject({ code: "workspace_preparation_stale" });
+        yield* service.workspaceApply(id, { revisionId: tested.revisionId }).pipe(Effect.flip),
+      ).toMatchObject({ code: "workspace_revision_stale" });
       const revised = yield* reviewAndPrepare(service, id);
       expect(revised.revisionId).not.toBe(tested.revisionId);
-      yield* service.workspaceApply(id, {
-        revisionId: revised.revisionId,
-        preparationId: revised.preparationId,
-      });
+      yield* service.workspaceApply(id, { revisionId: revised.revisionId });
       expect(f.entries.get(id)?.status).toBe("integrated");
     });
   });
@@ -276,10 +257,7 @@ describe("writer workspace lifecycle", () => {
         status: "prepared",
         preparation: { preparationId: tested.preparationId },
       });
-      yield* service.workspaceApply(id, {
-        revisionId: tested.revisionId,
-        preparationId: tested.preparationId,
-      });
+      yield* service.workspaceApply(id, { revisionId: tested.revisionId });
       expect(f.entries.get(id)?.status).toBe("integrated");
     });
   });
@@ -294,10 +272,7 @@ describe("writer workspace lifecycle", () => {
       expect(tested.revisionId).toBe(first.revisionId);
       const again = yield* service.workspaceReview(id);
       expect(again).toMatchObject({ revisionId: first.revisionId, offset: 0 });
-      yield* service.workspaceApply(id, {
-        revisionId: tested.revisionId,
-        preparationId: tested.preparationId,
-      });
+      yield* service.workspaceApply(id, { revisionId: tested.revisionId });
     });
   });
 
@@ -306,10 +281,6 @@ describe("writer workspace lifecycle", () => {
     return withService(f.layer, function* (service) {
       const id = (yield* stoppedWriter(service)).workspaceId!;
       const first = yield* service.workspaceReview(id);
-      yield* service.workspaceReview(id, {
-        revisionId: first.revisionId,
-        offset: first.nextOffset!,
-      });
       f.hooks.createHookFailure = new WorkspaceError({
         operation: "hook",
         message: "Hook failed.",
@@ -322,17 +293,10 @@ describe("writer workspace lifecycle", () => {
       const shown = yield* listed(service, id);
       expect(shown?.status).toBe("frozen");
       expect(shown?.preparation).toBeUndefined();
-      expect(
-        yield* service
-          .workspaceApply(id, { revisionId: first.revisionId, preparationId: untested! })
-          .pipe(Effect.flip),
-      ).toMatchObject({ code: "workspace_preparation_stale" });
-      f.hooks.createHookFailure = undefined;
-      const prepared = yield* service.workspacePrepare(id, first.revisionId);
-      yield* service.workspaceApply(id, {
-        revisionId: first.revisionId,
-        preparationId: prepared.preparationId,
-      });
+      // Apply prepares the revision again rather than integrate the untested tree.
+      const applied = yield* service.workspaceApply(id, { revisionId: first.revisionId });
+      expect(applied).toMatchObject({ testing: "untested" });
+      expect(applied.preparationId).not.toBe(untested);
       expect(f.entries.get(id)?.status).toBe("integrated");
     });
   });

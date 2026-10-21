@@ -84,7 +84,7 @@ const oversizedPublication = (operation: string, bytes: number) =>
     message: "The proposal's changed files are too large to integrate together.",
     detail: [
       `Rule: integration reads the parent's and the tested tree's copies of every changed file into memory, at most ${MAX_PUBLISHED_TOTAL_BYTES / MEBIBYTE} MiB in all; these hold at least ${Math.floor(bytes / MEBIBYTE)} MiB`,
-      "Remedy: apply the proposal in parts with `paths`, or revise the workspace so the writer changes fewer large files.",
+      "Remedy: revise the workspace so the writer changes fewer large files.",
     ].join("\n"),
   });
 

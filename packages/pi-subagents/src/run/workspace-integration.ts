@@ -4,17 +4,14 @@ import type { WriterLease } from "../boundary/writer-lease.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
 import { isCleanupOwed } from "./internal.ts";
 import { isActiveRunState } from "./model.ts";
-import { fullyReviewed } from "./workspace-review.ts";
 import {
   isWithin,
   mapWorkspaceError,
-  narrowProposalLocked,
   recordWorkspaceOutcomeLocked,
   revisionKnowledge,
   runHoldsCwd,
   runsWithin,
   settleBinding,
-  UNREVIEWED,
   type WorkspaceControlContext,
 } from "./workspace-binding.ts";
 
@@ -27,22 +24,15 @@ export interface WorkspaceIntegrationOutcome {
   readonly leaseReleaseUnconfirmed: boolean;
   /** Unresolved child workspaces created from the worker tree, which therefore stays. */
   readonly retainedForChildren?: ReadonlyArray<string> | undefined;
-  /**
-   * A partial integration's changed paths left out. The workspace stays an unreviewed proposal
-   * of exactly these changes.
-   */
-  readonly remainingPaths?: ReadonlyArray<string> | undefined;
 }
 
 /** A committed integration with what the coordinator knew of its revision and preparation. */
 export interface WorkspaceIntegrationResult extends WorkspaceIntegrationOutcome {
-  /** Every path the integration published: the revision's, or a partial preparation's subset. */
+  /** Every path the integration published. */
   readonly changedPaths: ReadonlyArray<string>;
   /** Credential files the worker created, which the revision leaves out on purpose. */
   readonly leftOutPaths: ReadonlyArray<string>;
   readonly preparedCwd: string;
-  /** Whether the parent had read every page of the revision's review text. */
-  readonly reviewed: boolean;
 }
 
 /** Integration of an exact prepared pair, which apply composes; see `integrateLocked`. */
@@ -117,10 +107,9 @@ export function workspaceIntegrationOperations(
           "The tested integration preparation no longer matches this revision.",
         );
       const known = {
-        changedPaths: artifact.preparation.paths ?? artifact.revision.changedPaths,
+        changedPaths: artifact.revision.changedPaths,
         leftOutPaths: artifact.revision.uncapturedPaths ?? [],
         preparedCwd: artifact.preparation.cwd,
-        reviewed: fullyReviewed(knowledge, revisionId),
       };
       const roots = yield* Effect.forEach(artifact.preparation.leaseDirectories, (cwd) =>
         leases.canonicalize(cwd).pipe(Effect.mapError(mapWorkspaceError)),
@@ -159,14 +148,8 @@ export function workspaceIntegrationOperations(
               })
               .pipe(Effect.mapError(mapWorkspaceError));
             applying = false;
-            // A partial integration leaves the rest of the proposal for a later review or apply.
-            if (integration.remainingPaths === undefined) {
-              settleBinding(binding, { phase: "finished", outcome: "integrated" });
-              recordWorkspaceOutcomeLocked(binding, { status: "integrated" });
-            } else {
-              settleBinding(binding, UNREVIEWED);
-              narrowProposalLocked(binding, integration.remainingPaths);
-            }
+            settleBinding(binding, { phase: "finished", outcome: "integrated" });
+            recordWorkspaceOutcomeLocked(binding, { status: "integrated" });
             yield* publish;
             return integration;
           }).pipe(

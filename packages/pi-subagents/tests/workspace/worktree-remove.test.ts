@@ -175,26 +175,6 @@ describe("WorktreeRemove hooks", () => {
     expect((yield* service.listAll).records[0]?.hookCleanupPending).toBe(handle.cwd);
   });
 
-  test("a partial apply reports the test tree a quarantined hook kept", function* (service, root) {
-    const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-    yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
-    yield* writeFile(path.join(handle.cwd, "src/extra.ts"), "extra\n");
-    const revision = yield* service.freeze(workspaceTarget(handle));
-    const target = { ...workspaceTarget(handle), revisionId: revision.revisionId };
-    const prepared = yield* service.prepare({ ...target, paths: ["src/main.ts"] });
-    const spy = unconfirmedRemoval();
-    const integrated = yield* service
-      .integrate({ ...target, preparationId: prepared.preparationId })
-      .pipe(Effect.ensuring(Effect.sync(() => spy.mockRestore())));
-    expect(integrated.remainingPaths).toEqual(["src/extra.ts"]);
-    expect(integrated.treeRemovalFailed).toBe(true);
-    expect(yield* readText(root, "src/main.ts")).toBe("worker\n");
-    expect(yield* exists(prepared.cwd)).toBe(true);
-    expect((yield* failureOf(service.inspect(workspaceTarget(handle)))).cleanupUnconfirmed).toBe(
-      true,
-    );
-  });
-
   test("a failed WorktreeCreate hook reports the quarantine of the preparation it withdrew", function* (service, root) {
     const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
     const { prepared } = yield* prepareEdit(service, handle);

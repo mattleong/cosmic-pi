@@ -39,13 +39,9 @@ export const stoppedWriter = (
 
 export const reviewAndPrepare = (service: SubagentServiceContract, workspaceId: string) =>
   Effect.gen(function* () {
-    const first = yield* service.workspaceReview(workspaceId);
-    yield* service.workspaceReview(workspaceId, {
-      revisionId: first.revisionId,
-      offset: first.nextOffset!,
-    });
-    const prepared = yield* service.workspacePrepare(workspaceId, first.revisionId);
-    return { revisionId: first.revisionId, preparationId: prepared.preparationId };
+    const { revisionId } = yield* service.workspaceReview(workspaceId);
+    const prepared = yield* service.workspacePrepare(workspaceId, revisionId);
+    return { revisionId, preparationId: prepared.preparationId };
   });
 
 export const leasesWith = (override: (base: WriterLeaseContract) => Partial<WriterLeaseContract>) =>
@@ -380,7 +376,6 @@ export function workspaceFixture({
               revisionId: target.revisionId,
               cwd: `/private/${target.workspaceId}/prepare-${preparationId}`,
               leaseDirectories: [entry.handle.sourceRoot, `${entry.handle.sourceRoot}/packages/b`],
-              ...(target.paths !== undefined && { paths: target.paths }),
             };
             entries.set(target.workspaceId, { ...entry, status: "prepared", preparation });
             return preparation;
@@ -398,23 +393,6 @@ export function workspaceFixture({
           ),
           Effect.map((entry) => {
             integrations.push(target);
-            const partial = entry.preparation?.paths;
-            if (partial !== undefined) {
-              // Like the real engine, a partial integration keeps the rest as an active proposal.
-              const { revision, preparation: _preparation, ...rest } = entry;
-              const reopened = { ...rest, status: "active" as const, baseline: "advanced-base" };
-              entries.set(target.workspaceId, reopened);
-              return {
-                record: reopened,
-                workerRoot: entry.handle.cwd,
-                untouchedDriftPaths: [],
-                treeRemovalFailed: false,
-                remainingBackupPaths: [],
-                remainingPaths: (revision?.changedPaths ?? []).filter(
-                  (name) => !partial.includes(name),
-                ),
-              };
-            }
             const integrated = { ...entry, status: "integrated" as const };
             entries.set(target.workspaceId, integrated);
             return {

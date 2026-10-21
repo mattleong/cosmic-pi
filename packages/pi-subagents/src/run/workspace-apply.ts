@@ -1,6 +1,4 @@
 import * as Effect from "effect/Effect";
-import type { WorkspaceRevisionMetadata } from "../workspace/model.ts";
-import { partialSelection } from "../workspace/policy.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
 import { SUBAGENT_ROOT_RUN_ID } from "./model.ts";
 import {
@@ -19,17 +17,12 @@ import type { workspaceReviewOperations } from "./workspace-review.ts";
 const MAX_APPLY_LISTED_PATHS = 20;
 
 /**
- * Without `preparationId`, apply integrates the parent's matching preparation, or else freezes,
- * prepares, and integrates; `revisionId` then optionally pins the current revision, and `paths`
- * limits it to those changed paths. With it, apply integrates exactly that prepared pair.
+ * Apply integrates the parent's preparation of the current revision, or else freezes, prepares,
+ * and integrates it; `revisionId` optionally pins that revision.
  */
-export type WorkspaceApplyOptions =
-  | {
-      readonly revisionId?: string | undefined;
-      readonly preparationId?: undefined;
-      readonly paths?: ReadonlyArray<string> | undefined;
-    }
-  | { readonly revisionId: string; readonly preparationId: string; readonly paths?: undefined };
+export interface WorkspaceApplyOptions {
+  readonly revisionId?: string | undefined;
+}
 
 /**
  * `parent-tested`: apply integrated the parent's own prepared pair, which the parent was to test.
@@ -42,27 +35,16 @@ export interface WorkspaceApplyResult extends WorkspaceIntegrationOutcome {
   readonly preparationId: string;
   /** The prepared tree the integration published from. */
   readonly preparedCwd: string;
-  /**
-   * The first paths applied: the revision's changed paths, or a partial apply's subset;
-   * `changedPathCount` counts them all.
-   */
+  /** The first changed paths applied; `changedPathCount` counts them all. */
   readonly changedPaths: ReadonlyArray<string>;
   readonly changedPathCount: number;
-  /**
-   * A partial apply's first changed paths left out, which stay in the workspace as its proposal;
-   * `remainingPathCount` counts them all.
-   */
-  readonly remainingPaths?: ReadonlyArray<string> | undefined;
-  readonly remainingPathCount?: number | undefined;
   /** Credential files the worker created, which the revision leaves out on purpose. */
   readonly leftOutPaths: ReadonlyArray<string>;
-  /** Whether the parent had read every page of this revision; apply never requires it. */
-  readonly reviewed: boolean;
   readonly testing: WorkspaceApplyTesting;
 }
 
 const appliedResult = (
-  { changedPaths, remainingPaths, ...integration }: WorkspaceIntegrationResult,
+  { changedPaths, ...integration }: WorkspaceIntegrationResult,
   revisionId: string,
   preparationId: string,
   testing: WorkspaceApplyTesting,
@@ -72,35 +54,8 @@ const appliedResult = (
   preparationId,
   changedPaths: changedPaths.slice(0, MAX_APPLY_LISTED_PATHS),
   changedPathCount: changedPaths.length,
-  ...(remainingPaths !== undefined && {
-    remainingPaths: remainingPaths.slice(0, MAX_APPLY_LISTED_PATHS),
-    remainingPathCount: remainingPaths.length,
-  }),
   testing,
 });
-
-/** The subset of a revision's changed paths a partial apply names; undefined for all of them. */
-const selectedPaths = (
-  revision: WorkspaceRevisionMetadata,
-  paths: ReadonlyArray<string> | undefined,
-): Effect.Effect<ReadonlyArray<string> | undefined, SubagentError> =>
-  Effect.gen(function* () {
-    if (paths === undefined) return undefined;
-    if (paths.length === 0)
-      return yield* invalid("workspace_paths_unknown", "A partial apply needs at least one path.");
-    const { unknown, subset } = partialSelection(revision.changedPaths, paths);
-    if (unknown.length > 0)
-      return yield* invalid(
-        "workspace_paths_unknown",
-        `Revision ${revision.revisionId} doesn't change ${unknown
-          .slice(0, MAX_APPLY_LISTED_PATHS)
-          .map((name) => JSON.stringify(name))
-          .join(
-            ", ",
-          )}${unknown.length > MAX_APPLY_LISTED_PATHS ? ` and ${unknown.length - MAX_APPLY_LISTED_PATHS} more` : ""}. Name exact changed paths from its review summary.`,
-      );
-    return subset;
-  });
 
 export function workspaceApplyOperations(
   context: WorkspaceControlContext,
@@ -109,16 +64,16 @@ export function workspaceApplyOperations(
 ) {
   const { withLock, operations, requireEngine, state } = context;
   /**
-   * Integrates the parent's own prepared pair when it matches the request; otherwise freezes,
-   * prepares, and integrates in one call, without requiring the diff to be read. That one-call
-   * preparation runs no WorktreeCreate hooks: nothing is tested in it. The binding stays busy
-   * throughout; the operations permit is held per phase. Only a committed integration publishes.
+   * Integrates the preparation the parent's `prepare` made of the current revision when it
+   * matches any pinned revision; otherwise freezes, prepares, and integrates in one call. That
+   * one-call preparation runs no WorktreeCreate hooks: nothing is tested in it. The binding stays
+   * busy throughout; the operations permit is held per phase. Only a committed integration
+   * publishes.
    */
-  const applyCurrent = (
+  const workspaceApply = (
     workspaceId: string,
-    pinnedRevisionId: string | undefined,
-    requestedPaths: ReadonlyArray<string> | undefined,
-    caller: string,
+    { revisionId: pinnedRevisionId }: WorkspaceApplyOptions = {},
+    caller = SUBAGENT_ROOT_RUN_ID,
   ): Effect.Effect<WorkspaceApplyResult, SubagentError> =>
     Effect.gen(function* () {
       const service = yield* requireEngine;
@@ -138,7 +93,6 @@ export function workspaceApplyOperations(
               const knowledge = revisionKnowledge(binding);
               return knowledge?.kind === "prepared" &&
                 knowledge.origin === "prepare" &&
-                requestedPaths === undefined &&
                 (pinnedRevisionId === undefined || pinnedRevisionId === knowledge.revisionId)
                 ? knowledge
                 : undefined;
@@ -158,9 +112,8 @@ export function workspaceApplyOperations(
           const revision = yield* operations.withPermits(1)(
             phases.settledRevision(service, held, pinnedRevisionId),
           );
-          const paths = yield* selectedPaths(revision, requestedPaths);
           const preparation = yield* operations.withPermits(1)(
-            phases.prepareHeld(service, held, revision.revisionId, paths),
+            phases.prepareHeld(service, held, revision.revisionId),
           );
           const integration = yield* operations.withPermits(1)(
             withLock(
@@ -178,29 +131,5 @@ export function workspaceApplyOperations(
         }),
       );
     });
-  const workspaceApply = (
-    workspaceId: string,
-    options: WorkspaceApplyOptions = {},
-    caller = SUBAGENT_ROOT_RUN_ID,
-  ): Effect.Effect<WorkspaceApplyResult, SubagentError> =>
-    options.preparationId === undefined
-      ? applyCurrent(workspaceId, options.revisionId, options.paths, caller)
-      : // The parent reviewed, prepared, and tested this pair; integration rechecks it all.
-        operations
-          .withPermits(1)(
-            withLock(
-              integrateLocked(workspaceId, options.revisionId, options.preparationId, caller),
-            ),
-          )
-          .pipe(
-            Effect.map((integration) =>
-              appliedResult(
-                integration,
-                options.revisionId,
-                options.preparationId,
-                "parent-tested",
-              ),
-            ),
-          );
   return workspaceApply;
 }

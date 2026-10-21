@@ -42,9 +42,7 @@ Nothing applies a worktree writer's changes automatically. A completed writer th
 
 ### Quick path
 
-For small or trusted changes, call `agent_worktree` with `{"action":"apply","workspaceId":"..."}`. It freezes, prepares, and integrates as uncommitted edits in one call, testing nothing and running no `WorktreeCreate` hooks; removing the worktree afterwards runs `WorktreeRemove` hooks. The result says whether the diff was read; run relevant tests in the parent checkout afterwards.
-
-To take only part of a proposal, pass `paths` (exact changed paths from the review summary). The remaining changes stay in the worktree as an unreviewed proposal.
+For small or trusted changes, call `agent_worktree` with `{"action":"apply","workspaceId":"..."}`. It freezes, prepares, and integrates as uncommitted edits in one call, testing nothing and running no `WorktreeCreate` hooks; removing the worktree afterwards runs `WorktreeRemove` hooks. Run relevant tests in the parent checkout afterwards.
 
 ### Careful path
 
@@ -53,7 +51,7 @@ For risky changes:
 1. Call `review` with the workspace ID and read every page, passing each `nextOffset` as `offset`. Each page holds up to 16,000 characters: first a summary (per-file line counts, binary, added, deleted, and mode markers, and credential files the worker left out), then the full diff.
 2. Call `prepare` with the workspace ID and the reviewed `revisionId`. This creates a separate cwd combining the proposal with current parent edits and runs `WorktreeCreate` hooks there.
 3. Run relevant tests in that cwd without editing it. Worker-only tests don't replace this pass.
-4. Call `apply` with the workspace ID. It integrates that preparation as uncommitted edits, without preparing again, and reports `parent-tested`; `revisionId` and `preparationId` optionally pin the pair. It never merges, stages, or commits.
+4. Call `apply` with the workspace ID. It integrates that preparation as uncommitted edits, without preparing again, and reports `parent-tested`; an optional `revisionId` refuses if the proposal changed since. It never merges, stages, or commits.
 
 ### What a worktree writer shares
 
@@ -91,7 +89,7 @@ Ignored dependencies are absent too. A `WorktreeCreate` hook in `pi-subagents.js
 
 - `revise` takes the workspace ID and concrete feedback in `message`, and starts a successor writer; await it, then apply or review the new revision.
 - When parent files moved on under the proposal (a stale preparation or `workspace_conflict`), add `"rebase": true`. The writer's tree is rebuilt from the parent's current files with its changes reapplied by three-way merge, and the successor's task lists conflicted files. A rebase that can't run refuses with `workspace_rebase_refused` and changes nothing.
-- `list` pages workspace metadata with an optional `offset`.
+- `list` shows workspace metadata, as many entries as fit in 32,000 characters, and counts the rest.
 - Workspaces stranded by `/reload` or a crash become orphans once their session has ended, and `list` marks them `adoptable` or `discard-only`. From a later session's root, `review`, `prepare`, `apply`, or `revise` on an adoptable one takes it over, provided no writer holds its worker tree and no child workspace is unresolved; its first `revise` starts a new writer with the original profile or custom agent and your `message` as the task; if that agent is no longer configured, revise fails with `workspace_launch_unavailable`, and you can still apply or discard it. Nested and mid-integration orphans can only be discarded, which rolls back an interrupted integration.
 - Orphans unchanged for 30 days are discarded when a root session starts in their checkout. Their patch stays at the path the start-up notice names for 7 days; apply it with `git apply` in its checkout to recover the work.
 

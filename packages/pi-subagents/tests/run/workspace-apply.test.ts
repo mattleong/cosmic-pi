@@ -36,7 +36,6 @@ describe("one-step workspace apply", () => {
       const id = (yield* stoppedWriter(service)).workspaceId!;
       const applied = yield* service.workspaceApply(id);
       expect(applied).toMatchObject({
-        reviewed: false,
         changedPaths: ["file.ts"],
         changedPathCount: 1,
         testing: "untested",
@@ -54,18 +53,13 @@ describe("one-step workspace apply", () => {
     });
   });
 
-  it.effect("reports a pinned, fully read revision as reviewed", () => {
+  it.effect("applies a pinned current revision", () => {
     const f = workspaceFixture();
     return withService(f.layer, function* (service) {
       const id = (yield* stoppedWriter(service)).workspaceId!;
       const page = yield* service.workspaceReview(id);
-      yield* service.workspaceReview(id, { revisionId: page.revisionId, offset: page.nextOffset! });
       const applied = yield* service.workspaceApply(id, { revisionId: page.revisionId });
-      expect(applied).toMatchObject({
-        reviewed: true,
-        revisionId: page.revisionId,
-        testing: "untested",
-      });
+      expect(applied).toMatchObject({ revisionId: page.revisionId, testing: "untested" });
       expect(f.entries.get(id)?.status).toBe("integrated");
     });
   });
@@ -94,7 +88,6 @@ describe("one-step workspace apply", () => {
       expect(yield* service.workspaceApply(id)).toMatchObject({
         revisionId: tested.revisionId,
         preparationId: tested.preparationId,
-        reviewed: true,
         testing: "parent-tested",
       });
       expect(f.hookRuns).toHaveLength(hookRuns);
@@ -106,7 +99,7 @@ describe("one-step workspace apply", () => {
     const f = workspaceFixture();
     return withService(f.layer, function* (service) {
       const id = (yield* stoppedWriter(service)).workspaceId!;
-      const first = yield* service.workspaceReview(id, { limit: 1 });
+      const first = yield* service.workspaceReview(id);
       let next = first.nextOffset;
       while (next !== undefined) {
         const page = yield* service.workspaceReview(id, { offset: next });
@@ -244,24 +237,15 @@ describe("one-step workspace apply", () => {
     });
   });
 
-  it.effect("integrates exactly a prepared pair without preparing again", () => {
+  it.effect("integrates the latest preparation without preparing again", () => {
     const f = hooked();
     return withService(f.layer, function* (service) {
       const id = (yield* stoppedWriter(service)).workspaceId!;
-      const stale = yield* reviewAndPrepare(service, id);
-      const tested = yield* service.workspacePrepare(id, stale.revisionId);
-      expect(
-        yield* service
-          .workspaceApply(id, { revisionId: stale.revisionId, preparationId: stale.preparationId })
-          .pipe(Effect.flip),
-      ).toMatchObject({ code: "workspace_preparation_stale" });
+      const replaced = yield* reviewAndPrepare(service, id);
+      const tested = yield* service.workspacePrepare(id, replaced.revisionId);
       const hookRuns = f.hookRuns.length;
-      const applied = yield* service.workspaceApply(id, {
-        revisionId: tested.revisionId,
-        preparationId: tested.preparationId,
-      });
+      const applied = yield* service.workspaceApply(id, { revisionId: tested.revisionId });
       expect(applied).toMatchObject({
-        reviewed: true,
         revisionId: tested.revisionId,
         preparationId: tested.preparationId,
         preparedCwd: tested.cwd,
@@ -274,13 +258,16 @@ describe("one-step workspace apply", () => {
     });
   });
 
-  it.effect("the careful path still requires every page before preparing", () => {
+  it.effect("prepare refuses a revision that a resume made stale", () => {
     const f = hooked();
     return withService(f.layer, function* (service) {
-      const id = (yield* stoppedWriter(service)).workspaceId!;
-      const page = yield* service.workspaceReview(id);
-      expect(yield* service.workspacePrepare(id, page.revisionId).pipe(Effect.flip)).toMatchObject({
-        code: "workspace_review_incomplete",
+      const writer = yield* completedWriter(service, f);
+      const id = writer.workspaceId!;
+      const old = yield* service.workspaceReview(id);
+      yield* service.resume(writer.id, "Rename the helper too.");
+      yield* completeLocalRun(service, f.children.controls[1]!, writer.id, "Renamed.");
+      expect(yield* service.workspacePrepare(id, old.revisionId).pipe(Effect.flip)).toMatchObject({
+        code: "workspace_revision_stale",
       });
       expect(f.entries.get(id)?.preparation).toBeUndefined();
     });
@@ -312,40 +299,6 @@ describe("a worktree writer's workspace outcome", () => {
       expect(yield* settledOutcome(service, discarded.id)).toMatchObject({ status: "proposal" });
       yield* service.workspaceDiscard(discarded.workspaceId!);
       expect(yield* outcomeOf(service, discarded.id)).toEqual({ status: "discarded" });
-    });
-  });
-
-  it.effect("narrows the proposal to the changes a partial apply left", () => {
-    const f = workspaceFixture();
-    const changed = ["a.ts", "b.ts", "c.ts"];
-    f.hooks.changedPaths = changed;
-    f.hooks.workerChanges = {
-      changedPaths: changed,
-      uncapturedPaths: [],
-      diffStat: changed.map((path, index) => ({
-        path,
-        change: "modified" as const,
-        binary: false,
-        addedLines: index + 1,
-        deletedLines: 1,
-      })),
-    };
-    return withService(f.layer, function* (service) {
-      const writer = yield* completedWriter(service, f);
-      expect(yield* settledOutcome(service, writer.id)).toMatchObject({
-        status: "proposal",
-        changedFileCount: 3,
-      });
-      yield* service.workspaceApply(writer.workspaceId!, { paths: ["a.ts", "c.ts"] });
-      expect(yield* outcomeOf(service, writer.id)).toEqual({
-        status: "proposal",
-        changedFileCount: 1,
-        diffStat: {
-          addedLines: 2,
-          deletedLines: 1,
-          files: [{ path: "b.ts", addedLines: 2, deletedLines: 1 }],
-        },
-      });
     });
   });
 });

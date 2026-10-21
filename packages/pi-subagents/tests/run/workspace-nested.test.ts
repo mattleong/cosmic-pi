@@ -125,7 +125,7 @@ const parentOperations = (
 ): ReadonlyArray<Effect.Effect<unknown, SubagentError>> => [
   service.workspaceReview(workspaceId),
   service.workspacePrepare(workspaceId, "revision-1"),
-  service.workspaceApply(workspaceId, { revisionId: "revision-1", preparationId: "prepared-1" }),
+  service.workspaceApply(workspaceId, { revisionId: "revision-1" }),
   service.workspaceApply(workspaceId),
   service.workspaceRevise(workspaceId, "Try again."),
 ];
@@ -310,10 +310,7 @@ describe("nested worktree writers", () => {
       const childOperations: ReadonlyArray<Effect.Effect<unknown, SubagentError>> = [
         service.workspaceReview(childWorkspace),
         service.workspaceApply(childWorkspace),
-        service.workspaceApply(childWorkspace, {
-          revisionId: "revision-1",
-          preparationId: "prepared-1",
-        }),
+        service.workspaceApply(childWorkspace, { revisionId: "revision-1" }),
         service.workspaceRevise(childWorkspace, "Continue."),
       ];
       for (const operation of childOperations)

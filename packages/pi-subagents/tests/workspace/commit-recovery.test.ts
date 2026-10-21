@@ -40,15 +40,11 @@ const publicationArtifacts = (root: string) =>
     ),
   );
 
-const freezeAndPrepare = (
-  service: WorkspaceServiceContract,
-  handle: WorkspaceHandle,
-  paths?: ReadonlyArray<string>,
-) =>
+const freezeAndPrepare = (service: WorkspaceServiceContract, handle: WorkspaceHandle) =>
   Effect.gen(function* () {
     const target = workspaceTarget(handle);
     const revision = yield* service.freeze(target);
-    const prepared = yield* service.prepare({ ...target, revisionId: revision.revisionId, paths });
+    const prepared = yield* service.prepare({ ...target, revisionId: revision.revisionId });
     return {
       revision,
       integration: {
@@ -204,15 +200,14 @@ test("names the rebase-worker ref when restoring the worker fails, and it holds 
   expect(yield* gitProcess.git(root, ["show", `${ref}:src/new.ts`])).toBe("new\n");
 });
 
-const isReopened = (text: string) =>
-  text.includes('"status":"active"') && text.includes('"journal"');
+const isIntegrated = (text: string) => text.includes('"status":"integrated"');
 
-test("keeps a partial apply mid-integration, its backups tracked, when its record can't be saved", function* (service, root, agent) {
+test("keeps an integration mid-integration, its backups tracked, when its record can't be saved", function* (service, root, agent) {
   const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
   yield* editWorker(handle);
-  const { integration } = yield* freezeAndPrepare(service, handle, ["src/a.ts", "src/gone.ts"]);
+  const { integration } = yield* freezeAndPrepare(service, handle);
   const failure = yield* spied(
-    failRecordSave(artifactOf(agent, handle), { matches: isReopened, failRename: true }),
+    failRecordSave(artifactOf(agent, handle), { matches: isIntegrated, failRename: true }),
     failureOf(service.integrate(integration)),
   );
   const record = yield* service.inspect(workspaceTarget(handle));
@@ -225,50 +220,23 @@ test("keeps a partial apply mid-integration, its backups tracked, when its recor
   yield* service.discard(workspaceTarget(handle));
   expect(yield* readText(root, "src/a.ts")).toBe("a\nb\nc\n");
   expect(yield* readText(root, "src/gone.ts")).toBe("gone\n");
+  expect(yield* exists(path.join(root, "src/new.ts"))).toBe(false);
   expect(yield* publicationArtifacts(root)).toEqual([]);
 });
 
-test("completes a partial apply whose record landed though its directory sync failed", function* (service, root, agent) {
+test("completes an integration whose record landed though its directory sync failed", function* (service, root, agent) {
   const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
   yield* editWorker(handle);
-  const { integration } = yield* freezeAndPrepare(service, handle, ["src/a.ts", "src/gone.ts"]);
+  const { integration } = yield* freezeAndPrepare(service, handle);
   const integrated = yield* spied(
-    failRecordSave(artifactOf(agent, handle), { matches: isReopened, failSync: true }),
+    failRecordSave(artifactOf(agent, handle), { matches: isIntegrated, failSync: true }),
     service.integrate(integration),
   );
-  expect(integrated.remainingPaths).toEqual(["src/new.ts"]);
   expect(integrated.remainingBackupPaths).toEqual([]);
-  expect((yield* service.inspect(workspaceTarget(handle))).status).toBe("active");
+  expect((yield* service.inspect(workspaceTarget(handle))).status).toBe("integrated");
   expect(yield* publicationArtifacts(root)).toEqual([]);
-  expect(yield* readText(root, "src/a.ts")).toBe("a\nworker\nc\n");
-});
-
-test("rolls back only a second publication that stopped partway after a partial apply", function* (service, root) {
-  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  yield* editWorker(handle);
-  yield* writeFile(path.join(handle.cwd, "src/b.ts"), "worker b\n");
-  const first = yield* freezeAndPrepare(service, handle, ["src/a.ts", "src/new.ts"]);
-  yield* service.integrate(first.integration);
-  const second = yield* freezeAndPrepare(service, handle);
-  expect(second.revision.changedPaths).toEqual(["src/b.ts", "src/gone.ts"]);
-  const original = files.publishWorkspaceFile;
-  const spy = vi
-    .spyOn(files, "publishWorkspaceFile")
-    .mockImplementation((request, hooks) =>
-      request.name === "gone.ts"
-        ? Effect.succeed({ status: "uncertain", reason: "io-failure" })
-        : original(request, hooks),
-    );
-  yield* spied(spy, failureOf(service.integrate(second.integration)));
-  expect(yield* readText(root, "src/b.ts")).toBe("worker b\n");
-  expect((yield* service.inspect(workspaceTarget(handle))).status).toBe("integrating");
-  yield* service.discard(workspaceTarget(handle));
-  expect(yield* readText(root, "src/b.ts")).toBe("one\n");
-  expect(yield* readText(root, "src/gone.ts")).toBe("gone\n");
-  // The first publication's files stay.
   expect(yield* readText(root, "src/a.ts")).toBe("a\nworker\nc\n");
   expect(yield* readText(root, "src/new.ts")).toBe("new\n");
-  expect(yield* publicationArtifacts(root)).toEqual([]);
 });
 
 test("discard drops a backup reservation left by a stop before the file moved there", function* (service, root) {

@@ -4,56 +4,6 @@ import { WorkspaceError } from "../../src/workspace/model.ts";
 import { request, withService } from "./fixtures/service-harness.ts";
 import { reviewAndPrepare, stoppedWriter, workspaceFixture } from "./fixtures/workspace-engine.ts";
 
-describe("partial apply", () => {
-  it.effect("integrates the chosen paths and keeps the rest as an unreviewed proposal", () => {
-    const f = workspaceFixture();
-    f.hooks.changedPaths = ["a.ts", "b.ts", "c.ts"];
-    return withService(f.layer, function* (service) {
-      const id = (yield* stoppedWriter(service)).workspaceId!;
-      expect(
-        yield* service.workspaceApply(id, { paths: ["b.ts", "missing.ts"] }).pipe(Effect.flip),
-      ).toMatchObject({ code: "workspace_paths_unknown" });
-      expect(f.entries.get(id)?.preparation).toBeUndefined();
-      const partial = yield* service.workspaceApply(id, { paths: ["c.ts", "a.ts"] });
-      expect(partial).toMatchObject({
-        testing: "untested",
-        changedPaths: ["a.ts", "c.ts"],
-        changedPathCount: 2,
-        remainingPaths: ["b.ts"],
-        remainingPathCount: 1,
-      });
-      expect(f.integrations).toHaveLength(1);
-      expect(f.entries.get(id)?.status).toBe("active");
-      // The prepared pair was partial; a careful-path apply of it is now stale.
-      expect(
-        yield* service
-          .workspaceApply(id, {
-            revisionId: partial.revisionId,
-            preparationId: partial.preparationId,
-          })
-          .pipe(Effect.flip),
-      ).toMatchObject({ code: "workspace_preparation_stale" });
-      f.hooks.changedPaths = ["b.ts"];
-      const rest = yield* service.workspaceApply(id);
-      expect(rest).toMatchObject({ testing: "untested", changedPaths: ["b.ts"] });
-      expect(rest.remainingPaths).toBeUndefined();
-      expect(rest.revisionId).not.toBe(partial.revisionId);
-      expect(f.entries.get(id)?.status).toBe("integrated");
-    });
-  });
-
-  it.effect("naming every changed path applies the whole revision", () => {
-    const f = workspaceFixture();
-    f.hooks.changedPaths = ["a.ts", "b.ts"];
-    return withService(f.layer, function* (service) {
-      const id = (yield* stoppedWriter(service)).workspaceId!;
-      const applied = yield* service.workspaceApply(id, { paths: ["b.ts", "a.ts"] });
-      expect(applied.remainingPathCount).toBeUndefined();
-      expect(f.entries.get(id)?.status).toBe("integrated");
-    });
-  });
-});
-
 describe("rebasing revise", () => {
   it.effect(
     "rebuilds the tree, runs WorktreeCreate there, and lists conflicts in the successor's task",

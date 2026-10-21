@@ -39,13 +39,6 @@ export interface RevisionHold {
   launched: boolean;
 }
 
-/** How much of a revision's patch the parent has read, in UTF-16 units. */
-export interface ReviewProgress {
-  readonly revisionId: string;
-  readonly reviewedThrough: number;
-  readonly totalChars: number;
-}
-
 /**
  * What this session knows about the engine's current revision. The engine record may hold a
  * frozen or prepared revision this session has no knowledge of; only a recorded preparation is
@@ -55,7 +48,8 @@ export type RevisionKnowledge =
   | { readonly kind: "unreviewed" }
   /** Resume or revision admission made the engine's revision stale; the next review reopens it. */
   | { readonly kind: "reopened" }
-  | { readonly kind: "frozen"; readonly review: ReviewProgress }
+  /** The parent reviewed the current revision, so automatic cleanup leaves it alone. */
+  | { readonly kind: "frozen" }
   | {
       readonly kind: "prepared";
       readonly revisionId: string;
@@ -63,8 +57,6 @@ export type RevisionKnowledge =
       readonly preparationId: string;
       /** `prepare` builds a tree for the parent to test; a one-call apply's tree runs no hooks. */
       readonly origin: "prepare" | "apply";
-      /** Apply prepares without requiring any review. */
-      readonly review?: ReviewProgress | undefined;
     };
 
 /** States outside any launch or revision; a root operation may hold the binding in one. */
@@ -140,9 +132,6 @@ export const updateKnowledge = (
   if (settled?.phase === "idle")
     settleBinding(binding, { phase: "idle", knowledge: update(settled.knowledge) });
 };
-
-export const reviewProgress = (knowledge: RevisionKnowledge | undefined) =>
-  knowledge?.kind === "frozen" || knowledge?.kind === "prepared" ? knowledge.review : undefined;
 
 /** Integrated, discarded, or left mid-integration: it never takes another assignment. */
 export const isBindingFinished = (binding: WorkspaceBinding) => {
@@ -277,35 +266,6 @@ export const recordWorkspaceOutcomeLocked = (
 ) => {
   const record = binding.record;
   if (record) record.view = { ...record.view, workspaceOutcome };
-};
-
-/**
- * The proposal a partial integration leaves: exactly the remaining paths. Line totals stay only
- * when the bounded diffstat listed every file.
- */
-export const narrowProposalLocked = (
-  binding: WorkspaceBinding,
-  remainingPaths: ReadonlyArray<string>,
-) => {
-  const current = binding.record?.view.workspaceOutcome;
-  const proposal = current?.status === "proposal" ? current : undefined;
-  const remaining = new Set(remainingPaths);
-  const stat = proposal?.diffStat;
-  const files = stat?.files.filter((file) => remaining.has(file.path)) ?? [];
-  const complete = stat !== undefined && stat.files.length === proposal?.changedFileCount;
-  recordWorkspaceOutcomeLocked(binding, {
-    status: "proposal",
-    changedFileCount: remainingPaths.length,
-    ...(proposal?.uncapturedFileCount && { uncapturedFileCount: proposal.uncapturedFileCount }),
-    ...(complete &&
-      files.length > 0 && {
-        diffStat: {
-          addedLines: files.reduce((total, file) => total + file.addedLines, 0),
-          deletedLines: files.reduce((total, file) => total + file.deletedLines, 0),
-          files,
-        },
-      }),
-  });
 };
 
 export const workspaceBusyError = () =>

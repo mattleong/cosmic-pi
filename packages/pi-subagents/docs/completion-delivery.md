@@ -259,7 +259,7 @@ Shared rules for registration, replay, compact issues, and expansion are in [too
 - Each `prepareArguments` hook validates and coerces as Pi does, rejects blank strings, and returns `[invalid_arguments]` lists naming allowed values and likely replacements for unknown fields.
 - `execute-result.ts` separates model text, persisted details, and script results.
 - Model text is compact. A start lists one bounded entry per launch (`id name · profile · runtime/model:effort`, plus `worktree <id>` for an isolated writer, and its route warning), or the launch's failure and recovery. Await and lifecycle results give one [run block](#model-facing-run-blocks) per run, and an await adds the whole reports that fit after them. A read is the detail surface: its card is a header line, then the fields that need attention (parent, a failed run's next candidate, a cwd other than the caller's, route warnings, worktree proposal with its files, quarantined cleanup, warnings, the whole failure and pending question), followed by the latest message, the report's file with its retained copy, or an unsaved report. `agent_read` with `verbose` adds route selection, context, capabilities, process, cwd, and timing. Pending cleanup is never reported; only quarantine is.
-- A worktree writer's proposal is stated once, as `proposal: N files, +A −D · agent_worktree apply workspaceId=…`, in cards, `agent_list` lines, issue details, and notifications. A partial apply narrows it to the remaining files; once applied or discarded, it reads `workspace applied` or `workspace discarded`.
+- A worktree writer's proposal is stated once, as `proposal: N files, +A −D · agent_worktree apply workspaceId=…`, in cards, `agent_list` lines, issue details, and notifications. Once applied or discarded, it reads `workspace applied` or `workspace discarded`.
 - `agent_worktree` pages complete immutable diffs and keeps patches out of persisted details. Its producers record display spans while composing output, so expansion never parses text.
 - `boundary/host-tool-result.ts` owns the receipts that set Pi's error flag, including decoded child-proxy results, and tracks call provenance from native events, never arguments. Unknown provenance fails closed.
 
@@ -274,7 +274,7 @@ Shared rules for registration, replay, compact issues, and expansion are in [too
 - Typed projections emit one `CompactIssue` per problem or recovery step. Messages start with a subagent, launch, or profile name, never a run or workspace ID. `tools/compact-action-failures.ts` owns each failure code's message and recovery guidance.
 - Headings name runs by display name and show one combined count without routine IDs or route metadata.
 - Routine facts are `info` issues, such as a stop the call requested or an isolated writer's workspace outcome (`ready to apply`, applied, or discarded, including automatically).
-- Workspace rows show whether the diff was reviewed and whether the parent tested its prepared pair or nothing was tested. Left-out worker files are a warning.
+- Workspace rows show whether the parent tested its preparation or nothing was tested. Left-out worker files are a warning.
 - Static discovery counts eligible options and disabled or unavailable profiles without claiming launch readiness.
 - Report-only omissions use the optional `reportsOnlyOmitted: true` flag; other omissions keep warnings and full-status guidance.
 - Compact summaries never derive grant paths or cleanup from bounded cards.

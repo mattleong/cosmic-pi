@@ -71,8 +71,6 @@ const WorkspacePreparationSchema = Schema.Struct({
   revisionId: Schema.String,
   cwd: Schema.String,
   leaseDirectories: Schema.Array(Schema.String),
-  /** A partial preparation's subset of the revision's changed paths; absent for all of them. */
-  paths: Schema.optional(Schema.Array(Schema.String)),
 });
 export type WorkspacePreparation = typeof WorkspacePreparationSchema.Type;
 const WorkspaceJournalFileSchema = Schema.Struct({
@@ -216,12 +214,8 @@ export interface WorkspaceSwept {
 export interface WorkspaceSettledTarget extends WorkspaceTarget {
   readonly processCleanupConfirmed: true;
 }
-interface WorkspaceRevisionTarget extends WorkspaceTarget {
+export interface WorkspacePreparationTarget extends WorkspaceTarget {
   readonly revisionId: string;
-}
-export interface WorkspacePreparationTarget extends WorkspaceRevisionTarget {
-  /** A strict, nonempty subset of the revision's changed paths to prepare alone. */
-  readonly paths?: ReadonlyArray<string> | undefined;
 }
 export interface WorkspaceRebase {
   /** The previous changes reapplied onto the fresh snapshot. */
@@ -230,7 +224,7 @@ export interface WorkspaceRebase {
   readonly conflictedPaths: ReadonlyArray<string>;
 }
 export interface WorkspaceIntegrationTarget
-  extends WorkspaceRevisionTarget, WorkspaceSettledTarget {
+  extends WorkspacePreparationTarget, WorkspaceSettledTarget {
   readonly preparationId: string;
   readonly retainTrees?: boolean;
 }
@@ -244,10 +238,5 @@ export interface WorkspaceIntegration {
   readonly remainingBackupPaths: ReadonlyArray<string>;
   /** Unresolved child workspaces created from the worker tree, which therefore stays. */
   readonly retainedForChildren?: ReadonlyArray<string> | undefined;
-  /**
-   * A partial integration's changed paths left out; the workspace stays active with them as its
-   * remaining proposal.
-   */
-  readonly remainingPaths?: ReadonlyArray<string> | undefined;
 }
 export type WorkspaceAcquired = (handle: WorkspaceHandle) => void;

@@ -136,11 +136,10 @@ const encodeWorkspaceMetadata = Schema.encodeEffect(
 const ORPHAN_GUIDANCE =
   "orphan=adoptable entries belong to ended sessions: review, prepare, apply, or revise takes one over. orphan=discard-only entries (nested or left mid-integration) can only be discarded, which rolls back an interrupted integration.";
 
-const executeWorkspaceList = (
-  service: SubagentServiceContract,
-  callerRunId: string,
-  offset: number,
-) =>
+// Model-facing list output; entries beyond it are counted, not shown.
+const MAX_LIST_CHARS = 32_000;
+
+const executeWorkspaceList = (service: SubagentServiceContract, callerRunId: string) =>
   Effect.gen(function* () {
     const listing = yield* service.workspaceList(callerRunId);
     const entries = [
@@ -163,7 +162,7 @@ const executeWorkspaceList = (
     ].toSorted((a, b) => a.workspaceId.localeCompare(b.workspaceId));
     const lines: string[] = [];
     let chars = 0;
-    for (const entry of entries.slice(offset, offset + 8)) {
+    for (const entry of entries) {
       const line = yield* encodeWorkspaceMetadata(entry).pipe(
         Effect.mapError(() =>
           invalidRequest(
@@ -172,16 +171,16 @@ const executeWorkspaceList = (
           ),
         ),
       );
-      if (line.length > 32_000)
+      if (line.length > MAX_LIST_CHARS)
         return yield* invalidRequest(
           "workspace_metadata_too_large",
           "Worktree metadata exceeds the safe output bound; inspect private worktree state manually.",
         );
-      if (chars + line.length > 32_000) break;
+      if (chars + line.length > MAX_LIST_CHARS) break;
       chars += line.length;
       lines.push(line);
     }
-    const nextOffset = offset + lines.length < entries.length ? offset + lines.length : undefined;
+    const omitted = entries.length - lines.length;
     const adoptableCount = [...(listing.orphans?.values() ?? [])].filter(
       (disposition) => disposition === "adoptable",
     ).length;
@@ -201,21 +200,19 @@ const executeWorkspaceList = (
               "Some nested worktrees name a source worktree whose record is missing or unreadable (reason source-workspace-unavailable). Their source tree and cleanup are unknown; preserve them and recover manually.",
             ]
           : []),
-        nextOffset === undefined
+        omitted === 0
           ? "End of worktree list."
-          : `More worktrees: call list with offset=${nextOffset}.`,
+          : `${countLabel(omitted, "more worktree")} didn't fit the output and ${omitted === 1 ? "was" : "were"} left out.`,
         ...(listing.orphans !== undefined && listing.orphans.size > 0 ? [ORPHAN_GUIDANCE] : []),
       ].join("\n"),
       {
         operation: "list",
-        offset,
         workspaceCount: entries.length,
         ...(adoptableCount > 0 && { adoptableCount }),
         unavailableCount: listing.unavailable.length,
         ...(sourceUnavailableCount > 0 && { sourceUnavailableCount }),
         listedCount: lines.length,
         displayContent: { offset: 0, length: lines.join("\n").length },
-        ...(nextOffset !== undefined && { nextOffset }),
       },
     );
   });
@@ -235,7 +232,6 @@ const executeWorkspaceReview = (
       {
         ...(operation.revisionId !== undefined && { revisionId: operation.revisionId }),
         offset: operation.offset ?? 0,
-        limit: operation.limit ?? 16_000,
       },
       callerRunId,
     );
@@ -243,7 +239,7 @@ const executeWorkspaceReview = (
       `Worktree ${workspaceId}; immutable revision ${review.revisionId}.`,
       `Review characters ${review.offset}..${review.offset + review.text.length} of ${review.totalChars}: a summary of changed files and line counts, then the diff.`,
       review.nextOffset !== undefined
-        ? `More pages: review workspaceId=${workspaceId} offset=${review.nextOffset}. Read every page before prepare.`
+        ? `More pages: review workspaceId=${workspaceId} offset=${review.nextOffset}.`
         : "End of review. Apply it, or prepare it and test in the returned cwd first.",
       "BEGIN IMMUTABLE REVIEW PAGE",
     ].join("\n");
@@ -292,11 +288,6 @@ const executeWorkspacePrepare = (
     );
   });
 
-const appliedReviewLine = (reviewed: boolean) =>
-  reviewed
-    ? "Reviewed: every diff page of this revision was read before apply."
-    : "Unreviewed: apply ran without the diff being read. Inspect the changed files in the parent checkout if the change needs review.";
-
 const APPLY_TESTING_LINES = {
   "parent-tested":
     "Tested by you: apply integrated the preparation you tested in its combined cwd.",
@@ -314,37 +305,25 @@ const executeWorkspaceApply = (
     const workspaceId = operation.workspaceId ?? "";
     const applied = yield* service.workspaceApply(
       workspaceId,
-      operation.preparationId !== undefined && operation.revisionId !== undefined
-        ? { revisionId: operation.revisionId, preparationId: operation.preparationId }
-        : { revisionId: operation.revisionId, paths: operation.paths },
+      { revisionId: operation.revisionId },
       callerRunId,
     );
     const ids = `worktree ${workspaceId}, revision ${applied.revisionId}, preparationId=${applied.preparationId}`;
     const changed = `Changed files (${applied.changedPathCount}): ${applied.changedPaths.length > 0 ? listedPaths(applied.changedPaths) : "none listed"}${applied.changedPathCount > applied.changedPaths.length ? ` (${applied.changedPathCount - applied.changedPaths.length} not listed)` : ""}`;
-    const remainingCount = applied.remainingPathCount;
-    const remaining =
-      remainingCount === undefined
-        ? []
-        : [
-            `Partial apply: ${countLabel(remainingCount, "other changed file")} ${remainingCount === 1 ? "stays" : "stay"} in worktree ${workspaceId} as an unreviewed proposal: ${listedPaths(applied.remainingPaths ?? [])}${remainingCount > (applied.remainingPaths ?? []).length ? ` (${remainingCount - (applied.remainingPaths ?? []).length} not listed)` : ""}. Apply, review, revise, or discard them later.`,
-          ];
     const metadata = {
       ...receipt,
       revisionId: applied.revisionId,
       preparationId: applied.preparationId,
       changedPathCount: applied.changedPathCount,
-      ...(remainingCount !== undefined && { remainingPathCount: remainingCount }),
-      reviewed: applied.reviewed,
       testing: applied.testing,
       ...(applied.preparedCwd.length <= 1_024 && { preparedCwd: applied.preparedCwd }),
     };
     const warnings = [...integrationWarnings(applied), ...leftOutWarnings(applied.leftOutPaths)];
     const heading = [
       `Applied ${ids} as uncommitted parent edits. The parent index was preserved. Do not stage or commit unless the user asks.`,
-      appliedReviewLine(applied.reviewed),
       APPLY_TESTING_LINES[applied.testing],
     ].join("\n");
-    const body = [changed, ...remaining].join("\n");
+    const body = changed;
     return result(
       [heading, body, ...warnings.map((warning) => `Warning: ${warning.detail}`)].join("\n"),
       {
@@ -374,7 +353,7 @@ export const executeWorkspaceAction = (
     const receipt = { operation: operation.action, ...(workspaceId && { workspaceId }) };
     switch (operation.action) {
       case "list":
-        return yield* executeWorkspaceList(service, callerRunId, operation.offset ?? 0);
+        return yield* executeWorkspaceList(service, callerRunId);
       case "review":
         return yield* executeWorkspaceReview(service, operation, receipt, callerRunId);
       case "prepare":

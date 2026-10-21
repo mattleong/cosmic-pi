@@ -2,7 +2,6 @@ import * as Effect from "effect/Effect";
 import { expect } from "vitest";
 import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-builtins.ts";
 import type { WorkspaceHandle } from "../../src/workspace/model.ts";
-import type { WorkspaceServiceContract } from "../../src/workspace/service.ts";
 import {
   exists,
   failureOf,
@@ -25,52 +24,6 @@ const editWorker = (handle: WorkspaceHandle) =>
     yield* writeFile(path.join(handle.cwd, "src/new.ts"), "new\n");
     yield* io(() => fs.unlink(path.join(handle.cwd, "src/gone.ts")));
   });
-
-const frozenProposal = (service: WorkspaceServiceContract, root: string) =>
-  Effect.gen(function* () {
-    const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-    yield* editWorker(handle);
-    const revision = yield* service.freeze(workspaceTarget(handle));
-    return { handle, revision };
-  });
-
-test("integrates only the chosen paths and keeps the rest as the workspace's proposal", function* (service, root) {
-  const { handle, revision } = yield* frozenProposal(service, root);
-  const target = workspaceTarget(handle);
-  const unknown = yield* failureOf(
-    service.prepare({ ...target, revisionId: revision.revisionId, paths: ["src/b.ts"] }),
-  );
-  expect(unknown.operation).toBe("prepare");
-  expect(unknown.detail).toContain('"src/b.ts"');
-  const preparation = yield* service.prepare({
-    ...target,
-    revisionId: revision.revisionId,
-    paths: ["src/new.ts", "src/a.ts"],
-  });
-  expect(preparation.paths).toEqual(["src/a.ts", "src/new.ts"]);
-  const integration = yield* service.integrate({
-    ...target,
-    revisionId: revision.revisionId,
-    preparationId: preparation.preparationId,
-  });
-  expect(integration.remainingPaths).toEqual(["src/gone.ts"]);
-  expect(integration.record.status).toBe("active");
-  expect(yield* readText(root, "src/a.ts")).toBe("a\nworker\nc\n");
-  expect(yield* readText(root, "src/new.ts")).toBe("new\n");
-  expect(yield* exists(path.join(root, "src/gone.ts"))).toBe(true);
-  expect(yield* exists(path.join(handle.cwd, "src/new.ts"))).toBe(true);
-  expect(yield* exists(preparation.cwd)).toBe(false);
-  const rest = yield* service.freeze(target);
-  expect(rest.changedPaths).toEqual(["src/gone.ts"]);
-  const final = yield* service.prepare({ ...target, revisionId: rest.revisionId });
-  yield* service.integrate({
-    ...target,
-    revisionId: rest.revisionId,
-    preparationId: final.preparationId,
-  });
-  expect(yield* exists(path.join(root, "src/gone.ts"))).toBe(false);
-  expect((yield* service.inspect(target)).status).toBe("integrated");
-});
 
 test("rebases onto current parent files, keeping conflict markers for the writer", function* (service, root) {
   const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });

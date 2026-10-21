@@ -342,18 +342,6 @@ it.live(
         yield* io(() => fs.unlink(path.join(handle.cwd, "src/gone.ts")));
         const revision = yield* service.freeze(target);
         expect(revision.revisionId).toMatch(/^[a-f0-9]{64}$/u);
-        // A partial apply advances the baseline, removing a deleted path from it.
-        const partial = yield* service.prepare({
-          ...target,
-          revisionId: revision.revisionId,
-          paths: ["src/gone.ts", "src/new.ts"],
-        });
-        yield* service.integrate({
-          ...target,
-          revisionId: revision.revisionId,
-          preparationId: partial.preparationId,
-        });
-        expect((yield* service.freeze(target)).changedPaths).toEqual(["src/a.ts"]);
         yield* writeFile(path.join(root, "src/a.ts"), "a\nb\nc\nparent\n");
         expect((yield* service.rebase(target)).conflictedPaths).toEqual([]);
         yield* integrate(service, handle);

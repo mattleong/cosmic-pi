@@ -11,10 +11,8 @@ import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
 import { SUBAGENT_ROOT_RUN_ID } from "./model.ts";
 import {
   mapWorkspaceError,
-  type ReviewProgress,
   type RevisionKnowledge,
   revisionKnowledge,
-  reviewProgress,
   runHoldsCwd,
   runsWithin,
   recordWorkspaceOutcomeLocked,
@@ -51,8 +49,10 @@ export interface WorkspacePrepared extends WorkspacePreparation {
 export interface WorkspaceReviewOptions {
   readonly revisionId?: string;
   readonly offset?: number;
-  readonly limit?: number;
 }
+
+/** UTF-16 units per review page. */
+const REVIEW_PAGE_CHARS = 16_000;
 
 /** A binding this operation keeps busy; `heldLocked` confirms, under the run lock, it still does. */
 interface HeldBinding {
@@ -65,18 +65,18 @@ const isHighSurrogate = (code: number) => code >= 0xd800 && code <= 0xdbff;
 const isLowSurrogate = (code: number) => code >= 0xdc00 && code <= 0xdfff;
 
 /**
- * Where a page starting at `offset` ends: at most `limit` UTF-16 units, never between the two
- * halves of a character, unless that character alone is longer than the limit.
+ * Where a page starting at `offset` ends: at most one page of UTF-16 units, never between the two
+ * halves of a character.
  */
-const pageEnd = (text: string, offset: number, limit: number) => {
-  const end = Math.min(text.length, offset + limit);
+const pageEnd = (text: string, offset: number) => {
+  const end = Math.min(text.length, offset + REVIEW_PAGE_CHARS);
   if (
     end >= text.length ||
     !isHighSurrogate(text.charCodeAt(end - 1)) ||
     !isLowSurrogate(text.charCodeAt(end))
   )
     return end;
-  return end - 1 > offset ? end - 1 : end + 1;
+  return end - 1;
 };
 
 const engineRecord = (service: WorkspaceServiceContract, { handle }: WorkspaceBinding) =>
@@ -96,53 +96,24 @@ const engineRevision = (service: WorkspaceServiceContract, { handle }: Workspace
     ),
   );
 
-/** Records that the parent read the review text of `revisionId` from `offset` up to `nextOffset`. */
-const readThrough = (
-  knowledge: RevisionKnowledge,
-  revisionId: string,
-  totalChars: number,
-  offset: number,
-  nextOffset: number,
-): RevisionKnowledge => {
-  const known = reviewProgress(knowledge);
-  const base: ReviewProgress =
-    known?.revisionId === revisionId ? known : { revisionId, reviewedThrough: 0, totalChars };
-  const review =
-    offset <= base.reviewedThrough
-      ? { ...base, reviewedThrough: Math.max(base.reviewedThrough, nextOffset) }
-      : base;
-  return knowledge.kind === "prepared" && knowledge.revisionId === revisionId
-    ? { ...knowledge, review }
-    : { kind: "frozen", review };
-};
-
-/** Every page of `revisionId` was read. */
-export const fullyReviewed = (knowledge: RevisionKnowledge | undefined, revisionId: string) => {
-  const review = reviewProgress(knowledge);
-  return review?.revisionId === revisionId && review.reviewedThrough === review.totalChars;
-};
+/** A review of the current revision; a preparation of it stays integrable. */
+const reviewed = (knowledge: RevisionKnowledge, revisionId: string): RevisionKnowledge =>
+  knowledge.kind === "prepared" && knowledge.revisionId === revisionId
+    ? knowledge
+    : { kind: "frozen" };
 
 /** The engine replaces any earlier preparation, which is no longer integrable from here on. */
 const withoutPreparation = (knowledge: RevisionKnowledge): RevisionKnowledge =>
-  knowledge.kind !== "prepared"
-    ? knowledge
-    : knowledge.review
-      ? { kind: "frozen", review: knowledge.review }
-      : { kind: "unreviewed" };
+  knowledge.kind === "prepared" ? { kind: "frozen" } : knowledge;
 
 /** Records a ready preparation, which makes it integrable. */
 const withPreparation =
-  (preparation: WorkspacePreparation, origin: "prepare" | "apply") =>
-  (knowledge: RevisionKnowledge): RevisionKnowledge => {
-    const review = reviewProgress(knowledge);
-    return {
-      kind: "prepared",
-      revisionId: preparation.revisionId,
-      preparationId: preparation.preparationId,
-      origin,
-      ...(review?.revisionId === preparation.revisionId && { review }),
-    };
-  };
+  (preparation: WorkspacePreparation, origin: "prepare" | "apply") => (): RevisionKnowledge => ({
+    kind: "prepared",
+    revisionId: preparation.revisionId,
+    preparationId: preparation.preparationId,
+    origin,
+  });
 
 export function workspaceReviewOperations(
   context: WorkspaceControlContext,
@@ -250,26 +221,23 @@ export function workspaceReviewOperations(
       return revision;
     });
   /**
-   * Prepares the revision, or only `paths` of it. The preparation isn't integrable until the
-   * caller records it, after `provisionHeld` runs its WorktreeCreate hooks when it is for testing.
+   * Prepares the revision. The preparation isn't integrable until the caller records it, after
+   * `provisionHeld` runs its WorktreeCreate hooks when it is for testing.
    */
   const prepareHeld = (
     service: WorkspaceServiceContract,
     { binding }: HeldBinding,
     revisionId: string,
-    paths?: ReadonlyArray<string>,
   ): Effect.Effect<WorkspacePreparation, SubagentError> =>
     Effect.gen(function* () {
       yield* withLock(Effect.sync(() => updateKnowledge(binding, withoutPreparation)));
-      const preparation = yield* service
+      return yield* service
         .prepare({
           workspaceId: binding.handle.workspaceId,
           ownerId: binding.handle.ownerId,
           revisionId,
-          paths,
         })
         .pipe(Effect.mapError(mapWorkspaceError));
-      return preparation;
     });
   /** Runs the WorktreeCreate hooks in a held binding's prepared tree. */
   const provisionHeld = (
@@ -345,17 +313,10 @@ export function workspaceReviewOperations(
   ): Effect.Effect<WorkspaceReview, SubagentError> =>
     Effect.gen(function* () {
       const offset = options.offset ?? 0;
-      const limit = options.limit ?? 16_000;
-      if (
-        !Number.isSafeInteger(offset) ||
-        offset < 0 ||
-        !Number.isSafeInteger(limit) ||
-        limit < 1 ||
-        limit > 16_000
-      )
+      if (!Number.isSafeInteger(offset) || offset < 0)
         return yield* invalid(
           "workspace_diff_bounds",
-          "Diff offset must be a nonnegative integer and limit must be 1 through 16000.",
+          "Review offset must be a nonnegative integer.",
         );
       const service = yield* requireEngine;
       return yield* operate(workspaceId, caller, (held) =>
@@ -372,10 +333,8 @@ export function workspaceReviewOperations(
                   "workspace_diff_bounds",
                   "Review offset exceeds this revision.",
                 );
-              const nextOffset = pageEnd(text, offset, limit);
-              updateKnowledge(binding, (knowledge) =>
-                readThrough(knowledge, revision.revisionId, text.length, offset, nextOffset),
-              );
+              const nextOffset = pageEnd(text, offset);
+              updateKnowledge(binding, (knowledge) => reviewed(knowledge, revision.revisionId));
               return {
                 ...revision,
                 text: text.slice(offset, nextOffset),
@@ -399,14 +358,10 @@ export function workspaceReviewOperations(
         Effect.gen(function* () {
           const { binding } = held;
           const { revision } = yield* engineRecord(service, binding);
-          const reviewed = yield* withLock(
-            Effect.sync(() => fullyReviewed(revisionKnowledge(binding), revisionId)),
+          const reopened = yield* withLock(
+            Effect.sync(() => revisionKnowledge(binding)?.kind === "reopened"),
           );
-          if (!reviewed || revision?.revisionId !== revisionId)
-            return yield* invalid(
-              "workspace_review_incomplete",
-              "Read every page of this exact immutable revision before preparing integration.",
-            );
+          if (reopened || revision?.revisionId !== revisionId) return yield* staleRevision();
           // The careful path leaves testing to the parent in the prepared tree.
           const preparation = yield* prepareHeld(service, held, revisionId);
           yield* provisionHeld(service, held, preparation);

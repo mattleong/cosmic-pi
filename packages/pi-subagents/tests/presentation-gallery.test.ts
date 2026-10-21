@@ -965,7 +965,6 @@ const workspaceService: SubagentServiceDoubleInput = {
   workspaceApply: () =>
     Effect.succeed({
       ...appliedWorkspace,
-      reviewed: true,
       testing: "parent-tested",
     }),
   workspaceDiscard: () => Effect.void,
@@ -978,7 +977,6 @@ const leftoverWorkspace: SubagentServiceDoubleInput = {
   workspaceApply: () =>
     Effect.succeed({
       ...appliedWorkspace,
-      reviewed: true,
       testing: "parent-tested",
       untouchedDriftPaths: ["src/billing.ts", "README.md"],
       remainingBackupPaths: ["/project/db/.pi-workspace-old-4f1c2a9e-0d3b-4e7a-9c55-1b2d3e4f5a6b"],
@@ -989,7 +987,6 @@ const untestedApply: SubagentServiceDoubleInput = {
   workspaceApply: () =>
     Effect.succeed({
       ...appliedWorkspace,
-      reviewed: false,
       testing: "untested",
       leftOutPaths: [".env.local", "certs/dev.pem"],
     }),
@@ -1066,33 +1063,32 @@ const workspaceScenarios = Effect.all([
     { service: workspaceService },
   ),
   scenario(
-    "apply the prepared pair you tested",
+    "apply the preparation you tested",
     {
       tool: "agent_worktree",
-      args: { action: "apply", workspaceId: "ws-1", revisionId: "rev-1", preparationId: "prep-2" },
+      args: { action: "apply", workspaceId: "ws-1", revisionId: "rev-1" },
     },
     { service: workspaceService },
   ),
   scenario(
-    "apply a prepared pair leaving files and the source lock behind",
+    "apply a preparation leaving files and the source lock behind",
     {
       tool: "agent_worktree",
-      args: { action: "apply", workspaceId: "ws-1", revisionId: "rev-1", preparationId: "prep-2" },
+      args: { action: "apply", workspaceId: "ws-1", revisionId: "rev-1" },
     },
     { service: leftoverWorkspace },
   ),
   scenario(
-    "apply a prepared pair keeping the working copy for child workspaces",
+    "apply a preparation keeping the working copy for child workspaces",
     {
       tool: "agent_worktree",
-      args: { action: "apply", workspaceId: "ws-1", revisionId: "rev-1", preparationId: "prep-2" },
+      args: { action: "apply", workspaceId: "ws-1", revisionId: "rev-1" },
     },
     {
       service: {
         workspaceApply: () =>
           Effect.succeed({
             ...appliedWorkspace,
-            reviewed: true,
             testing: "parent-tested",
             retainedForChildren: ["ws-2"],
           }),
@@ -1100,7 +1096,7 @@ const workspaceScenarios = Effect.all([
     },
   ),
   scenario(
-    "apply an unreviewed, untested proposal",
+    "apply an untested proposal",
     { tool: "agent_worktree", args: { action: "apply", workspaceId: "ws-1" } },
     { service: untestedApply },
   ),
@@ -1133,27 +1129,6 @@ const workspaceScenarios = Effect.all([
                 "Child workspaces created from this workspace are still unresolved. Apply or discard ws-2 first.",
             }),
           ),
-      },
-    },
-  ),
-  scenario(
-    "apply only some of a proposal's files",
-    {
-      tool: "agent_worktree",
-      args: { action: "apply", workspaceId: "ws-1", paths: ["db/0007.sql"] },
-    },
-    {
-      service: {
-        workspaceApply: () =>
-          Effect.succeed({
-            ...appliedWorkspace,
-            changedPaths: ["db/0007.sql"],
-            changedPathCount: 1,
-            remainingPaths: ["src/db/schema.ts"],
-            remainingPathCount: 1,
-            reviewed: false,
-            testing: "untested",
-          }),
       },
     },
   ),

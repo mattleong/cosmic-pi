@@ -178,10 +178,7 @@ describe("writer workspace orchestration", () => {
         const id = (yield* stoppedWriter(service, { cwd: root })).workspaceId!;
         const tested = yield* reviewAndPrepare(service, id);
         const integrating = yield* service
-          .workspaceApply(id, {
-            revisionId: tested.revisionId,
-            preparationId: tested.preparationId,
-          })
+          .workspaceApply(id, { revisionId: tested.revisionId })
           .pipe(Effect.forkChild);
         expect(Exit.isFailure(yield* Fiber.await(integrating))).toBe(true);
         expect(f.entries.get(id)?.status).toBe("prepared");
@@ -236,37 +233,24 @@ describe("writer workspace orchestration", () => {
     });
   });
 
-  it.effect(
-    "requires complete immutable review and source lease before uncommitted integration",
-    () => {
-      const f = fixture();
-      return withService(f.layer, function* (service) {
-        const id = (yield* stoppedWriter(service)).workspaceId!;
-        expect(f.entries.has(id)).toBe(true);
-        const page = yield* service.workspaceReview(id);
-        expect(page.nextOffset).toBe(16_000);
-        expect(
-          yield* service.workspacePrepare(id, page.revisionId).pipe(Effect.flip),
-        ).toMatchObject({ code: "workspace_review_incomplete" });
-        yield* service.workspaceReview(id, {
-          revisionId: page.revisionId,
-          offset: page.nextOffset ?? 0,
-        });
-        const prepared = yield* service.workspacePrepare(id, page.revisionId);
-        expect(prepared.cwd).not.toBe("/repo");
-        yield* service.workspaceApply(id, {
-          revisionId: page.revisionId,
-          preparationId: prepared.preparationId,
-        });
-        expect(f.acquired).toContain("/repo");
-        expect(f.acquired).toContain("/repo/packages/b");
-        expect(f.released).toContain("/repo");
-        expect(f.released).toContain("/repo/packages/b");
-        expect(f.entries.get(id)?.status).toBe("integrated");
-        expect(yield* service.inspectWriterWorkspace).toEqual({ mode: "worktree" });
-      });
-    },
-  );
+  it.effect("integrates a tested preparation under the source leases", () => {
+    const f = fixture();
+    return withService(f.layer, function* (service) {
+      const id = (yield* stoppedWriter(service)).workspaceId!;
+      expect(f.entries.has(id)).toBe(true);
+      const page = yield* service.workspaceReview(id);
+      expect(page.nextOffset).toBe(16_000);
+      const prepared = yield* service.workspacePrepare(id, page.revisionId);
+      expect(prepared.cwd).not.toBe("/repo");
+      yield* service.workspaceApply(id, { revisionId: page.revisionId });
+      expect(f.acquired).toContain("/repo");
+      expect(f.acquired).toContain("/repo/packages/b");
+      expect(f.released).toContain("/repo");
+      expect(f.released).toContain("/repo/packages/b");
+      expect(f.entries.get(id)?.status).toBe("integrated");
+      expect(yield* service.inspectWriterWorkspace).toEqual({ mode: "worktree" });
+    });
+  });
 
   it.effect("discards the workspace of a writer launch interrupted after acquisition", () => {
     const f = fixture();
@@ -288,10 +272,7 @@ describe("writer workspace orchestration", () => {
       const id = writer.workspaceId!;
       yield* completeLocalRun(service, f.children.controls[0]!, writer.id, "Done.");
       const tested = yield* reviewAndPrepare(service, id);
-      yield* service.workspaceApply(id, {
-        revisionId: tested.revisionId,
-        preparationId: tested.preparationId,
-      });
+      yield* service.workspaceApply(id, { revisionId: tested.revisionId });
       expect(yield* service.resume(writer.id).pipe(Effect.flip)).toMatchObject({
         code: "workspace_finished",
       });
@@ -310,9 +291,7 @@ describe("writer workspace orchestration", () => {
     return withService(f.layer, function* (service) {
       const id = (yield* stoppedWriter(service)).workspaceId!;
       const tested = yield* reviewAndPrepare(service, id);
-      yield* service
-        .workspaceApply(id, { revisionId: tested.revisionId, preparationId: tested.preparationId })
-        .pipe(Effect.flip);
+      yield* service.workspaceApply(id, { revisionId: tested.revisionId }).pipe(Effect.flip);
       expect(f.entries.get(id)?.status).toBe("integrating");
       expect(sourceLeases(f.acquired)).toEqual(["/repo", "/repo/packages/b"]);
       expect(sourceLeases(f.released)).toEqual([]);
@@ -385,18 +364,15 @@ describe("writer workspace orchestration", () => {
     });
     return withService(f.layer, function* (service) {
       const id = (yield* stoppedWriter(service)).workspaceId!;
+      const other = (yield* stoppedWriter(service)).workspaceId!;
       const tested = yield* reviewAndPrepare(service, id);
-      const integrate = service.workspaceApply(id, {
-        revisionId: tested.revisionId,
-        preparationId: tested.preparationId,
-      });
-      const outcome = yield* integrate;
+      const outcome = yield* service.workspaceApply(id, { revisionId: tested.revisionId });
       expect(f.entries.get(id)?.status).toBe("integrated");
       expect(outcome).toMatchObject({ testing: "parent-tested", leaseReleaseUnconfirmed: true });
       expect(yield* service.start(repoWriter()).pipe(Effect.flip)).toMatchObject({
         code: "workspace_integration_quarantined",
       });
-      expect(yield* integrate.pipe(Effect.flip)).toMatchObject({
+      expect(yield* service.workspaceApply(other).pipe(Effect.flip)).toMatchObject({
         code: "workspace_integration_quarantined",
       });
     });
@@ -484,10 +460,7 @@ describe("writer workspace orchestration", () => {
     return withService(f.layer, function* (service) {
       const id = (yield* stoppedWriter(service)).workspaceId!;
       const tested = yield* reviewAndPrepare(service, id);
-      const integrate = service.workspaceApply(id, {
-        revisionId: tested.revisionId,
-        preparationId: tested.preparationId,
-      });
+      const integrate = service.workspaceApply(id, { revisionId: tested.revisionId });
       yield* service.start(sharedWriter({ cwd: "/elsewhere" }));
       for (const cwd of ["/repo", "/repo/packages/a", "/"]) {
         const writer = yield* service.start(sharedWriter({ cwd }));

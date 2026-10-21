@@ -73,11 +73,9 @@ describe("empty worktree proposal cleanup", () => {
         expect(yield* service.workspaceReview(id).pipe(Effect.flip)).toMatchObject({
           code: "workspace_finished",
         });
-        expect(
-          yield* service
-            .workspaceApply(id, { revisionId: "revision-1", preparationId: "prepared-1" })
-            .pipe(Effect.flip),
-        ).toMatchObject({ code: "workspace_finished" });
+        expect(yield* service.workspaceApply(id).pipe(Effect.flip)).toMatchObject({
+          code: "workspace_finished",
+        });
         const resumed = yield* service.resume(writer.id).pipe(Effect.flip);
         expect(resumed).toMatchObject({ code: "workspace_finished" });
         expect(resumed.message).toMatch(/automatically/u);

@@ -14,22 +14,11 @@ function reviewPosition(details: WorkspaceToolDetails): string {
 
 const TESTING_LABELS = { "parent-tested": "tested", untested: "untested" } as const;
 
-function appliedFiles(changed: number, remaining: number | undefined): string {
-  return remaining === undefined
-    ? `${countLabel(changed, "file")} applied`
-    : `${changed} of ${countLabel(changed + remaining, "file")} applied`;
-}
-
-// Narrower fallbacks first drop the file count, then the review state, keeping testing.
+// The narrower fallback drops the file count, keeping testing.
 function applyCounters(details: WorkspaceToolDetails): string[] {
   if (details.testing === undefined || details.changedPathCount === undefined) return [];
   const tested = TESTING_LABELS[details.testing];
-  const reviewed = details.reviewed ? "reviewed" : "unreviewed";
-  return [
-    `${appliedFiles(details.changedPathCount, details.remainingPathCount)} · ${reviewed} · ${tested}`,
-    `${reviewed} · ${tested}`,
-    tested,
-  ];
+  return [`${countLabel(details.changedPathCount, "file")} applied · ${tested}`, tested];
 }
 
 function reviseLine(details: WorkspaceToolDetails): string {
@@ -132,7 +121,6 @@ type WorkspaceOperationReceipt = WorkspaceToolDetails &
         readonly revisionId: string;
         readonly preparationId: string;
         readonly changedPathCount: number;
-        readonly reviewed: boolean;
         readonly testing: NonNullable<WorkspaceToolDetails["testing"]>;
       }
   );
@@ -148,9 +136,7 @@ function hasOperationReceipt(details: WorkspaceToolDetails): details is Workspac
     return false;
   if (
     details.operation === "apply" &&
-    (details.changedPathCount === undefined ||
-      details.reviewed === undefined ||
-      details.testing === undefined)
+    (details.changedPathCount === undefined || details.testing === undefined)
   )
     return false;
   return !["prepare", "apply"].includes(details.operation) || details.preparationId !== undefined;
@@ -204,14 +190,6 @@ function listIssues(details: WorkspaceToolDetails): CompactIssue[] {
         "Entries marked orphan=adoptable belong to sessions that have ended. Review, prepare, apply, or revise takes one over for this session; discard deletes it.",
       ),
     );
-  if (details.nextOffset !== undefined)
-    issues.push(
-      step(
-        "list-pagination",
-        "More worktree entries are available",
-        `More worktree metadata: list offset=${details.nextOffset}.`,
-      ),
-    );
   return issues;
 }
 
@@ -246,31 +224,7 @@ function testingStep(details: WorkspaceApplyReceipt): CompactIssue {
 }
 
 function applyIssues(details: WorkspaceApplyReceipt): CompactIssue[] {
-  const remaining = details.remainingPathCount;
-  return [
-    ...asWarnings(details),
-    ...(remaining === undefined
-      ? []
-      : [
-          step(
-            "remaining-proposal",
-            remaining === 1
-              ? "One changed file stays in the worktree"
-              : `${remaining} changed files stay in the worktree`,
-            `Partial apply integrated only the chosen paths. The revision's ${countLabel(remaining, "other changed file")} ${remaining === 1 ? "stays" : "stay"} in worktree ${details.workspaceId} as an unreviewed proposal; apply, review, revise, or discard ${remaining === 1 ? "it" : "them"} later.`,
-          ),
-        ]),
-    ...(details.reviewed
-      ? []
-      : [
-          step(
-            "applied-unreviewed",
-            "The diff wasn't read before apply",
-            "Apply integrated the proposal without a complete diff review. Inspect the changed files in the parent checkout if the change needs review.",
-          ),
-        ]),
-    testingStep(details),
-  ];
+  return [...asWarnings(details), testingStep(details)];
 }
 
 function reviseIssues(details: WorkspaceToolDetails): CompactIssue[] {

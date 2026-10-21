@@ -35,7 +35,6 @@ import {
   type AgentToolName,
   type SubagentToolName,
 } from "../run/tool-policy.ts";
-import { MAX_WORKSPACE_FILES } from "../workspace/policy.ts";
 import { decodeArgumentsObject, replacementField, toolArgumentPreparer } from "./arguments.ts";
 
 const strictObjectOptions = { additionalProperties: false } as const;
@@ -243,15 +242,6 @@ export const WorkspaceParameters = Type.Object(
     }),
     workspaceId: Type.Optional(RunIdParameter),
     revisionId: Type.Optional(RunIdParameter),
-    preparationId: Type.Optional(RunIdParameter),
-    paths: Type.Optional(
-      Type.Array(nonblankString(1_023), {
-        description: "apply only: changed paths to integrate now; the rest stay as the proposal.",
-        minItems: 1,
-        maxItems: MAX_WORKSPACE_FILES,
-        uniqueItems: true,
-      }),
-    ),
     rebase: Type.Optional(
       Type.Boolean({
         description:
@@ -262,14 +252,7 @@ export const WorkspaceParameters = Type.Object(
       Type.Integer({
         minimum: 0,
         maximum: Number.MAX_SAFE_INTEGER,
-        description: "list or review paging offset, from the previous page.",
-      }),
-    ),
-    limit: Type.Optional(
-      Type.Integer({
-        minimum: 1,
-        maximum: 16_000,
-        description: "Maximum review characters per page; default 16000.",
+        description: "review paging offset, from the previous page.",
       }),
     ),
     message: Type.Optional(MessageParameters),
@@ -281,10 +264,10 @@ export type SubagentWorkspaceInput = Static<typeof WorkspaceParameters>;
 
 type WorkspaceField = Exclude<keyof SubagentWorkspaceInput, "action">;
 const WORKSPACE_ACTION_FIELDS = {
-  list: { required: [], optional: ["offset"] },
-  review: { required: ["workspaceId"], optional: ["revisionId", "offset", "limit"] },
+  list: { required: [], optional: [] },
+  review: { required: ["workspaceId"], optional: ["revisionId", "offset"] },
   prepare: { required: ["workspaceId", "revisionId"], optional: [] },
-  apply: { required: ["workspaceId"], optional: ["revisionId", "preparationId", "paths"] },
+  apply: { required: ["workspaceId"], optional: ["revisionId"] },
   discard: { required: ["workspaceId"], optional: [] },
   revise: { required: ["workspaceId", "message"], optional: ["rebase"] },
 } satisfies Record<
@@ -307,18 +290,6 @@ export const workspaceOperationError = (operation: SubagentWorkspaceInput): stri
     (field) => operation[field] !== undefined && !allowed.has(field),
   );
   if (unexpected) return `Worktree ${operation.action} does not accept ${unexpected}.`;
-  if (
-    operation.action === "apply" &&
-    operation.preparationId !== undefined &&
-    operation.revisionId === undefined
-  )
-    return "Worktree apply with preparationId requires the exact revisionId it prepared.";
-  if (
-    operation.action === "apply" &&
-    operation.preparationId !== undefined &&
-    operation.paths !== undefined
-  )
-    return "Worktree apply with preparationId integrates that whole preparation and does not accept paths.";
   return undefined;
 };
 

@@ -10,7 +10,6 @@ import {
   WorkspaceError,
   workspaceCheckoutRoot,
 } from "../workspace/model.ts";
-import { partialSelection } from "../workspace/policy.ts";
 import { canonicalizeWriterDirectory } from "./writer-lease.ts";
 import { runWorktreeHook } from "./worktree-hook.ts";
 import { HOOK_QUARANTINE_REMEDY, worktreeKind, worktreeRemoveHooks } from "./git-worktree-hooks.ts";
@@ -24,7 +23,6 @@ import type {
   WorkspacePreparationTarget,
   WorkspaceRecord,
   WorkspaceRevision,
-  WorkspaceRevisionMetadata,
   WorkspaceHookTarget,
   WorkspaceSettledTarget,
   WorkspaceTarget,
@@ -36,7 +34,6 @@ import {
   checkDirectory,
   gitFailure,
   gitSucceeded,
-  listedPaths,
   oid,
   repositoryGit,
   repositoryGitResult,
@@ -65,7 +62,7 @@ import {
   treeOf,
   workerLeftOut,
 } from "./git-capture.ts";
-import { commitRevisionPatch, patchBytes, revisionText } from "./git-worktree-patch.ts";
+import { commitRevisionPatch, revisionText } from "./git-worktree-patch.ts";
 import {
   copyIncludedFiles,
   includedLeftOut,
@@ -147,27 +144,6 @@ const nestedSourceRefusal = (sourceCwd: string) =>
     path: sourceCwd,
     rule: "a nested workspace's source must be its named source workspace's worker tree or a directory inside it, never a prepared tree, workspace directory, or another workspace",
     remedy: "Start the nested writer from the parent writer's own workspace directory.",
-  });
-
-/** The subset of `revision`'s changed paths to prepare, or undefined for all of them. */
-const preparationPaths = (
-  revision: WorkspaceRevisionMetadata,
-  paths: ReadonlyArray<string> | undefined,
-) =>
-  Effect.gen(function* () {
-    if (paths === undefined) return undefined;
-    const { unknown, subset } = partialSelection(revision.changedPaths, paths);
-    if (paths.length === 0 || unknown.length > 0)
-      return yield* workspaceRefusal(
-        "prepare",
-        "Partial preparation names paths the revision doesn't change.",
-        {
-          ...(unknown.length === 1 && { path: unknown[0] }),
-          rule: `a partial apply names a nonempty subset of the revision's changed paths${unknown.length > 1 ? `; unknown: ${listedPaths(unknown)}` : ""}`,
-          remedy: "Review the revision's summary for its exact changed paths.",
-        },
-      );
-    return subset;
   });
 
 const settled = (target: WorkspaceSettledTarget) =>
@@ -650,40 +626,6 @@ export const gitWorkspaceEngine = (
         );
       });
 
-    // The baseline with `paths` taken from the revision: once a partial integration publishes
-    // them, they are no longer changes, and the next freeze proposes only the rest.
-    const advancedBaseline = (
-      record: WorkspaceRecord,
-      revisionId: string,
-      paths: ReadonlyArray<string>,
-    ) =>
-      withScratchIndex(record, (environment) =>
-        Effect.gen(function* () {
-          const { repository } = record;
-          const entries = yield* treeEntries(repository, revisionId);
-          const encoder = new TextEncoder();
-          const updates = paths.flatMap((name) => {
-            const entry = entries.get(name);
-            return entry ? [`${entry.mode} ${entry.oid}\t${name}\0`] : [];
-          });
-          const removals = paths.flatMap((name) => (entries.has(name) ? [] : [`${name}\0`]));
-          yield* repositoryGit(repository, ["read-tree", record.baseline], { environment });
-          if (updates.length > 0)
-            yield* repositoryGit(repository, ["update-index", "-z", "--index-info"], {
-              stdin: encoder.encode(updates.join("")),
-              environment,
-            });
-          if (removals.length > 0)
-            yield* repositoryGit(repository, ["update-index", "-z", "--force-remove", "--stdin"], {
-              stdin: encoder.encode(removals.join("")),
-              environment,
-            });
-          const tree = yield* repositoryGit(repository, ["write-tree"], { environment }).pipe(
-            Effect.flatMap(oid),
-          );
-          return yield* commitTree(repository, tree, [record.baseline], "baseline");
-        }),
-      );
     // The parent's captured files with the patch applied, as Git objects: the patch meets the
     // repository's form of each file, whatever filters and line endings checkouts use.
     const combinedTree = (
@@ -723,8 +665,7 @@ export const gitWorkspaceEngine = (
       const reviewed = yield* revision(record, target.revisionId);
       if (record.status !== "frozen" && record.status !== "prepared")
         return yield* workspaceFailure("prepare", "Workspace is not awaiting integration.");
-      const paths = yield* preparationPaths(reviewed, target.paths);
-      const selected = paths ?? reviewed.changedPaths;
+      const selected = reviewed.changedPaths;
       yield* openSourceWorkspace(record, "prepare");
       const { repository } = record;
       const { sourceRoot } = record.handle;
@@ -745,17 +686,7 @@ export const gitWorkspaceEngine = (
           "prepare",
           "A changed path is now a source symlink or submodule; integration refused.",
         );
-      // A partial preparation applies only its paths' sections of the revision's patch.
-      const patch =
-        paths === undefined
-          ? yield* readRevisionDiff(registry, target.workspaceId)
-          : yield* patchBytes(
-              registry,
-              record,
-              { from: record.baseline, to: target.revisionId },
-              "prepare",
-              paths,
-            );
+      const patch = yield* readRevisionDiff(registry, target.workspaceId);
       const combined = yield* combinedTree(record, parentCommit, patch, selected);
       const preparedCommit = yield* commitTree(repository, combined, [parentCommit], "prepared");
       yield* setWorkspaceRef(repository, target.workspaceId, "prepared", preparedCommit);
@@ -775,7 +706,6 @@ export const gitWorkspaceEngine = (
           revisionId: target.revisionId,
           cwd: path.join(preparedRoot, subdirectory(record)),
           leaseDirectories,
-          ...(paths !== undefined && { paths }),
         };
         yield* checkDirectory(result.cwd);
         yield* saveWorkspaceRecord(
@@ -821,11 +751,8 @@ export const gitWorkspaceEngine = (
       const { repository } = record;
       const { sourceRoot } = record.handle;
       // Rechecked here, since a bit set after preparation hides edits made since.
-      yield* refuseHiddenLocalEdits(
-        sourceRoot,
-        "integrate",
-        preparation.paths ?? reviewed.changedPaths,
-      );
+      const selected = reviewed.changedPaths;
+      yield* refuseHiddenLocalEdits(sourceRoot, "integrate", selected);
       const reviewedTree = yield* treeOf(repository, target.revisionId);
       const workerTree = yield* captureWorker(record);
       const preparedRoot = prepared(record, target.preparationId);
@@ -853,8 +780,6 @@ export const gitWorkspaceEngine = (
         before.tree === record.parentTree
           ? []
           : yield* changedBetween(repository, record.parentTree, before.tree);
-      // A partial preparation publishes only its paths; the rest stay the workspace's proposal.
-      const selected = preparation.paths ?? reviewed.changedPaths;
       const touched = new Set(selected);
       const touchedDrift = drifted.filter((name) => touched.has(name));
       if (touchedDrift.length > 0) return yield* touchedParentDrift(touchedDrift);
@@ -877,17 +802,9 @@ export const gitWorkspaceEngine = (
       const next = yield* readPublishedFiles(preparedRoot, selected, budget);
       // Read before publication, so a failure can't follow the commit. No child can appear
       // meanwhile: its creation takes this chain's lock.
-      const partialBaseline =
-        preparation.paths === undefined
-          ? undefined
-          : yield* advancedBaseline(record, target.revisionId, selected);
-      if (partialBaseline !== undefined)
-        // The worker's HEAD keeps the previous baseline reachable meanwhile.
-        yield* setWorkspaceRef(repository, target.workspaceId, "baseline", partialBaseline);
-      const retainedForChildren =
-        target.retainTrees || partialBaseline !== undefined
-          ? []
-          : yield* unresolvedChildWorkspaces(registry, target.workspaceId);
+      const retainedForChildren = target.retainTrees
+        ? []
+        : yield* unresolvedChildWorkspaces(registry, target.workspaceId);
       // Only the proposal's own changes are published, so untouched parent edits stay.
       const changed = selected.filter((name) => {
         const current = previous.get(name),
@@ -916,35 +833,6 @@ export const gitWorkspaceEngine = (
           `The source ${changedParts.join(" and ")} changed during publication; the workspace stays mid-integration.`,
           "inspect the source branch and staged changes, then discard the workspace to roll the published files back, or keep them and delete the backups manually.",
         );
-      }
-      if (partialBaseline !== undefined) {
-        // The worker keeps every change; the advanced baseline makes the rest its proposal. Like an
-        // integrated record, it keeps the journal that names this publication's backups.
-        const {
-          revision: _revision,
-          preparation: _preparation,
-          preparedTree: _preparedTree,
-          parentTree: _parentTree,
-          sourceHead: _sourceHead,
-          sourceIndex: _sourceIndex,
-          ...kept
-        } = publication.record;
-        const reopened: WorkspaceRecord = { ...kept, status: "active", baseline: partialBaseline };
-        yield* commitPublication(registry, publication.record, reopened);
-        yield* finishPublication(registry, reopened);
-        const remainingBackupPaths = yield* removePublicationBackups(publication.backups);
-        yield* removeEmptiedDirectories(publication.emptiedDirectories);
-        const treeRemovalFailed = target.retainTrees
-          ? false
-          : (yield* removePreparation(reopened, target.preparationId)) !== undefined;
-        return {
-          record: reopened,
-          workerRoot: worker(record),
-          untouchedDriftPaths,
-          treeRemovalFailed,
-          remainingBackupPaths,
-          remainingPaths: reviewed.changedPaths.filter((name) => !touched.has(name)),
-        };
       }
       const integrated: WorkspaceRecord = { ...publication.record, status: "integrated" };
       yield* commitPublication(registry, publication.record, integrated);

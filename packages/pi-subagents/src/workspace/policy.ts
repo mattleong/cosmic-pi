@@ -1,6 +1,3 @@
-/** Most changed paths one partial apply may name. */
-export const MAX_WORKSPACE_FILES = 4000;
-
 const CREDENTIAL_NAME =
   /^(?:\.env(?:\..*)?|\.npmrc|\.pypirc|\.netrc|\.git-credentials|\.ssh|\.aws|\.azure|\.gnupg|\.kube|credentials?(?:\..*)?|secrets?(?:\..*)?|id_(?:rsa|dsa|ecdsa|ed25519)(?:\.pub)?)$/iu;
 const CREDENTIAL_EXTENSION = /\.(?:pem|key|p12|pfx|jks|keystore)$/iu;
@@ -21,21 +18,3 @@ const SOURCE_CODE_EXTENSION =
  */
 export const credentialPrivatePath = (path: string): boolean =>
   credentialWorkspacePath(path) && !SOURCE_CODE_EXTENSION.test(path);
-
-/**
- * A partial apply's selection from a revision's changed paths: the names it doesn't change, and
- * the selected paths in revision order, undefined when the selection names every changed path.
- */
-export const partialSelection = (
-  changedPaths: ReadonlyArray<string>,
-  paths: ReadonlyArray<string>,
-) => {
-  const selected = new Set(paths);
-  return {
-    unknown: [...selected].filter((name) => !changedPaths.includes(name)),
-    subset:
-      selected.size === changedPaths.length
-        ? undefined
-        : changedPaths.filter((name) => selected.has(name)),
-  };
-};

@@ -158,11 +158,8 @@ it.live(
 
       const revisionId = yield* reviewAll(control, handle.workspaceId);
       expect((yield* control.workspaceList()).orphans).toBeUndefined();
-      const prepared = yield* control.workspacePrepare(handle.workspaceId, revisionId);
-      yield* control.workspaceApply(handle.workspaceId, {
-        revisionId,
-        preparationId: prepared.preparationId,
-      });
+      yield* control.workspacePrepare(handle.workspaceId, revisionId);
+      yield* control.workspaceApply(handle.workspaceId, { revisionId });
       expect(yield* readText(source, "src/main.ts")).toBe("adopted change\n");
       expect(yield* exists(handle.cwd)).toBe(false);
       const [record] = (yield* successor.service.listAll).records;
