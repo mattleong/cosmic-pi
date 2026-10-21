@@ -47,7 +47,7 @@ const DISPOSITION_TEXT: Record<
 > = {
   woken: "It was idle and started a turn to read it.",
   queued: "It's busy and will read it when its current turn ends.",
-  held: "It's holding messages after an interrupt, during a dialog, or after several messages, so it reads it once its user next prompts it or the dialog closes.",
+  held: "It's waiting on its user, behind an open dialog or after an interrupt; your message waits in its conversation and wakes it when the dialog closes or on the user's next prompt.",
 };
 
 const UNCERTAIN_TEXT: Record<

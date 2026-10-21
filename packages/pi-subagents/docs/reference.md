@@ -42,7 +42,7 @@ Nothing applies a worktree writer's changes automatically. A completed writer th
 
 ### Quick path
 
-For small or trusted changes, call `agent_worktree` with `{"action":"apply","workspaceId":"..."}`. It freezes, prepares, and integrates as uncommitted edits in one call, testing nothing and running no hooks. The result says whether the diff was read; run relevant tests in the parent checkout afterwards.
+For small or trusted changes, call `agent_worktree` with `{"action":"apply","workspaceId":"..."}`. It freezes, prepares, and integrates as uncommitted edits in one call, testing nothing and running no `WorktreeCreate` hooks; removing the worktree afterwards runs `WorktreeRemove` hooks. The result says whether the diff was read; run relevant tests in the parent checkout afterwards.
 
 To take only part of a proposal, pass `paths` (exact changed paths from the review summary). The remaining changes stay in the worktree as an unreviewed proposal.
 

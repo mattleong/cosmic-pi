@@ -130,7 +130,7 @@ A root start item's optional `model: { runtime, model, effort? }` replaces the p
 `agent_lifecycle({ action: "retry", runIds })` continues a failed run on its next configured candidate. It is a new launch and run ID, never implicit fallthrough or resurrection. Resume, by contrast, continues the failed run's own session on the same candidate ([resume admission](#resume-admission)).
 
 - It keeps the original task, profile guidance or custom agent, route source, and a deeply frozen copy of the launch-time route; later edits don't alter it. Planning starts strictly after the predecessor's selected candidate, keeps the original candidate indexes, and repeats the full preflight.
-- Retry claims the predecessor exclusively. Exact claims travel with the frozen continuation and are rechecked against current pools. After cleanup is confirmed, admission atomically revalidates, marks the predecessor with its successor ID, and admits the linked run. Concurrent retries have one winner, and retry-claimed records can't be evicted.
+- Retry claims the predecessor exclusively. After cleanup is confirmed, admission atomically revalidates, marks the predecessor with its successor ID, and admits the linked run. Concurrent retries have one winner, and retry-claimed records can't be evicted.
 - A plan with no remaining candidate records every skip and marks the route exhausted (`retry_route_exhausted`); only then should the parent choose a `generalist` replacement.
 - Retry refuses non-failed, later-assignment, already-superseded, exhausted, outcome-uncertain, cleanup-quarantined, eviction-claimed, and concurrently claimed records, so no uncertainty launches duplicate work automatically.
 - Writers start a fresh execution and may repeat partial side effects. A worktree writer's successor gets a fresh workspace from its parent's current tree, and the failed writer's workspace stays a proposal. Parent guidance permits writer continuation only when the original handoff and current user intent allow it.
@@ -168,7 +168,7 @@ Start is always background and nonblocking. `agent_await` supports `all_finished
 ### Model-facing guidance
 
 - Tool descriptions state what a tool does and its rules; parameter descriptions state formats and choices, with `profile` choices generated from the definitions; guideline bullets state when to act; tool results carry recovery steps with exact run IDs.
-- A start with no runnable candidate (`profile_no_eligible_model` or `backend_not_implemented`) points the user to `/subagents doctor` and `/subagents profiles`. The start guideline forbids running `claude`, `codex`, or `pi` from the shell instead, which would bypass sandbox policy, claims, and supervision.
+- A start with no runnable candidate (`profile_no_eligible_model` or `backend_not_implemented`) points the user to `/subagents doctor` and `/subagents profiles`. The start guideline forbids running `claude`, `codex`, or `pi` from the shell instead, which would bypass sandbox policy and supervision.
 - The root's delegation rule comes from its [delegation mode](settings-workspace.md#delegation-settings). Nested Pi children get a restrained rule. Only nested worktree writers get `agent_worktree`.
 - In every audience the parent keeps working after launch, awaits only at a dependency or synthesis barrier, coordinates rather than edits while shared-checkout writers run, and treats worktree reports as proposals.
 
