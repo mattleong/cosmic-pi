@@ -85,13 +85,6 @@ const reviewAll = (control: ReturnType<typeof workspaceControl>, workspaceId: st
 
 const neverStarts = () => Effect.die("A discard-only orphan never launches a successor.");
 
-const nested = (service: WorkspaceServiceContract, parent: WorkspaceHandle) =>
-  service.create({
-    sourceCwd: parent.cwd,
-    ownerId: "old/child",
-    sourceWorkspace: { workspaceId: parent.workspaceId, ownerId: parent.ownerId },
-  });
-
 const savedRecord = (agent: string, workspaceId: string) =>
   readWorkspaceRecord(registryOf(agent), workspaceId).pipe(
     Effect.provide(SafeFile.layer.pipe(Layer.provide(nodeFilePlatformLayer))),
@@ -171,12 +164,10 @@ it.live(
 );
 
 it.live(
-  "refuses takeover while a writer holds the worker tree or children are unresolved",
+  "refuses takeover while a writer holds the worker tree",
   () =>
     Effect.gen(function* () {
       const { source, agent, creator } = yield* orphanScenario("pi-adopt-refusals-");
-      const parent = yield* creator.service.create({ sourceCwd: source, ownerId: "old/root" });
-      const child = yield* nested(creator.service, parent);
       const held = yield* creator.service.create({ sourceCwd: source, ownerId: "old/root" });
       yield* creator.close;
       const { control, leases, successor } = yield* laterSession(agent, source);
@@ -188,22 +179,7 @@ it.live(
         code: "workspace_process_unsettled",
       });
       yield* leases.release(lease);
-
-      const orphans = (yield* control.workspaceList()).orphans;
-      expect(orphans?.get(child.workspaceId)).toBe("discard-only");
-      expect(orphans?.has(parent.workspaceId)).toBe(false);
-      expect(yield* control.workspaceReview(parent.workspaceId).pipe(Effect.flip)).toMatchObject({
-        code: "workspace_children_unresolved",
-      });
-      // A nested orphan can only be discarded; then its source workspace can be adopted.
-      expect(yield* control.workspaceReview(child.workspaceId).pipe(Effect.flip)).toMatchObject({
-        code: "workspace_orphan_discard_only",
-      });
-      expect(
-        yield* control.revise(neverStarts)(child.workspaceId, "Continue").pipe(Effect.flip),
-      ).toMatchObject({ code: "workspace_orphan_discard_only" });
-      yield* control.workspaceDiscard(child.workspaceId);
-      expect((yield* control.workspaceReview(parent.workspaceId)).changedPaths).toEqual([]);
+      expect((yield* control.workspaceReview(held.workspaceId)).changedPaths).toEqual([]);
       yield* successor.close;
     }).pipe(Effect.scoped),
   60_000,
@@ -224,6 +200,9 @@ it.live(
       expect(yield* control.workspaceReview(handle.workspaceId).pipe(Effect.flip)).toMatchObject({
         code: "workspace_orphan_discard_only",
       });
+      expect(
+        yield* control.revise(neverStarts)(handle.workspaceId, "Continue").pipe(Effect.flip),
+      ).toMatchObject({ code: "workspace_orphan_discard_only" });
       // A writer in the checkout keeps the half-published files as they are.
       const writer = yield* leases.acquire({
         cwd: yield* leases.canonicalize(source),
@@ -250,7 +229,7 @@ it.live(
 );
 
 it.live(
-  "sweeps month-old orphans, children first, keeping each patch and skipping the rest",
+  "sweeps month-old orphans, keeping each patch and skipping the rest",
   () =>
     Effect.gen(function* () {
       const { source, agent, creator } = yield* orphanScenario("pi-orphan-sweep-");
@@ -260,39 +239,21 @@ it.live(
       const young = yield* create;
       const integrating = yield* create;
       yield* stopPublicationAtMain(creator.service, integrating, source);
-      const busyParent = yield* create;
-      const youngChild = yield* nested(creator.service, busyParent);
-      const chainParent = yield* create;
-      const chainChild = yield* nested(creator.service, chainParent);
       yield* creator.close;
-      for (const handle of [old, integrating, busyParent, chainParent, chainChild])
-        yield* ageRecord(agent, handle.workspaceId, 31);
+      for (const handle of [old, integrating]) yield* ageRecord(agent, handle.workspaceId, 31);
       yield* ageRecord(agent, young.workspaceId, 29);
-      yield* ageRecord(agent, youngChild.workspaceId, 1);
 
       const { control, successor } = yield* laterSession(agent, source);
       const swept = yield* control.sweepOrphanedWorkspaces;
-      expect(swept.map((entry) => entry.workspaceId)).toEqual([
-        expect.any(String),
-        expect.any(String),
-        expect.any(String),
-      ]);
-      expect(new Set(swept.map((entry) => entry.workspaceId))).toEqual(
-        new Set([old.workspaceId, chainParent.workspaceId, chainChild.workspaceId]),
-      );
-      // The child goes before the parent it was created from.
-      expect(swept.findIndex((entry) => entry.workspaceId === chainChild.workspaceId)).toBeLessThan(
-        swept.findIndex((entry) => entry.workspaceId === chainParent.workspaceId),
-      );
-      const oldSwept = swept.find((entry) => entry.workspaceId === old.workspaceId);
+      expect(swept.map((entry) => entry.workspaceId)).toEqual([old.workspaceId]);
+      const oldSwept = swept[0];
       expect(oldSwept?.changedPathCount).toBe(1);
       expect(yield* readText(oldSwept?.patchPath ?? "")).toContain("+month-old work");
       expect(yield* exists(old.cwd)).toBe(false);
       const record = yield* savedRecord(agent, old.workspaceId);
       expect(record).toMatchObject({ status: "discarded", disposition: "orphan-swept" });
 
-      for (const kept of [young, integrating, busyParent, youngChild])
-        expect(yield* exists(kept.cwd)).toBe(true);
+      for (const kept of [young, integrating]) expect(yield* exists(kept.cwd)).toBe(true);
       expect((yield* savedRecord(agent, integrating.workspaceId)).status).toBe("integrating");
       expect(yield* control.sweepOrphanedWorkspaces).toEqual([]);
       yield* successor.close;

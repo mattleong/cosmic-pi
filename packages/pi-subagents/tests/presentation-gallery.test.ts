@@ -991,30 +991,6 @@ const untestedApply: SubagentServiceDoubleInput = {
       leftOutPaths: [".env.local", "certs/dev.pem"],
     }),
 };
-const nestedWorkspaces: SubagentServiceDoubleInput = {
-  workspaceList: () =>
-    Effect.succeed({
-      records: [
-        workspaceRecord,
-        {
-          ...workspaceRecord,
-          status: "active",
-          handle: {
-            ...workspaceRecord.handle,
-            workspaceId: "ws-2",
-            sourceCwd: "/project/.pi-subagents/worktrees/ws-1",
-            sourceRoot: "/project/.pi-subagents/worktrees/ws-1",
-            cwd: "/project/.pi-subagents/worktrees/ws-2",
-            sourceWorkspaceId: "ws-1",
-            checkoutRoot: "/project",
-          },
-        },
-      ],
-      unavailable: [
-        { workspaceId: "ws-8", status: "unavailable", reason: "source-workspace-unavailable" },
-      ],
-    }),
-};
 const orphanedWorkspaces: SubagentServiceDoubleInput = {
   workspaceList: () =>
     Effect.succeed({
@@ -1079,23 +1055,6 @@ const workspaceScenarios = Effect.all([
     { service: leftoverWorkspace },
   ),
   scenario(
-    "apply a preparation keeping the working copy for child workspaces",
-    {
-      tool: "agent_worktree",
-      args: { action: "apply", workspaceId: "ws-1", revisionId: "rev-1" },
-    },
-    {
-      service: {
-        workspaceApply: () =>
-          Effect.succeed({
-            ...appliedWorkspace,
-            testing: "parent-tested",
-            retainedForChildren: ["ws-2"],
-          }),
-      },
-    },
-  ),
-  scenario(
     "apply an untested proposal",
     { tool: "agent_worktree", args: { action: "apply", workspaceId: "ws-1" } },
     { service: untestedApply },
@@ -1115,27 +1074,6 @@ const workspaceScenarios = Effect.all([
           ),
       },
     },
-  ),
-  scenario(
-    "apply refused while child workspaces are unresolved",
-    { tool: "agent_worktree", args: { action: "apply", workspaceId: "ws-1" } },
-    {
-      service: {
-        workspaceApply: () =>
-          Effect.fail(
-            new InvalidSubagentRequestError({
-              code: "workspace_children_unresolved",
-              message:
-                "Child workspaces created from this workspace are still unresolved. Apply or discard ws-2 first.",
-            }),
-          ),
-      },
-    },
-  ),
-  scenario(
-    "list nested workspaces",
-    { tool: "agent_worktree", args: { action: "list" } },
-    { service: nestedWorkspaces },
   ),
   scenario(
     "list workspaces left by an ended session",

@@ -57,8 +57,6 @@ export interface BackendLaunchRequest {
   readonly parentSessionFile?: string | undefined;
   readonly parentLeafId?: string | undefined;
   readonly sharesParentPromptCache?: boolean | undefined;
-  /** The admitted run is a Pi worktree writer that may own worktree writer children. */
-  readonly workspaceParent?: boolean | undefined;
   readonly resumeToken?: BackendResumeToken | undefined;
   readonly systemPrompt: string;
 }

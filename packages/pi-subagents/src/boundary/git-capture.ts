@@ -1,6 +1,5 @@
 import * as Effect from "effect/Effect";
 import type { WorkspaceDiffStatFile } from "../workspace/diffstat.ts";
-import type { WorkspaceRecord } from "../workspace/model.ts";
 import { credentialPrivatePath, credentialWorkspacePath } from "../workspace/policy.ts";
 import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
 import {
@@ -27,15 +26,12 @@ interface TreeCapture {
  * Untracked files a capture of the user's checkout leaves out: any credential-shaped name, so
  * local secrets never enter the repository's objects.
  */
-const checkoutLeftOut = credentialWorkspacePath;
+export const sourceLeftOut = credentialWorkspacePath;
 /**
- * Untracked files a capture of a private tree (worker, prepared, or nested source) leaves out:
- * credential files a writer created, but not credential-named source such as `credentials.ts`.
+ * Untracked files a capture of a private tree (worker or prepared) leaves out: credential files
+ * a writer created, but not credential-named source such as `credentials.ts`.
  */
 export const workerLeftOut = credentialPrivatePath;
-/** The rule for the tree a workspace was created from. */
-export const sourceLeftOut = (record: WorkspaceRecord) =>
-  record.handle.sourceWorkspaceId === undefined ? checkoutLeftOut : workerLeftOut;
 
 const unmergedRefusal = (name: string) =>
   workspaceRefusal("snapshot", "The checkout has unresolved merge conflicts.", {

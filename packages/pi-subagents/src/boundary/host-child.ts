@@ -36,7 +36,7 @@ import {
   AGENT_TOOL_NAMES,
   CONTACT_PARENT_TOOL_NAME,
   isAgentToolName,
-  nestedSubagentToolNames,
+  NESTED_SUBAGENT_TOOL_NAMES,
   SUBAGENT_TOOL_NAMES,
 } from "../run/tool-policy.ts";
 import {
@@ -69,7 +69,6 @@ import {
 import { registerForkPromptCacheHooks } from "./fork-prompt-cache.ts";
 import { registerChildSettle } from "./host-child-settle.ts";
 import { parentCorrelations, parentContactRejection } from "./host-child-correlation.ts";
-import { isWorkspaceParentChildProcess } from "./host-environment.ts";
 import {
   openLocalPiChildIpc,
   ParentContactError,
@@ -157,9 +156,8 @@ export function registerSubagentChildBridge(
   if (runtimeApi.apiKey && runtimeApi.provider)
     pi.registerProvider(runtimeApi.provider, { apiKey: runtimeApi.apiKey });
 
-  const workspaceParent = isWorkspaceParentChildProcess();
   const proxyToolNames = [
-    ...nestedSubagentToolNames(workspaceParent),
+    ...NESTED_SUBAGENT_TOOL_NAMES,
     ...AGENT_TOOL_NAMES,
     CONTACT_PARENT_TOOL_NAME,
   ];
@@ -461,14 +459,12 @@ export function registerSubagentChildBridge(
           },
           { receipts, owner },
           withCodePreviewShell,
-          { workspaceParent },
         );
         registerAgentTools(pi, {
           execute: callAgent,
           isScripted: (id) => receipts.isNested(owner, id),
           scheduleAnimation,
           nested: true,
-          worktrees: workspaceParent,
         });
         registerContactParent(input, token, scheduleAnimation);
         if (!isActivationCurrent(input, token)) throw new Error("Stale child activation.");

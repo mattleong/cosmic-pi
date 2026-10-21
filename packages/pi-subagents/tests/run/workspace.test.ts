@@ -378,6 +378,33 @@ describe("writer workspace orchestration", () => {
     });
   });
 
+  it.effect("starts a worktree writer's own writers in its worker tree, never in worktrees", () => {
+    const f = fixture();
+    return withService(f.layer, function* (service) {
+      const parent = yield* service.start(repoWriter());
+      const child = yield* service.startSessionOwnedFrom(
+        parent.id,
+        request({ cwd: parent.cwd, writeIntent: "writer" }),
+      );
+      expect(child).toMatchObject({ cwd: parent.cwd, writerWorkspaceMode: "shared-checkout" });
+      expect(child.workspaceId).toBeUndefined();
+      // A custom agent that asks for a worktree must come from the root.
+      expect(
+        yield* service
+          .startSessionOwnedFrom(
+            parent.id,
+            request({
+              cwd: parent.cwd,
+              writeIntent: "writer",
+              writerWorkspaceModeOverride: "worktree",
+            }),
+          )
+          .pipe(Effect.flip),
+      ).toMatchObject({ code: "workspace_nested_writer_unsupported" });
+      expect([...f.entries.keys()]).toEqual([parent.workspaceId]);
+    });
+  });
+
   it.effect("keeps read-only launches in source and atomically persists mode switches", () => {
     const f = fixture();
     return withService(f.layer, function* (service) {

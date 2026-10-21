@@ -87,7 +87,7 @@ A custom agent is a named role the user declares in a configuration document's r
 - The start item's `agent` choices and their descriptions are generated when the root registers its tools, and the field is absent when no agents are configured. Nested Pi children accept any agent name and the root resolves it.
 - Planning applies the agent's overrides to each candidate before the usual checks. A candidate the overrides don't fit, such as fork context or an unsupported explicit effort on Claude or Codex, is skipped with `agent_candidate_incompatible`.
 - Tool lists can only be enforced on a Pi child, so Claude and Codex candidates are skipped with `agent_tools_unsupported` whenever an agent sets `allow` or `deny`. There is no unfiltered fallback.
-- An item's `isolation` wins over the agent's; the agent's wins over nested and session defaults. Either one on a launch whose selected candidate is read-only fails with `isolation_requires_writer` before admission.
+- An item's `isolation` wins over the agent's; the agent's wins over the session default. Either one on a launch whose selected candidate is read-only fails with `isolation_requires_writer` before admission.
 - A [model override](#per-launch-model-override) launched with an agent takes the agent's effort, context, and write intent defaults, and fails with `model_override_invalid` when the agent's tool lists need Pi.
 - The child's system prompt names the agent and carries its instructions in place of the profile guidance. Run cards, start entries, status, and the orchestration contract report `agent` alongside the routed `profile`.
 
@@ -152,12 +152,12 @@ A launch freezes its route, the declared candidates and the one it selected, so 
 - `profile`, optional, defaulting to `generalist`;
 - `agent`, optional: a [custom agent](#custom-agents), never combined with `profile`;
 - `name`, optional;
-- `isolation`, optional: `shared-checkout` or `worktree`, for writers only (profile `worker`, or an agent or route with writer intent). An item whose selected candidate is read-only fails with `isolation_requires_writer` before admission, as does an item whose [custom agent](#launch-planning) sets `isolation`;
+- `isolation`, optional and root only: `shared-checkout` or `worktree`, for writers only (profile `worker`, or an agent or route with writer intent). An item whose selected candidate is read-only fails with `isolation_requires_writer` before admission, as does an item whose [custom agent](#launch-planning) sets `isolation`;
 - `model`, optional and root only: a [per-launch model override](#per-launch-model-override). Nested children launch on profile routes, because only the root talks to the user who asks for a model.
 
 The schema is strict, and the service independently rejects other launch overrides, such as a top-level `effort`, `context`, or `writeIntent`, with `launch_override_not_allowed`. Model-facing schemas declare no `pattern` keyword, which some providers reject. Task-tool-shaped top-level fields fail with `[invalid_start_shape]` instead of being renamed.
 
-A writer's workspace mode is, in order: the item's `isolation`, a custom agent's `isolation`, `worktree` when the caller is an active Pi worktree writer, then the session's `writerWorkspaceMode` (default `shared-checkout`). Admission records the mode. The root and active Pi worktree writers may start worktree writers; other nested callers fail with `workspace_nested_writer_unsupported` ([Nested worktree writers](local-backends.md#nested-worktree-writers)). Launch and status projections include the mode, workspace identity, actual cwd, and source cwd.
+A root writer's workspace mode is, in order: the item's `isolation`, a custom agent's `isolation`, then the session's `writerWorkspaceMode` (default `shared-checkout`). Admission records the mode. Only the root starts worktree writers: nested start items take no `isolation`, a nested writer shares its caller's checkout or worker tree, and one whose custom agent sets `isolation: "worktree"` fails with `workspace_nested_writer_unsupported` ([Mode and admission](local-backends.md#mode-and-admission)). Launch and status projections include the mode, workspace identity, actual cwd, and source cwd.
 
 Start is always background and nonblocking. `agent_await` supports `all_finished` and `any_finished`. `agent_lifecycle` takes `interrupt` or `stop` and run IDs, never task or route overrides.
 
@@ -165,7 +165,7 @@ Start is always background and nonblocking. `agent_await` supports `all_finished
 
 - Tool descriptions state what a tool does and its rules; parameter descriptions state formats and choices, with `profile` choices generated from the definitions; guideline bullets state when to act; tool results carry recovery steps with exact run IDs.
 - A start with no runnable candidate (`profile_no_eligible_model` or `backend_not_implemented`) points the user to `/subagents doctor` and `/subagents profiles`. The start guideline forbids running `claude`, `codex`, or `pi` from the shell instead, which would bypass sandbox policy and supervision.
-- The root's delegation rule comes from its [delegation mode](settings-workspace.md#delegation-settings). Nested Pi children get a restrained rule. Only nested worktree writers get `agent_worktree`.
+- The root's delegation rule comes from its [delegation mode](settings-workspace.md#delegation-settings). Nested Pi children get a restrained rule and never get `agent_worktree`.
 - In every audience the parent keeps working after launch, awaits only at a dependency or synthesis barrier, coordinates rather than edits while shared-checkout writers run, and treats worktree reports as proposals.
 
 ### Model discovery

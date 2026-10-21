@@ -39,13 +39,11 @@ export function workspaceReceiptLine(details: WorkspaceToolDetails): string | un
         details.listedCount < details.workspaceCount
           ? `${details.listedCount} of ${countLabel(details.workspaceCount, "worktree")}`
           : countLabel(details.listedCount, "workspace");
-      const sourceless = details.sourceUnavailableCount ?? 0;
-      const unreadable = (details.unavailableCount ?? 0) - sourceless;
+      const unreadable = details.unavailableCount ?? 0;
       const adoptable = details.adoptableCount ?? 0;
       return [
         listed,
         ...(unreadable > 0 ? [`${unreadable} unreadable`] : []),
-        ...(sourceless > 0 ? [`${sourceless} missing their source`] : []),
         ...(adoptable > 0 ? [`${adoptable} adoptable`] : []),
       ].join(", ");
     }
@@ -68,11 +66,6 @@ function validListCounts(details: WorkspaceToolDetails): boolean {
     details.workspaceCount !== undefined &&
     details.listedCount !== undefined &&
     details.listedCount > details.workspaceCount
-  )
-    return false;
-  if (
-    details.sourceUnavailableCount !== undefined &&
-    details.sourceUnavailableCount > (details.unavailableCount ?? 0)
   )
     return false;
   if (
@@ -159,25 +152,13 @@ const step = (code: string, message: string, detail: string): CompactIssue => ({
 
 function listIssues(details: WorkspaceToolDetails): CompactIssue[] {
   const issues: CompactIssue[] = [];
-  const sourceless = details.sourceUnavailableCount ?? 0;
-  if ((details.unavailableCount ?? 0) > sourceless)
+  if ((details.unavailableCount ?? 0) > 0)
     issues.push({
       severity: "warning",
       code: "workspace-records-unavailable",
       message: "Some worktree records are unreadable; ownership and cleanup are unknown",
       detail:
         "Incomplete worktree metadata: some recovery records are missing, invalid, or unreadable. Their ownership, source identity, and cleanup are unknown; manual recovery is required.",
-    });
-  if (sourceless > 0)
-    issues.push({
-      severity: "warning",
-      code: "workspace-source-unavailable",
-      message:
-        sourceless === 1
-          ? "A nested worktree's source worktree is missing or unreadable"
-          : `${sourceless} nested worktrees' source worktrees are missing or unreadable`,
-      detail:
-        "These nested worktrees name a source worktree whose record is missing or unreadable (source-workspace-unavailable). Their source tree and cleanup are unknown; preserve them and recover manually.",
     });
   const adoptable = details.adoptableCount ?? 0;
   if (adoptable > 0)

@@ -96,8 +96,6 @@ export const WorkspaceToolDetailsSchema = Schema.Struct({
   workspaceCount: Schema.optionalKey(nonNegativeInteger),
   unavailableCount: Schema.optionalKey(nonNegativeInteger),
   listedCount: Schema.optionalKey(nonNegativeInteger),
-  /** Listed entries whose nested source workspace chain can't be resolved; within `unavailableCount`. */
-  sourceUnavailableCount: Schema.optionalKey(nonNegativeInteger),
   /** Listed workspaces of sessions that have ended which the root may adopt. */
   adoptableCount: Schema.optionalKey(nonNegativeInteger),
   changedPathCount: Schema.optionalKey(nonNegativeInteger),

@@ -2,7 +2,7 @@ import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import type { CrossProcessLockContract, SafeFile } from "pi-cosmic-core";
-import { OPEN_WORKSPACE_STATUSES, workspaceCheckoutRoot } from "../workspace/model.ts";
+import { OPEN_WORKSPACE_STATUSES } from "../workspace/model.ts";
 import type {
   WorkspaceAdoptTarget,
   WorkspaceError,
@@ -26,10 +26,8 @@ import {
 } from "./git-worktree-store.ts";
 import {
   listWorkspaceRecords,
-  MAX_WORKSPACE_NESTING,
   removeWorkspaceTrees,
   requireOriginalWorker,
-  unresolvedChildWorkspaces,
 } from "./git-worktree-recovery.ts";
 import { rollbackPublication } from "./git-worktree-integration.ts";
 
@@ -45,9 +43,6 @@ export interface OrphanEngine {
   readonly managedRecord: (
     workspaceId: string,
   ) => Effect.Effect<WorkspaceRecord, WorkspaceError, SafeFile>;
-  readonly refuseWithChildren: (
-    record: WorkspaceRecord,
-  ) => Effect.Effect<undefined, WorkspaceError, SafeFile>;
   /** The worker tree's current capture. */
   readonly workerTree: (record: WorkspaceRecord) => Effect.Effect<string, WorkspaceError, SafeFile>;
   /** Freezes the worker tree as a new revision, dropping any preparation. */
@@ -64,18 +59,6 @@ export interface OrphanEngine {
 
 const oldEnough = (record: WorkspaceRecord, now: number, minimumAgeMillis: number) =>
   now - record.lastChangedAt >= minimumAgeMillis;
-
-// How many source-workspace links separate a record from its real checkout.
-const sourceDepth = (record: WorkspaceRecord, listed: ReadonlyMap<string, WorkspaceRecord>) => {
-  let depth = 0;
-  for (
-    let link = record.handle.sourceWorkspaceId;
-    link !== undefined && depth <= MAX_WORKSPACE_NESTING;
-    link = listed.get(link)?.handle.sourceWorkspaceId
-  )
-    depth += 1;
-  return depth;
-};
 
 /** Discard, takeover, and the sweep of workspaces whose creating session has ended. */
 export const orphanWorkspaceOperations = (engine: OrphanEngine) => {
@@ -120,7 +103,6 @@ export const orphanWorkspaceOperations = (engine: OrphanEngine) => {
             "Discard it from the root session of its checkout, which takes those leases, or compare the journal's paths with the parent checkout, restore each file from its backup (paths relative to the source root) or keep the published content, delete the backup and temporary files, then remove the private workspace directory.",
         },
       );
-    yield* engine.refuseWithChildren(record);
     yield* whileOwnerEnded(
       record,
       Effect.gen(function* () {
@@ -147,12 +129,6 @@ export const orphanWorkspaceOperations = (engine: OrphanEngine) => {
         "This session already owns the workspace under another parent.",
       );
     }
-    if (record.handle.sourceWorkspaceId !== undefined)
-      return yield* workspaceRefusal("adopt", "A nested orphan can only be discarded.", {
-        path: record.handle.cwd,
-        rule: "a nested workspace integrates into its source workspace's worker tree, which only the writer that started it could resolve",
-        remedy: "Discard it, children before their parent, then adopt the source workspace.",
-      });
     if (!OPEN_WORKSPACE_STATUSES.has(record.status))
       return yield* workspaceRefusal(
         "adopt",
@@ -168,7 +144,6 @@ export const orphanWorkspaceOperations = (engine: OrphanEngine) => {
               : "Start a new writer instead.",
         },
       );
-    yield* engine.refuseWithChildren(record);
     const ownerLease = yield* engine.ownerPresence;
     return yield* whileOwnerEnded(
       record,
@@ -195,26 +170,19 @@ export const orphanWorkspaceOperations = (engine: OrphanEngine) => {
           ),
     ).pipe(Effect.map((ids) => ids.flat()));
   /**
-   * Records the orphan sweep may discard, children before their source workspaces so a pass can
-   * resolve a whole chain. A plain candidate scan: `sweepOrphan` rechecks each one under its
-   * checkout's lock and owner lease.
+   * Records the orphan sweep may discard. A plain candidate scan: `sweepOrphan` rechecks each one
+   * under its checkout's lock and owner lease.
    */
   const sweepCandidates = (input: { readonly minimumAgeMillis: number }) =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
       const { records } = yield* listWorkspaceRecords(registry);
-      const listed = new Map(records.map((record) => [record.handle.workspaceId, record]));
-      const candidates: WorkspaceRecord[] = [];
-      for (const record of records)
-        if (
+      return records.filter(
+        (record) =>
           !owned.has(record.handle.workspaceId) &&
           OPEN_WORKSPACE_STATUSES.has(record.status) &&
           record.hookCleanupPending === undefined &&
-          oldEnough(record, now, input.minimumAgeMillis)
-        )
-          candidates.push(record);
-      return candidates.toSorted(
-        (left, right) => sourceDepth(right, listed) - sourceDepth(left, listed),
+          oldEnough(record, now, input.minimumAgeMillis),
       );
     });
   /**
@@ -231,8 +199,7 @@ export const orphanWorkspaceOperations = (engine: OrphanEngine) => {
     if (
       owned.has(target.workspaceId) ||
       !OPEN_WORKSPACE_STATUSES.has(record.status) ||
-      !oldEnough(record, now, target.minimumAgeMillis) ||
-      (yield* unresolvedChildWorkspaces(registry, target.workspaceId)).length > 0
+      !oldEnough(record, now, target.minimumAgeMillis)
     )
       return undefined;
     const swept = yield* ownerEnded(
@@ -258,7 +225,7 @@ export const orphanWorkspaceOperations = (engine: OrphanEngine) => {
         });
         return {
           workspaceId: target.workspaceId,
-          sourceRoot: workspaceCheckoutRoot(record.handle),
+          sourceRoot: record.handle.sourceRoot,
           changedPathCount: kept.revision?.changedPaths.length ?? 0,
           patchPath: revisionDiffFile(registry, target.workspaceId),
         } satisfies WorkspaceSwept;

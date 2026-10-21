@@ -22,7 +22,7 @@ const writer = (task: string, cwd: string) =>
     workspace: workspace(cwd),
   });
 
-const ownsChildWorkspaces = (overrides: Partial<StartSubagentRequest>) =>
+const offersWorktrees = (overrides: Partial<StartSubagentRequest>) =>
   childSystemPrompt(request(overrides)).includes("agent_worktree");
 
 describe("child prompts", () => {
@@ -36,19 +36,16 @@ describe("child prompts", () => {
     expect(task).toContain("/private/ws-1");
   });
 
-  it("tells only admitted Pi worktree writers that they own child workspaces", () => {
+  it("offers no child, not even a worktree writer, worktrees of its own", () => {
     const worktree = {
       writeIntent: "writer",
       writerWorkspaceMode: "worktree",
       workspace: workspace("/private/ws-1"),
     } as const;
-    expect(ownsChildWorkspaces(worktree)).toBe(true);
-    expect(ownsChildWorkspaces({})).toBe(false);
-    expect(
-      ownsChildWorkspaces({ writeIntent: "writer", writerWorkspaceMode: "shared-checkout" }),
-    ).toBe(false);
-    expect(ownsChildWorkspaces({ ...worktree, workspace: undefined })).toBe(false);
-    expect(ownsChildWorkspaces({ ...worktree, runtime: "claude" })).toBe(false);
-    expect(ownsChildWorkspaces({ ...worktree, runtime: "codex" })).toBe(false);
+    expect(offersWorktrees(worktree)).toBe(false);
+    expect(offersWorktrees({})).toBe(false);
+    expect(offersWorktrees({ writeIntent: "writer", writerWorkspaceMode: "shared-checkout" })).toBe(
+      false,
+    );
   });
 });

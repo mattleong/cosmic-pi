@@ -183,33 +183,6 @@ describe(".worktreeinclude", () => {
     expect(error.operation).toBe("create");
   });
 
-  test("gives a nested writer the source worker's included files without capturing them", function* (service, root) {
-    // A credential-named source file is captured from private trees, so only the include rule
-    // keeps the parent's copy out of the nested baseline.
-    yield* writeFile(path.join(root, "secrets.ts"), "export const key = 'parent';\n");
-    yield* writeFile(path.join(root, ".env"), "TOKEN=parent\n");
-    yield* includeFile(root, ".env\nsecrets.ts\n");
-    const parent = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-    yield* writeFile(path.join(parent.cwd, "secrets.ts"), "export const key = 'worker';\n");
-    yield* writeFile(path.join(parent.cwd, ".env"), "TOKEN=worker\n");
-
-    const child = yield* service.create({
-      sourceCwd: parent.cwd,
-      ownerId: "parent/child",
-      sourceWorkspace: { workspaceId: parent.workspaceId, ownerId: parent.ownerId },
-    });
-    expect(yield* readText(child.cwd, ".env")).toBe("TOKEN=worker\n");
-    expect(yield* readText(child.cwd, "secrets.ts")).toBe("export const key = 'worker';\n");
-    expect(yield* holdsBlob(root, "export const key = 'worker';\n")).toBe(false);
-    expect((yield* service.inspect(workspaceTarget(child))).includedPaths).toEqual([
-      ".env",
-      "secrets.ts",
-    ]);
-    yield* writeFile(path.join(child.cwd, "src/main.ts"), "child edit\n");
-    expect((yield* service.freeze(workspaceTarget(child))).changedPaths).toEqual(["src/main.ts"]);
-    expect((yield* service.freeze(workspaceTarget(parent))).changedPaths).toEqual([]);
-  });
-
   test("includes nothing without the file and refuses one it can't use", function* (service, root) {
     yield* writeFile(path.join(root, ".env"), "TOKEN=parent\n");
     const plain = yield* service.create({ sourceCwd: root, ownerId: "parent" });

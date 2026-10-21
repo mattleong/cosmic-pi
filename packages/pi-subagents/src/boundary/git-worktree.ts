@@ -5,11 +5,7 @@ import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import { CrossProcessLock, type CrossProcessLease, type SafeFile } from "pi-cosmic-core";
 import type { WorktreeHook } from "../config/schema.ts";
-import {
-  OPEN_WORKSPACE_STATUSES,
-  WorkspaceError,
-  workspaceCheckoutRoot,
-} from "../workspace/model.ts";
+import { OPEN_WORKSPACE_STATUSES, WorkspaceError } from "../workspace/model.ts";
 import { canonicalizeWriterDirectory } from "./writer-lease.ts";
 import { runWorktreeHook } from "./worktree-hook.ts";
 import { HOOK_QUARANTINE_REMEDY, worktreeKind, worktreeRemoveHooks } from "./git-worktree-hooks.ts";
@@ -98,9 +94,7 @@ import {
 import {
   collectWorkspaceRecords,
   listWorkspaceRecords,
-  MAX_WORKSPACE_NESTING,
   removeWorkspaceTrees,
-  unresolvedChildWorkspaces,
 } from "./git-worktree-recovery.ts";
 import {
   commitPublication,
@@ -122,29 +116,15 @@ const subdirectory = workspaceSubdirectory;
 // Publication installs regular files only, so freeze refuses links and submodules that change.
 const unpublishableMode = (mode: string) => mode === "120000" || mode === "160000";
 
-interface WorkspaceSource extends SourceCheckout {
-  /** Set when the source is another workspace's worker tree (see WorkspaceHandle). */
-  readonly sourceWorkspaceId?: string | undefined;
-  readonly checkoutRoot?: string | undefined;
-}
-
 interface CreateWorkspaceInput {
   readonly sourceCwd: string;
   readonly ownerId: string;
-  readonly sourceWorkspace?: WorkspaceTarget | undefined;
   readonly launch?: WorkspaceLaunch | undefined;
   readonly onAcquired?: WorkspaceAcquired | undefined;
 }
 
 const withinTree = (tree: string, target: string) =>
   target === tree || target.startsWith(`${tree}${path.sep}`);
-
-const nestedSourceRefusal = (sourceCwd: string) =>
-  workspaceRefusal("create", "The session directory isn't the source workspace's worker tree.", {
-    path: sourceCwd,
-    rule: "a nested workspace's source must be its named source workspace's worker tree or a directory inside it, never a prepared tree, workspace directory, or another workspace",
-    remedy: "Start the nested writer from the parent writer's own workspace directory.",
-  });
 
 const settled = (target: WorkspaceSettledTarget) =>
   target.processCleanupConfirmed
@@ -162,13 +142,6 @@ const withoutPreparation = ({
   sourceIndex: _sourceIndex,
   ...record
 }: WorkspaceRecord): WorkspaceRecord => ({ ...record, status: "frozen" });
-
-const MAX_LISTED_CHANGES = 5;
-
-const listedChanges = (paths: ReadonlyArray<string>) =>
-  `${paths.slice(0, MAX_LISTED_CHANGES).join(", ")}${
-    paths.length > MAX_LISTED_CHANGES ? `, and ${paths.length - MAX_LISTED_CHANGES} more` : ""
-  }`;
 
 /** Serializes this process's workspace operations; WorktreeCreate hooks release it while they run. */
 type WorkspaceOperationGate = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
@@ -242,21 +215,8 @@ export const gitWorkspaceEngine = (
       includedLeftOut(record.repository, checkedOut, record.includedPaths).pipe(
         Effect.flatMap((included) => captureTree(root, directory(record), workerLeftOut, included)),
       );
-    // A nested workspace's source is its source workspace's worker, with that one's included files.
-    const sourceIncluded = (record: WorkspaceRecord) =>
-      record.handle.sourceWorkspaceId === undefined
-        ? Effect.succeed([])
-        : readWorkspaceRecord(registry, record.handle.sourceWorkspaceId).pipe(
-            Effect.flatMap((source) =>
-              includedLeftOut(source.repository, source.baseline, source.includedPaths),
-            ),
-          );
     const captureSource = (record: WorkspaceRecord) =>
-      sourceIncluded(record).pipe(
-        Effect.flatMap((included) =>
-          captureTree(record.handle.sourceRoot, directory(record), sourceLeftOut(record), included),
-        ),
-      );
+      captureTree(record.handle.sourceRoot, directory(record), sourceLeftOut, []);
     const managedRecord = (workspaceId: string) =>
       Effect.gen(function* () {
         const record = yield* readWorkspaceRecord(registry, workspaceId);
@@ -307,59 +267,18 @@ export const gitWorkspaceEngine = (
       removePreparationTree(registry, record, preparationId, beforeRemove);
     const removeUnhanded = (record: WorkspaceRecord, preparationId: string) =>
       removePreparationTree(registry, record, preparationId).pipe(Effect.asVoid);
-    // Lock order: an operation holds at most one store lock, keyed by the real checkout at the top
-    // of its record's nested chain (workspaceCheckoutRoot). A whole chain shares it, so a nested
-    // workspace's integration into its source workspace's worker tree serializes with every
-    // operation on that workspace and on the real checkout without ever nesting store locks. Owner
-    // leases (orphan discard) are only taken inside it.
-    const lockedSource = <A, E, R>(checkoutRoot: string, effect: Effect.Effect<A, E, R>) =>
-      withWorkspaceStoreLock(locks, lockDirectory, checkoutRoot, effect);
-    // The checkout root never changes for a record, so reading it before the lock is safe; the
+    // Lock order: an operation holds at most one store lock, keyed by its record's source
+    // checkout. Owner leases (orphan discard) are only taken inside it.
+    const lockedSource = <A, E, R>(sourceRoot: string, effect: Effect.Effect<A, E, R>) =>
+      withWorkspaceStoreLock(locks, lockDirectory, sourceRoot, effect);
+    // The source root never changes for a record, so reading it before the lock is safe; the
     // operation itself rereads the record under the lock.
     const locked = <A, E, R>(effect: Effect.Effect<A, E, R>, target: WorkspaceOrphanTarget) =>
       readWorkspaceRecord(registry, target.workspaceId).pipe(
-        Effect.flatMap((record) => lockedSource(workspaceCheckoutRoot(record.handle), effect)),
+        Effect.flatMap((record) => lockedSource(record.handle.sourceRoot, effect)),
       );
-    // A nested workspace integrates into its source workspace's worker tree, which must still
-    // hold unfinished work and must not be running a worktree hook.
-    const openSourceWorkspace = (record: WorkspaceRecord, operation: string) =>
-      Effect.gen(function* () {
-        const sourceId = record.handle.sourceWorkspaceId;
-        if (sourceId === undefined) return undefined;
-        const source = yield* managedRecord(sourceId);
-        if (
-          !OPEN_WORKSPACE_STATUSES.has(source.status) ||
-          worker(source) !== record.handle.sourceRoot
-        )
-          return yield* workspaceRefusal(
-            operation,
-            "The source workspace's worker tree is no longer open.",
-            {
-              path: record.handle.sourceRoot,
-              rule: "a nested workspace prepares and integrates only into the worker tree of an active, frozen, or prepared source workspace",
-              remedy: "Discard this workspace; its source workspace was integrated or discarded.",
-            },
-          );
-        return undefined;
-      });
-    // The durable child guard: a worker tree stays while a workspace created from it is unresolved.
-    const refuseWithChildren = (record: WorkspaceRecord) =>
-      Effect.gen(function* () {
-        const children = yield* unresolvedChildWorkspaces(registry, record.handle.workspaceId);
-        if (children.length > 0)
-          return yield* workspaceRefusal(
-            "discard",
-            "Workspaces created from this worker tree are unresolved.",
-            {
-              path: worker(record),
-              rule: "a worker tree stays while a workspace created from it is neither integrated nor discarded",
-              remedy: `Integrate or discard ${listedChanges(children)} first.`,
-            },
-          );
-        return undefined;
-      });
 
-    const createInternal = (input: CreateWorkspaceInput, source: WorkspaceSource) =>
+    const createInternal = (input: CreateWorkspaceInput, source: SourceCheckout) =>
       Effect.gen(function* () {
         if (
           registry === source.sourceRoot ||
@@ -378,10 +297,6 @@ export const gitWorkspaceEngine = (
           sourceRoot: source.sourceRoot,
           artifactRoot: dir,
           cwd: path.join(dir, "worker", source.subdirectory),
-          ...(source.sourceWorkspaceId !== undefined && {
-            sourceWorkspaceId: source.sourceWorkspaceId,
-            checkoutRoot: source.checkoutRoot,
-          }),
         };
         let record: WorkspaceRecord = {
           version: 2,
@@ -506,57 +421,19 @@ export const gitWorkspaceEngine = (
           },
         );
       const resolved = yield* workspaceIO("source", () => fs.realpath(input.sourceCwd));
-      const named = input.sourceWorkspace;
-      if (named === undefined) {
-        if (withinTree(registry, resolved))
-          return yield* workspaceRefusal(
-            "create",
-            "The session directory is inside private workspace storage.",
-            {
-              path: resolved,
-              rule: "a workspace is created from private storage only from the worker tree of the workspace named as its source",
-              remedy:
-                "Start the writer from the real checkout, or have the worktree writer that owns this directory start it.",
-            },
-          );
-        const source = yield* inspectSource(input.sourceCwd);
-        yield* initializeWorkspaceStore(registry);
-        return yield* lockedSource(source.sourceRoot, createInternal(input, source));
-      }
-      // Read before the lock only for its key and a precise refusal; it is rechecked under the lock.
-      const unlocked = yield* readWorkspaceRecord(registry, named.workspaceId);
-      if (!withinTree(worker(unlocked), resolved)) return yield* nestedSourceRefusal(resolved);
+      if (withinTree(registry, resolved))
+        return yield* workspaceRefusal(
+          "create",
+          "The session directory is inside private workspace storage.",
+          {
+            path: resolved,
+            rule: "a workspace snapshots a real checkout, never another workspace's tree",
+            remedy: "Start the writer from the real checkout.",
+          },
+        );
       const source = yield* inspectSource(input.sourceCwd);
-      return yield* lockedSource(
-        workspaceCheckoutRoot(unlocked.handle),
-        Effect.gen(function* () {
-          const parent = yield* checked(named);
-          if (parent.status !== "active")
-            return yield* workspaceRefusal("create", "The source workspace isn't active.", {
-              path: source.sourceCwd,
-              rule: "a nested workspace snapshots only an active workspace's worker tree",
-              remedy: "Revise the source workspace to reopen it, or start from the real checkout.",
-            });
-          if (source.sourceRoot !== worker(parent) || !withinTree(worker(parent), source.sourceCwd))
-            return yield* nestedSourceRefusal(source.sourceCwd);
-          let links = 0;
-          for (let link = parent; link.handle.sourceWorkspaceId !== undefined; ) {
-            links += 1;
-            if (links >= MAX_WORKSPACE_NESTING)
-              return yield* workspaceRefusal("create", "Workspaces are nested too deeply.", {
-                path: source.sourceCwd,
-                rule: `at most ${MAX_WORKSPACE_NESTING} workspaces may separate a nested workspace from its real checkout`,
-                remedy: "Integrate nested work into its source workspace before starting another.",
-              });
-            link = yield* readWorkspaceRecord(registry, link.handle.sourceWorkspaceId);
-          }
-          return yield* createInternal(input, {
-            ...source,
-            sourceWorkspaceId: parent.handle.workspaceId,
-            checkoutRoot: workspaceCheckoutRoot(parent.handle),
-          });
-        }),
-      );
+      yield* initializeWorkspaceStore(registry);
+      return yield* lockedSource(source.sourceRoot, createInternal(input, source));
     });
     // Captures the active worker tree as the record's revision, committing its patch first.
     const freezeRecord = (record: WorkspaceRecord) =>
@@ -666,7 +543,6 @@ export const gitWorkspaceEngine = (
       if (record.status !== "frozen" && record.status !== "prepared")
         return yield* workspaceFailure("prepare", "Workspace is not awaiting integration.");
       const selected = reviewed.changedPaths;
-      yield* openSourceWorkspace(record, "prepare");
       const { repository } = record;
       const { sourceRoot } = record.handle;
       yield* refuseHiddenLocalEdits(sourceRoot, "prepare", selected);
@@ -747,7 +623,6 @@ export const gitWorkspaceEngine = (
         !validWorkspaceId(target.preparationId)
       )
         return yield* workspaceFailure("integrate", "Tested preparation is stale or unknown.");
-      yield* openSourceWorkspace(record, "integrate");
       const { repository } = record;
       const { sourceRoot } = record.handle;
       // Rechecked here, since a bit set after preparation hides edits made since.
@@ -800,11 +675,6 @@ export const gitWorkspaceEngine = (
       const hidden = selected.filter((name) => previous.has(name) !== captured.has(name));
       if (hidden.length > 0) return yield* touchedParentDrift(hidden);
       const next = yield* readPublishedFiles(preparedRoot, selected, budget);
-      // Read before publication, so a failure can't follow the commit. No child can appear
-      // meanwhile: its creation takes this chain's lock.
-      const retainedForChildren = target.retainTrees
-        ? []
-        : yield* unresolvedChildWorkspaces(registry, target.workspaceId);
       // Only the proposal's own changes are published, so untouched parent edits stay.
       const changed = selected.filter((name) => {
         const current = previous.get(name),
@@ -841,10 +711,7 @@ export const gitWorkspaceEngine = (
       yield* removeEmptiedDirectories(publication.emptiedDirectories);
       const treeRemovalFailed = target.retainTrees
         ? false
-        : yield* removeWorkspaceTrees(registry, integrated, {
-            keepWorker: retainedForChildren.length > 0,
-            beforeRemove,
-          }).pipe(
+        : yield* removeWorkspaceTrees(registry, integrated, { beforeRemove }).pipe(
             Effect.as(false),
             Effect.catchTag("WorkspaceError", (error) =>
               Effect.logWarning(`Integrated workspace trees remain on disk: ${error.message}`).pipe(
@@ -859,7 +726,6 @@ export const gitWorkspaceEngine = (
         untouchedDriftPaths,
         treeRemovalFailed,
         remainingBackupPaths,
-        ...(retainedForChildren.length > 0 && { retainedForChildren }),
       };
     }, locked);
 
@@ -891,7 +757,6 @@ export const gitWorkspaceEngine = (
       Effect.gen(function* () {
         yield* settled(target);
         const record = yield* checked(target);
-        yield* refuseWithChildren(record);
         // A stopped publication is undone first; until that succeeds the record stays mid-integration.
         if (record.status === "integrating") yield* rollbackPublication(registry, record);
         yield* removeWorkspaceTrees(registry, record, { beforeRemove });
@@ -908,7 +773,6 @@ export const gitWorkspaceEngine = (
         owned,
         ownerPresence,
         managedRecord,
-        refuseWithChildren,
         workerTree: (record) => captureWorker(record).pipe(Effect.map(({ tree }) => tree)),
         freezeAnew: (record) =>
           freezeRecord({ ...withoutPreparation(record), status: "active" }).pipe(
@@ -921,7 +785,7 @@ export const gitWorkspaceEngine = (
       target: WorkspaceSettledTarget,
     ) {
       yield* settled(target);
-      return yield* rebaseWorkspace(registry, yield* checked(target), managedRecord, beforeRemove);
+      return yield* rebaseWorkspace(registry, yield* checked(target), beforeRemove);
     }, locked);
     const collectGarbage = Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
@@ -1156,8 +1020,6 @@ export const gitWorkspaceEngine = (
     // Reading takes no lock: freeze commits the patch file before the record that names it.
     const currentRevision = (target: WorkspaceTarget) =>
       checked(target, false).pipe(Effect.flatMap(revisionWithDiff));
-    const unresolvedChildren = (target: WorkspaceOrphanTarget) =>
-      unresolvedChildWorkspaces(registry, target.workspaceId);
     const hookCleanupPending = (target: WorkspaceOrphanTarget) =>
       readWorkspaceRecord(registry, target.workspaceId).pipe(
         Effect.map((record) => record.hookCleanupPending !== undefined),
@@ -1197,7 +1059,6 @@ export const gitWorkspaceEngine = (
       inspectWorkerChanges,
       inspect,
       revision: currentRevision,
-      unresolvedChildren,
       hookCleanupPending,
       list,
       listRecords,

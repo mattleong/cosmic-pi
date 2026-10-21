@@ -118,13 +118,10 @@ const StartSpecWithoutAgentParameters = Type.Object(
   { ...StartSpecBaseFields, ...StartSpecOptionFields },
   strictObjectOptions,
 );
-// A model override is for a model the user asks for, and only the root talks to the user.
+// A model override is for a model the user asks for, and only the root talks to the user. Only
+// the root starts worktree writers, so a nested writer always shares its parent's directory.
 const NestedStartSpecParameters = Type.Object(
-  {
-    ...StartSpecBaseFields,
-    agent: Type.Optional(nestedAgentParameter()),
-    isolation: StartSpecOptionFields.isolation,
-  },
+  { ...StartSpecBaseFields, agent: Type.Optional(nestedAgentParameter()) },
   strictObjectOptions,
 );
 

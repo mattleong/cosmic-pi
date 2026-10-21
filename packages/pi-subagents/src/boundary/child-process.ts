@@ -21,10 +21,9 @@ import type * as Scope from "effect/Scope";
 import {
   AGENT_TOOL_NAMES,
   CONTACT_PARENT_TOOL_NAME,
-  nestedSubagentToolNames,
+  NESTED_SUBAGENT_TOOL_NAMES,
   PI_CHILD_EXCLUDED_TOOL_ARGUMENT,
 } from "../run/tool-policy.ts";
-import { SUBAGENT_WORKSPACE_PARENT_ENV } from "./host-environment.ts";
 import { processCauseError as processError, type SubagentProcessError } from "../run/errors.ts";
 import type { BackendLaunchRequest } from "../backend/model.ts";
 import {
@@ -54,7 +53,6 @@ const BLOCKED_ENV_KEYS = new Set([
   RUNTIME_API_KEY_ENV,
   RUNTIME_API_PROVIDER_ENV,
   FORK_PROMPT_CACHE_KEY_ENV,
-  SUBAGENT_WORKSPACE_PARENT_ENV,
 ]);
 
 export type ChildLaunchRequest = Omit<BackendLaunchRequest, "resumeToken"> & {
@@ -121,15 +119,12 @@ const reclaimChildRunState = (runDirectory: string) =>
     ),
   );
 
-export const childToolPolicy = (
-  rootActiveTools: ReadonlyArray<string>,
-  workspaceParent = false,
-) => ({
+export const childToolPolicy = (rootActiveTools: ReadonlyArray<string>) => ({
   enabled: [
     ...new Set([
       ...rootActiveTools,
       CONTACT_PARENT_TOOL_NAME,
-      ...nestedSubagentToolNames(workspaceParent),
+      ...NESTED_SUBAGENT_TOOL_NAMES,
       ...AGENT_TOOL_NAMES,
     ]),
   ],
@@ -155,7 +150,6 @@ export function childProcessEnvironment(
     PI_SUBAGENT_CHILD: "1",
     PI_SUBAGENT_PARENT_SESSION: request.parentSessionId,
     PI_SUBAGENT_RUN_ID: request.runId,
-    ...(request.workspaceParent && { [SUBAGENT_WORKSPACE_PARENT_ENV]: "1" }),
     ...(request.context === "fork" &&
       request.sharesParentPromptCache && {
         [FORK_PROMPT_CACHE_KEY_ENV]: forkPromptCacheKey(request.parentSessionId),
@@ -309,7 +303,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
       : undefined;
 
   const cliEntry = nodePath.join(getPackageDir(), "dist", "bundle", "cli.js");
-  const toolPolicy = childToolPolicy(request.activeTools, request.workspaceParent === true);
+  const toolPolicy = childToolPolicy(request.activeTools);
   const cliArgs = [
     "--mode",
     "rpc",

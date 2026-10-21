@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { WRITER_WORKSPACE_MODES } from "../src/config/schema.ts";
 import { toolDefinitions as supervisorToolDefinitions } from "../src/supervisor/mcp-wire.ts";
 import {
+  startToolParameters,
   subagentArgumentPreparer,
   SUBAGENT_TOOL_SCHEMAS,
   workspaceOperationError,
@@ -21,7 +22,10 @@ const registeredTools = (nested: boolean) =>
     }),
   ).tools;
 
+// The shared start schema is the nested one; the root registers its own.
 const prepareStart = subagentArgumentPreparer("agent_start");
+const rootStartParameters = startToolParameters([]);
+const prepareRootStart = subagentArgumentPreparer("agent_start", rootStartParameters);
 
 describe("model-facing tool schemas", () => {
   it.each([false, true])(
@@ -59,7 +63,7 @@ describe("subagent argument preparation", () => {
   });
 
   it("rejects an unknown isolation value and names the allowed modes", () => {
-    const rejected = () => prepareStart({ agents: [{ task: "Edit", isolation: "sandbox" }] });
+    const rejected = () => prepareRootStart({ agents: [{ task: "Edit", isolation: "sandbox" }] });
     expect(rejected).toThrow(/\[invalid_arguments\]/u);
     expect(rejected).toThrow(
       new RegExp(`isolation[^\\n]*${WRITER_WORKSPACE_MODES.join(", ")}`, "u"),
@@ -74,11 +78,15 @@ describe("subagent argument preparation", () => {
   });
 
   it("suggests isolation for workspace-style start keys", () => {
-    const accepted = Object.keys(
-      SUBAGENT_TOOL_SCHEMAS.agent_start.parameters.properties.agents.items.properties,
-    );
+    const accepted = Object.keys(rootStartParameters.properties.agents.items.properties);
     for (const key of ["workspace", "worktree", "workspace_mode", "writerWorkspaceMode"])
       expect(replacementField(key, accepted)).toBe("isolation");
+  });
+
+  it("rejects isolation from a nested child, which can't start worktree writers", () => {
+    expect(() =>
+      prepareStart({ agents: [{ task: "Edit", profile: "worker", isolation: "worktree" }] }),
+    ).toThrow(/\[invalid_arguments\][\s\S]*isolation/u);
   });
 });
 

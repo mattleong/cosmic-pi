@@ -15,9 +15,6 @@ export const NORMAL_START_GUIDELINE =
 export const NESTED_START_GUIDELINE =
   "Your parent assigned you a bounded task. Start subagents only for clearly independent slices that are worth briefing; most assignments need none.";
 
-/** Nested worktree writers may also split implementation into worktree writers they apply. */
-export const NESTED_WORKSPACE_PARENT_START_GUIDELINE = `${NESTED_START_GUIDELINE} For parallel implementation slices, you may start worktree writers (isolation: worktree); you own their worktrees and must apply or discard each one with agent_worktree before you report.`;
-
 /** Added to the root's start guidelines when the user configured custom agents. */
 export const CUSTOM_AGENT_START_GUIDELINE =
   "The user configured custom agents, listed under the agent parameter. When the user names one, or a slice matches an agent's description, set agent instead of profile; the agent supplies its own instructions and route.";

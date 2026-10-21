@@ -30,15 +30,16 @@ const outcomeDiffStat = (
 
 /**
  * Best-effort cleanup once a completed worktree writer's processes are confirmed stopped: a
- * workspace whose tree matches its baseline, with no uncaptured files and no unresolved child
- * workspaces, is discarded; any other records its change counts and bounded diffstat. It never delays report delivery, and any doubt keeps the workspace.
+ * workspace whose tree matches its baseline, with no uncaptured files, is discarded; any other
+ * records its change counts and bounded diffstat. It never delays report delivery, and any doubt
+ * keeps the workspace.
  */
 export function workspaceSettleOperations(
   context: WorkspaceControlContext,
   publish: Effect.Effect<void>,
   discardLocked: ReturnType<typeof workspaceReviewOperations>["held"]["discardLocked"],
 ) {
-  const { engine, records, state, withLock, operations, unresolvedChildrenLocked } = context;
+  const { engine, records, state, withLock, operations } = context;
   // The parent may already be reviewing or applying it; only an untouched, settled
   // workspace that no run still uses is eligible. The engine refuses a quarantined one.
   const eligibleLocked = (
@@ -78,9 +79,6 @@ export function workspaceSettleOperations(
           );
           if (!binding) return;
           const { workspaceId, ownerId } = binding.handle;
-          const durableChildren = yield* engine
-            .unresolvedChildren({ workspaceId })
-            .pipe(Effect.mapError(mapWorkspaceError));
           const changes = yield* engine
             .inspectWorkerChanges({ workspaceId, ownerId, processCleanupConfirmed: true })
             .pipe(Effect.mapError(mapWorkspaceError));
@@ -90,17 +88,8 @@ export function workspaceSettleOperations(
                 if (eligibleLocked(record, assignmentEpoch) !== binding) return;
                 const changedFileCount = changes.changedPaths.length;
                 const uncapturedFileCount = changes.uncapturedPaths.length;
-                // Child workspaces created from this worker tree, including any still being
-                // created, keep it as their integration target.
-                const children = unresolvedChildrenLocked(binding);
                 // Discard records the auto-discarded outcome itself.
-                if (
-                  changedFileCount === 0 &&
-                  uncapturedFileCount === 0 &&
-                  durableChildren.length === 0 &&
-                  children.workspaceIds.length === 0 &&
-                  children.creating === 0
-                ) {
+                if (changedFileCount === 0 && uncapturedFileCount === 0) {
                   yield* discardLocked(engine, binding, "auto-discarded");
                   return;
                 }

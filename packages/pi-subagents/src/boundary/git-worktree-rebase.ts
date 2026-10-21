@@ -1,5 +1,4 @@
 import * as Effect from "effect/Effect";
-import type { SafeFile } from "pi-cosmic-core";
 import { OPEN_WORKSPACE_STATUSES, WorkspaceError } from "../workspace/model.ts";
 import type { WorkspaceRebase, WorkspaceRecord } from "../workspace/model.ts";
 import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
@@ -18,7 +17,6 @@ import {
 } from "./git-worktree-process.ts";
 import { newWorkspaceId, readWorkspaceRecord, saveWorkspaceRecord } from "./git-worktree-store.ts";
 import { patchBytes } from "./git-worktree-patch.ts";
-import { includedLeftOut } from "./git-worktree-include.ts";
 import {
   captureTree,
   changedPaths as changedBetween,
@@ -38,11 +36,6 @@ import {
   workspaceWorker,
 } from "./git-worktree-trees.ts";
 import type { BeforeTreeRemoval } from "./git-worktree-hooks.ts";
-
-/** Reads a record the engine manages, refusing one that a worktree hook still quarantines. */
-type ManagedWorkspaceRecord = (
-  workspaceId: string,
-) => Effect.Effect<WorkspaceRecord, WorkspaceError, SafeFile>;
 
 /** Paths `git apply --3way` left unmerged in the tree's index. */
 const unmergedPaths = (root: string) =>
@@ -137,29 +130,6 @@ const restoreWorker = (
     yield* git(root, ["reset", "-q", "--mixed", baseline]);
   });
 
-// A nested rebase snapshots its source like a nested create: an active workspace's worker,
-// without the files `.worktreeinclude` copied into it.
-const activeSource = (
-  registry: string,
-  record: WorkspaceRecord,
-  managedRecord: ManagedWorkspaceRecord,
-) =>
-  Effect.gen(function* () {
-    const sourceId = record.handle.sourceWorkspaceId;
-    if (sourceId === undefined) return [];
-    const source = yield* managedRecord(sourceId);
-    if (
-      source.status !== "active" ||
-      workspaceWorker(registry, source) !== record.handle.sourceRoot
-    )
-      return yield* workspaceRefusal("rebase", "The source workspace isn't active.", {
-        path: record.handle.sourceRoot,
-        rule: "a nested workspace snapshots only an active workspace's worker tree",
-        remedy: "Revise without rebase, or discard this workspace.",
-      });
-    return yield* includedLeftOut(source.repository, source.baseline, source.includedPaths);
-  });
-
 /** The baseline record.json names now, or undefined when it can't be read. */
 const savedBaseline = (registry: string, record: WorkspaceRecord) =>
   readWorkspaceRecord(registry, record.handle.workspaceId).pipe(
@@ -225,13 +195,11 @@ const recoverWorker = (
 export const rebaseWorkspace = (
   registry: string,
   record: WorkspaceRecord,
-  managedRecord: ManagedWorkspaceRecord,
   beforeRemove?: BeforeTreeRemoval,
 ) =>
   Effect.gen(function* () {
     if (!OPEN_WORKSPACE_STATUSES.has(record.status))
       return yield* workspaceFailure("rebase", "Workspace cannot be rebuilt in its current state.");
-    const sourceIncluded = yield* activeSource(registry, record, managedRecord);
     // The worker's included files stay as they are, even staged ones; no capture takes them.
     const included = record.includedPaths ?? [];
     const { repository } = record;
@@ -247,7 +215,7 @@ export const rebaseWorkspace = (
         ? new Uint8Array()
         : yield* patchBytes(registry, record, { from: record.baseline, to: captured }, "rebase");
     const identity = yield* sourceIdentity(sourceRoot);
-    const source = yield* captureTree(sourceRoot, scratch, sourceLeftOut(record), sourceIncluded);
+    const source = yield* captureTree(sourceRoot, scratch, sourceLeftOut, []);
     const parent = yield* commitTree(
       repository,
       source.tree,

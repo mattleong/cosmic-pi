@@ -9,12 +9,9 @@ import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
 import { isCleanupOwed, type RunContext, type RunRecord, type StoredRunView } from "./internal.ts";
 import {
   isActiveRunState,
-  isTerminalRunState,
   type StartSubagentRequest,
-  SUBAGENT_ROOT_RUN_ID,
   type SubagentWorkspaceOutcome,
 } from "./model.ts";
-import { isRunInSubtree } from "./tree.ts";
 
 export interface LaunchSlot {
   readonly caller: string;
@@ -25,12 +22,6 @@ export interface SharedReservation {
   readonly cwd: string;
   readonly caller: string;
 }
-
-/**
- * `discard` additionally admits the root or an ancestor of the workspace's direct parent once that
- * parent run is inactive; every other operation requires the direct parent.
- */
-export type WorkspaceAccess = "owner" | "discard";
 
 export interface RevisionHold {
   readonly successor: StartSubagentRequest;
@@ -180,21 +171,7 @@ export interface WorkspaceControlContext extends WorkspaceControlDependencies {
     workspaceId: string,
     caller: string,
     held?: symbol,
-    access?: WorkspaceAccess,
   ) => Effect.Effect<WorkspaceBinding, SubagentError>;
-  /**
-   * Refuses a workspace whose worker tree is the source of unresolved child workspaces, including
-   * children still being created and durable ones this session doesn't bind. Callers hold the run
-   * lock.
-   */
-  readonly requireChildrenResolved: (
-    binding: WorkspaceBinding,
-  ) => Effect.Effect<void, SubagentError>;
-  /** Unresolved child workspaces this session binds, and child launches still creating theirs. */
-  readonly unresolvedChildrenLocked: (binding: WorkspaceBinding) => {
-    readonly workspaceIds: ReadonlyArray<string>;
-    readonly creating: number;
-  };
   /**
    * Waits, interruptibly, for the bound writer's process cleanup once it finished, so operations
    * right after its report need no retry. A running writer or quarantined cleanup is left for
@@ -313,77 +290,10 @@ export function workspaceControlContext(
           "Private workspace service is unavailable. Writer launch is denied.",
         ),
       );
-  /**
-   * The escape hatch once a nested workspace's direct parent can no longer resolve it: that run
-   * is terminal with confirmed cleanup, or gone. Ancestry comes from authenticated run records.
-   */
-  const ancestorMayDiscard = (binding: WorkspaceBinding, caller: string) => {
-    const prefix = ownerFor("");
-    if (!binding.handle.ownerId.startsWith(prefix)) return false;
-    const parentRunId = binding.handle.ownerId.slice(prefix.length);
-    if (parentRunId === SUBAGENT_ROOT_RUN_ID || parentRunId === caller) return false;
-    const parent = records.get(parentRunId);
-    if (!parent) return caller === SUBAGENT_ROOT_RUN_ID;
-    return (
-      isTerminalRunState(parent.view.state) &&
-      parent.process === undefined &&
-      parent.cleanupDisposition === "confirmed" &&
-      (caller === SUBAGENT_ROOT_RUN_ID || isRunInSubtree(records, caller, parentRunId))
-    );
-  };
-  const unresolvedChildrenLocked = (binding: WorkspaceBinding) => {
-    const { workspaceId } = binding.handle;
-    const children = [...state.bindings.values()].filter(
-      (child) => child.handle.sourceWorkspaceId === workspaceId && !isBindingFinished(child),
-    );
-    // A child launch from any run of this workspace may still be creating its workspace.
-    const callers = new Set(
-      [...records.values()].flatMap((record) =>
-        record.view.workspaceId === workspaceId ? [record.view.id] : [],
-      ),
-    );
-    const creating =
-      [...state.launchSlots].filter(
-        (slot) =>
-          callers.has(slot.caller) && !children.some((child) => bindingSlot(child) === slot),
-      ).length +
-      [...state.sharedReservations].filter((reservation) => callers.has(reservation.caller)).length;
-    return { workspaceIds: children.map((child) => child.handle.workspaceId), creating };
-  };
-  const requireChildrenResolved = (binding: WorkspaceBinding) =>
-    Effect.gen(function* () {
-      const local = unresolvedChildrenLocked(binding);
-      const durable = engine
-        ? yield* engine
-            .unresolvedChildren({ workspaceId: binding.handle.workspaceId })
-            .pipe(Effect.mapError(mapWorkspaceError))
-        : [];
-      const workspaceIds = [...new Set([...local.workspaceIds, ...durable])].toSorted();
-      if (workspaceIds.length > 0 || local.creating > 0) {
-        const pending = [
-          ...(workspaceIds.length > 0 ? [workspaceIds.join(", ")] : []),
-          ...(local.creating > 0 ? [`${local.creating} still being created`] : []),
-        ].join("; ");
-        return yield* invalid(
-          "workspace_children_unresolved",
-          `Child workspaces created from this workspace are unresolved (${pending}). The writer that started them must apply or discard them first; once that writer has stopped, discard them directly, children before their parent.`,
-        );
-      }
-      return undefined;
-    });
-  const requireBinding = (
-    workspaceId: string,
-    caller: string,
-    held?: symbol,
-    access: WorkspaceAccess = "owner",
-  ) =>
+  const requireBinding = (workspaceId: string, caller: string, held?: symbol) =>
     Effect.gen(function* () {
       const binding = state.bindings.get(workspaceId);
-      if (
-        !binding ||
-        (binding.handle.ownerId !== ownerFor(caller) &&
-          !(access === "discard" && ancestorMayDiscard(binding, caller)))
-      )
+      if (!binding || binding.handle.ownerId !== ownerFor(caller))
         return yield* invalid(
           "workspace_owner_unavailable",
           "Workspace mutation requires its authenticated direct parent and live coordinator ownership evidence. Persisted artifacts without cleanup evidence require manual recovery.",
@@ -467,8 +377,6 @@ export function workspaceControlContext(
     ownerFor,
     requireEngine,
     requireBinding,
-    requireChildrenResolved,
-    unresolvedChildrenLocked,
     awaitWriterCleanup,
     operations: Semaphore.makeUnsafe(1),
   };

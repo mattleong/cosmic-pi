@@ -11,7 +11,7 @@ import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
 import type { SubagentToolPresentation } from "../boundary/host-activity-widget.ts";
 import type { SubagentErrorReceiptOwner } from "../boundary/host-tool-result.ts";
 import {
-  nestedSubagentToolNames,
+  NESTED_SUBAGENT_TOOL_NAMES,
   SUBAGENT_TOOL_NAME,
   SUBAGENT_TOOL_NAMES,
   type SubagentToolName,
@@ -43,7 +43,6 @@ import { CONTRACT_SCHEMAS, isSubagentContractTool } from "./contract-schema.ts";
 import {
   CUSTOM_AGENT_START_GUIDELINE,
   NESTED_START_GUIDELINE,
-  NESTED_WORKSPACE_PARENT_START_GUIDELINE,
   NORMAL_START_GUIDELINE,
 } from "../delegation/prompt.ts";
 
@@ -114,10 +113,10 @@ const START_GUIDELINES = [
   FAILED_RUN_GUIDELINE,
 ];
 
-// Only the root and worktree writers can start worktree writers or apply their proposals.
+// Only the root starts worktree writers or applies their proposals.
 const NESTED_START_GUIDELINES = [
   DELIVERABLE_GUIDELINE,
-  `Use profile=worker for implementation you hand off. You can't start worktree writers, so set isolation: "shared-checkout" on each writer when the session default is worktree. ${SHARED_CHECKOUT_SCOPES}`,
+  `Use profile=worker for implementation you hand off. Writers you start share your working directory; while they run, coordinate and review instead of editing. ${SHARED_CHECKOUT_SCOPES}`,
   FAILED_START_GUIDELINE,
 ];
 
@@ -133,7 +132,7 @@ const TOOL_SPECS: SubagentToolSpecs = {
   [SUBAGENT_TOOL_NAME.start]: {
     label: "Start Subagents",
     description:
-      "Start background subagents, up to your direct-child limit. Returns run IDs immediately; each report is delivered to you as a saved file when its run finishes, and runs end after reporting. Give every agent a self-contained task with the relevant paths, constraints, and deliverable. The profile sets the role and model route (default generalist). Only the main session and worktree writers can start worktree writers. Subagents started from a codemode script, and their descendants, stay read-only.",
+      "Start background subagents, up to your direct-child limit. Returns run IDs immediately; each report is delivered to you as a saved file when its run finishes, and runs end after reporting. Give every agent a self-contained task with the relevant paths, constraints, and deliverable. The profile sets the role and model route (default generalist). Only the main session can start worktree writers. Subagents started from a codemode script, and their descendants, stay read-only.",
     promptSnippet: "Run bounded, independent tasks in background subagents",
     renderCall: (args, theme, context) =>
       renderSubagentStartCall(
@@ -210,8 +209,6 @@ export function registerSubagentTools(
   runtime: SubagentToolRuntime,
   receiptOwner?: SubagentErrorReceiptOwner,
   shell: typeof withCodePreviewShell = withCodePreviewShell,
-  /** A nested worktree writer also reviews and applies its own worktree writer children. */
-  nestedSurface: { readonly workspaceParent: boolean } = { workspaceParent: false },
 ): void {
   const startUiTicker = runtime.startUiTicker ?? startHostUiTicker;
   const panelOwnsHierarchy = (
@@ -250,14 +247,8 @@ export function registerSubagentTools(
       ...spec,
       ...(name === SUBAGENT_TOOL_NAME.start && {
         promptGuidelines: [
-          nested
-            ? nestedSurface.workspaceParent
-              ? NESTED_WORKSPACE_PARENT_START_GUIDELINE
-              : NESTED_START_GUIDELINE
-            : NORMAL_START_GUIDELINE,
-          ...(nested && !nestedSurface.workspaceParent
-            ? NESTED_START_GUIDELINES
-            : START_GUIDELINES),
+          nested ? NESTED_START_GUIDELINE : NORMAL_START_GUIDELINE,
+          ...(nested ? NESTED_START_GUIDELINES : START_GUIDELINES),
           ...(agents && agents.length > 0 ? [CUSTOM_AGENT_START_GUIDELINE] : []),
           ...(scriptable ? [SCRIPTED_SUBAGENT_GUIDELINE] : []),
         ],
@@ -358,9 +349,7 @@ export function registerSubagentTools(
     });
     return wrapped;
   };
-  for (const name of nested
-    ? nestedSubagentToolNames(nestedSurface.workspaceParent)
-    : SUBAGENT_TOOL_NAMES)
+  for (const name of nested ? NESTED_SUBAGENT_TOOL_NAMES : SUBAGENT_TOOL_NAMES)
     pi.registerTool(buildTool(name));
   if (!nested)
     registerAgentTools(

@@ -28,7 +28,7 @@ const ORPHAN_SWEEP_AGE = Duration.days(30);
 
 /**
  * What the root may do with another session's unfinished workspace once that session ended:
- * adopt a top-level open one and continue it, or only discard it.
+ * adopt an open one and continue it, or only discard it.
  */
 export type OrphanDisposition = "adoptable" | "discard-only";
 
@@ -42,20 +42,9 @@ export const orphanDisposition = (
 ): OrphanDisposition | undefined => {
   const { workspaceId } = record.handle;
   if (!listing.endedOwners?.includes(workspaceId)) return undefined;
-  if (
-    record.handle.writerCwd === undefined ||
-    record.hookCleanupPending !== undefined ||
-    listing.records.some(
-      (child) =>
-        child.handle.sourceWorkspaceId === workspaceId &&
-        child.status !== "integrated" &&
-        child.status !== "discarded",
-    )
-  )
+  if (record.handle.writerCwd === undefined || record.hookCleanupPending !== undefined)
     return undefined;
-  return record.handle.sourceWorkspaceId === undefined && OPEN_WORKSPACE_STATUSES.has(record.status)
-    ? "adoptable"
-    : "discard-only";
+  return OPEN_WORKSPACE_STATUSES.has(record.status) ? "adoptable" : "discard-only";
 };
 
 const orphanError = (error: WorkspaceError) => {
@@ -198,7 +187,7 @@ export function workspaceOrphanOperations(
         ),
       { discard: true },
     );
-  /** Finds the orphan among this checkout's records once it has no unresolved children. */
+  /** Finds the orphan among this checkout's records. */
   const orphanRecord = (
     service: WorkspaceServiceContract,
     workspaceId: string,
@@ -210,15 +199,6 @@ export function workspaceOrphanOperations(
       );
       const record = listing.records.find((entry) => entry.handle.workspaceId === workspaceId);
       if (!record) return yield* invalid("workspace_owner_unavailable", ORPHAN_UNAVAILABLE);
-      // The engine refuses too; this names the children to discard first.
-      const children = yield* service
-        .unresolvedChildren({ workspaceId })
-        .pipe(Effect.mapError(mapWorkspaceError));
-      if (children.length > 0)
-        return yield* invalid(
-          "workspace_children_unresolved",
-          `Child workspaces created from this workspace are unresolved (${children.join(", ")}). Discard them first, children before their parent.`,
-        );
       return record;
     });
   const discardOrphan = (workspaceId: string): Effect.Effect<void, SubagentError> =>
@@ -242,7 +222,7 @@ export function workspaceOrphanOperations(
   /**
    * Takes over an orphan for the root, which then reviews, applies, revises, or discards it like
    * its own: the coordinator binds it without a run, unreviewed, with its recorded launch for a
-   * revision successor. Nested and mid-integration orphans stay discard-only.
+   * revision successor. Mid-integration orphans stay discard-only.
    */
   const adopt = (workspaceId: string): Effect.Effect<void, SubagentError> =>
     Effect.gen(function* () {
@@ -274,9 +254,8 @@ export function workspaceOrphanOperations(
       );
     });
   /**
-   * Discards this checkout's orphans unchanged for 30 days, children before their source
-   * workspaces, skipping any a takeover would refuse. Each keeps its revision patch beside its
-   * record until collection.
+   * Discards this checkout's orphans unchanged for 30 days, skipping any a takeover would refuse.
+   * Each keeps its revision patch beside its record until collection.
    */
   const sweepOrphans: Effect.Effect<ReadonlyArray<WorkspaceSwept>, SubagentError> = Effect.gen(
     function* () {

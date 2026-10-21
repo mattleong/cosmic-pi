@@ -10,7 +10,7 @@ import {
   type SubagentCapability,
 } from "./model.ts";
 import { MAX_TASK_CHARS } from "./state.ts";
-import { childSystemPrompt, isWorkspaceParentRequest } from "./tool-policy.ts";
+import { childSystemPrompt } from "./tool-policy.ts";
 import { descendantRunIds } from "./tree.ts";
 
 export interface LaunchPlan {
@@ -103,7 +103,6 @@ export const backendLaunchRequest = (
   ...(request.parentSessionFile && { parentSessionFile: request.parentSessionFile }),
   ...(request.parentLeafId && { parentLeafId: request.parentLeafId }),
   ...(request.sharesParentPromptCache && { sharesParentPromptCache: true }),
-  ...(isWorkspaceParentRequest(request) && { workspaceParent: true }),
   systemPrompt: childSystemPrompt(request),
 });
 

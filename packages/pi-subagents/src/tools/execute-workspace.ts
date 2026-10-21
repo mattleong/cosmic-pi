@@ -65,16 +65,6 @@ function integrationWarnings(outcome: WorkspaceIntegrationOutcome): WorkspaceWar
       detail: `The integration published only the proposal's own changes and kept these parent edits, which it doesn't touch, as they are: ${listedPaths(drifted)}. They changed after the combined tree was prepared, so tests run there didn't include them; rerun relevant tests in the parent checkout.`,
     });
   }
-  const children = outcome.retainedForChildren ?? [];
-  if (children.length > 0)
-    warnings.push({
-      code: "worker-retained-for-children",
-      message:
-        children.length === 1
-          ? "The working copy was kept for an unresolved child worktree"
-          : `The working copy was kept for ${countLabel(children.length, "unresolved child worktree")}`,
-      detail: `The integration committed, but child worktrees created from the worker tree are still unresolved: ${listedPaths(children)}. The worker tree at ${worker} stays until each child is applied or discarded; then discard this worktree to delete the tree.`,
-    });
   if (outcome.treeRemovalFailed)
     warnings.push({
       code: "workspace-trees-remain",
@@ -121,7 +111,6 @@ const WorkspaceMetadataSchema = Schema.Struct({
   status: WorkspaceRecordSchema.fields.status,
   cwd: Schema.String,
   sourceCwd: Schema.String,
-  sourceWorkspaceId: Schema.optional(Schema.String),
   revisionId: Schema.optional(Schema.String),
   preparationId: Schema.optional(Schema.String),
   /** Set on another session's workspace once that session ended. */
@@ -134,7 +123,7 @@ const encodeWorkspaceMetadata = Schema.encodeEffect(
 );
 
 const ORPHAN_GUIDANCE =
-  "orphan=adoptable entries belong to ended sessions: review, prepare, apply, or revise takes one over. orphan=discard-only entries (nested or left mid-integration) can only be discarded, which rolls back an interrupted integration.";
+  "orphan=adoptable entries belong to ended sessions: review, prepare, apply, or revise takes one over. orphan=discard-only entries were left mid-integration and can only be discarded, which rolls back the interrupted integration.";
 
 // Model-facing list output; entries beyond it are counted, not shown.
 const MAX_LIST_CHARS = 32_000;
@@ -149,9 +138,6 @@ const executeWorkspaceList = (service: SubagentServiceContract, callerRunId: str
         status: record.status,
         cwd: record.handle.cwd,
         sourceCwd: record.handle.sourceCwd,
-        ...(record.handle.sourceWorkspaceId !== undefined && {
-          sourceWorkspaceId: record.handle.sourceWorkspaceId,
-        }),
         ...(record.revision && { revisionId: record.revision.revisionId }),
         ...(record.preparation && { preparationId: record.preparation.preparationId }),
         ...(listing.orphans?.has(record.handle.workspaceId) && {
@@ -184,20 +170,12 @@ const executeWorkspaceList = (service: SubagentServiceContract, callerRunId: str
     const adoptableCount = [...(listing.orphans?.values() ?? [])].filter(
       (disposition) => disposition === "adoptable",
     ).length;
-    const sourceUnavailableCount = listing.unavailable.filter(
-      (entry) => entry.reason === "source-workspace-unavailable",
-    ).length;
     return result(
       [
         ...lines,
-        ...(listing.unavailable.length > sourceUnavailableCount
+        ...(listing.unavailable.length > 0
           ? [
               "Incomplete worktree metadata: some recovery records are missing, invalid, or unreadable. Their ownership, source identity, and cleanup are unknown; manual recovery is required.",
-            ]
-          : []),
-        ...(sourceUnavailableCount > 0
-          ? [
-              "Some nested worktrees name a source worktree whose record is missing or unreadable (reason source-workspace-unavailable). Their source tree and cleanup are unknown; preserve them and recover manually.",
             ]
           : []),
         omitted === 0
@@ -210,7 +188,6 @@ const executeWorkspaceList = (service: SubagentServiceContract, callerRunId: str
         workspaceCount: entries.length,
         ...(adoptableCount > 0 && { adoptableCount }),
         unavailableCount: listing.unavailable.length,
-        ...(sourceUnavailableCount > 0 && { sourceUnavailableCount }),
         listedCount: lines.length,
         displayContent: { offset: 0, length: lines.join("\n").length },
       },

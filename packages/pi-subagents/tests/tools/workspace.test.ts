@@ -208,7 +208,7 @@ describe("workspace refusals", () => {
   });
 });
 
-const orphan = (workspaceId: string, sourceWorkspaceId?: string) => ({
+const orphan = (workspaceId: string, status: "active" | "integrating" = "active") => ({
   version: 2 as const,
   repository: "/repo/.git",
   handle: {
@@ -218,72 +218,30 @@ const orphan = (workspaceId: string, sourceWorkspaceId?: string) => ({
     sourceRoot: "/project",
     artifactRoot: `/agent/${workspaceId}`,
     cwd: `/agent/${workspaceId}/worker`,
-    ...(sourceWorkspaceId !== undefined && { sourceWorkspaceId, checkoutRoot: "/project" }),
   },
-  status: "active" as const,
+  status,
   baseline: "abc",
   ownerLease: "ended-owner",
   lastChangedAt: 0,
 });
 
-describe("workspace apply leftovers and list", () => {
-  effectTest("warns when unresolved child workspaces keep the worker tree", function* () {
-    const args = { action: "apply", workspaceId: "ws-1", revisionId: "rev-1" } as const;
-    const result = yield* run(args, "parent", {
-      workspaceApply: () =>
-        Effect.succeed(
-          applied({
-            testing: "parent-tested",
-            retainedForChildren: ["ws-child-1", "ws-child-2"],
-          }),
-        ),
-    }).pipe(Effect.orDie);
-    expect(resultText(result)).toContain("ws-child-2");
-    const summary = summarize(args, result);
-    expect(summary?.outcome).toBe("warning");
-    expect(summary?.issues?.some((issue) => issue.detail?.includes("ws-child-1"))).toBe(true);
-    expectStyledIssues(summary);
-  });
-
-  effectTest("names nested sources and unresolvable source chains", function* () {
+describe("workspace list", () => {
+  effectTest("warns that unreadable records leave ownership and cleanup unknown", function* () {
     const args = { action: "list" } as const;
-    const result = yield* run(args, "parent", {
+    const result = yield* run(args, undefined, {
       workspaceList: () =>
         Effect.succeed({
-          records: [
-            {
-              version: 2,
-              repository: "/repo/.git",
-              handle: {
-                workspaceId: "ws-2",
-                ownerId: "root",
-                sourceCwd: "/agent/ws-1/worker",
-                sourceRoot: "/agent/ws-1/worker",
-                artifactRoot: "/agent/ws-2",
-                cwd: "/agent/ws-2/worker",
-                sourceWorkspaceId: "ws-1",
-                checkoutRoot: "/project",
-              },
-              status: "active",
-              baseline: "abc",
-              ownerLease: "owner",
-              lastChangedAt: 0,
-            },
-          ],
+          records: [orphan("ws-1")],
           unavailable: [
-            { workspaceId: "ws-3", status: "unavailable", reason: "source-workspace-unavailable" },
+            { workspaceId: "ws-3", status: "unavailable", reason: "recovery-record-unavailable" },
           ],
         }),
     }).pipe(Effect.orDie);
-    const text = resultText(result);
-    expect(text).toContain('"sourceWorkspaceId":"ws-1"');
-    expect(text).toContain("source-workspace-unavailable");
-    expect(result.details).toMatchObject({ unavailableCount: 1, sourceUnavailableCount: 1 });
+    expect(resultText(result)).toContain("recovery-record-unavailable");
+    expect(result.details).toMatchObject({ workspaceCount: 2, unavailableCount: 1 });
     const summary = summarize(args, result);
     expect(summary?.outcome).toBe("warning");
-    expect(summary?.issues?.map((issue) => issue.code)).not.toContain(
-      "workspace-records-unavailable",
-    );
+    expect(summary?.issues?.map((issue) => issue.code)).toContain("workspace-records-unavailable");
     expectStyledIssues(summary);
   });
 
@@ -292,7 +250,7 @@ describe("workspace apply leftovers and list", () => {
     const result = yield* run(args, undefined, {
       workspaceList: () =>
         Effect.succeed({
-          records: [orphan("ws-1"), orphan("ws-2", "ws-1")],
+          records: [orphan("ws-1"), orphan("ws-2", "integrating")],
           unavailable: [],
           orphans: new Map([
             ["ws-1", "adoptable" as const],

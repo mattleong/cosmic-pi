@@ -5,21 +5,11 @@ import {
   DEFAULT_SUBAGENT_NESTING_POLICY,
   type WriterWorkspaceMode,
 } from "../config/schema.ts";
-import type {
-  WorkspaceHandle,
-  WorkspaceLaunch,
-  WorkspaceRebase,
-  WorkspaceTarget,
-} from "../workspace/model.ts";
+import type { WorkspaceHandle, WorkspaceLaunch, WorkspaceRebase } from "../workspace/model.ts";
 import { processCapacityError, treeCapacityError } from "./admission.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
-import { isInactiveRunRecord, type RunRecord } from "./internal.ts";
-import {
-  isActiveRunState,
-  SUBAGENT_ROOT_RUN_ID,
-  type StartSubagentRequest,
-  type SubagentRunView,
-} from "./model.ts";
+import type { RunRecord } from "./internal.ts";
+import { SUBAGENT_ROOT_RUN_ID, type StartSubagentRequest, type SubagentRunView } from "./model.ts";
 import { runSessionOwned } from "./session-owned.ts";
 import { runWorktreeCreateHooks } from "./workspace-hooks.ts";
 import {
@@ -68,8 +58,6 @@ export interface WorkspaceRevised {
 
 interface LaunchSelection {
   readonly mode: WriterWorkspaceMode;
-  /** The nested caller's own workspace, whose worker tree is the new workspace's source. */
-  readonly sourceWorkspace?: WorkspaceTarget | undefined;
   readonly slotWait?: Deferred.Deferred<void>;
 }
 
@@ -166,7 +154,7 @@ const releaseRevisionLocked = ({ binding, revision }: Succession) => {
 export function workspaceLaunchOperations(context: WorkspaceControlContext) {
   const { records, withLock, isClosed, state, ownerFor, requireEngine, requireBinding } = context;
   const { engine } = context;
-  const { worktreeCreate, requireChildrenResolved } = context;
+  const { worktreeCreate } = context;
   const { operations, ownerScope } = context;
   const releaseSlotLocked = (slot: LaunchSlot | undefined) => {
     if (!slot || !state.launchSlots.delete(slot)) return;
@@ -215,26 +203,6 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
         ? state.slotReleased
         : undefined;
     });
-  /**
-   * The binding of an active Pi worktree writer that may own worktree writer children, judged
-   * only from the authenticated caller's own run record and launch facts.
-   */
-  const workspaceParentLocked = (caller: string): WorkspaceBinding | undefined => {
-    const record = records.get(caller);
-    if (!record || isInactiveRunRecord(record) || !isActiveRunState(record.view.state))
-      return undefined;
-    const { view } = record;
-    if (
-      view.runtime !== "pi" ||
-      view.writeIntent !== "writer" ||
-      view.writerWorkspaceMode !== "worktree" ||
-      view.workspaceId === undefined ||
-      record.launch.workspaceParent !== true
-    )
-      return undefined;
-    const binding = state.bindings.get(view.workspaceId);
-    return binding?.record === record && !isBindingFinished(binding) ? binding : undefined;
-  };
   const checkLaunchLocked = (
     request: StartSubagentRequest,
   ): Effect.Effect<LaunchSelection, SubagentError> =>
@@ -243,21 +211,20 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
         return yield* invalid("workspace_runtime_closed", "The subagent session is closed.");
       if (state.integrationQuarantined) return yield* integrationQuarantinedError();
       const caller = request.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
-      const parent = caller === SUBAGENT_ROOT_RUN_ID ? undefined : workspaceParentLocked(caller);
-      // The start item's isolation wins, and a worktree writer's own writers default to worktrees.
-      const mode = request.writerWorkspaceModeOverride ?? (parent ? "worktree" : state.mode);
+      // Only the root starts worktree writers. A nested writer shares its parent's checkout or
+      // worker tree, whatever the session default, unless its custom agent asks for a worktree.
+      if (caller !== SUBAGENT_ROOT_RUN_ID) {
+        if (request.writerWorkspaceModeOverride === "worktree")
+          return yield* invalid(
+            "workspace_nested_writer_unsupported",
+            "Only the root parent may start worktree writers, and this agent asks for one. Ask the root to launch this writer; nested read-only work and shared-checkout writers remain available.",
+          );
+        return { mode: "shared-checkout" };
+      }
+      const mode = request.writerWorkspaceModeOverride ?? state.mode;
       if (mode !== "worktree") return { mode };
-      if (caller !== SUBAGENT_ROOT_RUN_ID && !parent)
-        return yield* invalid(
-          "workspace_nested_writer_unsupported",
-          "Only the root parent or an active worktree writer may start worktree writers. Ask the root to launch this writer; nested read-only work and shared-checkout nesting remain available.",
-        );
-      const sourceWorkspace = parent && {
-        workspaceId: parent.handle.workspaceId,
-        ownerId: parent.handle.ownerId,
-      };
       const slotWait = yield* worktreeCapacityLocked(request, caller);
-      return { mode, sourceWorkspace, ...(slotWait && { slotWait }) };
+      return { mode, ...(slotWait && { slotWait }) };
     });
   const discardUnadmitted = (binding: WorkspaceBinding) => {
     const { workspaceId, ownerId } = binding.handle;
@@ -307,14 +274,14 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
           ),
         ),
       ).pipe(
-        Effect.flatMap(({ mode, sourceWorkspace, slotWait }) =>
+        Effect.flatMap(({ mode, slotWait }) =>
           slotWait
             ? restore(Deferred.await(slotWait)).pipe(Effect.andThen(() => select))
-            : Effect.succeed({ mode, sourceWorkspace }),
+            : Effect.succeed({ mode }),
         ),
       );
       return Effect.gen(function* () {
-        const { mode: selectedMode, sourceWorkspace } = yield* select;
+        const { mode: selectedMode } = yield* select;
         let binding: WorkspaceBinding | undefined;
         const onAcquired = (handle: WorkspaceHandle) => {
           if (binding?.handle === handle) return;
@@ -342,7 +309,6 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
               .create({
                 sourceCwd: request.cwd,
                 ownerId: ownerFor(caller),
-                sourceWorkspace,
                 launch: launchFacts(request),
                 onAcquired,
               })
@@ -524,7 +490,6 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
                     const binding = yield* requireBinding(workspaceId, caller);
                     const { state: current } = binding;
                     if (current.phase !== "idle") return yield* workspaceFinishedError();
-                    yield* requireChildrenResolved(binding);
                     const successor = binding.request
                       ? successorRequest(binding.request, message)
                       : resolved && adoptedSuccessor(resolved, binding, message);

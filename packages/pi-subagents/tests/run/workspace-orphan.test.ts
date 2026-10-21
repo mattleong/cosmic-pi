@@ -26,15 +26,14 @@ const orphan = (
   workspaceId: string,
   status: WorkspaceRecord["status"],
   extra: Partial<WorkspaceRecord> = {},
-  sourceWorkspaceId?: string,
 ): WorkspaceRecord => ({
   version: 2,
   repository: "/repo/.git",
   handle: {
     workspaceId,
     ownerId: "old-session/root",
-    sourceRoot: sourceWorkspaceId === undefined ? "/repo" : `/private/${sourceWorkspaceId}/worker`,
-    sourceCwd: sourceWorkspaceId === undefined ? "/repo" : `/private/${sourceWorkspaceId}/worker`,
+    sourceRoot: "/repo",
+    sourceCwd: "/repo",
     artifactRoot: `/private/${workspaceId}`,
     cwd: `/private/${workspaceId}/worker`,
     writerCwd: {
@@ -42,7 +41,6 @@ const orphan = (
       filesystemIdentity: `dev:1;ino:/private/${workspaceId}/worker`,
       digest: ORPHAN_DIGEST,
     },
-    ...(sourceWorkspaceId !== undefined && { sourceWorkspaceId, checkoutRoot: "/repo" }),
   },
   status,
   baseline: "baseline",
@@ -56,8 +54,6 @@ describe("orphaned workspace takeover", () => {
     const f = fixture();
     f.hooks.orphanOwnerEnded = true;
     f.entries.set("open", orphan("open", "frozen"));
-    f.entries.set("parent", orphan("parent", "active"));
-    f.entries.set("nested", orphan("nested", "active", {}, "parent"));
     f.entries.set("integrating", orphan("integrating", "integrating"));
     f.entries.set("done", orphan("done", "integrated"));
     return withService(f.layer, function* (service) {
@@ -65,7 +61,6 @@ describe("orphaned workspace takeover", () => {
       const { orphans } = yield* service.workspaceList();
       expect(Object.fromEntries(orphans ?? [])).toEqual({
         open: "adoptable",
-        nested: "discard-only",
         integrating: "discard-only",
       });
       expect(orphans?.has(own.workspaceId ?? "")).toBe(false);

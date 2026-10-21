@@ -22,8 +22,6 @@ export interface WorkspaceIntegrationOutcome {
   readonly treeRemovalFailed: boolean;
   readonly remainingBackupPaths: ReadonlyArray<string>;
   readonly leaseReleaseUnconfirmed: boolean;
-  /** Unresolved child workspaces created from the worker tree, which therefore stays. */
-  readonly retainedForChildren?: ReadonlyArray<string> | undefined;
 }
 
 /** A committed integration with what the coordinator knew of its revision and preparation. */
@@ -41,15 +39,6 @@ export function workspaceIntegrationOperations(
   publish: Effect.Effect<void>,
 ) {
   const { records, writerLeases: leases, state, requireBinding, requireEngine } = context;
-  const { requireChildrenResolved } = context;
-  /**
-   * The writer lease the integrating caller's own writer pool holds on its worker tree. A nested
-   * workspace integrates into that tree, so acquiring the lease again would conflict with it.
-   */
-  const callerHeldLeaseDigest = (caller: string): string | undefined => {
-    const pool = records.get(caller)?.writerPool;
-    return pool?.lease !== undefined && pool.members.has(caller) ? pool.cwd.digest : undefined;
-  };
   /**
    * Integrates the exact prepared pair. Callers hold the operations permit and run lock; `held`
    * admits a binding that operation's token keeps busy.
@@ -64,14 +53,12 @@ export function workspaceIntegrationOperations(
     Effect.gen(function* () {
       const binding = yield* requireBinding(workspaceId, caller, held);
       const service = yield* requireEngine;
-      yield* requireChildrenResolved(binding);
       if (state.integrationQuarantined)
         return yield* invalid(
           "workspace_integration_quarantined",
           "Integration ownership is quarantined; further integration is blocked pending manual recovery.",
         );
-      // Worktree launches need no check: the engine's source lock orders their snapshots. The
-      // caller is exempt, so a worktree writer can integrate its child into its own worker tree.
+      // Worktree launches need no check: the engine's source lock orders their snapshots.
       const { sourceRoot } = binding.handle;
       const overlapsTarget = (cwd: string) =>
         isWithin(cwd, sourceRoot) || isWithin(sourceRoot, cwd);
@@ -79,7 +66,6 @@ export function workspaceIntegrationOperations(
         [...state.sharedReservations].some((reservation) => overlapsTarget(reservation.cwd)) ||
         [...records.values()].some(
           (record) =>
-            record.view.id !== caller &&
             record.view.writeIntent === "writer" &&
             record.view.writerWorkspaceMode !== "worktree" &&
             overlapsTarget(record.view.cwd) &&
@@ -114,10 +100,9 @@ export function workspaceIntegrationOperations(
       const roots = yield* Effect.forEach(artifact.preparation.leaseDirectories, (cwd) =>
         leases.canonicalize(cwd).pipe(Effect.mapError(mapWorkspaceError)),
       );
-      const ownLease = callerHeldLeaseDigest(caller);
-      const sources = [...new Map(roots.map((cwd) => [cwd.digest, cwd])).values()]
-        .filter((cwd) => cwd.digest !== ownLease)
-        .toSorted((left, right) => left.digest.localeCompare(right.digest));
+      const sources = [...new Map(roots.map((cwd) => [cwd.digest, cwd])).values()].toSorted(
+        (left, right) => left.digest.localeCompare(right.digest),
+      );
       const retainTrees = [...runsWithin(records, [artifact.handle.artifactRoot]).keys()].some(
         runHoldsCwd,
       );

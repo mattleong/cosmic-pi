@@ -32,16 +32,13 @@ import type {
 
 export interface WorkspaceServiceContract {
   /**
-   * Snapshots `sourceCwd` into a new workspace. A source inside private workspace storage must be
-   * `sourceWorkspace`'s live, active worker tree or a directory in it; the new workspace then
-   * integrates into that tree, and the source's worker tree is kept until it is resolved.
+   * Snapshots `sourceCwd`, which must be outside private workspace storage, into a new workspace.
    * Untracked files the source's top-level `.worktreeinclude` matches and the baseline doesn't
    * carry are copied into the worker tree and every test tree, never into revisions.
    */
   readonly create: (input: {
     readonly sourceCwd: string;
     readonly ownerId: string;
-    readonly sourceWorkspace?: WorkspaceTarget | undefined;
     /** Recorded so a session that adopts the workspace can revise it with the same launch. */
     readonly launch?: WorkspaceLaunch | undefined;
     readonly onAcquired?: WorkspaceAcquired | undefined;
@@ -77,12 +74,11 @@ export interface WorkspaceServiceContract {
     target: WorkspaceOrphanDiscardTarget,
   ) => Effect.Effect<void, WorkspaceError>;
   /**
-   * Takes over an active, frozen, or prepared top-level orphan whose creating session provably
-   * ended and that has no unresolved children; the caller proves its writer stopped. Returns the
-   * handle naming the new owner.
+   * Takes over an active, frozen, or prepared orphan whose creating session provably ended; the
+   * caller proves its writer stopped. Returns the handle naming the new owner.
    */
   readonly adopt: (target: WorkspaceAdoptTarget) => Effect.Effect<WorkspaceHandle, WorkspaceError>;
-  /** Orphans unchanged for the minimum age that the sweep may discard, children first. */
+  /** Orphans unchanged for the minimum age that the sweep may discard. */
   readonly sweepCandidates: (input: {
     readonly minimumAgeMillis: number;
   }) => Effect.Effect<ReadonlyArray<WorkspaceRecord>, WorkspaceError>;
@@ -119,10 +115,6 @@ export interface WorkspaceServiceContract {
   readonly revision: (
     target: WorkspaceTarget,
   ) => Effect.Effect<WorkspaceRevision | undefined, WorkspaceError>;
-  /** Workspaces created from this one's worker tree that are neither integrated nor discarded. */
-  readonly unresolvedChildren: (
-    target: WorkspaceOrphanTarget,
-  ) => Effect.Effect<ReadonlyArray<string>, WorkspaceError>;
   /**
    * Whether the durable hook marker is set: a worktree hook is running in one of the workspace's
    * trees, or its process cleanup is unconfirmed.
@@ -204,7 +196,6 @@ export class WorkspaceService extends Context.Service<WorkspaceService, Workspac
           revision: (input) => run(engine.revision(input)),
           // Lock-free reads: callers check them under the run lock, so they never wait behind
           // engine work, and this process's in-flight creates are tracked by their launches.
-          unresolvedChildren: (input) => provided(engine.unresolvedChildren(input)),
           hookCleanupPending: (input) => provided(engine.hookCleanupPending(input)),
           list: (input) => run(engine.list(input)),
           listRecords: run(engine.listRecords),

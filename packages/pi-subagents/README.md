@@ -11,7 +11,7 @@ Background subagents for Pi on macOS and Linux. The main agent delegates work to
 - **Two-way supervision:** children can ask the parent questions and report progress; the parent can answer or guide them, interrupt, resume, or stop them.
 - **Agent messaging:** any agent in the session can list, message, and read any other, including the main agent.
 - **Nesting:** children can launch their own subagents, up to depth 3 with 12 direct children each by default.
-- **Safe parallel writes:** per writer, either share the checkout with other writers on disjoint task scopes, or work in an isolated worktree whose proposal the parent applies in one step (wholly or file by file), or reviews and tests before applying. Proposals can also be revised onto the parent's current files.
+- **Safe parallel writes:** per writer, either share the checkout with other writers on disjoint task scopes, or work in an isolated worktree whose proposal the parent applies in one step, or reviews and tests before applying. Proposals can also be revised onto the parent's current files.
 - **Live view:** a run tree above the editor and the shared Activity manager, where you can also rename runs.
 
 ## Install

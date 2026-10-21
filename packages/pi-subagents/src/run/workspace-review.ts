@@ -19,7 +19,6 @@ import {
   settleBinding,
   settledState,
   updateKnowledge,
-  type WorkspaceAccess,
   type WorkspaceBinding,
   workspaceBusyError,
   type WorkspaceControlContext,
@@ -121,22 +120,16 @@ export function workspaceReviewOperations(
 ) {
   const { records, withLock, state, requireBinding, requireEngine, operations, worktreeCreate } =
     context;
-  const { requireChildrenResolved } = context;
-  /**
-   * Marks the binding busy for `use`, so resume, revise, and other operations refuse it. A
-   * workspace that is the source of unresolved child workspaces is refused.
-   */
+  /** Marks the binding busy for `use`, so resume, revise, and other operations refuse it. */
   const hold = <A>(
     workspaceId: string,
     caller: string,
     use: (held: HeldBinding) => Effect.Effect<A, SubagentError>,
-    access?: WorkspaceAccess,
   ): Effect.Effect<A, SubagentError> =>
     Effect.acquireUseRelease(
       withLock(
         Effect.gen(function* () {
-          const binding = yield* requireBinding(workspaceId, caller, undefined, access);
-          yield* requireChildrenResolved(binding);
+          const binding = yield* requireBinding(workspaceId, caller);
           const settled = settledState(binding);
           if (!settled) return yield* workspaceBusyError();
           const token = Symbol("workspace operation");
@@ -171,9 +164,7 @@ export function workspaceReviewOperations(
     workspaceId: string,
     caller: string,
     use: (held: HeldBinding) => Effect.Effect<A, SubagentError>,
-    access?: WorkspaceAccess,
-  ): Effect.Effect<A, SubagentError> =>
-    operations.withPermits(1)(hold(workspaceId, caller, use, access));
+  ): Effect.Effect<A, SubagentError> => operations.withPermits(1)(hold(workspaceId, caller, use));
   const reviewedRevision = (
     service: WorkspaceServiceContract,
     binding: WorkspaceBinding,
@@ -376,13 +367,8 @@ export function workspaceReviewOperations(
   ): Effect.Effect<void, SubagentError> =>
     Effect.gen(function* () {
       const service = yield* requireEngine;
-      // Once the direct parent is inactive, the root or its ancestors may discard, never integrate.
-      yield* operate(
-        workspaceId,
-        caller,
-        ({ binding, heldLocked }) =>
-          withLock(heldLocked().pipe(Effect.andThen(discardLocked(service, binding)))),
-        "discard",
+      yield* operate(workspaceId, caller, ({ binding, heldLocked }) =>
+        withLock(heldLocked().pipe(Effect.andThen(discardLocked(service, binding)))),
       );
     });
   return {

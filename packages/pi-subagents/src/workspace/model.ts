@@ -36,15 +36,8 @@ const WorkspaceHandleSchema = Schema.Struct({
       digest: Schema.String,
     }),
   ),
-  /** The workspace whose worker tree is this one's source; absent for a real checkout. */
-  sourceWorkspaceId: Schema.optional(Schema.String),
-  /** The real checkout at the top of a nested chain; absent when `sourceRoot` is that checkout. */
-  checkoutRoot: Schema.optional(Schema.String),
 });
 export type WorkspaceHandle = typeof WorkspaceHandleSchema.Type;
-/** The real checkout a workspace ultimately comes from, through any chain of nested sources. */
-export const workspaceCheckoutRoot = (handle: WorkspaceHandle) =>
-  handle.checkoutRoot ?? handle.sourceRoot;
 /**
  * Whether the worker path still names the directory the original writer lease was taken on.
  * Without that identity no one can prove a writer stopped there, so nothing may take it over.
@@ -157,8 +150,7 @@ export const OPEN_WORKSPACE_STATUSES: ReadonlySet<WorkspaceRecord["status"]> = n
 export const UnavailableWorkspaceArtifactSchema = Schema.Struct({
   workspaceId: Schema.String,
   status: Schema.Literal("unavailable"),
-  /** An unreadable record, or a nested record whose source workspace chain can't be resolved. */
-  reason: Schema.Literals(["recovery-record-unavailable", "source-workspace-unavailable"]),
+  reason: Schema.Literal("recovery-record-unavailable"),
 });
 export type UnavailableWorkspaceArtifact = typeof UnavailableWorkspaceArtifactSchema.Type;
 export interface WorkspaceListing {
@@ -236,7 +228,5 @@ export interface WorkspaceIntegration {
   readonly treeRemovalFailed: boolean;
   /** Preimage backups left in the source checkout because deleting them failed. */
   readonly remainingBackupPaths: ReadonlyArray<string>;
-  /** Unresolved child workspaces created from the worker tree, which therefore stays. */
-  readonly retainedForChildren?: ReadonlyArray<string> | undefined;
 }
 export type WorkspaceAcquired = (handle: WorkspaceHandle) => void;

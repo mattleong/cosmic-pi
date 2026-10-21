@@ -48,25 +48,10 @@ const isCoordinationTool = (name: string): boolean => COORDINATION_TOOL_NAME_SET
 export const isAgentToolName = (name: string): name is AgentToolName =>
   AGENT_TOOL_NAME_SET.has(name);
 
-/** Nested children that are not worktree writers have no workspaces to review or apply. */
-export const NESTED_SUBAGENT_TOOL_NAMES = Object.freeze(
+/** Only the root starts worktree writers, so nested children have no workspaces to apply. */
+export const NESTED_SUBAGENT_TOOL_NAMES: ReadonlyArray<SubagentToolName> = Object.freeze(
   SUBAGENT_TOOL_NAMES.filter((name) => name !== SUBAGENT_TOOL_NAME.workspace),
 );
-
-/**
- * An admitted Pi worktree writer may own worktree writer children through the root coordinator,
- * which rechecks that authority on every proxied call.
- */
-export const isWorkspaceParentRequest = (request: StartSubagentRequest): boolean =>
-  request.runtime === "pi" &&
-  request.writeIntent === "writer" &&
-  request.writerWorkspaceMode === "worktree" &&
-  request.workspace !== undefined;
-
-export const nestedSubagentToolNames = (
-  workspaceParent: boolean,
-): ReadonlyArray<SubagentToolName> =>
-  workspaceParent ? SUBAGENT_TOOL_NAMES : NESTED_SUBAGENT_TOOL_NAMES;
 
 // pi-intercom's cross-session tools belong to main agents only; subagents never reach another root.
 const CROSS_SESSION_TOOL_NAMES: ReadonlySet<string> = new Set([
@@ -169,11 +154,6 @@ export const childSystemPrompt = (request: StartSubagentRequest): string =>
           "You work in an isolated workspace, named with your task. Work only there; don't write into the source checkout or another worker's directory.",
           "Your changes are a proposal: don't stage, commit, merge, or integrate them. Your parent reviews or tests them before applying them. The isolation is not a security sandbox.",
           "The workspace is a Git worktree on a detached HEAD that shares its repository with the parent's checkout. Stay on that detached HEAD: don't create or switch branches, use git stash, change Git config, or run git worktree commands, because each would change the parent's repository.",
-        ]
-      : []),
-    ...(isWorkspaceParentRequest(request)
-      ? [
-          "You may start worktree writer children (isolation: worktree) for parallel slices of your task. Their worktrees are yours: apply each one into your own worktree with agent_worktree, or discard it. Apply or discard every child worktree before you report, because unresolved child worktrees block your parent's integration.",
         ]
       : []),
     request.writeIntent === "writer"

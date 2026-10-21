@@ -1,11 +1,6 @@
 import * as Effect from "effect/Effect";
 import type { WriterWorkspaceMode } from "../config/schema.ts";
-import {
-  type WorkspaceListing,
-  type WorkspaceRecord,
-  type WorkspaceSwept,
-  workspaceCheckoutRoot,
-} from "../workspace/model.ts";
+import type { WorkspaceListing, WorkspaceRecord, WorkspaceSwept } from "../workspace/model.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
 import type { RunContext } from "./internal.ts";
 import { SUBAGENT_ROOT_RUN_ID } from "./model.ts";
@@ -118,11 +113,9 @@ export function workspaceControl(
       return {
         unavailable: listing.unavailable,
         endedOwners: listing.endedOwners,
-        // A nested workspace belongs to the real checkout at the top of its chain.
         records: entries.filter(
           (record) =>
-            owned(record) ||
-            (source !== undefined && isWithin(source, workspaceCheckoutRoot(record.handle))),
+            owned(record) || (source !== undefined && isWithin(source, record.handle.sourceRoot)),
         ),
       };
     });
@@ -249,7 +242,7 @@ export function workspaceControl(
         ? orphans.adopt(workspaceId).pipe(Effect.andThen(operation))
         : context.awaitWriterCleanup(workspaceId).pipe(Effect.andThen(operation)),
     );
-  // An orphan is discarded without adoption, so nested and mid-integration orphans can go too.
+  // An orphan is discarded without adoption, so mid-integration orphans can go too.
   const workspaceDiscard: WorkspaceCoordinatorContract["workspaceDiscard"] = (
     workspaceId,
     caller = SUBAGENT_ROOT_RUN_ID,

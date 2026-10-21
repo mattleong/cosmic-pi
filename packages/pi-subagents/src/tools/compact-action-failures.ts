@@ -25,7 +25,7 @@ const START_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
   SCRIPTED_WRITER_RECOVERY,
   [
     ["workspace_nested_writer_unsupported"],
-    'Set isolation: "shared-checkout" for this writer, or ask the root to launch it in a worktree.',
+    "Ask the root to launch this writer in a worktree, or start a writer that shares your directory.",
   ],
   [
     ["isolation_requires_writer"],

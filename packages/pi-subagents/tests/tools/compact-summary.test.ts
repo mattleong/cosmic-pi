@@ -356,7 +356,7 @@ describe("subagent compact semantic policy", () => {
 describe("failure recovery routing", () => {
   it("routes a start failure by its exact code before broader code fragments", () => {
     for (const [code, knob] of [
-      ["workspace_nested_writer_unsupported", "shared-checkout"],
+      ["workspace_nested_writer_unsupported", "root"],
       ["isolation_requires_writer", "isolation"],
       ["session_spend_limit", "sessionSpendLimit"],
     ] as const)

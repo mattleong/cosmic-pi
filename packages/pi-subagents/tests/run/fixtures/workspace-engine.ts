@@ -6,10 +6,8 @@ import {
   type WriterLeaseContract,
   WriterLeaseService,
 } from "../../../src/boundary/writer-lease.ts";
-import { isWithin } from "../../../src/run/workspace-binding.ts";
 import {
   WorkspaceError,
-  workspaceCheckoutRoot,
   type UnavailableWorkspaceArtifact,
   type WorkspaceIntegrationTarget,
   type WorkspaceRebase,
@@ -183,51 +181,11 @@ export function workspaceFixture({
         }),
       ),
     );
-  // Like the real engine, children are the unfinished workspaces created from a worker tree.
-  const childrenOf = (workspaceId: string) =>
-    [...entries.values()].flatMap((entry) =>
-      entry.handle.sourceWorkspaceId === workspaceId && !finished(entry)
-        ? [entry.handle.workspaceId]
-        : [],
-    );
-  // A nested workspace prepares and integrates only into a still-open source worker tree.
-  const requireOpenSource = (entry: WorkspaceRecord, operation: string) => {
-    const sourceId = entry.handle.sourceWorkspaceId;
-    const source = sourceId === undefined ? undefined : entries.get(sourceId);
-    return sourceId === undefined ||
-      (source && ["active", "frozen", "prepared"].includes(source.status))
-      ? Effect.succeed(entry)
-      : refuse(operation, "The source workspace's worker tree is no longer open.");
-  };
-  // Like the real engine, a private source must be the named source workspace's active worker tree.
-  const nestedSource = (input: Parameters<WorkspaceServiceContract["create"]>[0]) =>
-    Effect.gen(function* () {
-      const named = input.sourceWorkspace;
-      if (!named) {
-        if (input.sourceCwd.startsWith("/private/"))
-          return yield* refuse(
-            "create",
-            "The session directory is inside private workspace storage.",
-          );
-        return { sourceRoot: input.sourceCwd };
-      }
-      const parent = entries.get(named.workspaceId);
-      if (
-        !parent ||
-        parent.handle.ownerId !== named.ownerId ||
-        parent.status !== "active" ||
-        !isWithin(input.sourceCwd, parent.handle.cwd)
-      )
-        return yield* refuse(
-          "create",
-          "The session directory isn't the source workspace's worker tree.",
-        );
-      return {
-        sourceRoot: parent.handle.cwd,
-        sourceWorkspaceId: parent.handle.workspaceId,
-        checkoutRoot: workspaceCheckoutRoot(parent.handle),
-      };
-    });
+  // Like the real engine, a source inside private workspace storage is refused.
+  const checkoutSource = (input: Parameters<WorkspaceServiceContract["create"]>[0]) =>
+    input.sourceCwd.startsWith("/private/")
+      ? refuse("create", "The session directory is inside private workspace storage.")
+      : Effect.succeed({ sourceRoot: input.sourceCwd });
   // Like the real engine, a record another session created whose owner lease is free.
   const orphaned = (entry: WorkspaceRecord) =>
     hooks.orphanOwnerEnded === true &&
@@ -238,11 +196,6 @@ export function workspaceFixture({
     isOpen(entry) &&
     entry.hookCleanupPending === undefined &&
     now - entry.lastChangedAt >= minimumAgeMillis;
-  const depth = (entry: WorkspaceRecord): number => {
-    const source = entry.handle.sourceWorkspaceId;
-    const parent = source === undefined ? undefined : entries.get(source);
-    return parent ? depth(parent) + 1 : 0;
-  };
   let ordinal = 0;
   let revisions = 0;
   let preparations = 0;
@@ -254,7 +207,7 @@ export function workspaceFixture({
           hooks.createFailure ? Effect.fail(hooks.createFailure) : Effect.void,
         ),
       ).pipe(
-        Effect.andThen(nestedSource(input)),
+        Effect.andThen(checkoutSource(input)),
         Effect.flatMap((source) =>
           Effect.gen(function* () {
             const workspaceId = `workspace-${++ordinal}`;
@@ -326,7 +279,6 @@ export function workspaceFixture({
             return revision && diff !== undefined ? { ...revision, diff } : undefined;
           }),
         ),
-      unresolvedChildren: ({ workspaceId }) => Effect.sync(() => childrenOf(workspaceId)),
       hookCleanupPending: ({ workspaceId }) =>
         Effect.sync(() => entries.get(workspaceId)?.hookCleanupPending !== undefined),
       list: ({ ownerId }) =>
@@ -368,7 +320,6 @@ export function workspaceFixture({
         ),
       prepare: (target) =>
         gated("prepare", requireEntry(target)).pipe(
-          Effect.flatMap((entry) => requireOpenSource(entry, "prepare")),
           Effect.map((entry) => {
             const preparationId = `prepared-${++preparations}`;
             const preparation = {
@@ -383,7 +334,6 @@ export function workspaceFixture({
         ),
       integrate: (target) =>
         requireEntry(target).pipe(
-          Effect.flatMap((entry) => requireOpenSource(entry, "integrate")),
           Effect.tap((entry) =>
             hooks.integrateStops
               ? Effect.sync(() =>
@@ -427,22 +377,17 @@ export function workspaceFixture({
           const entry = entries.get(workspaceId);
           if (entry?.status === "integrating" && !sourceLeasesHeld)
             return refuse("discard", "The workspace was left mid-integration.");
-          if (childrenOf(workspaceId).length > 0)
-            return refuse("discard", "Unresolved child workspaces use this worker tree.");
           if (!entry || !hooks.orphanOwnerEnded) return ownerRunning();
           if (entry.status === "integrating") rollbacks.push(workspaceId);
           entries.set(workspaceId, { ...entry, status: "discarded" });
           return Effect.void;
         }),
-      // Like the real engine, only an open top-level orphan without children is adopted.
+      // Like the real engine, only an open orphan is adopted.
       adopt: ({ workspaceId, ownerId }) =>
         Effect.suspend(() => {
           const entry = entries.get(workspaceId);
           if (!entry || !hooks.orphanOwnerEnded) return ownerRunning();
-          if (entry.handle.sourceWorkspaceId !== undefined || !isOpen(entry))
-            return refuse("adopt", "The orphan can only be discarded.");
-          if (childrenOf(workspaceId).length > 0)
-            return refuse("discard", "Unresolved child workspaces use this worker tree.");
+          if (!isOpen(entry)) return refuse("adopt", "The orphan can only be discarded.");
           const handle = { ...entry.handle, ownerId };
           entries.set(workspaceId, { ...entry, handle });
           return Effect.succeed(handle);
@@ -450,21 +395,14 @@ export function workspaceFixture({
       sweepCandidates: ({ minimumAgeMillis }) =>
         Clock.currentTimeMillis.pipe(
           Effect.map((now) =>
-            [...entries.values()]
-              .filter((entry) => sweepable(entry, minimumAgeMillis, now))
-              .toSorted((left, right) => depth(right) - depth(left)),
+            [...entries.values()].filter((entry) => sweepable(entry, minimumAgeMillis, now)),
           ),
         ),
       sweepOrphan: ({ workspaceId, minimumAgeMillis }) =>
         Clock.currentTimeMillis.pipe(
           Effect.map((now) => {
             const entry = entries.get(workspaceId);
-            if (
-              !entry ||
-              !sweepable(entry, minimumAgeMillis, now) ||
-              childrenOf(workspaceId).length > 0
-            )
-              return undefined;
+            if (!entry || !sweepable(entry, minimumAgeMillis, now)) return undefined;
             entries.set(workspaceId, {
               ...entry,
               status: "discarded",
@@ -473,7 +411,7 @@ export function workspaceFixture({
             });
             return {
               workspaceId,
-              sourceRoot: workspaceCheckoutRoot(entry.handle),
+              sourceRoot: entry.handle.sourceRoot,
               changedPathCount: entry.revision?.changedPaths.length ?? 0,
               patchPath: `/private/${workspaceId}/revision.diff`,
             };
@@ -482,15 +420,13 @@ export function workspaceFixture({
       discard: (target) =>
         gated("discard", requireEntry(target)).pipe(
           Effect.flatMap((entry) =>
-            childrenOf(target.workspaceId).length > 0
-              ? refuse("discard", "Unresolved child workspaces use this worker tree.")
-              : hooks.failDiscard
-                ? Effect.fail(
-                    new WorkspaceError({ operation: "discard", message: "Fixture failure" }),
-                  )
-                : Effect.sync(() => {
-                    entries.set(target.workspaceId, { ...entry, status: "discarded" });
-                  }),
+            hooks.failDiscard
+              ? Effect.fail(
+                  new WorkspaceError({ operation: "discard", message: "Fixture failure" }),
+                )
+              : Effect.sync(() => {
+                  entries.set(target.workspaceId, { ...entry, status: "discarded" });
+                }),
           ),
         ),
     };
