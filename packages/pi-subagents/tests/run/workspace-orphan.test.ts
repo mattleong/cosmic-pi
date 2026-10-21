@@ -35,6 +35,7 @@ const orphan = (
     ownerId: "old-session/root",
     sourceRoot: sourceWorkspaceId === undefined ? "/repo" : `/private/${sourceWorkspaceId}/worker`,
     sourceCwd: sourceWorkspaceId === undefined ? "/repo" : `/private/${sourceWorkspaceId}/worker`,
+    artifactRoot: `/private/${workspaceId}`,
     cwd: `/private/${workspaceId}/worker`,
     writerCwd: {
       path: `/private/${workspaceId}/worker`,

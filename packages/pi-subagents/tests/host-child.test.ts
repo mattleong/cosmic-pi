@@ -439,6 +439,7 @@ const workspace = {
   ownerId: "session-1/root",
   sourceCwd: "/repo",
   sourceRoot: "/repo",
+  artifactRoot: "/private/ws-child",
   cwd: "/private/ws-child",
 };
 

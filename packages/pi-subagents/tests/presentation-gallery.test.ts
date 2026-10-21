@@ -901,6 +901,7 @@ const workspaceRecord: WorkspaceRecord = {
     ownerId: "root",
     sourceCwd: "/project",
     sourceRoot: "/project",
+    artifactRoot: "/project/.pi-subagents/worktrees/ws-1",
     cwd: "/project/.pi-subagents/worktrees/ws-1",
   },
   status: "frozen",

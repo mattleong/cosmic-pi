@@ -25,6 +25,7 @@ it.live(
           ownerId: "parent",
           sourceCwd: "/source",
           sourceRoot: "/source",
+          artifactRoot: "/private",
           cwd: "/private/worker",
         },
         status: "frozen",

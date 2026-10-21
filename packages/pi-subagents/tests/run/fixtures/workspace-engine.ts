@@ -267,6 +267,7 @@ export function workspaceFixture({
               ownerId: input.ownerId,
               sourceCwd: input.sourceCwd,
               ...source,
+              artifactRoot: `/private/${workspaceId}`,
               cwd: `/private/${workspaceId}/worker`,
               writerCwd: yield* leases
                 .canonicalize(`/private/${workspaceId}/worker`)

@@ -25,6 +25,7 @@ const record = (workspaceId: string): WorkspaceRecord => ({
     ownerId: "parent",
     sourceRoot: "/source",
     sourceCwd: "/source",
+    artifactRoot: "/private",
     cwd: "/private/worker",
   },
   status: "active",

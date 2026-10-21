@@ -1,12 +1,14 @@
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import type { WriterLease } from "../boundary/writer-lease.ts";
-import type {
-  WorkspaceError,
-  WorkspaceHandle,
-  WorkspaceListing,
-  WorkspaceRecord,
-  WorkspaceSwept,
+import {
+  isOriginalWorker,
+  OPEN_WORKSPACE_STATUSES,
+  type WorkspaceError,
+  type WorkspaceHandle,
+  type WorkspaceListing,
+  type WorkspaceRecord,
+  type WorkspaceSwept,
 } from "../workspace/model.ts";
 import type { WorkspaceServiceContract } from "../workspace/service.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
@@ -30,12 +32,6 @@ const ORPHAN_SWEEP_AGE = Duration.days(30);
  */
 export type OrphanDisposition = "adoptable" | "discard-only";
 
-const OPEN_STATUSES: ReadonlySet<WorkspaceRecord["status"]> = new Set([
-  "active",
-  "frozen",
-  "prepared",
-]);
-
 /**
  * The listing's verdict for one record, from its advisory owner probe; adoption and discard
  * recheck everything under the checkout's lock.
@@ -57,7 +53,7 @@ export const orphanDisposition = (
     )
   )
     return undefined;
-  return record.handle.sourceWorkspaceId === undefined && OPEN_STATUSES.has(record.status)
+  return record.handle.sourceWorkspaceId === undefined && OPEN_WORKSPACE_STATUSES.has(record.status)
     ? "adoptable"
     : "discard-only";
 };
@@ -120,7 +116,7 @@ export function workspaceOrphanOperations(
                 ),
               ),
               Effect.flatMap((current) =>
-                current.filesystemIdentity === handle.writerCwd?.filesystemIdentity
+                isOriginalWorker(handle, current)
                   ? use
                   : Effect.fail(
                       invalid(

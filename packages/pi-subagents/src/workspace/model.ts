@@ -25,6 +25,8 @@ const WorkspaceHandleSchema = Schema.Struct({
   ownerId: Schema.String,
   sourceCwd: Schema.String,
   sourceRoot: Schema.String,
+  /** The workspace's private directory, which holds its record, patch, and every tree. */
+  artifactRoot: Schema.String,
   cwd: Schema.String,
   /** Original writer-lease identity; absent until creation has made the worker tree ready. */
   writerCwd: Schema.optional(
@@ -43,6 +45,16 @@ export type WorkspaceHandle = typeof WorkspaceHandleSchema.Type;
 /** The real checkout a workspace ultimately comes from, through any chain of nested sources. */
 export const workspaceCheckoutRoot = (handle: WorkspaceHandle) =>
   handle.checkoutRoot ?? handle.sourceRoot;
+/**
+ * Whether the worker path still names the directory the original writer lease was taken on.
+ * Without that identity no one can prove a writer stopped there, so nothing may take it over.
+ */
+export const isOriginalWorker = (
+  handle: WorkspaceHandle,
+  current: { readonly filesystemIdentity: string },
+) =>
+  handle.writerCwd !== undefined &&
+  handle.writerCwd.filesystemIdentity === current.filesystemIdentity;
 /** A frozen revision as its record keeps it; the patch is stored in a file beside the record. */
 const WorkspaceRevisionMetadataSchema = Schema.Struct({
   revisionId: Schema.String,
@@ -137,6 +149,12 @@ export const WorkspaceRecordSchema = Schema.Struct({
   disposition: Schema.optional(Schema.Literal("orphan-swept")),
 });
 export type WorkspaceRecord = typeof WorkspaceRecordSchema.Type;
+/** Statuses with an open worker tree, which a writer, revision, or adopting session may continue. */
+export const OPEN_WORKSPACE_STATUSES: ReadonlySet<WorkspaceRecord["status"]> = new Set([
+  "active",
+  "frozen",
+  "prepared",
+]);
 
 export const UnavailableWorkspaceArtifactSchema = Schema.Struct({
   workspaceId: Schema.String,

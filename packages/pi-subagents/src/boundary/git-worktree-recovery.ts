@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import type { SafeFile } from "pi-cosmic-core";
 import {
+  isOriginalWorker,
   workspaceCheckoutRoot,
   type UnavailableWorkspaceArtifact,
   type WorkspaceError,
@@ -28,6 +29,31 @@ import {
   validWorkspaceId,
   workspaceDirectory,
 } from "./git-worktree-store.ts";
+
+/**
+ * Refuses unless the worker path still names its original writer-directory identity. The caller
+ * holds the original writer lease, so a matching identity proves no writer is left there.
+ */
+export const requireOriginalWorker = (record: WorkspaceRecord, operation: string) =>
+  Effect.gen(function* () {
+    const refusal = () =>
+      workspaceRefusal(
+        operation,
+        `The original worker directory changed; ${operation} is unsafe.`,
+        {
+          path: record.handle.cwd,
+          rule: "an orphan's worker path must still name its original writer-directory identity",
+          remedy:
+            "Preserve both trees and the recovery record. Independently confirm every writer and descendant has stopped, then recover the artifact manually.",
+        },
+      );
+    if (record.handle.writerCwd === undefined) return yield* refusal();
+    const current = yield* canonicalizeWriterDirectory(record.handle.cwd).pipe(
+      Effect.mapError(refusal),
+    );
+    if (!isOriginalWorker(record.handle, current)) return yield* refusal();
+    return undefined;
+  });
 
 const editableTreeName = (name: string) =>
   name === "worker" || /^prepare-[a-f0-9-]{36}$/u.test(name);
@@ -66,23 +92,9 @@ export const removeWorkspaceTrees = (
     for (const tree of trees.toSorted(
       (left, right) => Number(left === worker) - Number(right === worker),
     )) {
-      if (options.requireOriginalWorker) {
-        const refusal = () =>
-          workspaceRefusal("discard", "The original worker directory changed; discard is unsafe.", {
-            path: record.handle.cwd,
-            rule: "orphan cleanup must still name the original writer-directory identity",
-            remedy:
-              "Preserve both trees and the recovery record. Independently confirm every writer and descendant has stopped, then recover the artifact manually.",
-          });
-        const original = record.handle.writerCwd;
-        if (!original) return yield* refusal();
-        // Service, source-lock, and owner-lease checks can all wait. Revalidate at removal,
-        // not merely before entering the engine, while the original writer lease is held.
-        const current = yield* canonicalizeWriterDirectory(record.handle.cwd).pipe(
-          Effect.mapError(refusal),
-        );
-        if (current.filesystemIdentity !== original.filesystemIdentity) return yield* refusal();
-      }
+      // Service, source-lock, and owner-lease checks can all wait. Revalidate at removal,
+      // not merely before entering the engine, while the original writer lease is held.
+      if (options.requireOriginalWorker) yield* requireOriginalWorker(record, "discard");
       if (options.beforeRemove) yield* options.beforeRemove(record, tree);
       yield* removeWorkspaceTree(registry, record, tree, listed);
     }

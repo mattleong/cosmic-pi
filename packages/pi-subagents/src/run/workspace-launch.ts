@@ -35,7 +35,6 @@ import {
   runsWithin,
   type SharedReservation,
   UNREVIEWED,
-  workspaceArtifactDirectory,
   type WorkspaceBinding,
   type WorkspaceControlContext,
   workspaceBusyError,
@@ -396,14 +395,13 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
       const { workspaceId, ownerId } = binding.handle;
       yield* withLock(
         Effect.gen(function* () {
-          const directory = workspaceArtifactDirectory(binding.handle);
-          if (!holdsRevision(held) || !directory)
+          if (!holdsRevision(held))
             return yield* invalid(
               "workspace_owner_unavailable",
               "The revision that requested this rebase no longer holds its workspace.",
             );
           // A rebase removes and rewrites the worker's files, like discard removes them.
-          if ([...runsWithin(records, [directory]).keys()].some(runHoldsCwd))
+          if ([...runsWithin(records, [binding.handle.artifactRoot]).keys()].some(runHoldsCwd))
             return yield* invalid(
               "workspace_process_unsettled",
               "A run still uses this workspace's tree. Stop it and confirm cleanup before a rebase rebuilds the tree.",

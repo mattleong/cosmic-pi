@@ -8,6 +8,7 @@ const workspace = (cwd: string) => ({
   ownerId: "root",
   sourceCwd: "/repo",
   sourceRoot: "/repo",
+  artifactRoot: cwd,
   cwd,
 });
 

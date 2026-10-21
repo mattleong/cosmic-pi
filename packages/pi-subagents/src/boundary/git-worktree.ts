@@ -5,7 +5,11 @@ import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import { CrossProcessLock, type CrossProcessLease, type SafeFile } from "pi-cosmic-core";
 import type { WorktreeHook } from "../config/schema.ts";
-import { WorkspaceError, workspaceCheckoutRoot } from "../workspace/model.ts";
+import {
+  OPEN_WORKSPACE_STATUSES,
+  WorkspaceError,
+  workspaceCheckoutRoot,
+} from "../workspace/model.ts";
 import { partialSelection } from "../workspace/policy.ts";
 import { canonicalizeWriterDirectory } from "./writer-lease.ts";
 import { runWorktreeHook } from "./worktree-hook.ts";
@@ -299,6 +303,7 @@ export const gitWorkspaceEngine = (
           relative === ".." ||
           relative.startsWith(`..${path.sep}`) ||
           path.isAbsolute(relative) ||
+          record.handle.artifactRoot !== directory(record) ||
           record.handle.cwd !== path.join(worker(record), relative)
         )
           return yield* workspaceFailure(
@@ -347,7 +352,7 @@ export const gitWorkspaceEngine = (
         if (sourceId === undefined) return undefined;
         const source = yield* managedRecord(sourceId);
         if (
-          !["active", "frozen", "prepared"].includes(source.status) ||
+          !OPEN_WORKSPACE_STATUSES.has(source.status) ||
           worker(source) !== record.handle.sourceRoot
         )
           return yield* workspaceRefusal(
@@ -395,6 +400,7 @@ export const gitWorkspaceEngine = (
           ownerId: input.ownerId,
           sourceCwd: source.sourceCwd,
           sourceRoot: source.sourceRoot,
+          artifactRoot: dir,
           cwd: path.join(dir, "worker", source.subdirectory),
           ...(source.sourceWorkspaceId !== undefined && {
             sourceWorkspaceId: source.sourceWorkspaceId,
@@ -974,7 +980,7 @@ export const gitWorkspaceEngine = (
     ) {
       yield* settled(target);
       const record = yield* checked(target);
-      if (!["active", "frozen", "prepared"].includes(record.status))
+      if (!OPEN_WORKSPACE_STATUSES.has(record.status))
         return yield* workspaceFailure(
           "revise",
           "Workspace cannot be reopened in its current state.",
@@ -1246,7 +1252,7 @@ export const gitWorkspaceEngine = (
     ) {
       yield* settled(target);
       const record = yield* checked(target);
-      if (!["active", "frozen", "prepared"].includes(record.status))
+      if (!OPEN_WORKSPACE_STATUSES.has(record.status))
         return yield* workspaceFailure("inspect", "The worker tree is no longer available.");
       const { snapshot, changedPaths } = yield* workerChanges(record);
       return {

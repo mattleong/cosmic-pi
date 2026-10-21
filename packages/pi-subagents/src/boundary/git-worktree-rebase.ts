@@ -1,6 +1,6 @@
 import * as Effect from "effect/Effect";
 import type { SafeFile } from "pi-cosmic-core";
-import { WorkspaceError } from "../workspace/model.ts";
+import { OPEN_WORKSPACE_STATUSES, WorkspaceError } from "../workspace/model.ts";
 import type { WorkspaceRebase, WorkspaceRecord } from "../workspace/model.ts";
 import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
 import {
@@ -229,7 +229,7 @@ export const rebaseWorkspace = (
   beforeRemove?: BeforeTreeRemoval,
 ) =>
   Effect.gen(function* () {
-    if (!["active", "frozen", "prepared"].includes(record.status))
+    if (!OPEN_WORKSPACE_STATUSES.has(record.status))
       return yield* workspaceFailure("rebase", "Workspace cannot be rebuilt in its current state.");
     const sourceIncluded = yield* activeSource(registry, record, managedRecord);
     // The worker's included files stay as they are, even staged ones; no capture takes them.

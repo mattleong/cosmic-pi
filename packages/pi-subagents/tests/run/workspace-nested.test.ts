@@ -82,6 +82,7 @@ const nestedRecord = (
     workspaceId,
     ownerId,
     sourceCwd: source.sourceRoot,
+    artifactRoot: `/private/${workspaceId}`,
     cwd: `/private/${workspaceId}/worker`,
     writerCwd: {
       path: `/private/${workspaceId}/worker`,

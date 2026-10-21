@@ -9,7 +9,6 @@ import {
   recordWorkspaceOutcomeLocked,
   runHoldsCwd,
   runsWithin,
-  workspaceArtifactDirectory,
   type WorkspaceBinding,
   type WorkspaceControlContext,
 } from "./workspace-binding.ts";
@@ -59,8 +58,7 @@ export function workspaceSettleOperations(
       binding.state.knowledge.kind !== "unreviewed"
     )
       return undefined;
-    const directory = workspaceArtifactDirectory(binding.handle);
-    if (!directory || [...runsWithin(records, [directory]).keys()].some(runHoldsCwd))
+    if ([...runsWithin(records, [binding.handle.artifactRoot]).keys()].some(runHoldsCwd))
       return undefined;
     return binding;
   };

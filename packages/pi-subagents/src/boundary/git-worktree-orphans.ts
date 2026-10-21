@@ -2,7 +2,7 @@ import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import type { CrossProcessLockContract, SafeFile } from "pi-cosmic-core";
-import { workspaceCheckoutRoot } from "../workspace/model.ts";
+import { OPEN_WORKSPACE_STATUSES, workspaceCheckoutRoot } from "../workspace/model.ts";
 import type {
   WorkspaceAdoptTarget,
   WorkspaceError,
@@ -14,7 +14,6 @@ import type {
   WorkspaceSwept,
 } from "../workspace/model.ts";
 import { nodePath as path } from "./node-builtins.ts";
-import { canonicalizeWriterDirectory } from "./writer-lease.ts";
 import { workspaceFailure, workspaceRefusal } from "./git-worktree-process.ts";
 import { treeOf } from "./git-capture.ts";
 import type { BeforeTreeRemoval } from "./git-worktree-hooks.ts";
@@ -29,6 +28,7 @@ import {
   listWorkspaceRecords,
   MAX_WORKSPACE_NESTING,
   removeWorkspaceTrees,
+  requireOriginalWorker,
   unresolvedChildWorkspaces,
 } from "./git-worktree-recovery.ts";
 import { rollbackPublication } from "./git-worktree-integration.ts";
@@ -61,32 +61,6 @@ export interface OrphanEngine {
     target: WorkspaceOrphanTarget,
   ) => Effect.Effect<A, E | WorkspaceError, R | SafeFile>;
 }
-
-// Statuses whose worker tree an adopting session or the orphan sweep can take over as they are.
-const openStatuses: ReadonlySet<WorkspaceRecord["status"]> = new Set([
-  "active",
-  "frozen",
-  "prepared",
-]);
-
-// Rechecked at the worker path itself while the caller holds the original writer lease.
-const requireOriginalWorker = (record: WorkspaceRecord, operation: string) =>
-  Effect.gen(function* () {
-    const refusal = () =>
-      workspaceRefusal(operation, "The original worker directory changed; takeover is unsafe.", {
-        path: record.handle.cwd,
-        rule: "an orphan's worker path must still name its original writer-directory identity",
-        remedy:
-          "Preserve both trees and the recovery record. Independently confirm every writer and descendant has stopped, then recover the artifact manually.",
-      });
-    const original = record.handle.writerCwd;
-    if (!original) return yield* refusal();
-    const current = yield* canonicalizeWriterDirectory(record.handle.cwd).pipe(
-      Effect.mapError(refusal),
-    );
-    if (current.filesystemIdentity !== original.filesystemIdentity) return yield* refusal();
-    return undefined;
-  });
 
 const oldEnough = (record: WorkspaceRecord, now: number, minimumAgeMillis: number) =>
   now - record.lastChangedAt >= minimumAgeMillis;
@@ -179,7 +153,7 @@ export const orphanWorkspaceOperations = (engine: OrphanEngine) => {
         rule: "a nested workspace integrates into its source workspace's worker tree, which only the writer that started it could resolve",
         remedy: "Discard it, children before their parent, then adopt the source workspace.",
       });
-    if (!openStatuses.has(record.status))
+    if (!OPEN_WORKSPACE_STATUSES.has(record.status))
       return yield* workspaceRefusal(
         "adopt",
         record.status === "integrating"
@@ -234,7 +208,7 @@ export const orphanWorkspaceOperations = (engine: OrphanEngine) => {
       for (const record of records)
         if (
           !owned.has(record.handle.workspaceId) &&
-          openStatuses.has(record.status) &&
+          OPEN_WORKSPACE_STATUSES.has(record.status) &&
           record.hookCleanupPending === undefined &&
           oldEnough(record, now, input.minimumAgeMillis)
         )
@@ -256,7 +230,7 @@ export const orphanWorkspaceOperations = (engine: OrphanEngine) => {
     const now = yield* Clock.currentTimeMillis;
     if (
       owned.has(target.workspaceId) ||
-      !openStatuses.has(record.status) ||
+      !OPEN_WORKSPACE_STATUSES.has(record.status) ||
       !oldEnough(record, now, target.minimumAgeMillis) ||
       (yield* unresolvedChildWorkspaces(registry, target.workspaceId)).length > 0
     )

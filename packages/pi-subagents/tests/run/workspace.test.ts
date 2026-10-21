@@ -41,6 +41,7 @@ const record = (
     ownerId,
     sourceRoot,
     sourceCwd: sourceRoot,
+    artifactRoot: `/private/${workspaceId}`,
     cwd: `/private/${workspaceId}`,
     writerCwd: {
       path: `/private/${workspaceId}`,

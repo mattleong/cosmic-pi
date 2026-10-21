@@ -21,7 +21,6 @@ import {
   settleBinding,
   settledState,
   updateKnowledge,
-  workspaceArtifactDirectory,
   type WorkspaceAccess,
   type WorkspaceBinding,
   workspaceBusyError,
@@ -308,13 +307,7 @@ export function workspaceReviewOperations(
       const artifact = yield* service
         .inspect({ workspaceId, ownerId })
         .pipe(Effect.mapError(mapWorkspaceError));
-      const directory = workspaceArtifactDirectory(artifact.handle);
-      if (!directory)
-        return yield* invalid(
-          "workspace_owner_unavailable",
-          "Workspace paths do not match the managed artifact layout.",
-        );
-      if ([...runsWithin(records, [directory]).keys()].some(runHoldsCwd))
+      if ([...runsWithin(records, [artifact.handle.artifactRoot]).keys()].some(runHoldsCwd))
         return yield* invalid(
           "workspace_process_unsettled",
           "A run still uses this workspace. Stop it and confirm cleanup before discard.",

@@ -247,17 +247,6 @@ export const runsWithin = (
     ),
   );
 
-/** The engine validates this layout; never infer a broader root from an unrelated path. */
-export const workspaceArtifactDirectory = (handle: WorkspaceHandle): string | undefined => {
-  if (!isWithin(handle.sourceCwd, handle.sourceRoot)) return undefined;
-  const sourceSuffix = handle.sourceCwd.slice(handle.sourceRoot.replace(/\/$/u, "").length);
-  if (sourceSuffix.split("/").some((part) => part === "." || part === "..")) return undefined;
-  const workerSuffix = `/worker${sourceSuffix}`;
-  if (!handle.cwd.endsWith(workerSuffix)) return undefined;
-  const directory = handle.cwd.slice(0, -workerSuffix.length);
-  return directory.endsWith(`/${handle.workspaceId}`) ? directory : undefined;
-};
-
 const isAutoDiscarded = (binding: WorkspaceBinding | undefined) => {
   const settled = binding && settledState(binding);
   return settled?.phase === "finished" && settled.outcome === "auto-discarded";
@@ -465,12 +454,9 @@ export function workspaceControlContext(
         );
       // A shared-checkout writer its writer started may still be editing the worker tree; readers
       // there are fine, because integration keeps the trees they use.
-      const directory = workspaceArtifactDirectory(binding.handle);
-      const sharedWriter =
-        directory &&
-        [...runsWithin(records, [directory], binding.record).keys()].some(
-          (record) => record.view.writeIntent === "writer" && runHoldsCwd(record),
-        );
+      const sharedWriter = [
+        ...runsWithin(records, [binding.handle.artifactRoot], binding.record).keys(),
+      ].some((record) => record.view.writeIntent === "writer" && runHoldsCwd(record));
       if (sharedWriter)
         return yield* invalid(
           "workspace_process_unsettled",
