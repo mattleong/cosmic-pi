@@ -54,8 +54,8 @@ const coordinationGuidelines = (worktrees: boolean) => [
 ];
 
 const SEND_GUIDELINES = [
-  "Send one self-contained message and don't resend: each send is delivered at once and reports what happened, and a pending or uncertain result may already have arrived. Resuming a finished run starts work its own parent will review, so do it only when the work needs that run's context.",
-  "Don't reply only to acknowledge or thank, and don't message a finished agent unless you need its work.",
+  "Send one self-contained message and don't resend: each send is delivered at once and reports what happened, and a pending or uncertain result may already have arrived.",
+  "Message a paused or finished run only when the work needs that run's context, such as continuing after a transient error: the message resumes it, and its own parent reviews the result.",
 ];
 
 const quoted = (message: string | undefined): string =>
@@ -89,7 +89,7 @@ const TOOL_SPECS: AgentToolSpecs = {
   [AGENT_TOOL_NAME.list]: {
     label: "List Agents",
     description:
-      'List every agent in this session: the main agent ("main") and every subagent at any depth, parents before children, with state, parent, role, runtime and model, worktree proposal, whether it waits on its parent, and task. agentIds selects up to 12. Use agent_read for a run\'s status card and latest message.',
+      'List every agent in this session: the main agent ("main") and every subagent at any depth, parents before children, with state, parent, role, runtime and model, worktree proposal, whether it waits on its parent, and task. Use agent_read for a run\'s status card and latest message.',
     promptSnippet: "List every agent in this session, including main and other agents' children",
     title: (args) => [
       args.agentIds === undefined ? "List agents" : `List ${idsLabel(args.agentIds)}`,

@@ -43,7 +43,7 @@ const DELEGATION_PROMPTS = {
       "- Answer quick questions yourself: if a search and a read or two will answer it, don't delegate.",
       "- Read only enough to write precise, self-contained tasks; let subagents explore in depth.",
       "- Use worker for implementation. Use a reviewer only for substantial or risky changes.",
-      "- Give parallel shared-checkout workers disjoint task scopes; nothing enforces file ownership between them. When slices may overlap, run them one after another instead.",
+      "- When parallel slices may overlap, run them one after another instead.",
       "- Act directly for trivial steps, such as a one-line fix, or when briefing would cost more than doing.",
       "- Check results in proportion to their risk: spot-check the key claims of an investigation instead of redoing it, and read the diff and run the tests for a change.",
     ].join("\n"),

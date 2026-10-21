@@ -130,7 +130,7 @@ const TOOL_SPECS: SubagentToolSpecs = {
   [SUBAGENT_TOOL_NAME.start]: {
     label: "Start Subagents",
     description:
-      "Start background subagents, up to your direct-child limit. Returns run IDs immediately; each report is delivered to you as a saved file when its run finishes, and runs end after reporting. Give every agent a self-contained task with the relevant paths, constraints, and deliverable. The profile sets the role and model route (default generalist). Writers use the shared checkout or a private worktree: omit isolation to use the session's workspace setting, and set it only when the user asks; only the main session and worktree writers can start worktree writers. Several shared-checkout writers may run in one cwd; give them disjoint task scopes because nothing enforces file ownership. Subagents started from a codemode script, and their descendants, stay read-only. A failed start says whether retry is available.",
+      "Start background subagents, up to your direct-child limit. Returns run IDs immediately; each report is delivered to you as a saved file when its run finishes, and runs end after reporting. Give every agent a self-contained task with the relevant paths, constraints, and deliverable. The profile sets the role and model route (default generalist). Only the main session and worktree writers can start worktree writers. Subagents started from a codemode script, and their descendants, stay read-only. A failed start says whether retry is available.",
     promptSnippet: "Run bounded, independent tasks in background subagents",
     renderCall: (args, theme, context) =>
       renderSubagentStartCall(
@@ -169,11 +169,10 @@ const TOOL_SPECS: SubagentToolSpecs = {
   [SUBAGENT_TOOL_NAME.lifecycle]: {
     label: "Manage Subagents",
     description:
-      "Interrupt or stop subagents you started, or their descendants, or retry a failed run on its profile's next configured candidate. Retry starts a new linked run, never reuses the failed candidate, and refuses when execution or cleanup is uncertain. To resume a paused or finished run, send it a message with agent_send. Each target's result is reported separately.",
+      "Interrupt or stop subagents you started, or their descendants, or retry a failed run on its profile's next configured candidate. Retry starts a new linked run, never reuses the failed candidate, and refuses when execution or cleanup is uncertain. Each target's result is reported separately.",
     promptSnippet: "Interrupt, stop, or retry subagents",
     promptGuidelines: [
       "If a profiled run fails with route candidates left, retry it with action=retry before starting a generalist replacement, and don't replace a profile the user disabled. Never retry when execution is uncertain.",
-      "Resume a paused or failed run with agent_send only when its session is worth continuing, such as after a transient error; a deterministic failure repeats, so retry or start a new run instead.",
     ],
     renderCall: (args, theme) => {
       const verb = args.action ?? "manage";
