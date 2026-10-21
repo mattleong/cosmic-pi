@@ -13,7 +13,7 @@ import {
 import { DEFAULT_MAX_ACTIVE_RUNS, type SubagentNestingPolicy } from "../config/schema.ts";
 import { beginNextAssignmentLocked, type RunAssignment } from "./assignment.ts";
 import { hasCompletionGenerationCapacity } from "./completion.ts";
-import { validateParentMessage } from "./tool-policy.ts";
+import { validateMessageText } from "./agent-messaging.ts";
 import {
   agentMessageRefusal,
   invalidRequest,
@@ -105,6 +105,8 @@ const resumeUnavailableError = (record: RunRecord): InvalidSubagentRequestError 
 
 /** An agent message that resumes a run; any agent in the tree may send one. */
 export interface AgentMessageResume {
+  /** The framed message, validated before framing, that becomes the next assignment. */
+  readonly prompt: string;
   /** Labels the sender in the resumed assignment's report notice. */
   readonly resumedBy: string;
   /** Records the message in the run's session events, in place of the parent's resume notice. */
@@ -443,9 +445,11 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
             if (needsRespawn) yield* respawnCapacityFailureLocked(selected);
             return { selected, needsRespawn, invalidateWorkspace };
           });
-          const prompt = message?.trim()
-            ? yield* validateParentMessage(message, "Resume message is required.")
-            : "Continue the assigned task from the current session state.";
+          const prompt =
+            agentMessage?.prompt ??
+            (message?.trim()
+              ? yield* validateMessageText(message)
+              : "Continue the assigned task from the current session state.");
           return yield* runSessionOwned(
             ownerScope,
             Effect.gen(function* () {

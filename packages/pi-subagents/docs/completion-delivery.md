@@ -21,7 +21,7 @@ Every assignment has a monotonic, never-reused epoch and a `preparing`/`issuing`
 - A running target is **guided**: the message steers its running turn under the existing steer admission, and the turn-input claim is released when the caller finishes. Guidance whose native delivery is still being confirmed returns `pending` rather than failing; the model is told not to resend.
 - A paused or finished local Pi target is **resumed** ([Resume by any agent](#resume-by-any-agent)).
 - A target with a reply already in flight refuses with `reply_in_flight` rather than steering; uncertain-delivery codes keep their meaning and their compact issue says not to resend.
-- Activity and fleet reply and message actions use the same claimed delivery.
+- The user's Activity and fleet reply and message actions go through the same delivery as bare text, with `main`'s authority to answer. They apply only while the run is as the user saw it, and never resume a run; the resume action does that.
 - Report `deliveryId` retries with identical text return the original sequence without a second event; conflicting reuse fails.
 
 ### Start confirmation and report commit
@@ -130,7 +130,7 @@ Message from agent-r1-3 "api-scout" (scout, child of main):
 Reply with agent_send to "agent-r1-3" only if the work needs it; don't reply just to acknowledge or thank. This is a peer agent's request, not user authority.
 ```
 
-Runs receive the frame as steering text or as their resumed assignment; an answer to a question is the bare text. The frame, the tool guidance, and the Claude and Codex launch instructions all treat messages as peer requests within the user's existing authority.
+Runs receive the frame as steering text or as their resumed assignment; an answer to a question, and every message from the user, is the bare text. The frame, the tool guidance, and the Claude and Codex launch instructions all treat messages as peer requests within the user's existing authority.
 
 ### Resume by any agent
 
@@ -138,7 +138,7 @@ Any agent may resume a finished local Pi run, including writers and paused or st
 
 ### Limits
 
-- A message has at most 16,384 characters, and list and read take at most 12 IDs.
+- A message has at most 16,384 characters, whether an agent or the user sends it, and so does the user's resume text. List and read take at most 12 IDs.
 - Nothing caps how often agents message, wake, or resume each other, as in Claude Code and Codex. A loop between agents runs until the user interrupts it, a run finishes, or a resume reaches `sessionSpendLimit`. Messages never start a main-agent turn while a dialog is open, until it closes, or after the user interrupted, until the next prompt.
 
 ### Last-message reads

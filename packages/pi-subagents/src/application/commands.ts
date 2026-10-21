@@ -13,7 +13,6 @@ import {
   registerSubagentManagerCommand,
   type FleetManagerActions,
 } from "../settings/controller.ts";
-import { isPendingSteerDelivery } from "../run/errors.ts";
 import type { FleetMessageDelivery } from "../ui/fleet.ts";
 
 interface CommandActivation {
@@ -103,12 +102,14 @@ export function registerApplicationCommands(pi: ExtensionAPI, host: ApplicationC
     send: (id, message, expected) =>
       run(
         SubagentService.use((service) =>
-          service.send(id, message, expected).pipe(
-            Effect.as<FleetMessageDelivery>("delivered"),
-            Effect.catchIf(isPendingSteerDelivery, () =>
-              Effect.succeed<FleetMessageDelivery>("pending"),
+          service
+            .send(id, message, expected)
+            .pipe(
+              Effect.map(
+                (sent): FleetMessageDelivery =>
+                  sent.disposition === "pending" ? "pending" : "delivered",
+              ),
             ),
-          ),
         ),
       ),
     rename: (id, name, expected) => runAction((service) => service.rename(id, name, expected)),

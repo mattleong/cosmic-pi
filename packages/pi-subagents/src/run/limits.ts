@@ -5,6 +5,10 @@ export const MAX_START_BATCH = 32;
 export const MAX_TOOL_OUTPUT_CHARS = 48_000;
 /** Bounds each root completion or question notice. */
 export const MAX_NOTIFICATION_CHARS = 32 * 1024;
+/**
+ * Bounds parent-channel text on the wire, such as contact messages, replies, and nested notices.
+ * Messages a user or agent sends have their own, smaller bound (`MAX_AGENT_MESSAGE_CHARS`).
+ */
 export const MAX_PARENT_MESSAGE_CHARS = 64 * 1024;
 export const MAX_PROTOCOL_ID_CHARS = 1_024;
 export const MAX_UNRESOLVED_REPORT_GENERATIONS = 64;

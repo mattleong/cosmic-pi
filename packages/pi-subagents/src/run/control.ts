@@ -29,8 +29,6 @@ import {
 import type { RunProcessControls } from "./process-lifecycle.ts";
 import type { RunRecordCleanup } from "./record-cleanup.ts";
 import type { RunSettlement } from "./settlement.ts";
-import { validateParentMessage } from "./tool-policy.ts";
-import { appendNoticeSessionEvent } from "./session-events.ts";
 import { runSessionOwned } from "./session-owned.ts";
 import { MAX_ERROR_CHARS, sanitizeDiagnosticText, sanitizeName, snapshotView } from "./state.ts";
 import { recordRunWarning } from "./warnings.ts";
@@ -49,14 +47,6 @@ interface RunControlDependencies extends Pick<
   readonly settle: RunSettlement["settle"];
 }
 
-const recordParentNoticeLocked = (record: RunRecord, text: string, now: number) => {
-  record.view = {
-    ...record.view,
-    lastActivityAt: now,
-    sessionEvents: appendNoticeSessionEvent(record.view.sessionEvents, "parent", text, now),
-  };
-};
-
 /** A message for a run, decided under the run lock as an answer or as guidance. */
 export interface RunControlMessage {
   /** Answers a pending question; only the run's ancestors may, so others leave it unset. */
@@ -70,17 +60,6 @@ export interface RunControlMessage {
     now: number,
   ) => void;
 }
-
-const parentMessage = (message: string): RunControlMessage => ({
-  answer: message,
-  guidance: message,
-  recordNoticeLocked: (record, delivery, now) =>
-    recordParentNoticeLocked(
-      record,
-      `${delivery === "answered" ? "Reply" : "Guidance"}: ${message}`,
-      now,
-    ),
-});
 
 export function controlOperations(dependencies: RunControlDependencies) {
   const {
@@ -344,15 +323,6 @@ export function controlOperations(dependencies: RunControlDependencies) {
       ),
     );
 
-  const send = (
-    id: string,
-    message: string,
-    expected?: SubagentControlExpectation,
-  ): Effect.Effect<SubagentSendOutcome, SubagentError> =>
-    validateParentMessage(message, "Message is required.").pipe(
-      Effect.flatMap((normalized) => deliver(id, parentMessage(normalized), expected)),
-    );
-
   const interrupt = (
     id: string,
     expected?: SubagentControlExpectation,
@@ -505,5 +475,5 @@ export function controlOperations(dependencies: RunControlDependencies) {
           : Effect.succeed(snapshotView(record.view)),
     );
 
-  return { send, deliver, interrupt, rename, stop };
+  return { deliver, interrupt, rename, stop };
 }

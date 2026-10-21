@@ -3,7 +3,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Match from "effect/Match";
 import * as Fiber from "effect/Fiber";
-import { controlOperations } from "../../src/run/control.ts";
+import { controlOperations, type RunControlMessage } from "../../src/run/control.ts";
 import { captureSubagentControlExpectation } from "../../src/run/model.ts";
 import { processControlOperations } from "../../src/run/process-lifecycle.ts";
 import { subtreeStopper } from "../../src/run/subtree-stop.ts";
@@ -16,6 +16,12 @@ import {
   runRecordFixture,
 } from "./fixtures/run-context.ts";
 import { localServiceFixture, request, runView, withService } from "./fixtures/service-harness.ts";
+
+const userMessage = (text: string): RunControlMessage => ({
+  answer: text,
+  guidance: text,
+  recordNoticeLocked: () => undefined,
+});
 
 const fixture = Effect.gen(function* () {
   const deliveries: string[] = [];
@@ -62,7 +68,7 @@ describe("captured fleet control authority", () => {
       const pending = yield* context.withLock(
         Effect.gen(function* () {
           const replying = yield* controls
-            .send(record.view.id, "Yes", expected)
+            .deliver(record.view.id, userMessage("Yes"), expected)
             .pipe(Effect.flip, Effect.forkScoped);
           yield* Deferred.await(waiting);
           record.view = {
@@ -77,7 +83,11 @@ describe("captured fleet control authority", () => {
       expect(record.replyPendingRequestId).toBeUndefined();
       expect(record.view.question?.requestId).toBe("new-question");
 
-      yield* controls.send(record.view.id, "No", captureSubagentControlExpectation(record.view));
+      yield* controls.deliver(
+        record.view.id,
+        userMessage("No"),
+        captureSubagentControlExpectation(record.view),
+      );
       expect(deliveries).toEqual(["new-question: No"]);
     }).pipe(Effect.scoped),
   );
@@ -89,7 +99,9 @@ describe("captured fleet control authority", () => {
         const expected = captureSubagentControlExpectation(record.view);
         const stopSubtree = subtreeStopper({ ...context, withLock, stopRun: controls.stop });
         const control = Match.value(action).pipe(
-          Match.when("send", () => controls.send(record.view.id, "Old guidance", expected)),
+          Match.when("send", () =>
+            controls.deliver(record.view.id, userMessage("Old guidance"), expected),
+          ),
           Match.when("rename", () => controls.rename(record.view.id, "Old name", expected)),
           Match.when("stop subtree", () => stopSubtree(record.view.id, expected)),
           Match.orElse((other) => controls[other](record.view.id, expected)),

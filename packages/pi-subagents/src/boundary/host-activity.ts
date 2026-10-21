@@ -9,11 +9,11 @@ import {
   type SubagentControlExpectation,
   type SubagentRunView,
 } from "../run/model.ts";
-import { isPendingSteerDelivery, type SubagentError } from "../run/errors.ts";
+import type { SubagentError } from "../run/errors.ts";
 import type { SubagentServiceContract } from "../run/service.ts";
 import type { SubagentProjectionBridge } from "./host-ui.ts";
 import { MAX_NAME_CHARS } from "../run/state.ts";
-import { MAX_PARENT_MESSAGE_CHARS } from "../run/limits.ts";
+import { MAX_AGENT_MESSAGE_CHARS } from "../run/agent-messaging.ts";
 import {
   runActions,
   SUBAGENT_ACTIVITY_PROVIDER,
@@ -57,7 +57,7 @@ const missingActivityInput = (action: string): Error =>
   new Error(`The ${action} activity action needs text input.`);
 
 /**
- * Runs an admitted Activity action. Reply and message share the parent's send path, which answers
+ * Runs an admitted Activity action. Reply and message share the user's send path, which answers
  * a pending question or steers by the target's locked state.
  */
 export const runSubagentActivityAction = (
@@ -79,10 +79,13 @@ export const runSubagentActivityAction = (
     case "reply":
       if (input === undefined) return Effect.die(missingActivityInput(action));
       if (action === "rename") return service.rename(id, input, expected).pipe(Effect.asVoid);
-      return service.send(id, input, expected).pipe(
-        Effect.asVoid,
-        Effect.catchIf(isPendingSteerDelivery, () => Effect.sync(onPendingGuidance)),
-      );
+      return service
+        .send(id, input, expected)
+        .pipe(
+          Effect.flatMap((sent) =>
+            sent.disposition === "pending" ? Effect.sync(onPendingGuidance) : Effect.void,
+          ),
+        );
   }
   return absurd(action);
 };
@@ -156,7 +159,7 @@ export function registerSubagentActivity(options: {
         const value = input.trim();
         if (
           (!value && action !== "resume") ||
-          value.length > (action === "rename" ? MAX_NAME_CHARS : MAX_PARENT_MESSAGE_CHARS)
+          value.length > (action === "rename" ? MAX_NAME_CHARS : MAX_AGENT_MESSAGE_CHARS)
         )
           throw new Error("Subagent input is invalid");
         return options.act(item.id, action, signal, value || undefined, expected);

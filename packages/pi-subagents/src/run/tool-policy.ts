@@ -2,7 +2,6 @@ import * as Effect from "effect/Effect";
 import { hasControlCharacter } from "pi-cosmic-core";
 import type { CustomAgentTools } from "../profiles/agents.ts";
 import { type InvalidSubagentRequestError, invalidRequest } from "./errors.ts";
-import { MAX_PARENT_MESSAGE_CHARS } from "./limits.ts";
 import type { StartSubagentRequest } from "./model.ts";
 
 /** Tools that manage the caller's own children and descendants. */
@@ -149,22 +148,6 @@ export const customAgentToolSnapshot = (
       (name) => (tools?.allow?.includes(name) ?? true) && !(tools?.deny?.includes(name) ?? false),
     ),
   );
-
-export const validateParentMessage = (
-  message: string,
-  emptyMessage: string,
-): Effect.Effect<string, InvalidSubagentRequestError> => {
-  const normalized = message.trim();
-  if (!normalized) return Effect.fail(invalidRequest("message_required", emptyMessage));
-  if (normalized.length > MAX_PARENT_MESSAGE_CHARS)
-    return Effect.fail(
-      invalidRequest(
-        "message_too_large",
-        `Subagent message exceeds ${MAX_PARENT_MESSAGE_CHARS} characters.`,
-      ),
-    );
-  return Effect.succeed(normalized);
-};
 
 export const childSystemPrompt = (request: StartSubagentRequest): string =>
   [

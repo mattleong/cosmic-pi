@@ -10,7 +10,6 @@ import {
   registerSubagentActivity,
   runSubagentActivityAction,
 } from "../src/boundary/host-activity.ts";
-import { SubagentProcessError } from "../src/run/errors.ts";
 import { subagentServiceDouble } from "./tools/fixtures/subagent-service-double.ts";
 import { subagentActivityDetail, subagentActivityItems } from "../src/ui/run-activity.ts";
 import { subagentProjectionBridge } from "../src/boundary/host-ui.ts";
@@ -275,16 +274,12 @@ describe("subagent activity provider", () => {
     const selected = view({ id: "selected", state: "waiting_for_parent", question });
     const expected = captureSubagentControlExpectation(selected);
     const send = vi.fn((id: string) =>
-      id === "pending"
-        ? Effect.fail(
-            new SubagentProcessError({
-              operation: "steer",
-              code: "steer_outcome_uncertain",
-              pendingDelivery: true,
-              message: "Guidance is awaiting confirmation.",
-            }),
-          )
-        : Effect.succeed({ delivery: "answered" as const, run: view({ id }) }),
+      Effect.succeed({
+        messageId: "message-1",
+        to: id,
+        name: id,
+        disposition: id === "pending" ? ("pending" as const) : ("answered" as const),
+      }),
     );
     const service = subagentServiceDouble({ send });
     const pendingNotices = vi.fn();

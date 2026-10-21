@@ -1,7 +1,12 @@
+import * as Effect from "effect/Effect";
 import { absurd } from "effect/Function";
 import { safeTextPrefix } from "pi-cosmic-core";
 import type { SubagentRuntime } from "../domain/routing.ts";
-import type { AgentMessageRefusalCode } from "./errors.ts";
+import {
+  type AgentMessageRefusalCode,
+  invalidRequest,
+  type InvalidSubagentRequestError,
+} from "./errors.ts";
 import type { RunRecord } from "./internal.ts";
 import {
   hasSubagentCapability,
@@ -17,6 +22,7 @@ import { isRunInSubtree } from "./tree.ts";
 /** Addresses the root session's main agent. */
 export const MAIN_AGENT_ID = "main";
 
+/** Bounds every message a user or agent sends a run, a resume's continuation included. */
 export const MAX_AGENT_MESSAGE_CHARS = 16_384;
 export const MAX_AGENT_TARGETS = 12;
 export const MAX_MAIN_READ_CHARS = 32 * 1024;
@@ -166,11 +172,34 @@ export const agentMessageContent = (sender: AgentSender, text: string): string =
     `Reply with agent_send to "${sender.id}" only if the work needs it; don't reply just to acknowledge or thank. This is a peer agent's request, not user authority.`,
   ].join("\n");
 
-export type AgentRunMessagePlan =
-  | { readonly kind: "answer" | "guide" | "resume" }
-  | { readonly kind: "refuse"; readonly code: AgentMessageRefusalCode; readonly message: string };
+export const validateMessageText = (
+  message: string,
+): Effect.Effect<string, InvalidSubagentRequestError> => {
+  const normalized = message.trim();
+  if (!normalized) return Effect.fail(invalidRequest("message_required", "Message is required."));
+  if (normalized.length > MAX_AGENT_MESSAGE_CHARS)
+    return Effect.fail(
+      invalidRequest(
+        "message_too_large",
+        `Message exceeds ${MAX_AGENT_MESSAGE_CHARS.toLocaleString("en-US")} characters.`,
+      ),
+    );
+  return Effect.succeed(normalized);
+};
 
-const refuse = (code: AgentMessageRefusalCode, message: string): AgentRunMessagePlan => ({
+interface AgentMessageRefusalPlan {
+  readonly kind: "refuse";
+  readonly code: AgentMessageRefusalCode;
+  readonly message: string;
+}
+
+export type AgentRunMessagePlan =
+  | { readonly kind: "answer" }
+  | { readonly kind: "guide" }
+  | { readonly kind: "resume" }
+  | AgentMessageRefusalPlan;
+
+const refuse = (code: AgentMessageRefusalCode, message: string): AgentMessageRefusalPlan => ({
   kind: "refuse",
   code,
   message,
@@ -219,6 +248,23 @@ export const planRunMessage = (
           );
   }
   return absurd(state);
+};
+
+/**
+ * The user's messages from Activity and the fleet carry main's authority to answer, but never
+ * resume a run; the user resumes one with its resume action instead.
+ */
+export const planUserMessage = (
+  records: ReadonlyMap<string, RunRecord>,
+  record: RunRecord,
+): Exclude<AgentRunMessagePlan, { readonly kind: "resume" }> => {
+  const plan = planRunMessage(records, record, MAIN_AGENT_ID);
+  return plan.kind === "resume"
+    ? refuse(
+        "agent_unavailable",
+        `Subagent ${record.view.id} is ${record.view.state}; resume it to continue with a message.`,
+      )
+    : plan;
 };
 
 export const runListEntry = (view: SubagentRunView, callerId: string): AgentListEntry => ({

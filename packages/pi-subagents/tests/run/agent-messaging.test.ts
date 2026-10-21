@@ -10,8 +10,12 @@ import {
   SubagentNotFoundError,
   SubagentProcessError,
 } from "../../src/run/errors.ts";
-import type { SubagentProjection, SubagentRunView } from "../../src/run/model.ts";
-import { objectContaining, stringContaining } from "../support/matchers.ts";
+import {
+  captureSubagentControlExpectation,
+  type SubagentProjection,
+  type SubagentRunView,
+} from "../../src/run/model.ts";
+import { anyString, objectContaining, stringContaining } from "../support/matchers.ts";
 import { fakeAgentMain } from "./fixtures/agent-main.ts";
 import {
   acknowledgeCompletions,
@@ -52,6 +56,11 @@ const messageNotices = (run: SubagentRunView | undefined) =>
     event.type === "notice" && event.kind === "message"
       ? [{ direction: event.direction, peer: event.peer, text: event.text }]
       : [],
+  );
+
+const parentNotices = (run: SubagentRunView | undefined) =>
+  (run?.sessionEvents ?? []).flatMap((event) =>
+    event.type === "notice" && event.kind === "parent" ? [event.text] : [],
   );
 
 const askQuestion = (
@@ -572,6 +581,152 @@ describe("agent messaging", () => {
       expect(messageNotices(latest(projections, sender.id))).toEqual([
         { direction: "out", peer: target.id, text: "Finish the migration." },
       ]);
+    });
+  });
+});
+
+describe("the user's messages", () => {
+  it.effect("answer a waiting run and steer a running one with the bare text", () => {
+    const { fake, projections, layer } = localServiceFixture();
+    return withService(layer, function* (service) {
+      const asking = yield* service.start(request({ name: "asking" }));
+      const working = yield* service.start(request({ name: "working", task: "Review tests" }));
+      yield* askQuestion(fake.controls[0]!, projections, asking.id, "question-1");
+
+      const outcomes = yield* Effect.forEach(
+        [asking.id, working.id],
+        (id) => service.send(id, "Use the public API."),
+        { concurrency: 2 },
+      );
+      expect(outcomes).toMatchObject([
+        { disposition: "answered", run: { id: asking.id, state: "running" } },
+        { disposition: "guided", run: { id: working.id, state: "running" } },
+      ]);
+      expect(fake.controls[0]?.ipc).toContainEqual({
+        channel: "pi-subagents",
+        type: "parent_reply",
+        requestId: "question-1",
+        ackId: anyString(),
+        message: "Use the public API.",
+      });
+      expect(fake.controls[0]?.sent("steer")).toBe(false);
+      expect(fake.controls[1]?.sentIpc("parent_reply")).toBe(false);
+      expect(steerMessages(fake.controls[1])).toEqual(["Use the public API."]);
+      expect(parentNotices(latest(projections, asking.id))).toEqual(["Reply: Use the public API."]);
+      expect(parentNotices(latest(projections, working.id))).toEqual([
+        "Guidance: Use the public API.",
+      ]);
+      expect(messageNotices(latest(projections, working.id))).toEqual([]);
+      expect(latest(projections, working.id)?.messageCount).toBeUndefined();
+    });
+  });
+
+  it.effect("never resume a paused or finished run", () => {
+    const { fake, layer } = localServiceFixture();
+    return withService(layer, function* (service) {
+      const paused = yield* service.start(request({ name: "paused" }));
+      const finished = yield* service.start(request({ name: "finished" }));
+      expect((yield* service.interrupt(paused.id)).state).toBe("paused");
+      yield* completeLocalRun(service, fake.controls[1]!, finished.id);
+
+      for (const run of [paused, finished])
+        expect(yield* service.send(run.id, "Keep going.").pipe(Effect.flip)).toMatchObject({
+          code: "agent_unavailable",
+          message: stringContaining("resume it"),
+        });
+      expect(yield* runView(service, paused.id)).toMatchObject({
+        state: "paused",
+        assignmentEpoch: 1,
+      });
+      expect(yield* runView(service, finished.id)).toMatchObject({
+        state: "completed",
+        assignmentEpoch: 1,
+      });
+      expect(fake.controls).toHaveLength(2);
+      expect(promptMessages(fake.controls[0])).not.toContain("Keep going.");
+    });
+  });
+
+  it.effect("apply only while the run is as the user saw it", () => {
+    const { fake, projections, layer } = localServiceFixture();
+    return withService(layer, function* (service) {
+      const run = yield* service.start(request({ name: "changing" }));
+      const expected = captureSubagentControlExpectation(yield* runView(service, run.id));
+      yield* askQuestion(fake.controls[0]!, projections, run.id, "question-later");
+
+      expect(
+        yield* service.send(run.id, "Old guidance.", expected).pipe(Effect.flip),
+      ).toMatchObject({ code: "run_control_changed" });
+      expect(fake.controls[0]?.sent("steer")).toBe(false);
+      expect(fake.controls[0]?.sentIpc("parent_reply")).toBe(false);
+    });
+  });
+
+  it.effect("refuse another message while a reply is in flight", () => {
+    const { fake, projections, layer } = localServiceFixture();
+    return withService(layer, function* (service) {
+      const run = yield* service.start(request({ name: "reply-in-flight" }));
+      yield* askQuestion(fake.controls[0]!, projections, run.id, "question-in-flight");
+      const replyGate = yield* Deferred.make<void>();
+      fake.controls[0]?.gateNextIpcType("parent_reply", replyGate);
+      const replying = yield* service
+        .send(run.id, "Proceed.")
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      yield* yieldUntil(() => fake.controls[0]?.sentIpc("parent_reply") === true);
+
+      expect(yield* service.send(run.id, "Proceed again.").pipe(Effect.flip)).toMatchObject({
+        code: "reply_in_flight",
+      });
+      expect(fake.controls[0]?.sent("steer")).toBe(false);
+
+      yield* Deferred.succeed(replyGate, undefined);
+      expect(yield* Fiber.join(replying)).toMatchObject({ disposition: "answered" });
+      expect(
+        fake.controls[0]?.ipc.filter((message) => message.type === "parent_reply"),
+      ).toHaveLength(1);
+    });
+  });
+
+  it.effect("roll back a definitely unsent reply and keep the question answerable", () => {
+    const { fake, projections, layer } = localServiceFixture();
+    return withService(layer, function* (service) {
+      const run = yield* service.start(request({ name: "unsent-reply" }));
+      yield* askQuestion(fake.controls[0]!, projections, run.id, "unsent-question");
+
+      fake.controls[0]?.failNextIpc("transport_not_sent");
+      expect(yield* service.send(run.id, "Proceed.").pipe(Effect.flip)).toMatchObject({
+        code: "reply_send_failed",
+      });
+      const status = yield* runView(service, run.id);
+      expect(status.state).toBe("waiting_for_parent");
+      expect(status.question).toMatchObject({ requestId: "unsent-question" });
+      expect(status.warning).toBeUndefined();
+
+      expect(yield* service.send(run.id, "Proceed.")).toMatchObject({
+        disposition: "answered",
+        run: { state: "running" },
+      });
+      expect(
+        fake.controls[0]?.ipc.flatMap((message) =>
+          message.type === "parent_reply" ? [[message.requestId, message.message]] : [],
+        ),
+      ).toEqual([
+        ["unsent-question", "Proceed."],
+        ["unsent-question", "Proceed."],
+      ]);
+    });
+  });
+
+  it.effect("share the agent messages' size limit", () => {
+    const { fake, layer } = localServiceFixture();
+    return withService(layer, function* (service) {
+      const run = yield* service.start(request({ name: "bounded-message" }));
+      for (const send of [
+        service.send(run.id, "x".repeat(16_385)),
+        service.agentSend(MAIN, run.id, "x".repeat(16_385)),
+      ])
+        expect(yield* send.pipe(Effect.flip)).toMatchObject({ code: "message_too_large" });
+      expect(fake.controls[0]?.sent("steer")).toBe(false);
     });
   });
 });

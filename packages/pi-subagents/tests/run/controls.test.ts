@@ -12,7 +12,6 @@ import {
   runView,
   withService,
 } from "./fixtures/service-harness.ts";
-import { anyString } from "../support/matchers.ts";
 import { InvalidSubagentRequestError } from "../../src/run/errors.ts";
 
 describe("SubagentService", () => {
@@ -59,90 +58,37 @@ describe("SubagentService", () => {
     });
   });
 
-  it.effect("routes blocking child questions and peer notices through supervisor IPC", () => {
-    const { fake, projections, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const first = yield* service.start(request({ name: "reader-one" }));
-      fake.controls[0]?.offer({
-        type: "extension_ui_request",
-        id: "dialog-1",
-        method: "confirm",
+  it.effect(
+    "routes child dialogs, blocking questions, and peer notices through supervisor IPC",
+    () => {
+      const { fake, projections, layer } = localServiceFixture();
+      return withService(layer, function* (service) {
+        const first = yield* service.start(request({ name: "reader-one" }));
+        fake.controls[0]?.offer({
+          type: "extension_ui_request",
+          id: "dialog-1",
+          method: "confirm",
+        });
+        yield* yieldUntil(() => fake.controls[0]?.sent("extension_ui_response") === true);
+        expect(fake.controls[0]?.commands).toContainEqual({
+          type: "extension_ui_response",
+          id: "dialog-1",
+          cancelled: true,
+        });
+        yield* askParent(fake.controls[0]!, projections, "question-1", "Which API should I use?");
+        expect((yield* runView(service, first.id)).question?.message).toBe(
+          "Which API should I use?",
+        );
+
+        yield* service.start(request({ name: "reader-two", task: "Review tests" }));
+        expect(
+          fake.controls[0]?.sentIpc("peer_notice", (notice) =>
+            notice.message.includes("reader-two"),
+          ),
+        ).toBe(true);
       });
-      yield* yieldUntil(() => fake.controls[0]?.sent("extension_ui_response") === true);
-      expect(fake.controls[0]?.commands).toContainEqual({
-        type: "extension_ui_response",
-        id: "dialog-1",
-        cancelled: true,
-      });
-      yield* askParent(fake.controls[0]!, projections, "question-1", "Which API should I use?");
-
-      const waiting = yield* runView(service, first.id);
-      expect(waiting.question?.message).toBe("Which API should I use?");
-      const replied = yield* service.send(first.id, "Use the public API.");
-      expect(replied).toMatchObject({ delivery: "answered", run: { state: "running" } });
-      expect(fake.controls[0]?.ipc).toContainEqual({
-        channel: "pi-subagents",
-        type: "parent_reply",
-        requestId: "question-1",
-        ackId: anyString(),
-        message: "Use the public API.",
-      });
-
-      yield* service.start(request({ name: "reader-two", task: "Review tests" }));
-      expect(
-        fake.controls[0]?.sentIpc("peer_notice", (notice) => notice.message.includes("reader-two")),
-      ).toBe(true);
-    });
-  });
-
-  it.effect("answers a waiting child and steers a running sibling with one message", () => {
-    const { fake, projections, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const asking = yield* service.start(request({ name: "asking" }));
-      const working = yield* service.start(request({ name: "working", task: "Review tests" }));
-      yield* askParent(fake.controls[0]!, projections, "question-1");
-      expect((yield* runView(service, working.id)).state).toBe("running");
-
-      const outcomes = yield* Effect.forEach(
-        [asking.id, working.id],
-        (id) => service.send(id, "Use the public API."),
-        { concurrency: 2 },
-      );
-      expect(outcomes).toMatchObject([
-        { delivery: "answered", run: { id: asking.id, state: "running" } },
-        { delivery: "guided", run: { id: working.id, state: "running" } },
-      ]);
-      expect(fake.controls[0]?.sentIpc("parent_reply")).toBe(true);
-      expect(fake.controls[0]?.sent("steer")).toBe(false);
-      expect(fake.controls[1]?.sentIpc("parent_reply")).toBe(false);
-      expect(fake.controls[1]?.sent("steer")).toBe(true);
-    });
-  });
-
-  it.effect("refuses another message while a parent reply is in flight", () => {
-    const { fake, projections, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const run = yield* service.start(request({ name: "reply-in-flight" }));
-      yield* askParent(fake.controls[0]!, projections, "question-in-flight");
-      const replyGate = yield* Deferred.make<void>();
-      fake.controls[0]?.gateNextIpcType("parent_reply", replyGate);
-      const replying = yield* service
-        .send(run.id, "Proceed.")
-        .pipe(Effect.forkScoped({ startImmediately: true }));
-      yield* yieldUntil(() => fake.controls[0]?.sentIpc("parent_reply") === true);
-
-      expect(yield* service.send(run.id, "Proceed again.").pipe(Effect.flip)).toMatchObject({
-        code: "reply_in_flight",
-      });
-      expect(fake.controls[0]?.sent("steer")).toBe(false);
-
-      yield* Deferred.succeed(replyGate, undefined);
-      expect(yield* Fiber.join(replying)).toMatchObject({ delivery: "answered" });
-      expect(
-        fake.controls[0]?.ipc.filter((message) => message.type === "parent_reply"),
-      ).toHaveLength(1);
-    });
-  });
+    },
+  );
 
   it.effect(
     "finishes admitted guidance before queue clearing and rejects guidance admitted after interrupt",
@@ -174,11 +120,11 @@ describe("SubagentService", () => {
 
         yield* Deferred.succeed(steerGate, undefined);
         expect(yield* Fiber.join(sending)).toMatchObject({
-          delivery: "guided",
+          disposition: "guided",
           run: { state: "running" },
         });
         expect(yield* Fiber.join(sendingSecond)).toMatchObject({
-          delivery: "guided",
+          disposition: "guided",
           run: { state: "running" },
         });
         yield* yieldUntil(() => fake.controls[0]?.sent("clear_queue") === true);
@@ -225,8 +171,9 @@ describe("SubagentService", () => {
       const paused = yield* service.interrupt(run.id);
       expect(paused.state).toBe("paused");
       expect(paused.question).toBeUndefined();
-      const guidanceFailure = yield* Effect.flip(service.send(run.id, "Continue."));
-      expect(guidanceFailure.message).toContain(`agent_send({ to: "${run.id}", message: "..." })`);
+      expect(yield* service.send(run.id, "Continue.").pipe(Effect.flip)).toMatchObject({
+        code: "agent_unavailable",
+      });
 
       const resumed = yield* service.resume(run.id);
       expect(resumed.state).toBe("running");
@@ -268,54 +215,6 @@ describe("SubagentService", () => {
       yield* Deferred.succeed(barrierGate, undefined);
       expect((yield* Fiber.join(interrupting)).state).toBe("paused");
       expect(fake.controls[0]?.sentIpc("parent_reply")).toBe(false);
-    });
-  });
-
-  it.effect("rolls back a definitely unsent reply and keeps the question answerable", () => {
-    const { fake, projections, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const run = yield* service.start(request({ name: "unsent-reply" }));
-      yield* askParent(fake.controls[0]!, projections, "unsent-question");
-
-      fake.controls[0]?.failNextIpc("transport_not_sent");
-      expect(yield* service.send(run.id, "Proceed.").pipe(Effect.flip)).toMatchObject({
-        code: "reply_send_failed",
-      });
-      const status = yield* runView(service, run.id);
-      expect(status.state).toBe("waiting_for_parent");
-      expect(status.question).toMatchObject({ requestId: "unsent-question" });
-      expect(status.warning).toBeUndefined();
-
-      expect(yield* service.send(run.id, "Proceed.")).toMatchObject({
-        delivery: "answered",
-        run: { state: "running" },
-      });
-      expect(fake.controls[0]?.ipc.filter((message) => message.type === "parent_reply")).toEqual([
-        {
-          channel: "pi-subagents",
-          type: "parent_reply",
-          requestId: "unsent-question",
-          ackId: anyString(),
-          message: "Proceed.",
-        },
-        {
-          channel: "pi-subagents",
-          type: "parent_reply",
-          requestId: "unsent-question",
-          ackId: anyString(),
-          message: "Proceed.",
-        },
-      ]);
-    });
-  });
-
-  it.effect("rejects oversized parent messages before transport", () => {
-    const { fake, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const run = yield* service.start(request({ name: "bounded-message" }));
-      const failure = yield* Effect.flip(service.send(run.id, "x".repeat(64 * 1024 + 1)));
-      expect(failure._tag).toBe("InvalidSubagentRequestError");
-      expect(fake.controls[0]?.sent("steer")).toBe(false);
     });
   });
 });

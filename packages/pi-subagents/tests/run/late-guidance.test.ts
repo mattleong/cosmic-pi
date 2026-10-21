@@ -29,7 +29,9 @@ describe("guidance that reaches a finishing local Pi child", () => {
       yield* yieldUntil(() => control.commandTypes("get_session_stats").length > stats);
 
       control.answerNextGuidance("started");
-      expect((yield* service.send(run.id, "Also check the lexer.")).run.state).toBe("running");
+      expect(yield* service.send(run.id, "Also check the lexer.")).toMatchObject({
+        run: { state: "running" },
+      });
       expect(control.commands.at(-1)).toMatchObject({
         type: "prompt",
         message: "Also check the lexer.",
@@ -68,7 +70,7 @@ describe("guidance that reaches a finishing local Pi child", () => {
       expect((yield* runView(service, run.id)).state).toBe("running");
 
       yield* Deferred.succeed(steerGate, undefined);
-      expect((yield* Fiber.join(sending)).run.state).toBe("running");
+      expect(yield* Fiber.join(sending)).toMatchObject({ run: { state: "running" } });
       yield* yieldTurns;
       expect((yield* runView(service, run.id)).state).toBe("running");
 

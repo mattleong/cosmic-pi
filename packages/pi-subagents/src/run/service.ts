@@ -56,7 +56,6 @@ import {
   type SubagentProjection,
   type SubagentRunView,
   type SubagentControlExpectation,
-  type SubagentSendOutcome,
   type SubagentUsage,
 } from "./model.ts";
 import { sortRuns } from "./projection.ts";
@@ -185,12 +184,15 @@ export interface SubagentServiceContract extends WorkspaceCoordinatorContract {
   readonly consumeCompletions: (
     receipts: ReadonlyArray<SubagentCompletionReceipt>,
   ) => Effect.Effect<void>;
-  /** Answers the target's pending question, or otherwise steers its running turn. */
+  /**
+   * The user's message from Activity or the fleet, through the agent-message delivery: it answers
+   * the target's pending question or steers its running turn as bare text, and never resumes it.
+   */
   readonly send: (
     id: string,
     message: string,
     expected?: SubagentControlExpectation,
-  ) => Effect.Effect<SubagentSendOutcome, SubagentError>;
+  ) => Effect.Effect<AgentSendResult, SubagentError>;
   readonly interrupt: (
     id: string,
     expected?: SubagentControlExpectation,
@@ -486,7 +488,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     ...runContext,
     main: options.agentMain,
     deliverToRun: controls.deliver,
-    resume: (id, message, agentMessage) => resume.resume(id, message, undefined, agentMessage),
+    resume: (id, agentMessage) => resume.resume(id, undefined, undefined, agentMessage),
     allocateMessageId,
   });
 
@@ -518,7 +520,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     captureLaunchParent: starts.captureLaunchParent,
     ...visibilityOperations(runContext),
     startRetrySessionOwned: starts.startRetrySessionOwned,
-    send: controls.send,
+    send: agentMessages.sendFromUser,
     interrupt: controls.interrupt,
     resume: resume.resume,
     rename: controls.rename,
