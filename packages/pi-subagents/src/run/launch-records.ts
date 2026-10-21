@@ -1,14 +1,13 @@
 import * as Effect from "effect/Effect";
 import type { BackendLaunchRequest } from "../backend/model.ts";
 import { invalidRequest, type SubagentError } from "./errors.ts";
-import type { RunContext, RunRecord } from "./internal.ts";
+import { isCleanupOwed, type RunContext, type RunRecord, type StoredRunView } from "./internal.ts";
 import {
   emptyUsage,
   isTerminalRunState,
   nextRouteCandidate,
   type StartSubagentRequest,
   type SubagentCapability,
-  type SubagentRunView,
 } from "./model.ts";
 import { MAX_TASK_CHARS } from "./state.ts";
 import { childSystemPrompt, isWorkspaceParentRequest } from "./tool-policy.ts";
@@ -43,12 +42,11 @@ export const validateStartRequest = (
 export const initialRunView = (
   { request, parentRunId, cwd }: LaunchPlan,
   parent: RunRecord | undefined,
-  { id, name }: LaunchIdentity,
+  id: string,
   capabilities: ReadonlyArray<SubagentCapability>,
   now: number,
-): SubagentRunView => ({
+): StoredRunView => ({
   id,
-  name,
   task: request.task.trim(),
   ...(request.profile && { profile: request.profile }),
   ...(request.agent && { agent: request.agent }),
@@ -77,7 +75,6 @@ export const initialRunView = (
   openaiFastMode: request.openaiFastMode,
   runtime: request.runtime,
   reportGeneration: 0,
-  assignmentEpoch: 1,
   capabilities,
   model: request.model,
   effort: request.effort,
@@ -114,7 +111,7 @@ export const isEvictionEligible = (
   { records }: Pick<RunContext, "records">,
   record: RunRecord,
 ): boolean =>
-  !record.cleanupPending &&
+  !isCleanupOwed(record) &&
   record.process === undefined &&
   descendantRunIds(records, record.view.id).length === 0 &&
   record.completionClaims.size === 0 &&

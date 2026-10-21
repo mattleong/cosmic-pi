@@ -1,10 +1,10 @@
-import type { RunRecord } from "./internal.ts";
+import { snapshotRun, type RunRecord } from "./internal.ts";
 import { isTerminalRunState, SUBAGENT_ROOT_RUN_ID, type SubagentRunView } from "./model.ts";
-import { snapshotView } from "./state.ts";
 
-const parentIdOf = (view: SubagentRunView): string => view.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
+const parentIdOf = (view: Pick<SubagentRunView, "parentRunId">): string =>
+  view.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
 
-const runDepth = (view: SubagentRunView): number => {
+const runDepth = (view: Pick<SubagentRunView, "depth">): number => {
   const depth = view.depth;
   return depth !== undefined && Number.isSafeInteger(depth) && depth >= 1 ? depth : 1;
 };
@@ -73,7 +73,7 @@ export const projectRunTree = (
   return [...records.values()].map(
     (record): SubagentRunView =>
       Object.freeze({
-        ...snapshotView(record.view),
+        ...snapshotRun(record),
         parentRunId: parentIdOf(record.view),
         depth: runDepth(record.view),
         directChildCount: directCounts.get(record.view.id) ?? 0,

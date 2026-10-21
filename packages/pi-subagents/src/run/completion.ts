@@ -48,7 +48,7 @@ const completionNotification = (
     completion.outcome === "failed" ? failedRunNextCandidate(record.view) : undefined;
   return {
     id: record.view.id,
-    name: record.view.name,
+    name: record.launch.name,
     generation: completion.generation,
     outcome: completion.outcome,
     ...(completion.finalText && { finalText: completion.finalText }),

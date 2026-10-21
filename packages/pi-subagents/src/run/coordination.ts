@@ -14,7 +14,7 @@ const activePeerLines = (records: ReadonlyArray<RunRecord>, selfId?: string): st
   records.flatMap((record) =>
     record.view.id !== selfId && isActiveRunState(record.view.state)
       ? [
-          `- ${record.view.name} (${record.view.id}): ${ownershipSummary(record)}; ${record.view.state}; task: ${safeTextPrefix(record.view.task, 160)}`,
+          `- ${record.launch.name} (${record.view.id}): ${ownershipSummary(record)}; ${record.view.state}; task: ${safeTextPrefix(record.view.task, 160)}`,
         ]
       : [],
   );

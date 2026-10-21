@@ -23,11 +23,13 @@ import {
   SubagentProcessError,
 } from "./errors.ts";
 import {
+  isCleanupOwed,
   clearRunActivity,
   commitRunInitialization,
   completeRunInitialization,
   type PendingInitializationSettlement,
   requireCapability,
+  snapshotRun,
   type RunContext,
   type RunRecord,
 } from "./internal.ts";
@@ -46,7 +48,6 @@ import type { RunSettlement } from "./settlement.ts";
 import { appendNoticeSessionEvent } from "./session-events.ts";
 import { spentAtLimitLocked } from "./session-usage.ts";
 import { runSessionOwned } from "./session-owned.ts";
-import { snapshotView } from "./state.ts";
 import { isStopInProgress } from "./tree.ts";
 import type { RunWorkspaceControl } from "./workspace-control.ts";
 import { requireControlExpectation } from "./control-admission.ts";
@@ -152,7 +153,7 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
     withLock(
       Effect.gen(function* () {
         const record = yield* requireRecord(id);
-        return record.cleanupPending ? record.cleanupSettlement : undefined;
+        return isCleanupOwed(record) ? record.cleanupSettlement : undefined;
       }),
     ).pipe(
       Effect.flatMap((cleanupSettlement) =>
@@ -218,18 +219,13 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
               : undefined;
             record.scope = nextScope;
             record.cleanupSettlement = nextCleanupSettlement;
-            record.cleanupPending = false;
-            record.cleanupDisposition = "pending";
+            record.cleanupDisposition = "none";
             record.cleanupRecovery = undefined;
             record.cleanupVerification = undefined;
             record.view = { ...record.view, cleanup: undefined };
             record.closingScope = undefined;
             record.closingScopeSettled = undefined;
             record.writerPool = writerPool;
-            record.launch = {
-              ...record.launch,
-              resumeToken: record.resumeToken,
-            };
             return true;
           }),
         );
@@ -265,7 +261,7 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
       const view = yield* withLock(
         Effect.gen(function* () {
           const resumed = claimed.record;
-          if (issued.state !== "running") return snapshotView(resumed.view);
+          if (issued.state !== "running") return snapshotRun(resumed);
           if (agentMessage) agentMessage.recordNoticeLocked(resumed, now);
           else
             resumed.view = {
@@ -278,7 +274,7 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
               ),
             };
           yield* publish;
-          return snapshotView(resumed.view);
+          return snapshotRun(resumed);
         }),
       );
       if (view.state !== "running" && !isTerminalRunState(view.state))
@@ -420,7 +416,7 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
                 `This session's subagents have spent $${spent.toFixed(2)} of its $${spendLimit.toFixed(2)} limit (sessionSpendLimit); agent messages can't resume ${id}.`,
               );
             const needsRespawn = selected.process === undefined;
-            if (needsRespawn && !selected.resumeToken)
+            if (needsRespawn && !selected.launch.resumeToken)
               return yield* resumeUnavailableError(selected);
             // Ownership first: a revision successor in this workspace would otherwise surface as a
             // transient writer conflict.

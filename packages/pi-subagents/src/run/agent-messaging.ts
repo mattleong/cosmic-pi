@@ -342,7 +342,7 @@ export const runReadout = (record: RunRecord, projected: SubagentRunView): Agent
   const base = {
     kind: "run" as const,
     id: view.id,
-    name: view.name,
+    name: projected.name,
     state: view.state,
     reportGeneration: view.reportGeneration,
     run: projected,

@@ -10,7 +10,6 @@ import type {
   BackendHandle,
   BackendLaunchRequest,
   BackendReport,
-  BackendResumeToken,
   BackendStartupState,
 } from "../backend/model.ts";
 import type { CanonicalWriterCwd, WriterLeaseContract } from "../boundary/writer-lease.ts";
@@ -28,8 +27,9 @@ import {
   type SubagentReportTruncation,
   type SubagentRunView,
 } from "./model.ts";
-import { type CapturedOutputText, snapshotView } from "./state.ts";
-import type { RunWarningSlots } from "./warnings.ts";
+import { freezeSnapshot } from "pi-cosmic-core";
+import type { CapturedOutputText } from "./state.ts";
+import { runWarningFields, type RunWarningSlots } from "./warnings.ts";
 import type { WriterPoolEntry, WriterPools } from "./writer-pool.ts";
 
 export type WithRunLock = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
@@ -84,13 +84,31 @@ interface BackendReportWatermark {
   readonly deliveryId: string;
 }
 
+/** View fields a snapshot derives from the record, so each is written once. */
+type DerivedViewField =
+  | "name"
+  | "assignmentEpoch"
+  | "warning"
+  | "warningSource"
+  | "childWarning"
+  | "systemWarning";
+
+/** The view a record stores; `snapshotRun` adds the derived fields. */
+export type StoredRunView = Omit<SubagentRunView, DerivedViewField>;
+
+/**
+ * Whether the run's cleanup has begun: `none` until a stop, settlement, failure, or shutdown
+ * starts it, then `pending` while it runs or is reverified, and finally confirmed or quarantined.
+ */
+export type RunCleanupDisposition = "none" | "pending" | "confirmed" | "quarantined";
+
 export interface RunRecord {
   readonly scriptOrigin: boolean;
-  view: SubagentRunView;
+  view: StoredRunView;
   scope: Scope.Closeable;
   readonly driver: BackendDriver;
+  /** The next spawn's request, with the current session's resume token once it started. */
   launch: BackendLaunchRequest;
-  resumeToken?: BackendResumeToken | undefined;
   /** Latest native parent facts admitted through this run's authenticated Pi channel. */
   parentContext?: SubagentParentContext | undefined;
   process?: BackendHandle | undefined;
@@ -100,7 +118,8 @@ export interface RunRecord {
   readonly activeTools: Map<string, string>;
   readonly nativeAgents: Set<string>;
   cleanupSettlement: Deferred.Deferred<"confirmed" | "quarantined">;
-  cleanupDisposition: "pending" | "confirmed" | "quarantined";
+  /** The view's `cleanup` publishes this, with its evidence, once closing starts. */
+  cleanupDisposition: RunCleanupDisposition;
   cleanupRecovery?:
     | { readonly scope: Scope.Closeable; readonly process: BackendHandle }
     | undefined;
@@ -119,7 +138,6 @@ export interface RunRecord {
   pauseRequested: boolean;
   pausedAssignmentEpoch?: number | undefined;
   stoppedByParent: boolean;
-  cleanupPending: boolean;
   runStateReclaimState: "pending" | "running" | "reclaimed";
   evictionClaim?: { readonly parentRunId?: string | undefined } | undefined;
   readonly canonicalWriterCwd?: CanonicalWriterCwd | undefined;
@@ -131,6 +149,7 @@ export interface RunRecord {
   pendingInitializationSettlement?: PendingInitializationSettlement | undefined;
   replyPendingRequestId?: string | undefined;
   notificationGeneration: number;
+  /** Counts failures too; view.reportGeneration is the latest accepted report's generation. */
   completionGeneration: number;
   warningSlots: RunWarningSlots;
   readonly completionGenerations: Map<number, CompletionGenerationRecord>;
@@ -166,6 +185,52 @@ export const clearRunActivity = (record: RunRecord): void => {
     };
 };
 
+/** Cleanup has begun and isn't confirmed: it is running, being reverified, or quarantined. */
+export const isCleanupOwed = (record: RunRecord): boolean =>
+  record.cleanupDisposition === "pending" || record.cleanupDisposition === "quarantined";
+
+/** Marks a run whose cleanup hasn't begun as owing it; later dispositions stand. */
+export const beginCleanup = (record: RunRecord): void => {
+  if (record.cleanupDisposition === "none") record.cleanupDisposition = "pending";
+};
+
+interface RunSnapshot {
+  readonly name: string;
+  readonly epoch: number;
+  readonly warnings: RunWarningSlots;
+  readonly view: SubagentRunView;
+}
+
+const runSnapshots = new WeakMap<StoredRunView, RunSnapshot>();
+
+/**
+ * The run's frozen public view: its stored view plus the name from its launch, the epoch from its
+ * assignment, and its retained warnings. Each stored view freezes once per change of those sources.
+ */
+export const snapshotRun = (record: RunRecord): SubagentRunView => {
+  const { view, launch, assignment, warningSlots } = record;
+  const cached = runSnapshots.get(view);
+  if (
+    cached?.name === launch.name &&
+    cached.epoch === assignment.epoch &&
+    cached.warnings === warningSlots
+  )
+    return cached.view;
+  const snapshot = freezeSnapshot({
+    ...view,
+    name: launch.name,
+    assignmentEpoch: assignment.epoch,
+    ...runWarningFields(warningSlots),
+  });
+  runSnapshots.set(view, {
+    name: launch.name,
+    epoch: assignment.epoch,
+    warnings: warningSlots,
+    view: snapshot,
+  });
+  return snapshot;
+};
+
 export const commitRunPauseLocked = (record: RunRecord, now: number): SubagentRunView => {
   record.pauseRequested = false;
   record.pausedAssignmentEpoch = record.assignment.epoch;
@@ -177,7 +242,7 @@ export const commitRunPauseLocked = (record: RunRecord, now: number): SubagentRu
     currentTool: undefined,
     lastActivityAt: now,
   };
-  return snapshotView(record.view);
+  return snapshotRun(record);
 };
 
 export const completeRunInitialization = (
@@ -194,7 +259,7 @@ export const completeRunInitialization = (
 
 export const commitRunInitialization = (record: RunRecord, state: BackendStartupState) => {
   const pending = completeRunInitialization(record);
-  record.resumeToken = state.resumeToken;
+  record.launch = { ...record.launch, resumeToken: state.resumeToken };
   record.view = {
     ...record.view,
     model: state.model ?? record.view.model,

@@ -33,6 +33,7 @@ import {
 import {
   commitRunInitialization,
   completeRunInitialization,
+  snapshotRun,
   type RunContext,
   type RunRecord,
 } from "./internal.ts";
@@ -54,7 +55,7 @@ import type { WriterPoolLookup, WriterPools } from "./writer-pool.ts";
 import type { RunRecordCleanup } from "./record-cleanup.ts";
 import { cleanupFailureDiagnostic } from "./cleanup-diagnostic.ts";
 import type { RunSettlement } from "./settlement.ts";
-import { MAX_ERROR_CHARS, sanitizeDiagnosticText, sanitizeName, snapshotView } from "./state.ts";
+import { MAX_ERROR_CHARS, sanitizeDiagnosticText, sanitizeName } from "./state.ts";
 import { scriptOriginForStart, scriptedWriterAdmissionError } from "./launch-policy.ts";
 import type { RunWorkspaceControl } from "./workspace-control.ts";
 import {
@@ -290,17 +291,16 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
               : undefined;
             const record: RunRecord = {
               scriptOrigin: scriptOriginForStart(records, request, scriptedRoot),
-              view: initialRunView(plan, parent, { id, name }, driver.capabilities, now),
+              view: initialRunView(plan, parent, id, driver.capabilities, now),
               scope,
               driver,
               launch: backendLaunchRequest(plan, { id, name }),
               activeTools: new Map(),
               nativeAgents: new Set(),
               cleanupSettlement,
-              cleanupDisposition: "pending",
+              cleanupDisposition: "none",
               pauseRequested: false,
               stoppedByParent: false,
-              cleanupPending: false,
               runStateReclaimState: "pending",
               ...(canonicalWriterCwd && { canonicalWriterCwd, writerPool }),
               initializationPending: true,
@@ -426,7 +426,7 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
               reserved.view = { ...reserved.view, lastActivityAt: startedAt };
               yield* publish;
               return {
-                view: snapshotView(reserved.view),
+                view: snapshotRun(reserved),
                 pendingSettlement,
               };
             }),
@@ -486,7 +486,10 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
                 const nextCandidate = failedRunNextCandidate(reserved.view);
                 failedStartRecoveries.set(error, {
                   runId: reserved.view.id,
-                  cleanupDisposition: reserved.cleanupDisposition,
+                  cleanupDisposition:
+                    reserved.cleanupDisposition === "none"
+                      ? "pending"
+                      : reserved.cleanupDisposition,
                   ...(nextCandidate && { nextCandidate }),
                 });
               }),

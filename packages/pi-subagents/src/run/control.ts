@@ -12,9 +12,12 @@ import {
   type SubagentSendOutcome,
 } from "./model.ts";
 import {
+  beginCleanup,
+  isCleanupOwed,
   clearRunActivity,
   commitRunPauseLocked,
   requireCapability,
+  snapshotRun,
   type RunContext,
   type RunRecord,
 } from "./internal.ts";
@@ -30,7 +33,7 @@ import type { RunProcessControls } from "./process-lifecycle.ts";
 import type { RunRecordCleanup } from "./record-cleanup.ts";
 import type { RunSettlement } from "./settlement.ts";
 import { runSessionOwned } from "./session-owned.ts";
-import { MAX_ERROR_CHARS, sanitizeDiagnosticText, sanitizeName, snapshotView } from "./state.ts";
+import { MAX_ERROR_CHARS, sanitizeDiagnosticText, sanitizeName } from "./state.ts";
 import { recordRunWarning } from "./warnings.ts";
 import { requireControlExpectation } from "./control-admission.ts";
 
@@ -116,7 +119,7 @@ export function controlOperations(dependencies: RunControlDependencies) {
             );
           message.recordNoticeLocked(record, "guided", now);
           yield* publish;
-          return snapshotView(record.view);
+          return snapshotRun(record);
         }),
       );
     });
@@ -260,7 +263,7 @@ export function controlOperations(dependencies: RunControlDependencies) {
               claimed.record.replyPendingRequestId = undefined;
             message.recordNoticeLocked(claimed.record, "answered", now);
             yield* publish;
-            return snapshotView(claimed.record.view);
+            return snapshotRun(claimed.record);
           }),
         ),
       ),
@@ -387,7 +390,7 @@ export function controlOperations(dependencies: RunControlDependencies) {
           const now = yield* Clock.currentTimeMillis;
           return yield* withLock(
             Effect.gen(function* () {
-              if (record.view.state === "paused") return snapshotView(record.view);
+              if (record.view.state === "paused") return snapshotRun(record);
               if (record.view.state !== "running" && record.view.state !== "waiting_for_parent")
                 return yield* invalidRequest(
                   "interrupt_outcome_uncertain",
@@ -416,9 +419,8 @@ export function controlOperations(dependencies: RunControlDependencies) {
           const record = yield* requireRecord(id);
           yield* requireControlExpectation(record, expected);
           record.launch = { ...record.launch, name };
-          record.view = { ...record.view, name };
           yield* publish;
-          return snapshotView(record.view);
+          return snapshotRun(record);
         }),
       );
       yield* sendPeerNotices(id);
@@ -438,7 +440,7 @@ export function controlOperations(dependencies: RunControlDependencies) {
           if (isTerminalRunState(selected.view.state))
             return {
               record: selected,
-              cleanupRequired: selected.cleanupPending,
+              cleanupRequired: isCleanupOwed(selected),
               preserveOutcome: true,
               recoverCleanup:
                 selected.cleanupDisposition === "quarantined" ||
@@ -447,7 +449,7 @@ export function controlOperations(dependencies: RunControlDependencies) {
           if (selected.view.state === "stopping")
             return { record: selected, cleanupRequired: true as const };
           selected.stoppedByParent = true;
-          selected.cleanupPending = true;
+          beginCleanup(selected);
           clearRunActivity(selected);
           selected.view = {
             ...selected.view,
@@ -467,12 +469,10 @@ export function controlOperations(dependencies: RunControlDependencies) {
           ? closeRecordScope(record).pipe(
               Effect.andThen(recoverCleanup ? verifyCleanup(record) : Effect.void),
               Effect.andThen(() =>
-                preserveOutcome
-                  ? Effect.succeed(snapshotView(record.view))
-                  : settle(record, "stopped"),
+                preserveOutcome ? Effect.succeed(snapshotRun(record)) : settle(record, "stopped"),
               ),
             )
-          : Effect.succeed(snapshotView(record.view)),
+          : Effect.succeed(snapshotRun(record)),
     );
 
   return { deliver, interrupt, rename, stop };

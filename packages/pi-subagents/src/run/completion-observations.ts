@@ -3,7 +3,7 @@ import * as Scope from "effect/Scope";
 import { invokeHostCallback } from "pi-cosmic-core";
 import { claimCompletion, completionClaimOwner, releaseCompletionClaim } from "./completion.ts";
 import { invalidRequest, type SubagentRuntimeClosedError } from "./errors.ts";
-import { type RunContext, type RunRecord, type WithRunLock } from "./internal.ts";
+import { snapshotRun, type RunContext, type RunRecord, type WithRunLock } from "./internal.ts";
 import {
   isTerminalRunState,
   isParentActionRequiredRun,
@@ -77,7 +77,7 @@ export function completionObservationOperations(
 
   const observeRecord = (record: RunRecord, claimToken: string): SubagentRunObservation => {
     const generation = record.completionGeneration;
-    const view = withTreeMetadata(record.view);
+    const view = withTreeMetadata(snapshotRun(record));
     if (!isTerminalRunState(view.state)) return { run: view };
     const unresolved = record.completionGenerations.has(generation);
     const claimOwner = completionClaimOwner(record, generation);
@@ -190,7 +190,7 @@ export function completionObservationOperations(
       record.view.state === "waiting_for_parent" &&
       record.view.question !== undefined &&
       questionRecipientRunId(records, record.view.id) === callerRunId
-        ? [redactCompletionReport(withTreeMetadata(record.view))]
+        ? [redactCompletionReport(withTreeMetadata(snapshotRun(record)))]
         : [],
     );
   };

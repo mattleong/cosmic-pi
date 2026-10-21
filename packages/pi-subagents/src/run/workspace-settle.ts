@@ -54,7 +54,6 @@ export function workspaceSettleOperations(
       record.view.state !== "completed" ||
       record.assignment.epoch !== assignmentEpoch ||
       record.process !== undefined ||
-      record.cleanupPending ||
       record.cleanupDisposition !== "confirmed" ||
       binding.state.phase !== "idle" ||
       binding.state.knowledge.kind !== "unreviewed"
@@ -70,9 +69,7 @@ export function workspaceSettleOperations(
       if (!engine) return;
       const cleanup = yield* withLock(
         Effect.sync(() =>
-          record.cleanupDisposition === "confirmed" && !record.cleanupPending
-            ? undefined
-            : record.cleanupSettlement,
+          record.cleanupDisposition === "confirmed" ? undefined : record.cleanupSettlement,
         ),
       );
       if (cleanup && (yield* Deferred.await(cleanup)) !== "confirmed") return;

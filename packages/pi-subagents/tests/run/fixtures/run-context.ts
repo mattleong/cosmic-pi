@@ -13,6 +13,7 @@ import type {
 import { WriterLeaseService } from "../../../src/boundary/writer-lease.ts";
 import { SubagentNotFoundError } from "../../../src/run/errors.ts";
 import type { RunContext, RunRecord } from "../../../src/run/internal.ts";
+import type { SubagentRunView } from "../../../src/run/model.ts";
 import type { RunNotificationDelivery } from "../../../src/run/notification-delivery.ts";
 import { WriterPools } from "../../../src/run/writer-pool.ts";
 import { settlementOperations } from "../../../src/run/settlement.ts";
@@ -116,38 +117,50 @@ export const backendHandleFixture = (overrides: Partial<BackendHandle> = {}) =>
     return handle;
   });
 
-export const runRecordFixture = (overrides: Partial<RunRecord> = {}) =>
+/** A record whose launch, assignment, and warnings hold what the given view shows. */
+export const runRecordFixture = (
+  overrides: Partial<Omit<RunRecord, "view">> & { readonly view?: SubagentRunView } = {},
+) =>
   Effect.gen(function* () {
+    const { view: shown = view(), ...rest } = overrides;
+    const {
+      name,
+      assignmentEpoch,
+      warning: _warning,
+      warningSource,
+      childWarning,
+      systemWarning,
+      ...stored
+    } = shown;
     const record: RunRecord = {
       scriptOrigin: false,
-      view: view(),
+      view: stored,
       scope: yield* Scope.make(),
       driver: inertDriver,
-      launch: launchFixture,
+      launch: { ...launchFixture, name },
       activeTools: new Map(),
       nativeAgents: new Set(),
       cleanupSettlement: yield* Deferred.make<"confirmed" | "quarantined">(),
-      cleanupDisposition: "pending",
+      cleanupDisposition: "none",
       pauseRequested: false,
       stoppedByParent: false,
-      cleanupPending: false,
       runStateReclaimState: "pending",
       initializationPending: false,
       notificationGeneration: 0,
       completionGeneration: 0,
-      warningSlots: {},
+      warningSlots: { child: childWarning, system: systemWarning, latest: warningSource },
       completionGenerations: new Map(),
       completionClaims: new Map(),
       assignment: {
-        epoch: 1,
+        epoch: assignmentEpoch,
         phase: "preparing",
         attemptToken: "fixture",
         startedObserved: false,
         outcomeUncertain: false,
         pendingRunSettled: false,
       },
-      nextAssignmentEpoch: 2,
-      ...overrides,
+      nextAssignmentEpoch: assignmentEpoch + 1,
+      ...rest,
     };
     return record;
   });

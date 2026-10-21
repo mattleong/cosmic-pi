@@ -1,9 +1,8 @@
 import * as Effect from "effect/Effect";
 import type { SubagentError } from "./errors.ts";
-import type { RunContext, RunRecord } from "./internal.ts";
+import { snapshotRun, type RunContext, type RunRecord } from "./internal.ts";
 import type { SubagentControlExpectation, SubagentRunView } from "./model.ts";
 import { runSessionOwned } from "./session-owned.ts";
-import { snapshotView } from "./state.ts";
 import { descendantRunIds } from "./tree.ts";
 import { requireControlExpectation } from "./control-admission.ts";
 
@@ -43,7 +42,7 @@ export const subtreeStopper =
             stopRun(target.view.id),
           );
           if (failures[0]) return yield* failures[0];
-          return stopped.at(-1) ?? snapshotView((yield* requireRecord(id)).view);
+          return stopped.at(-1) ?? snapshotRun(yield* requireRecord(id));
         }),
     );
   };

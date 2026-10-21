@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import { snapshotRun } from "../../src/run/internal.ts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -32,7 +33,7 @@ describe("completion admission", () => {
           completionGate.withPermits(1)(
             Deferred.succeed(enteredGate, undefined).pipe(Effect.andThen(effect)),
           ),
-        currentProjection: () => ({ revision: 1, runs: [record.view] }),
+        currentProjection: () => ({ revision: 1, runs: [snapshotRun(record)] }),
         waitForRevision: () => Effect.never,
         allocateClaimToken: () => `claim-${++token}`,
         delivery: {

@@ -2,6 +2,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import type { WriterLease } from "../boundary/writer-lease.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
+import { isCleanupOwed } from "./internal.ts";
 import { isActiveRunState } from "./model.ts";
 import { fullyReviewed } from "./workspace-review.ts";
 import {
@@ -93,7 +94,7 @@ export function workspaceIntegrationOperations(
             record.view.writeIntent === "writer" &&
             record.view.writerWorkspaceMode !== "worktree" &&
             overlapsTarget(record.view.cwd) &&
-            (isActiveRunState(record.view.state) || record.cleanupPending),
+            (isActiveRunState(record.view.state) || isCleanupOwed(record)),
         )
       )
         return yield* invalid(

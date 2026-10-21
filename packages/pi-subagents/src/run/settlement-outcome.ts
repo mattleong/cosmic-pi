@@ -4,6 +4,7 @@ import {
   isInactiveRunRecord,
   type PendingInitializationSettlement,
   type RunRecord,
+  type StoredRunView,
 } from "./internal.ts";
 import { isTerminalRunState, type SubagentRunView } from "./model.ts";
 
@@ -78,7 +79,7 @@ export const viewForSettlement = (
   finalText: string | undefined,
   error: string | undefined,
   { errorArchive, ...report }: SettledReport,
-): SubagentRunView => ({
+): StoredRunView => ({
   ...record.view,
   state,
   endedAt: now,

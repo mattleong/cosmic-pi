@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import { snapshotRun } from "../../src/run/internal.ts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Match from "effect/Match";
@@ -64,7 +65,7 @@ describe("captured fleet control authority", () => {
         state: "waiting_for_parent",
         question: { requestId: "old-question", message: "Change directory A?" },
       };
-      const expected = captureSubagentControlExpectation(record.view);
+      const expected = captureSubagentControlExpectation(snapshotRun(record));
       const pending = yield* context.withLock(
         Effect.gen(function* () {
           const replying = yield* controls
@@ -86,7 +87,7 @@ describe("captured fleet control authority", () => {
       yield* controls.deliver(
         record.view.id,
         userMessage("No"),
-        captureSubagentControlExpectation(record.view),
+        captureSubagentControlExpectation(snapshotRun(record)),
       );
       expect(deliveries).toEqual(["new-question: No"]);
     }).pipe(Effect.scoped),
@@ -96,7 +97,7 @@ describe("captured fleet control authority", () => {
     it.effect(`rejects queued ${action} after a new assignment takes over`, () =>
       Effect.gen(function* () {
         const { context, controls, deliveries, record, waiting, withLock } = yield* fixture;
-        const expected = captureSubagentControlExpectation(record.view);
+        const expected = captureSubagentControlExpectation(snapshotRun(record));
         const stopSubtree = subtreeStopper({ ...context, withLock, stopRun: controls.stop });
         const control = Match.value(action).pipe(
           Match.when("send", () =>
@@ -111,17 +112,16 @@ describe("captured fleet control authority", () => {
             const queued = yield* control.pipe(Effect.flip, Effect.forkScoped);
             yield* Deferred.await(waiting);
             record.assignment = runningAssignment(2);
-            record.view = { ...record.view, assignmentEpoch: 2 };
             return queued;
           }),
         );
         expect(yield* Fiber.join(pending)).toMatchObject({ code: "run_control_changed" });
         expect(deliveries).toEqual([]);
         expect(record.view.state).toBe("running");
-        expect(record.view.name).toBe("auth-review");
+        expect(record.launch.name).toBe("auth-review");
         expect(record.pauseRequested).toBe(false);
         expect(record.stoppedByParent).toBe(false);
-        expect(record.cleanupPending).toBe(false);
+        expect(record.cleanupDisposition).toBe("none");
       }).pipe(Effect.scoped),
     );
 

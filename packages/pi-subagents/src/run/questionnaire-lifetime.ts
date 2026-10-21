@@ -1,7 +1,7 @@
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import type { QuestionnaireOwner } from "pi-ask-user/protocol";
-import type { RunRecord } from "./internal.ts";
+import { isCleanupOwed, type RunRecord } from "./internal.ts";
 import { isActiveRunState } from "./model.ts";
 import { invalidRequest, type SubagentError } from "./errors.ts";
 
@@ -51,7 +51,7 @@ export const questionnaireLifetimes = (isClosed: () => boolean) => {
         !isClosed() &&
         record.view.runtime === "pi" &&
         !record.stoppedByParent &&
-        !record.cleanupPending &&
+        !isCleanupOwed(record) &&
         !record.pauseRequested &&
         record.view.state !== "paused" &&
         record.view.state !== "stopping" &&

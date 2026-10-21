@@ -68,7 +68,6 @@ describe("report ownership at assignment activation", () => {
                   context.withLock(
                     Effect.sync(() => {
                       record.process = undefined;
-                      record.cleanupPending = false;
                       record.cleanupDisposition = "confirmed";
                     }),
                   ),
@@ -129,7 +128,7 @@ describe("report ownership at assignment activation", () => {
               { generation: 1, outcome: "completed", finalText: REPORT },
             ]);
             expect(record.lastBackendReport?.deliveryId).toBe("accepted");
-            expect(record.cleanupPending).toBe(true);
+            expect(record.cleanupDisposition).toBe("pending");
             yield* Deferred.await(noticesStarted);
             expect(yield* Deferred.isDone(cleanupStarted)).toBe(false);
 

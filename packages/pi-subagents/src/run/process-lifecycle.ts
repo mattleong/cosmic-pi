@@ -4,7 +4,7 @@ import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import type { BackendAgentMessaging, BackendHandle } from "../backend/model.ts";
-import type { RunContext, RunRecord, WithRunLock } from "./internal.ts";
+import { isCleanupOwed, type RunContext, type RunRecord, type WithRunLock } from "./internal.ts";
 import type { SubagentError } from "./errors.ts";
 import { invalidRequest, SubagentProcessError } from "./errors.ts";
 import type { RunEventHandler } from "./events.ts";
@@ -25,7 +25,7 @@ export function processControlOperations(withLock: WithRunLock) {
           if (
             !process ||
             record.stoppedByParent ||
-            record.cleanupPending ||
+            isCleanupOwed(record) ||
             record.view.state === "stopping" ||
             isTerminalRunState(record.view.state)
           )

@@ -5,11 +5,14 @@ import { MAX_ERROR_CHARS, sanitizeDiagnosticText } from "./state.ts";
 
 type RunWarningSource = "child" | "system";
 
+/** The latest child and system warnings of the current assignment, and which came last. */
 export interface RunWarningSlots {
   readonly child?: string | undefined;
   readonly system?: string | undefined;
+  readonly latest?: RunWarningSource | undefined;
 }
 
+/** Retains the warning and returns the session events that record its notice. */
 export const recordRunWarning = (
   record: RunRecord,
   sessionEvents: SubagentRunView["sessionEvents"],
@@ -18,13 +21,24 @@ export const recordRunWarning = (
   now: number,
   notice = warning,
 ) => {
-  record.warningSlots = { ...record.warningSlots, [source]: warning };
+  record.warningSlots = { ...record.warningSlots, [source]: warning, latest: source };
+  return { sessionEvents: appendNoticeSessionEvent(sessionEvents, "warning", notice, now) };
+};
+
+/** The view's warning fields, which a run snapshot derives from its slots. */
+export const runWarningFields = ({
+  child,
+  system,
+  latest,
+}: RunWarningSlots): Pick<
+  SubagentRunView,
+  "warning" | "warningSource" | "childWarning" | "systemWarning"
+> => {
+  const warning = latest && { child, system }[latest];
   return {
-    warning,
-    warningSource: source,
-    childWarning: record.warningSlots.child,
-    systemWarning: record.warningSlots.system,
-    sessionEvents: appendNoticeSessionEvent(sessionEvents, "warning", notice, now),
+    ...(warning !== undefined && { warning, warningSource: latest }),
+    ...(child !== undefined && { childWarning: child }),
+    ...(system !== undefined && { systemWarning: system }),
   };
 };
 

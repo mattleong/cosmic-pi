@@ -4,8 +4,12 @@ import * as Effect from "effect/Effect";
 import { clipText, sanitizeDiagnosticContent } from "pi-cosmic-core";
 import type { BackendEvent, BackendHandle } from "../backend/model.ts";
 import { type SubagentError, SubagentProcessError, SubagentProtocolError } from "./errors.ts";
-import { isInactiveRunRecord, recordLatestAssistantText, type RunRecord } from "./internal.ts";
-import type { SubagentRunView } from "./model.ts";
+import {
+  isInactiveRunRecord,
+  recordLatestAssistantText,
+  type RunRecord,
+  type StoredRunView,
+} from "./internal.ts";
 import type { RunNotificationDelivery } from "./notification-delivery.ts";
 import type { RunProxyExecution } from "./proxy-execution.ts";
 import type { RunSettlement } from "./settlement.ts";
@@ -61,7 +65,7 @@ export function backendEventHandler(dependencies: RunEventDependencies) {
   const mutateAt = (
     record: RunRecord,
     assignmentEpoch: number | undefined,
-    update: (view: SubagentRunView, now: number) => SubagentRunView | undefined,
+    update: (view: StoredRunView, now: number) => StoredRunView | undefined,
   ) =>
     Clock.currentTimeMillis.pipe(
       Effect.flatMap((now) =>
@@ -104,7 +108,7 @@ export function backendEventHandler(dependencies: RunEventDependencies) {
       queueQuestionLocked(record, {
         type: "question",
         id: current.id,
-        name: current.name,
+        name: record.launch.name,
         requestId: envelope.requestId,
         message,
       });

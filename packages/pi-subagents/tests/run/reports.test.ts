@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import { snapshotRun } from "../../src/run/internal.ts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -307,7 +308,7 @@ describe("SubagentService", () => {
         deliveryId: "conflicting",
         text: "Must not commit.",
       });
-      expect(record.view.warning).toContain("reused delivery identity");
+      expect(snapshotRun(record).warning).toContain("reused delivery identity");
       expect(record.lastBackendReport).toEqual(first);
       expect(record.view.reportGeneration).toBe(0);
       record.assignment.phase = "issuing";

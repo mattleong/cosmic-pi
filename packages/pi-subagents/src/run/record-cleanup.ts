@@ -83,8 +83,11 @@ export function recordCleanup(
   const markCleanupPending = (record: RunRecord) =>
     withLock(
       Effect.gen(function* () {
-        if (record.closingScope === record.scope && record.cleanupDisposition !== "pending") return;
-        record.cleanupPending = true;
+        if (
+          record.closingScope === record.scope &&
+          (record.cleanupDisposition === "confirmed" || record.cleanupDisposition === "quarantined")
+        )
+          return;
         record.cleanupDisposition = "pending";
         record.view = { ...record.view, cleanup: { disposition: "pending" } };
         yield* publish;
@@ -95,7 +98,6 @@ export function recordCleanup(
     withLock(
       Effect.gen(function* () {
         if (record.scope !== scope) return;
-        record.cleanupPending = false;
         record.cleanupDisposition = "confirmed";
         record.cleanupRecovery = undefined;
         record.process = undefined;
@@ -119,7 +121,6 @@ export function recordCleanup(
       Effect.gen(function* () {
         if (record.scope !== scope) return;
         record.writerPool?.quarantineLocked(record.view.id, diagnostic.phase === "writer-lease");
-        record.cleanupPending = true;
         record.cleanupDisposition = "quarantined";
         record.cleanupRecovery = recoverableProcess
           ? { scope, process: recoverableProcess }

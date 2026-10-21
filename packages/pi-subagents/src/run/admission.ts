@@ -2,7 +2,7 @@ import { absurd } from "effect/Function";
 import * as Effect from "effect/Effect";
 import type { CanonicalWriterCwd, WriterLeaseContract } from "../boundary/writer-lease.ts";
 import { invalidRequest, SubagentCapacityError, SubagentWriterConflictError } from "./errors.ts";
-import type { RunRecord } from "./internal.ts";
+import { isCleanupOwed, type RunRecord } from "./internal.ts";
 import { SUBAGENT_ROOT_RUN_ID } from "./model.ts";
 import type { WriterPoolView, WriterPoolLookup } from "./writer-pool.ts";
 
@@ -16,7 +16,7 @@ export const canonicalizeWriterCwd = (writerLeases: WriterLeaseContract, cwd: st
     );
 
 const ownsProcessSlot = (record: RunRecord): boolean =>
-  record.cleanupPending ||
+  isCleanupOwed(record) ||
   record.process !== undefined ||
   record.view.state === "starting" ||
   record.evictionClaim !== undefined;
@@ -78,7 +78,7 @@ export const writerConflictError = (
     const active = activeId ? records.get(activeId) : undefined;
     return new SubagentWriterConflictError({
       activeId: active?.view.id ?? "shared-writer-pool",
-      activeName: active?.view.name ?? "shared writer pool",
+      activeName: active?.launch.name ?? "shared writer pool",
       ...unavailable,
     });
   }
@@ -89,7 +89,7 @@ export const writerConflictError = (
     if (conflict === undefined) continue;
     return new SubagentWriterConflictError({
       activeId: record.view.id,
-      activeName: record.view.name,
+      activeName: record.launch.name,
       ...conflict,
     });
   }
@@ -135,8 +135,8 @@ const writerConflict = (
   canonicalCwd: CanonicalWriterCwd,
 ): WriterConflict | undefined => {
   if (record.canonicalWriterCwd?.digest !== canonicalCwd.digest) return undefined;
-  if (!record.cleanupPending || record.view.writeIntent !== "writer") return undefined;
-  const writer = `Writer ${record.view.name} (${record.view.id})`;
+  if (!isCleanupOwed(record) || record.view.writeIntent !== "writer") return undefined;
+  const writer = `Writer ${record.launch.name} (${record.view.id})`;
   return record.cleanupDisposition === "quarantined"
     ? {
         message: `${writer} remains quarantined because cleanup could not be confirmed.`,

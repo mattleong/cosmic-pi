@@ -14,12 +14,15 @@ import {
 import type { ReportArchive } from "../boundary/report-archive.ts";
 import { processError, type SubagentError, SubagentProcessError } from "./errors.ts";
 import {
+  beginCleanup,
   clearRunActivity,
   commitRunPauseLocked,
   isInactiveRunRecord,
   recordLatestAssistantText,
+  snapshotRun,
   type RunContext,
   type RunRecord,
+  type StoredRunView,
 } from "./internal.ts";
 import type { SubagentReportArchive, SubagentRunView, SubagentUsage } from "./model.ts";
 import { MAX_OUTCOME_PREVIEW_CHARS, MAX_UNRESOLVED_REPORT_GENERATIONS } from "./limits.ts";
@@ -31,7 +34,6 @@ import {
   MAX_ERROR_CHARS,
   sanitizeDiagnosticText,
   sanitizeOutputText,
-  snapshotView,
 } from "./state.ts";
 import {
   settledAssignmentLocked,
@@ -115,7 +117,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
   const mutateEventView = (
     record: RunRecord,
     assignmentEpoch: number | undefined,
-    update: (view: SubagentRunView) => SubagentRunView | undefined,
+    update: (view: StoredRunView) => StoredRunView | undefined,
   ) =>
     withLock(
       Effect.gen(function* () {
@@ -129,7 +131,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
         if (!next) return undefined;
         record.view = next;
         yield* publish;
-        return snapshotView(record.view);
+        return snapshotRun(record);
       }),
     );
   const mergeLateUsage = (record: RunRecord, assignmentEpoch: number, usage: SubagentUsage) =>
@@ -254,15 +256,15 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
       ) {
         // This settlement never reports, so its full text is never archived.
         record.latestAssistantFullText = undefined;
-        return { notifyPeers: false, view: snapshotView(record.view) };
+        return { notifyPeers: false, view: snapshotRun(record) };
       }
       if (record.initializationPending && state !== "stopped") {
         record.pendingInitializationSettlement = { state, ...(error && { error }) };
-        return { notifyPeers: false, view: snapshotView(record.view) };
+        return { notifyPeers: false, view: snapshotRun(record) };
       }
       const completedScope =
         state === "completed" && record.process !== undefined ? record.scope : undefined;
-      if (completedScope) record.cleanupPending = true;
+      if (completedScope) beginCleanup(record);
       const pauseOutcome = record.pauseOutcome;
       record.pauseOutcome = undefined;
       record.pauseRequested = false;
@@ -284,7 +286,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
       if (state === "completed") record.assignment.phase = "reported";
       record.view = viewForSettlement(record, state, now, finalText, settledError, report);
       yield* publish;
-      const view = snapshotView(record.view);
+      const view = snapshotRun(record);
       if (pauseOutcome) Deferred.doneUnsafe(pauseOutcome, Effect.succeed(view));
       // Transfer post-commit work with the outcome, not with its interruptible waiter. Peer notices
       // still precede backend closure, and their interruption cannot abandon cleanup. This fork
@@ -334,7 +336,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
           return false;
         const failure =
           pendingError ?? new SubagentProcessError({ operation: "run", message: diagnostic });
-        record.cleanupPending = true;
+        beginCleanup(record);
         record.backendFailure ??= failure;
         if (
           pendingError?._tag === "SubagentProcessError" &&
@@ -347,7 +349,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
       }),
     ).pipe(
       Effect.flatMap((shouldFail) => {
-        if (!shouldFail) return Effect.succeed(snapshotView(record.view));
+        if (!shouldFail) return Effect.succeed(snapshotRun(record));
         const primaryDiagnostic = sanitizeDiagnosticText(
           record.backendFailure?.message ?? diagnostic,
           MAX_ERROR_CHARS,
@@ -371,7 +373,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
         ...record.view,
         ...recordRunWarning(record, record.view.sessionEvents, "system", warning, now),
       };
-      const view = snapshotView(record.view);
+      const view = snapshotRun(record);
       yield* publish;
       return { kind: "unchanged" as const, view };
     });
@@ -393,10 +395,10 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
       const decision = yield* withLock(
         Effect.gen(function* () {
           if (isInactiveRunRecord(record) || record.assignment.epoch !== report.assignmentEpoch)
-            return { kind: "unchanged" as const, view: snapshotView(record.view) };
+            return { kind: "unchanged" as const, view: snapshotRun(record) };
           const pair = reportPairStatus(record, report);
           if (pair === "exact-retry")
-            return { kind: "unchanged" as const, view: snapshotView(record.view) };
+            return { kind: "unchanged" as const, view: snapshotRun(record) };
           if (pair === "invalid")
             return yield* rejectReportAndPublishLocked(
               record,
@@ -415,7 +417,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
                 now,
               );
             if (!pending) record.assignment.pendingReport = report;
-            return { kind: "buffered" as const, view: snapshotView(record.view) };
+            return { kind: "buffered" as const, view: snapshotRun(record) };
           }
           if (record.assignment.phase !== "running")
             return yield* rejectReportAndPublishLocked(
@@ -434,7 +436,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
 
   const activateAssignmentLocked = (
     record: RunRecord,
-    runningView: SubagentRunView,
+    runningView: StoredRunView,
   ): Effect.Effect<AssignmentActivationReplay> =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
@@ -456,7 +458,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
             assignmentEpoch: record.assignment.epoch,
             terminal: pendingRunSettled.terminal,
           }
-        : { kind: "running", view: snapshotView(record.view) };
+        : { kind: "running", view: snapshotRun(record) };
       yield* publish;
       return replay;
     }).pipe(Effect.uninterruptible);
@@ -472,7 +474,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
           : Effect.succeed(replay.view);
       case "settlement":
         return runSettledFromBackend(record, replay.assignmentEpoch, replay.terminal).pipe(
-          Effect.map(() => snapshotView(record.view)),
+          Effect.map(() => snapshotRun(record)),
         );
       case "running":
         return Effect.succeed(replay.view);
@@ -488,7 +490,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
             !isInactiveRunRecord(record) && record.assignment.epoch === rawReport.assignmentEpoch,
         ),
       );
-      if (!current) return snapshotView(record.view);
+      if (!current) return snapshotRun(record);
       if (
         rawReport.runId !== record.view.id ||
         !Number.isSafeInteger(rawReport.assignmentEpoch) ||
@@ -524,7 +526,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
         withLock(
           Effect.suspend(() =>
             isInactiveRunRecord(record) || record.assignment.epoch !== rawReport.assignmentEpoch
-              ? Effect.succeed(snapshotView(record.view))
+              ? Effect.succeed(snapshotRun(record))
               : Effect.fail(error),
           ),
         ),
@@ -545,7 +547,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
             return undefined;
           record.assignment.startedObserved = true;
           record.pausedAssignmentEpoch = undefined;
-          const running: SubagentRunView = {
+          const running: StoredRunView = {
             ...record.view,
             state: "running",
             endedAt: undefined,

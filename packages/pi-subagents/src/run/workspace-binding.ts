@@ -6,13 +6,12 @@ import type { WriterLease } from "../boundary/writer-lease.ts";
 import type { WorkspaceHandle, WorkspaceLaunch } from "../workspace/model.ts";
 import type { WorkspaceServiceContract } from "../workspace/service.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
-import type { RunContext, RunRecord } from "./internal.ts";
+import { isCleanupOwed, type RunContext, type RunRecord, type StoredRunView } from "./internal.ts";
 import {
   isActiveRunState,
   isTerminalRunState,
   type StartSubagentRequest,
   SUBAGENT_ROOT_RUN_ID,
-  type SubagentRunView,
   type SubagentWorkspaceOutcome,
 } from "./model.ts";
 import { isRunInSubtree } from "./tree.ts";
@@ -232,16 +231,16 @@ export const isWithin = (cwd: string, root: string) =>
   cwd === root || cwd.startsWith(`${root.replace(/\/$/, "")}/`);
 
 export const runHoldsCwd = (record: RunRecord) =>
-  isActiveRunState(record.view.state) || record.process !== undefined || record.cleanupPending;
+  isActiveRunState(record.view.state) || record.process !== undefined || isCleanupOwed(record);
 
 export const runsWithin = (
   records: ReadonlyMap<string, RunRecord>,
   trees: ReadonlyArray<string>,
   except?: RunRecord,
-): ReadonlyMap<RunRecord, SubagentRunView> =>
+): ReadonlyMap<RunRecord, StoredRunView> =>
   new Map(
     [...records.values()].flatMap(
-      (record): ReadonlyArray<readonly [RunRecord, SubagentRunView]> =>
+      (record): ReadonlyArray<readonly [RunRecord, StoredRunView]> =>
         record !== except && trees.some((tree) => isWithin(record.view.cwd, tree))
           ? [[record, record.view]]
           : [],
@@ -379,7 +378,6 @@ export function workspaceControlContext(
     return (
       isTerminalRunState(parent.view.state) &&
       parent.process === undefined &&
-      !parent.cleanupPending &&
       parent.cleanupDisposition === "confirmed" &&
       (caller === SUBAGENT_ROOT_RUN_ID || isRunInSubtree(records, caller, parentRunId))
     );
@@ -458,7 +456,6 @@ export function workspaceControlContext(
       if (
         writer &&
         (writer.process !== undefined ||
-          writer.cleanupPending ||
           writer.cleanupDisposition !== "confirmed" ||
           isActiveRunState(writer.view.state))
       )
@@ -493,8 +490,8 @@ export function workspaceControlContext(
           const record = state.bindings.get(workspaceId)?.record;
           return record &&
             !isActiveRunState(record.view.state) &&
-            record.cleanupDisposition === "pending" &&
-            (record.cleanupPending || record.process !== undefined)
+            (record.cleanupDisposition === "pending" ||
+              (record.cleanupDisposition === "none" && record.process !== undefined))
             ? record.cleanupSettlement
             : undefined;
         }),

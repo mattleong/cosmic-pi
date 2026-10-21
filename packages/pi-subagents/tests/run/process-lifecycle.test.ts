@@ -11,7 +11,7 @@ import * as Scope from "effect/Scope";
 import { interruptingScheduler, yieldUntil } from "pi-cosmic-core/testing";
 import type { BackendEvent, BackendHandle } from "../../src/backend/model.ts";
 import { WriterLeaseService } from "../../src/boundary/writer-lease.ts";
-import type { RunContext, RunRecord } from "../../src/run/internal.ts";
+import { snapshotRun, type RunContext, type RunRecord } from "../../src/run/internal.ts";
 import { processInitializer } from "../../src/run/process-lifecycle.ts";
 import { recordCleanup } from "../../src/run/record-cleanup.ts";
 import { writerSpawnPreparation } from "../../src/run/writer-preparation.ts";
@@ -79,10 +79,9 @@ const processFixture = () =>
           activeTools: new Map(),
           nativeAgents: new Set(),
           cleanupSettlement: yield* Deferred.make<"confirmed" | "quarantined">(),
-          cleanupDisposition: "pending",
+          cleanupDisposition: "none",
           pauseRequested: false,
           stoppedByParent: false,
-          cleanupPending: false,
           runStateReclaimState: "pending",
           canonicalWriterCwd: cwd,
           writerPool: pool,
@@ -118,7 +117,7 @@ const initializer = (
     prepareBackendSpawn,
     initialize: (record) => Effect.suspend(() => record.process!.controls.initialize),
     handleBackendEvent: () => Effect.void,
-    failRun: (record) => Effect.succeed(record.view),
+    failRun: (record) => Effect.succeed(snapshotRun(record)),
   });
 };
 

@@ -4,13 +4,14 @@ import { isOutcomeUncertain, SubagentProcessError } from "./errors.ts";
 import {
   isInactiveRunRecord,
   recordLatestAssistantText,
+  snapshotRun,
   type RunContext,
   type RunRecord,
+  type StoredRunView,
 } from "./internal.ts";
-import type { SubagentRunView } from "./model.ts";
 import type { RunProcessControls } from "./process-lifecycle.ts";
 import type { RunSettlement } from "./settlement.ts";
-import { MAX_ERROR_CHARS, sanitizeDiagnosticText, snapshotView } from "./state.ts";
+import { MAX_ERROR_CHARS, sanitizeDiagnosticText } from "./state.ts";
 import { recordRunWarning } from "./warnings.ts";
 
 interface RunAssignmentDependencies extends Pick<RunContext, "withLock" | "publish"> {
@@ -28,7 +29,7 @@ export const beginNextAssignmentLocked = (
   record: RunRecord,
   attemptToken: string,
   now: number,
-  viewPatch: Partial<SubagentRunView>,
+  viewPatch: Partial<StoredRunView>,
 ): void => {
   record.pausedAssignmentEpoch = undefined;
   recordLatestAssistantText(record, undefined);
@@ -44,17 +45,12 @@ export const beginNextAssignmentLocked = (
   record.view = {
     ...record.view,
     ...viewPatch,
-    assignmentEpoch: record.assignment.epoch,
     state: "starting",
     // Older report payloads remain owned by their completion generations.
     finalText: undefined,
     finalTextTruncation: undefined,
     reportArchive: undefined,
     endedAt: undefined,
-    warning: undefined,
-    warningSource: undefined,
-    childWarning: undefined,
-    systemWarning: undefined,
     error: undefined,
     errorArchive: undefined,
     lastActivityAt: now,
@@ -71,7 +67,7 @@ export function assignmentOperations(dependencies: RunAssignmentDependencies) {
       const result = yield* withLock(
         Effect.gen(function* () {
           if (!isCurrentIssuingAssignment(record, attemptToken))
-            return { kind: "unchanged" as const, view: snapshotView(record.view) };
+            return { kind: "unchanged" as const, view: snapshotRun(record) };
           record.assignment.outcomeUncertain = false;
           return yield* activateAssignmentLocked(record, {
             ...record.view,

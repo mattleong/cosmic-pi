@@ -32,7 +32,7 @@ import {
   type SubagentError,
   type SubagentNotFoundError,
 } from "./errors.ts";
-import type { RunContext, RunRecord } from "./internal.ts";
+import { snapshotRun, type RunContext, type RunRecord } from "./internal.ts";
 import type { RunControlMessage } from "./control.ts";
 import { requireControlExpectation } from "./control-admission.ts";
 import type { AgentMessageResume } from "./resume.ts";
@@ -43,7 +43,6 @@ import type {
   SubagentSendOutcome,
 } from "./model.ts";
 import { sortRuns } from "./projection.ts";
-import { snapshotView } from "./state.ts";
 import { appendMessageSessionEvent, appendNoticeSessionEvent } from "./session-events.ts";
 import { runSessionOwned } from "./session-owned.ts";
 import { projectRunTree } from "./tree.ts";
@@ -159,7 +158,9 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
   ): Effect.Effect<AgentSender, SubagentNotFoundError> => {
     if (caller.kind === "main") return Effect.succeed(MAIN_AGENT_SENDER);
     const record = records.get(caller.runId);
-    return record ? Effect.succeed(runSender(record.view)) : Effect.fail(runNotFound(caller.runId));
+    return record
+      ? Effect.succeed(runSender(snapshotRun(record)))
+      : Effect.fail(runNotFound(caller.runId));
   };
 
   const readMain = (): AgentMainReadout | undefined =>
@@ -316,7 +317,7 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
                 Effect.gen(function* () {
                   recordReceived(record, "guided", now);
                   yield* publish;
-                  const run = snapshotView(record.view);
+                  const run = snapshotRun(record);
                   return {
                     name: run.name,
                     disposition: "guided" as const,
