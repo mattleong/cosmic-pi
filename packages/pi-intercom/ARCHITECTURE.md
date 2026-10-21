@@ -134,7 +134,10 @@ closes or the user prompts again. Nothing limits how many messages arrive or how
 start, as with Claude Code's cross-session messages; a loop between sessions runs until the user
 interrupts it or turns receiving off. Receiving resets to on with each session start; nothing is
 persisted.
-The frame tells the model the message comes from another agent session, not its user.
+The frame tells the model the message comes from another agent session, not its user. Framing,
+sending through the wake, and the latest-reply read are core's shared
+[agent messages](../pi-cosmic-core/src/host-agent-messages.ts), which pi-subagents uses for its main
+agent too; a message sent the moment the session starts streaming arrives as steering.
 
 ## Tools and command
 

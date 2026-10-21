@@ -1,15 +1,10 @@
 import { absurd } from "effect/Function";
+import { agentMessageDeliveryText } from "pi-cosmic-core";
 import type {
   SupervisorAgentListResult,
   SupervisorAgentReadResult,
   SupervisorAgentSendResult,
 } from "./protocol.ts";
-
-const MAIN_DELIVERIES: Record<NonNullable<SupervisorAgentSendResult["mainState"]>, string> = {
-  idle: "started a new turn for the idle main agent",
-  busy: "appended for the busy main agent to read before its turn ends",
-  held: "held for the main agent until its open dialog closes or its user's next prompt after an interrupt",
-};
 
 const sendOutcome = (result: SupervisorAgentSendResult): string => {
   switch (result.disposition) {
@@ -18,7 +13,6 @@ const sendOutcome = (result: SupervisorAgentSendResult): string => {
     case "resumed":
       return "resumed the finished run with this message as its assignment";
     case "guided": {
-      if (result.mainState !== undefined) return MAIN_DELIVERIES[result.mainState];
       const guided = result.confirmed
         ? "delivered as guidance to its current turn"
         : "sent as guidance; delivery confirmation is still pending and it may already have arrived";
@@ -78,6 +72,10 @@ export const agentReadText = (result: SupervisorAgentReadResult): string =>
 
 export const agentSendText = (result: SupervisorAgentSendResult): string =>
   [
-    `Message ${result.messageId} to ${result.to} ${JSON.stringify(result.name)}: ${result.disposition}, ${sendOutcome(result)}.`,
+    `Message ${result.messageId} to ${result.to} ${JSON.stringify(result.name)}: ${result.disposition}${
+      result.mainState === undefined
+        ? `, ${sendOutcome(result)}.`
+        : `. ${agentMessageDeliveryText(result.mainState, "The main agent")}`
+    }`,
     "Do not resend it; any reply arrives as a new message.",
   ].join("\n");

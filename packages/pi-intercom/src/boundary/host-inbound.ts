@@ -1,7 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
-import { invokeHostCallback, latestAssistantText, safeTextPrefix } from "pi-cosmic-core";
+import { invokeHostCallback, readLatestReply, safeTextPrefix } from "pi-cosmic-core";
 import type { IntercomDelivery } from "../delivery.ts";
 import {
   IntercomRefused,
@@ -45,14 +45,7 @@ export const hostIntercomInbound = (
     };
   });
 
-  const readLast = read((): LastMessage => {
-    const latest = latestAssistantText(ctx.sessionManager.getBranch(), MAX_READ_BYTES);
-    return {
-      ...(latest !== undefined && { text: latest.text }),
-      truncated: latest?.truncated ?? false,
-      state: sessionState(ctx),
-    };
-  });
+  const readLast = read((): LastMessage => readLatestReply(ctx, MAX_READ_BYTES));
 
   const deliver = (message: InboundMessage) =>
     Effect.suspend(() => {

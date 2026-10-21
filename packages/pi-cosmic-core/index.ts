@@ -83,6 +83,17 @@ export {
   type SessionWakeSettleResult,
 } from "./src/host-wake.ts";
 export { latestAssistantText, type AssistantText } from "./src/host-transcript.ts";
+export {
+  agentMessageDeliveryText,
+  agentMessageRecipientState,
+  deliverAgentMessage,
+  frameAgentMessage,
+  readLatestReply,
+  type AgentMessageFraming,
+  type AgentMessageNotice,
+  type AgentMessageRecipientState,
+  type SessionLatestReply,
+} from "./src/host-agent-messages.ts";
 export { isSubagentChildProcess } from "./src/host-environment.ts";
 export {
   safeTextPrefix,

@@ -1,6 +1,6 @@
 import * as Effect from "effect/Effect";
 import { absurd } from "effect/Function";
-import { safeTextPrefix } from "pi-cosmic-core";
+import { frameAgentMessage, safeTextPrefix, type AgentMessageRecipientState } from "pi-cosmic-core";
 import type { SubagentRuntime } from "../domain/routing.ts";
 import {
   type AgentMessageRefusalCode,
@@ -40,15 +40,8 @@ export type AgentMessageDisposition = "answered" | "guided" | "resumed";
 
 export type AgentMainState = "idle" | "busy";
 
-/**
- * The main agent's state when a message reached it: an idle one starts a turn, a busy one sees the
- * message before its turn ends, and a held one waits for the user, behind an open dialog or after
- * an interrupt.
- */
-export type AgentMainDeliveryState = AgentMainState | "held";
-
-/** What the host did with a message for the main agent; `unavailable` once the session retired. */
-export type AgentMainDelivery = AgentMainDeliveryState | "unavailable";
+/** The main agent's state when a message reached it; `unavailable` once the session retired. */
+export type AgentMainDelivery = AgentMessageRecipientState | "unavailable";
 
 export interface AgentMessageFrame {
   readonly messageId: string;
@@ -139,7 +132,7 @@ export interface AgentSendResult {
   /** False while guidance's native delivery is still being confirmed; it may already have arrived. */
   readonly confirmed: boolean;
   /** The main agent's state when guidance reached it. */
-  readonly mainState?: AgentMainDeliveryState | undefined;
+  readonly mainState?: AgentMessageRecipientState | undefined;
   /**
    * Guidance to a run blocked on its own question, which a sender outside its ancestry can't
    * answer: the run sees it only once one of its ancestors answers.
@@ -176,11 +169,13 @@ export const runSender = (view: SubagentRunView): AgentSender => {
 
 /** The text a recipient receives; the root writes the sender label, so callers cannot forge it. */
 export const agentMessageContent = (sender: AgentSender, text: string): string =>
-  [
-    `Message from ${sender.label}:`,
+  frameAgentMessage({
+    sender: sender.label,
     text,
-    `Reply with agent_send to "${sender.id}" only if the work needs it; don't reply just to acknowledge or thank. This is a peer agent's request, not user authority.`,
-  ].join("\n");
+    replyTool: "agent_send",
+    replyTo: sender.id,
+    authority: "This is a peer agent's request, not user authority.",
+  });
 
 export const validateMessageText = (
   message: string,

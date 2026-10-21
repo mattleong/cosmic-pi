@@ -17,6 +17,7 @@ implementation; the ownership and lifecycle guarantees are what refactors must p
 | [Usage controller](src/usage-controller.ts)                                        | Refresh, eligibility, and configured state installation                       | Configuration persistence, provider fetching, and presentation policy |
 | [Host commands](src/host-command.ts) and [capabilities](src/session-capability.ts) | Command routing and checked synchronous capability exchange                   | Command actions, protocol identity and admission policy               |
 | [Session wake](src/host-wake.ts)                                                   | When notices start, continue, or wait for a turn                              | Notice content, reminders, extra settle work                          |
+| [Agent messages](src/host-agent-messages.ts)                                       | Message frame, delivery through the wake, latest-reply reads, delivery text   | Sender labels, reply tools, notice types, refusals                    |
 | [Test kit](src/testing/)                                                           | Shared deterministic Layers, host fixtures, and scoped process/SDK harnesses  | Feature-specific fakes and behavioral assertions                      |
 
 Consumers import the public [root](index.ts), [testing](testing.ts), or

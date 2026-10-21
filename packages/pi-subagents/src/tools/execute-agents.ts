@@ -4,6 +4,7 @@ import { absurd } from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import type { CompactIssue } from "pi-code-previews";
 import {
+  agentMessageDeliveryText,
   clipText,
   MESSAGE_TEXT_LIMIT,
   sanitizeTerminalLine,
@@ -16,7 +17,6 @@ import {
   type AgentCaller,
   type AgentListEntry,
   type AgentListResult,
-  type AgentMainDeliveryState,
   type AgentReadout,
   type AgentReadResult,
   type AgentSendResult,
@@ -179,14 +179,9 @@ const listDetails = (result: AgentListResult): AgentToolDetails => {
   };
 };
 
-const MAIN_SEND_TEXT: Record<AgentMainDeliveryState, string> = {
-  idle: "The main agent was idle; your message started its turn.",
-  busy: "The main agent is busy; it sees your message before its current turn ends.",
-  held: "The main agent is waiting on the user, behind an open dialog or after an interrupt; your message waits in its conversation and wakes it when the dialog closes or on the user's next prompt.",
-};
-
 const guidedText = (result: AgentSendResult, label: string): string => {
-  if (result.mainState !== undefined) return MAIN_SEND_TEXT[result.mainState];
+  if (result.mainState !== undefined)
+    return agentMessageDeliveryText(result.mainState, "The main agent");
   const sent = result.confirmed
     ? `Delivered your message to ${label} as guidance for its current work.`
     : `Sent your message to ${label} as guidance; ${pendingDeliveryEvidence.message.toLowerCase()}. ${pendingDeliveryEvidence.detail}`;

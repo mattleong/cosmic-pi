@@ -1,4 +1,10 @@
-import { countLabel, formatBytes, sanitizeTerminalLine } from "pi-cosmic-core";
+import {
+  agentMessageDeliveryText,
+  agentMessageRecipientState,
+  countLabel,
+  formatBytes,
+  sanitizeTerminalLine,
+} from "pi-cosmic-core";
 import { MAX_MESSAGE_CHARS, MAX_READ_BYTES } from "../transport/protocol.ts";
 import type {
   ListedSession,
@@ -41,15 +47,6 @@ export const listText = (result: SessionListContract): string => {
   ].join("\n");
 };
 
-const DISPOSITION_TEXT: Record<
-  Extract<SessionSendDetails, { readonly outcome: "delivered" }>["disposition"],
-  string
-> = {
-  woken: "It was idle and started a turn to read it.",
-  queued: "It's busy and will read it when its current turn ends.",
-  held: "It's waiting on its user, behind an open dialog or after an interrupt; your message waits in its conversation and wakes it when the dialog closes or on the user's next prompt.",
-};
-
 const UNCERTAIN_TEXT: Record<
   Extract<SessionSendDetails, { readonly outcome: "uncertain" }>["reason"],
   string
@@ -61,7 +58,7 @@ const UNCERTAIN_TEXT: Record<
 
 export const sendText = (result: SessionSendDetails): string =>
   result.outcome === "delivered"
-    ? `Delivered to ${sessionLabel(result.session)}. ${DISPOSITION_TEXT[result.disposition]} A reply, if any, arrives as a message from that session; don't wait for it in a loop.`
+    ? `Delivered to ${sessionLabel(result.session)}. ${agentMessageDeliveryText(agentMessageRecipientState(result.disposition), "It")} A reply, if any, arrives as a message from that session; don't wait for it in a loop.`
     : `The message to ${sessionLabel(result.session)} may or may not have been delivered: ${UNCERTAIN_TEXT[result.reason]}. Don't resend it. Use session_read later to see whether the session responded.`;
 
 export const readText = (result: SessionReadContract): string => {

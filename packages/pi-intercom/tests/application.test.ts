@@ -134,7 +134,7 @@ layer(nodeFilePlatformLayer)("intercom application", (it) => {
       expect(yield* deliverMessage(record, peerMessage)).toBe("queued");
       expect(first.sendMessage).toHaveBeenCalledWith(
         expect.objectContaining({ customType: INTERCOM_MESSAGE_TYPE }),
-        { triggerTurn: false },
+        expect.objectContaining({ triggerTurn: false }),
       );
       expect(
         yield* failureOf(describeSession({ socket: record.socket, token: other.token })),

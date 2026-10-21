@@ -207,7 +207,7 @@ layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
 
       expect(detailsOf(woken)).toMatchObject({ outcome: "delivered", disposition: "woken" });
       const [sent, options] = b.sendMessage.mock.calls[0] ?? [];
-      expect(options).toEqual({ triggerTurn: true });
+      expect(options).toMatchObject({ triggerTurn: true });
       expect(sent).toMatchObject({
         customType: INTERCOM_MESSAGE_TYPE,
         display: true,
@@ -221,7 +221,7 @@ layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
         message: "Also lint.",
       });
       expect(detailsOf(queued)).toMatchObject({ outcome: "delivered", disposition: "queued" });
-      expect(b.sendMessage.mock.calls[1]?.[1]).toEqual({ triggerTurn: false });
+      expect(b.sendMessage.mock.calls[1]?.[1]).toMatchObject({ triggerTurn: false });
     }),
   );
 
