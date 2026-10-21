@@ -195,25 +195,20 @@ const StartContractSchema = Schema.Struct({
   ).check(Schema.isMaxLength(MAX_START_BATCH)),
 });
 
-const awaitFields = {
+// One struct rather than a union per outcome: Pi's codemode description summarizes an object's
+// fields but renders any other output schema in full on every request.
+const AwaitContractSchema = Schema.Struct({
   ...envelope(SUBAGENT_TOOL_NAME.await),
+  outcome: Schema.Literals(["finished", "attention", "cancelled", "timed_out", "user_input"]),
   until: UntilSchema,
   requestedRunIds: RunIdsSchema,
-};
-const AwaitContractSchema = Schema.Union([
-  Schema.Struct({
-    ...awaitFields,
-    outcome: Schema.Literals(["finished", "attention"]),
-    targets: RunTargetsSchema,
-  }),
-  Schema.Struct({
-    ...awaitFields,
-    outcome: Schema.Literals(["cancelled", "timed_out", "user_input"]),
-    targets: Schema.Array(WithheldRunTargetSchema).check(Schema.isMaxLength(MAX_TARGET_RUNS)),
-    unobservedRunIds: RunIdsSchema,
-    cleanup: Schema.Literals(["confirmed", "unconfirmed"]),
-  }),
-]);
+  /** An ended wait (cancelled, timed out, or user input) withholds every report. */
+  targets: RunTargetsSchema,
+  /** Only on an ended wait. */
+  unobservedRunIds: Schema.optionalKey(RunIdsSchema),
+  /** Only on an ended wait. */
+  cleanup: Schema.optionalKey(Schema.Literals(["confirmed", "unconfirmed"])),
+});
 
 const LifecycleContractSchema = Schema.Struct({
   ...envelope(SUBAGENT_TOOL_NAME.lifecycle),

@@ -266,4 +266,21 @@ describe("native scripted subagent workflows", () => {
       expect(output(result.text)).toBe("finished");
     }),
   );
+
+  // Pi's codemode description lists an object result's field names but renders any other output
+  // schema, such as a union, in full on every request.
+  nativeTest("declares every script result as one object", () =>
+    Effect.gen(function* () {
+      const h = yield* nativeCodemodeSession(subagentServiceDouble({}));
+      const schemas = h.session
+        .getAllTools()
+        .filter((tool) => tool.name.startsWith("agent_"))
+        .flatMap((tool) => {
+          const schema = h.session.getToolDefinition(tool.name)?.outputSchema;
+          return schema === undefined ? [] : [[tool.name, schema] as const];
+        });
+      expect(schemas.map(([name]) => name)).toContain("agent_await");
+      for (const [name, schema] of schemas) expect(schema, name).toMatchObject({ type: "object" });
+    }),
+  );
 });
