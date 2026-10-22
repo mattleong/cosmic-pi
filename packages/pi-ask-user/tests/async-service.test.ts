@@ -15,7 +15,7 @@ import { issueMessageStyleProblems } from "pi-code-previews/testing";
 import { failureMessage } from "pi-cosmic-core";
 import { pausedScheduler } from "pi-cosmic-core/testing";
 import { AskUserService, type AskUserHost } from "../src/questionnaire/service.ts";
-import { AskUserHostError } from "../src/questionnaire/errors.ts";
+import { AskUserHostError, AskUserRuntimeClosedError } from "../src/questionnaire/errors.ts";
 import type { AskUserOutcome } from "../src/questionnaire/model.ts";
 import {
   MAX_RETAINED_REQUESTS,
@@ -308,19 +308,19 @@ it.effect("scope shutdown closes the presenter and cannot emit an answer afterwa
   }),
 );
 
-it.effect("acknowledging failed openings recovers a full registry after host recovery", () =>
+it.effect("failed openings report the host failure and recover a full registry", () =>
   Effect.gen(function* () {
     const recovered = yield* Ref.make(false);
+    const unavailable = new AskUserHostError({ operation: "open", message: "Unavailable" });
     const host: AskUserHost = (_request, presence) =>
       Effect.gen(function* () {
-        if (!(yield* Ref.get(recovered)))
-          return yield* new AskUserHostError({ operation: "open", message: "Unavailable" });
+        if (!(yield* Ref.get(recovered))) return yield* unavailable;
         if (presence) yield* Deferred.succeed(presence.opened, undefined);
         return yield* Effect.never;
       });
     const service = yield* acquireService(host, () => Effect.void);
     for (let i = 0; i < MAX_RETAINED_REQUESTS; i++) {
-      expect(yield* Effect.flip(service.startAsync(request))).toBeInstanceOf(AskUserHostError);
+      expect(yield* Effect.flip(service.startAsync(request))).toBe(unavailable);
     }
     const listed = yield* service.controlAsync({ action: "status" });
     expect(listed.requests).toHaveLength(MAX_RETAINED_REQUESTS);
@@ -398,6 +398,50 @@ it.effect("queued admission is bounded and shutdown never mounts waiting request
     yield* Scope.close(scope, Exit.void);
     expect(yield* Ref.get(f.released)).toBe(1);
     expect(yield* Ref.get(f.messages)).toEqual([]);
+  }),
+);
+
+it.effect("shutdown never mounts a blocking request queued behind an active questionnaire", () =>
+  Effect.gen(function* () {
+    const mounted = yield* Ref.make<ReadonlyArray<string>>([]);
+    const host: AskUserHost = (input, presence) =>
+      Effect.gen(function* () {
+        yield* Ref.update(mounted, (items) => [...items, input.questions[0]!.key]);
+        if (!presence) return outcome;
+        yield* Deferred.succeed(presence.opened, undefined);
+        return yield* Effect.never;
+      });
+    const scope = yield* Scope.make();
+    const service = yield* acquireService(host, () => Effect.void).pipe(Scope.provide(scope));
+    yield* service.startAsync(keyedRequest(0));
+    const blocking = yield* Effect.forkChild(service.ask(keyedRequest(1)), {
+      startImmediately: true,
+    });
+    yield* Scope.close(scope, Exit.void);
+    for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
+    expect(yield* Ref.get(mounted)).toEqual(["0"]);
+    expect(yield* Effect.flip(Fiber.join(blocking))).toBeInstanceOf(AskUserRuntimeClosedError);
+  }),
+);
+
+it.effect("shutdown settles an in-progress await and an opening start with a closed error", () =>
+  Effect.gen(function* () {
+    const mountedScope = yield* Scope.make();
+    const { service } = yield* startMounted().pipe(Scope.provide(mountedScope));
+    const id = (yield* control(service, "status"))!.requestId;
+    const waiter = yield* Effect.forkChild(control(service, "await", id), {
+      startImmediately: true,
+    });
+    yield* Scope.close(mountedScope, Exit.void);
+    expect(yield* Effect.flip(Fiber.join(waiter))).toBeInstanceOf(AskUserRuntimeClosedError);
+
+    const f = yield* fixture;
+    const openingScope = yield* Scope.make();
+    const opening = yield* acquireService(f.host, f.delivery).pipe(Scope.provide(openingScope));
+    const start = yield* Effect.forkChild(opening.startAsync(request));
+    yield* Deferred.await(f.entered);
+    yield* Scope.close(openingScope, Exit.void);
+    expect(yield* Effect.flip(Fiber.join(start))).toBeInstanceOf(AskUserRuntimeClosedError);
   }),
 );
 

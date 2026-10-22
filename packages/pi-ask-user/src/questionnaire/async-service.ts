@@ -1,11 +1,18 @@
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Queue from "effect/Queue";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
-import { AskUserAsyncError, AskUserHostError, AskUserValidationError } from "./errors.ts";
+import {
+  AskUserAsyncError,
+  AskUserHostError,
+  AskUserRuntimeClosedError,
+  AskUserValidationError,
+} from "./errors.ts";
 import { MAX_RETAINED_REQUESTS, type AsyncQuestionnaireSnapshot } from "./async-model.ts";
 import {
   MAX_WORK_DESCRIPTION_LENGTH,
@@ -23,8 +30,8 @@ export type AsyncDelivery = (
 
 interface Entry {
   readonly snapshot: AsyncQuestionnaireSnapshot;
-  readonly opened: Deferred.Deferred<void, AskUserHostError>;
-  readonly completed: Deferred.Deferred<void>;
+  readonly opened: Deferred.Deferred<void, AskUserHostError | AskUserRuntimeClosedError>;
+  readonly completed: Deferred.Deferred<void, AskUserRuntimeClosedError>;
   readonly cancel: Deferred.Deferred<void>;
   readonly waiter?: symbol;
   readonly deliveryAttempts: number;
@@ -56,7 +63,24 @@ export const acquireAsyncQuestionnaires = Effect.fn("AskUserService.acquireAsync
   const counter = yield* Ref.make(0);
   const admission = yield* Semaphore.make(1);
   const closed = yield* Ref.make(false);
-  yield* Scope.addFinalizer(parentScope, Ref.set(closed, true));
+  // Runs before the presenter scope closes. Interrupted presenters cannot settle their entries,
+  // so closure releases every opening and waiting caller. The admission permit keeps a start
+  // from registering an entry after this snapshot.
+  yield* Scope.addFinalizer(
+    parentScope,
+    admission.withPermit(
+      Effect.gen(function* () {
+        yield* Ref.set(closed, true);
+        const error = new AskUserRuntimeClosedError({
+          message: "The questionnaire session closed before this questionnaire finished.",
+        });
+        for (const entry of yield* Ref.get(state)) {
+          yield* Deferred.fail(entry.opened, error);
+          yield* Deferred.fail(entry.completed, error);
+        }
+      }),
+    ),
+  );
 
   const get = (id: string) =>
     Ref.get(state).pipe(
@@ -157,10 +181,14 @@ export const acquireAsyncQuestionnaires = Effect.fn("AskUserService.acquireAsync
       yield* activity.settled(id, outcome?.outcome ?? "failed");
       yield* Deferred.fail(
         entry.opened,
-        new AskUserHostError({
-          operation: "open",
-          message: "The questionnaire closed before its overlay opened.",
-        }),
+        Option.getOrElse(
+          Exit.isFailure(result) ? Cause.findErrorOption(result.cause) : Option.none(),
+          () =>
+            new AskUserHostError({
+              operation: "open",
+              message: "The questionnaire closed before its overlay opened.",
+            }),
+        ),
       );
       yield* Deferred.succeed(entry.completed, undefined);
       yield* deliver(id);
@@ -198,8 +226,8 @@ export const acquireAsyncQuestionnaires = Effect.fn("AskUserService.acquireAsync
           };
           const entry: Entry = {
             snapshot,
-            opened: yield* Deferred.make<void, AskUserHostError>(),
-            completed: yield* Deferred.make<void>(),
+            opened: yield* Deferred.make<void, AskUserHostError | AskUserRuntimeClosedError>(),
+            completed: yield* Deferred.make<void, AskUserRuntimeClosedError>(),
             cancel: yield* Deferred.make<void>(),
             deliveryAttempts: 0,
           };

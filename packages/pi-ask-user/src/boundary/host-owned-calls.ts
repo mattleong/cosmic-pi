@@ -30,7 +30,7 @@ interface QuestionnaireCapabilityOptions {
   readonly run: (
     effect: Effect.Effect<
       AskUserOutcome,
-      AskUserValidationError | AskUserHostError | AskUserAsyncError,
+      AskUserValidationError | AskUserHostError | AskUserAsyncError | AskUserRuntimeClosedError,
       AskUserService
     >,
     signal: AbortSignal,

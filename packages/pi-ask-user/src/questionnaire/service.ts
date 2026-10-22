@@ -8,13 +8,13 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { acquireQuestionnaireQueue } from "./queue.ts";
 import type { AskUserRequest } from "./schema.ts";
-import type { AskUserHostError } from "./errors.ts";
+import type { AskUserHostError, AskUserRuntimeClosedError } from "./errors.ts";
 import type { QuestionnaireOwner } from "./protocol.ts";
 import type { AskUserOutcome } from "./model.ts";
 import { normalizeAskUserRequest, validateAskUserRequest } from "./validation.ts";
 
 export interface QuestionnairePresence {
-  readonly opened: Deferred.Deferred<void, AskUserHostError>;
+  readonly opened: Deferred.Deferred<void, AskUserHostError | AskUserRuntimeClosedError>;
   readonly visibility: Queue.Enqueue<"open" | "hidden">;
 }
 
@@ -55,6 +55,8 @@ const makeService = Effect.fn("AskUserService.make")(function* (
   const queue = yield* acquireQuestionnaireQueue;
   const blockingCount = yield* Ref.make(0);
   const async = yield* acquireAsyncQuestionnaires(host, queue, delivery, idPrefix, activity);
+  // Registered last so admission closes before the async scope interrupts presenters.
+  yield* Effect.addFinalizer(() => queue.close);
   const askRequest = Effect.fn("AskUserService.ask")(function* (
     request: AskUserRequest,
     owner?: QuestionnaireOwner,

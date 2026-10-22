@@ -34,8 +34,14 @@ closure revokes delivery before interrupting its children. A successful public `
 returns no acceptance receipt, so `sent` means only that the call returned. Results survive
 delivery attempts, and repeated delivery IDs identify the same result.
 
+Service shutdown closes queue admission before interrupting presenters. Otherwise an
+interrupted presenter's cleanup would advance the queue and mount a waiting blocking request.
+Queued requests, openers, and waiters then fail with a runtime-closed error, because interrupted
+presenters can no longer settle them.
+
 [Async service tests](../tests/async-service.test.ts) force these races, including interruption
-immediately before acknowledgement, queue cancellation, retention exhaustion, and retry shutdown.
+immediately before acknowledgement, queue cancellation, retention exhaustion, retry shutdown, and
+service shutdown.
 
 ## TUI and external-editor handoff
 

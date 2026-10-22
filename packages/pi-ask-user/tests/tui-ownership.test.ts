@@ -19,7 +19,7 @@ import { expect, vi } from "vitest";
 import { createAskUserPromptGate } from "../src/boundary/host-prompt.ts";
 import { askUserHost } from "../src/boundary/host-dialogs.ts";
 import { createAskUserDialogBridge } from "../src/boundary/host-ui.ts";
-import { AskUserHostError } from "../src/questionnaire/errors.ts";
+import { AskUserHostError, type AskUserRuntimeClosedError } from "../src/questionnaire/errors.ts";
 import type { QuestionnairePresence } from "../src/questionnaire/service.ts";
 
 const open = (h: ReturnType<typeof hostFixture>, presence?: QuestionnairePresence) =>
@@ -29,7 +29,7 @@ it.effect("the opening handshake waits for mounting and reports each hide and re
   Effect.gen(function* () {
     const h = hostFixture();
     const presence = {
-      opened: yield* Deferred.make<void, AskUserHostError>(),
+      opened: yield* Deferred.make<void, AskUserHostError | AskUserRuntimeClosedError>(),
       visibility: yield* Queue.unbounded<"open" | "hidden">(),
     };
     const { bridge, controller, pending } = yield* open(h, presence);

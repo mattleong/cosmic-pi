@@ -2,12 +2,14 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
-import { AskUserAsyncError } from "./errors.ts";
+import { AskUserAsyncError, AskUserRuntimeClosedError } from "./errors.ts";
 
 export const MAX_PENDING_QUESTIONNAIRES = 16;
 export interface QuestionnaireTicket {
   readonly immediate: boolean;
-  readonly run: <A, E>(effect: Effect.Effect<A, E>) => Effect.Effect<A, E>;
+  readonly run: <A, E>(
+    effect: Effect.Effect<A, E>,
+  ) => Effect.Effect<A, E | AskUserRuntimeClosedError>;
   readonly close: Effect.Effect<void>;
 }
 
@@ -23,10 +25,14 @@ export const acquireQuestionnaireQueue = Effect.gen(function* () {
     tail: undefined,
     closed: false,
   });
-  yield* Scope.addFinalizer(
-    parent,
-    Ref.update(state, (current) => ({ ...current, closed: true })),
+  const closing = yield* Deferred.make<void>();
+  // Owners that interrupt presenters must call this first; otherwise an interrupted presenter's
+  // cleanup would advance the queue and mount a waiting successor during shutdown.
+  const closeAdmission = Ref.update(state, (current) => ({ ...current, closed: true })).pipe(
+    Effect.andThen(Deferred.succeed(closing, undefined)),
+    Effect.asVoid,
   );
+  yield* Scope.addFinalizer(parent, closeAdmission);
   const admit = Effect.gen(function* () {
     const done = yield* Deferred.make<void>();
     const admitted = yield* Ref.modify(state, (current) =>
@@ -45,6 +51,9 @@ export const acquireQuestionnaireQueue = Effect.gen(function* () {
       });
     const released = yield* Ref.make(false);
     const previous = admitted.previous ? Deferred.await(admitted.previous) : Effect.void;
+    const ready = admitted.previous
+      ? Effect.raceFirst(previous, Deferred.await(closing))
+      : Effect.void;
     const drain = previous.pipe(
       Effect.andThen(
         Ref.update(state, (current) => ({ ...current, pending: current.pending - 1 })),
@@ -62,11 +71,24 @@ export const acquireQuestionnaireQueue = Effect.gen(function* () {
     );
     const ticket: QuestionnaireTicket = {
       immediate: admitted.immediate,
-      run: (effect) => previous.pipe(Effect.andThen(effect)),
+      run: <A, E>(effect: Effect.Effect<A, E>) =>
+        ready.pipe(
+          Effect.andThen(Deferred.isDone(closing)),
+          Effect.flatMap(
+            (closed): Effect.Effect<A, E | AskUserRuntimeClosedError> =>
+              closed
+                ? Effect.fail(
+                    new AskUserRuntimeClosedError({
+                      message: "The questionnaire session closed before this questionnaire opened.",
+                    }),
+                  )
+                : effect,
+          ),
+        ),
       close,
     };
     return ticket;
   });
-  return { admit };
+  return { admit, close: closeAdmission };
 });
 export type QuestionnaireQueue = Effect.Success<typeof acquireQuestionnaireQueue>;
