@@ -14,7 +14,8 @@ interactive changes.
   atomically replaces them through core's document store. [Schema](src/config/schema.ts) and
   [path keys](src/config/path-key.ts) describe the persisted value and directory identity.
 - [Host adapters](src/boundary/) capture CLI preferences, classify the session, and read or
-  apply Pi's model and thinking level. The service determines when those operations happen.
+  apply Pi's model and thinking level. The service determines when those operations happen and
+  receives only the current-model and model-lookup capability, not the session context.
 
 ## Lifecycle and invariants
 
@@ -30,9 +31,10 @@ cannot overwrite the saved preference. Admitted changes capture the live selecti
 service semaphore, preventing delayed events from writing stale event payloads.
 
 Only successful directory identity lookups are cached; failures remain retryable. Saved documents
-include their canonical cwd and are rejected if it differs from the requested directory. Invalid
-documents are not overwritten. Read, restore, and write failures become bounded warnings rather
-than breaking the session. Shutdown disposes the runtime, and inactive events do not write.
+include their canonical cwd and are rejected if it differs from the requested directory.
+Unreadable, invalid, and foreign documents are not overwritten, and each reason has its own
+warning. Read, restore, and write failures become bounded warnings rather than breaking the
+session. Shutdown disposes the runtime, and inactive events do not write.
 Service warnings check the slot's captured authority when published, so neither restoration
 nor persistence can report a late warning after its owning session retires.
 

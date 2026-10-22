@@ -16,10 +16,11 @@ export interface DirectoryIdentity {
 
 export class DirectoryModelStoreError extends Schema.TaggedError<DirectoryModelStoreError>()(
   "DirectoryModelStoreError",
-  {},
+  { reason: Schema.Literals(["unreadable", "invalid", "foreign", "unwritable"]) },
 ) {}
 
-const storeError = () => new DirectoryModelStoreError();
+const storeError = (reason: DirectoryModelStoreError["reason"]) => () =>
+  new DirectoryModelStoreError({ reason });
 
 export class DirectoryModelStore extends Context.Service<DirectoryModelStore>()(
   "pi-directory-models/config/store/DirectoryModelStore",
@@ -32,7 +33,9 @@ export class DirectoryModelStore extends Context.Service<DirectoryModelStore>()(
 
       const identify = Effect.fn("DirectoryModelStore.identify")(function* (cwd: string) {
         const lexical = paths.resolve(cwd);
-        const canonicalCwd = yield* fs.realPath(lexical).pipe(Effect.mapError(storeError));
+        const canonicalCwd = yield* fs
+          .realPath(lexical)
+          .pipe(Effect.mapError(storeError("unreadable")));
         const filename = preferenceFilename(canonicalCwd, paths.basename(canonicalCwd));
         return {
           canonicalCwd,
@@ -43,22 +46,26 @@ export class DirectoryModelStore extends Context.Service<DirectoryModelStore>()(
       const read = Effect.fn("DirectoryModelStore.read")(function* (identity: DirectoryIdentity) {
         const raw = yield* documents
           .readObject(identity.preferencePath)
-          .pipe(Effect.mapError(storeError));
+          .pipe(
+            Effect.mapError((error) =>
+              storeError(error.operation === "decode" ? "invalid" : "unreadable")(),
+            ),
+          );
         if (raw === undefined) return undefined;
         const preference = yield* Schema.decodeUnknownEffect(DirectoryModelPreferenceSchema)(
           raw,
-        ).pipe(Effect.mapError(storeError));
-        if (preference.cwd !== identity.canonicalCwd) return yield* storeError();
+        ).pipe(Effect.mapError(storeError("invalid")));
+        if (preference.cwd !== identity.canonicalCwd) return yield* storeError("foreign")();
         return preference;
       });
 
-      const write = Effect.fn("DirectoryModelStore.write")(function* (
-        identity: DirectoryIdentity,
-        preference: DirectoryModelPreference,
-      ) {
-        const document = yield* Schema.encodeEffect(DirectoryModelPreferenceSchema)(preference);
-        yield* documents.writeObject(identity.preferencePath, document);
-      }, Effect.mapError(storeError));
+      const write = Effect.fn("DirectoryModelStore.write")(
+        function* (identity: DirectoryIdentity, preference: DirectoryModelPreference) {
+          const document = yield* Schema.encodeEffect(DirectoryModelPreferenceSchema)(preference);
+          yield* documents.writeObject(identity.preferencePath, document);
+        },
+        Effect.mapError(storeError("unwritable")),
+      );
 
       return { identify, read, write };
     }),

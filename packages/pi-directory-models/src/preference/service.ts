@@ -1,6 +1,6 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Semaphore from "effect/Semaphore";
 import { PiApi } from "pi-cosmic-core";
@@ -8,12 +8,17 @@ import {
   applyHostPreference,
   captureContextModel,
   preferenceFromSelectedModel,
+  type DirectoryModelHost,
 } from "../boundary/host-model.ts";
 import type { DirectoryModelPreference } from "../config/schema.ts";
-import { DirectoryModelStore, type DirectoryIdentity } from "../config/store.ts";
+import {
+  DirectoryModelStore,
+  type DirectoryIdentity,
+  type DirectoryModelStoreError,
+} from "../config/store.ts";
 
 export interface DirectoryModelSessionInput {
-  readonly ctx: ExtensionContext;
+  readonly models: DirectoryModelHost;
   readonly cwd: string;
   readonly fresh: boolean;
   readonly explicitPreference: boolean;
@@ -21,7 +26,21 @@ export interface DirectoryModelSessionInput {
 
 export type DirectoryModelWarn = (message: string) => void;
 
-const READ_WARNING = "The saved model for this directory is invalid, so Pi kept its current model";
+const readWarning = (reason: DirectoryModelStoreError["reason"]) =>
+  Match.value(reason).pipe(
+    Match.when(
+      "invalid",
+      () => "The saved model for this directory is invalid, so Pi kept its current model",
+    ),
+    Match.when(
+      "foreign",
+      () =>
+        "The saved model file for this directory belongs to another directory, so Pi kept its current model",
+    ),
+    Match.orElse(
+      () => "Couldn't read the saved model for this directory, so Pi kept its current model",
+    ),
+  );
 const IDENTIFY_WARNING = "Couldn't identify this directory to remember its model";
 export const WRITE_WARNING = "Couldn't save the model for this directory";
 
@@ -62,7 +81,7 @@ export class DirectoryModelPreferenceService extends Context.Service<DirectoryMo
 
         const currentPreference = (canonicalCwd: string) =>
           Effect.suspend(() => {
-            const selected = captureContextModel(input.ctx);
+            const selected = captureContextModel(input.models);
             if (!selected) return Effect.undefined;
             return recovered(
               preferenceFromSelectedModel(pi, canonicalCwd, selected),
@@ -87,7 +106,7 @@ export class DirectoryModelPreferenceService extends Context.Service<DirectoryMo
             const identified = yield* recovered(identity, "identify", IDENTIFY_WARNING);
             if (!identified) return;
             const loaded = yield* store.read(identified).pipe(
-              Effect.tapError(() => warnOnce("read", READ_WARNING)),
+              Effect.tapError((error) => warnOnce("read", readWarning(error.reason))),
               Effect.option,
             );
             if (Option.isNone(loaded)) return;
@@ -97,7 +116,7 @@ export class DirectoryModelPreferenceService extends Context.Service<DirectoryMo
               if (current) yield* write(identified, current);
               return;
             }
-            const restored = yield* applyHostPreference(pi, input.ctx, loadedPreference).pipe(
+            const restored = yield* applyHostPreference(pi, input.models, loadedPreference).pipe(
               Effect.catch((error) =>
                 Effect.as(warnOnce(`restore:${error.operation}`, error.message), undefined),
               ),

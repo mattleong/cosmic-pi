@@ -9,7 +9,11 @@ import {
   notifyAtHostBoundary,
 } from "pi-cosmic-core";
 import { captureExplicitPreferenceArgument } from "./boundary/host-cli.ts";
-import { captureSelectedModel, captureThinkingLevel } from "./boundary/host-model.ts";
+import {
+  captureSelectedModel,
+  captureThinkingLevel,
+  directoryModelHost,
+} from "./boundary/host-model.ts";
 import { captureDirectorySession } from "./boundary/host-session.ts";
 import { directoryModelsLayer } from "./layer.ts";
 import {
@@ -21,12 +25,16 @@ import {
 const warn = (ctx: ExtensionContext, message: string) =>
   notifyAtHostBoundary(ctx, message, "warning");
 
+interface DirectoryModelSession extends DirectoryModelSessionInput {
+  readonly ctx: ExtensionContext;
+}
+
 export function registerDirectoryModelsApplication(
   pi: ExtensionAPI,
   explicitPreference: boolean = captureExplicitPreferenceArgument(),
 ): void {
   const slot = makePiSessionRuntimeSlot({
-    makeRuntime: (input: DirectoryModelSessionInput) => {
+    makeRuntime: (input: DirectoryModelSession) => {
       // Start has already advanced the epoch, so this authority retires with this runtime.
       // Runtime disposal follows retirement asynchronously; the check keeps late warnings out.
       const isCurrent = slot.captureAuthority();
@@ -54,6 +62,7 @@ export function registerDirectoryModelsApplication(
       .start(
         {
           ctx,
+          models: directoryModelHost(ctx),
           cwd: captured.cwd,
           fresh: captured.fresh,
           explicitPreference,

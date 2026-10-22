@@ -31,8 +31,21 @@ export const captureThinkingLevel = decodeUnknownOrUndefined(ThinkingLevelSchema
 
 export const captureSelectedModel = decodeUnknownOrUndefined(SelectedModelSchema);
 
-export function captureContextModel(ctx: ExtensionContext): SelectedModel | undefined {
-  return invokeHostCallback(() => captureSelectedModel(ctx.model), undefined);
+type HostModel = NonNullable<ReturnType<ExtensionContext["modelRegistry"]["find"]>>;
+
+/** The part of a session context the preference service may use; both reads can throw. */
+export interface DirectoryModelHost {
+  readonly currentModel: () => SelectedModel | undefined;
+  readonly findModel: (provider: string, id: string) => HostModel | undefined;
+}
+
+export const directoryModelHost = (ctx: ExtensionContext): DirectoryModelHost => ({
+  currentModel: () => Option.getOrUndefined(decodeSelectedModel(ctx.model)),
+  findModel: (provider, id) => ctx.modelRegistry.find(provider, id),
+});
+
+export function captureContextModel(host: DirectoryModelHost): SelectedModel | undefined {
+  return invokeHostCallback(host.currentModel, undefined);
 }
 
 const thinkingReadError = hostError("thinking", "Couldn't read Pi's thinking level");
@@ -56,20 +69,22 @@ export const preferenceFromSelectedModel = Effect.fn("DirectoryModelHost.fromSel
 
 export const applyHostPreference = Effect.fn("DirectoryModelHost.apply")(function* (
   pi: ExtensionAPI,
-  ctx: ExtensionContext,
+  host: DirectoryModelHost,
   preference: DirectoryModelPreference,
 ) {
   const current = yield* Effect.try({
-    try: () => Option.getOrUndefined(decodeSelectedModel(ctx.model)),
+    try: host.currentModel,
     catch: hostError("read", "Couldn't read Pi's current model"),
   });
   if (current?.provider !== preference.provider || current.id !== preference.model) {
     const model = yield* Effect.try({
-      try: () => ctx.modelRegistry.find(preference.provider, preference.model),
+      try: () => host.findModel(preference.provider, preference.model),
       catch: hostError("find", "Couldn't read Pi's model list"),
     });
     if (!model)
       return yield* hostError("find", "The model saved for this directory isn't available")();
+    // Pi cannot cancel a model switch. Masking keeps an interrupted restore from abandoning a
+    // switch that may still land; replacement therefore waits for Pi to settle it.
     const applied = yield* Effect.uninterruptible(
       Effect.tryPromise({
         try: () => pi.setModel(model),
