@@ -11,6 +11,7 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import {
   confirmEffectProcessClose,
   confirmProcessGroupExit,
+  guardProcessGroupAtHostExit,
   hasControlCharacter,
   nodeFilePlatformLayer,
   provideNodeProcess,
@@ -233,6 +234,8 @@ const runCatalogProcess = (
             ),
           ),
         );
+        // Covers host exits that skip this scope until the group is confirmed gone.
+        const exitGuard = yield* guardProcessGroupAtHostExit(Number(child.pid));
         const bounded = <E>(stream: Stream.Stream<Uint8Array, E>, label: string) => {
           let bytes = 0;
           return stream.pipe(
@@ -303,6 +306,7 @@ const runCatalogProcess = (
         const groupSignal = signalProcessGroup(Number(child.pid), "SIGKILL");
         const groupConfirmed =
           groupSignal === "absent" || (yield* confirmProcessGroupExit(Number(child.pid), 2_000));
+        if (groupConfirmed) yield* exitGuard.release;
         if (!cleanupConfirmed || !groupConfirmed)
           return yield* catalogError(
             runtime,

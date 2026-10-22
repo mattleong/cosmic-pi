@@ -30,6 +30,8 @@ const boundary = {
   terminate: vi.fn<ProcessTransportRuntime["terminate"]>(),
   confirmGroupExit: vi.fn<ProcessTransportRuntime["confirmGroupExit"]>(),
   detachedGroups: vi.fn<ProcessTransportRuntime["detachedGroups"]>(),
+  // The fixture's PID is not a real group, so no guard may reach the host's exit listener.
+  guardGroup: () => Effect.succeed({ release: Effect.void }),
 };
 const nativeRequest = {
   executable: "fixture",

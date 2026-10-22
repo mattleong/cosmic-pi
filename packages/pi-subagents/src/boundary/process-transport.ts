@@ -6,7 +6,7 @@ import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
-import { confirmProcessGroupExit } from "pi-cosmic-core";
+import { confirmProcessGroupExit, guardProcessGroupAtHostExit } from "pi-cosmic-core";
 import { cleanupFailureDiagnostic } from "../run/cleanup-diagnostic.ts";
 import type { BackendCleanupVerifier } from "../backend/model.ts";
 import type { SubagentCleanupDiagnostic } from "../run/model.ts";
@@ -66,12 +66,14 @@ export interface ProcessTransportRuntime {
   readonly terminate: typeof terminateProcessTree;
   readonly confirmGroupExit: typeof confirmProcessGroupExit;
   readonly detachedGroups: typeof detachedDescendantGroups;
+  readonly guardGroup: typeof guardProcessGroupAtHostExit;
 }
 const nodeRuntime: ProcessTransportRuntime = {
   spawn: nodeSpawn,
   terminate: terminateProcessTree,
   confirmGroupExit: confirmProcessGroupExit,
   detachedGroups: detachedDescendantGroups,
+  guardGroup: guardProcessGroupAtHostExit,
 };
 
 interface ProcessTransportOptions<Message, Frame, Attachment> {
@@ -327,6 +329,16 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
         cleanup();
         return yield* processError("spawn", "Process did not expose a pid.");
       }
+      // Covers host exits that skip scope cleanup. Acquired before the release finalizer, the guard
+      // lasts through cleanup; a group already gone when the child exits releases it early, so a
+      // reused group ID is never killed.
+      const exitGuard = yield* runtime.guardGroup(pid);
+      runFork(
+        Deferred.await(exited).pipe(
+          Effect.andThen(runtime.confirmGroupExit(pid, 200)),
+          Effect.flatMap((gone) => (gone ? exitGuard.release : Effect.void)),
+        ),
+      );
       const send = (frame: Frame) =>
         Effect.callback<void, SubagentProcessError>((resume) => {
           const notSent = (operation: string, cause: unknown) =>

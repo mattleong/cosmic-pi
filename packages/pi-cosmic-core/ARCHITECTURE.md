@@ -94,7 +94,8 @@ supply process execution. Platform support is limited to macOS and Linux. Scoped
 reports confirmed exit separately from a successful kill request. Process-tree sweeps wait for
 observed process-group absence; inspection failures and deadlines remain uncertain. The
 [host-exit guard](src/platform/process-group-exit-guard.ts) covers a detached group from
-acquisition until its owner confirms settlement or closes the scope. Each loaded copy of core keeps
+acquisition until its owner confirms settlement or closes the scope. The bounded process runner guards
+each `detached` request until its sweep confirms the group gone or its scope closes. Each loaded copy of core keeps
 one guard registry and installs a single synchronous `exit` listener only while a guard is held;
 when the host exits without closing scopes, that listener sends `SIGKILL` to every guarded group.
 It reaches only those groups, never processes that leave them, and nothing runs after host

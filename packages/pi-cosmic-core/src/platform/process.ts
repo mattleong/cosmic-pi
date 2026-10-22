@@ -9,9 +9,11 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/process/ChildProcess";
 import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import { guardProcessGroupAtHostExit } from "./process-group-exit-guard.ts";
 import { confirmProcessGroupExit, signalProcessGroup } from "./process-tree.ts";
 
 export const nodeProcessLayer = NodeChildProcessSpawner.layer.pipe(
@@ -158,9 +160,13 @@ const runBoundedProcess = Effect.fn("BoundedProcess.run")(function* (
     killSignal: "SIGTERM",
     forceKillAfter: Math.max(1, cleanupTimeoutMillis / 2),
   });
-  const handle = yield* Effect.uninterruptible(
+  const { handle, exitGuard } = yield* Effect.uninterruptible(
     Effect.gen(function* () {
       let confirmed = false;
+      // A detached group escapes the host's own child cleanup. Its guard closes after the
+      // handle's finalizer, so the group stays covered while that cleanup runs.
+      const guardScope = request.detached ? yield* Scope.make() : undefined;
+      if (guardScope) yield* Effect.addFinalizer((exit) => Scope.close(guardScope, exit));
       const onCleanup = request.onCleanup;
       if (onCleanup) yield* Effect.addFinalizer(() => Effect.sync(() => onCleanup(confirmed)));
       const acquired = yield* command.pipe(
@@ -184,7 +190,12 @@ const runBoundedProcess = Effect.fn("BoundedProcess.run")(function* (
             ),
           ),
         );
-      return acquired;
+      return {
+        handle: acquired,
+        exitGuard: guardScope
+          ? yield* guardProcessGroupAtHostExit(Number(acquired.pid)).pipe(Scope.provide(guardScope))
+          : undefined,
+      };
     }),
   );
   const total = {
@@ -221,6 +232,8 @@ const runBoundedProcess = Effect.fn("BoundedProcess.run")(function* (
     leaderClosed && request.sweepProcessTreeOnExit
       ? yield* sweepExitedProcessTree(handle, cleanupTimeoutMillis)
       : leaderClosed;
+  // Only a swept group is confirmed gone; any other group stays guarded until the scope closes.
+  if (exitGuard && cleanupConfirmed && request.sweepProcessTreeOnExit) yield* exitGuard.release;
   return {
     ...ObservedProcessOutcome.$match(outcome, {
       Completed: ({ exit }) => effectProcessExit(exit),

@@ -54,6 +54,25 @@ it.live("terminates a process at its deadline", () =>
   }),
 );
 
+it.live("guards a detached process group at host exit until its sweep confirms it gone", () =>
+  Effect.gen(function* () {
+    // The host-exit guard holds one process `exit` listener exactly while a group is guarded.
+    const baseline = process.listenerCount("exit");
+    const running = yield* runNode("setTimeout(() => {}, 300)", {
+      detached: true,
+      sweepProcessTreeOnExit: true,
+    }).pipe(Effect.forkChild);
+    let guarded = false;
+    for (let attempt = 0; attempt < 100 && !guarded; attempt += 1) {
+      guarded = process.listenerCount("exit") === baseline + 1;
+      if (!guarded) yield* Effect.sleep("5 millis");
+    }
+    expect(guarded).toBe(true);
+    expect((yield* Fiber.join(running)).cleanupUnconfirmed).toBe(false);
+    expect(process.listenerCount("exit")).toBe(baseline);
+  }),
+);
+
 const denied = PlatformError.systemError({
   _tag: "PermissionDenied",
   module: "ChildProcess",
