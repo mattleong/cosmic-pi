@@ -12,6 +12,7 @@ import {
 } from "pi-cosmic-core";
 import { makeInMemoryDocuments, type InMemoryDocuments } from "pi-cosmic-core/testing";
 import {
+  SubagentConfigConflictError,
   SubagentConfigStore,
   subagentConfigStoreLayer,
   type SubagentConfigScope,
@@ -53,7 +54,7 @@ const v6 = (profiles: JsonObject, rest: JsonObject = {}): JsonObject => ({
 });
 
 const rejects = <A>(
-  attempt: Effect.Effect<A, SubagentConfigStoreError>,
+  attempt: Effect.Effect<A, SubagentConfigStoreError | SubagentConfigConflictError>,
   operation: string,
   path: string,
   message?: string,
@@ -66,6 +67,17 @@ const rejects = <A>(
         ...(message !== undefined && { message: stringContaining(message) }),
       }),
     ),
+  );
+
+const conflicts = <A>(
+  attempt: Effect.Effect<A, SubagentConfigStoreError | SubagentConfigConflictError>,
+  path: string,
+) =>
+  Effect.flip(attempt).pipe(
+    Effect.map((error) => {
+      expect(error).toBeInstanceOf(SubagentConfigConflictError);
+      expect(error).toMatchObject({ path });
+    }),
   );
 
 const writes = (memory: InMemoryDocuments) =>
@@ -261,7 +273,7 @@ describe("SubagentConfigStore profile writes", () => {
         store.patchProfile(CWD, AGENT, { ...stale, profileSet: "default", profile: "worker" }),
         store.patchWriterWorkspace(CWD, AGENT, { ...stale, writerWorkspaceMode: "worktree" }),
       ])
-        yield* rejects(write, "update", GLOBAL, "changed on disk");
+        yield* conflicts(write, GLOBAL);
       expect(memory.documents.get(GLOBAL)).toEqual(scoutDocument("high"));
     }),
   );
@@ -465,14 +477,13 @@ describe("profile declaration visit restore", () => {
     Effect.gen(function* () {
       const { memory, store } = yield* setup({ [GLOBAL]: original });
       memory.injectBeforeNextUpdate((current) => ({ ...current, defaultProfileSet: "other" }));
-      yield* rejects(
+      yield* conflicts(
         store.restoreProfileDeclaration(CWD, AGENT, {
           ...at("global", original),
           profileSet: "saved",
           profile: "worker",
           declaration: candidate,
         }),
-        "update",
         GLOBAL,
       );
       expect(memory.documents.get(GLOBAL)).toEqual(original);

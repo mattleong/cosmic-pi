@@ -44,6 +44,12 @@ export class SubagentConfigStoreError extends Schema.TaggedError<SubagentConfigS
   { operation: Schema.String, path: Schema.String, message: Schema.String },
 ) {}
 
+/** The document changed after the caller inspected it; the caller may refresh and retry. */
+export class SubagentConfigConflictError extends Schema.TaggedError<SubagentConfigConflictError>()(
+  "SubagentConfigConflictError",
+  { path: Schema.String, message: Schema.String },
+) {}
+
 export interface SubagentConfigInspection {
   readonly config: ResolvedSubagentConfig;
   readonly globalDocument?: JsonObject | undefined;
@@ -118,7 +124,7 @@ type ConfigPatch<Patch, A = void> = (
   cwd: string,
   agentDirectory: string,
   patch: Patch,
-) => Effect.Effect<A, SubagentConfigStoreError>;
+) => Effect.Effect<A, SubagentConfigStoreError | SubagentConfigConflictError>;
 
 export interface SubagentConfigStoreContract {
   readonly load: ConfigRead<ResolvedSubagentConfig>;
@@ -155,10 +161,10 @@ const unsupportedVersionError = (path: string) =>
 const mutationError = (path: string, message: string) => configError("update", path, message);
 
 const conflictError = (path: string) =>
-  mutationError(
+  new SubagentConfigConflictError({
     path,
-    "Subagents settings changed on disk; reopen /subagents profiles and try again.",
-  );
+    message: "Subagents settings changed on disk; reopen /subagents profiles and try again.",
+  });
 
 const trustError = (path: string) =>
   mutationError(path, "Project subagent settings require a trusted project.");

@@ -1,5 +1,9 @@
 import * as Effect from "effect/Effect";
-import { runBoundedProcessNode, type BoundedProcessResult } from "pi-cosmic-core";
+import {
+  runBoundedProcessNode,
+  type BoundedProcessError,
+  type BoundedProcessResult,
+} from "pi-cosmic-core";
 import { WorkspaceError } from "../workspace/model.ts";
 import { gitInstallation } from "./git-installation.ts";
 import { isGitLocalEnvironmentKey } from "./git-local-environment.ts";
@@ -107,6 +111,23 @@ const gitEnvironment = (options: GitOptions | undefined) => ({
   ...options?.environment,
 });
 
+/**
+ * Git that never started left nothing behind; any later read failure leaves its detached group
+ * unconfirmed, so its artifacts are kept for recovery.
+ */
+export const gitRunFailure = (error: BoundedProcessError) =>
+  error.operation === "spawn"
+    ? new WorkspaceError({
+        operation: "git",
+        message: "Git couldn't be started.",
+        cleanupUnconfirmed: false,
+      })
+    : new WorkspaceError({
+        operation: "git",
+        message: "Git couldn't be run; no automatic retry is safe.",
+        cleanupUnconfirmed: true,
+      });
+
 /** Runs Git and returns its result whatever its exit status; fails only when Git can't run. */
 export const gitResult = (cwd: string, args: ReadonlyArray<string>, options?: GitOptions) =>
   gitInstallation.pipe(
@@ -123,16 +144,7 @@ export const gitResult = (cwd: string, args: ReadonlyArray<string>, options?: Gi
         cleanupTimeoutMillis: 2000,
         detached: true,
         sweepProcessTreeOnExit: true,
-      }).pipe(
-        Effect.mapError(
-          () =>
-            new WorkspaceError({
-              operation: "git",
-              message: "Git couldn't be run; no automatic retry is safe.",
-              cleanupUnconfirmed: true,
-            }),
-        ),
-      ),
+      }).pipe(Effect.mapError(gitRunFailure)),
     ),
   );
 

@@ -6,6 +6,7 @@ import { type ProfileRoute } from "../src/profiles/model.ts";
 import { makeSubagentProfileService } from "../src/profiles/service.ts";
 import {
   SessionProfileConflictError,
+  SessionProfileInvalidError,
   sessionProfileSnapshot,
   sessionProfileSeed,
 } from "../src/profiles/session-overrides.ts";
@@ -245,6 +246,34 @@ describe("session profile overrides", () => {
           actualRevision: cleared.revision,
         });
       }),
+  );
+
+  it.effect("rejects an edit that cannot apply as invalid, not as a revision conflict", () =>
+    Effect.gen(function* () {
+      const service = yield* makeSubagentProfileService(baseConfig());
+      const initial = yield* service.capture;
+      const invalid = yield* service
+        .patchSessionNesting({
+          nesting: { maxDirectChildren: -1, maxDepth: 0 },
+          expectedRevision: initial.revision,
+        })
+        .pipe(Effect.flip);
+      expect(invalid).toBeInstanceOf(SessionProfileInvalidError);
+      expect((yield* service.capture).revision).toBe(initial.revision);
+
+      const exhausted = yield* makeSubagentProfileService(baseConfig(), {
+        initialSessionOverrides: { revision: Number.MAX_SAFE_INTEGER, overrides: {} },
+      });
+      const limited = yield* exhausted
+        .patchSessionProfile({
+          profile: "scout",
+          route: route("openai/limit"),
+          expectedRevision: Number.MAX_SAFE_INTEGER,
+        })
+        .pipe(Effect.flip);
+      expect(limited).toBeInstanceOf(SessionProfileInvalidError);
+      expect((yield* exhausted.capture).overrides).toEqual({});
+    }),
   );
 
   it.effect("linearizes racing same-revision patches so exactly one commits", () =>

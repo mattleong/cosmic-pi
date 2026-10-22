@@ -63,11 +63,11 @@ export function assignmentOperations(dependencies: RunAssignmentDependencies) {
 
   const confirmIssuedAssignment = (record: RunRecord, attemptToken: string) =>
     Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis;
       const result = yield* withLock(
         Effect.gen(function* () {
           if (!isCurrentIssuingAssignment(record, attemptToken))
             return { kind: "unchanged" as const, view: snapshotRun(record) };
+          const now = yield* Clock.currentTimeMillis;
           record.assignment.outcomeUncertain = false;
           return yield* activateAssignmentLocked(record, {
             ...record.view,
@@ -119,10 +119,10 @@ export function assignmentOperations(dependencies: RunAssignmentDependencies) {
 
   const retainUncertainAssignment = (record: RunRecord, attemptToken: string, warning: string) =>
     Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis;
       const replay = yield* withLock(
         Effect.gen(function* () {
           if (!isCurrentIssuingAssignment(record, attemptToken)) return undefined;
+          const now = yield* Clock.currentTimeMillis;
           record.assignment.outcomeUncertain = true;
           const diagnostic = sanitizeDiagnosticText(warning, MAX_ERROR_CHARS);
           record.view = {

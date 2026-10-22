@@ -10,6 +10,7 @@ import type {
   BackendHandle,
   BackendLaunchRequest,
 } from "../../../src/backend/model.ts";
+import type { ReportArchive, ReportArchiveEntry } from "../../../src/boundary/report-archive.ts";
 import { WriterLeaseService } from "../../../src/boundary/writer-lease.ts";
 import { SubagentNotFoundError } from "../../../src/run/errors.ts";
 import type { RunContext, RunRecord } from "../../../src/run/internal.ts";
@@ -172,4 +173,28 @@ export const runningAssignment = (epoch: number): RunRecord["assignment"] => ({
   startedObserved: true,
   outcomeUncertain: false,
   pendingRunSettled: false,
+});
+
+/** A report archive whose saves wait for the test's release, recording what it saved and discarded. */
+export const gatedReportArchive = Effect.gen(function* () {
+  const entered = yield* Deferred.make<void>();
+  const release = yield* Deferred.make<void>();
+  const saved: Array<ReportArchiveEntry> = [];
+  const discarded: Array<string> = [];
+  const archive: ReportArchive = {
+    save: (entry) =>
+      Effect.gen(function* () {
+        saved.push(entry);
+        yield* Deferred.succeed(entered, undefined);
+        yield* Deferred.await(release);
+        return {
+          path: `/archive/${saved.length}.md`,
+          chars: entry.text.length,
+          lines: 1,
+          complete: true,
+        };
+      }),
+    discard: (file) => Effect.sync(() => void discarded.push(file.path)),
+  };
+  return { archive, entered, release, saved, discarded };
 });

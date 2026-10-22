@@ -629,6 +629,33 @@ describe("private supervisor channel", () => {
     yield* step(() => direct.close());
   });
 
+  liveTest("keeps one session per client across concurrent and repeated opens", function* () {
+    const { handle } = yield* step(() => openChannel("agent-supervisor-open-race"));
+    const config = yield* step(() => connectionConfig(handle));
+    const direct = yield* step(() => connectDirectRpc(handle, config));
+    yield* Effect.orDie(
+      Effect.all(
+        Array.from({ length: 8 }, () => direct.client.SupervisorOpenSession(config)),
+        { concurrency: "unbounded" },
+      ),
+    );
+    const watching = Effect.runPromiseExit(
+      Stream.runForEach(direct.client.SupervisorWatchAssignments(config), (update) =>
+        direct.client.SupervisorAcknowledgeAssignment({
+          ...config,
+          updateId: update.updateId,
+          assignmentEpoch: update.assignmentEpoch,
+        }),
+      ),
+    );
+    yield* Effect.orDie(handle.awaitReady);
+    // A later open must not replace the queue the watch stream reads.
+    yield* Effect.orDie(direct.client.SupervisorOpenSession(config));
+    yield* Effect.orDie(handle.setAssignmentEpoch(1).pipe(Effect.timeout("5 seconds")));
+    yield* step(() => direct.close());
+    yield* step(() => withTimeout(watching));
+  });
+
   for (const [name, runId, options, frame] of [
     [
       "closes an unauthenticated peer at the scoped authentication deadline",

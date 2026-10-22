@@ -5,7 +5,6 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import { invokeHostCallback, isProjectTrusted, notifyAtHostBoundary } from "pi-cosmic-core";
 import { hasCustomSurface, openOwnedSurfacePromise } from "pi-cosmic-ui/boundary/host-surface";
 import { fullScreenKeybindingOptions } from "pi-cosmic-ui/manager/key-labels";
-import { SubagentConfigStoreError } from "../config/store.ts";
 import { normalizeDeclaredProfileRoute, type ProfileId } from "../profiles/model.ts";
 import { decodeSubagentEffort, type SubagentEffort } from "../domain/routing.ts";
 import {
@@ -148,12 +147,7 @@ export function openProfileDashboard(
         ).then(
           (document) => refreshInspection(undefined, { kind: "saved", document }),
           (cause: unknown) => {
-            if (
-              cause instanceof SubagentConfigStoreError &&
-              cause.operation === "update" &&
-              cause.message ===
-                "Subagents settings changed on disk; reopen /subagents profiles and try again."
-            )
+            if (Predicate.isTagged(cause, "SubagentConfigConflictError"))
               return refreshInspection(
                 "Saved settings changed on disk. Your change was not applied. The editor now shows the latest profiles. Try again.",
               );

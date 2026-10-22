@@ -1,5 +1,4 @@
 import { absurd } from "effect/Function";
-import { invokeHostCallback } from "pi-cosmic-core";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -11,7 +10,7 @@ import {
   type BackendHandle,
   type BackendReport,
 } from "../backend/model.ts";
-import type { ReportArchive } from "../boundary/report-archive.ts";
+import type { ReportArchive, ReportArchiveEntry } from "../boundary/report-archive.ts";
 import { processError, type SubagentError, SubagentProcessError } from "./errors.ts";
 import {
   beginCleanup,
@@ -184,41 +183,72 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
         return view;
       }),
     );
+  // Saving under the run lock keeps each settlement one atomic transition, so no other operation can
+  // overtake an outcome while its file is written. The write is bounded (1 MiB) asynchronous local
+  // I/O: it delays other locked transitions but never blocks the event loop. A file that can't be
+  // saved leaves the parent a preview and agent_read.
+  const saveArchiveLocked = (
+    entry: ReportArchiveEntry,
+  ): Effect.Effect<SubagentReportArchive | undefined> =>
+    archiveReport
+      ? Effect.suspend(() => archiveReport.save(entry)).pipe(
+          Effect.catchTag("ReportArchiveError", (error) =>
+            Effect.logWarning(`Subagent report file wasn't saved (${error.reason}).`).pipe(
+              Effect.as(undefined),
+            ),
+          ),
+          Effect.catchDefect(() =>
+            Effect.logWarning("Subagent report file wasn't saved (archive defect).").pipe(
+              Effect.as(undefined),
+            ),
+          ),
+        )
+      : Effect.undefined;
+
+  const discardArchive = (archive: SubagentReportArchive | undefined) =>
+    archiveReport && archive
+      ? Effect.suspend(() => archiveReport.discard(archive)).pipe(
+          Effect.catchTag("ReportArchiveError", (error) =>
+            Effect.logWarning(`Uncommitted subagent report file remains (${error.reason}).`),
+          ),
+          Effect.catchDefect(() =>
+            Effect.logWarning("Uncommitted subagent report file remains (archive defect)."),
+          ),
+        )
+      : Effect.void;
+
   // Only an admitted generation is archived, so every file names the generation that delivers it.
   const archiveReportLocked = (
     record: RunRecord,
     finalText: string,
     generation: number | undefined,
-  ): SettledReport => {
-    const truncation = record.latestAssistantTruncation;
-    const entry = generation !== undefined && {
-      id: record.view.id,
-      generation,
-      text: record.latestAssistantFullText ?? finalText,
-      ...(truncation && { originalChars: truncation.originalChars }),
-    };
-    const reportArchive =
-      archiveReport && entry
-        ? invokeHostCallback(() => archiveReport(entry), undefined)
-        : undefined;
-    return {
-      ...(truncation && { finalTextTruncation: truncation }),
-      ...(reportArchive && { reportArchive }),
-    };
-  };
+  ): Effect.Effect<SettledReport> =>
+    Effect.gen(function* () {
+      const truncation = record.latestAssistantTruncation;
+      const reportArchive =
+        generation === undefined
+          ? undefined
+          : yield* saveArchiveLocked({
+              id: record.view.id,
+              generation,
+              text: record.latestAssistantFullText ?? finalText,
+              ...(truncation && { originalChars: truncation.originalChars }),
+            });
+      return {
+        ...(truncation && { finalTextTruncation: truncation }),
+        ...(reportArchive && { reportArchive }),
+      };
+    });
 
   // Like a report, only an admitted failure generation is archived.
   const archiveFailureLocked = (
     record: RunRecord,
     error: string,
     generation: number | undefined,
-  ): SubagentReportArchive | undefined =>
-    archiveReport && generation !== undefined && error.length > MAX_OUTCOME_PREVIEW_CHARS
-      ? invokeHostCallback(
-          () => archiveReport({ id: record.view.id, generation, kind: "failure", text: error }),
-          undefined,
-        )
-      : undefined;
+  ): Effect.Effect<SubagentReportArchive | undefined> =>
+    generation !== undefined && error.length > MAX_OUTCOME_PREVIEW_CHARS
+      ? saveArchiveLocked({ id: record.view.id, generation, kind: "failure", text: error })
+      : Effect.undefined;
 
   const queueCompletionLocked = (
     record: RunRecord,
@@ -242,44 +272,36 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
     });
   };
 
-  const settleLocked = (
+  const commitSettlementLocked = (
     record: RunRecord,
     state: SettlementState,
-    now: number,
-    error?: string,
-    assignmentEpoch?: number,
+    generation: number | undefined,
+    finalText: string | undefined,
+    settledError: string | undefined,
+    report: SettledReport,
   ) =>
     Effect.gen(function* () {
-      if (
-        settlementBlocked(record, state) ||
-        (assignmentEpoch !== undefined && record.assignment.epoch !== assignmentEpoch)
-      ) {
-        // This settlement never reports, so its full text is never archived.
+      const now = yield* Clock.currentTimeMillis;
+      const { completedScope, pauseOutcome } = yield* Effect.sync(() => {
+        const scope =
+          state === "completed" && record.process !== undefined ? record.scope : undefined;
+        if (scope) beginCleanup(record);
+        const outcome = record.pauseOutcome;
+        record.pauseOutcome = undefined;
+        record.pauseRequested = false;
+        clearRunActivity(record);
         record.latestAssistantFullText = undefined;
-        return { notifyPeers: false, view: snapshotRun(record) };
-      }
-      if (record.initializationPending && state !== "stopped") {
-        record.pendingInitializationSettlement = { state, ...(error && { error }) };
-        return { notifyPeers: false, view: snapshotRun(record) };
-      }
-      const completedScope =
-        state === "completed" && record.process !== undefined ? record.scope : undefined;
-      if (completedScope) beginCleanup(record);
-      const pauseOutcome = record.pauseOutcome;
-      record.pauseOutcome = undefined;
-      record.pauseRequested = false;
-      clearRunActivity(record);
-      const finalText = state === "completed" ? record.latestAssistantText : undefined;
-      const generation = allocateCompletionLocked(record, state);
-      const reportArchive = finalText ? archiveReportLocked(record, finalText, generation) : {};
-      record.latestAssistantFullText = undefined;
-      const settledError = state === "failed" ? (error ?? "Run failed.") : error;
-      const errorArchive =
-        state === "failed" && settledError !== undefined
-          ? archiveFailureLocked(record, settledError, generation)
-          : undefined;
-      const report: SettledReport = { ...reportArchive, ...(errorArchive && { errorArchive }) };
-      queueCompletionLocked(record, state, generation, finalText, settledError, report);
+        queueCompletionLocked(record, state, generation, finalText, settledError, report);
+        return { completedScope: scope, pauseOutcome: outcome };
+      }).pipe(
+        // Until the completion outbox owns them, nothing else owns the files this settlement
+        // saved. Once queued, later failures must keep them: the parent is told their paths.
+        Effect.onError(() =>
+          discardArchive(report.reportArchive).pipe(
+            Effect.andThen(discardArchive(report.errorArchive)),
+          ),
+        ),
+      );
       record.notificationGeneration += 1;
       delivery.discardQuestionLocked(record.view.id);
       record.replyPendingRequestId = undefined;
@@ -305,6 +327,46 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
           Effect.forkIn(ownerScope),
         );
       return { notifyPeers: completedScope === undefined, view };
+    });
+
+  const settleLocked = (
+    record: RunRecord,
+    state: SettlementState,
+    error?: string,
+    assignmentEpoch?: number,
+  ) =>
+    Effect.gen(function* () {
+      if (
+        settlementBlocked(record, state) ||
+        (assignmentEpoch !== undefined && record.assignment.epoch !== assignmentEpoch)
+      ) {
+        // This settlement never reports, so its full text is never archived.
+        record.latestAssistantFullText = undefined;
+        return { notifyPeers: false, view: snapshotRun(record) };
+      }
+      if (record.initializationPending && state !== "stopped") {
+        record.pendingInitializationSettlement = { state, ...(error && { error }) };
+        return { notifyPeers: false, view: snapshotRun(record) };
+      }
+      const finalText = state === "completed" ? record.latestAssistantText : undefined;
+      const generation = allocateCompletionLocked(record, state);
+      const reportArchive = finalText
+        ? yield* archiveReportLocked(record, finalText, generation)
+        : {};
+      const settledError = state === "failed" ? (error ?? "Run failed.") : error;
+      const errorArchive =
+        state === "failed" && settledError !== undefined
+          ? yield* archiveFailureLocked(record, settledError, generation)
+          : undefined;
+      const report: SettledReport = { ...reportArchive, ...(errorArchive && { errorArchive }) };
+      return yield* commitSettlementLocked(
+        record,
+        state,
+        generation,
+        finalText,
+        settledError,
+        report,
+      );
     }).pipe(Effect.uninterruptible);
 
   const settle = (
@@ -314,8 +376,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
     assignmentEpoch?: number,
   ) =>
     Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis;
-      const result = yield* withLock(settleLocked(record, state, now, error, assignmentEpoch));
+      const result = yield* withLock(settleLocked(record, state, error, assignmentEpoch));
       if (result.notifyPeers) yield* sendPeerNotices(record.view.id);
       return result.view;
     });
@@ -378,7 +439,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
       return { kind: "unchanged" as const, view };
     });
 
-  const commitReportLocked = (record: RunRecord, report: BackendReport, now: number) =>
+  const commitReportLocked = (record: RunRecord, report: BackendReport) =>
     Effect.gen(function* () {
       recordLatestAssistantText(record, captureOutputText({ text: report.text ?? "" }));
       record.lastBackendReport = {
@@ -386,7 +447,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
         sequence: report.sequence,
         deliveryId: report.deliveryId,
       };
-      return yield* settleLocked(record, "completed", now, undefined, report.assignmentEpoch);
+      return yield* settleLocked(record, "completed", undefined, report.assignmentEpoch);
     }).pipe(Effect.uninterruptible);
 
   const acceptValidatedBackendReport = (record: RunRecord, report: BackendReport) =>
@@ -425,7 +486,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
               `sequence ${report.sequence} arrived while assignment ${report.assignmentEpoch} was ${record.assignment.phase}.`,
               now,
             );
-          const committed = yield* commitReportLocked(record, report, now);
+          const committed = yield* commitReportLocked(record, report);
           return { kind: "committed" as const, ...committed };
         }),
       );
@@ -439,7 +500,6 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
     runningView: StoredRunView,
   ): Effect.Effect<AssignmentActivationReplay> =>
     Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis;
       const pendingReport = record.assignment.pendingReport;
       const pendingRunSettled = record.assignment.pendingRunSettled;
       record.assignment.phase = "running";
@@ -449,7 +509,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
       if (pendingReport) {
         // The buffered report owns this activation. No running projection or post-lock replay may
         // let process exit/failure overtake its completion payload and retry eligibility.
-        const committed = yield* commitReportLocked(record, pendingReport, now);
+        const committed = yield* commitReportLocked(record, pendingReport);
         return { kind: "committed-report" as const, ...committed };
       }
       const replay: AssignmentActivationReplay = pendingRunSettled

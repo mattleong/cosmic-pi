@@ -6,6 +6,7 @@ import * as Schema from "effect/Schema";
 import {
   synchronousRandomHex,
   runBoundedProcessNode,
+  type BoundedProcessError,
   type BoundedProcessResult,
 } from "pi-cosmic-core";
 import { nodeFsPromises as fs, nodePath } from "./node-builtins.ts";
@@ -480,6 +481,19 @@ export const claudeAuthLoggedIn = (source: string): boolean => {
   return Option.isSome(decoded) && decoded.value.loggedIn;
 };
 
+/**
+ * A probe that never started left nothing behind; any later read failure leaves its detached
+ * group unconfirmed, so candidate fallback stops.
+ */
+export const probeFailureResult = (error: BoundedProcessError): ProbeResult => ({
+  code: null,
+  stdout: "",
+  stderr: error.message,
+  overflowed: false,
+  timedOut: false,
+  cleanupUnconfirmed: error.operation !== "spawn",
+});
+
 export const runProbeEffect = (
   executable: string,
   args: ReadonlyArray<string>,
@@ -496,18 +510,7 @@ export const runProbeEffect = (
     cleanupTimeoutMillis: 2_000,
     sweepProcessTreeOnExit: true,
     detached: true,
-  }).pipe(
-    Effect.catch((error) =>
-      Effect.succeed({
-        code: null,
-        stdout: "",
-        stderr: error.message,
-        overflowed: false,
-        timedOut: false,
-        cleanupUnconfirmed: false,
-      }),
-    ),
-  );
+  }).pipe(Effect.catch((error) => Effect.succeed(probeFailureResult(error))));
 
 export const runIsolatedCodexAuthProbe = (
   executable: string,

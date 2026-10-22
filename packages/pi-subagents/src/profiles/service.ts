@@ -22,6 +22,7 @@ import {
   replaceSessionProfileSnapshot,
   type SessionDelegationPatch,
   type SessionProfileConflictError,
+  type SessionProfileEditError,
   type SessionNestingPatch,
   type SessionProfileOverrideSeed,
   type SessionProfilePatch,
@@ -45,16 +46,16 @@ export interface SubagentProfileServiceContract {
   ) => Effect.Effect<A, E | SessionProfileConflictError, R>;
   readonly patchSessionProfile: (
     patch: SessionProfilePatch,
-  ) => Effect.Effect<SessionProfileSnapshot, SessionProfileConflictError>;
+  ) => Effect.Effect<SessionProfileSnapshot, SessionProfileEditError>;
   readonly replaceSessionProfiles: (
     patch: SessionProfileSetPatch,
-  ) => Effect.Effect<SessionProfileSnapshot, SessionProfileConflictError>;
+  ) => Effect.Effect<SessionProfileSnapshot, SessionProfileEditError>;
   readonly patchSessionNesting: (
     patch: SessionNestingPatch,
-  ) => Effect.Effect<SessionProfileSnapshot, SessionProfileConflictError>;
+  ) => Effect.Effect<SessionProfileSnapshot, SessionProfileEditError>;
   readonly patchSessionDelegation: (
     patch: SessionDelegationPatch,
-  ) => Effect.Effect<SessionProfileSnapshot, SessionProfileConflictError>;
+  ) => Effect.Effect<SessionProfileSnapshot, SessionProfileEditError>;
 }
 
 export class SubagentProfileService extends Context.Service<

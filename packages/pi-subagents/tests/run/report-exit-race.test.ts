@@ -12,12 +12,16 @@ import { settlementOperations } from "../../src/run/settlement.ts";
 import { view } from "../fixtures/run-view.ts";
 import {
   backendHandleFixture,
+  gatedReportArchive,
   makeRunContext,
   runRecordFixture,
   runningAssignment,
 } from "./fixtures/run-context.ts";
 
 const REPORT = "Accepted supervisor report.";
+const yieldTurns = Effect.gen(function* () {
+  for (let turn = 0; turn < 25; turn += 1) yield* Effect.yieldNow;
+});
 const lateEvents: ReadonlyArray<BackendEvent> = [
   { type: "exit", exitCode: 0, diagnostic: "Process exited after reporting." },
   {
@@ -151,5 +155,76 @@ describe("report ownership at assignment activation", () => {
         }),
       );
     }
+  }
+});
+
+describe("report ownership while its file is saved", () => {
+  for (const lateEvent of lateEvents) {
+    it.effect(`keeps a buffered report ahead of ${lateEvent.type} during its file save`, () =>
+      Effect.gen(function* () {
+        const gate = yield* gatedReportArchive;
+        const context = yield* makeRunContext();
+        const record = yield* runRecordFixture({
+          view: view({ state: "starting" }),
+          process: yield* backendHandleFixture(),
+          assignment: { ...runningAssignment(1), phase: "issuing" },
+        });
+        const completionGate = yield* Semaphore.make(1);
+        const delivery = yield* notificationDelivery({
+          ...context,
+          withCompletionGate: completionGate.withPermits(1),
+          notify: () => Effect.succeed({ deliveredCompletionKeys: [] }),
+        });
+        const settlement = settlementOperations({
+          ...context,
+          delivery,
+          closeRecordScope: () => Effect.void,
+          claimTurnInputDrain: (_record, drained) => Deferred.doneUnsafe(drained, Effect.void),
+          archiveReport: gate.archive,
+        });
+        const assignments = assignmentOperations({
+          ...context,
+          startPrompt: () => Effect.void,
+          activateAssignmentLocked: settlement.activateAssignmentLocked,
+          replayAssignmentActivation: settlement.replayAssignmentActivation,
+        });
+        const handleEvent = backendEventHandler({
+          settlement,
+          queueQuestionLocked: () => undefined,
+          onProxyEvent: () => Effect.void,
+        });
+        yield* settlement.acceptBackendReport(record, {
+          runId: record.view.id,
+          assignmentEpoch: 1,
+          sequence: 1,
+          deliveryId: "accepted",
+          text: REPORT,
+        });
+
+        const confirming = yield* assignments
+          .submitPrompt(record, "Task", "start", record.assignment.attemptToken)
+          .pipe(Effect.forkScoped);
+        yield* Deferred.await(gate.entered);
+        const handling = yield* handleEvent(record, lateEvent).pipe(Effect.forkScoped);
+        yield* yieldTurns;
+        // The late event waits for the report's settlement instead of failing the run.
+        expect(record.view.state).not.toBe("failed");
+        expect(record.completionGenerations.size).toBe(0);
+        yield* Deferred.succeed(gate.release, undefined);
+        yield* Fiber.join(confirming);
+        yield* Fiber.join(handling);
+
+        expect(record.view).toMatchObject({
+          state: "completed",
+          finalText: REPORT,
+          reportGeneration: 1,
+          reportArchive: { path: "/archive/1.md" },
+        });
+        expect([...record.completionGenerations.values()]).toMatchObject([
+          { generation: 1, outcome: "completed", finalText: REPORT },
+        ]);
+        expect(gate.discarded).toEqual([]);
+      }),
+    );
   }
 });

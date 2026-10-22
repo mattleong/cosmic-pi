@@ -12,13 +12,18 @@ export const closeRunsLeafFirst = (dependencies: RunShutdownDependencies): Effec
   const { records, withLock, cleanup } = dependencies;
   return Effect.forEach(
     leafFirst(records.values()),
-    (record) => {
-      record.stoppedByParent = true;
-      record.process?.cancelPending(
-        new SubagentRuntimeClosedError({ message: "Parent session shut down." }),
-      );
-      if (record.closingScope !== record.scope) beginCleanup(record);
-      return cleanup.closeRecordScope(record).pipe(
+    (record) =>
+      // Fibers in the record's still-open scope may be mid-transition, so stop under the lock.
+      withLock(
+        Effect.sync(() => {
+          record.stoppedByParent = true;
+          record.process?.cancelPending(
+            new SubagentRuntimeClosedError({ message: "Parent session shut down." }),
+          );
+          if (record.closingScope !== record.scope) beginCleanup(record);
+        }),
+      ).pipe(
+        Effect.andThen(cleanup.closeRecordScope(record)),
         Effect.andThen(
           withLock(Effect.sync(() => !isCleanupOwed(record) && record.process === undefined)),
         ),
@@ -29,8 +34,7 @@ export const closeRunsLeafFirst = (dependencies: RunShutdownDependencies): Effec
                 .pipe(Effect.catch(() => cleanup.retainCleanupQuarantine(record, record.scope)))
             : Effect.void,
         ),
-      );
-    },
+      ),
     { concurrency: 1, discard: true },
   );
 };

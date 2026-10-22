@@ -41,7 +41,7 @@ describe("subagent report archive", () => {
       const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>();
       const notify = hostNotifier(extensionApiFixture({ sendMessage }));
       const report = Array.from({ length: 2_000 }, (_, line) => `finding ${line}`).join("\n");
-      const reportArchive = archive({ id: "agent-1", generation: 2, text: report });
+      const reportArchive = yield* archive.save({ id: "agent-1", generation: 2, text: report });
 
       notify({
         type: "completed",
@@ -66,9 +66,9 @@ describe("subagent report archive", () => {
       const text = sentText(sendMessage);
       expect(text).not.toContain("finding 0");
       expect(text).not.toContain("finding 1999");
-      expect(reportArchive?.chars).toBe(report.length);
-      expect(reportArchive?.lines).toBe(2_000);
-      expect(reportArchive?.complete).toBe(true);
+      expect(reportArchive.chars).toBe(report.length);
+      expect(reportArchive.lines).toBe(2_000);
+      expect(reportArchive.complete).toBe(true);
       const directory = path.join(reportArchiveRoot(agent), "session-1");
       const files = yield* Effect.promise(() => fs.readdir(directory));
       expect(files).toHaveLength(1);
@@ -83,15 +83,17 @@ describe("subagent report archive", () => {
   it.effect("saves nothing under a path that a report reference can't name verbatim", () =>
     Effect.gen(function* () {
       const agent = path.join(yield* temporaryAgent, "two  spaces");
-      expect(
-        sessionReportArchive(agent, "session-1")({ id: "agent-1", generation: 1, text: "report" }),
-      ).toBeUndefined();
+      const spaced = yield* sessionReportArchive(agent, "session-1")
+        .save({ id: "agent-1", generation: 1, text: "report" })
+        .pipe(Effect.flip);
+      expect(spaced.reason).toBe("path_unrepresentable");
       expect(yield* exists(reportArchiveRoot(agent))).toBe(false);
       // Each run's model-facing block has room for a path of bounded length only.
       const deep = path.join(yield* temporaryAgent, "d".repeat(MAX_OUTCOME_FILE_PATH_CHARS));
-      expect(
-        sessionReportArchive(deep, "session-1")({ id: "agent-1", generation: 1, text: "report" }),
-      ).toBeUndefined();
+      const long = yield* sessionReportArchive(deep, "session-1")
+        .save({ id: "agent-1", generation: 1, text: "report" })
+        .pipe(Effect.flip);
+      expect(long.reason).toBe("path_unrepresentable");
     }).pipe(Effect.scoped),
   );
 
@@ -131,11 +133,14 @@ describe("subagent report archive", () => {
       const agent = yield* temporaryAgent;
       const archive = sessionReportArchive(agent, "session-1");
       const failure = `Build failed.\n${"detail ".repeat(500)}`;
-      const saved = archive({ id: "agent-1", generation: 1, kind: "failure", text: failure });
-      expect(saved?.path).toContain("failure");
-      expect(yield* Effect.promise(() => fs.readFile(saved?.path ?? "missing", "utf8"))).toBe(
-        failure,
-      );
+      const saved = yield* archive.save({
+        id: "agent-1",
+        generation: 1,
+        kind: "failure",
+        text: failure,
+      });
+      expect(saved.path).toContain("failure");
+      expect(yield* Effect.promise(() => fs.readFile(saved.path, "utf8"))).toBe(failure);
     }).pipe(Effect.scoped),
   );
 
@@ -144,16 +149,12 @@ describe("subagent report archive", () => {
       const agent = yield* temporaryAgent;
       const archive = sessionReportArchive(agent, "session-1");
       const entry = { id: "agent-r1-1", generation: 1, text: "original" };
-      const original = archive(entry);
-      const repeated = archive({ ...entry, text: "repeated" });
-      const replacement = sessionReportArchive(
-        agent,
-        "session-1",
-      )({
+      const original = yield* archive.save(entry);
+      const repeated = yield* archive.save({ ...entry, text: "repeated" });
+      const replacement = yield* sessionReportArchive(agent, "session-1").save({
         ...entry,
         text: "replacement owner",
       });
-      if (!original || !repeated || !replacement) return yield* Effect.die("archive write failed");
 
       expect(new Set([original.path, repeated.path, replacement.path]).size).toBe(3);
       expect(yield* Effect.promise(() => fs.readFile(original.path, "utf8"))).toBe("original");
@@ -161,7 +162,6 @@ describe("subagent report archive", () => {
       expect(yield* Effect.promise(() => fs.readFile(replacement.path, "utf8"))).toBe(
         "replacement owner",
       );
-      return undefined;
     }).pipe(Effect.scoped),
   );
 
@@ -173,16 +173,21 @@ describe("subagent report archive", () => {
         .spyOn(Core, "synchronousRandomUuid")
         .mockReturnValue("fixed-archive-identity");
       try {
-        const original = archive({ id: "agent-r1-1", generation: 1, text: "original secret" });
-        if (!original) return yield* Effect.die("archive write failed");
-        expect(archive({ id: "agent-r1-1", generation: 1, text: "replacement" })).toBeUndefined();
+        const original = yield* archive.save({
+          id: "agent-r1-1",
+          generation: 1,
+          text: "original secret",
+        });
+        const collision = yield* archive
+          .save({ id: "agent-r1-1", generation: 1, text: "replacement" })
+          .pipe(Effect.flip);
+        expect(collision.reason).toBe("file_exists");
         expect(yield* Effect.promise(() => fs.readFile(original.path, "utf8"))).toBe(
           "original secret",
         );
       } finally {
         uuid.mockRestore();
       }
-      return undefined;
     }).pipe(Effect.scoped),
   );
 
@@ -190,14 +195,18 @@ describe("subagent report archive", () => {
     Effect.gen(function* () {
       const agent = yield* temporaryAgent;
       const archive = sessionReportArchive(agent, "session-1");
-      const whole = archive({ id: "agent-1", generation: 1, text: "whole", originalChars: 5 });
-      const bounded = archive({
+      const whole = yield* archive.save({
+        id: "agent-1",
+        generation: 1,
+        text: "whole",
+        originalChars: 5,
+      });
+      const bounded = yield* archive.save({
         id: "agent-1",
         generation: 2,
         text: "start",
         originalChars: 9_000,
       });
-      if (!whole || !bounded) return yield* Effect.die("archive write failed");
 
       expect(whole.complete).toBe(true);
       expect(yield* Effect.promise(() => fs.readFile(whole.path, "utf8"))).toBe("whole");
@@ -206,7 +215,6 @@ describe("subagent report archive", () => {
       expect(saved.startsWith("start")).toBe(true);
       // The file itself says it was cut, beyond the text it keeps.
       expect(saved.length).toBeGreaterThan("start".length);
-      return undefined;
     }).pipe(Effect.scoped),
   );
 
@@ -214,9 +222,8 @@ describe("subagent report archive", () => {
     Effect.gen(function* () {
       const agent = yield* temporaryAgent;
       const archive = sessionReportArchive(agent, "session-1");
-      const older = archive({ id: "agent-1", generation: 1, text: "older" });
-      const newer = archive({ id: "agent-1", generation: 1, text: "newer" });
-      if (!older || !newer) return yield* Effect.die("archive write failed");
+      const older = yield* archive.save({ id: "agent-1", generation: 1, text: "older" });
+      const newer = yield* archive.save({ id: "agent-1", generation: 1, text: "newer" });
       yield* Effect.promise(() => fs.truncate(older.path, 64 * 1024 * 1024));
       const now = yield* Clock.currentTimeMillis;
       const yesterday = (now - 24 * 60 * 60 * 1000) / 1000;
@@ -226,30 +233,22 @@ describe("subagent report archive", () => {
 
       expect(yield* exists(older.path)).toBe(false);
       expect(yield* Effect.promise(() => fs.readFile(newer.path, "utf8"))).toBe("newer");
-      return undefined;
     }).pipe(Effect.scoped),
   );
 
   it.live("keeps pruning past unreadable entries and removes emptied session directories", () =>
     Effect.gen(function* () {
       const agent = yield* temporaryAgent;
-      const expired = sessionReportArchive(
-        agent,
-        "session-1",
-      )({
+      const expired = yield* sessionReportArchive(agent, "session-1").save({
         id: "agent-1",
         generation: 1,
         text: "old",
       });
-      const fresh = sessionReportArchive(
-        agent,
-        "session-2",
-      )({
+      const fresh = yield* sessionReportArchive(agent, "session-2").save({
         id: "agent-2",
         generation: 1,
         text: "fresh",
       });
-      if (!expired || !fresh) return yield* Effect.die("archive write failed");
       const dangling = path.join(reportArchiveRoot(agent), "session-2", "dangling.md");
       yield* Effect.promise(() => fs.symlink(path.join(agent, "missing"), dangling));
       const now = yield* Clock.currentTimeMillis;
@@ -261,7 +260,6 @@ describe("subagent report archive", () => {
       expect(yield* exists(expired.path)).toBe(false);
       expect(yield* exists(path.dirname(expired.path))).toBe(false);
       expect(yield* exists(fresh.path)).toBe(true);
-      return undefined;
     }).pipe(Effect.scoped),
   );
 });

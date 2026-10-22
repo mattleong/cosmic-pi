@@ -15,10 +15,11 @@ import {
   profileSettingsInspection,
   openRegisteredFleet,
 } from "./fixtures/profile-settings-inspection.ts";
-import { SubagentConfigStoreError } from "../src/config/store.ts";
+import { SubagentConfigConflictError, SubagentConfigStoreError } from "../src/config/store.ts";
 import {
   sessionProfileSnapshot,
   SessionProfileConflictError,
+  SessionProfileInvalidError,
 } from "../src/profiles/session-overrides.ts";
 import type { SubagentRunView } from "../src/run/model.ts";
 import {
@@ -265,6 +266,44 @@ describe("profile settings controller", () => {
     yield* closeDashboard(fixture, running);
   });
 
+  for (const outcome of ["conflict", "invalid"] as const)
+    effectTest(`a Session edit ${outcome} keeps its own recovery`, function* () {
+      const fixture = setup();
+      const running = yield* openDashboard(fixture);
+      const inspect = vi.mocked(fixture.managerActions.inspectProfiles);
+      const patch = vi.mocked(fixture.managerActions.patchSessionProfile);
+      inspect.mockClear();
+      const reason = "Sentinel rejection reason.";
+      patch.mockRejectedValueOnce(
+        outcome === "conflict"
+          ? new SessionProfileConflictError({
+              expectedRevision: 0,
+              actualRevision: 1,
+              message: reason,
+            })
+          : new SessionProfileInvalidError({ message: reason }),
+      );
+      const changeEffort = function* () {
+        press(fixture, "e");
+        yield* step(settleHostPromises);
+        press(fixture, "j", "\r");
+        yield* step(settleHostPromises);
+      };
+      yield* changeEffort();
+      expect(patch).toHaveBeenCalledTimes(1);
+      const screen = fixture.overlays[0]?.render(120).join("\n") ?? "";
+      if (outcome === "conflict") {
+        // A conflict refreshes to the latest Session and lets the user retry the edit.
+        expect(inspect).toHaveBeenCalledTimes(1);
+        yield* changeEffort();
+        expect(patch).toHaveBeenCalledTimes(2);
+      } else {
+        expect(inspect).not.toHaveBeenCalled();
+        expect(screen).toContain(reason);
+      }
+      yield* closeDashboard(fixture, running);
+    });
+
   effectTest("invalid inherited saved routes cannot replace Session", function* () {
     const fixture = setup({ value: inspection("missing") });
     const running = yield* openLibrary(fixture);
@@ -325,14 +364,16 @@ describe("profile settings controller", () => {
       if (outcome === "refresh-failure") inspect.mockRejectedValueOnce(new Error("read failed"));
       else inspect.mockResolvedValue(updated);
       vi.mocked(fixture.managerActions.patchProfile).mockRejectedValueOnce(
-        new SubagentConfigStoreError({
-          operation: "update",
-          path: "/repo/.pi/subagents.json",
-          message:
-            outcome === "other-error"
-              ? "permission denied"
-              : "Subagents settings changed on disk; reopen /subagents profiles and try again.",
-        }),
+        outcome === "other-error"
+          ? new SubagentConfigStoreError({
+              operation: "update",
+              path: "/repo/.pi/subagents.json",
+              message: "permission denied",
+            })
+          : new SubagentConfigConflictError({
+              path: "/repo/.pi/subagents.json",
+              message: "changed on disk",
+            }),
       );
       const changeEffort = function* () {
         press(fixture, "e");

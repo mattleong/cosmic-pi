@@ -65,15 +65,32 @@ export interface SubagentSessionEnvironment {
   readonly parentContext?: SubagentParentContext | undefined;
 }
 
+type ModelRegistry = ExtensionContext["modelRegistry"];
+
+/**
+ * Pi's context getters and extension API throw once the session is replaced or reloaded. A launch
+ * reads them through this guard so a retired session fails the launch instead of becoming a defect.
+ */
+const readHost = <A>(read: () => A): Effect.Effect<A, InvalidSubagentRequestError> =>
+  Effect.try({
+    try: read,
+    catch: () =>
+      new InvalidSubagentRequestError({
+        code: "host_session_unavailable",
+        message:
+          "The Pi session changed while this launch was being prepared. Start the agent again from the current session.",
+      }),
+  });
+
 const sharesParentPromptCache = (
-  ctx: ExtensionContext,
+  registry: ModelRegistry,
   parent: SubagentParentContext,
   context: StartSubagentRequest["context"],
   model: string,
 ): boolean => {
   if (context !== "fork" || parent.model !== model) return false;
   const separator = model.indexOf("/");
-  const parentModel = ctx.modelRegistry.find(model.slice(0, separator), model.slice(separator + 1));
+  const parentModel = registry.find(model.slice(0, separator), model.slice(separator + 1));
   return parentModel !== undefined && forkPromptCacheRoute(parentModel) !== undefined;
 };
 
@@ -94,10 +111,10 @@ const resolvePiModel = (
   selector: string,
   effort: SubagentEffort,
   effortWasExplicit: boolean,
-  ctx: ExtensionContext,
+  registry: ModelRegistry,
 ): Effect.Effect<ResolvedModel, InvalidSubagentRequestError> =>
   Effect.gen(function* () {
-    const availableModels = ctx.modelRegistry
+    const availableModels = registry
       .getAvailable()
       .map((model) => ({ provider: model.provider, id: model.id }));
     const resolution = resolvePiModelSelector(selector, availableModels);
@@ -112,8 +129,8 @@ const resolvePiModel = (
         message: `Profile route references unknown or unauthenticated Pi model "${selector}".${resolution.nearMatches.length > 0 ? ` Close authenticated matches: ${resolution.nearMatches.join(", ")}.` : ""} Update the profile route and reload.`,
       });
     const modelId = `${resolution.provider}/${resolution.id}`;
-    const model = ctx.modelRegistry.find(resolution.provider, resolution.id);
-    if (!model || !ctx.modelRegistry.hasConfiguredAuth(model))
+    const model = registry.find(resolution.provider, resolution.id);
+    if (!model || !registry.hasConfiguredAuth(model))
       return yield* new InvalidSubagentRequestError({
         code: "pi_model_unauthenticated",
         message: `Model is unavailable or unauthenticated: ${modelId}`,
@@ -124,10 +141,10 @@ const resolvePiModel = (
         code: "pi_effort_unsupported",
         message: `Pi model ${modelId} does not support required effort ${effort}; supported efforts: ${supportedEfforts.join(", ") || "none"}.`,
       });
-    const authSource = ctx.modelRegistry.getProviderAuthStatus(model.provider).source;
+    const authSource = registry.getProviderAuthStatus(model.provider).source;
     if (authSource !== "runtime") return { model: modelId };
     const auth = yield* Effect.tryPromise({
-      try: () => ctx.modelRegistry.getApiKeyAndHeaders(model),
+      try: () => registry.getApiKeyAndHeaders(model),
       catch: () =>
         new InvalidSubagentRequestError({
           code: "pi_auth_resolution_failed",
@@ -145,12 +162,11 @@ const resolvePiModel = (
     };
   });
 
-export const hostProfileEnvironment = (
-  pi: ExtensionAPI,
-  ctx: ExtensionContext,
-  parent: SubagentParentContext = capturePiParentContext(pi, ctx),
+const profileEnvironment = (
+  registry: ModelRegistry,
+  parent: SubagentParentContext,
 ): ProfileResolutionEnvironment => ({
-  availablePiModels: ctx.modelRegistry.getAvailable().map((model) => ({
+  availablePiModels: registry.getAvailable().map((model) => ({
     provider: model.provider,
     id: model.id,
     supportedEfforts: getSupportedThinkingLevels(model),
@@ -162,16 +178,27 @@ export const hostProfileEnvironment = (
   forkAvailable: Boolean(parent.sessionFile && parent.leafId),
 });
 
+export const hostProfileEnvironment = (
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  parent: SubagentParentContext = capturePiParentContext(pi, ctx),
+): ProfileResolutionEnvironment => profileEnvironment(ctx.modelRegistry, parent);
+
 const resolveConcreteModel = (
   attempt: ProfileCandidateAttempt,
-  ctx: ExtensionContext,
+  modelRegistry: ModelRegistry,
   cwd: string,
 ): Effect.Effect<ResolvedModel, InvalidSubagentRequestError, SubagentBackendRegistry> =>
   Effect.gen(function* () {
     const registry = yield* SubagentBackendRegistry;
     const resolved =
       attempt.runtime === "pi"
-        ? yield* resolvePiModel(attempt.model, attempt.effort, attempt.effortWasExplicit, ctx)
+        ? yield* resolvePiModel(
+            attempt.model,
+            attempt.effort,
+            attempt.effortWasExplicit,
+            modelRegistry,
+          )
         : { model: attempt.model };
     if (attempt.openaiFastMode && !supportsSubagentFastMode(attempt.runtime, resolved.model))
       return yield* new InvalidSubagentRequestError({
@@ -279,12 +306,12 @@ const exhaustedRoute = (
   });
 };
 
-const selectCandidate = (input: PlannedStartInput, ctx: ExtensionContext, cwd: string) =>
+const selectCandidate = (input: PlannedStartInput, registry: ModelRegistry, cwd: string) =>
   Effect.gen(function* () {
     const skipped: SkippedProfileCandidate[] = [];
     for (const attempt of input.plan.attempts) {
       skipped.push(...(attempt.skippedBefore ?? []));
-      const outcome = yield* Effect.result(resolveConcreteModel(attempt, ctx, cwd));
+      const outcome = yield* Effect.result(resolveConcreteModel(attempt, registry, cwd));
       if (Result.isSuccess(outcome)) return { attempt, resolved: outcome.success, skipped };
       if (isCleanupUnconfirmed(outcome.failure) || isOutcomeUncertain(outcome.failure))
         return yield* outcome.failure;
@@ -313,13 +340,13 @@ const validatedStartInput = (rawInput: SubagentProfileStartSpec) =>
 const resolvePlannedStart = (
   pi: ExtensionAPI,
   input: PlannedStartInput,
-  ctx: ExtensionContext,
+  registry: ModelRegistry,
   environment: SubagentSessionEnvironment,
   parent: SubagentParentContext,
 ): Effect.Effect<StartSubagentRequest, InvalidSubagentRequestError, SubagentBackendRegistry> =>
   Effect.gen(function* () {
     const task = yield* validatedStartInput(input.rawInput);
-    const { attempt, resolved, skipped } = yield* selectCandidate(input, ctx, environment.cwd);
+    const { attempt, resolved, skipped } = yield* selectCandidate(input, registry, environment.cwd);
     const modelOverride = input.routeSource === "override" ? input.rawInput.model : undefined;
     const selection: SubagentSelectionProvenance = {
       source: attempt.source,
@@ -342,7 +369,7 @@ const resolvePlannedStart = (
     const activeTools =
       attempt.runtime === "pi"
         ? customAgentToolSnapshot(
-            yield* piRootActiveToolSnapshot(pi.getActiveTools()),
+            yield* piRootActiveToolSnapshot(yield* readHost(() => pi.getActiveTools())),
             input.agent?.tools,
           )
         : [];
@@ -382,7 +409,7 @@ const resolvePlannedStart = (
       parentSessionId: parent.sessionId,
       ...(parentSessionFile && { parentSessionFile }),
       ...(parentLeafId && { parentLeafId }),
-      ...(sharesParentPromptCache(ctx, parent, attempt.effectiveContext, resolved.model) && {
+      ...(sharesParentPromptCache(registry, parent, attempt.effectiveContext, resolved.model) && {
         sharesParentPromptCache: true,
       }),
     };
@@ -442,13 +469,16 @@ export const resolveProfileStart = (
         code: "profile_unknown",
         message: `Unknown subagent profile "${selectedProfile}". Available profiles: ${PROFILE_IDS.join(", ")}.`,
       });
-    const parent = environment.parentContext ?? capturePiParentContext(pi, ctx);
+    const parent =
+      environment.parentContext ?? (yield* readHost(() => capturePiParentContext(pi, ctx)));
+    // Candidate probes can outlast the session, so later registry reads use this capture.
+    const registry = yield* readHost(() => ctx.modelRegistry);
     if (rawInput.model) {
       const candidate = yield* validatedModelOverride(definition, rawInput.model, agent);
       const plan = resolveProfileOverridePlan(
         definition.id,
         candidate,
-        hostProfileEnvironment(pi, ctx, parent),
+        profileEnvironment(registry, parent),
       );
       if (plan.kind === "failed")
         return yield* modelOverrideUnavailable(
@@ -467,7 +497,7 @@ export const resolveProfileStart = (
           routeCandidates: [candidate],
           routeSource: "override",
         },
-        ctx,
+        registry,
         environment,
         parent,
       );
@@ -475,7 +505,7 @@ export const resolveProfileStart = (
     const plan = profiles.resolve(
       profileSnapshot,
       definition.id,
-      hostProfileEnvironment(pi, ctx, parent),
+      profileEnvironment(registry, parent),
       agent,
     );
     if (plan.kind === "failed")
@@ -491,7 +521,7 @@ export const resolveProfileStart = (
         routeCandidates: route.candidates,
         routeSource: profileSnapshot.effectiveConfig.profileSources[definition.id],
       },
-      ctx,
+      registry,
       environment,
       parent,
     );

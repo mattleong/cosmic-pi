@@ -3,7 +3,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import * as TestClock from "effect/testing/TestClock";
-import { extensionApiFixture, yieldUntil } from "pi-cosmic-core/testing";
+import { eventLoopTurn, extensionApiFixture, step, yieldUntil } from "pi-cosmic-core/testing";
 import { vi } from "vitest";
 import {
   hostNotifier,
@@ -41,6 +41,16 @@ const findings = (lines: number) =>
 
 const readFile = (file: string) => Effect.promise(() => fs.readFile(file, "utf8"));
 
+// Settlement writes report files with real asynchronous I/O, so wait in real time.
+const untilSettled = (predicate: () => boolean, turns = 5_000): Effect.Effect<void> =>
+  Effect.suspend(() =>
+    predicate()
+      ? Effect.void
+      : turns <= 0
+        ? Effect.die(new Error("The run did not settle."))
+        : step(eventLoopTurn).pipe(Effect.andThen(untilSettled(predicate, turns - 1))),
+  );
+
 const completedRun = (notification: SubagentNotification | undefined) =>
   notification?.type === "completed" ? notification.runs[0] : undefined;
 
@@ -64,7 +74,7 @@ describe("report retention", () => {
       yield* withService(layer, function* (service) {
         const run = yield* service.start(request());
         fake.controls[0]!.settle(report);
-        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
+        yield* untilSettled(() => projections.at(-1)?.runs[0]?.state === "completed");
 
         const completed = yield* runView(service, run.id);
         expect(completed.finalText?.length).toBeLessThanOrEqual(MAX_FINAL_TEXT_CHARS);
@@ -102,7 +112,7 @@ describe("report retention", () => {
       yield* withService(layer, function* (service) {
         const run = yield* service.start(request());
         fake.controls[0]!.settle(report);
-        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
+        yield* untilSettled(() => projections.at(-1)?.runs[0]?.state === "completed");
 
         const read = yield* executeAgentActionEffect(
           { tool: "agent_read", args: { agentIds: [run.id] } },
@@ -152,7 +162,7 @@ describe("report retention", () => {
       yield* withService(awaited.layer, function* (service) {
         const run = yield* service.start(request());
         awaited.fake.controls[0]!.settle(report);
-        yield* yieldUntil(() => awaited.projections.at(-1)?.runs[0]?.state === "completed");
+        yield* untilSettled(() => awaited.projections.at(-1)?.runs[0]?.state === "completed");
 
         const completed = yield* runView(service, run.id);
         expect(completed.reportArchive).toBeUndefined();
@@ -188,7 +198,7 @@ describe("report retention", () => {
       yield* withService(notified.layer, function* (service) {
         yield* service.start(request());
         notified.fake.controls[0]!.settle(report);
-        yield* yieldUntil(() => notified.projections.at(-1)?.runs[0]?.state === "completed");
+        yield* untilSettled(() => notified.projections.at(-1)?.runs[0]?.state === "completed");
         yield* TestClock.adjust("100 millis");
         yield* yieldUntil(() => notified.notifications.length > 0);
         const notice = completedRun(notified.notifications[0]);
@@ -214,7 +224,7 @@ describe("report retention", () => {
         const parent = yield* service.start(request({ name: "parent" }));
         const child = yield* service.startSessionOwnedFrom(parent.id, request({ name: "child" }));
         fake.controls[1]!.settle(report);
-        yield* yieldUntil(
+        yield* untilSettled(
           () => projections.at(-1)?.runs.find((run) => run.id === child.id)?.state === "completed",
         );
         yield* TestClock.adjust("100 millis");
@@ -258,7 +268,7 @@ describe("report retention", () => {
               },
             });
             fake.controls[0]!.offer({ type: "agent_settled" });
-            yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
+            yield* untilSettled(() => projections.at(-1)?.runs[0]?.state === "failed");
 
             const failed = yield* runView(service, run.id);
             expect((failed.error?.length ?? 0) > MAX_OUTCOME_PREVIEW_CHARS).toBe(long);
@@ -283,14 +293,17 @@ describe("report retention", () => {
 
   it.effect("completes the run when the archive capability throws", () => {
     const { fake, projections, layer } = localServiceFixture({
-      archiveReport: () => {
-        throw new Error("archive host failed");
+      archiveReport: {
+        save: () => {
+          throw new Error("archive host failed");
+        },
+        discard: () => Effect.void,
       },
     });
     return withService(layer, function* (service) {
       const run = yield* service.start(request());
       fake.controls[0]!.settle("Short report.");
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
+      yield* untilSettled(() => projections.at(-1)?.runs[0]?.state === "completed");
       const completed = yield* runView(service, run.id);
       expect(completed).toMatchObject({ state: "completed", finalText: "Short report." });
       expect(completed.reportArchive).toBeUndefined();
@@ -309,7 +322,7 @@ describe("report retention", () => {
       yield* withService(layer, function* (service) {
         const run = yield* service.start(request());
         fake.controls[0]!.settle(report);
-        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
+        yield* untilSettled(() => projections.at(-1)?.runs[0]?.state === "completed");
 
         const completed = yield* runView(service, run.id);
         expect(completed.finalTextTruncation?.originalChars).toBe(report.length);
@@ -344,7 +357,7 @@ describe("report retention", () => {
       yield* withService(layer, function* (service) {
         const run = yield* service.start(nativeReportRequest());
         backend.controls[0]?.report(run.id, 1, "long-report", report);
-        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
+        yield* untilSettled(() => projections.at(-1)?.runs[0]?.state === "completed");
 
         const completed = yield* runView(service, run.id);
         expect(completed.finalText?.length).toBeLessThanOrEqual(MAX_FINAL_TEXT_CHARS);

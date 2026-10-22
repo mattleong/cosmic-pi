@@ -169,8 +169,9 @@ export const supervisorChannelHandlers = (state: SupervisorChannelState) =>
       SupervisorOpenSession: (payload, options) =>
         Effect.gen(function* () {
           const guard = yield* authorize(state, options.client.id, payload);
+          // Allocate before the check so a concurrent open can't replace the first peer's queue.
+          const assignments = yield* Queue.bounded<AssignmentUpdate, Cause.Done>(4);
           if (!state.peers.has(options.client.id)) {
-            const assignments = yield* Queue.bounded<AssignmentUpdate, Cause.Done>(4);
             state.peers.set(options.client.id, {
               clientId: options.client.id,
               guard,

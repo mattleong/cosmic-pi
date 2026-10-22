@@ -11,6 +11,5 @@ export type NodeChildProcess = InstanceType<typeof childProcessModule.ChildProce
 export const nodeFsConstants = fsModule.constants;
 export const nodeFsPromises = fsModule.promises;
 export const nodeMkdirSync = fsModule.mkdirSync;
-export const nodeWriteFileSync = fsModule.writeFileSync;
 export const nodeCreateHash = cryptoModule.createHash;
 export const nodePath = pathModule;

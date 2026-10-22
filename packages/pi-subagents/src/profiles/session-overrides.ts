@@ -79,6 +79,14 @@ export class SessionProfileConflictError extends Schema.TaggedError<SessionProfi
   },
 ) {}
 
+/** The edit itself cannot be applied; refreshing and retrying the same edit won't help. */
+export class SessionProfileInvalidError extends Schema.TaggedError<SessionProfileInvalidError>()(
+  "SessionProfileInvalidError",
+  { message: Schema.String },
+) {}
+
+export type SessionProfileEditError = SessionProfileConflictError | SessionProfileInvalidError;
+
 const SessionProfileOverrideSeedInputSchema = Schema.Struct({
   revision: Schema.Finite.check(
     Schema.isInt(),
@@ -256,17 +264,18 @@ const editSnapshot = (
   expectedRevision: number,
   staleMessage: string,
   edit: () => Partial<SessionProfileOverrideSeed> | string | undefined,
-): Effect.Effect<SessionProfileSnapshot, SessionProfileConflictError> => {
+): Effect.Effect<SessionProfileSnapshot, SessionProfileEditError> => {
   if (expectedRevision !== snapshot.revision)
     return conflict(snapshot, expectedRevision, staleMessage);
   const changes = edit();
-  if (Predicate.isString(changes)) return conflict(snapshot, expectedRevision, changes);
+  if (Predicate.isString(changes))
+    return Effect.fail(new SessionProfileInvalidError({ message: changes }));
   if (changes === undefined) return Effect.succeed(snapshot);
   if (snapshot.revision >= MAX_SESSION_PROFILE_REVISION)
-    return conflict(
-      snapshot,
-      snapshot.revision,
-      `Session profile revision reached the exact-integer limit ${MAX_SESSION_PROFILE_REVISION}; restart the Pi session before making another change.`,
+    return Effect.fail(
+      new SessionProfileInvalidError({
+        message: `Session profile revision reached the exact-integer limit ${MAX_SESSION_PROFILE_REVISION}; restart the Pi session before making another change.`,
+      }),
     );
   return Effect.succeed(
     sessionProfileSnapshot(snapshot.baseConfig, {
@@ -280,7 +289,7 @@ const editSnapshot = (
 export const patchSessionProfileSnapshot = (
   snapshot: SessionProfileSnapshot,
   patch: SessionProfilePatch,
-): Effect.Effect<SessionProfileSnapshot, SessionProfileConflictError> =>
+): Effect.Effect<SessionProfileSnapshot, SessionProfileEditError> =>
   editSnapshot(snapshot, patch.expectedRevision, STALE_PROFILES, () => {
     const route = patch.route === undefined ? undefined : decodeProfileRoute(patch.route);
     if (!isProfileId(patch.profile) || (patch.route !== undefined && !route))
@@ -303,7 +312,7 @@ const sameOrigin = (left: ResolvedProfileSetSelection, right: ResolvedProfileSet
 export const replaceSessionProfileSnapshot = (
   snapshot: SessionProfileSnapshot,
   patch: SessionProfileSetPatch,
-): Effect.Effect<SessionProfileSnapshot, SessionProfileConflictError> =>
+): Effect.Effect<SessionProfileSnapshot, SessionProfileEditError> =>
   editSnapshot(snapshot, patch.expectedRevision, STALE_PROFILES, () => {
     const baseline = decodeSessionProfileOverrideSeed({
       revision: 0,
@@ -330,7 +339,7 @@ export const replaceSessionProfileSnapshot = (
 export const patchSessionNestingSnapshot = (
   snapshot: SessionProfileSnapshot,
   patch: SessionNestingPatch,
-): Effect.Effect<SessionProfileSnapshot, SessionProfileConflictError> =>
+): Effect.Effect<SessionProfileSnapshot, SessionProfileEditError> =>
   editSnapshot(snapshot, patch.expectedRevision, STALE_SETTINGS, () => {
     const nesting = patch.nesting === undefined ? undefined : decodeSubagentNesting(patch.nesting);
     if (patch.nesting !== undefined && !nesting)
@@ -345,7 +354,7 @@ export const patchSessionNestingSnapshot = (
 export const patchSessionDelegationSnapshot = (
   snapshot: SessionProfileSnapshot,
   patch: SessionDelegationPatch,
-): Effect.Effect<SessionProfileSnapshot, SessionProfileConflictError> =>
+): Effect.Effect<SessionProfileSnapshot, SessionProfileEditError> =>
   editSnapshot(snapshot, patch.expectedRevision, STALE_SETTINGS, () => {
     if (patch.delegation !== undefined && !Schema.is(DelegationModeSchema)(patch.delegation))
       return "The delegation mode is invalid and was not applied.";

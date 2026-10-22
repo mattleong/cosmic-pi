@@ -147,12 +147,12 @@ export function registerApplicationCommands(pi: ExtensionAPI, host: ApplicationC
         ),
       ),
     setWriterWorkspaceMode: (mode) =>
-      withCurrentActivation((activation) =>
-        run(
+      withCurrentActivation((activation) => {
+        const projectTrusted = isProjectTrusted(activation.ctx);
+        return run(
           Effect.gen(function* () {
             const store = yield* SubagentConfigStore;
             const service = yield* SubagentService;
-            const projectTrusted = activation.ctx.isProjectTrusted();
             const inspection = yield* store.inspect(
               activation.cwd,
               activation.agentDirectory,
@@ -172,8 +172,8 @@ export function registerApplicationCommands(pi: ExtensionAPI, host: ApplicationC
               }),
             );
           }),
-        ),
-      ),
+        );
+      }),
     patchProfile: withConfigStore((store) => store.patchProfile),
     restoreProfileDeclaration: withConfigStore((store) => store.restoreProfileDeclaration),
     patchDefaultProfileSet: withConfigStore((store) => store.patchDefaultProfileSet),

@@ -100,14 +100,18 @@ describe("report capture", () => {
         delivery: quietDelivery,
         closeRecordScope: () => Effect.void,
         claimTurnInputDrain: (_record, drained) => Deferred.doneUnsafe(drained, Effect.void),
-        archiveReport: (entry) => {
-          archived.push(entry);
-          return {
-            path: `/archive/${entry.generation}.md`,
-            chars: entry.text.length,
-            lines: 1,
-            complete: true,
-          };
+        archiveReport: {
+          save: (entry) =>
+            Effect.sync(() => {
+              archived.push(entry);
+              return {
+                path: `/archive/${entry.generation}.md`,
+                chars: entry.text.length,
+                lines: 1,
+                complete: true,
+              };
+            }),
+          discard: () => Effect.void,
         },
       });
       const settle = (completionGenerations: Map<number, CompletionGenerationRecord>) =>
