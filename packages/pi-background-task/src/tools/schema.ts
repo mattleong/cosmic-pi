@@ -61,14 +61,12 @@ export const BackgroundTaskParameters = Type.Object({
   tailLines: Type.Optional(
     Type.Integer({
       minimum: 1,
-      maximum: BACKGROUND_TASK_FIELD_BOUNDS.maxTailLines,
-      description: "Newest lines for logs; invalid with afterCursor",
+      description: `Newest lines for logs, capped at ${BACKGROUND_TASK_FIELD_BOUNDS.maxTailLines}; invalid with afterCursor`,
     }),
   ),
   waitSeconds: Type.Optional(
     Type.Number({
       minimum: 0,
-      maximum: BACKGROUND_TASK_FIELD_BOUNDS.maxWaitSeconds,
       description:
         "Long-poll seconds for logs or wait, capped by the maxWaitSeconds setting; wait defaults to that cap",
     }),

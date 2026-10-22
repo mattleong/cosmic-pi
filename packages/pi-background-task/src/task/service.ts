@@ -19,7 +19,7 @@ import {
 } from "../boundary/local-process.ts";
 import { BackgroundTaskConfigStore } from "../config/store.ts";
 import { normalizeStartRequest, validateWaitRequest } from "./admission.ts";
-import { BACKGROUND_LOG_BOUNDS } from "./bounds.ts";
+import { BACKGROUND_LOG_BOUNDS, BACKGROUND_TASK_FIELD_BOUNDS } from "./bounds.ts";
 import {
   afterCursorAhead,
   BackgroundTaskCapacityError,
@@ -502,9 +502,16 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
     const waitSeconds = request.waitSeconds ?? 0;
     const deadline =
       (yield* monotonicMillis) + Math.min(waitSeconds, config.maxWaitSeconds) * 1_000;
+    const window =
+      request.tailLines === undefined
+        ? request
+        : {
+            ...request,
+            tailLines: Math.min(request.tailLines, BACKGROUND_TASK_FIELD_BOUNDS.maxTailLines),
+          };
     return yield* pollUntil(deadline, () => {
       const { snapshot } = record;
-      const slice = readLogBuffer(request.id, record.logs, snapshot.state, request);
+      const slice = readLogBuffer(request.id, record.logs, snapshot.state, window);
       const waits =
         waitSeconds > 0 && slice.events.length === 0 && isActiveTaskState(snapshot.state);
       const task = Object.freeze({

@@ -140,4 +140,33 @@ describe("native scripted background task smoke", () => {
       }).pipe(Effect.provide(Layer.merge(realServiceLayer, nodeFilePlatformLayer))),
     30_000,
   );
+
+  it.live(
+    "accepts waitSeconds and tailLines above their caps and applies the caps",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* nativeCodemodeSession(yield* BackgroundTaskService);
+        const command = `node -e "for (let i = 1; i <= 2500; i++) console.log(i)"`;
+        const result = yield* h.run(`
+          const started = await tools.background_task({action:'start',command:${literal(command)}});
+          const exited = await tools.background_task({action:'wait',id:started.task.id,until:'exit',waitSeconds:300});
+          const logs = await tools.background_task({action:'logs',id:started.task.id,tailLines:5000});
+          ${print("{exited,lines:logs.output.split('\\n').filter(Boolean),truncated:logs.truncated}")}
+        `);
+        expect(result.isError, result.text).toBe(false);
+        const { exited, lines, truncated } = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({
+            exited: Schema.Struct({ outcome: Schema.String, appliedWaitSeconds: Schema.Finite }),
+            lines: Schema.Array(Schema.String),
+            truncated: Schema.Boolean,
+          }),
+        )(output(result.text));
+        expect(exited).toEqual({ outcome: "completed", appliedWaitSeconds: 30 });
+        expect(lines).toHaveLength(2_000);
+        expect(lines.at(0)).toBe("501");
+        expect(lines.at(-1)).toBe("2500");
+        expect(truncated).toBe(true);
+      }).pipe(Effect.provide(Layer.merge(realServiceLayer, nodeFilePlatformLayer))),
+    30_000,
+  );
 });
