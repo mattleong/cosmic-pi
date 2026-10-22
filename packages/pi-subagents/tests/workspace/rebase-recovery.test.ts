@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import { expect, vi } from "vitest";
 import * as gitProcess from "../../src/boundary/git-worktree-process.ts";
-import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-builtins.ts";
+import { nodeFsPromises as fs, nodePath as path } from "../support/node-builtins.ts";
 import type { WorkspaceHandle, WorkspaceRecord } from "../../src/workspace/model.ts";
 import type { WorkspaceServiceContract } from "../../src/workspace/service.ts";
 import {

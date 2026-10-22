@@ -227,14 +227,14 @@ describe("subagent tool", () => {
       getActiveTools: () => ["read"],
     });
     const reject = (input: SubagentProfileStartSpec) =>
-      Effect.runPromise(
-        resolveProfileStart(pi, input, context, {
-          cwd: "/project",
-          projectTrusted: true,
-        }).pipe(
-          Effect.provideService(SubagentProfileService, fallbackProfileService),
-          Effect.provideService(SubagentBackendRegistry, testBackendRegistry),
-        ),
+      resolveProfileStart(pi, input, context, {
+        cwd: "/project",
+        projectTrusted: true,
+      }).pipe(
+        Effect.provideService(SubagentProfileService, fallbackProfileService),
+        Effect.provideService(SubagentBackendRegistry, testBackendRegistry),
+        Effect.flip,
+        Effect.orDie,
       );
 
     for (const forged of [
@@ -244,9 +244,7 @@ describe("subagent tool", () => {
       { supersedes: {} },
     ]) {
       const spec = { task: "Probe", ...forged };
-      yield* step(() =>
-        expect(reject(spec)).rejects.toMatchObject({ code: "launch_override_not_allowed" }),
-      );
+      expect(yield* reject(spec)).toMatchObject({ code: "launch_override_not_allowed" });
     }
   });
 

@@ -1,7 +1,11 @@
 import { absurd } from "effect/Function";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import {
   MAX_BACKEND_REPORT_EVIDENCE_CHARS,
   MAX_BACKEND_REPORT_ID_CHARS,
@@ -11,7 +15,12 @@ import {
   type BackendReport,
 } from "../backend/model.ts";
 import type { ReportArchive, ReportArchiveEntry } from "../boundary/report-archive.ts";
-import { processError, type SubagentError, SubagentProcessError } from "./errors.ts";
+import {
+  PENDING_STEER_DELIVERY_CODE,
+  processError,
+  type SubagentError,
+  SubagentProcessError,
+} from "./errors.ts";
 import {
   beginCleanup,
   clearRunActivity,
@@ -24,7 +33,11 @@ import {
   type StoredRunView,
 } from "./internal.ts";
 import type { SubagentReportArchive, SubagentRunView, SubagentUsage } from "./model.ts";
-import { MAX_OUTCOME_PREVIEW_CHARS, MAX_UNRESOLVED_REPORT_GENERATIONS } from "./limits.ts";
+import {
+  MAX_OUTCOME_PREVIEW_CHARS,
+  MAX_UNRESOLVED_REPORT_GENERATIONS,
+  REPORT_SAVE_DEADLINE_MILLIS,
+} from "./limits.ts";
 import type { RunNotificationDelivery } from "./notification-delivery.ts";
 import type { RunRecordCleanup } from "./record-cleanup.ts";
 import {
@@ -87,11 +100,34 @@ const reportPairStatus = (record: RunRecord, report: BackendReport) => {
   return report.sequence <= watermark.sequence ? "invalid" : "new";
 };
 
+interface SettlementCommit {
+  /** Whether the caller sends peer notices; a completed run's backend closure sends its own. */
+  readonly notifyPeers: boolean;
+  readonly view: SubagentRunView;
+}
+
 /** The outcome's completion generation, or undefined when the run's outbox is full. */
 const allocateCompletionLocked = (record: RunRecord, state: SettlementState) =>
   state === "stopped" || record.completionGenerations.size >= MAX_UNRESOLVED_REPORT_GENERATIONS
     ? undefined
     : ++record.completionGeneration;
+
+const saveArchive = (
+  archive: ReportArchive,
+  entry: ReportArchiveEntry,
+): Effect.Effect<SubagentReportArchive | undefined> =>
+  Effect.suspend(() => archive.save(entry)).pipe(
+    Effect.catchTag("ReportArchiveError", (error) =>
+      Effect.logWarning(`Subagent report file wasn't saved (${error.reason}).`).pipe(
+        Effect.as(undefined),
+      ),
+    ),
+    Effect.catchDefect(() =>
+      Effect.logWarning("Subagent report file wasn't saved (archive defect).").pipe(
+        Effect.as(undefined),
+      ),
+    ),
+  );
 
 export function settlementOperations(dependencies: RunSettlementDependencies) {
   const {
@@ -183,28 +219,6 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
         return view;
       }),
     );
-  // Saving under the run lock keeps each settlement one atomic transition, so no other operation can
-  // overtake an outcome while its file is written. The write is bounded (1 MiB) asynchronous local
-  // I/O: it delays other locked transitions but never blocks the event loop. A file that can't be
-  // saved leaves the parent a preview and agent_read.
-  const saveArchiveLocked = (
-    entry: ReportArchiveEntry,
-  ): Effect.Effect<SubagentReportArchive | undefined> =>
-    archiveReport
-      ? Effect.suspend(() => archiveReport.save(entry)).pipe(
-          Effect.catchTag("ReportArchiveError", (error) =>
-            Effect.logWarning(`Subagent report file wasn't saved (${error.reason}).`).pipe(
-              Effect.as(undefined),
-            ),
-          ),
-          Effect.catchDefect(() =>
-            Effect.logWarning("Subagent report file wasn't saved (archive defect).").pipe(
-              Effect.as(undefined),
-            ),
-          ),
-        )
-      : Effect.undefined;
-
   const discardArchive = (archive: SubagentReportArchive | undefined) =>
     archiveReport && archive
       ? Effect.suspend(() => archiveReport.discard(archive)).pipe(
@@ -216,6 +230,42 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
           ),
         )
       : Effect.void;
+
+  // Saving under the run lock keeps each settlement one atomic transition, so no other operation can
+  // overtake an outcome while its file is written. The write is bounded (1 MiB) asynchronous local
+  // I/O that never blocks the event loop, but every run's locked transitions wait for it, so the
+  // settlement waits only until its deadline and then settles without the file: the parent gets a
+  // preview and agent_read, as for any file that can't be saved. The save itself can't be cut short
+  // without risking a partial file, so it finishes in the session scope and removes a file it made
+  // after the settlement stopped waiting; nothing names that file.
+  const saveArchiveLocked = (
+    entry: ReportArchiveEntry,
+  ): Effect.Effect<SubagentReportArchive | undefined> =>
+    archiveReport
+      ? Effect.gen(function* () {
+          // The file, or none once the deadline passed first. Whichever completes it first owns
+          // the outcome, so a save that loses removes its file.
+          const outcome = yield* Deferred.make<Option.Option<SubagentReportArchive | undefined>>();
+          yield* saveArchive(archiveReport, entry).pipe(
+            Effect.flatMap((file) =>
+              Deferred.succeed(outcome, Option.some(file)).pipe(
+                Effect.flatMap((won) => (won ? Effect.void : discardArchive(file))),
+              ),
+            ),
+            // Uninterruptible from its start, so it runs even once the session scope is closing.
+            Effect.forkIn(ownerScope, { startImmediately: true, uninterruptible: true }),
+          );
+          const deadline = yield* Effect.sleep(Duration.millis(REPORT_SAVE_DEADLINE_MILLIS)).pipe(
+            Effect.andThen(Deferred.succeed(outcome, Option.none())),
+            Effect.forkChild({ startImmediately: true }),
+          );
+          const saved = yield* Deferred.await(outcome);
+          yield* Fiber.interrupt(deadline);
+          if (Option.isSome(saved)) return saved.value;
+          yield* Effect.logWarning("Subagent report file wasn't saved (deadline).");
+          return undefined;
+        })
+      : Effect.undefined;
 
   // Only an admitted generation is archived, so every file names the generation that delivers it.
   const archiveReportLocked = (
@@ -334,7 +384,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
     state: SettlementState,
     error?: string,
     assignmentEpoch?: number,
-  ) =>
+  ): Effect.Effect<SettlementCommit> =>
     Effect.gen(function* () {
       if (
         settlementBlocked(record, state) ||
@@ -344,9 +394,20 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
         record.latestAssistantFullText = undefined;
         return { notifyPeers: false, view: snapshotRun(record) };
       }
-      if (record.initializationPending && state !== "stopped") {
-        record.pendingInitializationSettlement = { state, ...(error && { error }) };
+      if (record.initialization && state !== "stopped") {
+        record.initialization.pendingSettlement = { state, ...(error && { error }) };
         return { notifyPeers: false, view: snapshotRun(record) };
+      }
+      const acceptedReport =
+        state === "failed" && record.assignment.phase === "issuing"
+          ? record.assignment.pendingReport
+          : undefined;
+      if (acceptedReport) {
+        // An accepted report proves the assignment ran, so an exit or failure before its start
+        // confirmed never replaces it with a retryable failure. Only an explicit stop does.
+        record.assignment.pendingReport = undefined;
+        record.assignment.pendingRunSettled = false;
+        return yield* commitReportLocked(record, acceptedReport);
       }
       const finalText = state === "completed" ? record.latestAssistantText : undefined;
       const generation = allocateCompletionLocked(record, state);
@@ -400,8 +461,8 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
         beginCleanup(record);
         record.backendFailure ??= failure;
         if (
-          pendingError?._tag === "SubagentProcessError" &&
-          pendingError.code === "steer_outcome_uncertain" &&
+          Predicate.isTagged(pendingError, "SubagentProcessError") &&
+          pendingError.code === PENDING_STEER_DELIVERY_CODE &&
           !pendingError.pendingDelivery
         )
           record.view = { ...record.view, steeringDelivery: "unresolved" };
@@ -415,7 +476,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
           record.backendFailure?.message ?? diagnostic,
           MAX_ERROR_CHARS,
         );
-        if (record.initializationPending)
+        if (record.initialization)
           return settle(record, "failed", primaryDiagnostic, assignmentEpoch);
         return (
           record.process ? record.process.terminate("force").pipe(Effect.ignore) : Effect.void

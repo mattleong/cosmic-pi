@@ -250,110 +250,111 @@ export const workspaceBusyError = () =>
     "Another operation on this workspace is still running. Retry once it finishes.",
   );
 
-export function workspaceControlContext(
+export const workspaceControlContext = (
   dependencies: WorkspaceControlDependencies,
-): WorkspaceControlContext {
-  const { engine, ownerId, records } = dependencies;
-  const state: WorkspaceControlState = {
-    mode: dependencies.initialMode,
-    sharedReservations: new Set(),
-    integrationQuarantined: false,
-    bindings: new Map(),
-    launchSlots: new Set(),
-    slotReleased: Deferred.makeUnsafe<void>(),
-  };
-  const ownerFor = (caller: string) => `${ownerId}/${caller}`;
-  const requireEngine = engine
-    ? Effect.succeed(engine)
-    : Effect.fail(
-        invalid(
-          "workspace_unavailable",
-          "Private workspace service is unavailable. Writer launch is denied.",
-        ),
-      );
-  const requireBinding = (workspaceId: string, caller: string, held?: symbol) =>
-    Effect.gen(function* () {
-      const binding = state.bindings.get(workspaceId);
-      if (!binding || binding.handle.ownerId !== ownerFor(caller))
-        return yield* invalid(
-          "workspace_owner_unavailable",
-          "Workspace mutation requires its authenticated direct parent and live coordinator ownership evidence. Persisted artifacts without cleanup evidence require manual recovery.",
+): Effect.Effect<WorkspaceControlContext> =>
+  Effect.gen(function* () {
+    const { engine, ownerId, records } = dependencies;
+    const state: WorkspaceControlState = {
+      mode: dependencies.initialMode,
+      sharedReservations: new Set(),
+      integrationQuarantined: false,
+      bindings: new Map(),
+      launchSlots: new Set(),
+      slotReleased: yield* Deferred.make<void>(),
+    };
+    const ownerFor = (caller: string) => `${ownerId}/${caller}`;
+    const requireEngine = engine
+      ? Effect.succeed(engine)
+      : Effect.fail(
+          invalid(
+            "workspace_unavailable",
+            "Private workspace service is unavailable. Writer launch is denied.",
+          ),
         );
-      if (isAutoDiscarded(binding)) return yield* workspaceFinishedError(binding);
-      const { state: current } = binding;
-      if (current.phase === "busy" && current.token !== held) return yield* workspaceBusyError();
-      if (current.phase === "creating" || current.phase === "revising")
-        return yield* invalid(
-          "workspace_process_unsettled",
-          "A writer is still launching in this workspace. Await it first.",
-        );
-      const writer = binding.record;
-      if (writer?.cleanupDisposition === "quarantined")
-        return yield* invalid(
-          "workspace_process_unsettled",
-          "The workspace writer's process cleanup is quarantined. Inspect it with agent_read and recover it first.",
-        );
-      if (
-        writer &&
-        (writer.process !== undefined ||
-          writer.cleanupDisposition !== "confirmed" ||
-          isActiveRunState(writer.view.state))
-      )
-        return yield* invalid(
-          "workspace_process_unsettled",
-          "The workspace writer is still running. Await or stop it first.",
-        );
-      // A shared-checkout writer its writer started may still be editing the worker tree; readers
-      // there are fine, because integration keeps the trees they use.
-      const sharedWriter = [
-        ...runsWithin(records, [binding.handle.artifactRoot], binding.record).keys(),
-      ].some((record) => record.view.writeIntent === "writer" && runHoldsCwd(record));
-      if (sharedWriter)
-        return yield* invalid(
-          "workspace_process_unsettled",
-          "A writer still works in this workspace's tree. Await or stop it first.",
-        );
-      return binding;
-    });
-  const awaitWriterCleanup = (workspaceId: string) =>
-    dependencies
-      .withLock(
-        Effect.sync(() => {
-          const record = state.bindings.get(workspaceId)?.record;
-          return record &&
-            !isActiveRunState(record.view.state) &&
-            (record.cleanupDisposition === "pending" ||
-              (record.cleanupDisposition === "none" && record.process !== undefined))
-            ? record.cleanupSettlement
-            : undefined;
-        }),
-      )
-      .pipe(
-        Effect.flatMap((settlement) =>
-          settlement === undefined
-            ? Effect.void
-            : Deferred.await(settlement).pipe(
-                Effect.asVoid,
-                Effect.timeoutOrElse({
-                  duration: WRITER_CLEANUP_WAIT,
-                  orElse: () =>
-                    Effect.fail(
-                      invalid(
-                        "workspace_process_unsettled",
-                        "The workspace writer's process cleanup is still settling. Retry shortly.",
+    const requireBinding = (workspaceId: string, caller: string, held?: symbol) =>
+      Effect.gen(function* () {
+        const binding = state.bindings.get(workspaceId);
+        if (!binding || binding.handle.ownerId !== ownerFor(caller))
+          return yield* invalid(
+            "workspace_owner_unavailable",
+            "Workspace mutation requires its authenticated direct parent and live coordinator ownership evidence. Persisted artifacts without cleanup evidence require manual recovery.",
+          );
+        if (isAutoDiscarded(binding)) return yield* workspaceFinishedError(binding);
+        const { state: current } = binding;
+        if (current.phase === "busy" && current.token !== held) return yield* workspaceBusyError();
+        if (current.phase === "creating" || current.phase === "revising")
+          return yield* invalid(
+            "workspace_process_unsettled",
+            "A writer is still launching in this workspace. Await it first.",
+          );
+        const writer = binding.record;
+        if (writer?.cleanupDisposition === "quarantined")
+          return yield* invalid(
+            "workspace_process_unsettled",
+            "The workspace writer's process cleanup is quarantined. Inspect it with agent_read and recover it first.",
+          );
+        if (
+          writer &&
+          (writer.process !== undefined ||
+            writer.cleanupDisposition !== "confirmed" ||
+            isActiveRunState(writer.view.state))
+        )
+          return yield* invalid(
+            "workspace_process_unsettled",
+            "The workspace writer is still running. Await or stop it first.",
+          );
+        // A shared-checkout writer its writer started may still be editing the worker tree; readers
+        // there are fine, because integration keeps the trees they use.
+        const sharedWriter = [
+          ...runsWithin(records, [binding.handle.artifactRoot], binding.record).keys(),
+        ].some((record) => record.view.writeIntent === "writer" && runHoldsCwd(record));
+        if (sharedWriter)
+          return yield* invalid(
+            "workspace_process_unsettled",
+            "A writer still works in this workspace's tree. Await or stop it first.",
+          );
+        return binding;
+      });
+    const awaitWriterCleanup = (workspaceId: string) =>
+      dependencies
+        .withLock(
+          Effect.sync(() => {
+            const record = state.bindings.get(workspaceId)?.record;
+            return record &&
+              !isActiveRunState(record.view.state) &&
+              (record.cleanupDisposition === "pending" ||
+                (record.cleanupDisposition === "none" && record.process !== undefined))
+              ? record.cleanupSettlement
+              : undefined;
+          }),
+        )
+        .pipe(
+          Effect.flatMap((settlement) =>
+            settlement === undefined
+              ? Effect.void
+              : Deferred.await(settlement).pipe(
+                  Effect.asVoid,
+                  Effect.timeoutOrElse({
+                    duration: WRITER_CLEANUP_WAIT,
+                    orElse: () =>
+                      Effect.fail(
+                        invalid(
+                          "workspace_process_unsettled",
+                          "The workspace writer's process cleanup is still settling. Retry shortly.",
+                        ),
                       ),
-                    ),
-                }),
-              ),
-        ),
-      );
-  return {
-    ...dependencies,
-    state,
-    ownerFor,
-    requireEngine,
-    requireBinding,
-    awaitWriterCleanup,
-    operations: Semaphore.makeUnsafe(1),
-  };
-}
+                  }),
+                ),
+          ),
+        );
+    return {
+      ...dependencies,
+      state,
+      ownerFor,
+      requireEngine,
+      requireBinding,
+      awaitWriterCleanup,
+      operations: yield* Semaphore.make(1),
+    };
+  });

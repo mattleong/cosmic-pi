@@ -305,59 +305,58 @@ const executeWorkspaceApply = (
  * `resolveLaunch` resolves an adopted workspace's recorded launch for its first revision; the
  * host supplies it with its profiles and parent context.
  */
-export const executeWorkspaceAction = (
+export const executeWorkspaceAction = Effect.fn("SubagentTools.workspace")(function* (
   operation: SubagentWorkspaceInput,
-  callerRunId = SUBAGENT_ROOT_RUN_ID,
+  callerRunId: string = SUBAGENT_ROOT_RUN_ID,
   resolveLaunch?: WorkspaceReviseOptions["resolveLaunch"],
-) =>
-  Effect.gen(function* () {
-    const error = Check(WorkspaceParameters, operation)
-      ? workspaceOperationError(operation)
-      : "Worktree arguments failed strict validation.";
-    if (error !== undefined) return yield* invalidRequest("workspace_input_invalid", error);
-    const service = yield* SubagentService;
-    const workspaceId = operation.workspaceId ?? "";
-    const receipt = { operation: operation.action, ...(workspaceId && { workspaceId }) };
-    switch (operation.action) {
-      case "list":
-        return yield* executeWorkspaceList(service, callerRunId);
-      case "review":
-        return yield* executeWorkspaceReview(service, operation, receipt, callerRunId);
-      case "prepare":
-        return yield* executeWorkspacePrepare(service, operation, receipt, callerRunId);
-      case "apply":
-        return yield* executeWorkspaceApply(service, operation, receipt, callerRunId);
-      case "discard":
-        yield* service.workspaceDiscard(workspaceId, callerRunId);
-        return result("Discarded the worktree proposal; parent files were not changed.", receipt);
-      case "revise": {
-        const { run, rebase } = yield* service.workspaceRevise(
-          workspaceId,
-          operation.message ?? "",
-          callerRunId,
-          { rebase: operation.rebase, resolveLaunch },
-        );
-        const conflicts = rebase?.conflictedPaths ?? [];
-        const rebased =
-          rebase === undefined
-            ? []
-            : [
-                conflicts.length === 0
-                  ? "Rebased: the writer's tree was rebuilt from your current files, and its changes reapplied cleanly."
-                  : `Rebased: the writer's tree was rebuilt from your current files, and its changes were reapplied with ${countLabel(conflicts.length, "conflicted file")} the successor was told to resolve first: ${listedPaths(conflicts)}.`,
-              ];
-        return result(
-          [
-            `Revision requested; successor runId=${run.id}. Await it, then apply or review its new revision; earlier review and preparation no longer apply.`,
-            ...rebased,
-          ].join("\n"),
-          {
-            ...receipt,
-            successorRunId: run.id,
-            ...(rebase && { rebased: true, conflictCount: conflicts.length }),
-          },
-        );
-      }
+) {
+  const error = Check(WorkspaceParameters, operation)
+    ? workspaceOperationError(operation)
+    : "Worktree arguments failed strict validation.";
+  if (error !== undefined) return yield* invalidRequest("workspace_input_invalid", error);
+  const service = yield* SubagentService;
+  const workspaceId = operation.workspaceId ?? "";
+  const receipt = { operation: operation.action, ...(workspaceId && { workspaceId }) };
+  switch (operation.action) {
+    case "list":
+      return yield* executeWorkspaceList(service, callerRunId);
+    case "review":
+      return yield* executeWorkspaceReview(service, operation, receipt, callerRunId);
+    case "prepare":
+      return yield* executeWorkspacePrepare(service, operation, receipt, callerRunId);
+    case "apply":
+      return yield* executeWorkspaceApply(service, operation, receipt, callerRunId);
+    case "discard":
+      yield* service.workspaceDiscard(workspaceId, callerRunId);
+      return result("Discarded the worktree proposal; parent files were not changed.", receipt);
+    case "revise": {
+      const { run, rebase } = yield* service.workspaceRevise(
+        workspaceId,
+        operation.message ?? "",
+        callerRunId,
+        { rebase: operation.rebase, resolveLaunch },
+      );
+      const conflicts = rebase?.conflictedPaths ?? [];
+      const rebased =
+        rebase === undefined
+          ? []
+          : [
+              conflicts.length === 0
+                ? "Rebased: the writer's tree was rebuilt from your current files, and its changes reapplied cleanly."
+                : `Rebased: the writer's tree was rebuilt from your current files, and its changes were reapplied with ${countLabel(conflicts.length, "conflicted file")} the successor was told to resolve first: ${listedPaths(conflicts)}.`,
+            ];
+      return result(
+        [
+          `Revision requested; successor runId=${run.id}. Await it, then apply or review its new revision; earlier review and preparation no longer apply.`,
+          ...rebased,
+        ].join("\n"),
+        {
+          ...receipt,
+          successorRunId: run.id,
+          ...(rebase && { rebased: true, conflictCount: conflicts.length }),
+        },
+      );
     }
-    return absurd<never>(operation.action);
-  });
+  }
+  return absurd<never>(operation.action);
+});

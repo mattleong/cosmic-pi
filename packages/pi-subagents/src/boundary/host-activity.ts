@@ -21,8 +21,13 @@ import {
   subagentActivityItems,
 } from "../ui/run-activity.ts";
 
-type SubagentActivityAction = "stop" | "interrupt" | "resume" | "message" | "reply" | "rename";
 type SubagentActivityInput = "resume" | "message" | "reply" | "rename";
+
+/** An admitted Activity action with the text it needs: only resume runs without any. */
+export type SubagentActivityRequest =
+  | { readonly action: "stop" | "interrupt" }
+  | { readonly action: "resume"; readonly input: string | undefined }
+  | { readonly action: "message" | "reply" | "rename"; readonly input: string };
 
 class SubagentActivityInputError extends Schema.TaggedError<SubagentActivityInputError>()(
   "SubagentActivityInputError",
@@ -53,9 +58,6 @@ export const promptSubagentActivityInput = (
     catch: () => new SubagentActivityInputError({ message: "Subagent input isn't available" }),
   });
 
-const missingActivityInput = (action: string): Error =>
-  new Error(`The ${action} activity action needs text input.`);
-
 /**
  * Runs an admitted Activity action. Reply and message share the user's send path, which answers
  * a pending question or steers by the target's locked state.
@@ -63,29 +65,27 @@ const missingActivityInput = (action: string): Error =>
 export const runSubagentActivityAction = (
   service: Pick<SubagentServiceContract, "stop" | "interrupt" | "resume" | "send" | "rename">,
   id: string,
-  action: SubagentActivityAction,
-  input: string | undefined,
+  request: SubagentActivityRequest,
   expected: SubagentControlExpectation,
   onPendingGuidance: () => void,
 ): Effect.Effect<void, SubagentError> => {
-  switch (action) {
+  switch (request.action) {
     case "stop":
     case "interrupt":
-      return service[action](id, expected).pipe(Effect.asVoid);
+      return service[request.action](id, expected).pipe(Effect.asVoid);
     case "resume":
-      return service.resume(id, input, expected).pipe(Effect.asVoid);
+      return service.resume(id, request.input, expected).pipe(Effect.asVoid);
     case "rename":
+      return service.rename(id, request.input, expected).pipe(Effect.asVoid);
     case "message":
     case "reply":
-      if (input === undefined) return Effect.die(missingActivityInput(action));
-      if (action === "rename") return service.rename(id, input, expected).pipe(Effect.asVoid);
       return service
-        .send(id, input, expected)
+        .send(id, request.input, expected)
         .pipe(
           Effect.flatMap((sent) => (sent.confirmed ? Effect.void : Effect.sync(onPendingGuidance))),
         );
   }
-  return absurd(action);
+  return absurd(request);
 };
 
 const sameAssignment = (before: SubagentRunView, after: SubagentRunView): boolean =>
@@ -115,9 +115,8 @@ export function registerSubagentActivity(options: {
   ) => Promise<string | undefined>;
   readonly act: (
     id: string,
-    action: SubagentActivityAction,
+    request: SubagentActivityRequest,
     signal: AbortSignal,
-    input: string | undefined,
     expected: SubagentControlExpectation,
   ) => Promise<void>;
 }): () => void {
@@ -138,7 +137,7 @@ export function registerSubagentActivity(options: {
       if (!before) throw new Error("Subagent action is unavailable");
       const expected = captureSubagentControlExpectation(before);
       if (action === "stop" || action === "interrupt")
-        return options.act(item.id, action, signal, undefined, expected);
+        return options.act(item.id, { action }, signal, expected);
       if (!isInputAction(action)) throw new Error("Subagent action is unavailable");
       if (!options.input) throw new Error("Subagent input isn't available");
       return options.input(before, action, signal).then((input) => {
@@ -155,12 +154,12 @@ export function registerSubagentActivity(options: {
         )
           throw new Error("Subagent changed while entering input");
         const value = input.trim();
-        if (
-          (!value && action !== "resume") ||
-          value.length > (action === "rename" ? MAX_NAME_CHARS : MAX_AGENT_MESSAGE_CHARS)
-        )
+        if (value.length > (action === "rename" ? MAX_NAME_CHARS : MAX_AGENT_MESSAGE_CHARS))
           throw new Error("Subagent input is invalid");
-        return options.act(item.id, action, signal, value || undefined, expected);
+        if (action === "resume")
+          return options.act(item.id, { action, input: value || undefined }, signal, expected);
+        if (!value) throw new Error("Subagent input is invalid");
+        return options.act(item.id, { action, input: value }, signal, expected);
       });
     },
     subscriptions: [options.bridge.subscribe, options.bridge.subscribeActivityPresentation],

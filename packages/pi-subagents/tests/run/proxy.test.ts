@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Result from "effect/Result";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
@@ -9,7 +10,6 @@ import {
   recordingExtensionHost,
   yieldUntil,
 } from "pi-cosmic-core/testing";
-import { InvalidSubagentRequestError } from "../../src/run/errors.ts";
 import { SubagentService, type SubagentServiceOptions } from "../../src/run/service.ts";
 import { executeSubagentActionEffect } from "../../src/tools/execute.ts";
 import { decodeSubagentProxyRequest } from "../../src/tools/proxy-protocol.ts";
@@ -84,11 +84,11 @@ const coordinatorProxyOptions = (): SubagentServiceOptions => {
   return {
     proxyHandler: (service, callerRunId, proxyRequest) => {
       const input = decodeSubagentProxyRequest(proxyRequest);
-      if (input instanceof InvalidSubagentRequestError) return Effect.fail(input);
+      if (Result.isFailure(input)) return Effect.fail(input.failure);
       return executeSubagentActionEffect(
         host.pi,
         { cwd: "/repo", projectTrusted: true },
-        input,
+        input.success,
         undefined,
         context,
         callerRunId,
@@ -149,11 +149,11 @@ describe("SubagentService parent proxy executions", () => {
         notify: acknowledgeCompletions,
         proxyHandler: (service, callerRunId, proxyRequest) => {
           const input = decodeSubagentProxyRequest(proxyRequest);
-          if (input instanceof InvalidSubagentRequestError) return Effect.fail(input);
+          if (Result.isFailure(input)) return Effect.fail(input.failure);
           return executeSubagentActionEffect(
             host.pi,
             { cwd: "/project", projectTrusted: true },
-            input,
+            input.success,
             () => {
               observed = true;
             },

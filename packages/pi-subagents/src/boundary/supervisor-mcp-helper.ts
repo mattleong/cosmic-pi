@@ -2,7 +2,9 @@
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FiberMap from "effect/FiberMap";
+import * as FiberSet from "effect/FiberSet";
 import { constVoid } from "effect/Function";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
@@ -66,7 +68,8 @@ const main = Effect.gen(function* () {
   const stdout = yield* serializedWriter(process.stdout);
   const activeCalls = yield* FiberMap.make<string>();
   const done = yield* Deferred.make<void>();
-  const runPromise = Effect.runPromiseWith(yield* Effect.context());
+  // Stdin callbacks start their writes here, so main's scope interrupts any still outstanding.
+  const runPromise = yield* FiberSet.makeRuntimePromise();
   let channelClosed = false;
   let initialized = false;
 
@@ -95,17 +98,35 @@ const main = Effect.gen(function* () {
     Effect.forkScoped({ startImmediately: true }),
   );
 
-  const executeTool = (request: ToolCall) => {
-    const call = decodeSupervisorToolCall(request.name, request.arguments);
-    return Result.isSuccess(call)
-      ? runSupervisorTool(supervisor, call.success, {
-          nativeThreadId: request.nativeThreadId,
-        }).pipe(Effect.map((result) => toolResult(result.text, result.isError)))
-      : Effect.succeed(toolResult(`Not delivered: ${call.failure}`, true));
-  };
-
   const writeToolResponse = (value: Schema.Json): Effect.Effect<void> =>
     stdout.write(value).pipe(Effect.catch(() => Effect.sync(failChannel)));
+
+  // Each call writes exactly one response; a call cancelled after the parent's reply was consumed
+  // still writes that reply.
+  const executeTool = (request: ToolCall): Effect.Effect<void> => {
+    const call = decodeSupervisorToolCall(request.name, request.arguments);
+    return Result.isSuccess(call)
+      ? runSupervisorTool(
+          supervisor,
+          call.success,
+          (exit) =>
+            writeToolResponse(
+              toolResponseFromExit(
+                request.id,
+                Exit.map(exit, (result) => toolResult(result.text, result.isError)),
+              ),
+            ),
+          { nativeThreadId: request.nativeThreadId },
+        )
+      : Effect.uninterruptible(
+          writeToolResponse(
+            toolResponseFromExit(
+              request.id,
+              Exit.succeed(toolResult(`Not delivered: ${call.failure}`, true)),
+            ),
+          ),
+        );
+  };
 
   const dispatchMcp = (request: DecodedMcpMessage): void => {
     if (!initialized && (request.method === "tools/list" || request.method === "tools/call")) {
@@ -154,14 +175,10 @@ const main = Effect.gen(function* () {
           );
           return;
         }
-        const call = Effect.uninterruptibleMask((restore) =>
-          Effect.exit(restore(executeTool(request))).pipe(
-            Effect.map((exit) => toolResponseFromExit(request.id, exit)),
-            Effect.flatMap(writeToolResponse),
-          ),
-        );
         runPromise(
-          FiberMap.run(activeCalls, key, { onlyIfMissing: true, startImmediately: true })(call),
+          FiberMap.run(activeCalls, key, { onlyIfMissing: true, startImmediately: true })(
+            executeTool(request),
+          ),
         ).catch(failChannel);
         break;
       }

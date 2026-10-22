@@ -1,7 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import { clipText, SafeFile } from "pi-cosmic-core";
-import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
+import { clipText, SafeFile, nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core";
 import {
   checkDirectory,
   git,

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { temporaryDirectory } from "pi-cosmic-core/testing";
-import { makeLocalCliProcess } from "../src/boundary/local-cli-process.ts";
+import type { LocalCliProcessContract } from "../src/boundary/local-cli-process.ts";
+import { localCliProcess } from "./support/local-cli-process.ts";
 import { step } from "./support/effect-test.ts";
 import { nodeFsPromises as fs, nodePath } from "./support/node-builtins.ts";
 
@@ -26,7 +27,7 @@ const versionedCli = (versionOutput: string) =>
     yield* step(() => fs.mkdir(agentDirectory, { mode: 0o700 }));
     yield* step(() => fs.writeFile(executable, CLI_SCRIPT, { mode: 0o700 }));
     yield* step(() => fs.writeFile(nodePath.join(home, "cli-version.txt"), `${versionOutput}\n`));
-    const processes = makeLocalCliProcess({
+    const processes = yield* localCliProcess({
       agentDirectory,
       environment: {
         HOME: home,
@@ -35,13 +36,15 @@ const versionedCli = (versionOutput: string) =>
       },
       executables: { claude: executable, codex: executable },
     });
-    return { processes };
+    return { processes, home };
   });
 
-const preflight = (
-  processes: ReturnType<typeof makeLocalCliProcess>,
-  runtime: "claude" | "codex",
-) =>
+const versionProbes = (home: string) =>
+  step(() => fs.readFile(nodePath.join(home, "cli-fixture.log"), "utf8")).pipe(
+    Effect.map((log) => log.split("\n").filter((line) => line === "--version").length),
+  );
+
+const preflight = (processes: LocalCliProcessContract, runtime: "claude" | "codex") =>
   processes.preflight({
     runtime,
     context: "fresh",
@@ -70,6 +73,33 @@ describe("local CLI versions", () => {
       expect(yield* processes.version?.("claude") ?? Effect.void).toMatchObject({
         status: "unrecognized",
       });
+    }),
+  );
+
+  it.live("probes a CLI version once for concurrent callers and keeps the answer", () =>
+    Effect.gen(function* () {
+      const { processes, home } = yield* versionedCli("2.1.300 (Claude Code)");
+      const version = processes.version;
+      if (!version) throw new Error("local CLI processes report no version");
+      const versions = yield* Effect.all([version("claude"), version("claude")], {
+        concurrency: "unbounded",
+      });
+      yield* version("claude");
+      expect(versions[0]).toEqual(versions[1]);
+      expect(yield* versionProbes(home)).toBe(1);
+    }),
+  );
+
+  it.live("probes an unavailable CLI again on the next call", () =>
+    Effect.gen(function* () {
+      const { processes, home } = yield* versionedCli("2.1.300 (Claude Code)");
+      const version = processes.version;
+      if (!version) throw new Error("local CLI processes report no version");
+      yield* step(() => fs.chmod(nodePath.join(home, "cli-version.txt"), 0o000));
+      expect(yield* version("claude")).toEqual({ status: "unavailable" });
+      yield* step(() => fs.chmod(nodePath.join(home, "cli-version.txt"), 0o600));
+      expect((yield* version("claude")).status).not.toBe("unavailable");
+      expect(yield* versionProbes(home)).toBe(2);
     }),
   );
 });

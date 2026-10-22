@@ -15,8 +15,9 @@ import { SupervisorChannel } from "./boundary/supervisor-channel.ts";
 import { WriterLeaseService } from "./boundary/writer-lease.ts";
 import { WorkspaceService } from "./workspace/service.ts";
 import type { SubagentNotifier } from "./boundary/host-notifier.ts";
-import { SubagentConfigStore, subagentConfigStoreLayer } from "./config/store.ts";
+import { subagentConfigStoreLayer } from "./config/store.ts";
 import {
+  SubagentProfileService,
   subagentProfileServiceLayer,
   type SubagentProfileLayerOptions,
 } from "./profiles/service.ts";
@@ -73,13 +74,9 @@ export const subagentApplicationLayer = (options: SubagentLayerOptions) => {
   const writerLeases = WriterLeaseService.layer(directory);
   const service = Layer.unwrap(
     Effect.gen(function* () {
-      const store = yield* SubagentConfigStore;
-      const inspection = yield* store.inspect(
-        options.cwd,
-        options.agentDirectory,
-        options.projectTrusted,
-      );
-      const { hooks } = inspection.config;
+      // The session's base configuration, which the doctor reports and /tree keeps.
+      const { baseConfig } = yield* SubagentProfileService.use((session) => session.capture);
+      const { hooks } = baseConfig;
       const workspaces = WorkspaceService.layer({
         ...directory,
         worktreeRemove: hooks.WorktreeRemove,
@@ -96,7 +93,7 @@ export const subagentApplicationLayer = (options: SubagentLayerOptions) => {
         }),
         agentMain: options.agentMain,
         questionnaireHandler: options.questionnaireHandler,
-        writerWorkspaceMode: inspection.config.writerWorkspaceMode,
+        writerWorkspaceMode: baseConfig.writerWorkspaceMode,
         worktreeCreate: hooks.WorktreeCreate,
         proxyHandler: options.proxyHandler,
       }).pipe(Layer.provide(workspaces));
@@ -109,8 +106,9 @@ export const subagentApplicationLayer = (options: SubagentLayerOptions) => {
     backend,
     NativeModelCatalog.layer(directory),
     CodePreviewSchedulerService.layer,
-    // Doctor reads the checkout's .worktreeinclude the way workspace creation does.
-    SafeFile.layer.pipe(Layer.provide(nodeFilePlatformLayer)),
+    // Doctor reads the checkout's .worktreeinclude the way workspace creation does, and checks
+    // that private state is writable.
+    SafeFile.layer.pipe(Layer.provideMerge(nodeFilePlatformLayer)),
     options.sweepPrivateState ? privateStateHousekeepingLayer(options.agentDirectory) : Layer.empty,
   );
 };

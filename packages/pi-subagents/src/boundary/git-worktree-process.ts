@@ -3,12 +3,13 @@ import {
   runBoundedProcessNode,
   type BoundedProcessError,
   type BoundedProcessResult,
+  nodeFsPromises as fs,
+  nodePath as path,
 } from "pi-cosmic-core";
 import { WorkspaceError } from "../workspace/model.ts";
 import { gitInstallation } from "./git-installation.ts";
 import { isGitLocalEnvironmentKey } from "./git-local-environment.ts";
 import { nodeErrorCode } from "./harness-shared.ts";
-import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
 
 export const workspaceFailure = (operation: string, message: string) =>
   new WorkspaceError({ operation, message });

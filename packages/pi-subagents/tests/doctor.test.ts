@@ -1,6 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Queue from "effect/Queue";
 import { nodeFilePlatformLayer, SafeFile } from "pi-cosmic-core";
 import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
 import { runSubagentDoctor } from "../src/application/doctor.ts";
@@ -10,7 +12,7 @@ import { InvalidSubagentRequestError } from "../src/run/errors.ts";
 import { resolveTestConfig } from "./fixtures/profile-settings-inspection.ts";
 import { profileLayerFor } from "./run/fixtures/service-harness.ts";
 import { git } from "../src/boundary/git-worktree-process.ts";
-import { nodePath as path } from "../src/boundary/node-builtins.ts";
+import { nodePath as path } from "./support/node-builtins.ts";
 import { temporaryDirectory, writeFile } from "./workspace/fixtures/repository.ts";
 
 const claude = (model: string) => ({
@@ -37,7 +39,7 @@ const config = {
 
 const doctor = (input: Parameters<typeof runSubagentDoctor>[0]) =>
   runSubagentDoctor(input).pipe(
-    Effect.provide(SafeFile.layer.pipe(Layer.provide(nodeFilePlatformLayer))),
+    Effect.provide(SafeFile.layer.pipe(Layer.provideMerge(nodeFilePlatformLayer))),
   );
 
 const registry = (probed: string[]) =>
@@ -87,6 +89,82 @@ describe("subagents doctor", () => {
       expect(byLabel.get("Activity view")?.status).toBe("warning");
       expect(byLabel.get("WorktreeCreate hooks")?.detail).toBe("none");
       expect(byLabel.get("WorktreeRemove hooks")?.detail).toBe("none");
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("probes distinct routes concurrently, at most four at a time", () =>
+    Effect.gen(function* () {
+      const agentDirectory = yield* temporaryDirectory("doctor-");
+      // Each probe reports its admission, then holds its slot until the test releases one, so
+      // admissions, not scheduling, show the bound.
+      const admitted = yield* Queue.unbounded<void>();
+      const releases = yield* Queue.unbounded<void>();
+      let active = 0;
+      let peak = 0;
+      const probing = Layer.succeed(
+        SubagentBackendRegistry,
+        backendRegistryFor([
+          {
+            runtime: "claude",
+            capabilities: [],
+            supportsContext: () => true,
+            spawn: () => Effect.die("doctor never launches"),
+            preflight: () =>
+              Effect.gen(function* () {
+                active += 1;
+                peak = Math.max(peak, active);
+                yield* Queue.offer(admitted, undefined);
+                yield* Queue.take(releases);
+                active -= 1;
+              }),
+          },
+        ]),
+      );
+      const routes = ["haiku", "opus", "sonnet", "fable", "mythos", "spark"];
+      const running = yield* doctor({
+        pi: extensionApiFixture(),
+        ctx: extensionContextFixture(),
+        agentDirectory,
+        activityViewAvailable: undefined,
+        projectTrusted: true,
+      }).pipe(
+        Effect.provide(
+          Layer.merge(
+            profileLayerFor({
+              ...config,
+              profileSets: {
+                doctor: {
+                  profiles: {
+                    scout: claude(routes[0]!),
+                    reviewer: claude(routes[1]!),
+                    researcher: claude(routes[2]!),
+                    planner: claude(routes[3]!),
+                    worker: claude(routes[4]!),
+                    oracle: claude(routes[5]!),
+                  },
+                },
+              },
+            }),
+            probing,
+          ),
+        ),
+        Effect.forkChild,
+      );
+      for (let probe = 0; probe < 4; probe++) yield* Queue.take(admitted);
+      expect(active).toBe(4);
+      // Every later probe waits for a held slot to be released.
+      for (let probe = 4; probe < routes.length; probe++) {
+        yield* Queue.offer(releases, undefined);
+        yield* Queue.take(admitted);
+        expect(active).toBe(4);
+      }
+      yield* Queue.offerAll(
+        releases,
+        Array.from({ length: 4 }, () => undefined),
+      );
+      yield* Fiber.join(running);
+      expect(active).toBe(0);
+      expect(peak).toBe(4);
     }).pipe(Effect.scoped),
   );
 

@@ -1,4 +1,4 @@
-import * as Duration from "effect/Duration";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import { hasEligibleCompletion } from "./completion.ts";
 import type { SubagentRuntimeClosedError } from "./errors.ts";
@@ -10,9 +10,6 @@ const WORKING_STATES: ReadonlySet<RunRecord["view"]["state"]> = new Set([
   "running",
   "stopping",
 ]);
-
-// Completion delivery can settle without publishing a new revision, so the wait also rechecks.
-const DRAIN_RECHECK = Duration.millis(500);
 
 const drainSettled = (records: ReadonlyMap<string, RunRecord>): boolean => {
   if (hasEligibleCompletion(records)) return false;
@@ -33,6 +30,8 @@ interface ParentDrainDependencies {
   readonly withLock: WithRunLock;
   readonly revision: Effect.Effect<number>;
   readonly waitForRevision: (after: number) => Effect.Effect<void, SubagentRuntimeClosedError>;
+  /** Completes once completions leave the outbox or are claimed, which publish no revision. */
+  readonly outboxChangedLocked: () => Deferred.Deferred<void>;
 }
 
 /**
@@ -45,11 +44,15 @@ export const parentDrainAwaiter = ({
   withLock,
   revision,
   waitForRevision,
+  outboxChangedLocked,
 }: ParentDrainDependencies): Effect.Effect<void, SubagentRuntimeClosedError> =>
   Effect.gen(function* () {
     while (true) {
       const observed = yield* revision;
-      if (yield* withLock(Effect.sync(() => drainSettled(records)))) return;
-      yield* waitForRevision(observed).pipe(Effect.timeoutOption(DRAIN_RECHECK));
+      const outboxChanged = yield* withLock(
+        Effect.sync(() => (drainSettled(records) ? undefined : outboxChangedLocked())),
+      );
+      if (!outboxChanged) return;
+      yield* Effect.raceFirst(waitForRevision(observed), Deferred.await(outboxChanged));
     }
   });

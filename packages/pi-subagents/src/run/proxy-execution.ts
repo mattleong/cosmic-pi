@@ -27,80 +27,85 @@ interface RunProxyExecutionDependencies {
 
 export function proxyExecutionHandler(dependencies: RunProxyExecutionDependencies) {
   const { ownerScope, executions, executeProxy, executeQuestionnaire } = dependencies;
+  // Admission reads the live execution map, so it runs when the returned effect does.
   return (
     record: RunRecord,
     event: Extract<BackendEvent, { readonly type: "proxy_request" | "proxy_cancel" }>,
-  ): Effect.Effect<void> => {
-    const key = `${record.view.id}:${event.requestId}`;
-    if (event.type === "proxy_cancel")
-      return FiberMap.remove(executions, key).pipe(
-        Effect.forkIn(ownerScope, { startImmediately: true }),
-        Effect.asVoid,
+  ): Effect.Effect<void> =>
+    Effect.suspend(() => {
+      const key = `${record.view.id}:${event.requestId}`;
+      if (event.type === "proxy_cancel")
+        return FiberMap.remove(executions, key).pipe(
+          Effect.forkIn(ownerScope, { startImmediately: true }),
+          Effect.asVoid,
+        );
+      const reject = (code: string, message: string) =>
+        event
+          .respond(false, encodeSubagentProxyPayload({ code, message }) ?? "{}")
+          .pipe(Effect.ignore);
+      if (
+        (event.tool === "ask_user" ? !executeQuestionnaire : !executeProxy) ||
+        record.view.runtime !== "pi" ||
+        record.stoppedByParent ||
+        !isActiveRunState(record.view.state)
+      )
+        return reject(
+          "proxy_caller_disconnected",
+          "Nested Pi coordinator access is unavailable for this run.",
+        );
+      const runKeyPrefix = `${record.view.id}:`;
+      const concurrent = [...executions].filter(([candidateKey]) =>
+        candidateKey.startsWith(runKeyPrefix),
+      ).length;
+      if (concurrent >= 16)
+        return reject("proxy_capacity", "Nested Pi has too many concurrent coordinator calls.");
+      if (FiberMap.hasUnsafe(executions, key))
+        return reject(
+          "proxy_request_conflict",
+          "Nested Pi reused an active coordinator request identity.",
+        );
+      const unavailable = Effect.fail(
+        new InvalidSubagentRequestError({
+          code: "proxy_caller_disconnected",
+          message: "Nested Pi coordinator access is unavailable for this run.",
+        }),
       );
-    const reject = (code: string, message: string) =>
-      event
-        .respond(false, encodeSubagentProxyPayload({ code, message }) ?? "{}")
-        .pipe(Effect.ignore);
-    if (
-      (event.tool === "ask_user" ? !executeQuestionnaire : !executeProxy) ||
-      record.view.runtime !== "pi" ||
-      record.stoppedByParent ||
-      !isActiveRunState(record.view.state)
-    )
-      return reject(
-        "proxy_caller_disconnected",
-        "Nested Pi coordinator access is unavailable for this run.",
-      );
-    const runKeyPrefix = `${record.view.id}:`;
-    const concurrent = [...executions].filter(([candidateKey]) =>
-      candidateKey.startsWith(runKeyPrefix),
-    ).length;
-    if (concurrent >= 16)
-      return reject("proxy_capacity", "Nested Pi has too many concurrent coordinator calls.");
-    if (FiberMap.hasUnsafe(executions, key))
-      return reject(
-        "proxy_request_conflict",
-        "Nested Pi reused an active coordinator request identity.",
-      );
-    const questionnaire =
-      event.tool === "ask_user" ? decodeQuestionnaireProxyRequest(event) : undefined;
-    const dispatch =
-      questionnaire instanceof InvalidSubagentRequestError
-        ? Effect.fail(questionnaire)
-        : questionnaire && executeQuestionnaire
-          ? executeQuestionnaire(record, event.requestId, questionnaire)
+      const dispatch: Effect.Effect<BackendProxyResult, SubagentError> =
+        event.tool === "ask_user"
+          ? Effect.fromResult(decodeQuestionnaireProxyRequest(event)).pipe(
+              Effect.flatMap((questionnaire) =>
+                executeQuestionnaire
+                  ? executeQuestionnaire(record, event.requestId, questionnaire)
+                  : unavailable,
+              ),
+            )
           : executeProxy
             ? executeProxy(record.view.id, event)
-            : Effect.fail(
-                new InvalidSubagentRequestError({
-                  code: "proxy_caller_disconnected",
-                  message: "Nested Pi coordinator access is unavailable for this run.",
-                }),
-              );
-    const execute = dispatch.pipe(
-      Effect.matchEffect({
-        onFailure: (error) => reject(subagentErrorCode(error), error.message),
-        onSuccess: (result) =>
-          Effect.suspend(() => {
-            const payloadJson = encodeSubagentProxyPayload(result);
-            return payloadJson
-              ? event.respond(true, payloadJson)
-              : reject(
-                  "proxy_response_oversized",
-                  "Nested Pi coordinator response exceeded its bound.",
-                );
-          }),
-      }),
-      Effect.ignore,
-    );
-    // The caller owns its wait and completion claims; session-owned commits retain
-    // their separate root scope. Register cancellation before releasing admission.
-    return Effect.uninterruptible(
-      Effect.forkIn(execute, record.scope, { startImmediately: true }).pipe(
-        Effect.flatMap((fiber) => FiberMap.set(executions, key, fiber, { onlyIfMissing: true })),
-      ),
-    );
-  };
+            : unavailable;
+      const execute = dispatch.pipe(
+        Effect.matchEffect({
+          onFailure: (error) => reject(subagentErrorCode(error), error.message),
+          onSuccess: (result) =>
+            Effect.suspend(() => {
+              const payloadJson = encodeSubagentProxyPayload(result);
+              return payloadJson
+                ? event.respond(true, payloadJson)
+                : reject(
+                    "proxy_response_oversized",
+                    "Nested Pi coordinator response exceeded its bound.",
+                  );
+            }),
+        }),
+        Effect.ignore,
+      );
+      // The caller owns its wait and completion claims; session-owned commits retain
+      // their separate root scope. Register cancellation before releasing admission.
+      return Effect.uninterruptible(
+        Effect.forkIn(execute, record.scope, { startImmediately: true }).pipe(
+          Effect.flatMap((fiber) => FiberMap.set(executions, key, fiber, { onlyIfMissing: true })),
+        ),
+      );
+    });
 }
 
 export type RunProxyExecution = ReturnType<typeof proxyExecutionHandler>;

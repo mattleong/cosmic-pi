@@ -1,9 +1,15 @@
+import * as Effect from "effect/Effect";
 import type { JsonObject } from "pi-cosmic-core";
+import type { ResolvedSubagentConfig } from "../../src/config/options.ts";
 import {
   mapProfileIds,
   type ProfileCandidate,
   type ProfileRouteSource,
 } from "../../src/profiles/model.ts";
+import {
+  SubagentProfileService,
+  subagentProfileServiceLayerFor,
+} from "../../src/profiles/service.ts";
 import type { SessionProfileBaseline } from "../../src/profiles/session-overrides.ts";
 
 export const profileCandidate = (
@@ -39,3 +45,13 @@ export const completeBaseline = (
   })),
   profileSources: mapProfileIds((id) => (id === "reviewer" ? scope : siblingSource)),
 });
+
+/** The profile service its layer builds from an already resolved configuration. */
+export const builtProfileService = (
+  config: ResolvedSubagentConfig,
+  options: Parameters<typeof subagentProfileServiceLayerFor>[1] = {},
+) =>
+  SubagentProfileService.use(Effect.succeed).pipe(
+    Effect.provide(subagentProfileServiceLayerFor(config, options)),
+    Effect.orDie,
+  );

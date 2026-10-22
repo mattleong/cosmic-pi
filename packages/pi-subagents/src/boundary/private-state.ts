@@ -4,13 +4,18 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import {
   currentProcessIdentity,
-  processLiveness,
+  nodeFsPromises as fs,
+  nodePath,
+  type PrivateFileError,
+  probeProcessLiveness,
   type ProcessIdentity,
   type ProcessLiveness,
+  removeOwnEntry,
+  removePrivateTree,
+  replacePrivateFile,
   synchronousRandomHex,
 } from "pi-cosmic-core";
-import { removePrivateTree, safeAgentDirectory } from "./harness-shared.ts";
-import { nodeFsConstants as constants, nodeFsPromises as fs, nodePath } from "./node-builtins.ts";
+import { safeAgentDirectory } from "./harness-shared.ts";
 
 /** Private state nobody has touched for this long is abandoned unless a recorded owner may be live. */
 export const PRIVATE_STATE_RETENTION_MILLIS = 7 * 24 * 60 * 60 * 1000;
@@ -60,29 +65,17 @@ const encodeOwner = Schema.encodeSync(Schema.fromJsonString(PrivateStateOwner));
  * Records this process as the owner of a private state directory, so a later Pi can remove the
  * directory as soon as this process is gone instead of waiting for it to age out.
  */
-export const recordPrivateStateOwner = (directory: string): Promise<void> => {
-  const { pid, started } = currentProcessIdentity();
-  const source = encodeOwner({ version: 1, pid, ...(started !== undefined && { started }) });
-  return fs
-    .open(
-      nodePath.join(directory, PRIVATE_STATE_OWNER_FILE),
-      constants.O_CREAT | constants.O_TRUNC | constants.O_WRONLY | constants.O_NOFOLLOW,
-      0o600,
-    )
-    .then((handle) =>
-      handle.writeFile(source, { encoding: "utf8" }).then(
-        () => handle.close(),
-        (cause: unknown) =>
-          handle.close().then(() => {
-            throw cause;
-          }),
-      ),
-    );
-};
+export const recordPrivateStateOwner = (directory: string): Effect.Effect<void, PrivateFileError> =>
+  Effect.suspend(() => {
+    const { pid, started } = currentProcessIdentity();
+    const source = encodeOwner({ version: 1, pid, ...(started !== undefined && { started }) });
+    const target = nodePath.join(directory, PRIVATE_STATE_OWNER_FILE);
+    return replacePrivateFile(target, `${target}.${synchronousRandomHex(6)}.tmp`, source);
+  });
 
 /** Removes the owner record so callers that require an empty directory can remove it. */
-export const removePrivateStateOwner = (directory: string): Promise<void> =>
-  fs.rm(nodePath.join(directory, PRIVATE_STATE_OWNER_FILE), { force: true });
+export const removePrivateStateOwner = (directory: string): Effect.Effect<void, PrivateFileError> =>
+  removeOwnEntry(nodePath.join(directory, PRIVATE_STATE_OWNER_FILE));
 
 const io = <A>(evaluate: () => PromiseLike<A>): Effect.Effect<Option.Option<A>> =>
   Effect.tryPromise(evaluate).pipe(Effect.option);
@@ -119,13 +112,16 @@ interface SweepContext {
   readonly liveness: Map<string, ProcessLiveness>;
 }
 
-const ownerLiveness = (context: SweepContext, owner: ProcessIdentity): ProcessLiveness => {
+const ownerLiveness = (
+  context: SweepContext,
+  owner: ProcessIdentity,
+): Effect.Effect<ProcessLiveness> => {
   const key = `${owner.pid}:${owner.started ?? ""}`;
   const cached = context.liveness.get(key);
-  if (cached) return cached;
-  const liveness = processLiveness(owner);
-  context.liveness.set(key, liveness);
-  return liveness;
+  if (cached) return Effect.succeed(cached);
+  return probeProcessLiveness(owner).pipe(
+    Effect.tap((liveness) => Effect.sync(() => context.liveness.set(key, liveness))),
+  );
 };
 
 /**
@@ -136,7 +132,7 @@ const ownerLiveness = (context: SweepContext, owner: ProcessIdentity): ProcessLi
 const isAbandoned = (context: SweepContext, directory: string): Effect.Effect<boolean> =>
   Effect.gen(function* () {
     const owner = yield* readOwner(directory);
-    if (Option.isSome(owner)) return ownerLiveness(context, owner.value) === "dead";
+    if (Option.isSome(owner)) return (yield* ownerLiveness(context, owner.value)) === "dead";
     const modified = yield* newestModification(directory);
     return Option.isSome(modified) && context.now - modified.value > PRIVATE_STATE_RETENTION_MILLIS;
   });
@@ -151,7 +147,7 @@ const removeEntry = (parent: string, name: string): Effect.Effect<boolean> => {
     Effect.flatMap((renamed) =>
       Option.isNone(renamed)
         ? Effect.succeed(false)
-        : io(() => removePrivateTree(tombstone)).pipe(Effect.as(true)),
+        : removePrivateTree(tombstone).pipe(Effect.option, Effect.as(true)),
     ),
   );
 };
@@ -200,7 +196,7 @@ const sweepEntries = (
       if (policy.ownerUid !== undefined && !(yield* isOwnedRealDirectory(path, policy.ownerUid)))
         continue;
       if (tombstone) {
-        yield* io(() => removePrivateTree(path));
+        yield* Effect.option(removePrivateTree(path));
         removed += 1;
         continue;
       }
@@ -243,7 +239,7 @@ export const sweepAbandonedPrivateState = (
       context,
       options.claudeTemporaryParent ?? CLAUDE_TEMPORARY_PARENT,
     );
-    const canonical = yield* io(() => safeAgentDirectory(agentDirectory));
+    const canonical = yield* Effect.option(safeAgentDirectory(agentDirectory));
     if (Option.isNone(canonical)) return;
     const root = nodePath.join(canonical.value, SUBAGENT_STATE_ROOT);
     if (!(yield* isRealDirectory(root))) return;
@@ -255,10 +251,12 @@ export const sweepAbandonedPrivateState = (
       if (!entry.isDirectory() || entry.name.startsWith(".") || NAMED_ROOTS.has(entry.name))
         continue;
       const session = nodePath.join(root, entry.name);
-      const removed = yield* sweepEntries(context, session, {
+      yield* sweepEntries(context, session, {
         ...PRIVATE_ROOT_POLICY,
         isCandidate: (name) => name.startsWith(RUN_DIRECTORY_PREFIX),
       });
-      if (removed > 0) yield* io(() => fs.rmdir(session));
+      // Removes the session directory only once it is empty, including one an interrupted spawn's
+      // late cleanup had to leave because it couldn't prove it created the directory.
+      yield* io(() => fs.rmdir(session));
     }
   });

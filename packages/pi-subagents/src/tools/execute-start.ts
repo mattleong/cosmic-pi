@@ -6,10 +6,10 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import {
+  captureHostParentContext,
   resolveProfileStart,
   type SubagentSessionEnvironment,
 } from "../boundary/host-profile-resolution.ts";
-import { capturePiParentContext } from "../boundary/host-child-pi.ts";
 import type { SubagentSelectionProvenance } from "../profiles/model.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
 import type { SubagentBackendRegistry } from "../backend/service.ts";
@@ -47,6 +47,13 @@ interface StartBatchInput {
   ) => Effect.Effect<SubagentRunView, SubagentError>;
   readonly onUpdate: AgentToolUpdateCallback<unknown> | undefined;
   readonly readOnly?: boolean;
+}
+
+interface StartBatchResult {
+  readonly runs: ReadonlyArray<SubagentRunView>;
+  readonly startFailures: ReadonlyArray<SubagentStartFailure>;
+  readonly startEntries: ReadonlyArray<SubagentStartEntry>;
+  readonly startOutcomes: ReadonlyArray<SubagentStartOutcome>;
 }
 
 const startSpecs = (
@@ -175,75 +182,70 @@ const admissionError = (
       )
     : undefined;
 
-export const executeStartBatch = (
+export const executeStartBatch = Effect.fn("SubagentTools.start")(function* (
   input: StartBatchInput,
-): Effect.Effect<
-  {
-    readonly runs: ReadonlyArray<SubagentRunView>;
-    readonly startFailures: ReadonlyArray<SubagentStartFailure>;
-    readonly startEntries: ReadonlyArray<SubagentStartEntry>;
-    readonly startOutcomes: ReadonlyArray<SubagentStartOutcome>;
-  },
+): Effect.fn.Return<
+  StartBatchResult,
   SubagentError,
   SubagentProfileService | SubagentBackendRegistry
-> =>
-  Effect.gen(function* () {
-    const specs = yield* startSpecs(input.agents);
-    const profileService = yield* SubagentProfileService;
-    const profileSnapshot = yield* profileService.capture;
-    const environment = {
-      ...input.environment,
-      parentContext: input.environment.parentContext ?? capturePiParentContext(input.pi, input.ctx),
-    };
-    const partialOutcomes = new Map<number, SubagentStartOutcome>();
-    const publishOutcome = (outcome: SubagentStartOutcome) =>
-      Effect.sync(() => {
-        partialOutcomes.set(outcome.index, outcome);
-        const { ordered, launched, failures } = settleStartOutcomes(partialOutcomes.values());
-        const pendingEntries = specs.flatMap((spec, index) =>
-          partialOutcomes.has(index) ? [] : [`#${index + 1} ${entryName(spec, index)}`],
-        );
-        const summary = `Processed ${ordered.length} of ${specs.length} launches · ${launched.length} started · ${failures.length} failed${pendingEntries.length > 0 ? ` · ${pendingEntries.length} pending (${pendingEntries.join(", ")})` : ""}.`;
-        invokeBestEffort(() =>
-          input.onUpdate?.({
-            content: [{ type: "text", text: summary }],
-            details: startDetails({
-              startEntries: startEntriesFor(specs, partialOutcomes),
-              ...(failures.length > 0 && { startFailures: failures }),
-            }),
+> {
+  const specs = yield* startSpecs(input.agents);
+  const profileService = yield* SubagentProfileService;
+  const profileSnapshot = yield* profileService.capture;
+  const environment = {
+    ...input.environment,
+    parentContext:
+      input.environment.parentContext ?? (yield* captureHostParentContext(input.pi, input.ctx)),
+  };
+  const partialOutcomes = new Map<number, SubagentStartOutcome>();
+  const publishOutcome = (outcome: SubagentStartOutcome) =>
+    Effect.sync(() => {
+      partialOutcomes.set(outcome.index, outcome);
+      const { ordered, launched, failures } = settleStartOutcomes(partialOutcomes.values());
+      const pendingEntries = specs.flatMap((spec, index) =>
+        partialOutcomes.has(index) ? [] : [`#${index + 1} ${entryName(spec, index)}`],
+      );
+      const summary = `Processed ${ordered.length} of ${specs.length} launches · ${launched.length} started · ${failures.length} failed${pendingEntries.length > 0 ? ` · ${pendingEntries.length} pending (${pendingEntries.join(", ")})` : ""}.`;
+      invokeBestEffort(() =>
+        input.onUpdate?.({
+          content: [{ type: "text", text: summary }],
+          details: startDetails({
+            startEntries: startEntriesFor(specs, partialOutcomes),
+            ...(failures.length > 0 && { startFailures: failures }),
           }),
-        );
-      });
-    const resolveRequest = (spec: SubagentStartSpec) =>
-      resolveProfileStart(input.pi, spec, input.ctx, environment, profileSnapshot).pipe(
-        Effect.map((request) => ({
-          ...request,
-          nestingPolicy: profileSnapshot.effectiveConfig.nesting,
-        })),
-      );
-    const launchOne = (spec: SubagentStartSpec, index: number) =>
-      resolveRequest(spec).pipe(
-        Effect.flatMap((request) => {
-          const rejected = admissionError(request, input.readOnly === true);
-          return (rejected ? Effect.fail(rejected) : input.startOwned(request)).pipe(
-            Effect.map((run): SubagentStartOutcome => ({ index, run })),
-            Effect.catch((error) =>
-              Effect.succeed(failureFor(spec, index, error, routeForRequest(request))),
-            ),
-          );
         }),
-        Effect.catch((error) => Effect.succeed(failureFor(spec, index, error))),
-        Effect.tap(publishOutcome),
       );
-    yield* Effect.forEach(specs, launchOne, { concurrency: MAX_START_BATCH, discard: true });
-    const { ordered, launched, failures } = settleStartOutcomes(partialOutcomes.values());
-    return {
-      runs: launched,
-      startFailures: failures,
-      startEntries: startEntriesFor(specs, partialOutcomes),
-      startOutcomes: ordered,
-    };
-  });
+    });
+  const resolveRequest = (spec: SubagentStartSpec) =>
+    resolveProfileStart(input.pi, spec, input.ctx, environment, profileSnapshot).pipe(
+      Effect.map((request) => ({
+        ...request,
+        nestingPolicy: profileSnapshot.effectiveConfig.nesting,
+      })),
+    );
+  const launchOne = (spec: SubagentStartSpec, index: number) =>
+    resolveRequest(spec).pipe(
+      Effect.flatMap((request) => {
+        const rejected = admissionError(request, input.readOnly === true);
+        return (rejected ? Effect.fail(rejected) : input.startOwned(request)).pipe(
+          Effect.map((run): SubagentStartOutcome => ({ index, run })),
+          Effect.catch((error) =>
+            Effect.succeed(failureFor(spec, index, error, routeForRequest(request))),
+          ),
+        );
+      }),
+      Effect.catch((error) => Effect.succeed(failureFor(spec, index, error))),
+      Effect.tap(publishOutcome),
+    );
+  yield* Effect.forEach(specs, launchOne, { concurrency: MAX_START_BATCH, discard: true });
+  const { ordered, launched, failures } = settleStartOutcomes(partialOutcomes.values());
+  return {
+    runs: launched,
+    startFailures: failures,
+    startEntries: startEntriesFor(specs, partialOutcomes),
+    startOutcomes: ordered,
+  };
+});
 
 /**
  * Resolves an adopted workspace's recorded launch like a worktree writer start item with `task`,
@@ -271,7 +273,7 @@ export const resolveRecordedLaunch = (
       ctx,
       {
         ...environment,
-        parentContext: environment.parentContext ?? capturePiParentContext(pi, ctx),
+        parentContext: environment.parentContext ?? (yield* captureHostParentContext(pi, ctx)),
       },
       profileSnapshot,
     ).pipe(

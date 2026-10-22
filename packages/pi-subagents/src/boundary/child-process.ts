@@ -1,9 +1,15 @@
 import { contentText, type SystemMessage } from "@earendil-works/pi-ai";
-import { sha256Text, synchronousRandomHex, synchronousRandomUuid } from "pi-cosmic-core";
+import {
+  nodeFsPromises,
+  nodePath,
+  removePrivateTree,
+  sha256Text,
+  synchronousRandomHex,
+  synchronousRandomUuid,
+} from "pi-cosmic-core";
 import { fileURLToPath } from "node:url";
 import { isGitLocalEnvironmentKey } from "./git-local-environment.ts";
 import { FORK_PROMPT_CACHE_KEY_ENV, forkPromptCacheKey } from "./fork-prompt-cache.ts";
-import { nodeFsPromises, nodePath } from "./node-builtins.ts";
 import {
   getAgentDir,
   getPackageDir,
@@ -14,6 +20,7 @@ import {
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import { constVoid } from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
@@ -41,7 +48,7 @@ import {
   type RpcCommand,
 } from "../backend/local-pi-protocol.ts";
 
-const { mkdir, readFile, rm, rmdir, writeFile } = nodeFsPromises;
+const fs = nodeFsPromises;
 
 const RUNTIME_API_KEY_ENV = "PI_SUBAGENT_RUNTIME_API_KEY";
 const RUNTIME_API_PROVIDER_ENV = "PI_SUBAGENT_RUNTIME_API_PROVIDER";
@@ -109,13 +116,16 @@ const fileStep = <A>(operation: string, evaluate: () => PromiseLike<A>) =>
   Effect.tryPromise({ try: evaluate, catch: (error) => processError(operation, error) });
 
 const reclaimChildRunState = (runDirectory: string) =>
-  fileStep("reclaim subagent run state", () =>
-    rm(runDirectory, { recursive: true, force: true }).then(() =>
-      rmdir(nodePath.join(runDirectory, "..")).catch((cause: unknown) => {
-        const code = nodeErrorCode(cause);
-        if (code !== "ENOENT" && code !== "ENOTEMPTY" && code !== "EEXIST" && code !== "EBUSY")
-          throw cause;
-      }),
+  removePrivateTree(runDirectory).pipe(
+    Effect.mapError(() => processError("reclaim subagent run state")),
+    Effect.andThen(
+      fileStep("reclaim subagent run state", () =>
+        fs.rmdir(nodePath.join(runDirectory, "..")).catch((cause: unknown) => {
+          const code = nodeErrorCode(cause);
+          if (code !== "ENOENT" && code !== "ENOTEMPTY" && code !== "EEXIST" && code !== "EBUSY")
+            throw cause;
+        }),
+      ),
     ),
   );
 
@@ -221,7 +231,7 @@ export const createForkedSession = Effect.fn("ChildProcess.createForkedSession")
       );
     const parentSessionFile = request.parentSessionFile;
     const content = yield* fileStep("read parent session", () =>
-      readFile(parentSessionFile, "utf8"),
+      fs.readFile(parentSessionFile, "utf8"),
     );
     const parsedEntries = yield* Effect.try({
       try: () => parseSessionEntries(content),
@@ -266,12 +276,29 @@ export const createForkedSession = Effect.fn("ChildProcess.createForkedSession")
     });
     const lines = yield* Effect.forEach([header, ...entries], (entry) => encodeJsonLine(entry));
     yield* fileStep("write forked session", () =>
-      writeFile(sessionFile, lines.join("\n") + "\n", { encoding: "utf8", mode: 0o600 }),
+      fs.writeFile(sessionFile, lines.join("\n") + "\n", { encoding: "utf8", mode: 0o600 }),
     );
     return sessionFile;
   },
   Effect.mapError((error) => processError("fork parent session", error)),
 );
+
+/**
+ * The mkdir stays interruptible, so a stalled filesystem can't hold cancellation. Once its spawn is
+ * interrupted, the run record's reclaim may finish before the mkdir settles, so the late settlement
+ * removes the run directory this call created. Concurrent spawns share the session directory and a
+ * recursive mkdir can't prove which of them created it, so the startup sweep removes it once empty.
+ */
+const createRunDirectory = (runDir: string) =>
+  Effect.tryPromise({
+    try: (signal) =>
+      fs
+        .mkdir(runDir, { recursive: true, mode: 0o700 })
+        .then((created) =>
+          signal.aborted && created !== undefined ? fs.rmdir(runDir).catch(constVoid) : undefined,
+        ),
+    catch: (error) => processError("create subagent run directory", error),
+  });
 
 const extensionPath = fileURLToPath(new URL("./host-child.ts", import.meta.url));
 
@@ -280,12 +307,13 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
   request: ChildLaunchRequest,
   runtime?: ProcessTransportRuntime,
 ) {
-  yield* fileStep("create subagent run directory", () =>
-    mkdir(runDir, { recursive: true, mode: 0o700 }).then(() => recordPrivateStateOwner(runDir)),
+  yield* createRunDirectory(runDir);
+  yield* recordPrivateStateOwner(runDir).pipe(
+    Effect.mapError(() => processError("create subagent run directory")),
   );
   const promptPath = nodePath.join(runDir, "system-prompt.md");
   yield* fileStep("write subagent system prompt", () =>
-    writeFile(promptPath, request.systemPrompt, { encoding: "utf8", mode: 0o600 }),
+    fs.writeFile(promptPath, request.systemPrompt, { encoding: "utf8", mode: 0o600 }),
   );
   const sessionFile =
     request.resumeSessionFile === undefined && request.context === "fork"
@@ -364,10 +392,9 @@ export class ChildProcess extends Context.Service<ChildProcess, ChildProcessCont
     return Layer.sync(this, () => {
       const runDirectory = subagentRunDirectories(agentDirectory, synchronousRandomHex(6));
       return {
-        spawn: (request) =>
-          Effect.uninterruptible(
-            acquireChild(runDirectory(request), request, options.transportRuntime),
-          ),
+        // Left interruptible: the run record's reclaim owns the run directory whatever the spawn
+        // outcome, and the transport masks only its own spawn-to-finalizer handoff.
+        spawn: (request) => acquireChild(runDirectory(request), request, options.transportRuntime),
         reclaimRunState: (request) => reclaimChildRunState(runDirectory(request)),
       };
     });

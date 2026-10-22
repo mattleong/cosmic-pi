@@ -1,7 +1,6 @@
 import type { MessageRenderer, Theme } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
 import * as Option from "effect/Option";
-import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { renderCompactRow } from "pi-code-previews";
 import {
@@ -12,6 +11,7 @@ import {
 } from "pi-cosmic-core";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { composeToolComponent, renderExpansionAffordance } from "pi-cosmic-ui/tool";
+import { decodeMessageEnvelope, messageContentText } from "./message-envelope.ts";
 
 const Id = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1_024));
 const Details = Schema.Struct({
@@ -20,23 +20,7 @@ const Details = Schema.Struct({
   to: Id,
   messageId: Id,
 });
-const Envelope = Schema.Struct({
-  content: Schema.optional(Schema.Union([Schema.String, Schema.Array(Schema.Unknown)])),
-  details: Schema.optional(Schema.Unknown),
-});
-const TextPart = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String });
-
-const decodeEnvelope = Schema.decodeUnknownOption(Envelope, { onExcessProperty: "ignore" });
 const decodeDetails = Schema.decodeUnknownOption(Details, { onExcessProperty: "ignore" });
-const isTextPart = Schema.is(TextPart);
-
-const contentText = (content: string | ReadonlyArray<unknown> | undefined): string =>
-  Predicate.isString(content)
-    ? content
-    : (content ?? [])
-        .filter(isTextPart)
-        .map((part) => part.text)
-        .join("\n");
 
 // The root frames each message as a sender line, the text, then a reply hint.
 const FRAME_HEADER = /^Message from .*:$/u;
@@ -54,8 +38,8 @@ export function renderAgentMessage(
   compact: boolean,
   theme: Theme,
 ): Component {
-  const envelope = Option.getOrUndefined(decodeEnvelope(input));
-  const text = contentText(envelope?.content);
+  const envelope = Option.getOrUndefined(decodeMessageEnvelope(input));
+  const text = messageContentText(envelope?.content);
   if (options.expanded) return new Text(stripTerminalControls(text), options.outputPad, 0);
   const details = Option.getOrUndefined(decodeDetails(envelope?.details));
   const sender = details

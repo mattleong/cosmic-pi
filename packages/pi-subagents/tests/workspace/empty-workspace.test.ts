@@ -1,5 +1,5 @@
 import { expect } from "vitest";
-import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-builtins.ts";
+import { nodeFsPromises as fs, nodePath as path } from "../support/node-builtins.ts";
 import { git } from "../../src/boundary/git-worktree-process.ts";
 import {
   exists,

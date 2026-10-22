@@ -1,11 +1,6 @@
-import type { NodeChildProcess } from "../../src/boundary/node-builtins.ts";
+import type { NodeChildProcess } from "pi-cosmic-core";
 
-export {
-  nodeFsPromises,
-  nodePath,
-  nodeSpawn,
-  type NodeChildProcess,
-} from "../../src/boundary/node-builtins.ts";
+export { nodeFs, nodeFsPromises, nodePath, nodeSpawn, type NodeChildProcess } from "pi-cosmic-core";
 export interface NodeChildProcessWithoutNullStreams extends NodeChildProcess {
   readonly stdin: NonNullable<NodeChildProcess["stdin"]>;
   readonly stdout: NonNullable<NodeChildProcess["stdout"]>;

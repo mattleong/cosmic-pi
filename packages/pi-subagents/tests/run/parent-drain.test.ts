@@ -63,12 +63,15 @@ describe("headless parent drain", () => {
     });
   });
 
-  it.effect("waits for a running child and the delivery of its report", () => {
+  it.effect("waits for a running child and finishes once its report is delivered", () => {
     const delivered: SubagentNotification[] = [];
+    let acknowledging = false;
     const { fake, layer } = localServiceFixture({
       notify: (notification) => {
         delivered.push(notification);
-        return acknowledgeCompletions(notification);
+        return acknowledging
+          ? acknowledgeCompletions(notification)
+          : { deliveredCompletionKeys: [] };
       },
     });
     return withService(layer, function* (service) {
@@ -80,7 +83,13 @@ describe("headless parent drain", () => {
       yield* completeLocalRun(service, fake.controls[0]!, run.id, "Done.");
       yield* TestClock.adjust("2 seconds");
       yield* yieldUntil(() => delivered.some((notification) => notification.type === "completed"));
-      yield* TestClock.adjust("1 second");
+      expect(drain.pollUnsafe()).toBeUndefined();
+
+      // The acknowledgement publishes no revision, so only its signal can end the drain once the
+      // clock stops advancing.
+      acknowledging = true;
+      yield* service.deliverPendingCompletions;
+      yield* yieldUntil(() => drain.pollUnsafe() !== undefined);
       yield* Fiber.join(drain);
     });
   });

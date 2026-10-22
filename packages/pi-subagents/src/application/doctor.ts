@@ -1,5 +1,6 @@
 import { VERSION, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import { absurd } from "effect/Function";
 import * as Option from "effect/Option";
 import type { SafeFile } from "pi-cosmic-core";
@@ -10,7 +11,6 @@ import {
 } from "../backend/local-cli-version.ts";
 import { SubagentBackendRegistry } from "../backend/service.ts";
 import { hostProfileEnvironment } from "../boundary/host-profile-resolution.ts";
-import { nodeFsConstants, nodeFsPromises as fs } from "../boundary/node-builtins.ts";
 import { nodeExecutableProblem } from "../boundary/node-executable.ts";
 import { describeWorktreeHook } from "../boundary/worktree-hook.ts";
 import {
@@ -26,6 +26,7 @@ import {
 import { PROFILE_IDS } from "../profiles/model.ts";
 import type { ProfileCandidateAttempt, ProfileResolution } from "../profiles/resolve.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
+import type { InvalidSubagentRequestError } from "../run/errors.ts";
 
 type DoctorStatus = "ok" | "warning" | "failed";
 
@@ -75,148 +76,172 @@ const attemptKey = (attempt: ProfileCandidateAttempt): string =>
 const routeLabel = (attempt: ProfileCandidateAttempt): string =>
   `local/${attempt.runtime} · ${attempt.model}`;
 
+const ROUTE_PROBE_CONCURRENCY = 4;
+
+interface RouteCheck {
+  readonly label: string;
+  readonly plan: ProfileResolution;
+  readonly prefix: string;
+}
+
+const routeOutcome = (
+  { label, plan, prefix }: RouteCheck,
+  failures: ReadonlyMap<string, string | undefined>,
+): DoctorCheck => {
+  if (plan.kind === "failed") return check(label, "failed", plan.message);
+  const [first] = plan.attempts;
+  if (!first) return check(label, "failed", "no eligible route");
+  const failure = failures.get(attemptKey(first));
+  const fallbacks = plan.attempts.length - 1;
+  return failure === undefined
+    ? check(
+        label,
+        "ok",
+        `${prefix}${routeLabel(first)}${fallbacks > 0 ? ` (+${fallbacks} fallback${fallbacks === 1 ? "" : "s"})` : ""}`,
+      )
+    : check(
+        label,
+        fallbacks > 0 ? "warning" : "failed",
+        `${prefix}${routeLabel(first)}: ${failure}${fallbacks > 0 ? "; a fallback will be tried" : ""}`,
+      );
+};
+
 /**
  * Checks what a subagent launch depends on, each check independently: Pi's version, saved
  * configuration, the readiness of every profile's first eligible route (including CLI sign-in),
- * private state, and optional companions. It launches nothing.
+ * private state, and optional companions. It launches nothing. A retired session fails the
+ * whole report.
  */
-export const runSubagentDoctor = (
+export const runSubagentDoctor = Effect.fn("SubagentDoctor.run")(function* (
   input: DoctorInput,
-): Effect.Effect<
+): Effect.fn.Return<
   ReadonlyArray<DoctorCheck>,
-  never,
-  SubagentProfileService | SubagentBackendRegistry | SafeFile
-> =>
-  Effect.gen(function* () {
-    const profiles = yield* SubagentProfileService;
-    const backends = yield* SubagentBackendRegistry;
-    const nodeProblem = yield* nodeExecutableProblem();
-    const checks: DoctorCheck[] = [
-      versionAtLeast(VERSION, MINIMUM_PI_VERSION)
-        ? check("Pi", "ok", `version ${VERSION}`)
-        : check(
-            "Pi",
-            "failed",
-            `version ${VERSION}; subagents need ${MINIMUM_PI_VERSION.join(".")} or later`,
-          ),
-      nodeProblem ? check("Node", "failed", nodeProblem) : check("Node", "ok", process.execPath),
-    ];
+  InvalidSubagentRequestError,
+  SubagentProfileService | SubagentBackendRegistry | SafeFile | FileSystem.FileSystem
+> {
+  const profiles = yield* SubagentProfileService;
+  const backends = yield* SubagentBackendRegistry;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const nodeProblem = yield* nodeExecutableProblem();
+  const checks: DoctorCheck[] = [
+    versionAtLeast(VERSION, MINIMUM_PI_VERSION)
+      ? check("Pi", "ok", `version ${VERSION}`)
+      : check(
+          "Pi",
+          "failed",
+          `version ${VERSION}; subagents need ${MINIMUM_PI_VERSION.join(".")} or later`,
+        ),
+    nodeProblem ? check("Node", "failed", nodeProblem) : check("Node", "ok", process.execPath),
+  ];
 
-    const snapshot = yield* profiles.capture;
-    const config = snapshot.effectiveConfig;
-    const setName =
-      config.currentProfileSet.scope === "builtin"
-        ? "built-in routes"
-        : `${config.currentProfileSet.name ?? "unnamed"} (${config.currentProfileSet.scope})`;
+  const snapshot = yield* profiles.capture;
+  const config = snapshot.effectiveConfig;
+  const setName =
+    config.currentProfileSet.scope === "builtin"
+      ? "built-in routes"
+      : `${config.currentProfileSet.name ?? "unnamed"} (${config.currentProfileSet.scope})`;
+  checks.push(
+    config.diagnostics.length === 0
+      ? check("Configuration", "ok", `profile set ${setName}`)
+      : check(
+          "Configuration",
+          "warning",
+          `profile set ${setName}; ignored fields: ${config.diagnostics.join(", ")}`,
+        ),
+    input.projectTrusted
+      ? check("Project settings", "ok", "trusted; project configuration applies")
+      : check(
+          "Project settings",
+          "warning",
+          "project is not trusted; its configuration is ignored",
+        ),
+  );
+
+  const environment = yield* hostProfileEnvironment(input.pi, input.ctx);
+  const routes: ReadonlyArray<RouteCheck> = [
+    ...PROFILE_IDS.map((id) => ({
+      label: `Profile ${id}`,
+      plan: profiles.resolve(snapshot, id, environment),
+      prefix: "",
+    })),
+    ...config.agents.map((agent) => ({
+      label: `Agent ${agent.name}`,
+      plan: profiles.resolve(snapshot, agent.profile, environment, agent),
+      prefix: `${agent.source} · profile ${agent.profile} · `,
+    })),
+  ];
+  // Profiles often share a route; each distinct first route is probed once.
+  const probes = new Map<string, ProfileCandidateAttempt>();
+  const cliRuntimes = new Set<LocalCliRuntime>();
+  for (const { plan } of routes) {
+    if (plan.kind === "failed") continue;
+    for (const attempt of plan.attempts)
+      if (attempt.runtime !== "pi") cliRuntimes.add(attempt.runtime);
+    const [first] = plan.attempts;
+    if (first && !probes.has(attemptKey(first))) probes.set(attemptKey(first), first);
+  }
+  const failures = new Map(
+    yield* Effect.forEach(
+      probes,
+      ([key, attempt]) =>
+        readinessFailure(backends, attempt, input.ctx.cwd).pipe(
+          Effect.map((failure) => [key, failure] as const),
+        ),
+      { concurrency: ROUTE_PROBE_CONCURRENCY },
+    ),
+  );
+  checks.push(...routes.map((route) => routeOutcome(route, failures)));
+  for (const invalid of config.invalidAgents)
     checks.push(
-      config.diagnostics.length === 0
-        ? check("Configuration", "ok", `profile set ${setName}`)
+      invalid.name === undefined
+        ? check(
+            `Agents (${invalid.scope})`,
+            "failed",
+            `the ${invalid.scope} agents object is invalid, so every agent it could declare fails closed`,
+          )
         : check(
-            "Configuration",
-            "warning",
-            `profile set ${setName}; ignored fields: ${config.diagnostics.join(", ")}`,
-          ),
-      input.projectTrusted
-        ? check("Project settings", "ok", "trusted; project configuration applies")
-        : check(
-            "Project settings",
-            "warning",
-            "project is not trusted; its configuration is ignored",
+            `Agent ${invalid.name}`,
+            "failed",
+            `invalid ${invalid.scope} entry; it fails closed until repaired`,
           ),
     );
 
-    const environment = hostProfileEnvironment(input.pi, input.ctx);
-    // Profiles often share a route; each distinct route is probed once.
-    const outcomes = new Map<string, string | undefined>();
-    const cliRuntimes = new Set<LocalCliRuntime>();
-    const routeCheck = (label: string, plan: ProfileResolution, prefix = "") =>
-      Effect.gen(function* () {
-        if (plan.kind === "failed") return check(label, "failed", plan.message);
-        for (const attempt of plan.attempts)
-          if (attempt.runtime !== "pi") cliRuntimes.add(attempt.runtime);
-        const [first] = plan.attempts;
-        if (!first) return check(label, "failed", "no eligible route");
-        const key = attemptKey(first);
-        const failure = outcomes.has(key)
-          ? outcomes.get(key)
-          : yield* readinessFailure(backends, first, input.ctx.cwd);
-        outcomes.set(key, failure);
-        const fallbacks = plan.attempts.length - 1;
-        return failure === undefined
-          ? check(
-              label,
-              "ok",
-              `${prefix}${routeLabel(first)}${fallbacks > 0 ? ` (+${fallbacks} fallback${fallbacks === 1 ? "" : "s"})` : ""}`,
-            )
-          : check(
-              label,
-              fallbacks > 0 ? "warning" : "failed",
-              `${prefix}${routeLabel(first)}: ${failure}${fallbacks > 0 ? "; a fallback will be tried" : ""}`,
-            );
-      });
-    for (const id of PROFILE_IDS)
-      checks.push(yield* routeCheck(`Profile ${id}`, profiles.resolve(snapshot, id, environment)));
-    for (const agent of config.agents)
-      checks.push(
-        yield* routeCheck(
-          `Agent ${agent.name}`,
-          profiles.resolve(snapshot, agent.profile, environment, agent),
-          `${agent.source} · profile ${agent.profile} · `,
-        ),
-      );
-    for (const invalid of config.invalidAgents)
-      checks.push(
-        invalid.name === undefined
-          ? check(
-              `Agents (${invalid.scope})`,
-              "failed",
-              `the ${invalid.scope} agents object is invalid, so every agent it could declare fails closed`,
-            )
-          : check(
-              `Agent ${invalid.name}`,
-              "failed",
-              `invalid ${invalid.scope} entry; it fails closed until repaired`,
-            ),
-      );
+  for (const runtime of cliRuntimes) {
+    const version = yield* cliVersionCheck(backends, runtime);
+    if (version) checks.push(version);
+  }
 
-    for (const runtime of cliRuntimes) {
-      const version = yield* cliVersionCheck(backends, runtime);
-      if (version) checks.push(version);
-    }
-
-    const writable = yield* Effect.promise(() =>
-      fs.access(input.agentDirectory, nodeFsConstants.W_OK).then(
-        () => true,
-        () => false,
+  const writable = yield* fileSystem.access(input.agentDirectory, { writable: true }).pipe(
+    Effect.as(true),
+    Effect.orElseSucceed(() => false),
+  );
+  checks.push(
+    writable
+      ? check("Private state", "ok", input.agentDirectory)
+      : check("Private state", "failed", `${input.agentDirectory} is not writable`),
+  );
+  for (const event of WORKTREE_HOOK_EVENTS) {
+    const hooks = config.hooks[event];
+    checks.push(
+      check(
+        `${event} hooks`,
+        "ok",
+        hooks.length === 0
+          ? "none"
+          : hooks.map((hook) => `${hook.scope}: ${describeWorktreeHook(hook)}`).join("; "),
       ),
     );
+  }
+  checks.push(yield* worktreeIncludeCheck(input.ctx.cwd));
+  checks.push(yield* gitCheck);
+  if (input.activityViewAvailable !== undefined)
     checks.push(
-      writable
-        ? check("Private state", "ok", input.agentDirectory)
-        : check("Private state", "failed", `${input.agentDirectory} is not writable`),
+      input.activityViewAvailable
+        ? check("Activity view", "ok", "shared Activity manager available")
+        : check("Activity view", "warning", "install pi-cosmic-ui for the shared Activity view"),
     );
-    for (const event of WORKTREE_HOOK_EVENTS) {
-      const hooks = config.hooks[event];
-      checks.push(
-        check(
-          `${event} hooks`,
-          "ok",
-          hooks.length === 0
-            ? "none"
-            : hooks.map((hook) => `${hook.scope}: ${describeWorktreeHook(hook)}`).join("; "),
-        ),
-      );
-    }
-    checks.push(yield* worktreeIncludeCheck(input.ctx.cwd));
-    checks.push(yield* gitCheck);
-    if (input.activityViewAvailable !== undefined)
-      checks.push(
-        input.activityViewAvailable
-          ? check("Activity view", "ok", "shared Activity manager available")
-          : check("Activity view", "warning", "install pi-cosmic-ui for the shared Activity view"),
-      );
-    return checks;
-  });
+  return checks;
+});
 
 // Creation reads the same file, so a file it would refuse warns here.
 const worktreeIncludeCheck = (cwd: string): Effect.Effect<DoctorCheck, never, SafeFile> =>

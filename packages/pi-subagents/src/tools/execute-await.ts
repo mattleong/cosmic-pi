@@ -1,8 +1,12 @@
 import type { AgentToolResult, AgentToolUpdateCallback } from "@earendil-works/pi-coding-agent";
 import * as Cause from "effect/Cause";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Match from "effect/Match";
+import * as Option from "effect/Option";
+import * as Result from "effect/Result";
 import { MAX_TARGET_RUNS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import {
   isTerminalRunState,
@@ -87,6 +91,34 @@ export type AwaitEnding =
   | { readonly kind: "cancelled" }
   | { readonly kind: "timed_out"; readonly seconds: number }
   | { readonly kind: "user_input" };
+
+/**
+ * Bounds a wait by its timeout on the effect's clock. At the timeout the wait is interrupted and
+ * its cleanup awaited, so released completion claims settle before the ending is reported. A wait
+ * that still finished, or failed for another reason during that cleanup, reports that instead,
+ * and so does one whose caller is interrupted meanwhile.
+ */
+export const awaitWithinTimeout = <A, E, R>(
+  wait: Effect.Effect<A, E, R>,
+  timeoutSeconds: number,
+): Effect.Effect<Result.Result<A, AwaitEnding>, E, R> =>
+  Effect.uninterruptibleMask((restore) =>
+    Effect.gen(function* () {
+      const waiting = yield* Effect.forkChild(restore(wait));
+      const settled = yield* restore(
+        Fiber.await(waiting).pipe(Effect.timeoutOption(Duration.seconds(timeoutSeconds))),
+      ).pipe(Effect.exit);
+      const finished = Exit.isSuccess(settled) ? Option.getOrUndefined(settled.value) : undefined;
+      if (finished === undefined) yield* Fiber.interrupt(waiting);
+      const exit = finished ?? (yield* Fiber.await(waiting));
+      if (Exit.isSuccess(exit)) return Result.succeed(exit.value);
+      if (finished !== undefined || !Cause.hasInterruptsOnly(exit.cause))
+        return yield* Effect.failCause(exit.cause);
+      // The caller's own interruption stays an interruption.
+      if (Exit.isFailure(settled)) return yield* Effect.failCause(settled.cause);
+      return Result.fail<AwaitEnding>({ kind: "timed_out", seconds: timeoutSeconds });
+    }),
+  );
 
 export function awaitExecutionFor(
   ids: ReadonlyArray<string>,

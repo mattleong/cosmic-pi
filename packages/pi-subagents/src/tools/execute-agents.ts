@@ -416,40 +416,39 @@ export const scriptedAgentSendRefusal = (): InvalidSubagentRequestError =>
  * when a status card names a run's own cwd. List and read results carry structured contracts for
  * scripts; scripts can't send.
  */
-export const executeAgentActionEffect = (
+export const executeAgentActionEffect = Effect.fn("SubagentTools.agents")(function* (
   input: AgentToolInput,
   caller: AgentCaller,
   scripted = false,
   callerCwd?: string,
-): Effect.Effect<AgentToolResult<unknown>, SubagentError, SubagentService> =>
-  Effect.gen(function* () {
-    const service = yield* SubagentService;
-    switch (input.tool) {
-      case AGENT_TOOL_NAME.list: {
-        const result = yield* service.agentList(caller, input.args.agentIds);
-        return {
-          content: [{ type: "text", text: boundToolOutput(listText(result)) }],
-          details: listDetails(result),
-          structuredContent: encodeSubagentContract(listContract(result)),
-        } satisfies AgentToolResult<unknown>;
-      }
-      case AGENT_TOOL_NAME.send: {
-        if (scripted) return yield* scriptedAgentSendRefusal();
-        const result = yield* service.agentSend(caller, input.args.to, input.args.message);
-        return {
-          content: [{ type: "text", text: sendText(result) }],
-          details: sendDetails(result),
-        } satisfies AgentToolResult<unknown>;
-      }
-      case AGENT_TOOL_NAME.read: {
-        const result = yield* service.agentRead(caller, input.args.agentIds);
-        const options = { caller, parentCwd: callerCwd, verbose: input.args.verbose === true };
-        return {
-          content: [{ type: "text", text: boundToolOutput(readBody(result, options)) }],
-          details: readDetails(result),
-          structuredContent: encodeSubagentContract(readContract(result)),
-        } satisfies AgentToolResult<unknown>;
-      }
+): Effect.fn.Return<AgentToolResult<unknown>, SubagentError, SubagentService> {
+  const service = yield* SubagentService;
+  switch (input.tool) {
+    case AGENT_TOOL_NAME.list: {
+      const result = yield* service.agentList(caller, input.args.agentIds);
+      return {
+        content: [{ type: "text", text: boundToolOutput(listText(result)) }],
+        details: listDetails(result),
+        structuredContent: encodeSubagentContract(listContract(result)),
+      } satisfies AgentToolResult<unknown>;
     }
-    return absurd<never>(input);
-  }).pipe(Effect.mapError(codedFailure));
+    case AGENT_TOOL_NAME.send: {
+      if (scripted) return yield* scriptedAgentSendRefusal();
+      const result = yield* service.agentSend(caller, input.args.to, input.args.message);
+      return {
+        content: [{ type: "text", text: sendText(result) }],
+        details: sendDetails(result),
+      } satisfies AgentToolResult<unknown>;
+    }
+    case AGENT_TOOL_NAME.read: {
+      const result = yield* service.agentRead(caller, input.args.agentIds);
+      const options = { caller, parentCwd: callerCwd, verbose: input.args.verbose === true };
+      return {
+        content: [{ type: "text", text: boundToolOutput(readBody(result, options)) }],
+        details: readDetails(result),
+        structuredContent: encodeSubagentContract(readContract(result)),
+      } satisfies AgentToolResult<unknown>;
+    }
+  }
+  return absurd<never>(input);
+}, Effect.mapError(codedFailure));

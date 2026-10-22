@@ -7,9 +7,10 @@ import {
   CrossProcessLock,
   type CrossProcessLease,
   type CrossProcessLockContract,
+  ensurePrivateDirectory,
+  nodeFsPromises as fs,
+  nodePath,
 } from "pi-cosmic-core";
-import { ensurePrivateDirectory } from "./harness-shared.ts";
-import { nodeFsPromises as fs, nodePath } from "./node-builtins.ts";
 import { SUBAGENT_STATE_ROOT, WRITER_LEASE_ROOT } from "./private-state.ts";
 
 const MAX_FILESYSTEM_IDENTITY_CHARS = 256;
@@ -110,7 +111,7 @@ const recoveryMessage = (slot: string | undefined): string =>
       : `Its lock at ${slot} is damaged or was left by a Pi session that ended while a writer ran. Remove that lock directory only after confirming that no writer from an earlier session is still running: its owner.json names the owner's process id.`
   }`;
 
-export const makeWriterLease = (
+const makeWriterLease = (
   agentDirectory: string,
   lock: CrossProcessLockContract,
 ): WriterLeaseContract => {
@@ -120,10 +121,9 @@ export const makeWriterLease = (
   const denied = (reason: string) =>
     new WriterLeaseAcquireError({ message: `${reason}; writer startup was denied.` });
 
-  const prepare = Effect.tryPromise({
-    try: () => ensurePrivateDirectory(packageRoot),
-    catch: () => denied("Unable to prepare private writer-lease state"),
-  });
+  const prepare = ensurePrivateDirectory(packageRoot).pipe(
+    Effect.mapError(() => denied("Unable to prepare private writer-lease state")),
+  );
 
   const transition = <E>(
     lease: WriterLease,
@@ -216,13 +216,19 @@ export const makeWriterLease = (
 export class WriterLeaseService extends Context.Service<WriterLeaseService, WriterLeaseContract>()(
   "pi-subagents/boundary/writer-lease/WriterLeaseService",
 ) {
-  static readonly layer = (options: {
+  /** Leases through whichever cross-process lock the context provides. */
+  static readonly layerWithLock = (options: {
     readonly agentDirectory: string;
-  }): Layer.Layer<WriterLeaseService> =>
+  }): Layer.Layer<WriterLeaseService, never, CrossProcessLock> =>
     Layer.effect(
       this,
       CrossProcessLock.useSync((lock) => makeWriterLease(options.agentDirectory, lock)),
-    ).pipe(
+    );
+
+  static readonly layer = (options: {
+    readonly agentDirectory: string;
+  }): Layer.Layer<WriterLeaseService> =>
+    WriterLeaseService.layerWithLock(options).pipe(
       Layer.provide(
         CrossProcessLock.layer({
           directory: nodePath.join(options.agentDirectory, SUBAGENT_STATE_ROOT, WRITER_LEASE_ROOT),

@@ -85,7 +85,6 @@ const processFixture = () =>
           runStateReclaimState: "pending",
           canonicalWriterCwd: cwd,
           writerPool: pool,
-          initializationPending: false,
           notificationGeneration: 0,
           completionGeneration: 0,
           warningSlots: {},

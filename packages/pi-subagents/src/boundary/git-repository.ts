@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { WorkspaceError } from "../workspace/model.ts";
-import { nodeCreateHash, nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
+import { nodeFsPromises as fs, nodePath as path, sha256Text } from "pi-cosmic-core";
 import {
   checkDirectory,
   git,
@@ -152,7 +152,7 @@ export const sourceIdentity = (root: string) =>
     const staged = yield* git(root, ["ls-files", "--stage", "-v", "-z"]);
     return {
       head: `${head}\n${branch}`,
-      index: nodeCreateHash("sha256").update(staged).digest("hex"),
+      index: sha256Text(staged),
     };
   });
 

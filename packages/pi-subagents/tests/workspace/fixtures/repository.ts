@@ -7,7 +7,7 @@ import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
 import * as os from "node:os";
 import { git, workspaceIO } from "../../../src/boundary/git-worktree-process.ts";
-import { nodeFsPromises as fs, nodePath as path } from "../../../src/boundary/node-builtins.ts";
+import { nodeFsPromises as fs, nodePath as path } from "../../support/node-builtins.ts";
 import type { WorkspaceHandle } from "../../../src/workspace/model.ts";
 import { WorkspaceService, type WorkspaceServiceContract } from "../../../src/workspace/service.ts";
 

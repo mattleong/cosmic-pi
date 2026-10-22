@@ -1,7 +1,13 @@
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import { CrossProcessLock, type CrossProcessLease, type SafeFile } from "pi-cosmic-core";
+import {
+  CrossProcessLock,
+  type CrossProcessLease,
+  type SafeFile,
+  nodeFsPromises as fs,
+  nodePath as path,
+} from "pi-cosmic-core";
 import type { WorktreeHook } from "../config/schema.ts";
 import { OPEN_WORKSPACE_STATUSES, WorkspaceError } from "../workspace/model.ts";
 import { canonicalizeWriterDirectory } from "./writer-lease.ts";
@@ -22,7 +28,6 @@ import type {
   WorkspaceTarget,
   WorkspaceWorkerChanges,
 } from "../workspace/model.ts";
-import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
 import {
   applyConflict,
   checkDirectory,
@@ -760,12 +765,12 @@ export const gitWorkspaceEngine = (
      * warning that fails no hook. A failed or interrupted run in a prepared tree withdraws the
      * preparation.
      */
-    const runCreateHooks = (
+    const runCreateHooks = Effect.fn("GitWorkspaceEngine.runCreateHooks")(function* (
       target: WorkspaceHookTarget & {
         readonly hooks: ReadonlyArray<WorktreeHook>;
         readonly runId?: string | undefined;
       },
-    ) => {
+    ) {
       const run = (root: string, sourceCwd: string) =>
         Effect.forEach(
           target.hooks,
@@ -784,7 +789,7 @@ export const gitWorkspaceEngine = (
             ),
           { discard: true },
         );
-      return Effect.uninterruptibleMask((restore) =>
+      return yield* Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           const { root, sourceCwd } = yield* restore(gate(createHookTree(target)));
           const exit = yield* restore(run(root, sourceCwd)).pipe(Effect.exit);
@@ -799,8 +804,8 @@ export const gitWorkspaceEngine = (
             );
           return yield* exit;
         }),
-      ).pipe(Effect.withSpan("GitWorkspaceEngine.runCreateHooks"));
-    };
+      );
+    });
     // Compares the worker tree with its baseline, storing no commit.
     const workerChanges = (record: WorkspaceRecord) =>
       Effect.gen(function* () {

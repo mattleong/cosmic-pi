@@ -1,4 +1,9 @@
-import { sanitizeTerminalLine, synchronousRandomUuid } from "pi-cosmic-core";
+import {
+  sanitizeTerminalLine,
+  synchronousRandomUuid,
+  nodeFsPromises as fs,
+  nodePath as path,
+} from "pi-cosmic-core";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -6,7 +11,6 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { safeSubagentDirectorySegment } from "./child-process.ts";
 import { nodeErrorCode } from "./harness-shared.ts";
-import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
 import { MAX_OUTCOME_FILE_PATH_CHARS } from "../run/limits.ts";
 import type { SubagentReportArchive } from "../run/model.ts";
 import {
@@ -71,9 +75,9 @@ const archiveIO = <A>(
     catch: () => new ReportArchiveError({ reason, message }),
   });
 
-// Run ids restart in every process. Exclusive creation also preserves an old link if the archive
-// identity ever collides; the report then reaches the parent inline. A file this call created
-// but couldn't fill is removed, since nothing else owns it.
+// Run ids and file suffixes are collision-resistant, not guaranteed unique. Exclusive creation
+// preserves an old link if the archive identity ever collides; the report then reaches the parent
+// inline. A file this call created but couldn't fill is removed, since nothing else owns it.
 const writeExclusive = (file: string, content: string) =>
   Effect.acquireUseRelease(
     Effect.tryPromise({

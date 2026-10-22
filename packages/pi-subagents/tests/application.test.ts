@@ -27,10 +27,10 @@ import type { SubagentProjection } from "../src/run/model.ts";
 import { SubagentService } from "../src/run/service.ts";
 import { encodeSubagentProxyInput } from "../src/tools/proxy-protocol.ts";
 import { view } from "./fixtures/run-view.ts";
-import { completeBaseline, profileCandidate } from "./fixtures/profiles.ts";
+import { builtProfileService, completeBaseline, profileCandidate } from "./fixtures/profiles.ts";
 import { resolveSubagentConfig } from "../src/config/options.ts";
 import { subagentConfigDecoder } from "../src/config/schema.ts";
-import { makeSubagentProfileService, SubagentProfileService } from "../src/profiles/service.ts";
+import { SubagentProfileService } from "../src/profiles/service.ts";
 import { mountingCustomUi, sessionContextFixture as sessionContext } from "./fixtures/pi-host.ts";
 import { describeActivationLifecycle } from "./support/activation-lifecycle.ts";
 import { effectTest, settle, step } from "./support/effect-test.ts";
@@ -369,7 +369,7 @@ describe("subagent Pi registration", () => {
       projectTrusted: false,
       global,
     });
-    const service = yield* makeSubagentProfileService(config);
+    const service = yield* builtProfileService(config);
     const writeStarted = yield* Deferred.make<void>();
     const releaseWrite = yield* Deferred.make<void>();
     const editAttempted = yield* Deferred.make<void>();

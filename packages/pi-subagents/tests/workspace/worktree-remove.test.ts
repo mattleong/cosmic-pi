@@ -2,11 +2,7 @@ import { afterAll, describe, expect } from "vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as os from "node:os";
-import {
-  nodeFsPromises as fs,
-  nodeMkdirSync,
-  nodePath as path,
-} from "../../src/boundary/node-builtins.ts";
+import { nodeFs, nodeFsPromises as fs, nodePath as path } from "../support/node-builtins.ts";
 import type { WorkspaceHandle } from "../../src/workspace/model.ts";
 import type { WorkspaceServiceContract } from "../../src/workspace/service.ts";
 import { unconfirmedShellCleanup } from "../support/unconfirmed-hook-cleanup.ts";
@@ -23,7 +19,7 @@ import {
 // Hooks are fixed when the engine starts, so they log to one directory for the whole file.
 // Logs name workspaces by their unique IDs, so another run's leftovers can't match.
 const logs = path.join(os.tmpdir(), `pi-worktree-remove-${process.pid}`);
-nodeMkdirSync(logs, { recursive: true });
+nodeFs.mkdirSync(logs, { recursive: true });
 afterAll(() => fs.rm(logs, { recursive: true, force: true }));
 const log = path.join(logs, "remove.log");
 

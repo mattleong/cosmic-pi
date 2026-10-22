@@ -1,11 +1,20 @@
-import { sha256Text, synchronousRandomHex } from "pi-cosmic-core";
+import {
+  createPrivateDirectory,
+  createPrivateFile,
+  ensurePrivateDirectory,
+  nodeFsPromises as fs,
+  nodePath,
+  type PrivateFileError,
+  removePrivateTree,
+  sha256Text,
+  synchronousRandomHex,
+} from "pi-cosmic-core";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import type { ClaudeLeadingTagDiagnostic } from "../backend/local-claude-correlation.ts";
 import type { ClaudeProtocolEvent } from "../backend/local-claude-protocol.ts";
-import { nodeFsPromises as fs, nodePath } from "./node-builtins.ts";
-import { ensurePrivateDirectory, safeAgentDirectory, writeExclusive } from "./harness-shared.ts";
+import { safeAgentDirectory } from "./harness-shared.ts";
 import { LOCAL_CLAUDE_DEBUG_ROOT, SUBAGENT_STATE_ROOT } from "./private-state.ts";
 
 const LEDGER_FILE = "replay-ledger.ndjson";
@@ -117,6 +126,11 @@ const diagnosticIo = <A>(
     catch: () => new LocalClaudeDebugIoError({}),
   });
 
+const diagnosticStep = <A>(
+  effect: Effect.Effect<A, PrivateFileError>,
+): Effect.Effect<A, LocalClaudeDebugIoError> =>
+  effect.pipe(Effect.mapError(() => new LocalClaudeDebugIoError({})));
+
 interface OwnedLedgerDirectory {
   readonly directory: string;
   readonly modifiedAt: number;
@@ -152,21 +166,19 @@ const persistLedger = Effect.fn("LocalClaudeDebug.persist")(function* (
   runIdentity: string,
   ledger: string,
 ) {
-  const canonicalAgentDirectory = yield* diagnosticIo(() => safeAgentDirectory(agentDirectory));
+  const canonicalAgentDirectory = yield* diagnosticStep(safeAgentDirectory(agentDirectory));
   const packageRoot = nodePath.join(canonicalAgentDirectory, SUBAGENT_STATE_ROOT);
   const root = nodePath.join(packageRoot, LOCAL_CLAUDE_DEBUG_ROOT);
-  yield* diagnosticIo(() => ensurePrivateDirectory(packageRoot));
-  yield* diagnosticIo(() => ensurePrivateDirectory(root));
+  yield* diagnosticStep(ensurePrivateDirectory(packageRoot));
+  yield* diagnosticStep(ensurePrivateDirectory(root));
   const owned = yield* ownedLedgerDirectories(root);
   for (const entry of owned.slice(0, Math.max(0, owned.length - MAX_RETAINED_LEDGERS + 1)))
     yield* diagnosticIo(() => fs.rm(entry.directory, { recursive: true, force: false }));
 
   const directory = nodePath.join(root, `claude-${runIdentity}-${synchronousRandomHex(8)}`);
-  yield* diagnosticIo(() => fs.mkdir(directory, { mode: 0o700 }));
-  yield* diagnosticIo(() => writeExclusive(nodePath.join(directory, LEDGER_FILE), ledger)).pipe(
-    Effect.tapError(() =>
-      diagnosticIo(() => fs.rm(directory, { recursive: true, force: true })).pipe(Effect.ignore),
-    ),
+  yield* diagnosticStep(createPrivateDirectory(directory));
+  yield* diagnosticStep(createPrivateFile(nodePath.join(directory, LEDGER_FILE), ledger)).pipe(
+    Effect.tapError(() => Effect.ignore(removePrivateTree(directory))),
   );
 });
 

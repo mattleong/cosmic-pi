@@ -2,32 +2,28 @@ import { isJsonObject, synchronousRandomUuid } from "pi-cosmic-core";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import type * as Exit from "effect/Exit";
 import { absurd } from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import type * as SchemaAST from "effect/SchemaAST";
+import type * as SchemaIssue from "effect/SchemaIssue";
 import type * as RpcClient from "effect/rpc/RpcClient";
 import type * as RpcClientError from "effect/rpc/RpcClientError";
 import {
-  MAX_SUPERVISOR_MCP_AGENT_ID_CHARS,
-  MAX_SUPERVISOR_MCP_AGENT_IDS,
-  MAX_SUPERVISOR_MCP_DELIVERY_ID_CHARS,
-  MAX_SUPERVISOR_MCP_MESSAGE_CHARS,
-  MAX_SUPERVISOR_MCP_REPORT_CHARS,
-  SUPERVISOR_MCP_AGENT_ID_PATTERN_SOURCE,
   SUPERVISOR_MCP_AGENT_IDS_ARGUMENT_KEY,
   SUPERVISOR_MCP_AGENT_SEND_ARGUMENT_KEYS,
   SUPERVISOR_MCP_CONTACT_ARGUMENT_KEYS,
   SUPERVISOR_MCP_CONTACT_KINDS,
-  SUPERVISOR_MCP_DELIVERY_ID_PATTERN_SOURCE,
-  SUPERVISOR_MCP_NONBLANK_PATTERN_SOURCE,
   SUPERVISOR_MCP_REPORT_ARGUMENT_KEYS,
   SUPERVISOR_MCP_REPORT_TOOL_NAME,
   SUPERVISOR_MCP_TOOL_NAMES,
   SUPERVISOR_MCP_VERBOSE_ARGUMENT_KEY,
 } from "./mcp-contract.ts";
 import {
+  AGENT_TOOL_NAME,
   CONTACT_PARENT_TOOL_NAME,
   isAgentToolName,
   type AgentToolName,
@@ -35,14 +31,15 @@ import {
 import {
   PARENT_REPLY_PREFIX,
   SupervisorAgentIdSchema,
-  SupervisorAgentRefusal,
+  SupervisorAgentIdsSchema,
+  type SupervisorAgentRefusal,
   SupervisorChannelIdSchema,
   type SupervisorChannelConfig,
   type SupervisorDeliveryId,
   SupervisorDeliveryIdSchema,
   SupervisorMessageSchema,
   SupervisorReportTextSchema,
-  SupervisorRpcFailure,
+  type SupervisorRpcFailure,
   type SupervisorRpcGroup,
 } from "./protocol.ts";
 import { agentListText, agentReadText, agentSendText } from "./agent-text.ts";
@@ -68,7 +65,11 @@ export interface SupervisorToolClient {
 }
 
 type SupervisorToolCall =
-  | { readonly kind: (typeof SUPERVISOR_MCP_CONTACT_KINDS)[number]; readonly message: string }
+  | { readonly kind: "question"; readonly message: string }
+  | {
+      readonly kind: Exclude<(typeof SUPERVISOR_MCP_CONTACT_KINDS)[number], "question">;
+      readonly message: string;
+    }
   | { readonly kind: "report"; readonly deliveryId: SupervisorDeliveryId; readonly report: string }
   | { readonly kind: "agent_list"; readonly ids?: ReadonlyArray<string> | undefined }
   | { readonly kind: "agent_send"; readonly to: string; readonly message: string }
@@ -84,147 +85,218 @@ interface SupervisorToolResult {
 }
 
 type ArgumentFields<Keys extends ReadonlyArray<string>> = Record<Keys[number], Schema.Top>;
-const exactArguments = { onExcessProperty: "error" } as const;
-const decodeContactArguments = Schema.decodeUnknownOption(
+const exactArguments = { onExcessProperty: "error", errors: "all" } as const;
+const decodeContactArguments = Schema.decodeUnknownResult(
   Schema.Struct({
     kind: Schema.Literals(SUPERVISOR_MCP_CONTACT_KINDS),
     message: SupervisorMessageSchema,
   } satisfies ArgumentFields<typeof SUPERVISOR_MCP_CONTACT_ARGUMENT_KEYS>),
   exactArguments,
 );
-const decodeReportArguments = Schema.decodeUnknownOption(
+const decodeReportArguments = Schema.decodeUnknownResult(
   Schema.Struct({
     delivery_id: SupervisorDeliveryIdSchema,
     report: SupervisorReportTextSchema,
   } satisfies ArgumentFields<typeof SUPERVISOR_MCP_REPORT_ARGUMENT_KEYS>),
   exactArguments,
 );
-
-const decodeAgentSendArguments = Schema.decodeUnknownOption(
+const decodeAgentSendArguments = Schema.decodeUnknownResult(
   Schema.Struct({
     to: SupervisorAgentIdSchema,
     message: SupervisorMessageSchema,
   } satisfies ArgumentFields<typeof SUPERVISOR_MCP_AGENT_SEND_ARGUMENT_KEYS>),
   exactArguments,
 );
-const decodeAgentIds = Schema.decodeUnknownOption(Schema.Array(SupervisorAgentIdSchema));
+const decodeAgentListArguments = Schema.decodeUnknownResult(
+  Schema.Struct({
+    [SUPERVISOR_MCP_AGENT_IDS_ARGUMENT_KEY]: Schema.optionalKey(SupervisorAgentIdsSchema),
+  }),
+  exactArguments,
+);
+const decodeAgentReadArguments = Schema.decodeUnknownResult(
+  Schema.Struct({
+    [SUPERVISOR_MCP_AGENT_IDS_ARGUMENT_KEY]: SupervisorAgentIdsSchema.check(Schema.isMinLength(1)),
+    [SUPERVISOR_MCP_VERBOSE_ARGUMENT_KEY]: Schema.optionalKey(Schema.Boolean),
+  }),
+  exactArguments,
+);
 
-interface ArgumentRule {
+/** How to tell the child to fix one argument; its limits come from the schema that rejected it. */
+interface ArgumentGuidance {
   readonly key: string;
-  readonly maximum: number;
-  readonly pattern: RegExp;
+  /** The value has the wrong JSON type. */
+  readonly type: string;
+  /** The value has the right type but the wrong content. */
   readonly mismatch: string;
+  readonly missing?: string;
+  /** A list entry fails its schema. */
+  readonly entry?: string;
+  /** A list names no entry but must name one. */
+  readonly empty?: string;
 }
 
-const nonblankRule = (key: string, maximum: number): ArgumentRule => ({
+interface ArgumentContract {
+  readonly tool: string;
+  /** The arguments named when the input isn't an object. */
+  readonly objectWith: string;
+  /** Every accepted argument, in the order problems are reported. */
+  readonly arguments: ReadonlyArray<ArgumentGuidance>;
+}
+
+const textArgument = (key: string, mismatch: string): ArgumentGuidance => ({
   key,
-  maximum,
-  pattern: new RegExp(SUPERVISOR_MCP_NONBLANK_PATTERN_SOURCE, "u"),
-  mismatch: `${key} is blank; provide nonblank text.`,
+  type: `${key} must be a string.`,
+  mismatch,
 });
-const CONTACT_KIND_PATTERN = new RegExp(`^(?:${SUPERVISOR_MCP_CONTACT_KINDS.join("|")})$`, "u");
-const CONTACT_RULES: ReadonlyArray<ArgumentRule> = [
-  {
-    key: SUPERVISOR_MCP_CONTACT_ARGUMENT_KEYS[0],
-    maximum: 16,
-    pattern: CONTACT_KIND_PATTERN,
-    mismatch: `${SUPERVISOR_MCP_CONTACT_ARGUMENT_KEYS[0]} must be one of ${SUPERVISOR_MCP_CONTACT_KINDS.join(", ")}.`,
-  },
-  nonblankRule(SUPERVISOR_MCP_CONTACT_ARGUMENT_KEYS[1], MAX_SUPERVISOR_MCP_MESSAGE_CHARS),
-];
-const AGENT_ID_PATTERN = new RegExp(SUPERVISOR_MCP_AGENT_ID_PATTERN_SOURCE, "u");
+const nonblankArgument = (key: string) =>
+  textArgument(key, `${key} is blank; provide nonblank text.`);
 const AGENT_ID_MISMATCH = "must be an agent ID from agent_list, such as main or a run ID.";
-const AGENT_SEND_RULES: ReadonlyArray<ArgumentRule> = [
-  {
-    key: SUPERVISOR_MCP_AGENT_SEND_ARGUMENT_KEYS[0],
-    maximum: MAX_SUPERVISOR_MCP_AGENT_ID_CHARS,
-    pattern: AGENT_ID_PATTERN,
-    mismatch: `${SUPERVISOR_MCP_AGENT_SEND_ARGUMENT_KEYS[0]} ${AGENT_ID_MISMATCH}`,
-  },
-  nonblankRule(SUPERVISOR_MCP_AGENT_SEND_ARGUMENT_KEYS[1], MAX_SUPERVISOR_MCP_MESSAGE_CHARS),
-];
-const REPORT_RULES: ReadonlyArray<ArgumentRule> = [
-  {
-    key: SUPERVISOR_MCP_REPORT_ARGUMENT_KEYS[0],
-    maximum: MAX_SUPERVISOR_MCP_DELIVERY_ID_CHARS,
-    pattern: new RegExp(SUPERVISOR_MCP_DELIVERY_ID_PATTERN_SOURCE, "u"),
-    mismatch: `${SUPERVISOR_MCP_REPORT_ARGUMENT_KEYS[0]} must start with a letter or digit and use only letters, digits, ".", "_", ":", or "-".`,
-  },
-  nonblankRule(SUPERVISOR_MCP_REPORT_ARGUMENT_KEYS[1], MAX_SUPERVISOR_MCP_REPORT_CHARS),
-];
+const agentIdsArgument = (required: boolean): ArgumentGuidance => {
+  const key = SUPERVISOR_MCP_AGENT_IDS_ARGUMENT_KEY;
+  const type = `${key} must be an array of agent IDs.`;
+  return {
+    key,
+    type,
+    mismatch: type,
+    entry: `Each entry in ${key} ${AGENT_ID_MISMATCH}`,
+    ...(required && {
+      missing: `Missing ${key}; name at least one agent.`,
+      empty: `${key} is empty; name at least one agent.`,
+    }),
+  };
+};
+const contract = (
+  tool: string,
+  argumentsInOrder: ReadonlyArray<ArgumentGuidance>,
+  objectWith = argumentsInOrder.map(({ key }) => key).join(" and "),
+): ArgumentContract => ({ tool, objectWith, arguments: argumentsInOrder });
+
+const CONTACT_ARGUMENTS = contract(CONTACT_PARENT_TOOL_NAME, [
+  textArgument(
+    SUPERVISOR_MCP_CONTACT_ARGUMENT_KEYS[0],
+    `${SUPERVISOR_MCP_CONTACT_ARGUMENT_KEYS[0]} must be one of ${SUPERVISOR_MCP_CONTACT_KINDS.join(", ")}.`,
+  ),
+  nonblankArgument(SUPERVISOR_MCP_CONTACT_ARGUMENT_KEYS[1]),
+]);
+const REPORT_ARGUMENTS = contract(SUPERVISOR_MCP_REPORT_TOOL_NAME, [
+  textArgument(
+    SUPERVISOR_MCP_REPORT_ARGUMENT_KEYS[0],
+    `${SUPERVISOR_MCP_REPORT_ARGUMENT_KEYS[0]} must start with a letter or digit and use only letters, digits, ".", "_", ":", or "-".`,
+  ),
+  nonblankArgument(SUPERVISOR_MCP_REPORT_ARGUMENT_KEYS[1]),
+]);
+const AGENT_SEND_ARGUMENTS = contract(AGENT_TOOL_NAME.send, [
+  textArgument(
+    SUPERVISOR_MCP_AGENT_SEND_ARGUMENT_KEYS[0],
+    `${SUPERVISOR_MCP_AGENT_SEND_ARGUMENT_KEYS[0]} ${AGENT_ID_MISMATCH}`,
+  ),
+  nonblankArgument(SUPERVISOR_MCP_AGENT_SEND_ARGUMENT_KEYS[1]),
+]);
+const AGENT_LIST_ARGUMENTS = contract(AGENT_TOOL_NAME.list, [agentIdsArgument(false)]);
+const AGENT_READ_ARGUMENTS = contract(
+  AGENT_TOOL_NAME.read,
+  [
+    agentIdsArgument(true),
+    {
+      key: SUPERVISOR_MCP_VERBOSE_ARGUMENT_KEY,
+      type: `${SUPERVISOR_MCP_VERBOSE_ARGUMENT_KEY} must be true or false.`,
+      mismatch: `${SUPERVISOR_MCP_VERBOSE_ARGUMENT_KEY} must be true or false.`,
+    },
+  ],
+  SUPERVISOR_MCP_AGENT_IDS_ARGUMENT_KEY,
+);
+
+interface ArgumentIssue {
+  readonly path: ReadonlyArray<PropertyKey>;
+  readonly issue: SchemaIssue.Issue;
+  readonly filter?: SchemaAST.Filter<unknown> | undefined;
+}
+
+// Each rejected value with its path and the check that rejected it.
+const argumentIssues = (
+  issue: SchemaIssue.Issue,
+  path: ReadonlyArray<PropertyKey> = [],
+  filter?: SchemaAST.Filter<unknown>,
+): ReadonlyArray<ArgumentIssue> => {
+  if (Predicate.isTagged(issue, "Pointer"))
+    return argumentIssues(issue.issue, [...path, ...issue.path], filter);
+  if (Predicate.isTagged(issue, "Composite"))
+    return issue.issues.flatMap((inner) => argumentIssues(inner, path, filter));
+  if (Predicate.isTagged(issue, "Filter")) return argumentIssues(issue.issue, path, issue.filter);
+  if (Predicate.isTagged(issue, "Encoding")) return argumentIssues(issue.issue, path, filter);
+  return [{ path, issue, filter }];
+};
+
+const decodeMaxLengthCheck = Schema.decodeUnknownOption(
+  Schema.Struct({
+    id: Schema.Literal("effect/schema/isMaxLength"),
+    payload: Schema.Struct({ maxLength: Schema.Finite }),
+  }),
+);
+const decodeMinLengthCheck = Schema.decodeUnknownOption(
+  Schema.Struct({ id: Schema.Literal("effect/schema/isMinLength") }),
+);
+const checkRepresentation = ({ filter }: ArgumentIssue) => filter?.annotations?.representation;
+
 // Argument names are echoed only when short and plain; other caller text never is.
 const ECHOABLE_KEY = /^[A-Za-z0-9_]{1,64}$/u;
 const count = (value: number): string => value.toLocaleString("en-US");
 
-// Names the first failing argument and its limit so the child can correct the call.
-const argumentProblem = (
-  tool: string,
-  rules: ReadonlyArray<ArgumentRule>,
-  args: Schema.Json | undefined,
-): string | undefined => {
-  const accepted = rules.map((rule) => rule.key).join(" and ");
-  if (!isJsonObject(args)) return `${tool} takes an object with ${accepted}.`;
-  const unexpected = Object.keys(args).find((key) => !rules.some((rule) => rule.key === key));
-  if (unexpected !== undefined)
-    return `Unexpected argument${ECHOABLE_KEY.test(unexpected) ? ` ${unexpected}` : ""}; ${tool} takes only ${accepted}.`;
-  for (const rule of rules) {
-    const value = args[rule.key];
-    if (value === undefined) return `Missing ${rule.key}.`;
-    if (!Predicate.isString(value)) return `${rule.key} must be a string.`;
-    if (value.length > rule.maximum)
-      return `${rule.key} is ${count(value.length)} characters; the limit is ${count(rule.maximum)}. Shorten it and resubmit.`;
-    if (!rule.pattern.test(value)) return rule.mismatch;
-  }
-  return undefined;
+const argumentProblemFor = (
+  { key, type, mismatch, missing, entry, empty }: ArgumentGuidance,
+  value: Schema.Json | undefined,
+  issues: ReadonlyArray<ArgumentIssue>,
+): string => {
+  const own = issues.filter(({ path }) => path.length === 1);
+  const has = (tag: SchemaIssue.Issue["_tag"]) =>
+    own.some(({ issue }) => Predicate.isTagged(issue, tag));
+  if (has("MissingKey")) return missing ?? `Missing ${key}.`;
+  if (has("InvalidType")) return type;
+  const maximum = own
+    .map((issue) => decodeMaxLengthCheck(checkRepresentation(issue)))
+    .find(Option.isSome)?.value.payload.maxLength;
+  if (maximum !== undefined && Array.isArray(value))
+    return `${key} has ${count(value.length)} entries; the limit is ${count(maximum)}.`;
+  if (maximum !== undefined && Predicate.isString(value))
+    return `${key} is ${count(value.length)} characters; the limit is ${count(maximum)}. Shorten it and resubmit.`;
+  if (
+    empty !== undefined &&
+    own.some((issue) => Option.isSome(decodeMinLengthCheck(checkRepresentation(issue))))
+  )
+    return empty;
+  if (entry !== undefined && issues.some(({ path }) => path.length > 1)) return entry;
+  return Predicate.isString(value) ? mismatch : type;
 };
 
 const UNSUPPORTED_ARGUMENTS = "Tool input is malformed or unsupported.";
 
-// `agentIds` is optional for agent_list and required, with at least one entry, for agent_read,
-// which also accepts `verbose`.
-const decodeAgentIdsCall = (
-  tool: string,
+// Names the first failing argument and its limit so the child can correct the call.
+const argumentProblem = (
+  { tool, objectWith, arguments: accepted }: ArgumentContract,
   args: Schema.Json | undefined,
-  required: boolean,
-): Result.Result<ReadonlyArray<string> | undefined, string> => {
-  const key = SUPERVISOR_MCP_AGENT_IDS_ARGUMENT_KEY;
-  const accepted: ReadonlyArray<string> = required
-    ? [key, SUPERVISOR_MCP_VERBOSE_ARGUMENT_KEY]
-    : [key];
-  if (!isJsonObject(args)) return Result.fail(`${tool} takes an object with ${key}.`);
-  const unexpected = Object.keys(args).find((name) => !accepted.includes(name));
-  if (unexpected !== undefined)
-    return Result.fail(
-      `Unexpected argument${ECHOABLE_KEY.test(unexpected) ? ` ${unexpected}` : ""}; ${tool} takes only ${accepted.join(" and ")}.`,
-    );
-  const verbose = args[SUPERVISOR_MCP_VERBOSE_ARGUMENT_KEY];
-  if (verbose !== undefined && !Predicate.isBoolean(verbose))
-    return Result.fail(`${SUPERVISOR_MCP_VERBOSE_ARGUMENT_KEY} must be true or false.`);
-  const ids = args[key];
-  if (ids === undefined)
-    return required
-      ? Result.fail(`Missing ${key}; name at least one agent.`)
-      : Result.succeed(undefined);
-  if (!Array.isArray(ids)) return Result.fail(`${key} must be an array of agent IDs.`);
-  if (required && ids.length === 0) return Result.fail(`${key} is empty; name at least one agent.`);
-  if (ids.length > MAX_SUPERVISOR_MCP_AGENT_IDS)
-    return Result.fail(
-      `${key} has ${count(ids.length)} entries; the limit is ${count(MAX_SUPERVISOR_MCP_AGENT_IDS)}.`,
-    );
-  if (
-    !ids.every(
-      (id) =>
-        Predicate.isString(id) &&
-        id.length <= MAX_SUPERVISOR_MCP_AGENT_ID_CHARS &&
-        AGENT_ID_PATTERN.test(id),
-    )
-  )
-    return Result.fail(`Each entry in ${key} ${AGENT_ID_MISMATCH}`);
-  return Option.match(decodeAgentIds(ids), {
-    onNone: () => Result.fail(UNSUPPORTED_ARGUMENTS),
-    onSome: (decoded) => Result.succeed(decoded),
-  });
+  issue: SchemaIssue.Issue,
+): string => {
+  if (!isJsonObject(args)) return `${tool} takes an object with ${objectWith}.`;
+  const issues = argumentIssues(issue);
+  const unexpected = issues.find(({ issue: found }) => Predicate.isTagged(found, "UnexpectedKey"))
+    ?.path[0];
+  if (unexpected !== undefined) {
+    const name = String(unexpected);
+    return `Unexpected argument${ECHOABLE_KEY.test(name) ? ` ${name}` : ""}; ${tool} takes only ${accepted.map(({ key }) => key).join(" and ")}.`;
+  }
+  for (const guidance of accepted) {
+    const found = issues.filter(({ path }) => path[0] === guidance.key);
+    if (found.length > 0) return argumentProblemFor(guidance, args[guidance.key], found);
+  }
+  return UNSUPPORTED_ARGUMENTS;
 };
+
+const decodeArguments = <A>(
+  argumentContract: ArgumentContract,
+  decode: (args: Schema.Json | undefined) => Result.Result<A, Schema.SchemaError>,
+  args: Schema.Json | undefined,
+): Result.Result<A, string> =>
+  Result.mapError(decode(args), (error) => argumentProblem(argumentContract, args, error.issue));
 
 const decodeAgentToolCall = (
   name: AgentToolName,
@@ -232,25 +304,24 @@ const decodeAgentToolCall = (
 ): Result.Result<SupervisorToolCall, string> => {
   switch (name) {
     case "agent_list":
-      return Result.map(decodeAgentIdsCall(name, args, false), (ids) => ({
-        kind: "agent_list" as const,
-        ...(ids !== undefined && { ids }),
-      }));
+      return Result.map(
+        decodeArguments(AGENT_LIST_ARGUMENTS, decodeAgentListArguments, args),
+        ({ agentIds }) => ({ kind: "agent_list" as const, ...(agentIds && { ids: agentIds }) }),
+      );
     case "agent_read":
-      return Result.map(decodeAgentIdsCall(name, args, true), (ids) => ({
-        kind: "agent_read" as const,
-        ids: ids ?? [],
-        ...(isJsonObject(args) &&
-          args[SUPERVISOR_MCP_VERBOSE_ARGUMENT_KEY] === true && { verbose: true }),
-      }));
-    case "agent_send": {
-      const problem = argumentProblem(name, AGENT_SEND_RULES, args);
-      if (problem !== undefined) return Result.fail(problem);
-      return Option.match(decodeAgentSendArguments(args), {
-        onNone: () => Result.fail(UNSUPPORTED_ARGUMENTS),
-        onSome: ({ to, message }) => Result.succeed({ kind: "agent_send" as const, to, message }),
-      });
-    }
+      return Result.map(
+        decodeArguments(AGENT_READ_ARGUMENTS, decodeAgentReadArguments, args),
+        ({ agentIds, verbose }) => ({
+          kind: "agent_read" as const,
+          ids: agentIds,
+          ...(verbose === true && { verbose: true }),
+        }),
+      );
+    case "agent_send":
+      return Result.map(
+        decodeArguments(AGENT_SEND_ARGUMENTS, decodeAgentSendArguments, args),
+        ({ to, message }) => ({ kind: "agent_send" as const, to, message }),
+      );
   }
   return absurd<Result.Result<SupervisorToolCall, string>>(name);
 };
@@ -261,23 +332,14 @@ export const decodeSupervisorToolCall = (
   args: Schema.Json | undefined,
 ): Result.Result<SupervisorToolCall, string> => {
   if (isAgentToolName(name)) return decodeAgentToolCall(name, args);
-  if (name === SUPERVISOR_MCP_REPORT_TOOL_NAME) {
-    const problem = argumentProblem(name, REPORT_RULES, args);
-    if (problem !== undefined) return Result.fail(problem);
-    return Option.match(decodeReportArguments(args), {
-      onNone: () => Result.fail(UNSUPPORTED_ARGUMENTS),
-      onSome: ({ delivery_id, report }) =>
-        Result.succeed({ kind: "report" as const, deliveryId: delivery_id, report }),
-    });
-  }
+  if (name === SUPERVISOR_MCP_REPORT_TOOL_NAME)
+    return Result.map(
+      decodeArguments(REPORT_ARGUMENTS, decodeReportArguments, args),
+      ({ delivery_id, report }) => ({ kind: "report" as const, deliveryId: delivery_id, report }),
+    );
   if (name !== CONTACT_PARENT_TOOL_NAME)
     return Result.fail(`Unknown tool; use one of ${SUPERVISOR_MCP_TOOL_NAMES.join(", ")}.`);
-  const problem = argumentProblem(name, CONTACT_RULES, args);
-  if (problem !== undefined) return Result.fail(problem);
-  return Option.match(decodeContactArguments(args), {
-    onNone: () => Result.fail(UNSUPPORTED_ARGUMENTS),
-    onSome: ({ kind, message }) => Result.succeed({ kind, message }),
-  });
+  return decodeArguments(CONTACT_ARGUMENTS, decodeContactArguments, args);
 };
 
 const uncertain = () =>
@@ -293,34 +355,97 @@ interface SupervisorToolCaller {
 }
 
 // The model can act on these refusals, so they return as tool errors rather than RPC failures.
-const isToolErrorRefusal = (error: unknown): error is SupervisorRpcFailure =>
-  error instanceof SupervisorRpcFailure &&
-  (error.code === "report_schema_invalid" || error.code === "native_sub_agent_refused");
-const refusedResult = (error: SupervisorRpcFailure | SupervisorAgentRefusal) =>
-  Effect.succeed(
-    error instanceof SupervisorAgentRefusal
-      ? ok(`Refused (${error.code}): ${error.message}`, true)
-      : ok(error.message, true),
-  );
-const isAgentRefusal = (error: unknown): error is SupervisorRpcFailure | SupervisorAgentRefusal =>
-  error instanceof SupervisorAgentRefusal || isToolErrorRefusal(error);
+const refusalAsToolError = (error: SupervisorRpcFailure) =>
+  error.code === "report_schema_invalid" || error.code === "native_sub_agent_refused"
+    ? Effect.succeed(ok(error.message, true))
+    : Effect.fail(error);
+const agentRefusalAsToolError = (error: SupervisorAgentRefusal) =>
+  Effect.succeed(ok(`Refused (${error.code}): ${error.message}`, true));
 
-export const runSupervisorTool = (
+type SupervisorToolError = SupervisorRpcFailure | SupervisorToolFailure;
+type SupervisorToolStep<A> = Effect.Effect<A, SupervisorToolError>;
+
+const settleTransportFailures =
+  (client: SupervisorToolClient) =>
+  <A>(
+    step: Effect.Effect<
+      A,
+      SupervisorToolError | RpcClientError.RpcClientError | Cause.TimeoutError
+    >,
+  ): SupervisorToolStep<A> =>
+    step.pipe(
+      Effect.catchTags({
+        RpcClientError: () => Effect.fail(uncertain()),
+        TimeoutError: () => Effect.fail(uncertain()),
+      }),
+      Effect.catchCauseIf(
+        (cause) => Deferred.isDoneUnsafe(client.closed) && Cause.hasInterruptsOnly(cause),
+        () => Effect.fail(uncertain()),
+      ),
+    );
+
+interface SupervisorCallContext {
+  readonly rpc: SupervisorToolClient["rpc"];
+  readonly auth: SupervisorToolClient["auth"];
+  readonly assignmentEpoch: number;
+  readonly requestId: typeof SupervisorChannelIdSchema.Type;
+  readonly identity: { readonly nativeThreadId?: string };
+}
+
+const callContext = (
   client: SupervisorToolClient,
-  call: SupervisorToolCall,
-  caller: SupervisorToolCaller = {},
-): Effect.Effect<SupervisorToolResult, SupervisorRpcFailure | SupervisorToolFailure> =>
-  Effect.gen(function* () {
+  caller: SupervisorToolCaller,
+): SupervisorToolStep<SupervisorCallContext> =>
+  Effect.suspend(() => {
     const assignmentEpoch = client.assignmentEpoch();
     if (Deferred.isDoneUnsafe(client.closed) || assignmentEpoch < 1)
-      return yield* new SupervisorToolFailure({
-        code: "channel_unavailable",
-        message: "Private supervisor channel is unavailable or has no active assignment.",
-      });
-    const { rpc, auth } = client;
-    const requestId = SupervisorChannelIdSchema.make(synchronousRandomUuid());
-    const identity =
-      caller.nativeThreadId === undefined ? {} : { nativeThreadId: caller.nativeThreadId };
+      return Effect.fail(
+        new SupervisorToolFailure({
+          code: "channel_unavailable",
+          message: "Private supervisor channel is unavailable or has no active assignment.",
+        }),
+      );
+    return Effect.succeed({
+      rpc: client.rpc,
+      auth: client.auth,
+      assignmentEpoch,
+      requestId: SupervisorChannelIdSchema.make(synchronousRandomUuid()),
+      identity:
+        caller.nativeThreadId === undefined ? {} : { nativeThreadId: caller.nativeThreadId },
+    });
+  });
+
+// The parent's reply, then the acknowledgement that consumes it and yields the result.
+const questionReply = (
+  { rpc, auth, assignmentEpoch, requestId, identity }: SupervisorCallContext,
+  message: string,
+  settle: ReturnType<typeof settleTransportFailures>,
+) =>
+  rpc.SupervisorQuestion({ ...auth, assignmentEpoch, requestId, message, ...identity }).pipe(
+    Effect.map((reply) =>
+      rpc
+        .SupervisorAcknowledgeQuestionReply({
+          ...auth,
+          assignmentEpoch,
+          questionId: reply.questionId,
+        })
+        .pipe(
+          Effect.timeout(CALL_TIMEOUT_MILLIS),
+          Effect.as(ok(`${PARENT_REPLY_PREFIX}${reply.message}`)),
+          Effect.catchTag("SupervisorRpcFailure", refusalAsToolError),
+          settle,
+        ),
+    ),
+    Effect.catchTag("SupervisorRpcFailure", (error) =>
+      Effect.map(refusalAsToolError(error), Effect.succeed),
+    ),
+  );
+
+const answerSupervisorTool = (
+  { rpc, auth, assignmentEpoch, requestId, identity }: SupervisorCallContext,
+  call: Exclude<SupervisorToolCall, { readonly kind: "question" }>,
+) =>
+  Effect.gen(function* () {
     switch (call.kind) {
       case "report": {
         const { deliveryId, report: text } = call;
@@ -333,36 +458,9 @@ export const runSupervisorTool = (
                 `${result.duplicate ? "Final report retry accepted" : "Final report accepted"}; sequence ${result.sequence}.`,
               ),
             ),
-            Effect.catchIf(isToolErrorRefusal, (error) => Effect.succeed(ok(error.message, true))),
+            Effect.catchTag("SupervisorRpcFailure", refusalAsToolError),
           );
       }
-      case "question":
-        return yield* Effect.uninterruptibleMask((restore) =>
-          restore(
-            rpc.SupervisorQuestion({
-              ...auth,
-              assignmentEpoch,
-              requestId,
-              message: call.message,
-              ...identity,
-            }),
-          ).pipe(
-            Effect.flatMap((reply) =>
-              rpc
-                .SupervisorAcknowledgeQuestionReply({
-                  ...auth,
-                  assignmentEpoch,
-                  questionId: reply.questionId,
-                })
-                .pipe(
-                  Effect.timeout(CALL_TIMEOUT_MILLIS),
-                  Effect.as(ok(`${PARENT_REPLY_PREFIX}${reply.message}`)),
-                ),
-            ),
-          ),
-        ).pipe(
-          Effect.catchIf(isToolErrorRefusal, (error) => Effect.succeed(ok(error.message, true))),
-        );
       case "progress":
       case "warning": {
         const contact = CONTACTS[call.kind];
@@ -375,7 +473,7 @@ export const runSupervisorTool = (
         }).pipe(
           Effect.timeout(CALL_TIMEOUT_MILLIS),
           Effect.as(ok(contact.text)),
-          Effect.catchIf(isToolErrorRefusal, (error) => Effect.succeed(ok(error.message, true))),
+          Effect.catchTag("SupervisorRpcFailure", refusalAsToolError),
         );
       }
       case "agent_list":
@@ -388,7 +486,10 @@ export const runSupervisorTool = (
           .pipe(
             Effect.timeout(CALL_TIMEOUT_MILLIS),
             Effect.map((result) => ok(agentListText(result))),
-            Effect.catchIf(isAgentRefusal, refusedResult),
+            Effect.catchTags({
+              SupervisorAgentRefusal: agentRefusalAsToolError,
+              SupervisorRpcFailure: refusalAsToolError,
+            }),
           );
       case "agent_read":
         return yield* rpc
@@ -401,7 +502,10 @@ export const runSupervisorTool = (
           .pipe(
             Effect.timeout(CALL_TIMEOUT_MILLIS),
             Effect.map((result) => ok(agentReadText(result))),
-            Effect.catchIf(isAgentRefusal, refusedResult),
+            Effect.catchTags({
+              SupervisorAgentRefusal: agentRefusalAsToolError,
+              SupervisorRpcFailure: refusalAsToolError,
+            }),
           );
       case "agent_send":
         return yield* rpc
@@ -415,18 +519,46 @@ export const runSupervisorTool = (
           .pipe(
             Effect.timeout(AGENT_SEND_TIMEOUT_MILLIS),
             Effect.map((result) => ok(agentSendText(result))),
-            Effect.catchIf(isAgentRefusal, refusedResult),
+            Effect.catchTags({
+              SupervisorAgentRefusal: agentRefusalAsToolError,
+              SupervisorRpcFailure: refusalAsToolError,
+            }),
           );
     }
     return absurd<SupervisorToolResult>(call);
-  }).pipe(
-    Effect.mapError((error) =>
-      error instanceof SupervisorRpcFailure || error instanceof SupervisorToolFailure
-        ? error
-        : uncertain(),
+  });
+
+// The call's request, then the commit that turns its response into the result.
+const requestSupervisorTool = (
+  client: SupervisorToolClient,
+  call: SupervisorToolCall,
+  caller: SupervisorToolCaller,
+): SupervisorToolStep<SupervisorToolStep<SupervisorToolResult>> => {
+  const settle = settleTransportFailures(client);
+  return callContext(client, caller).pipe(
+    Effect.flatMap((context) =>
+      call.kind === "question"
+        ? questionReply(context, call.message, settle)
+        : Effect.map(answerSupervisorTool(context, call), Effect.succeed),
     ),
-    Effect.catchCauseIf(
-      (cause) => Deferred.isDoneUnsafe(client.closed) && Cause.hasInterruptsOnly(cause),
-      () => Effect.fail(uncertain()),
+    settle,
+  );
+};
+
+/**
+ * Runs a tool call and passes its outcome to `deliver`. The request stays interruptible, but the
+ * parent's reply is consumed once acknowledged and can't be sent again, so acknowledgement, result,
+ * and delivery are one uninterruptible commit. A cancellation arriving after the reply therefore
+ * waits for the bounded acknowledgement and for `deliver`, which still carries the reply.
+ */
+export const runSupervisorTool = <A, E, R>(
+  client: SupervisorToolClient,
+  call: SupervisorToolCall,
+  deliver: (exit: Exit.Exit<SupervisorToolResult, SupervisorToolError>) => Effect.Effect<A, E, R>,
+  caller: SupervisorToolCaller = {},
+): Effect.Effect<A, E, R> =>
+  Effect.uninterruptibleMask((restore) =>
+    Effect.exit(Effect.flatten(restore(requestSupervisorTool(client, call, caller)))).pipe(
+      Effect.flatMap(deliver),
     ),
   );

@@ -2,7 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as os from "node:os";
-import { nodeFsPromises as fs, nodePath as path } from "../src/boundary/node-builtins.ts";
+import { nodeFsPromises as fs, nodePath as path } from "./support/node-builtins.ts";
 import { runWorktreeHook, type WorktreeHookInput } from "../src/boundary/worktree-hook.ts";
 import { capturedWarnings, unconfirmedShellCleanup } from "./support/unconfirmed-hook-cleanup.ts";
 

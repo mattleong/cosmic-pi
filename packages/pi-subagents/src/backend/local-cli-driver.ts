@@ -35,7 +35,7 @@ import {
   type BackendHandle,
   type BackendLaunchRequest,
 } from "./model.ts";
-import { supervisorError } from "./driver-shared.ts";
+import { ignoreConsumerCause, supervisorError } from "./driver-shared.ts";
 import { LOCAL_CLI_LABELS } from "./local-cli-version.ts";
 
 const REPORT_TOOL = SUPERVISOR_MCP_REPORT_TOOL_NAME;
@@ -103,7 +103,7 @@ export const consumeUntilExit = (
         );
       }),
     ),
-    Effect.ignoreCause,
+    ignoreConsumerCause(`${LOCAL_CLI_LABELS[runtime]} frame consumer`),
     Effect.ensuring(
       Effect.suspend(() =>
         onClosed(

@@ -1,5 +1,8 @@
+import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import type * as Scope from "effect/Scope";
 import {
@@ -108,14 +111,14 @@ const validateLocalPreflightRequest = (
       );
     // The supervisor MCP helper that Claude and Codex start runs on this Node binary.
     yield* requireNodeExecutable();
-    yield* Effect.tryPromise({
-      try: () => safeAgentDirectory(options.agentDirectory),
-      catch: () =>
+    yield* safeAgentDirectory(options.agentDirectory).pipe(
+      Effect.mapError(() =>
         preflightError(
           "local_harness_unavailable",
           "Private agent-directory state is unavailable for the local CLI harness.",
         ),
-    });
+      ),
+    );
     return undefined;
   });
 
@@ -157,7 +160,7 @@ const resolveCodexApiKeyFallback = (
 ) =>
   Effect.gen(function* () {
     if (request.runtime !== "codex") return false;
-    const auth = yield* Effect.promise(() => readValidatedCodexAuth(environment));
+    const auth = yield* readValidatedCodexAuth(environment);
     const fallback = !auth && approvedCodexApiKey(environment) !== undefined;
     if (!auth && !fallback)
       return yield* preflightError(
@@ -279,49 +282,50 @@ const acquireLocalCli = Effect.fn("LocalCliProcess.acquire")(function* (
   return handle;
 });
 
-export const makeLocalCliProcess = (options: LocalCliHarnessOptions): LocalCliProcessContract => {
-  const environment = options.environment ?? process.env;
-  // A CLI rarely changes within a session; an unavailable one is probed again next time.
-  const versions = new Map<LocalCliRuntime, LocalCliVersion>();
-  const cachedVersion = (runtime: LocalCliRuntime) =>
-    Effect.suspend(() => {
-      const known = versions.get(runtime);
-      if (known) return Effect.succeed(known);
-      return runVersionProbe(options, runtime, environment).pipe(
-        Effect.tap((probed) =>
-          Effect.sync(() => {
-            if (probed.status !== "unavailable") versions.set(runtime, probed);
-          }),
-        ),
-      );
-    });
-  const version = (runtime: LocalCliRuntime): Effect.Effect<LocalCliVersion> =>
-    cachedVersion(runtime).pipe(
-      Effect.catch(() => Effect.succeed<LocalCliVersion>({ status: "unavailable" })),
+const makeLocalCliProcess = (
+  options: LocalCliHarnessOptions,
+): Effect.Effect<LocalCliProcessContract> =>
+  Effect.gen(function* () {
+    const environment = options.environment ?? process.env;
+    // A CLI rarely changes within a session; an unavailable one is probed again next time.
+    const versions = yield* Cache.makeWith(
+      (runtime: LocalCliRuntime) => runVersionProbe(options, runtime, environment),
+      {
+        capacity: 2,
+        timeToLive: (exit) =>
+          Exit.isSuccess(exit) && exit.value.status !== "unavailable"
+            ? Duration.infinity
+            : Duration.zero,
+      },
     );
-  return {
-    preflight: Effect.fn("LocalCliProcess.preflight")(function* (
-      request: LocalCliPreflightRequest,
-    ) {
-      yield* validateLocalPreflightRequest(options, request);
-      yield* requireSupportedVersion(request.runtime, yield* cachedVersion(request.runtime));
-      const codexApiKeyFallback = yield* resolveCodexApiKeyFallback(request, environment);
-      const result = yield* runLocalPreflightProbe(
-        options,
-        request,
-        environment,
-        codexApiKeyFallback,
+    const cachedVersion = (runtime: LocalCliRuntime) => Cache.get(versions, runtime);
+    const version = (runtime: LocalCliRuntime): Effect.Effect<LocalCliVersion> =>
+      cachedVersion(runtime).pipe(
+        Effect.orElseSucceed((): LocalCliVersion => ({ status: "unavailable" })),
       );
-      yield* validateLocalProbeResult(request, result, codexApiKeyFallback);
-    }),
-    version,
-    spawn: (request) => acquireLocalCli(options, request),
-  };
-};
+    return {
+      preflight: Effect.fn("LocalCliProcess.preflight")(function* (
+        request: LocalCliPreflightRequest,
+      ) {
+        yield* validateLocalPreflightRequest(options, request);
+        yield* requireSupportedVersion(request.runtime, yield* cachedVersion(request.runtime));
+        const codexApiKeyFallback = yield* resolveCodexApiKeyFallback(request, environment);
+        const result = yield* runLocalPreflightProbe(
+          options,
+          request,
+          environment,
+          codexApiKeyFallback,
+        );
+        yield* validateLocalProbeResult(request, result, codexApiKeyFallback);
+      }),
+      version,
+      spawn: (request) => acquireLocalCli(options, request),
+    } satisfies LocalCliProcessContract;
+  });
 
 export class LocalCliProcess extends Context.Service<LocalCliProcess, LocalCliProcessContract>()(
   "pi-subagents/boundary/local-cli-process/LocalCliProcess",
 ) {
   static readonly layer = (options: LocalCliHarnessOptions): Layer.Layer<LocalCliProcess> =>
-    Layer.succeed(this, makeLocalCliProcess(options));
+    Layer.effect(this, makeLocalCliProcess(options));
 }

@@ -1,9 +1,8 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { homedir } from "node:os";
-import { type SafeFileContract } from "pi-cosmic-core";
+import { type SafeFileContract, nodeFsPromises as fs, nodePath } from "pi-cosmic-core";
 import { isSafeNativeModelSelector } from "../profiles/model.ts";
-import { nodeFsPromises as fs, nodePath } from "./node-builtins.ts";
 
 const MAX_SETTINGS_BYTES = 64 * 1024;
 const UserModelPreference = Schema.fromJsonString(

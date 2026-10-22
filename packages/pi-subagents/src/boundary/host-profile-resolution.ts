@@ -68,8 +68,8 @@ export interface SubagentSessionEnvironment {
 type ModelRegistry = ExtensionContext["modelRegistry"];
 
 /**
- * Pi's context getters and extension API throw once the session is replaced or reloaded. A launch
- * reads them through this guard so a retired session fails the launch instead of becoming a defect.
+ * Pi's context getters and extension API throw once the session is replaced or reloaded. Effects
+ * read them through this guard so a retired session fails the request instead of becoming a defect.
  */
 const readHost = <A>(read: () => A): Effect.Effect<A, InvalidSubagentRequestError> =>
   Effect.try({
@@ -78,9 +78,16 @@ const readHost = <A>(read: () => A): Effect.Effect<A, InvalidSubagentRequestErro
       new InvalidSubagentRequestError({
         code: "host_session_unavailable",
         message:
-          "The Pi session changed while this launch was being prepared. Start the agent again from the current session.",
+          "The Pi session changed while this request was being prepared. Try again from the current session.",
       }),
   });
+
+/** The invoking session's model, effort, and branch, read through the stale-session guard. */
+export const captureHostParentContext = (
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+): Effect.Effect<SubagentParentContext, InvalidSubagentRequestError> =>
+  readHost(() => capturePiParentContext(pi, ctx));
 
 const sharesParentPromptCache = (
   registry: ModelRegistry,
@@ -181,8 +188,12 @@ const profileEnvironment = (
 export const hostProfileEnvironment = (
   pi: ExtensionAPI,
   ctx: ExtensionContext,
-  parent: SubagentParentContext = capturePiParentContext(pi, ctx),
-): ProfileResolutionEnvironment => profileEnvironment(ctx.modelRegistry, parent);
+  parent?: SubagentParentContext,
+): Effect.Effect<ProfileResolutionEnvironment, InvalidSubagentRequestError> =>
+  Effect.gen(function* () {
+    const captured = parent ?? (yield* captureHostParentContext(pi, ctx));
+    return yield* readHost(() => profileEnvironment(ctx.modelRegistry, captured));
+  });
 
 const resolveConcreteModel = (
   attempt: ProfileCandidateAttempt,
@@ -469,8 +480,7 @@ export const resolveProfileStart = (
         code: "profile_unknown",
         message: `Unknown subagent profile "${selectedProfile}". Available profiles: ${PROFILE_IDS.join(", ")}.`,
       });
-    const parent =
-      environment.parentContext ?? (yield* readHost(() => capturePiParentContext(pi, ctx)));
+    const parent = environment.parentContext ?? (yield* captureHostParentContext(pi, ctx));
     // Candidate probes can outlast the session, so later registry reads use this capture.
     const registry = yield* readHost(() => ctx.modelRegistry);
     if (rawInput.model) {

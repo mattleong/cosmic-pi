@@ -227,13 +227,13 @@ export const SupervisorAgentIdSchema = Schema.String.check(
   Schema.isMaxLength(MAX_SUPERVISOR_MCP_AGENT_ID_CHARS),
   Schema.isPattern(AGENT_ID_PATTERN),
 );
-const AgentIdsSchema = Schema.Array(SupervisorAgentIdSchema).check(
+export const SupervisorAgentIdsSchema = Schema.Array(SupervisorAgentIdSchema).check(
   Schema.isMaxLength(MAX_SUPERVISOR_MCP_AGENT_IDS),
 );
 const AgentRefusalError = Schema.Union([SupervisorRpcFailure, SupervisorAgentRefusal]);
 
 const SupervisorAgentListRpc = Rpc.make("SupervisorAgentList", {
-  payload: { ...AssignedPayload, ids: Schema.optional(AgentIdsSchema) },
+  payload: { ...AssignedPayload, ids: Schema.optional(SupervisorAgentIdsSchema) },
   success: Schema.Struct({
     agents: Schema.Array(
       Schema.Struct({
@@ -253,7 +253,7 @@ const SupervisorAgentListRpc = Rpc.make("SupervisorAgentList", {
         self: Schema.Boolean,
       }),
     ),
-    missingIds: AgentIdsSchema,
+    missingIds: SupervisorAgentIdsSchema,
   }),
   error: AgentRefusalError,
 });
@@ -280,7 +280,7 @@ const SupervisorAgentSendRpc = Rpc.make("SupervisorAgentSend", {
 const SupervisorAgentReadRpc = Rpc.make("SupervisorAgentRead", {
   payload: {
     ...AssignedPayload,
-    ids: AgentIdsSchema.check(Schema.isMinLength(1)),
+    ids: SupervisorAgentIdsSchema.check(Schema.isMinLength(1)),
     verbose: Schema.optional(Schema.Boolean),
   },
   success: Schema.Struct({
@@ -300,7 +300,7 @@ const SupervisorAgentReadRpc = Rpc.make("SupervisorAgentRead", {
         source: Schema.optional(Schema.Literals(["assistant", "report", "error"])),
       }),
     ),
-    missingIds: AgentIdsSchema,
+    missingIds: SupervisorAgentIdsSchema,
   }),
   error: AgentRefusalError,
 });

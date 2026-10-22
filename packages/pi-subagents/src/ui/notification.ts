@@ -2,12 +2,12 @@ import type { MessageRenderer, Theme } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
-import * as Predicate from "effect/Predicate";
 import * as Match from "effect/Match";
 import { countLabel, stripTerminalControls } from "pi-cosmic-core";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { composeToolComponent, renderExpansionAffordance } from "pi-cosmic-ui/tool";
 import { renderCompactRow, type CompactStatus, type CompactSummary } from "pi-code-previews";
+import { decodeMessageEnvelope, messageContentText } from "./message-envelope.ts";
 
 const Count = Schema.Natural.check(Schema.isLessThanOrEqualTo(100_000));
 const Name = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(120));
@@ -33,17 +33,7 @@ const Details = Schema.Union([
   }),
 ]);
 type NotificationDetails = typeof Details.Type;
-const Envelope = Schema.Struct({
-  customType: Schema.optional(Schema.String),
-  content: Schema.optional(Schema.Union([Schema.String, Schema.Array(Schema.Unknown)])),
-  details: Schema.optional(Schema.Unknown),
-});
-
-const TextPart = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String });
-
-const decodeEnvelope = Schema.decodeUnknownOption(Envelope, { onExcessProperty: "ignore" });
 const decodeDetails = Schema.decodeUnknownOption(Details, { onExcessProperty: "ignore" });
-const isTextPart = Schema.is(TextPart);
 
 interface NotificationRow {
   readonly summary: CompactSummary;
@@ -124,17 +114,13 @@ export function renderSubagentNotification(
   compact: boolean,
   theme: Theme,
 ): Component {
-  const envelope = Option.getOrUndefined(decodeEnvelope(input));
-  if (options.expanded) {
-    const content = envelope?.content;
-    const text = Predicate.isString(content)
-      ? content
-      : (content ?? [])
-          .filter(isTextPart)
-          .map((part) => part.text)
-          .join("\n");
-    return new Text(stripTerminalControls(text), options.outputPad, 0);
-  }
+  const envelope = Option.getOrUndefined(decodeMessageEnvelope(input));
+  if (options.expanded)
+    return new Text(
+      stripTerminalControls(messageContentText(envelope?.content)),
+      options.outputPad,
+      0,
+    );
   const details = Option.getOrUndefined(decodeDetails(envelope?.details));
   const { summary, status } = notificationRow(envelope?.customType, details);
   const hint = compact

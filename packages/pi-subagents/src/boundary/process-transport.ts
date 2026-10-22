@@ -6,13 +6,17 @@ import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
-import { confirmProcessGroupExit, guardProcessGroupAtHostExit } from "pi-cosmic-core";
+import {
+  confirmProcessGroupExit,
+  guardProcessGroupAtHostExit,
+  nodeSpawn,
+  type NodeChildProcess,
+} from "pi-cosmic-core";
 import { cleanupFailureDiagnostic } from "../run/cleanup-diagnostic.ts";
 import type { BackendCleanupVerifier } from "../backend/model.ts";
 import type { SubagentCleanupDiagnostic } from "../run/model.ts";
 import { processCauseError, type SubagentProcessError } from "../run/errors.ts";
 import { attachBoundedLineParser, type OversizedLine } from "./bounded-line-parser.ts";
-import { nodeSpawn, type NodeChildProcess } from "./node-builtins.ts";
 import { detachedDescendantGroups, terminateProcessTree } from "./process-tree.ts";
 import { decodeUnknownJsonOption } from "./wire-shared.ts";
 

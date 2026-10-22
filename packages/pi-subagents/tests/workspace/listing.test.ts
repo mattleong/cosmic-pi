@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { SafeFile, nodeFilePlatformLayer } from "pi-cosmic-core";
-import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-builtins.ts";
+import { nodeFsPromises as fs, nodePath as path } from "../support/node-builtins.ts";
 import { listWorkspaceRecords } from "../../src/boundary/git-worktree-recovery.ts";
 import * as store from "../../src/boundary/git-worktree-store.ts";
 import { WorkspaceService } from "../../src/workspace/service.ts";

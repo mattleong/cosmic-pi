@@ -9,6 +9,7 @@ import {
   revisionKnowledge,
   workspaceControlContext,
   mapWorkspaceError,
+  type WorkspaceControlContext,
   type WorkspaceControlDependencies,
 } from "./workspace-binding.ts";
 import {
@@ -95,10 +96,17 @@ export interface WorkspaceCoordinatorContract {
   ) => Effect.Effect<void, SubagentError | E, R>;
 }
 
-export function workspaceControl(
+export const workspaceControl = (
   dependencies: WorkspaceControlDependencies & Pick<RunContext, "publish">,
+) =>
+  workspaceControlContext(dependencies).pipe(
+    Effect.map((context) => workspaceControlOperations(context, dependencies.publish)),
+  );
+
+function workspaceControlOperations(
+  context: WorkspaceControlContext,
+  publish: RunContext["publish"],
 ) {
-  const context = workspaceControlContext(dependencies);
   const { engine, ownerId, withLock, isClosed, state, ownerFor } = context;
   const { requireEngine, sourceCwd, writerLeases } = context;
   const sourceRecords = (listing: WorkspaceListing) =>
@@ -223,8 +231,8 @@ export function workspaceControl(
         }),
       );
     });
-  const review = workspaceReviewOperations(context, dependencies.publish);
-  const integrateLocked = workspaceIntegrationOperations(context, dependencies.publish);
+  const review = workspaceReviewOperations(context, publish);
+  const integrateLocked = workspaceIntegrationOperations(context, publish);
   const orphans = workspaceOrphanOperations(context, sourceRecords);
   const isOrphan = (workspaceId: string, caller: string) =>
     caller === SUBAGENT_ROOT_RUN_ID && !state.bindings.has(workspaceId);
@@ -273,7 +281,7 @@ export function workspaceControl(
     /** Forked once a worktree writer completes; see `workspaceSettleOperations`. */
     settleCompletedWorkspace: workspaceSettleOperations(
       context,
-      dependencies.publish,
+      publish,
       review.held.discardLocked,
     ),
     workspaceList,
@@ -282,4 +290,4 @@ export function workspaceControl(
   };
 }
 
-export type RunWorkspaceControl = ReturnType<typeof workspaceControl>;
+export type RunWorkspaceControl = ReturnType<typeof workspaceControlOperations>;

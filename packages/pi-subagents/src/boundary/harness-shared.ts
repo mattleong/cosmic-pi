@@ -1,9 +1,16 @@
+import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import type * as Schema from "effect/Schema";
-import { hasControlCharacter, hasObjectRuntimeType } from "pi-cosmic-core";
+import {
+  hasControlCharacter,
+  hasObjectRuntimeType,
+  nodeFsPromises as fs,
+  nodePath,
+  PrivateFileError,
+  tryPrivateFileOperation,
+} from "pi-cosmic-core";
 import { homedir } from "node:os";
-import { nodeFsConstants as constants, nodeFsPromises as fs, nodePath } from "./node-builtins.ts";
 import { decodeUnknownJsonOption } from "./wire-shared.ts";
 
 const MAX_AUTH_BYTES = 64 * 1024;
@@ -16,96 +23,29 @@ export const nodeErrorCode = (cause: unknown): string | undefined =>
     ? cause.code
     : undefined;
 
-export const ensurePrivateDirectory = (path: string): Promise<void> =>
-  fs
-    .mkdir(path, { mode: 0o700 })
-    .catch((cause: unknown) => {
-      if (nodeErrorCode(cause) !== "EEXIST") throw cause;
-    })
-    .then(() => fs.lstat(path))
-    .then((stat) => {
-      if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("unsafe-private-directory");
-      return fs.chmod(path, 0o700);
-    });
+const unsafeEntry = () => new PrivateFileError({ reason: "unsafe" });
 
-export const writeExclusive = (path: string, source: string): Promise<void> => {
-  return fs
-    .open(
-      path,
-      constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
-      0o600,
-    )
-    .then((handle) =>
-      handle
-        .writeFile(source, { encoding: "utf8" })
-        .then(() => handle.sync())
-        .then(
-          () => handle.close(),
-          (cause: unknown) =>
-            handle.close().then(() => {
-              throw cause;
-            }),
-        ),
-    )
-    .then(() => fs.chmod(path, 0o600));
-};
-
-export const safeAgentDirectory = (agentDirectory: string): Promise<string> => {
-  if (
-    !nodePath.isAbsolute(agentDirectory) ||
-    agentDirectory.length > MAX_PATH_CHARS ||
-    hasControlCharacter(agentDirectory)
-  )
-    return Promise.reject(new Error("invalid-agent-directory"));
-  const requested = nodePath.resolve(agentDirectory);
-  return fs
-    .lstat(requested)
-    .then((requestedStat) => {
-      if (!requestedStat.isDirectory() || requestedStat.isSymbolicLink())
-        throw new Error("unsafe-agent-directory");
-      return fs.realpath(requested);
-    })
-    .then((canonical) =>
-      fs.lstat(canonical).then((canonicalStat) => {
-        if (!canonicalStat.isDirectory() || canonicalStat.isSymbolicLink())
-          throw new Error("unsafe-agent-directory");
-        return canonical;
-      }),
-    );
-};
-
-/** Restores owner access to every directory in a private tree, one directory at a time. */
-const restoreDirectoryAccess = (path: string): Promise<void> =>
-  fs.lstat(path).then((stat) =>
-    stat.isDirectory()
-      ? fs
-          .chmod(path, 0o700)
-          .then(() => fs.readdir(path))
-          .then((names) =>
-            names.reduce<Promise<void>>(
-              (previous, name) =>
-                previous.then(() => restoreDirectoryAccess(nodePath.join(path, name))),
-              Promise.resolve(),
-            ),
-          )
-      : undefined,
+const isRealDirectory = (path: string): Effect.Effect<boolean, PrivateFileError> =>
+  tryPrivateFileOperation(() => fs.lstat(path)).pipe(
+    Effect.map((stat) => stat.isDirectory() && !stat.isSymbolicLink()),
   );
 
-/**
- * Removes a private tree. A child may write its private temp directory, so a directory it left
- * without owner write or search access is opened back up before a second attempt.
- */
-export const removePrivateTree = (path: string): Promise<void> =>
-  fs
-    .rm(path, { recursive: true, force: true })
-    .catch(() =>
-      restoreDirectoryAccess(path).then(() => fs.rm(path, { recursive: true, force: true })),
-    );
-
-export const removePrivateDirectory = (directory: string): Promise<void> =>
-  fs.lstat(directory).then((stat) => {
-    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("unsafe-harness-cleanup");
-    return removePrivateTree(directory);
+/** The canonical path of an absolute agent directory that is a real directory, never a link. */
+export const safeAgentDirectory = (
+  agentDirectory: string,
+): Effect.Effect<string, PrivateFileError> =>
+  Effect.gen(function* () {
+    if (
+      !nodePath.isAbsolute(agentDirectory) ||
+      agentDirectory.length > MAX_PATH_CHARS ||
+      hasControlCharacter(agentDirectory)
+    )
+      return yield* unsafeEntry();
+    const requested = nodePath.resolve(agentDirectory);
+    if (!(yield* isRealDirectory(requested))) return yield* unsafeEntry();
+    const canonical = yield* tryPrivateFileOperation(() => fs.realpath(requested));
+    if (!(yield* isRealDirectory(canonical))) return yield* unsafeEntry();
+    return canonical;
   });
 
 const isJsonArray = (value: Schema.Json): value is ReadonlyArray<Schema.Json> =>
@@ -125,32 +65,38 @@ const boundedJsonValue = (value: Schema.Json, depth = 0): boolean => {
   );
 };
 
-const readValidatedCodexAuthFromHome = (sourceHome: string): Promise<string | undefined> => {
-  const path = nodePath.join(sourceHome, "auth.json");
-  return fs
-    .lstat(path)
-    .then((stat) =>
-      !stat.isFile() || stat.isSymbolicLink() || stat.size <= 1 || stat.size > MAX_AUTH_BYTES
-        ? undefined
-        : fs.readFile(path),
-    )
-    .catch(() => undefined)
-    .then((bytes) => {
-      if (bytes === undefined || bytes.length <= 1 || bytes.length > MAX_AUTH_BYTES)
-        return undefined;
-      const decoded = decodeUnknownJsonOption(bytes.toString("utf8"));
-      return Option.isSome(decoded) &&
-        Predicate.isObject(decoded.value) &&
-        boundedJsonValue(decoded.value)
-        ? `${JSON.stringify(decoded.value)}\n`
-        : undefined;
-    });
+const validatedCodexAuth = (bytes: Buffer): string | undefined => {
+  if (bytes.length <= 1 || bytes.length > MAX_AUTH_BYTES) return undefined;
+  const decoded = decodeUnknownJsonOption(bytes.toString("utf8"));
+  return Option.isSome(decoded) &&
+    Predicate.isObject(decoded.value) &&
+    boundedJsonValue(decoded.value)
+    ? `${JSON.stringify(decoded.value)}\n`
+    : undefined;
 };
 
+const readValidatedCodexAuthFromHome = (sourceHome: string): Effect.Effect<string | undefined> => {
+  const path = nodePath.join(sourceHome, "auth.json");
+  return tryPrivateFileOperation(() => fs.lstat(path)).pipe(
+    Effect.filterOrFail(
+      (stat) =>
+        stat.isFile() && !stat.isSymbolicLink() && stat.size > 1 && stat.size <= MAX_AUTH_BYTES,
+      unsafeEntry,
+    ),
+    Effect.andThen(tryPrivateFileOperation(() => fs.readFile(path))),
+    Effect.map(validatedCodexAuth),
+    Effect.orElseSucceed(() => undefined),
+  );
+};
+
+/** The user's Codex credential, normalized, or nothing when it is missing, unsafe, or invalid. */
 export const readValidatedCodexAuth = (
   sourceEnvironment: NodeJS.ProcessEnv,
-): Promise<string | undefined> =>
+): Effect.Effect<string | undefined> =>
   safeAgentDirectory(
     sourceEnvironment.CODEX_HOME ??
       nodePath.join((sourceEnvironment.HOME ?? "") || homedir(), ".codex"),
-  ).then(readValidatedCodexAuthFromHome, () => undefined);
+  ).pipe(
+    Effect.flatMap(readValidatedCodexAuthFromHome),
+    Effect.orElseSucceed(() => undefined),
+  );

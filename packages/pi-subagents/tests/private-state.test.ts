@@ -103,11 +103,29 @@ describe("private state sweep", () => {
       const agent = yield* temporaryAgent;
       const run = path.join(agent, "subagents", SESSION, "agent-r1-1-0a1b2c3d4e5f");
       yield* entry(run, { "system-prompt.md": "prompt" });
-      yield* io(() => recordPrivateStateOwner(run));
+      yield* Effect.orDie(recordPrivateStateOwner(run));
       yield* age(run, 30);
 
       yield* sweepAbandonedPrivateState(agent);
 
+      expect(yield* exists(run)).toBe(true);
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("removes an empty session directory and keeps one a live run still uses", () =>
+    Effect.gen(function* () {
+      const agent = yield* temporaryAgent;
+      const root = path.join(agent, "subagents");
+      const empty = path.join(root, "019fd976-b551-752b-b00e-000000000001");
+      const used = path.join(root, SESSION);
+      const run = path.join(used, "agent-r1-1-0a1b2c3d4e5f");
+      yield* io(() => fs.mkdir(empty, { recursive: true, mode: 0o700 }));
+      yield* entry(run, { "system-prompt.md": "prompt" });
+      yield* Effect.orDie(recordPrivateStateOwner(run));
+
+      yield* sweepAbandonedPrivateState(agent);
+
+      expect(yield* exists(empty)).toBe(false);
       expect(yield* exists(run)).toBe(true);
     }).pipe(Effect.scoped),
   );
@@ -132,7 +150,7 @@ describe("private state sweep", () => {
       ];
       yield* entry(abandoned, { "claude-501/tasks/output.txt": "x" }, deadOwner);
       yield* entry(live, { "claude-501/file.txt": "x" });
-      yield* io(() => recordPrivateStateOwner(live));
+      yield* Effect.orDie(recordPrivateStateOwner(live));
       yield* entry(tombstone, { "claude-501/file.txt": "x" });
       yield* entry(elsewhere, { "file.txt": "x" }, deadOwner);
       yield* io(() => fs.symlink(elsewhere, linked));

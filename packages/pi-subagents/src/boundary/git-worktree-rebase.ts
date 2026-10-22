@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import { OPEN_WORKSPACE_STATUSES, WorkspaceError } from "../workspace/model.ts";
 import type { WorkspaceRebase, WorkspaceRecord } from "../workspace/model.ts";
-import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
+import { nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core";
 import {
   git,
   gitFailure,

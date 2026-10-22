@@ -52,6 +52,12 @@ export interface PendingInitializationSettlement {
   readonly error?: string | undefined;
 }
 
+/** A backend initialization in progress; settlements that arrive meanwhile wait for it. */
+export interface RunInitialization {
+  readonly settled: Deferred.Deferred<void>;
+  pendingSettlement?: PendingInitializationSettlement | undefined;
+}
+
 export const isInactiveRunRecord = (record: RunRecord): boolean =>
   record.stoppedByParent ||
   record.view.state === "stopping" ||
@@ -144,9 +150,7 @@ export interface RunRecord {
   writerPool?: WriterPoolEntry | undefined;
   closingScope?: Scope.Closeable | undefined;
   closingScopeSettled?: Deferred.Deferred<void> | undefined;
-  initializationPending: boolean;
-  initializationSettled?: Deferred.Deferred<void> | undefined;
-  pendingInitializationSettlement?: PendingInitializationSettlement | undefined;
+  initialization?: RunInitialization | undefined;
   replyPendingRequestId?: string | undefined;
   notificationGeneration: number;
   /** Counts failures too; view.reportGeneration is the latest accepted report's generation. */
@@ -248,13 +252,11 @@ export const commitRunPauseLocked = (record: RunRecord, now: number): SubagentRu
 export const completeRunInitialization = (
   record: RunRecord,
 ): PendingInitializationSettlement | undefined => {
-  record.initializationPending = false;
-  const settled = record.initializationSettled;
-  record.initializationSettled = undefined;
-  if (settled) Deferred.doneUnsafe(settled, Effect.void);
-  const pending = record.pendingInitializationSettlement;
-  record.pendingInitializationSettlement = undefined;
-  return pending;
+  const initialization = record.initialization;
+  record.initialization = undefined;
+  if (!initialization) return undefined;
+  Deferred.doneUnsafe(initialization.settled, Effect.void);
+  return initialization.pendingSettlement;
 };
 
 export const commitRunInitialization = (record: RunRecord, state: BackendStartupState) => {

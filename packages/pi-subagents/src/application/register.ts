@@ -246,12 +246,12 @@ export function registerSubagentApplication(
           agentDirectory: activation.agentDirectory,
           projectTrusted: activation.projectTrusted,
           ...(sessionBaseConfig && { sessionBaseConfig }),
-          publishSessionBaseConfig: (config) =>
-            profileOverrideHandoff.publishBaseConfig(owner, config),
           initialSessionOverrides: restoredReload ?? profileOverrideHandoff.capture(),
           publishSession: (snapshot) => {
             profileOverrideHandoff.publishSnapshot(owner, snapshot);
-            if (ownsActivation() && currentActivation === activation) showSessionFooter();
+            // The footer is presentation; its failure must not fail the committed change.
+            if (ownsActivation() && currentActivation === activation)
+              invokeHostCallback(showSessionFooter, undefined);
           },
           publish: (projection) => {
             if (!ownsActivation()) return;
@@ -299,8 +299,7 @@ export function registerSubagentApplication(
                   message: "The subagent session was replaced.",
                 });
               // The authenticated channel names the caller; agent payloads carry no identity.
-              const agentInput = decodeAgentProxyRequest(request);
-              if (agentInput instanceof InvalidSubagentRequestError) return yield* agentInput;
+              const agentInput = yield* Effect.fromResult(decodeAgentProxyRequest(request));
               if (agentInput) {
                 const callerCwd = (yield* service.visibleList(callerRunId)).find(
                   (run) => run.id === callerRunId,
@@ -312,13 +311,11 @@ export function registerSubagentApplication(
                   callerCwd,
                 ).pipe(Effect.provideService(SubagentService, service));
               }
-              const decoded = decodeSubagentProxyParent(request);
-              if (decoded instanceof InvalidSubagentRequestError) return yield* decoded;
+              const decoded = yield* Effect.fromResult(decodeSubagentProxyParent(request));
               const parent = decoded.parentContext
                 ? yield* service.captureLaunchParent(callerRunId, decoded.parentContext)
                 : undefined;
-              const input = decodeSubagentProxyRequest(decoded.request);
-              if (input instanceof InvalidSubagentRequestError) return yield* input;
+              const input = yield* Effect.fromResult(decodeSubagentProxyRequest(decoded.request));
               const caller = (yield* service.visibleList(callerRunId)).find(
                 (run) => run.id === callerRunId,
               );
@@ -452,10 +449,10 @@ export function registerSubagentApplication(
             isCurrent,
             input: (selected, action, signal) =>
               slot.run(promptSubagentActivityInput(activation.ctx, selected, action), signal),
-            act: (id, action, signal, input, expected) =>
+            act: (id, request, signal, expected) =>
               slot.run(
                 SubagentService.use((service) =>
-                  runSubagentActivityAction(service, id, action, input, expected, () => {
+                  runSubagentActivityAction(service, id, request, expected, () => {
                     if (isCurrent())
                       notifyAtHostBoundary(
                         activation.ctx,

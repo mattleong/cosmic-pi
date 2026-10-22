@@ -4,14 +4,13 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import { CrossProcessLock, crossProcessLockHolder } from "pi-cosmic-core";
-import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-builtins.ts";
+import { nodeFsPromises as fs, nodePath as path, nodeSpawn } from "../support/node-builtins.ts";
 import {
   sourceLockNamespace,
   withWorkspaceStoreLock,
   workspaceLockDirectory,
 } from "../../src/boundary/git-worktree-store.ts";
 import { WorkspaceService } from "../../src/workspace/service.ts";
-import { nodeSpawn } from "../support/node-builtins.ts";
 import { waitForDead } from "../support/process-liveness.ts";
 import {
   commitRepository,
@@ -50,6 +49,29 @@ it.effect("waits for another session's operation on the same checkout, then runs
     held?.release();
     yield* TestClock.adjust("1 second");
     expect(yield* Fiber.join(waiting)).toBe("ran");
+  }).pipe(Effect.scoped),
+);
+
+it.effect("gives up with a lock failure once the wait runs out", () =>
+  Effect.gen(function* () {
+    const directory = path.join(yield* temporaryDirectory("workspace-lock-"), "locks");
+    const locks = yield* lockFor(directory);
+    const held = yield* locks.tryAcquire(sourceLockNamespace("/repo"));
+    let ran = false;
+    const waiting = yield* withWorkspaceStoreLock(
+      locks,
+      directory,
+      "/repo",
+      Effect.sync(() => {
+        ran = true;
+      }),
+    ).pipe(Effect.flip, Effect.forkChild);
+    yield* TestClock.adjust("2 minutes");
+    yield* TestClock.adjust("1 second");
+    const failure = yield* Fiber.join(waiting);
+    expect(failure.operation).toBe("lock");
+    expect(ran).toBe(false);
+    held?.release();
   }).pipe(Effect.scoped),
 );
 

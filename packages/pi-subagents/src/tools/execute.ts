@@ -8,6 +8,7 @@ import type {
 import * as Effect from "effect/Effect";
 import { absurd } from "effect/Function";
 import * as Predicate from "effect/Predicate";
+import * as Result from "effect/Result";
 import type { CompactAnimationScheduler } from "pi-code-previews";
 import { invokeHostCallback } from "pi-cosmic-core";
 import type { SubagentToolPresentation } from "../boundary/host-activity-widget.ts";
@@ -27,19 +28,16 @@ import {
   type SubagentRunView,
 } from "../run/model.ts";
 import { MAX_TARGET_RUNS } from "../run/limits.ts";
-import {
-  SubagentService,
-  type SubagentAwaitUntil,
-  type SubagentRunObservation,
-} from "../run/service.ts";
+import { SubagentService, type SubagentRunObservation } from "../run/service.ts";
 import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
 import { executeStartBatch, resolveRecordedLaunch } from "./execute-start.ts";
-import { presentSubagentResult, type SubagentExecutionResult } from "./execute-result.ts";
+import { presentSubagentResult } from "./execute-result.ts";
 import { awaitContract, startContract, lifecycleContract } from "./contract.ts";
 import { attentionRecoveryText } from "./format.ts";
 import {
   awaitExecutionFor,
   awaitResultText,
+  awaitWithinTimeout,
   observeAwaitInterruption,
   type AwaitEnding,
   type AwaitExecution,
@@ -117,7 +115,7 @@ const withQuestionRuns = (
   return [...contextRuns, ...questions.filter((run) => !shown.has(run.id))];
 };
 
-type AwaitedLifecycleResult = Effect.Success<ReturnType<typeof forEachOutcome>>;
+type AwaitToolInput = SubagentToolInput<typeof SUBAGENT_TOOL_NAME.await>;
 
 const requiredTargetIds = (
   action: SubagentToolAction,
@@ -141,7 +139,7 @@ const requiredTargetIds = (
   return Effect.succeed(unique);
 };
 
-export const executeSubagentActionEffect = (
+export const executeSubagentActionEffect = Effect.fn("SubagentTools.execute")(function* (
   pi: ExtensionAPI,
   environment: SubagentToolRuntime["environment"],
   input: SubagentToolInput,
@@ -149,157 +147,225 @@ export const executeSubagentActionEffect = (
   ctx: ExtensionContext,
   callerRunId?: string,
   awaitExecution?: AwaitExecution,
-  scripted = false,
+  scripted: boolean = false,
   expected?: SubagentControlExpectation,
-): Effect.Effect<
+): Effect.fn.Return<
   AgentToolResult<unknown>,
   SubagentError,
   SubagentService | SubagentProfileService | SubagentBackendRegistry
-> => {
-  if (input.tool === SUBAGENT_TOOL_NAME.models)
-    return callerRunId && !environment.parentContext
-      ? SubagentService.use((service) => service.captureLaunchParent(callerRunId)).pipe(
-          Effect.flatMap((parent) =>
-            executeModelsAction(input.args, pi, ctx, parent.parentContext),
-          ),
-        )
-      : executeModelsAction(input.args, pi, ctx, environment.parentContext);
+> {
+  if (input.tool === SUBAGENT_TOOL_NAME.models) {
+    const parentContext =
+      callerRunId && !environment.parentContext
+        ? (yield* SubagentService.use((service) => service.captureLaunchParent(callerRunId)))
+            .parentContext
+        : environment.parentContext;
+    return yield* executeModelsAction(input.args, pi, ctx, parentContext);
+  }
   // Only the root adopts orphans, so only its revisions resolve a recorded launch.
-  if (input.tool === SUBAGENT_TOOL_NAME.workspace)
-    return callerRunId
-      ? executeWorkspaceAction(input.args, callerRunId)
-      : Effect.context<SubagentProfileService | SubagentBackendRegistry>().pipe(
-          Effect.flatMap((services) =>
-            executeWorkspaceAction(input.args, callerRunId, (launch, task) =>
-              resolveRecordedLaunch(pi, ctx, environment, launch, task).pipe(
-                Effect.provideContext(services),
-              ),
-            ),
-          ),
-        );
+  if (input.tool === SUBAGENT_TOOL_NAME.workspace) {
+    if (callerRunId) return yield* executeWorkspaceAction(input.args, callerRunId);
+    const services = yield* Effect.context<SubagentProfileService | SubagentBackendRegistry>();
+    return yield* executeWorkspaceAction(input.args, callerRunId, (launch, task) =>
+      resolveRecordedLaunch(pi, ctx, environment, launch, task).pipe(
+        Effect.provideContext(services),
+      ),
+    );
+  }
 
   const action = subagentToolAction(input);
-  const awaitState =
-    input.tool === SUBAGENT_TOOL_NAME.await
-      ? (awaitExecution ?? awaitExecutionFor(input.args.runIds, input.args.until, onUpdate))
-      : undefined;
-  const requestedAwaitIds = awaitState?.requestedIds;
-  const present = (result: SubagentExecutionResult) =>
-    presentSubagentResult(input, result, requestedAwaitIds);
-  return Effect.gen(function* () {
-    const service = yield* SubagentService;
-    const launchEnvironment =
-      callerRunId && !environment.parentContext && input.tool === SUBAGENT_TOOL_NAME.start
-        ? { ...environment, ...(yield* service.captureLaunchParent(callerRunId)) }
-        : environment;
-    const authorize = (ids: ReadonlyArray<string>) =>
-      callerRunId ? service.authorizeTargets(callerRunId, ids) : Effect.void;
-    const startOwned = (request: StartSubagentRequest) =>
-      callerRunId
-        ? service.startSessionOwnedFrom(callerRunId, request)
-        : scripted
-          ? service.startScriptSessionOwned(request)
-          : service.startSessionOwned(request);
-    // Every awaited run's block fits, so the result delivers every claimed report.
-    const completeObservations = (
-      until: SubagentAwaitUntil,
-      observations: ReadonlyArray<SubagentRunObservation>,
-      summary: string,
-      contextRuns: ReadonlyArray<SubagentRunView>,
-      questions: ReadonlyArray<SubagentRunView> = [],
-    ) =>
-      Effect.gen(function* () {
-        const runs = observations.map((observation) => observation.run);
-        const attention = [...runs, ...questions];
-        const attentionRequired = attention.some(isParentActionRequiredRun);
-        if (scripted && attentionRequired)
-          return yield* invalidRequest(
-            "scripted_parent_attention_required",
-            `Subagents need parent attention\n\nEnd the script and handle this directly.\n\n${attentionRecoveryText(attention)}`,
-          );
-        const outcome = {
-          runs,
-          attentionRequired,
-          text: awaitResultText(summary, observations, questions),
-          awaitContextRuns: contextRuns,
-          contract: awaitContract({
-            observations,
-            until,
-            requestedRunIds: requestedAwaitIds ?? [],
-            questionsElsewhere: questions.length > 0,
-          }),
-        };
-        const result = yield* Effect.sync(() => present(outcome));
-        const receipts = observations.flatMap((observation) =>
-          observation.completionReceipt ? [observation.completionReceipt] : [],
+  const service = yield* SubagentService;
+  const launchEnvironment =
+    callerRunId && !environment.parentContext && input.tool === SUBAGENT_TOOL_NAME.start
+      ? { ...environment, ...(yield* service.captureLaunchParent(callerRunId)) }
+      : environment;
+  const authorize = (ids: ReadonlyArray<string>) =>
+    callerRunId ? service.authorizeTargets(callerRunId, ids) : Effect.void;
+  const startOwned = (request: StartSubagentRequest) =>
+    callerRunId
+      ? service.startSessionOwnedFrom(callerRunId, request)
+      : scripted
+        ? service.startScriptSessionOwned(request)
+        : service.startSessionOwned(request);
+  // Every awaited run's block fits, so the result delivers every claimed report.
+  const completeObservations = (
+    state: AwaitExecution,
+    args: AwaitToolInput["args"],
+    observations: ReadonlyArray<SubagentRunObservation>,
+    questions: ReadonlyArray<SubagentRunView> = [],
+  ) =>
+    Effect.gen(function* () {
+      const runs = observations.map((observation) => observation.run);
+      const attention = [...runs, ...questions];
+      const attentionRequired = attention.some(isParentActionRequiredRun);
+      if (scripted && attentionRequired)
+        return yield* invalidRequest(
+          "scripted_parent_attention_required",
+          `Subagents need parent attention\n\nEnd the script and handle this directly.\n\n${attentionRecoveryText(attention)}`,
         );
-        awaitState?.markDeliveryAttempt(receipts.map((receipt) => receipt.id));
-        yield* service.consumeCompletions(receipts);
-        return result;
-      });
-    const executeLifecycle = (args: SubagentLifecycleInput) =>
-      Effect.gen(function* () {
-        if (scripted && args.action !== "stop")
-          return yield* invalidRequest(
-            "scripted_lifecycle_not_supported",
-            "Codemode scripts support lifecycle stop only. Hand interrupt decisions back to the parent agent.",
-          );
-        const presentLifecycle = (result: AwaitedLifecycleResult) =>
-          present({
-            ...result,
-            contract: lifecycleContract(args.action, result.outcomes),
-          });
-        const ids = yield* requiredTargetIds(action, args.runIds);
-        yield* authorize(ids);
-        return presentLifecycle(
-          yield* forEachOutcome(ids, (id) =>
-            args.action === "interrupt"
-              ? service.interrupt(id, expected)
-              : service.stop(id, expected),
-          ),
+      const outcome = {
+        runs,
+        attentionRequired,
+        text: awaitResultText(state.progressSummary(runs), observations, questions),
+        awaitContextRuns: withQuestionRuns(state.contextRuns(), questions),
+        contract: awaitContract({
+          observations,
+          until: args.until,
+          requestedRunIds: state.requestedIds,
+          questionsElsewhere: questions.length > 0,
+        }),
+      };
+      const result = yield* Effect.sync(() =>
+        presentSubagentResult(input, outcome, state.requestedIds),
+      );
+      const receipts = observations.flatMap((observation) =>
+        observation.completionReceipt ? [observation.completionReceipt] : [],
+      );
+      yield* Effect.sync(() => state.markDeliveryAttempt(receipts.map((receipt) => receipt.id)));
+      yield* service.consumeCompletions(receipts);
+      return result;
+    });
+  const executeLifecycle = (args: SubagentLifecycleInput) =>
+    Effect.gen(function* () {
+      if (scripted && args.action !== "stop")
+        return yield* invalidRequest(
+          "scripted_lifecycle_not_supported",
+          "Codemode scripts support lifecycle stop only. Hand interrupt decisions back to the parent agent.",
         );
-      });
+      const ids = yield* requiredTargetIds(action, args.runIds);
+      yield* authorize(ids);
+      const result = yield* forEachOutcome(ids, (id) =>
+        args.action === "interrupt" ? service.interrupt(id, expected) : service.stop(id, expected),
+      );
+      return yield* Effect.sync(() =>
+        presentSubagentResult(input, {
+          ...result,
+          contract: lifecycleContract(args.action, result.outcomes),
+        }),
+      );
+    });
 
-    switch (input.tool) {
-      case SUBAGENT_TOOL_NAME.start: {
-        const result = yield* executeStartBatch({
-          agents: input.args.agents,
-          pi,
-          ctx,
-          environment: launchEnvironment,
-          startOwned,
-          onUpdate,
-          readOnly: scripted,
-        });
-        return present({
+  switch (input.tool) {
+    case SUBAGENT_TOOL_NAME.start: {
+      const result = yield* executeStartBatch({
+        agents: input.args.agents,
+        pi,
+        ctx,
+        environment: launchEnvironment,
+        startOwned,
+        onUpdate,
+        readOnly: scripted,
+      });
+      return yield* Effect.sync(() =>
+        presentSubagentResult(input, {
           ...result,
           contract: startContract(input.args.agents, result.startOutcomes),
-        });
-      }
-      case SUBAGENT_TOOL_NAME.await: {
-        const ids = yield* requiredTargetIds(action, input.args.runIds);
-        yield* authorize(ids);
-        const state =
-          awaitState ?? (yield* Effect.die(new Error("Await execution state is missing.")));
-        return yield* service.withAwaitTerminalObservations(
-          ids,
-          input.args.until,
-          state.update,
-          (observations, questions = []) =>
-            completeObservations(
-              input.args.until,
-              observations,
-              state.progressSummary(observations.map((observation) => observation.run)),
-              withQuestionRuns(state.contextRuns(), questions),
-              questions,
-            ),
-          callerRunId,
-        );
-      }
-      case SUBAGENT_TOOL_NAME.lifecycle:
-        return yield* executeLifecycle(input.args);
+        }),
+      );
     }
-    return absurd<never>(input);
+    case SUBAGENT_TOOL_NAME.await: {
+      const { args } = input;
+      const state = awaitExecution ?? awaitExecutionFor(args.runIds, args.until, onUpdate);
+      const ids = yield* requiredTargetIds(action, args.runIds);
+      yield* authorize(ids);
+      return yield* service.withAwaitTerminalObservations(
+        ids,
+        args.until,
+        state.update,
+        (observations, questions) => completeObservations(state, args, observations, questions),
+        callerRunId,
+      );
+    }
+    case SUBAGENT_TOOL_NAME.lifecycle:
+      return yield* executeLifecycle(input.args);
+  }
+  return absurd<never>(input);
+});
+
+/**
+ * A root wait ends at its timeout, the host's abort, or the user's next message, exactly like a
+ * cancellation; children keep running. The timeout runs on the effect's clock and settles as a
+ * result; the signals interrupt the run, which the await state records.
+ */
+const executeRootAwait = (
+  pi: ExtensionAPI,
+  runtime: SubagentToolRuntime,
+  input: AwaitToolInput,
+  signal: AbortSignal | undefined,
+  onUpdate: AgentToolUpdateCallback<unknown> | undefined,
+  ctx: ExtensionContext,
+  scripted: boolean,
+): Promise<AgentToolResult<unknown>> => {
+  const state = awaitExecutionFor(input.args.runIds, input.args.until, onUpdate);
+  const ended = (ending: AwaitEnding) => {
+    const result = state.cancelled(false, ending);
+    invokeHostCallback(() => onUpdate?.(result), undefined);
+    return result;
+  };
+  const wait = executeSubagentActionEffect(
+    pi,
+    runtime.environment,
+    input,
+    onUpdate,
+    ctx,
+    undefined,
+    state,
+    scripted,
+  );
+  const { timeoutSeconds } = input.args;
+  const bounded =
+    timeoutSeconds === undefined
+      ? wait
+      : awaitWithinTimeout(wait, timeoutSeconds).pipe(
+          Effect.flatMap(
+            Result.match({
+              onSuccess: Effect.succeed,
+              onFailure: (ending) => Effect.sync(() => ended(ending)),
+            }),
+          ),
+        );
+  const userInput = runtime.userInput?.();
+  const endings = [signal, userInput].filter(Predicate.isNotUndefined);
+  return runtime
+    .run(
+      observeAwaitInterruption(bounded, state.markInterrupted),
+      endings.length > 1 ? AbortSignal.any(endings) : endings[0],
+    )
+    .catch((cause: unknown) => {
+      if (!state.wasInterrupted()) throw cause;
+      return ended(
+        signal?.aborted !== true && userInput?.aborted === true
+          ? { kind: "user_input" }
+          : { kind: "cancelled" },
+      );
+    });
+};
+
+/**
+ * A nested wait runs in the root, so only the abort signal reaches it; the root's completion-claim
+ * cleanup after the abort is unconfirmed here.
+ */
+const executeProxiedAwait = (
+  proxyCall: NonNullable<SubagentToolRuntime["proxyCall"]>,
+  input: AwaitToolInput,
+  signal: AbortSignal | undefined,
+  onUpdate: AgentToolUpdateCallback<unknown> | undefined,
+): Promise<AgentToolResult<unknown>> => {
+  const state = awaitExecutionFor(input.args.runIds, input.args.until, onUpdate);
+  const { timeoutSeconds } = input.args;
+  const timeout =
+    timeoutSeconds === undefined ? undefined : AbortSignal.timeout(timeoutSeconds * 1000);
+  const endings = [signal, timeout].filter(Predicate.isNotUndefined);
+  const waitSignal = endings.length > 1 ? AbortSignal.any(endings) : endings[0];
+  return proxyCall(input, waitSignal, state.markInterrupted).catch((cause: unknown) => {
+    if (!state.wasInterrupted()) throw cause;
+    const ending: AwaitEnding =
+      signal?.aborted !== true && timeout?.aborted === true && timeoutSeconds !== undefined
+        ? { kind: "timed_out", seconds: timeoutSeconds }
+        : { kind: "cancelled" };
+    const result = state.cancelled(true, ending);
+    invokeHostCallback(() => onUpdate?.(result), undefined);
+    return result;
   });
 };
 
@@ -312,52 +378,23 @@ export const executeSubagentAction = (
   ctx: ExtensionContext,
   scripted = false,
 ): Promise<AgentToolResult<unknown>> => {
-  const awaitState =
-    input.tool === SUBAGENT_TOOL_NAME.await
-      ? awaitExecutionFor(input.args.runIds, input.args.until, onUpdate)
-      : undefined;
-  const timeoutSeconds =
-    input.tool === SUBAGENT_TOOL_NAME.await ? input.args.timeoutSeconds : undefined;
-  // The timeout and the user's next message end only this wait, exactly like a cancellation;
-  // children keep running.
-  const timeout =
-    timeoutSeconds === undefined ? undefined : AbortSignal.timeout(timeoutSeconds * 1000);
-  const userInput =
-    input.tool === SUBAGENT_TOOL_NAME.await && !runtime.proxyCall
-      ? runtime.userInput?.()
-      : undefined;
-  const endings = [signal, timeout, userInput].filter(Predicate.isNotUndefined);
-  const waitSignal = endings.length > 1 ? AbortSignal.any(endings) : endings[0];
-  const executing = runtime.proxyCall
-    ? runtime.proxyCall(input, waitSignal, awaitState?.markInterrupted)
+  if (input.tool === SUBAGENT_TOOL_NAME.await)
+    return runtime.proxyCall
+      ? executeProxiedAwait(runtime.proxyCall, input, signal, onUpdate)
+      : executeRootAwait(pi, runtime, input, signal, onUpdate, ctx, scripted);
+  return runtime.proxyCall
+    ? runtime.proxyCall(input, signal)
     : runtime.run(
-        observeAwaitInterruption(
-          executeSubagentActionEffect(
-            pi,
-            runtime.environment,
-            input,
-            onUpdate,
-            ctx,
-            undefined,
-            awaitState,
-            scripted,
-          ),
-          awaitState?.markInterrupted,
+        executeSubagentActionEffect(
+          pi,
+          runtime.environment,
+          input,
+          onUpdate,
+          ctx,
+          undefined,
+          undefined,
+          scripted,
         ),
-        waitSignal,
+        signal,
       );
-  return executing.catch((cause: unknown) => {
-    if (!awaitState?.wasInterrupted()) throw cause;
-    const ending: AwaitEnding =
-      signal?.aborted === true
-        ? { kind: "cancelled" }
-        : timeout?.aborted === true && timeoutSeconds !== undefined
-          ? { kind: "timed_out", seconds: timeoutSeconds }
-          : userInput?.aborted === true
-            ? { kind: "user_input" }
-            : { kind: "cancelled" };
-    const result = awaitState.cancelled(runtime.proxyCall !== undefined, ending);
-    invokeHostCallback(() => onUpdate?.(result), undefined);
-    return result;
-  });
 };

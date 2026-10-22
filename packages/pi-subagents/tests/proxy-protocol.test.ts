@@ -1,3 +1,4 @@
+import * as Result from "effect/Result";
 import { describe, expect, it } from "vitest";
 import { InvalidSubagentRequestError } from "../src/run/errors.ts";
 import { MAX_TOOL_OUTPUT_CHARS } from "../src/run/limits.ts";
@@ -13,6 +14,7 @@ import { cancelledAwaitContract, lifecycleContract } from "../src/tools/contract
 import { modelsContract } from "../src/tools/discovery-contract.ts";
 import { profileCandidate } from "./fixtures/profiles.ts";
 import { view } from "./fixtures/run-view.ts";
+import { rejection } from "./support/result.ts";
 
 const request = (count: number) => ({
   tool: "agent_start",
@@ -38,12 +40,13 @@ describe("nested Pi proxy protocol", () => {
     };
     const encoded = encodeSubagentProxyInput(input);
     const envelope = withSubagentProxyParent(encoded, parentContext);
-    expect(decodeSubagentProxyRequest(envelope)).toBeInstanceOf(InvalidSubagentRequestError);
-    const decoded = decodeSubagentProxyParent(envelope);
+    expect(rejection(decodeSubagentProxyRequest(envelope))).toBeInstanceOf(
+      InvalidSubagentRequestError,
+    );
+    const decoded = Result.getOrThrow(decodeSubagentProxyParent(envelope));
     expect(decoded).toEqual({ request: encoded, parentContext });
-    if (decoded instanceof InvalidSubagentRequestError) throw decoded;
-    expect(decodeSubagentProxyRequest(decoded.request)).toEqual(input);
-    expect(decodeSubagentProxyParent(encoded)).toEqual({ request: encoded });
+    expect(Result.getOrUndefined(decodeSubagentProxyRequest(decoded.request))).toEqual(input);
+    expect(Result.getOrUndefined(decodeSubagentProxyParent(encoded))).toEqual({ request: encoded });
   });
 
   it.each([
@@ -53,22 +56,26 @@ describe("nested Pi proxy protocol", () => {
     { sessionFile: "/sessions/injected\nfile.jsonl" },
   ])("rejects malformed parent facts and caller authority %j", (override) => {
     expect(
-      decodeSubagentProxyParent({
-        tool: "agent_start",
-        argumentsJson: JSON.stringify({
-          parentContext: { ...parentContext, ...override },
-          argumentsJson: JSON.stringify({ agents: [{ task: "Inspect" }] }),
+      rejection(
+        decodeSubagentProxyParent({
+          tool: "agent_start",
+          argumentsJson: JSON.stringify({
+            parentContext: { ...parentContext, ...override },
+            argumentsJson: JSON.stringify({ agents: [{ task: "Inspect" }] }),
+          }),
         }),
-      }),
+      ),
     ).toBeInstanceOf(InvalidSubagentRequestError);
   });
 
   it("does not admit parent facts as public start-item fields", () => {
     expect(
-      decodeSubagentProxyRequest({
-        tool: "agent_start",
-        argumentsJson: JSON.stringify({ agents: [{ task: "Inspect", parentContext }] }),
-      }),
+      rejection(
+        decodeSubagentProxyRequest({
+          tool: "agent_start",
+          argumentsJson: JSON.stringify({ agents: [{ task: "Inspect", parentContext }] }),
+        }),
+      ),
     ).toBeInstanceOf(InvalidSubagentRequestError);
   });
 
@@ -146,10 +153,12 @@ describe("nested Pi proxy protocol", () => {
     { action: "apply", workspaceId: "w", revisionId: "r", parentRunId: "root" },
   ])("rejects invalid or forged workspace arguments %j", (args) => {
     expect(
-      decodeSubagentProxyRequest({
-        tool: "agent_worktree",
-        argumentsJson: JSON.stringify(args),
-      }),
+      rejection(
+        decodeSubagentProxyRequest({
+          tool: "agent_worktree",
+          argumentsJson: JSON.stringify(args),
+        }),
+      ),
     ).toBeInstanceOf(InvalidSubagentRequestError);
   });
   it.each([
@@ -175,22 +184,22 @@ describe("nested Pi proxy protocol", () => {
   });
 
   it("accepts the hard 32-item start bound and rejects a larger batch", () => {
-    expect(decodeSubagentProxyRequest(request(32))).not.toBeInstanceOf(InvalidSubagentRequestError);
-    expect(decodeSubagentProxyRequest(request(33))).toBeInstanceOf(InvalidSubagentRequestError);
+    expect(Result.isSuccess(decodeSubagentProxyRequest(request(32)))).toBe(true);
+    expect(rejection(decodeSubagentProxyRequest(request(33)))).toBeInstanceOf(
+      InvalidSubagentRequestError,
+    );
   });
 
   it.each([
     ["spoofed ancestry", "agent_start", { agents: [{ task: "spoof", parentRunId: "sibling" }] }],
   ])("rejects %s", (_label, tool, args) => {
-    expect(decodeSubagentProxyRequest({ tool, argumentsJson: JSON.stringify(args) })).toMatchObject(
-      {
-        code: "proxy_request_invalid",
-      },
-    );
+    expect(
+      rejection(decodeSubagentProxyRequest({ tool, argumentsJson: JSON.stringify(args) })),
+    ).toMatchObject({ code: "proxy_request_invalid" });
   });
 
   it.each(["ask_user", "__proto__"])("rejects the unknown coordinator tool %s", (tool) => {
-    const decoded = decodeSubagentProxyRequest({ tool, argumentsJson: "{}" });
+    const decoded = rejection(decodeSubagentProxyRequest({ tool, argumentsJson: "{}" }));
     expect(decoded).toBeInstanceOf(InvalidSubagentRequestError);
     expect(decoded).toMatchObject({
       code: "proxy_request_invalid",

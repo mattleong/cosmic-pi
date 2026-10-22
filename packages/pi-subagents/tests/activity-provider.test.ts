@@ -73,9 +73,8 @@ describe("subagent activity provider", () => {
       yield* step(() => invoke("stop", signal));
       expect(act).toHaveBeenCalledWith(
         run.id,
-        "stop",
+        { action: "stop" },
         signal,
-        undefined,
         captureSubagentControlExpectation(run),
       );
       const manual = {
@@ -116,9 +115,8 @@ describe("subagent activity provider", () => {
     yield* step(() => transport.capability()!.invoke!(item.id, "stop", item.revision, signal));
     expect(act).toHaveBeenCalledWith(
       "selected",
-      "stop",
+      { action: "stop" },
       signal,
-      undefined,
       captureSubagentControlExpectation(resumed),
     );
     dispose();
@@ -247,9 +245,8 @@ describe("subagent activity provider", () => {
       yield* step(() => invoke("run", "stop", revision, signal));
       expect(act).toHaveBeenCalledWith(
         "run",
-        "stop",
+        { action: "stop" },
         signal,
-        undefined,
         captureSubagentControlExpectation(view({ id: "run" })),
       );
       bridge.publish({ revision: 2, runs: [view({ id: "run", state: "completed" })] });
@@ -285,7 +282,7 @@ describe("subagent activity provider", () => {
     const service = subagentServiceDouble({ send });
     const pendingNotices = vi.fn();
     const act = (id: string, action: "reply" | "message", input: string) =>
-      runSubagentActivityAction(service, id, action, input, expected, pendingNotices).pipe(
+      runSubagentActivityAction(service, id, { action, input }, expected, pendingNotices).pipe(
         Effect.orDie,
       );
     yield* act("selected", "reply", "Yes");

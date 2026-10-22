@@ -1,11 +1,15 @@
 import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer";
 import {
   boundedNdjsonRpcSerialization,
+  createPrivateFile,
+  ensurePrivateDirectory,
   makeTokenVerifier,
+  nodeFsPromises as fs,
+  nodePath,
+  PrivateFileError,
   synchronousRandomHex,
 } from "pi-cosmic-core";
 import { fileURLToPath } from "node:url";
-import { nodeFsPromises as fs, nodePath } from "./node-builtins.ts";
 import type * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -36,13 +40,7 @@ import {
   SUPERVISOR_MCP_REGISTRATION,
   SUPERVISOR_MCP_TOOL_NAMES,
 } from "../supervisor/mcp-contract.ts";
-import {
-  ensurePrivateDirectory,
-  nodeErrorCode,
-  safeAgentDirectory,
-  tomlString,
-  writeExclusive,
-} from "./harness-shared.ts";
+import { nodeErrorCode, safeAgentDirectory, tomlString } from "./harness-shared.ts";
 import {
   recordPrivateStateOwner,
   removePrivateStateOwner,
@@ -186,12 +184,20 @@ const privateStateError = (operation: string, cause: unknown) =>
 
 const privateStateOperation = <Value>(
   operation: string,
-  evaluate: () => PromiseLike<Value>,
+  evaluate: (signal: AbortSignal) => PromiseLike<Value>,
 ): Effect.Effect<Value, SupervisorPrivateStateError> =>
   Effect.tryPromise({
     try: evaluate,
     catch: (error) => privateStateError(operation, error),
   });
+
+const privateStateStep = <Value>(
+  operation: string,
+  effect: Effect.Effect<Value, PrivateFileError>,
+): Effect.Effect<Value, SupervisorPrivateStateError> =>
+  effect.pipe(
+    Effect.mapError((error) => new SupervisorPrivateStateError({ operation, code: error.reason })),
+  );
 
 const prepareStateDirectory = (
   agentDirectory: string,
@@ -199,49 +205,48 @@ const prepareStateDirectory = (
   onCreated: (prepared: PreparedStateDirectory) => void,
 ): Effect.Effect<PreparedStateDirectory, SupervisorPrivateStateError> =>
   Effect.gen(function* () {
-    const canonicalAgentDirectory = yield* privateStateOperation("resolve-agent-directory", () =>
+    const canonicalAgentDirectory = yield* privateStateStep(
+      "resolve-agent-directory",
       safeAgentDirectory(agentDirectory),
     );
     const packageRoot = nodePath.join(canonicalAgentDirectory, SUBAGENT_STATE_ROOT);
     const channelRoot = nodePath.join(packageRoot, SUPERVISOR_CHANNEL_ROOT);
-    yield* privateStateOperation("prepare-package-root", () => ensurePrivateDirectory(packageRoot));
-    yield* privateStateOperation("prepare-channel-root", () => ensurePrivateDirectory(channelRoot));
+    yield* privateStateStep("prepare-package-root", ensurePrivateDirectory(packageRoot));
+    yield* privateStateStep("prepare-channel-root", ensurePrivateDirectory(channelRoot));
     const stateDirectory = nodePath.join(channelRoot, `${runId}-${synchronousRandomHex(12)}`);
     const prepared = {
       stateDirectory,
       connectionConfigPath: nodePath.join(stateDirectory, CONNECTION_CONFIG_FILE),
     } satisfies PreparedStateDirectory;
-    let directoryCreated = false;
-    const removeLateDirectory = () =>
-      directoryCreated
-        ? removePrivateStateOwner(stateDirectory)
-            .then(() => fs.rmdir(stateDirectory))
-            .catch(() => undefined)
-        : Promise.resolve();
-    return yield* Effect.tryPromise({
-      try: (signal) =>
-        fs.mkdir(stateDirectory, { mode: 0o700 }).then(() => {
-          directoryCreated = true;
-          onCreated(prepared);
-          if (signal.aborted)
-            return removeLateDirectory().then(() => {
-              throw new Error("state-directory-acquisition-interrupted");
-            });
-          return fs.lstat(stateDirectory).then((stateStat) => {
-            if (signal.aborted || !stateStat.isDirectory() || stateStat.isSymbolicLink())
-              throw new Error("unsafe-run-dir");
-            return recordPrivateStateOwner(stateDirectory).then(() => prepared);
-          });
-        }),
-      catch: (error) => privateStateError("prepare-state-directory", error),
-    }).pipe(Effect.onError(() => Effect.promise(removeLateDirectory)));
+    // The mkdir stays interruptible, so a stalled filesystem can't hold cancellation. A directory
+    // created after its caller left reaches no cleanup, so the late settlement removes it here.
+    yield* privateStateOperation("prepare-state-directory", (signal) =>
+      fs
+        .mkdir(stateDirectory, { mode: 0o700 })
+        .then(() =>
+          signal.aborted ? fs.rmdir(stateDirectory).catch(() => undefined) : onCreated(prepared),
+        ),
+    );
+    const stateStat = yield* privateStateOperation("prepare-state-directory", () =>
+      fs.lstat(stateDirectory),
+    );
+    if (!stateStat.isDirectory() || stateStat.isSymbolicLink())
+      return yield* new SupervisorPrivateStateError({
+        operation: "prepare-state-directory",
+        code: "UNSAFE_ENTRY",
+      });
+    yield* privateStateStep("prepare-state-directory", recordPrivateStateOwner(stateDirectory));
+    return prepared;
   });
 
-const writePrivateConfig = (path: string, value: SupervisorChannelConfig): Promise<void> => {
+const writePrivateConfig = (
+  path: string,
+  value: SupervisorChannelConfig,
+): Effect.Effect<void, PrivateFileError> => {
   const source = `${JSON.stringify(value)}\n`;
   if (Buffer.byteLength(source, "utf8") > MAX_SUPERVISOR_CONFIG_BYTES)
-    return Promise.reject(new Error("config-size"));
-  return writeExclusive(path, source);
+    return Effect.fail(new PrivateFileError({ reason: "unsafe" }));
+  return createPrivateFile(path, source);
 };
 
 const removePrivateState = ({
@@ -266,9 +271,7 @@ const removePrivateState = ({
         });
       yield* privateStateOperation("remove-channel-config", () => fs.unlink(connectionConfigPath));
     }
-    yield* privateStateOperation("remove-channel-owner", () =>
-      removePrivateStateOwner(stateDirectory),
-    );
+    yield* privateStateStep("remove-channel-owner", removePrivateStateOwner(stateDirectory));
     const entries = yield* privateStateOperation("read-channel-state", () =>
       fs.readdir(stateDirectory),
     );
@@ -412,10 +415,9 @@ const acquireNodeChannelEffect = (
             try: () => beforeConfigCommit(metadata),
             catch: configWriteError,
           });
-        yield* Effect.tryPromise({
-          try: () => writePrivateConfig(prepared.connectionConfigPath, config),
-          catch: configWriteError,
-        });
+        yield* writePrivateConfig(prepared.connectionConfigPath, config).pipe(
+          Effect.mapError(configWriteError),
+        );
         yield* restore(Effect.void);
         const beforeAcquireComplete = options.beforeAcquireComplete;
         if (beforeAcquireComplete)
@@ -435,7 +437,7 @@ const acquireNodeChannelEffect = (
     }),
   );
 
-export const makeSupervisorChannel = (
+const makeSupervisorChannel = (
   options: SupervisorChannelLayerOptions,
 ): SupervisorChannelContract => ({
   open: Effect.fn("SupervisorChannel.open")(function* (request: SupervisorChannelOpenRequest) {

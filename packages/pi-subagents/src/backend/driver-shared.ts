@@ -1,3 +1,4 @@
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -29,6 +30,23 @@ export const oversizedLineError = (source: string, line: OversizedLine): Backend
     message: `${source} emitted a ${formatBytes(line.bytes)} ${event}, over the ${formatBytes(MAX_PROCESS_LINE_BYTES)} line limit.`,
   };
 };
+
+/**
+ * Ends a background consumer without failing its scope. Its handlers have no typed failures, so a
+ * non-interrupt cause is a defect that stops delivery; it is logged with a fixed message, never its
+ * content, which may quote child output.
+ */
+export const ignoreConsumerCause =
+  (consumer: string) =>
+  <A, E, R>(self: Effect.Effect<A, E, R>): Effect.Effect<void, never, R> =>
+    self.pipe(
+      Effect.tapCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.void
+          : Effect.logError(`Subagent ${consumer} stopped unexpectedly.`),
+      ),
+      Effect.ignoreCause,
+    );
 
 export const supervisorError =
   (operation: string) =>

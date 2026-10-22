@@ -153,6 +153,7 @@ export function registerApplicationCommands(pi: ExtensionAPI, host: ApplicationC
           Effect.gen(function* () {
             const store = yield* SubagentConfigStore;
             const service = yield* SubagentService;
+            const profiles = yield* SubagentProfileService;
             const inspection = yield* store.inspect(
               activation.cwd,
               activation.agentDirectory,
@@ -163,13 +164,18 @@ export function registerApplicationCommands(pi: ExtensionAPI, host: ApplicationC
               scope === "project" ? inspection.projectDocument : inspection.globalDocument;
             yield* service.setWriterWorkspaceMode(
               mode,
-              store.patchWriterWorkspace(activation.cwd, activation.agentDirectory, {
-                scope,
-                expectedExists: document !== undefined,
-                expectedDocument: document,
-                projectTrusted,
-                writerWorkspaceMode: mode,
-              }),
+              store
+                .patchWriterWorkspace(activation.cwd, activation.agentDirectory, {
+                  scope,
+                  expectedExists: document !== undefined,
+                  expectedDocument: document,
+                  projectTrusted,
+                  writerWorkspaceMode: mode,
+                })
+                .pipe(
+                  // The session's base configuration keeps the new default across /tree.
+                  Effect.andThen(profiles.recordWriterWorkspaceMode(mode)),
+                ),
             );
           }),
         );

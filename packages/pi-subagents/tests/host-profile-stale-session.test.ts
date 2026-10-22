@@ -1,14 +1,22 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import { nodeFilePlatformLayer, SafeFile } from "pi-cosmic-core";
 import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
+import { runSubagentDoctor } from "../src/application/doctor.ts";
 import { SubagentBackendRegistry } from "../src/backend/service.ts";
 import { resolveProfileStart } from "../src/boundary/host-profile-resolution.ts";
 import type { ProfileCandidate } from "../src/profiles/model.ts";
 import { SubagentProfileService } from "../src/profiles/service.ts";
 import { InvalidSubagentRequestError } from "../src/run/errors.ts";
 import type { SubagentParentContext } from "../src/run/model.ts";
+import { SubagentService } from "../src/run/service.ts";
+import { executeSubagentActionEffect } from "../src/tools/execute.ts";
+import type { SubagentToolInput } from "../src/tools/schema.ts";
+import { subagentServiceDouble } from "./tools/fixtures/subagent-service-double.ts";
 import {
   context,
+  fallbackProfileService,
   profileServiceFor,
   testBackendDriver,
   testBackendRegistry,
@@ -121,4 +129,57 @@ describe("profile start on a retired session", () => {
           expect(error.code).toBe("host_session_unavailable");
         }),
     );
+});
+
+describe("tool and doctor host reads on a retired session", () => {
+  const environment = { cwd: "/project", projectTrusted: true };
+  const execute = (session: ReturnType<typeof retirableSession>, input: SubagentToolInput) =>
+    executeSubagentActionEffect(session.pi, environment, input, undefined, session.ctx).pipe(
+      Effect.provideService(SubagentService, subagentServiceDouble({})),
+      Effect.provideService(SubagentProfileService, fallbackProfileService),
+      Effect.provideService(SubagentBackendRegistry, testBackendRegistry),
+      Effect.flip,
+    );
+
+  it.effect("fails agent_profiles with a typed error", () =>
+    Effect.gen(function* () {
+      const session = retirableSession();
+      session.retire();
+      const error = yield* execute(session, { tool: "agent_profiles", args: {} });
+      expect(error).toMatchObject({ code: "host_session_unavailable" });
+    }),
+  );
+
+  it.effect("fails agent_start with a typed error before any launch", () =>
+    Effect.gen(function* () {
+      const session = retirableSession();
+      session.retire();
+      // The service double dies on any launch, so a typed failure proves none was attempted.
+      const error = yield* execute(session, {
+        tool: "agent_start",
+        args: { agents: [{ task: "Review" }] },
+      });
+      expect(error).toMatchObject({ code: "host_session_unavailable" });
+    }),
+  );
+
+  it.effect("fails the doctor with a typed error", () =>
+    Effect.gen(function* () {
+      const session = retirableSession();
+      session.retire();
+      const error = yield* runSubagentDoctor({
+        pi: session.pi,
+        ctx: session.ctx,
+        agentDirectory: "/agent",
+        activityViewAvailable: undefined,
+        projectTrusted: true,
+      }).pipe(
+        Effect.provideService(SubagentProfileService, fallbackProfileService),
+        Effect.provideService(SubagentBackendRegistry, testBackendRegistry),
+        Effect.provide(SafeFile.layer.pipe(Layer.provideMerge(nodeFilePlatformLayer))),
+        Effect.flip,
+      );
+      expect(error).toMatchObject({ code: "host_session_unavailable" });
+    }),
+  );
 });

@@ -10,7 +10,7 @@ import {
   type SubagentCompletionNotification,
   type SubagentNotification,
 } from "../../src/boundary/host-notifier.ts";
-import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-builtins.ts";
+import { nodeFsPromises as fs, nodePath as path } from "../support/node-builtins.ts";
 import { sessionReportArchive } from "../../src/boundary/report-archive.ts";
 import { SubagentService } from "../../src/run/service.ts";
 import {

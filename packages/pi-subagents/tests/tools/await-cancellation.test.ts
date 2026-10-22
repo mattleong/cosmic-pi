@@ -4,13 +4,18 @@ import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Duration from "effect/Duration";
+import * as Clock from "effect/Clock";
+import * as TestClock from "effect/testing/TestClock";
 import { makePiManagedRuntime } from "pi-cosmic-core";
-import { expect } from "vitest";
+import { describe, expect } from "vitest";
 import { SubagentService } from "../../src/run/service.ts";
 import type { SubagentToolRuntime } from "../../src/tools/execute.ts";
+import { awaitWithinTimeout } from "../../src/tools/execute-await.ts";
 import { registerSubagentTools } from "../../src/tools/subagent.ts";
 import {
   awaitObservations,
@@ -20,7 +25,7 @@ import {
   runView,
 } from "../run/fixtures/service-harness.ts";
 import { recordingExtensionHost } from "pi-cosmic-core/testing";
-import { step } from "../support/effect-test.ts";
+import { eventLoopTurn, step } from "../support/effect-test.ts";
 import { executeTool } from "./fixtures/tool-harness.ts";
 import { stringContaining } from "../support/matchers.ts";
 
@@ -244,23 +249,34 @@ it.live(
     }),
 );
 
-it.live("ends a wait at its timeout without stopping the child", () =>
+it.effect("ends a wait at its timeout without stopping the child", () =>
   Effect.gen(function* () {
     const { tools, pi, runtime, service } = yield* managedTools;
+    // The wait runs on the managed runtime; the test's clock drives its timeout.
+    const clock = yield* Clock.Clock;
     registerSubagentTools(pi, {
       environment: { cwd: "/project", projectTrusted: true },
-      run: (effect, signal) => runtime.run(effect, signal),
+      run: (effect, signal) =>
+        runtime.run(effect.pipe(Effect.provideService(Clock.Clock, clock)), signal),
     });
     const child = yield* step(() => runtime.run(service.startSessionOwned(nativeReportRequest())));
-    const result = yield* step(() =>
-      executeTool(
-        tools.get("agent_await")!,
-        { runIds: [child.id], until: "all_finished", timeoutSeconds: 1 },
-        { callID: "timed-await" },
-      ),
-    );
+    const progress = Deferred.makeUnsafe<void>();
+    let settled = false;
+    const pending = executeTool(
+      tools.get("agent_await")!,
+      { runIds: [child.id], until: "all_finished", timeoutSeconds: 30 },
+      { callID: "timed-await", update: () => Deferred.doneUnsafe(progress, Effect.void) },
+    ).finally(() => {
+      settled = true;
+    });
+    yield* Deferred.await(progress);
+    yield* TestClock.adjust(Duration.seconds(29));
+    yield* step(eventLoopTurn);
+    expect(settled).toBe(false);
+    yield* TestClock.adjust(Duration.seconds(1));
+    const result = yield* step(() => pending);
     expect(result.structuredContent).toMatchObject({ outcome: "timed_out" });
-    expect(result.content[0]).toMatchObject({ text: stringContaining("timed out after 1s") });
+    expect(result.details).toMatchObject({ cancelled: true, timedOutSeconds: 30 });
     const status = yield* step(() => runtime.run(runView(service, child.id)));
     expect(status.state).toBe("running");
   }),
@@ -292,3 +308,37 @@ it.live("ends a wait for the user's next message without stopping the child", ()
     expect(status.state).toBe("running");
   }),
 );
+
+describe("await timeout", () => {
+  it.effect("ends a wait at its timeout only after its cleanup", () =>
+    Effect.gen(function* () {
+      let cleaned = false;
+      const waiting = yield* Effect.forkChild(
+        awaitWithinTimeout(
+          Effect.never.pipe(Effect.onInterrupt(() => Effect.sync(() => void (cleaned = true)))),
+          5,
+        ),
+      );
+      yield* TestClock.adjust(Duration.seconds(4));
+      expect(waiting.pollUnsafe()).toBeUndefined();
+      yield* TestClock.adjust(Duration.seconds(1));
+      const ended = yield* Fiber.join(waiting);
+      expect(cleaned).toBe(true);
+      expect(ended).toEqual(Result.fail({ kind: "timed_out", seconds: 5 }));
+    }),
+  );
+
+  it.effect("reports a failure raised while the timeout cleans the wait up", () =>
+    Effect.gen(function* () {
+      const waiting = yield* Effect.forkChild(
+        awaitWithinTimeout(
+          Effect.never.pipe(Effect.onInterrupt(() => Effect.die("cleanup failed"))),
+          5,
+        ),
+      );
+      yield* TestClock.adjust(Duration.seconds(5));
+      const exit = yield* Fiber.await(waiting);
+      expect(Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)).toBe(true);
+    }),
+  );
+});

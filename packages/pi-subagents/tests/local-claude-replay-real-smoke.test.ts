@@ -1,12 +1,13 @@
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import { synchronousRandomHex, provideBuiltLayer } from "pi-cosmic-core";
+import { synchronousRandomHex } from "pi-cosmic-core";
+import { provideBuiltLayer } from "pi-cosmic-core/testing";
 import { describe, expect, it } from "vitest";
 import { localClaudeBackendDriver } from "../src/backend/local-claude.ts";
 import type { BackendEvent } from "../src/backend/model.ts";
-import { makeLocalCliProcess } from "../src/boundary/local-cli-process.ts";
 import { SupervisorChannel } from "../src/boundary/supervisor-channel.ts";
 import { backendLaunch, takeBackendEvent } from "./fixtures/backend-supervisor.ts";
+import { localCliProcess } from "./support/local-cli-process.ts";
 
 const sourceEnvironment = { ...process.env };
 const enabled = sourceEnvironment.PI_SUBAGENTS_REAL_CLAUDE_REPLAY_SMOKE === "1";
@@ -17,7 +18,6 @@ describe.skipIf(!enabled)("installed local Claude replay smoke", () => {
     if (!model) throw new Error("Set PI_SUBAGENTS_REAL_CLAUDE_MODEL for the live replay smoke.");
     const agentDirectory = getAgentDir();
     const environment = { ...sourceEnvironment, PI_SUBAGENTS_CLAUDE_DEBUG: "1" };
-    const processes = makeLocalCliProcess({ agentDirectory, environment });
     const launch = backendLaunch({
       runId: `real-local-claude-${synchronousRandomHex(4)}`,
       name: "real-local-claude-replay",
@@ -34,6 +34,7 @@ describe.skipIf(!enabled)("installed local Claude replay smoke", () => {
 
     return Effect.runPromise(
       Effect.gen(function* () {
+        const processes = yield* localCliProcess({ agentDirectory, environment });
         const supervisors = yield* SupervisorChannel;
         const driver = localClaudeBackendDriver(processes, supervisors);
         yield* driver.preflight(launch);

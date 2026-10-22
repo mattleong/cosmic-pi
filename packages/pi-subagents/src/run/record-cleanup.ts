@@ -17,7 +17,7 @@ import {
 type ExitedScopeOwnership = Data.TaggedEnum<{
   Stale: Record<never, never>;
   Close: Record<never, never>;
-  Wait: { readonly settled: Deferred.Deferred<void> | undefined };
+  Wait: { readonly settled: Deferred.Deferred<void> };
 }>;
 const ExitedScopeOwnership = Data.taggedEnum<ExitedScopeOwnership>();
 
@@ -384,8 +384,9 @@ export function recordCleanup(
       Effect.sync(() => {
         if (record.scope !== scope || record.closingScope === scope)
           return ExitedScopeOwnership.Stale();
-        if (!record.initializationPending) return ExitedScopeOwnership.Close();
-        return ExitedScopeOwnership.Wait({ settled: record.initializationSettled });
+        return record.initialization
+          ? ExitedScopeOwnership.Wait({ settled: record.initialization.settled })
+          : ExitedScopeOwnership.Close();
       }),
     ).pipe(
       Effect.flatMap(
@@ -393,9 +394,7 @@ export function recordCleanup(
           Stale: () => Effect.void,
           Close: () => closeRecordScope(record, scope),
           Wait: ({ settled }) =>
-            settled
-              ? Deferred.await(settled).pipe(Effect.flatMap(() => closeExitedScope(record, scope)))
-              : Effect.never,
+            Deferred.await(settled).pipe(Effect.flatMap(() => closeExitedScope(record, scope))),
         }),
       ),
       Effect.asVoid,

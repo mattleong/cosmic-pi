@@ -492,7 +492,7 @@ const loadNativeModelCatalog =
     });
   };
 
-export const makeNativeModelCatalog = (
+const makeNativeModelCatalog = (
   options: NativeModelCatalogLayerOptions = {},
 ): Effect.Effect<NativeModelCatalogContract, never, SafeFile> =>
   Effect.gen(function* () {

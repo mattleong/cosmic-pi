@@ -1,17 +1,15 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Layer from "effect/Layer";
 import {
+  CrossProcessLock,
   CrossProcessLockError,
   type CrossProcessLease,
   type CrossProcessLockContract,
 } from "pi-cosmic-core";
 import { temporaryDirectory } from "pi-cosmic-core/testing";
-import {
-  makeWriterLease,
-  WriterLeaseReleaseError,
-  WriterLeaseService,
-} from "../src/boundary/writer-lease.ts";
+import { WriterLeaseReleaseError, WriterLeaseService } from "../src/boundary/writer-lease.ts";
 import { nodeFsPromises as fs, nodePath } from "./support/node-builtins.ts";
 
 type LockOutcome = "live" | "recovery-required" | "unavailable";
@@ -55,7 +53,13 @@ const adapter = (outcomes?: Array<LockOutcome>) =>
   Effect.gen(function* () {
     const agentDirectory = yield* temporaryDirectory("pi-subagents-writer-lease-");
     const fake = fakeLock(outcomes);
-    const service = makeWriterLease(agentDirectory, fake.lock);
+    const service = yield* WriterLeaseService.pipe(
+      Effect.provide(
+        WriterLeaseService.layerWithLock({ agentDirectory }).pipe(
+          Layer.provide(Layer.succeed(CrossProcessLock, fake.lock)),
+        ),
+      ),
+    );
     const cwd = yield* service.canonicalize(agentDirectory);
     return {
       ...fake,

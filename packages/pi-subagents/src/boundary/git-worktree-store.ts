@@ -2,6 +2,7 @@ import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import {
   crossProcessLockHolder,
@@ -10,10 +11,11 @@ import {
   type CrossProcessLease,
   type CrossProcessLockContract,
   type CrossProcessLockError,
+  nodeFsPromises as fs,
+  nodePath as path,
 } from "pi-cosmic-core";
 import { WorkspaceError, WorkspaceRecordSchema, type WorkspaceRecord } from "../workspace/model.ts";
 import { nodeErrorCode } from "./harness-shared.ts";
-import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
 import {
   checkDirectory,
   isSharedOrForeign,
@@ -222,25 +224,17 @@ export const withWorkspaceStoreLock = <A, E, R>(
   sourceRoot: string,
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E | WorkspaceError, R> =>
-  Effect.gen(function* () {
-    const deadline = (yield* Clock.currentTimeMillis) + Duration.toMillis(WORKSPACE_LOCK_WAIT);
-    const attempt: Effect.Effect<A, E | WorkspaceError, R> = withFreeLock(
-      locks,
-      directory,
-      sourceLockNamespace(sourceRoot),
-      effect,
-    ).pipe(
-      Effect.flatMap((result) =>
-        Option.isSome(result)
-          ? Effect.succeed(result.value)
-          : Clock.currentTimeMillis.pipe(
-              Effect.flatMap((now) =>
-                now >= deadline
-                  ? Effect.fail(lockTimeout(sourceRoot, directory))
-                  : Effect.sleep(WORKSPACE_LOCK_POLL).pipe(Effect.andThen(() => attempt)),
-              ),
-            ),
+  withFreeLock(locks, directory, sourceLockNamespace(sourceRoot), effect).pipe(
+    Effect.repeat({
+      schedule: Schedule.spaced(WORKSPACE_LOCK_POLL).pipe(
+        Schedule.upTo({ duration: WORKSPACE_LOCK_WAIT }),
       ),
-    );
-    return yield* attempt;
-  });
+      until: Option.isSome,
+    }),
+    Effect.flatMap(
+      Option.match({
+        onNone: () => Effect.fail(lockTimeout(sourceRoot, directory)),
+        onSome: (value) => Effect.succeed(value),
+      }),
+    ),
+  );

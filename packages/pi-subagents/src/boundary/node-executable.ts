@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import { invalidRequest } from "../run/errors.ts";
 import { nodeErrorCode } from "./harness-shared.ts";
-import { nodeFsConstants, nodeFsPromises } from "./node-builtins.ts";
+import { nodeFsConstants, nodeFsPromises } from "pi-cosmic-core";
 
 /**
  * Why the Node binary running Pi can no longer start Pi children or helpers. On macOS, Homebrew

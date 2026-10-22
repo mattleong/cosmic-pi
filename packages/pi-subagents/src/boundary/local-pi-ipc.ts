@@ -7,7 +7,7 @@ import {
   decodeLocalPiParentControlOption,
 } from "../backend/local-pi-protocol.ts";
 import { processCauseError, type SubagentProcessError } from "../run/errors.ts";
-import type { NodeChildProcess } from "./node-builtins.ts";
+import type { NodeChildProcess } from "pi-cosmic-core";
 
 const IPC_WRITE_TIMEOUT = "10 seconds";
 
@@ -81,7 +81,7 @@ interface LocalPiParentIpcChannel {
   readonly detach: () => void;
 }
 
-export const makeLocalPiParentIpcChannel = (
+export const localPiParentIpcChannel = (
   port: LocalPiIpcPort<LocalPiParentControl>,
   handlers: LocalPiParentIpcHandlers,
 ): LocalPiParentIpcChannel => ({
@@ -107,7 +107,7 @@ export const attachLocalPiParentIpc = (
   child: NodeChildProcess,
   handlers: LocalPiParentIpcHandlers,
 ): LocalPiParentIpcChannel =>
-  makeLocalPiParentIpcChannel(
+  localPiParentIpcChannel(
     {
       events: child,
       connected: () => child.connected,
@@ -126,9 +126,7 @@ export interface LocalPiChildIpcChannel {
   readonly listen: (handlers: LocalPiChildIpcHandlers) => () => void;
 }
 
-const makeLocalPiChildIpcChannel = (
-  port: LocalPiIpcPort<LocalPiContact>,
-): LocalPiChildIpcChannel => ({
+const localPiChildIpcChannel = (port: LocalPiIpcPort<LocalPiContact>): LocalPiChildIpcChannel => ({
   sendContact: (contact) =>
     boundedSend(
       port,
@@ -157,7 +155,7 @@ const makeLocalPiChildIpcChannel = (
 const processSend = () => process.send?.bind(process);
 
 export const openLocalPiChildIpc = (): LocalPiChildIpcChannel =>
-  makeLocalPiChildIpcChannel({
+  localPiChildIpcChannel({
     events: process,
     connected: () => processSend() !== undefined && process.connected,
     send: (message, callback) => {

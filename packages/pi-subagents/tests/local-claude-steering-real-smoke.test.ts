@@ -7,18 +7,17 @@ import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { synchronousRandomHex, provideBuiltLayer } from "pi-cosmic-core";
+import { synchronousRandomHex } from "pi-cosmic-core";
+import { provideBuiltLayer } from "pi-cosmic-core/testing";
 import { describe, expect, it } from "vitest";
 import { localClaudeBackendDriver } from "../src/backend/local-claude.ts";
 import type { BackendEvent } from "../src/backend/model.ts";
-import {
-  makeLocalCliProcess,
-  type LocalCliProcessContract,
-} from "../src/boundary/local-cli-process.ts";
+import type { LocalCliProcessContract } from "../src/boundary/local-cli-process.ts";
 import type { LocalClaudeDebugEntry } from "../src/boundary/local-claude-debug.ts";
 import { SupervisorChannel } from "../src/boundary/supervisor-channel.ts";
 import { InvalidSubagentRequestError, SubagentProcessError } from "../src/run/errors.ts";
 import { backendLaunch } from "./fixtures/backend-supervisor.ts";
+import { localCliProcess } from "./support/local-cli-process.ts";
 
 const sourceEnvironment = { ...process.env };
 const enabled = sourceEnvironment.PI_SUBAGENTS_REAL_CLAUDE_STEERING_SMOKE === "1";
@@ -249,7 +248,7 @@ describe.skipIf(!enabled)("installed local Claude steering smoke", () => {
     const program = Effect.gen(function* () {
       const startedAt = yield* Clock.currentTimeMillis;
       const elapsed = Clock.currentTimeMillis.pipe(Effect.map((now) => now - startedAt));
-      const processes = makeLocalCliProcess({
+      const processes = yield* localCliProcess({
         agentDirectory,
         environment: { ...sourceEnvironment, PI_SUBAGENTS_CLAUDE_DEBUG: "0" },
       });

@@ -10,7 +10,7 @@ import type { LocalPiContact, LocalPiParentControl } from "../src/backend/local-
 import type { NodeChildProcess } from "./support/node-builtins.ts";
 import {
   attachLocalPiParentIpc,
-  makeLocalPiParentIpcChannel,
+  localPiParentIpcChannel,
   type LocalPiIpcPort,
 } from "../src/boundary/local-pi-ipc.ts";
 
@@ -85,7 +85,7 @@ describe("Local Pi IPC boundary", () => {
     const fake = fakePort<LocalPiParentControl>();
     const contacts: LocalPiContact[] = [];
     const protocolErrors: string[] = [];
-    const channel = makeLocalPiParentIpcChannel(fake.port, {
+    const channel = localPiParentIpcChannel(fake.port, {
       onContact: (contact) => contacts.push(contact),
       onProtocolError: (message) => protocolErrors.push(message),
     });
@@ -110,7 +110,7 @@ describe("Local Pi IPC boundary", () => {
   it.effect("distinguishes definite parent-control rejection from uncertain delivery", () =>
     Effect.gen(function* () {
       const fake = fakePort<LocalPiParentControl>();
-      const channel = makeLocalPiParentIpcChannel(fake.port, ignoreParent);
+      const channel = localPiParentIpcChannel(fake.port, ignoreParent);
 
       yield* channel.sendControl(parentReply());
       expect(fake.sent).toEqual([parentReply()]);
@@ -136,7 +136,7 @@ describe("Local Pi IPC boundary", () => {
     Effect.gen(function* () {
       const fake = fakePort<LocalPiParentControl>();
       fake.setBehavior("pending");
-      const channel = makeLocalPiParentIpcChannel(fake.port, ignoreParent);
+      const channel = localPiParentIpcChannel(fake.port, ignoreParent);
       const sending = yield* channel
         .sendControl(parentReply())
         .pipe(Effect.flip, Effect.forkScoped);

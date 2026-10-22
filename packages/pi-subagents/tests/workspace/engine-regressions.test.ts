@@ -8,7 +8,7 @@ import {
   sourceLockNamespace,
   workspaceLockDirectory,
 } from "../../src/boundary/git-worktree-store.ts";
-import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-builtins.ts";
+import { nodeFsPromises as fs, nodePath as path } from "../support/node-builtins.ts";
 import type { WorkspaceError, WorkspaceHandle } from "../../src/workspace/model.ts";
 import type { WorkspaceServiceContract } from "../../src/workspace/service.ts";
 import { capturedWarnings, unconfirmedShellCleanup } from "../support/unconfirmed-hook-cleanup.ts";

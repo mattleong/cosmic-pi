@@ -99,26 +99,27 @@ export class ProfileModelCatalog {
   }
 
   refresh(): Effect.Effect<ProfileModelCatalogRefresh> {
-    return Effect.tryPromise({
-      try: (signal) => this.registry.refresh({ signal }),
-      catch: () => undefined,
-    }).pipe(
-      Effect.match({
-        onFailure: () => "failed",
-        onSuccess: (refreshResult): ProfileModelCatalogRefresh => {
-          if (refreshResult.aborted) return "aborted";
-          if (refreshResult.errors && refreshResult.errors.size > 0) return "failed";
-          try {
-            if (this.registry.getError()) return "failed";
-          } catch {
-            return "failed";
-          }
-          const projected = projectRegistry(this.registry, this.scopedSelectors);
-          if (!projected) return "failed";
-          this.snapshot = projected;
-          return "updated";
-        },
-      }),
+    // A registry that throws or reports an error leaves the previous snapshot in place.
+    const projectRefreshed = Effect.try(() =>
+      this.registry.getError() ? undefined : projectRegistry(this.registry, this.scopedSelectors),
+    );
+    return Effect.tryPromise((signal) => this.registry.refresh({ signal })).pipe(
+      Effect.flatMap((refreshResult) =>
+        refreshResult.aborted
+          ? Effect.succeed<ProfileModelCatalogRefresh>("aborted")
+          : refreshResult.errors && refreshResult.errors.size > 0
+            ? Effect.succeed<ProfileModelCatalogRefresh>("failed")
+            : projectRefreshed.pipe(
+                Effect.flatMap((projected) =>
+                  projected
+                    ? Effect.sync(() => {
+                        this.snapshot = projected;
+                      }).pipe(Effect.as<ProfileModelCatalogRefresh>("updated"))
+                    : Effect.succeed<ProfileModelCatalogRefresh>("failed"),
+                ),
+              ),
+      ),
+      Effect.orElseSucceed((): ProfileModelCatalogRefresh => "failed"),
     );
   }
 }

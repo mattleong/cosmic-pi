@@ -185,8 +185,6 @@ export class WorkspaceService extends Context.Service<WorkspaceService, Workspac
           inspectWorkerChanges: (input) => run(engine.inspectWorkerChanges(input)),
           inspect: (input) => run(engine.inspect(input)),
           revision: (input) => run(engine.revision(input)),
-          // Lock-free reads: callers check them under the run lock, so they never wait behind
-          // engine work, and this process's in-flight creates are tracked by their launches.
           list: (input) => run(engine.list(input)),
           listRecords: run(engine.listRecords),
           listAll: run(engine.listAll),

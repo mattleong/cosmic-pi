@@ -51,8 +51,8 @@ import {
   type SubagentServiceContract,
   type SubagentServiceOptions,
 } from "../../../src/run/service.ts";
-import { provideBuiltLayer, type JsonObject } from "pi-cosmic-core";
-import { yieldUntil } from "pi-cosmic-core/testing";
+import { type JsonObject } from "pi-cosmic-core";
+import { yieldUntil, provideBuiltLayer } from "pi-cosmic-core/testing";
 
 export const withService = <Eff extends Effect.Effect<unknown, unknown, unknown>, A, ROut, LE, LR>(
   layer: Layer.Layer<ROut, LE, LR>,

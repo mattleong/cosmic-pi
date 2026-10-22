@@ -11,7 +11,7 @@ import {
   prepareLocalCliHarness,
   removeLocalCliHarness,
 } from "../src/boundary/local-cli-harness.ts";
-import { makeLocalCliProcess } from "../src/boundary/local-cli-process.ts";
+import { localCliProcess } from "./support/local-cli-process.ts";
 import { backendLaunch, supervisorMetadata } from "./fixtures/backend-supervisor.ts";
 import { nodeFsPromises as fs, nodePath } from "./support/node-builtins.ts";
 
@@ -130,7 +130,7 @@ describe("local CLI harness ownership", () => {
       const test = yield* setup;
       const entered = Deferred.makeUnsafe<void>();
       const gate = deferredPromise();
-      const service = makeLocalCliProcess({
+      const service = yield* localCliProcess({
         agentDirectory: test.agentDirectory,
         environment: test.environment,
         executables: { claude: executable, codex: executable },
@@ -212,7 +212,7 @@ describe("local CLI harness ownership", () => {
     () =>
       Effect.gen(function* () {
         const test = yield* setup;
-        const service = makeLocalCliProcess({
+        const service = yield* localCliProcess({
           agentDirectory: test.agentDirectory,
           environment: test.environment,
           executables: { claude: executable, codex: executable },

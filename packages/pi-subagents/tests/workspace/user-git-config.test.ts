@@ -1,7 +1,7 @@
 import { afterAll, expect } from "@effect/vitest";
 import { vi } from "vitest";
 import * as os from "node:os";
-import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-builtins.ts";
+import { nodeFsPromises as fs, nodePath as path } from "../support/node-builtins.ts";
 import { exists, workspaceTests, writeFile } from "./fixtures/repository.ts";
 
 // Workspace Git runs with the user's global configuration, so its excludes file decides which

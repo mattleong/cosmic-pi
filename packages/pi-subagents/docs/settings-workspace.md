@@ -75,7 +75,7 @@ The Saved profiles tab groups sets by Project and Global. Untrusted Project rows
 
 ## Writer workspace default
 
-The writer workspace default has its own unscoped setting. It changes later launches and new sessions, never running writers or existing workspaces, and the settings show how many workspaces in this checkout remain unresolved.
+The writer workspace default has its own unscoped setting. It changes later launches, including after `/tree`, and new sessions, never running writers or existing workspaces, and the settings show how many workspaces in this checkout remain unresolved. Worktree hooks, like the rest of the saved configuration, load at activation; `/tree` keeps the activation's hooks, and edits apply after `/reload`.
 
 ## Custom agents
 
@@ -91,7 +91,7 @@ Custom agents are edited by hand in the root `agents` object of `~/.pi/agent/pi-
 
 - Pi's version against the 1.4.0 minimum, and whether Pi's Node binary is still executable;
 - configuration diagnostics, the current profile set, and project trust;
-- for every profile, the launch preflight against its first eligible route (each distinct route probed once, bounded to 20 seconds); a failing first route is a warning when a fallback exists;
+- for every profile, the launch preflight against its first eligible route (each distinct route probed once, up to four at a time, each bounded to 20 seconds); a failing first route is a warning when a fallback exists;
 - the same route check for every custom agent after its overrides, and a failure for each agent entry or `agents` object that fails closed;
 - each Claude Code or Codex CLI version a route uses, failing below the minimum and warning when missing or unrecognized;
 - whether private agent state is writable, the Git version isolated writers would use, the configured worktree hooks per event and scope, the checkout's `.worktreeinclude` patterns, and whether the shared Activity view is installed.

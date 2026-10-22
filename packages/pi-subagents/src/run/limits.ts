@@ -26,5 +26,10 @@ export const MAX_CONTACT_TEXT_CHARS = 16 * 1024;
  * failure is saved to the session's report directory, and its preview names the file.
  */
 export const MAX_OUTCOME_PREVIEW_CHARS = 240;
+/**
+ * How long a settlement holds the run lock for its report file. A slower save settles without the
+ * file, so the parent gets the report inline, and the save removes its file once it finishes.
+ */
+export const REPORT_SAVE_DEADLINE_MILLIS = 5_000;
 /** The longest outcome file path the archive saves; a longer one saves nothing. */
 export const MAX_OUTCOME_FILE_PATH_CHARS = 384;

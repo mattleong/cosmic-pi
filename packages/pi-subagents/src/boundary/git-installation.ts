@@ -1,8 +1,13 @@
 import * as Effect from "effect/Effect";
-import { hasControlCharacter, runBoundedProcessNode } from "pi-cosmic-core";
+import {
+  hasControlCharacter,
+  runBoundedProcessNode,
+  nodeFsConstants,
+  nodeFsPromises as fs,
+  nodePath as path,
+} from "pi-cosmic-core";
 import { WorkspaceError } from "../workspace/model.ts";
 import { isGitLocalEnvironmentKey } from "./git-local-environment.ts";
-import { nodeFsConstants, nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
 
 /** Oldest Git with every option isolated workspaces use (`rev-parse --path-format`). */
 export const MINIMUM_GIT_VERSION = [2, 31] as const;

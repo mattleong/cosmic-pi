@@ -7,9 +7,9 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import { nodeFilePlatformLayer, SafeFile } from "pi-cosmic-core";
 import { readWorkspaceRecord } from "../../src/boundary/git-worktree-store.ts";
-import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-builtins.ts";
+import { nodeFsPromises as fs, nodePath as path } from "../support/node-builtins.ts";
 import { WriterLeaseService } from "../../src/boundary/writer-lease.ts";
-import { workspaceControl } from "../../src/run/workspace-control.ts";
+import { type RunWorkspaceControl, workspaceControl } from "../../src/run/workspace-control.ts";
 import {
   type WorkspaceHandle,
   type WorkspaceRecord,
@@ -53,7 +53,7 @@ const laterSession = (agent: string, source: string) =>
     const leases = yield* WriterLeaseService.pipe(
       Effect.provide(WriterLeaseService.layer({ agentDirectory: agent })),
     );
-    const control = workspaceControl({
+    const control = yield* workspaceControl({
       ownerScope: yield* Scope.Scope,
       records: new Map(),
       withLock: (effect) => effect,
@@ -70,7 +70,7 @@ const laterSession = (agent: string, source: string) =>
   });
 
 /** Reads every review page, as the careful path requires before prepare. */
-const reviewAll = (control: ReturnType<typeof workspaceControl>, workspaceId: string) =>
+const reviewAll = (control: RunWorkspaceControl, workspaceId: string) =>
   Effect.gen(function* () {
     let page = yield* control.workspaceReview(workspaceId);
     while (page.nextOffset !== undefined)

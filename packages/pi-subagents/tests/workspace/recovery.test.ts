@@ -15,7 +15,7 @@ import {
   workspaceLockDirectory,
 } from "../../src/boundary/git-worktree-store.ts";
 import { git } from "../../src/boundary/git-worktree-process.ts";
-import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-builtins.ts";
+import { nodeFsPromises as fs, nodePath as path } from "../support/node-builtins.ts";
 import { WorkspaceService } from "../../src/workspace/service.ts";
 import {
   commitRepository,
@@ -64,7 +64,7 @@ for (const replaced of [false, true]) {
         }
         yield* creator.close;
         const successor = yield* openWorkspaceService(agent);
-        const context = workspaceControlContext({
+        const context = yield* workspaceControlContext({
           ownerScope: yield* Scope.Scope,
           records: new Map(),
           withLock: (effect) => effect,
@@ -115,7 +115,7 @@ it.live(
       const leases = yield* WriterLeaseService.pipe(
         Effect.provide(WriterLeaseService.layer({ agentDirectory: agent })),
       );
-      const context = workspaceControlContext({
+      const context = yield* workspaceControlContext({
         ownerScope: yield* Scope.Scope,
         records: new Map(),
         withLock: (effect) => effect,

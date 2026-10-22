@@ -7,6 +7,7 @@ import type { BackendEvent } from "../../src/backend/model.ts";
 import { assignmentOperations } from "../../src/run/assignment.ts";
 import { SubagentProcessError } from "../../src/run/errors.ts";
 import { backendEventHandler } from "../../src/run/events.ts";
+import type { RunRecord } from "../../src/run/internal.ts";
 import { notificationDelivery } from "../../src/run/notification-delivery.ts";
 import { settlementOperations } from "../../src/run/settlement.ts";
 import { view } from "../fixtures/run-view.ts";
@@ -227,4 +228,105 @@ describe("report ownership while its file is saved", () => {
       }),
     );
   }
+});
+
+describe("report ownership before assignment activation", () => {
+  const issuingFixture = (startPrompt: () => Effect.Effect<void, SubagentProcessError>) =>
+    Effect.gen(function* () {
+      const context = yield* makeRunContext();
+      const record = yield* runRecordFixture({
+        view: view({ state: "starting" }),
+        process: yield* backendHandleFixture(),
+        assignment: { ...runningAssignment(1), phase: "issuing" },
+      });
+      const completionGate = yield* Semaphore.make(1);
+      const delivery = yield* notificationDelivery({
+        ...context,
+        withCompletionGate: completionGate.withPermits(1),
+        notify: () => Effect.succeed({ deliveredCompletionKeys: [] }),
+      });
+      const settlement = settlementOperations({
+        ...context,
+        delivery,
+        closeRecordScope: () => Effect.void,
+        claimTurnInputDrain: (_record, drained) => Deferred.doneUnsafe(drained, Effect.void),
+      });
+      const assignments = assignmentOperations({
+        ...context,
+        startPrompt,
+        activateAssignmentLocked: settlement.activateAssignmentLocked,
+        replayAssignmentActivation: settlement.replayAssignmentActivation,
+      });
+      const handleEvent = backendEventHandler({
+        settlement,
+        queueQuestionLocked: () => undefined,
+        onProxyEvent: () => Effect.void,
+      });
+      yield* settlement.acceptBackendReport(record, {
+        runId: record.view.id,
+        assignmentEpoch: 1,
+        sequence: 1,
+        deliveryId: "accepted",
+        text: REPORT,
+      });
+      expect(record.assignment.pendingReport?.deliveryId).toBe("accepted");
+      return { record, settlement, assignments, handleEvent };
+    });
+
+  const expectReportWon = (record: RunRecord) => {
+    expect(record.view).toMatchObject({
+      state: "completed",
+      finalText: REPORT,
+      reportGeneration: 1,
+    });
+    expect([...record.completionGenerations.values()]).toMatchObject([
+      { generation: 1, outcome: "completed", finalText: REPORT },
+    ]);
+    expect(record.lastBackendReport?.deliveryId).toBe("accepted");
+  };
+
+  for (const lateEvent of lateEvents) {
+    it.effect(`keeps a buffered report when ${lateEvent.type} arrives before start confirms`, () =>
+      Effect.gen(function* () {
+        const startGate = yield* Deferred.make<void, SubagentProcessError>();
+        const { record, assignments, handleEvent } = yield* issuingFixture(() =>
+          Deferred.await(startGate),
+        );
+        const confirming = yield* assignments
+          .submitPrompt(record, "Task", "start", record.assignment.attemptToken)
+          .pipe(Effect.forkScoped);
+        yield* yieldTurns;
+        yield* handleEvent(record, lateEvent);
+        expectReportWon(record);
+
+        // The exit or failure cancels the start request; the accepted report still answers it.
+        yield* Deferred.fail(
+          startGate,
+          new SubagentProcessError({ operation: "start", message: "Transport closed." }),
+        );
+        expect(yield* Fiber.join(confirming)).toMatchObject({ state: "completed" });
+        expectReportWon(record);
+        expect(record.completionGenerations.size).toBe(1);
+      }),
+    );
+  }
+
+  it.effect("answers a failed start with the buffered report it already accepted", () =>
+    Effect.gen(function* () {
+      const { record, settlement, assignments } = yield* issuingFixture(() =>
+        Effect.fail(new SubagentProcessError({ operation: "start", message: "Prompt refused." })),
+      );
+      const issued = yield* assignments.submitPrompt(
+        record,
+        "Task",
+        "resume",
+        record.assignment.attemptToken,
+      );
+      expect(issued).toMatchObject({ state: "completed", finalText: REPORT });
+      // The caller's own failure path finds the outcome settled and changes nothing.
+      yield* settlement.failRun(record, "Prompt refused.");
+      expectReportWon(record);
+      expect(record.completionGenerations.size).toBe(1);
+    }),
+  );
 });

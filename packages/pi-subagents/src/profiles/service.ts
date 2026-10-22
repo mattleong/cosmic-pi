@@ -1,9 +1,11 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import { identity } from "effect/Function";
 import * as Layer from "effect/Layer";
-import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
+import { frozenProjection, type ProjectionError } from "pi-cosmic-core";
 import type { ResolvedSubagentConfig } from "../config/options.ts";
+import type { WriterWorkspaceMode } from "../config/schema.ts";
 import { SubagentConfigStore } from "../config/store.ts";
 import type { CustomAgent } from "./agents.ts";
 import { PROFILE_DEFINITIONS } from "./definitions.ts";
@@ -15,6 +17,7 @@ import {
 } from "./resolve.ts";
 import {
   conflict,
+  sessionProfileSeed,
   sessionProfileSnapshot,
   patchSessionDelegationSnapshot,
   patchSessionNestingSnapshot,
@@ -46,16 +49,23 @@ export interface SubagentProfileServiceContract {
   ) => Effect.Effect<A, E | SessionProfileConflictError, R>;
   readonly patchSessionProfile: (
     patch: SessionProfilePatch,
-  ) => Effect.Effect<SessionProfileSnapshot, SessionProfileEditError>;
+  ) => Effect.Effect<SessionProfileSnapshot, SessionProfileEditError | ProjectionError>;
   readonly replaceSessionProfiles: (
     patch: SessionProfileSetPatch,
-  ) => Effect.Effect<SessionProfileSnapshot, SessionProfileEditError>;
+  ) => Effect.Effect<SessionProfileSnapshot, SessionProfileEditError | ProjectionError>;
   readonly patchSessionNesting: (
     patch: SessionNestingPatch,
-  ) => Effect.Effect<SessionProfileSnapshot, SessionProfileEditError>;
+  ) => Effect.Effect<SessionProfileSnapshot, SessionProfileEditError | ProjectionError>;
   readonly patchSessionDelegation: (
     patch: SessionDelegationPatch,
-  ) => Effect.Effect<SessionProfileSnapshot, SessionProfileEditError>;
+  ) => Effect.Effect<SessionProfileSnapshot, SessionProfileEditError | ProjectionError>;
+  /**
+   * Records a saved writer workspace default in the session's base configuration, which /tree
+   * keeps, without changing Current Session's revision.
+   */
+  readonly recordWriterWorkspaceMode: (
+    mode: WriterWorkspaceMode,
+  ) => Effect.Effect<void, ProjectionError>;
 }
 
 export class SubagentProfileService extends Context.Service<
@@ -67,41 +77,46 @@ export interface SubagentProfileLayerOptions {
   readonly cwd: string;
   readonly agentDirectory: string;
   readonly projectTrusted: boolean;
+  /** The base configuration a replaced runtime published, which /tree keeps. */
   readonly sessionBaseConfig?: ResolvedSubagentConfig | undefined;
-  readonly publishSessionBaseConfig?: ((config: ResolvedSubagentConfig) => void) | undefined;
   readonly initialSessionOverrides?: SessionProfileOverrideSeed | undefined;
-  /** Receives the initial snapshot and every committed session change. */
+  /**
+   * Receives the initial snapshot and every committed change, including its base configuration.
+   * A throw fails that change and leaves the committed snapshot unchanged.
+   */
   readonly publishSession?: ((snapshot: SessionProfileSnapshot) => void) | undefined;
 }
 
-export const makeSubagentProfileService = (
+type SubagentProfileServiceOptions = Pick<
+  SubagentProfileLayerOptions,
+  "initialSessionOverrides" | "publishSession"
+>;
+
+const subagentProfileService = (
   config: ResolvedSubagentConfig,
-  options: Pick<SubagentProfileLayerOptions, "initialSessionOverrides" | "publishSession"> = {},
-): Effect.Effect<SubagentProfileServiceContract> =>
+  options: SubagentProfileServiceOptions,
+): Effect.Effect<SubagentProfileServiceContract, ProjectionError> =>
   Effect.gen(function* () {
-    const publishSnapshot = (snapshot: SessionProfileSnapshot): Effect.Effect<void> => {
-      const publish = options.publishSession;
-      return publish ? Effect.try(() => publish(snapshot)).pipe(Effect.ignore) : Effect.void;
-    };
-    const initial = sessionProfileSnapshot(config, options.initialSessionOverrides);
-    const state = yield* Ref.make(initial);
+    // A failed publication leaves the committed snapshot unchanged, so the handoff that /reload
+    // and /tree restore from never disagrees with this service.
+    const projection = yield* frozenProjection<SessionProfileSnapshot, SessionProfileSnapshot>(
+      sessionProfileSnapshot(config, options.initialSessionOverrides),
+      identity,
+      (snapshot) => options.publishSession?.(snapshot),
+    );
+    // Serializes edits with saved-set writes, which read the snapshot without republishing it, so
+    // a failed publication cannot report a saved-set write that already committed as failed.
     const lock = yield* Semaphore.make(1);
-    yield* publishSnapshot(initial);
     const commit = <E>(
       transition: (current: SessionProfileSnapshot) => Effect.Effect<SessionProfileSnapshot, E>,
-    ): Effect.Effect<SessionProfileSnapshot, E> =>
+    ): Effect.Effect<SessionProfileSnapshot, E | ProjectionError> =>
       lock.withPermit(
-        Ref.get(state).pipe(
-          Effect.flatMap(transition),
-          Effect.tap((next) =>
-            Effect.uninterruptible(
-              Ref.set(state, next).pipe(Effect.andThen(publishSnapshot(next))),
-            ),
-          ),
+        projection.transition((current) =>
+          transition(current).pipe(Effect.map((next) => [next, next] as const)),
         ),
       );
     return SubagentProfileService.of({
-      capture: Ref.get(state),
+      capture: projection.getState,
       definition: (profile) => (isProfileId(profile) ? PROFILE_DEFINITIONS[profile] : undefined),
       resolve: (snapshot, profile, environment, agent) =>
         resolveProfilePlan(profile, snapshot.effectiveConfig, environment, agent),
@@ -111,7 +126,7 @@ export const makeSubagentProfileService = (
       ) =>
         lock.withPermit(
           Effect.flatMap(
-            Ref.get(state),
+            projection.getState,
             (current): Effect.Effect<A, E | SessionProfileConflictError, R> =>
               current.revision === expectedRevision
                 ? operation(current)
@@ -130,6 +145,15 @@ export const makeSubagentProfileService = (
         commit((current) => patchSessionNestingSnapshot(current, patch)),
       patchSessionDelegation: (patch) =>
         commit((current) => patchSessionDelegationSnapshot(current, patch)),
+      recordWriterWorkspaceMode: (mode) =>
+        commit((current) =>
+          Effect.succeed(
+            sessionProfileSnapshot(
+              { ...current.baseConfig, writerWorkspaceMode: mode },
+              sessionProfileSeed(current),
+            ),
+          ),
+        ).pipe(Effect.asVoid),
     });
   });
 
@@ -141,17 +165,16 @@ export const subagentProfileServiceLayer = (options: SubagentProfileLayerOptions
       const config =
         options.sessionBaseConfig ??
         (yield* store.load(options.cwd, options.agentDirectory, options.projectTrusted));
-      yield* Effect.try(() => options.publishSessionBaseConfig?.(config)).pipe(Effect.ignore);
       if (config.diagnostics.length > 0)
         yield* Effect.logWarning(
           `Invalid Subagents configuration fields were ignored or failed closed: ${config.diagnostics.join(", ")}.`,
         );
-      return yield* makeSubagentProfileService(config, options);
+      return yield* subagentProfileService(config, options);
     }),
   );
 
 /** Builds the profile service from an already resolved configuration. */
 export const subagentProfileServiceLayerFor = (
   config: ResolvedSubagentConfig,
-  options: Pick<SubagentProfileLayerOptions, "initialSessionOverrides" | "publishSession"> = {},
-) => Layer.effect(SubagentProfileService, makeSubagentProfileService(config, options));
+  options: SubagentProfileServiceOptions = {},
+) => Layer.effect(SubagentProfileService, subagentProfileService(config, options));

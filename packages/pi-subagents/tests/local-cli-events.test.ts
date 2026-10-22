@@ -8,8 +8,13 @@ import * as EffectScope from "effect/Scope";
 import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
 import type { Scope } from "effect/Scope";
-import { provideBuiltLayer } from "pi-cosmic-core";
-import { capturedTelemetrySnapshot, makeCapturedLogger, yieldUntil } from "pi-cosmic-core/testing";
+
+import {
+  capturedTelemetrySnapshot,
+  makeCapturedLogger,
+  yieldUntil,
+  provideBuiltLayer,
+} from "pi-cosmic-core/testing";
 import type { LocalCliWireEvent } from "../src/boundary/local-cli-transport.ts";
 import { backendLaunch } from "./fixtures/backend-supervisor.ts";
 import {

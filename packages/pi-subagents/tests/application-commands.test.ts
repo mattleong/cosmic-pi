@@ -53,4 +53,33 @@ describe("application settings commands", () => {
       yield* settle(() => host.emit("session_shutdown", ctx));
     },
   );
+
+  effectTest("a writer workspace change made mid-session survives /tree", function* () {
+    const agentDirectory = yield* temporaryDirectory("pi-subagents-commands-agent-");
+    const cwd = yield* temporaryDirectory("pi-subagents-commands-project-");
+    const host = recordingExtensionHost();
+    registerSubagentApplication(host.pi, {
+      getAgentDirectory: () => agentDirectory,
+      loadSettings: () => Promise.resolve(),
+    });
+    const notify = vi.fn();
+    const ctx = sessionContextFixture({ cwd, ui: { notify }, isProjectTrusted: () => false });
+    const command = (args: string) =>
+      step(
+        () =>
+          host.commands.get("subagents")?.handler(args, ctx) ??
+          Promise.reject(new Error("Missing /subagents command")),
+      );
+    yield* settle(() => host.emit("session_start", ctx));
+    yield* command("settings writerWorkspace worktree");
+    // /tree keeps the session's base configuration instead of rereading it.
+    yield* settle(() => host.emit("session_tree", ctx));
+    notify.mockClear();
+    yield* command("settings status");
+    expect(notify).toHaveBeenCalledWith(
+      expect.stringMatching(/writerWorkspace\W+worktree\b/u),
+      expect.anything(),
+    );
+    yield* settle(() => host.emit("session_shutdown", ctx));
+  });
 });

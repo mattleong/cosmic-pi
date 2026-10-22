@@ -1,7 +1,7 @@
 import { it, expect } from "@effect/vitest";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
-import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-builtins.ts";
+import { nodeFsPromises as fs, nodePath as path } from "../support/node-builtins.ts";
 import * as Schema from "effect/Schema";
 import { SafeFile, nodeFilePlatformLayer } from "pi-cosmic-core";
 import * as Layer from "effect/Layer";

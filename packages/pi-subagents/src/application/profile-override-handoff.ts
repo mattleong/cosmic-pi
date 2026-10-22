@@ -22,18 +22,17 @@ export const createProfileOverrideHandoff = () => {
     capture: () => cloneSessionProfileOverrideSeed(seed),
     captureAuthoritative: () =>
       seedIsAuthoritative ? cloneSessionProfileOverrideSeed(seed) : undefined,
+    /** The current owner's latest base configuration, which /tree keeps. */
     captureBaseConfig: () => baseConfig,
     /** The current owner's latest committed Current Session, for prompt and footer views. */
     captureSnapshot: () => snapshot,
     open: () => ++owner,
-    publishBaseConfig: (from: number, config: ResolvedSubagentConfig) => {
-      if (from === owner) baseConfig = config;
-    },
     publish,
     publishSnapshot: (from: number, next: SessionProfileSnapshot) => {
       if (from !== owner) return;
       publish(from, sessionProfileSeed(next));
       snapshot = next;
+      baseConfig = next.baseConfig;
     },
     clear: () => {
       owner += 1;

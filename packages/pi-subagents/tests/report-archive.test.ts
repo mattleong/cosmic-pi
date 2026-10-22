@@ -4,7 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import * as Core from "pi-cosmic-core";
 import { hostNotifier } from "../src/boundary/host-notifier.ts";
-import { nodeFsPromises as fs, nodePath as path } from "../src/boundary/node-builtins.ts";
+import { nodeFsPromises as fs, nodePath as path } from "./support/node-builtins.ts";
 import {
   sessionReportArchive,
   pruneReportArchive,
@@ -188,6 +188,32 @@ describe("subagent report archive", () => {
       } finally {
         uuid.mockRestore();
       }
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("fails the save and removes the file when closing reports a deferred write error", () =>
+    Effect.gen(function* () {
+      const agent = yield* temporaryAgent;
+      const archive = sessionReportArchive(agent, "session-1");
+      const open = fs.open.bind(fs);
+      const opened = vi.spyOn(fs, "open").mockImplementation((...args) =>
+        open(...args).then((handle) => {
+          const close = handle.close.bind(handle);
+          vi.spyOn(handle, "close").mockImplementationOnce(() =>
+            close().then(() => {
+              throw Object.assign(new Error("deferred write failure"), { code: "EIO" });
+            }),
+          );
+          return handle;
+        }),
+      );
+      const failure = yield* archive
+        .save({ id: "agent-1", generation: 1, text: "report" })
+        .pipe(Effect.flip, Effect.ensuring(Effect.sync(() => opened.mockRestore())));
+
+      expect(failure.reason).toBe("write_failed");
+      const directory = path.join(reportArchiveRoot(agent), "session-1");
+      expect(yield* Effect.promise(() => fs.readdir(directory))).toEqual([]);
     }).pipe(Effect.scoped),
   );
 

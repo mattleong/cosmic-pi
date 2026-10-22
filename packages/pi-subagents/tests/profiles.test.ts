@@ -2,8 +2,12 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import { provideBuiltLayer } from "pi-cosmic-core";
-import { capturedTelemetrySnapshot, makeCapturedLogger } from "pi-cosmic-core/testing";
+import { ProjectionError } from "pi-cosmic-core";
+import {
+  capturedTelemetrySnapshot,
+  makeCapturedLogger,
+  provideBuiltLayer,
+} from "pi-cosmic-core/testing";
 import { type ResolvedSubagentConfig } from "../src/config/options.ts";
 import {
   decodeSubagentConfig,
@@ -311,24 +315,17 @@ describe("subagent v6 profile configuration and resolution", () => {
       expect(subagentConfigDecoder("global")({ version }).unsupportedVersion).toBe(true);
   });
 
-  it.effect("activates loaded base configuration when publication throws", () =>
+  it.effect("fails activation, not silently, when the initial session publication throws", () =>
     Effect.gen(function* () {
       let attempts = 0;
-      const snapshot = yield* captureLoaded(
-        resolveTestConfig(
-          document({ profiles: { reviewer: candidate({ model: "openai/base-after-throw" }) } }),
-        ),
-        {
-          publishSessionBaseConfig: () => {
-            attempts += 1;
-            throw new Error("hostile base publication");
-          },
+      const error = yield* captureLoaded(resolveTestConfig(document({})), {
+        publishSession: () => {
+          attempts += 1;
+          throw new Error("hostile session publication");
         },
-      );
+      }).pipe(Effect.flip);
       expect(attempts).toBe(1);
-      expect(snapshot.effectiveConfig.profiles.reviewer.candidates[0]?.model).toBe(
-        "openai/base-after-throw",
-      );
+      expect(error).toBeInstanceOf(ProjectionError);
     }),
   );
 

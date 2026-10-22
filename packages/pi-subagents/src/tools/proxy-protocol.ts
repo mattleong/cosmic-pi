@@ -1,5 +1,6 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Option from "effect/Option";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import {
   decodeQuestionnaireRequest,
@@ -81,20 +82,21 @@ export const withSubagentProxyParent = (
 
 export const decodeSubagentProxyParent = (
   request: SubagentProxyRequest,
-):
-  | { readonly request: SubagentProxyRequest; readonly parentContext?: SubagentParentContext }
-  | InvalidSubagentRequestError => {
+): Result.Result<
+  { readonly request: SubagentProxyRequest; readonly parentContext?: SubagentParentContext },
+  InvalidSubagentRequestError
+> => {
   if (request.argumentsJson.length > MAX_PROXY_JSON_CHARS)
     return invalid("Nested subagent request arguments exceeded their bound.");
   const decoded = decodeParentEnvelope(request.argumentsJson);
   if (Option.isSome(decoded))
-    return {
+    return Result.succeed({
       request: { tool: request.tool, argumentsJson: decoded.value.argumentsJson },
       parentContext: decoded.value.parentContext,
-    };
+    });
   return Option.isSome(hasParentEnvelope(request.argumentsJson))
     ? invalid("Nested Pi parent context failed strict validation.")
-    : { request };
+    : Result.succeed({ request });
 };
 const decodeQuestionnaireJson = Schema.decodeUnknownOption(
   Schema.fromJsonString(QuestionnaireRequestSchema),
@@ -103,12 +105,14 @@ const decodeQuestionnaireJson = Schema.decodeUnknownOption(
 
 export const decodeQuestionnaireProxyRequest = (
   request: SubagentProxyRequest,
-): AskUserRequest | InvalidSubagentRequestError => {
+): Result.Result<AskUserRequest, InvalidSubagentRequestError> => {
   if (request.tool !== "ask_user" || request.argumentsJson.length > 131_072)
     return invalid("Nested questionnaire arguments exceeded the structured request bound.");
   const decoded = decodeQuestionnaireJson(request.argumentsJson);
   const value = Option.isSome(decoded) ? decodeQuestionnaireRequest(decoded.value) : undefined;
-  return value ?? invalid("Nested questionnaire arguments failed strict validation.");
+  return value
+    ? Result.succeed(value)
+    : invalid("Nested questionnaire arguments failed strict validation.");
 };
 
 type SubagentProxyPayload =
@@ -154,7 +158,8 @@ export const decodeSubagentProxyResult = (source: string): AgentToolResult<unkno
   };
 };
 
-const invalid = (message: string) => invalidRequest("proxy_request_invalid", message);
+const invalid = (message: string): Result.Result<never, InvalidSubagentRequestError> =>
+  Result.fail(invalidRequest("proxy_request_invalid", message));
 
 type ToolSchemas = {
   readonly [N in SubagentToolName]: {
@@ -181,7 +186,7 @@ const decodeToolArguments = <N extends SubagentToolName>(
 
 export const decodeSubagentProxyRequest = (
   request: SubagentProxyRequest,
-): SubagentToolInput | InvalidSubagentRequestError => {
+): Result.Result<SubagentToolInput, InvalidSubagentRequestError> => {
   if (request.argumentsJson.length > MAX_PROXY_JSON_CHARS)
     return invalid("Nested subagent request arguments were not bounded JSON.");
   const decoded = decodeProxyArgumentsJson(request.argumentsJson);
@@ -189,10 +194,10 @@ export const decodeSubagentProxyRequest = (
     return invalid("Nested subagent request arguments were not bounded JSON.");
   const { tool } = request;
   if (!isSubagentToolName(tool)) return invalid("Nested Pi requested an unknown coordinator tool.");
-  return (
-    decodeToolArguments(tool, decoded.value) ??
-    invalid(`Nested ${tool} arguments failed strict validation.`)
-  );
+  const input = decodeToolArguments(tool, decoded.value);
+  return input
+    ? Result.succeed(input)
+    : invalid(`Nested ${tool} arguments failed strict validation.`);
 };
 
 const decodeAgentToolArguments = <N extends AgentToolName>(
@@ -204,22 +209,22 @@ const decodeAgentToolArguments = <N extends AgentToolName>(
     : undefined;
 
 /**
- * Decodes a nested `agent_*` call, or returns undefined for other tools. Arguments are the public
- * tool arguments alone: the root binds the caller from the authenticated channel, so a payload that
- * names a caller, ancestry, or parent context fails strict validation.
+ * Decodes a nested `agent_*` call, or succeeds with undefined for other tools. Arguments are the
+ * public tool arguments alone: the root binds the caller from the authenticated channel, so a
+ * payload that names a caller, ancestry, or parent context fails strict validation.
  */
 export const decodeAgentProxyRequest = (
   request: SubagentProxyRequest,
-): AgentToolInput | InvalidSubagentRequestError | undefined => {
+): Result.Result<AgentToolInput | undefined, InvalidSubagentRequestError> => {
   const { tool } = request;
-  if (!isAgentToolName(tool)) return undefined;
+  if (!isAgentToolName(tool)) return Result.succeed(undefined);
   if (request.argumentsJson.length > MAX_PROXY_JSON_CHARS)
     return invalid("Nested agent request arguments were not bounded JSON.");
   const decoded = decodeProxyArgumentsJson(request.argumentsJson);
   if (Option.isNone(decoded))
     return invalid("Nested agent request arguments were not bounded JSON.");
-  return (
-    decodeAgentToolArguments(tool, decoded.value) ??
-    invalid(`Nested ${tool} arguments failed strict validation.`)
-  );
+  const input = decodeAgentToolArguments(tool, decoded.value);
+  return input
+    ? Result.succeed(input)
+    : invalid(`Nested ${tool} arguments failed strict validation.`);
 };

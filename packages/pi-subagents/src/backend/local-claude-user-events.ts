@@ -22,6 +22,7 @@ import {
   type ClaudeUserDiagnosticContext,
 } from "./local-claude-correlation.ts";
 import { userContentDigest, type PendingUserReplay } from "./local-claude-input-delivery.ts";
+import { ignoreConsumerCause } from "./driver-shared.ts";
 import { CLAUDE_INTERRUPT_MARKER } from "./local-claude-protocol.ts";
 import type { BackendEvent } from "./model.ts";
 
@@ -204,7 +205,7 @@ export const localClaudeUserEvents = (context: LocalClaudeHandleContext) => {
         pending: pendingDiagnostic(),
         report,
       });
-    }).pipe(Effect.ignoreCause);
+    }).pipe(ignoreConsumerCause("Claude debug recorder"));
   };
 
   const rejectUncorrelatedUser = (

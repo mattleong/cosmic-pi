@@ -448,11 +448,9 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
                   selected.notificationGeneration += 1;
                   delivery.discardQuestionLocked(selected.view.id);
                   selected.replyPendingRequestId = undefined;
-                  selected.initializationPending = needsRespawn;
-                  selected.initializationSettled = needsRespawn
-                    ? Deferred.makeUnsafe<void>()
+                  selected.initialization = needsRespawn
+                    ? { settled: yield* Deferred.make<void>() }
                     : undefined;
-                  selected.pendingInitializationSettlement = undefined;
                   beginNextAssignmentLocked(selected, attemptToken, now, {
                     question: undefined,
                     currentTool: undefined,

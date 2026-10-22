@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 import * as Scope from "effect/Scope";
 import { invokeHostCallback } from "pi-cosmic-core";
 import { claimCompletion, completionClaimOwner, releaseCompletionClaim } from "./completion.ts";
-import { invalidRequest, type SubagentRuntimeClosedError } from "./errors.ts";
+import { invalidRequest, type SubagentError, type SubagentRuntimeClosedError } from "./errors.ts";
 import { snapshotRun, type RunContext, type RunRecord, type WithRunLock } from "./internal.ts";
 import {
   isTerminalRunState,
@@ -24,7 +24,10 @@ interface RunCompletionObservationDependencies extends Pick<RunContext, "records
   readonly currentProjection: () => SubagentProjection;
   readonly waitForRevision: (after: number) => Effect.Effect<void, SubagentRuntimeClosedError>;
   readonly allocateClaimToken: () => string;
-  readonly delivery: Pick<RunNotificationDelivery, "wakeCompletionLocked">;
+  readonly delivery: Pick<
+    RunNotificationDelivery,
+    "wakeCompletionLocked" | "signalOutboxChangedLocked"
+  >;
 }
 
 const reportStatusOf = (finalText: string | undefined, unresolved: boolean, available: boolean) =>
@@ -98,7 +101,9 @@ export function completionObservationOperations(
     };
   };
 
-  const consumeCompletions: SubagentServiceContract["consumeCompletions"] = (receipts) =>
+  const consumeCompletions: SubagentServiceContract["consumeCompletions"] = Effect.fn(
+    "SubagentService.consumeCompletions",
+  )((receipts: Parameters<SubagentServiceContract["consumeCompletions"]>[0]) =>
     withLock(
       Effect.sync(() => {
         for (const receipt of receipts) {
@@ -110,9 +115,11 @@ export function completionObservationOperations(
             continue;
           record.completionGenerations.delete(receipt.generation);
           record.completionClaims.delete(receipt.generation);
+          delivery.signalOutboxChangedLocked();
         }
       }),
-    );
+    ),
+  );
 
   interface CompletionClaim {
     readonly claimToken: string;
@@ -157,6 +164,7 @@ export function completionObservationOperations(
             const claimed = desired.filter(({ record, generation }) =>
               claimCompletion(record, generation, claimToken),
             );
+            if (claimed.length > 0) delivery.signalOutboxChangedLocked();
             return { claimToken, selected, claimed } satisfies CompletionClaim;
           }),
           releaseCompletionClaims,
@@ -239,23 +247,28 @@ export function completionObservationOperations(
       );
     return waitLoop();
   };
-  const withAwaitTerminalObservations: SubagentServiceContract["withAwaitTerminalObservations"] = (
-    ids,
-    until,
-    onUpdate,
-    use,
-    callerRunId,
-  ) => {
-    if (ids.length === 0)
-      return Effect.fail(
-        invalidRequest("run_ids_required", "Await requires at least one subagent run ID."),
+  const withAwaitTerminalObservations: SubagentServiceContract["withAwaitTerminalObservations"] =
+    Effect.fn("SubagentService.await")(function* <A, E, R>(
+      ids: ReadonlyArray<string>,
+      until: SubagentAwaitUntil,
+      onUpdate: Parameters<SubagentServiceContract["withAwaitTerminalObservations"]>[2],
+      use: (
+        observations: ReadonlyArray<SubagentRunObservation>,
+        questions?: ReadonlyArray<SubagentRunView>,
+      ) => Effect.Effect<A, E, R>,
+      callerRunId?: string,
+    ): Effect.fn.Return<A, SubagentError | E, R> {
+      if (ids.length === 0)
+        return yield* invalidRequest(
+          "run_ids_required",
+          "Await requires at least one subagent run ID.",
+        );
+      return yield* withCompletionClaims(ids, (claim) =>
+        waitForTerminalObservations(claim, until, callerRunId, onUpdate).pipe(
+          Effect.flatMap(({ observations, questions }) => use(observations, questions)),
+        ),
       );
-    return withCompletionClaims(ids, (claim) =>
-      waitForTerminalObservations(claim, until, callerRunId, onUpdate).pipe(
-        Effect.flatMap(({ observations, questions }) => use(observations, questions)),
-      ),
-    );
-  };
+    });
   return {
     redactCompletionReport,
     consumeCompletions,

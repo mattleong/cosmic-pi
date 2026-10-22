@@ -1,9 +1,11 @@
 import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
+import { absurd } from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
-import type * as Schema from "effect/Schema";
-import { isJsonObject, runtimeTypeName, type JsonObject, type JsonValue } from "pi-cosmic-core";
+import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
+import { isJsonObject, runtimeTypeName } from "pi-cosmic-core";
 import { AGENT_TOOL_NAME, CONTACT_PARENT_TOOL_NAME } from "../run/tool-policy.ts";
 import type { SupervisorRpcFailure } from "./protocol.ts";
 import type { SupervisorToolFailure } from "./tool-call.ts";
@@ -24,8 +26,17 @@ import {
 } from "./mcp-contract.ts";
 
 const MAX_ID_CHARS = 256;
+const MAX_METHOD_CHARS = 128;
+const MAX_METADATA_DEPTH = 6;
+const MAX_METADATA_ENTRIES = 64;
+const MAX_METADATA_KEY_CHARS = 128;
+const MAX_METADATA_STRING_CHARS = 4096;
 
-export type RpcId = string | number;
+const RpcIdSchema = Schema.Union([
+  Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(MAX_ID_CHARS)),
+  Schema.Number.check(Schema.isInt()),
+]);
+export type RpcId = typeof RpcIdSchema.Type;
 
 export type DecodedMcpMessage =
   | { readonly method: "initialize"; readonly id: RpcId; readonly protocolVersion: string }
@@ -36,7 +47,7 @@ export type DecodedMcpMessage =
       readonly method: "tools/call";
       readonly id: RpcId;
       readonly name: string;
-      readonly arguments: JsonValue | undefined;
+      readonly arguments: Schema.Json;
       /** The native thread making the call, when the runtime names it in the request metadata. */
       readonly nativeThreadId?: string | undefined;
     }
@@ -52,18 +63,6 @@ type McpToolResult = {
   readonly isError?: true;
 };
 
-const own = (value: JsonObject, key: string): boolean => Object.hasOwn(value, key);
-
-const exactKeys = <ValueInput>(
-  value: ValueInput,
-  allowed: ReadonlyArray<string>,
-  required: ReadonlyArray<string> = [],
-): value is ValueInput & JsonObject =>
-  isJsonObject(value) &&
-  Object.keys(value).every((key) => allowed.includes(key)) &&
-  required.every((key) => own(value, key)) &&
-  (!own(value, "_meta") || boundedMetadata(value._meta));
-
 export const boundedString = <ValueInput>(
   value: ValueInput,
   maximum: number,
@@ -71,32 +70,160 @@ export const boundedString = <ValueInput>(
 ): value is ValueInput & string =>
   Predicate.isString(value) && value.length <= maximum && (!nonEmpty || value.trim().length > 0);
 
+const isRpcId = Schema.is(RpcIdSchema);
 export const validRpcId = <ValueInput>(value: ValueInput): value is ValueInput & RpcId =>
-  (Predicate.isString(value) && value.length > 0 && value.length <= MAX_ID_CHARS) ||
-  (Predicate.isNumber(value) && Number.isSafeInteger(value));
+  isRpcId(value);
 
 export const rpcKey = (value: RpcId): string => `${runtimeTypeName(value)}:${String(value)}`;
 
-const isJsonArray = (value: Schema.Json | undefined): value is ReadonlyArray<Schema.Json> =>
+const isJsonArray = (value: Schema.Json): value is ReadonlyArray<Schema.Json> =>
   Array.isArray(value);
 
-const boundedMetadata = (value: Schema.Json | undefined, depth = 0): boolean => {
-  if (depth > 6) return false;
+const boundedMetadata = (value: Schema.Json, depth = 0): boolean => {
+  if (depth > MAX_METADATA_DEPTH) return false;
   if (value === null || Predicate.isBoolean(value)) return true;
   if (Predicate.isNumber(value)) return Number.isFinite(value);
-  if (Predicate.isString(value)) return value.length <= 4096;
+  if (Predicate.isString(value)) return value.length <= MAX_METADATA_STRING_CHARS;
   if (isJsonArray(value))
-    return value.length <= 64 && value.every((entry) => boundedMetadata(entry, depth + 1));
-  if (!isJsonObject(value)) return false;
+    return (
+      value.length <= MAX_METADATA_ENTRIES &&
+      value.every((entry) => boundedMetadata(entry, depth + 1))
+    );
   const entries = Object.entries(value);
   return (
-    entries.length <= 64 &&
-    entries.every(([key, entry]) => key.length <= 128 && boundedMetadata(entry, depth + 1))
+    entries.length <= MAX_METADATA_ENTRIES &&
+    entries.every(
+      ([key, entry]) => key.length <= MAX_METADATA_KEY_CHARS && boundedMetadata(entry, depth + 1),
+    )
   );
 };
 
-const validMeta = (params: Schema.Json | undefined): boolean =>
-  params === undefined || exactKeys(params, ["_meta"]);
+const boundedText = (maximum: number) =>
+  Schema.String.check(
+    Schema.isMaxLength(maximum),
+    Schema.makeFilter((text: string) => text.trim().length > 0),
+  );
+/** Request metadata the runtime may attach anywhere, bounded in depth, breadth, and size. */
+const MetadataSchema = Schema.Json.check(Schema.makeFilter((value) => boundedMetadata(value)));
+const metadata = { _meta: Schema.optionalKey(MetadataSchema) };
+const MetadataOnlyParams = Schema.optionalKey(Schema.Struct(metadata));
+const JsonRpcVersion = Schema.Literal("2.0");
+
+const InitializeMessage = Schema.Struct({
+  jsonrpc: JsonRpcVersion,
+  id: RpcIdSchema,
+  method: Schema.Literal("initialize"),
+  params: Schema.Struct({
+    protocolVersion: boundedText(64),
+    capabilities: Schema.optionalKey(Schema.Json),
+    clientInfo: Schema.optionalKey(Schema.Json),
+    ...metadata,
+  }),
+});
+const InitializedMessage = Schema.Struct({
+  jsonrpc: JsonRpcVersion,
+  method: Schema.Literal("notifications/initialized"),
+  params: MetadataOnlyParams,
+});
+const CancelledMessage = Schema.Struct({
+  jsonrpc: JsonRpcVersion,
+  method: Schema.Literal("notifications/cancelled"),
+  params: Schema.Struct({
+    requestId: RpcIdSchema,
+    reason: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(512))),
+    ...metadata,
+  }),
+});
+const RequestMessage = Schema.Struct({
+  jsonrpc: JsonRpcVersion,
+  id: RpcIdSchema,
+  method: Schema.Literals(["ping", "tools/list"]),
+  params: MetadataOnlyParams,
+});
+const ToolCallMessage = Schema.Struct({
+  jsonrpc: JsonRpcVersion,
+  id: RpcIdSchema,
+  method: Schema.Literal("tools/call"),
+  params: Schema.Struct({
+    name: boundedText(128),
+    arguments: Schema.Json,
+    ...metadata,
+  }),
+});
+const KNOWN_METHODS: ReadonlySet<string> = new Set([
+  "initialize",
+  "notifications/initialized",
+  "notifications/cancelled",
+  "ping",
+  "tools/list",
+  "tools/call",
+]);
+// A method this server doesn't serve; a known method whose shape is wrong is rejected instead.
+const UnknownMessage = Schema.Struct({
+  jsonrpc: JsonRpcVersion,
+  id: Schema.optionalKey(RpcIdSchema),
+  method: Schema.String.check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(MAX_METHOD_CHARS),
+    Schema.makeFilter((method: string) => !KNOWN_METHODS.has(method)),
+  ),
+  params: Schema.optionalKey(Schema.Json),
+});
+const exactMessage = { onExcessProperty: "error" } as const;
+const decodeServedMessage = Schema.decodeUnknownResult(
+  Schema.Union([
+    InitializeMessage,
+    InitializedMessage,
+    CancelledMessage,
+    RequestMessage,
+    ToolCallMessage,
+  ]),
+  exactMessage,
+);
+const decodeUnservedMessage = Schema.decodeUnknownResult(UnknownMessage, exactMessage);
+
+// Codex names the calling thread, including a native sub-agent's own thread, in `_meta.threadId`.
+const callerThreadId = (meta: Schema.Json | undefined): string | undefined => {
+  if (!isJsonObject(meta)) return undefined;
+  const threadId = meta.threadId;
+  return boundedString(threadId, MAX_SUPERVISOR_MCP_THREAD_ID_CHARS) ? threadId : undefined;
+};
+
+export const decodeMcpMessage = (value: Schema.Json): DecodedMcpMessage | undefined => {
+  const served = decodeServedMessage(value);
+  if (Result.isFailure(served))
+    return Result.match(decodeUnservedMessage(value), {
+      onFailure: () => undefined,
+      onSuccess: ({ id }) => ({ method: "unknown", ...(id !== undefined && { id }) }),
+    });
+  const message = served.success;
+  switch (message.method) {
+    case "initialize":
+      return {
+        method: "initialize",
+        id: message.id,
+        protocolVersion: message.params.protocolVersion,
+      };
+    case "notifications/initialized":
+      return { method: "notifications/initialized" };
+    case "notifications/cancelled":
+      return { method: "notifications/cancelled", requestId: message.params.requestId };
+    case "ping":
+    case "tools/list":
+      return { method: message.method, id: message.id };
+    case "tools/call": {
+      const nativeThreadId = callerThreadId(message.params._meta);
+      return {
+        method: "tools/call",
+        id: message.id,
+        name: message.params.name,
+        arguments: message.params.arguments,
+        ...(nativeThreadId !== undefined && { nativeThreadId }),
+      };
+    }
+  }
+  return absurd<DecodedMcpMessage>(message);
+};
 
 const contactInputSchema = {
   type: "object",
@@ -216,114 +343,6 @@ export const toolDefinitions = [
     annotations: { ...toolAnnotations, readOnlyHint: true, idempotentHint: true },
   },
 ];
-
-const decodeInitializeMessage = (
-  params: Schema.Json | undefined,
-  id: RpcId | undefined,
-): DecodedMcpMessage | undefined => {
-  if (
-    id === undefined ||
-    !exactKeys(
-      params,
-      ["protocolVersion", "capabilities", "clientInfo", "_meta"],
-      ["protocolVersion"],
-    ) ||
-    !boundedString(params.protocolVersion, 64)
-  )
-    return undefined;
-  return { method: "initialize", id, protocolVersion: params.protocolVersion };
-};
-
-const decodeInitializedMessage = (
-  params: Schema.Json | undefined,
-  id: RpcId | undefined,
-): DecodedMcpMessage | undefined =>
-  id === undefined && validMeta(params) ? { method: "notifications/initialized" } : undefined;
-
-const decodeCancelledMessage = (
-  params: Schema.Json | undefined,
-  id: RpcId | undefined,
-): DecodedMcpMessage | undefined => {
-  if (
-    id !== undefined ||
-    !exactKeys(params, ["requestId", "reason", "_meta"], ["requestId"]) ||
-    !validRpcId(params.requestId) ||
-    (params.reason !== undefined && !boundedString(params.reason, 512, false))
-  )
-    return undefined;
-  return { method: "notifications/cancelled", requestId: params.requestId };
-};
-
-const decodeRequestMessage = (
-  method: "ping" | "tools/list",
-  params: Schema.Json | undefined,
-  id: RpcId | undefined,
-): DecodedMcpMessage | undefined =>
-  id !== undefined && validMeta(params) ? { method, id } : undefined;
-
-const decodeToolCallMessage = (
-  params: Schema.Json | undefined,
-  id: RpcId | undefined,
-): DecodedMcpMessage | undefined => {
-  if (
-    id === undefined ||
-    !exactKeys(params, ["name", "arguments", "_meta"], ["name", "arguments"]) ||
-    !boundedString(params.name, 128)
-  )
-    return undefined;
-  const nativeThreadId = callerThreadId(params._meta);
-  return {
-    method: "tools/call",
-    id,
-    name: params.name,
-    arguments: params.arguments,
-    ...(nativeThreadId !== undefined && { nativeThreadId }),
-  };
-};
-
-// Codex names the calling thread, including a native sub-agent's own thread, in `_meta.threadId`.
-const callerThreadId = (meta: Schema.Json | undefined): string | undefined => {
-  if (!isJsonObject(meta)) return undefined;
-  const threadId = meta.threadId;
-  return boundedString(threadId, MAX_SUPERVISOR_MCP_THREAD_ID_CHARS) ? threadId : undefined;
-};
-
-const decodeMethodMessage = (
-  method: string,
-  params: Schema.Json | undefined,
-  id: RpcId | undefined,
-): DecodedMcpMessage | undefined => {
-  switch (method) {
-    case "initialize":
-      return decodeInitializeMessage(params, id);
-    case "notifications/initialized":
-      return decodeInitializedMessage(params, id);
-    case "notifications/cancelled":
-      return decodeCancelledMessage(params, id);
-    case "ping":
-    case "tools/list":
-      return decodeRequestMessage(method, params, id);
-    case "tools/call":
-      return decodeToolCallMessage(params, id);
-    default:
-      return { method: "unknown", ...(id !== undefined && { id }) };
-  }
-};
-
-export const decodeMcpMessage = (value: Schema.Json): DecodedMcpMessage | undefined => {
-  if (
-    !exactKeys(value, ["jsonrpc", "id", "method", "params"], ["jsonrpc", "method"]) ||
-    value.jsonrpc !== "2.0" ||
-    !Predicate.isString(value.method) ||
-    value.method.length < 1 ||
-    value.method.length > 128
-  )
-    return undefined;
-  const rawId = value.id;
-  const id = validRpcId(rawId) ? rawId : undefined;
-  if (own(value, "id") && id === undefined) return undefined;
-  return decodeMethodMessage(value.method, value.params, id);
-};
 
 export const toolResult = (text: string, isError = false): McpToolResult => ({
   content: [{ type: "text", text }],

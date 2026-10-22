@@ -1,6 +1,6 @@
 import * as Effect from "effect/Effect";
 import { expect } from "vitest";
-import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-builtins.ts";
+import { nodeFsPromises as fs, nodePath as path } from "../support/node-builtins.ts";
 import type { WorkspaceHandle } from "../../src/workspace/model.ts";
 import {
   exists,

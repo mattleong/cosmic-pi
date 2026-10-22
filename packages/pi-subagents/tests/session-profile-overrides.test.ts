@@ -2,8 +2,8 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import { ProjectionError } from "pi-cosmic-core";
 import { type ProfileRoute } from "../src/profiles/model.ts";
-import { makeSubagentProfileService } from "../src/profiles/service.ts";
 import {
   SessionProfileConflictError,
   SessionProfileInvalidError,
@@ -11,7 +11,11 @@ import {
   sessionProfileSeed,
 } from "../src/profiles/session-overrides.ts";
 import { resolveTestConfig } from "./fixtures/profile-settings-inspection.ts";
-import { declaredCandidate, profileCandidate as candidate } from "./fixtures/profiles.ts";
+import {
+  builtProfileService,
+  declaredCandidate,
+  profileCandidate as candidate,
+} from "./fixtures/profiles.ts";
 import { stringContaining } from "./support/matchers.ts";
 
 const route = (model: string): ProfileRoute => ({ candidates: [candidate(model)] });
@@ -40,7 +44,7 @@ describe("session profile overrides", () => {
     () =>
       Effect.gen(function* () {
         const published: Array<{ revision: number; baselineProfiles: number }> = [];
-        const service = yield* makeSubagentProfileService(baseConfig(), {
+        const service = yield* builtProfileService(baseConfig(), {
           publishSession: (snapshot) =>
             published.push({
               revision: snapshot.revision,
@@ -94,44 +98,94 @@ describe("session profile overrides", () => {
     expect(restored.effectiveConfig.profiles.reviewer.candidates[0]?.model).toBe("openai/original");
   });
 
-  it.effect(
-    "commits each edit with its best-effort handoff publication, even interrupted there",
-    () =>
-      Effect.gen(function* () {
-        const committing: Array<Fiber.Fiber<unknown, unknown>> = [];
-        const published: number[] = [];
-        const service = yield* makeSubagentProfileService(baseConfig(), {
-          publishSession: (snapshot) => {
-            published.push(snapshot.revision);
-            committing[0]?.interruptUnsafe();
-            throw new Error("hostile session publication");
-          },
+  it.effect("commits each edit together with its publication, even when interrupted there", () =>
+    Effect.gen(function* () {
+      const committing: Array<Fiber.Fiber<unknown, unknown>> = [];
+      const published: number[] = [];
+      let rejectPublication = false;
+      const service = yield* builtProfileService(baseConfig(), {
+        publishSession: (snapshot) => {
+          if (rejectPublication) throw new Error("hostile session publication");
+          published.push(snapshot.revision);
+          committing[0]?.interruptUnsafe();
+        },
+      });
+      const patch = (model: string, expectedRevision: number) =>
+        service.patchSessionProfile({
+          profile: "reviewer",
+          route: route(model),
+          expectedRevision,
         });
-        const patch = (model: string, expectedRevision: number) =>
-          service.patchSessionProfile({
-            profile: "reviewer",
-            route: route(model),
-            expectedRevision,
-          });
-        const committed = yield* patch("openai/session-after-throw", 0);
-        expect(yield* service.capture).toEqual(committed);
-        expect(committed.effectiveConfig.profiles.reviewer.candidates[0]?.model).toBe(
-          "openai/session-after-throw",
-        );
+      rejectPublication = true;
+      expect(yield* patch("openai/unpublished", 0).pipe(Effect.flip)).toBeInstanceOf(
+        ProjectionError,
+      );
+      expect((yield* service.capture).revision).toBe(0);
+      rejectPublication = false;
 
-        const fiber = yield* Effect.forkChild(patch("openai/interrupted", committed.revision));
-        committing.push(fiber);
-        expect(Exit.hasInterrupts(yield* Fiber.await(fiber))).toBe(true);
-        expect(published).toEqual([0, 1, 2]);
-        expect((yield* service.capture).revision).toBe(2);
-      }),
+      const fiber = yield* Effect.forkChild(patch("openai/interrupted", 0));
+      committing.push(fiber);
+      expect(Exit.hasInterrupts(yield* Fiber.await(fiber))).toBe(true);
+      expect(published).toEqual([0, 1]);
+      const committed = yield* service.capture;
+      expect(committed.revision).toBe(1);
+      expect(committed.effectiveConfig.profiles.reviewer.candidates[0]?.model).toBe(
+        "openai/interrupted",
+      );
+    }),
+  );
+
+  it.effect("reports a saved-set write as committed when session publication fails", () =>
+    Effect.gen(function* () {
+      let rejectPublication = false;
+      const service = yield* builtProfileService(baseConfig(), {
+        publishSession: () => {
+          if (rejectPublication) throw new Error("hostile session publication");
+        },
+      });
+      rejectPublication = true;
+      const saved: number[] = [];
+      const result = yield* service.withSnapshotAtRevision(0, (snapshot) =>
+        Effect.sync(() => {
+          saved.push(snapshot.revision);
+          return "saved";
+        }),
+      );
+      expect(result).toBe("saved");
+      expect(saved).toEqual([0]);
+    }),
+  );
+
+  it.effect("keeps a recorded writer workspace default without a Current Session revision", () =>
+    Effect.gen(function* () {
+      const published: Array<{ revision: number; mode: string }> = [];
+      const service = yield* builtProfileService(baseConfig(), {
+        publishSession: (snapshot) =>
+          published.push({
+            revision: snapshot.revision,
+            mode: snapshot.baseConfig.writerWorkspaceMode,
+          }),
+      });
+      const edited = yield* service.patchSessionProfile({
+        profile: "reviewer",
+        route: route("openai/session"),
+        expectedRevision: 0,
+      });
+      yield* service.recordWriterWorkspaceMode("worktree");
+      const current = yield* service.capture;
+      expect(current.revision).toBe(edited.revision);
+      expect(current.baseConfig.writerWorkspaceMode).toBe("worktree");
+      expect(current.effectiveConfig.writerWorkspaceMode).toBe("worktree");
+      expect(current.effectiveConfig.profiles.reviewer.candidates[0]?.model).toBe("openai/session");
+      expect(published.at(-1)).toEqual({ revision: edited.revision, mode: "worktree" });
+    }),
   );
 
   it.effect(
     "supports temporary disable, baseline restoration, no-op revisions, and stale-write rejection",
     () =>
       Effect.gen(function* () {
-        const service = yield* makeSubagentProfileService(baseConfig());
+        const service = yield* builtProfileService(baseConfig());
         const initial = yield* service.capture;
         const disabled = yield* service.patchSessionProfile({
           profile: "reviewer",
@@ -184,7 +238,7 @@ describe("session profile overrides", () => {
     "atomically replaces the complete baseline, preserves nesting, and rejects stale replacement",
     () =>
       Effect.gen(function* () {
-        const service = yield* makeSubagentProfileService(baseConfig());
+        const service = yield* builtProfileService(baseConfig());
         const initial = yield* service.capture;
         const nested = yield* service.patchSessionNesting({
           nesting: { maxDirectChildren: 9, maxDepth: 4 },
@@ -250,7 +304,7 @@ describe("session profile overrides", () => {
 
   it.effect("rejects an edit that cannot apply as invalid, not as a revision conflict", () =>
     Effect.gen(function* () {
-      const service = yield* makeSubagentProfileService(baseConfig());
+      const service = yield* builtProfileService(baseConfig());
       const initial = yield* service.capture;
       const invalid = yield* service
         .patchSessionNesting({
@@ -261,7 +315,7 @@ describe("session profile overrides", () => {
       expect(invalid).toBeInstanceOf(SessionProfileInvalidError);
       expect((yield* service.capture).revision).toBe(initial.revision);
 
-      const exhausted = yield* makeSubagentProfileService(baseConfig(), {
+      const exhausted = yield* builtProfileService(baseConfig(), {
         initialSessionOverrides: { revision: Number.MAX_SAFE_INTEGER, overrides: {} },
       });
       const limited = yield* exhausted
@@ -278,7 +332,7 @@ describe("session profile overrides", () => {
 
   it.effect("linearizes racing same-revision patches so exactly one commits", () =>
     Effect.gen(function* () {
-      const service = yield* makeSubagentProfileService(baseConfig());
+      const service = yield* builtProfileService(baseConfig());
       const initial = yield* service.capture;
       const outcomes = yield* Effect.all(
         [

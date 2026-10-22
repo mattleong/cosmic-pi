@@ -1,4 +1,5 @@
 import * as Data from "effect/Data";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Latch from "effect/Latch";
@@ -45,6 +46,16 @@ export const notificationDelivery = Effect.fn("RunNotificationDelivery.acquire")
   const pendingActionNotifications = new Map<string, SubagentQuestionNotification>();
   const completionWake = yield* Latch.make();
   const actionWake = yield* Latch.make();
+  // Completions leave the outbox, or become claimed, without a new projection revision. Each such
+  // change under the run lock completes this and replaces it, so a waiter that read it in the same
+  // lock hold as its check can't miss the change.
+  let outboxChanged = yield* Deferred.make<void>();
+  const signalOutboxChangedLocked = (): void => {
+    Deferred.doneUnsafe(outboxChanged, Effect.void);
+    outboxChanged = Deferred.makeUnsafe<void>();
+  };
+  // The delay is shared worker state, not a Schedule: it resets whenever a batch is acknowledged,
+  // across worker wakes, and doubles only while every eligible notice stays unacknowledged.
   let completionRetryDelayMillis = COMPLETION_RETRY_INITIAL_MILLIS;
   let actionRetryDelayMillis = COMPLETION_RETRY_INITIAL_MILLIS;
 
@@ -68,6 +79,7 @@ export const notificationDelivery = Effect.fn("RunNotificationDelivery.acquire")
             selected,
             deliveredCompletionKeys(delivery, runs),
           );
+          if (acknowledged > 0) signalOutboxChangedLocked();
           const eligibleRemain = hasEligibleCompletion(records);
           completionRetryDelayMillis = nextRetryDelay(
             completionRetryDelayMillis,
@@ -208,6 +220,9 @@ export const notificationDelivery = Effect.fn("RunNotificationDelivery.acquire")
     wakeCompletionLocked: (): void => {
       Latch.openUnsafe(completionWake);
     },
+    /** Completes once a completion is consumed, acknowledged, or claimed after this call. */
+    outboxChangedLocked: (): Deferred.Deferred<void> => outboxChanged,
+    signalOutboxChangedLocked,
     discardQuestionLocked: (id: string): void => void pendingActionNotifications.delete(id),
   };
 });

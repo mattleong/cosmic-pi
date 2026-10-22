@@ -2,7 +2,7 @@ import { expect, vi } from "vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
-import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-builtins.ts";
+import { nodeFsPromises as fs, nodePath as path } from "../support/node-builtins.ts";
 import * as gitProcess from "../../src/boundary/git-worktree-process.ts";
 import { type WorkspaceHandle } from "../../src/workspace/model.ts";
 import {

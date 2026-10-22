@@ -1,7 +1,11 @@
-import { processGroupSignalError, runBoundedProcessNode, signalProcessGroup } from "pi-cosmic-core";
+import {
+  processGroupSignalError,
+  runBoundedProcessNode,
+  signalProcessGroup,
+  type NodeChildProcess,
+} from "pi-cosmic-core";
 import * as Effect from "effect/Effect";
 import { processCauseError, processError, type SubagentProcessError } from "../run/errors.ts";
-import type { NodeChildProcess } from "./node-builtins.ts";
 
 const hasExited = (child: NodeChildProcess) => child.exitCode !== null || child.signalCode !== null;
 

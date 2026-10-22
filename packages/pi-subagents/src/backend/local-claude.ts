@@ -27,7 +27,7 @@ import { localClaudeDiagnostics } from "./local-claude-diagnostics.ts";
 import { localClaudeUsage, usageComponentsTotal } from "./local-claude-usage.ts";
 import { localClaudeUserEvents } from "./local-claude-user-events.ts";
 import { localCliEventIngress } from "./local-cli-events.ts";
-import { oversizedLineError, supervisorError } from "./driver-shared.ts";
+import { ignoreConsumerCause, oversizedLineError, supervisorError } from "./driver-shared.ts";
 import {
   consumeUntilExit,
   deliverTerminalReport,
@@ -362,7 +362,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
   ).pipe(Effect.forkScoped);
   yield* Stream.fromQueue(supervisor.events).pipe(
     Stream.runForEach(handleSupervisorEvent),
-    Effect.ignoreCause,
+    ignoreConsumerCause("Claude supervisor-event consumer"),
     Effect.forkScoped,
   );
 

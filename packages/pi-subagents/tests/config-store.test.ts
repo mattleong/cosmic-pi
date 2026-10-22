@@ -4,13 +4,12 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Result from "effect/Result";
+import { JsonDocumentError, JsonDocumentStore, type JsonObject } from "pi-cosmic-core";
 import {
-  JsonDocumentError,
-  JsonDocumentStore,
+  makeInMemoryDocuments,
+  type InMemoryDocuments,
   provideBuiltLayer,
-  type JsonObject,
-} from "pi-cosmic-core";
-import { makeInMemoryDocuments, type InMemoryDocuments } from "pi-cosmic-core/testing";
+} from "pi-cosmic-core/testing";
 import {
   SubagentConfigConflictError,
   SubagentConfigStore,

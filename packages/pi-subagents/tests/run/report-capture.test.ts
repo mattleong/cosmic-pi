@@ -36,6 +36,8 @@ const quietDelivery: RunNotificationDelivery = {
   insertCompletionLocked: () => undefined,
   wakeCompletionLocked: () => undefined,
   discardQuestionLocked: () => undefined,
+  outboxChangedLocked: () => Deferred.makeUnsafe<void>(),
+  signalOutboxChangedLocked: () => undefined,
 };
 
 describe("report capture", () => {

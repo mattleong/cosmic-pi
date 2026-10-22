@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import type { WorkspaceDiffStatFile } from "../workspace/diffstat.ts";
 import { credentialPrivatePath, credentialWorkspacePath } from "../workspace/policy.ts";
-import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
+import { nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core";
 import {
   git,
   gitFields,

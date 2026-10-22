@@ -38,6 +38,7 @@ import type { BackendLaunchRequest } from "./model.ts";
 import { localCliEventIngress } from "./local-cli-events.ts";
 import {
   correlatedRequest,
+  ignoreConsumerCause,
   oversizedLineError,
   protocolError,
   supervisorError,
@@ -391,7 +392,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
   ).pipe(Effect.forkScoped);
   yield* Stream.fromQueue(supervisor.events).pipe(
     Stream.runForEach((event) => offer(event)),
-    Effect.ignoreCause,
+    ignoreConsumerCause("Codex supervisor-event consumer"),
     Effect.forkScoped,
   );
 

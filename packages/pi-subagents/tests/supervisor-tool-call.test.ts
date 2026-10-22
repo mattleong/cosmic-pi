@@ -8,10 +8,17 @@ import * as Predicate from "effect/Predicate";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
+import * as RpcTest from "effect/rpc/RpcTest";
 import { temporaryDirectory } from "pi-cosmic-core/testing";
 import { openSupervisorClient } from "../src/boundary/supervisor-client.ts";
-import { makeSupervisorChannel } from "../src/boundary/supervisor-channel.ts";
-import { SupervisorChannelConfigSchema } from "../src/supervisor/protocol.ts";
+import { SupervisorChannel } from "../src/boundary/supervisor-channel.ts";
+import {
+  PARENT_REPLY_PREFIX,
+  SupervisorChannelConfigSchema,
+  SupervisorChannelIdSchema,
+  SupervisorRpcGroup,
+} from "../src/supervisor/protocol.ts";
 import { runSupervisorTool, type SupervisorToolClient } from "../src/supervisor/tool-call.ts";
 import { nodeFsPromises as fs } from "./support/node-builtins.ts";
 
@@ -76,7 +83,7 @@ const rawConfig = (port: number) =>
   });
 
 const progress = (client: SupervisorToolClient) =>
-  runSupervisorTool(client, { kind: "progress", message: "Still connected?" });
+  runSupervisorTool(client, { kind: "progress", message: "Still connected?" }, (exit) => exit);
 
 describe("native supervisor client lifetime", () => {
   it.live("disconnects an interrupted open while its parent scope stays open", () =>
@@ -93,9 +100,9 @@ describe("native supervisor client lifetime", () => {
     it.live(`releases the connection and rejects later calls after ${failure}`, () =>
       Effect.gen(function* () {
         const directory = yield* temporaryDirectory("pi-subagents-native-client-");
-        const channel = yield* makeSupervisorChannel({ agentDirectory: directory }).open({
-          runId: "agent-native-client",
-        });
+        const channel = yield* SupervisorChannel.use((channels) =>
+          channels.open({ runId: "agent-native-client" }),
+        ).pipe(Effect.provide(SupervisorChannel.layer({ agentDirectory: directory })));
         const source = yield* Effect.promise(() =>
           fs.readFile(channel.metadata.connectionConfigPath, "utf8"),
         );
@@ -112,10 +119,11 @@ describe("native supervisor client lifetime", () => {
         if (failure === "scope close") {
           yield* Scope.close(clientScope, Exit.void);
         } else {
-          const question = yield* runSupervisorTool(client, {
-            kind: "question",
-            message: "Is the parent still connected?",
-          }).pipe(Effect.exit, Effect.forkScoped);
+          const question = yield* runSupervisorTool(
+            client,
+            { kind: "question", message: "Is the parent still connected?" },
+            (exit) => exit,
+          ).pipe(Effect.exit, Effect.forkScoped);
           expect(yield* Queue.take(channel.events)).toMatchObject({ kind: "question" });
           peer.clients[0]?.destroy();
           expect(Exit.isFailure(yield* Fiber.join(question))).toBe(true);
@@ -129,4 +137,67 @@ describe("native supervisor client lifetime", () => {
         expect(peer.clients).toHaveLength(1);
       }),
     );
+});
+
+const unused = () => Effect.never;
+
+// An in-memory parent whose acknowledgement of its reply waits until the test releases it.
+const gatedReplyParent = Effect.gen(function* () {
+  const acknowledging = yield* Deferred.make<void>();
+  const releaseAcknowledgement = yield* Deferred.make<void>();
+  const handlers = SupervisorRpcGroup.toLayer({
+    SupervisorOpenSession: () => Effect.succeed({ assignmentEpoch: 1 }),
+    SupervisorWatchAssignments: () => Stream.never,
+    SupervisorAcknowledgeAssignment: unused,
+    SupervisorProgress: unused,
+    SupervisorWarning: unused,
+    SupervisorQuestion: () =>
+      Effect.succeed({
+        questionId: SupervisorChannelIdSchema.make("question-1"),
+        message: "Take the left path.",
+      }),
+    SupervisorAcknowledgeQuestionReply: () =>
+      Deferred.succeed(acknowledging, undefined).pipe(
+        Effect.andThen(Deferred.await(releaseAcknowledgement)),
+      ),
+    SupervisorReport: unused,
+    SupervisorAgentList: unused,
+    SupervisorAgentSend: unused,
+    SupervisorAgentRead: unused,
+  });
+  const rpc = yield* RpcTest.makeClient(SupervisorRpcGroup).pipe(Effect.provide(handlers));
+  const { version, runId, token } = rawConfig(1);
+  const client: SupervisorToolClient = {
+    rpc,
+    auth: { version, runId, token },
+    assignmentEpoch: () => 1,
+    closed: yield* Deferred.make<void>(),
+  };
+  return { client, acknowledging, releaseAcknowledgement };
+});
+
+describe("parent replies", () => {
+  it.effect("delivers a reply whose acknowledgement began before the call was cancelled", () =>
+    Effect.gen(function* () {
+      const { client, acknowledging, releaseAcknowledgement } = yield* gatedReplyParent;
+      const delivered = yield* Deferred.make<Exit.Exit<{ readonly text: string }, unknown>>();
+      const call = yield* runSupervisorTool(
+        client,
+        { kind: "question", message: "Which path?" },
+        (exit) => Deferred.succeed(delivered, exit),
+      ).pipe(Effect.forkChild({ startImmediately: true }));
+
+      // The parent has handed over its reply, so cancelling now can't return it.
+      yield* Deferred.await(acknowledging);
+      const cancelling = yield* Fiber.interrupt(call).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.succeed(releaseAcknowledgement, undefined);
+      yield* Fiber.join(cancelling);
+
+      expect(yield* Deferred.await(delivered)).toEqual(
+        Exit.succeed({ text: `${PARENT_REPLY_PREFIX}Take the left path.`, isError: false }),
+      );
+    }),
+  );
 });

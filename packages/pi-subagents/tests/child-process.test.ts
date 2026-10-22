@@ -1,8 +1,14 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Predicate from "effect/Predicate";
 import * as TestClock from "effect/testing/TestClock";
+import { deferredPromise, step, temporaryDirectory } from "pi-cosmic-core/testing";
+import { vi } from "vitest";
 import {
+  ChildProcess,
   childProcessEnvironment,
   childToolPolicy,
   requestCooperativeAbort,
@@ -14,7 +20,17 @@ import {
   NESTED_SUBAGENT_TOOL_NAMES,
   piRootActiveToolSnapshot,
 } from "../src/run/tool-policy.ts";
+import { sweepAbandonedPrivateState } from "../src/boundary/private-state.ts";
 import { backendLaunch } from "./fixtures/backend-supervisor.ts";
+import { nodeFsPromises, nodePath } from "./support/node-builtins.ts";
+
+const isMissing = (path: string) =>
+  step(() =>
+    nodeFsPromises.stat(path).then(
+      () => false,
+      (cause: unknown) => Predicate.hasProperty(cause, "code") && cause.code === "ENOENT",
+    ),
+  );
 
 describe("subagent child process boundary", () => {
   it("keeps a child's Git on its own repository when the parent runs under Git variables", () => {
@@ -135,5 +151,61 @@ describe("subagent child process boundary", () => {
       yield* TestClock.adjust("250 millis");
       yield* Fiber.join(abort);
     }).pipe(Effect.scoped),
+  );
+
+  it.live(
+    "removes a run directory whose creation settles after an interrupted spawn's reclaim",
+    () =>
+      Effect.gen(function* () {
+        const agentDirectory = yield* temporaryDirectory("pi-subagents-child-late-mkdir-");
+        const request = backendLaunch({ parentSessionId: "late-mkdir-session", runId: "late-run" });
+        const sessionDirectory = nodePath.join(agentDirectory, "subagents", "late-mkdir-session");
+        const isRunDirectory = (path: unknown): path is string =>
+          Predicate.isString(path) && nodePath.dirname(path) === sessionDirectory;
+        const mkdirEntered = yield* Deferred.make<string>();
+        const mkdirGate = deferredPromise();
+        const lateCleanup = yield* Deferred.make<void>();
+        let released = false;
+        const createDirectory = nodeFsPromises.mkdir;
+        const removeDirectory = nodeFsPromises.rmdir;
+        const gatedMkdir = vi.spyOn(nodeFsPromises, "mkdir").mockImplementation((path, options) => {
+          if (!isRunDirectory(path)) return createDirectory(path, options);
+          Deferred.doneUnsafe(mkdirEntered, Effect.succeed(path));
+          return mkdirGate.promise.then(() => createDirectory(path, options));
+        });
+        const observedRmdir = vi
+          .spyOn(nodeFsPromises, "rmdir")
+          .mockImplementation((path, options) =>
+            removeDirectory(path, options).finally(() => {
+              if (released && isRunDirectory(path)) Deferred.doneUnsafe(lateCleanup, Effect.void);
+            }),
+          );
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            gatedMkdir.mockRestore();
+            observedRmdir.mockRestore();
+          }),
+        );
+        const children = yield* Effect.service(ChildProcess).pipe(
+          Effect.provide(ChildProcess.layer({ agentDirectory })),
+        );
+        const spawning = yield* children.spawn(request).pipe(Effect.scoped, Effect.forkChild);
+
+        const runDirectory = yield* Deferred.await(mkdirEntered).pipe(Effect.timeout("5 seconds"));
+        // The creation is still gated, so only an interruptible spawn lets this return.
+        yield* Fiber.interrupt(spawning).pipe(Effect.timeout("5 seconds"));
+        expect(Exit.hasInterrupts(yield* Fiber.await(spawning))).toBe(true);
+        yield* children.reclaimRunState(request);
+
+        released = true;
+        mkdirGate.resolve();
+        yield* Deferred.await(lateCleanup).pipe(Effect.timeout("5 seconds"));
+        expect(yield* isMissing(runDirectory)).toBe(true);
+        // The shared session directory is left to the startup sweep, which removes it once empty.
+        yield* sweepAbandonedPrivateState(agentDirectory, {
+          claudeTemporaryParent: yield* temporaryDirectory("pi-subagents-child-late-claude-"),
+        });
+        expect(yield* isMissing(sessionDirectory)).toBe(true);
+      }).pipe(Effect.scoped),
   );
 });

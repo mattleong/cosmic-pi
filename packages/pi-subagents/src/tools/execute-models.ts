@@ -5,6 +5,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { hostProfileEnvironment } from "../boundary/host-profile-resolution.ts";
+import type { InvalidSubagentRequestError } from "../run/errors.ts";
 import type { SubagentParentContext } from "../run/model.ts";
 import { customAgentCandidate, type CustomAgent } from "../profiles/agents.ts";
 import {
@@ -143,63 +144,62 @@ const agentView = (
   candidates,
 });
 
-export const executeModelsAction = (
+export const executeModelsAction = Effect.fn("SubagentTools.models")(function* (
   input: SubagentModelsInput,
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   parentContext?: SubagentParentContext,
-): Effect.Effect<AgentToolResult<unknown>, never, SubagentProfileService> =>
-  Effect.gen(function* () {
-    const profileService = yield* SubagentProfileService;
-    const snapshot = yield* profileService.capture;
-    const { fallbackProfile } = snapshot.effectiveConfig;
-    const ids: ReadonlyArray<ProfileId> = input.profile ? [input.profile] : PROFILE_IDS;
-    const environment = hostProfileEnvironment(pi, ctx, parentContext);
-    const profiles: ReadonlyArray<SubagentProfileView> = ids.flatMap((id) => {
-      const definition = profileService.definition(id);
-      if (!definition) return [];
-      const route = snapshot.effectiveConfig.profiles[definition.id];
-      const resolution = profileService.resolve(snapshot, definition.id, environment);
-      const candidates = candidateDiscovery(route.candidates, resolution);
-      return [
-        {
-          id: definition.id,
-          description: definition.description,
-          source: snapshot.effectiveConfig.profileSources[definition.id],
-          isDefault: definition.id === fallbackProfile,
-          defaultContext: definition.defaultContext,
-          defaultWriteIntent: definition.defaultWriteIntent,
-          ...(definition.defaultEffort !== undefined && {
-            defaultEffort: definition.defaultEffort,
-          }),
-          candidates,
-        } satisfies SubagentProfileView,
-      ];
-    });
-    const agents: ReadonlyArray<SubagentAgentView> = snapshot.effectiveConfig.agents
-      .filter((agent) => ids.includes(agent.profile))
-      .map((agent) =>
-        agentView(
-          agent,
-          candidateDiscovery(
-            agentCandidates(snapshot.effectiveConfig.profiles[agent.profile].candidates, agent),
-            profileService.resolve(snapshot, agent.profile, environment, agent),
-          ),
-        ),
-      );
-    const { invalidAgents } = snapshot.effectiveConfig;
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: boundToolOutput(
-            formatProfileDiscovery(profiles, fallbackProfile, agents, invalidAgents),
-          ),
-        },
-      ],
-      details: modelDetails({ profiles, agents, invalidAgents, fallbackProfile }),
-      structuredContent: encodeSubagentContract(
-        modelsContract(profiles, fallbackProfile, agents, invalidAgents),
-      ),
-    };
+): Effect.fn.Return<AgentToolResult<unknown>, InvalidSubagentRequestError, SubagentProfileService> {
+  const profileService = yield* SubagentProfileService;
+  const snapshot = yield* profileService.capture;
+  const { fallbackProfile } = snapshot.effectiveConfig;
+  const ids: ReadonlyArray<ProfileId> = input.profile ? [input.profile] : PROFILE_IDS;
+  const environment = yield* hostProfileEnvironment(pi, ctx, parentContext);
+  const profiles: ReadonlyArray<SubagentProfileView> = ids.flatMap((id) => {
+    const definition = profileService.definition(id);
+    if (!definition) return [];
+    const route = snapshot.effectiveConfig.profiles[definition.id];
+    const resolution = profileService.resolve(snapshot, definition.id, environment);
+    const candidates = candidateDiscovery(route.candidates, resolution);
+    return [
+      {
+        id: definition.id,
+        description: definition.description,
+        source: snapshot.effectiveConfig.profileSources[definition.id],
+        isDefault: definition.id === fallbackProfile,
+        defaultContext: definition.defaultContext,
+        defaultWriteIntent: definition.defaultWriteIntent,
+        ...(definition.defaultEffort !== undefined && {
+          defaultEffort: definition.defaultEffort,
+        }),
+        candidates,
+      } satisfies SubagentProfileView,
+    ];
   });
+  const agents: ReadonlyArray<SubagentAgentView> = snapshot.effectiveConfig.agents
+    .filter((agent) => ids.includes(agent.profile))
+    .map((agent) =>
+      agentView(
+        agent,
+        candidateDiscovery(
+          agentCandidates(snapshot.effectiveConfig.profiles[agent.profile].candidates, agent),
+          profileService.resolve(snapshot, agent.profile, environment, agent),
+        ),
+      ),
+    );
+  const { invalidAgents } = snapshot.effectiveConfig;
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: boundToolOutput(
+          formatProfileDiscovery(profiles, fallbackProfile, agents, invalidAgents),
+        ),
+      },
+    ],
+    details: modelDetails({ profiles, agents, invalidAgents, fallbackProfile }),
+    structuredContent: encodeSubagentContract(
+      modelsContract(profiles, fallbackProfile, agents, invalidAgents),
+    ),
+  };
+});

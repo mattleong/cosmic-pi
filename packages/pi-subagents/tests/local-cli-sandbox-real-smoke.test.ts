@@ -3,19 +3,17 @@ import { fileURLToPath } from "node:url";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import { provideBuiltLayer, synchronousRandomHex } from "pi-cosmic-core";
-import { temporaryDirectory } from "pi-cosmic-core/testing";
+import { synchronousRandomHex } from "pi-cosmic-core";
+import { temporaryDirectory, provideBuiltLayer } from "pi-cosmic-core/testing";
 import { describe, expect, it } from "vitest";
 import { localClaudeBackendDriver } from "../src/backend/local-claude.ts";
 import { localCodexBackendDriver } from "../src/backend/local-codex.ts";
 import type { BackendEvent } from "../src/backend/model.ts";
-import {
-  makeLocalCliProcess,
-  type LocalCliProcessContract,
-} from "../src/boundary/local-cli-process.ts";
+import type { LocalCliProcessContract } from "../src/boundary/local-cli-process.ts";
 import { SupervisorChannel } from "../src/boundary/supervisor-channel.ts";
 import type { SubagentWriteIntent } from "../src/domain/routing.ts";
 import { backendLaunch, takeBackendEvent } from "./fixtures/backend-supervisor.ts";
+import { localCliProcess } from "./support/local-cli-process.ts";
 import { nodeFsPromises as fs, nodePath as path } from "./support/node-builtins.ts";
 
 const sourceEnvironment = { ...process.env };
@@ -220,7 +218,7 @@ const runCanary = (runtime: Runtime, writeIntent: SubagentWriteIntent) =>
     const agentDirectory = yield* temporaryDirectory("pi-subagents-sandbox-agent-").pipe(
       Effect.flatMap((directory) => Effect.promise(() => fs.realpath(directory))),
     );
-    const processes = makeLocalCliProcess({ agentDirectory, environment: sourceEnvironment });
+    const processes = yield* localCliProcess({ agentDirectory, environment: sourceEnvironment });
     const privateTemporaryDirectory = yield* Ref.make<string | undefined>(undefined);
     const observedProcesses: LocalCliProcessContract = {
       ...processes,

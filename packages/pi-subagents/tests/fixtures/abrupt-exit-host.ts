@@ -2,7 +2,7 @@ import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import { confirmProcessGroupExit, guardProcessGroupAtHostExit } from "pi-cosmic-core";
 import { ChildProcess } from "../../src/boundary/child-process.ts";
-import { nodeSpawn } from "../../src/boundary/node-builtins.ts";
+import { nodeSpawn } from "../support/node-builtins.ts";
 import { detachedDescendantGroups, terminateProcessTree } from "../../src/boundary/process-tree.ts";
 import type { ProcessTransportRuntime } from "../../src/boundary/process-transport.ts";
 import { backendLaunch } from "./backend-supervisor.ts";

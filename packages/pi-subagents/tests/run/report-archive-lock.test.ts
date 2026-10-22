@@ -5,7 +5,10 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Logger from "effect/Logger";
 import * as References from "effect/References";
+import * as Scope from "effect/Scope";
+import * as TestClock from "effect/testing/TestClock";
 import { ReportArchiveError, type ReportArchive } from "../../src/boundary/report-archive.ts";
+import { REPORT_SAVE_DEADLINE_MILLIS } from "../../src/run/limits.ts";
 import type { RunNotificationDelivery } from "../../src/run/notification-delivery.ts";
 import { settlementOperations } from "../../src/run/settlement.ts";
 import { view } from "../fixtures/run-view.ts";
@@ -22,6 +25,8 @@ const quietDelivery: RunNotificationDelivery = {
   insertCompletionLocked: () => undefined,
   wakeCompletionLocked: () => undefined,
   discardQuestionLocked: () => undefined,
+  outboxChangedLocked: () => Deferred.makeUnsafe<void>(),
+  signalOutboxChangedLocked: () => undefined,
 };
 
 const yieldTurns = Effect.gen(function* () {
@@ -140,6 +145,60 @@ describe("report files saved during settlement", () => {
       expect(record.view.state).toBe("completed");
       expect(record.view.reportArchive?.path).toBe("/archive/1.md");
       expect(gate.discarded).toEqual([]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("settles without a file whose save misses its deadline, which then removes it", () =>
+    Effect.gen(function* () {
+      const gate = yield* gatedReportArchive;
+      const removed = yield* Deferred.make<void>();
+      const { context, record, settle } = yield* fixture({
+        ...gate.archive,
+        discard: (file) =>
+          gate.archive.discard(file).pipe(Effect.andThen(Deferred.succeed(removed, undefined))),
+      });
+
+      const settling = yield* Effect.forkChild(settle("Final report."));
+      yield* Deferred.await(gate.entered);
+      yield* TestClock.adjust(REPORT_SAVE_DEADLINE_MILLIS - 1);
+      expect(record.view.state).toBe("running");
+      yield* TestClock.adjust(1);
+      yield* Fiber.join(settling);
+
+      // The parent gets the report inline, and the run lock is free while the save goes on.
+      expect(record.view).toMatchObject({ state: "completed", finalText: "Final report." });
+      expect(record.view.reportArchive).toBeUndefined();
+      expect(yield* context.withLock(Effect.succeed("free"))).toBe("free");
+      expect(gate.discarded).toEqual([]);
+
+      yield* Deferred.succeed(gate.release, undefined);
+      yield* Deferred.await(removed);
+      expect(gate.discarded).toEqual(["/archive/1.md"]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("finishes a save whose deadline passed while the session scope closes", () =>
+    Effect.gen(function* () {
+      const gate = yield* gatedReportArchive;
+      const ownerScope = yield* Scope.make();
+      // Removal yields as a real one does, so the scope's close can't finish it in passing.
+      const archive: ReportArchive = {
+        ...gate.archive,
+        discard: (file) => Effect.yieldNow.pipe(Effect.andThen(gate.archive.discard(file))),
+      };
+      const { record, settle } = yield* fixture(archive, quietDelivery, { ownerScope });
+
+      const settling = yield* Effect.forkChild(settle("Final report."));
+      yield* Deferred.await(gate.entered);
+      yield* TestClock.adjust(REPORT_SAVE_DEADLINE_MILLIS);
+      yield* Fiber.join(settling);
+      expect(record.view.reportArchive).toBeUndefined();
+
+      // Finalizers run newest first, so closing releases the save before reaching the save's own
+      // finalizer, which must then wait for it to remove the file nothing names.
+      yield* Scope.addFinalizer(ownerScope, Deferred.succeed(gate.release, undefined));
+      yield* Scope.close(ownerScope, Exit.void);
+      expect(gate.discarded).toEqual(["/archive/1.md"]);
     }).pipe(Effect.scoped),
   );
 

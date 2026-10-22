@@ -19,6 +19,11 @@ const problem = (name: string, args: Schema.Json): string => {
   return decoded.failure;
 };
 
+const decoded = (name: string, args: Schema.Json) => {
+  const result = decodeSupervisorToolCall(name, args);
+  return Result.isSuccess(result) ? result.success : result.failure;
+};
+
 describe("supervisor MCP arguments", () => {
   it("names the failing field without echoing the rejected value", () => {
     const delivery = problem(REPORT, report("slash/secret-value"));
@@ -31,6 +36,63 @@ describe("supervisor MCP arguments", () => {
     expect(problem(REPORT, { ...report("delivery-1"), "secret value!": 1 })).not.toContain(
       "secret value",
     );
+  });
+
+  it("names the limit a too-long argument exceeds, from the schema that rejected it", () => {
+    const message = problem("agent_send", { to: "main", message: "x".repeat(16_385) });
+    expect(message).toContain("message");
+    expect(message).toContain("16,384");
+    expect(problem("agent_send", { to: "a".repeat(81), message: "Hi." })).toContain("80");
+    const ids = Array.from({ length: 13 }, (_, index) => `agent-${index + 1}`);
+    expect(problem("agent_read", { agentIds: ids })).toContain("12");
+    expect(problem("agent_list", { agentIds: ids })).toContain("12");
+  });
+
+  it("explains each rejected argument shape", () => {
+    for (const [name, args, field] of [
+      [CONTACT, null, "kind"],
+      [CONTACT, { kind: 3, message: "Halfway." }, "kind"],
+      [CONTACT, { kind: "progress", message: 4 }, "message"],
+      [CONTACT, { kind: "progress", message: "" }, "message"],
+      [CONTACT, { kind: "progress", message: "x", extra: 1 }, "extra"],
+      ["agent_send", { to: "../main", message: "Hi." }, "to"],
+      ["agent_send", { message: "Hi." }, "to"],
+      ["agent_list", { agentIds: "main" }, "agentIds"],
+      ["agent_list", { agentIds: ["../x"] }, "agentIds"],
+      ["agent_list", { verbose: true }, "verbose"],
+      ["agent_read", {}, "agentIds"],
+      ["agent_read", { agentIds: [] }, "agentIds"],
+      ["agent_read", { agentIds: ["main"], verbose: "yes" }, "verbose"],
+    ] satisfies ReadonlyArray<readonly [string, Schema.Json, string]>)
+      expect(problem(name, args)).toContain(field);
+  });
+
+  it("decodes every accepted argument shape", () => {
+    expect(decoded(CONTACT, { kind: "question", message: "Ready?" })).toEqual({
+      kind: "question",
+      message: "Ready?",
+    });
+    expect(decoded(REPORT, report("delivery-1"))).toEqual({
+      kind: "report",
+      deliveryId: "delivery-1",
+      report: "Complete.",
+    });
+    expect(decoded("agent_send", { to: "main", message: "Hi." })).toEqual({
+      kind: "agent_send",
+      to: "main",
+      message: "Hi.",
+    });
+    expect(decoded("agent_list", {})).toEqual({ kind: "agent_list" });
+    expect(decoded("agent_list", { agentIds: [] })).toEqual({ kind: "agent_list", ids: [] });
+    expect(decoded("agent_read", { agentIds: ["main"], verbose: false })).toEqual({
+      kind: "agent_read",
+      ids: ["main"],
+    });
+    expect(decoded("agent_read", { agentIds: ["main"], verbose: true })).toEqual({
+      kind: "agent_read",
+      ids: ["main"],
+      verbose: true,
+    });
   });
 
   it("accepts a report at the cap, even behind a long blank line, and refuses a longer one", () => {

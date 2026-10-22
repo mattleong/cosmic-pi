@@ -60,6 +60,8 @@ const inertDelivery: RunNotificationDelivery = {
   insertCompletionLocked: unexpectedDelivery,
   wakeCompletionLocked: unexpectedDelivery,
   discardQuestionLocked: unexpectedDelivery,
+  outboxChangedLocked: unexpectedDelivery,
+  signalOutboxChangedLocked: unexpectedDelivery,
 };
 
 export const makeTestSettlement = (overrides: Partial<RunContext> = {}) =>
@@ -146,7 +148,6 @@ export const runRecordFixture = (
       pauseRequested: false,
       stoppedByParent: false,
       runStateReclaimState: "pending",
-      initializationPending: false,
       notificationGeneration: 0,
       completionGeneration: 0,
       warningSlots: { child: childWarning, system: systemWarning, latest: warningSource },

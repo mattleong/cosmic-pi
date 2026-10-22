@@ -1,4 +1,5 @@
 import type { AskUserRequest, QuestionnaireOwner } from "pi-ask-user/protocol";
+import { invokeHostCallback } from "pi-cosmic-core";
 import { questionnaireLifetimes } from "./questionnaire-lifetime.ts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -242,7 +243,10 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       Effect.flatMap((usage) =>
         Effect.forEach(
           usage,
-          (settled) => Effect.try(() => options.recordSessionUsage?.(settled)).pipe(Effect.ignore),
+          (settled) =>
+            Effect.sync(() =>
+              invokeHostCallback(() => options.recordSessionUsage?.(settled), undefined),
+            ),
           { discard: true },
         ),
       ),
@@ -284,7 +288,9 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
                 frozenProjection(current.revision + 1),
               ).pipe(
                 Effect.flatMap((projection) =>
-                  Effect.try(() => options.publish?.(projection)).pipe(Effect.ignore),
+                  Effect.sync(() =>
+                    invokeHostCallback(() => options.publish?.(projection), undefined),
+                  ),
                 ),
                 Effect.andThen(recordSessionUsage(false)),
               ),
@@ -292,6 +298,8 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       ),
     ),
   );
+  // A direct subscription, not `SubscriptionRef.changes`: that stream turns an interrupted pull into
+  // its end, so a cancelled await would surface a stream completion instead of its interruption.
   const waitForRevision = (after: number): Effect.Effect<void, SubagentRuntimeClosedError> =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -321,7 +329,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     allocateAssignmentAttemptToken,
     sessionUsage,
   };
-  const workspaces = workspaceControl({
+  const workspaces = yield* workspaceControl({
     ...runContext,
     engine: Option.getOrUndefined(workspaceEngine),
     initialMode: options.writerWorkspaceMode ?? initialProfiles.effectiveConfig.writerWorkspaceMode,
@@ -487,29 +495,33 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
 
   const service: SubagentServiceContract = {
     ...observations,
-    start: starts.start,
-    startSessionOwned: starts.startSessionOwned,
-    startScriptSessionOwned: starts.startScriptSessionOwned,
-    workspaceList: workspaces.workspaceList,
-    workspaceReview: workspaces.workspaceReview,
-    workspacePrepare: workspaces.workspacePrepare,
-    workspaceDiscard: workspaces.workspaceDiscard,
-    workspaceApply: workspaces.workspaceApply,
-    workspaceRevise: workspaces.revise(launch.start),
+    start: Effect.fn("SubagentService.start")(starts.start),
+    startSessionOwned: Effect.fn("SubagentService.startSessionOwned")(starts.startSessionOwned),
+    startScriptSessionOwned: Effect.fn("SubagentService.startScriptSessionOwned")(
+      starts.startScriptSessionOwned,
+    ),
+    workspaceList: Effect.fn("SubagentService.workspaceList")(workspaces.workspaceList),
+    workspaceReview: Effect.fn("SubagentService.workspaceReview")(workspaces.workspaceReview),
+    workspacePrepare: Effect.fn("SubagentService.workspacePrepare")(workspaces.workspacePrepare),
+    workspaceDiscard: Effect.fn("SubagentService.workspaceDiscard")(workspaces.workspaceDiscard),
+    workspaceApply: Effect.fn("SubagentService.workspaceApply")(workspaces.workspaceApply),
+    workspaceRevise: Effect.fn("SubagentService.workspaceRevise")(workspaces.revise(launch.start)),
     inspectWriterWorkspace: workspaces.inspectWriterWorkspace,
     sweepOrphanedWorkspaces: workspaces.sweepOrphanedWorkspaces,
     setWriterWorkspaceMode: workspaces.setWriterWorkspaceMode,
-    startSessionOwnedFrom: starts.startSessionOwnedFrom,
+    startSessionOwnedFrom: Effect.fn("SubagentService.startSessionOwnedFrom")(
+      starts.startSessionOwnedFrom,
+    ),
     captureLaunchParent: starts.captureLaunchParent,
     ...visibilityOperations(runContext),
-    send: agentMessages.sendFromUser,
-    interrupt: controls.interrupt,
-    resume: resume.resume,
-    rename: controls.rename,
-    stop,
-    agentList: agentMessages.list,
-    agentSend: agentMessages.send,
-    agentRead: agentMessages.read,
+    send: Effect.fn("SubagentService.send")(agentMessages.sendFromUser),
+    interrupt: Effect.fn("SubagentService.interrupt")(controls.interrupt),
+    resume: Effect.fn("SubagentService.resume")(resume.resume),
+    rename: Effect.fn("SubagentService.rename")(controls.rename),
+    stop: Effect.fn("SubagentService.stop")(stop),
+    agentList: Effect.fn("SubagentService.agentList")(agentMessages.list),
+    agentSend: Effect.fn("SubagentService.agentSend")(agentMessages.send),
+    agentRead: Effect.fn("SubagentService.agentRead")(agentMessages.read),
     projection,
     deliverPendingCompletions: delivery.deliverPendingCompletions,
     awaitParentDrain: parentDrainAwaiter({
@@ -517,6 +529,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       withLock,
       revision: projection.pipe(Effect.map(({ revision }) => revision)),
       waitForRevision,
+      outboxChangedLocked: delivery.outboxChangedLocked,
     }),
   };
 

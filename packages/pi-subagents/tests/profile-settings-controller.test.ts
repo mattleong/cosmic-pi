@@ -476,6 +476,31 @@ const topLevel = (overrides: Partial<SubagentRunView> = {}) =>
   view({ id: "child", name: "child", parentRunId: "root", depth: 1, ...overrides });
 
 describe("root /subagents fleet actions", () => {
+  effectTest("closes an idle fleet when its command is cancelled", function* () {
+    const { pi, commands } = recordingExtensionHost();
+    // An empty fleet has no refresh ticker or projection change to notice the cancellation.
+    registerSubagentManagerCommand(pi, subagentProjectionBridge(), fleetManagerActionsFixture({}));
+    const host = fakeCustomSurfaceHost({ theme: plainTheme, columns: 120, rows: 30 });
+    const command = new AbortController();
+    const ctx = extensionContextFixture({
+      hasUI: true,
+      mode: "tui",
+      ui: host.ctx.ui,
+      signal: command.signal,
+    });
+    const running = commands.get("subagents")?.handler("", ctx) ?? Promise.resolve();
+    yield* step(() =>
+      vi.waitFor(() => {
+        host.mount();
+        expect(host.overlays).toHaveLength(1);
+      }),
+    );
+    command.abort();
+    yield* step(() => running);
+    expect(host.overlays).toEqual([]);
+    expect(host.doneCalls).toBe(1);
+  });
+
   effectTest(
     "does not dispatch a retained fleet control into a replacement activation",
     function* () {
