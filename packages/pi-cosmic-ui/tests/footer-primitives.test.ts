@@ -1,6 +1,13 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { getOsc8LinkAtColumn, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
-import { expect, it } from "vitest";
+import {
+  getCapabilities,
+  getOsc8LinkAtColumn,
+  resetCapabilitiesCache,
+  setCapabilities,
+  stripTerminalSequences,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
+import { afterEach, expect, it } from "vitest";
 import {
   extensionApiFixture,
   extensionContextFixture,
@@ -54,7 +61,37 @@ const footer = (options: {
   });
 };
 
+const supportHyperlinks = (hyperlinks: boolean) =>
+  setCapabilities({ ...getCapabilities(), hyperlinks });
+
+const links = (lines: readonly string[]) =>
+  lines.flatMap((line) =>
+    Array.from({ length: visibleWidth(line) }, (_, column) => getOsc8LinkAtColumn(line, column)),
+  );
+
+afterEach(resetCapabilitiesCache);
+
+it.each([true, false])(
+  "links a fitted PR only when the terminal supports links (%s)",
+  (supported) => {
+    const url = "https://git.example.test/team/project/pull/1742";
+    supportHyperlinks(supported);
+    const render = (link: string | undefined) =>
+      footer({
+        contributions: [],
+        branch: "branch",
+        pullRequest: { number: 1742, url: link },
+        config: defaultResolvedCosmicUiConfig,
+        contextUsage: () => undefined,
+      }).render(120);
+    const lines = render(url);
+    expect(links(lines).includes(url)).toBe(supported);
+    expect(lines.join("\n") === render(undefined).join("\n")).toBe(!supported);
+  },
+);
+
 it("does not link a partially clipped PR or leak into following right-aligned text", () => {
+  supportHyperlinks(true);
   const defaults = defaultResolvedCosmicUiConfig();
   const component = footer({
     contributions: [
@@ -86,6 +123,7 @@ it.each([
   "https://git.example.test/team/project/pull/1742\x1b]52;c;payload\x07",
   "javascript:alert(1742)",
 ])("keeps an unsafe projected URL %j out of terminal output", (url) => {
+  supportHyperlinks(true);
   const options = {
     contributions: [],
     branch: "branch",

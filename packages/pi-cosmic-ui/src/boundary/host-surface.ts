@@ -79,7 +79,6 @@ function mountOwnedSurface<A>(
   let doneInvoked = false;
   let requested: { readonly value: A } | undefined;
   let hostDone: ((value: A) => void) | undefined;
-  let hostTui: TUI | undefined;
   let owned: OverlayHandle | undefined;
   let release: (() => void) | undefined;
 
@@ -96,25 +95,26 @@ function mountOwnedSurface<A>(
   };
   const tryDone = () => {
     const done = hostDone;
-    const tui = hostTui;
     const handle = owned;
     if (doneInvoked || !requested || !done) return;
-    if (placement !== "inline" && (!tui || !handle)) return;
+    // Pi disposes an overlay component only when `done` follows its mount, so wait for the handle.
+    if (placement !== "inline" && !handle) return;
     doneInvoked = true;
     revoke();
     const { value } = requested;
-    if (!tui || !handle) return attempt(() => done(value));
+    let failure: { readonly cause: unknown } | undefined;
     try {
-      handle.hide();
-      const guard = tui.showOverlay(inert(), { nonCapturing: true });
-      try {
-        done(value);
-      } finally {
-        guard.hide();
-      }
+      handle?.hide();
     } catch (cause) {
-      complete(OwnedSurfaceOutcome.Failed({ cause }));
+      failure = { cause };
     }
+    // A failed hide still settles the host opening, which ends Pi's prompt and removes the overlay.
+    try {
+      done(value);
+    } catch (cause) {
+      failure ??= { cause };
+    }
+    if (failure) complete(OwnedSurfaceOutcome.Failed(failure));
   };
   const close = () => {
     revoke();
@@ -143,7 +143,6 @@ function mountOwnedSurface<A>(
     }
     factoryInvoked = true;
     hostDone = done;
-    hostTui = tui;
     if (closing || !current()) {
       close();
       return inert();

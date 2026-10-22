@@ -81,72 +81,59 @@ it.effect(
     }),
 );
 
-for (const fault of ["ownedHide", "createGuard", "done", "guardHide"] as const) {
-  it.effect(`normal submission rejects a throwing ${fault} and releases its FIFO ticket`, () =>
-    Effect.gen(function* () {
-      const gate = createAskUserPromptGate();
-      const h = hostFixture(gate);
-      const bridge = createAskUserDialogBridge();
-      const host = askUserHost(h.ctx, bridge, gate);
-      const queue = yield* acquireQuestionnaireQueue;
-      const first = yield* queue.admit;
-      const second = yield* queue.admit;
-      const firstFiber = yield* first
-        .run(host(request))
-        .pipe(Effect.ensuring(first.close), Effect.exit, Effect.forkChild);
-      const successorAdmitted = yield* Deferred.make<void>();
-      const secondFiber = yield* second
-        .run(
-          Deferred.succeed(successorAdmitted, undefined).pipe(
-            Effect.andThen(host(request, undefined, true)),
-          ),
-        )
-        .pipe(Effect.ensuring(second.close), Effect.forkChild);
-      yield* waitMounted(h);
-      h.mount!();
-      const oldComponent = h.component!;
-      h.showOverlay(foreign);
-      h[fault].mockImplementationOnce(() => {
-        oldComponent.handleInput?.("\r");
-        throw new Error("secret host path /private/questionnaire");
-      });
-      oldComponent.handleInput?.("1");
-      expect(() => oldComponent.handleInput?.("\r")).not.toThrow();
-      const result = yield* Fiber.join(firstFiber);
-      expect(Exit.isFailure(result)).toBe(true);
-      if (Exit.isFailure(result)) {
-        const error = Cause.squash(result.cause);
-        expect(error).toBeInstanceOf(AskUserHostError);
-        expect(String(error)).not.toContain("secret");
-        expect(error).toEqual(
-          new AskUserHostError({
-            operation: "render",
-            message: "Couldn't show the questionnaire.",
-          }),
-        );
-      }
-      expect(h.stack).toEqual(fault === "ownedHide" ? [oldComponent, foreign] : [foreign]);
-      expect(h.ownedHide).toHaveBeenCalledOnce();
-      expect(h.done).toHaveBeenCalledTimes(fault === "done" || fault === "guardHide" ? 1 : 0);
-      expect(h.guardHide).toHaveBeenCalledTimes(fault === "done" || fault === "guardHide" ? 1 : 0);
-      expect(bridge.resume()).toBe(false);
-      yield* Deferred.await(successorAdmitted);
-      if (fault !== "guardHide") {
-        expect(gate.canOpen()).toBe(false);
-        expect(h.customCalls).toBe(1);
-        gate.ended();
-      }
-      yield* eventually(() => expect(h.customCalls).toBe(2));
-      h.mount!();
-      h.component!.handleInput?.("1");
-      h.component!.handleInput?.("\r");
-      expect((yield* Fiber.join(secondFiber)).outcome).toBe("submitted");
-      expect(h.stack).toContain(foreign);
+it.effect("a failed close rejects yet ends the host prompt so the next questionnaire opens", () =>
+  Effect.gen(function* () {
+    const gate = createAskUserPromptGate();
+    const h = hostFixture(gate);
+    const bridge = createAskUserDialogBridge();
+    const host = askUserHost(h.ctx, bridge, gate);
+    const queue = yield* acquireQuestionnaireQueue;
+    const first = yield* queue.admit;
+    const second = yield* queue.admit;
+    const firstFiber = yield* first
+      .run(host(request))
+      .pipe(Effect.ensuring(first.close), Effect.exit, Effect.forkChild);
+    const secondFiber = yield* second
+      .run(host(request, undefined, true))
+      .pipe(Effect.ensuring(second.close), Effect.forkChild);
+    yield* waitMounted(h);
+    h.mount!();
+    const oldComponent = h.component!;
+    h.showOverlay(foreign);
+    h.ownedHide.mockImplementationOnce(() => {
       oldComponent.handleInput?.("\r");
-      expect(h.ownedHide).toHaveBeenCalledTimes(2);
-    }),
-  );
-}
+      throw new Error("secret host path /private/questionnaire");
+    });
+    oldComponent.handleInput?.("1");
+    expect(() => oldComponent.handleInput?.("\r")).not.toThrow();
+    const result = yield* Fiber.join(firstFiber);
+    expect(Exit.isFailure(result)).toBe(true);
+    if (Exit.isFailure(result)) {
+      const error = Cause.squash(result.cause);
+      expect(error).toBeInstanceOf(AskUserHostError);
+      expect(String(error)).not.toContain("secret");
+      expect(error).toEqual(
+        new AskUserHostError({
+          operation: "render",
+          message: "Couldn't show the questionnaire.",
+        }),
+      );
+    }
+    expect(h.stack).toEqual([foreign]);
+    expect(h.done).toHaveBeenCalledOnce();
+    expect(bridge.resume()).toBe(false);
+    yield* eventually(() => expect(h.customCalls).toBe(2));
+    h.mount!();
+    h.component!.handleInput?.("1");
+    h.component!.handleInput?.("\r");
+    expect((yield* Fiber.join(secondFiber)).outcome).toBe("submitted");
+    expect(h.stack).toEqual([foreign]);
+    expect(gate.canOpen()).toBe(true);
+    oldComponent.handleInput?.("\r");
+    expect(h.stack).toEqual([foreign]);
+    expect(h.done).toHaveBeenCalledTimes(2);
+  }),
+);
 
 for (const fail of [false, true]) {
   it.effect(`a pre-mount answer finishes only after handle acquisition (failure: ${fail})`, () =>
@@ -178,8 +165,6 @@ for (const fail of [false, true]) {
       }
       expect(h.stack).toEqual([foreign]);
       expect(h.done).toHaveBeenCalledOnce();
-      expect(h.ownedHide).toHaveBeenCalledOnce();
-      expect(h.guardHide).toHaveBeenCalledOnce();
     }),
   );
 }

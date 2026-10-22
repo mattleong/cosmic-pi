@@ -46,10 +46,10 @@ presenter retries when an unrelated prompt wins that race.
 
 Pi creates the component before acknowledging its mount. Only the mount callback acknowledges
 an opening; a late mount after revocation must immediately close without activating the dialog.
-Cosmic UI's [owned surface](../../pi-cosmic-ui/src/boundary/host-surface.ts) also isolates Pi's
-global-stack `done` behavior: it removes the owned overlay and closes through an inert guard so
-an unrelated overlay above it is preserved. A failed removal or guard acquisition must not fall
-back to an unguarded `done`.
+Cosmic UI's [owned surface](../../pi-cosmic-ui/src/boundary/host-surface.ts) closes only the
+questionnaire's own overlay, so an unrelated overlay above it is preserved. A failed close is
+reported, but it still completes Pi's `custom()` call; otherwise Pi's prompt would never end and
+the prompt gate would keep later questionnaires closed.
 
 Closing revokes callback and editor-admission authority before finishing the surface. It then
 joins every admitted [external editor](../src/boundary/host-external-editor.ts), including process

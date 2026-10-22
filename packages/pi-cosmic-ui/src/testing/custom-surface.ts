@@ -15,7 +15,7 @@ import {
   type HostTui,
 } from "pi-cosmic-core/testing";
 
-type CustomSurfaceFault = "ownedHide" | "guardShow" | "done" | "guardHide";
+type CustomSurfaceFault = "ownedHide" | "done";
 
 type Disposable = Component & { dispose?(): void };
 type CustomOptions = Parameters<ExtensionUIContext["custom"]>[1];
@@ -31,6 +31,8 @@ export function fakeCustomSurfaceHost(
   } = {},
 ) {
   const stack: Array<{ readonly component: Component; hidden: boolean }> = [];
+  // Inline openings share Pi's extension-dialog stack; the last entry is visible.
+  const dialogs: Component[] = [];
   const widgets = new Map<string, Component>();
   const faults = new Set<CustomSurfaceFault>();
   const mounts: Array<() => void> = [];
@@ -45,7 +47,6 @@ export function fakeCustomSurfaceHost(
   });
   const theme = options.theme ?? plainTheme;
   const keybindings = options.keybindings ?? piKeybindingsFixture();
-  let editor: Component | undefined;
   let doneCalls = 0;
   let renders = 0;
   let lastOverlayOptions: OverlayOptions | undefined;
@@ -77,11 +78,7 @@ export function fakeCustomSurfaceHost(
     requestRender: () => {
       renders += 1;
     },
-    showOverlay: (component, overlay) => {
-      if (!overlay?.nonCapturing) return show(component);
-      trip("guardShow");
-      return show(component, "guardHide");
-    },
+    showOverlay: (component) => show(component),
   });
 
   const custom = <T>(
@@ -97,15 +94,21 @@ export function fakeCustomSurfaceHost(
     const overlay = customOptions?.overlay ?? false;
     let closed = false;
     let mounted: Disposable | undefined;
+    let handle: OverlayHandle | undefined;
     const reject = (cause: unknown) =>
       completion.reject(Predicate.isError(cause) ? cause : new Error(String(cause)));
+    const removeDialog = () => {
+      const index = mounted ? dialogs.indexOf(mounted) : -1;
+      if (index >= 0) dialogs.splice(index, 1);
+    };
+    // Like Pi, done removes only this opening's overlay or dialog, never the topmost one.
     const done = (result: T) => {
       if (closed) return;
       trip("done");
       closed = true;
+      if (overlay) handle?.hide();
+      else removeDialog();
       doneCalls += 1;
-      if (overlay) stack.pop();
-      else editor = undefined;
       completion.resolve(result);
       try {
         mounted?.dispose?.();
@@ -120,16 +123,16 @@ export function fakeCustomSurfaceHost(
         mounted = created;
         try {
           if (!overlay) {
-            editor = created;
+            dialogs.push(created);
             return;
           }
           const configured = customOptions?.overlayOptions;
           lastOverlayOptions = Predicate.isFunction(configured) ? configured() : configured;
-          const handle = show(created, "ownedHide");
+          handle = show(created, "ownedHide");
           customOptions?.onHandle?.(handle);
         } catch (cause) {
           if (closed) return;
-          if (!overlay) editor = undefined;
+          if (!overlay) removeDialog();
           reject(cause);
         }
       });
@@ -171,8 +174,9 @@ export function fakeCustomSurfaceHost(
     get widgets(): ReadonlyMap<string, Component> {
       return widgets;
     },
-    get editor() {
-      return editor;
+    /** The visible inline dialog. */
+    get editor(): Component | undefined {
+      return dialogs.at(-1);
     },
     get doneCalls() {
       return doneCalls;

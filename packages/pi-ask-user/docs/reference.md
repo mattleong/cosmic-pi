@@ -135,6 +135,8 @@ For async workflows, check the same envelope with `tool === "ask_user_async"`, p
 
 Service/validation errors and interrupted calls reject rather than becoming cancelled decisions. If result encoding fails after an action, the error retains the original receipt text and display details but has no structured result or codec diagnostics. Read that evidence; do not blindly retry. Script failure does not roll back answers, admitted async requests, or cancellation signals. Interrupting an async await leaves its presenter open; recover an uncertain admission with one ID-free status call rather than another start. Pending script calls are cancelled when the script ends, so await every intended call. Discard saved IDs across runtime replacement, reload and tree navigation.
 
+A script holds one of Pi's process-wide codemode workers (two by default; `PI_CODEMODE_MAX_WORKERS` raises the limit) for its whole run, including a blocking questionnaire or an async `await`. Other scripts wait up to 60 seconds for a worker and then fail, so call questionnaire tools directly for long user waits.
+
 This is an additive tool-result boundary: normal text, persisted details, rendering, mode gates and tool exposure are unchanged. Codemode does not enable questionnaire tools in modes where they are unavailable.
 
 ## Activity view and child questions

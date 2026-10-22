@@ -4,9 +4,9 @@ These are deliberate adaptations to the pinned Pi host, rather than general rule
 
 ## Closing an owned surface
 
-Pi's custom-overlay `done` callback removes the topmost overlay, which may belong to a newer opening. [host-surface.ts](../src/boundary/host-surface.ts) first hides its own handle, places an inert non-capturing guard on top, calls `done`, and removes the guard. Failure never falls back to an unguarded pop. Inline surfaces can call `done` directly.
+Pi's custom-overlay `done` callback removes only its own overlay, and inline openings share Pi's extension-dialog stack. [host-surface.ts](../src/boundary/host-surface.ts) hides its own handle, which also disposes a dock, then calls `done`. A failed hide or disposal is reported as a failure, but `done` still runs: an unsettled `custom()` call keeps Pi's UI prompt open, so `ui_prompt_end` never fires and prompt-gated work such as questionnaires, wake holds, and the working row stays paused.
 
-A finish requested before mounting waits for the handle. Cancellation revokes callback authority and disposes the dock immediately, then cleans up a late mount. The dock adapter forwards its component's optional disposal hook once, including cancellation before the input overlay mounts. For mounted surfaces, `onClose` runs before host completion and admission is released after completion and dock disposal. The [surface tests](../tests/host-surface.test.ts) cover stacked surfaces, interrupted mounting, and close failures using the shared [custom-host model](../src/testing/custom-surface.ts).
+A finish requested before mounting waits for the handle, because Pi disposes an overlay component only when `done` follows its mount. Cancellation revokes callback authority and disposes the dock immediately, then cleans up a late mount. The dock adapter forwards its component's optional disposal hook once, including cancellation before the input overlay mounts. For mounted surfaces, `onClose` runs before host completion and admission is released after completion and dock disposal. The [surface tests](../tests/host-surface.test.ts) cover stacked surfaces, interrupted mounting, and close failures using the shared [custom-host model](../src/testing/custom-surface.ts) of Pi's own-entry closing and inline dialog stack.
 
 ## Live options and shared widget space
 
@@ -20,7 +20,7 @@ All above-editor widgets share Pi's shrinking layout slot. A questionnaire dock 
 
 ## Pull-request footer links
 
-The repository probe decodes `gh`'s PR number and actual URL together with Effect Schema, including enterprise hosts. Only HTTP(S) URLs without whitespace or control characters are admitted. Number and URL publish and invalidate together. Footer rendering adds Pi's OSC 8 hyperlink only after fitting and clipping plain text; clipped PR text remains unlinked, and the link closes before separators, padding, or following content. [Probe tests](../tests/probe.test.ts), [service tests](../tests/host-service.test.ts), and [footer tests](../tests/footer-primitives.test.ts) cover malformed output, terminal safety, invalidation, and narrow widths.
+The repository probe decodes `gh`'s PR number and actual URL together with Effect Schema, including enterprise hosts. Only HTTP(S) URLs without whitespace or control characters are admitted. Number and URL publish and invalidate together. Footer rendering adds an OSC 8 hyperlink only when pi-tui reports hyperlink support, which also honors `PI_HYPERLINKS`, and only after fitting and clipping plain text; clipped PR text remains unlinked, and the link closes before separators, padding, or following content. [Probe tests](../tests/probe.test.ts), [service tests](../tests/host-service.test.ts), and [footer tests](../tests/footer-primitives.test.ts) cover malformed output, terminal safety, invalidation, and narrow widths.
 
 ## Usage and main-agent throughput
 

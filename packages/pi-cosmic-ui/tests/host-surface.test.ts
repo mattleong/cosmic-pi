@@ -15,12 +15,14 @@ import {
 const view = (text = "view"): OwnedSurfaceComponent => ({ render: () => [text], invalidate() {} });
 const open = <A>(h: FakeCustomSurfaceHost, options: OwnedSurfaceOptions<A>) =>
   openOwnedSurface(h.ctx, options).pipe(Effect.forkScoped({ startImmediately: true }));
-const capture = () => {
+const capture = (text = "view") => {
   let host: OwnedSurfaceHost<string> | undefined;
+  const component = view(text);
   return {
+    component,
     create: (next: OwnedSurfaceHost<string>) => {
       host = next;
-      return view();
+      return component;
     },
     finish: (value: string) => host?.finish(value),
   };
@@ -139,30 +141,64 @@ describe("owned custom surfaces", () => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect("fails closed on each guarded-close fault without an unguarded global pop", () =>
+  it.effect("inline surfaces stack and close only their own dialog", () =>
     Effect.gen(function* () {
-      for (const [fault, doneCalls] of [
-        ["ownedHide", 0],
-        ["guardShow", 0],
-        ["done", 0],
-        ["guardHide", 1],
+      const h = fakeCustomSurfaceHost();
+      const first = capture("first");
+      const second = capture("second");
+      const lower = yield* open(h, {
+        placement: "inline",
+        closedValue: "closed",
+        create: first.create,
+      });
+      h.mount();
+      const upper = yield* open(h, {
+        placement: "inline",
+        closedValue: "closed",
+        create: second.create,
+      });
+      h.mount();
+      expect(h.editor).toBe(second.component);
+      yield* Fiber.interrupt(lower);
+      expect(h.editor).toBe(second.component);
+      second.finish("selected");
+      expect(yield* Fiber.join(upper)).toBe("selected");
+      expect(h.editor).toBeUndefined();
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a failed close is reported and still completes the host opening", () =>
+    Effect.gen(function* () {
+      for (const [placement, fault, doneCalls] of [
+        ["screen", "ownedHide", 1],
+        ["dock", "dispose", 1],
+        ["screen", "done", 0],
       ] as const) {
         const h = fakeCustomSurfaceHost();
-        const screen = capture();
+        const events: string[] = [];
+        let finish: (() => void) | undefined;
         const fiber = yield* open(h, {
-          placement: "screen",
+          placement,
           closedValue: "closed",
-          create: screen.create,
+          admit: () => () => events.push(`released after ${h.doneCalls} done calls`),
+          create: (host) => {
+            finish = () => host.finish("selected");
+            return {
+              ...view(),
+              dispose: () => {
+                if (fault === "dispose") throw new Error("Injected dispose failure");
+              },
+            };
+          },
         });
         h.mount();
         const unrelated = view("unrelated");
         h.showUnrelated(unrelated);
-        h.fail(fault);
-        screen.finish("selected");
+        if (fault !== "dispose") h.fail(fault);
+        finish?.();
         expect(yield* Fiber.join(fiber).pipe(Effect.flip)).toMatchObject({ reason: "failed" });
-        expect(h.doneCalls).toBe(doneCalls);
-        expect(h.overlays).toContain(unrelated);
-        expect(h.overlays.at(-1)).toBe(unrelated);
+        expect(events).toEqual([`released after ${doneCalls} done calls`]);
+        expect([h.doneCalls, h.overlays, h.widgets.size]).toEqual([doneCalls, [unrelated], 0]);
       }
     }).pipe(Effect.scoped),
   );

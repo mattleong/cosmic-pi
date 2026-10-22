@@ -3,7 +3,7 @@ import type {
   KeybindingsManager,
   Theme,
 } from "@earendil-works/pi-coding-agent";
-import type { Component, OverlayHandle, OverlayOptions } from "@earendil-works/pi-tui";
+import type { Component, OverlayHandle } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import {
@@ -49,8 +49,6 @@ export const makeTuiHost = (gate?: ReturnType<typeof createAskUserPromptGate>) =
     }),
   });
   const ownedHide = vi.fn();
-  const guardHide = vi.fn();
-  const createGuard = vi.fn();
   const done = vi.fn(<Outcome>(outcome: Outcome): Outcome => outcome);
   const requestRender = vi.fn();
   const stop = vi.fn();
@@ -62,10 +60,6 @@ export const makeTuiHost = (gate?: ReturnType<typeof createAskUserPromptGate>) =
     requestRender,
     stop,
     start,
-    showOverlay: (item: Component, options?: OverlayOptions) => {
-      createGuard();
-      return spyHide(host.tui.showOverlay(item, options), guardHide);
-    },
   });
   function custom<Outcome>(
     factory: CustomFactory<Outcome>,
@@ -122,8 +116,6 @@ export const makeTuiHost = (gate?: ReturnType<typeof createAskUserPromptGate>) =
     },
     done,
     ownedHide,
-    guardHide,
-    createGuard,
     get customCalls() {
       return customSpy.mock.calls.length;
     },
