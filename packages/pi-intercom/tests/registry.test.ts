@@ -1,6 +1,11 @@
+import { createServer, type Socket } from "node:net";
 import { expect, layer } from "@effect/vitest";
+import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -26,7 +31,14 @@ import {
   FALLBACK_NAMESPACE_PREFIX,
   IntercomRegistry,
   MAX_SOCKET_PATH_BYTES,
+  OwnerLiveness,
 } from "../src/registry/store.ts";
+import { IntercomRefused } from "../src/transport/protocol.ts";
+import {
+  IntercomInbound,
+  serveIntercom,
+  type IntercomInboundContract,
+} from "../src/transport/server.ts";
 
 const hex = (seed: string, bytes: number) => seed.repeat(bytes * 2).slice(0, bytes * 2);
 
@@ -118,6 +130,57 @@ const registryHarness = (options: { readonly longAgentDirectory?: boolean } = {}
 
 const encodeOwner = (instance: string, pid: number, started: string | undefined) =>
   Schema.encodeEffect(SocketOwnerFromJson)(socketOwner(instance, pid, started));
+
+/** A listener that takes connections and never answers them. */
+const silentListener = (socket: string, onConnection: (peer: Socket) => void) =>
+  Effect.acquireRelease(
+    Effect.callback<ReturnType<typeof createServer>>((resume) => {
+      const server = createServer((peer) => {
+        peer.on("error", () => undefined);
+        onConnection(peer);
+      });
+      server.listen(socket, () => resume(Effect.succeed(server)));
+    }),
+    (server) => Effect.callback<void>((resume) => void server.close(() => resume(Effect.void))),
+  );
+
+/**
+ * A clock that stands still until told to move. A sleep, such as a probe's timeout, ends only once
+ * the clock is moved past its end, so no real delay can expire one early.
+ */
+const manualClock = (live: Clock.Clock) => {
+  let now = live.currentTimeMillisUnsafe();
+  const sleepers = new Set<{ readonly until: number; readonly wake: () => void }>();
+  const nanos = () => BigInt(now) * 1_000_000n;
+  const clock: Clock.Clock = {
+    currentTimeMillisUnsafe: () => now,
+    currentTimeMillis: Effect.sync(() => now),
+    currentTimeNanosUnsafe: nanos,
+    currentTimeNanos: Effect.sync(nanos),
+    monotonicTimeNanosUnsafe: nanos,
+    monotonicTimeNanos: Effect.sync(nanos),
+    sleep: (duration) =>
+      Effect.callback<void>((resume) => {
+        const sleeper = {
+          until: now + Duration.toMillis(duration),
+          wake: () => resume(Effect.void),
+        };
+        sleepers.add(sleeper);
+        return Effect.sync(() => void sleepers.delete(sleeper));
+      }),
+  };
+  return {
+    clock,
+    advance: (millis: number) => {
+      now += millis;
+      for (const sleeper of sleepers)
+        if (sleeper.until <= now) {
+          sleepers.delete(sleeper);
+          sleeper.wake();
+        }
+    },
+  };
+};
 
 /** Makes a path look untouched since 1970. */
 const ancient = (fs: FileSystem.FileSystem, path: string) => fs.utimes(path, 1, 1);
@@ -292,6 +355,95 @@ layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom registry",
       // Tombstones without proof of a dead owner stay.
       expect(yield* h.fs.exists(liveTombstone)).toBe(true);
       expect(yield* h.fs.exists(malformedTombstone)).toBe(true);
+    }),
+  );
+
+  it.effect("keeps a session that answers without asking whether its owner runs", () =>
+    Effect.gen(function* () {
+      const h = yield* registryHarness();
+      const own = currentProcessIdentity();
+      const answeringInstance = hex("1", 16);
+      const directory = h.paths.join(h.namespace, answeringInstance);
+      yield* h.fs.makeDirectory(h.namespace, { mode: 0o700 });
+      yield* h.fs.makeDirectory(directory, { mode: 0o700 });
+      const ownerPath = h.paths.join(directory, "owner.json");
+      yield* h.fs.writeFileString(
+        ownerPath,
+        yield* encodeOwner(answeringInstance, own.pid, own.started),
+      );
+      yield* h.fs.chmod(ownerPath, 0o600);
+      const answering = h.record("1", { socket: h.paths.join(directory, "intercom.sock") });
+      const inbound: IntercomInboundContract = {
+        describe: Effect.succeed({
+          sessionId: answering.sessionId,
+          cwd: "/project",
+          state: "idle",
+        }),
+        deliver: () => Effect.succeed("woken"),
+        readLast: Effect.succeed({ truncated: false, state: "idle" }),
+      };
+      yield* serveIntercom({ socket: answering.socket, token: answering.token }).pipe(
+        Effect.provideService(IntercomInbound, inbound),
+      );
+      // A refusal comes from a listener that proved it holds the record's token.
+      const refusing = h.record("3");
+      yield* h.fs.makeDirectory(h.sockets, { recursive: true });
+      yield* serveIntercom({ socket: refusing.socket, token: refusing.token }).pipe(
+        Effect.provideService(IntercomInbound, {
+          ...inbound,
+          describe: Effect.fail(new IntercomRefused({ code: "session_unavailable" })),
+        }),
+      );
+      const silent = h.record("2");
+      for (const record of [answering, refusing, silent]) yield* h.registry.write(record);
+
+      // Liveness that calls every owner dead shows which records were judged by it.
+      const swept = yield* h.registry
+        .sweep()
+        .pipe(Effect.provideService(OwnerLiveness, () => "dead"));
+
+      expect(swept).toEqual({ records: 1, socketDirectories: 0 });
+      expect((yield* h.registry.list()).records.map(({ instance }) => instance).toSorted()).toEqual(
+        [answering.instance, refusing.instance].toSorted(),
+      );
+      expect(yield* h.fs.exists(ownerPath)).toBe(true);
+    }),
+  );
+
+  it.effect("asks about no owner once the time budget passes with probes outstanding", () =>
+    Effect.gen(function* () {
+      const h = yield* registryHarness();
+      yield* h.fs.makeDirectory(h.sockets, { recursive: true });
+      const records = ["1", "2", "3"].map((seed) => h.record(seed));
+      const peers = new Set<Socket>();
+      const connected = yield* Deferred.make<void>();
+      for (const record of records) {
+        yield* h.registry.write(record);
+        yield* silentListener(record.socket, (peer) => {
+          peers.add(peer);
+          if (peers.size === records.length) Deferred.doneUnsafe(connected, Effect.void);
+        });
+      }
+      const time = manualClock(yield* Clock.Clock);
+      let asked = 0;
+      const sweep = yield* h.registry.sweep().pipe(
+        Effect.provideService(OwnerLiveness, () => {
+          asked += 1;
+          return "dead";
+        }),
+        Effect.provideService(Clock.Clock, time.clock),
+        Effect.forkScoped,
+      );
+      yield* Deferred.await(connected);
+
+      // Every probe is in flight when the budget runs out; then each fails at once.
+      time.advance(2_000);
+      for (const peer of peers) peer.destroy();
+      const swept = yield* Fiber.join(sweep);
+
+      expect(asked).toBe(0);
+      expect(swept.records).toBe(0);
+      expect((yield* h.registry.list()).records).toHaveLength(records.length);
     }),
   );
 

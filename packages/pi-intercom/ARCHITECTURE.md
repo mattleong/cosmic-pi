@@ -58,9 +58,12 @@ after the directory read are skipped silently.
 
 ## Sweep and liveness
 
-A record's owner is dead only on positive evidence from core's `processLiveness`: the PID is
-gone, or a live PID started at a different time. Unknown liveness, including a record without a
-comparable start identity, keeps the record. A dead record is claimed by renaming it to a
+The sweep first describes each record's session under the short `Describe` deadline; a session
+that answers, even with a refusal, is live, and so is its fallback socket directory. Owner
+liveness can spawn `ps`, so it is checked only for an owner whose session didn't answer, and not
+once the sweep's time budget has passed. An owner is dead only on positive
+evidence from core's `processLiveness`: the PID is gone, or a live PID started at a different
+time. Unknown liveness, including a record without a comparable start identity, keeps the record. A dead record is claimed by renaming it to a
 tombstone, so one concurrent sweeper retires it; the tombstone is read back and removed only when
 it is still the record judged dead, together with its socket in the shared socket directory.
 Otherwise it goes back unless its owner already wrote a new one. A tombstone left behind is
@@ -100,7 +103,8 @@ both challenges for the server role. Only when that proof checks does the client
 `Authenticate` with the HMAC for the client role; the server then admits `Describe`, `Deliver`, and
 `ReadLast` on that connection alone. A listener that doesn't hold the token, such as a stale or
 foreign listener at the recorded path, learns no token and no request, and its answers are
-rejected. A failed client proof is refused as unauthorized and the connection admits nothing more.
+rejected. A failed client proof is refused as unauthorized and the connection admits nothing more; a
+connection closed while a handshake step awaits its proof never advances.
 The client never reconnects, so every request and answer travels on the authenticated
 connection. Application frames after the handshake aren't authenticated, so an active relay of
 the same user between the two ends could read or alter them; the handshake stops impostor

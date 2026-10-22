@@ -8,10 +8,18 @@ import * as FileSystem from "effect/FileSystem";
 import * as Logger from "effect/Logger";
 import * as Path from "effect/Path";
 import * as Result from "effect/Result";
+import * as Scheduler from "effect/Scheduler";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Tracer from "effect/Tracer";
-import { nodeFilePlatformLayer, runBoundedProcessNode } from "pi-cosmic-core";
+import * as RpcSerialization from "effect/rpc/RpcSerialization";
+import * as TestClock from "effect/testing/TestClock";
+import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer";
+import {
+  boundedNdjsonRpcSerialization,
+  nodeFilePlatformLayer,
+  runBoundedProcessNode,
+} from "pi-cosmic-core";
 import { connect, createServer, type Socket } from "node:net";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
@@ -28,7 +36,12 @@ import {
   MAX_FRAME_BYTES,
   type InboundMessage,
 } from "../src/transport/protocol.ts";
-import type { ConnectionLimits } from "../src/transport/connections.ts";
+import {
+  guardedRpcProtocol,
+  type ConnectionLimits,
+  type GuardedProtocol,
+  type IntercomConnection,
+} from "../src/transport/connections.ts";
 import { handshakeKey } from "../src/transport/handshake.ts";
 import {
   IntercomInbound,
@@ -388,6 +401,34 @@ layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom transport"
     }),
   );
 
+  it.effect("admits no more connections than the limit when they arrive together", () =>
+    Effect.gen(function* () {
+      const socket = yield* socketPath;
+      // Yielding every few steps opens any window between the bound check and taking a slot; a
+      // budget below 3 stalls even a bare sleep.
+      yield* startServer(socket, fakeInbound(), TOKEN, limits({ maxConnections: 2 })).pipe(
+        Effect.provideService(Scheduler.MaxOpsBeforeYield, 3),
+      );
+      const peers = yield* Effect.forEach(Array.from({ length: 12 }), () => rawPeer(socket), {
+        concurrency: "unbounded",
+      });
+
+      const served = yield* Effect.forEach(
+        peers,
+        (peer) => {
+          peer.request(0, "Hello", { nonce: "c".repeat(64) });
+          return Effect.raceFirst(
+            peer.answer(0).pipe(Effect.as(true)),
+            peer.closed.pipe(Effect.as(false)),
+          );
+        },
+        { concurrency: "unbounded" },
+      );
+
+      expect(served.filter(Boolean)).toHaveLength(2);
+    }),
+  );
+
   it.effect("reports a missing socket or one nobody listens on as unreachable", () =>
     Effect.gen(function* () {
       const socket = yield* socketPath;
@@ -560,6 +601,77 @@ layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom transport"
         socket,
       ])
         expect(telemetry).not.toContain(secret);
+    }),
+  );
+});
+
+/** The guarded connection layer alone, so a test can hold a connection's handshake state. */
+const guardedServer = (socket: string, connectionLimits: ConnectionLimits) =>
+  Effect.gen(function* () {
+    const server = yield* NodeSocketServer.make({ path: socket });
+    return yield* guardedRpcProtocol(server, connectionLimits).pipe(
+      Effect.provideService(
+        RpcSerialization.RpcSerialization,
+        boundedNdjsonRpcSerialization(MAX_FRAME_BYTES),
+      ),
+    );
+  });
+
+/** Lets the event loop deliver pending socket events, independently of the test clock. */
+const nextTurn = Effect.callback<void>((resume) => {
+  const turn = setImmediate(() => resume(Effect.void));
+  return Effect.sync(() => clearImmediate(turn));
+});
+
+/** The connection the server registered as `clientId`, once the listener has accepted it. */
+const accepted = (guarded: GuardedProtocol, clientId: number): Effect.Effect<IntercomConnection> =>
+  Effect.suspend(() => {
+    const connection = guarded.connection(clientId);
+    return connection === undefined
+      ? nextTurn.pipe(Effect.andThen(accepted(guarded, clientId)))
+      : Effect.succeed(connection);
+  });
+
+// The authentication deadline runs on the test clock.
+layer(nodeFilePlatformLayer)("intercom connection handshake state", (it) => {
+  it.effect("never advances a handshake the authentication deadline closed", () =>
+    Effect.gen(function* () {
+      const socket = yield* socketPath;
+      const guarded = yield* guardedServer(
+        socket,
+        limits({ authenticationDeadline: "2 seconds", idleDeadline: "1 hour" }),
+      );
+      const slow = yield* rawPeer(socket);
+      const pending = yield* accepted(guarded, 0);
+      yield* rawPeer(socket);
+      const authenticated = yield* accepted(guarded, 1);
+      expect(authenticated.advance("fresh", "challenged")).toBe(true);
+      expect(authenticated.advance("challenged", "authenticated")).toBe(true);
+
+      // A handler awaiting its proof when the deadline passes finds the connection closed.
+      yield* TestClock.adjust("2 seconds");
+      yield* slow.closed;
+
+      expect(pending.advance("fresh", "challenged")).toBe(false);
+      expect(pending.advance("challenged", "authenticated")).toBe(false);
+      expect(pending.phase).toBe("refused");
+      expect(authenticated.phase).toBe("authenticated");
+    }),
+  );
+
+  it.effect("advances a handshake only from the phase it is in", () =>
+    Effect.gen(function* () {
+      const socket = yield* socketPath;
+      const guarded = yield* guardedServer(socket, limits({}));
+      yield* rawPeer(socket);
+      const connection = yield* accepted(guarded, 0);
+
+      expect(connection.advance("challenged", "authenticated")).toBe(false);
+      expect(connection.advance("fresh", "challenged")).toBe(true);
+      expect(connection.advance("fresh", "challenged")).toBe(false);
+      expect(connection.advance("challenged", "refused")).toBe(true);
+      expect(connection.advance("challenged", "authenticated")).toBe(false);
+      expect(connection.phase).toBe("refused");
     }),
   );
 });

@@ -1,17 +1,10 @@
-import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import {
-  processLiveness,
-  safeTextPrefix,
-  synchronousRandomHex,
-  type ProcessIdentity,
-  type ProcessLiveness,
-} from "pi-cosmic-core";
+import { safeTextPrefix, synchronousRandomHex } from "pi-cosmic-core";
 import type { SessionRecord } from "../registry/schema.ts";
-import { IntercomRegistry } from "../registry/store.ts";
+import { IntercomRegistry, ownerIsDead } from "../registry/store.ts";
 import { IntercomSession } from "../session/service.ts";
 import {
   deliverMessage,
@@ -54,21 +47,6 @@ const viewOf = (record: Pick<SessionRecord, "sessionId" | "name" | "cwd">): Sess
   ...(record.name !== undefined && { name: safeTextPrefix(record.name, MAX_IDENTITY_CHARS) }),
   cwd: safeTextPrefix(record.cwd, MAX_CWD_CHARS),
 });
-
-/**
- * Whether a record's owner process still runs. Asking it can spawn `ps`, so it is consulted only
- * for records whose session didn't answer.
- */
-export const OwnerLiveness = Context.Reference<(owner: ProcessIdentity) => ProcessLiveness>(
-  "pi-intercom/OwnerLiveness",
-  { defaultValue: () => processLiveness },
-);
-
-const ownerIsDead = (record: SessionRecord) =>
-  Effect.gen(function* () {
-    const liveness = yield* OwnerLiveness;
-    return liveness({ pid: record.pid, started: record.started }) === "dead";
-  });
 
 /** Records of other runtimes; ones whose owners are dead are left for the next sweep. */
 const peerRecords = Effect.gen(function* () {

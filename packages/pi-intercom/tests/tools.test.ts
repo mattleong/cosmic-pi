@@ -23,9 +23,9 @@ import {
   type SessionToolDetails,
   type ToolRefusalCode,
 } from "../src/tools/contract.ts";
+import { OwnerLiveness } from "../src/registry/store.ts";
 import {
   listSessions,
-  OwnerLiveness,
   readSession,
   sendToSession,
   SessionToolRefusal,

@@ -108,9 +108,10 @@ export const serveIntercom = Effect.fn("IntercomServer.serve")(function* (
           if (peer?.phase !== "fresh") return yield* Effect.interrupt;
           const serverNonce = yield* freshNonce;
           const proof = yield* key.prove("server", nonce, serverNonce);
+          // The authentication deadline may have closed the peer while the proof was made.
+          if (!peer.advance("fresh", "challenged")) return yield* Effect.interrupt;
           peer.clientNonce = nonce;
           peer.serverNonce = serverNonce;
-          peer.phase = "challenged";
           return { nonce: serverNonce, proof };
         }).pipe(Effect.catchTag("IntercomHandshakeError", () => Effect.interrupt)),
       Authenticate: ({ proof }, { client }) =>
@@ -120,9 +121,10 @@ export const serveIntercom = Effect.fn("IntercomServer.serve")(function* (
           const valid = yield* key
             .check("client", peer.clientNonce, peer.serverNonce, proof)
             .pipe(Effect.orElseSucceed(() => false));
-          // A failed proof admits nothing more; the authentication deadline closes the peer.
-          peer.phase = valid ? "authenticated" : "refused";
-          return valid ? undefined : yield* new IntercomUnauthorized();
+          // A failed proof admits nothing more; the authentication deadline closes the peer. A
+          // peer closed during the check stays refused.
+          const admitted = peer.advance("challenged", valid ? "authenticated" : "refused") && valid;
+          return admitted ? undefined : yield* new IntercomUnauthorized();
         }),
       Describe: (_payload, { client }) => authenticated(client, inbound.describe),
       Deliver: (message, { client }) =>

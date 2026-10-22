@@ -47,9 +47,15 @@ export type ConnectionPhase = "fresh" | "challenged" | "refused" | "authenticate
 
 /** One peer connection's handshake state, which the RPC handlers advance. */
 export interface IntercomConnection {
-  phase: ConnectionPhase;
+  readonly phase: ConnectionPhase;
   clientNonce: string;
   serverNonce: string;
+  /**
+   * Moves the handshake from `from` to `to` and reports whether it did. A connection that has
+   * moved on or closed since, as the authentication deadline may while a handler awaits, stays
+   * where it is: a refused or ended connection never advances.
+   */
+  readonly advance: (from: Exclude<ConnectionPhase, "refused">, to: ConnectionPhase) => boolean;
   readonly close: () => void;
 }
 
@@ -194,19 +200,30 @@ export const guardedRpcProtocol = (
         Effect.gen(function* () {
           const netSocket = yield* Effect.serviceOption(NodeSocket.NetSocket);
           if (Option.isNone(netSocket)) return;
+          const output = yield* Queue.bounded<Uint8Array | string, Cause.Done>(MAX_PENDING_WRITES);
+          const arrived = yield* Clock.currentTimeMillis;
+          // From the bound check to taking the slot nothing yields, so concurrent connections can't
+          // both take the last one.
           if (transports.size >= limits.maxConnections) {
             netSocket.value.destroy();
             return;
           }
           const clientId = nextClientId;
           nextClientId += 1;
-          const output = yield* Queue.bounded<Uint8Array | string, Cause.Done>(MAX_PENDING_WRITES);
+          let phase: ConnectionPhase = "fresh";
           const connection: IntercomConnection = {
-            phase: "fresh",
+            get phase() {
+              return phase;
+            },
             clientNonce: "",
             serverNonce: "",
+            advance: (from, to) => {
+              if (phase !== from) return false;
+              phase = to;
+              return true;
+            },
             close: () => {
-              connection.phase = "refused";
+              phase = "refused";
               netSocket.value.destroy();
             },
           };
@@ -216,11 +233,12 @@ export const guardedRpcProtocol = (
             activeRequests: new Set(),
             output,
             encode: (response) => parser.encode(response),
-            lastActivity: yield* Clock.currentTimeMillis,
+            lastActivity: arrived,
           };
           transports.set(clientId, transport);
           yield* Effect.addFinalizer(() =>
             Effect.sync(() => {
+              phase = "refused";
               transports.delete(clientId);
               Queue.endUnsafe(output);
               Queue.offerUnsafe(disconnects, clientId);

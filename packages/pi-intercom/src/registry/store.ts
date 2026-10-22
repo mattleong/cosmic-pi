@@ -6,6 +6,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import {
   AgentDirectory,
@@ -13,7 +14,9 @@ import {
   synchronousRandomHex,
   utf8ByteLength,
   type ProcessIdentity,
+  type ProcessLiveness,
 } from "pi-cosmic-core";
+import { DESCRIBE_CONCURRENCY, describeSession } from "../transport/client.ts";
 import {
   createPrivateDirectory,
   currentUserId,
@@ -122,8 +125,21 @@ export interface IntercomRegistryOptions {
   readonly fallbackRoot: string;
 }
 
-const ownerIsDead = (owner: { readonly pid: number; readonly started?: string | undefined }) =>
-  Effect.sync(() => processLiveness({ pid: owner.pid, started: owner.started }) === "dead");
+/**
+ * Whether a record's owner process still runs. Asking it can spawn `ps`, so it is consulted only
+ * for owners whose session didn't answer.
+ */
+export const OwnerLiveness = Context.Reference<(owner: ProcessIdentity) => ProcessLiveness>(
+  "pi-intercom/OwnerLiveness",
+  { defaultValue: () => processLiveness },
+);
+
+/** Dead only on positive evidence; an owner whose liveness is unknown is kept. */
+export const ownerIsDead = (owner: ProcessIdentity) =>
+  Effect.gen(function* () {
+    const liveness = yield* OwnerLiveness;
+    return liveness({ pid: owner.pid, started: owner.started }) === "dead";
+  });
 
 const decodeRecord = Schema.decodeOption(SessionRecordFromJson);
 const decodeOwner = Schema.decodeOption(SocketOwnerFromJson);
@@ -326,13 +342,19 @@ export class IntercomRegistry extends Context.Service<IntercomRegistry>()(
          * Whether the directory may be reclaimed: its owner record names this instance and a dead
          * owner, or it has no owner record and nothing changed in it for the retention period.
          */
-        const reclaimable = Effect.fnUntraced(function* (directory: string, instance: string) {
+        const reclaimable = Effect.fnUntraced(function* (
+          directory: string,
+          instance: string,
+          answered: ReadonlySet<string>,
+        ) {
           const identity = yield* Effect.option(ownDirectory(directory));
           if (Option.isNone(identity)) return Option.none();
           const evidence = yield* socketOwnerEvidence(directory, instance);
           const now = yield* Clock.currentTimeMillis;
           const reclaim = yield* SocketOwnerEvidence.$match(evidence, {
-            Owner: ({ owner }) => ownerIsDead(owner),
+            // An instance whose session answered this sweep is live without asking about its owner.
+            Owner: ({ owner }) =>
+              answered.has(instance) ? Effect.succeed(false) : ownerIsDead(owner),
             Unowned: () =>
               Effect.succeed(
                 now - identity.value.modifiedMillis > UNOWNED_DIRECTORY_RETENTION_MILLIS,
@@ -345,12 +367,13 @@ export class IntercomRegistry extends Context.Service<IntercomRegistry>()(
         const sweepSocketDirectory = Effect.fnUntraced(function* (
           namespace: string,
           entry: string,
+          answered: ReadonlySet<string>,
         ) {
           const match = SOCKET_DIRECTORY.exec(entry);
           const instance = match?.[1];
           if (match === null || instance === undefined) return false;
           const directory = paths.join(namespace, entry);
-          const judged = yield* reclaimable(directory, instance);
+          const judged = yield* reclaimable(directory, instance, answered);
           if (Option.isNone(judged)) return false;
           // A tombstone was already claimed by a sweeper that died before clearing it.
           if (match[2] !== undefined)
@@ -362,12 +385,15 @@ export class IntercomRegistry extends Context.Service<IntercomRegistry>()(
           );
           if (!claimed) return false;
           // The claimed directory must be the one judged, and still be reclaimable.
-          const moved = yield* reclaimable(tombstone, instance);
+          const moved = yield* reclaimable(tombstone, instance, answered);
           if (Option.isNone(moved) || !sameDirectory(moved.value, judged.value)) return false;
           return yield* clearSocketDirectory(tombstone).pipe(Effect.orElseSucceed(() => false));
         });
 
-        const sweepSocketDirectories = Effect.fnUntraced(function* (until: number) {
+        const sweepSocketDirectories = Effect.fnUntraced(function* (
+          until: number,
+          answered: ReadonlySet<string>,
+        ) {
           const namespace = yield* fallbackNamespace;
           if (namespace === undefined) return 0;
           // Only this user's own namespace is swept; a link or another user's directory isn't.
@@ -376,25 +402,49 @@ export class IntercomRegistry extends Context.Service<IntercomRegistry>()(
           let removed = 0;
           for (const entry of entries.slice(0, MAX_SWEPT_ENTRIES)) {
             if (yield* pastDeadline(until)) break;
-            if (yield* sweepSocketDirectory(namespace, entry)) removed += 1;
+            if (yield* sweepSocketDirectory(namespace, entry, answered)) removed += 1;
           }
           return removed;
         });
 
+        /** A session that answers is live; only a silent one's owner is asked about. */
+        const sweepRecord = Effect.fnUntraced(function* (record: SessionRecord, until: number) {
+          if (yield* pastDeadline(until)) return "kept";
+          const described = yield* Effect.result(describeSession(record));
+          // Only a listener that proved it holds the record's token can refuse.
+          if (
+            Result.isSuccess(described) ||
+            Predicate.isTagged(described.failure, "IntercomRefused")
+          )
+            return "answered";
+          // Asking about the owner can block on `ps`, so a probe that outlasted the sweep stops.
+          if (yield* pastDeadline(until)) return "kept";
+          return (yield* ownerIsDead(record)) && (yield* retireRecord(record)) ? "retired" : "kept";
+        });
+
         /**
          * Removes records and fallback socket directories whose owner is positively dead: its PID
-         * is gone, or now belongs to a process that started at another time. Owners whose
-         * liveness is unknown are kept. Each sweep examines a bounded number of entries for a
-         * bounded time.
+         * is gone, or now belongs to a process that started at another time. Each record's
+         * session is described first, and only an owner whose session didn't answer is asked
+         * about. Owners whose liveness is unknown are kept. Each sweep examines a bounded number
+         * of entries for a bounded time.
          */
         const sweep = Effect.fn("IntercomRegistry.sweep")(function* () {
           const until = yield* sweepDeadline;
           const { records } = yield* list();
-          let retired = 0;
-          for (const record of records) {
-            if (yield* pastDeadline(until)) break;
-            if ((yield* ownerIsDead(record)) && (yield* retireRecord(record))) retired += 1;
-          }
+          const outcomes = yield* Effect.forEach(
+            records,
+            (record) =>
+              Effect.map(sweepRecord(record, until), (outcome) => ({
+                instance: record.instance,
+                outcome,
+              })),
+            { concurrency: DESCRIBE_CONCURRENCY },
+          );
+          const answered = new Set(
+            outcomes.flatMap(({ instance, outcome }) => (outcome === "answered" ? [instance] : [])),
+          );
+          const retired = outcomes.filter(({ outcome }) => outcome === "retired").length;
           const files = yield* listEntries(sessions).pipe(Effect.orElseSucceed(() => []));
           for (const file of files
             .filter((name) => RECORD_TOMBSTONE.test(name))
@@ -402,7 +452,7 @@ export class IntercomRegistry extends Context.Service<IntercomRegistry>()(
             if (yield* pastDeadline(until)) break;
             yield* removeRecordTombstone(file);
           }
-          const socketDirectories = yield* sweepSocketDirectories(until);
+          const socketDirectories = yield* sweepSocketDirectories(until, answered);
           return { records: retired, socketDirectories } satisfies SweepResult;
         });
 
