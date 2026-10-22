@@ -2,7 +2,8 @@
 
 Cosmic Core provides shared runtime, coordination, platform, and host-boundary contracts. It is a
 library, not a Pi extension: it registers nothing of its own and owns no process-wide runtime;
-host helpers such as the session wake register handlers only on the caller's extension API.
+host helpers such as the session wake register handlers only on the caller's extension API. The
+only process-wide hook is the host-exit guard's `exit` listener, present while a guard is held.
 Feature policy, provider schemas, and UI remain in consumer packages. The module map below describes the current
 implementation; the ownership and lifecycle guarantees are what refactors must preserve.
 
@@ -91,7 +92,13 @@ project paths before any read. Atomic file replacement prepares and validates be
 Process and safe-file capabilities are explicit dependencies; file or network Layers do not silently
 supply process execution. Platform support is limited to macOS and Linux. Scoped process cleanup
 reports confirmed exit separately from a successful kill request. Process-tree sweeps wait for
-observed process-group absence; inspection failures and deadlines remain uncertain. A failed
+observed process-group absence; inspection failures and deadlines remain uncertain. The
+[host-exit guard](src/platform/process-group-exit-guard.ts) covers a detached group from
+acquisition until its owner confirms settlement or closes the scope. Each loaded copy of core keeps
+one guard registry and installs a single synchronous `exit` listener only while a guard is held;
+when the host exits without closing scopes, that listener sends `SIGKILL` to every guarded group.
+It reaches only those groups, never processes that leave them, and nothing runs after host
+`SIGKILL`. Owners release a guard as soon as the group settles so a reused ID is never killed. A failed
 acquisition may leave cleanup uncertain, so callers must not infer resource release from an error
 alone. Safe-file access validates containment, file identity, bounded reads,
 and unchanged size/modification metadata across the read.
@@ -129,6 +136,7 @@ anchors are the [session lifecycle](tests/session-runtime.test.ts),
 [usage publication](tests/usage-controller.test.ts), [session wake](tests/host-wake.test.ts),
 [document races](tests/json-document.test.ts),
 [document files and processes](tests/json-document-files.test.ts),
-[process cleanup](tests/process-runner.test.ts), [safe-file](tests/safe-file.test.ts), and
+[process cleanup](tests/process-runner.test.ts), [host-exit guard](tests/process-group-exit-guard.test.ts),
+[safe-file](tests/safe-file.test.ts), and
 [cross-process recovery](tests/cross-process-lock.test.ts) tests. These protect observable guarantees;
 module names and helper placement may change with ownership.

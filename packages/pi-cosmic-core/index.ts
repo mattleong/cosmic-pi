@@ -163,6 +163,10 @@ export {
   signalProcessGroup,
 } from "./src/platform/process-tree.ts";
 export {
+  guardProcessGroupAtHostExit,
+  type ProcessGroupExitGuard,
+} from "./src/platform/process-group-exit-guard.ts";
+export {
   currentProcessIdentity,
   processLiveness,
   type ProcessIdentity,
