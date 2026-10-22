@@ -141,6 +141,7 @@ test("errors are short human issues while expansion keeps full native text and r
     "MCP tool docs/lookup returned an error",
     "Error: HTTP 429 Too Many Requests\n    at fetch (internal)",
     "Run /mcp to reconnect docs before retrying.",
+    'Validation failed for tool "mcp__docs__lookup":\n  - query: must be string\n\nReceived arguments:\n{\n  "query": 1\n}',
     "",
   ]) {
     const summary = summarize(dynamicTool(), result(text, docs), {}, true);

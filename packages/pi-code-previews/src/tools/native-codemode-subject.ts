@@ -1,7 +1,7 @@
 import * as Predicate from "effect/Predicate";
 import type { CompactChild } from "./compact-summary";
 import { describeBuiltinCompactSubject, type BuiltinCompactTool } from "./builtin-subject";
-import { getReadLineRange } from "./data/args";
+import { getReadLineRange, numericArg } from "./data/args";
 import type { NativeArgumentPreview } from "./native-codemode-args";
 import { nativeMcpResourceAction, nativeMcpResourceSubject } from "./native-mcp-identity";
 import { isCorePreviewName } from "./preview-admission";
@@ -47,9 +47,13 @@ function coreSubject(
   const rawPath = text("path") || text("file_path");
   const path = rawPath ? formatDisplayPath(rawPath, cwd) : "";
   if (name === "find" || name === "grep") return searchSubject(text, path);
-  const offset = preview.values.offset;
-  const ranged = name === "read" && Number.isSafeInteger(offset) && Number(offset) > 0;
-  return path && ranged ? path + getReadLineRange(preview.values) : path;
+  if (name !== "read" || !path) return path;
+  const settled = Object.fromEntries(
+    Object.entries(preview.values).filter(([key]) => !preview.partialFields.has(key)),
+  );
+  const offset = numericArg(settled, "offset");
+  const ranged = offset !== undefined && Number.isSafeInteger(offset) && offset > 0;
+  return ranged ? path + getReadLineRange(settled) : path;
 }
 
 function waitSubject(text: FieldText): string {

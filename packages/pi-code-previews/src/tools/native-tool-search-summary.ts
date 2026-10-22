@@ -7,6 +7,7 @@ import {
   isAgentGuidance,
 } from "pi-cosmic-core";
 import type { CompactSummaryProvider } from "./compact-summary";
+import { argumentFailureIssue } from "./argument-failure";
 import { hostContainer, HostContainerSchema, type HostContainer } from "../shared/untrusted-value";
 import { ownData, visibleDiagnosticLine } from "./native-safe-content";
 
@@ -56,7 +57,7 @@ export const nativeToolSearchSummary: CompactSummaryProvider = ({
       ...heading,
       outcome: "error",
       issues: [
-        {
+        argumentFailureIssue(text) ?? {
           severity: "error",
           code: "tool-search-error",
           message: isAgentGuidance(text) ? fallback : failureMessage(text, fallback),

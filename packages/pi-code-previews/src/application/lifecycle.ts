@@ -95,18 +95,11 @@ export function codePreviewsWithDependencies(
   pi: ExtensionAPI,
   dependencies: CodePreviewExtensionDependencies = defaultDependencies,
 ): Promise<void> {
-  const registerToolRenderer = pi.registerToolRenderer?.bind(pi);
-  if (!registerToolRenderer) {
-    pi.on("session_start", (_event, ctx) =>
-      notifyAtHostBoundary(ctx, "Code Previews needs Pi 1.4.0 or later", "warning"),
-    );
-    return Promise.resolve();
-  }
   const ownedTools = new Set<CodePreviewToolName>();
   const installedTools = new Set<CodePreviewToolName>();
   let presentation = new CodePreviewPresentationOwner();
   let started = false;
-  registerToolRenderer(createCodePreviewRendererResolver(pi, () => presentation, ownedTools));
+  pi.registerToolRenderer(createCodePreviewRendererResolver(pi, () => presentation, ownedTools));
   dependencies.registerCommands(pi);
 
   const startup = (input: SessionInput) =>

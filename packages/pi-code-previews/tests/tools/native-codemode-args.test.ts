@@ -74,3 +74,20 @@ test("quoted credential names and truncated URI userinfo remain redacted", () =>
   const benign = nativeArgumentPreview(receipt({ command: "curl https://host:3000/path" }));
   assert.equal(benign?.values.command, "curl https://host:3000/path");
 });
+
+test("nested read ranges treat numeric strings like the numbers Pi coerces them to", () => {
+  const path = "/project/a.ts";
+  const ranged = subject("read", { path, offset: 120 }).subject;
+  assert.notEqual(ranged, subject("read", { path }).subject);
+  assert.equal(
+    subject("read", { path, offset: "120", limit: "40" }).subject,
+    subject("read", { path, offset: 120, limit: 40 }).subject,
+  );
+  const cut = (tail: string) => {
+    const head = `{"path":"${path}","padding":"`;
+    const cutReceipt = `${head}${"x".repeat(197 - head.length - tail.length - 2)}",${tail}...`;
+    return nativeCodemodeCallSubject("read", nativeArgumentPreview(cutReceipt), "/project").subject;
+  };
+  for (const tail of ['"offset":"120","limit":"4', '"offset":120,"limit":4'])
+    assert.equal(cut(tail), ranged, tail);
+});

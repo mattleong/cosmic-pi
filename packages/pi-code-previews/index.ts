@@ -34,6 +34,7 @@ export {
   mergeCompactIssues,
   type CompactIssue,
 } from "./src/tools/compact-issues";
+export { argumentFailureIssue, isRejectedEmptyCall } from "./src/tools/argument-failure";
 export {
   exitStatusMeaning,
   outputFailureLine,

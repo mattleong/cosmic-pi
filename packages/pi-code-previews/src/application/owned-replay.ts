@@ -25,14 +25,11 @@ export function registerCodePreviewReplay(
   const staged = new Map<string, ToolRenderers>();
   const selected = new Map<string, ToolRenderers>();
   const gate = new RetainedRendererGate();
-  const registerToolRenderer = pi.registerToolRenderer?.bind(pi);
-  if (registerToolRenderer)
-    registerToolRenderer((name, next) => {
-      const downstream = rendererFields(next());
-      if (!gate.live || gate.ready || !names.has(name) || downstream) return downstream;
-      return retainedCodePreviewRenderers(name, undefined, gate, () => selected.get(name));
-    });
-  else gate.retire();
+  pi.registerToolRenderer((name, next) => {
+    const downstream = rendererFields(next());
+    if (!gate.live || gate.ready || !names.has(name) || downstream) return downstream;
+    return retainedCodePreviewRenderers(name, undefined, gate, () => selected.get(name));
+  });
 
   const shell: typeof withCodePreviewShell = (tool, shellOptions) => {
     const wrapped = withCodePreviewShell(tool, shellOptions);

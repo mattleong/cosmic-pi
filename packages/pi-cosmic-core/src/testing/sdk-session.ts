@@ -4,7 +4,10 @@ import {
   fauxToolCall,
   InMemoryCredentialStore,
   InMemoryModelsStore,
+  parseToolCallArguments,
+  validateToolArguments,
   type JsonObject,
+  type Tool,
 } from "@earendil-works/pi-ai";
 import {
   createAgentSession,
@@ -38,6 +41,33 @@ export const fauxModels = (provider: string) =>
     );
     return { fake, models };
   });
+
+/**
+ * The result text Pi returns when it rejects a call before the tool runs: providers parse the
+ * model's argument text with `parseToolCallArguments`, and the agent loop reports
+ * `validateToolArguments`'s parse or schema failure. Throws if Pi would accept the arguments.
+ */
+export const piArgumentRejection = (
+  tool: Pick<Tool, "name" | "parameters">,
+  argumentsText: string,
+): string => {
+  let rejection: unknown;
+  try {
+    validateToolArguments(
+      { ...tool, description: tool.name },
+      {
+        type: "toolCall",
+        id: "rejected",
+        name: tool.name,
+        ...parseToolCallArguments(argumentsText),
+      },
+    );
+  } catch (error) {
+    rejection = error;
+  }
+  if (rejection instanceof Error) return rejection.message;
+  throw new Error(`Pi accepted the arguments for tool "${tool.name}"`);
+};
 
 export const quietSettings = (overrides: Parameters<typeof SettingsManager.inMemory>[0] = {}) =>
   SettingsManager.inMemory({

@@ -7,6 +7,7 @@ import { metadata, previewFooter, trimSingleTrailingNewline } from "../../previe
 import { codePreviewSettings } from "../../config/state";
 import { escapeControlChars } from "../../shared/terminal-text";
 import { shouldSkipHighlight } from "../../syntax/render";
+import { numericArg } from "../data/args";
 import { getTextContent } from "../data/results";
 import { renderCodePreviewToolTitle } from "../presentation";
 import { splitListingNotice, withAgentNotes } from "./shared/output-notice";
@@ -23,11 +24,10 @@ export function grepPreviewRenderers(cwd: string): PreviewRenderers {
       const patternArg = ownField(input, "pattern");
       const pathArg = ownField(input, "path");
       const globArg = ownField(input, "glob");
-      const limitArg = ownField(input, "limit");
       const pattern = Predicate.isString(patternArg) ? patternArg : "";
       const path = Predicate.isString(pathArg) && pathArg ? pathArg : ".";
       const glob = Predicate.isString(globArg) && globArg ? globArg : undefined;
-      const limit = Predicate.isNumber(limitArg) ? limitArg : undefined;
+      const limit = numericArg(input, "limit");
       let text = `${renderCodePreviewToolTitle("grep", theme)} ${theme.fg("accent", `/${escapeControlChars(pattern)}/`)} ${theme.fg("muted", "in")} ${renderDisplayPath(path, cwd, theme)}`;
       text += metadata(theme, [
         glob ? escapeControlChars(glob) : undefined,

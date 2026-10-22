@@ -1,3 +1,4 @@
+import { argumentFailureIssue } from "./argument-failure";
 import { compactIssueSeverity, type CompactIssue } from "./compact-issues";
 import { isSafeCompactSummary, type CompactOutcomeSchema } from "./compact-summary-schema";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
@@ -76,11 +77,13 @@ export function resolveCompactSummary(
 }
 
 export function toolErrorIssue(errorText: string): CompactIssue {
-  return {
-    severity: "error",
-    code: "tool-error",
-    message: failureMessage(errorText, "The tool reported an error"),
-  };
+  return (
+    argumentFailureIssue(errorText) ?? {
+      severity: "error",
+      code: "tool-error",
+      message: failureMessage(errorText, "The tool reported an error"),
+    }
+  );
 }
 
 export function compactStatus(phase: CompactPhase, summary: CompactSummary): CompactStatus {

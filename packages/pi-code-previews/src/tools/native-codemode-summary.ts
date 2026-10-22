@@ -18,6 +18,7 @@ import {
   type NativeCodemodeCall,
 } from "./native-codemode-evidence";
 import type { CompactIssue } from "./compact-issues";
+import { argumentFailureIssue } from "./argument-failure";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { selectCompactChildren } from "../preview/compact-children";
 import {
@@ -41,7 +42,8 @@ const SCRIPT_ERROR = "Script error:\n";
 
 function issue(code: string, text: string): CompactIssue {
   const detail = sanitizeDiagnosticContent(text);
-  const message = failureMessage(detail, "The nested call failed");
+  const message =
+    argumentFailureIssue(text)?.message ?? failureMessage(detail, "The nested call failed");
   const projected: CompactIssue = { code, severity: "error", message };
   return detail === message ? projected : { ...projected, detail };
 }

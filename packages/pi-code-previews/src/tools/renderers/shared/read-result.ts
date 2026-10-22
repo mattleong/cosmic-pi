@@ -1,8 +1,7 @@
-import * as Predicate from "effect/Predicate";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { codePreviewSettings } from "../../../config/state";
-import { hostObject, ownField, type HostObject } from "../../../shared/untrusted-value";
-import { getReadStartLine } from "../../data/args";
+import { hostObject, type HostObject } from "../../../shared/untrusted-value";
+import { getReadStartLine, hasReadLimit } from "../../data/args";
 import { getTextContent, isTruncated, splitReadContinuationNotice } from "../../data/results";
 import { oversizedReadNotice } from "./output-notice";
 
@@ -20,7 +19,7 @@ export function readResultBody(
   const details = hostObject(result.details);
   const notice = oversizedReadNotice(details, text);
   if (notice !== undefined) return { kind: "oversized", notice };
-  const paged = isTruncated(details) || Predicate.isNumber(ownField(args, "limit"));
+  const paged = isTruncated(details) || hasReadLimit(args);
   return {
     kind: "content",
     content: paged ? splitReadContinuationNotice(text).content : text,

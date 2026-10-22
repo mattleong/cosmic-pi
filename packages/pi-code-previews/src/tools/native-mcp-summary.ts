@@ -10,6 +10,7 @@ import {
   sanitizeDiagnosticContent,
 } from "pi-cosmic-core";
 import { hostContainer, type HostContainer } from "../shared/untrusted-value";
+import { argumentFailureIssue } from "./argument-failure";
 import { getBoundedTextContent } from "./data/results";
 import type { CompactIssue } from "./compact-issues";
 import type { CompactSummary, CompactSummaryProvider } from "./compact-summary";
@@ -174,11 +175,13 @@ function errorIssue(identity: NativeMcpIdentity, result: AgentToolResult<unknown
     .slice(0, MAX_ERROR_TEXT);
   const fallback =
     identity.kind === "tool" ? "The MCP tool reported an error" : "The resource request failed";
-  return {
-    severity: "error",
-    code: "mcp-error",
-    message: isAgentGuidance(text) ? fallback : failureMessage(text, fallback),
-  };
+  return (
+    argumentFailureIssue(text) ?? {
+      severity: "error",
+      code: "mcp-error",
+      message: isAgentGuidance(text) ? fallback : failureMessage(text, fallback),
+    }
+  );
 }
 
 function contentCounters(result: AgentToolResult<unknown>): string[] {

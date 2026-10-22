@@ -22,25 +22,37 @@ export function getPathArg(args: HostObject | undefined): string {
   return Predicate.isString(path) ? path : "";
 }
 
+/**
+ * Pi's validation coerces numeric strings before a tool runs, but renderers receive the raw
+ * arguments, so numeric fields accept finite numbers and trimmed numeric strings alike.
+ */
+export function numericArg(args: HostObject | undefined, name: string): number | undefined {
+  const value = ownField(args, name);
+  const number = Predicate.isString(value) && value.trim() !== "" ? Number(value) : value;
+  return Predicate.isNumber(number) && Number.isFinite(number) ? number : undefined;
+}
+
+export function hasReadLimit(args: HostObject | undefined): boolean {
+  return numericArg(args, "limit") !== undefined;
+}
+
 export function getReadStartLine(args: HostObject | undefined): number {
-  const offset = ownField(args, "offset");
-  return Predicate.isNumber(offset) && Number.isFinite(offset) && offset > 0
-    ? Math.floor(offset)
-    : 1;
+  const offset = numericArg(args, "offset");
+  return offset !== undefined && offset > 0 ? Math.floor(offset) : 1;
 }
 
 export function getReadLineRange(args: HostObject | undefined): string {
   const start = getReadStartLine(args);
-  const limit = ownField(args, "limit");
+  const limit = numericArg(args, "limit");
   if (!Number.isSafeInteger(start)) return "";
   if (
-    Predicate.isNumber(limit) &&
+    limit !== undefined &&
     Number.isSafeInteger(limit) &&
     limit > 0 &&
     limit - 1 <= Number.MAX_SAFE_INTEGER - start
   )
     return `:${start}-${start + (limit - 1)}`;
-  return Predicate.isNumber(ownField(args, "offset")) ? `:${start}` : "";
+  return numericArg(args, "offset") === undefined ? "" : `:${start}`;
 }
 
 export interface EditPreviewOperation {

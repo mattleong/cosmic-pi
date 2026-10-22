@@ -7,6 +7,7 @@ import {
 import { hostObject, ownField, type HostObject } from "../shared/untrusted-value";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type { CompactSummary, CompactPhase } from "./compact-summary";
+import { argumentFailureIssue } from "./argument-failure";
 import { fileFailure } from "./builtin-failure-file";
 import { shellFailure } from "./builtin-failure-shell";
 import { compactIssueSeverity, mergeCompactIssues, type CompactIssue } from "./compact-issues";
@@ -17,7 +18,7 @@ import {
   secretIssues,
   writeDiffProjection,
 } from "./builtin-issues";
-import { editOperationInputs, getPathArg } from "./data/args";
+import { editOperationInputs, getPathArg, hasReadLimit } from "./data/args";
 import { getBoundedTextContent, getEditDiff } from "./data/results";
 import {
   describeBuiltinCompactSubject,
@@ -84,7 +85,7 @@ export function projectBuiltinCompactSummary(
   const live = liveResultParts(tool, input, decoded, output);
   if (!live) return undefined;
   issues.push(...live.issues);
-  if (isError) return failureSummary(tool, subject, result, output, issues);
+  if (isError) return failureSummary(tool, subject, decoded, result, output, issues);
   if (phase !== "settled") return { subject, issues };
   if (!result) return undefined;
   const settled = settledResultParts(tool, input, decoded);
@@ -110,7 +111,7 @@ function liveResultParts(
 ): ProjectionParts | undefined {
   if (!input.result) return EMPTY_PARTS;
   if (tool === "read" && !input.isError) {
-    const read = readIssues(details, output, Predicate.isNumber(ownField(args, "limit")));
+    const read = readIssues(details, output, hasReadLimit(args));
     return read && { ...EMPTY_PARTS, issues: read };
   }
   if (tool === "bash" || tool === "grep" || tool === "find" || tool === "ls")
@@ -121,11 +122,20 @@ function liveResultParts(
 function failureSummary(
   tool: BuiltinCompactTool,
   subject: string,
+  { args }: DecodedProjectionInput,
   result: AgentToolResult<unknown> | undefined,
   output: string,
   issues: readonly CompactIssue[],
 ): CompactSummary | undefined {
   if (result?.content.some((part) => part.type !== "text")) return undefined;
+  const invalid = argumentFailureIssue(output);
+  if (invalid)
+    return {
+      // Malformed JSON reaches renderers as `{}`, where argument defaults would invent a subject.
+      subject: args && Object.keys(args).length > 0 ? subject : "",
+      outcome: "error",
+      issues: mergeCompactIssues([invalid], issues),
+    };
   const failure = builtinFailure(tool, output, issues);
   return {
     subject,

@@ -854,6 +854,32 @@ const scenarios: ReadonlyArray<
     isError: true,
   },
   {
+    tool: "read",
+    title: "read rejected for malformed JSON arguments",
+    args: {},
+    result: text(
+      'Invalid arguments for tool "read": Expected \',\' or \'}\' after property value in JSON at position 28 (line 1 column 29)\n\nReceived arguments:\n{"path":"/project/src/a.ts" "offset":120}',
+    ),
+    isError: true,
+  },
+  {
+    tool: "grep",
+    title: "grep rejected for arguments that do not match its schema",
+    args: { pattern: "TODO", limit: "many" },
+    result: text(
+      'Validation failed for tool "grep":\n  - limit: must be number\n\nReceived arguments:\n{\n  "pattern": "TODO",\n  "limit": "many"\n}',
+    ),
+    isError: true,
+  },
+  {
+    tool: "read",
+    title: "read numeric-string range",
+    args: { path: "/project/src/a.ts", offset: "120", limit: "3" },
+    result: text(
+      "export const a = 1;\nexport const b = 2;\nexport const c = 3;\n\n[37 more lines in file. Use offset=123 to continue.]",
+    ),
+  },
+  {
     tool: "edit",
     title: "edit without a match",
     args: { path: "/project/src/a.ts", edits: [{ oldText: "a", newText: "b" }] },
