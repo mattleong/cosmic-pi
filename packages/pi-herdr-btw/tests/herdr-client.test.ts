@@ -69,6 +69,12 @@ it.effect("isolates credentials and hostile arguments while bounding requests", 
         PATH: "/bin",
         HERDR_ENV: "1",
         HERDR_PANE_ID: "w1:p1",
+        PI_CODING_AGENT_DIR: "/home/test/custom-pi",
+        PI_CONFIG_DIR: "/home/test/pi-config",
+        XDG_CONFIG_HOME: "/home/test/xdg-config",
+        XDG_STATE_HOME: "/home/test/xdg-state",
+        PI_SESSION_FILE: "/sessions/parent.jsonl",
+        PI_SESSION_ID: "parent-session-id",
         SECRET: "never-pass",
         OPENAI_API_KEY: "private-api-key",
         AWS_SESSION_TOKEN: "private-session-token",
@@ -126,8 +132,18 @@ it.effect("isolates credentials and hostile arguments while bounding requests", 
         PATH: "/bin",
         HERDR_ENV: "1",
         HERDR_PANE_ID: "w1:p1",
+        PI_CODING_AGENT_DIR: "/home/test/custom-pi",
+        PI_CONFIG_DIR: "/home/test/pi-config",
+        XDG_CONFIG_HOME: "/home/test/xdg-config",
+        XDG_STATE_HOME: "/home/test/xdg-state",
       });
-      for (const key of ["SECRET", "OPENAI_API_KEY", "AWS_SESSION_TOKEN"]) {
+      for (const key of [
+        "SECRET",
+        "OPENAI_API_KEY",
+        "AWS_SESSION_TOKEN",
+        "PI_SESSION_FILE",
+        "PI_SESSION_ID",
+      ]) {
         expect(request.environment).not.toHaveProperty(key);
       }
       for (const secret of ["never-pass", "private-api-key", "private-session-token"]) {
@@ -213,5 +229,82 @@ it.effect("keeps undecodable mutation exits and responses outcome-uncertain", ()
 
     for (const client of [exitClient, decodeClient])
       expect(yield* Effect.flip(client.splitPane(input))).toMatchObject({ outcome: "uncertain" });
+  }),
+);
+
+it.effect("recognizes a current Pi integration across status wording changes", () =>
+  Effect.gen(function* () {
+    const integrationFor = (stdout: string) =>
+      makeHerdrClient(
+        {},
+        { processRunner: () => Effect.succeed(success(stdout)) },
+      ).inspectPiIntegration();
+
+    for (const line of [
+      "pi: current (v9) (/home/test/.pi/agent/extensions/herdr-agent-state.ts)",
+      "pi: current",
+      "pi:  current v10 at /home/test/custom-pi/extensions/herdr-agent-state.ts",
+    ])
+      expect(yield* integrationFor(`claude: current (v10) (/x)\n${line}\n`)).toBe(true);
+    for (const line of [
+      "pi: not installed (/home/test/.pi/agent/extensions/herdr-agent-state.ts)",
+      "pi: outdated (v8) (/home/test/.pi/agent/extensions/herdr-agent-state.ts)",
+      "omp: current (v10) (/home/test/.omp/agent/extensions/herdr-omp-agent-state.ts)",
+    ])
+      expect(yield* integrationFor(`${line}\n`)).toBe(false);
+  }),
+);
+
+const piAgent = {
+  ...childPane,
+  agent: "pi",
+  name: "btw-agent",
+  agent_session: {
+    source: "herdr:pi",
+    agent: "pi",
+    kind: "path",
+    value: "/sessions/child.jsonl",
+  },
+};
+const snapshotClient = (agents: ReadonlyArray<unknown>) =>
+  makeHerdrClient(
+    {},
+    {
+      processRunner: () =>
+        Effect.succeed(success(JSON.stringify({ result: { snapshot: { protocol: 1, agents } } }))),
+    },
+  );
+
+it.effect("keeps live Pi agents when an unrelated agent has an unexpected shape", () =>
+  Effect.gen(function* () {
+    const agents = yield* snapshotClient([
+      {
+        ...parentPane,
+        agent: "future-agent",
+        name: "x".repeat(500),
+        agent_session: { source: "herdr:future", agent: "future", kind: "uri", value: "" },
+      },
+      { pane_id: 7, agent: "claude" },
+      "not an agent",
+      piAgent,
+    ]).inspectLiveAgents();
+
+    expect(agents).toEqual([piAgent]);
+  }),
+);
+
+it.effect("rejects a snapshot whose Pi agent is malformed", () =>
+  Effect.gen(function* () {
+    for (const malformed of [
+      { ...piAgent, agent_session: { ...piAgent.agent_session, kind: "uri" } },
+      { ...piAgent, agent: "renamed", name: "x".repeat(500) },
+      { ...piAgent, agent: null, terminal_id: "" },
+    ]) {
+      const error = yield* Effect.flip(snapshotClient([piAgent, malformed]).inspectLiveAgents());
+      expect(error).toMatchObject({
+        code: "herdr_inspect_live_agents_protocol_invalid",
+        outcome: "confirmed",
+      });
+    }
   }),
 );

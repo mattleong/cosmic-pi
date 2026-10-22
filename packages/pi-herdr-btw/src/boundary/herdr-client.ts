@@ -65,14 +65,36 @@ const LayoutEnvelopeSchema = Schema.Struct({
 const AgentEnvelopeSchema = Schema.Struct({
   result: Schema.Struct({ agent: PaneSchema }),
 });
+// Agents are decoded individually so one unrelated integration's unexpected shape cannot hide
+// the Pi agents this extension validates.
 const SnapshotEnvelopeSchema = Schema.Struct({
   result: Schema.Struct({
     snapshot: Schema.Struct({
       protocol: Schema.Int,
-      agents: Schema.Array(PaneSchema).check(Schema.isMaxLength(4_096)),
+      agents: Schema.Array(Schema.Unknown).check(Schema.isMaxLength(4_096)),
     }),
   }),
 });
+const decodeSnapshotAgent = decodeUnknownOrUndefined(PaneSchema);
+const isPiLikeAgent = Schema.is(
+  Schema.Union([
+    Schema.Struct({ agent: Schema.Literal("pi") }),
+    Schema.Struct({ agent_session: Schema.Struct({ source: Schema.Literal("herdr:pi") }) }),
+    Schema.Struct({ agent_session: Schema.Struct({ agent: Schema.Literal("pi") }) }),
+  ]),
+);
+/** Skips undecodable non-Pi agents; returns undefined when a Pi agent is malformed. */
+const decodeLiveAgents = (
+  entries: ReadonlyArray<unknown>,
+): ReadonlyArray<HerdrPane> | undefined => {
+  const agents: Array<HerdrPane> = [];
+  for (const entry of entries) {
+    const agent = decodeSnapshotAgent(entry);
+    if (agent !== undefined) agents.push(agent);
+    else if (isPiLikeAgent(entry)) return undefined;
+  }
+  return agents;
+};
 const PaneProcessInfoEnvelopeSchema = Schema.Struct({
   result: Schema.Struct({
     process_info: Schema.Struct({
@@ -174,29 +196,39 @@ const herdrCommandExitFailure = (
   });
 };
 
+// Herdr locates Pi's integration through the Pi and XDG directory variables. Pi session
+// identity variables such as PI_SESSION_FILE stay private to this process.
+const HERDR_ENVIRONMENT_KEYS: ReadonlySet<string> = new Set([
+  "HOME",
+  "USER",
+  "LOGNAME",
+  "PATH",
+  "SHELL",
+  "TMPDIR",
+  "TMP",
+  "TEMP",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "PI_CODING_AGENT_DIR",
+  "PI_CONFIG_DIR",
+  "HERDR_CONFIG_PATH",
+  "HERDR_SOCKET_PATH",
+  "HERDR_SESSION",
+  "HERDR_ENV",
+  "HERDR_WORKSPACE_ID",
+  "HERDR_TAB_ID",
+  "HERDR_PANE_ID",
+]);
+
 const selectHerdrEnvironment = (source: Readonly<NodeJS.ProcessEnv>): NodeJS.ProcessEnv =>
   Object.freeze(
     Object.fromEntries(
-      [
-        "HOME",
-        "USER",
-        "LOGNAME",
-        "PATH",
-        "SHELL",
-        "TMPDIR",
-        "TMP",
-        "TEMP",
-        "LANG",
-        "LC_ALL",
-        "LC_CTYPE",
-        "HERDR_CONFIG_PATH",
-        "HERDR_SOCKET_PATH",
-        "HERDR_SESSION",
-        "HERDR_ENV",
-        "HERDR_WORKSPACE_ID",
-        "HERDR_TAB_ID",
-        "HERDR_PANE_ID",
-      ].flatMap((key) => (source[key] === undefined ? [] : ([[key, source[key]]] as const))),
+      Object.entries(source).flatMap(([key, value]) =>
+        value !== undefined && (HERDR_ENVIRONMENT_KEYS.has(key) || key.startsWith("XDG_"))
+          ? ([[key, value]] as const)
+          : [],
+      ),
     ),
   );
 
@@ -299,9 +331,7 @@ export const makeHerdrClient = (
       }).pipe(
         Effect.map((stdout) => {
           const piIntegration = stdout.split(/\r?\n/gu).find((line) => line.startsWith("pi:"));
-          return (
-            piIntegration !== undefined && /^pi: current \(v\d+\) \(.+\)$/u.test(piIntegration)
-          );
+          return piIntegration !== undefined && /^pi:\s+current\b/u.test(piIntegration);
         }),
       ),
     ),
@@ -356,16 +386,21 @@ export const makeHerdrClient = (
         PaneProcessInfoEnvelopeSchema,
       ).pipe(Effect.map(({ result }) => result.process_info)),
     ),
-    inspectLiveAgents: Effect.fn("HerdrClient.inspectLiveAgents")(() =>
-      decoded(
-        {
-          args: ["api", "snapshot"],
-          operation: "inspect live agents",
-          mutation: false,
-        },
-        SnapshotEnvelopeSchema,
-      ).pipe(Effect.map(({ result }) => result.snapshot.agents)),
-    ),
+    inspectLiveAgents: Effect.fn("HerdrClient.inspectLiveAgents")(() => {
+      const request: HerdrCommandRequest = {
+        args: ["api", "snapshot"],
+        operation: "inspect live agents",
+        mutation: false,
+      };
+      return decoded(request, SnapshotEnvelopeSchema).pipe(
+        Effect.flatMap(({ result }) => {
+          const agents = decodeLiveAgents(result.snapshot.agents);
+          return agents === undefined
+            ? Effect.fail(herdrDecodeFailure(request, "protocol"))
+            : Effect.succeed(agents);
+        }),
+      );
+    }),
     startSideSessionPi: Effect.fn("HerdrClient.startSideSessionPi")(
       (input: HerdrStartSideSessionInput) => {
         const markerArguments = herdrBtwParentMarkerArguments(
