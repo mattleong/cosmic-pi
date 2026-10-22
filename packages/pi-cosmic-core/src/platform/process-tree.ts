@@ -28,10 +28,11 @@ export const signalProcessGroup = (pid: number | undefined, signal: NodeJS.Signa
 export const signalProcess = (pid: number | undefined, signal: NodeJS.Signals | 0) =>
   signalable(pid) ? send(pid, signal) : "failed";
 
-export const confirmProcessGroupExit = (
-  pid: number | undefined,
-  timeoutMillis: number,
-): Effect.Effect<boolean> =>
+/**
+ * Waits, without a deadline, until the process group is gone (true) or can no longer be inspected
+ * (false). Interruptible, so callers can race it with their own stop condition.
+ */
+export const awaitProcessGroupExit = (pid: number | undefined): Effect.Effect<boolean> =>
   Effect.gen(function* () {
     while (true) {
       const observed = signalProcessGroup(pid, 0);
@@ -40,8 +41,13 @@ export const confirmProcessGroupExit = (
       // macOS may report EPERM briefly while a terminated group is being reaped.
       yield* Effect.sleep(10);
     }
-  }).pipe(
-    Effect.interruptible,
+  }).pipe(Effect.interruptible);
+
+export const confirmProcessGroupExit = (
+  pid: number | undefined,
+  timeoutMillis: number,
+): Effect.Effect<boolean> =>
+  awaitProcessGroupExit(pid).pipe(
     Effect.timeoutOption(Math.max(1, timeoutMillis)),
     Effect.map((result) => Option.isSome(result) && result.value),
   );

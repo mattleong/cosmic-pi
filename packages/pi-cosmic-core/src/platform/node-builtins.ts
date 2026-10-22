@@ -2,6 +2,12 @@ const nodeFsModule = process.getBuiltinModule("node:fs");
 const nodePathModule = process.getBuiltinModule("node:path");
 if (!nodeFsModule || !nodePathModule) throw new Error("Node fs/path builtins are unavailable.");
 
+/**
+ * Node builtins for boundaries whose protocol Effect's platform modules cannot express, such as
+ * no-follow opens, handle-level ownership checks, or synchronous host callbacks. Loading them
+ * through `process.getBuiltinModule` keeps direct `node:` imports flagged everywhere else.
+ */
+export const nodeFs = nodeFsModule;
 export const nodeFsConstants = nodeFsModule.constants;
 export const nodeFsPromises = nodeFsModule.promises;
 export const nodePath = nodePathModule;
@@ -28,3 +34,4 @@ const nodeChildProcessModule = process.getBuiltinModule("node:child_process");
 if (!nodeChildProcessModule) throw new Error("Node child-process builtin is unavailable.");
 export const nodeSpawn = nodeChildProcessModule.spawn;
 export const nodeSpawnSync = nodeChildProcessModule.spawnSync;
+export type NodeChildProcess = InstanceType<typeof nodeChildProcessModule.ChildProcess>;

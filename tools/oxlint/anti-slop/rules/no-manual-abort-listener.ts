@@ -7,7 +7,6 @@ import { isWorkspaceFile } from "../shared/workspace-path.ts";
 export const abortBoundaryFiles = [
   "packages/pi-cosmic-core/src/runtime/runtime.ts",
   "packages/pi-cosmic-core/src/runtime/session-runtime.ts",
-  "packages/pi-cosmic-ui/src/boundary/host-abort-signal.ts",
 ];
 
 function isAbortEvent(argument: ESTree.Argument | undefined): boolean {
@@ -29,7 +28,7 @@ export const noManualAbortListenerRule = defineRule({
     },
     messages: {
       manualAbortListener:
-        "Do not wire abort handling by hand. Pass the signal to Effect with `runPromise(effect, { signal })`, or use the shared adapter in pi-cosmic-ui `boundary/host-abort-signal.ts`.",
+        "Do not wire abort handling by hand. Pass the signal to Effect with `runPromise(effect, { signal })`, or forward it with pi-cosmic-core `forwardAbortSignal`.",
     },
   },
   createOnce(context) {

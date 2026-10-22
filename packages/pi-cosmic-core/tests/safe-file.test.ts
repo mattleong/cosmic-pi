@@ -5,12 +5,13 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import { vi } from "vitest";
-import { provideBuiltLayer, SafeFile } from "../index.ts";
+import { SafeFile } from "../index.ts";
 import { nodeFsPromises, nodePath } from "../src/platform/node-builtins.ts";
 import {
   capturedTelemetrySnapshot,
   deferredPromise,
   makeCapturedTracer,
+  provideBuiltLayer,
   temporaryDirectory,
 } from "../testing.ts";
 

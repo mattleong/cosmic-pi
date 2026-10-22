@@ -4,10 +4,7 @@ import type { ESTree } from "@oxlint/plugins";
 import { staticPropertyName, unwrapExpression } from "../shared/ast.ts";
 import { isWorkspaceFile } from "../shared/workspace-path.ts";
 
-export const notifyBoundaryFiles = [
-  "packages/pi-cosmic-core/src/host-session.ts",
-  "packages/pi-cosmic-core/src/usage-controller.ts",
-];
+export const notifyBoundaryFiles = ["packages/pi-cosmic-core/src/host-session.ts"];
 
 function memberObject(expression: ESTree.Expression, name: string): ESTree.Expression | null {
   const member = unwrapExpression(expression);

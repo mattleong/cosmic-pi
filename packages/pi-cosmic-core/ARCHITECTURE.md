@@ -9,17 +9,16 @@ implementation; the ownership and lifecycle guarantees are what refactors must p
 
 ## Ownership and dependencies
 
-| Area                                                                               | Owns                                                                          | Consumer retains                                                      |
-| ---------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| [Runtime](src/runtime/)                                                            | Managed-runtime creation, session replacement, invocation authority, disposal | Application Layer, startup work, host activation                      |
-| [Coordination](src/coordination/) and [projection](src/projection.ts)              | Refresh admission, cancellation, atomic state/snapshot publication            | Eligibility, transition policy, renderer behavior                     |
-| [Platform](src/platform/)                                                          | Typed documents, HTTP, safe files, processes, and opt-in cross-process locks  | Domain validation, retry policy, resource-specific recovery           |
-| [Configuration](src/config/)                                                       | Scoped document access, tolerant decoding, atomic settings commits            | Schemas, defaults, trust decisions, effective-value resolution        |
-| [Usage controller](src/usage-controller.ts)                                        | Refresh, eligibility, and configured state installation                       | Configuration persistence, provider fetching, and presentation policy |
-| [Host commands](src/host-command.ts) and [capabilities](src/session-capability.ts) | Command routing and checked synchronous capability exchange                   | Command actions, protocol identity and admission policy               |
-| [Session wake](src/host-wake.ts)                                                   | When notices start, continue, or wait for a turn                              | Notice content, reminders, extra settle work                          |
-| [Agent messages](src/host-agent-messages.ts)                                       | Message frame, delivery through the wake, latest-reply reads, delivery text   | Sender labels, reply tools, notice types, refusals                    |
-| [Test kit](src/testing/)                                                           | Shared deterministic Layers, host fixtures, and scoped process/SDK harnesses  | Feature-specific fakes and behavioral assertions                      |
+| Area                                                                               | Owns                                                                          | Consumer retains                                               |
+| ---------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| [Runtime](src/runtime/)                                                            | Managed-runtime creation, session replacement, invocation authority, disposal | Application Layer, startup work, host activation               |
+| [Coordination](src/coordination/) and [projection](src/projection.ts)              | Refresh admission, cancellation, atomic state/snapshot publication            | Eligibility, transition policy, renderer behavior              |
+| [Platform](src/platform/)                                                          | Typed documents, HTTP, safe files, processes, and opt-in cross-process locks  | Domain validation, retry policy, resource-specific recovery    |
+| [Configuration](src/config/)                                                       | Scoped document access, tolerant decoding, atomic settings commits            | Schemas, defaults, trust decisions, effective-value resolution |
+| [Host commands](src/host-command.ts) and [capabilities](src/session-capability.ts) | Command routing and checked synchronous capability exchange                   | Command actions, protocol identity and admission policy        |
+| [Session wake](src/host-wake.ts)                                                   | When notices start, continue, or wait for a turn                              | Notice content, reminders, extra settle work                   |
+| [Agent messages](src/host-agent-messages.ts)                                       | Message frame, delivery through the wake, latest-reply reads, delivery text   | Sender labels, reply tools, notice types, refusals             |
+| [Test kit](src/testing/)                                                           | Shared deterministic Layers, host fixtures, and scoped process/SDK harnesses  | Feature-specific fakes and behavioral assertions               |
 
 Consumers import the public [root](index.ts), [testing](testing.ts), or
 [`testing/sdk`](src/testing/sdk-session.ts) entrypoint. Core never imports extension packages.
@@ -36,8 +35,11 @@ The host creates a managed runtime and supplies it to the
 [session slot](src/runtime/session-runtime.ts). A new start immediately revokes old invocation
 and publication authority, then serializes disposal and startup. Only the current generation can
 activate its startup result. Commands invoked during startup keep their authority through activation;
-replacement, shutdown, or runtime removal permanently revoke it. Services and background fibers
-acquired inside the runtime close with its scope.
+replacement, shutdown, or runtime removal permanently revoke it. A failed startup effect logs only a
+static class, `failure` or `defect`, through the runtime's logger before disposal; error tags and
+messages are never logged. A Layer that fails to build has no logger, so its only signal is the
+consumer's start-failure hook. Services and background fibers acquired inside the runtime close
+with its scope.
 
 Synchronous renderers consume detached snapshots. The [projection transaction](src/projection.ts)
 keeps waiting, transition work, and snapshot preparation interruptible; external publication,
@@ -49,12 +51,8 @@ already-admitted durable commit is allowed to finish.
 Refresh coordination follows the same ownership principle: admission cannot be interrupted between
 claiming work and installing cleanup, but work and joiners remain interruptible. Background polling
 logs a cause-free warning and continues after a failed refresh; only interrupting it stops polling.
-The usage controller is the only writer of its published projection, including context changes, and
-receives an initial resolved config and installs later `configure` updates through its refresh gate;
-it does not own configuration persistence. Callers attach their scoped configuration observer before
-explicitly starting polling, avoiding a missed update during construction. Lock order is configuration,
-then document, then refresh; refresh commits never acquire configuration/document locks. Publication
-authority is checked beside each actual host callback, so late refreshes cannot restore retired views.
+A revision bump or key change during a fetch discards its result; invalidation waits for an
+in-progress commit. Each refresh runs under the caller's stable `spanName`.
 
 ## Session wake
 
@@ -106,6 +104,13 @@ acquisition may leave cleanup uncertain, so callers must not infer resource rele
 alone. Safe-file access validates containment, file identity, bounded reads,
 and unchanged size/modification metadata across the read.
 
+[Private files](src/platform/private-file.ts) are the shared no-follow mechanism for this user's
+0700 directories and 0600 files: ensured directories must be real directories of this user and are
+tightened to 0700, files are created exclusively and synced, replacement commits by an uninterruptible
+rename with nothing fallible after it, and a failed write removes only the file it created. Failures
+are a `PrivateFileError` with a bounded reason and no path or OS message. The cross-process lock
+shares its ownership and mode checks but stays synchronous because its lease callbacks are.
+
 [Cross-process locks](src/platform/cross-process-lock.ts) are an opt-in, same-host capability.
 Exclusion requires the same private root and actual shared-resource namespace. `tryAcquire` does
 not wait; callers own retries and the returned lease. `crossProcessLockHolder` names a slot and its
@@ -113,8 +118,11 @@ owner's process id for diagnostics without touching the lock. Recovery requires 
 evidence and a quiescent journal. Owners record their process start time when the OS reports it,
 read independently of the time zone and locale, so a live PID whose start time differs counts as
 dead: a reused PID does not hold a lease forever. A recorded start in another format proves
-nothing and leaves liveness unknown. `processLiveness` exports that check for consumers that record
-owners of their own private state.
+nothing and leaves liveness unknown. `probeProcessLiveness` exports that check for consumers that
+record owners of their own private state; on macOS it runs `ps` through the bounded process runner
+so it never blocks the event loop. The synchronous `processLiveness` can block on `ps` for up to two
+seconds and is reserved for synchronous ownership commits, such as lock recovery, where an
+asynchronous gap would let another owner act between the check and the commit.
 An uncancellable native mutation retains the lease until its real completion callback settles it; a
 dead owner with pending native work fails closed.
 
@@ -136,10 +144,10 @@ The [workspace Effect guide](../../docs/architecture/effect-v4.md) and
 [Pi boundary guide](../../docs/architecture/pi-boundaries.md) define shared contracts. Behavioral
 anchors are the [session lifecycle](tests/session-runtime.test.ts),
 [atomic projection](tests/projection.test.ts), [refresh ownership](tests/refresh-coordinator.test.ts),
-[usage publication](tests/usage-controller.test.ts), [session wake](tests/host-wake.test.ts),
+[subscription refresh](tests/subscription-refresh.test.ts), [session wake](tests/host-wake.test.ts),
 [document races](tests/json-document.test.ts),
 [document files and processes](tests/json-document-files.test.ts),
 [process cleanup](tests/process-runner.test.ts), [host-exit guard](tests/process-group-exit-guard.test.ts),
-[safe-file](tests/safe-file.test.ts), and
+[safe-file](tests/safe-file.test.ts), [private-file](tests/private-file.test.ts), and
 [cross-process recovery](tests/cross-process-lock.test.ts) tests. These protect observable guarantees;
 module names and helper placement may change with ownership.

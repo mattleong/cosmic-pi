@@ -5,7 +5,12 @@ import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import { vi } from "vitest";
-import { confirmProcessGroupExit, signalProcess, signalProcessGroup } from "../index.ts";
+import {
+  awaitProcessGroupExit,
+  confirmProcessGroupExit,
+  signalProcess,
+  signalProcessGroup,
+} from "../index.ts";
 import { nodeSpawn } from "../src/platform/node-builtins.ts";
 describe("process signals", () => {
   for (const initial of ["present", "permission"] as const)
@@ -50,6 +55,27 @@ describe("process signals", () => {
         expect(yield* Fiber.join(pending)).toBe(false);
       }),
     );
+
+  it.effect("waits for process-group exit without a deadline", () =>
+    Effect.gen(function* () {
+      let alive = true;
+      yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          vi.spyOn(process, "kill").mockImplementation(() => {
+            if (alive) return true;
+            throw Object.assign(new Error("gone"), { code: "ESRCH" });
+          }),
+        ),
+        (spy) => Effect.sync(() => spy.mockRestore()),
+      );
+      const pending = yield* awaitProcessGroupExit(42).pipe(Effect.forkScoped);
+      yield* TestClock.adjust("1 second");
+      expect(pending.pollUnsafe()).toBeUndefined();
+      alive = false;
+      yield* TestClock.adjust(10);
+      expect(yield* Fiber.join(pending)).toBe(true);
+    }),
+  );
 
   it("never signals a pid that is not a positive safe integer", () => {
     const kill = vi.spyOn(process, "kill");

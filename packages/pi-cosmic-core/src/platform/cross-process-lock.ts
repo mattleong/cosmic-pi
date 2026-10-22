@@ -5,6 +5,7 @@ import * as Schema from "effect/Schema";
 import { sha256Text } from "../security/sha256.ts";
 import { synchronousRandomHex } from "./native-crypto.ts";
 import { nodeFsConstants as flags, nodeLockFs as fs, nodePath as path } from "./node-builtins.ts";
+import { hasPrivateMode, isOwnedByCurrentUser, isPrivateDirectoryInfo } from "./private-file.ts";
 import { currentProcessIdentity, processLiveness } from "./process-start.ts";
 
 export class CrossProcessLockError extends Schema.TaggedError<CrossProcessLockError>()(
@@ -45,14 +46,9 @@ const recovery = (slot?: string) =>
   new CrossProcessLockError({ reason: "recovery-required", ...(slot !== undefined && { slot }) });
 const code = (...expected: string[]) =>
   Schema.is(Schema.Struct({ code: Schema.Literals(expected) }));
-const uid = (slot?: string) => {
-  if (!process.getuid) throw recovery(slot);
-  return process.getuid();
-};
+// Synchronous, unlike the private-file module, because lease callbacks such as `release` are.
 const privateDirectory = (directory: string, slot?: string) => {
-  const stat = fs.lstatSync(directory);
-  if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== uid(slot) || stat.mode & 0o077)
-    throw recovery(slot);
+  if (!isPrivateDirectoryInfo(fs.lstatSync(directory))) throw recovery(slot);
 };
 const syncDirectory = (directory: string) => {
   const fd = fs.openSync(directory, flags.O_RDONLY | flags.O_NOFOLLOW);
@@ -69,8 +65,8 @@ const readOwner = (directory: string): Owner => {
     const stat = fs.fstatSync(fd);
     if (
       !stat.isFile() ||
-      stat.uid !== uid() ||
-      stat.mode & 0o077 ||
+      !isOwnedByCurrentUser(stat) ||
+      !hasPrivateMode(stat) ||
       stat.size > 1024 ||
       stat.nlink !== 1
     )

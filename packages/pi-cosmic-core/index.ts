@@ -1,25 +1,50 @@
-import * as Effect from "effect/Effect";
-
 export { PiApi } from "./src/runtime/pi-api.ts";
 export {
+  forwardAbortSignal,
   makePiManagedRuntime,
   makePiRuntime,
   piHostLoggerLayer,
+  type ForwardedAbortSignal,
   type PiManagedRuntime,
 } from "./src/runtime/runtime.ts";
 export { bestEffortHostBootstrap } from "./src/runtime/host-bootstrap.ts";
-export const provideBuiltLayer = Effect.provide;
 export {
   makePiSessionRuntimeSlot,
   PiSessionRuntimeError,
   type PiSessionRuntimeSlot,
 } from "./src/runtime/session-runtime.ts";
 export { notifyListeners } from "./src/coordination/listeners.ts";
-export { createSubscriptionRefresh } from "./src/coordination/subscription-refresh.ts";
+export {
+  createSubscriptionRefresh,
+  recoverRefreshFailure,
+} from "./src/coordination/subscription-refresh.ts";
+export type { RefreshRequest } from "./src/coordination/refresh-coordinator.ts";
 export { mergeHeaders } from "./src/http/headers.ts";
 export { JsonDocumentError, StreamingHttpError } from "./src/platform/errors.ts";
 export { AgentDirectory } from "./src/platform/agent-directory.ts";
 export { SafeFile, type SafeFileContract } from "./src/platform/safe-file.ts";
+export {
+  nodeFs,
+  nodeFsConstants,
+  nodeFsPromises,
+  nodePath,
+  nodeSpawn,
+  type NodeChildProcess,
+} from "./src/platform/node-builtins.ts";
+export {
+  createPrivateDirectory,
+  createPrivateFile,
+  currentUserId,
+  ensurePrivateDirectory,
+  isOwnedByCurrentUser,
+  PrivateFileError,
+  readPrivateFile,
+  removeOwnEntry,
+  removePrivateDirectory,
+  removePrivateTree,
+  replacePrivateFile,
+  tryPrivateFileOperation,
+} from "./src/platform/private-file.ts";
 export { decodeUnknownOrUndefined } from "./src/schema/decode.ts";
 export { toPiToolOutputSchema } from "./src/schema/tool-output.ts";
 export {
@@ -103,6 +128,7 @@ export {
   utf8Suffix,
 } from "./src/text.ts";
 export {
+  clampPercent,
   clipText,
   countLabel,
   formatBytes,
@@ -110,6 +136,7 @@ export {
   formatDuration,
   formatElapsed,
   formatRelativeAge,
+  formatTokens,
 } from "./src/display.ts";
 export {
   failureMessage,
@@ -119,21 +146,6 @@ export {
   quoteText,
   restatesText,
 } from "./src/message-text.ts";
-export {
-  initialUsageProjection,
-  withUsageEligibility,
-  makeFrozenUsageProjection,
-  resetFrozenUsageProjection,
-  type UsageEligibilityStatusTexts,
-  type UsageProjectionBase,
-} from "./src/usage-projection.ts";
-export {
-  formatUsageDebugReport,
-  makeUsageRefreshController,
-  timedDiagnosticResult,
-  UsageFetchOutcome,
-  type SubscriptionUsageConfig,
-} from "./src/usage-controller.ts";
 export { freezeSnapshot, frozenProjection, ProjectionError } from "./src/projection.ts";
 export { hasObjectRuntimeType, runtimeTypeName } from "./src/runtime-values.ts";
 export {
@@ -148,14 +160,16 @@ export {
 export {
   BoundedProcessError,
   confirmEffectProcessClose,
-  effectProcessExit,
+  acquireBoundedProcessRunner,
   nodeProcessLayer,
   provideNodeProcess,
   runBoundedProcessNode,
   type BoundedProcessRequest,
   type BoundedProcessResult,
+  type BoundedProcessRunner,
 } from "./src/platform/process.ts";
 export {
+  awaitProcessGroupExit,
   confirmProcessGroupExit,
   processGroupSignalError,
   signalProcess,
@@ -167,6 +181,7 @@ export {
 } from "./src/platform/process-group-exit-guard.ts";
 export {
   currentProcessIdentity,
+  probeProcessLiveness,
   processLiveness,
   type ProcessIdentity,
   type ProcessLiveness,
@@ -180,6 +195,7 @@ export {
   extractJwtClaim,
   hasControlCharacter,
   isSensitiveDiagnosticKey,
+  maskIdentifier,
   redactDiagnosticValue,
   redactedTokenSchema,
   sanitizeDiagnosticContent,
@@ -195,15 +211,6 @@ export {
   decodeSettingUpdate,
   FiniteNumberFromJsonSchema,
   InvalidSettingError,
-  makeUsageSettingDescriptors,
   type SettingsOptionDescriptor,
 } from "./src/settings-completion.ts";
 export { dispatchSettingsCommand, SettingsCommandDispatch } from "./src/settings-dispatch.ts";
-export {
-  clampPercent,
-  formatPercent,
-  formatTimestamp,
-  formatTokens,
-  formatWindowedUsageLine,
-  usedToLeftPercent,
-} from "./src/subscription-format.ts";

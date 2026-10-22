@@ -1,3 +1,7 @@
+import * as Effect from "effect/Effect";
+
+/** `Effect.provide` for tests, which build complete Layers at the test entry point. */
+export const provideBuiltLayer = Effect.provide;
 export {
   capturedTelemetrySnapshot,
   jsonHttpRawResponse,

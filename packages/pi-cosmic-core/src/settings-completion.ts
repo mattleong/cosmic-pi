@@ -1,7 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { isJsonObject, type JsonObject, type JsonValue } from "./platform/json-document.ts";
-import type { SubscriptionUsageConfig } from "./usage-controller.ts";
 
 interface SettingsCompletionDescriptor {
   readonly id: string;
@@ -109,37 +108,6 @@ export const BooleanFromJsonSchema = Schema.fromJsonString(Schema.Boolean);
 export const FiniteNumberFromJsonSchema = Schema.fromJsonString(
   Schema.Number.check(Schema.isFinite()),
 );
-
-export const makeUsageSettingDescriptors = <
-  Config extends { readonly usage: SubscriptionUsageConfig },
->(
-  subscriptionDescription: string,
-): readonly SettingsOptionDescriptor<Config>[] => [
-  {
-    id: "usage.refreshIntervalMs",
-    label: "Usage refresh",
-    currentValue: (cfg) => String(cfg.usage.refreshIntervalMs),
-    values: ["15000", "30000", "60000", "120000", "300000", "600000"],
-    description: "Usage refresh interval in milliseconds.",
-    decoder: FiniteNumberFromJsonSchema,
-  },
-  {
-    id: "usage.showOnlyOnSubscriptionModels",
-    label: "Usage only on OAuth",
-    currentValue: (cfg) => String(cfg.usage.showOnlyOnSubscriptionModels),
-    values: ["true", "false"],
-    description: subscriptionDescription,
-    decoder: BooleanFromJsonSchema,
-  },
-  {
-    id: "usage.showResetTimes",
-    label: "Usage reset times",
-    currentValue: (cfg) => String(cfg.usage.showResetTimes),
-    values: ["true", "false"],
-    description: "Include compact reset countdowns and local reset times.",
-    decoder: BooleanFromJsonSchema,
-  },
-];
 
 export const decodeSettingUpdate = <Config>(
   descriptors: ReadonlyArray<Pick<SettingsOptionDescriptor<Config>, "id" | "decoder">>,

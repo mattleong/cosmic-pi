@@ -69,14 +69,12 @@ use Oxlint's AST and lexical scopes. They report without fixes because each find
   property or a function bound to one. Prefer `expandedArguments` or `escapeControlChars`. Collapsed
   summaries, issues, notifications, logs, other colors, and test fakes under `tests/` remain valid.
 - **`no-manual-abort-listener`** rejects `addEventListener("abort", ...)` member calls. Pass the
-  signal to Effect with `runPromise(effect, { signal })`, or use the shared adapter in
-  `pi-cosmic-ui/src/boundary/host-abort-signal.ts`. The rule exempts that adapter and the
-  pi-cosmic-core runtime files that implement signal forwarding; test fakes can wait with
-  `Effect.runPromiseExit(Effect.never, { signal })`.
+  signal to Effect with `runPromise(effect, { signal })`, or forward it with pi-cosmic-core's
+  `forwardAbortSignal`. The rule exempts the pi-cosmic-core runtime files that implement signal
+  forwarding; test fakes can wait with `Effect.runPromiseExit(Effect.never, { signal })`.
 - **`no-raw-host-notify`** rejects `<expr>.ui.notify(...)` calls, including optional chains. Route
   notifications through `notifyAtHostBoundary` from pi-cosmic-core. The rule exempts the core
-  `host-session.ts` and `usage-controller.ts` implementations; reading or replacing a
-  `ui.notify` spy remains valid.
+  `host-session.ts` implementation; reading or replacing a `ui.notify` spy remains valid.
 - **`no-runtime-type-only-tests`** rejects Vitest type assertions, imported from `vitest` or
   `@effect/vitest`, inside runtime test callbacks, and direct import/declaration-spelling
   assertions against statically identified production source reads. Top-level type assertions,

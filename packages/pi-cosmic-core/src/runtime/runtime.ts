@@ -53,7 +53,19 @@ export const piHostFileLoggerLayer = (target: PiHostLogTarget): Layer.Layer<neve
 
 declare const PiManagedRuntimeRuntimeError: unique symbol;
 
-const ownAbortSignal = (source: AbortSignal) => {
+export interface ForwardedAbortSignal {
+  /** Aborts when the source aborts, including when it already had or its listener failed. */
+  readonly signal: AbortSignal;
+  /** Removes the source listener; idempotent. */
+  readonly release: () => void;
+}
+
+/**
+ * Forwards a host abort signal to a signal this caller owns. The listener is installed before the
+ * initial aborted state is read, so an abort in between is not missed; a host signal that throws
+ * counts as aborted.
+ */
+export const forwardAbortSignal = (source: AbortSignal): ForwardedAbortSignal => {
   const controller = new AbortController();
   const abort = () => controller.abort();
   let removePending = true;
@@ -105,12 +117,12 @@ export function makePiManagedRuntime<R, E>(
   let disposal: Promise<void> | undefined;
   return {
     run: (effect, signal) => {
-      const owned = signal ? ownAbortSignal(signal) : undefined;
+      const owned = signal ? forwardAbortSignal(signal) : undefined;
       const result = runtime.runPromise(effect, owned ? { signal: owned.signal } : undefined);
       return owned ? result.finally(owned.release) : result;
     },
     fork: (effect, signal) => {
-      const owned = signal ? ownAbortSignal(signal) : undefined;
+      const owned = signal ? forwardAbortSignal(signal) : undefined;
       const fiber = runtime.runFork(effect, owned ? { signal: owned.signal } : undefined);
       if (owned) fiber.addObserver(owned.release);
       return fiber;

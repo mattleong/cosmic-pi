@@ -103,7 +103,11 @@ interface EffectProcessExit {
   readonly signal: string | null;
 }
 
-export const effectProcessExit = (
+/**
+ * Effect's Node spawner reports a signal death only as a failure whose message names the signal,
+ * so the signal is read from that text; the process runner tests pin it.
+ */
+const effectProcessExit = (
   exit: Exit.Exit<ChildProcessSpawner.ExitCode, PlatformError.PlatformError>,
 ): EffectProcessExit => {
   if (Exit.isSuccess(exit)) return { code: Number(exit.value), signal: null };
@@ -248,6 +252,11 @@ const runBoundedProcess = Effect.fn("BoundedProcess.run")(function* (
   } satisfies BoundedProcessResult;
 });
 
+export type BoundedProcessRunner = (
+  request: BoundedProcessRequest,
+) => Effect.Effect<BoundedProcessResult, BoundedProcessError>;
+
+/** Runs one bounded process with the caller's spawner. */
 export const runBoundedProcessScoped = (
   request: BoundedProcessRequest,
 ): Effect.Effect<
@@ -256,6 +265,21 @@ export const runBoundedProcessScoped = (
   ChildProcessSpawner.ChildProcessSpawner
 > => Effect.scoped(runBoundedProcess(request));
 
+/**
+ * Takes the caller's spawner once, returning a runner that needs nothing more. A long-lived owner
+ * builds it in its Layer instead of building the Node process Layer for every command.
+ */
+export const acquireBoundedProcessRunner: Effect.Effect<
+  BoundedProcessRunner,
+  never,
+  ChildProcessSpawner.ChildProcessSpawner
+> = Effect.map(
+  Effect.context<ChildProcessSpawner.ChildProcessSpawner>(),
+  (context) => (request) => runBoundedProcessScoped(request).pipe(Effect.provideContext(context)),
+);
+
+// Equivalent to `Effect.provide(effect, nodeProcessLayer)`, which the workspace's
+// `strictEffectProvide` diagnostic reserves for application entry points.
 export const provideNodeProcess = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E, Exclude<R, ChildProcessSpawner.ChildProcessSpawner>> =>
@@ -263,7 +287,5 @@ export const provideNodeProcess = <A, E, R>(
     Effect.flatMap(Layer.build(nodeProcessLayer), (services) => Effect.provide(effect, services)),
   );
 
-export const runBoundedProcessNode = (
-  request: BoundedProcessRequest,
-): Effect.Effect<BoundedProcessResult, BoundedProcessError> =>
+export const runBoundedProcessNode: BoundedProcessRunner = (request) =>
   runBoundedProcessScoped(request).pipe(provideNodeProcess);

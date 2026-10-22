@@ -57,7 +57,7 @@ Packages run and publish TypeScript source through Pi/Jiti, with no generated `d
 
 - `pi-cosmic-core.runtime.startup`, `pi-cosmic-core.http.{json,streaming}.*`, `pi-cosmic-core.safe-file.initialize`;
 - `pi-better-openai.usage.{initialize,refresh}`, `pi-better-openai.image.{request,stream,convert,write}`;
-- `pi-cosmic-ui.probe.{git,pull-request}`;
+- `pi-cosmic-ui.probe.{git,pull-request}`, `pi-cosmic-ui.refresh.{git,pull-request}`;
 - `pi-code-previews.shiki.initialize`.
 
 Attributes contain only bounded enums, counts, methods, and status codes. Exclude URLs, paths, prompts, bodies, credentials, account identifiers, and raw errors. Core disables upstream URL-bearing HTTP spans and supplies safe spans instead. Redact unknown diagnostics before logs or projections. Extensions do not install process-wide telemetry exporters.

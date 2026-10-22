@@ -1,3 +1,4 @@
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import type * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
@@ -43,6 +44,22 @@ type Active<Input, R, RuntimeError> = {
   activated: boolean;
   disposal?: Promise<void>;
 };
+
+/**
+ * A static failure class. Error tags and messages are caller-controlled text and may carry
+ * credentials, so neither is ever logged.
+ */
+const startupFailureClass = (cause: Cause.Cause<unknown>): "failure" | "defect" | "unknown" =>
+  Cause.hasFails(cause) ? "failure" : Cause.hasDies(cause) ? "defect" : "unknown";
+
+/**
+ * The slot reports a failed startup to its consumer without a reason, and disposal follows, so the
+ * runtime's own logger records the failure class first. Interruption is replacement or abort.
+ */
+const logStartupFailure = (cause: Cause.Cause<unknown>) =>
+  Cause.hasInterruptsOnly(cause)
+    ? Effect.void
+    : Effect.logWarning(`pi-cosmic-core.runtime.startup failed: ${startupFailureClass(cause)}.`);
 
 const dispose = (runtime: Pick<PiManagedRuntime<never>, "dispose">): Promise<void> =>
   Promise.resolve()
@@ -133,7 +150,10 @@ export function makePiSessionRuntimeSlot<
         let started: Promise<StartupValue>;
         try {
           started = runtime.run(
-            hooks.startup(input).pipe(Effect.withSpan("pi-cosmic-core.runtime.startup")),
+            Effect.suspend(() => hooks.startup(input)).pipe(
+              Effect.tapCause(logStartupFailure),
+              Effect.withSpan("pi-cosmic-core.runtime.startup"),
+            ),
             signal,
           );
         } catch {

@@ -8,9 +8,9 @@ import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientError from "effect/http/HttpClientError";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
-import { JsonHttpClient, provideBuiltLayer, StreamingHttpClient } from "../index.ts";
+import { JsonHttpClient, StreamingHttpClient } from "../index.ts";
 import type { StreamingHttpRequest } from "../src/platform/streaming-http.ts";
-import { capturedTelemetrySnapshot, makeCapturedTracer } from "../testing.ts";
+import { capturedTelemetrySnapshot, makeCapturedTracer, provideBuiltLayer } from "../testing.ts";
 
 const Ok = Schema.Struct({ ok: Schema.Boolean });
 const okRequest = { url: "https://example.invalid", responseSchema: Ok };

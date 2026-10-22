@@ -2,6 +2,7 @@ import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import { vi } from "vitest";
 import {
   makePiManagedRuntime,
@@ -9,7 +10,12 @@ import {
   PiApi,
   type PiManagedRuntime,
 } from "../index.ts";
-import { extensionApiFixture, makeLifecycleProbe } from "../testing.ts";
+import {
+  capturedTelemetrySnapshot,
+  extensionApiFixture,
+  makeCapturedLogger,
+  makeLifecycleProbe,
+} from "../testing.ts";
 
 const fakeRuntime = (
   run: PiManagedRuntime<never, never>["run"],
@@ -151,6 +157,60 @@ it.effect("releases acquired resources after startup failure", () =>
     expect(yield* Effect.promise(() => slot.start(undefined))).toBeUndefined();
     expect(probe.events).toEqual(["acquire", "release"]);
     expect(failures).toEqual([1]);
+  }),
+);
+
+class CredentialRejected extends Schema.TaggedError<CredentialRejected>()("CredentialRejected", {
+  message: Schema.String,
+}) {}
+
+const failedStartupLogs = (startup: () => Effect.Effect<void, unknown>) =>
+  Effect.gen(function* () {
+    const captured = makeCapturedLogger();
+    const logsAtDisposal: unknown[][] = [];
+    const failures: number[] = [];
+    const slot = makePiSessionRuntimeSlot<void, never, unknown, never>({
+      makeRuntime: () =>
+        fakeRuntime(
+          (effect) =>
+            Effect.runPromise(
+              effect.pipe(
+                Effect.provideService(PiApi, extensionApiFixture()),
+                Effect.provide(captured.layer),
+              ),
+            ),
+          () => {
+            logsAtDisposal.push([...captured.entries]);
+            return Promise.resolve();
+          },
+        ),
+      startup,
+      onStartFailure: (_input, token) => failures.push(token),
+    });
+    expect(yield* Effect.promise(() => slot.start(undefined))).toBeUndefined();
+    expect(failures).toEqual([1]);
+    // Logged once, before the runtime that owns the logger is disposed.
+    expect(logsAtDisposal).toEqual([captured.entries]);
+    expect(captured.entries).toHaveLength(1);
+    return capturedTelemetrySnapshot(captured);
+  });
+
+it.effect("records only a static failure class before disposing a failed startup", () =>
+  Effect.gen(function* () {
+    const secret = "sk-live-0123456789";
+    const typed = yield* failedStartupLogs(() =>
+      Effect.fail(new CredentialRejected({ message: `rejected ${secret}` })),
+    );
+    // A tag is caller-controlled text, so even a well-formed one is never echoed.
+    const secretTag = yield* failedStartupLogs(() => Effect.fail({ _tag: secret }));
+    expect(typed).toContain("failure");
+    expect(secretTag).toContain("failure");
+    expect(typed).not.toContain("CredentialRejected");
+    const thrown = yield* failedStartupLogs(() => {
+      throw new Error(`startup crashed with ${secret}`);
+    });
+    expect(thrown).toContain("defect");
+    expect(typed + secretTag + thrown).not.toContain(secret);
   }),
 );
 

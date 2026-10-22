@@ -62,6 +62,15 @@ export const formatCost = (cost: number): string => {
   return `$${value.toFixed(2)}`;
 };
 
+export const formatTokens = (count: number): string => {
+  if (count < 1_000) return `${count}`;
+  if (count < 10_000) return `${(count / 1_000).toFixed(1)}k`;
+  if (count < 1_000_000) return `${Math.round(count / 1_000)}k`;
+  return `${(count / 1_000_000).toFixed(count < 10_000_000 ? 1 : 0)}M`;
+};
+
+export const clampPercent = (value: number): number => Math.min(100, Math.max(0, value));
+
 export const clipText = (text: string, limit: number): string => {
   const budget = Math.max(0, Math.floor(limit));
   if (text.length <= budget) return text;

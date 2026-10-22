@@ -12,7 +12,7 @@ import {
   type JsonDocumentModification,
   type JsonObject,
 } from "../src/platform/json-document.ts";
-import { provideBuiltLayer } from "../index.ts";
+import { provideBuiltLayer } from "../testing.ts";
 import { inProcessDocumentLock } from "./support/json-documents.ts";
 
 const toBytes = (source: string | Uint8Array) =>

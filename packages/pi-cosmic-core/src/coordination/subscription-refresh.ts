@@ -10,6 +10,7 @@ interface SubscriptionRefreshOptions<Key, Value, E, R> {
   readonly interval: Effect.Effect<number, never, R>;
   readonly fetch: (request: RefreshRequest) => Effect.Effect<Value, E, R>;
   readonly commit: (value: Value) => Effect.Effect<void, E, R>;
+  /** Stable operation name for each refresh span; also labels poll recovery logs. */
   readonly spanName?: string;
 }
 
@@ -55,7 +56,7 @@ export const createSubscriptionRefresh = <Key, Value, E, R>(
         Ref.update(revisionRef, (revision) => revision + 1).pipe(Effect.andThen(effect)),
       ).pipe(Effect.tap(() => Latch.release(wakeLatch)));
 
-    const perform = Effect.fn(spanName)(function* (request: RefreshRequest) {
+    const perform = Effect.fnUntraced(function* (request: RefreshRequest) {
       const capturedRevision = yield* Ref.get(revisionRef);
       const capturedKey = yield* options.currentKey;
       const value = yield* options.fetch(request);
@@ -66,7 +67,7 @@ export const createSubscriptionRefresh = <Key, Value, E, R>(
           if (Object.is(capturedKey, currentKey)) yield* options.commit(value);
         }),
       );
-    });
+    }, Effect.withSpan(spanName));
 
     const request = (next: RefreshRequest) => coordinator.run(next, perform);
 

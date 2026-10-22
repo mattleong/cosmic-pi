@@ -43,6 +43,14 @@ it.live("terminates a process when bounded output overflows", () =>
   }),
 );
 
+for (const signal of ["SIGTERM", "SIGKILL"] as const)
+  it.live(`reports a process killed by ${signal} with that signal and no code`, () =>
+    Effect.gen(function* () {
+      const result = yield* runNode(`process.kill(process.pid, "${signal}")`);
+      expect(result).toMatchObject({ code: null, signal, timedOut: false, overflowed: false });
+    }),
+  );
+
 it.live("terminates a process at its deadline", () =>
   Effect.gen(function* () {
     const result = yield* runNode("setInterval(() => {}, 1000)", {

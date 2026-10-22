@@ -1,14 +1,19 @@
+import { it as effectIt } from "@effect/vitest";
+import * as Effect from "effect/Effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { nodeSpawn, nodeSpawnSync } from "../src/platform/node-builtins.ts";
+import { nodeLockFs, nodeSpawn, nodeSpawnSync } from "../src/platform/node-builtins.ts";
 import {
   currentProcessIdentity,
+  probeProcessLiveness,
   processLiveness,
   processStartIdentity,
+  type ProcessIdentity,
 } from "../src/platform/process-start.ts";
 import { reusedProcessIdentity } from "../testing.ts";
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
 });
 
 describe("process liveness", () => {
@@ -61,4 +66,55 @@ describe("process liveness", () => {
       child.kill("SIGKILL");
     }
   });
+});
+
+describe("non-blocking process liveness", () => {
+  const waitingChild = Effect.acquireRelease(
+    Effect.sync(() =>
+      nodeSpawn(process.execPath, ["-e", "setTimeout(() => {}, 60_000)"], { stdio: "ignore" }),
+    ),
+    (child) => Effect.sync(() => child.kill("SIGKILL")),
+  );
+
+  effectIt.live("gives the synchronous check's answer for the same evidence", () =>
+    Effect.gen(function* () {
+      const child = yield* waitingChild;
+      const pid = child.pid ?? 0;
+      const started = processStartIdentity(pid);
+      expect(started).toBeDefined();
+      const exited = nodeSpawnSync(process.execPath, ["-e", ""]);
+      const cases: ReadonlyArray<readonly [ProcessIdentity, string]> = [
+        [currentProcessIdentity(), "alive"],
+        [{ pid, started }, "alive"],
+        [{ pid, started: `${started ?? ""}0` }, "dead"],
+        [{ pid: exited.pid, started: "whenever" }, "dead"],
+        [reusedProcessIdentity(), "dead"],
+        [{ pid }, "unknown"],
+        [{ pid, started: "an earlier process" }, "unknown"],
+      ];
+      for (const [identity, expected] of cases) {
+        expect(yield* probeProcessLiveness(identity)).toBe(expected);
+        expect(processLiveness(identity)).toBe(expected);
+      }
+    }),
+  );
+});
+
+describe("non-blocking process liveness on Linux", () => {
+  const platform = process.platform;
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: platform });
+  });
+
+  effectIt.effect("is unknown when procfs refuses the read after the signal probe", () =>
+    Effect.gen(function* () {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      // The process exits, or procfs denies access, between the signal probe and the read.
+      vi.spyOn(nodeLockFs, "readFileSync").mockImplementation(() => {
+        throw Object.assign(new Error("ENOENT: no such file or directory"), { code: "ENOENT" });
+      });
+      // The parent process is present, and not this process, so its start is read from procfs.
+      expect(yield* probeProcessLiveness({ pid: process.ppid, started: "proc:1" })).toBe("unknown");
+    }),
+  );
 });
