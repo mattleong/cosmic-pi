@@ -70,7 +70,7 @@ Use the shared Cosmic UI manager navigation, action vocabulary, confirmation beh
 
 ## Retention and validation
 
-Bound and sanitize evidence where it enters a package or persistence boundary. `createBoundedCompactIssuesSchema` provides bounded issue schemas. Redact before storage, mark incomplete evidence, and do not raise retention limits merely to make rendering pass. Changed versioned receipts need an explicit version change; unsupported versions decline to generic presentation.
+Bound and sanitize evidence where it enters a package or persistence boundary. `createBoundedCompactIssuesSchema` provides bounded issue schemas. Redact before storage, mark incomplete evidence, and do not raise retention limits merely to make rendering pass. Change receipts in place without version bumps or legacy handling; saved receipts that no longer decode decline to generic presentation.
 
 Use `pi-code-previews/testing` with actual registered definitions or public renderer-only callbacks. `createToolPresentationHarness` exercises call/result slots, widths, expansion, lifecycle, and invalidation without executing tools. Host-row helpers cover Pi's retained history, first-ready adoption, complete reconstruction, owner retirement, and fallback. Avoid importing another package's internal source for consumer assertions.
 
