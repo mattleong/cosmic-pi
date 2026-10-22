@@ -125,6 +125,8 @@ it.live(
                     sessionManager: ctx.sessionManager,
                     modelRegistry: ctx.modelRegistry,
                     executeTool(name, rawArgs) {
+                      // The host calls this Promise callback outside the test's fiber.
+                      // @effect-diagnostics-next-line runEffectInsideEffect:off
                       return Effect.runPromise(
                         Effect.gen(function* () {
                           const session = bound.session;

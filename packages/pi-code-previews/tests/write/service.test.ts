@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { provideBuiltLayer } from "pi-cosmic-core";
+import { provideBuiltLayer } from "pi-cosmic-core/testing";
 import { lookupBeforeWrite } from "../../src/write/projection";
 import { CodePreviewWriteService } from "../../src/write/service";
 

@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import { describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import { provideBuiltLayer } from "pi-cosmic-core";
+
 import {
   capturedTelemetrySnapshot,
   deferredPromise,
   makeCapturedLogger,
+  provideBuiltLayer,
 } from "pi-cosmic-core/testing";
 import { disposeShikiHighlighter, ShikiAdapter } from "../../src/boundary/shiki";
 import { shikiHighlighterFixture } from "../support/shiki";

@@ -1,4 +1,4 @@
-import { nodeBasename, nodeExtname } from "../boundary/node";
+import { nodePath } from "pi-cosmic-core";
 import type { PathIconMode } from "../config/schema";
 
 const NERD_FILE = "\uf15b";
@@ -56,6 +56,6 @@ export function pathIcon(path: string, isDirectory: boolean, mode: PathIconMode)
   if (mode === "off") return "";
   if (mode === "unicode") return isDirectory ? "▸" : "•";
   if (isDirectory) return NERD_DIR;
-  const name = nodeBasename(path).toLowerCase();
-  return NERD_BY_NAME.get(name) ?? NERD_BY_EXT.get(nodeExtname(name).slice(1)) ?? NERD_FILE;
+  const name = nodePath.basename(path).toLowerCase();
+  return NERD_BY_NAME.get(name) ?? NERD_BY_EXT.get(nodePath.extname(name).slice(1)) ?? NERD_FILE;
 }

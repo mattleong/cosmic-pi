@@ -6,7 +6,6 @@ import * as Semaphore from "effect/Semaphore";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import { acquireProjectionOwnership } from "../shared/projection-ownership";
 import { disposeShikiHighlighter, ShikiAdapter, type ShikiHighlighter } from "../boundary/shiki";
-import { codePreviewSettings } from "../config/state";
 import { acquireSyntaxIngress } from "./ingress";
 import {
   clearSyntaxProjection,
@@ -134,7 +133,6 @@ export class CodePreviewSyntaxService extends Context.Service<
       const initialize: (theme: string) => Effect.Effect<void> = Effect.fn(
         "CodePreviewShiki.initialize",
       )(function* (theme: string) {
-        if (!codePreviewSettings.syntaxHighlighting) return undefined;
         return yield* Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
             const flight: InitializationFlight = {

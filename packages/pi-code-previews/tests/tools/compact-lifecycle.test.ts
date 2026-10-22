@@ -5,7 +5,7 @@ import { afterEach, beforeEach, test } from "vitest";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
-import { provideBuiltLayer } from "pi-cosmic-core";
+import { provideBuiltLayer } from "pi-cosmic-core/testing";
 import { applyPresentationSettings, renderContextFixture } from "../../testing";
 import { CodePreviewSchedulerService } from "../../src/application/scheduler";
 import {

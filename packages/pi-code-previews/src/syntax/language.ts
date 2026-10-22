@@ -1,6 +1,6 @@
 import { getLanguageFromPath } from "@earendil-works/pi-coding-agent";
 import { bundledLanguages } from "shiki";
-import { nodeBasename, nodeExtname } from "../boundary/node";
+import { nodePath } from "pi-cosmic-core";
 import { codePreviewPerformanceConfig } from "../config/state";
 
 const EXACT_BASENAMES = new Map<string, string>([
@@ -58,7 +58,7 @@ export function resolvePreviewLanguage({
   content?: string | undefined;
 }): string | undefined {
   return firstSupported(
-    path && JSX_LANGUAGES.get(nodeExtname(path).toLowerCase()),
+    path && JSX_LANGUAGES.get(nodePath.extname(path).toLowerCase()),
     path && getLanguageFromPath(path),
     languageFromPath(path),
     languageFromShebang(content),
@@ -68,7 +68,7 @@ export function resolvePreviewLanguage({
 
 function languageFromPath(path: string | undefined): string | undefined {
   if (!path) return undefined;
-  const name = nodeBasename(path).toLowerCase();
+  const name = nodePath.basename(path).toLowerCase();
   if (name.startsWith(".env") || name.endsWith(".env")) return "dotenv";
   if (name === "dockerfile" || name.startsWith("dockerfile.")) return "dockerfile";
   return EXACT_BASENAMES.get(name);
@@ -81,12 +81,13 @@ function languageFromShebang(content: string | undefined): string | undefined {
     .replace(/^#!\s*/, "")
     .split(/\s+/)
     .filter(Boolean);
-  const envIndex = parts.findIndex((part) => nodeBasename(part) === "env");
+  const envIndex = parts.findIndex((part) => nodePath.basename(part) === "env");
   const command =
     envIndex >= 0 ? parts.slice(envIndex + 1).find((part) => !part.startsWith("-")) : parts[0];
   if (!command) return undefined;
   return SHEBANG_ALIASES.get(
-    nodeBasename(command)
+    nodePath
+      .basename(command)
       .toLowerCase()
       .replace(/\d+(\.\d+)?$/, ""),
   );

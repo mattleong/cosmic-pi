@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { Text } from "@earendil-works/pi-tui";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { provideBuiltLayer } from "pi-cosmic-core";
+import { provideBuiltLayer } from "pi-cosmic-core/testing";
 import {
   clearCodePreviewSessionCapability,
   captureCodePreviewSessionCapability,

@@ -9,7 +9,6 @@ import {
   AgentDirectory,
   JsonDocumentError,
   JsonDocumentStore,
-  provideBuiltLayer,
   type JsonDocumentStoreContract,
 } from "pi-cosmic-core";
 import {
@@ -17,6 +16,7 @@ import {
   makeCapturedLogger,
   makeInMemoryDocuments,
   type InMemoryDocuments,
+  provideBuiltLayer,
 } from "pi-cosmic-core/testing";
 import { nextSettingsAdmission } from "../../src/config/coordinator";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";

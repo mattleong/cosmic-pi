@@ -9,8 +9,12 @@ import {
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import { nodeFilePlatformLayer, provideBuiltLayer } from "pi-cosmic-core";
-import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
+import { nodeFilePlatformLayer } from "pi-cosmic-core";
+import {
+  extensionApiFixture,
+  extensionContextFixture,
+  provideBuiltLayer,
+} from "pi-cosmic-core/testing";
 import { afterEach, test } from "vitest";
 import {
   clearCodePreviewSessionCapability,

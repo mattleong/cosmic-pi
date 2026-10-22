@@ -10,7 +10,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
-import { provideBuiltLayer } from "pi-cosmic-core";
+import { provideBuiltLayer } from "pi-cosmic-core/testing";
 import { executeWriteWithPreviewEffect } from "../../src/write/preview-execution";
 import { lookupBeforeWrite } from "../../src/write/projection";
 import { CodePreviewWriteService } from "../../src/write/service";

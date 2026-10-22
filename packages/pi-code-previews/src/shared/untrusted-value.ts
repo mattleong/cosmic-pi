@@ -28,6 +28,8 @@ export const hostContainer = flow(
 export const HostValueSchema = Schema.Union([
   HostContainerSchema,
   Schema.String,
+  // Raw host values are classified as they are; non-finite numbers are still numbers here.
+  // @effect-diagnostics-next-line schemaNumber:off
   Schema.Number,
   Schema.Boolean,
   Schema.Null,

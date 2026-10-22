@@ -1,4 +1,4 @@
-import { failureMessage, formatDisplayPath } from "pi-cosmic-core";
+import { failureMessage, formatDisplayPath, nodePath } from "pi-cosmic-core";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
@@ -6,7 +6,6 @@ import {
   hasCodePreviewSessionCapability,
   runCodePreviewSessionEffect,
 } from "../application/capability";
-import { nodeJoin } from "../boundary/node";
 import { runOneShotSettingsEffect } from "../boundary/settings-one-shot";
 import { nextSettingsAdmission, type SettingsAdmission } from "./coordinator";
 import type { CodePreviewSettings } from "./schema";
@@ -38,10 +37,11 @@ export function loadCodePreviewSettings(
   projectTrusted = false,
   signal?: AbortSignal,
 ): Promise<CodePreviewSettings> {
+  const options: LoadSettingsOptions = projectTrusted
+    ? { projectCwd: projectCwd ?? process.cwd(), projectTrusted }
+    : {};
   const execute = (admission: SettingsAdmission): Promise<CodePreviewSettings> => {
-    const effect = CodePreviewSettingsService.use((service) =>
-      service.load(admission, { projectCwd, projectTrusted }),
-    );
+    const effect = CodePreviewSettingsService.use((service) => service.load(admission, options));
     if (!hasCodePreviewSessionCapability()) return runOneShotSettingsEffect(effect, signal);
     return runCodePreviewSessionEffect(effect, signal).catch((cause: unknown) => {
       if (signal?.aborted) throw cause;
@@ -64,7 +64,7 @@ export function loadCodePreviewSettings(
 }
 
 export function getSettingsPath(): string {
-  return nodeJoin(getAgentDir(), "code-previews.json");
+  return nodePath.join(getAgentDir(), "code-previews.json");
 }
 
 export function queueSettingsSave(

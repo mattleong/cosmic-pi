@@ -42,9 +42,14 @@ export type SettingsLoadProblem = {
   readonly fields?: readonly string[];
 };
 
-export type LoadSettingsOptions = {
-  projectCwd?: string | undefined;
-  projectTrusted?: boolean | undefined;
+/** A trusted project's settings load from its working directory, which the caller supplies. */
+export type LoadSettingsOptions =
+  | { readonly projectCwd?: string | undefined; readonly projectTrusted?: false | undefined }
+  | { readonly projectCwd: string; readonly projectTrusted: true };
+
+type LoadedSettingsFile = {
+  readonly settings: CodePreviewSettings;
+  readonly problems: readonly SettingsLoadProblem[];
 };
 
 type SettingKey = keyof CodePreviewSettings;
@@ -181,58 +186,59 @@ export class CodePreviewSettingsService extends Context.Service<
         settingsPath: string,
         extract: (document: JsonObject) => JsonObject,
         fallback: CodePreviewSettings,
-        problems: SettingsLoadProblem[],
       ) {
-        const document = yield* documents
-          .readObject(settingsPath)
-          .pipe(
-            Effect.catchTag("JsonDocumentError", () =>
-              Effect.logWarning(
-                "Failed to load settings for code previews; ignoring that document.",
-              ).pipe(
-                Effect.andThen(Effect.sync(() => problems.push({ path: settingsPath }))),
-                Effect.as(undefined),
-              ),
-            ),
-          );
-        if (!document) return fallback;
-        const normalized = normalizeSettingsWithDiagnostics(extract(document), fallback);
-        if (normalized.diagnostics.length > 0) {
-          const paths = normalized.diagnostics.map((diagnostic) => diagnostic.path);
-          yield* Effect.logWarning(
-            `Ignored invalid code preview setting fields: ${paths.join(", ")}.`,
-          );
-          const fields = paths.flatMap((field) =>
-            field.startsWith("settings.") ? [field.slice("settings.".length)] : [],
-          );
-          problems.push(
-            fields.length > 0 ? { path: settingsPath, fields } : { path: settingsPath },
-          );
-        }
-        return normalized.settings;
+        const read = yield* documents.readObject(settingsPath).pipe(
+          Effect.map((document) => ({ document, readable: true })),
+          Effect.catchTag("JsonDocumentError", () =>
+            Effect.logWarning(
+              "Failed to load settings for code previews; ignoring that document.",
+            ).pipe(Effect.as({ document: undefined, readable: false })),
+          ),
+        );
+        if (!read.document)
+          return {
+            settings: fallback,
+            problems: read.readable ? [] : [{ path: settingsPath }],
+          } satisfies LoadedSettingsFile;
+        const normalized = normalizeSettingsWithDiagnostics(extract(read.document), fallback);
+        if (normalized.diagnostics.length === 0)
+          return { settings: normalized.settings, problems: [] } satisfies LoadedSettingsFile;
+        const paths = normalized.diagnostics.map((diagnostic) => diagnostic.path);
+        yield* Effect.logWarning(
+          `Ignored invalid code preview setting fields: ${paths.join(", ")}.`,
+        );
+        const fields = paths.flatMap((field) =>
+          field.startsWith("settings.") ? [field.slice("settings.".length)] : [],
+        );
+        return {
+          settings: normalized.settings,
+          problems: [fields.length > 0 ? { path: settingsPath, fields } : { path: settingsPath }],
+        } satisfies LoadedSettingsFile;
       });
 
       const loadSaveContext = Effect.fn("CodePreviewSettings.loadSaveContext")(function* (
         options: LoadSettingsOptions,
       ) {
-        const projectCwd = options.projectCwd ?? process.cwd();
-        const problems: SettingsLoadProblem[] = [];
-        const globalBaseline = yield* loadFile(
+        const global = yield* loadFile(
           path.join(agentDir, "settings.json"),
           nestedCodePreviewSettings,
           defaultCodePreviewSettings,
-          problems,
         );
-        const baseline = options.projectTrusted
+        const project = options.projectTrusted
           ? yield* loadFile(
-              path.join(projectCwd, ".pi", "settings.json"),
+              path.join(options.projectCwd, ".pi", "settings.json"),
               nestedCodePreviewSettings,
-              globalBaseline,
-              problems,
+              global.settings,
             )
-          : globalBaseline;
-        const loaded = yield* loadFile(flatSettingsPath, identity, baseline, problems);
-        const context: SettingsSaveContext = { globalBaseline, baseline, loaded };
+          : undefined;
+        const baseline = project?.settings ?? global.settings;
+        const flat = yield* loadFile(flatSettingsPath, identity, baseline);
+        const context: SettingsSaveContext = {
+          globalBaseline: global.settings,
+          baseline,
+          loaded: flat.settings,
+        };
+        const problems = [...global.problems, ...(project?.problems ?? []), ...flat.problems];
         return { context, problems };
       });
 
@@ -251,32 +257,25 @@ export class CodePreviewSettingsService extends Context.Service<
         failIfSuperseded(coordinator, editedKeys).pipe(
           Effect.andThen(
             documents.modifyObject(flatSettingsPath, (latest) =>
-              Effect.try({
-                try: () => {
-                  const document = edit(latest);
-                  const committed = {
-                    ...next,
-                    loaded: normalizeSettingsWithDiagnostics(document, next.baseline).settings,
-                  };
-                  return {
-                    value: committed,
-                    document,
-                    write: !Equal.equals(document, latest),
-                    afterCommit: commit(committed, () =>
-                      coordinator.publishEdit(editedKeys, next.baseline, (baseline) =>
-                        setCodePreviewSettings(
-                          normalizeSettingsWithDiagnostics(document, baseline).settings,
-                        ),
+              // Editing and normalizing the document are pure and total.
+              Effect.sync(() => {
+                const document = edit(latest);
+                const committed = {
+                  ...next,
+                  loaded: normalizeSettingsWithDiagnostics(document, next.baseline).settings,
+                };
+                return {
+                  value: committed,
+                  document,
+                  write: !Equal.equals(document, latest),
+                  afterCommit: commit(committed, () =>
+                    coordinator.publishEdit(editedKeys, next.baseline, (baseline) =>
+                      setCodePreviewSettings(
+                        normalizeSettingsWithDiagnostics(document, baseline).settings,
                       ),
                     ),
-                  } satisfies JsonDocumentModification<SettingsSaveContext>;
-                },
-                catch: () =>
-                  new JsonDocumentError({
-                    operation: "write",
-                    path: flatSettingsPath,
-                    message: "Unable to update code preview settings.",
-                  }),
+                  ),
+                } satisfies JsonDocumentModification<SettingsSaveContext>;
               }).pipe(Effect.tap((change) => (change.write ? Effect.void : change.afterCommit))),
             ),
           ),

@@ -7,11 +7,11 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Scheduler from "effect/Scheduler";
 import * as Scope from "effect/Scope";
-import { provideBuiltLayer } from "pi-cosmic-core";
 import {
   capturedTelemetrySnapshot,
   makeCapturedLogger,
   makeCapturedTracer,
+  provideBuiltLayer,
 } from "pi-cosmic-core/testing";
 import {
   ShikiAdapter,
@@ -47,7 +47,12 @@ const syntaxLayer = (
     Layer.provide(Layer.succeed(ShikiAdapter, ShikiAdapter.of({ create, loadLanguage }))),
   );
 
-// Runs each fiber resumption on demand so a test can interrupt between layer acquisition steps.
+/**
+ * Runs each fiber resumption on demand so a test can interrupt between layer acquisition steps.
+ * A fiber yields after a few operations: enough for a resumed continuation to make progress, and
+ * few enough to pause well inside a layer build. Tests check both, so a change in how Effect
+ * counts operations fails them rather than leaving the window untested.
+ */
 const steppedScheduler = () => {
   const tasks: (() => void)[] = [];
   const step = (): boolean => {
@@ -60,8 +65,7 @@ const steppedScheduler = () => {
   };
   const scheduler: Scheduler.Scheduler = {
     executionMode: "async",
-    // Smaller budgets yield again before the resumed continuation can make progress.
-    shouldYield: (fiber) => fiber.currentOpCount >= 3,
+    shouldYield: (fiber) => fiber.currentOpCount >= 8,
     makeDispatcher: () => ({
       scheduleTask: (task) => {
         tasks.push(task);
@@ -403,8 +407,11 @@ describe("session syntax service", () => {
         Effect.provideService(Scheduler.Scheduler, stepped.scheduler),
         Effect.forkDetach({ startImmediately: true }),
       );
-      while (syntaxProjection() === undefined) assert.equal(stepped.step(), true);
-      assert.equal(build.pollUnsafe(), undefined);
+      for (let steps = 0; syntaxProjection() === undefined; steps++) {
+        assert.ok(steps < 10_000, "the stepped build made no progress");
+        assert.equal(stepped.step(), true);
+      }
+      assert.equal(build.pollUnsafe(), undefined, "the stepped build didn't pause");
 
       const interrupted = yield* Fiber.interrupt(build).pipe(
         Effect.forkChild({ startImmediately: true }),

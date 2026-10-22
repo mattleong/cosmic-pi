@@ -5,7 +5,7 @@ import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import { provideBuiltLayer } from "pi-cosmic-core";
+import { provideBuiltLayer } from "pi-cosmic-core/testing";
 import { test } from "vitest";
 import { defaultCodePreviewPerformanceConfig } from "../../src/config/defaults";
 import {

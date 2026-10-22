@@ -6,13 +6,14 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import { makePiManagedRuntime, nodeFilePlatformLayer, provideBuiltLayer } from "pi-cosmic-core";
+import { makePiManagedRuntime, nodeFilePlatformLayer } from "pi-cosmic-core";
 import {
   extensionContextFixture,
   makeLifecycleProbe,
   recordingExtensionHost,
   type ExtensionContextOverrides,
   type ExtensionHostContext,
+  provideBuiltLayer,
 } from "pi-cosmic-core/testing";
 import { afterEach } from "vitest";
 import {
@@ -64,6 +65,8 @@ for (const cancellation of ["abort", "replacement", "shutdown"] as const) {
         }),
       );
       yield* Deferred.await(predecessorEntered);
+      // Stands in for the host's abort signal, which Pi passes to the write tool.
+      // @effect-diagnostics-next-line abortControllerInEffect:off
       const controller = new AbortController();
       let outcome: "pending" | "success" | "failure" = "pending";
       const pending = executeWriteWithPreview(

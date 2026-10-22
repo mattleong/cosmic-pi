@@ -5,7 +5,7 @@ import {
   type WriteOperations,
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
+import * as FiberSet from "effect/FiberSet";
 
 export const executeNativeWrite = <E, R>(
   toolCallId: string,
@@ -25,12 +25,8 @@ export const executeNativeWrite = <E, R>(
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
-      const services = yield* Effect.context<R>();
-      const scope = yield* Effect.scope;
-      const run = <A>(effect: Effect.Effect<A, E, R>) =>
-        Effect.runPromiseWith(services)(
-          effect.pipe(Effect.forkIn(scope), Effect.flatMap(Fiber.join)),
-        );
+      // Workers belong to the invocation's scope; their Promises take no abort signal.
+      const run = yield* FiberSet.makeRuntimePromise<R>();
       return yield* Effect.tryPromise({
         try: (signal) => {
           const nativeOperations: WriteOperations = {
