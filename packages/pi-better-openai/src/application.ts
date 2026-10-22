@@ -4,6 +4,7 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as MutableRef from "effect/MutableRef";
 import * as Predicate from "effect/Predicate";
 import {
@@ -73,11 +74,7 @@ import { registerSettingsController } from "./settings/controller.ts";
 import { fastModeFooterPrimitive, openAIUsageFooterPrimitive } from "./ui/primitives.ts";
 import { OpenAIUsageService, sessionNotStarted } from "./usage/controller.ts";
 import { formatDebug } from "./usage/debug.ts";
-import {
-  usageProjectionRef,
-  resetProjection,
-  synchronizeProjectionContext,
-} from "./usage/projection.ts";
+import { usageProjectionRef, resetProjection } from "./usage/projection.ts";
 
 const FAST_ID = "fast";
 const COMMAND = "openai";
@@ -148,9 +145,9 @@ export function betterOpenAIWithDependencies(
   };
   const setStatus = makeSetStatusSafely("better-openai");
   let usageVisible = true;
-  const refreshForNewContext = OpenAIUsageService.use((service) =>
-    service.contextChanged(true).pipe(Effect.andThen(service.refresh({ force: true }))),
-  );
+  const clearUsageForNewContext = OpenAIUsageService.use((service) => service.contextChanged(true));
+  const refreshUsage = OpenAIUsageService.use((service) => service.refresh({ force: true }));
+  const refreshForNewContext = clearUsageForNewContext.pipe(Effect.andThen(refreshUsage));
   const isUsageVisible = () => {
     cosmicUi.query();
     return cosmicUi.isVisible("openai.usage");
@@ -458,7 +455,12 @@ export function betterOpenAIWithDependencies(
     providerTransport.request(ctx);
     const before = MutableRef.get(fastProjection).active;
     updateContext(ctx);
-    synchronizeProjectionContext(projection, ctx);
+    // The usage controller clears the old model's usage and re-renders the footer. Its fiber
+    // starts synchronously, so the clear usually lands before the render below. The clear isn't
+    // tied to the host signal: an abort while it waits for the commit lock would leave the old
+    // model's usage visible. Only the network refresh that follows it is.
+    const cleared = slot.fork(clearUsageForNewContext);
+    if (cleared) slot.fork(Fiber.join(cleared).pipe(Effect.andThen(refreshUsage)), signal);
     updateFooter(ctx);
     const fast = MutableRef.get(fastProjection);
     const active = isFastActive(ctx, fast);
@@ -472,7 +474,6 @@ export function betterOpenAIWithDependencies(
       FastModeService.use((service) => service.modelChanged(ctx)),
       signal,
     );
-    slot.fork(refreshForNewContext, signal);
   });
   pi.on("session_shutdown", () => {
     providerTransport.discard();

@@ -5,7 +5,6 @@ import {
   isUsingOAuthAtHostBoundary,
   makeFrozenUsageProjection,
   resetFrozenUsageProjection,
-  synchronizeUsageProjectionContext,
   withUsageEligibility,
   type UsageEligibilityStatusTexts,
   type UsageProjectionBase,
@@ -83,13 +82,6 @@ export function synchronizedProjection(
 ): OpenAIProjection {
   const decision = openAIUsageDecision(state, ctx, clearUsage);
   return withUsageEligibility(state, decision.eligible, decision.clearUsage, decision.statusTexts);
-}
-
-export function synchronizeProjectionContext(
-  projection: MutableRef.MutableRef<OpenAIProjection>,
-  ctx: ExtensionContext,
-): void {
-  synchronizeUsageProjectionContext(projection, (state) => openAIUsageDecision(state, ctx, true));
 }
 
 export function visibleStatusLine(
