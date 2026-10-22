@@ -11,8 +11,10 @@ const validTimeout = (timeoutSeconds: number | undefined) =>
 
 export const normalizeStartRequest = (request: StartBackgroundTask, path: Path.Path) =>
   Effect.gen(function* () {
-    const command = request.command.trim();
-    if (!command) return yield* invalidCommand("Background command must not be empty.");
+    // Whitespace can be shell syntax, such as an escaped trailing space, so the command runs as
+    // submitted; trimming only detects a blank one.
+    const command = request.command;
+    if (!command.trim()) return yield* invalidCommand("Background command must not be empty.");
     if (command.length > BACKGROUND_TASK_FIELD_BOUNDS.maxCommandChars)
       return yield* invalidCommand(
         `Background command must not exceed ${BACKGROUND_TASK_FIELD_BOUNDS.maxCommandChars} characters.`,

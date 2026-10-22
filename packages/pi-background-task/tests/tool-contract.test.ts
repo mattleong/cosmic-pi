@@ -23,8 +23,10 @@ import {
 import type { BackgroundTaskToolInput } from "../src/tools/schema.ts";
 import {
   provideTaskService,
+  taskLogs,
   taskServiceDouble,
   taskServiceRunner,
+  taskStop,
   taskWait,
 } from "./support/task-service-double.ts";
 
@@ -87,23 +89,30 @@ describe("background_task contract", () => {
       const services: ServiceOverrides = {
         start: () => Effect.succeed(task({ state: "starting" })),
         status: () => Effect.succeed(task()),
-        stop: () => Effect.succeed(task({ state: "stopped", endedAt: 300, signal: "SIGTERM" })),
+        stop: () =>
+          Effect.succeed(taskStop(task({ state: "stopped", endedAt: 300, signal: "SIGTERM" }))),
         list: () => Effect.succeed([task(), failed]),
         stopAll: () => Effect.succeed([task({ state: "stopped", endedAt: 300, exitCode: null })]),
         logs: () =>
-          Effect.succeed({
-            id: "task-1",
-            state: "running",
-            nextCursor: 4,
-            earliestAvailableCursor: 2,
-            droppedBytes: 0,
-            events: [event(2, "ready\n")],
-          }),
+          Effect.succeed(
+            taskLogs(
+              {
+                id: "task-1",
+                state: "running",
+                nextCursor: 4,
+                earliestAvailableCursor: 1,
+                droppedBytes: 0,
+                retainedBytes: 6,
+                events: [event(2, "ready\n")],
+              },
+              task(),
+            ),
+          ),
         wait: () =>
           Effect.succeed(
             taskWait(task(), "matched", {
               nextCursor: 4,
-              earliestAvailableCursor: 2,
+              earliestAvailableCursor: 1,
               matchCursor: 2,
             }),
           ),
@@ -138,7 +147,12 @@ describe("background_task contract", () => {
         "task-2",
       ]);
       const wait = (yield* execute(inputs[6]!, services)).contract;
-      expect(wait).toMatchObject({ outcome: "matched", matchCursor: 2, task: { id: "task-1" } });
+      expect(wait).toMatchObject({
+        outcome: "matched",
+        matchCursor: 2,
+        task: { id: "task-1" },
+        appliedWaitSeconds: 30,
+      });
       expect((yield* execute({ action: "clear" }, services)).contract).toMatchObject({
         removed: 2,
       });
@@ -200,8 +214,9 @@ describe("background_task contract", () => {
       expect(contract.task.cause).toMatch(/^FAIL auth password=/u);
       expect(contract.task.name!.length).toBeLessThanOrEqual(256);
       expect(contract.task.error!.length).toBeLessThanOrEqual(2_048);
-      expect(serialize(result.details)).not.toContain("FAIL auth");
-      expect(result.details).toMatchObject({ causes: [{ id: "task-1" }] });
+      // Details keep the same redacted cause for rendering, never the raw secret.
+      expect(serialize(result.details)).not.toContain("cause-secret");
+      expect(result.details).toMatchObject({ snapshot: { failureCause: contract.task.cause } });
 
       const blank = task({ name: "\u001b[0m  ", signal: "", error: "\t" });
       const projected = (yield* execute(

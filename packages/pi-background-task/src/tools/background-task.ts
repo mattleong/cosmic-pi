@@ -102,13 +102,13 @@ export function registerBackgroundTaskTool(
     name: "background_task",
     label: "Background Task",
     description:
-      "Start and manage session-scoped local background commands. Actions: start, list, status, logs, wait, stop, stop_all, clear. Output is bounded; tasks are terminated when the Pi session closes.",
+      "Start and manage session-scoped local background commands. Actions: start, list, status, logs, wait, stop, stop_all, clear. Each action accepts only its own parameters and rejects the rest. Output is bounded; each task's process group is terminated when the Pi session closes, but processes that start their own session or process group, such as daemons, are not tracked.",
     promptSnippet: "Start and manage long-running local commands without blocking the current turn",
     promptGuidelines: [
       "Use background_task only when a server, watcher, long test suite, or other command can run independently; use bash when validation or the next step must finish before responding.",
-      "After starting a background task, continue independent work. At a dependency barrier, use wait once instead of polling status or logs.",
-      "Use logs only when output is needed for a decision, the task fails, or the user asks. For one bounded snapshot, omit afterCursor and set a small tailLines value. For incremental reads, set afterCursor to the previous nextCursor and optionally waitSeconds; tailLines does not apply when afterCursor is set.",
-      "Stop background tasks when they are no longer needed; every task is terminated when the Pi session is replaced or shut down.",
+      "After starting a background task, continue independent work. At a dependency barrier, use wait instead of polling status or logs. The maxWaitSeconds setting (30 seconds by default) caps every wait, and the result reports the applied limit. A timeout leaves the task running; call wait again until it matches or completes. Output waits match the plain text that logs shows within one stream, without the [stderr] label; set afterCursor to an earlier nextCursor to wait only for new output, because earlier retained output can match immediately.",
+      "Use logs only when output is needed for a decision, the task fails, or the user asks. For one bounded snapshot, omit afterCursor and set a small tailLines value. For incremental reads, set afterCursor to the previous nextCursor and optionally waitSeconds; don't combine tailLines with afterCursor.",
+      "Stop background tasks when they are no longer needed; every task's process group is terminated when the Pi session is replaced or shut down. Run services in the foreground: daemonized or detached processes escape that cleanup.",
       "Native codemode receives version-1 structured results. Print successful task IDs immediately and check the contract envelope before using them. A task's finished flag means terminal state, not command success or cleanup confirmation.",
       "Rejected or cancelled calls do not roll back admitted starts or stop signals. Hand uncertainty to the main agent for list/status recovery before replaying a command. Task IDs can be reused after reload or tree navigation; discard old workflow checkpoints.",
     ],

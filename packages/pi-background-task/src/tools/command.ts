@@ -3,11 +3,12 @@ import {
   DEFAULT_MAX_LINES,
   truncateHead,
   truncateLine,
-  truncateTail,
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
-import { sanitizeTerminalLine, countLabel, utf8ByteLength } from "pi-cosmic-core";
+import * as Record from "effect/Record";
+import { sanitizeTerminalLine, countLabel, formatBytes, utf8ByteLength } from "pi-cosmic-core";
+import { BACKGROUND_TASK_FIELD_BOUNDS } from "../task/bounds.ts";
 import { InvalidBackgroundCommandError } from "../task/errors.ts";
 import {
   discardedOutputText,
@@ -20,17 +21,19 @@ import {
   type StartBackgroundTask,
   type WaitForBackgroundTask,
 } from "../task/model.ts";
-import type { BackgroundTaskDetailsSchema } from "../task/schema.ts";
-import { BackgroundTaskService } from "../task/service.ts";
+import { BACKGROUND_TASK_ACTIONS, type BackgroundTaskDetailsSchema } from "../task/schema.ts";
+import { BackgroundTaskService, type BackgroundTaskFilter } from "../task/service.ts";
 import {
   clearContract,
-  combinedLogOutput,
   logsContract,
+  redactedLine,
+  stopContract,
   taskActionContract,
   tasksActionContract,
   waitContract,
 } from "./contract.ts";
 import type { BackgroundTaskContract } from "./contract-schema.ts";
+import { pageLogSlice, pageOmission, type LogPageOmission } from "./log-page.ts";
 import type { BackgroundTaskToolInput } from "./schema.ts";
 
 export type BackgroundTaskToolDetails = typeof BackgroundTaskDetailsSchema.Type;
@@ -41,14 +44,68 @@ export interface BackgroundTaskContractResult {
   readonly contract: BackgroundTaskContract;
 }
 
-const required = (
+type BackgroundTaskAction = BackgroundTaskToolInput["action"];
+type BackgroundTaskField = Exclude<keyof BackgroundTaskToolInput, "action">;
+
+/** A non-blank value, as submitted. */
+const present = (
   value: string | undefined,
   field: string,
-  action: BackgroundTaskToolInput["action"],
+  action: BackgroundTaskAction,
 ): Effect.Effect<string, InvalidBackgroundCommandError> =>
   value?.trim()
-    ? Effect.succeed(value.trim())
+    ? Effect.succeed(value)
     : new InvalidBackgroundCommandError({ message: `The ${action} action requires ${field}.` });
+
+const required = (value: string | undefined, field: string, action: BackgroundTaskAction) =>
+  Effect.map(present(value, field, action), (text) => text.trim());
+
+// The flat parameter schema stays provider-portable; each action accepts only its own fields.
+const FIELD_ACTIONS = {
+  command: ["start"],
+  cwd: ["start"],
+  name: ["start"],
+  timeoutSeconds: ["start"],
+  id: ["status", "logs", "wait", "stop"],
+  state: ["list"],
+  until: ["wait"],
+  contains: ["wait"],
+  afterCursor: ["logs", "wait"],
+  tailLines: ["logs"],
+  waitSeconds: ["logs", "wait"],
+  force: ["stop", "stop_all"],
+} as const satisfies {
+  readonly [Field in BackgroundTaskField]: ReadonlyArray<BackgroundTaskAction>;
+};
+
+const UNKNOWN_ACTION = "Unknown background task action.";
+
+const isBackgroundTaskAction = (action: string): action is BackgroundTaskAction =>
+  BACKGROUND_TASK_ACTIONS.some((known) => known === action);
+
+const fieldList = (fields: ReadonlyArray<string>): string =>
+  fields.length < 3
+    ? fields.join(" or ")
+    : `${fields.slice(0, -1).join(", ")}, or ${fields.at(-1) ?? ""}`;
+
+const invalidCommand = (message: string) =>
+  Effect.fail(new InvalidBackgroundCommandError({ message }));
+
+const validateFields = (
+  input: BackgroundTaskToolInput,
+): Effect.Effect<void, InvalidBackgroundCommandError> => {
+  const { action } = input;
+  if (!isBackgroundTaskAction(action)) return invalidCommand(UNKNOWN_ACTION);
+  const rejected = Record.keys(FIELD_ACTIONS).filter(
+    (field) =>
+      input[field] !== undefined && !FIELD_ACTIONS[field].some((accepted) => accepted === action),
+  );
+  if (rejected.length > 0)
+    return invalidCommand(`The ${action} action does not accept ${fieldList(rejected)}.`);
+  if (input.afterCursor !== undefined && input.tailLines !== undefined)
+    return invalidCommand("The logs action accepts afterCursor or tailLines, not both.");
+  return Effect.void;
+};
 
 const MAX_TASK_LINE_CHARS = 8_192;
 const ERROR_PREFIX = "\n  error: ";
@@ -69,53 +126,40 @@ const formatBackgroundTask = (task: BackgroundTaskSnapshot): string => {
 const boundedText = (text: string, maxBytes: number): string =>
   truncateHead(text, { maxLines: DEFAULT_MAX_LINES, maxBytes }).content;
 
-interface CauseText {
-  readonly id: string;
-  readonly start: number;
-  readonly end: number;
-  readonly cause: string;
-}
-interface TaskText {
-  readonly text: string;
-  readonly causes: ReadonlyArray<CauseText>;
-}
-
 const CAUSE_PREFIX = "\n  cause: ";
 
+// Details keep the same short, redacted cause that the text shows, so rendering never
+// depends on the result text a tool_result hook may have rewritten.
 const detailsSnapshot = ({
-  failureCause: _cause,
+  failureCause,
   ...snapshot
-}: BackgroundTaskStatus): BackgroundTaskSnapshot => snapshot;
-
-const withCause = (line: string, task: BackgroundTaskStatus): TaskText => {
-  if (!task.failureCause) return { text: line, causes: [] };
-  const cause = sanitizeTerminalLine(task.failureCause);
-  const start = line.length + CAUSE_PREFIX.length;
-  return {
-    text: `${line}${CAUSE_PREFIX}${cause}`,
-    causes: [{ id: task.id, start, end: start + cause.length, cause }],
-  };
+}: BackgroundTaskStatus): BackgroundTaskSnapshot => {
+  const cause = redactedLine(failureCause, BACKGROUND_TASK_FIELD_BOUNDS.maxErrorChars);
+  return cause === undefined ? snapshot : { ...snapshot, failureCause: cause };
 };
 
-const causeSpans = (text: string, causes: ReadonlyArray<CauseText>) => {
-  const kept = causes.flatMap(({ id, start, end, cause }) =>
-    text.slice(start, end) === cause ? [{ id, start, end }] : [],
-  );
-  return kept.length > 0 ? { causes: kept } : {};
-};
+const withCause = (line: string, task: BackgroundTaskSnapshot): string =>
+  task.failureCause ? `${line}${CAUSE_PREFIX}${task.failureCause}` : line;
 
 const omittedMarker = (count: number) => `[${countLabel(count, "background task")} omitted]`;
 
-const formatTaskList = (tasks: ReadonlyArray<BackgroundTaskStatus>, maxBytes: number): TaskText => {
-  if (tasks.length === 0)
-    return { text: boundedText("No background tasks.", maxBytes), causes: [] };
+const EMPTY_LISTS = {
+  active: "No active background tasks.",
+  completed: "No completed background tasks.",
+  all: "No background tasks.",
+} as const satisfies { readonly [Filter in BackgroundTaskFilter]: string };
+
+const formatTaskList = (
+  tasks: ReadonlyArray<BackgroundTaskSnapshot>,
+  filter: BackgroundTaskFilter,
+  maxBytes: number,
+): string => {
+  if (tasks.length === 0) return boundedText(EMPTY_LISTS[filter], maxBytes);
   const lines: string[] = [];
-  const causes: CauseText[] = [];
   let used = 0;
-  let length = 0;
   for (const [index, task] of tasks.entries()) {
     const separatorBytes = lines.length === 0 ? 0 : 1;
-    const { text: line, causes: lineCauses } = withCause(formatBackgroundTask(task), task);
+    const line = withCause(formatBackgroundTask(task), task);
     const lineBytes = utf8ByteLength(line);
     const omittedAfter = tasks.length - index - 1;
     const reservedMarkerBytes =
@@ -125,57 +169,77 @@ const formatTaskList = (tasks: ReadonlyArray<BackgroundTaskStatus>, maxBytes: nu
       if (used + separatorBytes + utf8ByteLength(marker) <= maxBytes) lines.push(marker);
       break;
     }
-    const offset = length + separatorBytes;
-    for (const span of lineCauses)
-      causes.push({ ...span, start: span.start + offset, end: span.end + offset });
     lines.push(line);
     used += separatorBytes + lineBytes;
-    length = offset + line.length;
   }
-  return { text: lines.join("\n"), causes };
+  return lines.join("\n");
 };
 
-const formatWait = (result: BackgroundTaskStatusWait): string => {
+const formatWait = (result: BackgroundTaskStatusWait, requestedSeconds?: number): string => {
   const cursor = result.matchCursor ?? result.nextCursor;
+  const applied = result.appliedWaitSeconds;
+  const capped =
+    requestedSeconds !== undefined && applied < requestedSeconds
+      ? ` (capped from ${requestedSeconds}s by maxWaitSeconds)`
+      : "";
   return sanitizeTerminalLine(
-    `${result.id} ${result.outcome} state=${result.snapshot.state} cursor=${cursor}`,
+    `${result.id} ${result.outcome} state=${result.snapshot.state} cursor=${cursor} limit=${applied}s${capped}`,
   );
 };
 
 const NO_NEW_OUTPUT = "(no new output)";
+// Room for the paging notice line, whose cursors and sizes are known only after paging.
+const LOG_NOTICE_RESERVE_BYTES = 320;
+const LOG_HEADER_LINES = 3;
 
-const formatLogs = (slice: BackgroundLogSlice, content: string, maxBytes: number) => {
-  const metadata = `[${slice.id} state=${slice.state} cursor=${slice.nextCursor} earliest=${slice.earliestAvailableCursor}]\n`;
-  const gap = slice.droppedBytes > 0 ? `[${discardedOutputText(slice.droppedBytes)}]\n` : "";
-  const header = `${metadata}${gap}`;
-  if (!content) return { text: boundedText(`${header}${NO_NEW_OUTPUT}`, maxBytes) };
-  const headerBytes = utf8ByteLength(header);
-  const whole = truncateTail(content, {
-    maxLines: DEFAULT_MAX_LINES - (gap ? 2 : 1),
-    maxBytes: Math.max(0, maxBytes - headerBytes),
-  });
-  return {
-    text: headerBytes > maxBytes ? boundedText(header, maxBytes) : `${header}${whole.content}`,
-    truncation: whole.truncated
-      ? {
-          truncated: true,
-          outputBytes: whole.outputBytes,
-          totalBytes: whole.totalBytes,
-          outputLines: whole.content ? whole.outputLines : 0,
-          totalLines: whole.totalLines,
-        }
-      : undefined,
-  };
+const pageNotice = (truncation: LogPageOmission, cutCursor: number | undefined): string => {
+  const parts: string[] = [];
+  if (truncation.cutBytes !== undefined && cutCursor !== undefined)
+    parts.push(
+      `Cursor ${cutCursor} is larger than this result; ${formatBytes(truncation.cutBytes)} of it is not shown and cannot be paged.`,
+    );
+  if (truncation.omittedBytes > 0)
+    parts.push(
+      truncation.omitted === "later"
+        ? `More output follows: ${formatBytes(truncation.omittedBytes)} retained after cursor ${truncation.resumeAfterCursor}. Continue with afterCursor=${truncation.resumeAfterCursor}.`
+        : `Showing the newest output; ${formatBytes(truncation.omittedBytes)} of earlier retained output is not shown. Read it from afterCursor=${truncation.resumeAfterCursor}.`,
+    );
+  return `[${parts.join(" ")}]\n`;
 };
 
+const formatLogs = (slice: BackgroundLogSlice, direction: "forward" | "tail", maxBytes: number) => {
+  const header = (cursor: number) =>
+    `[${slice.id} state=${slice.state} cursor=${cursor} earliest=${slice.earliestAvailableCursor}]\n`;
+  const loss =
+    slice.droppedBytes > 0
+      ? `[${discardedOutputText(slice.droppedBytes)}; it cannot be recovered.]\n`
+      : "";
+  const reserved =
+    utf8ByteLength(header(slice.nextCursor)) + utf8ByteLength(loss) + LOG_NOTICE_RESERVE_BYTES;
+  const page = pageLogSlice(slice, direction, {
+    maxBytes: Math.max(0, maxBytes - reserved),
+    maxLines: DEFAULT_MAX_LINES - LOG_HEADER_LINES,
+  });
+  const truncation = pageOmission(slice, direction, page);
+  const notice = truncation ? pageNotice(truncation, page.cut?.cursor) : "";
+  const text = `${header(page.nextCursor)}${loss}${notice}${page.output || NO_NEW_OUTPUT}`;
+  return { text: boundedText(text, maxBytes), nextCursor: page.nextCursor, truncation };
+};
+
+/** The output lines of a logs result, without its header and notice lines. */
 export const backgroundLogLines = (
   text: string,
-  logs: Pick<BackgroundLogMetadata, "droppedBytes">,
+  details: {
+    readonly logs: Pick<BackgroundLogMetadata, "droppedBytes">;
+    readonly truncation?: unknown;
+  },
 ): ReadonlyArray<string> => {
+  const headerLines =
+    1 + Number(details.logs.droppedBytes > 0) + Number(details.truncation !== undefined);
   const lines = text
     .replace(/\r?\n$/u, "")
     .split(/\r?\n/u)
-    .slice(logs.droppedBytes > 0 ? 2 : 1);
+    .slice(headerLines);
   return lines.length === 1 && lines[0] === NO_NEW_OUTPUT ? [] : lines;
 };
 
@@ -187,19 +251,12 @@ const reply = (
 
 const taskReply = (
   line: string,
-  task: BackgroundTaskStatus,
+  task: BackgroundTaskSnapshot,
   maxTextBytes: number,
-  details: (snapshot: BackgroundTaskSnapshot) => BackgroundTaskToolDetails,
+  details: BackgroundTaskToolDetails,
   contract: BackgroundTaskContract,
-): BackgroundTaskContractResult => {
-  const composed = withCause(line, task);
-  const text = boundedText(composed.text, maxTextBytes);
-  return reply(
-    text,
-    { ...details(detailsSnapshot(task)), ...causeSpans(text, composed.causes) },
-    contract,
-  );
-};
+): BackgroundTaskContractResult =>
+  reply(boundedText(withCause(line, task), maxTextBytes), details, contract);
 
 const logsRequest = (input: BackgroundTaskToolInput) =>
   Effect.map(
@@ -236,82 +293,95 @@ export const executeBackgroundTaskCommand = (
   maxTextBytes = DEFAULT_MAX_BYTES,
 ) =>
   Effect.gen(function* () {
+    yield* validateFields(input);
     const service = yield* BackgroundTaskService;
     const path = yield* Path.Path;
     switch (input.action) {
       case "start": {
         const name = input.name?.trim();
         const request: StartBackgroundTask = {
-          command: yield* required(input.command, "command", input.action),
+          command: yield* present(input.command, "command", input.action),
           cwd: path.resolve(sessionCwd, input.cwd ?? "."),
           ...(name && { name }),
           ...(input.timeoutSeconds !== undefined && {
             timeoutSeconds: input.timeoutSeconds,
           }),
         };
-        const snapshot = yield* service.start(request);
-        return reply(
-          boundedText(`Started ${formatBackgroundTask(snapshot)}`, maxTextBytes),
-          { action: "start", snapshot: detailsSnapshot(snapshot) },
-          taskActionContract("start", snapshot),
+        const task = yield* service.start(request);
+        const snapshot = detailsSnapshot(task);
+        return taskReply(
+          `Started ${formatBackgroundTask(snapshot)}`,
+          snapshot,
+          maxTextBytes,
+          { action: "start", snapshot },
+          taskActionContract("start", task),
         );
       }
       case "list": {
-        const tasks = yield* service.list(input.state ?? "all");
-        const listed = formatTaskList(tasks, maxTextBytes);
+        const filter = input.state ?? "all";
+        const tasks = yield* service.list(filter);
+        const snapshots = tasks.map(detailsSnapshot);
         return reply(
-          listed.text,
-          {
-            action: input.action,
-            tasks: tasks.map(detailsSnapshot),
-            ...causeSpans(listed.text, listed.causes),
-          },
+          formatTaskList(snapshots, filter, maxTextBytes),
+          { action: input.action, tasks: snapshots },
           tasksActionContract(input.action, tasks),
         );
       }
       case "status": {
         const task = yield* service.status(yield* required(input.id, "id", input.action));
+        const snapshot = detailsSnapshot(task);
         return taskReply(
-          formatBackgroundTask(task),
-          task,
+          formatBackgroundTask(snapshot),
+          snapshot,
           maxTextBytes,
-          (snapshot) => ({ action: "status", snapshot }),
+          { action: "status", snapshot },
           taskActionContract("status", task),
         );
       }
       case "logs": {
-        const slice = yield* service.logs(yield* logsRequest(input));
-        const output = combinedLogOutput(slice.events);
-        const { events: _events, ...logs } = slice;
-        const { text, truncation } = formatLogs(slice, output, maxTextBytes);
+        const request = yield* logsRequest(input);
+        const slice = yield* service.logs(request);
+        const direction = request.afterCursor === undefined ? "tail" : "forward";
+        const { text, nextCursor, truncation } = formatLogs(slice, direction, maxTextBytes);
+        const { id, state, earliestAvailableCursor, droppedBytes } = slice;
+        const { name, command } = slice.task;
         return reply(
           text,
-          { action: input.action, logs, ...(truncation && { truncation }) },
-          logsContract(slice, output),
+          {
+            action: input.action,
+            logs: { id, state, nextCursor, earliestAvailableCursor, droppedBytes },
+            task: { ...(name !== undefined && { name }), command },
+            ...(truncation && { truncation }),
+          },
+          logsContract(slice, direction),
         );
       }
       case "wait": {
         const wait = yield* service.wait(yield* waitRequest(input));
         const { appliedWaitSeconds, ...member } = wait;
+        const snapshot = detailsSnapshot(wait.snapshot);
         return taskReply(
-          formatWait(wait),
-          wait.snapshot,
+          formatWait(wait, input.waitSeconds),
+          snapshot,
           maxTextBytes,
-          (snapshot) => ({ action: "wait", wait: { ...member, snapshot }, appliedWaitSeconds }),
+          { action: "wait", wait: { ...member, snapshot }, appliedWaitSeconds },
           waitContract(wait),
         );
       }
       case "stop": {
-        const task = yield* service.stop(
+        const stop = yield* service.stop(
           yield* required(input.id, "id", input.action),
           input.force,
         );
+        // Only the service knows whether the task finished before this stop landed.
+        const { alreadyFinished } = stop;
+        const snapshot = detailsSnapshot(stop.snapshot);
         return taskReply(
-          `Stopped ${formatBackgroundTask(task)}`,
-          task,
+          `${alreadyFinished ? "Already finished; nothing to stop:" : "Stopped"} ${formatBackgroundTask(snapshot)}`,
+          snapshot,
           maxTextBytes,
-          (snapshot) => ({ action: "stop", snapshot }),
-          taskActionContract("stop", task),
+          { action: "stop", snapshot, alreadyFinished },
+          stopContract(stop),
         );
       }
       case "stop_all": {
@@ -331,7 +401,5 @@ export const executeBackgroundTaskCommand = (
         );
       }
     }
-    return yield* new InvalidBackgroundCommandError({
-      message: "Unknown background task action.",
-    });
+    return yield* new InvalidBackgroundCommandError({ message: UNKNOWN_ACTION });
   });

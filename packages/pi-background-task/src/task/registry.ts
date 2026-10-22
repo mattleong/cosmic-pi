@@ -7,17 +7,21 @@ import type {
   LocalProcessHandle,
 } from "../boundary/local-process.ts";
 import type { BackgroundRuntimeClosedError } from "./errors.ts";
-import { LogBuffer, readLogBuffer } from "./log-buffer.ts";
+import { LogBuffer, ownedText, readLogBuffer } from "./log-buffer.ts";
 import {
   isActiveTaskState,
   sortTasksByActivity,
+  type BackgroundLogStream,
   type BackgroundTaskProjection,
   type BackgroundTaskStatus,
 } from "./model.ts";
+import { plainTerminalText, TerminalTextNormalizer } from "./terminal-text.ts";
 
 export interface TaskRecord {
   snapshot: BackgroundTaskStatus;
   readonly logs: LogBuffer;
+  /** Per-stream intake state; escape sequences split across writes stay with their stream. */
+  readonly terminal: Readonly<Record<BackgroundLogStream, TerminalTextNormalizer>>;
   wake: Deferred.Deferred<void>;
   readonly completion: Deferred.Deferred<BackgroundTaskStatus>;
   readonly handleReady: Deferred.Deferred<
@@ -25,6 +29,8 @@ export interface TaskRecord {
     LocalProcessError | BackgroundRuntimeClosedError
   >;
   terminalOutcome?: "stopped" | "timed_out";
+  /** The first stop's grace window is still running; internal stops join it. */
+  graceWindowOpen: boolean;
   ingressDroppedObserved: number;
   awaiters: number;
 }
@@ -34,15 +40,17 @@ export type TaskRegistry = Map<string, TaskRecord>;
 export const taskRecord = (snapshot: BackgroundTaskStatus): TaskRecord => ({
   snapshot,
   logs: new LogBuffer(),
+  terminal: { stdout: new TerminalTextNormalizer(), stderr: new TerminalTextNormalizer() },
   wake: Deferred.makeUnsafe<void>(),
   completion: Deferred.makeUnsafe<BackgroundTaskStatus>(),
   handleReady: Deferred.makeUnsafe(),
+  graceWindowOpen: false,
   ingressDroppedObserved: 0,
   awaiters: 0,
 });
 
 export const logFields = (logs: LogBuffer) => ({
-  logCursor: logs.nextCursor - 1,
+  logCursor: logs.latestCursor,
   droppedLogBytes: logs.droppedBytes,
 });
 
@@ -54,7 +62,7 @@ export const wakeTaskRecord = (record: TaskRecord) => {
 
 const recentOutputLines = (record: TaskRecord): string[] =>
   readLogBuffer(record.snapshot.id, record.logs, record.snapshot.state, { tailLines: 200 })
-    .events.map((event) => event.text)
+    .events.map((event) => plainTerminalText(event.text))
     .join("")
     .split(/\r?\n/u);
 
@@ -64,8 +72,9 @@ export const completedSnapshot = (
   endedAt: number,
 ): BackgroundTaskStatus => {
   const state = record.terminalOutcome ?? (exit.exitCode !== 0 ? "failed" : "exited");
-  const failureCause =
-    state === "failed" ? outputFailureLine(recentOutputLines(record)) : undefined;
+  // The cause outlives the output it was read from, so it keeps its own copy.
+  const cause = state === "failed" ? outputFailureLine(recentOutputLines(record)) : undefined;
+  const failureCause = cause && ownedText(cause);
   return {
     ...record.snapshot,
     state,
@@ -106,13 +115,13 @@ const oldestLogOwner = (tasks: TaskRegistry): TaskRecord | undefined => {
 };
 
 export const enforceRetainedLogBudget = (tasks: TaskRegistry, budget: number) => {
-  let total = [...tasks.values()].reduce((sum, record) => sum + record.logs.bytes, 0);
+  let total = [...tasks.values()].reduce((sum, record) => sum + record.logs.chargedBytes, 0);
   while (total > budget) {
     const selected = oldestLogOwner(tasks);
-    const dropped = selected?.logs.oldestEvent;
-    if (!selected || !dropped) break;
+    if (!selected?.logs.oldestEvent) break;
+    const before = selected.logs.chargedBytes;
     selected.logs.dropOldest();
-    total -= dropped.bytes;
+    total -= before - selected.logs.chargedBytes;
     selected.snapshot = { ...selected.snapshot, ...logFields(selected.logs) };
     wakeTaskRecord(selected);
   }

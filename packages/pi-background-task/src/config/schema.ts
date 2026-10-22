@@ -1,14 +1,21 @@
-export interface BackgroundTaskConfig {
-  readonly enabled: boolean;
-  readonly maxRunning: number;
-  readonly maxRetained: number;
-  readonly logBufferBytesPerTask: number;
-  readonly totalLogBufferBytes: number;
-  readonly stopGraceMs: number;
-  readonly maxWaitSeconds: number;
-  readonly showFooterStatus: boolean;
-  readonly shellPath?: string;
-}
+import * as Schema from "effect/Schema";
+
+export const BackgroundTaskConfigSchema = Schema.Struct({
+  enabled: Schema.Boolean,
+  maxRunning: Schema.Finite,
+  maxRetained: Schema.Finite,
+  logBufferBytesPerTask: Schema.Finite,
+  totalLogBufferBytes: Schema.Finite,
+  stopGraceMs: Schema.Finite,
+  maxWaitSeconds: Schema.Finite,
+  showFooterStatus: Schema.Boolean,
+  shellPath: Schema.optionalKey(Schema.String),
+});
+
+export type BackgroundTaskConfig = typeof BackgroundTaskConfigSchema.Type;
+export type BackgroundTaskSettingId = keyof BackgroundTaskConfig;
+export type BackgroundTaskSettingValue<Id extends BackgroundTaskSettingId> =
+  Required<BackgroundTaskConfig>[Id];
 
 export const DEFAULT_BACKGROUND_TASK_CONFIG: BackgroundTaskConfig = {
   enabled: true,

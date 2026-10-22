@@ -9,7 +9,11 @@ import {
 } from "pi-code-previews/testing";
 import { extensionContextFixture } from "pi-cosmic-core/testing";
 import { describe, it } from "@effect/vitest";
-import { backgroundTaskNotFound, InvalidBackgroundCwdError } from "../src/task/errors.ts";
+import {
+  afterCursorAhead,
+  backgroundTaskNotFound,
+  InvalidBackgroundCwdError,
+} from "../src/task/errors.ts";
 import type { BackgroundLogEvent, BackgroundTaskStatus } from "../src/task/model.ts";
 import type { BackgroundTaskServiceContract } from "../src/task/service.ts";
 import { registerBackgroundTaskTool } from "../src/tools/background-task.ts";
@@ -21,6 +25,7 @@ import {
   taskServiceDouble,
   taskServiceRunner,
   taskStatus,
+  taskStop,
   taskWait,
 } from "./support/task-service-double.ts";
 
@@ -119,6 +124,15 @@ const unnamed = task({
   state: "failed",
   endedAt: 2,
   exitCode: 127,
+});
+const errorNamed = task({
+  id: "task-14",
+  name: "BuildError",
+  command: "pnpm build:errors",
+  state: "failed",
+  endedAt: 2,
+  exitCode: 2,
+  failureCause: "src/index.ts:4 Cannot find name 'foo'",
 });
 const byId = new Map(
   [
@@ -221,6 +235,7 @@ const scenarios: ReadonlyArray<Scenario> = [
         ),
     },
   },
+  { title: "running task", input: { action: "status", id: "task-3" } },
   { title: "finished task", input: { action: "status", id: "task-8" } },
   { title: "failed task with a cause", input: { action: "status", id: "task-1" } },
   { title: "task killed without output", input: { action: "status", id: "task-2" } },
@@ -234,12 +249,17 @@ const scenarios: ReadonlyArray<Scenario> = [
   {
     title: "short log slice",
     input: { action: "logs", id: "task-3", tailLines: 5 },
-    service: { logs: () => Effect.succeed(slice("task-3", "running", serverLog, { from: 9 })) },
+    service: {
+      logs: () => Effect.succeed(slice("task-3", "running", serverLog, { from: 9, task: running })),
+    },
   },
   {
     title: "long log slice",
     input: { action: "logs", id: "task-3", tailLines: 30 },
-    service: { logs: () => Effect.succeed(slice("task-3", "running", requestLog, { from: 40 })) },
+    service: {
+      logs: () =>
+        Effect.succeed(slice("task-3", "running", requestLog, { from: 40, task: running })),
+    },
   },
   {
     title: "logs after output was discarded",
@@ -247,24 +267,46 @@ const scenarios: ReadonlyArray<Scenario> = [
     service: {
       logs: () =>
         Effect.succeed(
-          slice("task-3", "running", requestLog.slice(0, 3), { from: 212, droppedBytes: 18_432 }),
+          slice("task-3", "running", requestLog.slice(0, 3), {
+            from: 212,
+            droppedBytes: 18_432,
+            task: running,
+          }),
         ),
     },
   },
   {
-    title: "log slice cut to the output limit",
+    title: "tail read that leaves earlier output out",
     input: { action: "logs", id: "task-9", tailLines: 3 },
-    service: { logs: () => Effect.succeed(slice("task-9", "running", bundleLog, { from: 7 })) },
+    service: {
+      logs: () => Effect.succeed(slice("task-9", "running", bundleLog, { from: 7, task: noisy })),
+    },
+  },
+  {
+    title: "log page with more output to read",
+    input: { action: "logs", id: "task-9", afterCursor: 6 },
+    service: {
+      logs: () => Effect.succeed(slice("task-9", "running", bundleLog, { from: 7, task: noisy })),
+    },
   },
   {
     title: "logs of a failed task",
     input: { action: "logs", id: "task-1", tailLines: 4 },
-    service: { logs: () => Effect.succeed(slice("task-1", "failed", testLog, { from: 9 })) },
+    service: {
+      logs: () => Effect.succeed(slice("task-1", "failed", testLog, { from: 9, task: failed })),
+    },
   },
   {
     title: "logs with no new output",
     input: { action: "logs", id: "task-3", afterCursor: 11, waitSeconds: 5 },
-    service: { logs: () => Effect.succeed(slice("task-3", "running", [], { from: 12 })) },
+    service: {
+      logs: () => Effect.succeed(slice("task-3", "running", [], { from: 12, task: running })),
+    },
+  },
+  {
+    title: "logs from a cursor ahead of the task's output",
+    input: { action: "logs", id: "task-3", afterCursor: 40 },
+    service: { logs: () => Effect.fail(afterCursorAhead("task-3", 40, 12)) },
   },
   {
     title: "wait in progress",
@@ -292,9 +334,23 @@ const scenarios: ReadonlyArray<Scenario> = [
     service: { wait: () => Effect.succeed(taskWait(running, "timeout")) },
   },
   {
+    title: "wait capped by the maxWaitSeconds setting",
+    input: { action: "wait", id: "task-3", until: "output", contains: "ready", waitSeconds: 120 },
+    service: { wait: () => Effect.succeed(taskWait(running, "timeout")) },
+  },
+  {
     title: "stop",
     input: { action: "stop", id: "task-3" },
-    service: { stop: () => Effect.succeed(stoppedServer) },
+    service: { stop: () => Effect.succeed(taskStop(stoppedServer)) },
+  },
+  {
+    title: "stop of a task that already finished",
+    input: { action: "stop", id: "task-8" },
+    service: { stop: () => Effect.succeed(taskStop(finished, true)) },
+  },
+  {
+    title: "stop all with a task ID it does not accept",
+    input: { action: "stop_all", id: "task-3" },
   },
   {
     title: "stop all",
@@ -307,6 +363,11 @@ const scenarios: ReadonlyArray<Scenario> = [
     service: { stopAll: () => Effect.succeed([]) },
   },
   { title: "list with failures", input: { action: "list" } },
+  {
+    title: "list with a task named like an error",
+    input: { action: "list", state: "completed" },
+    service: { list: () => Effect.succeed([errorNamed, finished]) },
+  },
   {
     title: "list of many tasks",
     input: { action: "list", state: "all" },
@@ -329,7 +390,7 @@ const scenarios: ReadonlyArray<Scenario> = [
   {
     title: "stop that could not confirm cleanup",
     input: { action: "stop", id: "task-4", force: true },
-    service: { stop: () => Effect.succeed(stopping) },
+    service: { stop: () => Effect.succeed(taskStop(stopping)) },
   },
   {
     title: "empty list",

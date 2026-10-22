@@ -4,6 +4,7 @@ import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import { vi } from "vitest";
 import { provideBuiltLayer, signalProcess } from "pi-cosmic-core";
 import {
   LocalProcess,
@@ -87,7 +88,7 @@ describe("local process boundary", () => {
     ),
   );
 
-  it.live("redacts the command when Effect reports a spawn failure", () =>
+  it.live("redacts the command when its shell cannot start", () =>
     withLocalProcess(
       Effect.gen(function* () {
         const result = yield* Effect.result(
@@ -183,9 +184,11 @@ describe("local process boundary", () => {
         );
         const descendant = Number(yield* firstOutput(handle));
         expect(Number.isSafeInteger(descendant)).toBe(true);
+        expect(yield* handle.leaderExited).toBe(false);
         yield* handle.terminate("graceful");
         const early = yield* handle.awaitExit.pipe(Effect.timeoutOption("300 millis"));
         expect(Option.isNone(early)).toBe(true);
+        expect(yield* handle.leaderExited).toBe(true);
         expect(processAlive(descendant)).toBe(true);
         yield* handle.terminate("force");
         const exit = yield* handle.awaitExit.pipe(Effect.timeout("5 seconds"));
@@ -193,5 +196,48 @@ describe("local process boundary", () => {
         expect(yield* awaitProcessDeath(descendant)).toBe(true);
       }),
     ),
+  );
+
+  it.live("counts queued output as dropped when its delivery is abandoned", () =>
+    withLocalProcess(
+      Effect.gen(function* () {
+        const handle = yield* spawnProcess(
+          `node -e "process.stdout.write('A'.repeat(1000)); setTimeout(() => {}, 200)"`,
+        );
+        yield* handle.awaitExit;
+        yield* handle.abandonOutput;
+        expect(handle.droppedOutputBytes()).toBe(1000);
+        const delivered = yield* handle.output.pipe(Stream.runCollect, Effect.timeout("1 second"));
+        expect([...delivered]).toEqual([]);
+      }),
+    ),
+  );
+
+  it.live("never signals a process group again after it settled, through scope release", () =>
+    Effect.gen(function* () {
+      const kill = yield* Effect.acquireRelease(
+        Effect.sync(() => vi.spyOn(process, "kill")),
+        (spy) => Effect.sync(() => spy.mockRestore()),
+      );
+      for (const [command, exitCode] of [
+        ["exit 0", 0],
+        ["exit 3", 3],
+      ] as const) {
+        const pid = yield* Effect.gen(function* () {
+          const handle = yield* spawnProcess(command);
+          expect(yield* handle.awaitExit).toEqual({ exitCode });
+          kill.mockClear();
+          yield* handle.terminate("graceful");
+          yield* handle.terminate("force");
+          // The scope that owns the process closes some time after it settled.
+          yield* Effect.sleep("100 millis");
+          return handle.pid;
+        }).pipe(Effect.scoped, provideBuiltLayer(LocalProcess.layer));
+        expect(
+          kill.mock.calls.filter(([target]) => Math.abs(target) === pid),
+          command,
+        ).toEqual([]);
+      }
+    }).pipe(Effect.scoped),
   );
 });

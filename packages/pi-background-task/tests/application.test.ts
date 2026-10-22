@@ -1,12 +1,16 @@
 import {
   createEventBus,
   type ExtensionAPI,
+  type ExtensionCommandContext,
   type ExtensionContext,
   type ExtensionToolContext,
   type ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import {
@@ -17,10 +21,15 @@ import {
   recordingExtensionHost,
   type DefaultedEventName,
 } from "pi-cosmic-core/testing";
-import { signalProcess } from "pi-cosmic-core";
+import {
+  JsonDocumentStore,
+  nodeFilePlatformLayer,
+  signalProcess,
+  type JsonObject,
+} from "pi-cosmic-core";
 import { fakeCustomSurfaceHost } from "pi-cosmic-ui/testing";
 import { fakeActivityHost } from "pi-cosmic-ui/activity/testing";
-import { vi } from "vitest";
+import { afterEach, vi } from "vitest";
 import {
   registerBackgroundTaskApplication,
   type BackgroundTaskApplicationBoundaries,
@@ -42,22 +51,55 @@ const context = (cwd: string) =>
 
 const decodeDetails = Schema.decodeUnknownSync(BackgroundTaskDetailsSchema);
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
+const useAgentDirectory = (directory: string) =>
+  Effect.sync(() => vi.stubEnv("PI_CODING_AGENT_DIR", directory));
+
+/**
+ * Registers the application against a scoped temporary agent directory, so the real runtime
+ * never reads the developer's settings or writes to their package log.
+ */
 const harness = (
   loadSettings: BackgroundTaskApplicationBoundaries["loadSettings"],
-  events: ExtensionAPI["events"] = createEventBus(),
-) => {
-  const host = recordingExtensionHost({}, { events });
-  registerBackgroundTaskApplication(host.pi, { loadSettings });
-  return {
-    tools: host.registrations,
-    execute: (input: BackgroundTaskToolInput, ctx: ExtensionToolContext) => {
-      const tool = host.registrations.findLast(({ name }) => name === "background_task");
-      if (!tool) return Promise.reject(new Error("background_task was not registered"));
-      return tool.execute("call", input, new AbortController().signal, undefined, ctx);
-    },
-    emit: (name: DefaultedEventName, ctx: ExtensionContext) => host.emit(name, ctx),
-  };
-};
+  options: { readonly events?: ExtensionAPI["events"]; readonly settings?: JsonObject } = {},
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const documents = yield* JsonDocumentStore;
+    const agentDirectory = yield* fs.makeTempDirectoryScoped({
+      prefix: "pi-background-application-",
+    });
+    const settingsPath = path.join(agentDirectory, "extensions", "pi-background-task.json");
+    if (options.settings) yield* documents.writeObject(settingsPath, options.settings);
+    yield* useAgentDirectory(agentDirectory);
+    // A regular file where the agent directory belongs makes session startup fail.
+    const blocker = path.join(agentDirectory, "not-a-directory");
+    const host = recordingExtensionHost({}, { events: options.events ?? createEventBus() });
+    registerBackgroundTaskApplication(host.pi, { loadSettings });
+    return {
+      tools: host.registrations,
+      execute: (input: BackgroundTaskToolInput, ctx: ExtensionToolContext) => {
+        const tool = host.registrations.findLast(({ name }) => name === "background_task");
+        if (!tool) return Promise.reject(new Error("background_task was not registered"));
+        return tool.execute("call", input, new AbortController().signal, undefined, ctx);
+      },
+      command: (args: string, ctx: ExtensionCommandContext) => {
+        const tasks = host.commands.get("tasks");
+        if (!tasks) return Promise.reject(new Error("/tasks was not registered"));
+        return Promise.resolve(tasks.handler(args, ctx));
+      },
+      emit: (name: DefaultedEventName, ctx: ExtensionContext) => host.emit(name, ctx),
+      globalSettings: documents.readObject(settingsPath),
+      breakAgentDirectory: documents
+        .writeObject(blocker, {})
+        .pipe(Effect.andThen(useAgentDirectory(blocker))),
+      restoreAgentDirectory: useAgentDirectory(agentDirectory),
+    };
+  }).pipe(Effect.provide(nodeFilePlatformLayer));
 
 const managerTask = (state: BackgroundTaskState): BackgroundTaskView => {
   const activeOrSettled = {
@@ -106,6 +148,7 @@ function tasksCommandHarness(
     clear: () => undefined,
   };
   registerTasksCommand(extension.pi, bridge, {
+    isAvailable: () => true,
     stop: () => Promise.resolve(),
     clear: () => Promise.resolve(),
     config: () => undefined,
@@ -150,7 +193,7 @@ describe("background-task Pi lifecycle", () => {
         const secondCwd = `${process.cwd()}/second-ready`;
         const entered = deferredPromise();
         let firstSignal: AbortSignal | undefined;
-        const app = harness((cwd, _trusted, signal) => {
+        const app = yield* harness((cwd, _trusted, signal) => {
           if (cwd !== firstCwd) return Promise.resolve();
           firstSignal = signal;
           entered.resolve();
@@ -176,7 +219,7 @@ describe("background-task Pi lifecycle", () => {
         const entered = deferredPromise();
         const replacement = deferredPromise();
         let loadCount = 0;
-        const app = harness(() => {
+        const app = yield* harness(() => {
           if (++loadCount === 1) return Promise.resolve();
           entered.resolve();
           return replacement.promise;
@@ -219,7 +262,7 @@ describe("background-task Pi lifecycle", () => {
   it.live("tree navigation terminates prior processes and starts a fresh registry", () =>
     Effect.gen(function* () {
       const activity = fakeActivityHost("tree-session");
-      const app = harness(() => Promise.resolve(), activity.events);
+      const app = yield* harness(() => Promise.resolve(), { events: activity.events });
       const ctx = extensionContextFixture({
         cwd: process.cwd(),
         signal: undefined,
@@ -303,7 +346,7 @@ describe("background-task Pi lifecycle", () => {
     Effect.gen(function* () {
       const entered = deferredPromise();
       let loaderSignal: AbortSignal | undefined;
-      const app = harness((_cwd, _trusted, signal) => {
+      const app = yield* harness((_cwd, _trusted, signal) => {
         loaderSignal = signal;
         entered.resolve();
         return Promise.race([]);
@@ -318,6 +361,129 @@ describe("background-task Pi lifecycle", () => {
       expect(loaderSignal?.aborted).toBe(true);
       expect(app.tools).toHaveLength(0);
     }),
+  );
+});
+
+const settingsContext = (ui: Partial<ExtensionUIContext>) =>
+  extensionContextFixture({
+    cwd: process.cwd(),
+    signal: undefined,
+    isProjectTrusted: () => false,
+    hasUI: true,
+    mode: "rpc",
+    ui,
+  });
+
+describe("background-task settings in a session", () => {
+  it.live.each([
+    { name: "default settings", settings: {}, footer: true, admits: true },
+    {
+      name: "showFooterStatus false",
+      settings: { showFooterStatus: false },
+      footer: false,
+      admits: true,
+    },
+    { name: "enabled false", settings: { enabled: false }, footer: false, admits: false },
+  ])(
+    "$name in the global file governs the footer and task admission",
+    ({ settings, footer, admits }) =>
+      Effect.gen(function* () {
+        const app = yield* harness(() => Promise.resolve(), { settings });
+        const setStatus = vi.fn<ExtensionUIContext["setStatus"]>();
+        const ctx = settingsContext({ setStatus });
+        const shown = () => setStatus.mock.calls.filter(([, text]) => text !== undefined);
+        yield* Effect.gen(function* () {
+          yield* Effect.promise(() => app.emit("session_start", ctx));
+          const started = yield* Effect.exit(
+            Effect.tryPromise(() => app.execute({ action: "start", command: "sleep 30" }, ctx)),
+          );
+          expect(Exit.isSuccess(started)).toBe(admits);
+          expect(shown().length > 0).toBe(footer);
+
+          yield* Effect.promise(() => app.execute({ action: "stop_all" }, ctx));
+          expect(setStatus.mock.calls.at(-1)?.[1]).toBeUndefined();
+          const listed = yield* Effect.promise(() => app.execute({ action: "list" }, ctx));
+          expect(decodeDetails(listed.details)).toMatchObject({
+            action: "list",
+            tasks: admits ? [expect.objectContaining({ state: "stopped" })] : [],
+          });
+        }).pipe(Effect.ensuring(Effect.promise(() => app.emit("session_shutdown", ctx))));
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("/tasks settings writes the session's global file only while the runtime runs", () =>
+    Effect.gen(function* () {
+      const app = yield* harness(() => Promise.resolve(), {
+        settings: { stopGraceMs: 1_000, unrelated: true },
+      });
+      const notify = vi.fn<ExtensionUIContext["notify"]>();
+      const ctx = settingsContext({ notify });
+
+      yield* Effect.promise(() => app.command("settings maxRunning 4", ctx));
+      expect(notify).toHaveBeenCalled();
+      expect(yield* app.globalSettings).toEqual({ stopGraceMs: 1_000, unrelated: true });
+
+      yield* Effect.promise(() => app.emit("session_start", ctx));
+      yield* Effect.promise(() => app.command("settings maxRunning 16", ctx));
+      expect(yield* app.globalSettings).toEqual({
+        stopGraceMs: 1_000,
+        unrelated: true,
+        maxRunning: 16,
+      });
+      yield* Effect.promise(() => app.command("settings maxRunning inherit", ctx));
+      expect(yield* app.globalSettings).toEqual({ stopGraceMs: 1_000, unrelated: true });
+      yield* Effect.promise(() => app.emit("session_shutdown", ctx));
+    }),
+  );
+
+  it.effect(
+    "/tasks explains a runtime that isn't running instead of failing or opening a manager",
+    () =>
+      Effect.gen(function* () {
+        const app = yield* harness(() => Promise.resolve());
+        const surfaces = fakeCustomSurfaceHost({
+          rows: 8,
+          keybindings: piKeybindingsFixture({ matches: () => false }),
+        });
+        const notify = vi.fn<ExtensionUIContext["notify"]>();
+        const ui = { notify, custom: surfaces.ctx.ui.custom.bind(surfaces.ctx.ui) };
+        const custom = vi.spyOn(ui, "custom");
+        const terminal = (signal?: AbortSignal) =>
+          extensionContextFixture({ cwd: process.cwd(), mode: "tui", hasUI: true, signal, ui });
+        const warnings = () => notify.mock.calls.filter(([, level]) => level === "warning").length;
+        const ctx = terminal();
+        const unavailableNotice = Effect.gen(function* () {
+          const before = warnings();
+          yield* Effect.promise(() => app.command("", ctx));
+          expect(warnings()).toBe(before + 1);
+        });
+
+        yield* unavailableNotice;
+
+        yield* app.breakAgentDirectory;
+        yield* Effect.promise(() => app.emit("session_start", ctx));
+        yield* app.restoreAgentDirectory;
+        expect(app.tools).toHaveLength(0);
+        yield* unavailableNotice;
+
+        yield* Effect.promise(() => app.emit("session_start", terminal(AbortSignal.abort())));
+        yield* unavailableNotice;
+        expect(custom).not.toHaveBeenCalled();
+
+        yield* Effect.promise(() => app.emit("session_start", ctx));
+        const before = warnings();
+        const opened = app.command("", ctx);
+        yield* macrotask;
+        surfaces.mount();
+        expect(custom).toHaveBeenCalledTimes(1);
+        surfaces.overlays.at(-1)?.handleInput?.("\x1b");
+        yield* Effect.promise(() => opened);
+        expect(warnings()).toBe(before);
+
+        yield* Effect.promise(() => app.emit("session_shutdown", ctx));
+        yield* unavailableNotice;
+        expect(custom).toHaveBeenCalledTimes(1);
+      }),
   );
 });
 

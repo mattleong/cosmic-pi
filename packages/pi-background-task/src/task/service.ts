@@ -1,3 +1,4 @@
+import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
@@ -10,6 +11,7 @@ import * as Path from "effect/Path";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import { invokeHostCallback, sanitizeDiagnosticError } from "pi-cosmic-core";
 import {
   LocalProcess,
   type LocalProcessError,
@@ -17,12 +19,15 @@ import {
 } from "../boundary/local-process.ts";
 import { BackgroundTaskConfigStore } from "../config/store.ts";
 import { normalizeStartRequest, validateWaitRequest } from "./admission.ts";
+import { BACKGROUND_LOG_BOUNDS } from "./bounds.ts";
 import {
+  afterCursorAhead,
   BackgroundTaskCapacityError,
   type BackgroundTaskNotFoundError,
   backgroundTaskNotFound,
   BackgroundRuntimeClosedError,
   BackgroundSpawnError,
+  BackgroundTasksDisabledError,
   BackgroundTerminationError,
   type InvalidBackgroundCommandError,
   InvalidBackgroundCwdError,
@@ -34,9 +39,10 @@ import {
   sortTasksByActivity,
   type BackgroundTaskStatus,
   type BackgroundTaskStatusWait,
-  type BackgroundLogSlice,
   type BackgroundLogStream,
+  type BackgroundTaskLogs,
   type BackgroundTaskProjection,
+  type BackgroundTaskStopResult,
   type BackgroundTaskWaitResult,
   type ReadBackgroundLogs,
   type StartBackgroundTask,
@@ -70,17 +76,25 @@ export interface BackgroundTaskServiceContract {
   readonly status: (id: string) => Effect.Effect<BackgroundTaskStatus, BackgroundTaskNotFoundError>;
   readonly logs: (
     request: ReadBackgroundLogs,
-  ) => Effect.Effect<BackgroundLogSlice, BackgroundTaskNotFoundError>;
+  ) => Effect.Effect<
+    BackgroundTaskLogs,
+    BackgroundTaskNotFoundError | InvalidBackgroundCommandError
+  >;
   readonly wait: (
     request: WaitForBackgroundTask,
   ) => Effect.Effect<
     BackgroundTaskStatusWait,
     BackgroundTaskNotFoundError | InvalidBackgroundCommandError
   >;
+  /** An explicit stop; repeating it while the task is stopping escalates to force. */
   readonly stop: (
     id: string,
     force?: boolean,
-  ) => Effect.Effect<BackgroundTaskStatus, BackgroundTaskError>;
+  ) => Effect.Effect<BackgroundTaskStopResult, BackgroundTaskError>;
+  /**
+   * Explicitly stops every active task, escalating those already stopping. Returns the tasks it
+   * stopped, leaving out any that finished on their own before their stop landed.
+   */
   readonly stopAll: (
     force?: boolean,
   ) => Effect.Effect<ReadonlyArray<BackgroundTaskStatus>, BackgroundTaskError>;
@@ -91,8 +105,33 @@ export interface BackgroundTaskServiceOptions {
   readonly publish?: (projection: BackgroundTaskProjection) => void;
 }
 
+const SHUTDOWN_WARNING_CHARS = 500;
+
+const leaderExited = (record: TaskRecord) =>
+  Deferred.poll(record.handleReady).pipe(
+    Effect.flatMap((ready) =>
+      Option.isSome(ready)
+        ? ready.value.pipe(
+            Effect.flatMap((handle) => handle.leaderExited),
+            Effect.orElseSucceed(() => false),
+          )
+        : Effect.succeed(false),
+    ),
+  );
+
 const runtimeClosed = () =>
   new BackgroundRuntimeClosedError({ message: "Background task runtime is closed." });
+
+/** Explicit stops escalate a stopping task to force; internal stops join its grace window. */
+type StopRequest = "explicit" | "internal";
+
+const checkCursor = (record: TaskRecord, afterCursor: number | undefined) =>
+  Effect.suspend(() => {
+    const latest = record.logs.latestCursor;
+    return afterCursor === undefined || afterCursor <= latest
+      ? Effect.void
+      : Effect.fail(afterCursorAhead(record.snapshot.id, afterCursor, latest));
+  });
 
 const makeService = Effect.fn("BackgroundTaskService.make")(function* (
   options: BackgroundTaskServiceOptions,
@@ -106,16 +145,16 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
   const tasks: TaskRegistry = new Map();
   let nextId = 1;
   let admissionsClosed = false;
-  const retainedLogBudget = Math.max(1, Math.floor(config.totalLogBufferBytes / 2));
-  const ingressLogBudget = Math.max(1, config.totalLogBufferBytes - retainedLogBudget);
+  // Output still in flight has its own per-task bound, outside the retained budgets.
   const ingressBufferBytes = Math.max(
-    1,
-    Math.min(config.logBufferBytesPerTask, Math.floor(ingressLogBudget / config.maxRunning)),
+    BACKGROUND_LOG_BOUNDS.minIngressBytes,
+    Math.min(config.logBufferBytesPerTask, BACKGROUND_LOG_BOUNDS.maxIngressBytes),
   );
 
   const withLock = Semaphore.withPermit(lock);
+  // A failing host publisher must not abort the registry transition that is publishing.
   const { publish, publishOutput } = yield* startTaskPublication(lock, () =>
-    options.publish?.(registryProjection(tasks)),
+    invokeHostCallback(() => options.publish?.(registryProjection(tasks)), undefined),
   );
   const settle = (record: TaskRecord, snapshot: BackgroundTaskStatus) => {
     record.snapshot = snapshot;
@@ -134,20 +173,29 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
     withLock(
       Effect.gen(function* () {
         const timestamp = yield* Clock.currentTimeMillis;
+        // Lost output may have cut a sequence short; what follows starts fresh.
+        if (droppedBytes > 0)
+          for (const terminal of Object.values(record.terminal)) terminal.reset();
         record.logs
           .addDropped(droppedBytes)
-          .append(stream, text, timestamp, config.logBufferBytesPerTask, droppedBytes > 0);
+          .append(
+            stream,
+            record.terminal[stream].write(text),
+            timestamp,
+            config.logBufferBytesPerTask,
+          );
         record.ingressDroppedObserved += droppedBytes;
         record.snapshot = { ...record.snapshot, ...logFields(record.logs) };
         wakeTaskRecord(record);
-        enforceRetainedLogBudget(tasks, retainedLogBudget);
+        enforceRetainedLogBudget(tasks, config.totalLogBufferBytes);
         yield* publishOutput;
       }),
     );
 
   const requestStop = Effect.fn("BackgroundTaskService.stop")(function* (
     id: string,
-    force = false,
+    force: boolean,
+    request: StopRequest,
     outcome: "stopped" | "timed_out" = "stopped",
   ) {
     return yield* Effect.uninterruptibleMask((restore) =>
@@ -157,25 +205,34 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
             const record = tasks.get(id);
             if (!record) return yield* backgroundTaskNotFound(id);
             if (!isActiveTaskState(record.snapshot.state))
-              return { record, owner: false, terminal: record.snapshot };
+              return { record, owner: false, joins: false, terminal: record.snapshot };
             const owner = record.snapshot.state !== "stopping";
-            record.terminalOutcome ??= outcome;
+            const joins = !owner && !force && request === "internal" && record.graceWindowOpen;
+            if (owner && !force) record.graceWindowOpen = true;
+            // A request that lands after the command exited on its own keeps that exit's outcome.
+            if (!(yield* leaderExited(record))) record.terminalOutcome ??= outcome;
             record.snapshot = { ...record.snapshot, state: "stopping" };
             wakeTaskRecord(record);
             publish();
-            return { record, owner, terminal: undefined };
+            return { record, owner, joins, terminal: undefined };
           }),
         );
-        if (prepared.terminal) return prepared.terminal;
+        if (prepared.terminal)
+          return {
+            snapshot: prepared.terminal,
+            alreadyFinished: true,
+          } satisfies BackgroundTaskStopResult;
 
+        let forced = false;
         const terminate = (handle: LocalProcessHandle, mode: "graceful" | "force") =>
-          handle
-            .terminate(mode)
-            .pipe(
-              Effect.mapError(
-                (error) => new BackgroundTerminationError({ id, message: error.message }),
-              ),
-            );
+          Effect.suspend(() => {
+            if (mode === "force") forced = true;
+            return handle.terminate(mode);
+          }).pipe(
+            Effect.mapError(
+              (error) => new BackgroundTerminationError({ id, message: error.message }),
+            ),
+          );
         const stopPhase = Effect.gen(function* () {
           const handle = Option.getOrUndefined(
             yield* Deferred.await(prepared.record.handleReady).pipe(
@@ -183,16 +240,24 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
               Effect.catch(() => Effect.succeedNone),
             ),
           );
-          if (!handle) return;
-          if (force) yield* terminate(handle, "force");
-          else if (prepared.owner) {
+          if (!handle || prepared.joins) return;
+          // The first stop owns the grace window. A repeated explicit stop escalates instead of
+          // waiting, as does an internal stop once no grace window remains.
+          if (force || !prepared.owner) yield* terminate(handle, "force");
+          else {
             yield* terminate(handle, "graceful");
             const settled = yield* Deferred.await(prepared.record.completion).pipe(
               Effect.timeoutOption(Duration.millis(config.stopGraceMs)),
             );
             if (Option.isNone(settled)) yield* terminate(handle, "force");
           }
-        });
+        }).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (prepared.owner) prepared.record.graceWindowOpen = false;
+            }),
+          ),
+        );
         yield* restore(stopPhase).pipe(
           Effect.onInterrupt(() =>
             prepared.owner
@@ -210,10 +275,18 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
             Effect.timeoutOption(Duration.millis(Math.max(5_000, config.stopGraceMs + 5_000))),
           ),
         );
-        if (Option.isSome(finalWait)) return finalWait.value;
+        if (Option.isSome(finalWait))
+          return {
+            snapshot: finalWait.value,
+            alreadyFinished: false,
+          } satisfies BackgroundTaskStopResult;
         return yield* new BackgroundTerminationError({
           id,
-          message: "Background process did not confirm exit after forced termination.",
+          message: forced
+            ? "Background process did not confirm exit after forced termination."
+            : prepared.joins
+              ? "Background process did not confirm exit after its stop grace period."
+              : "Background process did not confirm exit; it had not finished starting.",
         });
       }),
     );
@@ -247,19 +320,31 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
           Stream.runForEach((event) =>
             appendOutput(record, event.stream, event.text, event.droppedBytes),
           ),
-          Effect.ignoreCause,
+          Effect.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause)
+              ? Effect.void
+              : Effect.logWarning(
+                  "Background task output stopped recording after a reader failure.",
+                ),
+          ),
           Effect.forkScoped({ startImmediately: true }),
         );
         if (request.timeoutSeconds !== undefined) {
           yield* Effect.sleep(Duration.seconds(request.timeoutSeconds)).pipe(
-            Effect.andThen(requestStop(record.snapshot.id, false, "timed_out")),
+            Effect.andThen(requestStop(record.snapshot.id, false, "internal", "timed_out")),
             Effect.ignore,
             Effect.forkScoped({ startImmediately: true }),
           );
         }
         const exit = yield* handle.awaitExit;
         const drained = yield* Fiber.await(outputFiber).pipe(Effect.timeoutOption("1 second"));
-        if (Option.isNone(drained)) yield* Fiber.interrupt(outputFiber);
+        if (Option.isNone(drained)) {
+          // A process outside the task's group can hold its pipes open. Undelivered output is
+          // counted as dropped; the reader then only finishes an append already in progress.
+          yield* handle.abandonOutput;
+          const finished = yield* Fiber.await(outputFiber).pipe(Effect.timeoutOption("1 second"));
+          if (Option.isNone(finished)) yield* Fiber.interrupt(outputFiber);
+        }
         const endedAt = yield* Clock.currentTimeMillis;
         yield* withLock(
           Effect.sync(() => {
@@ -298,10 +383,11 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
       Effect.gen(function* () {
         const record = yield* withLock(
           Effect.gen(function* () {
-            if (admissionsClosed || !config.enabled) {
-              return yield* admissionsClosed
-                ? runtimeClosed()
-                : new BackgroundRuntimeClosedError({ message: "Background tasks are disabled." });
+            if (admissionsClosed) return yield* runtimeClosed();
+            if (!config.enabled) {
+              return yield* new BackgroundTasksDisabledError({
+                message: "Background tasks are disabled.",
+              });
             }
             if (activeRecords(tasks).length >= config.maxRunning) {
               return yield* new BackgroundTaskCapacityError({
@@ -389,14 +475,23 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
 
   const logs = Effect.fn("BackgroundTaskService.logs")(function* (request: ReadBackgroundLogs) {
     const record = yield* admitRecord(request.id);
+    yield* withLock(checkCursor(record, request.afterCursor));
     const waitSeconds = request.waitSeconds ?? 0;
     const deadline =
       (yield* monotonicMillis) + Math.min(waitSeconds, config.maxWaitSeconds) * 1_000;
     return yield* pollUntil(deadline, () => {
-      const slice = readLogBuffer(request.id, record.logs, record.snapshot.state, request);
+      const { snapshot } = record;
+      const slice = readLogBuffer(request.id, record.logs, snapshot.state, request);
       const waits =
-        waitSeconds > 0 && slice.events.length === 0 && isActiveTaskState(record.snapshot.state);
-      return { value: slice, change: waits ? Deferred.await(record.wake) : undefined };
+        waitSeconds > 0 && slice.events.length === 0 && isActiveTaskState(snapshot.state);
+      const task = Object.freeze({
+        ...(snapshot.name !== undefined && { name: snapshot.name }),
+        command: snapshot.command,
+      });
+      return {
+        value: Object.freeze({ ...slice, task }) satisfies BackgroundTaskLogs,
+        change: waits ? Deferred.await(record.wake) : undefined,
+      };
     });
   });
 
@@ -406,6 +501,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
       yield* validateWaitRequest(request, waitSeconds);
 
       const record = yield* admitRecord(request.id);
+      yield* withLock(checkCursor(record, request.afterCursor));
       yield* Effect.acquireRelease(
         withLock(
           Effect.sync(() => {
@@ -462,17 +558,21 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
     (effect) => Effect.scoped(effect),
   );
 
-  const stopAll = Effect.fn("BackgroundTaskService.stopAll")(function* (force = false) {
+  const stopAll = Effect.fn("BackgroundTaskService.stopAll")(function* (
+    force: boolean,
+    request: StopRequest,
+  ) {
     const ids = yield* withLock(
       Effect.sync(() => activeRecords(tasks).map((record) => record.snapshot.id)),
     );
+    // Every task gets its graceful signal at once, so the batch shares one grace window.
     const [settled, failures] = yield* Effect.partition(
       ids,
       (id) =>
-        requestStop(id, force).pipe(
+        requestStop(id, force, request).pipe(
           Effect.catchTag("BackgroundTaskNotFoundError", () => Effect.undefined),
         ),
-      { concurrency: 8 },
+      { concurrency: "unbounded" },
     );
     if (failures.length > 0) {
       return yield* new BackgroundTerminationError({
@@ -480,7 +580,9 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
         message: failures.map((failure) => `${failure.id}: ${failure.message}`).join(" · "),
       });
     }
-    return settled.filter((snapshot) => snapshot !== undefined);
+    return settled.flatMap((result) =>
+      result && !result.alreadyFinished ? [result.snapshot] : [],
+    );
   });
   const clear = withLock(
     Effect.sync(() => {
@@ -496,8 +598,8 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
     status,
     logs,
     wait,
-    stop: requestStop,
-    stopAll,
+    stop: (id, force = false) => requestStop(id, force, "explicit"),
+    stopAll: (force = false) => stopAll(force, "explicit"),
     clear,
   };
 
@@ -506,7 +608,18 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
       Effect.sync(() => {
         admissionsClosed = true;
       }),
-    ).pipe(Effect.andThen(stopAll(false)), Effect.ignore),
+    ).pipe(
+      // Shutdown and tree navigation join stops already in their grace window.
+      Effect.andThen(stopAll(false, "internal")),
+      Effect.catch((error) =>
+        Effect.logWarning(
+          `Background task shutdown couldn't confirm every process exited: ${sanitizeDiagnosticError(
+            error.message,
+            { maximumLength: SHUTDOWN_WARNING_CHARS },
+          )}`,
+        ),
+      ),
+    ),
   );
 
   return service;

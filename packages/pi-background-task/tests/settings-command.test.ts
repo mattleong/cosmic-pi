@@ -13,7 +13,10 @@ import { vi } from "vitest";
 import { BACKGROUND_TASK_SETTINGS } from "../src/config/options.ts";
 import { DEFAULT_BACKGROUND_TASK_CONFIG } from "../src/config/schema.ts";
 import { BackgroundTaskConfigError } from "../src/config/store.ts";
-import { taskSettingsSubcommand, type TaskSettingsActions } from "../src/settings/controller.ts";
+import { taskSettingsSubcommand, type TaskSettingsActions } from "../src/settings/task-settings.ts";
+import { BACKGROUND_TASK_FIELD_BOUNDS } from "../src/task/bounds.ts";
+
+const SPOOFED_SHELL = "/bin/\u001b[31mzsh\nspoof = injected";
 
 const harness = (options: { readonly trusted?: boolean; readonly started?: boolean } = {}) => {
   const write = vi.fn<TaskSettingsActions["write"]>(() => Promise.resolve());
@@ -22,7 +25,7 @@ const harness = (options: { readonly trusted?: boolean; readonly started?: boole
     config: () =>
       options.started === false
         ? undefined
-        : { ...DEFAULT_BACKGROUND_TASK_CONFIG, shellPath: "/bin/\u001b[31mzsh\nspoof" },
+        : { ...DEFAULT_BACKGROUND_TASK_CONFIG, shellPath: SPOOFED_SHELL },
     captureAuthority: () => () => true,
     read,
     write,
@@ -100,11 +103,52 @@ describe("/tasks settings", () => {
 
       const untrusted = harness({ trusted: false });
       yield* untrusted.run("project maxRunning 4");
+      yield* untrusted.run("project maxRunning inherit");
       expect(untrusted.write).not.toHaveBeenCalled();
-      expect(untrusted.notify).toHaveBeenLastCalledWith(
-        expect.stringMatching(/trust/iu),
-        "warning",
-      );
+      expect(untrusted.notify.mock.calls.map(([, level]) => level)).toEqual(["warning", "warning"]);
+    }),
+  );
+
+  it.effect("accepts waits up to the tool's own cap and rejects longer ones", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      const cap = BACKGROUND_TASK_FIELD_BOUNDS.maxWaitSeconds;
+      yield* h.run(`maxWaitSeconds ${cap}`);
+      yield* h.run(`maxWaitSeconds ${cap + 1}`);
+      expect(h.write.mock.calls).toEqual([
+        [{ cwd: "/project", scope: "global" }, "maxWaitSeconds", cap],
+      ]);
+      expect(h.notify).toHaveBeenLastCalledWith(expect.any(String), "error");
+    }),
+  );
+
+  it.effect("status and help report the session's values on single sanitized lines", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      yield* h.run("status");
+      yield* h.run("help");
+      const reports = h.notify.mock.calls.map(([message, level]) => ({ message, level }));
+      expect(reports.map(({ level }) => level)).toEqual(["info", "info"]);
+      for (const { message } of reports) {
+        expect(message).not.toContain("\u001b");
+        const shellLines = message.split("\n").filter((line) => line.includes("/bin/"));
+        expect(shellLines).toHaveLength(1);
+        expect(shellLines[0]).toContain("shellPath");
+        expect(message.split("\n").some((line) => line.trimStart().startsWith("spoof"))).toBe(
+          false,
+        );
+      }
+      expect(h.write).not.toHaveBeenCalled();
+    }),
+  );
+
+  it.effect("status before the session starts warns instead of failing", () =>
+    Effect.gen(function* () {
+      const h = harness({ started: false });
+      yield* h.run("status");
+      expect(h.notify.mock.calls.map(([, level]) => level)).toEqual(["warning"]);
+      yield* h.run("help");
+      expect(h.notify).toHaveBeenLastCalledWith(expect.not.stringContaining("/bin/"), "info");
     }),
   );
 

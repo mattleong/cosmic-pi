@@ -14,13 +14,20 @@ nor a command sandbox, and completion does not automatically send messages or tr
   semaphore. [Registry policy](src/task/registry.ts), [admission](src/task/admission.ts), and
   [output matching](src/task/output-match.ts) keep deterministic work separate from orchestration.
 - [Local-process boundary](src/boundary/local-process.ts) owns shell spawning, output streams,
-  bounded ingress, process-tree termination, and release through Effect's process platform and
-  core's process-tree helpers.
-- [Log buffers](src/task/log-buffer.ts) own retained output and byte accounting;
+  bounded ingress, process-group termination, and release. It spawns through Node's child-process
+  API so that it alone signals each group, using core's process-tree helpers and host-exit guard.
+- [Terminal normalization](src/task/terminal-text.ts) runs per stream at intake. [Log
+  buffers](src/task/log-buffer.ts) own retained output, bounded events, and byte accounting;
+  [log paging](src/tools/log-page.ts) renders the labeled plain text results share;
   [publication](src/task/publication.ts) coalesces updates into immutable projections.
-- [Config store](src/config/store.ts) resolves global and trusted project settings and handles
-  explicit writes. Reading configuration never creates a default file or probes an untrusted
-  project. [Settings controller](src/settings/controller.ts) adapts commands and settings UI.
+- [Config schema](src/config/schema.ts) defines the persisted fields and the config type;
+  [options](src/config/options.ts) own bounds, normalization, and a setting descriptor for every
+  field. The [config store](src/config/store.ts) resolves global and trusted project settings and
+  handles explicit single-field writes. Reading configuration never creates a default file or
+  probes an untrusted project, and a write never replaces a document it can't read.
+- The [`/tasks` command](src/settings/controller.ts) opens Activity or the standalone manager when
+  the runtime is available; the [settings subcommand](src/settings/task-settings.ts) adapts the
+  shared settings command and picker.
 - [Tool execution](src/tools/command.ts) produces text, presentation details, and a separate
   [native result contract](src/tools/contract.ts) from service facts. Renderers do not infer task
   state from log text or own processes.
@@ -40,16 +47,26 @@ Tree navigation joins process-tree cleanup before activating a fresh registry. T
 retain their activation token; `/tasks` captures authority for each invocation. Retained managers,
 settings pickers, and Activity actions cannot target a later registry, even when task IDs repeat.
 Shutdown closes admission and attempts to settle active processes before interrupting their monitors.
+If Pi exits without shutdown, core's host-exit guard kills every task group that has not settled.
 
 ## Critical invariants
 
 - Metadata is normalized and bounded before IDs, monitors, or processes are allocated, including
   calls that bypass the tool schema.
 - Stop requests retain active capacity until exit is confirmed. A termination failure leaves a
-  task `stopping`; `stopAll` attempts every captured task before reporting aggregate failures.
+  task `stopping`; `stopAll` stops every captured task concurrently before reporting aggregate
+  failures. A stop or timeout that follows leader exit does not replace the command's outcome.
+- Cleanup reaches each task's original process group, not processes that leave it. A settled
+  group is never signalled again.
 - Admitted readers retain their task record. Clearing or evicting registry entries removes
   discoverability without invalidating in-flight waits or reinserting removed tasks.
-- Output and ingress are bounded independently. Dropped output remains explicit; literal waits
+- Stored output holds only text and complete SGR sequences, so stripping SGR from any one event
+  gives the plain text that reads, waits, and Activity share. Events are split to a bounded size,
+  and reads select whole events, so cursors page without skipping output.
+- Retained budgets charge a per-event overhead, and evicted events are released at once. Each
+  event owns a copy of its text, so keeping part of a large write never keeps the whole write
+  alive outside the budget. Ingress
+  has its own per-task bound outside those budgets. Dropped output remains explicit; literal waits
   never match across a dropped-byte gap. Wait and publication deadlines use monotonic time.
 - Projections and log slices are detached and immutable. Neither consumer mutation nor later
   buffer eviction can alter earlier results or authoritative byte accounting.
@@ -60,5 +77,6 @@ Shutdown closes admission and attempts to settle active processes before interru
 The focused [process lifecycle note](docs/process-lifecycle.md) explains cancellation handoff and
 platform cleanup limits. [Task-service tests](tests/task-service.test.ts),
 [process tests](tests/local-process.test.ts), [lifecycle tests](tests/lifecycle-stress.test.ts),
-and [log-buffer tests](tests/log-buffer.test.ts) protect these invariants. Tool semantics, settings,
+[real-process cleanup tests](tests/process-cleanup.test.ts), and
+[log-buffer tests](tests/log-buffer.test.ts) protect these invariants. Tool semantics, settings,
 and rendering are described in the [reference](docs/reference.md).

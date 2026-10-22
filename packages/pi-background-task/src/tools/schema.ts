@@ -20,13 +20,13 @@ export const BackgroundTaskParameters = Type.Object({
   name: Type.Optional(
     Type.String({
       maxLength: BACKGROUND_TASK_FIELD_BOUNDS.maxNameChars,
-      description: "Short optional display name",
+      description: "Short optional display name for start",
     }),
   ),
   timeoutSeconds: Type.Optional(
     Type.Number({
       minimum: 0.001,
-      description: "Optional runtime limit; omitted means no timeout",
+      description: "Runtime limit for start; omitted means no timeout",
     }),
   ),
   id: Type.Optional(
@@ -36,7 +36,7 @@ export const BackgroundTaskParameters = Type.Object({
     }),
   ),
   state: Type.Optional(
-    StringEnum(["active", "completed", "all"] as const, { description: "List filter" }),
+    StringEnum(["active", "completed", "all"] as const, { description: "Filter for list" }),
   ),
   until: Type.Optional(
     StringEnum(["exit", "output"] as const, {
@@ -54,24 +54,28 @@ export const BackgroundTaskParameters = Type.Object({
   afterCursor: Type.Optional(
     Type.Integer({
       minimum: 0,
-      description: 'Read logs or match output after this cursor; invalid for until="exit".',
+      description:
+        'Read logs or match output after this cursor; invalid for until="exit" and with tailLines.',
     }),
   ),
   tailLines: Type.Optional(
     Type.Integer({
       minimum: 1,
       maximum: BACKGROUND_TASK_FIELD_BOUNDS.maxTailLines,
-      description: "Tail lines when no cursor is supplied",
+      description: "Newest lines for logs; invalid with afterCursor",
     }),
   ),
   waitSeconds: Type.Optional(
     Type.Number({
       minimum: 0,
       maximum: BACKGROUND_TASK_FIELD_BOUNDS.maxWaitSeconds,
-      description: "Long-poll duration for logs or wait; wait defaults to configured maximum",
+      description:
+        "Long-poll seconds for logs or wait, capped by the maxWaitSeconds setting; wait defaults to that cap",
     }),
   ),
-  force: Type.Optional(Type.Boolean({ description: "Force immediate process-tree termination" })),
+  force: Type.Optional(
+    Type.Boolean({ description: "Force immediate process-tree termination for stop or stop_all" }),
+  ),
 });
 
 export type BackgroundTaskToolInput = Static<typeof BackgroundTaskParameters>;

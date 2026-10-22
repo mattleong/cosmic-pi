@@ -54,7 +54,9 @@ function processFixture(behavior: Behavior, gated = false) {
       ),
     ),
     awaitExit: Deferred.await(exited),
+    leaderExited: Deferred.isDone(exited),
     droppedOutputBytes: () => 0,
+    abandonOutput: Effect.void,
     terminate: (mode) =>
       Effect.gen(function* () {
         yield* Deferred.succeed(mode === "force" ? forced : graceful, undefined);

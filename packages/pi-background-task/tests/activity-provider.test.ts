@@ -1,7 +1,9 @@
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vitest";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import { ACTIVITY_HOST, ACTIVITY_LIMITS, ActivitySnapshotSchema } from "pi-cosmic-ui/activity";
 import { fakeActivityHost } from "pi-cosmic-ui/activity/testing";
 import {
@@ -11,6 +13,7 @@ import {
 } from "../src/boundary/host-activity.ts";
 import { taskProjectionBridge } from "../src/boundary/host-ui.ts";
 import type { BackgroundTaskView } from "../src/task/model.ts";
+import { TerminalTextNormalizer } from "../src/task/terminal-text.ts";
 
 const task: BackgroundTaskView = {
   id: "task",
@@ -74,13 +77,33 @@ describe("background task activity provider", () => {
         {
           ...task,
           command: `API_KEY=${secret} command`,
-          logs: [{ ...task.logs[0]!, text: `Bearer ${secret}` }],
+          logs: [{ ...task.logs[0]!, text: `server ready\nusing Bearer ${secret}\n` }],
         },
       ],
     };
     expect(JSON.stringify(backgroundTaskActivityItems(projection))).not.toContain(secret);
-    expect(backgroundTaskActivityDetail(projection, "task")).not.toContain(secret);
-    expect(backgroundTaskActivityDetail(projection, "task")).toContain("[REDACTED]");
+    const detail = backgroundTaskActivityDetail(projection, "task") ?? "";
+    expect(detail).not.toContain(secret);
+    expect(detail).toContain("server ready\nusing Bearer");
+  });
+
+  it("shows captured output as plain text, without escape remnants, however it is trimmed", () => {
+    const normalizer = new TerminalTextNormalizer();
+    const raw = [
+      "\u001b]0;evil-title\u0007\u001b]8;;https://x.example/\u001b\\link\u001b]8;;\u001b\\\n",
+      `\u001b[31m${"r".repeat(11_991)}\u001b[0m\n`,
+    ];
+    const logs = raw.map((text, index) => ({
+      cursor: index + 1,
+      stream: "stdout" as const,
+      text: normalizer.write(text),
+      timestamp: index + 1,
+      bytes: 0,
+    }));
+    const detail = backgroundTaskActivityDetail({ tasks: [{ ...task, logs }] }, "task") ?? "";
+    for (const remnant of ["evil-title", "]0;", "8;;", "x.example", "[31m", "[0m", "\u001b"])
+      expect(detail).not.toContain(remnant);
+    expect(detail).toContain("r".repeat(100));
   });
 
   it.effect(
@@ -113,12 +136,13 @@ describe("background task activity provider", () => {
         yield* Effect.promise(() =>
           expect(getDetail?.("task", revision, signal)).resolves.toContain("private output"),
         );
-        const cancelled = new AbortController();
-        const pending = invoke!("task", "stop", revision, cancelled.signal);
-        cancelled.abort();
+        const cancellation = yield* Scope.make();
+        const cancelled = yield* Effect.abortSignal.pipe(Scope.provide(cancellation));
+        const pending = invoke!("task", "stop", revision, cancelled);
+        yield* Scope.close(cancellation, Exit.void);
         yield* Effect.promise(() => expect(pending).rejects.toThrow());
         yield* Effect.promise(() =>
-          expect(getDetail?.("task", revision, cancelled.signal)).rejects.toThrow(),
+          expect(getDetail?.("task", revision, cancelled)).rejects.toThrow(),
         );
         yield* Effect.promise(() => invoke!("task", "stop", revision, signal));
         expect(stop).toHaveBeenCalledWith("task", signal);

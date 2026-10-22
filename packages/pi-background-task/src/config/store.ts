@@ -12,27 +12,22 @@ import {
   type JsonObject,
 } from "pi-cosmic-core";
 import { normalizeConfig } from "./options.ts";
-import type { BackgroundTaskConfig } from "./schema.ts";
+import {
+  BackgroundTaskConfigSchema,
+  type BackgroundTaskConfig,
+  type BackgroundTaskSettingId,
+  type BackgroundTaskSettingValue,
+} from "./schema.ts";
 
 export class BackgroundTaskConfigError extends Schema.TaggedError<BackgroundTaskConfigError>()(
   "BackgroundTaskConfigError",
   { operation: Schema.String, path: Schema.String, message: Schema.String },
 ) {}
 
-const decodeConfigFields = decodeTolerantFields(
-  {
-    enabled: Schema.Boolean,
-    maxRunning: Schema.Finite,
-    maxRetained: Schema.Finite,
-    logBufferBytesPerTask: Schema.Finite,
-    totalLogBufferBytes: Schema.Finite,
-    stopGraceMs: Schema.Finite,
-    maxWaitSeconds: Schema.Finite,
-    showFooterStatus: Schema.Boolean,
-    shellPath: Schema.String,
-  },
-  { path: "config" },
-);
+// Fields decode independently: a wrong-typed value falls back alone, keeping the rest of the file.
+const decodeConfigFields = decodeTolerantFields(BackgroundTaskConfigSchema.fields, {
+  path: "config",
+});
 
 const decodeConfig = (value: JsonObject): Partial<BackgroundTaskConfig> =>
   decodeConfigFields(value).value;
@@ -59,10 +54,11 @@ export interface BackgroundTaskSettingsFilesContract {
   readonly read: (
     location: BackgroundTaskSettingsLocation,
   ) => Effect.Effect<Partial<BackgroundTaskConfig>, BackgroundTaskConfigError>;
-  readonly write: (
+  /** Sets one field in the scope's file; `undefined` removes it so the scope inherits. */
+  readonly write: <Id extends BackgroundTaskSettingId>(
     location: BackgroundTaskSettingsLocation,
-    id: keyof BackgroundTaskConfig,
-    value: boolean | number | string | undefined,
+    id: Id,
+    value: BackgroundTaskSettingValue<Id> | undefined,
   ) => Effect.Effect<void, BackgroundTaskConfigError>;
 }
 

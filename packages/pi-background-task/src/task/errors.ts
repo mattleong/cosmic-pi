@@ -10,6 +10,12 @@ export class InvalidBackgroundCwdError extends Schema.TaggedError<InvalidBackgro
   { cwd: Schema.String, message: Schema.String },
 ) {}
 
+/** An afterCursor beyond a task's output, such as one kept from an earlier task with its ID. */
+export const afterCursorAhead = (id: string, afterCursor: number, latest: number) =>
+  new InvalidBackgroundCommandError({
+    message: `afterCursor is ahead of this task's output\nafterCursor ${afterCursor} is ahead of ${id}'s latest cursor ${latest}; it may come from an earlier task with the same ID. Use ${latest} or less.`,
+  });
+
 export class BackgroundTaskNotFoundError extends Schema.TaggedError<BackgroundTaskNotFoundError>()(
   "BackgroundTaskNotFoundError",
   { id: Schema.String, message: Schema.String },
@@ -41,6 +47,11 @@ export class BackgroundRuntimeClosedError extends Schema.TaggedError<BackgroundR
   { message: Schema.String },
 ) {}
 
+export class BackgroundTasksDisabledError extends Schema.TaggedError<BackgroundTasksDisabledError>()(
+  "BackgroundTasksDisabledError",
+  { message: Schema.String },
+) {}
+
 export type BackgroundTaskError =
   | InvalidBackgroundCommandError
   | InvalidBackgroundCwdError
@@ -48,4 +59,5 @@ export type BackgroundTaskError =
   | BackgroundTaskCapacityError
   | BackgroundSpawnError
   | BackgroundTerminationError
-  | BackgroundRuntimeClosedError;
+  | BackgroundRuntimeClosedError
+  | BackgroundTasksDisabledError;

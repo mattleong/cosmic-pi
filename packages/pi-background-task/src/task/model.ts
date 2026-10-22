@@ -21,6 +21,7 @@ export type BackgroundLogStream = "stdout" | "stderr";
 export interface BackgroundLogEvent {
   readonly cursor: number;
   readonly stream: BackgroundLogStream;
+  /** Normalized output: printable text, newlines, tabs, and complete SGR sequences only. */
   readonly text: string;
   readonly timestamp: number;
   readonly bytes: number;
@@ -29,6 +30,19 @@ export interface BackgroundLogEvent {
 
 export interface BackgroundLogSlice extends BackgroundLogMetadata {
   readonly events: ReadonlyArray<BackgroundLogEvent>;
+  /** Text bytes the task retains in total, including events outside this slice. */
+  readonly retainedBytes: number;
+}
+
+/** A log read, with the identity of the task record it was read from. */
+export interface BackgroundTaskLogs extends BackgroundLogSlice {
+  readonly task: Pick<BackgroundTaskSnapshot, "name" | "command">;
+}
+
+/** A stop request's result. `alreadyFinished` means the task had ended, so nothing was stopped. */
+export interface BackgroundTaskStopResult {
+  readonly snapshot: BackgroundTaskStatus;
+  readonly alreadyFinished: boolean;
 }
 
 export interface BackgroundTaskView extends BackgroundTaskSnapshot {

@@ -5,11 +5,11 @@ Session-scoped background tasks for Pi. The agent can start long-running command
 ## Features
 
 - **One agent tool**, `background_task`, with `start`, `list`, `status`, `logs`, `wait`, `stop`, `stop_all`, and `clear` actions.
-- **Bounded waits** for a task to exit or for text to appear in its output, without polling.
+- **Bounded waits** for a task to exit or for text to appear in its output, without polling. Each wait is capped by the `maxWaitSeconds` setting.
 - **Task manager** in the shared Activity view: browse tasks, read recent logs, follow output, stop or clear tasks.
-- **Footer status** for active tasks only, such as `2 background tasks active`.
+- **Footer status** while tasks are active, such as `2 background tasks running`; the count includes tasks still starting or stopping.
 - **Native codemode results:** scripts receive structured task data instead of text.
-- **Process-tree cleanup** when the session reloads, switches, forks, navigates the tree, or shuts down.
+- **Process-group cleanup** when the session reloads, switches, forks, navigates the tree, or shuts down, and when Pi exits abruptly. Processes that start their own session or process group, such as daemons, aren't tracked.
 
 ## Install
 
@@ -30,7 +30,7 @@ Ask the agent to run something in the background, such as a dev server, a long t
 
 ## Configuration
 
-Optional JSON in `~/.pi/agent/extensions/pi-background-task.json`, or `.pi/extensions/pi-background-task.json` in a trusted project. Changes apply after `/reload`.
+Optional JSON in `~/.pi/agent/extensions/pi-background-task.json`, or `.pi/extensions/pi-background-task.json` in a trusted project. Changes apply when the session's task runtime restarts: after `/reload`, a session switch or fork, or `/tree` navigation.
 
 ```json
 {
@@ -49,6 +49,6 @@ Set `shellPath` to run tasks in a specific shell instead of the platform default
 
 ## How it works
 
-Each Pi session owns its task registry, bounded log buffers, and wait barriers. Tasks are non-interactive, run with your own permissions, and have no default timeout. Output is sanitized before it reaches the TUI and is not credential-redacted. A stop that can't confirm the process exited keeps the task in `stopping` rather than reporting it finished. Task IDs restart at `task-1` with each new session runtime, so IDs from an earlier runtime must not be reused.
+Each Pi session owns its task registry, bounded log buffers, and wait barriers. Tasks are non-interactive, run with your own permissions, and have no default timeout. Output is sanitized as it arrives; `logs` and the standalone manager show it without credential redaction, while the Activity view redacts credentials it recognizes. A stop that can't confirm the process exited keeps the task in `stopping` rather than reporting it finished; stopping it again forces it. Cleanup reaches each task's own process group and nothing that detaches from it, and no cleanup runs if Pi itself is killed with `SIGKILL` or the machine goes down. Task IDs restart at `task-1` with each new session runtime, so IDs from an earlier runtime must not be reused.
 
 See [docs/reference.md](docs/reference.md) for the tool, manager, and codemode result contracts, and [ARCHITECTURE.md](ARCHITECTURE.md) for ownership and lifecycle.

@@ -1,4 +1,5 @@
 import { utf8ByteLength, utf8Suffix } from "pi-cosmic-core";
+import { BACKGROUND_LOG_BOUNDS as LOG_BOUNDS } from "./bounds.ts";
 import type {
   BackgroundLogEvent,
   BackgroundLogSlice,
@@ -8,55 +9,170 @@ import type {
 
 const COMPACTION_MIN_DEAD_EVENTS = 32;
 
+const utf8Encoder = new TextEncoder();
+const utf8Decoder = new TextDecoder();
+
+/**
+ * A copy of `text` decoded from its own bytes, sharing no storage with the string it was cut
+ * from. A substring may keep its whole source alive, so a small retained event would otherwise
+ * hold an entire large write in memory, outside the byte budget.
+ */
+export const ownedText = (text: string): string => utf8Decoder.decode(utf8Encoder.encode(text));
+
+const isHighSurrogate = (code: number) => code >= 0xd800 && code <= 0xdbff;
+const isLowSurrogate = (code: number) => code >= 0xdc00 && code <= 0xdfff;
+
+/**
+ * Where the stored event starting at `start` ends: within the byte and line bounds, at a line
+ * break when one falls in the second half, and never inside an SGR sequence or surrogate pair.
+ */
+const eventEnd = (text: string, start: number, maxBytes: number, maxLines: number): number => {
+  let bytes = 0;
+  let lines = 0;
+  let lineBreak = -1;
+  let sequence = -1;
+  let index = start;
+  while (index < text.length) {
+    const code = text.charCodeAt(index);
+    const pair = isHighSurrogate(code) && isLowSurrogate(text.charCodeAt(index + 1));
+    const size = code < 0x80 ? 1 : code < 0x800 ? 2 : pair ? 4 : 3;
+    if (bytes + size > maxBytes && index > start) break;
+    bytes += size;
+    if (code === 0x1b) sequence = index;
+    else if (code === 0x6d) sequence = -1;
+    index += pair ? 2 : 1;
+    if (code === 0x0a) {
+      lineBreak = index;
+      lines += 1;
+      if (lines >= maxLines) return index;
+    }
+  }
+  if (index >= text.length) return text.length;
+  if (sequence > start) return sequence;
+  if (sequence === start) {
+    const final = text.indexOf("m", sequence);
+    return final < 0 ? index : final + 1;
+  }
+  return lineBreak > start + (index - start) / 2 ? lineBreak : index;
+};
+
+/** Splits normalized output into the bounded pieces stored as separate events. */
+export const splitLogText = (
+  text: string,
+  maxBytes: number = LOG_BOUNDS.maxEventBytes,
+  maxLines: number = LOG_BOUNDS.maxEventLines,
+): string[] => {
+  const pieces: string[] = [];
+  for (let start = 0; start < text.length; ) {
+    const end = eventEnd(text, start, maxBytes, maxLines);
+    pieces.push(text.slice(start, end));
+    start = end;
+  }
+  return pieces;
+};
+
+/** The newest text within `maxBytes` that does not begin inside an SGR sequence. */
+const styledSuffix = (text: string, maxBytes: number): string => {
+  const suffix = utf8Suffix(text, maxBytes);
+  const start = text.length - suffix.length;
+  if (start === 0) return suffix;
+  const escape = text.lastIndexOf("\u001b", start - 1);
+  if (escape < 0) return suffix;
+  const final = text.indexOf("m", escape);
+  return final >= start ? text.slice(final + 1) : suffix;
+};
+
 export class LogBuffer {
   private snapshot: ReadonlyArray<BackgroundLogEvent> | undefined;
-  private store: BackgroundLogEvent[] = [];
+  // Evicted slots are cleared at once so their text is released; compaction only reclaims slots.
+  private store: Array<BackgroundLogEvent | undefined> = [];
   private start = 0;
+  private gapPending = false;
   bytes = 0;
   droppedBytes = 0;
   nextCursor = 1;
 
+  get size(): number {
+    return this.store.length - this.start;
+  }
+
+  /** Retained text plus a fixed per-event overhead, so floods of tiny writes stay bounded. */
+  get chargedBytes(): number {
+    return this.bytes + this.size * LOG_BOUNDS.eventOverheadBytes;
+  }
+
+  get latestCursor(): number {
+    return this.nextCursor - 1;
+  }
+
+  /** The afterCursor value that reads from the oldest retained event. */
+  get earliestCursor(): number {
+    return (this.oldestEvent?.cursor ?? this.nextCursor) - 1;
+  }
+
   get events(): ReadonlyArray<BackgroundLogEvent> {
-    return (this.snapshot ??= Object.freeze(this.store.slice(this.start)));
+    return (this.snapshot ??= Object.freeze(this.range(this.start)));
   }
 
   get oldestEvent(): BackgroundLogEvent | undefined {
     return this.store[this.start];
   }
 
+  /** Stores normalized text as bounded events, keeping the newest that fit `maxBytes`. */
   append(
     stream: BackgroundLogStream,
     text: string,
     timestamp: number,
     maxBytes: number,
-    droppedBefore = false,
   ): LogBuffer {
     if (!text) return this;
-    const originalBytes = utf8ByteLength(text);
-    const tail = utf8Suffix(text, maxBytes);
-    const bytes = utf8ByteLength(tail);
-    if (tail) {
+    const pieces = splitLogText(text);
+    const sizes = pieces.map(utf8ByteLength);
+    let first = pieces.length;
+    let charged = 0;
+    while (first > 0) {
+      const next = charged + (sizes[first - 1] ?? 0) + LOG_BOUNDS.eventOverheadBytes;
+      if (next > maxBytes) break;
+      charged = next;
+      first -= 1;
+    }
+    if (first === pieces.length) {
+      // Only a budget smaller than one event reaches this: keep what fits of the newest piece.
+      const newest = pieces.at(-1) ?? "";
+      const kept = styledSuffix(newest, maxBytes - LOG_BOUNDS.eventOverheadBytes);
+      for (const bytes of sizes.slice(0, -1)) this.addDropped(bytes);
+      this.addDropped((sizes.at(-1) ?? 0) - utf8ByteLength(kept));
+      pieces.splice(0, pieces.length, kept);
+      first = 0;
+    } else for (const bytes of sizes.slice(0, first)) this.addDropped(bytes);
+    for (const piece of pieces.slice(first)) {
+      if (!piece) continue;
       this.snapshot = undefined;
+      const bytes = utf8ByteLength(piece);
       this.store.push(
         Object.freeze({
           cursor: this.nextCursor,
           stream,
-          text: tail,
+          text: ownedText(piece),
           timestamp,
           bytes,
-          ...((droppedBefore || bytes < originalBytes) && { droppedBefore: true as const }),
+          ...(this.gapPending && { droppedBefore: true as const }),
         }),
       );
+      this.gapPending = false;
+      this.bytes += bytes;
+      this.nextCursor += 1;
     }
-    this.bytes += bytes;
-    this.droppedBytes += originalBytes - bytes;
-    this.nextCursor += 1;
-    while (this.bytes > maxBytes && this.oldestEvent) this.dropOldest();
+    while (this.chargedBytes > maxBytes && this.oldestEvent) this.dropOldest();
     return this;
   }
 
+  /** Counts output lost before reaching the buffer; the next stored event follows a gap. */
   addDropped(droppedBytes: number): LogBuffer {
-    if (droppedBytes > 0) this.droppedBytes += droppedBytes;
+    if (droppedBytes > 0) {
+      this.droppedBytes += droppedBytes;
+      this.gapPending = true;
+    }
     return this;
   }
 
@@ -64,6 +180,7 @@ export class LogBuffer {
     const first = this.oldestEvent;
     if (!first) return this;
     this.snapshot = undefined;
+    this.store[this.start] = undefined;
     this.start += 1;
     this.bytes -= first.bytes;
     this.droppedBytes += first.bytes;
@@ -73,44 +190,61 @@ export class LogBuffer {
     }
     return this;
   }
-}
 
-function eventsFrom(
-  events: ReadonlyArray<BackgroundLogEvent>,
-  index: number,
-  offset: number,
-): ReadonlyArray<BackgroundLogEvent> {
-  const first = events[index];
-  if (!first || offset >= first.text.length) return events.slice(index + 1);
-  const text = first.text.slice(offset);
-  return [
-    Object.freeze({ ...first, text, bytes: utf8ByteLength(text) }),
-    ...events.slice(index + 1),
-  ];
-}
-
-function tailEvents(
-  events: ReadonlyArray<BackgroundLogEvent>,
-  lineLimit: number,
-): ReadonlyArray<BackgroundLogEvent> {
-  if (lineLimit <= 0) return [];
-  let ignoredBreaks = events.at(-1)?.text.endsWith("\n") ? 1 : 0;
-  let linesLeft = lineLimit;
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const text = events[index]?.text ?? "";
-    for (let end = text.length; end > 0; ) {
-      const newline = text.lastIndexOf("\n", end - 1);
-      if (newline < 0) break;
-      end = newline;
-      if (ignoredBreaks > 0) {
-        ignoredBreaks -= 1;
-        continue;
-      }
-      linesLeft -= 1;
-      if (linesLeft === 0) return eventsFrom(events, index, newline + 1);
+  /** Retained events after `cursor`, found by binary search without copying older events. */
+  eventsAfter(cursor: number): BackgroundLogEvent[] {
+    let low = this.start;
+    let high = this.store.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if ((this.store[middle]?.cursor ?? Number.POSITIVE_INFINITY) > cursor) high = middle;
+      else low = middle + 1;
     }
+    return this.range(low);
   }
-  return events.slice();
+
+  /** The events holding the last `lineLimit` logical lines, trimming the first at a line start. */
+  tail(lineLimit: number): BackgroundLogEvent[] {
+    if (lineLimit <= 0) return [];
+    let ignoredBreaks = this.store.at(-1)?.text.endsWith("\n") ? 1 : 0;
+    let linesLeft = lineLimit;
+    for (let index = this.store.length - 1; index >= this.start; index -= 1) {
+      const event = this.store[index];
+      const text = event?.text ?? "";
+      for (let end = text.length; end > 0; ) {
+        const newline = text.lastIndexOf("\n", end - 1);
+        if (newline < 0) break;
+        end = newline;
+        if (ignoredBreaks > 0) {
+          ignoredBreaks -= 1;
+          continue;
+        }
+        linesLeft -= 1;
+        if (linesLeft === 0 && event) return this.trimmedFrom(index, event, newline + 1);
+      }
+    }
+    return this.range(this.start);
+  }
+
+  private trimmedFrom(
+    index: number,
+    event: BackgroundLogEvent,
+    offset: number,
+  ): BackgroundLogEvent[] {
+    const rest = this.range(index + 1);
+    if (offset >= event.text.length) return rest;
+    const text = event.text.slice(offset);
+    return [Object.freeze({ ...event, text, bytes: utf8ByteLength(text) }), ...rest];
+  }
+
+  private range(from: number): BackgroundLogEvent[] {
+    const events: BackgroundLogEvent[] = [];
+    for (let index = from; index < this.store.length; index += 1) {
+      const event = this.store[index];
+      if (event) events.push(event);
+    }
+    return events;
+  }
 }
 
 export function readLogBuffer(
@@ -119,17 +253,17 @@ export function readLogBuffer(
   state: BackgroundTaskState,
   options: { readonly afterCursor?: number; readonly tailLines?: number },
 ): BackgroundLogSlice {
-  const afterCursor = options.afterCursor;
-  const filtered =
-    afterCursor === undefined
-      ? tailEvents(buffer.events, options.tailLines ?? 200)
-      : buffer.events.filter((event) => event.cursor > afterCursor);
+  const events =
+    options.afterCursor === undefined
+      ? buffer.tail(options.tailLines ?? 200)
+      : buffer.eventsAfter(options.afterCursor);
   return Object.freeze({
     id,
-    events: Object.freeze(filtered),
-    nextCursor: buffer.nextCursor - 1,
-    earliestAvailableCursor: buffer.oldestEvent?.cursor ?? buffer.nextCursor,
+    events: Object.freeze(events),
+    nextCursor: buffer.latestCursor,
+    earliestAvailableCursor: buffer.earliestCursor,
     droppedBytes: buffer.droppedBytes,
+    retainedBytes: buffer.bytes,
     state,
   });
 }

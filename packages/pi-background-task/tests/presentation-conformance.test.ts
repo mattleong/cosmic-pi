@@ -85,3 +85,49 @@ it("uses the registering owner's scheduler and releases it when the call settles
   expect(probe?.invalidated).toBe(true);
   expect(probe?.stops).toBeGreaterThan(0);
 });
+
+it.each(["compact", "preview"] as const)(
+  "shows the stored failure cause after a hook rewrites the text in %s style",
+  (style) => {
+    const failureCause = "FAIL tests/auth.test.ts > adds";
+    const harness = createToolPresentationHarness(registeredTool("on", style));
+    const [collapsed] = harness.cycle(
+      { action: "status", id: "task-1" },
+      {
+        content: [{ type: "text", text: "Rewritten by a tool_result hook" }],
+        details: {
+          action: "status",
+          snapshot: { ...snapshot, state: "failed", exitCode: 1, endedAt: 2, failureCause },
+        },
+      },
+      { states: [false] },
+    );
+    expect(collapsed?.text).toContain(failureCause);
+  },
+);
+
+it.each(["compact", "preview"] as const)(
+  "names the task whose logs were read in %s style",
+  (style) => {
+    const harness = createToolPresentationHarness(registeredTool("on", style));
+    const [collapsed] = harness.cycle(
+      { action: "logs", id: "task-1" },
+      {
+        content: [{ type: "text", text: "[task-1 state=running cursor=10 earliest=1]\nready\n" }],
+        details: {
+          action: "logs",
+          logs: {
+            id: "task-1",
+            state: "running",
+            nextCursor: 10,
+            earliestAvailableCursor: 1,
+            droppedBytes: 0,
+          },
+          task: { name: "dev server", command: "pnpm dev" },
+        },
+      },
+      { states: [false] },
+    );
+    expect(collapsed?.text).toContain("dev server");
+  },
+);

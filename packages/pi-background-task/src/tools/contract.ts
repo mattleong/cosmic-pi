@@ -1,17 +1,12 @@
-import {
-  sanitizeDiagnosticError,
-  sanitizeTerminalLine,
-  stripTerminalControls,
-  utf8Suffix,
-} from "pi-cosmic-core";
+import { sanitizeDiagnosticError, sanitizeTerminalLine } from "pi-cosmic-core";
 import { BACKGROUND_TASK_FIELD_BOUNDS as BOUNDS } from "../task/bounds.ts";
 import {
   isActiveTaskState,
-  type BackgroundLogEvent,
   type BackgroundLogSlice,
   type BackgroundTaskState,
   type BackgroundTaskStatus,
   type BackgroundTaskStatusWait,
+  type BackgroundTaskStopResult,
 } from "../task/model.ts";
 import {
   BACKGROUND_TASK_CONTRACT_ID,
@@ -22,10 +17,12 @@ import {
   type BackgroundTaskClearContract,
   type BackgroundTaskContractTask,
   type BackgroundTaskLogsContract,
+  type BackgroundTaskStopContract,
   type BackgroundTaskTaskActionContract,
   type BackgroundTaskTasksActionContract,
   type BackgroundTaskWaitContract,
 } from "./contract-schema.ts";
+import { pageLogSlice, pageOmission } from "./log-page.ts";
 
 const envelope = {
   contract: BACKGROUND_TASK_CONTRACT_ID,
@@ -33,7 +30,7 @@ const envelope = {
   tool: BACKGROUND_TASK_TOOL_NAME,
 } as const;
 
-const metadata = (value: string | undefined, maximum: number): string | undefined => {
+export const redactedLine = (value: string | undefined, maximum: number): string | undefined => {
   const line = value === undefined ? "" : sanitizeTerminalLine(value);
   return line ? sanitizeDiagnosticError(line, { maximumLength: maximum }) : undefined;
 };
@@ -41,10 +38,10 @@ const metadata = (value: string | undefined, maximum: number): string | undefine
 const isFinished = (state: BackgroundTaskState): boolean => !isActiveTaskState(state);
 
 const projectTaskContract = (task: BackgroundTaskStatus): BackgroundTaskContractTask => {
-  const name = metadata(task.name, BOUNDS.maxNameChars);
-  const signal = metadata(task.signal, BOUNDS.maxSignalChars);
-  const error = metadata(task.error, BOUNDS.maxErrorChars);
-  const cause = metadata(task.failureCause, MAX_CONTRACT_CAUSE_CHARS);
+  const name = redactedLine(task.name, BOUNDS.maxNameChars);
+  const signal = redactedLine(task.signal, BOUNDS.maxSignalChars);
+  const error = redactedLine(task.error, BOUNDS.maxErrorChars);
+  const cause = redactedLine(task.failureCause, MAX_CONTRACT_CAUSE_CHARS);
   return {
     id: task.id,
     ...(name !== undefined && { name }),
@@ -66,6 +63,13 @@ export const taskActionContract = (
   task: BackgroundTaskStatus,
 ): BackgroundTaskTaskActionContract => ({ ...envelope, action, task: projectTaskContract(task) });
 
+export const stopContract = (stop: BackgroundTaskStopResult): BackgroundTaskStopContract => ({
+  ...envelope,
+  action: "stop",
+  task: projectTaskContract(stop.snapshot),
+  alreadyFinished: stop.alreadyFinished,
+});
+
 export const tasksActionContract = (
   action: BackgroundTaskTasksActionContract["action"],
   tasks: ReadonlyArray<BackgroundTaskStatus>,
@@ -75,25 +79,24 @@ export const tasksActionContract = (
   tasks: tasks.map(projectTaskContract),
 });
 
-export const combinedLogOutput = (events: ReadonlyArray<BackgroundLogEvent>): string =>
-  stripTerminalControls(
-    events.map((event) => `${event.stream === "stderr" ? "[stderr] " : ""}${event.text}`).join(""),
-  );
-
+/** Pages the slice independently of the text result, within the structured output bound. */
 export const logsContract = (
   slice: BackgroundLogSlice,
-  output: string,
+  direction: "forward" | "tail",
 ): BackgroundTaskLogsContract => {
-  const clipped = utf8Suffix(output, MAX_CONTRACT_LOG_OUTPUT_BYTES);
+  const page = pageLogSlice(slice, direction, {
+    maxBytes: MAX_CONTRACT_LOG_OUTPUT_BYTES,
+    maxLines: Number.POSITIVE_INFINITY,
+  });
   return {
     ...envelope,
     action: "logs",
     id: slice.id,
     state: slice.state,
     finished: isFinished(slice.state),
-    output: clipped,
-    truncated: clipped.length < output.length,
-    nextCursor: slice.nextCursor,
+    output: page.output,
+    truncated: pageOmission(slice, direction, page) !== undefined,
+    nextCursor: page.nextCursor,
     earliestAvailableCursor: slice.earliestAvailableCursor,
     droppedBytes: slice.droppedBytes,
   };
@@ -108,6 +111,7 @@ export const waitContract = (wait: BackgroundTaskStatusWait): BackgroundTaskWait
   earliestAvailableCursor: wait.earliestAvailableCursor,
   droppedBytes: wait.droppedBytes,
   ...(wait.matchCursor !== undefined && { matchCursor: wait.matchCursor }),
+  appliedWaitSeconds: wait.appliedWaitSeconds,
 });
 
 export const clearContract = (removed: number): BackgroundTaskClearContract => ({

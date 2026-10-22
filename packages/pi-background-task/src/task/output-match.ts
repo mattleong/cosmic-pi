@@ -1,5 +1,7 @@
 import type { BackgroundLogSlice, BackgroundLogStream } from "./model.ts";
+import { plainTerminalText } from "./terminal-text.ts";
 
+/** Matches literal text in the plain output readers see, per stream and never across a gap. */
 export class OutputMatcher {
   private readonly carry = { stdout: "", stderr: "" } satisfies Record<BackgroundLogStream, string>;
   private readonly contains: string | undefined;
@@ -17,11 +19,11 @@ export class OutputMatcher {
   match(slice: BackgroundLogSlice): number | undefined {
     const contains = this.contains;
     if (!contains) return undefined;
-    if (slice.earliestAvailableCursor > this.scannedCursor + 1) this.reset();
+    if (slice.earliestAvailableCursor > this.scannedCursor) this.reset();
     let matchCursor: number | undefined;
     for (const event of slice.events) {
       if (event.droppedBefore) this.reset();
-      const candidate = this.carry[event.stream] + event.text;
+      const candidate = this.carry[event.stream] + plainTerminalText(event.text);
       if (candidate.includes(contains)) {
         matchCursor = event.cursor;
         break;

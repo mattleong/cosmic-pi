@@ -3,6 +3,7 @@ import * as Schema from "effect/Schema";
 import { freezeSnapshot, utf8ByteLength } from "pi-cosmic-core";
 import { BACKGROUND_TASK_FIELD_BOUNDS as BOUNDS } from "../task/bounds.ts";
 import {
+  AppliedWaitSecondsSchema,
   BackgroundLogMetadataSchema,
   BackgroundTaskSnapshotSchema,
   BackgroundTaskWaitResultSchema,
@@ -51,7 +52,7 @@ const TaskContractSchema = Schema.Struct({
 
 const LogOutput = Schema.String.annotate({
   description:
-    "Newest sanitized stdout/stderr from the requested slice, at most 1 MiB of UTF-8. Stderr prefixes may be clipped. Not credential-redacted; defaults to the last 200 lines.",
+    "Sanitized plain stdout/stderr, at most 1 MiB of UTF-8, with each stderr line prefixed `[stderr] `. Not credential-redacted. Without afterCursor it holds the newest output, by default the last 200 lines.",
 }).check(
   Schema.isMaxLength(MAX_CONTRACT_LOG_OUTPUT_BYTES),
   Schema.makeFilter((output: string) => utf8ByteLength(output) <= MAX_CONTRACT_LOG_OUTPUT_BYTES, {
@@ -61,8 +62,17 @@ const LogOutput = Schema.String.annotate({
 
 const TaskActionContractSchema = Schema.Struct({
   ...envelope,
-  action: Schema.Literals(["start", "status", "stop"]),
+  action: Schema.Literals(["start", "status"]),
   task: TaskContractSchema,
+});
+
+const StopContractSchema = Schema.Struct({
+  ...envelope,
+  action: Schema.Literal("stop"),
+  task: TaskContractSchema,
+  alreadyFinished: Schema.Boolean.annotate({
+    description: "The task had already finished, so this call stopped nothing.",
+  }),
 });
 
 const TasksActionContractSchema = Schema.Struct({
@@ -80,11 +90,17 @@ const LogsContractSchema = Schema.Struct({
   output: LogOutput,
   truncated: Schema.Boolean.annotate({
     description:
-      "Output was clipped to its newest bytes. Clipped bytes cannot be paged; droppedBytes counts buffer loss separately.",
+      "Retained output was left out, as the text result reports. After an afterCursor read, more output follows: read on from nextCursor. A read without afterCursor shows the newest output, by line limit or size, and earlier output is readable from earliestAvailableCursor.",
   }),
-  nextCursor: logs.nextCursor,
-  earliestAvailableCursor: logs.earliestAvailableCursor,
-  droppedBytes: logs.droppedBytes,
+  nextCursor: logs.nextCursor.annotate({
+    description: "Pass as afterCursor to read the output that follows this result.",
+  }),
+  earliestAvailableCursor: logs.earliestAvailableCursor.annotate({
+    description: "Pass as afterCursor to read from the oldest retained output.",
+  }),
+  droppedBytes: logs.droppedBytes.annotate({
+    description: "Output the task's log buffer already discarded; it cannot be read again.",
+  }),
 });
 
 const WaitContractSchema = Schema.Struct({
@@ -98,6 +114,10 @@ const WaitContractSchema = Schema.Struct({
   earliestAvailableCursor: wait.earliestAvailableCursor,
   droppedBytes: wait.droppedBytes,
   matchCursor: wait.matchCursor,
+  appliedWaitSeconds: AppliedWaitSecondsSchema.annotate({
+    description:
+      "The longest this call would wait: waitSeconds capped by the maxWaitSeconds setting, which is also the default. After a timeout, call wait again.",
+  }),
 });
 
 const ClearContractSchema = Schema.Struct({
@@ -108,6 +128,7 @@ const ClearContractSchema = Schema.Struct({
 
 export const BackgroundTaskContractSchema = Schema.Union([
   TaskActionContractSchema,
+  StopContractSchema,
   TasksActionContractSchema,
   LogsContractSchema,
   WaitContractSchema,
@@ -117,6 +138,7 @@ export const BackgroundTaskContractSchema = Schema.Union([
 export type BackgroundTaskContract = typeof BackgroundTaskContractSchema.Type;
 export type BackgroundTaskContractTask = typeof TaskContractSchema.Type;
 export type BackgroundTaskTaskActionContract = typeof TaskActionContractSchema.Type;
+export type BackgroundTaskStopContract = typeof StopContractSchema.Type;
 export type BackgroundTaskTasksActionContract = typeof TasksActionContractSchema.Type;
 export type BackgroundTaskLogsContract = typeof LogsContractSchema.Type;
 export type BackgroundTaskWaitContract = typeof WaitContractSchema.Type;

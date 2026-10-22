@@ -122,8 +122,14 @@ function detailRows(
   switch (details.action) {
     case "start":
     case "status":
-    case "stop":
       return [{ text: taskPreviewLine(details.snapshot, theme) }];
+    case "stop":
+      return [
+        { text: taskPreviewLine(details.snapshot, theme) },
+        ...(details.alreadyFinished
+          ? [{ text: theme.fg("muted", "Already finished; nothing was stopped") }]
+          : []),
+      ];
     case "wait":
       return waitRows(details, args, theme);
     case "list":
@@ -140,7 +146,7 @@ function detailRows(
         { text: theme.fg("muted", `Removed ${countLabel(details.removed, "completed task")}`) },
       ];
     case "logs": {
-      const lines = backgroundLogLines(text, details.logs);
+      const lines = backgroundLogLines(text, details);
       return lines.length === 0
         ? [{ text: theme.fg("muted", "No new output") }]
         : boundedLines(lines, "log lines", theme);

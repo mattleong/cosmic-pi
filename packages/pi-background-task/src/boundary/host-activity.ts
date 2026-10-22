@@ -4,13 +4,14 @@ import {
   type ActivityEvents,
   type ActivityItem,
 } from "pi-cosmic-ui/activity";
-import { sanitizeDiagnosticContent } from "pi-cosmic-core";
+import { safeTextSuffix, sanitizeDiagnosticContent } from "pi-cosmic-core";
 import {
   isActiveTaskState,
   sortTasksByActivity,
   type BackgroundTaskProjection,
   type BackgroundTaskState,
 } from "../task/model.ts";
+import { plainTerminalText } from "../task/terminal-text.ts";
 import type { BackgroundTaskProjectionBridge } from "./host-ui.ts";
 import { taskStateLabel } from "../ui/task-state.ts";
 
@@ -78,9 +79,10 @@ export function backgroundTaskActivityDetail(
   if (!task) return undefined;
   let remaining = 12_000;
   const chunks: string[] = [];
+  // Plain text per event, so trimming never splits a color sequence into visible text.
   for (const event of task.logs.toReversed()) {
     if (remaining <= 0) break;
-    const text = event.text.slice(-remaining);
+    const text = safeTextSuffix(plainTerminalText(event.text), remaining);
     chunks.push(text);
     remaining -= text.length;
   }

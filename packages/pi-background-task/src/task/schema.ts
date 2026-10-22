@@ -37,6 +37,8 @@ export const BackgroundTaskSnapshotSchema = Schema.Struct({
   exitCode: Schema.optionalKey(Schema.NullOr(Schema.Int)),
   signal: Schema.optionalKey(MaxChars(BOUNDS.maxSignalChars)),
   error: Schema.optionalKey(MaxChars(BOUNDS.maxErrorChars)),
+  // A short, credential-redacted output line naming why a failed task failed.
+  failureCause: Schema.optionalKey(MaxChars(BOUNDS.maxErrorChars)),
   logCursor: Schema.Natural,
   droppedLogBytes: Schema.Natural,
 });
@@ -60,43 +62,47 @@ export const BackgroundTaskWaitResultSchema = Schema.Struct({
   matchCursor: Schema.optionalKey(Schema.Natural),
 });
 
-const CauseSpans = Schema.optionalKey(
-  Schema.Array(Schema.Struct({ id: TaskId, start: Schema.Natural, end: Schema.Natural })).check(
-    Schema.isMaxLength(BOUNDS.maxSnapshots),
-  ),
+export const AppliedWaitSecondsSchema = Schema.Finite.check(
+  Schema.isBetween({ minimum: 0, maximum: BOUNDS.maxWaitSeconds }),
 );
 
 export const BackgroundTaskDetailsSchema = Schema.Union([
   Schema.Struct({
-    action: Schema.Literals(["start", "status", "stop"]),
+    action: Schema.Literals(["start", "status"]),
     snapshot: BackgroundTaskSnapshotSchema,
-    causes: CauseSpans,
+  }),
+  Schema.Struct({
+    action: Schema.Literal("stop"),
+    snapshot: BackgroundTaskSnapshotSchema,
+    // The task had already finished, so this call stopped nothing.
+    alreadyFinished: Schema.Boolean,
   }),
   Schema.Struct({
     action: Schema.Literals(["list", "stop_all"]),
     tasks: BackgroundTaskSnapshotsSchema,
-    causes: CauseSpans,
   }),
   Schema.Struct({
     action: Schema.Literal("logs"),
     logs: BackgroundLogMetadataSchema,
+    task: Schema.Struct({
+      name: BackgroundTaskSnapshotSchema.fields.name,
+      command: BackgroundTaskSnapshotSchema.fields.command,
+    }),
+    // Retained output this text leaves out; reading from resumeAfterCursor recovers it.
     truncation: Schema.optionalKey(
       Schema.Struct({
-        truncated: Schema.Boolean,
-        outputBytes: Schema.Natural,
-        totalBytes: Schema.Natural,
-        outputLines: Schema.Natural,
-        totalLines: Schema.Natural,
+        omitted: Schema.Literals(["earlier", "later"]),
+        omittedBytes: Schema.Natural,
+        resumeAfterCursor: Schema.Natural,
+        // Part of one event too large for the whole result; paging cannot show it.
+        cutBytes: Schema.optionalKey(Schema.Natural),
       }),
     ),
   }),
   Schema.Struct({
     action: Schema.Literal("wait"),
     wait: BackgroundTaskWaitResultSchema,
-    appliedWaitSeconds: Schema.optionalKey(
-      Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: BOUNDS.maxWaitSeconds })),
-    ),
-    causes: CauseSpans,
+    appliedWaitSeconds: AppliedWaitSecondsSchema,
   }),
   Schema.Struct({ action: Schema.Literal("clear"), removed: Schema.Natural }),
 ]);

@@ -44,6 +44,8 @@ interface BackgroundTaskSessionActivation extends BackgroundTaskSessionInput {
 }
 
 const UNAVAILABLE = "Background Tasks aren't available in this session";
+const REPLACED = "Background Tasks session was replaced";
+const CANCELLED = "Opening background tasks was cancelled";
 
 export interface BackgroundTaskApplicationBoundaries {
   readonly loadSettings: (
@@ -110,12 +112,16 @@ export function registerBackgroundTaskApplication(
       bridge.setFooterEnabled(prepared.config.showFooterStatus);
       bridge.setContext(ctx);
       openActivity = (signal) => {
-        if (!slot.isCurrent(token) || signal?.aborted) throw new Error(UNAVAILABLE);
+        // A retired activation explains the failure even when its signal was also aborted.
+        const interruption = (retired: string) =>
+          !slot.isCurrent(token) ? retired : signal?.aborted ? CANCELLED : undefined;
+        const unavailable = interruption(UNAVAILABLE);
+        if (unavailable) return Promise.reject(new Error(unavailable));
         const capability = sessionId ? discoverActivityView(pi.events, sessionId) : undefined;
         return Promise.resolve(capability ? capability.open("tasks", signal) : false).then(
           (opened) => {
-            if (!slot.isCurrent(token) || signal?.aborted)
-              throw new Error("Background Tasks session was replaced");
+            const interrupted = interruption(REPLACED);
+            if (interrupted) throw new Error(interrupted);
             return opened;
           },
         );
@@ -168,6 +174,7 @@ export function registerBackgroundTaskApplication(
 
   registerTasksCommand(pi, bridge, {
     captureAuthority: slot.captureAuthority,
+    isAvailable: slot.isActive,
     openActivity: (signal) =>
       openActivity ? openActivity(signal) : Promise.reject(new Error(UNAVAILABLE)),
     stop: (id) => stopTask(id),

@@ -1,29 +1,27 @@
 import { StringDecoder } from "node:string_decoder";
 import {
-  effectProcessExit,
+  guardProcessGroupAtHostExit,
   nodeFilePlatformLayer,
-  nodeProcessLayer,
-  signalProcess,
   signalProcessGroup,
   utf8ByteLength,
   utf8Suffix,
+  type ProcessGroupExitGuard,
 } from "pi-cosmic-core";
 import type * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import type * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import * as ChildProcess from "effect/process/ChildProcess";
-import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import type { BackgroundLogStream } from "../task/model.ts";
+import { nodeSpawn, type NodeChildProcess } from "./node-builtins.ts";
 
 const INGRESS_CHUNKS = 32;
 const GROUP_EXIT_POLL = "20 millis";
@@ -57,8 +55,13 @@ export interface LocalProcessExit {
 export interface LocalProcessHandle {
   readonly pid: number;
   readonly output: Stream.Stream<LocalProcessOutput>;
+  /** Completes after the leader exits and its process group settles. */
   readonly awaitExit: Effect.Effect<LocalProcessExit>;
+  /** The leader has exited, even if its process group is still settling. */
+  readonly leaderExited: Effect.Effect<boolean>;
   readonly droppedOutputBytes: () => number;
+  /** Ends the output stream and counts output that was never delivered as dropped. */
+  readonly abandonOutput: Effect.Effect<void>;
   readonly terminate: (mode: "graceful" | "force") => Effect.Effect<void, LocalProcessError>;
 }
 
@@ -111,13 +114,6 @@ interface ProcessTreeTermination {
   readonly settleExit: Effect.Effect<void>;
 }
 
-const dispatchGracefulTermination = (pid: number) => {
-  if (signalProcessGroup(pid, "SIGTERM") !== "present") signalProcess(pid, "SIGTERM");
-};
-
-const terminateLingeringGroup = (pid: number) =>
-  Effect.sync(() => void signalProcessGroup(pid, "SIGKILL"));
-
 const awaitGroupExit = (pid: number) =>
   Effect.sync(() => signalProcessGroup(pid, 0)).pipe(
     Effect.repeat({
@@ -128,40 +124,59 @@ const awaitGroupExit = (pid: number) =>
   );
 
 interface GroupLeader {
-  readonly isRunning: Effect.Effect<boolean, PlatformError.PlatformError>;
-  readonly kill: (options: {
-    readonly killSignal: "SIGKILL";
-  }) => Effect.Effect<void, PlatformError.PlatformError>;
+  /** The leader's exit was observed. Until then its ID stays reserved for its group. */
+  readonly exited: () => boolean;
+  readonly awaitExit: Effect.Effect<LocalProcessExit>;
+  /** Signals the leader alone, for a group that refuses the signal. */
+  readonly kill: () => void;
 }
 
-const makePosixGroupTermination = (pid: number, child: GroupLeader) =>
+const makePosixGroupTermination = (
+  pid: number,
+  leader: GroupLeader,
+  exitGuard: ProcessGroupExitGuard,
+) =>
   Effect.gen(function* () {
     const forceRequested = yield* Deferred.make<void>();
     let gracefulStop = false;
-    const forceLeader = child.isRunning.pipe(
-      Effect.orElseSucceed(() => true),
-      Effect.flatMap((running) =>
-        running
-          ? child.kill({ killSignal: "SIGKILL" }).pipe(
-              Effect.timeoutOrElse({
-                duration: "2 seconds",
-                orElse: () => Effect.fail(processError("terminate")),
-              }),
-            )
-          : terminateLingeringGroup(pid),
-      ),
-      Effect.mapError((error) =>
-        error instanceof LocalProcessError ? error : processError("terminate"),
-      ),
-    );
+    // Once the group is confirmed gone or swept after leader exit, its ID may be reused, so it is
+    // never signalled again.
+    let groupSettled = false;
+    const markSettled = Effect.suspend(() => {
+      groupSettled = true;
+      return exitGuard.release;
+    });
+    const sweepExitedGroup = Effect.suspend(() => {
+      if (groupSettled) return Effect.void;
+      signalProcessGroup(pid, "SIGKILL");
+      return markSettled;
+    });
+    const forceLeader = Effect.suspend(() => {
+      if (leader.exited()) return sweepExitedGroup;
+      if (signalProcessGroup(pid, "SIGKILL") !== "present") leader.kill();
+      return leader.awaitExit.pipe(
+        Effect.timeoutOrElse({
+          duration: "2 seconds",
+          orElse: () => Effect.fail(processError("terminate")),
+        }),
+        Effect.andThen(
+          Effect.suspend(() =>
+            signalProcessGroup(pid, 0) === "absent" ? markSettled : Effect.void,
+          ),
+        ),
+      );
+    });
+    // The group ID stays reserved while the leader runs, so it is the only signal target.
+    const signalGracefully = Effect.suspend(() => {
+      gracefulStop = true;
+      if (groupSettled) return Effect.void;
+      return signalProcessGroup(pid, "SIGTERM") === "absent" ? markSettled : Effect.void;
+    });
     return {
       terminate: (mode) =>
         mode === "force"
           ? Deferred.succeed(forceRequested, undefined).pipe(Effect.andThen(forceLeader))
-          : Effect.sync(() => {
-              gracefulStop = true;
-              dispatchGracefulTermination(pid);
-            }),
+          : signalGracefully,
       settleExit: Effect.suspend(() =>
         gracefulStop
           ? Effect.raceFirst(
@@ -169,7 +184,7 @@ const makePosixGroupTermination = (pid: number, child: GroupLeader) =>
               Deferred.await(forceRequested).pipe(Effect.as(false)),
             )
           : Effect.succeed(false),
-      ).pipe(Effect.flatMap((gone) => (gone ? Effect.void : terminateLingeringGroup(pid)))),
+      ).pipe(Effect.flatMap((gone) => (gone ? markSettled : sweepExitedGroup))),
     } satisfies ProcessTreeTermination;
   });
 
@@ -189,37 +204,72 @@ const verifyCwd = (fs: FileSystem.FileSystem, cwd: string) =>
     ),
   );
 
-const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (
-  spawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
+/**
+ * Starts the shell as the leader of its own process group. The boundary spawns it directly so
+ * that it alone signals the group: Effect's process spawner signals a group again after a nonzero
+ * exit, including at scope release, when the group may have settled and its ID been reused.
+ */
+const spawnGroupLeader = (
   request: LocalProcessRequest,
-) {
+  leaderExit: Deferred.Deferred<LocalProcessExit>,
+) =>
+  Effect.callback<NodeChildProcess, LocalProcessError>((resume) => {
+    let child: NodeChildProcess;
+    try {
+      child = nodeSpawn(request.command, [], {
+        cwd: request.cwd,
+        detached: true,
+        env: makeBackgroundProcessEnvironment(process.env),
+        shell: request.shellPath ?? true,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch {
+      resume(Effect.fail(processError("spawn")));
+      return Effect.void;
+    }
+    // Registered at spawn so no exit goes unobserved, and kept for the child's lifetime so a
+    // later child error cannot surface as an unhandled host error.
+    child.once("exit", (exitCode, signal) =>
+      Deferred.doneUnsafe(leaderExit, Exit.succeed({ exitCode, ...(signal && { signal }) })),
+    );
+    child.on("error", () => resume(Effect.fail(processError("spawn"))));
+    child.once("spawn", () => resume(Effect.succeed(child)));
+    // Before the spawn event the leader's exit is unobserved, so its ID is still its own.
+    return Effect.sync(() => void child.kill("SIGKILL"));
+  });
+
+const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (request: LocalProcessRequest) {
   const ingressBufferBytes = Math.max(1, Math.floor(request.ingressBufferBytes));
   const outputQueue = yield* Queue.dropping<LocalProcessOutput, Cause.Done>(INGRESS_CHUNKS);
-  const stdoutDecoder = new StringDecoder("utf8");
-  const stderrDecoder = new StringDecoder("utf8");
+  const decoders = {
+    stdout: new StringDecoder("utf8"),
+    stderr: new StringDecoder("utf8"),
+  } satisfies Record<BackgroundLogStream, StringDecoder>;
   let queuedBytes = 0;
   let totalDroppedBytes = 0;
   let reportedDroppedBytes = 0;
   let outputClosed = false;
 
-  const command = ChildProcess.make(request.command, [], {
-    cwd: request.cwd,
-    detached: true,
-    env: makeBackgroundProcessEnvironment(process.env),
-    extendEnv: false,
-    shell: request.shellPath ?? true,
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "pipe",
-    killSignal: "SIGTERM",
-    forceKillAfter: 1_000,
-  });
-  const child = yield* spawner.spawn(command).pipe(
-    Effect.mapError(() => processError("spawn")),
-    Effect.catchDefect(() => Effect.fail(processError("spawn"))),
+  const leaderExit = yield* Deferred.make<LocalProcessExit>();
+  const child = yield* spawnGroupLeader(request, leaderExit);
+  const pid = child.pid;
+  if (pid === undefined) return yield* processError("spawn");
+  // Covers host exits that skip scope cleanup until the group is confirmed settled.
+  const exitGuard = yield* guardProcessGroupAtHostExit(pid);
+  const tree = yield* makePosixGroupTermination(
+    pid,
+    {
+      exited: () => Deferred.isDoneUnsafe(leaderExit),
+      awaitExit: Deferred.await(leaderExit),
+      kill: () => void child.kill("SIGKILL"),
+    },
+    exitGuard,
   );
-  const pid = Number(child.pid);
-  const tree = yield* makePosixGroupTermination(pid, child);
+
+  const takeQueued = () => {
+    const taken = Queue.takeUnsafe(outputQueue);
+    return taken !== undefined && Exit.isSuccess(taken) ? taken.value : undefined;
+  };
 
   const offer = (stream: BackgroundLogStream, original: string) => {
     if (!original || outputClosed) return;
@@ -229,12 +279,12 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (
     if (!tail) return;
 
     while (Queue.isFullUnsafe(outputQueue) || queuedBytes + tailBytes > ingressBufferBytes) {
-      const evicted = Queue.takeUnsafe(outputQueue);
-      if (evicted?._tag !== "Success") break;
-      const evictedBytes = utf8ByteLength(evicted.value.text);
+      const evicted = takeQueued();
+      if (!evicted) break;
+      const evictedBytes = utf8ByteLength(evicted.text);
       queuedBytes = Math.max(0, queuedBytes - evictedBytes);
       totalDroppedBytes += evictedBytes;
-      reportedDroppedBytes = Math.max(0, reportedDroppedBytes - evicted.value.droppedBytes);
+      reportedDroppedBytes = Math.max(0, reportedDroppedBytes - evicted.droppedBytes);
     }
     if (Queue.isFullUnsafe(outputQueue) || queuedBytes + tailBytes > ingressBufferBytes) {
       totalDroppedBytes += tailBytes;
@@ -254,41 +304,39 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (
   };
   const closeOutput = () => {
     if (outputClosed) return;
-    offer("stdout", stdoutDecoder.end());
-    offer("stderr", stderrDecoder.end());
+    offer("stdout", decoders.stdout.end());
+    offer("stderr", decoders.stderr.end());
     outputClosed = true;
     Queue.endUnsafe(outputQueue);
   };
-  const observe = (
-    stream: "stdout" | "stderr",
-    decoder: StringDecoder,
-    source: Stream.Stream<Uint8Array, PlatformError.PlatformError>,
-  ) =>
-    source.pipe(
-      Stream.runForEach((chunk) => Effect.sync(() => offer(stream, decoder.write(chunk)))),
-      Effect.catch(() =>
-        Effect.sync(() => {
-          offer("stderr", `\nLocal process ${stream} stream failed.\n`);
-        }),
-      ),
-    );
-
-  yield* Effect.all(
-    [
-      observe("stdout", stdoutDecoder, child.stdout),
-      observe("stderr", stderrDecoder, child.stderr),
-    ],
-    { concurrency: 2, discard: true },
-  ).pipe(Effect.ensuring(Effect.sync(closeOutput)), Effect.forkScoped({ startImmediately: true }));
-  const exitFiber = yield* Effect.exit(child.exitCode).pipe(
-    Effect.flatMap((exit) => {
-      const observed = effectProcessExit(exit);
-      const result = {
-        exitCode: observed.code,
-        ...(observed.signal && { signal: observed.signal }),
-      };
-      return tree.settleExit.pipe(Effect.as(result));
-    }),
+  // Undelivered gaps were already counted in the total; only their text joins it here.
+  const abandonOutput = () => {
+    outputClosed = true;
+    for (let event = takeQueued(); event; event = takeQueued()) {
+      const bytes = utf8ByteLength(event.text);
+      queuedBytes = Math.max(0, queuedBytes - bytes);
+      totalDroppedBytes += bytes;
+    }
+    Queue.endUnsafe(outputQueue);
+  };
+  let openStreams = 2;
+  // Reading continues until each pipe ends, even after output closes, so a process that kept a
+  // pipe never blocks on it; output arriving after closing is discarded.
+  const observe = (stream: BackgroundLogStream, source: NodeChildProcess["stdout"]) => {
+    const ended = () => {
+      openStreams -= 1;
+      if (openStreams === 0) closeOutput();
+    };
+    if (!source) return ended();
+    source.on("data", (chunk: Buffer) => offer(stream, decoders[stream].write(chunk)));
+    source.once("error", () => offer("stderr", `\nLocal process ${stream} stream failed.\n`));
+    // A pipe closes after it ends or fails.
+    source.once("close", ended);
+  };
+  observe("stdout", child.stdout);
+  observe("stderr", child.stderr);
+  const exitFiber = yield* Deferred.await(leaderExit).pipe(
+    Effect.flatMap((exit) => tree.settleExit.pipe(Effect.as(exit))),
     Effect.forkScoped({ startImmediately: true }),
   );
 
@@ -305,13 +353,20 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (
     pid,
     output,
     awaitExit: Fiber.join(exitFiber),
+    leaderExited: Deferred.isDone(leaderExit),
     droppedOutputBytes: () => totalDroppedBytes,
+    abandonOutput: Effect.sync(abandonOutput),
     terminate: tree.terminate,
-    release: child.unref.pipe(
-      Effect.andThen(tree.terminate("force")),
+    release: tree.terminate("force").pipe(
       Effect.timeoutOrElse({ duration: "2500 millis", orElse: () => Effect.void }),
       Effect.ignore,
-      Effect.ensuring(Effect.sync(closeOutput)),
+      Effect.ensuring(
+        Effect.sync(() => {
+          closeOutput();
+          // A leader that outlived a failed kill no longer keeps the host running.
+          child.unref();
+        }),
+      ),
     ),
   };
 });
@@ -323,19 +378,18 @@ export class LocalProcess extends Context.Service<LocalProcess, LocalProcessCont
     Layer.effect(
       this,
       Effect.gen(function* () {
-        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
         const fs = yield* FileSystem.FileSystem;
         return LocalProcess.of({
           spawn: (request) =>
             verifyCwd(fs, request.cwd).pipe(
               Effect.andThen(
-                Effect.acquireRelease(acquireProcess(spawner, request), (handle) => handle.release),
+                Effect.acquireRelease(acquireProcess(request), (handle) => handle.release),
               ),
               Effect.map(({ release: _release, ...handle }) => handle),
             ),
         });
       }),
-    ).pipe(Layer.provide(Layer.merge(nodeProcessLayer, fileSystem)));
+    ).pipe(Layer.provide(fileSystem));
 
   static readonly layer = this.layerWith(nodeFilePlatformLayer);
 }

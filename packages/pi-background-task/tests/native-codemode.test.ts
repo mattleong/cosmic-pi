@@ -58,6 +58,40 @@ describe("native scripted background task workflows", () => {
       }).pipe(Effect.provide(nodeFilePlatformLayer)),
     15_000,
   );
+
+  it.live(
+    "rejects a field the action does not use instead of widening the action",
+    () =>
+      Effect.gen(function* () {
+        const calls: string[] = [];
+        const service = taskServiceDouble({
+          stopAll: () =>
+            Effect.sync(() => {
+              calls.push("stopAll");
+              return [];
+            }),
+          clear: Effect.sync(() => {
+            calls.push("clear");
+            return 0;
+          }),
+        });
+        const h = yield* nativeCodemodeSession(service);
+        const result = yield* h.run(`
+          const outcomes = [];
+          for (const args of [{action:'stop_all',id:'task-1'},{action:'clear',id:'task-1'}]) {
+            try { await tools.background_task(args); outcomes.push('accepted'); }
+            catch (error) { outcomes.push(String(error?.message ?? error)); }
+          }
+          ${print("outcomes")}
+        `);
+        expect(calls).toEqual([]);
+        const outcomes = output(result.text);
+        expect(Array.isArray(outcomes) ? outcomes.length : 0).toBe(2);
+        for (const outcome of Array.isArray(outcomes) ? outcomes : [])
+          expect(outcome).toMatch(/does not accept id/u);
+      }).pipe(Effect.provide(nodeFilePlatformLayer)),
+    15_000,
+  );
 });
 
 const realServiceLayer = BackgroundTaskService.layer().pipe(

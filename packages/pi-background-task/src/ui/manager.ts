@@ -1,5 +1,6 @@
 import * as Match from "effect/Match";
 import * as Predicate from "effect/Predicate";
+import { exitStatusMeaning } from "pi-code-previews";
 import { focusedField, managerTone } from "pi-cosmic-ui/manager/style";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
@@ -27,16 +28,13 @@ import {
   listDetailHeading,
   detailFieldRows,
   ListDetailShell,
+  type ListDetailField,
   type ListDetailFrame,
 } from "pi-cosmic-ui/manager/list-detail-shell";
-import type {
-  BackgroundTaskView,
-  BackgroundLogEvent,
-  BackgroundTaskProjection,
-} from "../task/model.ts";
+import type { BackgroundTaskView, BackgroundTaskProjection } from "../task/model.ts";
 import { countTaskStates, isActiveTaskState } from "../task/model.ts";
 import { sanitizeTerminalLine, formatElapsed, formatBytes, countLabel } from "pi-cosmic-core";
-import { styledBackgroundLogLines } from "./styled-log.ts";
+import { StyledLogRows } from "./styled-log.ts";
 import { taskStatePresentation, taskDisplayName } from "./task-state.ts";
 
 export interface TaskManagerOptions {
@@ -65,6 +63,35 @@ type PendingTaskAction =
 const duration = (task: BackgroundTaskView, now: number): string =>
   formatElapsed((task.endedAt ?? now) - task.startedAt);
 
+const withMeaning = (label: string, meaning: string | undefined) =>
+  meaning ? `${label} (${meaning})` : label;
+
+function exitValue(task: BackgroundTaskView): string | undefined {
+  const parts = [
+    ...(Predicate.isNumber(task.exitCode)
+      ? [withMeaning(`code ${task.exitCode}`, exitStatusMeaning(task.exitCode))]
+      : []),
+    ...(task.signal
+      ? [withMeaning(`signal ${task.signal}`, exitStatusMeaning(undefined, task.signal))]
+      : []),
+  ];
+  if (parts.length > 0) return sanitizeTerminalLine(parts.join(" · "));
+  return task.exitCode === null ? "unknown" : undefined;
+}
+
+// Finished tasks explain their ending; the spawn error and output cause are often the only clue.
+function outcomeFields(task: BackgroundTaskView): ListDetailField[] {
+  if (isActiveTaskState(task.state)) return [];
+  const exit = exitValue(task);
+  const error = task.error && sanitizeTerminalLine(task.error);
+  const cause = task.failureCause && sanitizeTerminalLine(task.failureCause);
+  return [
+    ...(exit ? [{ label: "Exit", value: exit, tone: managerTone.value }] : []),
+    ...(error ? [{ label: "Error", value: error, tone: "error" as const }] : []),
+    ...(cause ? [{ label: "Cause", value: cause, tone: "error" as const }] : []),
+  ];
+}
+
 export class TaskManagerComponent implements Component {
   private follow = true;
   private showTechnicalDetails = false;
@@ -72,9 +99,11 @@ export class TaskManagerComponent implements Component {
   private pending: PendingTaskAction | undefined;
   private readonly shell = new ListDetailShell();
   private readonly options: TaskManagerOptions;
+  private logRows: StyledLogRows;
 
   constructor(options: TaskManagerOptions) {
     this.options = options;
+    this.logRows = this.makeLogRows();
   }
 
   private get frame(): ListDetailFrame {
@@ -329,24 +358,15 @@ export class TaskManagerComponent implements Component {
     return tasks.slice(start, end).map((task, offset) => ({ task, index: start + offset }));
   }
 
-  private renderedLogLines = new WeakMap<
-    ReadonlyArray<BackgroundLogEvent>,
-    ReadonlyArray<string>
-  >();
-
-  private logLines(events: ReadonlyArray<BackgroundLogEvent>): ReadonlyArray<string> {
-    const cached = this.renderedLogLines.get(events);
-    if (cached) return cached;
-    const rendered = styledBackgroundLogLines(events).map(({ stream, text }) => {
-      const prefix = stream === "stderr" ? this.options.theme.fg("error", "│ ") : "│ ";
-      return `${prefix}${text}`;
-    });
-    this.renderedLogLines.set(events, rendered);
-    return rendered;
+  private makeLogRows(): StyledLogRows {
+    return new StyledLogRows({ stdout: "│ ", stderr: this.options.theme.fg("error", "│ ") });
   }
 
-  private detailLines(task: BackgroundTaskView | undefined): string[] {
-    if (!task) return [this.options.theme.fg("dim", "No background tasks yet")];
+  /** Detail rows wrapped to `width`; log rows come wrapped from a cache kept across renders. */
+  private detailLines(task: BackgroundTaskView | undefined, width: number): string[] {
+    const wrap = (lines: string[]) =>
+      lines.flatMap((line) => wrapTextWithAnsi(line, Math.max(1, width)));
+    if (!task) return wrap([this.options.theme.fg("dim", "No background tasks yet")]);
     const presentation = taskStatePresentation(task.state, spinnerFrameAt(this.options.getNow()));
     const lines = [
       listDetailHeading(
@@ -361,6 +381,7 @@ export class TaskManagerComponent implements Component {
           value: `${presentation.label} · ${duration(task, this.options.getNow())}`,
           tone: presentation.color,
         },
+        ...outcomeFields(task),
       ]),
     ];
     if (this.showTechnicalDetails) {
@@ -376,22 +397,27 @@ export class TaskManagerComponent implements Component {
         ]),
       );
     }
+    const logs = this.logRows.rows(`${task.id}:${task.startedAt}`, task.logs, width);
+    const removed = formatBytes(task.droppedLogBytes);
+    // Output can be removed entirely, in which case the task did print but none is kept.
     if (task.droppedLogBytes > 0)
       lines.push(
         this.options.theme.fg(
           "warning",
-          `… ${formatBytes(task.droppedLogBytes)} of older output removed`,
+          logs.length > 0
+            ? `… ${removed} of older output removed`
+            : `${removed} of output removed; none is retained`,
         ),
       );
-    const beforeLogs = lines.length;
-    for (const line of this.logLines(task.logs)) lines.push(line);
-    if (lines.length === beforeLogs) lines.push(this.options.theme.fg("dim", "No output yet"));
-    return lines;
+    else if (logs.length === 0)
+      lines.push(
+        this.options.theme.fg("dim", isActiveTaskState(task.state) ? "No output yet" : "No output"),
+      );
+    return [...wrap(lines), ...logs];
   }
 
   private detailWindow(lines: string[], height: number, width: number): string[] {
-    const wrapped = lines.flatMap((line) => wrapTextWithAnsi(line, Math.max(1, width)));
-    const window = this.shell.detailWindow(wrapped, height, this.follow);
+    const window = this.shell.detailWindow(lines, height, this.follow);
     if (!window.overflow) return [...window.visible];
     return [
       this.options.theme.fg("dim", detailWindowPositionLabel(window.overflow)),
@@ -420,7 +446,7 @@ export class TaskManagerComponent implements Component {
   ): string[] {
     const { listWidth, detailWidth } = wideListDetailGeometry(width, 34, 0.4);
     const left = this.listPane(tasks, Math.max(1, height - 1), listWidth);
-    const right = this.detailWindow(this.detailLines(selected), height, detailWidth);
+    const right = this.detailWindow(this.detailLines(selected, detailWidth), height, detailWidth);
     return framedWideRows(this.frame, { left, right, height, listWidth, detailWidth });
   }
 
@@ -434,7 +460,7 @@ export class TaskManagerComponent implements Component {
     const listHeight = stackedListHeight(height, tasks.length);
     const list = this.listPane(tasks, Math.max(1, listHeight - 1), inner);
     const remaining = Math.max(0, height - list.length - 1);
-    const detail = this.detailWindow(this.detailLines(selected), remaining, inner);
+    const detail = this.detailWindow(this.detailLines(selected, inner), remaining, inner);
     return framedStackedRows(this.frame, { list, detail, height, inner });
   }
 
@@ -447,7 +473,7 @@ export class TaskManagerComponent implements Component {
     const inner = width - 2;
     const lines =
       this.shell.state.details && selected
-        ? this.detailWindow(this.detailLines(selected), height, inner)
+        ? this.detailWindow(this.detailLines(selected, inner), height, inner)
         : tasks.length
           ? this.visibleTasks(tasks, height).map(({ task, index }) =>
               this.taskLine(task, index, inner),
@@ -457,6 +483,6 @@ export class TaskManagerComponent implements Component {
   }
 
   invalidate(): void {
-    this.renderedLogLines = new WeakMap();
+    this.logRows = this.makeLogRows();
   }
 }

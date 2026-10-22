@@ -1,11 +1,14 @@
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
+import { utf8ByteLength } from "pi-cosmic-core";
 import type {
   BackgroundLogEvent,
   BackgroundLogSlice,
+  BackgroundTaskLogs,
   BackgroundTaskState,
   BackgroundTaskStatus,
   BackgroundTaskStatusWait,
+  BackgroundTaskStopResult,
 } from "../../src/task/model.ts";
 import {
   BackgroundTaskService,
@@ -58,27 +61,51 @@ export const taskWait = (
   outcome,
   snapshot,
   nextCursor: snapshot.logCursor,
-  earliestAvailableCursor: 1,
+  earliestAvailableCursor: 0,
   droppedBytes: 0,
   appliedWaitSeconds: 30,
   ...fields,
 });
 
+export const taskStop = (
+  snapshot: BackgroundTaskStatus,
+  alreadyFinished = false,
+): BackgroundTaskStopResult => ({ snapshot, alreadyFinished });
+
+type LogTask = BackgroundTaskLogs["task"];
+
+/** A log read of `slice` from the task `task` names; only its name and command are kept. */
+export const taskLogs = (
+  slice: BackgroundLogSlice,
+  { name, command }: LogTask = { command: "pnpm test" },
+): BackgroundTaskLogs => ({ ...slice, task: { ...(name !== undefined && { name }), command } });
+
 export const taskLogSlice = (
   id: string,
   state: BackgroundTaskState,
   lines: ReadonlyArray<Pick<BackgroundLogEvent, "stream" | "text">>,
-  { from = 1, droppedBytes = 0 }: { readonly from?: number; readonly droppedBytes?: number } = {},
-): BackgroundLogSlice => ({
-  id,
-  state,
-  nextCursor: from + lines.length - 1,
-  earliestAvailableCursor: from,
-  droppedBytes,
-  events: lines.map((line, index) => ({
+  {
+    from = 1,
+    droppedBytes = 0,
+    task,
+  }: { readonly from?: number; readonly droppedBytes?: number; readonly task?: LogTask } = {},
+): BackgroundTaskLogs => {
+  const events = lines.map((line, index) => ({
     ...line,
     cursor: from + index,
     timestamp: from + index,
-    bytes: line.text.length,
-  })),
-});
+    bytes: utf8ByteLength(line.text),
+  }));
+  return taskLogs(
+    {
+      id,
+      state,
+      nextCursor: from + lines.length - 1,
+      earliestAvailableCursor: from - 1,
+      droppedBytes,
+      retainedBytes: events.reduce((sum, event) => sum + event.bytes, 0),
+      events,
+    },
+    task,
+  );
+};
