@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import type * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -12,8 +13,7 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { issueMessageStyleProblems } from "pi-code-previews/testing";
-import { provideBuiltLayer } from "pi-cosmic-core";
-import { makeCapturedLogger } from "pi-cosmic-core/testing";
+import { makeCapturedLogger, provideBuiltLayer } from "pi-cosmic-core/testing";
 import {
   LocalProcess,
   LocalProcessError,
@@ -207,6 +207,33 @@ const outputWait = (
   waitSeconds: 30,
   ...overrides,
 });
+
+/** A clock that never answers the first time read after `stallNextRead`; all else is `base`. */
+const stallingClock = (base: Clock.Clock) => {
+  let stallNext = false;
+  const stalled = Deferred.makeUnsafe<void>();
+  const clock: Clock.Clock = {
+    currentTimeMillisUnsafe: () => base.currentTimeMillisUnsafe(),
+    currentTimeMillis: Effect.suspend(() => {
+      if (!stallNext) return base.currentTimeMillis;
+      stallNext = false;
+      Deferred.doneUnsafe(stalled, Effect.void);
+      return Effect.never;
+    }),
+    currentTimeNanosUnsafe: () => base.currentTimeNanosUnsafe(),
+    currentTimeNanos: base.currentTimeNanos,
+    monotonicTimeNanosUnsafe: () => base.monotonicTimeNanosUnsafe(),
+    monotonicTimeNanos: base.monotonicTimeNanos,
+    sleep: (duration) => base.sleep(duration),
+  };
+  return {
+    clock,
+    stallNextRead: () => {
+      stallNext = true;
+    },
+    stalled: Deferred.await(stalled),
+  };
+};
 
 const exitWait = (id: string, waitSeconds = 30): WaitForBackgroundTask => ({
   id,
@@ -891,6 +918,33 @@ describe("BackgroundTaskService", () => {
         outcome: "completed",
         droppedBytes: 64,
         snapshot: { state: "exited", droppedLogBytes: 64 },
+      });
+    });
+  });
+
+  it.effect("counts output an interrupted reader received but never stored as dropped", () => {
+    const harness = serviceHarness();
+    return harness.run(function* (service) {
+      const stalling = stallingClock(yield* Clock.Clock);
+      const started = yield* service
+        .start(taskInput())
+        .pipe(Effect.provideService(Clock.Clock, stalling.clock));
+      const control = harness.controls[0];
+      if (!control) throw new Error("started process was not captured");
+      // The reader takes the event, then stalls inside its append until it is interrupted.
+      stalling.stallNextRead();
+      control.offer("stdout", "lost\n");
+      yield* stalling.stalled;
+      control.complete({ exitCode: 0 }, true);
+      const waiting = yield* service.wait(exitWait(started.id)).pipe(forkNow);
+
+      // The monitor abandons the held output, then interrupts the stalled reader and settles.
+      for (let second = 0; second < 10 && waiting.pollUnsafe() === undefined; second += 1)
+        yield* TestClock.adjust("1 second");
+      expect(yield* Fiber.join(waiting)).toMatchObject({
+        outcome: "completed",
+        droppedBytes: 5,
+        snapshot: { state: "exited", droppedLogBytes: 5 },
       });
     });
   });

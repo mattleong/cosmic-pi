@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
-import { provideBuiltLayer } from "pi-cosmic-core";
+import { provideBuiltLayer } from "pi-cosmic-core/testing";
 import { LocalProcess } from "../../src/boundary/local-process.ts";
 import { normalizeConfig } from "../../src/config/options.ts";
 import { BackgroundTaskConfigStore } from "../../src/config/store.ts";

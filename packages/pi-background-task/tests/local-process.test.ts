@@ -7,8 +7,12 @@ import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as Schedule from "effect/Schedule";
 import { vi } from "vitest";
-import { provideBuiltLayer, signalProcess } from "pi-cosmic-core";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import { nodeFilePlatformLayer, signalProcess } from "pi-cosmic-core";
+import { provideBuiltLayer } from "pi-cosmic-core/testing";
 import {
   LocalProcess,
   makeBackgroundProcessEnvironment,
@@ -250,6 +254,33 @@ describe("local process boundary", () => {
         yield* Fiber.interrupt(reader);
         expect(handle.droppedOutputBytes()).toBe(300 - Buffer.byteLength(first.text, "utf8"));
       }),
+    ),
+  );
+
+  it.live("counts output that arrives after its delivery was abandoned as dropped", () =>
+    withLocalProcess(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const marker = path.join(
+          yield* fs.makeTempDirectoryScoped({ prefix: "bg-abandon-" }),
+          "abandoned",
+        );
+        // The command writes only once the marker exists, after the test abandons delivery.
+        const handle = yield* spawnProcess(
+          `node -e "const fs = require('node:fs'); const poll = setInterval(() => { if (!fs.existsSync(process.argv[1])) return; clearInterval(poll); process.stdout.write('C'.repeat(150)); }, 10)" '${marker}'`,
+        );
+        yield* handle.abandonOutput;
+        yield* fs.writeFileString(marker, "");
+        yield* handle.awaitExit;
+
+        // Pipe data may still follow the leader's exit.
+        const dropped = yield* Effect.sync(handle.droppedOutputBytes).pipe(
+          Effect.repeat({ schedule: Schedule.spaced("10 millis"), until: (bytes) => bytes >= 150 }),
+          Effect.timeout(processTimeout),
+        );
+        expect(dropped).toBe(150);
+      }).pipe(Effect.provide(nodeFilePlatformLayer)),
     ),
   );
 

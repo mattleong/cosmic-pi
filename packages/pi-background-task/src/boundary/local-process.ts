@@ -1,10 +1,13 @@
 import { StringDecoder } from "node:string_decoder";
 import {
+  awaitProcessGroupExit,
   guardProcessGroupAtHostExit,
   nodeFilePlatformLayer,
+  nodeSpawn,
   signalProcessGroup,
   utf8ByteLength,
   utf8Suffix,
+  type NodeChildProcess,
   type ProcessGroupExitGuard,
 } from "pi-cosmic-core";
 import type * as Cause from "effect/Cause";
@@ -17,15 +20,12 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Predicate from "effect/Predicate";
 import * as Queue from "effect/Queue";
-import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import type { BackgroundLogStream } from "../task/model.ts";
-import { nodeSpawn, type NodeChildProcess } from "./node-builtins.ts";
 
 const INGRESS_CHUNKS = 32;
-const GROUP_EXIT_POLL = "20 millis";
 const BLOCKED_ENVIRONMENT_KEYS = new Set([
   "BASH_ENV",
   "ENV",
@@ -115,15 +115,6 @@ interface ProcessTreeTermination {
   readonly settleExit: Effect.Effect<void>;
 }
 
-const awaitGroupExit = (pid: number) =>
-  Effect.sync(() => signalProcessGroup(pid, 0)).pipe(
-    Effect.repeat({
-      schedule: Schedule.spaced(GROUP_EXIT_POLL),
-      while: (group) => group === "present" || group === "permission",
-    }),
-    Effect.map((group) => group === "absent"),
-  );
-
 interface GroupLeader {
   /** The leader's exit was observed. Until then its ID stays reserved for its group. */
   readonly exited: () => boolean;
@@ -181,7 +172,7 @@ const makePosixGroupTermination = (
       settleExit: Effect.suspend(() =>
         gracefulStop
           ? Effect.raceFirst(
-              awaitGroupExit(pid),
+              awaitProcessGroupExit(pid),
               Deferred.await(forceRequested).pipe(Effect.as(false)),
             )
           : Effect.succeed(false),
@@ -276,7 +267,13 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (request: Loc
   };
 
   const offer = (stream: BackgroundLogStream, original: string) => {
-    if (!original || outputClosed) return;
+    if (!original) return;
+    // Output that arrives once delivery was abandoned is never delivered, so it counts as dropped.
+    if (abandoned) {
+      totalDroppedBytes += utf8ByteLength(original);
+      return;
+    }
+    if (outputClosed) return;
     const tail = utf8Suffix(original, ingressBufferBytes);
     const tailBytes = utf8ByteLength(tail);
     totalDroppedBytes += utf8ByteLength(original) - tailBytes;
@@ -314,8 +311,8 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (request: Loc
     Queue.endUnsafe(outputQueue);
   };
   // Queued bytes cover every event the reader has not received, including the rest of a batch it
-  // already pulled, so they all become dropped here and the reader skips them. Undelivered gaps
-  // were already counted in the total.
+  // already pulled, so they all become dropped here and the reader skips them, as it does anything
+  // that arrives later. Undelivered gaps were already counted in the total.
   const abandonOutput = () => {
     outputClosed = true;
     abandoned = true;
@@ -326,7 +323,8 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (request: Loc
   };
   let openStreams = 2;
   // Reading continues until each pipe ends, even after output closes, so a process that kept a
-  // pipe never blocks on it; output arriving after closing is discarded.
+  // pipe never blocks on it; output arriving after closing is discarded, and after abandonment
+  // it is also counted as dropped.
   const observe = (stream: BackgroundLogStream, source: NodeChildProcess["stdout"]) => {
     const ended = () => {
       openStreams -= 1;

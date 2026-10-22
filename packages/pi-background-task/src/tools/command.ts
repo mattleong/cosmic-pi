@@ -287,119 +287,115 @@ const waitRequest = (input: BackgroundTaskToolInput) =>
     return request;
   });
 
-export const executeBackgroundTaskCommand = (
+export const executeBackgroundTaskCommand = Effect.fn("BackgroundTaskCommand.execute")(function* (
   input: BackgroundTaskToolInput,
   sessionCwd: string,
-  maxTextBytes = DEFAULT_MAX_BYTES,
-) =>
-  Effect.gen(function* () {
-    yield* validateFields(input);
-    const service = yield* BackgroundTaskService;
-    const path = yield* Path.Path;
-    switch (input.action) {
-      case "start": {
-        const name = input.name?.trim();
-        const request: StartBackgroundTask = {
-          command: yield* present(input.command, "command", input.action),
-          cwd: path.resolve(sessionCwd, input.cwd ?? "."),
-          ...(name && { name }),
-          ...(input.timeoutSeconds !== undefined && {
-            timeoutSeconds: input.timeoutSeconds,
-          }),
-        };
-        const task = yield* service.start(request);
-        const snapshot = detailsSnapshot(task);
-        return taskReply(
-          `Started ${formatBackgroundTask(snapshot)}`,
-          snapshot,
-          maxTextBytes,
-          { action: "start", snapshot },
-          taskActionContract("start", task),
-        );
-      }
-      case "list": {
-        const filter = input.state ?? "all";
-        const tasks = yield* service.list(filter);
-        const snapshots = tasks.map(detailsSnapshot);
-        return reply(
-          formatTaskList(snapshots, filter, maxTextBytes),
-          { action: input.action, tasks: snapshots },
-          tasksActionContract(input.action, tasks),
-        );
-      }
-      case "status": {
-        const task = yield* service.status(yield* required(input.id, "id", input.action));
-        const snapshot = detailsSnapshot(task);
-        return taskReply(
-          formatBackgroundTask(snapshot),
-          snapshot,
-          maxTextBytes,
-          { action: "status", snapshot },
-          taskActionContract("status", task),
-        );
-      }
-      case "logs": {
-        const request = yield* logsRequest(input);
-        const slice = yield* service.logs(request);
-        const direction = request.afterCursor === undefined ? "tail" : "forward";
-        const { text, nextCursor, truncation } = formatLogs(slice, direction, maxTextBytes);
-        const { id, state, earliestAvailableCursor, droppedBytes } = slice;
-        const { name, command } = slice.task;
-        return reply(
-          text,
-          {
-            action: input.action,
-            logs: { id, state, nextCursor, earliestAvailableCursor, droppedBytes },
-            task: { ...(name !== undefined && { name }), command },
-            ...(truncation && { truncation }),
-          },
-          logsContract(slice, direction),
-        );
-      }
-      case "wait": {
-        const wait = yield* service.wait(yield* waitRequest(input));
-        const { appliedWaitSeconds, ...member } = wait;
-        const snapshot = detailsSnapshot(wait.snapshot);
-        return taskReply(
-          formatWait(wait, input.waitSeconds),
-          snapshot,
-          maxTextBytes,
-          { action: "wait", wait: { ...member, snapshot }, appliedWaitSeconds },
-          waitContract(wait),
-        );
-      }
-      case "stop": {
-        const stop = yield* service.stop(
-          yield* required(input.id, "id", input.action),
-          input.force,
-        );
-        // Only the service knows whether the task finished before this stop landed.
-        const { alreadyFinished } = stop;
-        const snapshot = detailsSnapshot(stop.snapshot);
-        return taskReply(
-          `${alreadyFinished ? "Already finished; nothing to stop:" : "Stopped"} ${formatBackgroundTask(snapshot)}`,
-          snapshot,
-          maxTextBytes,
-          { action: "stop", snapshot, alreadyFinished },
-          stopContract(stop),
-        );
-      }
-      case "stop_all": {
-        const tasks = yield* service.stopAll(input.force);
-        return reply(
-          boundedText(`Stopped ${countLabel(tasks.length, "background task")}.`, maxTextBytes),
-          { action: input.action, tasks: tasks.map(detailsSnapshot) },
-          tasksActionContract(input.action, tasks),
-        );
-      }
-      case "clear": {
-        const removed = yield* service.clear;
-        return reply(
-          boundedText(`Cleared ${countLabel(removed, "completed background task")}.`, maxTextBytes),
-          { action: input.action, removed },
-          clearContract(removed),
-        );
-      }
+  maxTextBytes: number = DEFAULT_MAX_BYTES,
+) {
+  yield* validateFields(input);
+  const service = yield* BackgroundTaskService;
+  const path = yield* Path.Path;
+  switch (input.action) {
+    case "start": {
+      const name = input.name?.trim();
+      const request: StartBackgroundTask = {
+        command: yield* present(input.command, "command", input.action),
+        cwd: path.resolve(sessionCwd, input.cwd ?? "."),
+        ...(name && { name }),
+        ...(input.timeoutSeconds !== undefined && {
+          timeoutSeconds: input.timeoutSeconds,
+        }),
+      };
+      const task = yield* service.start(request);
+      const snapshot = detailsSnapshot(task);
+      return taskReply(
+        `Started ${formatBackgroundTask(snapshot)}`,
+        snapshot,
+        maxTextBytes,
+        { action: "start", snapshot },
+        taskActionContract("start", task),
+      );
     }
-    return yield* new InvalidBackgroundCommandError({ message: UNKNOWN_ACTION });
-  });
+    case "list": {
+      const filter = input.state ?? "all";
+      const tasks = yield* service.list(filter);
+      const snapshots = tasks.map(detailsSnapshot);
+      return reply(
+        formatTaskList(snapshots, filter, maxTextBytes),
+        { action: input.action, tasks: snapshots },
+        tasksActionContract(input.action, tasks),
+      );
+    }
+    case "status": {
+      const task = yield* service.status(yield* required(input.id, "id", input.action));
+      const snapshot = detailsSnapshot(task);
+      return taskReply(
+        formatBackgroundTask(snapshot),
+        snapshot,
+        maxTextBytes,
+        { action: "status", snapshot },
+        taskActionContract("status", task),
+      );
+    }
+    case "logs": {
+      const request = yield* logsRequest(input);
+      const slice = yield* service.logs(request);
+      const direction = request.afterCursor === undefined ? "tail" : "forward";
+      const { text, nextCursor, truncation } = formatLogs(slice, direction, maxTextBytes);
+      const { id, state, earliestAvailableCursor, droppedBytes } = slice;
+      const { name, command } = slice.task;
+      return reply(
+        text,
+        {
+          action: input.action,
+          logs: { id, state, nextCursor, earliestAvailableCursor, droppedBytes },
+          task: { ...(name !== undefined && { name }), command },
+          ...(truncation && { truncation }),
+        },
+        logsContract(slice, direction),
+      );
+    }
+    case "wait": {
+      const wait = yield* service.wait(yield* waitRequest(input));
+      const { appliedWaitSeconds, ...member } = wait;
+      const snapshot = detailsSnapshot(wait.snapshot);
+      return taskReply(
+        formatWait(wait, input.waitSeconds),
+        snapshot,
+        maxTextBytes,
+        { action: "wait", wait: { ...member, snapshot }, appliedWaitSeconds },
+        waitContract(wait),
+      );
+    }
+    case "stop": {
+      const stop = yield* service.stop(yield* required(input.id, "id", input.action), input.force);
+      // Only the service knows whether the task finished before this stop landed.
+      const { alreadyFinished } = stop;
+      const snapshot = detailsSnapshot(stop.snapshot);
+      return taskReply(
+        `${alreadyFinished ? "Already finished; nothing to stop:" : "Stopped"} ${formatBackgroundTask(snapshot)}`,
+        snapshot,
+        maxTextBytes,
+        { action: "stop", snapshot, alreadyFinished },
+        stopContract(stop),
+      );
+    }
+    case "stop_all": {
+      const tasks = yield* service.stopAll(input.force);
+      return reply(
+        boundedText(`Stopped ${countLabel(tasks.length, "background task")}.`, maxTextBytes),
+        { action: input.action, tasks: tasks.map(detailsSnapshot) },
+        tasksActionContract(input.action, tasks),
+      );
+    }
+    case "clear": {
+      const removed = yield* service.clear;
+      return reply(
+        boundedText(`Cleared ${countLabel(removed, "completed background task")}.`, maxTextBytes),
+        { action: input.action, removed },
+        clearContract(removed),
+      );
+    }
+  }
+  return yield* new InvalidBackgroundCommandError({ message: UNKNOWN_ACTION });
+});

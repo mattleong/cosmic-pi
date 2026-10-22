@@ -49,9 +49,11 @@ spawner, whose cleanup signals the group again after a nonzero exit, including a
 
 Cleanup covers only the task's original process group. A process that starts its own session or
 process group, such as a `setsid` child, a detached spawn, or a build daemon, is not tracked and
-survives stop, shutdown, and host exit. If such a process keeps the task's pipes open, the task
-settles one second after its group exits; output the reader has not yet received is then counted
-as dropped.
+survives stop, shutdown, and host exit. If such a process keeps the task's pipes open, delivery
+is abandoned one second after its group exits, and the task settles once its reader stops, within
+another second. Output the reader has not received, output that arrives before the task settles,
+and text the reader received but was still storing when it was stopped all count as dropped;
+nothing after settlement is recorded.
 
 From spawn until its group settles, the boundary registers the group with core's host-exit guard.
 When Pi exits through `process.exit()` without session shutdown, as its uncaught-exception and

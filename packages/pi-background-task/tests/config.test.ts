@@ -2,8 +2,12 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
-import { AgentDirectory, provideBuiltLayer } from "pi-cosmic-core";
-import { makeInMemoryDocuments, type InMemoryDocuments } from "pi-cosmic-core/testing";
+import { AgentDirectory } from "pi-cosmic-core";
+import {
+  makeInMemoryDocuments,
+  type InMemoryDocuments,
+  provideBuiltLayer,
+} from "pi-cosmic-core/testing";
 import { normalizeConfig } from "../src/config/options.ts";
 import { DEFAULT_BACKGROUND_TASK_CONFIG } from "../src/config/schema.ts";
 import {

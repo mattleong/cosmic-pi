@@ -28,7 +28,7 @@ export const startTaskPublication = (lock: Semaphore.Semaphore, emit: () => void
       yield* Effect.sleep(Duration.millis(delayMillis));
       yield* withLock(
         Effect.gen(function* () {
-          Latch.closeUnsafe(outputWake);
+          yield* Latch.close(outputWake);
           if (!outputPending) return;
           outputDeadline = (yield* monotonicMillis) + OUTPUT_PUBLISH_INTERVAL_MILLIS;
           publish();
@@ -42,7 +42,7 @@ export const startTaskPublication = (lock: Semaphore.Semaphore, emit: () => void
         outputDeadline = now + OUTPUT_PUBLISH_INTERVAL_MILLIS;
         publish();
       } else {
-        Latch.openUnsafe(outputWake);
+        yield* Latch.open(outputWake);
       }
     });
     return { publish, publishOutput };

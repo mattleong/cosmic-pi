@@ -3,8 +3,12 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
-import { AgentDirectory, nodeFilePlatformLayer, provideBuiltLayer } from "pi-cosmic-core";
-import { capturedTelemetrySnapshot, makeCapturedLogger } from "pi-cosmic-core/testing";
+import { AgentDirectory, nodeFilePlatformLayer } from "pi-cosmic-core";
+import {
+  capturedTelemetrySnapshot,
+  makeCapturedLogger,
+  provideBuiltLayer,
+} from "pi-cosmic-core/testing";
 import { DEFAULT_BACKGROUND_TASK_CONFIG } from "../src/config/schema.ts";
 import {
   BackgroundTaskConfigError,

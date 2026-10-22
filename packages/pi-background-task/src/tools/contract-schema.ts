@@ -150,13 +150,10 @@ const encodeContract = Schema.encodeExit(
   STRICT_PARSE_OPTIONS,
 );
 
+/** Encoding failures, including defects the encoder raises, come back as a failed `Exit`. */
 export const encodeBackgroundTaskContract = (
   contract: BackgroundTaskContract,
 ): Schema.Json | undefined => {
-  try {
-    const exit = encodeContract(contract);
-    return Exit.isSuccess(exit) ? freezeSnapshot(exit.value) : undefined;
-  } catch {
-    return undefined;
-  }
+  const exit = encodeContract(contract);
+  return Exit.isSuccess(exit) ? freezeSnapshot(exit.value) : undefined;
 };

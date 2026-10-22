@@ -11,7 +11,7 @@ import * as Path from "effect/Path";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import { invokeHostCallback, sanitizeDiagnosticError } from "pi-cosmic-core";
+import { invokeHostCallback, sanitizeDiagnosticError, utf8ByteLength } from "pi-cosmic-core";
 import {
   LocalProcess,
   type LocalProcessError,
@@ -151,6 +151,10 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
     Math.min(config.logBufferBytesPerTask, BACKGROUND_LOG_BOUNDS.maxIngressBytes),
   );
 
+  // Every holder's critical section is synchronous apart from reading the clock: no holder
+  // awaits another fiber, a process, or the host. Stop claims, start admission, and wait
+  // registration wait for this lock with interruption masked, so that a claim and its handoff
+  // can't be split; those waits stay brief only because every holder releases promptly.
   const withLock = Semaphore.withPermit(lock);
   // A failing host publisher must not abort the registry transition that is publishing.
   const { publish, publishOutput } = yield* startTaskPublication(lock, () =>
@@ -170,27 +174,44 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
     text: string,
     droppedBytes: number,
   ) =>
-    withLock(
-      Effect.gen(function* () {
-        const timestamp = yield* Clock.currentTimeMillis;
-        // Lost output may have cut a sequence short; what follows starts fresh.
-        if (droppedBytes > 0)
-          for (const terminal of Object.values(record.terminal)) terminal.reset();
-        record.logs
-          .addDropped(droppedBytes)
-          .append(
-            stream,
-            record.terminal[stream].write(text),
-            timestamp,
-            config.logBufferBytesPerTask,
-          );
-        record.ingressDroppedObserved += droppedBytes;
-        record.snapshot = { ...record.snapshot, ...logFields(record.logs) };
-        wakeTaskRecord(record);
-        enforceRetainedLogBudget(tasks, config.totalLogBufferBytes);
-        yield* publishOutput;
-      }),
-    );
+    Effect.suspend(() => {
+      let appended = false;
+      return withLock(
+        Effect.gen(function* () {
+          const timestamp = yield* Clock.currentTimeMillis;
+          // Lost output may have cut a sequence short; what follows starts fresh.
+          if (droppedBytes > 0)
+            for (const terminal of Object.values(record.terminal)) terminal.reset();
+          record.logs
+            .addDropped(droppedBytes)
+            .append(
+              stream,
+              record.terminal[stream].write(text),
+              timestamp,
+              config.logBufferBytesPerTask,
+            );
+          record.ingressDroppedObserved += droppedBytes;
+          record.snapshot = { ...record.snapshot, ...logFields(record.logs) };
+          appended = true;
+          wakeTaskRecord(record);
+          enforceRetainedLogBudget(tasks, config.totalLogBufferBytes);
+          yield* publishOutput;
+        }),
+      ).pipe(
+        // The boundary already counts the event as delivered, so text an interrupted reader
+        // received but never stored, as an abandoned reader's may be, is counted as dropped here.
+        Effect.onInterrupt(() =>
+          appended
+            ? Effect.void
+            : withLock(
+                Effect.sync(() => {
+                  record.logs.addDropped(utf8ByteLength(text));
+                  record.snapshot = { ...record.snapshot, ...logFields(record.logs) };
+                }),
+              ),
+        ),
+      );
+    });
 
   const requestStop = Effect.fn("BackgroundTaskService.stop")(function* (
     id: string,
@@ -292,90 +313,91 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
     );
   });
 
-  const monitor = (record: TaskRecord, request: StartBackgroundTask) =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const handle = yield* processes.spawn({
-          command: request.command,
-          cwd: request.cwd,
-          ingressBufferBytes,
-          ...(config.shellPath && { shellPath: config.shellPath }),
-        });
-        const stopRequested = yield* withLock(
-          Effect.sync(() => {
-            const stopping = record.snapshot.state === "stopping";
-            record.snapshot = {
-              ...record.snapshot,
-              state: stopping ? "stopping" : "running",
-              pid: handle.pid,
-            };
-            Deferred.doneUnsafe(record.handleReady, Effect.succeed(handle));
-            wakeTaskRecord(record);
-            publish();
-            return stopping;
-          }),
-        );
-        if (stopRequested) yield* handle.terminate("force").pipe(Effect.ignore);
-        const outputFiber = yield* handle.output.pipe(
-          Stream.runForEach((event) =>
-            appendOutput(record, event.stream, event.text, event.droppedBytes),
-          ),
-          Effect.catchCause((cause) =>
-            Cause.hasInterruptsOnly(cause)
-              ? Effect.void
-              : Effect.logWarning(
-                  "Background task output stopped recording after a reader failure.",
-                ),
-          ),
+  const monitor = Effect.fn("BackgroundTaskService.monitor")(
+    function* (record: TaskRecord, request: StartBackgroundTask) {
+      const handle = yield* processes.spawn({
+        command: request.command,
+        cwd: request.cwd,
+        ingressBufferBytes,
+        ...(config.shellPath && { shellPath: config.shellPath }),
+      });
+      const stopRequested = yield* withLock(
+        Effect.sync(() => {
+          const stopping = record.snapshot.state === "stopping";
+          record.snapshot = {
+            ...record.snapshot,
+            state: stopping ? "stopping" : "running",
+            pid: handle.pid,
+          };
+          Deferred.doneUnsafe(record.handleReady, Effect.succeed(handle));
+          wakeTaskRecord(record);
+          publish();
+          return stopping;
+        }),
+      );
+      if (stopRequested) yield* handle.terminate("force").pipe(Effect.ignore);
+      const outputFiber = yield* handle.output.pipe(
+        Stream.runForEach((event) =>
+          appendOutput(record, event.stream, event.text, event.droppedBytes),
+        ),
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.void
+            : Effect.logWarning("Background task output stopped recording after a reader failure."),
+        ),
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      if (request.timeoutSeconds !== undefined) {
+        yield* Effect.sleep(Duration.seconds(request.timeoutSeconds)).pipe(
+          Effect.andThen(requestStop(record.snapshot.id, false, "internal", "timed_out")),
+          Effect.ignore,
           Effect.forkScoped({ startImmediately: true }),
         );
-        if (request.timeoutSeconds !== undefined) {
-          yield* Effect.sleep(Duration.seconds(request.timeoutSeconds)).pipe(
-            Effect.andThen(requestStop(record.snapshot.id, false, "internal", "timed_out")),
-            Effect.ignore,
-            Effect.forkScoped({ startImmediately: true }),
+      }
+      const exit = yield* handle.awaitExit;
+      const drained = yield* Fiber.await(outputFiber).pipe(Effect.timeoutOption("1 second"));
+      if (Option.isNone(drained)) {
+        // A process outside the task's group can hold its pipes open. Output the reader hasn't
+        // received, including the rest of a batch it already pulled, is counted as dropped and
+        // skipped, so the reader only finishes an append already in progress; one still
+        // unfinished when the reader is interrupted counts its text as dropped.
+        yield* handle.abandonOutput;
+        const finished = yield* Fiber.await(outputFiber).pipe(Effect.timeoutOption("1 second"));
+        if (Option.isNone(finished)) yield* Fiber.interrupt(outputFiber);
+      }
+      const endedAt = yield* Clock.currentTimeMillis;
+      yield* withLock(
+        Effect.sync(() => {
+          const unobservedDrops = Math.max(
+            0,
+            handle.droppedOutputBytes() - record.ingressDroppedObserved,
           );
-        }
-        const exit = yield* handle.awaitExit;
-        const drained = yield* Fiber.await(outputFiber).pipe(Effect.timeoutOption("1 second"));
-        if (Option.isNone(drained)) {
-          // A process outside the task's group can hold its pipes open. Output the reader hasn't
-          // received, including the rest of a batch it already pulled, is counted as dropped and
-          // skipped, so the reader only finishes an append already in progress.
-          yield* handle.abandonOutput;
-          const finished = yield* Fiber.await(outputFiber).pipe(Effect.timeoutOption("1 second"));
-          if (Option.isNone(finished)) yield* Fiber.interrupt(outputFiber);
-        }
-        const endedAt = yield* Clock.currentTimeMillis;
-        yield* withLock(
-          Effect.sync(() => {
-            const unobservedDrops = Math.max(
-              0,
-              handle.droppedOutputBytes() - record.ingressDroppedObserved,
-            );
-            record.logs.addDropped(unobservedDrops);
-            record.ingressDroppedObserved += unobservedDrops;
-            settle(record, completedSnapshot(record, exit, endedAt));
-          }),
-        );
-      }),
-    ).pipe(
-      Effect.catch((spawnError: LocalProcessError) =>
-        withLock(
-          Effect.gen(function* () {
-            Deferred.doneUnsafe(record.handleReady, Effect.fail(spawnError));
-            const endedAt = yield* Clock.currentTimeMillis;
-            settle(record, {
-              ...record.snapshot,
-              state: "failed",
-              endedAt,
-              error: spawnError.message,
-            });
-          }),
+          record.logs.addDropped(unobservedDrops);
+          record.ingressDroppedObserved += unobservedDrops;
+          settle(record, completedSnapshot(record, exit, endedAt));
+        }),
+      );
+    },
+    Effect.scoped,
+    (effect, record) =>
+      effect.pipe(
+        Effect.catch((spawnError: LocalProcessError) =>
+          withLock(
+            Effect.gen(function* () {
+              Deferred.doneUnsafe(record.handleReady, Effect.fail(spawnError));
+              const endedAt = yield* Clock.currentTimeMillis;
+              settle(record, {
+                ...record.snapshot,
+                state: "failed",
+                endedAt,
+                error: spawnError.message,
+              });
+            }),
+          ),
         ),
+        Effect.onInterrupt(() => Deferred.fail(record.handleReady, runtimeClosed())),
       ),
-      Effect.onInterrupt(() => Deferred.fail(record.handleReady, runtimeClosed())),
-    );
+  );
 
   const start = Effect.fn("BackgroundTaskService.start")(function* (request: StartBackgroundTask) {
     const prepared = yield* normalizeStartRequest(request, path);
