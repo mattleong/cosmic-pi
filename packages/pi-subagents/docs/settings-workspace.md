@@ -89,7 +89,7 @@ Custom agents are edited by hand in the root `agents` object of `~/.pi/agent/pi-
 
 `/subagents doctor` checks each item independently and launches nothing:
 
-- Pi's version against the 1.2.0 minimum, and whether Pi's Node binary is still executable;
+- Pi's version against the 1.4.0 minimum, and whether Pi's Node binary is still executable;
 - configuration diagnostics, the current profile set, and project trust;
 - for every profile, the launch preflight against its first eligible route (each distinct route probed once, bounded to 20 seconds); a failing first route is a warning when a fallback exists;
 - the same route check for every custom agent after its overrides, and a failure for each agent entry or `agents` object that fails closed;

@@ -30,7 +30,7 @@ Pi owns native codemode, tool search, and MCP execution, permissions, cancellati
 
 Write's genuine before-write snapshot hook is the single presentation-related execution exception. It preserves Pi's mutation queue, activation, direct-write semantics, and cancellation. Queue waiting remains interruptible; once a write is admitted, its mutation and matching evidence settle before the queue is released. A delayed queue entry cannot enter a retired or replacement runtime. Other owned tools retain their ordinary executable registration; presentation alone never registers foreign execution.
 
-Code Previews requires Pi 1.0.1 or later and is tested with 1.2.0. Existing standalone MCP Previews installations require manual removal; never edit user configuration automatically. See the [native migration guide](../migrations/native-mcp-codemode.md).
+Code Previews requires Pi 1.4.0 or later and is tested with 1.4.0. Existing standalone MCP Previews installations require manual removal; never edit user configuration automatically. See the [native migration guide](../migrations/native-mcp-codemode.md).
 
 Pi parameter schemas may use TypeBox or literal JSON Schema. Effect Schema owns output contracts; `toPiToolOutputSchema` generates Pi's self-contained declaration, and producers encode results with the matching codec. Execution enters the owning service through a named host boundary.
 

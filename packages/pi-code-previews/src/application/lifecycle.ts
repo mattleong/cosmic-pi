@@ -98,7 +98,7 @@ export function codePreviewsWithDependencies(
   const registerToolRenderer = pi.registerToolRenderer?.bind(pi);
   if (!registerToolRenderer) {
     pi.on("session_start", (_event, ctx) =>
-      notifyAtHostBoundary(ctx, "Code Previews needs Pi 1.0.1 or later", "warning"),
+      notifyAtHostBoundary(ctx, "Code Previews needs Pi 1.4.0 or later", "warning"),
     );
     return Promise.resolve();
   }

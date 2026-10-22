@@ -96,6 +96,13 @@ describe("installed Pi transcript reconstruction", () => {
             expect(getCurrentSystemPrompt(context.messages)).not.toContain("parent-only");
             expect(getCurrentTools(context.messages).map((tool) => tool.name)).toEqual([
               "child_alpha",
+              "child_beta",
+            ]);
+            return fauxAssistantMessage("both ready");
+          },
+          (context) => {
+            expect(getCurrentTools(context.messages).map((tool) => tool.name)).toEqual([
+              "child_alpha",
             ]);
             return fauxAssistantMessage(fauxToolCall("child_alpha", {}), { stopReason: "toolUse" });
           },
@@ -115,6 +122,7 @@ describe("installed Pi transcript reconstruction", () => {
           },
           fauxAssistantMessage("alpha restored"),
         ]);
+        yield* Effect.promise(() => session.prompt("use both"));
         yield* Effect.promise(() => session.prompt("use alpha"));
         const alphaLeaf = session.sessionManager.getLeafId()!;
         yield* Effect.promise(() => session.prompt("switch to beta"));

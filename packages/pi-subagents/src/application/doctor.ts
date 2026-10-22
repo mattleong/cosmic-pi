@@ -44,7 +44,7 @@ interface DoctorInput {
   readonly projectTrusted: boolean;
 }
 
-const MINIMUM_PI_VERSION = [1, 2, 0] as const;
+const MINIMUM_PI_VERSION = [1, 4, 0] as const;
 const PREFLIGHT_TIMEOUT = "20 seconds";
 
 const versionAtLeast = (version: string, minimum: ReadonlyArray<number>): boolean => {
@@ -94,7 +94,11 @@ export const runSubagentDoctor = (
     const checks: DoctorCheck[] = [
       versionAtLeast(VERSION, MINIMUM_PI_VERSION)
         ? check("Pi", "ok", `version ${VERSION}`)
-        : check("Pi", "failed", `version ${VERSION}; subagents need 1.2.0 or later`),
+        : check(
+            "Pi",
+            "failed",
+            `version ${VERSION}; subagents need ${MINIMUM_PI_VERSION.join(".")} or later`,
+          ),
       nodeProblem ? check("Node", "failed", nodeProblem) : check("Node", "ok", process.execPath),
     ];
 
