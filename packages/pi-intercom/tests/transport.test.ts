@@ -1,4 +1,5 @@
 import { expect, layer } from "@effect/vitest";
+import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import type * as Duration from "effect/Duration";
@@ -8,7 +9,6 @@ import * as FileSystem from "effect/FileSystem";
 import * as Logger from "effect/Logger";
 import * as Path from "effect/Path";
 import * as Result from "effect/Result";
-import * as Scheduler from "effect/Scheduler";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Tracer from "effect/Tracer";
@@ -164,6 +164,28 @@ const closesWithin = (peer: RawPeer, duration: Duration.Input) =>
     Effect.timeoutOrElse({ duration, orElse: () => Effect.succeed(false) }),
   );
 
+/**
+ * A clock that holds every reader of the current time until `arrivals` readers wait, then frees
+ * them together; everything else passes through to `base`.
+ */
+const gatheringClock = (base: Clock.Clock, arrivals: number): Clock.Clock => {
+  const gathered = Deferred.makeUnsafe<void>();
+  let waiting = 0;
+  return {
+    currentTimeMillisUnsafe: () => base.currentTimeMillisUnsafe(),
+    currentTimeMillis: Effect.suspend(() => {
+      waiting += 1;
+      if (waiting >= arrivals) Deferred.doneUnsafe(gathered, Effect.void);
+      return Deferred.await(gathered).pipe(Effect.andThen(base.currentTimeMillis));
+    }),
+    currentTimeNanosUnsafe: () => base.currentTimeNanosUnsafe(),
+    currentTimeNanos: base.currentTimeNanos,
+    monotonicTimeNanosUnsafe: () => base.monotonicTimeNanosUnsafe(),
+    monotonicTimeNanos: base.monotonicTimeNanos,
+    sleep: (duration) => base.sleep(duration),
+  };
+};
+
 /** Forwards connections at `socket` to `target`, recording what clients send. */
 const recordingRelay = (socket: string, target: string) =>
   Effect.gen(function* () {
@@ -198,7 +220,7 @@ const recordingRelay = (socket: string, target: string) =>
     return { sent: () => sent };
   });
 
-// Deadlines run on the real clock.
+// Client call deadlines run on the real clock.
 layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom transport", (it) => {
   it.effect("serves describe, deliver, and read to a caller with the token", () =>
     Effect.gen(function* () {
@@ -335,35 +357,6 @@ layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom transport"
     }),
   );
 
-  it.effect("closes a connection that doesn't authenticate in time", () =>
-    Effect.gen(function* () {
-      const socket = yield* socketPath;
-      yield* startServer(
-        socket,
-        fakeInbound(),
-        TOKEN,
-        limits({ authenticationDeadline: "100 millis" }),
-      );
-
-      const silent = yield* rawPeer(socket);
-
-      expect(yield* closesWithin(silent, "5 seconds")).toBe(true);
-    }),
-  );
-
-  it.effect("closes an authenticated connection left idle", () =>
-    Effect.gen(function* () {
-      const socket = yield* socketPath;
-      yield* startServer(socket, fakeInbound(), TOKEN, limits({ idleDeadline: "200 millis" }));
-      const peer = yield* rawPeer(socket);
-
-      const answer = decodeExitAnswer(yield* handshake(peer));
-      expect(Option.map(answer, ({ exit }) => exit._tag)).toEqual(Option.some("Success"));
-
-      expect(yield* closesWithin(peer, "5 seconds")).toBe(true);
-    }),
-  );
-
   it.effect("closes a connection with too many requests in flight", () =>
     Effect.gen(function* () {
       const socket = yield* socketPath;
@@ -404,12 +397,14 @@ layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom transport"
   it.effect("admits no more connections than the limit when they arrive together", () =>
     Effect.gen(function* () {
       const socket = yield* socketPath;
-      // Yielding every few steps opens any window between the bound check and taking a slot; a
-      // budget below 3 stalls even a bare sleep.
+      const arrivals = 12;
+      // Every connection is held at its first clock read until all have arrived, then all resume
+      // at once: a clock read or any other suspension between the bound check and taking a slot
+      // would let them all pass the check.
       yield* startServer(socket, fakeInbound(), TOKEN, limits({ maxConnections: 2 })).pipe(
-        Effect.provideService(Scheduler.MaxOpsBeforeYield, 3),
+        Effect.provideService(Clock.Clock, gatheringClock(yield* Clock.Clock, arrivals)),
       );
-      const peers = yield* Effect.forEach(Array.from({ length: 12 }), () => rawPeer(socket), {
+      const peers = yield* Effect.forEach(Array.from({ length: arrivals }), () => rawPeer(socket), {
         concurrency: "unbounded",
       });
 
@@ -632,8 +627,58 @@ const accepted = (guarded: GuardedProtocol, clientId: number): Effect.Effect<Int
       : Effect.succeed(connection);
   });
 
-// The authentication deadline runs on the test clock.
-layer(nodeFilePlatformLayer)("intercom connection handshake state", (it) => {
+/** Whether the server answers request `id` rather than closing the connection. */
+const answers = (peer: RawPeer, id: number) =>
+  Effect.raceFirst(peer.answer(id).pipe(Effect.as(true)), peer.closed.pipe(Effect.as(false)));
+
+// Connection deadlines run on the test clock.
+layer(nodeFilePlatformLayer)("intercom connection deadlines and handshake state", (it) => {
+  it.effect("closes a connection that doesn't authenticate in time but keeps one that did", () =>
+    Effect.gen(function* () {
+      const socket = yield* socketPath;
+      yield* startServer(
+        socket,
+        fakeInbound(),
+        TOKEN,
+        limits({ authenticationDeadline: "2 seconds", idleDeadline: "1 hour" }),
+      );
+      const slow = yield* rawPeer(socket);
+      const prompt = yield* rawPeer(socket);
+      // Each answer shows its connection is served, so its deadline is running.
+      slow.request(0, "Hello", { nonce: "c".repeat(64) });
+      yield* slow.answer(0);
+      const answer = decodeExitAnswer(yield* handshake(prompt));
+      expect(Option.map(answer, ({ exit }) => exit._tag)).toEqual(Option.some("Success"));
+
+      yield* TestClock.adjust("2 seconds");
+      yield* slow.closed;
+
+      prompt.request(2, "Deliver", message);
+      expect(yield* answers(prompt, 2)).toBe(true);
+    }),
+  );
+
+  it.effect("closes an authenticated connection only once it has been idle for the deadline", () =>
+    Effect.gen(function* () {
+      const socket = yield* socketPath;
+      yield* startServer(socket, fakeInbound(), TOKEN, limits({ idleDeadline: "10 seconds" }));
+      const peer = yield* rawPeer(socket);
+      const answer = decodeExitAnswer(yield* handshake(peer));
+      expect(Option.map(answer, ({ exit }) => exit._tag)).toEqual(Option.some("Success"));
+
+      yield* TestClock.adjust("6 seconds");
+      peer.request(2, "Deliver", message);
+      expect(yield* answers(peer, 2)).toBe(true);
+      // The first idle check finds traffic 4 seconds old.
+      yield* TestClock.adjust("4 seconds");
+      peer.request(3, "Deliver", { ...message, messageId: "message-3" });
+      expect(yield* answers(peer, 3)).toBe(true);
+
+      yield* TestClock.adjust("10 seconds");
+      yield* peer.closed;
+    }),
+  );
+
   it.effect("never advances a handshake the authentication deadline closed", () =>
     Effect.gen(function* () {
       const socket = yield* socketPath;

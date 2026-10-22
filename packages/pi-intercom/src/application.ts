@@ -154,7 +154,11 @@ export function registerIntercomApplication(
     if (!slot.isActive()) return undefined;
     // A failed rewrite leaves the previous name listed; the record stays valid.
     return slot
-      .run(IntercomSession.use((session) => session.rename(event.name)))
+      .run(
+        IntercomSession.use((session) => session.rename(event.name)).pipe(
+          Effect.catch(() => Effect.logWarning("Couldn't rewrite the intercom record.")),
+        ),
+      )
       .catch(() => undefined);
   });
 

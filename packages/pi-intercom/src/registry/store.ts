@@ -10,7 +10,7 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import {
   AgentDirectory,
-  processLiveness,
+  probeProcessLiveness,
   synchronousRandomHex,
   utf8ByteLength,
   type ProcessIdentity,
@@ -129,16 +129,15 @@ export interface IntercomRegistryOptions {
  * Whether a record's owner process still runs. Asking it can spawn `ps`, so it is consulted only
  * for owners whose session didn't answer.
  */
-export const OwnerLiveness = Context.Reference<(owner: ProcessIdentity) => ProcessLiveness>(
-  "pi-intercom/OwnerLiveness",
-  { defaultValue: () => processLiveness },
-);
+export const OwnerLiveness = Context.Reference<
+  (owner: ProcessIdentity) => Effect.Effect<ProcessLiveness>
+>("pi-intercom/OwnerLiveness", { defaultValue: () => probeProcessLiveness });
 
 /** Dead only on positive evidence; an owner whose liveness is unknown is kept. */
 export const ownerIsDead = (owner: ProcessIdentity) =>
   Effect.gen(function* () {
     const liveness = yield* OwnerLiveness;
-    return liveness({ pid: owner.pid, started: owner.started }) === "dead";
+    return (yield* liveness({ pid: owner.pid, started: owner.started })) === "dead";
   });
 
 const decodeRecord = Schema.decodeOption(SessionRecordFromJson);
@@ -417,7 +416,7 @@ export class IntercomRegistry extends Context.Service<IntercomRegistry>()(
             Predicate.isTagged(described.failure, "IntercomRefused")
           )
             return "answered";
-          // Asking about the owner can block on `ps`, so a probe that outlasted the sweep stops.
+          // Asking about the owner can wait on `ps`, so a describe that outlasted the sweep stops.
           if (yield* pastDeadline(until)) return "kept";
           return (yield* ownerIsDead(record)) && (yield* retireRecord(record)) ? "retired" : "kept";
         });

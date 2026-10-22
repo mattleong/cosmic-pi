@@ -168,10 +168,12 @@ layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
         effect: Effect.Effect<X, E, Layer.Success<ReturnType<typeof intercomLayer>>>,
       ) =>
         effect.pipe(
-          Effect.provideService(OwnerLiveness, ({ pid }) => {
-            asked.push(pid);
-            return pid === deadPid ? "dead" : "alive";
-          }),
+          Effect.provideService(OwnerLiveness, ({ pid }) =>
+            Effect.sync(() => {
+              asked.push(pid);
+              return pid === deadPid ? "dead" : "alive";
+            }),
+          ),
           Effect.provide(a.context),
         );
 

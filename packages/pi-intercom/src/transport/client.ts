@@ -2,6 +2,7 @@ import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import * as Cause from "effect/Cause";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Match from "effect/Match";
 import * as Predicate from "effect/Predicate";
 import type * as Result from "effect/Result";
 import * as Schedule from "effect/Schedule";
@@ -63,17 +64,18 @@ const failWith = (reason: IntercomClientFailure) => new IntercomClientError({ re
 /** Failures that leave a request's outcome open once it went out. */
 const UNCERTAIN = new Set<IntercomClientFailure>(["disconnected", "timeout", "protocol"]);
 
-const DISCONNECTIONS = new Set(["SocketReadError", "SocketWriteError", "SocketCloseError"]);
+const clientFailure = Match.type<RpcClientError.RpcClientError["reason"]>().pipe(
+  Match.withReturnType<IntercomClientFailure>(),
+  Match.tag("SocketOpenError", () => "unreachable"),
+  Match.tag("SocketReadError", "SocketWriteError", "SocketCloseError", () => "disconnected"),
+  Match.orElse(() => "protocol"),
+);
 
 const transportFailure = (error: RpcClientError.RpcClientError | IntercomUnauthorized) =>
   failWith(
     Predicate.isTagged(error, "IntercomUnauthorized")
       ? "unauthorized"
-      : Predicate.isTagged(error.reason, "SocketOpenError")
-        ? "unreachable"
-        : DISCONNECTIONS.has(error.reason._tag)
-          ? "disconnected"
-          : "protocol",
+      : clientFailure(error.reason),
   );
 
 /**

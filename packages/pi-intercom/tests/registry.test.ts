@@ -400,7 +400,7 @@ layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom registry",
       // Liveness that calls every owner dead shows which records were judged by it.
       const swept = yield* h.registry
         .sweep()
-        .pipe(Effect.provideService(OwnerLiveness, () => "dead"));
+        .pipe(Effect.provideService(OwnerLiveness, () => Effect.succeed("dead")));
 
       expect(swept).toEqual({ records: 1, socketDirectories: 0 });
       expect((yield* h.registry.list()).records.map(({ instance }) => instance).toSorted()).toEqual(
@@ -427,10 +427,12 @@ layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom registry",
       const time = manualClock(yield* Clock.Clock);
       let asked = 0;
       const sweep = yield* h.registry.sweep().pipe(
-        Effect.provideService(OwnerLiveness, () => {
-          asked += 1;
-          return "dead";
-        }),
+        Effect.provideService(OwnerLiveness, () =>
+          Effect.sync(() => {
+            asked += 1;
+            return "dead";
+          }),
+        ),
         Effect.provideService(Clock.Clock, time.clock),
         Effect.forkScoped,
       );

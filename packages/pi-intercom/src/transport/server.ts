@@ -102,18 +102,25 @@ export const serveIntercom = Effect.fn("IntercomServer.serve")(function* (
 
   const handlers = yield* IntercomRpcGroup.toHandlers(
     IntercomRpcGroup.of({
-      Hello: ({ nonce }, { client }) =>
-        Effect.gen(function* () {
-          const peer = connection(client.id);
-          if (peer?.phase !== "fresh") return yield* Effect.interrupt;
+      Hello: ({ nonce }, { client }) => {
+        const peer = connection(client.id);
+        // `Hello` declares no error, so a refused challenge closes the connection and the
+        // handler ends without an answer.
+        const refuse = Effect.suspend(() => {
+          peer?.close();
+          return Effect.interrupt;
+        });
+        return Effect.gen(function* () {
+          if (peer?.phase !== "fresh") return yield* refuse;
           const serverNonce = yield* freshNonce;
           const proof = yield* key.prove("server", nonce, serverNonce);
           // The authentication deadline may have closed the peer while the proof was made.
-          if (!peer.advance("fresh", "challenged")) return yield* Effect.interrupt;
+          if (!peer.advance("fresh", "challenged")) return yield* refuse;
           peer.clientNonce = nonce;
           peer.serverNonce = serverNonce;
           return { nonce: serverNonce, proof };
-        }).pipe(Effect.catchTag("IntercomHandshakeError", () => Effect.interrupt)),
+        }).pipe(Effect.catchTag("IntercomHandshakeError", () => refuse));
+      },
       Authenticate: ({ proof }, { client }) =>
         Effect.gen(function* () {
           const peer = connection(client.id);

@@ -32,7 +32,7 @@ among the agents of one session belongs to pi-subagents' `agent_*` tools.
 - [Registry store](src/registry/store.ts) owns `<agentDir>/intercom` and this user's fallback
   socket namespace: private directories, atomic record replacement, listing, socket path
   reservation, and the sweep of dead owners. [Private files](src/registry/private-files.ts) are
-  its no-follow file operations. [Schema](src/registry/schema.ts) describes the record and the
+  its no-follow file operations, built on core's shared private-file mechanism. [Schema](src/registry/schema.ts) describes the record and the
   fallback socket owner record.
 
 ## Registry
@@ -62,7 +62,7 @@ The sweep first describes each record's session under the short `Describe` deadl
 that answers, even with a refusal, is live, and so is its fallback socket directory. Owner
 liveness can spawn `ps`, so it is checked only for an owner whose session didn't answer, and not
 once the sweep's time budget has passed. An owner is dead only on positive
-evidence from core's `processLiveness`: the PID is gone, or a live PID started at a different
+evidence from core's non-blocking `probeProcessLiveness`: the PID is gone, or a live PID started at a different
 time. Unknown liveness, including a record without a comparable start identity, keeps the record. A dead record is claimed by renaming it to a
 tombstone, so one concurrent sweeper retires it; the tombstone is read back and removed only when
 it is still the record judged dead, together with its socket in the shared socket directory.
