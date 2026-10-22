@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { invokeHostCallback } from "pi-cosmic-core";
 import {
   HERDR_BTW_CHILD_SESSION_FLAG,
   HERDR_BTW_PARENT_FILE_FLAG,
@@ -38,8 +39,8 @@ export const registerHerdrBtwParentReference = (
       type: "string",
     });
 
-  const capture = (ctx: ExtensionContext): HerdrBtwParentReference | undefined => {
-    try {
+  const capture = (ctx: ExtensionContext): HerdrBtwParentReference | undefined =>
+    invokeHostCallback(() => {
       const sessionId = ctx.sessionManager.getSessionId();
       const sessionFile = ctx.sessionManager.getSessionFile();
       const candidate = resolveParentReferenceCandidate({
@@ -56,10 +57,7 @@ export const registerHerdrBtwParentReference = (
         parentHeader.header.id === candidate.id
         ? candidate
         : undefined;
-    } catch {
-      return undefined;
-    }
-  };
+    }, undefined);
 
   pi.on("before_agent_start", (event, ctx) => {
     delete event.systemPromptOptions.sections.herdr_btw_parent_reference;

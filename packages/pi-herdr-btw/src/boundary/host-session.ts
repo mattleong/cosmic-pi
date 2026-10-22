@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Predicate from "effect/Predicate";
-import { captureSessionHost } from "pi-cosmic-core";
+import { captureSessionHost, invokeHostCallback } from "pi-cosmic-core";
 
 export interface HerdrBtwSessionInput {
   readonly cwd: string;
@@ -13,8 +13,8 @@ export interface HerdrBtwSessionInput {
 export const captureHerdrBtwSession = (ctx: ExtensionContext) => {
   const host = captureSessionHost(ctx);
   if (!Predicate.isTagged(host, "Captured")) return undefined;
-  try {
-    return {
+  return invokeHostCallback(
+    () => ({
       cwd: host.cwd,
       signal: host.signal,
       aborted: host.aborted,
@@ -22,8 +22,7 @@ export const captureHerdrBtwSession = (ctx: ExtensionContext) => {
       sessionId: ctx.sessionManager.getSessionId(),
       sessionDir: ctx.sessionManager.getSessionDir(),
       environment: process.env,
-    };
-  } catch {
-    return undefined;
-  }
+    }),
+    undefined,
+  );
 };

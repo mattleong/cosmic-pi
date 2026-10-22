@@ -1,11 +1,12 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import * as Semaphore from "effect/Semaphore";
 import { HerdrClient, type HerdrPane } from "../boundary/herdr-client.ts";
 import { HerdrBtwLinkStore, type HerdrBtwLinkRecordResult } from "../boundary/host-link-store.ts";
 import type { HerdrBtwSessionInput } from "../boundary/host-session.ts";
-import * as SessionFile from "../boundary/session-file.ts";
+import { BlankChildSessionFileResult, HerdrSessionFiles } from "../boundary/session-file.ts";
 import { confirmedFailure, HerdrBtwError, uncertainFailure } from "./errors.ts";
 import { HerdrBtwLinkRestoration, type HerdrBtwLink } from "./link.ts";
 import {
@@ -51,13 +52,6 @@ export interface HerdrBtwResult {
   readonly mode: "created" | "resumed" | "focused";
 }
 
-const sessionFileBoundary = {
-  probeSessionHeader: SessionFile.probeSessionHeader,
-  compareSessionFileIdentity: SessionFile.compareSessionFileIdentity,
-  createChildSessionId: SessionFile.createChildSessionId,
-  createBlankChildSessionFile: SessionFile.createBlankChildSessionFile,
-};
-
 const failClosedLink = (operation: string, code: string, message: string): HerdrBtwError =>
   confirmedFailure(operation, code, `${message}; ${NEW_COMMAND_GUIDANCE.toLowerCase()}`);
 
@@ -78,20 +72,16 @@ type LaunchTarget =
   | { readonly mode: "create"; readonly childSessionId: string }
   | { readonly mode: "resume"; readonly link: HerdrBtwLink };
 
-const makeHerdrBtwService = (
-  input: HerdrBtwSessionInput,
-  options: Partial<typeof sessionFileBoundary> = {},
-) =>
+const makeHerdrBtwService = (input: HerdrBtwSessionInput) =>
   Effect.gen(function* () {
     const gate = yield* Semaphore.make(1);
     const herdr = yield* HerdrClient;
     const linkStore = yield* HerdrBtwLinkStore;
-    const {
-      probeSessionHeader,
-      compareSessionFileIdentity,
-      createChildSessionId,
-      createBlankChildSessionFile,
-    } = { ...sessionFileBoundary, ...options };
+    const files = yield* HerdrSessionFiles;
+    const isValidBlankChild = (path: string, childSessionId: string) =>
+      files
+        .probeSessionHeader(path)
+        .pipe(Effect.map((probe) => isValidBlankChildProbe(probe, childSessionId)));
 
     const prepareFreshLaunchTarget = Effect.fn("HerdrBtwService.prepareFreshLaunchTarget")(
       function* (childSessionId: string) {
@@ -102,18 +92,18 @@ const makeHerdrBtwService = (
             "herdr_btw_session_directory_unavailable",
             "Couldn't find this session's folder",
           );
-        const created = yield* createBlankChildSessionFile({
+        const created = yield* files.createBlankChildSessionFile({
           sessionDir,
           cwd: input.cwd,
           sessionId: childSessionId,
         });
-        if (!SessionFile.BlankChildSessionFileResult.$is("created")(created))
+        if (!BlankChildSessionFileResult.$is("created")(created))
           return yield* confirmedFailure(
             "create blank child session",
             "herdr_btw_child_create_failed",
             "Couldn't create the side session's file",
           );
-        if (!isValidBlankChildProbe(probeSessionHeader(created.path), childSessionId))
+        if (!(yield* isValidBlankChild(created.path, childSessionId)))
           return yield* confirmedFailure(
             "create blank child session",
             "herdr_btw_child_create_invalid",
@@ -190,8 +180,8 @@ const makeHerdrBtwService = (
             : target.link;
         const agentName = sideSessionAgentName(sessionId, btwPane.pane_id);
         if (target.mode === "resume") {
-          const newlyLive = (yield* herdr.inspectLiveAgents()).filter((agent) =>
-            isLinkedAgentConflictCandidate(agent, target.link, compareSessionFileIdentity),
+          const newlyLive = yield* Effect.filter(yield* herdr.inspectLiveAgents(), (agent) =>
+            isLinkedAgentConflictCandidate(files, agent, target.link),
           );
           if (newlyLive.length > 0)
             return yield* failClosedLink(
@@ -199,14 +189,14 @@ const makeHerdrBtwService = (
               "herdr_btw_live_agent_race",
               "The side session started elsewhere while its pane was being prepared, so a second one wasn't started",
             );
-          if (!isValidBlankChildProbe(probeSessionHeader(childSessionPath), childSessionId))
+          if (!(yield* isValidBlankChild(childSessionPath, childSessionId)))
             return yield* failClosedLink(
               "validate linked child session",
               "herdr_btw_link_child_invalid",
               "The linked side session's file is missing or was replaced",
             );
         }
-        if (!isDistinctChildSessionPath(childSessionPath, sessionFile, compareSessionFileIdentity))
+        if (!(yield* isDistinctChildSessionPath(files, childSessionPath, sessionFile)))
           return yield* confirmedFailure(
             "validate child session identity",
             "herdr_btw_child_identity_invalid",
@@ -222,21 +212,21 @@ const makeHerdrBtwService = (
           displayName: target.mode === "create" ? parentBtwDisplayName(input.cwd) : undefined,
         });
         if (
-          !isOwnedStartedAgent(
+          !(yield* isOwnedStartedAgent(
+            files,
             startedAgent,
             btwPane,
             agentName,
             sessionFile,
             childSessionPath,
-            compareSessionFileIdentity,
-          )
+          ))
         )
           return yield* uncertainFailure(
             "start side-session Pi",
             "herdr_agent_ownership_mismatch",
             "Herdr reported a different Pi starting than the one launched",
           );
-        if (!isValidBlankChildProbe(probeSessionHeader(childSessionPath), childSessionId))
+        if (!(yield* isValidBlankChild(childSessionPath, childSessionId)))
           return yield* confirmedFailure(
             "validate started child session",
             "herdr_btw_child_invalid",
@@ -263,7 +253,7 @@ const makeHerdrBtwService = (
       sessionFile: string,
       sessionId: string,
     ) {
-      const childSessionId = createChildSessionId();
+      const childSessionId = yield* files.createChildSessionId;
       yield* ensureHerdrProtocol(herdr);
       return yield* launch({ mode: "create", childSessionId }, prompt, sessionFile, sessionId);
     });
@@ -277,7 +267,7 @@ const makeHerdrBtwService = (
       if (
         liveAgents.length !== 1 ||
         live === undefined ||
-        !isExactLinkedAgent(live, link, compareSessionFileIdentity)
+        !(yield* isExactLinkedAgent(files, live, link))
       )
         return yield* failClosedLink(
           "validate live BTW agent",
@@ -289,7 +279,7 @@ const makeHerdrBtwService = (
     });
 
     const openInner = Effect.fn("HerdrBtwService.open")(function* (prompt?: string) {
-      const { sessionFile, sessionId } = yield* validateBtwInput(prompt, input, probeSessionHeader);
+      const { sessionFile, sessionId } = yield* validateBtwInput(prompt, input, files);
       const restoration = linkStore.restore();
       if (HerdrBtwLinkRestoration.$is("malformed")(restoration))
         return yield* failClosedLink(
@@ -302,8 +292,8 @@ const makeHerdrBtwService = (
 
       const link = restoration.link;
       if (
-        !isValidBlankChildProbe(probeSessionHeader(link.childSessionPath), link.childSessionId) ||
-        !isDistinctChildSessionPath(link.childSessionPath, sessionFile, compareSessionFileIdentity)
+        !(yield* isValidBlankChild(link.childSessionPath, link.childSessionId)) ||
+        !(yield* isDistinctChildSessionPath(files, link.childSessionPath, sessionFile))
       )
         return yield* failClosedLink(
           "validate linked child session",
@@ -312,15 +302,15 @@ const makeHerdrBtwService = (
         );
 
       yield* ensureHerdrProtocol(herdr);
-      const liveAgents = (yield* herdr.inspectLiveAgents()).filter((agent) =>
-        isLinkedAgentConflictCandidate(agent, link, compareSessionFileIdentity),
+      const liveAgents = yield* Effect.filter(yield* herdr.inspectLiveAgents(), (agent) =>
+        isLinkedAgentConflictCandidate(files, agent, link),
       );
       if (liveAgents.length > 0) return yield* focusLiveAgent(link, liveAgents, prompt);
       return yield* launch({ mode: "resume", link }, prompt, sessionFile, sessionId);
     });
 
     const openNewInner = Effect.fn("HerdrBtwService.openNew")(function* (prompt?: string) {
-      const { sessionFile, sessionId } = yield* validateBtwInput(prompt, input, probeSessionHeader);
+      const { sessionFile, sessionId } = yield* validateBtwInput(prompt, input, files);
       return yield* openFreshCreate(prompt, sessionFile, sessionId);
     });
 
@@ -333,4 +323,7 @@ const makeHerdrBtwService = (
 export class HerdrBtwService extends Context.Service<HerdrBtwService>()(
   "pi-herdr-btw/btw/service/HerdrBtwService",
   { make: makeHerdrBtwService },
-) {}
+) {
+  static readonly layer = (input: HerdrBtwSessionInput) =>
+    Layer.effect(this, makeHerdrBtwService(input));
+}

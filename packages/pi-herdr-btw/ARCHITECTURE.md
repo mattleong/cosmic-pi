@@ -10,13 +10,14 @@ The extension never closes user-owned panes.
   generation-checked publication of the child's parent-reference capability.
 - [Workflow service](src/btw/service.ts) serializes commands and coordinates creation, reuse,
   prompt delivery, and focus. [Command controller](src/btw/controller.ts) adapts TUI commands
-  and reports bounded failures. [Layer composition](src/layer.ts) supplies the Herdr client
-  and link store.
+  and reports bounded failures. [Layer composition](src/layer.ts) supplies the Herdr client,
+  link store, and session-file capability; tests replace those Layers rather than the service.
 - [Herdr client](src/boundary/herdr-client.ts) owns the CLI transport, fixed argument arrays,
   response decoding, deadlines, and mutation-outcome classification. Workflows and their tests
   use semantic client operations rather than the transport protocol.
 - [Session-file boundary](src/boundary/session-file.ts) creates blank child files and verifies
-  headers and filesystem identity without opening a mutable Pi session manager.
+  headers and filesystem identity without opening a mutable Pi session manager. Workflows use
+  its `HerdrSessionFiles` service; synchronous host callbacks call the probes directly.
 - [Link store](src/boundary/host-link-store.ts) owns persistence through parent custom entries.
   [Link policy](src/btw/link.ts) filters entries by owner; [validation](src/btw/validation.ts)
   establishes whether a live agent or session file is safe to reuse.

@@ -4,9 +4,11 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import {
   decodeUnknownOrUndefined,
-  runBoundedProcessNode,
+  acquireBoundedProcessRunner,
+  nodeProcessLayer,
   sanitizeDiagnosticContent,
   type BoundedProcessError,
+  type BoundedProcessRunner,
   firstLineMessage,
 } from "pi-cosmic-core";
 import { HerdrBtwError } from "../btw/errors.ts";
@@ -115,8 +117,14 @@ export type HerdrClientContract = ReturnType<typeof makeHerdrClient>;
 export class HerdrClient extends Context.Service<HerdrClient, HerdrClientContract>()(
   "pi-herdr-btw/boundary/herdr-client/HerdrClient",
 ) {
+  /** Takes the process spawner once, so commands don't rebuild the Node process Layer. */
   static layer(environment: Readonly<NodeJS.ProcessEnv>) {
-    return Layer.succeed(this, makeHerdrClient(environment));
+    return Layer.effect(
+      this,
+      Effect.map(acquireBoundedProcessRunner, (processRunner) =>
+        makeHerdrClient(environment, { processRunner }),
+      ),
+    ).pipe(Layer.provide(nodeProcessLayer));
   }
 }
 
@@ -128,7 +136,7 @@ interface HerdrCommandRequest {
   readonly confirmedRejectionCodes?: ReadonlyArray<string> | undefined;
 }
 
-export type HerdrProcessRunner = typeof runBoundedProcessNode;
+export type HerdrProcessRunner = BoundedProcessRunner;
 
 const operationCode = (operation: string, suffix: string): string =>
   `herdr_${operation
@@ -241,7 +249,7 @@ const decodeJson = <A>(
 
 export const makeHerdrClient = (
   sourceEnvironment: Readonly<NodeJS.ProcessEnv>,
-  { processRunner = runBoundedProcessNode }: { readonly processRunner?: HerdrProcessRunner } = {},
+  { processRunner }: { readonly processRunner: HerdrProcessRunner },
 ) => {
   const environment = selectHerdrEnvironment(sourceEnvironment);
   const run = (request: HerdrCommandRequest): Effect.Effect<string, HerdrBtwError> =>

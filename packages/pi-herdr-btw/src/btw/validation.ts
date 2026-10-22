@@ -8,7 +8,7 @@ import type {
 import type { HerdrBtwSessionInput } from "../boundary/host-session.ts";
 import {
   SessionHeaderProbe,
-  type SessionFileIdentityComparator,
+  type HerdrSessionFilesContract,
   type SessionFileIdentityComparison,
 } from "../boundary/session-file.ts";
 import { confirmedFailure } from "./errors.ts";
@@ -64,7 +64,7 @@ const parentSessionUnavailable = () =>
 export const validateBtwInput = Effect.fn("HerdrBtw.validateBtwInput")(function* (
   prompt: string | undefined,
   input: HerdrBtwSessionInput,
-  probeSessionHeader: (path: string) => SessionHeaderProbe,
+  files: HerdrSessionFilesContract,
 ) {
   if (input.environment.HERDR_ENV !== "1" || !input.environment.HERDR_PANE_ID)
     return yield* confirmedFailure(
@@ -81,7 +81,7 @@ export const validateBtwInput = Effect.fn("HerdrBtw.validateBtwInput")(function*
       "parent_session_id_unavailable",
       "Couldn't read this Pi session's ID",
     );
-  const parentProbe = probeSessionHeader(input.sessionFile);
+  const parentProbe = yield* files.probeSessionHeader(input.sessionFile);
   if (!SessionHeaderProbe.$is("valid")(parentProbe)) return yield* parentSessionUnavailable();
   if (parentProbe.header.id !== sessionId)
     return yield* confirmedFailure(
@@ -143,26 +143,29 @@ export const waitForAvailableShell = Effect.fn("HerdrBtw.waitForAvailableShell")
 });
 
 export const isDistinctChildSessionPath = (
+  files: HerdrSessionFilesContract,
   childPath: string,
   parentSessionFile: string,
-  compareSessionFileIdentity: SessionFileIdentityComparator,
-): boolean =>
-  childPath !== parentSessionFile &&
-  compareSessionFileIdentity(childPath, parentSessionFile) === "distinct";
+): Effect.Effect<boolean> =>
+  childPath === parentSessionFile
+    ? Effect.succeed(false)
+    : files
+        .compareSessionFileIdentity(childPath, parentSessionFile)
+        .pipe(Effect.map((identity) => identity === "distinct"));
 
 const piAgentSession = (agent: HerdrPane) => {
   const session = agent.agent_session;
   return session?.source === "herdr:pi" && session.agent === "pi" ? session : undefined;
 };
 
-export const isOwnedStartedAgent = (
+export const isOwnedStartedAgent = Effect.fn("HerdrBtw.isOwnedStartedAgent")(function* (
+  files: HerdrSessionFilesContract,
   agent: HerdrPane,
   pane: HerdrPane,
   agentName: string,
   parentSessionFile: string,
   expectedChildPath: string,
-  compareSessionFileIdentity: SessionFileIdentityComparator,
-): boolean => {
+) {
   const childSession = piAgentSession(agent);
   return (
     agent.pane_id === pane.pane_id &&
@@ -172,38 +175,41 @@ export const isOwnedStartedAgent = (
     agent.name === agentName &&
     agent.agent === "pi" &&
     childSession?.kind === "path" &&
-    compareSessionFileIdentity(childSession.value, expectedChildPath) === "same" &&
-    isDistinctChildSessionPath(expectedChildPath, parentSessionFile, compareSessionFileIdentity)
+    (yield* files.compareSessionFileIdentity(childSession.value, expectedChildPath)) === "same" &&
+    (yield* isDistinctChildSessionPath(files, expectedChildPath, parentSessionFile))
   );
-};
+});
 
 const linkedAgentSessionIdentity = (
+  files: HerdrSessionFilesContract,
   agent: HerdrPane,
   link: HerdrBtwLink,
-  compareSessionFileIdentity: SessionFileIdentityComparator,
-): SessionFileIdentityComparison | undefined => {
+): Effect.Effect<SessionFileIdentityComparison | undefined> => {
   const session = piAgentSession(agent);
-  if (session === undefined) return undefined;
-  if (session.kind === "id") return session.value === link.childSessionId ? "same" : "distinct";
-  return compareSessionFileIdentity(session.value, link.childSessionPath);
+  if (session === undefined) return Effect.undefined;
+  if (session.kind === "id")
+    return Effect.succeed(session.value === link.childSessionId ? "same" : "distinct");
+  return files.compareSessionFileIdentity(session.value, link.childSessionPath);
 };
 
 export const isLinkedAgentConflictCandidate = (
+  files: HerdrSessionFilesContract,
   agent: HerdrPane,
   link: HerdrBtwLink,
-  compareSessionFileIdentity: SessionFileIdentityComparator,
-): boolean => {
-  if (agent.name === link.agentName) return true;
-  const identity = linkedAgentSessionIdentity(agent, link, compareSessionFileIdentity);
-  return identity !== undefined && identity !== "distinct";
-};
+): Effect.Effect<boolean> =>
+  agent.name === link.agentName
+    ? Effect.succeed(true)
+    : linkedAgentSessionIdentity(files, agent, link).pipe(
+        Effect.map((identity) => identity !== undefined && identity !== "distinct"),
+      );
 
 export const isExactLinkedAgent = (
+  files: HerdrSessionFilesContract,
   agent: HerdrPane,
   link: HerdrBtwLink,
-  compareSessionFileIdentity: SessionFileIdentityComparator,
-): boolean =>
-  agent.name === link.agentName &&
-  agent.terminal_id === link.terminalId &&
-  agent.agent === "pi" &&
-  linkedAgentSessionIdentity(agent, link, compareSessionFileIdentity) === "same";
+): Effect.Effect<boolean> =>
+  agent.name === link.agentName && agent.terminal_id === link.terminalId && agent.agent === "pi"
+    ? linkedAgentSessionIdentity(files, agent, link).pipe(
+        Effect.map((identity) => identity === "same"),
+      )
+    : Effect.succeed(false);

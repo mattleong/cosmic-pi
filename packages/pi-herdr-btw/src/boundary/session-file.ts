@@ -1,18 +1,21 @@
 import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import * as Clock from "effect/Clock";
+import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import { decodeUnknownOrUndefined, synchronousRandomUuid } from "pi-cosmic-core";
+import {
+  decodeUnknownOrUndefined,
+  nodeFs,
+  nodePath as pathApi,
+  synchronousRandomUuid,
+} from "pi-cosmic-core";
 import { BoundedId, BoundedPath, parseHerdrBtwSessionId } from "../btw/marker.ts";
 
-const nodeFs = process.getBuiltinModule("node:fs");
-const nodePath = process.getBuiltinModule("node:path");
-if (!nodeFs || !nodePath) throw new Error("Node fs/path builtins are unavailable.");
 const { closeSync, constants, fstatSync, lstatSync, openSync, readSync, statSync, writeFileSync } =
   nodeFs;
-const pathApi = nodePath;
 
 const MAX_SESSION_PATH_CHARS = 4_096;
 const MAX_HEADER_LINE_BYTES = 256 * 1024;
@@ -158,4 +161,32 @@ const createBlankChildSessionFileAt = (
 export const createBlankChildSessionFile = (
   input: BlankChildSessionFileInput,
 ): Effect.Effect<BlankChildSessionFileResult> =>
-  Clock.currentTimeMillis.pipe(Effect.map((now) => createBlankChildSessionFileAt(input, now)));
+  Clock.currentTimeMillis.pipe(
+    Effect.flatMap((now) => Effect.sync(() => createBlankChildSessionFileAt(input, now))),
+  );
+
+export interface HerdrSessionFilesContract {
+  readonly probeSessionHeader: (path: string) => Effect.Effect<SessionHeaderProbe>;
+  readonly compareSessionFileIdentity: (
+    leftPath: string,
+    rightPath: string,
+  ) => Effect.Effect<SessionFileIdentityComparison>;
+  readonly createChildSessionId: Effect.Effect<string>;
+  readonly createBlankChildSessionFile: (
+    input: BlankChildSessionFileInput,
+  ) => Effect.Effect<BlankChildSessionFileResult>;
+}
+
+/** Session-file probes for workflows; host callbacks that must stay synchronous use the functions. */
+export class HerdrSessionFiles extends Context.Service<
+  HerdrSessionFiles,
+  HerdrSessionFilesContract
+>()("pi-herdr-btw/boundary/session-file/HerdrSessionFiles") {
+  static readonly layer: Layer.Layer<HerdrSessionFiles> = Layer.succeed(this, {
+    probeSessionHeader: (path) => Effect.sync(() => probeSessionHeader(path)),
+    compareSessionFileIdentity: (leftPath, rightPath) =>
+      Effect.sync(() => compareSessionFileIdentity(leftPath, rightPath)),
+    createChildSessionId: Effect.sync(createChildSessionId),
+    createBlankChildSessionFile,
+  });
+}

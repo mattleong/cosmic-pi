@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Context from "effect/Context";
 import * as Layer from "effect/Layer";
+import { invokeHostCallback } from "pi-cosmic-core";
 import {
   HERDR_BTW_LINK_ENTRY_TYPE,
   HerdrBtwLinkRestoration,
@@ -28,8 +29,8 @@ export const makeHostHerdrBtwLinkStore = (
   capturedOwner: HerdrBtwLinkOwner,
   probe: (path: string) => SessionHeaderProbe = probeSessionHeader,
 ): HerdrBtwLinkStoreContract => {
-  const revalidateOwner = (): boolean => {
-    try {
+  const revalidateOwner = (): boolean =>
+    invokeHostCallback(() => {
       if (
         ctx.sessionManager.getSessionId() !== capturedOwner.sessionId ||
         ctx.sessionManager.getSessionFile() !== capturedOwner.sessionPath
@@ -39,23 +40,20 @@ export const makeHostHerdrBtwLinkStore = (
       return (
         SessionHeaderProbe.$is("valid")(header) && header.header.id === capturedOwner.sessionId
       );
-    } catch {
-      return false;
-    }
-  };
+    }, false);
   return {
-    restore: () => {
-      try {
-        if (!revalidateOwner()) return HerdrBtwLinkRestoration.malformed();
-        return restoreHerdrBtwLink(ctx.sessionManager.getEntries(), capturedOwner);
-      } catch {
-        return HerdrBtwLinkRestoration.malformed();
-      }
-    },
+    restore: () =>
+      invokeHostCallback(
+        () =>
+          revalidateOwner()
+            ? restoreHerdrBtwLink(ctx.sessionManager.getEntries(), capturedOwner)
+            : HerdrBtwLinkRestoration.malformed(),
+        HerdrBtwLinkRestoration.malformed(),
+      ),
     record: (link) => {
       if (!revalidateOwner()) return "refused";
-
-      try {
+      // A throwing append may already have persisted the entry.
+      return invokeHostCallback<HerdrBtwLinkRecordResult>(() => {
         pi.appendEntry(HERDR_BTW_LINK_ENTRY_TYPE, {
           version: 1,
           parentSessionId: capturedOwner.sessionId,
@@ -66,9 +64,7 @@ export const makeHostHerdrBtwLinkStore = (
           terminalId: link.terminalId,
         });
         return "recorded";
-      } catch {
-        return "uncertain";
-      }
+      }, "uncertain");
     },
   };
 };

@@ -1,6 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 import {
   HerdrClient,
@@ -17,6 +18,7 @@ import {
 } from "../../src/boundary/host-link-store.ts";
 import {
   BlankChildSessionFileResult,
+  HerdrSessionFiles,
   SessionHeaderProbe,
   type SessionFileIdentityComparator,
   type SessionFileIdentityComparison,
@@ -225,29 +227,37 @@ export const makeServiceFixture = (options: HerdrBtwFixtureOptions = {}) => {
       return result;
     },
   };
-  const serviceOptions = {
-    probeSessionHeader: (path: string): SessionHeaderProbe => {
-      const override = options.probes?.[path];
-      if (override) return override;
-      if (path === SESSION_FILE)
-        return SessionHeaderProbe.valid({ header: { id: options.sessionId ?? SESSION_ID } });
-      if (path === CHILD_FILE) return SessionHeaderProbe.valid({ header: { id: CHILD_ID } });
-      return path === createdChildFile
-        ? SessionHeaderProbe.valid({ header: { id: createdChildId } })
-        : SessionHeaderProbe.invalid();
-    },
-    compareSessionFileIdentity:
-      options.compareSessionFileIdentity ??
-      ((leftPath: string, rightPath: string) =>
-        leftPath === rightPath ? ("same" as const) : ("distinct" as const)),
-    createChildSessionId: () => createdChildId,
+  const probeSessionHeader = (path: string): SessionHeaderProbe => {
+    const override = options.probes?.[path];
+    if (override) return override;
+    if (path === SESSION_FILE)
+      return SessionHeaderProbe.valid({ header: { id: options.sessionId ?? SESSION_ID } });
+    if (path === CHILD_FILE) return SessionHeaderProbe.valid({ header: { id: CHILD_ID } });
+    return path === createdChildFile
+      ? SessionHeaderProbe.valid({ header: { id: createdChildId } })
+      : SessionHeaderProbe.invalid();
+  };
+  const compareSessionFileIdentity: SessionFileIdentityComparator =
+    options.compareSessionFileIdentity ??
+    ((leftPath, rightPath) => (leftPath === rightPath ? "same" : "distinct"));
+  const sessionFiles = HerdrSessionFiles.of({
+    probeSessionHeader: (path) => Effect.sync(() => probeSessionHeader(path)),
+    compareSessionFileIdentity: (leftPath, rightPath) =>
+      Effect.sync(() => compareSessionFileIdentity(leftPath, rightPath)),
+    createChildSessionId: Effect.succeed(createdChildId),
     createBlankChildSessionFile: () =>
       Effect.succeed(BlankChildSessionFileResult.created({ path: createdChildFile })),
-  };
-  const makeService = HerdrBtwService.make(input, serviceOptions).pipe(
-    Effect.provideService(HerdrClient, client),
-    Effect.provideService(HerdrBtwLinkStore, linkStore),
+  });
+  const serviceLayer = HerdrBtwService.layer(input).pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.succeed(HerdrClient, client),
+        Layer.succeed(HerdrBtwLinkStore, linkStore),
+        Layer.succeed(HerdrSessionFiles, sessionFiles),
+      ),
+    ),
   );
+  const makeService = HerdrBtwService.pipe(Effect.provide(serviceLayer));
   const open = (prompt?: string) => Effect.flatMap(makeService, (service) => service.open(prompt));
   const openNew = (prompt?: string) =>
     Effect.flatMap(makeService, (service) => service.openNew(prompt));
