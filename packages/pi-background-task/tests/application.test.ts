@@ -259,87 +259,93 @@ describe("background-task Pi lifecycle", () => {
       }),
   );
 
-  it.live("tree navigation terminates prior processes and starts a fresh registry", () =>
-    Effect.gen(function* () {
-      const activity = fakeActivityHost("tree-session");
-      const app = yield* harness(() => Promise.resolve(), { events: activity.events });
-      const ctx = extensionContextFixture({
-        cwd: process.cwd(),
-        signal: undefined,
-        isProjectTrusted: () => false,
-        hasUI: false,
-        mode: "rpc",
-        sessionManager: {
-          getSessionId: () => "tree-session",
-          getSessionFile: () => undefined,
-        },
-      });
-      yield* Effect.gen(function* () {
-        yield* Effect.promise(() => app.emit("session_start", ctx));
-        for (let navigation = 0; navigation < 2; navigation += 1) {
-          const execute = (input: BackgroundTaskToolInput) => app.execute(input, ctx);
-          const started = yield* Effect.promise(() =>
-            execute({
-              action: "start",
-              command:
-                `node -e "const {spawn}=require('node:child_process'); ` +
-                `const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'}); ` +
-                `console.log('ready:'+process.pid+':'+child.pid+':end'); setInterval(()=>{},1000)"`,
-            }),
-          );
-          const startedDetails = decodeDetails(started.details);
-          if (startedDetails.action !== "start") throw new Error("start returned the wrong action");
-          const taskId = startedDetails.snapshot.id;
-          const ready = yield* Effect.promise(() =>
-            execute({
-              action: "wait",
-              id: taskId,
-              until: "output",
-              contains: ":end",
-              waitSeconds: 5,
-            }),
-          );
-          const readyDetails = decodeDetails(ready.details);
-          if (readyDetails.action !== "wait") throw new Error("wait returned the wrong action");
-          expect(readyDetails.wait.outcome).toBe("matched");
-          const logs = yield* Effect.promise(() => execute({ action: "logs", id: taskId }));
-          const output = logs.content.map((part) => (part.type === "text" ? part.text : ""));
-          const match = /ready:(\d+):(\d+):end/.exec(output.join(""));
-          const nodePid = Number(match?.[1]);
-          const descendantPid = Number(match?.[2]);
-          const shellPid = readyDetails.wait.snapshot.pid;
-          if (
-            !shellPid ||
-            ![nodePid, descendantPid].every((pid) => Number.isSafeInteger(pid) && pid > 0)
-          )
-            throw new Error("running task did not report valid process ids");
-          const pids = yield* Effect.acquireRelease(
-            Effect.succeed([...new Set([shellPid, nodePid, descendantPid])]),
-            (captured) =>
-              Effect.sync(() => {
-                for (const pid of captured) signalProcess(pid, "SIGKILL");
+  it.live(
+    "tree navigation terminates prior processes and starts a fresh registry",
+    () =>
+      Effect.gen(function* () {
+        const activity = fakeActivityHost("tree-session");
+        const app = yield* harness(() => Promise.resolve(), { events: activity.events });
+        const ctx = extensionContextFixture({
+          cwd: process.cwd(),
+          signal: undefined,
+          isProjectTrusted: () => false,
+          hasUI: false,
+          mode: "rpc",
+          sessionManager: {
+            getSessionId: () => "tree-session",
+            getSessionFile: () => undefined,
+          },
+        });
+        yield* Effect.gen(function* () {
+          yield* Effect.promise(() => app.emit("session_start", ctx));
+          for (let navigation = 0; navigation < 2; navigation += 1) {
+            const execute = (input: BackgroundTaskToolInput) => app.execute(input, ctx);
+            const started = yield* Effect.promise(() =>
+              execute({
+                action: "start",
+                command:
+                  `node -e "const {spawn}=require('node:child_process'); ` +
+                  `const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'}); ` +
+                  `console.log('ready:'+process.pid+':'+child.pid+':end'); setInterval(()=>{},1000)"`,
               }),
-          );
-          expect(descendantPid).not.toBe(nodePid);
-          for (const pid of pids) expect(signalProcess(pid, 0)).toBe("present");
-          expect(activity.get()?.items).toEqual(
-            expect.arrayContaining([expect.objectContaining({ id: taskId })]),
-          );
+            );
+            const startedDetails = decodeDetails(started.details);
+            if (startedDetails.action !== "start")
+              throw new Error("start returned the wrong action");
+            const taskId = startedDetails.snapshot.id;
+            const ready = yield* Effect.promise(() =>
+              execute({
+                action: "wait",
+                id: taskId,
+                until: "output",
+                contains: ":end",
+                waitSeconds: 30,
+              }),
+            );
+            const readyDetails = decodeDetails(ready.details);
+            if (readyDetails.action !== "wait") throw new Error("wait returned the wrong action");
+            expect(readyDetails.wait.outcome).toBe("matched");
+            const logs = yield* Effect.promise(() => execute({ action: "logs", id: taskId }));
+            const output = logs.content.map((part) => (part.type === "text" ? part.text : ""));
+            const match = /ready:(\d+):(\d+):end/.exec(output.join(""));
+            const nodePid = Number(match?.[1]);
+            const descendantPid = Number(match?.[2]);
+            const shellPid = readyDetails.wait.snapshot.pid;
+            if (
+              !shellPid ||
+              ![nodePid, descendantPid].every((pid) => Number.isSafeInteger(pid) && pid > 0)
+            )
+              throw new Error("running task did not report valid process ids");
+            const pids = yield* Effect.acquireRelease(
+              Effect.succeed([...new Set([shellPid, nodePid, descendantPid])]),
+              (captured) =>
+                Effect.sync(() => {
+                  for (const pid of captured) signalProcess(pid, "SIGKILL");
+                }),
+            );
+            expect(descendantPid).not.toBe(nodePid);
+            for (const pid of pids) expect(signalProcess(pid, 0)).toBe("present");
+            expect(activity.get()?.items).toEqual(
+              expect.arrayContaining([expect.objectContaining({ id: taskId })]),
+            );
 
-          yield* Effect.promise(() => app.emit("session_tree", ctx));
+            yield* Effect.promise(() => app.emit("session_tree", ctx));
 
-          for (let attempt = 0; attempt < 100; attempt += 1) {
-            if (pids.every((pid) => signalProcess(pid, 0) === "absent")) break;
-            yield* Effect.sleep("10 millis");
+            // Signalled processes can take a while to be reaped on loaded runners.
+            for (let attempt = 0; attempt < 1_000; attempt += 1) {
+              if (pids.every((pid) => signalProcess(pid, 0) === "absent")) break;
+              yield* Effect.sleep("10 millis");
+            }
+            for (const pid of pids) expect(signalProcess(pid, 0)).toBe("absent");
+            expect(activity.get()?.items).toEqual([]);
+            expect(yield* Effect.promise(() => execute({ action: "list" }))).toMatchObject({
+              details: { action: "list", tasks: [] },
+            });
           }
-          for (const pid of pids) expect(signalProcess(pid, 0)).toBe("absent");
-          expect(activity.get()?.items).toEqual([]);
-          expect(yield* Effect.promise(() => execute({ action: "list" }))).toMatchObject({
-            details: { action: "list", tasks: [] },
-          });
-        }
-      }).pipe(Effect.ensuring(Effect.promise(() => app.emit("session_shutdown", ctx))));
-    }).pipe(Effect.scoped),
+        }).pipe(Effect.ensuring(Effect.promise(() => app.emit("session_shutdown", ctx))));
+      }).pipe(Effect.scoped),
+    // Starts four real node processes, each slow to start on a loaded runner.
+    60_000,
   );
 
   it.effect("interrupts a never-settling settings load on shutdown", () =>

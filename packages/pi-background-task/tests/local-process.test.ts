@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
@@ -12,6 +13,11 @@ import {
   type LocalProcessHandle,
   type LocalProcessRequest,
 } from "../src/boundary/local-process.ts";
+
+// Real processes start slowly on loaded runners. These bounds only end a hung test; no
+// assertion depends on how quickly a process starts or exits.
+vi.setConfig({ testTimeout: 60_000 });
+const processTimeout = "20 seconds";
 
 const withLocalProcess = <A, E>(effect: Effect.Effect<A, E, LocalProcess | Scope.Scope>) =>
   effect.pipe(Effect.scoped, provideBuiltLayer(LocalProcess.layer));
@@ -29,20 +35,23 @@ const firstOutput = (handle: LocalProcessHandle) =>
   handle.output.pipe(
     Stream.take(1),
     Stream.runCollect,
-    Effect.timeout("5 seconds"),
+    Effect.timeout(processTimeout),
     Effect.map((events) => [...events].map((event) => event.text).join("")),
   );
 
 const processAlive = (pid: number) => signalProcess(pid, 0) === "present";
 
-const awaitProcessDeath = (pid: number) =>
+const pollUntil = (done: Effect.Effect<boolean>) =>
   Effect.gen(function* () {
-    for (let attempt = 0; attempt < 100; attempt += 1) {
-      if (!processAlive(pid)) return true;
+    const deadline = (yield* Clock.currentTimeMillis) + 10_000;
+    while ((yield* Clock.currentTimeMillis) < deadline) {
+      if (yield* done) return true;
       yield* Effect.sleep("10 millis");
     }
-    return !processAlive(pid);
+    return yield* done;
   });
+
+const awaitProcessDeath = (pid: number) => pollUntil(Effect.sync(() => !processAlive(pid)));
 
 describe("local process boundary", () => {
   it("filters blocked environment keys with case-sensitive names", () => {
@@ -132,7 +141,7 @@ describe("local process boundary", () => {
         const handle = yield* spawnProcess(
           `node -e "const {spawn}=require('child_process'); const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'inherit'}); child.unref();"`,
         );
-        const result = yield* collectUntilExit(handle).pipe(Effect.timeout("5 seconds"));
+        const result = yield* collectUntilExit(handle).pipe(Effect.timeout(processTimeout));
         expect(result.exit.exitCode).toBe(0);
       }),
     ),
@@ -147,7 +156,7 @@ describe("local process boundary", () => {
         const events = yield* handle.output.pipe(
           Stream.take(1),
           Stream.runCollect,
-          Effect.timeout("5 seconds"),
+          Effect.timeout(processTimeout),
         );
         const descendant = Number([...events][0]?.text.trim());
         expect(Number.isSafeInteger(descendant)).toBe(true);
@@ -169,7 +178,7 @@ describe("local process boundary", () => {
           );
           expect(yield* firstOutput(handle)).toBe("ready");
           yield* handle.terminate("graceful");
-          const result = yield* collectUntilExit(handle).pipe(Effect.timeout("5 seconds"));
+          const result = yield* collectUntilExit(handle).pipe(Effect.timeout(processTimeout));
           expect(result.exit).toEqual({ exitCode: null, signal: "SIGTERM" });
           expect([...result.events].map((event) => event.text).join("")).toContain("cleaned");
         }),
@@ -186,12 +195,13 @@ describe("local process boundary", () => {
         expect(Number.isSafeInteger(descendant)).toBe(true);
         expect(yield* handle.leaderExited).toBe(false);
         yield* handle.terminate("graceful");
+        // The shell leader dies of SIGTERM; its descendant ignores it and holds the group open.
+        expect(yield* pollUntil(handle.leaderExited)).toBe(true);
         const early = yield* handle.awaitExit.pipe(Effect.timeoutOption("300 millis"));
         expect(Option.isNone(early)).toBe(true);
-        expect(yield* handle.leaderExited).toBe(true);
         expect(processAlive(descendant)).toBe(true);
         yield* handle.terminate("force");
-        const exit = yield* handle.awaitExit.pipe(Effect.timeout("5 seconds"));
+        const exit = yield* handle.awaitExit.pipe(Effect.timeout(processTimeout));
         expect(exit).toEqual({ exitCode: null, signal: "SIGTERM" });
         expect(yield* awaitProcessDeath(descendant)).toBe(true);
       }),
@@ -207,7 +217,10 @@ describe("local process boundary", () => {
         yield* handle.awaitExit;
         yield* handle.abandonOutput;
         expect(handle.droppedOutputBytes()).toBe(1000);
-        const delivered = yield* handle.output.pipe(Stream.runCollect, Effect.timeout("1 second"));
+        const delivered = yield* handle.output.pipe(
+          Stream.runCollect,
+          Effect.timeout(processTimeout),
+        );
         expect([...delivered]).toEqual([]);
       }),
     ),

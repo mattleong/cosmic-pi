@@ -1,5 +1,5 @@
 import { setFlagsFromString } from "node:v8";
-import { runInNewContext } from "node:vm";
+import { createContext, runInContext } from "node:vm";
 import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { describe, expect, it } from "vitest";
@@ -16,9 +16,12 @@ const tailText = (buffer: LogBuffer, tailLines: number) =>
     .events.map((event) => event.text)
     .join("");
 
+// One context, created once: a new context for each collection would add its own allocations
+// to the heap being measured. A missing gc throws rather than skipping.
+setFlagsFromString("--expose-gc");
+const gcContext = createContext();
 const collectGarbage = Effect.sync(() => {
-  setFlagsFromString("--expose-gc");
-  runInNewContext("gc()");
+  runInContext("gc()", gcContext);
 });
 
 describe("background log buffer", () => {
@@ -170,8 +173,10 @@ describe("background log buffer", () => {
 
   effectIt.live("keeps memory for the output it retains, not for the writes it came from", () =>
     Effect.gen(function* () {
-      const buffers = 200;
-      const writeBytes = 64 * 1_024;
+      // Large writes into small budgets put the two outcomes about a hundredfold apart, so heap
+      // noise cannot pass a regression or fail a correct buffer.
+      const buffers = 32;
+      const writeBytes = 512 * 1_024;
       const write = (index: number) =>
         Buffer.alloc(writeBytes, `${String(index).padStart(6, "0")}\n`).toString("utf8");
       yield* collectGarbage;
@@ -189,8 +194,9 @@ describe("background log buffer", () => {
         );
         expect(buffer.bytes + buffer.droppedBytes).toBe(writeBytes);
       }
-      // Holding each whole write would take buffers * writeBytes, sixteen times the charge.
-      expect(heapGrowth).toBeLessThan(charged * 4);
+      // Holding each whole write would take buffers * writeBytes, over a hundred times the charge.
+      expect(charged * 100).toBeLessThan(buffers * writeBytes);
+      expect(heapGrowth).toBeLessThan((buffers * writeBytes) / 8);
     }),
   );
 

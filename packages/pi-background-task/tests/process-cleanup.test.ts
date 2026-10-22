@@ -13,17 +13,19 @@ import { normalizeConfig } from "../src/config/options.ts";
 import { BackgroundTaskConfigStore } from "../src/config/store.ts";
 import { BackgroundTaskService } from "../src/task/service.ts";
 
-vi.setConfig({ testTimeout: 30_000 });
+vi.setConfig({ testTimeout: 60_000 });
 
 const hostScript = fileURLToPath(new URL("./fixtures/abrupt-exit-host.ts", import.meta.url));
 
+// Polls until a deadline generous enough for loaded runners; a gone group returns at once.
 const groupGone = (pid: number) =>
   Effect.gen(function* () {
-    for (let attempt = 0; attempt < 200; attempt += 1) {
+    const deadline = (yield* Clock.currentTimeMillis) + 10_000;
+    while ((yield* Clock.currentTimeMillis) < deadline) {
       if (signalProcessGroup(pid, 0) === "absent") return true;
       yield* Effect.sleep("10 millis");
     }
-    return false;
+    return signalProcessGroup(pid, 0) === "absent";
   });
 
 const killGroupsAfterward = (pids: ReadonlyArray<number>) =>
@@ -38,7 +40,7 @@ describe("real process cleanup", () => {
     Effect.gen(function* () {
       // The host transpiles the service graph on a cold start, which takes over 10 seconds on
       // loaded CI runners.
-      const host = yield* spawnIpcChild(hostScript, [], { timeout: "25 seconds" });
+      const host = yield* spawnIpcChild(hostScript, [], { timeout: "40 seconds" });
       yield* host.wait("ready");
       const announced = host.messages.find(
         (message): message is string => Predicate.isString(message) && message.startsWith("group:"),
@@ -56,14 +58,15 @@ describe("real process cleanup", () => {
   );
 
   it.live("stops more than eight SIGTERM-ignoring tasks within one shared grace window", () => {
-    const graceMillis = 1_000;
+    const graceMillis = 2_000;
+    const taskCount = 12;
     const layer = BackgroundTaskService.layer().pipe(
       Layer.provide(
         Layer.mergeAll(
           LocalProcess.layer,
           Layer.succeed(
             BackgroundTaskConfigStore,
-            normalizeConfig({ maxRunning: 12, stopGraceMs: graceMillis }),
+            normalizeConfig({ maxRunning: taskCount, stopGraceMs: graceMillis }),
           ),
           Path.layer,
         ),
@@ -71,12 +74,25 @@ describe("real process cleanup", () => {
     );
     return Effect.gen(function* () {
       const service = yield* BackgroundTaskService;
-      const tasks = yield* Effect.forEach(Array.from({ length: 10 }), () =>
-        service.start({ command: "trap '' TERM; while :; do sleep 1; done", cwd: "." }),
+      // Each task reports SIGTERM and keeps running, so only the forced stop ends it.
+      const tasks = yield* Effect.forEach(Array.from({ length: taskCount }), () =>
+        service.start({
+          command: "trap 'echo term' TERM; echo ready; while :; do sleep 1; done",
+          cwd: ".",
+        }),
       );
       const pids = tasks.flatMap((task) => (task.pid === undefined ? [] : [task.pid]));
       expect(pids).toHaveLength(tasks.length);
       yield* killGroupsAfterward(pids);
+      for (const task of tasks) {
+        const ready = yield* service.wait({
+          id: task.id,
+          until: "output",
+          contains: "ready",
+          waitSeconds: 30,
+        });
+        expect(ready.outcome).toBe("matched");
+      }
 
       const startedAt = yield* Clock.currentTimeMillis;
       const stopped = yield* service.stopAll();
@@ -84,7 +100,23 @@ describe("real process cleanup", () => {
 
       expect(stopped.map((task) => task.state)).toEqual(tasks.map(() => "stopped"));
       expect(elapsed).toBeGreaterThanOrEqual(graceMillis - 50);
-      expect(elapsed).toBeLessThan(graceMillis * 1.8);
+      // Ordering rather than elapsed time: every task saw SIGTERM before the shared window
+      // ended any of them. Stopping in batches signals later tasks only after earlier ones end.
+      const termedAt = yield* Effect.forEach(tasks, (task) =>
+        service
+          .logs({ id: task.id, afterCursor: 0 })
+          .pipe(
+            Effect.map(
+              (logs) => logs.events.find((event) => event.text.includes("term"))?.timestamp,
+            ),
+          ),
+      );
+      const endedAt = stopped.map((task) => task.endedAt);
+      expect(termedAt.every(Predicate.isNumber)).toBe(true);
+      expect(endedAt.every(Predicate.isNumber)).toBe(true);
+      expect(Math.max(...termedAt.filter(Predicate.isNumber))).toBeLessThan(
+        Math.min(...endedAt.filter(Predicate.isNumber)),
+      );
       for (const pid of pids) expect(yield* groupGone(pid)).toBe(true);
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
