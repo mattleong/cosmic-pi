@@ -124,7 +124,6 @@ export {
   withUsageEligibility,
   makeFrozenUsageProjection,
   resetFrozenUsageProjection,
-  synchronizeUsageProjectionContext,
   type UsageEligibilityStatusTexts,
   type UsageProjectionBase,
 } from "./src/usage-projection.ts";

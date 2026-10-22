@@ -18,8 +18,24 @@ interface SubscriptionRefresh<E, R> {
   readonly invalidateWith: <A, E2, R2>(
     effect: Effect.Effect<A, E2, R2>,
   ) => Effect.Effect<A, E2, R2>;
-  readonly startPolling: (request: RefreshRequest) => Effect.Effect<void, E, R>;
+  readonly startPolling: (request: RefreshRequest) => Effect.Effect<void, never, R>;
 }
+
+/**
+ * Keeps a background refresh loop alive. A joined refresh interrupted by its owner is expected;
+ * any other failure is logged without its cause, which may carry URLs, paths, or credentials.
+ * Interrupting the calling fiber still stops it, because Effect skips failure handlers then.
+ */
+export const recoverRefreshFailure =
+  (operation: string) =>
+  <E, R>(effect: Effect.Effect<void, E, R>): Effect.Effect<void, never, R> =>
+    effect.pipe(
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.void
+          : Effect.logWarning(`${operation} recovery: refresh_failed.`),
+      ),
+    );
 
 export const createSubscriptionRefresh = <Key, Value, E, R>(
   options: SubscriptionRefreshOptions<Key, Value, E, R>,
@@ -58,11 +74,7 @@ export const createSubscriptionRefresh = <Key, Value, E, R>(
       Effect.forever(
         options.interval.pipe(
           Effect.flatMap((interval) => Latch.await(wakeLatch).pipe(Effect.timeoutOption(interval))),
-          Effect.andThen(request(pollRequest)),
-          Effect.catchCauseIf(
-            (cause) => Cause.hasInterruptsOnly(cause),
-            () => Effect.void,
-          ),
+          Effect.andThen(request(pollRequest).pipe(recoverRefreshFailure(`${spanName}.poll`))),
         ),
       );
 

@@ -10,7 +10,10 @@ import type * as Result from "effect/Result";
 import type * as Scope from "effect/Scope";
 import * as Tracer from "effect/Tracer";
 import type { RefreshRequest } from "./coordination/refresh-coordinator.ts";
-import { createSubscriptionRefresh } from "./coordination/subscription-refresh.ts";
+import {
+  createSubscriptionRefresh,
+  recoverRefreshFailure,
+} from "./coordination/subscription-refresh.ts";
 import { AgentDirectory } from "./platform/agent-directory.ts";
 import { JsonHttpClient } from "./platform/json-http.ts";
 import { invokeHostCallback } from "./host-session.ts";
@@ -49,6 +52,11 @@ interface UsageFetchOutcomeDefinition extends Data.TaggedEnum.WithGenerics<2> {
 export const UsageFetchOutcome = Data.taggedEnum<UsageFetchOutcomeDefinition>();
 
 const hostHasUi = (ctx: ExtensionContext): boolean => invokeHostCallback(() => ctx.hasUI, true);
+const hostModelKey = (ctx: ExtensionContext): string =>
+  invokeHostCallback(() => {
+    const model = ctx.model;
+    return `${model?.provider ?? "none"}/${model?.id ?? "none"}`;
+  }, "unavailable");
 
 type RefreshValue<Snapshot, Patch> = Data.TaggedEnum<{
   Skipped: Record<never, never>;
@@ -242,7 +250,7 @@ export const makeUsageRefreshController = <
       const ctx = MutableRef.get(context);
       const current = yield* state.getState;
       const segments = [
-        `${ctx.model?.provider ?? "none"}/${ctx.model?.id ?? "none"}`,
+        hostModelKey(ctx),
         String(options.backgroundEnabled?.() ?? true),
         String(current.config?.usage.showOnlyOnSubscriptionModels ?? true),
       ];
@@ -329,8 +337,11 @@ export const makeUsageRefreshController = <
     });
     const refresh = (request: RefreshRequest = {}) =>
       provideDependencies(refreshEngine.request(request));
+    // The controller is the projection's only writer, so hosts render after this transition.
     const contextChanged = (clearUsage = false) =>
-      provideDependencies(refreshEngine.invalidateWith(synchronize(clearUsage)));
+      provideDependencies(refreshEngine.invalidateWith(synchronize(clearUsage))).pipe(
+        Effect.andThen(notifyChanged),
+      );
     const configure: UsageRefreshController<P, Resolved, Snapshot>["configure"] = (
       config,
       configureOptions,
@@ -341,6 +352,7 @@ export const makeUsageRefreshController = <
     };
     const startPolling = () =>
       refresh({ force: true }).pipe(
+        recoverRefreshFailure(`${options.spanPrefix}.initial-refresh`),
         Effect.andThen(provideDependencies(refreshEngine.startPolling({}))),
         Effect.forkScoped,
         Effect.asVoid,

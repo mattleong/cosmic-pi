@@ -79,22 +79,3 @@ export const resetFrozenUsageProjection = <Projection>(
 ): void => {
   MutableRef.set(projection, freezeSnapshot(initialProjection()));
 };
-
-interface UsageEligibilityDecision {
-  readonly eligible: boolean;
-  readonly clearUsage: boolean;
-  readonly statusTexts?: Partial<UsageEligibilityStatusTexts>;
-}
-
-export function synchronizeUsageProjectionContext<Projection extends UsageVisibilityFields>(
-  projection: MutableRef.MutableRef<Projection>,
-  evaluateEligibility: (state: Projection) => UsageEligibilityDecision,
-): void {
-  const current = MutableRef.get(projection);
-  const decision = evaluateEligibility(current);
-  const texts = { hiddenStatusText: "Usage hidden", ...decision.statusTexts };
-  MutableRef.set(
-    projection,
-    freezeSnapshot(withUsageEligibility(current, decision.eligible, decision.clearUsage, texts)),
-  );
-}

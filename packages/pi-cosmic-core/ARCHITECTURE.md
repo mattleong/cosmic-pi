@@ -47,7 +47,9 @@ Consumers guard the actual host publication against retired-session authority, i
 already-admitted durable commit is allowed to finish.
 
 Refresh coordination follows the same ownership principle: admission cannot be interrupted between
-claiming work and installing cleanup, but work and joiners remain interruptible. The usage controller
+claiming work and installing cleanup, but work and joiners remain interruptible. Background polling
+logs a cause-free warning and continues after a failed refresh; only interrupting it stops polling.
+The usage controller is the only writer of its published projection, including context changes, and
 receives an initial resolved config and installs later `configure` updates through its refresh gate;
 it does not own configuration persistence. Callers attach their scoped configuration observer before
 explicitly starting polling, avoiding a missed update during construction. Lock order is configuration,

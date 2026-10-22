@@ -1,11 +1,12 @@
 import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 import { createSubscriptionRefresh } from "../index.ts";
-import { yieldUntil } from "../testing.ts";
+import { capturedTelemetrySnapshot, makeCapturedLogger, yieldUntil } from "../testing.ts";
 
 it.effect("discards a response when its key or revision becomes stale", () =>
   Effect.gen(function* () {
@@ -82,5 +83,75 @@ it.effect("keeps polling after the refresh it joined is interrupted", () =>
     yield* Deferred.await(polled);
     expect(calls).toBe(2);
     yield* Fiber.interrupt(poller);
+  }).pipe(Effect.scoped),
+);
+
+for (const failing of ["fetch", "commit", "currentKey"] as const) {
+  it.effect(`keeps polling after a ${failing} defect and still stops on interruption`, () => {
+    const logger = makeCapturedLogger();
+    return Effect.gen(function* () {
+      const polled = yield* Deferred.make<void>();
+      let intervalReads = 0;
+      let poisonPending = true;
+      const poisoned = <A>(source: typeof failing, healthy: Effect.Effect<A>) =>
+        Effect.suspend(() => {
+          if (source !== failing || !poisonPending) return healthy;
+          poisonPending = false;
+          return Effect.die("poll-poison /secret/path");
+        });
+      const refresh = yield* createSubscriptionRefresh({
+        currentKey: poisoned("currentKey", Effect.succeed("key")),
+        interval: Effect.sync(() => ++intervalReads).pipe(Effect.as(1_000)),
+        fetch: () => poisoned("fetch", Effect.succeed(1)),
+        commit: () => poisoned("commit", Deferred.succeed(polled, undefined)),
+      });
+      const poller = yield* refresh.startPolling({}).pipe(Effect.forkScoped);
+      yield* yieldUntil(() => intervalReads === 1);
+      yield* TestClock.adjust("1 second");
+      yield* yieldUntil(() => intervalReads === 2);
+      yield* TestClock.adjust("1 second");
+      yield* Deferred.await(polled);
+      const exit = yield* Fiber.interrupt(poller).pipe(Effect.andThen(Fiber.await(poller)));
+      expect(Exit.hasInterrupts(exit)).toBe(true);
+      expect(logger.entries).toHaveLength(1);
+      expect(capturedTelemetrySnapshot(logger)).not.toContain("poison");
+    }).pipe(Effect.scoped, Effect.provide(logger.layer));
+  });
+}
+
+it.effect("an invalidation issued during a commit lands after it", () =>
+  Effect.gen(function* () {
+    const committing = yield* Deferred.make<void>();
+    const releaseCommit = yield* Deferred.make<void>();
+    let published = "empty";
+    const refresh = yield* createSubscriptionRefresh({
+      currentKey: Effect.succeed("key"),
+      interval: Effect.succeed(60_000),
+      fetch: () => Effect.succeed("old-context usage"),
+      commit: (value: string) =>
+        Deferred.succeed(committing, undefined).pipe(
+          Effect.andThen(Deferred.await(releaseCommit)),
+          Effect.andThen(
+            Effect.sync(() => {
+              published = value;
+            }),
+          ),
+        ),
+    });
+    const request = yield* refresh.request({}).pipe(Effect.forkScoped);
+    yield* Deferred.await(committing);
+    const cleared = yield* refresh
+      .invalidateWith(
+        Effect.sync(() => {
+          published = "cleared";
+        }),
+      )
+      .pipe(Effect.forkScoped);
+    for (let turn = 0; turn < 10; turn++) yield* Effect.yieldNow;
+    expect(published).toBe("empty");
+    yield* Deferred.succeed(releaseCommit, undefined);
+    yield* Fiber.join(request);
+    yield* Fiber.join(cleared);
+    expect(published).toBe("cleared");
   }).pipe(Effect.scoped),
 );

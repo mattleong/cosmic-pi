@@ -6,10 +6,13 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
+import * as TestClock from "effect/testing/TestClock";
 import { provideBuiltLayer } from "../index.ts";
+import { capturedTelemetrySnapshot, makeCapturedLogger, yieldUntil } from "../testing.ts";
 import { AgentDirectory } from "../src/platform/agent-directory.ts";
 import { JsonHttpClient } from "../src/platform/json-http.ts";
-import { extensionContextFixture } from "../src/testing/host.ts";
+import { extensionContextFixture, type ExtensionContextOverrides } from "../src/testing/host.ts";
+import { modelFixture } from "../src/testing/model.ts";
 import {
   makeUsageRefreshController,
   UsageFetchOutcome,
@@ -38,7 +41,6 @@ const fixture = <R = never>(overrides: Partial<Options<R>> & Pick<Options<R>, "d
   Effect.gen(function* () {
     const projection = MutableRef.make(initialUsageProjection<UsageControllerConfig, number>());
     const notifications: string[] = [];
-    const host = { hasUI: true, ui: { notify: (text: string) => void notifications.push(text) } };
     const controller = yield* makeUsageRefreshController<
       Projection,
       UsageControllerConfig,
@@ -47,7 +49,7 @@ const fixture = <R = never>(overrides: Partial<Options<R>> & Pick<Options<R>, "d
     >({
       spanPrefix: "test.usage",
       logLabel: "Test",
-      context: MutableRef.make(extensionContextFixture(host)),
+      context: MutableRef.make(hostContext(notifications)),
       projection,
       onChange: () => undefined,
       initialConfig: config,
@@ -62,6 +64,13 @@ const fixture = <R = never>(overrides: Partial<Options<R>> & Pick<Options<R>, "d
       ...overrides,
     });
     return { controller, projection, notifications };
+  });
+
+const hostContext = (notifications: string[], overrides: ExtensionContextOverrides = {}) =>
+  extensionContextFixture({
+    hasUI: true,
+    ui: { notify: (text: string) => void notifications.push(text) },
+    ...overrides,
   });
 
 const nextConfig: UsageControllerConfig = {
@@ -147,4 +156,81 @@ it.effect(
       expect(changes).toBe(0);
       expect(h.notifications).toEqual([]);
     }).pipe(provideBuiltLayer(testLayer)),
+);
+
+it.effect("polling starts even when the initial forced refresh dies", () => {
+  const logger = makeCapturedLogger();
+  return Effect.gen(function* () {
+    let calls = 0;
+    const h = yield* fixture(
+      fetching(
+        Effect.suspend(() =>
+          ++calls === 1 ? Effect.die("usage-poison /secret/auth.json") : Effect.succeed(7),
+        ),
+      ),
+    );
+    yield* h.controller.startPolling();
+    yield* yieldUntil(() => calls === 1);
+    for (let turn = 0; turn < 10; turn++) yield* Effect.yieldNow;
+    yield* TestClock.adjust("1 minute");
+    yield* yieldUntil(() => MutableRef.get(h.projection).snapshot === 7);
+    expect(capturedTelemetrySnapshot(logger)).not.toContain("poison");
+  }).pipe(provideBuiltLayer(Layer.merge(testLayer, logger.layer)));
+});
+
+it.effect("a retired host context's model getter does not break a refresh", () =>
+  Effect.gen(function* () {
+    const context = MutableRef.make(
+      extensionContextFixture({
+        hasUI: true,
+        get model(): never {
+          throw new Error("stale extension context");
+        },
+      }),
+    );
+    const h = yield* fixture({ ...fetching(Effect.succeed(5)), context });
+    yield* h.controller.refresh({ force: true });
+    expect(MutableRef.get(h.projection).snapshot).toBe(5);
+  }).pipe(provideBuiltLayer(testLayer)),
+);
+
+it.effect("a model change cannot be overwritten by an in-flight refresh for the old model", () =>
+  Effect.gen(function* () {
+    let renders = 0;
+    let fetches = 0;
+    const started = yield* Deferred.make<void>();
+    const finish = yield* Deferred.make<number>();
+    const context = MutableRef.make(hostContext([], { model: modelFixture({ id: "old" }) }));
+    const h = yield* fixture({
+      ...fetching(
+        Effect.suspend(() =>
+          ++fetches === 1
+            ? Effect.succeed(1)
+            : Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(finish))),
+        ),
+      ),
+      context,
+      onChange: () => {
+        renders++;
+      },
+    });
+    yield* h.controller.refresh({ force: true });
+    expect(MutableRef.get(h.projection).snapshot).toBe(1);
+
+    const pending = yield* h.controller.refresh({ force: true }).pipe(Effect.forkScoped);
+    yield* Deferred.await(started);
+    MutableRef.set(context, hostContext([], { model: modelFixture({ id: "new" }) }));
+    const rendersBefore = renders;
+    yield* h.controller.contextChanged(true);
+    expect(MutableRef.get(h.projection)).toMatchObject({
+      snapshot: undefined,
+      statusLine: undefined,
+    });
+    expect(renders).toBeGreaterThan(rendersBefore);
+
+    yield* Deferred.succeed(finish, 2);
+    yield* Fiber.join(pending);
+    expect(MutableRef.get(h.projection).snapshot).toBeUndefined();
+    expect(MutableRef.get(h.projection)).toEqual(yield* h.controller.getState);
+  }).pipe(provideBuiltLayer(testLayer)),
 );
