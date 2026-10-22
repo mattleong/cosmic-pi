@@ -46,7 +46,8 @@ import type { WriterPoolLookup, WriterPools } from "./writer-pool.ts";
 import type { RunRecordCleanup } from "./record-cleanup.ts";
 import type { RunSettlement } from "./settlement.ts";
 import { appendNoticeSessionEvent } from "./session-events.ts";
-import { spentAtLimitLocked } from "./session-usage.ts";
+import { spendLimitRefusalLocked } from "./session-usage.ts";
+import type { SessionSpendLimit } from "../config/options.ts";
 import { runSessionOwned } from "./session-owned.ts";
 import { isStopInProgress } from "./tree.ts";
 import type { RunWorkspaceControl } from "./workspace-control.ts";
@@ -120,7 +121,7 @@ interface RunResumeDependencies extends Pick<
   readonly writerPools: WriterPoolLookup & Pick<WriterPools, "joinLocked">;
   readonly currentNesting: Effect.Effect<SubagentNestingPolicy>;
   /** The root's `sessionSpendLimit`, which also stops agent messages from resuming runs. */
-  readonly currentSpendLimit: Effect.Effect<number | undefined>;
+  readonly currentSpendLimit: Effect.Effect<SessionSpendLimit | undefined>;
   readonly delivery: RunNotificationDelivery;
   readonly initializeProcess: RunProcessInitializer;
   readonly assignment: RunAssignment;
@@ -409,11 +410,16 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
                 `Agent ${id} is being stopped with its subtree; send again once the stop finishes.`,
               );
             // Like a new start, a resume by an agent message spends under the session's limit.
-            const spent = spentAtLimitLocked(sessionUsage, records, spendLimit);
-            if (spendLimit !== undefined && spent !== undefined)
+            const refusal = spendLimitRefusalLocked(sessionUsage, records, spendLimit);
+            if (refusal?.kind === "invalid")
+              return yield* agentMessageRefusal(
+                "agent_spend_limit_invalid",
+                `The configured sessionSpendLimit is invalid (${refusal.diagnostic}); agent messages can't resume ${id} until it is fixed.`,
+              );
+            if (refusal)
               return yield* agentMessageRefusal(
                 "agent_spend_limit",
-                `This session's subagents have spent $${spent.toFixed(2)} of its $${spendLimit.toFixed(2)} limit (sessionSpendLimit); agent messages can't resume ${id}.`,
+                `This session's subagents have spent $${refusal.spent.toFixed(2)} of its $${refusal.dollars.toFixed(2)} limit (sessionSpendLimit); agent messages can't resume ${id}.`,
               );
             const needsRespawn = selected.process === undefined;
             if (needsRespawn && !selected.launch.resumeToken)

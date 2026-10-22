@@ -24,7 +24,7 @@ import {
 } from "./profile-restore.ts";
 import {
   decodeProfileRoute,
-  decodeSubagentNesting,
+  decodeSubagentNestingOverrides,
   isProfileSetName,
   isSupportedConfigVersion,
   subagentConfigDecoder,
@@ -34,7 +34,7 @@ import {
   SUBAGENT_CONFIG_VERSION,
   type DelegationMode,
   DelegationModeSchema,
-  type SubagentNestingPolicy,
+  type SubagentNestingOverrides,
   type WriterWorkspaceMode,
   WriterWorkspaceModeSchema,
 } from "./schema.ts";
@@ -103,7 +103,7 @@ export interface SubagentDeleteProfileSetPatch extends SubagentConfigPatchBase {
 }
 
 export interface SubagentNestingPatch extends SubagentConfigPatchBase {
-  readonly nesting?: SubagentNestingPolicy | undefined;
+  readonly nesting?: SubagentNestingOverrides | undefined;
 }
 
 interface SubagentWriterWorkspacePatch extends SubagentConfigPatchBase {
@@ -169,29 +169,15 @@ const conflictError = (path: string) =>
 const trustError = (path: string) =>
   mutationError(path, "Project subagent settings require a trusted project.");
 
+/** Only an unsupported version fails activation; invalid fields degrade with diagnostics. */
 const decodeDocument = (
   raw: JsonObject,
   scope: SubagentConfigScope,
   path: string,
 ): Effect.Effect<DecodedSubagentConfig, SubagentConfigStoreError> => {
   const decoded = subagentConfigDecoder(scope)(raw);
-  if (decoded.unsupportedVersion) return Effect.fail(unsupportedVersionError(path));
-  const fatal = new Set([
-    `${scope}.<unknown>`,
-    `${scope}.nesting`,
-    `${scope}.writerWorkspaceMode`,
-    `${scope}.delegation`,
-    `${scope}.hooks`,
-    `${scope}.sessionSpendLimit`,
-  ]);
-  return decoded.diagnostics.some((diagnostic) => fatal.has(diagnostic))
-    ? Effect.fail(
-        configError(
-          "activate",
-          path,
-          "Subagents configuration contains fields that are not part of its declared version.",
-        ),
-      )
+  return decoded.unsupportedVersion
+    ? Effect.fail(unsupportedVersionError(path))
     : Effect.succeed(decoded);
 };
 
@@ -392,10 +378,15 @@ const applyDeleteProfileSet: ApplyPatch<SubagentDeleteProfileSetPatch> = Effect.
 
 const applyNestingPatch: ApplyPatch<SubagentNestingPatch> = Effect.fnUntraced(
   function* (current, patch, path) {
-    const nesting = patch.nesting === undefined ? undefined : decodeSubagentNesting(patch.nesting);
+    const nesting =
+      patch.nesting === undefined ? undefined : decodeSubagentNestingOverrides(patch.nesting);
     if (patch.nesting !== undefined && !nesting)
       return yield* mutationError(path, "Invalid nesting policy.");
-    return withEntry(current, "nesting", nesting && { ...nesting });
+    return withEntry(
+      current,
+      "nesting",
+      nesting && Object.keys(nesting).length > 0 ? { ...nesting } : undefined,
+    );
   },
 );
 

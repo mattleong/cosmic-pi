@@ -304,6 +304,35 @@ describe("local Pi child bridge", () => {
     yield* settle(harness.shutdown);
   });
 
+  effectTest("keeps a parent question waiting for its reply without a deadline", function* () {
+    const harness = makeHarness();
+    yield* settle(harness.start);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    try {
+      let settled = false;
+      const result = harness.ask().finally(() => {
+        settled = true;
+      });
+      const question = yield* harness.awaitContact("contact_request");
+      yield* step(() => vi.advanceTimersByTimeAsync(24 * 60 * 60_000));
+      expect(settled).toBe(false);
+      expect(contactOfType(harness.contacts, "contact_cancel")).toBeUndefined();
+      harness.currentListener().handlers.onControl({
+        channel: "pi-subagents",
+        type: "parent_reply",
+        requestId: question.requestId,
+        ackId: "late-reply",
+        message: "still here",
+      });
+      yield* step(() =>
+        expect(result).resolves.toMatchObject({ content: [{ text: "Parent reply: still here" }] }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+    yield* settle(harness.shutdown);
+  });
+
   effectTest("rejects correlated waits on disconnect and shutdown", function* () {
     for (const end of ["disconnect", "shutdown"] as const) {
       const harness = makeHarness();

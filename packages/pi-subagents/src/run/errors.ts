@@ -57,6 +57,7 @@ export const AGENT_MESSAGE_REFUSAL_CODES = [
   "agent_unavailable",
   "agent_resume_unsupported",
   "agent_spend_limit",
+  "agent_spend_limit_invalid",
 ] as const;
 export type AgentMessageRefusalCode = (typeof AGENT_MESSAGE_REFUSAL_CODES)[number];
 

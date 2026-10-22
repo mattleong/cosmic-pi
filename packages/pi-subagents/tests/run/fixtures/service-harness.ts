@@ -23,7 +23,7 @@ import {
   type WriterLease,
 } from "../../../src/boundary/writer-lease.ts";
 import { resolveSubagentConfig } from "../../../src/config/options.ts";
-import { decodeSubagentConfig } from "../../../src/config/schema.ts";
+import { decodeSubagentConfig, subagentConfigDecoder } from "../../../src/config/schema.ts";
 import { subagentProfileServiceLayerFor } from "../../../src/profiles/service.ts";
 import type { LocalPiParentControl, RpcCommand } from "../../../src/backend/local-pi-protocol.ts";
 import {
@@ -568,13 +568,14 @@ export function fakeChildLayer(
   return { controls, reclaimedRunIds, layer };
 }
 
-export const profileLayerFor = (global: JsonObject) =>
+export const profileLayerFor = (global: JsonObject, project?: JsonObject) =>
   subagentProfileServiceLayerFor(
     resolveSubagentConfig({
       globalConfigPath: "/agent/pi-subagents.json",
       projectConfigPath: "/project/.pi/pi-subagents.json",
       projectTrusted: true,
       global: decodeSubagentConfig(global),
+      ...(project && { project: subagentConfigDecoder("project")(project) }),
     }),
   );
 

@@ -13,6 +13,49 @@ describe("writer workspace configuration", () => {
   });
 });
 
+describe("nesting configuration", () => {
+  it("merges each declared field over the scope below it", () => {
+    const global = { version: 6, nesting: { maxDepth: 5 } };
+    const project = { version: 6, nesting: { maxActiveRuns: 8 } };
+    expect(resolve(global, project).nesting).toEqual({
+      maxDirectChildren: 12,
+      maxDepth: 5,
+      maxActiveRuns: 8,
+    });
+    expect(resolve(global, project, false).nesting).toEqual({
+      maxDirectChildren: 12,
+      maxDepth: 5,
+      maxActiveRuns: 16,
+    });
+  });
+
+  it("fails an invalid nesting limit closed with a diagnostic", () => {
+    for (const [nesting, expected, diagnostics] of [
+      // A fraction is floored.
+      [{ maxActiveRuns: 2.5 }, { maxActiveRuns: 2 }, ["global.nesting.maxActiveRuns"]],
+      // A value that isn't a number takes the field's most restrictive bound.
+      [
+        { maxDepth: "2", maxActiveRuns: 8 },
+        { maxDepth: 0, maxActiveRuns: 8 },
+        ["global.nesting.maxDepth"],
+      ],
+      [{ maxDirectChildren: null }, { maxDirectChildren: 1 }, ["global.nesting.maxDirectChildren"]],
+      ["deep", { maxDirectChildren: 1, maxDepth: 0, maxActiveRuns: 1 }, ["global.nesting"]],
+      // An unknown key is ignored.
+      [{ maxActiveRuns: 8, depth: 2 }, { maxActiveRuns: 8 }, ["global.nesting.<unknown>"]],
+    ] as const) {
+      const config = resolve({ version: 6, nesting });
+      expect(config.nesting).toEqual({
+        maxDirectChildren: 12,
+        maxDepth: 3,
+        maxActiveRuns: 16,
+        ...expected,
+      });
+      expect(config.diagnostics).toEqual(diagnostics);
+    }
+  });
+});
+
 describe("worktree hook configuration", () => {
   const install = { command: ["pnpm", "install", "--offline"], timeout: 300 };
   const prune = { command: ["./scripts/prune-cache"] };
@@ -27,34 +70,90 @@ describe("worktree hook configuration", () => {
         { ...copy, scope: "project" },
       ],
       WorktreeRemove: [{ ...prune, scope: "project" }],
+      invalidWorktreeCreate: [],
     });
     expect(resolve(global, project, false).hooks).toEqual({
       WorktreeCreate: [{ ...install, scope: "global" }],
       WorktreeRemove: [],
+      invalidWorktreeCreate: [],
     });
-    expect(resolve({ version: 6 }).hooks).toEqual({ WorktreeCreate: [], WorktreeRemove: [] });
+    expect(resolve({ version: 6 }).hooks).toEqual({
+      WorktreeCreate: [],
+      WorktreeRemove: [],
+      invalidWorktreeCreate: [],
+    });
   });
 
-  it("rejects unknown events, unknown keys, and malformed hooks in either scope", () => {
+  const malformedHooks = [
+    { command: [] },
+    { command: "pnpm install" },
+    { command: ["pnpm", " "] },
+    { command: ["pnpm"], shell: true },
+    { command: ["pnpm"], timeout: "300" },
+    { command: ["pnpm"], timeout: null },
+    "pnpm install",
+  ];
+
+  it("drops a malformed WorktreeRemove hook while keeping the valid hooks beside it", () => {
     for (const scope of ["global", "project"])
-      for (const hooks of [
-        { PostToolUse: [install] },
-        { WorktreeCreate: install },
-        { WorktreeCreate: [{ command: [] }] },
-        { WorktreeCreate: [{ command: "pnpm install" }] },
-        { WorktreeCreate: [{ command: ["pnpm", " "] }] },
-        { WorktreeCreate: [{ command: ["pnpm"], timeout: 0 }] },
-        { WorktreeCreate: [{ command: ["pnpm"], timeout: 3_601 }] },
-        { WorktreeCreate: [{ command: ["pnpm"], timeout: 1.5 }] },
-        { WorktreeRemove: [{ command: ["pnpm"], shell: true }] },
-        { WorktreeCreate: Array.from({ length: 17 }, () => install) },
-      ])
-        expect(subagentConfigDecoder(scope)({ version: 6, hooks }).diagnostics).toContain(
-          `${scope}.hooks`,
-        );
+      for (const hook of malformedHooks) {
+        const decoded = subagentConfigDecoder(scope)({
+          version: 6,
+          hooks: { WorktreeRemove: [hook, prune] },
+        });
+        expect(decoded.file.hooks).toEqual({ WorktreeRemove: [prune] });
+        expect(decoded.diagnostics).toContain(`${scope}.hooks.WorktreeRemove[0]`);
+        expect(decoded.invalidWorktreeCreate).toEqual([]);
+      }
   });
 
-  it("rejects the removed workspace command and include fields", () => {
+  it("blocks WorktreeCreate setup on any malformed declaration", () => {
+    for (const scope of ["global", "project"])
+      for (const hook of malformedHooks) {
+        const decoded = subagentConfigDecoder(scope)({
+          version: 6,
+          hooks: { WorktreeCreate: [install, hook] },
+        });
+        expect(decoded.invalidWorktreeCreate).toEqual([`${scope}.hooks.WorktreeCreate[1]`]);
+        expect(decoded.diagnostics).toContain(`${scope}.hooks.WorktreeCreate[1]`);
+      }
+    for (const [hooks, invalid] of [
+      ["pnpm install", "global.hooks"],
+      [{ WorktreeCreate: install }, "global.hooks.WorktreeCreate"],
+      [
+        { WorktreeCreate: Array.from({ length: 17 }, () => install) },
+        "global.hooks.WorktreeCreate[16+]",
+      ],
+    ] as const) {
+      const decoded = subagentConfigDecoder("global")({ version: 6, hooks });
+      expect(decoded.invalidWorktreeCreate).toEqual([invalid]);
+      expect(decoded.diagnostics).toEqual([invalid]);
+    }
+  });
+
+  it("ignores unknown events and an invalid WorktreeRemove list without blocking setup", () => {
+    for (const [hooks, diagnostic] of [
+      [{ PostToolUse: [install], WorktreeCreate: [install] }, "global.hooks.<unknown>"],
+      [{ WorktreeRemove: prune, WorktreeCreate: [install] }, "global.hooks.WorktreeRemove"],
+    ] as const) {
+      const decoded = subagentConfigDecoder("global")({ version: 6, hooks });
+      expect(decoded.file.hooks).toEqual({ WorktreeCreate: [install] });
+      expect(decoded.invalidWorktreeCreate).toEqual([]);
+      expect(decoded.diagnostics).toEqual([diagnostic]);
+    }
+  });
+
+  it("floors a fractional hook timeout", () => {
+    const decoded = subagentConfigDecoder("global")({
+      version: 6,
+      hooks: { WorktreeCreate: [{ command: ["pnpm"], timeout: 299.9 }] },
+    });
+    expect(decoded.file.hooks).toEqual({ WorktreeCreate: [{ command: ["pnpm"], timeout: 299 }] });
+    expect(decoded.invalidWorktreeCreate).toEqual([]);
+    expect(decoded.diagnostics).toEqual(["global.hooks.WorktreeCreate[0].timeout"]);
+  });
+
+  it("reports the removed workspace command and include fields as unknown", () => {
     for (const removed of [
       { workspaceSetup: { command: ["pnpm", "install"] } },
       { workspaceVerify: { command: ["pnpm", "test"] } },

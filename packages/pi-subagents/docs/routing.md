@@ -4,7 +4,12 @@ Part of the [pi-subagents](../README.md) architecture documentation. See [ARCHIT
 
 ## Version-6 routing and nesting domain
 
-Only configuration version 6 is accepted. Any other version fails activation and store writes, and documents are never rewritten automatically. Unknown root keys fail activation, and diagnostics redact profile-set names.
+Only configuration version 6 is accepted. Any other version fails activation and store writes, and documents are never rewritten automatically. Every other invalid field degrades instead of failing activation, and each leaves a path-only diagnostic in the activation log and `/subagents doctor` (diagnostics redact profile-set and agent names). Ordinary fields are ignored: an unknown root key, and an invalid `delegation`, which inherits from the next scope or the default. Safety controls fail closed, to their most restrictive setting rather than a looser inherited one:
+
+- a `nesting` limit takes its minimum ([Nesting](#nesting-capacity-and-spend));
+- an invalid `writerWorkspaceMode` becomes `worktree`;
+- an unusable `sessionSpendLimit` blocks spending unless another scope declares a valid one;
+- an invalid `WorktreeCreate` declaration fails every tree's setup ([Worktree hooks](local-backends.md#worktree-hooks)).
 
 ### Profile sets
 
@@ -40,10 +45,10 @@ Only the seven declared profile IDs are accepted. An explicit launch profile alw
 
 ### Nesting, capacity, and spend
 
-- An omitted `nesting` is `{ maxDirectChildren: 12, maxDepth: 3, maxActiveRuns: 16 }`. Direct children must be an integer from 1 to 32, depth from 0 to 8, and `maxActiveRuns` from 1 to 64. Invalid values fail activation without clamping.
+- The built-in `nesting` is `{ maxDirectChildren: 12, maxDepth: 3, maxActiveRuns: 16 }`. Each field is optional and merges over the scope below it. Direct children are an integer from 1 to 32, depth from 0 to 8, and `maxActiveRuns` from 1 to 64. A configured fraction is floored and a number outside the bounds clamped; a value that isn't a number takes the field's minimum, and a `nesting` value that isn't an object takes every minimum. Unknown keys are ignored.
 - Policy precedence is Session, trusted Project, Global, then built-in. A start batch captures one route and policy revision.
 - Admission counts active direct children and reservations for one parent, then active processes across the tree against `maxActiveRuns` (`tree_capacity`).
-- Optional root `sessionSpendLimit` (US dollars, Project over Global) stops new starts with `session_spend_limit` once the session's known subagent cost reaches it, and resumes by agent messages with `agent_spend_limit`.
+- Optional root `sessionSpendLimit` (US dollars up to 100,000, Project over Global; a larger value is clamped) stops new starts with `session_spend_limit` once the session's known subagent cost reaches it, and resumes by agent messages with `agent_spend_limit`. A declared limit that isn't a positive number falls back to the other scope's valid limit; with none, every start fails with `session_spend_limit_invalid` and every resume by agent message with `agent_spend_limit_invalid` until it is fixed.
 - That cost includes evicted runs and earlier runtimes: each run's usage is appended as a `pi-subagents-usage` custom session entry (never sent to the model) when its assignment settles and when the runtime ends. `/reload`, `/tree`, and resume restore the sum across every branch, because navigating back refunds nothing. A fork keeps the entries on its path.
 - Usage since a run last settled is lost if Pi crashes, and Codex reports no cost, so the total is a lower bound.
 

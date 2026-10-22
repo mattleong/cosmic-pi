@@ -429,8 +429,8 @@ describe("profile settings controller", () => {
     expect(fixture.ui.notify).not.toHaveBeenCalled();
   });
 
-  effectTest("keeps a scope's other nesting limits when one limit inherits", function* () {
-    const sessionWith = (nesting: { maxDirectChildren: number; maxDepth: number }) =>
+  effectTest("changes one nesting limit while the scope's other limits stay", function* () {
+    const sessionWith = (nesting: { maxDirectChildren?: number; maxDepth?: number }) =>
       setup({
         value: profileSettingsInspection(
           {
@@ -444,11 +444,17 @@ describe("profile settings controller", () => {
     const partial = sessionWith({ maxDirectChildren: 4, maxDepth: 2 });
     yield* step(() => partial.settings("session maxDepth inherit"));
     expect(partial.managerActions.patchSessionNesting).toHaveBeenCalledWith(
-      expect.objectContaining({ nesting: { maxDirectChildren: 4, maxDepth: 3 } }),
+      expect.objectContaining({ nesting: { maxDirectChildren: 4 } }),
     );
 
-    // Once every limit matches what the scope inherits, it inherits the whole policy.
-    const last = sessionWith({ maxDirectChildren: 12, maxDepth: 2 });
+    const set = sessionWith({ maxDepth: 2 });
+    yield* step(() => set.settings("session maxActiveRuns 8"));
+    expect(set.managerActions.patchSessionNesting).toHaveBeenCalledWith(
+      expect.objectContaining({ nesting: { maxDepth: 2, maxActiveRuns: 8 } }),
+    );
+
+    // Once the scope declares no limit, it inherits the whole policy.
+    const last = sessionWith({ maxDepth: 2 });
     yield* step(() => last.settings("session maxDepth inherit"));
     expect(
       vi.mocked(last.managerActions.patchSessionNesting).mock.calls[0]?.[0],

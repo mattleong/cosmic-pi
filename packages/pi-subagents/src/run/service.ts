@@ -76,12 +76,12 @@ import { writerSpawnPreparation } from "./writer-preparation.ts";
 import { WriterPools } from "./writer-pool.ts";
 import { workspaceControl, type WorkspaceCoordinatorContract } from "./workspace-control.ts";
 import { WorkspaceService } from "../workspace/service.ts";
-import type { WorktreeHook, WriterWorkspaceMode } from "../config/schema.ts";
+import type { WorktreeCreateSetup, WriterWorkspaceMode } from "../config/schema.ts";
 
 export interface SubagentServiceOptions {
   readonly writerWorkspaceMode?: WriterWorkspaceMode;
   /** Run in order in every new worker and prepared tree before it is used. */
-  readonly worktreeCreate?: ReadonlyArray<WorktreeHook> | undefined;
+  readonly worktreeCreate?: WorktreeCreateSetup | undefined;
   readonly workspaceOwnerId?: string;
   readonly workspaceSourceCwd?: string;
   readonly publish?: (projection: SubagentProjection) => void;

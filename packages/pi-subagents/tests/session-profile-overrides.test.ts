@@ -271,7 +271,11 @@ describe("session profile overrides", () => {
         expect(replaced.effectiveConfig.profiles.reviewer.candidates[0]?.model).toBe(
           "openai/replacement",
         );
-        expect(replaced.effectiveConfig.nesting).toEqual({ maxDirectChildren: 9, maxDepth: 4 });
+        expect(replaced.effectiveConfig.nesting).toEqual({
+          maxDirectChildren: 9,
+          maxDepth: 4,
+          maxActiveRuns: 16,
+        });
 
         const edited = yield* service.patchSessionProfile({
           profile: "reviewer",
@@ -300,6 +304,33 @@ describe("session profile overrides", () => {
           actualRevision: cleared.revision,
         });
       }),
+  );
+
+  it.effect("merges a partial session nesting override over the activation-time policy", () =>
+    Effect.gen(function* () {
+      const service = yield* builtProfileService(baseConfig());
+      const initial = yield* service.capture;
+      expect(initial.effectiveConfig.nesting).toEqual({
+        maxDirectChildren: 4,
+        maxDepth: 2,
+        maxActiveRuns: 16,
+      });
+      const nested = yield* service.patchSessionNesting({
+        nesting: { maxDepth: 6 },
+        expectedRevision: initial.revision,
+      });
+      expect(nested.effectiveConfig.nesting).toEqual({
+        maxDirectChildren: 4,
+        maxDepth: 6,
+        maxActiveRuns: 16,
+      });
+      const cleared = yield* service.patchSessionNesting({
+        nesting: {},
+        expectedRevision: nested.revision,
+      });
+      expect(cleared.nesting).toBeUndefined();
+      expect(cleared.effectiveConfig.nesting).toEqual(initial.effectiveConfig.nesting);
+    }),
   );
 
   it.effect("rejects an edit that cannot apply as invalid, not as a revision conflict", () =>

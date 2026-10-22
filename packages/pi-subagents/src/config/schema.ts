@@ -35,6 +35,7 @@ export const WRITER_WORKSPACE_MODES = ["worktree", "shared-checkout"] as const;
 export type WriterWorkspaceMode = (typeof WRITER_WORKSPACE_MODES)[number];
 export const DEFAULT_WRITER_WORKSPACE_MODE: WriterWorkspaceMode = "shared-checkout";
 export const WriterWorkspaceModeSchema = Schema.Literals(WRITER_WORKSPACE_MODES);
+const isWriterWorkspaceMode = Schema.is(WriterWorkspaceModeSchema);
 
 export const DELEGATION_MODES = ["normal", "encouraged", "orchestration"] as const;
 export type DelegationMode = (typeof DELEGATION_MODES)[number];
@@ -51,41 +52,32 @@ export const DEFAULT_WORKTREE_HOOK_TIMEOUT_SECONDS: Readonly<Record<WorktreeHook
   WorktreeCreate: 600,
   WorktreeRemove: 60,
 };
-/** An argv command run without a shell at the root of an isolated writer or prepared tree. */
-const WorktreeHookSchema = Schema.Struct({
-  command: Schema.Array(
-    Schema.String.check(
-      Schema.isBetweenLength(1, MAX_WORKTREE_HOOK_ARGUMENT_CHARS),
-      Schema.isPattern(/\S/u),
-    ),
-  ).check(Schema.isBetweenLength(1, MAX_WORKTREE_HOOK_ARGUMENTS)),
-  /** Seconds; defaults per event (DEFAULT_WORKTREE_HOOK_TIMEOUT_SECONDS). */
-  timeout: Schema.optionalKey(
-    Schema.Finite.check(
-      Schema.isInt(),
-      Schema.isGreaterThanOrEqualTo(1),
-      Schema.isLessThanOrEqualTo(MAX_WORKTREE_HOOK_TIMEOUT_SECONDS),
-    ),
+/** The argv of a command run without a shell at the root of an isolated writer or prepared tree. */
+const WorktreeHookCommandSchema = Schema.Array(
+  Schema.String.check(
+    Schema.isBetweenLength(1, MAX_WORKTREE_HOOK_ARGUMENT_CHARS),
+    Schema.isPattern(/\S/u),
   ),
-});
-export type WorktreeHook = typeof WorktreeHookSchema.Type;
-const WorktreeHookListSchema = Schema.Array(WorktreeHookSchema).check(
-  Schema.isMaxLength(MAX_WORKTREE_HOOKS_PER_EVENT),
-);
+).check(Schema.isBetweenLength(1, MAX_WORKTREE_HOOK_ARGUMENTS));
+export interface WorktreeHook {
+  readonly command: ReadonlyArray<string>;
+  /** Seconds; defaults per event (DEFAULT_WORKTREE_HOOK_TIMEOUT_SECONDS). */
+  readonly timeout?: number;
+}
 /** Claude Code-style worktree hooks, which run after the engine creates or before it removes a tree. */
-const WorktreeHooksSchema = Schema.Struct({
-  WorktreeCreate: Schema.optionalKey(WorktreeHookListSchema),
-  WorktreeRemove: Schema.optionalKey(WorktreeHookListSchema),
-});
-type WorktreeHooks = typeof WorktreeHooksSchema.Type;
+type WorktreeHooks = Partial<Readonly<Record<WorktreeHookEvent, ReadonlyArray<WorktreeHook>>>>;
+/** WorktreeCreate setup that can't run as declared; every tree's setup fails instead of skipping it. */
+export interface InvalidWorktreeCreate {
+  /** Diagnostics naming the invalid declarations. */
+  readonly invalid: ReadonlyArray<string>;
+}
+/** WorktreeCreate hooks in run order, or setup blocked by an invalid declaration. */
+export type WorktreeCreateSetup = ReadonlyArray<WorktreeHook> | InvalidWorktreeCreate;
 
 export const MIN_DIRECT_CHILDREN = 1;
 export const MAX_DIRECT_CHILDREN = 32;
 /** Optional cap, in US dollars, on what one session's subagents may spend before new starts stop. */
-const SessionSpendLimitSchema = Schema.Finite.check(
-  Schema.isGreaterThan(0),
-  Schema.isLessThanOrEqualTo(100_000),
-);
+const MAX_SESSION_SPEND_LIMIT = 100_000;
 
 export const MIN_ACTIVE_RUNS = 1;
 export const MAX_ACTIVE_RUNS = 64;
@@ -110,7 +102,7 @@ interface SubagentConfigFile {
   readonly version?: number | undefined;
   readonly defaultProfileSet?: string | undefined;
   readonly profileSets?: Readonly<Record<string, SubagentProfileSet>> | undefined;
-  readonly nesting?: SubagentNestingPolicy | undefined;
+  readonly nesting?: SubagentNestingOverrides | undefined;
   readonly writerWorkspaceMode?: WriterWorkspaceMode | undefined;
   readonly delegation?: DelegationMode | undefined;
   readonly hooks?: WorktreeHooks | undefined;
@@ -128,36 +120,59 @@ export interface DecodedSubagentConfig {
   readonly invalidAgents: ReadonlyArray<string>;
   /** The document's `agents` value is not an object of at most 32 entries. */
   readonly invalidAgentsContainer: boolean;
+  /** The document declares a `sessionSpendLimit` that can't be used; spending fails closed. */
+  readonly invalidSessionSpendLimit: boolean;
+  /** Diagnostics of WorktreeCreate declarations that can't run; tree setup fails closed. */
+  readonly invalidWorktreeCreate: ReadonlyArray<string>;
   readonly unsupportedVersion: boolean;
 }
 
-export const SubagentNestingSchema = Schema.Struct({
-  maxDirectChildren: Schema.Finite.check(
-    Schema.isInt(),
-    Schema.isGreaterThanOrEqualTo(MIN_DIRECT_CHILDREN),
-    Schema.isLessThanOrEqualTo(MAX_DIRECT_CHILDREN),
-  ),
-  maxDepth: Schema.Finite.check(
-    Schema.isInt(),
-    Schema.isGreaterThanOrEqualTo(MIN_SUBAGENT_DEPTH),
-    Schema.isLessThanOrEqualTo(MAX_SUBAGENT_DEPTH),
-  ),
+const NESTING_BOUNDS = {
+  maxDirectChildren: { minimum: MIN_DIRECT_CHILDREN, maximum: MAX_DIRECT_CHILDREN },
+  maxDepth: { minimum: MIN_SUBAGENT_DEPTH, maximum: MAX_SUBAGENT_DEPTH },
   /** Active subagent processes allowed at once across the whole tree. */
-  maxActiveRuns: Schema.optionalKey(
+  maxActiveRuns: { minimum: MIN_ACTIVE_RUNS, maximum: MAX_ACTIVE_RUNS },
+} as const;
+type NestingField = keyof typeof NESTING_BOUNDS;
+const NESTING_FIELDS: ReadonlyArray<NestingField> = [
+  "maxDirectChildren",
+  "maxDepth",
+  "maxActiveRuns",
+];
+
+const boundedInteger = ({ minimum, maximum }: { minimum: number; maximum: number }) =>
+  Schema.optionalKey(
     Schema.Finite.check(
       Schema.isInt(),
-      Schema.isGreaterThanOrEqualTo(MIN_ACTIVE_RUNS),
-      Schema.isLessThanOrEqualTo(MAX_ACTIVE_RUNS),
+      Schema.isGreaterThanOrEqualTo(minimum),
+      Schema.isLessThanOrEqualTo(maximum),
     ),
-  ),
+  );
+
+/** One scope's nesting limits; each omitted field inherits from the next scope. */
+export const SubagentNestingOverridesSchema = Schema.Struct({
+  maxDirectChildren: boundedInteger(NESTING_BOUNDS.maxDirectChildren),
+  maxDepth: boundedInteger(NESTING_BOUNDS.maxDepth),
+  maxActiveRuns: boundedInteger(NESTING_BOUNDS.maxActiveRuns),
 });
-export type SubagentNestingPolicy = typeof SubagentNestingSchema.Type;
+export type SubagentNestingOverrides = typeof SubagentNestingOverridesSchema.Type;
+
+export interface SubagentNestingPolicy {
+  readonly maxDirectChildren: number;
+  readonly maxDepth: number;
+  readonly maxActiveRuns?: number;
+}
 
 export const DEFAULT_SUBAGENT_NESTING_POLICY: SubagentNestingPolicy = Object.freeze({
   maxDirectChildren: 12,
   maxDepth: 3,
   maxActiveRuns: DEFAULT_MAX_ACTIVE_RUNS,
 });
+
+export const mergeSubagentNesting = (
+  inherited: SubagentNestingPolicy,
+  overrides: SubagentNestingOverrides | undefined,
+): SubagentNestingPolicy => Object.freeze({ ...inherited, ...overrides });
 
 const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
 type UnknownRecord = typeof UnknownRecordSchema.Type;
@@ -175,10 +190,28 @@ const nullPrototypeRecord = <Value>() => {
   return record;
 };
 
-export const decodeSubagentNesting = flow(
-  decodeUnknownOrUndefined(SubagentNestingSchema, EXACT_FIELDS),
-  (nesting): SubagentNestingPolicy | undefined => nesting && Object.freeze({ ...nesting }),
+/** Strictly decodes an edit; documents degrade per field instead (decodeDocumentNesting). */
+export const decodeSubagentNestingOverrides = flow(
+  decodeUnknownOrUndefined(SubagentNestingOverridesSchema, EXACT_FIELDS),
+  (nesting): SubagentNestingOverrides | undefined => nesting && Object.freeze({ ...nesting }),
 );
+
+/**
+ * Floors a finite number and clamps it to its bounds, with a diagnostic when that changed it;
+ * anything else is undefined so the caller decides how it fails.
+ */
+const flooredInBounds = (
+  value: FieldValue,
+  minimum: number,
+  maximum: number,
+  path: string,
+  diagnostics: string[],
+): number | undefined => {
+  if (!Predicate.isNumber(value) || !Number.isFinite(value)) return undefined;
+  const bounded = Math.min(maximum, Math.max(minimum, Math.floor(value)));
+  if (bounded !== value) diagnostics.push(path);
+  return bounded;
+};
 
 const hasValidCandidatePolicy = Schema.makeFilter((candidate: ProfileCandidate) =>
   profileCandidateValidationIssues(candidate).length === 0
@@ -284,6 +317,8 @@ interface DecodedBody {
   readonly invalidDefaultProfileSet: boolean;
   readonly invalidAgents: ReadonlyArray<string>;
   readonly invalidAgentsContainer: boolean;
+  readonly invalidSessionSpendLimit: boolean;
+  readonly invalidWorktreeCreate: ReadonlyArray<string>;
 }
 
 const EMPTY_BODY: DecodedBody = Object.freeze({
@@ -293,6 +328,8 @@ const EMPTY_BODY: DecodedBody = Object.freeze({
   invalidDefaultProfileSet: false,
   invalidAgents: Object.freeze([]),
   invalidAgentsContainer: false,
+  invalidSessionSpendLimit: false,
+  invalidWorktreeCreate: Object.freeze([]),
 });
 
 const decodeProfileSet = (
@@ -443,12 +480,58 @@ const decodeRootField = <S extends Schema.ConstraintDecoder<unknown>>(
   scope: string,
   diagnostics: string[],
   schema: S,
-  options?: typeof EXACT_FIELDS,
 ): S["Type"] | undefined => {
   if (!Object.hasOwn(root, key)) return undefined;
-  const decoded = decodeUnknownOrUndefined(schema, options)(root[key]);
+  const decoded = decodeUnknownOrUndefined(schema)(root[key]);
   if (decoded === undefined) diagnostics.push(`${scope}.${key}`);
   return decoded;
+};
+
+const NESTING_KEYS: ReadonlySet<string> = new Set(NESTING_FIELDS);
+
+/** Nesting limits are safety controls, so a value that isn't a number takes its most restrictive bound. */
+const MOST_RESTRICTIVE_NESTING: SubagentNestingOverrides = Object.freeze({
+  maxDirectChildren: NESTING_BOUNDS.maxDirectChildren.minimum,
+  maxDepth: NESTING_BOUNDS.maxDepth.minimum,
+  maxActiveRuns: NESTING_BOUNDS.maxActiveRuns.minimum,
+});
+
+const decodeDocumentNesting = (
+  value: FieldValue,
+  path: string,
+  diagnostics: string[],
+): SubagentNestingOverrides | undefined => {
+  const record = decodeUnknownRecord(value);
+  if (!record) {
+    diagnostics.push(path);
+    return MOST_RESTRICTIVE_NESTING;
+  }
+  if (!hasOnlyKeys(record, NESTING_KEYS)) diagnostics.push(`${path}.<unknown>`);
+  const nesting: { -readonly [Field in NestingField]?: number } = {};
+  for (const field of NESTING_FIELDS) {
+    if (!Object.hasOwn(record, field)) continue;
+    const { minimum, maximum } = NESTING_BOUNDS[field];
+    const fieldPath = `${path}.${field}`;
+    const limit = flooredInBounds(record[field], minimum, maximum, fieldPath, diagnostics);
+    if (limit === undefined) diagnostics.push(fieldPath);
+    nesting[field] = limit ?? minimum;
+  }
+  return Object.keys(nesting).length > 0 ? Object.freeze(nesting) : undefined;
+};
+
+const decodeSessionSpendLimit = (
+  value: FieldValue,
+  path: string,
+  diagnostics: string[],
+): number | undefined => {
+  // A limit has no meaningful minimum to clamp up to; the caller fails a nonpositive one closed.
+  if (!Predicate.isNumber(value) || !Number.isFinite(value) || value <= 0) {
+    diagnostics.push(path);
+    return undefined;
+  }
+  if (value <= MAX_SESSION_SPEND_LIMIT) return value;
+  diagnostics.push(path);
+  return MAX_SESSION_SPEND_LIMIT;
 };
 
 const decodeDefaultProfileSet = (root: UnknownRecord, scope: string, diagnostics: string[]) => {
@@ -461,29 +544,108 @@ const decodeDefaultProfileSet = (root: UnknownRecord, scope: string, diagnostics
   return { defaultProfileSet, invalidDefaultProfileSet };
 };
 
-const freezeHooks = (hooks: ReadonlyArray<WorktreeHook>) =>
-  Object.freeze(
-    hooks.map((hook) => Object.freeze({ ...hook, command: Object.freeze([...hook.command]) })),
-  );
+const decodeHookCommand = decodeUnknownOrUndefined(WorktreeHookCommandSchema);
+const HOOK_KEYS: ReadonlySet<string> = new Set(["command", "timeout"]);
+const HOOK_EVENT_KEYS: ReadonlySet<string> = new Set(WORKTREE_HOOK_EVENTS);
 
+/** A hook without a valid command or timeout, or with keys it doesn't understand, is invalid. */
+const decodeWorktreeHook = (
+  value: FieldValue,
+  path: string,
+  diagnostics: string[],
+): WorktreeHook | undefined => {
+  const record = decodeUnknownRecord(value);
+  const command = record && decodeHookCommand(record.command);
+  if (!record || !command || !hasOnlyKeys(record, HOOK_KEYS)) return undefined;
+  if (!Object.hasOwn(record, "timeout"))
+    return Object.freeze({ command: Object.freeze([...command]) });
+  const timeout = flooredInBounds(
+    record.timeout,
+    1,
+    MAX_WORKTREE_HOOK_TIMEOUT_SECONDS,
+    `${path}.timeout`,
+    diagnostics,
+  );
+  return timeout === undefined
+    ? undefined
+    : Object.freeze({ command: Object.freeze([...command]), timeout });
+};
+
+interface DecodedHookList {
+  readonly hooks: ReadonlyArray<WorktreeHook>;
+  /** Paths of declarations that were dropped. */
+  readonly invalid: ReadonlyArray<string>;
+}
+
+const decodeWorktreeHookList = (
+  value: FieldValue,
+  path: string,
+  diagnostics: string[],
+): DecodedHookList => {
+  const list = decodeUnknownList(value);
+  if (!list || list.length > MAX_WORKTREE_HOOKS_PER_EVENT) {
+    const invalid = list ? `${path}[${MAX_WORKTREE_HOOKS_PER_EVENT}+]` : path;
+    diagnostics.push(invalid);
+    return { hooks: [], invalid: [invalid] };
+  }
+  const invalid: string[] = [];
+  const hooks = list.flatMap((entry, index) => {
+    const entryPath = `${path}[${index}]`;
+    const hook = decodeWorktreeHook(entry, entryPath, diagnostics);
+    if (hook) return [hook];
+    diagnostics.push(entryPath);
+    invalid.push(entryPath);
+    return [];
+  });
+  return { hooks: Object.freeze(hooks), invalid };
+};
+
+interface DecodedWorktreeHooks {
+  readonly hooks?: WorktreeHooks | undefined;
+  readonly invalidCreate: ReadonlyArray<string>;
+}
+
+/**
+ * WorktreeRemove is best effort, so an invalid hook is dropped and the rest run. WorktreeCreate is
+ * sequential setup a writer depends on, so any invalid declaration, including a malformed `hooks`
+ * value that could have held it, blocks setup instead of skipping a step.
+ */
 const decodeWorktreeHooks = (
+  value: FieldValue,
+  path: string,
+  diagnostics: string[],
+): DecodedWorktreeHooks => {
+  const record = decodeUnknownRecord(value);
+  if (!record) {
+    diagnostics.push(path);
+    return { invalidCreate: [path] };
+  }
+  if (!hasOnlyKeys(record, HOOK_EVENT_KEYS)) diagnostics.push(`${path}.<unknown>`);
+  const hooks: { -readonly [Event in WorktreeHookEvent]?: ReadonlyArray<WorktreeHook> } = {};
+  let invalidCreate: ReadonlyArray<string> = [];
+  for (const event of WORKTREE_HOOK_EVENTS) {
+    if (!Object.hasOwn(record, event)) continue;
+    const list = decodeWorktreeHookList(record[event], `${path}.${event}`, diagnostics);
+    if (event === "WorktreeCreate") invalidCreate = list.invalid;
+    if (list.hooks.length > 0) hooks[event] = list.hooks;
+  }
+  return {
+    ...(Object.keys(hooks).length > 0 && { hooks: Object.freeze(hooks) }),
+    invalidCreate,
+  };
+};
+
+/** Writer isolation is a safety control, so an invalid mode takes the more isolated one. */
+const decodeWriterWorkspaceMode = (
   root: UnknownRecord,
   scope: string,
   diagnostics: string[],
-): WorktreeHooks | undefined => {
-  const hooks = decodeRootField(
-    root,
-    "hooks",
-    scope,
-    diagnostics,
-    WorktreeHooksSchema,
-    EXACT_FIELDS,
-  );
-  if (hooks === undefined) return undefined;
-  return Object.freeze({
-    ...(hooks.WorktreeCreate && { WorktreeCreate: freezeHooks(hooks.WorktreeCreate) }),
-    ...(hooks.WorktreeRemove && { WorktreeRemove: freezeHooks(hooks.WorktreeRemove) }),
-  });
+): WriterWorkspaceMode | undefined => {
+  if (!Object.hasOwn(root, "writerWorkspaceMode")) return undefined;
+  const mode = root.writerWorkspaceMode;
+  if (isWriterWorkspaceMode(mode)) return mode;
+  diagnostics.push(`${scope}.writerWorkspaceMode`);
+  return "worktree";
 };
 
 const decodeCurrentBody = (
@@ -491,22 +653,18 @@ const decodeCurrentBody = (
   scope: string,
   diagnostics: string[],
 ): DecodedBody => {
-  const writerWorkspaceMode = decodeRootField(
-    root,
-    "writerWorkspaceMode",
-    scope,
-    diagnostics,
-    WriterWorkspaceModeSchema,
-  );
+  const writerWorkspaceMode = decodeWriterWorkspaceMode(root, scope, diagnostics);
   const delegation = decodeRootField(root, "delegation", scope, diagnostics, DelegationModeSchema);
-  const hooks = decodeWorktreeHooks(root, scope, diagnostics);
-  const sessionSpendLimit = decodeRootField(
-    root,
-    "sessionSpendLimit",
-    scope,
-    diagnostics,
-    SessionSpendLimitSchema,
-  );
+  const hooks = Object.hasOwn(root, "hooks")
+    ? decodeWorktreeHooks(root.hooks, `${scope}.hooks`, diagnostics)
+    : undefined;
+  const spendLimitDeclared = Object.hasOwn(root, "sessionSpendLimit");
+  const sessionSpendLimit = spendLimitDeclared
+    ? decodeSessionSpendLimit(root.sessionSpendLimit, `${scope}.sessionSpendLimit`, diagnostics)
+    : undefined;
+  const nesting = Object.hasOwn(root, "nesting")
+    ? decodeDocumentNesting(root.nesting, `${scope}.nesting`, diagnostics)
+    : undefined;
   const decoded = Object.hasOwn(root, "profileSets")
     ? decodeProfileSets(root.profileSets, `${scope}.profileSets`, diagnostics)
     : undefined;
@@ -522,9 +680,10 @@ const decodeCurrentBody = (
     file: {
       ...(decoded && Object.keys(decoded.sets).length > 0 && { profileSets: decoded.sets }),
       ...(defaultProfileSet !== undefined && { defaultProfileSet }),
+      ...(nesting !== undefined && { nesting }),
       ...(writerWorkspaceMode !== undefined && { writerWorkspaceMode }),
       ...(delegation !== undefined && { delegation }),
-      ...(hooks !== undefined && { hooks }),
+      ...(hooks?.hooks !== undefined && { hooks: hooks.hooks }),
       ...(sessionSpendLimit !== undefined && { sessionSpendLimit }),
       ...(agents && Object.keys(agents.agents).length > 0 && { agents: agents.agents }),
     },
@@ -533,6 +692,8 @@ const decodeCurrentBody = (
     invalidDefaultProfileSet,
     invalidAgents: agents?.invalidAgents ?? [],
     invalidAgentsContainer: agents?.containerInvalid ?? false,
+    invalidSessionSpendLimit: spendLimitDeclared && sessionSpendLimit === undefined,
+    invalidWorktreeCreate: hooks?.invalidCreate ?? [],
   };
 };
 
@@ -554,14 +715,9 @@ const decodeConfigRoot = (
   if (!hasOnlyKeys(root, ROOT_KEYS)) diagnostics.push(`${scope}.<unknown>`);
 
   const body = version === undefined ? EMPTY_BODY : decodeCurrentBody(root, scope, diagnostics);
-  const nesting =
-    version === undefined
-      ? undefined
-      : decodeRootField(root, "nesting", scope, diagnostics, SubagentNestingSchema, EXACT_FIELDS);
   const file: SubagentConfigFile = {
     ...(version !== undefined && { version }),
     ...body.file,
-    ...(nesting !== undefined && { nesting: Object.freeze({ ...nesting }) }),
   };
 
   const missingDefault = declaresMissingDefault(file);
@@ -580,6 +736,8 @@ const decodeConfigRoot = (
     invalidDefaultProfileSet: body.invalidDefaultProfileSet || missingDefault,
     invalidAgents: body.invalidAgents,
     invalidAgentsContainer: body.invalidAgentsContainer,
+    invalidSessionSpendLimit: body.invalidSessionSpendLimit,
+    invalidWorktreeCreate: body.invalidWorktreeCreate,
     unsupportedVersion,
   };
 };

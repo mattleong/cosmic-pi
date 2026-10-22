@@ -10,7 +10,7 @@ Every assignment has a monotonic, never-reused epoch and a `preparing`/`issuing`
 - Events from older epochs, and activity, tool, progress, warning, and question events while idle `reported`, are ignored. Handle-scoped lifecycle warnings stay visible but never trigger a parent turn.
 - Progress, warnings, and questions, all sent with `agent_contact_parent`, normalize to `supervisor_contact` events. Warnings update the parent-visible projection and session history without a model message; the latest child warning and latest system warning are kept separately and folded into the terminal outcome.
 - Child instructions escalate risks that could invalidate current parent work into questions. One question may block per run at a time; an assignment may ask again once it settles.
-- Reply, MCP cancellation, socket loss, adapter cancellation, and scope close settle the exact owned question. Every definite question-death path emits a correlated cancellation, for which the channel reserves queue capacity, so `waiting_for_parent` never outlives its question.
+- Reply, MCP cancellation, socket loss, adapter cancellation, and scope close settle the exact owned question. A question has no deadline: it waits for a reply until the child's turn is aborted, the run is stopped, or the session ends. Every definite question-death path emits a correlated cancellation, for which the channel reserves queue capacity, so `waiting_for_parent` never outlives its question.
 - A reply timeout after transmission returns `reply_outcome_uncertain`, closes the question without retry, and keeps a system warning.
 
 ### Parent messages

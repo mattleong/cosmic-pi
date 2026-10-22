@@ -1450,9 +1450,9 @@ const parentScenarios: ReadonlyArray<ToolScenario> = [
   contact("question answered", "question", questionNote, {
     result: textResult("Parent reply: No backfill; leave existing rows null."),
   }),
-  contact("question timed out", "question", questionNote, {
+  contact("question cancelled", "question", questionNote, {
     isError: true,
-    result: textResult("Parent question timed out without a reply."),
+    result: textResult("Parent question was cancelled."),
   }),
 ];
 

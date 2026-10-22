@@ -15,6 +15,7 @@ import {
   profileLayerFor,
   withService,
 } from "./run/fixtures/service-harness.ts";
+import { stringContaining } from "./support/matchers.ts";
 
 const charge = (cost: number): SubagentUsage => ({
   ...emptyUsage(),
@@ -78,6 +79,45 @@ describe("session subagent spend", () => {
           });
         });
       }),
+  );
+
+  it.effect("refuses every start while the only declared spend limit is invalid", () =>
+    Effect.gen(function* () {
+      const { layer, backend } = nativeReportServiceFixture(
+        fakeNativeReportBackendLayer(),
+        {},
+        profileLayerFor({ version: 6 }, { version: 6, sessionSpendLimit: "10" }),
+      );
+      yield* withService(layer, function* (service) {
+        expect(yield* service.start(nativeReportRequest()).pipe(Effect.flip)).toMatchObject({
+          code: "session_spend_limit_invalid",
+          message: stringContaining("project.sessionSpendLimit"),
+        });
+        expect(backend.controls).toHaveLength(0);
+      });
+    }),
+  );
+
+  it.effect("applies another scope's valid spend limit over an invalid one", () =>
+    Effect.gen(function* () {
+      const { layer, backend, projections } = nativeReportServiceFixture(
+        fakeNativeReportBackendLayer(),
+        {},
+        profileLayerFor(
+          { version: 6, sessionSpendLimit: 0.5 },
+          { version: 6, sessionSpendLimit: 0 },
+        ),
+      );
+      yield* withService(layer, function* (service) {
+        yield* service.start(nativeReportRequest());
+        backend.controls[0]!.offer({ type: "usage", usage: charge(0.5) });
+        yield* yieldUntil(() => projections.at(-1)?.sessionUsage?.cost === 0.5, 200);
+        expect(yield* service.start(nativeReportRequest()).pipe(Effect.flip)).toMatchObject({
+          code: "session_spend_limit",
+          limit: 0.5,
+        });
+      });
+    }),
   );
 
   it("restores usage from every branch of the session, skipping malformed entries", () => {

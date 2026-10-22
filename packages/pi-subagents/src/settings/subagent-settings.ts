@@ -12,7 +12,6 @@ import {
 import {
   DELEGATION_MODES,
   DelegationModeSchema,
-  DEFAULT_SUBAGENT_NESTING_POLICY,
   MAX_DIRECT_CHILDREN,
   MAX_SUBAGENT_DEPTH,
   MIN_DIRECT_CHILDREN,
@@ -23,7 +22,7 @@ import {
   WRITER_WORKSPACE_MODES,
   WriterWorkspaceModeSchema,
   type DelegationMode,
-  type SubagentNestingPolicy,
+  type SubagentNestingOverrides,
 } from "../config/schema.ts";
 import type { WriterWorkspaceInspection } from "../run/workspace-control.ts";
 import type { FleetManagerActions } from "./controller.ts";
@@ -38,7 +37,7 @@ type SettingsResult = Result.Result<
   undefined,
   { readonly message: string; readonly stale?: boolean }
 >;
-type NestingField = keyof SubagentNestingPolicy;
+type NestingField = keyof SubagentNestingOverrides;
 
 const WORKSPACE = "writerWorkspace";
 const DELEGATION = "delegation";
@@ -114,7 +113,7 @@ const editableScopes = (trusted: boolean): readonly ProfileSettingsScope[] =>
 const scopeNesting = (
   inspection: ProfileSettingsInspection,
   scope: ProfileSettingsScope,
-): SubagentNestingPolicy | undefined =>
+): SubagentNestingOverrides | undefined =>
   scope === "session" ? inspection.session.nesting : inspection[scope]?.file.nesting;
 
 const scopeDelegation = (
@@ -123,37 +122,28 @@ const scopeDelegation = (
 ): DelegationMode | undefined =>
   scope === "session" ? inspection.session.delegation : inspection[scope]?.file.delegation;
 
-const inheritedNesting = (
-  inspection: ProfileSettingsInspection,
-  scope: ProfileSettingsScope,
-): SubagentNestingPolicy =>
-  scope === "session"
-    ? inspection.session.baseConfig.nesting
-    : ((scope === "project" ? inspection.global.file.nesting : undefined) ??
-      DEFAULT_SUBAGENT_NESTING_POLICY);
-
-const nestingValue = (policy: SubagentNestingPolicy, field: NestingField): number =>
-  policy[field] ?? DEFAULT_MAX_ACTIVE_RUNS;
+const ownNestingValue = (
+  own: SubagentNestingOverrides | undefined,
+  field: NestingField,
+): string => {
+  const value = own?.[field];
+  return value === undefined ? INHERIT : String(value);
+};
 
 /**
- * A scope's own policy after one field inherits: its other limits stay, and the scope inherits
- * the whole policy (undefined) once every field matches what it would inherit.
+ * A scope's own limits after one field changes: its other limits stay, an inheriting field is
+ * dropped, and the scope inherits the whole policy (undefined) once it declares none.
  */
-const inheritNestingField = (
-  own: SubagentNestingPolicy,
-  inherited: SubagentNestingPolicy,
+const withNestingField = (
+  own: SubagentNestingOverrides | undefined,
   field: NestingField,
-): SubagentNestingPolicy | undefined => {
-  const source = (id: NestingField) => (id === field ? inherited : own);
-  const maxActiveRuns = source("maxActiveRuns").maxActiveRuns;
-  const next: SubagentNestingPolicy = {
-    maxDirectChildren: source("maxDirectChildren").maxDirectChildren,
-    maxDepth: source("maxDepth").maxDepth,
-    ...(maxActiveRuns !== undefined && { maxActiveRuns }),
-  };
-  return NESTING_FIELD_IDS.every((id) => nestingValue(next, id) === nestingValue(inherited, id))
-    ? undefined
-    : next;
+  limit: number | undefined,
+): SubagentNestingOverrides | undefined => {
+  const fields = NESTING_FIELD_IDS.flatMap((id) => {
+    const value = id === field ? limit : own?.[id];
+    return value === undefined ? [] : [[id, value] as const];
+  });
+  return fields.length === 0 ? undefined : Object.fromEntries(fields);
 };
 
 const parseLimit = (field: NestingField, value: string): number | undefined => {
@@ -196,10 +186,7 @@ const scopedSettingItem = (
       currentValue: scopeDelegation(inspection, scope) ?? INHERIT,
       values: [...DELEGATION_MODES, INHERIT],
     };
-  const own = scopeNesting(inspection, scope);
-  const currentValue = own
-    ? String(own[id] ?? DEFAULT_SUBAGENT_NESTING_POLICY[id] ?? DEFAULT_MAX_ACTIVE_RUNS)
-    : INHERIT;
+  const currentValue = ownNestingValue(scopeNesting(inspection, scope), id);
   return {
     id: `${scope}:${id}`,
     label: `${SCOPE_LABELS[scope]} · ${NESTING_FIELDS[id].label}`,
@@ -299,10 +286,7 @@ function subagentSettingsCommand(
       scope,
       "save the nesting limits",
       (inspection) => {
-        const own = scopeNesting(inspection, scope);
-        const inherited = inheritedNesting(inspection, scope);
-        if (limit !== undefined) return { nesting: { ...(own ?? inherited), [field]: limit } };
-        const next = own && inheritNestingField(own, inherited, field);
+        const next = withNestingField(scopeNesting(inspection, scope), field, limit);
         return next ? { nesting: next } : {};
       },
       { session: actions.patchSessionNesting, saved: actions.patchNesting },
@@ -336,7 +320,7 @@ function subagentSettingsCommand(
         const nestingLine = (scope: ProfileSettingsScope) => {
           const own = scopeNesting(inspection, scope);
           return own
-            ? `  ${scope}: maxDirectChildren = ${own.maxDirectChildren}, maxDepth = ${own.maxDepth}, maxActiveRuns = ${own.maxActiveRuns ?? DEFAULT_MAX_ACTIVE_RUNS}`
+            ? `  ${scope}: ${NESTING_FIELD_IDS.map((id) => `${id} = ${ownNestingValue(own, id)}`).join(", ")}`
             : `  ${scope}: ${INHERIT}`;
         };
         const delegationLine = (scope: ProfileSettingsScope) =>

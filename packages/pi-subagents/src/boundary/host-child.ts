@@ -75,7 +75,6 @@ import {
   type LocalPiChildIpcChannel,
 } from "./local-pi-ipc.ts";
 
-const QUESTION_TIMEOUT_MILLIS = 10 * 60_000;
 const MAX_TOOL_REPLY_BYTES = MAX_TOOL_OUTPUT_CHARS - PARENT_REPLY_PREFIX.length;
 // Every private name is removed on deactivation, whichever surface this child registered.
 const CHILD_PRIVATE_TOOL_NAME_SET: ReadonlySet<string> = new Set([
@@ -349,18 +348,7 @@ export function registerSubagentChildBridge(
                     },
                     false,
                   )
-                  .pipe(
-                    Effect.timeoutOrElse({
-                      duration: QUESTION_TIMEOUT_MILLIS,
-                      orElse: () =>
-                        Effect.fail(
-                          new ParentContactError({
-                            message: "Parent question timed out without a reply.",
-                          }),
-                        ),
-                    }),
-                    Effect.map((reply) => `${PARENT_REPLY_PREFIX}${clipToolReply(reply)}`),
-                  )
+                  .pipe(Effect.map((reply) => `${PARENT_REPLY_PREFIX}${clipToolReply(reply)}`))
               : send.pipe(Effect.as(`Parent received ${params.kind}.`));
             return slot.run(delivery, signal).then(
               (text) => {

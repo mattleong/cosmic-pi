@@ -146,7 +146,7 @@ export const runSubagentDoctor = Effect.fn("SubagentDoctor.run")(function* (
       : check(
           "Configuration",
           "warning",
-          `profile set ${setName}; ignored fields: ${config.diagnostics.join(", ")}`,
+          `profile set ${setName}; invalid fields (ignored, clamped, or failed closed): ${config.diagnostics.join(", ")}`,
         ),
     input.projectTrusted
       ? check("Project settings", "ok", "trusted; project configuration applies")
@@ -222,14 +222,21 @@ export const runSubagentDoctor = Effect.fn("SubagentDoctor.run")(function* (
   );
   for (const event of WORKTREE_HOOK_EVENTS) {
     const hooks = config.hooks[event];
+    const invalid = event === "WorktreeCreate" ? config.hooks.invalidWorktreeCreate : [];
     checks.push(
-      check(
-        `${event} hooks`,
-        "ok",
-        hooks.length === 0
-          ? "none"
-          : hooks.map((hook) => `${hook.scope}: ${describeWorktreeHook(hook)}`).join("; "),
-      ),
+      invalid.length > 0
+        ? check(
+            `${event} hooks`,
+            "failed",
+            `invalid declarations (${invalid.join(", ")}); worktree setup fails until they are fixed`,
+          )
+        : check(
+            `${event} hooks`,
+            "ok",
+            hooks.length === 0
+              ? "none"
+              : hooks.map((hook) => `${hook.scope}: ${describeWorktreeHook(hook)}`).join("; "),
+          ),
     );
   }
   checks.push(yield* worktreeIncludeCheck(input.ctx.cwd));

@@ -94,7 +94,10 @@ export const subagentApplicationLayer = (options: SubagentLayerOptions) => {
         agentMain: options.agentMain,
         questionnaireHandler: options.questionnaireHandler,
         writerWorkspaceMode: baseConfig.writerWorkspaceMode,
-        worktreeCreate: hooks.WorktreeCreate,
+        worktreeCreate:
+          hooks.invalidWorktreeCreate.length > 0
+            ? { invalid: hooks.invalidWorktreeCreate }
+            : hooks.WorktreeCreate,
         proxyHandler: options.proxyHandler,
       }).pipe(Layer.provide(workspaces));
     }),

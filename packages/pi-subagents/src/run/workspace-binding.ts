@@ -1,7 +1,7 @@
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Semaphore from "effect/Semaphore";
-import type { WorktreeHook, WriterWorkspaceMode } from "../config/schema.ts";
+import type { WorktreeCreateSetup, WriterWorkspaceMode } from "../config/schema.ts";
 import type { WorkspaceHandle, WorkspaceLaunch } from "../workspace/model.ts";
 import type { WorkspaceServiceContract } from "../workspace/service.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
@@ -145,7 +145,7 @@ export type WorkspaceControlDependencies = Pick<
   readonly engine: WorkspaceServiceContract | undefined;
   readonly initialMode: WriterWorkspaceMode;
   /** Global then trusted-project WorktreeCreate hooks, run in every new worker and prepared tree. */
-  readonly worktreeCreate: ReadonlyArray<WorktreeHook>;
+  readonly worktreeCreate: WorktreeCreateSetup;
   readonly ownerId: string;
   readonly sourceCwd?: string;
   readonly isClosed: () => boolean;

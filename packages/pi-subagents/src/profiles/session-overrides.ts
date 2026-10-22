@@ -6,13 +6,14 @@ import { decodeUnknownOrUndefined, freezeSnapshot } from "pi-cosmic-core";
 import type { ResolvedProfileSetSelection, ResolvedSubagentConfig } from "../config/options.ts";
 import {
   decodeProfileRoute,
-  decodeSubagentNesting,
+  decodeSubagentNestingOverrides,
   DelegationModeSchema,
   isProfileSetName,
+  mergeSubagentNesting,
   ProfileRouteSchema,
-  SubagentNestingSchema,
+  SubagentNestingOverridesSchema,
   type DelegationMode,
-  type SubagentNestingPolicy,
+  type SubagentNestingOverrides,
 } from "../config/schema.ts";
 import { BUILTIN_PROFILE_ROUTES } from "./definitions.ts";
 import {
@@ -39,7 +40,8 @@ export interface SessionProfileBaseline {
 export interface SessionProfileOverrideSeed {
   readonly revision: number;
   readonly overrides: SessionProfileOverrides;
-  readonly nesting?: SubagentNestingPolicy | undefined;
+  /** Merged field by field over the activation-time policy. */
+  readonly nesting?: SubagentNestingOverrides | undefined;
   readonly delegation?: DelegationMode | undefined;
   readonly baseline?: SessionProfileBaseline | undefined;
 }
@@ -61,7 +63,7 @@ export interface SessionProfileSetPatch extends SessionProfileBaseline {
 }
 
 export interface SessionNestingPatch {
-  readonly nesting?: SubagentNestingPolicy | undefined;
+  readonly nesting?: SubagentNestingOverrides | undefined;
   readonly expectedRevision: number;
 }
 
@@ -94,7 +96,7 @@ const SessionProfileOverrideSeedInputSchema = Schema.Struct({
     Schema.isLessThanOrEqualTo(MAX_SESSION_PROFILE_REVISION),
   ),
   overrides: Schema.Struct(mapProfileIds(() => Schema.optionalKey(ProfileRouteSchema))),
-  nesting: Schema.optional(SubagentNestingSchema),
+  nesting: Schema.optional(SubagentNestingOverridesSchema),
   delegation: Schema.optional(DelegationModeSchema),
   baseline: Schema.optional(
     Schema.Struct({
@@ -230,7 +232,7 @@ export const sessionProfileSnapshot = (
       profileSources: mapProfileIds((id) =>
         overrides[id] ? "session" : baseline.profileSources[id],
       ),
-      nesting: nesting ?? baseConfig.nesting,
+      nesting: mergeSubagentNesting(baseConfig.nesting, nesting),
       delegation: delegation ?? baseConfig.delegation,
     },
     ...(nesting && { nesting }),
@@ -341,8 +343,11 @@ export const patchSessionNestingSnapshot = (
   patch: SessionNestingPatch,
 ): Effect.Effect<SessionProfileSnapshot, SessionProfileEditError> =>
   editSnapshot(snapshot, patch.expectedRevision, STALE_SETTINGS, () => {
-    const nesting = patch.nesting === undefined ? undefined : decodeSubagentNesting(patch.nesting);
-    if (patch.nesting !== undefined && !nesting)
+    const decoded =
+      patch.nesting === undefined ? undefined : decodeSubagentNestingOverrides(patch.nesting);
+    // An override without fields inherits the whole policy.
+    const nesting = decoded && Object.keys(decoded).length > 0 ? decoded : undefined;
+    if (patch.nesting !== undefined && !decoded)
       return "The nesting policy is invalid and was not applied.";
     return snapshot.nesting?.maxDirectChildren === nesting?.maxDirectChildren &&
       snapshot.nesting?.maxDepth === nesting?.maxDepth &&

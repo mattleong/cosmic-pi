@@ -31,6 +31,7 @@ import {
   stoppedWriter,
   workspaceFixture as fixture,
 } from "./fixtures/workspace-engine.ts";
+import { stringContaining } from "../support/matchers.ts";
 
 const record = (
   workspaceId: string,
@@ -116,6 +117,20 @@ describe("writer workspace orchestration", () => {
       });
       expect(yield* runViews(service)).toEqual([]);
       expect(f.children.controls).toHaveLength(0);
+      expect([...f.entries.values()].map((entry) => entry.status)).toEqual(["discarded"]);
+    });
+  });
+
+  it.effect("never launches a writer while its WorktreeCreate setup is invalid", () => {
+    const f = fixture({ worktreeCreate: { invalid: ["project.hooks.WorktreeCreate[0]"] } });
+    return withService(f.layer, function* (service) {
+      expect(yield* service.start(repoWriter()).pipe(Effect.flip)).toMatchObject({
+        code: "workspace_hook_failed",
+        message: stringContaining("project.hooks.WorktreeCreate[0]"),
+      });
+      expect(yield* runViews(service)).toEqual([]);
+      expect(f.children.controls).toHaveLength(0);
+      expect(f.hookRuns).toEqual([]);
       expect([...f.entries.values()].map((entry) => entry.status)).toEqual(["discarded"]);
     });
   });

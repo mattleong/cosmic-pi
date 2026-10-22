@@ -139,43 +139,163 @@ describe("SubagentConfigStore activation", () => {
     }),
   );
 
-  it.effect("never reads an untrusted project, so its invalid values cannot block activation", () =>
+  it.effect(
+    "never reads an untrusted project, and a trusted project's invalid mode isolates writers",
+    () =>
+      Effect.gen(function* () {
+        const { memory, store } = yield* setup({
+          [GLOBAL]: { version: 6, writerWorkspaceMode: "shared-checkout" },
+          [PROJECT]: { version: 6, writerWorkspaceMode: "worktrees" },
+        });
+        expect((yield* store.load(CWD, AGENT, false)).writerWorkspaceMode).toBe("shared-checkout");
+        expect(memory.operations).not.toContain(`read:${PROJECT}`);
+        const trusted = yield* store.load(CWD, AGENT, true);
+        expect(trusted.writerWorkspaceMode).toBe("worktree");
+        expect(trusted.diagnostics).toEqual(["project.writerWorkspaceMode"]);
+      }),
+  );
+
+  it.effect("activates past invalid fields, failing safety controls closed", () =>
     Effect.gen(function* () {
       const { memory, store } = yield* setup({
-        [GLOBAL]: { version: 6, writerWorkspaceMode: "worktree" },
-        [PROJECT]: { version: 6, writerWorkspaceMode: "invalid" },
+        [GLOBAL]: {
+          version: 6,
+          nesting: { maxDepth: 5, maxActiveRuns: 40 },
+          delegation: "encouraged",
+          sessionSpendLimit: 10,
+        },
+        [PROJECT]: {
+          version: 6,
+          workspaceSetup: { command: ["pnpm", "install"] },
+          nesting: { maxDirectChildren: 4, maxDepth: "deep", extra: true },
+          writerWorkspaceMode: "elsewhere",
+          delegation: 7,
+          sessionSpendLimit: -1,
+          hooks: "pnpm install",
+        },
       });
-      expect((yield* store.load(CWD, AGENT, false)).writerWorkspaceMode).toBe("worktree");
-      expect(memory.operations).not.toContain(`read:${PROJECT}`);
-      yield* rejects(store.load(CWD, AGENT, true), "activate", PROJECT);
+      const config = yield* store.load(CWD, AGENT, true);
+      expect(config.nesting).toEqual({ maxDirectChildren: 4, maxDepth: 0, maxActiveRuns: 40 });
+      expect(config.writerWorkspaceMode).toBe("worktree");
+      expect(config.delegation).toBe("encouraged");
+      // Another scope's valid limit still applies.
+      expect(config.sessionSpendLimit).toEqual({ kind: "limited", dollars: 10 });
+      expect(config.hooks).toEqual({
+        WorktreeCreate: [],
+        WorktreeRemove: [],
+        invalidWorktreeCreate: ["project.hooks"],
+      });
+      expect(config.diagnostics.toSorted()).toEqual(
+        [
+          "project.<unknown>",
+          "project.nesting.<unknown>",
+          "project.nesting.maxDepth",
+          "project.writerWorkspaceMode",
+          "project.delegation",
+          "project.sessionSpendLimit",
+          "project.hooks",
+        ].toSorted(),
+      );
+      expect(writes(memory)).toEqual([]);
     }),
   );
 
-  it.effect("activates hooks from both scopes and refuses removed or malformed hook fields", () =>
+  it.effect("clamps out-of-range limits to their bounds with a diagnostic", () =>
+    Effect.gen(function* () {
+      const { store } = yield* setup({
+        [GLOBAL]: {
+          version: 6,
+          nesting: { maxDirectChildren: 0, maxDepth: 99, maxActiveRuns: 1_000 },
+          sessionSpendLimit: 1_000_000,
+          hooks: {
+            WorktreeCreate: [
+              { command: ["fast"], timeout: 0 },
+              { command: ["slow"], timeout: 99_999 },
+              { command: ["fraction"], timeout: 1.5 },
+            ],
+          },
+        },
+      });
+      const config = yield* store.load(CWD, AGENT, false);
+      expect(config.nesting).toEqual({ maxDirectChildren: 1, maxDepth: 8, maxActiveRuns: 64 });
+      expect(config.sessionSpendLimit).toEqual({ kind: "limited", dollars: 100_000 });
+      expect(config.hooks.WorktreeCreate).toEqual([
+        { command: ["fast"], timeout: 1, scope: "global" },
+        { command: ["slow"], timeout: 3_600, scope: "global" },
+        { command: ["fraction"], timeout: 1, scope: "global" },
+      ]);
+      expect(config.hooks.invalidWorktreeCreate).toEqual([]);
+      expect(config.diagnostics).toEqual(
+        expect.arrayContaining([
+          "global.nesting.maxDirectChildren",
+          "global.nesting.maxDepth",
+          "global.nesting.maxActiveRuns",
+          "global.sessionSpendLimit",
+          "global.hooks.WorktreeCreate[0].timeout",
+          "global.hooks.WorktreeCreate[1].timeout",
+          "global.hooks.WorktreeCreate[2].timeout",
+        ]),
+      );
+    }),
+  );
+
+  it.effect("blocks spending when the only declared spend limit is invalid", () =>
+    Effect.gen(function* () {
+      for (const sessionSpendLimit of ["10", 0, -5, null, true]) {
+        const { store } = yield* setup({
+          [GLOBAL]: v6({}),
+          [PROJECT]: { version: 6, sessionSpendLimit },
+        });
+        const config = yield* store.load(CWD, AGENT, true);
+        expect(config.sessionSpendLimit).toEqual({
+          kind: "invalid",
+          diagnostic: "project.sessionSpendLimit",
+        });
+        expect(config.diagnostics).toEqual(["project.sessionSpendLimit"]);
+        expect((yield* store.load(CWD, AGENT, false)).sessionSpendLimit).toBeUndefined();
+      }
+    }),
+  );
+
+  it.effect("still fails activation on an unsupported version", () =>
+    Effect.gen(function* () {
+      const { store } = yield* setup({ [GLOBAL]: v6({}), [PROJECT]: { version: 5 } });
+      yield* rejects(store.load(CWD, AGENT, true), "activate", PROJECT, "version 6");
+    }),
+  );
+
+  it.effect("drops malformed WorktreeRemove hooks but blocks setup on a malformed create", () =>
     Effect.gen(function* () {
       const create = { command: ["pnpm", "install"] };
       const remove = { command: ["./cleanup"], timeout: 30 };
       const { store } = yield* setup({
-        [GLOBAL]: v6({}, { hooks: { WorktreeCreate: [create] } }),
-        [PROJECT]: { version: 6, hooks: { WorktreeRemove: [remove] } },
+        [GLOBAL]: v6({}, { hooks: { WorktreeCreate: [create], Unknown: [create] } }),
+        [PROJECT]: {
+          version: 6,
+          hooks: {
+            WorktreeCreate: [create, { command: "./seed-db" }],
+            WorktreeRemove: [{ command: "./cleanup" }, remove, { ...remove, shell: true }],
+          },
+        },
       });
-      expect((yield* store.load(CWD, AGENT, true)).hooks).toEqual({
-        WorktreeCreate: [{ ...create, scope: "global" }],
+      const config = yield* store.load(CWD, AGENT, true);
+      expect(config.hooks).toEqual({
+        WorktreeCreate: [
+          { ...create, scope: "global" },
+          { ...create, scope: "project" },
+        ],
         WorktreeRemove: [{ ...remove, scope: "project" }],
+        invalidWorktreeCreate: ["project.hooks.WorktreeCreate[1]"],
       });
-      expect((yield* store.load(CWD, AGENT, false)).hooks.WorktreeRemove).toEqual([]);
-
-      for (const project of [
-        { version: 6, workspaceSetup: create },
-        { version: 6, workspaceVerify: create },
-        { version: 6, workspaceInclude: [".env"] },
-        { version: 6, hooks: { WorktreeCreate: [{ command: ["pnpm"], timeout: 0 }] } },
-      ]) {
-        const invalid = yield* setup({ [GLOBAL]: v6({}), [PROJECT]: project });
-        yield* rejects(invalid.store.load(CWD, AGENT, true), "activate", PROJECT);
-      }
-      const global = yield* setup({ [GLOBAL]: v6({}, { hooks: { Unknown: [create] } }) });
-      yield* rejects(global.store.load(CWD, AGENT, true), "activate", GLOBAL);
+      expect(config.diagnostics).toEqual([
+        "global.hooks.<unknown>",
+        "project.hooks.WorktreeCreate[1]",
+        "project.hooks.WorktreeRemove[0]",
+        "project.hooks.WorktreeRemove[2]",
+      ]);
+      const untrusted = (yield* store.load(CWD, AGENT, false)).hooks;
+      expect(untrusted.WorktreeRemove).toEqual([]);
+      expect(untrusted.invalidWorktreeCreate).toEqual([]);
     }),
   );
 

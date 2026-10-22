@@ -1,8 +1,9 @@
 import {
   retireRunUsageLocked,
-  spentAtLimitLocked,
+  spendLimitRefusalLocked,
   type SessionUsageLedger,
 } from "./session-usage.ts";
+import type { SessionSpendLimit } from "../config/options.ts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
@@ -90,7 +91,7 @@ interface RunLaunchDependencies extends Pick<
   readonly initializeProcess: RunProcessInitializer;
   readonly workspaces: Pick<RunWorkspaceControl, "bind" | "heldLaunchSlots">;
   readonly sessionUsage: SessionUsageLedger;
-  readonly currentSpendLimit: Effect.Effect<number | undefined>;
+  readonly currentSpendLimit: Effect.Effect<SessionSpendLimit | undefined>;
 }
 
 const runtimeClosedError = () =>
@@ -149,14 +150,19 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
       return parent;
     });
 
-  const spendLimitLocked = (spendLimit: number | undefined) =>
+  const spendLimitLocked = (spendLimit: SessionSpendLimit | undefined) =>
     Effect.gen(function* () {
-      const spent = spentAtLimitLocked(dependencies.sessionUsage, records, spendLimit);
-      if (spendLimit !== undefined && spent !== undefined)
+      const refusal = spendLimitRefusalLocked(dependencies.sessionUsage, records, spendLimit);
+      if (refusal?.kind === "invalid")
+        return yield* invalidRequest(
+          "session_spend_limit_invalid",
+          `The configured sessionSpendLimit is invalid (${refusal.diagnostic}); no new runs start until it is fixed.`,
+        );
+      if (refusal)
         return yield* new SubagentCapacityError({
-          limit: spendLimit,
+          limit: refusal.dollars,
           code: "session_spend_limit",
-          message: `This session's subagents have spent $${spent.toFixed(2)} of its $${spendLimit.toFixed(2)} limit (sessionSpendLimit); no new runs start.`,
+          message: `This session's subagents have spent $${refusal.spent.toFixed(2)} of its $${refusal.dollars.toFixed(2)} limit (sessionSpendLimit); no new runs start.`,
         });
       return undefined;
     });

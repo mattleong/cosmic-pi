@@ -16,7 +16,7 @@ import {
   type WorkspaceWorkerChanges,
 } from "../../../src/workspace/model.ts";
 import { WorkspaceService, type WorkspaceServiceContract } from "../../../src/workspace/service.ts";
-import type { WorktreeHook } from "../../../src/config/schema.ts";
+import type { WorktreeCreateSetup } from "../../../src/config/schema.ts";
 import type { StartSubagentRequest } from "../../../src/run/model.ts";
 import type { SubagentServiceContract, SubagentServiceOptions } from "../../../src/run/service.ts";
 import {
@@ -125,7 +125,7 @@ export function workspaceFixture({
   readonly writerLeases?: Layer.Layer<WriterLeaseService>;
   readonly profiles?: ReturnType<typeof profileLayerFor>;
   readonly children?: ReturnType<typeof fakeChildLayer>;
-  readonly worktreeCreate?: ReadonlyArray<WorktreeHook>;
+  readonly worktreeCreate?: WorktreeCreateSetup;
   readonly serviceOptions?: SubagentServiceOptions;
 } = {}) {
   const hooks: EngineHooks = {
