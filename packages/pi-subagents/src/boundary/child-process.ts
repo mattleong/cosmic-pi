@@ -209,16 +209,6 @@ const cloneEntry = (
     delete cloned.systemMessage;
     return cloned;
   }
-  if (entry.type === "message" && entry.message.role === "assistant") {
-    return {
-      ...entry,
-      parentId,
-      message: {
-        ...entry.message,
-        content: entry.message.content.filter((part) => part.type !== "thinking"),
-      },
-    };
-  }
   return { ...entry, parentId };
 };
 

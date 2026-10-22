@@ -204,6 +204,7 @@ const invalidArgumentsError = (
  * reports allowed values, unknown fields, and blank strings precisely and echoes only bounded
  * arguments. Model-facing schemas omit `pattern`, so nonblank text is enforced here. `isArgs`
  * is the schema's own check, and `inspect` rejects tool-specific shapes before validation.
+ * Invalid empty arguments are left to Pi's own validation, which reports malformed tool-call JSON.
  */
 export const toolArgumentPreparer = <Args>(
   toolName: string,
@@ -224,8 +225,15 @@ export const toolArgumentPreparer = <Args>(
     ),
   );
   const prepare = (args: JsonObject): Args => {
+    const validation = Option.flatten(validate(args));
+    // Pi parses malformed final tool-call JSON as `{}` and reports the parse error only from its
+    // own validation, which runs after this hook. An empty object that validation rejects goes back
+    // unchanged so Pi reports why; Pi never executes it, so it never reaches the tool as `Args`.
+    const isLeftToPiValidation = (value: JsonObject): value is JsonObject & Args =>
+      Object.keys(value).length === 0 && Option.isNone(validation);
+    if (isLeftToPiValidation(args)) return args;
     inspect?.(args);
-    const validated = Option.getOrThrowWith(Option.flatten(validate(args)), () => {
+    const validated = Option.getOrThrowWith(validation, () => {
       const issues = validationIssues(parameters, schema, args, toolName);
       return invalidArgumentsError(
         toolName,

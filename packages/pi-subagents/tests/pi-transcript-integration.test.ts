@@ -143,115 +143,120 @@ describe("installed Pi transcript reconstruction", () => {
     15_000,
   );
 
-  it.live(
-    "runs a cache-sharing fork under the child's prompt and refuses the parent's declared tools",
-    () =>
-      Effect.gen(function* () {
-        const directory = yield* temporaryDirectory("pi-transcript-shared-");
-        const { fake, models } = yield* fauxModels("subagent-shared-transcript-test");
-        const model = {
-          ...fake.getModel(),
-          api: "openai-responses",
-          compat: { supportsMidConvoSystemMessages: true, supportsAdditionalTools: true },
-        };
-        const parent = SessionManager.create(directory, directory);
-        parent.appendMessage({
-          role: "system",
-          content: "",
-          sections: {
-            preamble: "parent-only preamble",
-            parent_rules: "<parent_rules>parent-only rules</parent_rules>",
-          },
-          toolsAdded: [{ name: "parent_only", description: "parent", parameters: Type.Object({}) }],
-          timestamp: 1,
-        });
-        parent.appendMessage({ role: "user", content: "parent conversation", timestamp: 2 });
-        parent.appendMessage({
-          ...fauxAssistantMessage("parent answer"),
-          content: [
-            { type: "thinking", thinking: "parent reasoning", thinkingSignature: "signature" },
-            { type: "text", text: "parent answer" },
-          ],
-        });
-        const inherited = parent.buildSessionContext().messages;
-        const forkFile = yield* createForkedSession(
-          backendLaunch({
-            cwd: directory,
-            context: "fork",
-            parentSessionId: parent.getSessionId(),
-            parentSessionFile: parent.getSessionFile()!,
-            parentLeafId: parent.getLeafId()!,
-            sharesParentPromptCache: true,
-          }),
-          directory,
-        );
-        const settings = quietSettings();
-        const executed: string[] = [];
-        const loader = yield* quietLoader({
-          cwd: directory,
-          agentDir: directory,
-          settingsManager: settings,
-          noExtensions: true,
-          systemPromptOverride: () => "child-only instruction",
-          extensionFactories: [
-            (pi) => {
-              pi.registerTool({
-                name: "child_alpha",
-                label: "child_alpha",
-                description: "child_alpha",
-                parameters: Type.Object({}),
-                execute() {
-                  executed.push("child_alpha");
-                  return Promise.resolve({
-                    content: [{ type: "text" as const, text: "child_alpha" }],
-                    details: {},
-                  });
-                },
-              });
-              registerForkPromptCacheHooks(pi, { PI_SUBAGENT_PROMPT_CACHE_KEY: "parent" });
+  // Additional tools carry the child's own loadout after the inherited prefix; tool search can
+  // only add tools, so the child's requests keep declaring the parent's.
+  for (const [route, compat, declared] of [
+    ["additional tools", { supportsAdditionalTools: true }, ["child_alpha"]],
+    ["tool search", { supportsToolSearch: true }, ["parent_only", "child_alpha"]],
+  ] as const)
+    it.live(
+      `runs a cache-sharing fork under the child's prompt and refuses the parent's tools (${route})`,
+      () =>
+        Effect.gen(function* () {
+          const directory = yield* temporaryDirectory("pi-transcript-shared-");
+          const { fake, models } = yield* fauxModels("subagent-shared-transcript-test");
+          const model = {
+            ...fake.getModel(),
+            api: "openai-responses",
+            compat: { supportsMidConvoSystemMessages: true, ...compat },
+          };
+          const parent = SessionManager.create(directory, directory);
+          parent.appendMessage({
+            role: "system",
+            content: "",
+            sections: {
+              preamble: "parent-only preamble",
+              parent_rules: "<parent_rules>parent-only rules</parent_rules>",
             },
-          ],
-        });
-        const session = yield* scopedPrintSession({
-          cwd: directory,
-          agentDir: directory,
-          model,
-          modelRuntime: models,
-          settingsManager: settings,
-          sessionManager: SessionManager.open(forkFile),
-          resourceLoader: loader,
-          tools: [...childToolPolicy(["child_alpha"]).enabled],
-          excludeTools: childToolPolicy([]).excluded.split(","),
-        });
-        fake.setResponses([
-          (context) => {
-            expect(context.messages.slice(0, inherited.length)).toEqual(inherited);
-            const prompt = getCurrentSystemPrompt(context.messages);
-            expect(prompt).toContain("child-only instruction");
-            expect(prompt).not.toContain("parent-only");
-            expect(getCurrentTools(context.messages).map((tool) => tool.name)).toEqual([
-              "parent_only",
-              "child_alpha",
-            ]);
-            return fauxAssistantMessage(fauxToolCall("parent_only", {}), {
-              stopReason: "toolUse",
-            });
-          },
-          (context) => {
-            expect(context.messages.at(-1)).toMatchObject({
-              role: "toolResult",
-              toolName: "parent_only",
-              isError: true,
-            });
-            return fauxAssistantMessage("finished with child tools only");
-          },
-        ]);
-        yield* Effect.promise(() => session.prompt("assigned task"));
-        expect(executed).toEqual([]);
-        expect(fake.getPendingResponseCount()).toBe(0);
-        const persisted = SessionManager.open(forkFile).buildSessionContext().messages;
-        expect(getCurrentTools(persisted).map((tool) => tool.name)).toEqual(["child_alpha"]);
-      }),
-    15_000,
-  );
+            toolsAdded: [
+              { name: "parent_only", description: "parent", parameters: Type.Object({}) },
+            ],
+            timestamp: 1,
+          });
+          parent.appendMessage({ role: "user", content: "parent conversation", timestamp: 2 });
+          parent.appendMessage({
+            ...fauxAssistantMessage("parent answer"),
+            content: [
+              { type: "thinking", thinking: "parent reasoning", thinkingSignature: "signature" },
+              { type: "text", text: "parent answer" },
+            ],
+          });
+          const inherited = parent.buildSessionContext().messages;
+          const forkFile = yield* createForkedSession(
+            backendLaunch({
+              cwd: directory,
+              context: "fork",
+              parentSessionId: parent.getSessionId(),
+              parentSessionFile: parent.getSessionFile()!,
+              parentLeafId: parent.getLeafId()!,
+              sharesParentPromptCache: true,
+            }),
+            directory,
+          );
+          const settings = quietSettings();
+          const executed: string[] = [];
+          const loader = yield* quietLoader({
+            cwd: directory,
+            agentDir: directory,
+            settingsManager: settings,
+            noExtensions: true,
+            systemPromptOverride: () => "child-only instruction",
+            extensionFactories: [
+              (pi) => {
+                pi.registerTool({
+                  name: "child_alpha",
+                  label: "child_alpha",
+                  description: "child_alpha",
+                  parameters: Type.Object({}),
+                  execute() {
+                    executed.push("child_alpha");
+                    return Promise.resolve({
+                      content: [{ type: "text" as const, text: "child_alpha" }],
+                      details: {},
+                    });
+                  },
+                });
+                registerForkPromptCacheHooks(pi, { PI_SUBAGENT_PROMPT_CACHE_KEY: "parent" });
+              },
+            ],
+          });
+          const session = yield* scopedPrintSession({
+            cwd: directory,
+            agentDir: directory,
+            model,
+            modelRuntime: models,
+            settingsManager: settings,
+            sessionManager: SessionManager.open(forkFile),
+            resourceLoader: loader,
+            tools: [...childToolPolicy(["child_alpha"]).enabled],
+            excludeTools: childToolPolicy([]).excluded.split(","),
+          });
+          fake.setResponses([
+            (context) => {
+              expect(context.messages.slice(0, inherited.length)).toEqual(inherited);
+              const prompt = getCurrentSystemPrompt(context.messages);
+              expect(prompt).toContain("child-only instruction");
+              expect(prompt).not.toContain("parent-only");
+              expect(getCurrentTools(context.messages).map((tool) => tool.name)).toEqual(declared);
+              return fauxAssistantMessage(fauxToolCall("parent_only", {}), {
+                stopReason: "toolUse",
+              });
+            },
+            (context) => {
+              expect(context.messages.at(-1)).toMatchObject({
+                role: "toolResult",
+                toolName: "parent_only",
+                isError: true,
+              });
+              return fauxAssistantMessage("finished with child tools only");
+            },
+          ]);
+          yield* Effect.promise(() => session.prompt("assigned task"));
+          expect(executed).toEqual([]);
+          expect(fake.getPendingResponseCount()).toBe(0);
+          const persisted = SessionManager.open(forkFile).buildSessionContext().messages;
+          expect(getCurrentTools(persisted).map((tool) => tool.name)).toEqual(["child_alpha"]);
+        }),
+      15_000,
+    );
 });

@@ -135,6 +135,8 @@ These examples are not a prescribed DAG; the main agent chooses profiles, branch
 
 Use non-overlapping await batches of at most 12 IDs and respect launch capacity. Bound loops and total steps, await every call, and avoid deadlines around launches that could hide admitted IDs. Print IDs immediately: partial output survives a failed script, but store writes don't. On interruption, inspect existing runs through the main agent rather than restarting the script. Reload or replacement ends the run registry even if stored IDs survive on the branch.
 
+A script holds one of Pi's codemode workers until it ends, including while it awaits subagents. One Pi process has two by default, shared by all its sessions (`PI_CODEMODE_MAX_WORKERS` raises the limit); local Pi children run in their own processes. A script that gets no worker within 60 seconds, or before its `timeout_ms`, fails with "The script did not start". It ran nothing, so it may be retried once the other scripts finish; any other failed script is not rerun.
+
 ## Pattern: read-only lanes with rolling hand-off
 
 Each area gets a scout, and as soon as one finishes its area moves to a reviewer, without waiting for the slowest. `until: "any_finished"` returns when any requested run finishes, and `timeoutSeconds` bounds each wait.
@@ -322,4 +324,4 @@ const waits = await Promise.allSettled([
 text(waits);
 ```
 
-This intentionally fails if a wait is still pending at 1.5 seconds; a fast job finishing first proves nothing. Cancellation stops neither job, and the failed script's store write must not commit. The main agent then inspects the existing IDs with direct `agent_read` and `background_task` status calls, verifies `load("interrupted-wait-probe")` is `undefined`, and rereads any delivered report with `agent_read`. Never replay the launch script, and don't repeat the drill after attention or another failure.
+This intentionally fails if a wait is still pending at 1.5 seconds; a fast job finishing first proves nothing. The deadline includes any wait for a free codemode worker, so run the drill while no other script is running; a failure saying the script did not start proves nothing either, and the drill may be rerun once the other scripts finish. Cancellation stops neither job, and the failed script's store write must not commit. The main agent then inspects the existing IDs with direct `agent_read` and `background_task` status calls, verifies `load("interrupted-wait-probe")` is `undefined`, and rereads any delivered report with `agent_read`. Never replay the launch script, and don't repeat the drill after attention or another failure.

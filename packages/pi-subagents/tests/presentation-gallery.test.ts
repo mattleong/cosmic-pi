@@ -74,6 +74,7 @@ import { executeSubagentActionEffect, type SubagentToolRuntime } from "../src/to
 import { awaitExecutionFor } from "../src/tools/execute-await.ts";
 import { decodeSubagentOutcomeDetails, hasSubagentToolFailure } from "../src/tools/outcome.ts";
 import {
+  SUBAGENT_TOOL_SCHEMAS,
   subagentToolAction,
   type AgentToolInput,
   type SubagentToolInput,
@@ -82,6 +83,7 @@ import { registerSubagentTools } from "../src/tools/subagent.ts";
 import { revisionReviewText } from "../src/run/workspace-review.ts";
 import type { WorkspaceRecord } from "../src/workspace/model.ts";
 import { extensionApiFixture, plainTheme } from "pi-cosmic-core/testing";
+import { piArgumentRejection } from "pi-cosmic-core/testing/sdk";
 import { view } from "./fixtures/run-view.ts";
 import {
   subagentServiceDouble,
@@ -1207,6 +1209,18 @@ const route = {
 } as const;
 
 const receiptScenarios: ReadonlyArray<ToolScenario> = [
+  {
+    tool: "agent_start",
+    title: "malformed arguments rejected by Pi",
+    args: {},
+    isError: true,
+    result: textResult(
+      piArgumentRejection(
+        { name: "agent_start", parameters: SUBAGENT_TOOL_SCHEMAS.agent_start.parameters },
+        '{"agents":[{"name":"auth-review","task":"Review the session refresh',
+      ),
+    ),
+  },
   {
     tool: "agent_start",
     title: "expanded writer task",

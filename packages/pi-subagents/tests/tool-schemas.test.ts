@@ -1,7 +1,20 @@
-import { validateToolArguments } from "@earendil-works/pi-ai";
+import {
+  fauxAssistantMessage,
+  fauxToolCall,
+  validateToolArguments,
+  type ToolResultMessage,
+} from "@earendil-works/pi-ai";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
 import { captureRegistrations } from "pi-code-previews/testing";
-import { toolSchemaPortabilityProblems } from "pi-cosmic-core/testing";
-import { describe, expect, it } from "vitest";
+import { temporaryDirectory, toolSchemaPortabilityProblems } from "pi-cosmic-core/testing";
+import {
+  fauxModels,
+  quietLoader,
+  quietSettings,
+  scopedPrintSession,
+} from "pi-cosmic-core/testing/sdk";
 import { WRITER_WORKSPACE_MODES } from "../src/config/schema.ts";
 import { toolDefinitions as supervisorToolDefinitions } from "../src/supervisor/mcp-wire.ts";
 import {
@@ -61,6 +74,59 @@ describe("subagent argument preparation", () => {
       ),
     ).toEqual(prepared);
   });
+
+  it.live("leaves malformed tool-call JSON to Pi, which shows the model the parse error", () =>
+    Effect.gen(function* () {
+      const directory = yield* temporaryDirectory("pi-tool-arguments-");
+      const { fake, models } = yield* fauxModels("subagent-tool-arguments-test");
+      const settings = quietSettings();
+      const loader = yield* quietLoader({
+        cwd: directory,
+        agentDir: directory,
+        settingsManager: settings,
+        noExtensions: true,
+        extensionFactories: [
+          (pi) =>
+            pi.registerTool({
+              name: "agent_start",
+              label: "agent_start",
+              description: "agent_start",
+              parameters: SUBAGENT_TOOL_SCHEMAS.agent_start.parameters,
+              prepareArguments: prepareStart,
+              execute: () => Promise.reject(new Error("malformed arguments must not execute")),
+            }),
+        ],
+      });
+      const session = yield* scopedPrintSession({
+        cwd: directory,
+        agentDir: directory,
+        model: fake.getModel(),
+        modelRuntime: models,
+        settingsManager: settings,
+        sessionManager: SessionManager.inMemory(directory),
+        resourceLoader: loader,
+        tools: ["agent_start"],
+      });
+      const parseError =
+        'Unterminated string in JSON\n\nReceived arguments:\n{"agents":[{"task":"Map';
+      fake.setResponses([
+        fauxAssistantMessage(
+          { ...fauxToolCall("agent_start", {}), argumentsError: parseError },
+          { stopReason: "toolUse" },
+        ),
+        fauxAssistantMessage("resent"),
+      ]);
+      yield* Effect.promise(() => session.prompt("start a scout"));
+      expect(fake.getPendingResponseCount()).toBe(0);
+      const result = session.messages.find(
+        (message): message is ToolResultMessage => message.role === "toolResult",
+      );
+      expect(result).toMatchObject({ toolName: "agent_start", isError: true });
+      const shown = result?.content.flatMap((part) => (part.type === "text" ? [part.text] : []));
+      expect(shown?.join("\n")).toContain(parseError);
+      expect(shown?.join("\n")).not.toContain("[invalid_arguments]");
+    }),
+  );
 
   it("rejects an unknown isolation value and names the allowed modes", () => {
     const rejected = () => prepareRootStart({ agents: [{ task: "Edit", isolation: "sandbox" }] });

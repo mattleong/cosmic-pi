@@ -131,7 +131,10 @@ function reactivateSubagentTools(pi: ExtensionAPI, names: ReadonlyArray<string>)
   );
 }
 
-/** The root registers agent_worktree inactive and declares it once there is a worktree to act on. */
+/**
+ * The root registers agent_worktree inactive and declares it once there is a worktree to act on.
+ * Pi also restores it on resume and /tree wherever the branch recorded it active.
+ */
 const activateWorktreeTool = (pi: ExtensionAPI): void =>
   invokeHostCallback(() => {
     const active = pi.getActiveTools();
@@ -411,7 +414,8 @@ export function registerSubagentApplication(
           profileReloadHandoff.clear(activation.sessionKey);
         bridge.setContext(activation.ctx);
         // A new session declares agent_worktree only once it has a worktree, which the orphan
-        // check below or the first worktree writer supplies; reload and tree keep it.
+        // check below or the first worktree writer supplies. Reload keeps it, and resume and tree
+        // keep the loadout Pi restored from the branch.
         reactivateSubagentTools(
           pi,
           activation.trigger === "start"

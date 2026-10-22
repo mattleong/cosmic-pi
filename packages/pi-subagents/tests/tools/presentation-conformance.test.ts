@@ -1,15 +1,27 @@
 import { beforeEach, expect, it } from "vitest";
+import { defineTool } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+import { argumentFailureIssue, withCodePreviewShell } from "pi-code-previews";
 import {
   animationSchedulerProbe,
   applyPresentationSettings,
   captureRegistrations,
   createToolPresentationHarness,
+  issueMessageStyleProblems,
   probeAnimationOwnership,
   withPresentationSettings,
 } from "pi-code-previews/testing";
+import { stripAnsi } from "pi-cosmic-core";
+import { piArgumentRejection } from "pi-cosmic-core/testing/sdk";
 import type { SubagentToolRuntime } from "../../src/tools/execute.ts";
 import { registerSubagentTools } from "../../src/tools/subagent.ts";
 import { compactToolDetails } from "../../src/tools/details.ts";
+import {
+  CONTACT_PARENT_LABEL,
+  contactParentCompactSummary,
+  contactParentExpandedContent,
+  contactParentRenderers,
+} from "../../src/tools/render-parent.ts";
 
 beforeEach(() =>
   applyPresentationSettings({ toolCallCollapsedStyle: "compact", toolCallTiming: false }),
@@ -70,6 +82,70 @@ it("retains malformed and historical evidence through expansion for every root r
         const rows = harness.render(width);
         if (expanded) expect(rows.join("\n")).toContain("historical evidence sentinel");
       }
+    }
+  }
+});
+
+it.each(["compact", "preview"] as const)(
+  "explains Pi's rejection of malformed arguments in %s style and keeps all of it expanded",
+  (style) => {
+    applyPresentationSettings({ toolCallCollapsedStyle: style });
+    for (const tool of registered()) {
+      // Malformed tool-call JSON reaches the renderers as `{}` with Pi's own rejection text.
+      const rejection = piArgumentRejection(tool, '{"agents":[{"task":"Map the auth flow');
+      const issue = argumentFailureIssue(rejection);
+      expect(issueMessageStyleProblems(issue?.message ?? "")).toEqual([]);
+      const [collapsed, expanded] = createToolPresentationHarness(tool, { width: 200 })
+        .cycle(
+          {},
+          { content: [{ type: "text", text: rejection }], details: {} },
+          {
+            states: [false, true],
+            overrides: () => ({ isError: true, isPartial: false }),
+          },
+        )
+        .map((frame) => stripAnsi(frame.text));
+      expect(collapsed, tool.name).toContain(issue?.message);
+      expect(collapsed, tool.name).not.toContain(rejection.split("\n")[0]);
+      for (const line of rejection.split("\n").filter(Boolean))
+        expect(expanded, tool.name).toContain(line);
+    }
+  },
+);
+
+const contactParent = () =>
+  withCodePreviewShell(
+    defineTool({
+      ...contactParentRenderers,
+      name: "agent_contact_parent",
+      label: CONTACT_PARENT_LABEL,
+      description: CONTACT_PARENT_LABEL,
+      parameters: Type.Object({}),
+      execute: () => Promise.reject(new Error("render-only fixture")),
+    }),
+    { compactSummary: contactParentCompactSummary, expandedContent: contactParentExpandedContent },
+  );
+
+it("names only the tool for a call Pi rejected as malformed JSON, not for one that ran", () => {
+  applyPresentationSettings({ toolCallCollapsedStyle: "preview" });
+  for (const tool of [...registered(), contactParent()]) {
+    const callRows = (overrides: { expanded: boolean; isError: boolean; durationMs?: number }) =>
+      stripAnsi(
+        createToolPresentationHarness(tool, { width: 120 })
+          .call(
+            {},
+            { isPartial: false, executionStarted: true, durationMs: undefined, ...overrides },
+          )
+          ?.render(120)
+          .join("\n") ?? "",
+      ).trim();
+    for (const expanded of [false, true]) {
+      // Pi parses malformed tool-call JSON as `{}` and records a duration only for calls that ran,
+      // so defaults that `{}` implies describe only an executed call.
+      expect(callRows({ expanded, isError: true }), tool.name).toBe(tool.label);
+      expect(callRows({ expanded, isError: true, durationMs: 12 }), tool.name).toBe(
+        callRows({ expanded, isError: false, durationMs: 12 }),
+      );
     }
   }
 });

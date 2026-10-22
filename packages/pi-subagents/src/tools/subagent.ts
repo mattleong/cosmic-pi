@@ -20,6 +20,7 @@ import { decodeStartAwaitCardDetails } from "./details-decode.ts";
 import { executeSubagentAction, type SubagentToolRuntime } from "./execute.ts";
 import { hasReturnedFailureEvidence } from "./outcome.ts";
 import { syncAwaitProgressTicker, type SubagentToolRenderContext } from "./render-await.ts";
+import { rejectionAwareCall } from "./render-preview.ts";
 import {
   renderSubagentCall,
   renderSubagentResult,
@@ -51,13 +52,14 @@ const targetsLabel = (args: SummaryArguments) =>
 
 type SubagentToolSpec<N extends SubagentToolName> = Pick<
   ToolDefinition<SubagentToolParameters<N>>,
-  "label" | "description" | "promptSnippet" | "promptGuidelines" | "renderCall"
-> & {
-  readonly lease?: (
-    presentation: SubagentToolPresentation,
-    args: Parameters<ToolDefinition<SubagentToolParameters<N>>["execute"]>[1],
-  ) => () => void;
-};
+  "label" | "description" | "promptSnippet" | "promptGuidelines"
+> &
+  Required<Pick<ToolDefinition<SubagentToolParameters<N>>, "renderCall">> & {
+    readonly lease?: (
+      presentation: SubagentToolPresentation,
+      args: Parameters<ToolDefinition<SubagentToolParameters<N>>["execute"]>[1],
+    ) => () => void;
+  };
 
 type SubagentToolSpecs = { readonly [N in SubagentToolName]: SubagentToolSpec<N> };
 
@@ -94,7 +96,7 @@ const ARGUMENT_PREPARERS: SubagentArgumentPreparers = {
 };
 
 const SCRIPTED_SUBAGENT_GUIDELINE =
-  "Native codemode can script read-only delegation with agent_start, agent_await, agent_list, agent_read, agent_profiles, and agent_lifecycle stop, which return structured results. Print run IDs as soon as you have them, await every call, and keep steps bounded. Don't rerun a failed script or loop on parent attention. Leave questions, retries, writers, and integration to the main agent.";
+  "Native codemode can script read-only delegation with agent_start, agent_await, agent_list, agent_read, agent_profiles, and agent_lifecycle stop, which return structured results. Print run IDs as soon as you have them, await every call, and keep steps bounded. Don't rerun a failed script unless Pi reports it did not start, and don't loop on parent attention. Leave questions, retries, writers, and integration to the main agent.";
 
 const DELIVERABLE_GUIDELINE =
   "Give each subagent one bounded slice with a concrete deliverable, and choose its profile by that deliverable. Read-only work is not automatically scouting.";
@@ -240,7 +242,7 @@ export function registerSubagentTools(
     [SUBAGENT_TOOL_NAME.start]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.start, startParameters),
   };
   const buildTool = <N extends SubagentToolName>(name: N) => {
-    const { lease, ...spec }: SubagentToolSpec<N> = TOOL_SPECS[name];
+    const { lease, renderCall, ...spec }: SubagentToolSpec<N> = TOOL_SPECS[name];
     // Root contract tools are the script-callable ones.
     const scriptable = !nested && isSubagentContractTool(name);
     const tool = defineTool<SubagentToolParameters<N>>({
@@ -255,7 +257,8 @@ export function registerSubagentTools(
       }),
       name,
       // The root declares agent_profiles only once tool search loads it, and agent_worktree once a
-      // worktree exists (application/register.ts); scripts still reach agent_profiles.
+      // worktree exists or Pi restores a loadout that recorded it (application/register.ts);
+      // scripts still reach agent_profiles.
       exposure:
         !nested && name === SUBAGENT_TOOL_NAME.models
           ? "deferred"
@@ -269,6 +272,7 @@ export function registerSubagentTools(
       }),
       parameters: toolParameters[name],
       prepareArguments: argumentPreparers[name],
+      renderCall: rejectionAwareCall(spec.label, renderCall),
       execute: (id, args, ...rest) => {
         const input = TOOL_INPUTS[name](args);
         return settlePresentation(

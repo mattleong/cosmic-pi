@@ -49,10 +49,12 @@ A fork **shares the parent's prompt cache** (`sharesParentPromptCache`) when its
 
 - The root passes the parent session ID as `PI_SUBAGENT_PROMPT_CACHE_KEY`, and the copy keeps the parent's system messages, compaction `systemMessage` fields, and assistant thinking verbatim.
 - Authority still comes from the child: its first prompt patch replaces or removes every differing inherited section, and Pi executes only the child's registered tools.
-- Anthropic requests withdraw the parent's other tools in place. OpenAI Responses requests keep the parent's tool declarations, drop the child's removals and redefinitions, add its new tools, and carry the parent's `prompt_cache_key`. A request that no longer starts with the inherited prompt, such as after the child compacts, is sent unchanged.
+- Anthropic requests withdraw the parent's other tools in place. So do OpenAI Responses requests on models with additional tools, where Pi declares every tool in place and announces removals as text.
+- With tool search alone, which can add tools but not withdraw them, OpenAI Responses requests keep the parent's tool declarations, drop the child's removals and redefinitions, and add its new tools. A request that no longer starts with the inherited prompt, such as after the child compacts, is sent unchanged.
+- OpenAI Responses requests carry the parent's `prompt_cache_key`.
 - Branches whose system messages carry prompt text, or that hold an encrypted checkpoint, are isolated instead. Codex is excluded because Pi derives its `session-id` header from the child's own session.
 
-Every other fork is **isolated**: parent `role: "system"` messages and Better OpenAI encrypted checkpoints become inert anchors, inherited compactions lose only `systemMessage`, Pi reconstructs the plaintext branch behind them, and assistant thinking is excluded for cross-model portability.
+Every other fork is **isolated**: parent `role: "system"` messages and Better OpenAI encrypted checkpoints become inert anchors, inherited compactions lose only `systemMessage`, and Pi reconstructs the plaintext branch behind them. Assistant thinking is copied; Pi sends it only to the model that produced it.
 
 ### Guidance, interruption, and turn input
 

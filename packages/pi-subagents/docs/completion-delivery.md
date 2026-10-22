@@ -250,7 +250,7 @@ Shared rules for registration, replay, compact issues, and expansion are in [too
 - Preview settings load as an interruptible best-effort bootstrap. The shared session-runtime slot owns replacement, and only its current token may register tools or publish activation state.
 - Factory-time `registerCodePreviewReplay`, anchored to `/subagents`, owns historical coordinator rows; adoption publishes only after registration succeeds. Child proxies use the plain shell.
 - Pi drops its pending tool-restore list whenever a tool is deactivated, so subagent tools stay active through `/tree` and the outgoing `/reload` shutdown. A later registration deactivates only tools it activated that the session hadn't kept active.
-- The root registers `agent_profiles` as deferred: scripts call it and tool search loads it, but it isn't declared until loaded. `agent_worktree` stays model-only and inactive until a runtime first publishes a run with a worktree, or a session start finds a worktree left by an ended session; then it is activated once. `/reload` and `/tree` keep it active, but a new session in the same Pi process starts without it again.
+- The root registers `agent_profiles` as deferred: scripts call it and tool search loads it, but it isn't declared until loaded. `agent_worktree` is model-only and registered inactive. It is activated once when a runtime first publishes a run with a worktree, or a session start finds a worktree left by an ended session. `/reload` keeps it active, and a new session starts without it. Resume and `/tree` restore the branch's recorded tool loadout, so it is active again wherever the transcript recorded it, even with no worktree; pi-subagents leaves that loadout alone.
 - Each runtime composes its own `CodePreviewSchedulerService.layer`; replacement and shutdown revoke stale scheduling.
 
 ### Arguments and results
@@ -266,6 +266,7 @@ Shared rules for registration, replay, compact issues, and expansion are in [too
 ### Shell coverage
 
 - All eight root tools and the child proxies use the shared presentation shell and the shared compact setting, projected from decoded domain details.
+- Pi parses malformed tool-call JSON as `{}` and refuses to run the call; while `isRejectedEmptyCall` holds, preview headings show only the tool's label instead of describing argument defaults, and the shared argument issue explains the rejection.
 - `agent_contact_parent` uses content-only callbacks; arbitrary replies stay verbatim, prefixed once with `PARENT_REPLY_PREFIX`. Warning calls keep the full warning as issue detail; settled questions and replies decline compaction.
 - The five supervisor tools are served over private MCP and have no Pi renderer.
 

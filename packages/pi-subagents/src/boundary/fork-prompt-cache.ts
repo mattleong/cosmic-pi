@@ -15,10 +15,14 @@ type RequestMessage = ContextWithSystemEvent["messages"][number];
  *
  * - `native`: the request-level tool list stays the parent's, and the transport withdraws and
  *   adds tools in place after the fork point (Anthropic inline tool changes).
- * - `declared`: requests keep the parent's tool declarations and anchor the child's new tools
- *   in place (OpenAI Responses additional tools or tool search).
+ * - `additional-tools`: Pi declares every tool in place from the head of the input and announces
+ *   removals as text, so the child's own tool changes follow the parent's prefix (OpenAI
+ *   Responses additional tools).
+ * - `tool-search`: tool search can only add tools in place, and a removal or redefinition rewrites
+ *   the request-level tool list, so requests keep the parent's tool declarations and anchor the
+ *   child's new tools in place.
  */
-type ForkPromptCacheRoute = "native" | "declared";
+type ForkPromptCacheRoute = "native" | "additional-tools" | "tool-search";
 
 /**
  * Codex is excluded: Pi derives its `session-id` header from the child's own session after
@@ -38,12 +42,10 @@ export const forkPromptCacheRoute = (
     return "supportsMidConvoToolChanges" in compat && compat.supportsMidConvoToolChanges
       ? "native"
       : undefined;
-  if (model.api === "openai-responses" || model.api === "azure-openai-responses")
-    return ("supportsAdditionalTools" in compat && compat.supportsAdditionalTools) ||
-      ("supportsToolSearch" in compat && compat.supportsToolSearch)
-      ? "declared"
-      : undefined;
-  return undefined;
+  if (model.api !== "openai-responses" && model.api !== "azure-openai-responses") return undefined;
+  if ("supportsAdditionalTools" in compat && compat.supportsAdditionalTools)
+    return "additional-tools";
+  return "supportsToolSearch" in compat && compat.supportsToolSearch ? "tool-search" : undefined;
 };
 
 export const forkPromptCacheKey = (parentSessionId: string): string =>
@@ -101,7 +103,7 @@ const isKeyedPayload = Schema.is(Schema.Struct({ prompt_cache_key: Schema.String
 
 /**
  * A fork that shares its parent's prompt cache starts from the parent's verbatim prompt state.
- * Its requests carry the parent's cache key and, on `declared` routes, the parent's tools.
+ * Its requests carry the parent's cache key and, on the `tool-search` route, the parent's tools.
  */
 export const registerForkPromptCacheHooks = (
   pi: ExtensionAPI,
@@ -110,7 +112,7 @@ export const registerForkPromptCacheHooks = (
   const key = environment[FORK_PROMPT_CACHE_KEY_ENV];
   if (!key) return;
   pi.on("context_with_system", (event, ctx) => {
-    if (!ctx.model || forkPromptCacheRoute(ctx.model) !== "declared") return undefined;
+    if (!ctx.model || forkPromptCacheRoute(ctx.model) !== "tool-search") return undefined;
     const header = invokeHostCallback(() => ctx.sessionManager.getHeader(), null);
     const forkedAt = header ? Date.parse(header.timestamp) : Number.NaN;
     if (!Number.isFinite(forkedAt)) return undefined;

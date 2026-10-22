@@ -1,4 +1,4 @@
-import type { CompactIssue, CompactSummary } from "pi-code-previews";
+import { argumentFailureIssue, type CompactIssue, type CompactSummary } from "pi-code-previews";
 import { failureMessage, quoteText } from "pi-cosmic-core";
 import type { AgentMessageRefusalCode } from "../run/errors.ts";
 import type { CompactToolActionFailure, SubagentRunCard } from "./details-schema.ts";
@@ -280,6 +280,9 @@ export function actionFailureIssues(
 }
 
 export function rejectedCallIssue(action: string, text: string, target: string): CompactIssue {
+  // Pi's own rejection names the tool, which `readableFailure` would refuse as agent text.
+  const invalid = argumentFailureIssue(text);
+  if (invalid) return invalid;
   const readable = readableFailure(text, []);
   const detail = readable ? quoteText(text, { failure: true }).detail : text.trim() && text;
   return {

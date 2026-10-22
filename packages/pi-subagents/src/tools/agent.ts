@@ -25,7 +25,7 @@ import {
   type AgentCallEvidence,
 } from "./compact-agent-summary.ts";
 import { CONTRACT_SCHEMAS } from "./contract-schema.ts";
-import { errorSection, previewCall, textResultBody } from "./render-preview.ts";
+import { errorSection, previewCall, rejectionAwareCall, textResultBody } from "./render-preview.ts";
 import {
   AGENT_TOOL_SCHEMAS,
   agentArgumentPreparer,
@@ -183,7 +183,7 @@ export function registerAgentTools(
       prepareArguments: ARGUMENT_PREPARERS[name],
       execute: (id, args, signal) =>
         runtime.execute(TOOL_INPUTS[name](args), runtime.isScripted?.(id) ?? false, signal),
-      renderCall: (args, theme, context) => {
+      renderCall: rejectionAwareCall(spec.label, (args, theme, context) => {
         const call = decodeAgentCall(args) ?? {};
         const [heading, subtitle] = title(call);
         // The heading shows one line of a message; expansion shows all of it.
@@ -192,7 +192,7 @@ export function registerAgentTools(
             ? new Text(theme.fg("toolOutput", escapeControlChars(call.message)), 0, 0)
             : undefined;
         return previewCall(theme, context, { title: heading, subtitle }, whole);
-      },
+      }),
       renderResult: (result, options, theme, context) =>
         textResultBody(
           theme,

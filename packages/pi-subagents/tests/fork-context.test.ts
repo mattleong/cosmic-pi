@@ -263,11 +263,10 @@ describe("forked Pi transcript", () => {
           "user",
           "assistant",
         ]);
-        for (const text of ["retained conversation", "retained answer"])
+        // Pi sends thinking only to the model that produced it.
+        for (const text of ["retained conversation", "retained answer", "signed private reasoning"])
           expect(toJson(context)).toContain(text);
-        expect(toJson(entries)).not.toMatch(
-          /parent secret|parent section secret|parent_only|signed private reasoning|signature/,
-        );
+        expect(toJson(entries)).not.toMatch(/parent secret|parent section secret|parent_only/);
         expect(yield* Effect.promise(() => fs.readFile(parent.getSessionFile()!, "utf8"))).toBe(
           original,
         );
@@ -375,7 +374,7 @@ describe("forked Pi transcript sharing the parent's prompt cache", () => {
           "system",
         );
         expect(toJson(child.getBranch())).not.toMatch(
-          /opaque parent secret|parent preamble|signed private reasoning|encrypted_content/,
+          /opaque parent secret|parent preamble|encrypted_content/,
         );
       }),
     );

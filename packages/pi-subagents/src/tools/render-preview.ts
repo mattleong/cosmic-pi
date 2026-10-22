@@ -1,6 +1,7 @@
-import type { Theme } from "@earendil-works/pi-coding-agent";
+import type { Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
-import { expandedSection } from "pi-code-previews";
+import type { TSchema } from "typebox";
+import { expandedSection, isRejectedEmptyCall } from "pi-code-previews";
 import {
   renderExpansionAffordance,
   renderToolHeader,
@@ -14,6 +15,16 @@ interface PreviewRenderContext {
   readonly isPartial: boolean;
   readonly isError: boolean;
 }
+
+type RenderCall<Params extends TSchema> = NonNullable<ToolDefinition<Params>["renderCall"]>;
+
+/** A call Pi rejected for malformed JSON arrives as `{}`, so its heading names only the tool. */
+export const rejectionAwareCall =
+  <Params extends TSchema>(label: string, renderCall: RenderCall<Params>): RenderCall<Params> =>
+  (args, theme, context) =>
+    isRejectedEmptyCall(context)
+      ? new Text(renderToolHeader({ title: label }, theme), 0, 0)
+      : renderCall(args, theme, context);
 
 export const errorSection = (theme: Theme, text: string): Component =>
   expandedSection(theme, "Error", new Text(theme.fg("toolOutput", text), 0, 0));

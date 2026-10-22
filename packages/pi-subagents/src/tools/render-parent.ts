@@ -22,7 +22,7 @@ import {
 import { MAX_PARENT_MESSAGE_CHARS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import { rejectedCallIssue } from "./compact-action-failures.ts";
 import { QUOTED_TEXT_LIMIT } from "./compact-run-issues.ts";
-import { errorSection, previewCall, textResultBody } from "./render-preview.ts";
+import { errorSection, previewCall, rejectionAwareCall, textResultBody } from "./render-preview.ts";
 
 export const CONTACT_PARENT_LABEL = "Contact Parent";
 
@@ -132,7 +132,7 @@ const fitsHeading = (message: string): boolean =>
 const COLLAPSED_REPLY_LINES = 4;
 
 export const contactParentRenderers = {
-  renderCall(args, theme, context) {
+  renderCall: rejectionAwareCall(CONTACT_PARENT_LABEL, (args, theme, context) => {
     const request = contactRequest(args);
     const message = request && request.kind !== "warning" ? request.message : undefined;
     const subject = [request?.kind, message].filter(Boolean).join(": ");
@@ -141,7 +141,7 @@ export const contactParentRenderers = {
         ? new Text(theme.fg("toolOutput", escapeControlChars(message)), 0, 0)
         : undefined;
     return previewCall(theme, context, { title: CONTACT_PARENT_LABEL, subtitle: subject }, whole);
-  },
+  }),
   renderResult(result, options, theme, context) {
     const text = stripTerminalControls(getTextContent(result.content));
     return textResultBody(
