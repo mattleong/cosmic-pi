@@ -45,12 +45,21 @@ export const acceptsAsyncMessage = (
   );
 };
 
+const unconfirmedDelivery = () =>
+  new AskUserHostError({
+    operation: "deliver",
+    message:
+      "Answer delivery was not confirmed. Retrieve the retained result with ask_user_async_control.",
+  });
+
 export const hostAsyncDelivery =
   (pi: ExtensionAPI, generation: string, isCurrent: () => boolean): AsyncDelivery =>
   (snapshot) =>
+    // Authority is checked in the same synchronous callback as delivery; a scheduling boundary
+    // between them would let a retired session deliver into its replacement.
     Effect.try({
       try: () => {
-        if (!isCurrent()) throw new Error("Revoked");
+        if (!isCurrent()) return false;
         pi.appendEntry(ASYNC_RECEIPT_TYPE, {
           version: 1,
           generation,
@@ -70,11 +79,9 @@ export const hostAsyncDelivery =
           },
           { deliverAs: "steer", triggerTurn: true },
         );
+        return true;
       },
-      catch: () =>
-        new AskUserHostError({
-          operation: "deliver",
-          message:
-            "Answer delivery was not confirmed. Retrieve the retained result with ask_user_async_control.",
-        }),
-    });
+      catch: unconfirmedDelivery,
+    }).pipe(
+      Effect.flatMap((delivered) => (delivered ? Effect.void : Effect.fail(unconfirmedDelivery()))),
+    );

@@ -126,53 +126,58 @@ const boundedArray = (maximum: number) =>
 const captureQuestions = boundedArray(MAX_QUESTIONS);
 const captureChoices = boundedArray(MAX_CHOICES);
 
+const decodeRawQuestion = decodeUnknownOrUndefined(RawQuestion);
+const decodeRawChoice = decodeUnknownOrUndefined(RawChoice);
+const decodeRawAnswer = decodeUnknownOrUndefined(RawAnswer);
+const decodeRequest = decodeUnknownOrUndefined(QuestionnaireRequestSchema);
+const decodeOutcome = decodeUnknownOrUndefined(QuestionnaireOutcomeSchema);
+
 const captureRequest = (root: typeof RawRequest.Type): AskUserRequest | undefined => {
-  try {
-    const questions = captureQuestions(root.questions);
-    if (!questions) return undefined;
-    const captured = questions.map((item) => {
-      const question = Schema.decodeUnknownSync(RawQuestion)(item);
-      if (question.mode === "text") return question;
-      const choices = captureChoices(question.choices);
-      return Object.assign({}, question, {
-        choices: choices?.map((choice) => Schema.decodeUnknownSync(RawChoice)(choice)),
-      });
-    });
-    const request = normalizeAskUserRequest(
-      Schema.decodeUnknownSync(QuestionnaireRequestSchema)({ questions: captured }),
-    );
-    return validateAskUserRequest(request) ? undefined : request;
-  } catch {
-    return undefined;
+  const questions = captureQuestions(root.questions);
+  if (!questions) return undefined;
+  const captured = [];
+  for (const item of questions) {
+    const question = decodeRawQuestion(item);
+    if (!question) return undefined;
+    if (question.mode === "text") {
+      captured.push(question);
+      continue;
+    }
+    const choices = [];
+    for (const choice of captureChoices(question.choices) ?? []) {
+      const decoded = decodeRawChoice(choice);
+      if (!decoded) return undefined;
+      choices.push(decoded);
+    }
+    captured.push(Object.assign({}, question, { choices }));
   }
+  const decoded = decodeRequest({ questions: captured });
+  if (!decoded) return undefined;
+  const request = normalizeAskUserRequest(decoded);
+  return validateAskUserRequest(request) ? undefined : request;
 };
 
 const captureOutcome = (root: typeof RawOutcome.Type): AskUserOutcome | undefined => {
-  try {
-    const answers = captureQuestions(root.answers);
-    if (!answers) return undefined;
-    const captured = answers.map((item) => {
-      const answer = Schema.decodeUnknownSync(RawAnswer)(item);
-      if (answer.kind === "text" && Schema.is(Schema.String)(answer.text)) {
-        const checked = validateQuestionnaireInput(answer.text, "text");
-        return checked.error === undefined
-          ? Object.assign({}, answer, { text: checked.value })
-          : undefined;
-      }
-      return answer.kind === "choices"
-        ? Object.assign({}, answer, {
-            values: captureChoices(answer.values),
-            labels: captureChoices(answer.labels),
-          })
-        : answer;
-    });
-    return Schema.decodeUnknownSync(QuestionnaireOutcomeSchema)({
-      outcome: root.outcome,
-      answers: captured,
-    });
-  } catch {
-    return undefined;
+  const answers = captureQuestions(root.answers);
+  if (!answers) return undefined;
+  const captured = [];
+  for (const item of answers) {
+    const answer = decodeRawAnswer(item);
+    if (!answer) return undefined;
+    if (answer.kind === "text" && Schema.is(Schema.String)(answer.text)) {
+      const checked = validateQuestionnaireInput(answer.text, "text");
+      if (checked.error !== undefined) return undefined;
+      captured.push(Object.assign({}, answer, { text: checked.value }));
+    } else if (answer.kind === "choices") {
+      captured.push(
+        Object.assign({}, answer, {
+          values: captureChoices(answer.values),
+          labels: captureChoices(answer.labels),
+        }),
+      );
+    } else captured.push(answer);
   }
+  return decodeOutcome({ outcome: root.outcome, answers: captured });
 };
 
 export const decodeQuestionnaireRequest = flow(decodeUnknownOrUndefined(RawRequest), (root) =>
@@ -182,33 +187,44 @@ export const decodeQuestionnaireOutcome = flow(decodeUnknownOrUndefined(RawOutco
   root === undefined ? undefined : captureOutcome(root),
 );
 
+const isQuestionnaireRelay = (value: unknown): value is QuestionnaireRelay =>
+  Predicate.hasProperty(value, "version") &&
+  value.version === 1 &&
+  Predicate.hasProperty(value, "sessionId") &&
+  Predicate.isString(value.sessionId) &&
+  Predicate.hasProperty(value, "ask") &&
+  Predicate.isFunction(value.ask);
+const isQuestionnaireCapability = (value: unknown): value is QuestionnaireCapability =>
+  Predicate.hasProperty(value, "version") &&
+  value.version === 1 &&
+  Predicate.hasProperty(value, "sessionId") &&
+  Predicate.isString(value.sessionId) &&
+  Predicate.hasProperty(value, "generation") &&
+  Predicate.isString(value.generation) &&
+  Predicate.hasProperty(value, "ask") &&
+  Predicate.isFunction(value.ask) &&
+  Predicate.hasProperty(value, "cancel") &&
+  Predicate.isFunction(value.cancel);
+
+// Candidates come from other extensions, so only these structural checks establish their shape.
 export const queryQuestionnaireRelay = (
   events: QuestionnaireEvents,
   sessionId: string,
 ): QuestionnaireRelay | undefined =>
-  querySessionCapability(
+  querySessionCapability<unknown, QuestionnaireRelay>(
     events,
     QUESTIONNAIRE_RELAY_QUERY,
     { version: 1, sessionId },
-    (value: QuestionnaireRelay) =>
-      value?.version === 1 && value.sessionId === sessionId && Predicate.isFunction(value.ask)
-        ? value
-        : undefined,
+    (value) => (isQuestionnaireRelay(value) && value.sessionId === sessionId ? value : undefined),
   ).candidates.at(-1);
 export const queryQuestionnaireCapability = (
   events: QuestionnaireEvents,
   sessionId: string,
 ): QuestionnaireCapability | undefined =>
-  querySessionCapability(
+  querySessionCapability<unknown, QuestionnaireCapability>(
     events,
     QUESTIONNAIRE_CAPABILITY_QUERY,
     { version: 1, sessionId },
-    (value: QuestionnaireCapability) =>
-      value?.version === 1 &&
-      value.sessionId === sessionId &&
-      Predicate.isString(value.generation) &&
-      Predicate.isFunction(value.ask) &&
-      Predicate.isFunction(value.cancel)
-        ? value
-        : undefined,
+    (value) =>
+      isQuestionnaireCapability(value) && value.sessionId === sessionId ? value : undefined,
   ).candidates.at(-1);

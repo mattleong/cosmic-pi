@@ -14,7 +14,12 @@ import { expect } from "vitest";
 import { issueMessageStyleProblems } from "pi-code-previews/testing";
 import { failureMessage } from "pi-cosmic-core";
 import { pausedScheduler } from "pi-cosmic-core/testing";
-import { AskUserService, type AskUserHost } from "../src/questionnaire/service.ts";
+import {
+  AskUserService,
+  noQuestionnaireActivity,
+  type AskUserHost,
+  type QuestionnaireActivity,
+} from "../src/questionnaire/service.ts";
 import { AskUserHostError, AskUserRuntimeClosedError } from "../src/questionnaire/errors.ts";
 import type { AskUserOutcome } from "../src/questionnaire/model.ts";
 import {
@@ -442,6 +447,50 @@ it.effect("shutdown settles an in-progress await and an opening start with a clo
     yield* Deferred.await(f.entered);
     yield* Scope.close(openingScope, Exit.void);
     expect(yield* Effect.flip(Fiber.join(start))).toBeInstanceOf(AskUserRuntimeClosedError);
+  }),
+);
+
+const mountedHost: AskUserHost = (_request, presence) =>
+  Effect.gen(function* () {
+    if (presence) yield* Deferred.succeed(presence.opened, undefined);
+    return yield* Effect.never;
+  });
+
+it.effect("a queued presenter released by shutdown settles its waiter with the closed error", () =>
+  Effect.gen(function* () {
+    const permitHeld = yield* Deferred.make<void>();
+    const releasePermit = yield* Deferred.make<void>();
+    // Holding admission keeps the shutdown finalizer waiting while queue closure wakes presenters.
+    const activity: QuestionnaireActivity = {
+      ...noQuestionnaireActivity,
+      admitted: (id) =>
+        id === "ask-3"
+          ? Deferred.succeed(permitHeld, undefined).pipe(
+              Effect.andThen(Deferred.await(releasePermit)),
+            )
+          : Effect.void,
+    };
+    const scope = yield* Scope.make();
+    const service = yield* acquireService(mountedHost, () => Effect.void, undefined, activity).pipe(
+      Scope.provide(scope),
+    );
+    yield* service.startAsync(keyedRequest(0));
+    const queued = yield* service.startAsync(keyedRequest(1));
+    const waiter = yield* Effect.forkChild(control(service, "await", queued.requestId), {
+      startImmediately: true,
+    });
+    const holding = yield* Effect.forkChild(service.startAsync(keyedRequest(2)), {
+      startImmediately: true,
+    });
+    yield* Deferred.await(permitHeld);
+    const closing = yield* Effect.forkChild(Scope.close(scope, Exit.void), {
+      startImmediately: true,
+    });
+    const waited = yield* Effect.flip(Fiber.join(waiter)).pipe(Effect.exit);
+    yield* Deferred.succeed(releasePermit, undefined);
+    yield* Fiber.join(closing);
+    yield* Effect.exit(Fiber.join(holding));
+    expect(Exit.isSuccess(waited) && waited.value).toBeInstanceOf(AskUserRuntimeClosedError);
   }),
 );
 

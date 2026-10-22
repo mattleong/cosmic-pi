@@ -2,10 +2,11 @@ import { SettingsManager, type ExtensionContext } from "@earendil-works/pi-codin
 import type { TUI } from "@earendil-works/pi-tui";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Predicate from "effect/Predicate";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as ChildProcess from "effect/process/ChildProcess";
 import { nodeFilePlatformLayer, nodeProcessLayer, stripTerminalControls } from "pi-cosmic-core";
@@ -40,11 +41,7 @@ const restoreTui = (tui: TUI) =>
     tui.requestRender(true);
   }).pipe(Effect.ignore);
 
-const editWithExternalEditorEffect = (
-  tui: TUI,
-  configuredCommand: string | undefined,
-  value: string,
-) =>
+const editorSession = (tui: TUI, configuredCommand: string | undefined, value: string) =>
   Effect.scoped(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -71,23 +68,23 @@ const editWithExternalEditorEffect = (
     }),
   );
 
+// Interruption terminates the editor, removes its temporary file, and restores the TUI before
+// the effect settles; callers that join the editor fiber therefore join that cleanup.
 export function editWithExternalEditor(
   tui: TUI,
   configuredCommand: string | undefined,
   value: string,
-  signal: AbortSignal,
-): Promise<string | undefined> {
-  if (signal.aborted) return Promise.resolve(undefined);
-  const program = Effect.provide(
-    editWithExternalEditorEffect(tui, configuredCommand, value),
-    externalEditorLayer,
-    { local: true },
+): Effect.Effect<string, ExternalEditorError> {
+  return editorSession(tui, configuredCommand, value).pipe(
+    Effect.provide(externalEditorLayer, { local: true }),
+    Effect.catchCause((cause) => {
+      if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt;
+      const error = Cause.findError(cause);
+      return Effect.fail(
+        Result.isSuccess(error) && Predicate.isTagged(error.success, "ExternalEditorError")
+          ? error.success
+          : new ExternalEditorError({ message: "External editor execution failed." }),
+      );
+    }),
   );
-  return Effect.runPromiseExit(program, { signal }).then((exit) => {
-    if (Exit.isSuccess(exit)) return exit.value;
-    if (signal.aborted) return undefined;
-    const failure = Cause.squash(exit.cause);
-    if (failure instanceof ExternalEditorError) throw failure;
-    throw new ExternalEditorError({ message: "External editor execution failed." });
-  });
 }

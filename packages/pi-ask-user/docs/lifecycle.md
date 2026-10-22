@@ -36,8 +36,9 @@ delivery attempts, and repeated delivery IDs identify the same result.
 
 Service shutdown closes queue admission before interrupting presenters. Otherwise an
 interrupted presenter's cleanup would advance the queue and mount a waiting blocking request.
-Queued requests, openers, and waiters then fail with a runtime-closed error, because interrupted
-presenters can no longer settle them.
+Queued requests, openers, and waiters then fail with a runtime-closed error. The shutdown
+finalizer settles entries whose presenters were interrupted; a queued presenter that closure
+releases first settles its own entry with the same error.
 
 [Async service tests](../tests/async-service.test.ts) force these races, including interruption
 immediately before acknowledgement, queue cancellation, retention exhaustion, retry shutdown, and
@@ -57,8 +58,9 @@ questionnaire's own overlay, so an unrelated overlay above it is preserved. A fa
 reported, but it still completes Pi's `custom()` call; otherwise Pi's prompt would never end and
 the prompt gate would keep later questionnaires closed.
 
-Closing revokes callback and editor-admission authority before finishing the surface. It then
-joins every admitted [external editor](../src/boundary/host-external-editor.ts), including process
+Closing revokes callback and editor-admission authority before finishing the surface. Admitted
+[external editors](../src/boundary/host-external-editor.ts) run as session-runtime fibers owned by
+the surface's scope, so closing that scope interrupts and joins each one, including process
 termination, temporary-file cleanup, and TUI restoration. This join is necessary: activating the
 replacement first could stop its TUI before the previous editor restarts it. Late editor results
 cannot modify a revoked dialog.

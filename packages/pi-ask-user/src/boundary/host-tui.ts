@@ -2,8 +2,9 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { OverlayHandle } from "@earendil-works/pi-tui";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as FiberSet from "effect/FiberSet";
 import * as Queue from "effect/Queue";
-import { openOwnedSurface, type OwnedSurfaceError } from "pi-cosmic-ui/boundary/host-surface";
+import { openOwnedSurface } from "pi-cosmic-ui/boundary/host-surface";
 import { AskUserHostError } from "../questionnaire/errors.ts";
 import type { AskUserOutcome } from "../questionnaire/model.ts";
 import { cancelQuestionnaire } from "../questionnaire/reducer.ts";
@@ -17,9 +18,10 @@ export const askUserTuiHost =
   (request, presence, queued) =>
     Effect.tryPromise(() => import("../ui/dialog.ts")).pipe(
       Effect.flatMap(({ AskUserDialog }) => {
-        const open = Effect.suspend(() => {
-          const authority = new AbortController();
-          const editors = new Set<Promise<void>>();
+        const open = Effect.gen(function* () {
+          // Closing this scope interrupts admitted editors and awaits their process termination,
+          // file cleanup, and TUI restoration before the dialog permit passes to a successor.
+          const runEditor = yield* FiberSet.makeRuntimePromise();
           let live = true;
           let handle: OverlayHandle | undefined;
           let token: number | undefined;
@@ -34,7 +36,7 @@ export const askUserTuiHost =
             report(visibility);
             return true;
           };
-          return openOwnedSurface<AskUserOutcome>(ctx, {
+          return yield* openOwnedSurface<AskUserOutcome>(ctx, {
             placement: "dock",
             closedValue: cancelQuestionnaire(),
             admit: () => {
@@ -47,7 +49,6 @@ export const askUserTuiHost =
             },
             onClose: () => {
               live = false;
-              authority.abort();
             },
             create: ({ tui, theme, keybindings, getHeight, finish }) => {
               const command = captureExternalEditorCommand(ctx);
@@ -61,22 +62,16 @@ export const askUserTuiHost =
                 collapse: () => {
                   if (show("hidden") && token !== undefined) bridge.markCollapsed(token);
                 },
-                editExternally: (value) => {
-                  if (authority.signal.aborted) return Promise.resolve(undefined);
-                  const editing = editWithExternalEditor(tui, command, value, authority.signal);
-                  const release = () => {
-                    editors.delete(settled);
-                  };
-                  const settled = editing.then(release, release);
-                  editors.add(settled);
-                  return editing.then(
-                    (result) => (authority.signal.aborted ? undefined : result),
-                    (cause: unknown) => {
-                      if (!authority.signal.aborted) throw cause;
-                      return undefined;
-                    },
-                  );
-                },
+                editExternally: (value) =>
+                  live
+                    ? runEditor(editWithExternalEditor(tui, command, value)).then(
+                        (result) => (live ? result : undefined),
+                        (cause: unknown) => {
+                          if (live) throw cause;
+                          return undefined;
+                        },
+                      )
+                    : Promise.resolve(undefined),
               });
               token = bridge.activate(() => {
                 if (show("open")) tui.requestRender(true);
@@ -88,16 +83,11 @@ export const askUserTuiHost =
               if (token !== undefined) bridge.markOpened(token);
               report("open");
             },
-          }).pipe(Effect.ensuring(Effect.promise(() => Promise.all(editors))));
-        });
-        const retrying: Effect.Effect<AskUserOutcome, OwnedSurfaceError> = (
-          gate?.awaitOpen ?? Effect.void
-        ).pipe(
+          });
+        }).pipe(Effect.scoped);
+        const retrying = (gate?.awaitOpen ?? Effect.void).pipe(
           Effect.andThen(open),
-          Effect.catchIf(
-            (error) => error.reason === "blocked",
-            () => retrying,
-          ),
+          Effect.retry({ while: (error) => error.reason === "blocked" }),
         );
         return queued ? retrying : open;
       }),

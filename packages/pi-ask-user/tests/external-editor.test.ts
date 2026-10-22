@@ -1,5 +1,6 @@
 import { layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
@@ -28,16 +29,14 @@ const editorScript = (source: string, name = "editor.mjs") =>
     return { fs, path, directory, script, command, tui, stop, start, requestRender };
   });
 
-layer(nodeFilePlatformLayer)("external editor boundary", (it) => {
+layer(nodeFilePlatformLayer, { excludeTestServices: true })("external editor boundary", (it) => {
   it.effect("runs the configured editor in a scoped process and restores the TUI", () =>
     Effect.gen(function* () {
       const { fs, path, script, command, tui, stop, start, requestRender } = yield* editorScript(
         'import { writeFile } from "node:fs/promises"; await writeFile(process.argv[2], "edited\\n", "utf8"); await writeFile(`${process.argv[1]}.target`, process.argv[2], "utf8");\n',
       );
 
-      const result = yield* Effect.promise(() =>
-        editWithExternalEditor(tui, command, "initial", new AbortController().signal),
-      );
+      const result = yield* editWithExternalEditor(tui, command, "initial");
 
       expect(result).toBe("edited");
       expect(stop).toHaveBeenCalledOnce();
@@ -55,14 +54,9 @@ layer(nodeFilePlatformLayer)("external editor boundary", (it) => {
         "failing-editor.mjs",
       );
 
-      const failure = yield* Effect.promise(() =>
-        editWithExternalEditor(tui, command, "initial", new AbortController().signal).then(
-          () => undefined,
-          (cause: unknown) => cause,
-        ),
-      );
+      const failure = yield* Effect.flip(editWithExternalEditor(tui, command, "initial"));
       expect(Predicate.isTagged(failure, "ExternalEditorError")).toBe(true);
-      expect(failure instanceof Error ? failure.message : "").not.toContain(script);
+      expect(failure.message).not.toContain(script);
 
       expect(stop).toHaveBeenCalledOnce();
       expect(start).toHaveBeenCalledOnce();
@@ -78,12 +72,8 @@ layer(nodeFilePlatformLayer)("external editor boundary", (it) => {
       );
       const statePath = path.join(directory, "state");
       const services = yield* Effect.context();
-      const controller = new AbortController();
-      const editing = editWithExternalEditor(
-        tui,
-        `${command} ${statePath}`,
-        "initial",
-        controller.signal,
+      const editing = yield* Effect.forkChild(
+        editWithExternalEditor(tui, `${command} ${statePath}`, "initial"),
       );
       yield* Effect.promise(() =>
         vi.waitFor(() =>
@@ -93,9 +83,7 @@ layer(nodeFilePlatformLayer)("external editor boundary", (it) => {
           }),
         ),
       );
-      controller.abort();
-      const result = yield* Effect.promise(() => editing);
-      expect(result).toBeUndefined();
+      yield* Fiber.interrupt(editing);
       expect(start).toHaveBeenCalledOnce();
       const state = decodeHangingEditorState(yield* fs.readFileString(statePath));
       expect(() => process.kill(state.pid, 0)).toThrow();

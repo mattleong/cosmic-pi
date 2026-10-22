@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Queue from "effect/Queue";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
@@ -179,10 +180,11 @@ export const acquireAsyncQuestionnaires = Effect.fn("AskUserService.acquireAsync
           : { status: "failed", presentation: "settled", delivery: "none" },
       );
       yield* activity.settled(id, outcome?.outcome ?? "failed");
+      const failure = Exit.isFailure(result) ? Cause.findErrorOption(result.cause) : Option.none();
       yield* Deferred.fail(
         entry.opened,
         Option.getOrElse(
-          Exit.isFailure(result) ? Cause.findErrorOption(result.cause) : Option.none(),
+          failure,
           () =>
             new AskUserHostError({
               operation: "open",
@@ -190,7 +192,12 @@ export const acquireAsyncQuestionnaires = Effect.fn("AskUserService.acquireAsync
             }),
         ),
       );
-      yield* Deferred.succeed(entry.completed, undefined);
+      // Queue closure can release this presenter before the shutdown finalizer reaches its entry;
+      // its waiters still observe the same closed error.
+      const closedError = Option.getOrUndefined(failure);
+      yield* Predicate.isTagged(closedError, "AskUserRuntimeClosedError")
+        ? Deferred.fail(entry.completed, closedError)
+        : Deferred.succeed(entry.completed, undefined);
       yield* deliver(id);
     });
 

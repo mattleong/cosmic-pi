@@ -8,6 +8,7 @@ import {
   type KeyId,
   type TUI,
 } from "@earendil-works/pi-tui";
+import * as Predicate from "effect/Predicate";
 import { invokeHostCallback } from "pi-cosmic-core";
 import {
   FullScreenKeymap,
@@ -235,11 +236,11 @@ export class AskUserDialog implements Focusable {
       matchesKeybinding: this.matchesKeybinding,
       reservedKeys: DIALOG_SHORTCUTS,
     });
-    if (resolution?._tag === "Shortcut") {
+    if (Predicate.isTagged(resolution, "Shortcut")) {
       this.handleShortcut(resolution.key);
       return;
     }
-    if (resolution?._tag === "Action" && this.handleAction(resolution.action)) return;
+    if (Predicate.isTagged(resolution, "Action") && this.handleAction(resolution.action)) return;
     if (this.onReview()) this.handleReviewInput(data);
     else this.handleQuestionInput(data);
   }
@@ -249,7 +250,7 @@ export class AskUserDialog implements Focusable {
       mode: "text-input",
       matchesKeybinding: this.matchesKeybinding,
     });
-    if (resolution?._tag === "Action" && resolution.action === "cancel") {
+    if (Predicate.isTagged(resolution, "Action") && resolution.action === "cancel") {
       this.closeInput();
       return;
     }

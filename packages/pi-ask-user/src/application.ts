@@ -93,7 +93,9 @@ export function askUserWithDependencies(
         run: (effect, signal) =>
           input.active
             ? slot.run(effect, signal)
-            : Promise.reject(new Error("Questionnaire session was replaced.")),
+            : Promise.reject(
+                new AskUserRuntimeClosedError({ message: "Questionnaire session was replaced." }),
+              ),
       });
       return makePiManagedRuntime(
         pi,

@@ -254,23 +254,32 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
       }),
   );
 
-  for (const lateResult of ["success", "rejection"] as const) {
-    it.effect(`replacement joins editor termination and TUI restoration (${lateResult})`, () =>
+  for (const editorCleanup of ["clean", "failing"] as const) {
+    it.effect(`replacement joins editor termination and TUI restoration (${editorCleanup})`, () =>
       Effect.gen(function* () {
         const terminated = deferredPromise();
-        let editorSignal: AbortSignal | undefined;
-        const edit = vi
-          .spyOn(externalEditor, "editWithExternalEditor")
-          .mockImplementation((tui, _command, _value, signal) => {
-            editorSignal = signal;
-            tui.stop();
-            return terminated.promise.then(() => {
-              tui.start();
-              tui.requestRender(true);
-              if (lateResult === "rejection") throw new Error("late editor failure");
-              return "late edited text";
-            });
-          });
+        let editorInterrupted = false;
+        const edit = vi.spyOn(externalEditor, "editWithExternalEditor").mockImplementation((tui) =>
+          Effect.acquireUseRelease(
+            Effect.sync(() => tui.stop()),
+            () => Effect.never,
+            () =>
+              Effect.sync(() => {
+                editorInterrupted = true;
+              }).pipe(
+                Effect.andThen(Effect.promise(() => terminated.promise)),
+                Effect.andThen(
+                  Effect.sync(() => {
+                    tui.start();
+                    tui.requestRender(true);
+                  }),
+                ),
+                Effect.andThen(
+                  editorCleanup === "failing" ? Effect.die("late editor failure") : Effect.void,
+                ),
+              ),
+          ),
+        );
         const { h, ui } = yield* tuiHarness();
         yield* Effect.promise(() => h.emit("session_start"));
         const start = h.tools.get("ask_user_async")!;
@@ -278,14 +287,14 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
         const oldComponent = ui.component!;
         oldComponent.handleInput?.("n");
         oldComponent.handleInput?.("external");
-        expect(editorSignal?.aborted).toBe(false);
+        expect(editorInterrupted).toBe(false);
         expect(ui.tuiControls.stop).toHaveBeenCalledOnce();
         let replaced = false;
         const replacing = h.emit("session_start").then(() => {
           replaced = true;
           return undefined;
         });
-        yield* eventually(() => expect(editorSignal?.aborted).toBe(true));
+        yield* eventually(() => expect(editorInterrupted).toBe(true));
         for (let i = 0; i < 30; i++) yield* Effect.yieldNow;
         expect(replaced).toBe(false);
         expect(ui.tuiControls.start).not.toHaveBeenCalled();

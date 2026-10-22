@@ -169,12 +169,12 @@ for (const fail of [false, true]) {
   );
 }
 
-for (const [lateResult, failFinish] of [
-  ["success", false],
-  ["rejection", true],
+for (const [editorCleanup, failFinish] of [
+  ["clean", false],
+  ["failing", true],
 ] as const) {
   it.effect(
-    `finish (${failFinish ? "failure" : "success"}) joins admitted editor cleanup before FIFO progress (${lateResult})`,
+    `finish (${failFinish ? "failure" : "success"}) joins admitted editor cleanup before FIFO progress (${editorCleanup} cleanup)`,
     () =>
       Effect.gen(function* () {
         const h = hostFixture();
@@ -182,35 +182,25 @@ for (const [lateResult, failFinish] of [
         const host = askUserHost(h.ctx, bridge);
         const terminated = yield* Deferred.make<void>();
         const restored = yield* Deferred.make<void>();
-        const runEditor = Effect.runPromiseWith(yield* Effect.context());
         const cleanup: string[] = [];
-        let editorSignal: AbortSignal | undefined;
-        const edit = vi
-          .spyOn(externalEditor, "editWithExternalEditor")
-          .mockImplementation((_tui, _command, _value, signal) => {
-            editorSignal = signal;
-            return runEditor(
-              Deferred.await(terminated).pipe(
+        let editorInterrupted = false;
+        const edit = vi.spyOn(externalEditor, "editWithExternalEditor").mockImplementation(() =>
+          Effect.never.pipe(
+            Effect.onInterrupt(() =>
+              Effect.sync(() => {
+                editorInterrupted = true;
+              }).pipe(
+                Effect.andThen(Deferred.await(terminated)),
                 Effect.andThen(Effect.sync(() => cleanup.push("process", "file"))),
                 Effect.andThen(Deferred.await(restored)),
+                Effect.andThen(Effect.sync(() => cleanup.push("tui"))),
                 Effect.andThen(
-                  Effect.sync(() => {
-                    cleanup.push("tui");
-                  }),
-                ),
-                Effect.andThen(
-                  lateResult === "rejection"
-                    ? Effect.fail(
-                        new AskUserHostError({
-                          operation: "editor",
-                          message: "late editor failure",
-                        }),
-                      )
-                    : Effect.succeed("late text"),
+                  editorCleanup === "failing" ? Effect.die("editor cleanup failure") : Effect.void,
                 ),
               ),
-            );
-          });
+            ),
+          ),
+        );
         yield* Effect.addFinalizer(() => Effect.sync(() => edit.mockRestore()));
         yield* Effect.gen(function* () {
           const queue = yield* acquireQuestionnaireQueue;
@@ -227,7 +217,7 @@ for (const [lateResult, failFinish] of [
           const oldComponent = h.component!;
           oldComponent.handleInput?.("n");
           oldComponent.handleInput?.("external");
-          expect(editorSignal?.aborted).toBe(false);
+          expect(editorInterrupted).toBe(false);
           oldComponent.handleInput?.("\u001b");
           oldComponent.handleInput?.("1");
           if (failFinish)
@@ -235,7 +225,7 @@ for (const [lateResult, failFinish] of [
               throw new Error("finish failure");
             });
           expect(() => oldComponent.handleInput?.("\r")).not.toThrow();
-          yield* eventually(() => expect(editorSignal?.aborted).toBe(true));
+          yield* eventually(() => expect(editorInterrupted).toBe(true));
           yield* eventually(() => expect(bridge.resume()).toBe(false));
           expect(h.customCalls).toBe(1);
           yield* Deferred.succeed(terminated, undefined);

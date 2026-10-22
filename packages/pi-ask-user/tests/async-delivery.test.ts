@@ -1,6 +1,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import type * as Scheduler from "effect/Scheduler";
 import { expect, it, vi } from "vitest";
 import {
   ASYNC_MESSAGE_TYPE,
@@ -145,3 +147,43 @@ effectIt.effect.each(["appendEntry", "sendMessage"] as const)(
       if (failing === "appendEntry") expect(sendMessage).not.toHaveBeenCalled();
     }),
 );
+
+it("retirement at any scheduler yield cannot let an authorized delivery reach the host", () => {
+  const tasks: Array<() => void> = [];
+  let resumed = false;
+  // Yield before every operation after the first. A resumed fiber spends one operation unwinding
+  // its yield, so each queued task advances exactly one real operation.
+  const scheduler: Scheduler.Scheduler = {
+    executionMode: "async",
+    shouldYield: (fiber) => fiber.currentOpCount > (resumed ? 2 : 1),
+    makeDispatcher: () => ({
+      scheduleTask: (task) => tasks.push(task),
+      flush: () => undefined,
+    }),
+  };
+  let active = true;
+  let checked = false;
+  const hostCalls: Array<{ readonly call: string; readonly active: boolean }> = [];
+  const pi = extensionApiFixture({
+    appendEntry: () => hostCalls.push({ call: "receipt", active }),
+    sendMessage: () => hostCalls.push({ call: "message", active }),
+  });
+  const send = hostAsyncDelivery(pi, "generation", () => {
+    checked = true;
+    return active;
+  });
+  const fiber = Effect.runFork(send(snapshot), { scheduler });
+  resumed = true;
+  if (checked) active = false;
+  for (let task = tasks.shift(), steps = 0; task && steps < 1_000; task = tasks.shift(), steps++) {
+    task();
+    if (checked) active = false;
+  }
+  // Retirement immediately follows the authority check, so delivery must complete in that step.
+  expect(hostCalls).toEqual([
+    { call: "receipt", active: true },
+    { call: "message", active: true },
+  ]);
+  const exit = fiber.pollUnsafe();
+  expect(exit !== undefined && Exit.isSuccess(exit)).toBe(true);
+});
