@@ -33,7 +33,8 @@ Only successful directory identity lookups are cached; failures remain retryable
 include their canonical cwd and are rejected if it differs from the requested directory. Invalid
 documents are not overwritten. Read, restore, and write failures become bounded warnings rather
 than breaking the session. Shutdown disposes the runtime, and inactive events do not write.
-Interrupted persistence cannot report a late warning after its owning session retires.
+Service warnings check the slot's captured authority when published, so neither restoration
+nor persistence can report a late warning after its owning session retires.
 
 [Application tests](tests/application.test.ts) exercise restoration, concurrent replacement,
 failure recovery, alias identity, and persistence. [CLI tests](tests/host-cli.test.ts) cover

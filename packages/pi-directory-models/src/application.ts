@@ -26,12 +26,18 @@ export function registerDirectoryModelsApplication(
   explicitPreference: boolean = captureExplicitPreferenceArgument(),
 ): void {
   const slot = makePiSessionRuntimeSlot({
-    makeRuntime: (input: DirectoryModelSessionInput) =>
-      makePiManagedRuntime(
+    makeRuntime: (input: DirectoryModelSessionInput) => {
+      // Start has already advanced the epoch, so this authority retires with this runtime.
+      // Runtime disposal follows retirement asynchronously; the check keeps late warnings out.
+      const isCurrent = slot.captureAuthority();
+      return makePiManagedRuntime(
         pi,
-        directoryModelsLayer(input, (message) => warn(input.ctx, message)),
+        directoryModelsLayer(input, (message) => {
+          if (isCurrent()) warn(input.ctx, message);
+        }),
         { agentDirectory: getAgentDir, packageName: "pi-directory-models" },
-      ),
+      );
+    },
     startup: () => DirectoryModelPreferenceService.use((service) => service.initialize),
     onStartFailure: ({ ctx }) => {
       warn(ctx, "Directory Models couldn't start");

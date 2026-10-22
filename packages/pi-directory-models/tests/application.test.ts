@@ -111,6 +111,7 @@ const harness = (
     readonly setModelDenied?: boolean;
     readonly setModelSettlement?: Promise<void>;
     readonly onSetModel?: () => void;
+    readonly retireDuringThinkingRestore?: boolean;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -159,6 +160,16 @@ const harness = (
       });
     });
     const setThinkingLevel = vi.fn((level: typeof thinkingLevel) => {
+      if (options.retireDuringThinkingRestore) {
+        // The shutdown handler retires the session synchronously; runtime disposal follows later.
+        thinkingEvents.push(
+          host.emit("session_shutdown", ctx).then(
+            () => Effect.void,
+            (cause: unknown) => Effect.die(cause),
+          ),
+        );
+        throw new Error("thinking level failed after retirement");
+      }
       const previousLevel = thinkingLevel;
       thinkingLevel = level;
       const event: ThinkingLevelSelectEvent = {
@@ -329,6 +340,17 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       expect(h.notify).not.toHaveBeenCalled();
     }).pipe(Effect.ensuring(Deferred.succeed(settlement, undefined)));
   });
+
+  it.effect("does not warn on a session retired before its runtime is disposed", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ retireDuringThinkingRestore: true });
+      yield* h.seedRememberedPreference();
+
+      yield* h.start();
+      expect(h.setThinkingLevel).toHaveBeenCalled();
+      expect(h.notify).not.toHaveBeenCalled();
+    }),
+  );
 
   it.effect("leaves explicit CLI preferences alone", () =>
     Effect.gen(function* () {
