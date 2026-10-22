@@ -36,7 +36,9 @@ const killGroupsAfterward = (pids: ReadonlyArray<number>) =>
 describe("real process cleanup", () => {
   it.live("kills a task's process group when its host exits without session shutdown", () =>
     Effect.gen(function* () {
-      const host = yield* spawnIpcChild(hostScript, [], { timeout: "10 seconds" });
+      // The host transpiles the service graph on a cold start, which takes over 10 seconds on
+      // loaded CI runners.
+      const host = yield* spawnIpcChild(hostScript, [], { timeout: "25 seconds" });
       yield* host.wait("ready");
       const announced = host.messages.find(
         (message): message is string => Predicate.isString(message) && message.startsWith("group:"),

@@ -25,6 +25,9 @@ const exitRequested = Effect.callback<void>((resume) => {
   return Effect.sync(() => process.off("message", receive));
 });
 
+// Separates slow cold module loading from task failures in a timed-out test's message log.
+process.send?.("loaded");
+
 Effect.runFork(
   Effect.gen(function* () {
     const service = yield* BackgroundTaskService;
