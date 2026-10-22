@@ -17,7 +17,6 @@ import {
   formatUsageDetails,
   formatUsageSnapshot,
   requestCodexUsageWithCredentials,
-  usageScopeForModel,
   type UsageSnapshot,
 } from "./format.ts";
 import {
@@ -69,7 +68,6 @@ export class OpenAIUsageService extends Context.Service<OpenAIUsageService>()(
         eligibility: (ctx, cfg) => Effect.succeed(isOpenAISubscriptionModel(ctx, cfg)),
         synchronizeState: (current, ctx, clearUsage) =>
           Effect.succeed(synchronizedProjection(current, ctx, clearUsage)),
-        refreshKeyScope: (ctx) => usageScopeForModel(ctx.model?.id),
         fetchOutcome: ({ ctx }) =>
           Effect.gen(function* () {
             const authAttempt = yield* timedDiagnosticResult(
@@ -82,7 +80,7 @@ export class OpenAIUsageService extends Context.Service<OpenAIUsageService>()(
             if (credentials === undefined) return UsageFetchOutcome.Missing();
             const authPatch = { authFound: true, accountId: credentials.accountId } as const;
             const usage = yield* timedDiagnosticResult(
-              requestCodexUsageWithCredentials(credentials, ctx.model?.id),
+              requestCodexUsageWithCredentials(credentials),
               "Codex usage request timed out.",
             );
             if (Result.isFailure(usage))

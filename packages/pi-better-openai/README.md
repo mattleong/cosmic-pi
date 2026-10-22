@@ -90,7 +90,7 @@ Settings live in `~/.pi/agent/extensions/pi-better-openai.json`; a project's `.p
   },
   "image": {
     "enabled": true,
-    "defaultModel": "gpt-5.5",
+    "defaultModel": "gpt-6.1-sol",
     "defaultSave": "project",
     "outputFormat": "png",
     "timeoutMs": 180000
@@ -102,6 +102,6 @@ Footer visibility is set in `/cosmic-ui settings`. Hiding usage stops automatic 
 
 ## How it works
 
-Each Pi session owns one scoped Effect runtime that runs usage polling and image streams and stops them on replacement or shutdown. Credentials come from Pi's model registry, which refreshes them. Fast mode assumes every `openai` and `openai-codex` model supports the `priority` tier and, for Codex subscription requests, also sends Codex's priority routing hint. Pi still decides when to compact; this extension replaces only how compaction runs for eligible models. Usage and fast-mode state reach the footer as plain data over the Cosmic UI protocol, so the extension never replaces the footer itself.
+Each Pi session owns one scoped Effect runtime that runs usage polling and image streams and stops them on replacement or shutdown. Credentials come from Pi's model registry, which refreshes them. Fast mode assumes every `openai` and `openai-codex` model supports the `priority` tier and, for Codex subscription requests, also sends Codex's priority routing hint. Pi still decides when to compact; this extension replaces only how compaction runs for eligible models. Native compaction rebuilds Pi's request input with this package's own pi-ai copy, so it runs only when that copy matches Pi's pi-ai version; otherwise Pi compacts and a warning names both versions. After upgrading Pi, update this checkout and rerun `pnpm install` to realign them. Usage and fast-mode state reach the footer as plain data over the Cosmic UI protocol, so the extension never replaces the footer itself.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for ownership and lifecycle.

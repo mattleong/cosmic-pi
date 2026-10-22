@@ -1,4 +1,4 @@
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { SessionManager, type SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
 import { expect, layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
@@ -34,6 +34,23 @@ const checkpointedSession = (cwd: string) => {
   );
   return manager;
 };
+
+const beforeCompactEvent = (signal: AbortSignal): SessionBeforeCompactEvent => ({
+  type: "session_before_compact",
+  preparation: {
+    firstKeptEntryId: "retained",
+    messagesToSummarize: [],
+    turnPrefixMessages: [],
+    isSplitTurn: false,
+    tokensBefore: 100,
+    fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+    settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
+  },
+  branchEntries: [],
+  reason: "manual",
+  willRetry: false,
+  signal,
+});
 
 layer(nodeFilePlatformLayer)("compaction session authority", (it) => {
   it.effect("retirement discards pending provider payload changes", () =>
@@ -88,22 +105,7 @@ layer(nodeFilePlatformLayer)("compaction session authority", (it) => {
       yield* h.emit("session_start");
       h.notify.mockClear();
       const pending = h.handlers.get("session_before_compact")[0]!(
-        {
-          type: "session_before_compact",
-          preparation: {
-            firstKeptEntryId: "retained",
-            messagesToSummarize: [],
-            turnPrefixMessages: [],
-            isSplitTurn: false,
-            tokensBefore: 100,
-            fileOps: { read: new Set(), written: new Set(), edited: new Set() },
-            settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
-          },
-          branchEntries: [],
-          reason: "manual",
-          willRetry: false,
-          signal: yield* Effect.abortSignal,
-        },
+        beforeCompactEvent(yield* Effect.abortSignal),
         h.ctx,
       );
       const shutdown = h.handlers.get("session_shutdown")[0]!(
@@ -118,4 +120,28 @@ layer(nodeFilePlatformLayer)("compaction session authority", (it) => {
       expect(h.notify).not.toHaveBeenCalled();
     }),
   );
+
+  for (const projection of ["1.4.0", "1.5.0"])
+    it.effect(`warns about Pi compaction only for a mismatched pi-ai ${projection}`, () =>
+      Effect.gen(function* () {
+        const h = yield* extensionHarness({
+          config: { compaction: { enabled: true } },
+          dependencies: { piAiVersions: { host: "1.4.0", projection } },
+        });
+        yield* h.emit("session_start");
+        h.notify.mockClear();
+        const result = yield* Effect.promise(() =>
+          Promise.resolve(
+            h.handlers.get("session_before_compact")[0]!(
+              beforeCompactEvent(new AbortController().signal),
+              h.ctx,
+            ),
+          ),
+        );
+        expect(result).toBeUndefined();
+        if (projection === "1.4.0") expect(h.notify).not.toHaveBeenCalled();
+        else expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
+        yield* h.emit("session_shutdown");
+      }),
+    );
 });

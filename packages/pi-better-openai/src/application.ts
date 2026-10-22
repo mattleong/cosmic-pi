@@ -28,9 +28,19 @@ import {
 } from "pi-cosmic-core";
 import { createCosmicFooterClient, createHostStateWatch } from "pi-cosmic-ui/client";
 import { makeSetStatusSafely } from "pi-cosmic-ui/boundary/host-status";
-import { resetOpenAICodexTransport } from "./boundary/host-codex-transport.ts";
+import {
+  createCodexTransportReset,
+  resetOpenAICodexTransport,
+} from "./boundary/host-codex-transport.ts";
+import { piRetryPolicy } from "./boundary/host-compaction.ts";
 import { containCommandFailure, safeHostSignal } from "./boundary/host-ui.ts";
 import { latestOwnedCheckpoint } from "./compaction/context.ts";
+import {
+  isEligibleOpenAICompactionModel,
+  piAiVersions,
+  projectionMatchesHost,
+  type PiAiVersions,
+} from "./compaction/projection.ts";
 import { decodeOpenAICompactionDetails } from "./compaction/protocol.ts";
 import { OpenAICompactionService } from "./compaction/service.ts";
 import type { OpenAIConfigError } from "./config/store.ts";
@@ -101,6 +111,7 @@ export interface BetterOpenAIExtensionDependencies {
   ) => PromiseLike<CodePreviewSettings | void>;
   readonly resetOpenAICodexTransport?: (ctx: ExtensionContext) => void;
   readonly imageMessageRenderer?: OpenAIImageMessageRenderer;
+  readonly piAiVersions?: PiAiVersions;
 }
 
 export function betterOpenAIWithDependencies(
@@ -110,9 +121,14 @@ export function betterOpenAIWithDependencies(
   const projection = usageProjectionRef();
   const configProjection = MutableRef.make<ResolvedConfig | undefined>(undefined);
   const fastProjection = MutableRef.make(initialFastSnapshot());
-  const resetProviderTransport =
-    dependencies.resetOpenAICodexTransport ?? resetOpenAICodexTransport;
+  const providerTransport = createCodexTransportReset(
+    dependencies.resetOpenAICodexTransport ?? resetOpenAICodexTransport,
+  );
   const loadPreviewSettings = dependencies.loadPreviewSettings ?? loadCodePreviewSettings;
+  const versions = dependencies.piAiVersions ?? piAiVersions;
+  const projectionMismatch = projectionMatchesHost(versions)
+    ? undefined
+    : `Better OpenAI's pi-ai ${versions.projection} doesn't match Pi's ${versions.host}`;
   let recordFastInjection = ignoreFastInjection;
   let currentContext: MutableRef.MutableRef<ExtensionContext> | undefined;
   const updateContext = (ctx: ExtensionContext) => {
@@ -196,6 +212,8 @@ export function betterOpenAIWithDependencies(
           onUsageChange: (context) => {
             if (currentContext === context) updateFooter(MutableRef.get(context));
           },
+          createCheckpoints: projectionMismatch === undefined,
+          retryPolicy: () => piRetryPolicy(pi),
         }),
         { agentDirectory: getAgentDir, packageName: "pi-better-openai" },
       ),
@@ -315,7 +333,7 @@ export function betterOpenAIWithDependencies(
       const update = FastModeService.use((service) => service.setDesired(ctx, desired)).pipe(
         Effect.tap(() =>
           Effect.sync(() => {
-            if (isCurrent()) resetProviderTransport(ctx);
+            if (isCurrent()) providerTransport.request(ctx);
             if (isCurrent()) invokeBestEffort(() => updateFooter(ctx));
             if (isCurrent()) notifyFastState(ctx, MutableRef.get(fastProjection));
           }),
@@ -329,7 +347,7 @@ export function betterOpenAIWithDependencies(
     return [
       ...fastDebugLines(ctx, MutableRef.get(fastProjection)),
       `Footer usage: ${cosmicUi.isVisible("openai.usage") ? "automatic" : "hidden"} (Cosmic UI)`,
-      `OpenAI compaction: ${cfg.compaction.enabled ? "enabled" : "disabled"}`,
+      `OpenAI compaction: ${cfg.compaction.enabled ? "enabled" : "disabled"}${projectionMismatch ? ` (unavailable: ${projectionMismatch})` : ""}`,
       "",
       formatDebug(projection, ctx),
       "",
@@ -344,7 +362,7 @@ export function betterOpenAIWithDependencies(
     updateFooter,
     formatDebugStatus,
     fastProjection,
-    resetFastRoutingTransport: resetProviderTransport,
+    resetFastRoutingTransport: providerTransport.request,
     captureAuthority: slot.captureAuthority,
     run,
   });
@@ -357,7 +375,7 @@ export function betterOpenAIWithDependencies(
     }
     const { cwd, signal } = captured;
     const projectTrusted = isProjectTrusted(ctx);
-    resetProviderTransport(ctx);
+    providerTransport.request(ctx);
     const context = MutableRef.make(ctx);
     const publicationOwner = MutableRef.make(true);
     return slot
@@ -380,6 +398,9 @@ export function betterOpenAIWithDependencies(
       safeHostSignal(ctx),
     );
   });
+  const openAICompactionRequested = (ctx: ExtensionContext) =>
+    MutableRef.get(configProjection)?.compaction.enabled === true &&
+    invokeHostCallback(() => isEligibleOpenAICompactionModel(ctx.model), false);
   const runCompaction = <A, E>(
     use: (service: OpenAICompactionService["Service"]) => Effect.Effect<A, E>,
     signal: () => AbortSignal | undefined,
@@ -394,9 +415,16 @@ export function betterOpenAIWithDependencies(
       () => event.signal,
       isCurrent,
     )
-      .then((compaction) =>
-        !isCurrent() ? { cancel: true } : compaction ? { compaction } : undefined,
-      )
+      .then((compaction) => {
+        if (!isCurrent()) return { cancel: true };
+        if (projectionMismatch && openAICompactionRequested(ctx))
+          notifyAtHostBoundary(
+            ctx,
+            `OpenAI compaction is unavailable because ${projectionMismatch}, so Pi compacted the context instead`,
+            "warning",
+          );
+        return compaction ? { compaction } : undefined;
+      })
       .catch(() => {
         if (!isCurrent()) return { cancel: true };
         const cancel = event.signal.aborted || needsContextRepair(ctx);
@@ -427,7 +455,7 @@ export function betterOpenAIWithDependencies(
   });
   pi.on("model_select", (_event, ctx) => {
     const signal = safeHostSignal(ctx);
-    resetProviderTransport(ctx);
+    providerTransport.request(ctx);
     const before = MutableRef.get(fastProjection).active;
     updateContext(ctx);
     synchronizeProjectionContext(projection, ctx);
@@ -447,6 +475,7 @@ export function betterOpenAIWithDependencies(
     slot.fork(refreshForNewContext, signal);
   });
   pi.on("session_shutdown", () => {
+    providerTransport.discard();
     replay.retire();
     cosmicUi.shutdown();
     return slot.shutdown();
@@ -471,6 +500,7 @@ export function betterOpenAIWithDependencies(
   });
   pi.on("before_provider_headers", (event, ctx) => {
     updateContext(ctx);
+    providerTransport.beforeProviderRequest(ctx);
     applyFastRoutingHeaders(event.headers, ctx, MutableRef.get(fastProjection));
   });
   pi.on("before_provider_request", (event, ctx) => {

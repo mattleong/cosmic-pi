@@ -5,7 +5,9 @@ import {
   normalizeContext,
   type Api,
   type Model,
+  type RetryPolicy,
 } from "@earendil-works/pi-ai";
+import { streamSimple as streamOpenAIResponses } from "@earendil-works/pi-ai/api/openai-responses";
 import { convertResponsesMessages } from "#pi-ai-openai-responses-shared";
 import {
   convertToLlm,
@@ -22,6 +24,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
+import * as Schema from "effect/Schema";
 import { provideBuiltLayer } from "pi-cosmic-core";
 import { extensionContextFixture } from "pi-cosmic-core/testing";
 import {
@@ -31,6 +34,7 @@ import {
   type OpenAICompactResult,
   type OpenAICompactionClientContract,
 } from "../src/boundary/openai-compaction.ts";
+import { piRetryPolicy } from "../src/boundary/host-compaction.ts";
 import { OpenAICompactionError, OpenAICompactionService } from "../src/compaction/service.ts";
 import {
   decodeOpenAICompactionDetails,
@@ -115,11 +119,17 @@ function fixture(options: {
 function serviceLayer(
   target: ReturnType<typeof fixture>,
   compact: OpenAICompactionClientContract["compact"],
+  options: {
+    readonly createCheckpoints?: boolean;
+    readonly retryPolicy?: RetryPolicy | undefined;
+  } = {},
 ) {
   return OpenAICompactionService.layer({
     context: target.context,
     config: () => MutableRef.get(target.config),
     fastProjection: target.fastProjection,
+    createCheckpoints: options.createCheckpoints ?? true,
+    retryPolicy: () => options.retryPolicy,
   }).pipe(
     Layer.provide(Layer.succeed(OpenAICompactionClient, OpenAICompactionClient.of({ compact }))),
   );
@@ -151,6 +161,53 @@ const responsesInput = (
     new Set(["openai"]),
     requestModel.compat,
   );
+
+const summaryStream = (requestModel: Model<Api>, message = "native summary") => {
+  const stream = createAssistantMessageEventStream();
+  stream.push({
+    type: "done",
+    reason: "stop",
+    message: assistantMessage([{ type: "text", text: message }], {
+      api: requestModel.api,
+      provider: requestModel.provider,
+      model: requestModel.id,
+    }),
+  });
+  return stream;
+};
+
+const decodePayload = Schema.decodeUnknownSync(
+  Schema.Struct({ input: Schema.Array(Schema.Unknown) }),
+);
+const isConfigurationUpdate = Schema.is(
+  Schema.Struct({ type: Schema.Literal("configuration_update") }),
+);
+const tailStart = (input: readonly unknown[]) =>
+  input.findIndex((item) => serializedSnapshot(item).includes("tail question"));
+
+/** Runs pi-ai's real OpenAI Responses provider and stops it at the payload hook, before any request. */
+const nativeProviderPayload = (
+  requestModel: Model<"openai-responses">,
+  messages: Parameters<typeof convertToLlm>[0],
+  reasoning: "high" | undefined,
+) =>
+  Effect.promise(() => {
+    let payload: unknown;
+    return streamOpenAIResponses(
+      requestModel,
+      normalizeContext({ messages: convertToLlm(messages) }),
+      {
+        apiKey: "sk-test",
+        ...(reasoning && { reasoning }),
+        onPayload: (params) => {
+          payload = params;
+          throw new Error("payload captured");
+        },
+      },
+    )
+      .result()
+      .then(() => payload);
+  });
 
 const commit = (manager: SessionManager, result: CompactionResult | undefined) => {
   if (!result) throw new Error("Expected compaction");
@@ -378,6 +435,57 @@ describe("OpenAICompactionService", () => {
     }
   }
 
+  for (const { supportsMidConvoEffort, reasoning, configurationUpdates } of [
+    { supportsMidConvoEffort: true, reasoning: "high", configurationUpdates: true },
+    { supportsMidConvoEffort: true, reasoning: undefined, configurationUpdates: false },
+    { supportsMidConvoEffort: false, reasoning: "high", configurationUpdates: false },
+  ] as const)
+    it.effect(
+      `injects into the native provider payload, mid-conversation effort=${supportsMidConvoEffort}, reasoning=${reasoning ?? "off"}`,
+      () => {
+        const requestModel = { ...testModel(), compat: { supportsMidConvoEffort } };
+        const manager = SessionManager.inMemory("/virtual/native-payload");
+        const reply = (text: string, timestamp: number) =>
+          assistantMessage([{ type: "text", text }], {
+            model: requestModel.id,
+            providerThinkingLevel: "high",
+            timestamp,
+          });
+        manager.appendMessage({ role: "system", content: "native rules", timestamp: 0 });
+        manager.appendMessage({ role: "user", content: "covered question", timestamp: 1 });
+        manager.appendMessage(reply("covered answer", 2));
+        const target = fixture({ enabled: true, currentModel: requestModel, manager });
+        const { client } = recordingClient("native");
+        return Effect.gen(function* () {
+          const service = yield* OpenAICompactionService;
+          commit(manager, yield* service.compact(compactEvent()));
+          manager.appendMessage({ role: "user", content: "tail question", timestamp: 3 });
+          manager.appendMessage(reply("tail answer", 4));
+          manager.appendMessage({ role: "user", content: "next question", timestamp: 5 });
+          const messages = manager.buildSessionContext().messages;
+          const repaired = yield* service.filterContext(messages);
+          const payload = yield* nativeProviderPayload(
+            requestModel,
+            repaired ?? messages,
+            reasoning,
+          );
+          const providerInput = decodePayload(payload).input;
+          // Precondition: pi-ai emits per-reply configuration_update items exactly when expected.
+          expect(providerInput.some(isConfigurationUpdate)).toBe(configurationUpdates);
+          const injected = decodePayload(yield* service.inject(payload)).input;
+          expect(injected.slice(tailStart(injected))).toEqual(
+            providerInput.slice(tailStart(providerInput)),
+          );
+          expect(injected[tailStart(injected) - 1]).toMatchObject({
+            type: "compaction",
+            encrypted_content: "native-1",
+          });
+          expect(serializedSnapshot(injected)).not.toContain("covered question");
+          expect(serializedSnapshot(injected)).not.toContain("covered answer");
+        }).pipe(provideBuiltLayer(serviceLayer(target, client)));
+      },
+    );
+
   it.effect("is a no-op when disabled or the current model is ineligible", () => {
     const { requests, client } = recordingClient("unused");
     const disabled = fixture({ enabled: false });
@@ -584,6 +692,83 @@ describe("OpenAICompactionService", () => {
       },
     );
   }
+
+  it.effect("injects existing checkpoints while Pi creates new compactions", () => {
+    const manager = SessionManager.inMemory("/virtual/version-mismatch");
+    manager.appendMessage({ role: "system", content: "rules", timestamp: 0 });
+    manager.appendMessage({ role: "user", content: "covered dialogue", timestamp: 1 });
+    let summaries = 0;
+    const target = fixture({
+      enabled: true,
+      manager,
+      streamSimple: (requestModel) => {
+        summaries++;
+        return summaryStream(requestModel);
+      },
+    });
+    const { requests, client } = recordingClient("checkpoint");
+    const tailInput = (service: OpenAICompactionService["Service"]) =>
+      service
+        .filterContext(manager.buildSessionContext().messages)
+        .pipe(Effect.map((messages) => ({ input: responsesInput(testModel(), messages ?? []) })));
+    return Effect.gen(function* () {
+      yield* Effect.gen(function* () {
+        const service = yield* OpenAICompactionService;
+        commit(manager, yield* service.compact(compactEvent()));
+        manager.appendMessage({ role: "user", content: "tail dialogue", timestamp: 2 });
+      }).pipe(provideBuiltLayer(serviceLayer(target, client)));
+      yield* Effect.gen(function* () {
+        const service = yield* OpenAICompactionService;
+        const payload = yield* tailInput(service);
+        expect(serializedSnapshot(payload)).toContain("covered dialogue");
+        const injected = serializedSnapshot(yield* service.inject(payload));
+        expect(injected).toContain("checkpoint-1");
+        expect(injected).toContain("tail dialogue");
+        expect(injected).not.toContain("covered dialogue");
+        const result = commit(manager, yield* service.compact(compactEvent()));
+        expect(decodeOpenAICompactionDetails(result.details)).toBeUndefined();
+        expect(summaries).toBe(1);
+        expect(yield* service.compact(compactEvent())).toBeUndefined();
+        expect(requests).toHaveLength(1);
+      }).pipe(provideBuiltLayer(serviceLayer(target, client, { createCheckpoints: false })));
+    });
+  });
+
+  for (const enabled of [true, false])
+    it.effect(`native fallback follows Pi's retry settings, retry=${enabled}`, () => {
+      const manager = SessionManager.inMemory("/virtual/fallback-retry");
+      manager.appendMessage({ role: "user", content: "old dialogue", timestamp: 1 });
+      let attempts = 0;
+      const target = fixture({
+        enabled: true,
+        manager,
+        streamSimple: (requestModel) => {
+          attempts++;
+          if (attempts > 1) return summaryStream(requestModel, "retried summary");
+          const stream = createAssistantMessageEventStream();
+          stream.push({
+            type: "error",
+            reason: "error",
+            error: assistantMessage([], { stopReason: "error", errorMessage: "overloaded" }),
+          });
+          return stream;
+        },
+      });
+      const { client } = recordingClient("checkpoint");
+      const retryPolicy = piRetryPolicy({
+        getSettings: () => ({ retry: { enabled, maxRetries: 1, baseDelayMs: 1 } }),
+      });
+      return Effect.gen(function* () {
+        const service = yield* OpenAICompactionService;
+        commit(manager, yield* service.compact(compactEvent()));
+        manager.appendMessage({ role: "user", content: "new dialogue", timestamp: 2 });
+        target.setEnabled(false);
+        const result = yield* service.compact(compactEvent()).pipe(Effect.result);
+        expect(attempts).toBe(enabled ? 2 : 1);
+        expect(result._tag).toBe(enabled ? "Success" : "Failure");
+        if (enabled) expect(serializedSnapshot(result)).toContain("retried summary");
+      }).pipe(provideBuiltLayer(serviceLayer(target, client, { retryPolicy })));
+    });
 
   for (const mode of ["abort", "failure", "no-cut", "prefix-mismatch"] as const) {
     it.effect(`fails closed on ${mode} with an owned checkpoint`, () => {

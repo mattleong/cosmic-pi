@@ -1,12 +1,14 @@
 import {
   getDeclaredTools,
   normalizeContext,
+  PI_AI_VERSION,
   resolveTranscript,
   type Api,
   type Model,
 } from "@earendil-works/pi-ai";
 import { createGrammarToolInputProperties } from "#pi-ai-constrained-sampling";
 import { convertResponsesMessages } from "#pi-ai-openai-responses-shared";
+import { PI_AI_VERSION as PROJECTION_PI_AI_VERSION } from "#pi-ai-version";
 import {
   convertToLlm,
   sessionEntryToContextMessages,
@@ -25,12 +27,42 @@ import { encodeJson, hasExactPrefix, latestOwnedCheckpoint } from "./context.ts"
 
 const OPENAI_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
 const InputJsonSchema = Schema.fromJsonString(Schema.Array(JsonObjectSchema));
+// Any effort enables pi-ai's per-reply items, which carry each reply's recorded level. Only the
+// trailing item uses this value, and projection drops it because it follows the uncovered tail.
+const COVERED_CONFIGURATION_UPDATE_EFFORT = "medium";
 
 function leadingInstructionCount(input: readonly unknown[]): number {
   const end = input.findIndex(
     (item) => !Predicate.isObject(item) || (item.role !== "system" && item.role !== "developer"),
   );
   return end < 0 ? input.length : end;
+}
+
+/** The pi-ai versions behind Pi's provider requests and behind this projection. */
+export interface PiAiVersions {
+  readonly host: string;
+  readonly projection: string;
+}
+
+// Pi's extension loader aliases only pi-ai's root, `compat`, `models`, `oauth`, and `providers/all`
+// entrypoints, so the `#pi-ai-*` imports of its public `api/*` and `utils/*` subpaths load this
+// package's copy while the root import resolves to Pi's. Their output matches Pi's provider input
+// only when both copies are the same version.
+export const piAiVersions: PiAiVersions = {
+  host: PI_AI_VERSION,
+  projection: PROJECTION_PI_AI_VERSION,
+};
+
+export const projectionMatchesHost = (versions: PiAiVersions): boolean =>
+  versions.host === versions.projection;
+
+const isConfigurationUpdate = Schema.is(
+  Schema.Struct({ type: Schema.Literal("configuration_update") }),
+);
+
+export interface CoveredProjectionOptions {
+  /** Pi's provider sent thinking levels as `configuration_update` items (`supportsMidConvoEffort`). */
+  readonly configurationUpdates?: boolean;
 }
 
 export function isEligibleOpenAICompactionModel(
@@ -74,6 +106,7 @@ const decodeInputJson = decodeUnknownOrUndefined(InputJsonSchema);
 export function projectOpenAIResponseInput(
   model: Model<"openai-responses">,
   entries: readonly SessionEntry[],
+  options: CoveredProjectionOptions = {},
 ): readonly OpenAICompactionJsonObject[] | undefined {
   const flags = compatFlags(model);
   const messages = convertToLlm(entries.flatMap(projectedEntryMessages));
@@ -93,21 +126,29 @@ export function projectOpenAIResponseInput(
       supportsStrictMode: flags.supportsStrictMode,
       supportsOpenAIGrammarTools: flags.supportsOpenAIGrammarTools,
     },
+    ...(options.configurationUpdates && {
+      configurationUpdateEffort: COVERED_CONFIGURATION_UPDATE_EFFORT,
+    }),
   });
   const input = decodeInputJson(encodeJson(converted));
-  return input?.slice(leadingInstructionCount(input));
+  const end =
+    options.configurationUpdates && isConfigurationUpdate(input?.at(-1)) ? -1 : input?.length;
+  return input?.slice(leadingInstructionCount(input), end);
 }
 
 export function injectOpenAICompactionCheckpoint<PayloadInput>(
   payload: PayloadInput,
   checkpoint: OpenAICompactionCheckpoint,
-  coveredInput: readonly OpenAICompactionJsonObject[],
+  projectCovered: (
+    options: CoveredProjectionOptions,
+  ) => readonly OpenAICompactionJsonObject[] | undefined,
 ) {
   if (!Predicate.isObject(payload) || !Array.isArray(payload.input)) return undefined;
   const input: readonly unknown[] = payload.input;
+  const coveredInput = projectCovered({ configurationUpdates: input.some(isConfigurationUpdate) });
   const instructionCount = leadingInstructionCount(input);
   const providerInput = input.slice(instructionCount);
-  if (!hasExactPrefix(providerInput, coveredInput)) return undefined;
+  if (!coveredInput || !hasExactPrefix(providerInput, coveredInput)) return undefined;
   return {
     ...payload,
     input: [

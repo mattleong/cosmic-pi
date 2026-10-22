@@ -1,3 +1,4 @@
+import type { RetryPolicy } from "@earendil-works/pi-ai";
 import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Layer from "effect/Layer";
 import { CodePreviewSchedulerService } from "pi-code-previews";
@@ -28,6 +29,8 @@ export interface OpenAIApplicationLayerOptions {
   readonly fastProjection: MutableRef.MutableRef<FastSnapshot>;
   readonly isUsageVisible: () => boolean;
   readonly onUsageChange: (context: MutableRef.MutableRef<ExtensionContext>) => void;
+  readonly createCheckpoints: boolean;
+  readonly retryPolicy: () => RetryPolicy | undefined;
 }
 
 export const openAIApplicationLayer = (
@@ -59,6 +62,8 @@ export const openAIApplicationLayer = (
     context,
     config: () => MutableRef.get(options.configProjection),
     fastProjection: options.fastProjection,
+    createCheckpoints: options.createCheckpoints,
+    retryPolicy: options.retryPolicy,
   }).pipe(Layer.provide(OpenAICompactionClient.layer(() => MutableRef.get(context).modelRegistry)));
   const platform = Layer.merge(
     nodePlatformLayer,

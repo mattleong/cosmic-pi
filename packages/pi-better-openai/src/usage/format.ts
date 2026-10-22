@@ -4,7 +4,6 @@ import * as Predicate from "effect/Predicate";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import {
-  decodeUnknownOrUndefined,
   formatPercent,
   formatWindowedUsageLine,
   JsonHttpClient,
@@ -13,18 +12,14 @@ import {
 } from "pi-cosmic-core";
 import type { CodexCredentials } from "../auth/codex-auth.ts";
 
-export type UsageScope = "default" | "spark";
 export type UsageSnapshot = {
   capturedAt: number;
-  scope: UsageScope;
   fiveHourLeftPercent: number | null;
   sevenDayLeftPercent: number | null;
   fiveHourResetInSeconds: number | null;
   sevenDayResetInSeconds: number | null;
 };
 export const USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
-const SPARK_MODEL_ID = "gpt-5.3-codex-spark";
-const SPARK_LIMIT_NAME = "GPT-5.3-Codex-Spark";
 
 const MAX_RESET_SECONDS = 366 * 86_400;
 const UsageWindowSchema = Schema.Struct({
@@ -38,36 +33,16 @@ const RateLimitBucketSchema = Schema.Struct({
   primary_window: Schema.optional(Schema.NullOr(UsageWindowSchema)),
   secondary_window: Schema.optional(Schema.NullOr(UsageWindowSchema)),
 });
-const AdditionalEntrySchema = Schema.Struct({
-  limit_name: Schema.optional(Schema.String),
-  rate_limit: Schema.optional(Schema.NullOr(RateLimitBucketSchema)),
-});
 const CodexUsageSchema = Schema.Struct({
   rate_limit: Schema.optional(Schema.NullOr(RateLimitBucketSchema)),
-  additional_rate_limits: Schema.optional(
-    Schema.NullOr(
-      Schema.Union([Schema.Array(Schema.Unknown), Schema.Record(Schema.String, Schema.Unknown)]),
-    ),
-  ),
 });
 export type CodexUsageResponse = typeof CodexUsageSchema.Type;
 type UsageWindow = typeof UsageWindowSchema.Type;
-type RateLimitBucket = typeof RateLimitBucketSchema.Type;
 
 export class CodexUsageError extends Schema.TaggedError<CodexUsageError>()("CodexUsageError", {
   operation: Schema.String,
   message: Schema.String,
 }) {}
-
-const decodeAdditionalEntry = decodeUnknownOrUndefined(AdditionalEntrySchema);
-
-function sparkBucket(data: CodexUsageResponse): RateLimitBucket | null {
-  for (const value of Object.values(data.additional_rate_limits ?? {})) {
-    const entry = decodeAdditionalEntry(value);
-    if (entry?.limit_name === SPARK_LIMIT_NAME && entry.rate_limit) return entry.rate_limit;
-  }
-  return null;
-}
 
 const boundedResetSeconds = (value: number | null | undefined): number | null =>
   Predicate.isNumber(value) && Number.isFinite(value) && value >= 0 && value <= MAX_RESET_SECONDS
@@ -91,23 +66,13 @@ function resetSeconds(window: UsageWindow | null | undefined, now: number): numb
   return boundedResetSeconds(Math.max(0, resetAt - now / 1000));
 }
 
-export const usageScopeForModel = (modelId: string | undefined): UsageScope =>
-  modelId === SPARK_MODEL_ID ? "spark" : "default";
-
-export function parseUsageSnapshot(
-  data: CodexUsageResponse,
-  modelId: string | undefined,
-  now: number,
-): UsageSnapshot {
-  const scope = usageScopeForModel(modelId);
-  const bucket = scope === "spark" ? (sparkBucket(data) ?? data.rate_limit) : data.rate_limit;
-  const primary = bucket?.primary_window ?? null;
-  const secondary = bucket?.secondary_window ?? null;
+export function parseUsageSnapshot(data: CodexUsageResponse, now: number): UsageSnapshot {
+  const primary = data.rate_limit?.primary_window ?? null;
+  const secondary = data.rate_limit?.secondary_window ?? null;
   const fiveHour = secondary ? primary : null;
   const sevenDay = secondary ?? primary;
   return {
     capturedAt: now,
-    scope,
     fiveHourLeftPercent: usedToLeftPercent(fiveHour?.used_percent),
     sevenDayLeftPercent: usedToLeftPercent(sevenDay?.used_percent),
     fiveHourResetInSeconds: resetSeconds(fiveHour, now),
@@ -150,7 +115,7 @@ export function formatUsageDetails(snapshot: UsageSnapshot, now: number): string
 }
 
 export const requestCodexUsageWithCredentials = Effect.fn("CodexUsage.requestWithCredentials")(
-  function* (credentials: CodexCredentials, modelId?: string) {
+  function* (credentials: CodexCredentials) {
     const http = yield* JsonHttpClient;
     const response = yield* http
       .request({
@@ -179,6 +144,6 @@ export const requestCodexUsageWithCredentials = Effect.fn("CodexUsage.requestWit
         message: `Usage request failed with status ${response.status}`,
       });
     const now = yield* Clock.currentTimeMillis;
-    return parseUsageSnapshot(response.body, modelId, now);
+    return parseUsageSnapshot(response.body, now);
   },
 );

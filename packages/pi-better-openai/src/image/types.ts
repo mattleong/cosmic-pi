@@ -42,7 +42,7 @@ export const TOOL_PARAMS = {
     model: {
       ...boundedJsonString(MODEL_MAX_LENGTH),
       description:
-        "Mainline Codex model override, for example openai-codex/gpt-5.5. Use imageModel to select the hosted image model.",
+        "Mainline Codex model override, for example openai-codex/gpt-6.1-sol. Use imageModel to select the hosted image model.",
     },
     imageModel: {
       type: "string",

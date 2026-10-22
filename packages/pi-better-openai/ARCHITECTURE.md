@@ -59,6 +59,12 @@ in-flight usage results and do not wake polling. See [config tests](tests/config
 [config service tests](tests/config-service.test.ts), and
 [fast commit tests](tests/fast-service.test.ts).
 
+Session start, fast toggles, and model switches close the session's pooled Codex
+sockets through Pi's session cleanup registry, never without a session id, so the
+next request reconnects with current routing headers and full context. A busy
+session defers the reset until its next `before_provider_headers`; shutdown drops
+a pending reset. See [transport reset tests](tests/codex-transport-reset.test.ts).
+
 Usage visibility comes from Cosmic UI: hiding it suppresses automatic requests
 and both footer/status output paths, while `/openai usage` remains available.
 Visibility/context changes invalidate pending usage results. Services publish
@@ -68,11 +74,20 @@ without running effects. Shared host rules are in
 
 ## Compaction and transcript authority
 
-[Projection](src/compaction/projection.ts) uses public Pi transcript and Responses
-conversion APIs, with the native provider's tool and grammar options. Projection
-and injection omit the same leading instruction prefix while preserving later
-system updates. Checkpoints live in ordinary branch-local compaction entries with
-typed extension details; the original branch remains navigable.
+[Projection](src/compaction/projection.ts) uses public Pi transcript APIs and
+pi-ai's Responses converters, with the native provider's tool and grammar options.
+Injection also emits per-reply `configuration_update` items when the provider
+payload carries them. Projection and injection omit the same leading instruction
+prefix while preserving later system updates. Checkpoints live in ordinary
+branch-local compaction entries with typed extension details; the original branch
+remains navigable.
+
+Pi's extension loader aliases only pi-ai's root, `compat`, `models`, `oauth`, and
+`providers/all` entrypoints, so the converters' public `api/*` and `utils/*`
+subpaths load this package's pi-ai copy. New checkpoints are created only when
+that copy's `PI_AI_VERSION` equals Pi's; otherwise Pi compacts and Better OpenAI
+warns. Repair and injection still use existing checkpoints, because injection
+replaces only a covered prefix that exactly matches Pi's payload.
 
 [Context reconstruction](src/compaction/context.ts) remains active for an owned
 checkpoint even after compaction is disabled or the model changes. It reconstructs
@@ -93,9 +108,9 @@ the safe alternative. See [context tests](tests/compaction-context.test.ts) and
 
 [Fallback](src/compaction/fallback.ts) prepares native compaction from that same
 reconstructed history through public Pi APIs, preserving tool groups, prior
-ordinary summaries, file operations, auth, and routing. It cancels if no safe cut
-exists or Pi would persist a stale system/tool snapshot that supersedes repair.
-It never hands Pi incomplete preparation. Usage is returned on the native
+ordinary summaries, file operations, auth, routing, and Pi's retry settings. It
+cancels if no safe cut exists or Pi would persist a stale system/tool snapshot that
+supersedes repair. It never hands Pi incomplete preparation. Usage is returned on the native
 compaction result; cost remains Pi's catalog estimate for the captured model.
 See [compaction service tests](tests/compaction-service.test.ts).
 

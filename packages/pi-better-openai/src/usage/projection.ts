@@ -11,7 +11,7 @@ import {
   type UsageProjectionBase,
 } from "pi-cosmic-core";
 import type { ResolvedConfig } from "../config/schema.ts";
-import { usageScopeForModel, type UsageSnapshot } from "./format.ts";
+import type { UsageSnapshot } from "./format.ts";
 
 export interface OpenAIProjection extends UsageProjectionBase<ResolvedConfig, UsageSnapshot> {
   readonly accountId: string | undefined;
@@ -59,10 +59,9 @@ function openAIUsageDecision(
 ): OpenAIUsageDecision {
   try {
     const eligible = state.config ? isOpenAISubscriptionModel(ctx, state.config) : false;
-    const scopeMatches = state.snapshot?.scope === usageScopeForModel(ctx.model?.id);
     return {
       eligible,
-      clearUsage: clearUsageRequested || !scopeMatches,
+      clearUsage: clearUsageRequested,
       statusTexts: { hiddenStatusText: HIDDEN_USAGE_STATUS_TEXT },
     };
   } catch {
@@ -98,7 +97,5 @@ export function visibleStatusLine(
   cfg: ResolvedConfig,
   projection: MutableRef.MutableRef<OpenAIProjection>,
 ): string | undefined {
-  if (!isOpenAISubscriptionModel(ctx, cfg)) return undefined;
-  const state = MutableRef.get(projection);
-  return state.snapshot?.scope === usageScopeForModel(ctx.model?.id) ? state.statusLine : undefined;
+  return isOpenAISubscriptionModel(ctx, cfg) ? MutableRef.get(projection).statusLine : undefined;
 }

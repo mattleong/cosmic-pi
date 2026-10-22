@@ -29,7 +29,7 @@ const details = (status: string, request = prompt): CodexImageDetails => ({
   revisedPrompt: "A soft watercolor painting of an otter reading a folded newspaper at dawn",
   mimeType: image.mimeType,
   savedPath: "/project/.pi/generated-images/openai-image-2026-09-27T10-00-00-000Z-ig_0a1b2c3d.png",
-  model: "gpt-5.5",
+  model: "gpt-6.1-sol",
   imageModel: "gpt-image-2.5-sunburst",
   action: "generate",
   outputFormat: "png",
@@ -46,7 +46,7 @@ const toolScenarios: ReadonlyArray<GalleryScenario> = [
     args,
     phase: "running",
     result: {
-      content: text("Requesting OpenAI image_generation via gpt-5.5…"),
+      content: text("Requesting OpenAI image_generation via gpt-6.1-sol…"),
       details: undefined,
     },
   },

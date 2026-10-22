@@ -94,7 +94,6 @@ export interface UsageRefreshControllerOptions<
     ctx: ExtensionContext,
     clearUsage: boolean,
   ) => Effect.Effect<P, never, UsageProviderRequirements | R>;
-  readonly refreshKeyScope?: ((ctx: ExtensionContext) => string) | undefined;
   readonly fetchOutcome: (args: {
     readonly ctx: ExtensionContext;
   }) => Effect.Effect<
@@ -244,7 +243,6 @@ export const makeUsageRefreshController = <
       const current = yield* state.getState;
       const segments = [
         `${ctx.model?.provider ?? "none"}/${ctx.model?.id ?? "none"}`,
-        ...(options.refreshKeyScope ? [options.refreshKeyScope(ctx)] : []),
         String(options.backgroundEnabled?.() ?? true),
         String(current.config?.usage.showOnlyOnSubscriptionModels ?? true),
       ];

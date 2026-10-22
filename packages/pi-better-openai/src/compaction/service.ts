@@ -2,6 +2,7 @@ import {
   calculateCost,
   getCurrentSystemPrompt,
   type Model,
+  type RetryPolicy,
   type Usage,
 } from "@earendil-works/pi-ai";
 import type {
@@ -94,6 +95,11 @@ interface OpenAICompactionServiceOptions {
   readonly context: MutableRef.MutableRef<ExtensionContext>;
   readonly config: () => ResolvedConfig | undefined;
   readonly fastProjection: MutableRef.MutableRef<FastSnapshot>;
+  // False when this package's pi-ai differs from Pi's, whose payloads its checkpoints might never
+  // match. Existing checkpoints still repair and inject: injection replaces only a covered prefix
+  // that exactly matches Pi's payload.
+  readonly createCheckpoints: boolean;
+  readonly retryPolicy: () => RetryPolicy | undefined;
 }
 
 export class OpenAICompactionService extends Context.Service<OpenAICompactionService>()(
@@ -137,7 +143,7 @@ export class OpenAICompactionService extends Context.Service<OpenAICompactionSer
           event: SessionBeforeCompactEvent,
         ) {
           const config = options.config();
-          if (!config?.compaction.enabled) return undefined;
+          if (!config?.compaction.enabled || !options.createCheckpoints) return undefined;
           const current = yield* readContext(event.willRetry);
           if (!isEligibleOpenAICompactionModel(current.model)) return undefined;
           const anchor = current.branch.at(-1);
@@ -232,10 +238,10 @@ export class OpenAICompactionService extends Context.Service<OpenAICompactionSer
             try: () => {
               const restored = reconstructOpenAIContext(current.branch, observed);
               if (restored?.coverageChanged) return undefined;
-              const covered =
-                restored && projectOpenAIResponseInput(model, restored.coveredEntries);
-              return covered
-                ? injectOpenAICompactionCheckpoint(payload, active, covered)
+              return restored
+                ? injectOpenAICompactionCheckpoint(payload, active, (projection) =>
+                    projectOpenAIResponseInput(model, restored.coveredEntries, projection),
+                  )
                 : undefined;
             },
             catch: () =>
@@ -266,7 +272,12 @@ export class OpenAICompactionService extends Context.Service<OpenAICompactionSer
             });
             if (!preparation)
               return yield* compactionError("context", "No safe compaction boundary is available.");
-            return yield* compactWithPi(MutableRef.get(options.context), event, preparation);
+            return yield* compactWithPi(
+              MutableRef.get(options.context),
+              event,
+              preparation,
+              options.retryPolicy(),
+            );
           });
           if (
             !isEligibleOpenAICompactionModel(ctx.model) ||

@@ -33,7 +33,7 @@ export const DEFAULT_USAGE_CONFIG = {
 export const DEFAULT_COMPACTION_CONFIG = { enabled: false } satisfies ResolvedConfig["compaction"];
 export const DEFAULT_IMAGE_CONFIG = {
   enabled: true,
-  defaultModel: "gpt-5.5",
+  defaultModel: "gpt-6.1-sol",
   defaultSave: "project",
   outputFormat: "png",
   timeoutMs: 180_000,
