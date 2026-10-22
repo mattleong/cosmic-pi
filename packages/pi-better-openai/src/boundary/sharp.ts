@@ -12,7 +12,7 @@ import {
 } from "pi-cosmic-core";
 
 export class SharpError extends Schema.TaggedError<SharpError>()("SharpError", {
-  operation: Schema.String,
+  operation: Schema.Literals(["decode"]),
   message: Schema.String,
 }) {}
 
@@ -33,8 +33,21 @@ const decodeMetadata = Schema.decodeUnknownEffect(metadataSchema, { onExcessProp
 const decodeError = () =>
   new SharpError({ operation: "decode", message: "Image data is not readable." });
 
-const admission = Semaphore.makeUnsafe(1);
-const disabled = MutableRef.make(false);
+/**
+ * One decoder runs at a time, and a decoder whose cleanup was unconfirmed disables decoding,
+ * because its child may still hold resources. Production adapters share one process-wide admission.
+ */
+export interface SharpAdmission {
+  readonly permit: Semaphore.Semaphore;
+  readonly disabled: MutableRef.MutableRef<boolean>;
+}
+
+export const createSharpAdmission = (): SharpAdmission => ({
+  permit: Semaphore.makeUnsafe(1),
+  disabled: MutableRef.make(false),
+});
+
+const processAdmission = createSharpAdmission();
 
 export type SharpProcessRunner = (
   bytes: Uint8Array,
@@ -54,7 +67,10 @@ const runDecoder: SharpProcessRunner = (bytes, onCleanup) =>
     onCleanup,
   });
 
-export const makeSharpAdapter = (run: SharpProcessRunner = runDecoder): SharpAdapterContract => ({
+export const makeSharpAdapter = (
+  run: SharpProcessRunner = runDecoder,
+  { permit, disabled }: SharpAdmission = processAdmission,
+): SharpAdapterContract => ({
   decode: (bytes) =>
     bytes.byteLength > maximumInputBytes || bytes.byteLength === 0
       ? Effect.fail(decodeError())
@@ -89,7 +105,7 @@ export const makeSharpAdapter = (run: SharpProcessRunner = runDecoder): SharpAda
             return yield* decodeError();
           return yield* decodeMetadata(result.stdout);
         }).pipe(
-          admission.withPermitsIfAvailable(1),
+          permit.withPermitsIfAvailable(1),
           Effect.flatMap((result) => Effect.fromOption(result)),
           Effect.mapError(decodeError),
         ),

@@ -49,6 +49,12 @@ the host. See [compaction lifecycle tests](tests/compaction-lifecycle.test.ts),
 mode commit through it; images and compaction read its dedicated configuration
 projection. Usage registers a scoped observer under the configuration update gate
 before starting polling, so initialization cannot miss a concurrent change.
+The [usage controller](src/usage/controller.ts) is the only writer of the usage projection,
+including context changes, and installs configuration updates through core's
+subscription refresh gate. Lock order is configuration, then document, then
+refresh; refresh commits never acquire configuration or document locks.
+Publication authority is checked beside each host callback, so a late refresh
+cannot restore a retired view. See [usage controller tests](tests/usage-controller.test.ts).
 Project configuration requires explicit trust, and writes preserve unknown JSON
 fields. A durable fast transition commits its document, private state, and
 synchronous projection together through the store's `afterCommit` region, without
@@ -67,7 +73,9 @@ a pending reset. See [transport reset tests](tests/codex-transport-reset.test.ts
 
 Usage visibility comes from Cosmic UI: hiding it suppresses automatic requests
 and both footer/status output paths, while `/openai usage` remains available.
-Visibility/context changes invalidate pending usage results. Services publish
+Visibility/context changes invalidate pending usage results. The usage service
+remembers the last visibility the host observed, and clears or refetches at once
+when it changes; footer rendering only reads it. Services publish
 immutable snapshots; synchronous renderers and provider hooks read those snapshots
 without running effects. Shared host rules are in
 [Pi boundaries](../../docs/architecture/pi-boundaries.md).

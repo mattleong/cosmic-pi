@@ -9,7 +9,7 @@ import * as Path from "effect/Path";
 import * as Result from "effect/Result";
 import { nodeFilePlatformLayer, runBoundedProcessNode } from "pi-cosmic-core";
 import sharp from "sharp";
-import { makeSharpAdapter } from "../src/boundary/sharp.ts";
+import { createSharpAdmission, makeSharpAdapter } from "../src/boundary/sharp.ts";
 
 const nativeProcess = process.getBuiltinModule("node:child_process");
 if (!nativeProcess) throw new Error("Node child_process builtin unavailable.");
@@ -116,12 +116,14 @@ it.live("cancellation confirms forced child exit before releasing shared admissi
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const marker = yield* makeMarker;
-    const adapter = makeSharpAdapter((_bytes, onCleanup) =>
-      fixtureRunner(marker, 10_000, onCleanup),
+    const admission = createSharpAdmission();
+    const adapter = makeSharpAdapter(
+      (_bytes, onCleanup) => fixtureRunner(marker, 10_000, onCleanup),
+      admission,
     );
     const pending = yield* adapter.decode(png).pipe(Effect.forkScoped);
     const pid = yield* ownPid(marker);
-    const next = makeSharpAdapter();
+    const next = makeSharpAdapter(undefined, admission);
     expect(Result.isFailure(yield* next.decode(png).pipe(Effect.result))).toBe(true);
     yield* Fiber.interrupt(pending);
     expect(yield* fs.readFileString(marker)).toContain("SIGTERM");
@@ -133,8 +135,10 @@ it.live("cancellation confirms forced child exit before releasing shared admissi
 it.live("failed native cancellation cannot admit another decoder while its child survives", () =>
   Effect.gen(function* () {
     const marker = yield* makeMarker;
-    const adapter = makeSharpAdapter((_bytes, onCleanup) =>
-      fixtureRunner(marker, 10_000, onCleanup),
+    const admission = createSharpAdmission();
+    const adapter = makeSharpAdapter(
+      (_bytes, onCleanup) => fixtureRunner(marker, 10_000, onCleanup),
+      admission,
     );
     const pending = yield* adapter.decode(png).pipe(Effect.forkScoped);
     const pid = yield* ownPid(marker);
@@ -164,7 +168,7 @@ it.live("failed native cancellation cannot admit another decoder while its child
     const next = makeSharpAdapter(() => {
       spawned = true;
       return Effect.die("must not dispatch");
-    });
+    }, admission);
     expect(Result.isFailure(yield* next.decode(png).pipe(Effect.result))).toBe(true);
     expect(spawned).toBe(false);
     expect(otherChildKills).toEqual([]);

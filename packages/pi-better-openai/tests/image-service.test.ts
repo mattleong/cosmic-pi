@@ -6,8 +6,9 @@ import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import { AgentDirectory, nodePlatformLayer, provideBuiltLayer, SafeFile } from "pi-cosmic-core";
+import { AgentDirectory, nodePlatformLayer, SafeFile } from "pi-cosmic-core";
 import {
+  provideBuiltLayer,
   streamingHttpResponse,
   streamingHttpTestLayer,
   type StreamingHttpTestRequest,

@@ -6,8 +6,13 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
-import { AgentDirectory, provideBuiltLayer } from "pi-cosmic-core";
-import { jsonHttpTestLayer, makeInMemoryDocuments, yieldUntil } from "pi-cosmic-core/testing";
+import { AgentDirectory } from "pi-cosmic-core";
+import {
+  jsonHttpTestLayer,
+  makeInMemoryDocuments,
+  provideBuiltLayer,
+  yieldUntil,
+} from "pi-cosmic-core/testing";
 import { FastModeService } from "../src/fast/service.ts";
 import { initialFastSnapshot, type FastSnapshot } from "../src/fast/controller.ts";
 import { OpenAIUsageService } from "../src/usage/controller.ts";

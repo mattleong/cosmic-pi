@@ -43,7 +43,7 @@ for (const failure of ["typed", "defect"] as const) {
           admitted.resolve(undefined);
           return foreign.promise;
         },
-        catch: () => new OpenAIBoundaryError({ operation: "test", message: "unavailable" }),
+        catch: () => new OpenAIBoundaryError({ operation: "runtime", message: "unavailable" }),
       });
       const command =
         failure === "typed" ? request : request.pipe(Effect.catch(() => Effect.die("defect")));

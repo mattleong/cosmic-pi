@@ -5,8 +5,8 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
-import { AgentDirectory, provideBuiltLayer } from "pi-cosmic-core";
-import { makeInMemoryDocuments } from "pi-cosmic-core/testing";
+import { AgentDirectory } from "pi-cosmic-core";
+import { makeInMemoryDocuments, provideBuiltLayer } from "pi-cosmic-core/testing";
 import type { ResolvedConfig } from "../src/config/schema.ts";
 import { OpenAIConfigService } from "../src/config/store.ts";
 

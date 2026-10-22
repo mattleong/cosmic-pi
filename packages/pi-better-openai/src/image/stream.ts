@@ -7,7 +7,7 @@ import * as Stream from "effect/Stream";
 import * as Sse from "effect/encoding/Sse";
 import { sanitizeDiagnosticError, type StreamingHttpError } from "pi-cosmic-core";
 import { decodeImageStreamEvent } from "./protocol.ts";
-import { OpenAIImageError, fail, type ExtractedImageResult } from "./types.ts";
+import { fail, type ExtractedImageResult, type OpenAIImageError } from "./types.ts";
 
 const MAX_IMAGE_RESPONSE_BYTES = 100 * 1024 * 1024;
 const MAX_SSE_EVENT_CHARS = 80 * 1024 * 1024;
@@ -90,10 +90,8 @@ export const parseImageSse = Effect.fn("OpenAIImage.parseSse")(function* (
   );
   yield* bounded.pipe(
     Stream.runForEachWhile(feed),
-    Effect.mapError((error) =>
-      error instanceof OpenAIImageError
-        ? error
-        : fail("stream", "Codex image response stream failed."),
+    Effect.catchTag("StreamingHttpError", () =>
+      Effect.fail(fail("stream", "Codex image response stream failed.")),
     ),
   );
   if (!completed && !providerFailure && !terminated) yield* feed("\n\n");

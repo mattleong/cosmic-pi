@@ -44,7 +44,7 @@ import {
 } from "./compaction/projection.ts";
 import { decodeOpenAICompactionDetails } from "./compaction/protocol.ts";
 import { OpenAICompactionService } from "./compaction/service.ts";
-import type { OpenAIConfigError } from "./config/store.ts";
+import { OpenAIConfigService, type OpenAIConfigError } from "./config/store.ts";
 import type { ResolvedConfig } from "./config/schema.ts";
 import {
   fastDebugLines,
@@ -144,10 +144,9 @@ export function betterOpenAIWithDependencies(
     throw sessionNotStarted("config");
   };
   const setStatus = makeSetStatusSafely("better-openai");
-  let usageVisible = true;
   const clearUsageForNewContext = OpenAIUsageService.use((service) => service.contextChanged(true));
   const refreshUsage = OpenAIUsageService.use((service) => service.refresh({ force: true }));
-  const refreshForNewContext = clearUsageForNewContext.pipe(Effect.andThen(refreshUsage));
+  const syncUsageVisibility = OpenAIUsageService.use((service) => service.visibilityChanged());
   const isUsageVisible = () => {
     cosmicUi.query();
     return cosmicUi.isVisible("openai.usage");
@@ -156,11 +155,10 @@ export function betterOpenAIWithDependencies(
     const ctx = currentContext ? MutableRef.get(currentContext) : fallback;
     const cfg = MutableRef.get(configProjection);
     if (!cfg) return;
-    const nextUsageVisible = isUsageVisible();
     const fast = cosmicUi.isVisible("openai.fast")
       ? fastModeFooterPrimitive(ctx, MutableRef.get(fastProjection))
       : undefined;
-    const usage = nextUsageVisible ? openAIUsageFooterPrimitive(ctx, cfg, projection) : undefined;
+    const usage = isUsageVisible() ? openAIUsageFooterPrimitive(ctx, cfg, projection) : undefined;
     if (hasTerminalUI(ctx) && cosmicUi.installed) {
       if (fast) cosmicUi.upsert(fast);
       else cosmicUi.remove("openai.fast");
@@ -175,17 +173,18 @@ export function betterOpenAIWithDependencies(
             .filter(Boolean)
             .join(" | ") || undefined,
     );
-    if (usageVisible !== nextUsageVisible) {
-      usageVisible = nextUsageVisible;
-      slot.fork(refreshForNewContext);
-    }
+  };
+  /** Renders, then lets the usage service react if the render found usage shown or hidden. */
+  const renderFooter = (ctx: ExtensionContext) => {
+    updateFooter(ctx);
+    slot.fork(syncUsageVisibility);
   };
   const refreshFooter = (ctx: ExtensionContext) => {
     updateContext(ctx);
-    updateFooter(ctx);
+    renderFooter(ctx);
   };
   const cosmicUiWatch = createHostStateWatch(cosmicUi, () => {
-    if (currentContext) updateFooter(MutableRef.get(currentContext));
+    if (currentContext) renderFooter(MutableRef.get(currentContext));
   });
 
   const slot = makePiSessionRuntimeSlot<
@@ -220,7 +219,8 @@ export function betterOpenAIWithDependencies(
           loadPreviewSettings(cwd, projectTrusted, signal),
         );
         const fast = yield* FastModeService;
-        yield* fast.initialize(ctx, config(), pi.getFlag(FAST_ID) === true);
+        const configService = yield* OpenAIConfigService;
+        yield* fast.initialize(ctx, yield* configService.get, pi.getFlag(FAST_ID) === true);
         return {
           injectionIngress: fast.recordInjection,
           scheduler: yield* CodePreviewSchedulerService,
@@ -244,7 +244,7 @@ export function betterOpenAIWithDependencies(
       });
       replay.publish();
       cosmicUiWatch.start();
-      updateFooter(ctx);
+      renderFooter(ctx);
       const fast = MutableRef.get(fastProjection);
       if (fast.desiredActive) notifyFastState(ctx, fast);
     },
@@ -461,7 +461,7 @@ export function betterOpenAIWithDependencies(
     // model's usage visible. Only the network refresh that follows it is.
     const cleared = slot.fork(clearUsageForNewContext);
     if (cleared) slot.fork(Fiber.join(cleared).pipe(Effect.andThen(refreshUsage)), signal);
-    updateFooter(ctx);
+    renderFooter(ctx);
     const fast = MutableRef.get(fastProjection);
     const active = isFastActive(ctx, fast);
     if (active !== before)

@@ -36,26 +36,22 @@ export const imageDetails = ({ data: _data, ...details }: CodexImageResult): Cod
   details;
 
 const structuredImageResult = (result: CodexImageResult): Schema.Json | undefined => {
-  try {
-    const encoded = encode({
-      contract: "pi-better-openai/image",
-      version: 1,
-      tool: "openai_image",
-      id: result.id,
-      status: result.status,
-      prompt: result.prompt,
-      ...(result.revisedPrompt !== undefined && { revisedPrompt: result.revisedPrompt }),
-      ...(result.savedPath !== undefined && { savedPath: result.savedPath }),
-      model: result.model,
-      ...(result.imageModel !== undefined && { imageModel: result.imageModel }),
-      action: result.action,
-      outputFormat: result.outputFormat,
-      image: { type: "image", data: result.data, mimeType: result.mimeType },
-    });
-    return Exit.isSuccess(encoded) ? encoded.value : undefined;
-  } catch {
-    return undefined;
-  }
+  const encoded = encode({
+    contract: "pi-better-openai/image",
+    version: 1,
+    tool: "openai_image",
+    id: result.id,
+    status: result.status,
+    prompt: result.prompt,
+    ...(result.revisedPrompt !== undefined && { revisedPrompt: result.revisedPrompt }),
+    ...(result.savedPath !== undefined && { savedPath: result.savedPath }),
+    model: result.model,
+    ...(result.imageModel !== undefined && { imageModel: result.imageModel }),
+    action: result.action,
+    outputFormat: result.outputFormat,
+    image: { type: "image", data: result.data, mimeType: result.mimeType },
+  });
+  return Exit.isSuccess(encoded) ? encoded.value : undefined;
 };
 
 export const imageToolResult = (result: CodexImageResult): AgentToolResult<CodexImageDetails> => {

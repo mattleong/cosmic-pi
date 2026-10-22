@@ -22,33 +22,37 @@ export const piRetryPolicy = (pi: Pick<ExtensionAPI, "getSettings">) =>
     undefined,
   );
 
-export const compactWithPi = Effect.fn("BetterOpenAI.compactWithPi")(
-  (
-    ctx: ExtensionContext,
-    event: SessionBeforeCompactEvent,
-    preparation: SessionBeforeCompactEvent["preparation"],
-    retry: RetryPolicy | undefined,
-  ) =>
-    Effect.tryPromise({
-      try: (signal) => {
-        if (!ctx.model || event.signal.aborted || signal.aborted)
-          return Promise.reject(new Error("Compaction unavailable."));
-        return compact(
-          preparation,
-          ctx.model,
-          undefined,
-          undefined,
-          event.customInstructions,
-          signal,
-          ctx.thinkingLevel,
-          (model, context, options) => ctx.modelRegistry.streamSimple(model, context, options),
-          undefined,
-          retry,
-          undefined,
-          ctx.sessionManager.getSessionId(),
-        );
-      },
-      catch: () =>
-        new NativeCompactionError({ message: "Unable to compact the restored Pi conversation." }),
-    }),
-);
+const compactionUnavailable = () =>
+  new NativeCompactionError({ message: "Unable to compact the restored Pi conversation." });
+
+export const compactWithPi = Effect.fn("BetterOpenAI.compactWithPi")(function* (
+  ctx: ExtensionContext,
+  event: SessionBeforeCompactEvent,
+  preparation: SessionBeforeCompactEvent["preparation"],
+  retry: RetryPolicy | undefined,
+) {
+  // Preconditions fail as typed errors before any host Promise starts.
+  const compactionModel = yield* Effect.try({
+    try: () => (event.signal.aborted ? undefined : ctx.model),
+    catch: compactionUnavailable,
+  });
+  if (!compactionModel) return yield* compactionUnavailable();
+  return yield* Effect.tryPromise({
+    try: (signal) =>
+      compact(
+        preparation,
+        compactionModel,
+        undefined,
+        undefined,
+        event.customInstructions,
+        signal,
+        ctx.thinkingLevel,
+        (model, context, options) => ctx.modelRegistry.streamSimple(model, context, options),
+        undefined,
+        retry,
+        undefined,
+        ctx.sessionManager.getSessionId(),
+      ),
+    catch: compactionUnavailable,
+  });
+});

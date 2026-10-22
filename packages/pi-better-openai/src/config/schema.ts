@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import type { ScopedConfigMetadata, SubscriptionUsageConfig } from "pi-cosmic-core";
+import type { ScopedConfigMetadata } from "pi-cosmic-core";
 
 export const CONFIG_BASENAME = "pi-better-openai.json";
 export const IMAGE_SAVE_MODES = ["none", "project", "global", "custom"] as const;
@@ -11,10 +11,16 @@ export const ImageOutputFormatSchema = Schema.Literals(IMAGE_OUTPUT_FORMATS);
 export type ImageSaveMode = typeof ImageSaveModeSchema.Type;
 export type ImageOutputFormat = typeof ImageOutputFormatSchema.Type;
 
+export interface UsageConfig {
+  readonly refreshIntervalMs: number;
+  readonly showOnlyOnSubscriptionModels: boolean;
+  readonly showResetTimes: boolean;
+}
+
 export interface ResolvedConfig extends ScopedConfigMetadata {
   persistState: boolean;
   desiredActive: boolean;
-  usage: SubscriptionUsageConfig;
+  usage: UsageConfig;
   compaction: { enabled: boolean };
   image: {
     enabled: boolean;

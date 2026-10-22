@@ -22,7 +22,7 @@ const JwtPayloadFromJsonSchema = Schema.fromJsonString(
 );
 
 export class CodexAuthError extends Schema.TaggedError<CodexAuthError>()("CodexAuthError", {
-  operation: Schema.String,
+  operation: Schema.Literals(["registry", "registry-decode"]),
   message: Schema.String,
 }) {}
 export type CodexCredentials = {

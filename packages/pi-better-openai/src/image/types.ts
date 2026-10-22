@@ -108,10 +108,26 @@ export type ExtractedImageResult = Omit<
   "prompt" | "savedPath" | "model" | "imageModel" | "action" | "outputFormat"
 >;
 
+const OpenAIImageOperationSchema = Schema.Literals([
+  "auth",
+  "config",
+  "context",
+  "input",
+  "params",
+  "request",
+  "response",
+  "save",
+  "sharp",
+  "stream",
+  "timeout",
+]);
+type OpenAIImageOperation = typeof OpenAIImageOperationSchema.Type;
+
 export class OpenAIImageError extends Schema.TaggedError<OpenAIImageError>()("OpenAIImageError", {
-  operation: Schema.String,
+  operation: OpenAIImageOperationSchema,
   message: Schema.String,
 }) {}
-export const fail = (operation: string, message: string) =>
+export const fail = (operation: OpenAIImageOperation, message: string) =>
   new OpenAIImageError({ operation, message });
-export const failWith = (operation: string, message: string) => () => fail(operation, message);
+export const failWith = (operation: OpenAIImageOperation, message: string) => () =>
+  fail(operation, message);

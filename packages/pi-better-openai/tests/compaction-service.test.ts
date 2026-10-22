@@ -25,8 +25,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Schema from "effect/Schema";
-import { provideBuiltLayer } from "pi-cosmic-core";
-import { extensionContextFixture } from "pi-cosmic-core/testing";
+import { extensionContextFixture, provideBuiltLayer } from "pi-cosmic-core/testing";
 import {
   OpenAICompactionBoundaryError,
   OpenAICompactionClient,

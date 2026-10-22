@@ -5,13 +5,16 @@ import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import type { BoundedProcessResult } from "pi-cosmic-core";
 import {
+  createSharpAdmission,
   makeSharpAdapter as makeOwnedSharpAdapter,
   type SharpProcessRunner,
 } from "../src/boundary/sharp.ts";
 
-const makeSharpAdapter = (run: SharpProcessRunner) =>
-  makeOwnedSharpAdapter((bytes, onCleanup) =>
-    run(bytes, onCleanup).pipe(Effect.ensuring(Effect.sync(() => onCleanup(true)))),
+const makeSharpAdapter = (run: SharpProcessRunner, admission = createSharpAdmission()) =>
+  makeOwnedSharpAdapter(
+    (bytes, onCleanup) =>
+      run(bytes, onCleanup).pipe(Effect.ensuring(Effect.sync(() => onCleanup(true)))),
+    admission,
   );
 
 const bytes = new Uint8Array([1, 2, 3]);
@@ -57,17 +60,20 @@ it.effect(
       const closing = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
       let reused = false;
-      const first = makeSharpAdapter(() =>
-        Effect.scoped(
-          Effect.acquireRelease(Deferred.succeed(started, undefined), () =>
-            Deferred.succeed(closing, undefined).pipe(Effect.andThen(Deferred.await(release))),
-          ).pipe(Effect.andThen(Effect.never)),
-        ),
+      const admission = createSharpAdmission();
+      const first = makeSharpAdapter(
+        () =>
+          Effect.scoped(
+            Effect.acquireRelease(Deferred.succeed(started, undefined), () =>
+              Deferred.succeed(closing, undefined).pipe(Effect.andThen(Deferred.await(release))),
+            ).pipe(Effect.andThen(Effect.never)),
+          ),
+        admission,
       );
       const second = makeSharpAdapter(() => {
         reused = true;
         return Effect.succeed(success);
-      });
+      }, admission);
       const fiber = yield* first.decode(bytes).pipe(Effect.forkScoped);
       yield* Deferred.await(started);
       expect((yield* second.decode(bytes).pipe(Effect.result))._tag).toBe("Failure");
@@ -84,11 +90,14 @@ it.effect(
 it.effect("disables all subsequent adapters after unconfirmed cleanup", () =>
   Effect.gen(function* () {
     const started = yield* Deferred.make<void>();
-    const failed = makeOwnedSharpAdapter((_bytes, onCleanup) =>
-      Deferred.succeed(started, undefined).pipe(
-        Effect.andThen(Effect.never),
-        Effect.ensuring(Effect.sync(() => onCleanup(false))),
-      ),
+    const admission = createSharpAdmission();
+    const failed = makeOwnedSharpAdapter(
+      (_bytes, onCleanup) =>
+        Deferred.succeed(started, undefined).pipe(
+          Effect.andThen(Effect.never),
+          Effect.ensuring(Effect.sync(() => onCleanup(false))),
+        ),
+      admission,
     );
     const pending = yield* failed.decode(bytes).pipe(Effect.forkScoped);
     yield* Deferred.await(started);
@@ -97,7 +106,7 @@ it.effect("disables all subsequent adapters after unconfirmed cleanup", () =>
     const next = makeSharpAdapter(() => {
       spawned = true;
       return Effect.succeed(success);
-    });
+    }, admission);
     expect((yield* next.decode(bytes).pipe(Effect.result))._tag).toBe("Failure");
     expect(spawned).toBe(false);
   }),
