@@ -56,7 +56,13 @@ export const imageOutput = (dependencies: {
     if (!bytes) return yield* fail("response", "Codex returned invalid image base64.");
     const metadata = yield* sharp
       .decode(bytes)
-      .pipe(Effect.mapError(failWith("response", "Codex returned unreadable image data.")));
+      .pipe(
+        Effect.mapError((error) =>
+          error.operation === "unavailable"
+            ? fail("sharp", error.message)
+            : fail("response", "Codex returned unreadable image data."),
+        ),
+      );
     const expected = imageOutputMetadata(outputFormat);
     const actual = metadata.format === "jpg" ? "jpeg" : metadata.format;
     if (actual !== expected.sharpFormat)

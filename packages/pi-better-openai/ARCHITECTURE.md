@@ -136,10 +136,11 @@ interruption, and lost verification.
 [one-shot decoder](src/boundary/sharp-decoder.mjs), through core's bounded process
 runner with a fixed executable/helper and no shell or caller-supplied environment.
 It fully decodes animation pages under byte/pixel/output limits; only bounded,
-schema-decoded format metadata returns. One process-wide immediate permit rejects
-busy calls instead of queuing image buffers and remains held through cleanup.
-Decoding stays disabled after unconfirmed child exit, including partial spawn:
-scope success or a successful kill request is not proof of termination. Deadlines
+schema-decoded format metadata returns. One process-wide permit serializes decoders;
+concurrent calls wait interruptibly, bounded by the caller's tool timeout or abort,
+and the permit remains held through cleanup. Decoding stays disabled, with a distinct
+unavailable error, after unconfirmed child exit, including partial spawn: scope
+success or a successful kill request is not proof of termination. Deadlines
 and process isolation are neither an OS memory sandbox nor an unconditional
 shutdown deadline. See [adapter tests](tests/sharp.test.ts) and
 [real-process tests](tests/sharp-process.test.ts).

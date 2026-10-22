@@ -52,39 +52,87 @@ for (const patch of [
   );
 }
 
-it.effect(
-  "shares immediate admission between adapters and retains it through cancelled cleanup",
-  () =>
-    Effect.gen(function* () {
-      const started = yield* Deferred.make<void>();
-      const closing = yield* Deferred.make<void>();
-      const release = yield* Deferred.make<void>();
-      let reused = false;
-      const admission = createSharpAdmission();
-      const first = makeSharpAdapter(
-        () =>
-          Effect.scoped(
-            Effect.acquireRelease(Deferred.succeed(started, undefined), () =>
-              Deferred.succeed(closing, undefined).pipe(Effect.andThen(Deferred.await(release))),
-            ).pipe(Effect.andThen(Effect.never)),
-          ),
-        admission,
+it.effect("queues concurrent decodes on shared admission held through cancelled cleanup", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    const finish = yield* Deferred.make<void>();
+    let running = 0;
+    let overlapped = false;
+    const admission = createSharpAdmission();
+    const runner: SharpProcessRunner = () =>
+      Effect.sync(() => {
+        running++;
+        if (running > 1) overlapped = true;
+      }).pipe(
+        Effect.andThen(Deferred.succeed(started, undefined)),
+        Effect.andThen(Deferred.await(finish)),
+        Effect.as(success),
+        Effect.ensuring(Effect.sync(() => running--)),
       );
-      const second = makeSharpAdapter(() => {
-        reused = true;
-        return Effect.succeed(success);
-      }, admission);
-      const fiber = yield* first.decode(bytes).pipe(Effect.forkScoped);
-      yield* Deferred.await(started);
-      expect((yield* second.decode(bytes).pipe(Effect.result))._tag).toBe("Failure");
-      const interruption = yield* Fiber.interrupt(fiber).pipe(Effect.forkScoped);
-      yield* Deferred.await(closing);
-      expect((yield* second.decode(bytes).pipe(Effect.result))._tag).toBe("Failure");
-      expect(reused).toBe(false);
-      yield* Deferred.succeed(release, undefined);
-      yield* Fiber.join(interruption);
-      expect(yield* second.decode(bytes)).toEqual({ format: "png" });
-    }),
+    const first = yield* makeSharpAdapter(runner, admission).decode(bytes).pipe(Effect.forkScoped);
+    yield* Deferred.await(started);
+    const second = yield* makeSharpAdapter(runner, admission).decode(bytes).pipe(Effect.forkScoped);
+    yield* Deferred.succeed(finish, undefined);
+    expect(yield* Fiber.join(first)).toEqual({ format: "png" });
+    expect(yield* Fiber.join(second)).toEqual({ format: "png" });
+    expect(overlapped).toBe(false);
+
+    const closing = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const blockedStart = yield* Deferred.make<void>();
+    let reused = false;
+    const cancelled = yield* makeSharpAdapter(
+      () =>
+        Effect.scoped(
+          Effect.acquireRelease(Deferred.succeed(blockedStart, undefined), () =>
+            Deferred.succeed(closing, undefined).pipe(Effect.andThen(Deferred.await(release))),
+          ).pipe(Effect.andThen(Effect.never)),
+        ),
+      admission,
+    )
+      .decode(bytes)
+      .pipe(Effect.forkScoped);
+    yield* Deferred.await(blockedStart);
+    const waiting = yield* makeSharpAdapter(() => {
+      reused = true;
+      return Effect.succeed(success);
+    }, admission)
+      .decode(bytes)
+      .pipe(Effect.forkScoped);
+    const interruption = yield* Fiber.interrupt(cancelled).pipe(Effect.forkScoped);
+    yield* Deferred.await(closing);
+    yield* Effect.yieldNow;
+    expect(reused).toBe(false);
+    yield* Deferred.succeed(release, undefined);
+    yield* Fiber.join(interruption);
+    expect(yield* Fiber.join(waiting)).toEqual({ format: "png" });
+    expect(reused).toBe(true);
+  }),
+);
+
+it.effect("lets a waiting decode be interrupted without running", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    const admission = createSharpAdmission();
+    let spawned = false;
+    const holder = yield* makeSharpAdapter(
+      () => Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+      admission,
+    )
+      .decode(bytes)
+      .pipe(Effect.forkScoped);
+    yield* Deferred.await(started);
+    const waiting = yield* makeSharpAdapter(() => {
+      spawned = true;
+      return Effect.succeed(success);
+    }, admission)
+      .decode(bytes)
+      .pipe(Effect.forkScoped);
+    yield* Effect.yieldNow;
+    yield* Fiber.interrupt(waiting);
+    yield* Fiber.interrupt(holder);
+    expect(spawned).toBe(false);
+  }),
 );
 
 it.effect("disables all subsequent adapters after unconfirmed cleanup", () =>
@@ -107,7 +155,9 @@ it.effect("disables all subsequent adapters after unconfirmed cleanup", () =>
       spawned = true;
       return Effect.succeed(success);
     }, admission);
-    expect((yield* next.decode(bytes).pipe(Effect.result))._tag).toBe("Failure");
+    expect(yield* next.decode(bytes).pipe(Effect.flip)).toMatchObject({
+      operation: "unavailable",
+    });
     expect(spawned).toBe(false);
   }),
 );

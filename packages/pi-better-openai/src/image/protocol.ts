@@ -13,11 +13,11 @@ import {
 
 const ImageGenerationItemSchema = Schema.Struct({
   type: Schema.Literal("image_generation_call"),
-  id: Schema.optional(Schema.String),
-  status: Schema.optional(Schema.String),
-  revised_prompt: Schema.optional(Schema.String),
-  result: Schema.optional(Schema.String),
-  b64_json: Schema.optional(Schema.String),
+  id: Schema.optional(Schema.NullOr(Schema.String)),
+  status: Schema.optional(Schema.NullOr(Schema.String)),
+  revised_prompt: Schema.optional(Schema.NullOr(Schema.String)),
+  result: Schema.optional(Schema.NullOr(Schema.String)),
+  b64_json: Schema.optional(Schema.NullOr(Schema.String)),
 });
 const OutputItemDoneSchema = Schema.Struct({
   type: Schema.Literal("response.output_item.done"),
@@ -29,18 +29,20 @@ const CompletedEventSchema = Schema.Struct({
 });
 const PartialEventSchema = Schema.Struct({
   type: Schema.optional(Schema.String),
-  partial_image_b64: Schema.optional(Schema.String),
-  b64_json: Schema.optional(Schema.String),
+  partial_image_b64: Schema.optional(Schema.NullOr(Schema.String)),
+  b64_json: Schema.optional(Schema.NullOr(Schema.String)),
 });
 const FailedEventSchema = Schema.Struct({
   type: Schema.Literal("response.failed"),
   response: Schema.Struct({
-    error: Schema.optional(Schema.Struct({ message: Schema.optional(Schema.String) })),
+    error: Schema.optional(
+      Schema.NullOr(Schema.Struct({ message: Schema.optional(Schema.NullOr(Schema.String)) })),
+    ),
   }),
 });
 const ProviderErrorEventSchema = Schema.Struct({
   type: Schema.Literal("error"),
-  message: Schema.optional(Schema.String),
+  message: Schema.optional(Schema.NullOr(Schema.String)),
 });
 const IgnoredEventSchema = Schema.Struct({ type: Schema.String });
 const EventDiscriminantSchema = Schema.Struct({ type: Schema.optional(Schema.String) });
@@ -49,6 +51,7 @@ type ImageGenerationItem = typeof ImageGenerationItemSchema.Type;
 
 export type ImageStreamEvent = Data.TaggedEnum<{
   Image: { readonly image: ExtractedImageResult };
+  ImageFailed: Record<never, never>;
   ResponseFailed: { readonly message: string };
   ProviderError: { readonly message: string };
   Ignored: Record<never, never>;
@@ -70,6 +73,7 @@ const normalizeImageItem = (
   fallbackMimeType: string,
   fallbackId: string,
 ): ImageStreamEvent => {
+  if (item.status === "failed") return ImageStreamEvent.ImageFailed();
   const raw = item.result?.trim() ? item.result : item.b64_json;
   if (!raw) return ignoredEvent;
   const base = {
@@ -78,8 +82,9 @@ const normalizeImageItem = (
     ...imageData(raw, fallbackMimeType),
   };
   return ImageStreamEvent.Image({
-    image:
-      item.revised_prompt === undefined ? base : { ...base, revisedPrompt: item.revised_prompt },
+    image: Predicate.isNullish(item.revised_prompt)
+      ? base
+      : { ...base, revisedPrompt: item.revised_prompt },
   });
 };
 

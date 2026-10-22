@@ -12,7 +12,7 @@ import {
 } from "pi-cosmic-core";
 
 export class SharpError extends Schema.TaggedError<SharpError>()("SharpError", {
-  operation: Schema.Literals(["decode"]),
+  operation: Schema.Literals(["decode", "unavailable"]),
   message: Schema.String,
 }) {}
 
@@ -32,10 +32,17 @@ const metadataSchema = Schema.fromJsonString(
 const decodeMetadata = Schema.decodeUnknownEffect(metadataSchema, { onExcessProperty: "error" });
 const decodeError = () =>
   new SharpError({ operation: "decode", message: "Image data is not readable." });
+const unavailableError = () =>
+  new SharpError({
+    operation: "unavailable",
+    message:
+      "Image decoding is disabled until Pi restarts: a previous decoder did not confirm exit.",
+  });
 
 /**
- * One decoder runs at a time, and a decoder whose cleanup was unconfirmed disables decoding,
- * because its child may still hold resources. Production adapters share one process-wide admission.
+ * One decoder runs at a time; later calls wait interruptibly for the permit. A decoder whose
+ * cleanup was unconfirmed disables decoding, because its child may still hold resources.
+ * Production adapters share one process-wide admission.
  */
 export interface SharpAdmission {
   readonly permit: Semaphore.Semaphore;
@@ -75,7 +82,7 @@ export const makeSharpAdapter = (
     bytes.byteLength > maximumInputBytes || bytes.byteLength === 0
       ? Effect.fail(decodeError())
       : Effect.gen(function* () {
-          if (MutableRef.get(disabled)) return yield* decodeError();
+          if (MutableRef.get(disabled)) return yield* unavailableError();
           let cleanupConfirmed = false;
           const result = yield* Effect.suspend(() =>
             run(bytes, (confirmed) => {
@@ -92,6 +99,7 @@ export const makeSharpAdapter = (
                 if (!cleanupConfirmed) MutableRef.set(disabled, true);
               }),
             ),
+            Effect.mapError(decodeError),
           );
           if (
             !cleanupConfirmed ||
@@ -103,12 +111,8 @@ export const makeSharpAdapter = (
             Buffer.byteLength(result.stdout) > maximumOutputBytes
           )
             return yield* decodeError();
-          return yield* decodeMetadata(result.stdout);
-        }).pipe(
-          permit.withPermitsIfAvailable(1),
-          Effect.flatMap((result) => Effect.fromOption(result)),
-          Effect.mapError(decodeError),
-        ),
+          return yield* decodeMetadata(result.stdout).pipe(Effect.mapError(decodeError));
+        }).pipe(permit.withPermits(1)),
 });
 
 export class SharpAdapter extends Context.Service<SharpAdapter, SharpAdapterContract>()(

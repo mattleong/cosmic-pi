@@ -20,6 +20,8 @@ export const parseImageSse = Effect.fn("OpenAIImage.parseSse")(function* (
   let totalBytes = 0;
   let completed: ExtractedImageResult | undefined;
   let providerFailure: OpenAIImageError | undefined;
+  // A failed item carries no reason; keep reading so a later response failure can supply one.
+  let imageFailed = false;
   let terminated = false;
   const pendingEvents: Sse.Event[] = [];
   const parser = Sse.makeParser(
@@ -48,6 +50,10 @@ export const parseImageSse = Effect.fn("OpenAIImage.parseSse")(function* (
           completed = image;
           return false;
         }
+        return true;
+      },
+      ImageFailed: () => {
+        imageFailed = true;
         return true;
       },
       ResponseFailed: ({ message }) => {
@@ -97,5 +103,6 @@ export const parseImageSse = Effect.fn("OpenAIImage.parseSse")(function* (
   if (!completed && !providerFailure && !terminated) yield* feed("\n\n");
   if (completed) return completed;
   if (providerFailure) return yield* providerFailure;
+  if (imageFailed) return yield* fail("response", "Codex image generation failed.");
   return yield* fail("stream", "No completed image_generation_call result returned by Codex.");
 });

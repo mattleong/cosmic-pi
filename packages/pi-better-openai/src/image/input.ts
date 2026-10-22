@@ -3,7 +3,7 @@ import type * as FileSystem from "effect/FileSystem";
 import type * as Path from "effect/Path";
 import { isStrictlyInsidePathWith, type SafeFileContract } from "pi-cosmic-core";
 import type { SharpAdapterContract } from "../boundary/sharp.ts";
-import { MAX_IMAGE_INPUTS, fail, failWith, type ImageInput } from "./types.ts";
+import { MAX_IMAGE_INPUTS, fail, type ImageInput } from "./types.ts";
 
 const MAX_IMAGE_INPUT_BYTES = 20 * 1024 * 1024;
 const MAX_TOTAL_IMAGE_INPUT_BYTES = 50 * 1024 * 1024;
@@ -49,7 +49,14 @@ export const imageInputReader = (dependencies: {
     const metadata = yield* sharp
       .decode(verified.bytes)
       .pipe(
-        Effect.mapError(failWith("sharp", `Image input is not a readable image: ${inputPath}`)),
+        Effect.mapError((error) =>
+          fail(
+            "sharp",
+            error.operation === "unavailable"
+              ? error.message
+              : `Image input is not a readable image: ${inputPath}`,
+          ),
+        ),
       );
     const mimeType = metadata.format && INPUT_MIME_TYPES.get(metadata.format);
     if (!mimeType) return yield* fail("input", `Image input is not a readable image: ${inputPath}`);

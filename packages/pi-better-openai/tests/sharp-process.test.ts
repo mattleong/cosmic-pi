@@ -6,7 +6,6 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import * as Result from "effect/Result";
 import { nodeFilePlatformLayer, runBoundedProcessNode } from "pi-cosmic-core";
 import sharp from "sharp";
 import { createSharpAdmission, makeSharpAdapter } from "../src/boundary/sharp.ts";
@@ -123,12 +122,38 @@ it.live("cancellation confirms forced child exit before releasing shared admissi
     );
     const pending = yield* adapter.decode(png).pipe(Effect.forkScoped);
     const pid = yield* ownPid(marker);
-    const next = makeSharpAdapter(undefined, admission);
-    expect(Result.isFailure(yield* next.decode(png).pipe(Effect.result))).toBe(true);
+    let admittedWhileChildAlive: boolean | undefined;
+    const waiting = yield* makeSharpAdapter(
+      (_bytes, onCleanup) =>
+        Effect.sync(() => {
+          try {
+            admittedWhileChildAlive = nativeKill(pid, 0);
+          } catch {
+            admittedWhileChildAlive = false;
+          }
+          onCleanup(true);
+          return {
+            code: 0,
+            signal: null,
+            stdout: '{"format":"png"}',
+            stderr: "",
+            overflowed: false,
+            timedOut: false,
+            cleanupUnconfirmed: false,
+          };
+        }),
+      admission,
+    )
+      .decode(png)
+      .pipe(Effect.forkScoped);
+    yield* Effect.sleep(50);
+    expect(admittedWhileChildAlive).toBeUndefined();
     yield* Fiber.interrupt(pending);
     expect(yield* fs.readFileString(marker)).toContain("SIGTERM");
     expectExited(pid);
-    expect(yield* next.decode(png)).toEqual({ format: "png" });
+    expect(yield* Fiber.join(waiting)).toEqual({ format: "png" });
+    expect(admittedWhileChildAlive).toBe(false);
+    expect(yield* makeSharpAdapter(undefined, admission).decode(png)).toEqual({ format: "png" });
   }).pipe(Effect.scoped, Effect.provide(nodeFilePlatformLayer)),
 );
 
@@ -169,7 +194,7 @@ it.live("failed native cancellation cannot admit another decoder while its child
       spawned = true;
       return Effect.die("must not dispatch");
     }, admission);
-    expect(Result.isFailure(yield* next.decode(png).pipe(Effect.result))).toBe(true);
+    expect(yield* next.decode(png).pipe(Effect.flip)).toMatchObject({ operation: "unavailable" });
     expect(spawned).toBe(false);
     expect(otherChildKills).toEqual([]);
   }).pipe(Effect.scoped, Effect.provide(nodeFilePlatformLayer)),

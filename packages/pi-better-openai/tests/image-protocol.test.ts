@@ -52,6 +52,60 @@ describe("OpenAI image protocol", () => {
       }),
   );
 
+  it.effect("accepts provider null fields on completed images", () =>
+    Effect.gen(function* () {
+      const result = yield* parseImageSse(
+        body(
+          dataEvent({ partial_image_b64: null }) +
+            dataEvent({
+              type: "response.output_item.done",
+              item: {
+                type: "image_generation_call",
+                id: "complete",
+                status: "completed",
+                revised_prompt: null,
+                result: "ZmluYWw=",
+                b64_json: null,
+              },
+            }),
+        ),
+        "image/png",
+      );
+      expect(result).toMatchObject({ id: "complete", data: "ZmluYWw=" });
+      expect(result).not.toHaveProperty("revisedPrompt");
+    }),
+  );
+
+  it.effect("reports failed image items with the provider's failure reason", () =>
+    Effect.gen(function* () {
+      const failedItem = dataEvent({
+        type: "response.output_item.done",
+        item: { type: "image_generation_call", id: "failed", status: "failed", result: null },
+      });
+      const withReason = yield* parseImageSse(
+        body(
+          failedItem +
+            dataEvent({
+              type: "response.failed",
+              response: { error: { message: "content policy rejected the prompt" } },
+            }),
+        ),
+        "image/png",
+      ).pipe(Effect.flip);
+      expect(withReason.operation).toBe("response");
+      expect(withReason.message).toContain("content policy rejected the prompt");
+
+      for (const input of [
+        failedItem,
+        dataEvent({ type: "response.failed", response: { error: null } }),
+      ]) {
+        const failure = yield* parseImageSse(body(input), "image/png").pipe(Effect.flip);
+        expect(failure.operation).toBe("response");
+        expect(failure.message).not.toContain("malformed");
+      }
+    }),
+  );
+
   it.effect("sanitizes provider failure messages", () =>
     Effect.gen(function* () {
       const failure = yield* parseImageSse(
