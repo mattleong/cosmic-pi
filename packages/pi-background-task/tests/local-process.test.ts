@@ -1,6 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import type * as Scope from "effect/Scope";
@@ -11,6 +13,7 @@ import {
   LocalProcess,
   makeBackgroundProcessEnvironment,
   type LocalProcessHandle,
+  type LocalProcessOutput,
   type LocalProcessRequest,
 } from "../src/boundary/local-process.ts";
 
@@ -222,6 +225,30 @@ describe("local process boundary", () => {
           Effect.timeout(processTimeout),
         );
         expect([...delivered]).toEqual([]);
+      }),
+    ),
+  );
+
+  it.live("counts the rest of a pulled batch as dropped when an abandoned reader stops", () =>
+    withLocalProcess(
+      Effect.gen(function* () {
+        // Separate streams guarantee two events, both queued before the reader's first pull.
+        const handle = yield* spawnProcess(
+          `node -e "process.stdout.write('A'.repeat(100)); process.stderr.write('B'.repeat(200)); setTimeout(() => {}, 200)"`,
+        );
+        yield* handle.awaitExit;
+        const received = yield* Deferred.make<LocalProcessOutput>();
+        const reader = yield* handle.output.pipe(
+          Stream.runForEach((event) =>
+            Deferred.succeed(received, event).pipe(Effect.andThen(Effect.never)),
+          ),
+          Effect.forkScoped({ startImmediately: true }),
+        );
+        const first = yield* Deferred.await(received).pipe(Effect.timeout(processTimeout));
+
+        yield* handle.abandonOutput;
+        yield* Fiber.interrupt(reader);
+        expect(handle.droppedOutputBytes()).toBe(300 - Buffer.byteLength(first.text, "utf8"));
       }),
     ),
   );

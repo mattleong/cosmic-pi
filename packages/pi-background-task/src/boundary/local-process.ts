@@ -15,6 +15,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Predicate from "effect/Predicate";
 import * as Queue from "effect/Queue";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
@@ -208,6 +209,10 @@ const verifyCwd = (fs: FileSystem.FileSystem, cwd: string) =>
  * Starts the shell as the leader of its own process group. The boundary spawns it directly so
  * that it alone signals the group: Effect's process spawner signals a group again after a nonzero
  * exit, including at scope release, when the group may have settled and its ID been reused.
+ *
+ * It runs inside masked acquisition and registers no interruption handler on purpose: an
+ * interrupted monitor waits for Node's spawn or error event, so a started child always reaches
+ * the host-exit guard and group terminator that own its cleanup.
  */
 const spawnGroupLeader = (
   request: LocalProcessRequest,
@@ -225,7 +230,7 @@ const spawnGroupLeader = (
       });
     } catch {
       resume(Effect.fail(processError("spawn")));
-      return Effect.void;
+      return;
     }
     // Registered at spawn so no exit goes unobserved, and kept for the child's lifetime so a
     // later child error cannot surface as an unhandled host error.
@@ -234,8 +239,6 @@ const spawnGroupLeader = (
     );
     child.on("error", () => resume(Effect.fail(processError("spawn"))));
     child.once("spawn", () => resume(Effect.succeed(child)));
-    // Before the spawn event the leader's exit is unobserved, so its ID is still its own.
-    return Effect.sync(() => void child.kill("SIGKILL"));
   });
 
 const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (request: LocalProcessRequest) {
@@ -249,6 +252,7 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (request: Loc
   let totalDroppedBytes = 0;
   let reportedDroppedBytes = 0;
   let outputClosed = false;
+  let abandoned = false;
 
   const leaderExit = yield* Deferred.make<LocalProcessExit>();
   const child = yield* spawnGroupLeader(request, leaderExit);
@@ -309,14 +313,15 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (request: Loc
     outputClosed = true;
     Queue.endUnsafe(outputQueue);
   };
-  // Undelivered gaps were already counted in the total; only their text joins it here.
+  // Queued bytes cover every event the reader has not received, including the rest of a batch it
+  // already pulled, so they all become dropped here and the reader skips them. Undelivered gaps
+  // were already counted in the total.
   const abandonOutput = () => {
     outputClosed = true;
-    for (let event = takeQueued(); event; event = takeQueued()) {
-      const bytes = utf8ByteLength(event.text);
-      queuedBytes = Math.max(0, queuedBytes - bytes);
-      totalDroppedBytes += bytes;
-    }
+    abandoned = true;
+    totalDroppedBytes += queuedBytes;
+    queuedBytes = 0;
+    while (takeQueued()) continue;
     Queue.endUnsafe(outputQueue);
   };
   let openStreams = 2;
@@ -340,13 +345,16 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (request: Loc
     Effect.forkScoped({ startImmediately: true }),
   );
 
+  // Each pull takes the whole queue, so delivery is recorded per event as the reader receives it.
   const output = Stream.fromQueue(outputQueue).pipe(
     Stream.mapEffect((event) =>
       Effect.sync(() => {
+        if (abandoned) return undefined;
         queuedBytes = Math.max(0, queuedBytes - utf8ByteLength(event.text));
         return event;
       }),
     ),
+    Stream.filter(Predicate.isNotUndefined),
   );
 
   return {
@@ -383,6 +391,7 @@ export class LocalProcess extends Context.Service<LocalProcess, LocalProcessCont
           spawn: (request) =>
             verifyCwd(fs, request.cwd).pipe(
               Effect.andThen(
+                // Acquisition stays uninterruptible; see spawnGroupLeader.
                 Effect.acquireRelease(acquireProcess(request), (handle) => handle.release),
               ),
               Effect.map(({ release: _release, ...handle }) => handle),

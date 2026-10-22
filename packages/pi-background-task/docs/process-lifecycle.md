@@ -11,11 +11,13 @@ registering its shutdown finalizer. Shutdown closes admission and attempts to se
 processes before that scope interrupts monitors. This ordering prevents monitor interruption from
 abandoning process ownership and avoids accumulating session finalizers for historical tasks.
 
-Cwd inspection remains interruptible before process acquisition. After admission, a stop can
-race an unresolved spawn. Stop ownership is claimed with interruption masked, then waiting
-resumes interruptibly. If that owner is interrupted, it force-terminates an already-settled
-handle; the monitor is responsible for a handle that arrives later. An interrupted monitor whose
-spawn never settled fails its waiting start instead of leaving the caller blocked.
+Cwd inspection remains interruptible before process acquisition. Acquisition itself is masked
+on purpose: an interrupted monitor waits for Node to report the spawn or its failure, so a started
+child always reaches its host-exit guard and group terminator, and scope release then terminates
+it. After admission, a stop can race an unresolved spawn. Stop ownership is claimed with
+interruption masked, then waiting resumes interruptibly. If that owner is interrupted, it
+force-terminates an already-settled handle; the monitor is responsible for a handle that arrives
+later. An interrupted monitor fails its waiting start instead of leaving the caller blocked.
 
 A stop request and confirmed exit are different facts. Timeouts or termination failures leave
 the record `stopping` and consuming active capacity. Only completion from the process monitor
@@ -48,7 +50,8 @@ spawner, whose cleanup signals the group again after a nonzero exit, including a
 Cleanup covers only the task's original process group. A process that starts its own session or
 process group, such as a `setsid` child, a detached spawn, or a build daemon, is not tracked and
 survives stop, shutdown, and host exit. If such a process keeps the task's pipes open, the task
-settles one second after its group exits; output still queued then is counted as dropped.
+settles one second after its group exits; output the reader has not yet received is then counted
+as dropped.
 
 From spawn until its group settles, the boundary registers the group with core's host-exit guard.
 When Pi exits through `process.exit()` without session shutdown, as its uncaught-exception and

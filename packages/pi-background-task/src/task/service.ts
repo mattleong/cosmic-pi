@@ -339,8 +339,9 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
         const exit = yield* handle.awaitExit;
         const drained = yield* Fiber.await(outputFiber).pipe(Effect.timeoutOption("1 second"));
         if (Option.isNone(drained)) {
-          // A process outside the task's group can hold its pipes open. Undelivered output is
-          // counted as dropped; the reader then only finishes an append already in progress.
+          // A process outside the task's group can hold its pipes open. Output the reader hasn't
+          // received, including the rest of a batch it already pulled, is counted as dropped and
+          // skipped, so the reader only finishes an append already in progress.
           yield* handle.abandonOutput;
           const finished = yield* Fiber.await(outputFiber).pipe(Effect.timeoutOption("1 second"));
           if (Option.isNone(finished)) yield* Fiber.interrupt(outputFiber);
