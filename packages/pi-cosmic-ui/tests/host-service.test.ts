@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
@@ -12,15 +13,15 @@ import {
   AgentDirectory,
   decodeUnknownOrUndefined,
   JsonDocumentStore,
-  provideBuiltLayer,
   type JsonDocumentStoreContract,
   type JsonObject,
 } from "pi-cosmic-core";
 import {
   deferredPromise,
   extensionContextFixture,
-  makeInMemoryDocuments,
   type InMemoryDocuments,
+  makeInMemoryDocuments,
+  provideBuiltLayer,
   yieldUntil,
 } from "pi-cosmic-core/testing";
 import { abortablePendingExec, execOk, execResult, type ExecResult } from "./support/host.ts";
@@ -47,6 +48,7 @@ function serviceLayer(
     projectTrusted?: boolean;
     canPublish?: () => boolean;
     onChange?: () => void;
+    onUsageChange?: () => void;
   } = {},
 ) {
   const projection = createProjection();
@@ -59,15 +61,37 @@ function serviceLayer(
   );
   const layer = CosmicUiService.layer({
     context: contextRef,
+    sessionManager: MutableRef.get(contextRef).sessionManager,
     cwd: "/project",
     projection,
     onChange: options.onChange ?? (() => undefined),
+    onUsageChange: options.onUsageChange,
     canPublish: options.canPublish,
     startPolling: options.startPolling ?? false,
     projectTrusted: options.projectTrusted ?? true,
   }).pipe(Layer.provide(Layer.merge(repository, probe)));
   return { layer, projection, contextRef, documents: store.documents };
 }
+
+type SessionEntries = ReturnType<ExtensionContext["sessionManager"]["getEntries"]>;
+const nativeUsage = (input: number) => ({
+  input,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: input,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+});
+const usageEntry = (input: number, usage = nativeUsage(input)): SessionEntries[number] => ({
+  id: "entry",
+  parentId: null,
+  timestamp: "2026-01-01T00:00:00Z",
+  type: "usage",
+  kind: "cache_warm",
+  provider: "test",
+  model: "test",
+  usage,
+});
 
 type Resolve = (value: ExecResult) => void;
 const resolveWith = (resolve: Resolve | undefined, value: ExecResult) =>
@@ -134,7 +158,7 @@ describe("Cosmic UI host service", () => {
       const service = yield* CosmicUiService;
       const old = yield* service.refreshAll(true).pipe(Effect.forkScoped);
       yield* yieldUntil(() => oldResolvers.size === 2);
-      yield* service.invalidateProbes;
+      yield* service.invalidateProbes();
       const next = yield* service.refreshAll(true).pipe(Effect.forkScoped);
       yield* resolveWith(oldResolvers.get("git"), execResult("## old\n M old.ts\n"));
       yield* resolveWith(
@@ -295,6 +319,107 @@ describe("Cosmic UI host service", () => {
       failing = false;
       yield* TestClock.adjust("2 seconds");
       yield* yieldUntil(() => calls >= 3);
+    }).pipe(provideBuiltLayer(layer));
+  });
+
+  it.effect(
+    "reconciles persisted usage on the Effect clock and keeps the last complete totals",
+    () => {
+      let entries: SessionEntries = [];
+      let unreadable = false;
+      let usageChanges = 0;
+      let changes = 0;
+      const contextRef = MutableRef.make(
+        extensionContextFixture({
+          cwd: "/project",
+          mode: "tui",
+          sessionManager: {
+            getCwd: () => "/project",
+            getEntries: () => {
+              if (unreadable) throw new Error("session closed");
+              return entries;
+            },
+          },
+        }),
+      );
+      const { layer, projection } = serviceLayer({
+        context: contextRef,
+        startPolling: true,
+        onUsageChange: () => void usageChanges++,
+        onChange: () => void changes++,
+      });
+      const input = () => MutableRef.get(projection).totals.input;
+      return Effect.gen(function* () {
+        yield* CosmicUiService;
+        entries = [usageEntry(10)];
+        yield* TestClock.adjust("999 millis");
+        expect(input()).toBe(0);
+        yield* TestClock.adjust("1 millis");
+        yield* yieldUntil(() => input() === 10);
+        expect({ usageChanges, changes }).toEqual({ usageChanges: 1, changes: 1 });
+
+        // An unreadable session, or one entry with unreadable usage, never replaces complete totals.
+        unreadable = true;
+        yield* TestClock.adjust("1 second");
+        unreadable = false;
+        entries = [usageEntry(10), usageEntry(5, { ...nativeUsage(5), input: -1 })];
+        yield* TestClock.adjust("1 second");
+        expect(input()).toBe(10);
+        expect(usageChanges).toBe(1);
+
+        entries = [usageEntry(10), usageEntry(15)];
+        yield* TestClock.adjust("1 second");
+        yield* yieldUntil(() => input() === 25);
+        expect(usageChanges).toBe(2);
+      }).pipe(provideBuiltLayer(layer));
+    },
+  );
+
+  it.effect("repairs a usage notification interrupted after its totals were published", () => {
+    let entries: SessionEntries = [];
+    let usageChanges = 0;
+    let changes = 0;
+    let interruptAtPublication: Fiber.Fiber<void> | undefined;
+    const published = Deferred.makeUnsafe<void>();
+    const contextRef = MutableRef.make(
+      extensionContextFixture({
+        cwd: "/project",
+        mode: "tui",
+        sessionManager: { getCwd: () => "/project", getEntries: () => entries },
+      }),
+    );
+    const { layer, projection } = serviceLayer({
+      context: contextRef,
+      // The projection publishes through this check inside its uninterruptible commit, so an
+      // interruption requested here lands exactly after the totals are published.
+      canPublish: () => {
+        const target = interruptAtPublication;
+        interruptAtPublication = undefined;
+        if (target) {
+          target.interruptUnsafe();
+          Deferred.doneUnsafe(published, Effect.void);
+        }
+        return true;
+      },
+      onUsageChange: () => void usageChanges++,
+      onChange: () => void changes++,
+    });
+    return Effect.gen(function* () {
+      const service = yield* CosmicUiService;
+      entries = [usageEntry(10)];
+      const interrupted = yield* service.reconcileUsage().pipe(Effect.forkChild);
+      interruptAtPublication = interrupted;
+      yield* Deferred.await(published);
+      const exit = yield* Fiber.await(interrupted);
+      expect(Exit.hasInterrupts(exit)).toBe(true);
+      expect(MutableRef.get(projection).totals.input).toBe(10);
+      expect({ usageChanges, changes }).toEqual({ usageChanges: 0, changes: 0 });
+
+      // Unchanged persisted totals still repair the invalidation and render that were skipped.
+      yield* service.reconcileUsage();
+      expect({ usageChanges, changes }).toEqual({ usageChanges: 1, changes: 1 });
+      yield* service.reconcileUsage();
+      expect({ usageChanges, changes }).toEqual({ usageChanges: 1, changes: 1 });
     }).pipe(provideBuiltLayer(layer));
   });
 

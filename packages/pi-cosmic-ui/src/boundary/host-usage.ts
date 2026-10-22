@@ -1,6 +1,7 @@
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { flow } from "effect/Function";
 import * as Schema from "effect/Schema";
-import { decodeUnknownOrUndefined } from "pi-cosmic-core";
+import { decodeUnknownOrUndefined, invokeHostCallback } from "pi-cosmic-core";
 
 const NonNegativeFiniteNumberSchema = Schema.Number.check(
   Schema.isFinite(),
@@ -60,3 +61,44 @@ export const addAssistantUsage = (
 export const decodeContextUsage = decodeUnknownOrUndefined(ContextUsageSchema);
 
 export const decodeHostCount = decodeUnknownOrUndefined(NonNegativeFiniteNumberSchema);
+
+export const emptyTotals = (): FooterTotals => ({
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  cost: 0,
+});
+
+type SessionEntry = ReturnType<ExtensionContext["sessionManager"]["getEntries"]>[number];
+
+/** Usage an entry persists; assistant and usage entries must carry it, others may. */
+const persistedUsage = (entry: SessionEntry) => {
+  if (entry.type === "usage" || entry.type === "compaction" || entry.type === "branch_summary")
+    return { required: entry.type === "usage", usage: entry.usage };
+  if (entry.type === "message" && entry.message.role === "assistant")
+    return { required: true, usage: entry.message.usage };
+  if (entry.type === "message" && entry.message.role === "toolResult")
+    return { required: false, usage: entry.message.usage };
+  return { required: false, usage: undefined };
+};
+
+/**
+ * Session totals from persisted usage, or undefined when the session can't be read or an entry
+ * holds unreadable usage, so a partial sum never replaces complete totals.
+ */
+export const readSessionUsageTotals = (
+  sessionManager: ExtensionContext["sessionManager"],
+): FooterTotals | undefined =>
+  invokeHostCallback<FooterTotals | undefined>(() => {
+    let totals = emptyTotals();
+    for (const entry of sessionManager.getEntries()) {
+      const { required, usage: rawUsage } = persistedUsage(entry);
+      if (rawUsage === undefined && !required) continue;
+      const usage = decodeAssistantUsage(rawUsage);
+      const next = usage && addAssistantUsage(totals, usage);
+      if (next === undefined) return undefined;
+      totals = next;
+    }
+    return totals;
+  }, undefined);

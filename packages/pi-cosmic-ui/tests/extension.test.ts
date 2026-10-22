@@ -404,6 +404,34 @@ describe("Cosmic UI extension", () => {
     }),
   );
 
+  it.effect("late events from a replaced session cannot overwrite the replacement's usage", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      const retired = h.ctx;
+      retired.sessionManager.getEntries = vi.fn(() => [usageEntry("cache_warm", 11)]);
+      yield* emit(h, "session_start");
+      expectFooterShows(capturedFooter(h), "↑11");
+      const replacement = withSession(retired, {
+        getEntries: vi.fn(() => [usageEntry("cache_warm", 22)]),
+      });
+      yield* emit(h, "session_start", replacement);
+      const footer = capturedFooter(h, -1);
+      expectFooterShows(footer, "↑22");
+
+      yield* emitEvent(
+        h,
+        { type: "tool_execution_start", toolCallId: "late", toolName: "read", args: {} },
+        retired,
+      );
+      yield* emit(h, "agent_settled", retired);
+      expectFooterShows(footer, "↑22");
+      // The replacement's own reconciliation still reads its session.
+      yield* emit(h, "agent_settled", replacement);
+      expectFooterShows(footer, "↑22");
+      yield* emit(h, "session_shutdown", replacement);
+    }),
+  );
+
   it.effect("observes an abort between session capture and runtime listener registration", () =>
     Effect.gen(function* () {
       const h = harness();

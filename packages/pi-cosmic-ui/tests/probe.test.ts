@@ -1,8 +1,11 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { provideBuiltLayer } from "pi-cosmic-core";
-import { capturedTelemetrySnapshot, makeCapturedTracer } from "pi-cosmic-core/testing";
+import {
+  capturedTelemetrySnapshot,
+  makeCapturedTracer,
+  provideBuiltLayer,
+} from "pi-cosmic-core/testing";
 import { PiExec, type PiExecContract } from "../src/boundary/host-exec.ts";
 import { RepositoryProbe } from "../src/probe/repository-probe.ts";
 

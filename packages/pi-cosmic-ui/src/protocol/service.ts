@@ -6,27 +6,26 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Option from "effect/Option";
+import * as Schedule from "effect/Schedule";
 import * as Semaphore from "effect/Semaphore";
 import {
   freezeSnapshot,
   invokeHostCallback,
   frozenProjection,
   createSubscriptionRefresh,
+  recoverRefreshFailure,
 } from "pi-cosmic-core";
-import type { FooterTotals } from "../boundary/host-usage.ts";
+import { emptyTotals, readSessionUsageTotals, type FooterTotals } from "../boundary/host-usage.ts";
 import type { ResolvedCosmicUiConfig } from "../config/schema.ts";
 import { CosmicUiConfigStore, type FooterPatch } from "../config/store.ts";
 import type { FooterRepositoryProjection } from "../footer/builtin-contributions.ts";
 import { RepositoryProbe } from "../probe/repository-probe.ts";
 
 const PULL_REQUEST_REFRESH_INTERVAL_MS = 30_000;
-export const emptyTotals = (): FooterTotals => ({
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  cost: 0,
-});
+const USAGE_RECONCILE_INTERVAL = "1 second";
+const TOTAL_KEYS = ["input", "output", "cacheRead", "cacheWrite", "cost"] as const;
+const sameTotals = (left: FooterTotals, right: FooterTotals) =>
+  TOTAL_KEYS.every((key) => left[key] === right[key]);
 export interface CosmicUiProjection extends FooterRepositoryProjection {
   readonly config: ResolvedCosmicUiConfig | undefined;
   readonly pullRequestCheckedAt: number;
@@ -54,10 +53,14 @@ export const resetProjection = (
 
 export interface CosmicUiServiceOptions {
   readonly context: MutableRef.MutableRef<ExtensionContext>;
+  /** The originating session, whose persisted usage the footer reconciles. */
+  readonly sessionManager: ExtensionContext["sessionManager"];
   readonly cwd: string;
   readonly initialTotals?: FooterTotals;
   readonly projection: MutableRef.MutableRef<CosmicUiProjection>;
   readonly onChange: () => void;
+  /** Runs before `onChange` when reconciled usage totals change. */
+  readonly onUsageChange?: (() => void) | undefined;
   readonly canPublish?: (() => boolean) | undefined;
   readonly startPolling?: boolean;
   readonly projectTrusted: boolean;
@@ -66,16 +69,18 @@ export interface CosmicUiServiceOptions {
 export class CosmicUiService extends Context.Service<CosmicUiService>()(
   "pi-cosmic-ui/protocol/service/CosmicUiService",
   {
-    make: Effect.fnUntraced(function* (options: CosmicUiServiceOptions) {
+    make: Effect.fn("CosmicUiService.make")(function* (options: CosmicUiServiceOptions) {
       const configStore = yield* CosmicUiConfigStore;
       const probes = yield* RepositoryProbe;
       const settingsLock = yield* Semaphore.make(1);
+      const usageLock = yield* Semaphore.make(1);
       const home = yield* Config.option(Config.String("HOME"));
       const config = yield* configStore.resolve(options.cwd, options.projectTrusted);
+      const initialTotals = options.initialTotals ?? MutableRef.get(options.projection).totals;
       const state = yield* frozenProjection<CosmicUiLiveState, CosmicUiProjection>(
         {
           ...initialProjection(),
-          totals: options.initialTotals ?? MutableRef.get(options.projection).totals,
+          totals: initialTotals,
           config,
           homeDirectory: Option.getOrUndefined(home),
         },
@@ -155,22 +160,57 @@ export class CosmicUiService extends Context.Service<CosmicUiService>()(
               })),
         spanName: "pi-cosmic-ui.refresh.pull-request",
       });
-      const refreshGit = (force = false) => gitRefresh.request({ force });
+      const refreshGit = Effect.fn("CosmicUiService.refreshGit")(function* (force?: boolean) {
+        yield* gitRefresh.request({ force: force === true });
+      });
       const installConfig = (next: ResolvedCosmicUiConfig) =>
         commit((current) => ({ ...current, config: next }));
+      /**
+       * Totals whose usage invalidation and render were requested. An interruption after the state
+       * commit leaves them behind, so the next reconciliation repairs the missed notification.
+       */
+      let notifiedTotals = initialTotals;
+      /**
+       * Totals change when the host persists usage, and some of that, such as cache warming, has no
+       * event. An unreadable session keeps the last complete totals, which the state already holds.
+       */
+      const reconcileUsage = Effect.fn("CosmicUiService.reconcileUsage")(function* () {
+        // Serialized so an older read cannot replace totals a newer read already committed.
+        yield* usageLock.withPermit(
+          Effect.gen(function* () {
+            const read = readSessionUsageTotals(options.sessionManager);
+            if (read !== undefined && !sameTotals(read, (yield* state.getState).totals))
+              yield* updateState((current) => ({ ...current, totals: read }));
+            const { totals } = yield* state.getState;
+            if (sameTotals(totals, notifiedTotals)) return;
+            yield* Effect.sync(() => {
+              notifiedTotals = totals;
+              if (options.canPublish?.() === false) return;
+              options.onUsageChange?.();
+              options.onChange();
+            });
+          }),
+        );
+      });
       if (options.startPolling !== false) {
         yield* gitRefresh.startPolling({}).pipe(Effect.forkScoped);
         yield* pullRefresh.startPolling({}).pipe(Effect.forkScoped);
+        yield* reconcileUsage().pipe(
+          recoverRefreshFailure("pi-cosmic-ui.usage.reconcile"),
+          Effect.schedule(Schedule.spaced(USAGE_RECONCILE_INTERVAL)),
+          Effect.forkScoped,
+        );
       }
       return {
         refreshGit,
-        refreshAll: (force = false) =>
-          Effect.all([refreshGit(force), pullRefresh.request({ force })], {
+        refreshAll: Effect.fn("CosmicUiService.refreshAll")(function* (force?: boolean) {
+          yield* Effect.all([refreshGit(force), pullRefresh.request({ force: force === true })], {
             concurrency: 2,
             discard: true,
-          }),
-        invalidateProbes: gitRefresh
-          .invalidateWith(
+          });
+        }),
+        invalidateProbes: Effect.fn("CosmicUiService.invalidateProbes")(function* () {
+          yield* gitRefresh.invalidateWith(
             pullRefresh.invalidateWith(
               updateState((current) => ({
                 ...current,
@@ -181,15 +221,22 @@ export class CosmicUiService extends Context.Service<CosmicUiService>()(
                 probeRevision: current.probeRevision + 1,
               })),
             ),
-          )
-          .pipe(Effect.andThen(notifyChanged)),
-        setTotals: (totals: FooterTotals) => commit((current) => ({ ...current, totals })),
-        updateFooterConfig: (patch: FooterPatch) =>
-          settingsLock.withPermit(
+          );
+          yield* notifyChanged;
+        }),
+        reconcileUsage,
+        updateFooterConfig: Effect.fn("CosmicUiService.updateFooterConfig")(function* (
+          patch: FooterPatch,
+        ) {
+          return yield* settingsLock.withPermit(
             configStore.updateFooter(options.cwd, patch, options.projectTrusted, installConfig),
-          ),
-        setFooterVisibility: (id: string, visible: boolean) =>
-          settingsLock.withPermit(
+          );
+        }),
+        setFooterVisibility: Effect.fn("CosmicUiService.setFooterVisibility")(function* (
+          id: string,
+          visible: boolean,
+        ) {
+          return yield* settingsLock.withPermit(
             configStore.setVisibility(
               options.cwd,
               id,
@@ -197,7 +244,8 @@ export class CosmicUiService extends Context.Service<CosmicUiService>()(
               options.projectTrusted,
               installConfig,
             ),
-          ),
+          );
+        }),
       };
     }),
   },

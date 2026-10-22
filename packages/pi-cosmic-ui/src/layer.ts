@@ -13,6 +13,8 @@ import type { ActivityHost } from "./boundary/host-activity.ts";
 export interface CosmicUiSessionInput {
   readonly ctx: ExtensionContext;
   readonly context: MutableRef.MutableRef<ExtensionContext>;
+  /** The originating session; later contexts must carry it to update or reconcile this session. */
+  readonly sessionManager: ExtensionContext["sessionManager"];
   readonly cwd: string;
   readonly signal: AbortSignal | undefined;
   readonly releaseSignal: () => void;
@@ -24,21 +26,31 @@ export interface CosmicUiSessionInput {
 export interface CosmicUiApplicationLayerOptions {
   readonly projection: MutableRef.MutableRef<CosmicUiProjection>;
   readonly requestRender: () => void;
+  readonly invalidateContextUsage: () => void;
   readonly activityHost: ActivityHost;
 }
 
 export const cosmicUiApplicationLayer = (
-  { context, cwd, initialTotals, projectTrusted, publicationOwner }: CosmicUiSessionInput,
+  {
+    context,
+    sessionManager,
+    cwd,
+    initialTotals,
+    projectTrusted,
+    publicationOwner,
+  }: CosmicUiSessionInput,
   options: CosmicUiApplicationLayerOptions,
 ) => {
   const platform = Layer.merge(nodeFilePlatformLayer, AgentDirectory.layerFromHost(getAgentDir));
   const service = CosmicUiService.layer({
     context,
+    sessionManager,
     cwd,
     initialTotals,
     projection: options.projection,
     projectTrusted,
     onChange: options.requestRender,
+    onUsageChange: options.invalidateContextUsage,
     canPublish: () => MutableRef.get(publicationOwner),
   }).pipe(
     Layer.provide(
