@@ -23,18 +23,18 @@ test("settings recover valid siblings and expose bounded path-only diagnostics",
       shikiTheme: "private-theme-token",
       toolCallCollapsedStyle: "private-style-token",
       readCollapsedLines: 19,
-      tools: ["write", "private-tool"],
+      tools: ["read", "private-tool", "grep"],
     },
     fallback,
   );
   assert.equal(normalized.settings.shikiTheme, "github-dark");
   assert.equal(normalized.settings.toolCallCollapsedStyle, "compact");
   assert.equal(normalized.settings.readCollapsedLines, 19);
-  assert.deepEqual(normalized.settings.tools, ["write"]);
+  assert.deepEqual(normalized.settings.tools, ["read", "grep"]);
   assert.deepEqual(normalized.diagnostics, [
     { path: "settings.shikiTheme", issue: "invalid" },
     { path: "settings.toolCallCollapsedStyle", issue: "invalid" },
-    { path: "settings.tools", issue: "invalid" },
+    { path: "settings.tools[1]", issue: "invalid" },
   ]);
   assert.equal(JSON.stringify(normalized.diagnostics).includes("private"), false);
 
@@ -44,6 +44,25 @@ test("settings recover valid siblings and expose bounded path-only diagnostics",
   );
   assert.equal(bounded.diagnostics.length, 16);
   assert.equal(JSON.stringify(bounded.diagnostics).includes("private-value"), false);
+});
+
+test("tool selections keep known names instead of falling back to every tool", () => {
+  const normalized = normalizeSettingsWithDiagnostics(
+    { tools: ["write", "Edit", 7] },
+    defaultCodePreviewSettings,
+  );
+  assert.deepEqual(normalized.settings.tools, ["write"]);
+  assert.deepEqual(normalized.diagnostics, [
+    { path: "settings.tools[1]", issue: "invalid" },
+    { path: "settings.tools[2]", issue: "invalid" },
+  ]);
+
+  const fallback: CodePreviewSettings = { ...defaultCodePreviewSettings, tools: ["grep"] };
+  assert.deepEqual(settingsFrom({ tools: [] }, fallback).tools, []);
+  assert.deepEqual(settingsFrom({ tools: ["Edit"] }, fallback).tools, ["grep"]);
+  assert.deepEqual(normalizeSettingsWithDiagnostics({ tools: "write" }, fallback).diagnostics, [
+    { path: "settings.tools", issue: "invalid" },
+  ]);
 });
 
 test("turning a preview off and on again leaves the saved tool selection unchanged", () => {

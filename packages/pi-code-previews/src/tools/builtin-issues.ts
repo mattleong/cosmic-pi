@@ -1,4 +1,5 @@
 import * as Predicate from "effect/Predicate";
+import { sanitizeDiagnosticContent } from "pi-cosmic-core";
 import { ownField, ownObject, type HostObject } from "../shared/untrusted-value";
 import { escapeControlChars } from "../shared/terminal-text";
 import { getBashWarnings } from "../warnings/bash";
@@ -123,6 +124,15 @@ export function readIssues(
   return truncated ? [READ_TRUNCATED] : [];
 }
 
+const OUTPUT_TRUNCATED = {
+  severity: "warning",
+  code: "output-truncated",
+  message: "Output was cut off",
+} as const;
+
+export const hasRetainedOutput = (issues: readonly CompactIssue[]) =>
+  issues.some(({ code, severity }) => code === OUTPUT_TRUNCATED.code && severity === "info");
+
 const LIMIT_FIELDS = {
   grep: "matchLimitReached",
   find: "resultLimitReached",
@@ -135,23 +145,17 @@ export function outputLimitProjection(
 ) {
   const issues: CompactIssue[] = [];
   const counters: string[] = [];
-  if (isTruncated(details))
+  const path = tool === "bash" ? ownField(details, "fullOutputPath") : undefined;
+  // A saved full-output path makes clipping recoverable, so it is informational.
+  if (Predicate.isString(path) && path)
     issues.push({
-      severity: "warning",
-      code: "output-truncated",
-      message: "Output was cut off",
-      detail: `Output truncated by ${tool}`,
+      ...OUTPUT_TRUNCATED,
+      severity: "info",
+      detail: `Full output saved to ${sanitizeDiagnosticContent(path)}`,
     });
-  if (tool === "bash") {
-    const path = ownField(details, "fullOutputPath");
-    if (Predicate.isString(path) && path)
-      issues.push({
-        severity: "info",
-        code: "retained-output",
-        message: `Full output: ${escapeControlChars(path)}`,
-      });
-    return { issues, counters };
-  }
+  else if (isTruncated(details))
+    issues.push({ ...OUTPUT_TRUNCATED, detail: `Output truncated by ${tool}` });
+  if (tool === "bash") return { issues, counters };
   const field = LIMIT_FIELDS[tool];
   const limit = ownField(details, field);
   if (Predicate.isNumber(limit) && Number.isSafeInteger(limit) && limit > 0)

@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { applyPresentationSettings, renderContextFixture } from "../../../testing";
+import {
+  applyPresentationSettings,
+  issueMessageStyleProblems,
+  renderContextFixture,
+} from "../../../testing";
 import type {
   AgentToolResult,
   ReadToolInput,
@@ -137,6 +141,19 @@ describe("issues independent of hidden preview bodies", () => {
     );
     expect(codes(value)).toEqual(["output-truncated"]);
     expect(value?.outcome).toBe("warning");
+  });
+
+  test("bash clipping with a saved full-output path is informational", () => {
+    const value = summary(
+      "bash",
+      { command: "cat build.log" },
+      result("step 50", { truncation: { truncated: true }, fullOutputPath: "/tmp/pi-bash-1.log" }),
+    );
+    expect(value?.outcome).toBe("success");
+    expect(value?.issues?.map(({ severity }) => severity)).toEqual(["info"]);
+    const issue = issueFor(value, "output-truncated");
+    expect(issue?.detail).toContain("/tmp/pi-bash-1.log");
+    expect(issueMessageStyleProblems(issue?.message ?? "")).toEqual([]);
   });
 
   test("read does not hide partial lines or unrecognized byte-limit annotations", () => {

@@ -13,6 +13,7 @@ import { shellFailure } from "./builtin-failure-shell";
 import { compactIssueSeverity, mergeCompactIssues, type CompactIssue } from "./compact-issues";
 import {
   bashCommandIssues,
+  hasRetainedOutput,
   outputLimitProjection,
   readIssues,
   secretIssues,
@@ -215,8 +216,7 @@ function builtinFailure(tool: BuiltinCompactTool, output: string, issues: readon
   if (details.trim() === "Operation aborted") return { outcome: "cancelled" as const, issues: [] };
   const lines = details.trimEnd().split(/\r?\n/u);
   if (tool !== "bash") return fileFailure(tool, details, lines);
-  const retained = issues.some(({ code }) => code === "retained-output");
-  return shellFailure(details, lines, retained);
+  return shellFailure(details, lines, hasRetainedOutput(issues));
 }
 
 function secretInputSources(

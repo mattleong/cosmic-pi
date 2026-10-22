@@ -7,7 +7,11 @@ import {
   type JsonObject,
   type TolerantFieldDiagnostic,
 } from "pi-cosmic-core";
-import { ALL_CODE_PREVIEW_TOOLS, parseCodePreviewTools } from "../tools/names";
+import {
+  ALL_CODE_PREVIEW_TOOLS,
+  parseCodePreviewTools,
+  type CodePreviewToolName,
+} from "../tools/names";
 import {
   CODE_PREVIEW_SETTING_KEYS,
   CodePreviewSettingsSchema,
@@ -39,10 +43,24 @@ export function formatSettingValue(
   return String(value);
 }
 
-const decodeSettingsFields = decodeTolerantFields(CodePreviewSettingsSchema.fields, {
-  path: "settings",
-  maxDiagnostics: MAX_SETTINGS_DIAGNOSTICS,
-});
+// Tools decode per entry so one unknown name cannot discard the whole selection.
+const decodeSettingsFields = decodeTolerantFields(
+  { ...CodePreviewSettingsSchema.fields, tools: Schema.Array(Schema.Unknown) },
+  { path: "settings", maxDiagnostics: MAX_SETTINGS_DIAGNOSTICS },
+);
+const decodeToolName = Schema.decodeUnknownOption(Schema.Literals(ALL_CODE_PREVIEW_TOOLS));
+
+function decodeToolEntries(entries: readonly unknown[]) {
+  const tools = new Set<CodePreviewToolName>();
+  const diagnostics: TolerantFieldDiagnostic[] = [];
+  entries.forEach((entry, index) => {
+    const tool = decodeToolName(entry);
+    if (Option.isSome(tool)) tools.add(tool.value);
+    else diagnostics.push({ path: `settings.tools[${index}]`, issue: "invalid" });
+  });
+  // Like the CLI parser, a selection with no known names keeps the fallback.
+  return { tools: entries.length > 0 && tools.size === 0 ? undefined : tools, diagnostics };
+}
 
 export function normalizeSettingsWithDiagnostics(
   data: JsonObject,
@@ -51,9 +69,11 @@ export function normalizeSettingsWithDiagnostics(
   const decoded = decodeSettingsFields(data);
   const next = cloneCodePreviewSettings(fallback);
   Object.assign(next, decoded.value);
-  const tools = new Set(decoded.value.tools ?? fallback.tools);
+  const entries = decoded.value.tools ? decodeToolEntries(decoded.value.tools) : undefined;
+  const tools = entries?.tools ?? new Set(fallback.tools);
   next.tools = ALL_CODE_PREVIEW_TOOLS.filter((tool) => tools.has(tool));
-  return { settings: next, diagnostics: decoded.diagnostics };
+  const diagnostics = [...decoded.diagnostics, ...(entries?.diagnostics ?? [])];
+  return { settings: next, diagnostics: diagnostics.slice(0, MAX_SETTINGS_DIAGNOSTICS) };
 }
 
 type SettingKey = keyof CodePreviewSettings;
