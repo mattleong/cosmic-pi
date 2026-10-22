@@ -161,7 +161,9 @@ describe("SubagentService", () => {
     return withService(layer, function* (service) {
       const first = yield* service.start(writer("writer-one", { task: "Implement auth" }));
       fake.controls[0]?.settle();
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
+      // A completed writer still owns the cwd until its cleanup confirms.
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.cleanup?.disposition === "confirmed");
+      expect(projections.at(-1)?.runs[0]?.state).toBe("completed");
       const second = yield* service.start(writer("writer-two", { task: "Implement tests" }));
 
       const resumed = yield* service.resume(first.id, "Make another edit");

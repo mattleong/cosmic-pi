@@ -665,10 +665,12 @@ export function fakeWriterLeaseLayer(
   });
 }
 
+// The fake children never run Node. Skipping the real Node-binary check keeps launches free of
+// filesystem I/O, so polling a forked start stays deterministic.
 const localPiBackendRegistryLayer = Layer.effect(
   SubagentBackendRegistry,
   ChildProcess.use((childProcesses) =>
-    Effect.succeed(backendRegistryFor([localPiBackendDriver(childProcesses)])),
+    Effect.succeed(backendRegistryFor([localPiBackendDriver(childProcesses, Effect.void)])),
   ),
 );
 

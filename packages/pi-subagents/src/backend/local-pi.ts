@@ -468,13 +468,17 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
   };
 });
 
-export const localPiBackendDriver = (childProcesses: ChildProcessContract): BackendDriver => ({
+export const localPiBackendDriver = (
+  childProcesses: ChildProcessContract,
+  // Children run on Pi's Node binary; a fake child boundary that never starts Node replaces the check.
+  nodeExecutableCheck: Effect.Effect<void, InvalidSubagentRequestError> = requireNodeExecutable(),
+): BackendDriver => ({
   runtime: "pi",
   capabilities: PI_SUBAGENT_CAPABILITIES,
   supportsContext: (context) => context === "fresh" || context === "fork",
   preflight: (request) =>
     isSafeNativeModelSelector(request.model)
-      ? requireNodeExecutable()
+      ? nodeExecutableCheck
       : Effect.fail(
           new InvalidSubagentRequestError({
             code: "pi_model_unsupported",

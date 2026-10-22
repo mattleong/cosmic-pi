@@ -30,6 +30,10 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
+        # pnpm silently skips an optional platform binary whose download keeps failing, so retry
+        # transient registry errors more than the default two times.
+        env:
+          npm_config_fetch_retries: 5
         run: pnpm install --frozen-lockfile
 
       - name: Validate packages
