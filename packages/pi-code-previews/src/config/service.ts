@@ -47,10 +47,19 @@ export type LoadSettingsOptions = {
   projectTrusted?: boolean | undefined;
 };
 
+type SettingKey = keyof CodePreviewSettings;
+
+export class CodePreviewSettingsSuperseded extends Schema.TaggedError<CodePreviewSettingsSuperseded>()(
+  "CodePreviewSettingsSuperseded",
+  { message: Schema.String },
+) {}
+
+type SettingsWriteError = JsonDocumentError | CodePreviewSettingsSuperseded;
+
 interface SaveSettingsOptions {
   readonly rehydrate?: LoadSettingsOptions;
   readonly previous?: CodePreviewSettings;
-  readonly editedKeys?: readonly (keyof CodePreviewSettings)[];
+  readonly editedKeys?: readonly SettingKey[];
 }
 
 export interface CodePreviewSettingsServiceContract {
@@ -62,11 +71,11 @@ export interface CodePreviewSettingsServiceContract {
     settings: CodePreviewSettings,
     admission: SettingsAdmission,
     options?: SaveSettingsOptions,
-  ) => Effect.Effect<void, JsonDocumentError>;
+  ) => Effect.Effect<void, SettingsWriteError>;
   readonly reset: (
     admission: SettingsAdmission,
     options?: SaveSettingsOptions,
-  ) => Effect.Effect<void, JsonDocumentError>;
+  ) => Effect.Effect<void, SettingsWriteError>;
   readonly flush: Effect.Effect<void>;
 }
 
@@ -94,22 +103,31 @@ function withoutKnownSettings(latest: JsonObject): JsonObject {
   return document;
 }
 
+function editedSettingKeys(
+  settings: CodePreviewSettings,
+  previous: CodePreviewSettings,
+  editedKeys: readonly SettingKey[] | undefined,
+): readonly SettingKey[] {
+  // Explicit assignments remain edits even while pending saves make the snapshot stale.
+  return (
+    editedKeys ??
+    CODE_PREVIEW_SETTING_KEYS.filter((key) => !Equal.equals(settings[key], previous[key]))
+  );
+}
+
 function settingsDocument(
   settings: CodePreviewSettings,
   context: SettingsSaveContext,
   latestGlobalDocument: JsonObject,
-  previous: CodePreviewSettings = context.loaded,
-  editedKeys?: readonly (keyof CodePreviewSettings)[],
+  editedKeys: readonly SettingKey[],
 ): JsonObject {
   const document = withoutKnownSettings(latestGlobalDocument);
   for (const key of CODE_PREVIEW_SETTING_KEYS) {
     const value = latestGlobalDocument[key];
     if (value !== undefined) document[key] = value;
   }
-  for (const key of CODE_PREVIEW_SETTING_KEYS) {
+  for (const key of editedKeys) {
     const value = settings[key];
-    // Explicit assignments remain edits even while pending saves make the snapshot stale.
-    if (editedKeys ? !editedKeys.includes(key) : Equal.equals(value, previous[key])) continue;
     if (
       Equal.equals(value, context.baseline[key]) &&
       Equal.equals(value, context.globalBaseline[key])
@@ -119,6 +137,21 @@ function settingsDocument(
   }
   return document;
 }
+
+// A later admission may win the settings permit first; it then owns the keys it edited.
+const failIfSuperseded = (
+  coordinator: SettingsCoordinator,
+  editedKeys: readonly SettingKey[],
+): Effect.Effect<void, CodePreviewSettingsSuperseded> =>
+  Effect.suspend(() =>
+    coordinator.isSuperseded(editedKeys)
+      ? Effect.fail(
+          new CodePreviewSettingsSuperseded({
+            message: "A newer change to the same setting was saved first",
+          }),
+        )
+      : Effect.void,
+  );
 
 function nestedCodePreviewSettings(document: JsonObject): JsonObject {
   const nested = document.codePreview;
@@ -203,64 +236,63 @@ export class CodePreviewSettingsService extends Context.Service<
         return { context, problems };
       });
 
-      const commit = (
-        coordinator: SettingsCoordinator,
-        context: SettingsSaveContext,
-        problems?: readonly SettingsLoadProblem[],
-      ) => {
-        const committed = freezeSnapshot(context);
-        return Ref.set(state, committed).pipe(
-          Effect.andThen(
-            Effect.sync(() => {
-              coordinator.publishIfCurrent(() => {
-                setCodePreviewSettings(committed.loaded);
-                if (problems) setCodePreviewSettingsProblems(problems);
-              });
-            }),
-          ),
+      const commit = (context: SettingsSaveContext, publication: () => void) =>
+        Ref.set(state, freezeSnapshot(context)).pipe(
+          Effect.andThen(Effect.sync(publication)),
           Effect.uninterruptible,
         );
-      };
 
       const commitDocument = (
         coordinator: SettingsCoordinator,
+        editedKeys: readonly SettingKey[],
         next: SettingsSaveContext,
         edit: (latest: JsonObject) => JsonObject,
       ) =>
-        documents.modifyObject(flatSettingsPath, (latest) =>
-          Effect.try({
-            try: () => {
-              const document = edit(latest);
-              const committed = {
-                ...next,
-                loaded: normalizeSettingsWithDiagnostics(document, next.baseline).settings,
-              };
-              return {
-                value: committed,
-                document,
-                write: !Equal.equals(document, latest),
-                afterCommit: commit(coordinator, committed),
-              } satisfies JsonDocumentModification<SettingsSaveContext>;
-            },
-            catch: () =>
-              new JsonDocumentError({
-                operation: "write",
-                path: flatSettingsPath,
-                message: "Unable to update code preview settings.",
-              }),
-          }).pipe(Effect.tap((change) => (change.write ? Effect.void : change.afterCommit))),
+        failIfSuperseded(coordinator, editedKeys).pipe(
+          Effect.andThen(
+            documents.modifyObject(flatSettingsPath, (latest) =>
+              Effect.try({
+                try: () => {
+                  const document = edit(latest);
+                  const committed = {
+                    ...next,
+                    loaded: normalizeSettingsWithDiagnostics(document, next.baseline).settings,
+                  };
+                  return {
+                    value: committed,
+                    document,
+                    write: !Equal.equals(document, latest),
+                    afterCommit: commit(committed, () =>
+                      coordinator.publishEdit(editedKeys, next.baseline, (baseline) =>
+                        setCodePreviewSettings(
+                          normalizeSettingsWithDiagnostics(document, baseline).settings,
+                        ),
+                      ),
+                    ),
+                  } satisfies JsonDocumentModification<SettingsSaveContext>;
+                },
+                catch: () =>
+                  new JsonDocumentError({
+                    operation: "write",
+                    path: flatSettingsPath,
+                    message: "Unable to update code preview settings.",
+                  }),
+              }).pipe(Effect.tap((change) => (change.write ? Effect.void : change.afterCommit))),
+            ),
+          ),
         );
 
       const saveState = Effect.fn("CodePreviewSettings.saveState")(function* (
         settings: CodePreviewSettings,
         context: SettingsSaveContext,
         coordinator: SettingsCoordinator,
-        previous?: CodePreviewSettings,
-        editedKeys?: readonly (keyof CodePreviewSettings)[],
+        previous: CodePreviewSettings = context.loaded,
+        editedKeys?: readonly SettingKey[],
       ) {
         const loaded = yield* decodeCommittedSettings(settings, flatSettingsPath);
-        return yield* commitDocument(coordinator, { ...context, loaded }, (latest) =>
-          settingsDocument(loaded, context, latest, previous, editedKeys),
+        const keys = editedSettingKeys(loaded, previous, editedKeys);
+        return yield* commitDocument(coordinator, keys, { ...context, loaded }, (latest) =>
+          settingsDocument(loaded, context, latest, keys),
         );
       });
 
@@ -268,6 +300,7 @@ export class CodePreviewSettingsService extends Context.Service<
         (context: SettingsSaveContext, coordinator: SettingsCoordinator) =>
           commitDocument(
             coordinator,
+            CODE_PREVIEW_SETTING_KEYS,
             { ...context, loaded: context.baseline },
             withoutKnownSettings,
           ),
@@ -279,11 +312,10 @@ export class CodePreviewSettingsService extends Context.Service<
         write: (
           current: SettingsSaveContext,
           coordinator: SettingsCoordinator,
-        ) => Effect.Effect<unknown, JsonDocumentError>,
+        ) => Effect.Effect<unknown, SettingsWriteError>,
       ) =>
         withSettingsCoordinator(admission, (coordinator) =>
           Effect.gen(function* () {
-            if (!coordinator.isCurrent()) return;
             let current = yield* Ref.get(state);
             if (options.rehydrate !== undefined) {
               const { context } = yield* loadSaveContext(options.rehydrate);
@@ -298,7 +330,14 @@ export class CodePreviewSettingsService extends Context.Service<
         load: (admission, options = {}) =>
           withSettingsCoordinator(admission, (coordinator) =>
             loadSaveContext(options).pipe(
-              Effect.tap(({ context, problems }) => commit(coordinator, context, problems)),
+              Effect.tap(({ context, problems }) =>
+                commit(context, () =>
+                  coordinator.publishIfCurrent(context.baseline, () => {
+                    setCodePreviewSettings(context.loaded);
+                    setCodePreviewSettingsProblems(problems);
+                  }),
+                ),
+              ),
               Effect.map(({ context }) => cloneCodePreviewSettings(context.loaded)),
             ),
           ),

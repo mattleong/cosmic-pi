@@ -1,10 +1,11 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type SettingsList, type SettingItem } from "@earendil-works/pi-tui";
 import { constTrue, constVoid } from "effect/Function";
-import type { CodePreviewSettings } from "../config/schema";
+import { CODE_PREVIEW_SETTING_KEYS, type CodePreviewSettings } from "../config/schema";
 import { cloneCodePreviewSettings, codePreviewSettings } from "../config/state";
 import { updateSetting } from "../config/values";
 import {
+  CodePreviewSettingsSuperseded,
   flushSettingsSaveQueue,
   formatSettingsSaveError,
   queueSettingsReset,
@@ -13,6 +14,16 @@ import {
 } from "../config/store";
 import { initializeShiki } from "../syntax/shiki";
 import { createSettingsCategoryItems } from "./ui/index";
+
+type SettingKey = keyof CodePreviewSettings;
+
+function copySetting<K extends SettingKey>(
+  target: Pick<CodePreviewSettings, K>,
+  source: Pick<CodePreviewSettings, K>,
+  key: K,
+): void {
+  target[key] = source[key];
+}
 
 interface SettingsListControllerOptions {
   theme?: Theme;
@@ -73,10 +84,25 @@ export function createCodePreviewSettingsModel({
   let activeList: SettingsList | undefined;
   let draftSettings = cloneCodePreviewSettings(codePreviewSettings);
   let revision = 0;
+  // Latest pending panel revision per edited setting; those draft values outrank the published ones.
+  const pendingEdits = new Map<SettingKey, number>();
   const sync = (list: SettingsList) => {
     if (!isCurrent()) return;
     for (const item of createSettingsCategoryItems(() => draftSettings, constVoid))
       list.updateValue(item.id, item.currentValue);
+  };
+  // Saves may settle out of admission order, so each settlement rebases the draft on the canonical
+  // settings rather than trusting whichever save happened to be admitted last.
+  const settle = (
+    list: SettingsList,
+    settled: (key: SettingKey, pendingRevision: number) => boolean,
+  ) => {
+    for (const [key, pendingRevision] of pendingEdits)
+      if (settled(key, pendingRevision)) pendingEdits.delete(key);
+    const rebased = cloneCodePreviewSettings(codePreviewSettings);
+    for (const key of pendingEdits.keys()) copySetting(rebased, draftSettings, key);
+    draftSettings = rebased;
+    sync(list);
   };
   const handleSettingChange = (list: SettingsList, id: string, value: string) => {
     if (!isCurrent()) return;
@@ -91,33 +117,39 @@ export function createCodePreviewSettingsModel({
       sync(list);
       saved = effects.queueReset(loadOptions).then(() => {
         if (!isCurrent()) return undefined;
-        if (revision === changeRevision) {
-          draftSettings = cloneCodePreviewSettings(codePreviewSettings);
-          sync(list);
-        }
+        // The reset superseded every earlier panel edit, whichever order they settle in.
+        settle(list, (_key, pendingRevision) => pendingRevision < changeRevision);
         if (codePreviewSettings.shikiTheme !== previous.shikiTheme)
           void effects.initializeSyntax(codePreviewSettings.shikiTheme).catch(() => undefined);
         notify("Code preview settings restored to defaults", "info");
         return undefined;
       });
     } else {
+      const editedKeys = CODE_PREVIEW_SETTING_KEYS.filter((key) => key === id);
       const next = updateSetting(draftSettings, id, value);
       draftSettings = next;
+      for (const edited of editedKeys) pendingEdits.set(edited, changeRevision);
       sync(list);
-      saved = persistSettingsChange(next, previous, loadOptions, effects, isCurrent).then(() => {
-        if (isCurrent() && revision === changeRevision) {
-          draftSettings = cloneCodePreviewSettings(codePreviewSettings);
-          sync(list);
-        }
-        return undefined;
+      // An explicit assignment is an edit even when a stale draft already shows the same value.
+      saved = persistSettingsChange(
+        next,
+        previous,
+        loadOptions,
+        effects,
+        isCurrent,
+        editedKeys,
+      ).finally(() => {
+        if (!isCurrent()) return;
+        settle(list, (pending, pendingRevision) =>
+          editedKeys.some((edited) => edited === pending && pendingRevision === changeRevision),
+        );
       });
     }
     void saved.catch((cause: unknown) => {
       if (!isCurrent()) return;
-      if (revision === changeRevision) {
-        draftSettings = cloneCodePreviewSettings(codePreviewSettings);
-        sync(list);
-      }
+      if (id === "resetToDefaults") settle(list, () => false);
+      // A later panel change to the same setting already saved the user's newest value.
+      if (revision !== changeRevision && cause instanceof CodePreviewSettingsSuperseded) return;
       notify(formatSettingsSaveError(cause), "warning");
     });
   };

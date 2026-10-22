@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { beforeEach, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Scheduler from "effect/Scheduler";
+import * as Scope from "effect/Scope";
 import { provideBuiltLayer } from "pi-cosmic-core";
 import {
   capturedTelemetrySnapshot,
@@ -44,6 +46,31 @@ const syntaxLayer = (
   CodePreviewSyntaxService.layer.pipe(
     Layer.provide(Layer.succeed(ShikiAdapter, ShikiAdapter.of({ create, loadLanguage }))),
   );
+
+// Runs each fiber resumption on demand so a test can interrupt between layer acquisition steps.
+const steppedScheduler = () => {
+  const tasks: (() => void)[] = [];
+  const step = (): boolean => {
+    const task = tasks.shift();
+    task?.();
+    return task !== undefined;
+  };
+  const drain = (): void => {
+    while (step());
+  };
+  const scheduler: Scheduler.Scheduler = {
+    executionMode: "async",
+    // Smaller budgets yield again before the resumed continuation can make progress.
+    shouldYield: (fiber) => fiber.currentOpCount >= 3,
+    makeDispatcher: () => ({
+      scheduleTask: (task) => {
+        tasks.push(task);
+      },
+      flush: drain,
+    }),
+  };
+  return { scheduler, step, drain };
+};
 
 describe("session syntax service", () => {
   beforeEach(() => setCodePreviewSettings(defaultCodePreviewSettings));
@@ -364,4 +391,29 @@ describe("session syntax service", () => {
       assert.equal(creates, 0);
     });
   });
+
+  it.effect("an interrupted session startup never leaves an orphaned syntax projection", () =>
+    Effect.gen(function* () {
+      const stepped = steppedScheduler();
+      const scope = yield* Scope.make();
+      const build = yield* Layer.buildWithScope(
+        syntaxLayer(() => Effect.succeed(highlighter())),
+        scope,
+      ).pipe(
+        Effect.provideService(Scheduler.Scheduler, stepped.scheduler),
+        Effect.forkDetach({ startImmediately: true }),
+      );
+      while (syntaxProjection() === undefined) assert.equal(stepped.step(), true);
+      assert.equal(build.pollUnsafe(), undefined);
+
+      const interrupted = yield* Fiber.interrupt(build).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      stepped.drain();
+      yield* Fiber.join(interrupted);
+      assert.equal(Exit.hasInterrupts(yield* Fiber.await(build)), true);
+      yield* Scope.close(scope, Exit.void);
+      assert.equal(syntaxProjection(), undefined);
+    }),
+  );
 });

@@ -89,7 +89,10 @@ export class CodePreviewSyntaxService extends Context.Service<
     this,
     Effect.gen(function* () {
       const adapter = yield* ShikiAdapter;
-      const owner = acquireProjectionOwnership("code-preview-syntax-projection");
+      const owner = yield* Effect.acquireRelease(
+        Effect.sync(() => acquireProjectionOwnership("code-preview-syntax-projection")),
+        (acquired) => Effect.sync(() => clearSyntaxProjection(acquired)),
+      );
       const initial: SyntaxState = {
         highlighter: undefined,
         theme: undefined,
@@ -297,12 +300,7 @@ export class CodePreviewSyntaxService extends Context.Service<
         language: requestLanguage,
       });
 
-      yield* Effect.addFinalizer(() =>
-        ingress.shutdown.pipe(
-          Effect.andThen(dispose),
-          Effect.ensuring(Effect.sync(() => clearSyntaxProjection(owner))),
-        ),
-      );
+      yield* Effect.addFinalizer(() => ingress.shutdown.pipe(Effect.andThen(dispose)));
       return CodePreviewSyntaxService.of({ initialize });
     }),
   );

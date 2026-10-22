@@ -19,6 +19,7 @@ import { cloneCodePreviewSettings } from "./state";
 
 export {
   CodePreviewSettingsService,
+  CodePreviewSettingsSuperseded,
   type CodePreviewSettingsServiceContract,
   type LoadSettingsOptions,
   type SettingsLoadProblem,

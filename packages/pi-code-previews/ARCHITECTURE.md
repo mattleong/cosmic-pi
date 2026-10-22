@@ -64,7 +64,13 @@ truncate its own expanded content. See [adapter maintenance](docs/third-party-re
 The configuration store is the persistence entrypoint; pre-session access uses a short-lived boundary
 runtime. A process-local coordinator serializes operations across independently built Layers. Only
 successful work advances publication authority. Atomic document modification, private replacement,
-and settings projection publication commit together; flush is a global barrier.
+and settings projection publication commit together; flush is a global barrier. Permits are not
+granted in admission order, so edits are ordered per key: an overtaken save still applies keys no
+later admission published and otherwise fails as superseded rather than reporting success. An
+overtaken save publishes against the newest publication's project context, never its own older one.
+The panel stays silent when its own later change superseded an edit; scripted apply reports it.
+Whenever one of its saves settles, the panel rebases its draft on the published settings plus its
+still-pending edits, and an explicit selection always saves its setting, even if the draft agrees.
 
 Settings resolution ignores untrusted projects, preserves valid sibling fields after malformed input,
 and reports ignored files/invalid fields. Saves modify only known edited overrides in the latest

@@ -28,8 +28,10 @@ import {
 } from "../../src/config/state";
 import {
   CodePreviewSettingsService,
+  formatSettingsSaveError,
   type CodePreviewSettingsServiceContract,
 } from "../../src/config/store";
+import { issueMessageStyleProblems } from "../../testing";
 
 const loadSettings = (service: CodePreviewSettingsServiceContract) =>
   service.load(nextSettingsAdmission());
@@ -48,7 +50,11 @@ function settingsLayer(documents: JsonDocumentStoreContract) {
 const usingSettings = <A, E, R>(
   documents: JsonDocumentStoreContract,
   use: (service: CodePreviewSettingsServiceContract) => Effect.Effect<A, E, R>,
-) => CodePreviewSettingsService.use(use).pipe(provideBuiltLayer(settingsLayer(documents)));
+) =>
+  // Each call builds an independent service, like separate session runtimes.
+  CodePreviewSettingsService.use(use).pipe(
+    provideBuiltLayer(settingsLayer(documents), { local: true }),
+  );
 
 const gateFirstRead = (fake: InMemoryDocuments, onRead: (read: number) => void = () => undefined) =>
   Effect.gen(function* () {
@@ -163,19 +169,82 @@ it.effect("a later save waits for an earlier load and publishes after it", () =>
   }).pipe(Effect.scoped),
 );
 
-it.effect("a stale save returns before document modification", () => {
+it.effect("an overtaken save still applies an edit to a different setting", () => {
   const fake = makeInMemoryDocuments();
   return usingSettings(fake.service, (service) =>
     Effect.gen(function* () {
-      const stale = nextSettingsAdmission();
+      const loaded = yield* loadSettings(service);
+      const earlier = nextSettingsAdmission();
+      yield* service.save({ ...loaded, pathIcons: "off" }, nextSettingsAdmission(), {
+        previous: loaded,
+      });
       yield* service.load(nextSettingsAdmission());
-      const published = codePreviewSettings;
-      yield* service.save({ ...defaultCodePreviewSettings, readCollapsedLines: 99 }, stale);
-      assert.equal(fake.updateCount, 0);
-      assert.equal(codePreviewSettings, published);
+      yield* service.save({ ...loaded, readCollapsedLines: 42 }, earlier, { previous: loaded });
+
+      assert.deepEqual(fake.documents.get("/agent/code-previews.json"), {
+        pathIcons: "off",
+        readCollapsedLines: 42,
+      });
+      assert.equal(codePreviewSettings.pathIcons, "off");
+      assert.equal(codePreviewSettings.readCollapsedLines, 42);
     }),
   );
 });
+
+it.effect("an overtaken save keeps the project context of another runtime's newer load", () => {
+  const fake = makeInMemoryDocuments({
+    "/a/.pi/settings.json": { codePreview: { shikiTheme: "nord" } },
+    "/b/.pi/settings.json": { codePreview: { shikiTheme: "github-dark" } },
+  });
+  return usingSettings(fake.service, (first) =>
+    usingSettings(fake.service, (second) =>
+      Effect.gen(function* () {
+        const loaded = yield* first.load(nextSettingsAdmission(), {
+          projectCwd: "/a",
+          projectTrusted: true,
+        });
+        const earlier = nextSettingsAdmission();
+        yield* second.load(nextSettingsAdmission(), { projectCwd: "/b", projectTrusted: true });
+        yield* first.save({ ...loaded, readCollapsedLines: 42 }, earlier, { previous: loaded });
+
+        assert.deepEqual(fake.documents.get("/agent/code-previews.json"), {
+          readCollapsedLines: 42,
+        });
+        assert.equal(codePreviewSettings.shikiTheme, "github-dark");
+        assert.equal(codePreviewSettings.readCollapsedLines, 42);
+      }),
+    ),
+  );
+});
+
+it.effect.each(["save", "reset"] as const)(
+  "an overtaken save of a setting the later %s changed fails as superseded",
+  (operation) => {
+    const fake = makeInMemoryDocuments({ "/agent/code-previews.json": { readCollapsedLines: 17 } });
+    return usingSettings(fake.service, (service) =>
+      Effect.gen(function* () {
+        const loaded = yield* loadSettings(service);
+        const earlier = nextSettingsAdmission();
+        if (operation === "save")
+          yield* service.save({ ...loaded, readCollapsedLines: 42 }, nextSettingsAdmission(), {
+            previous: loaded,
+          });
+        else yield* service.reset(nextSettingsAdmission());
+        const committed = fake.documents.get("/agent/code-previews.json");
+        const published = codePreviewSettings;
+
+        const failure = yield* Effect.flip(
+          service.save({ ...loaded, readCollapsedLines: 99 }, earlier, { previous: loaded }),
+        );
+
+        assert.equal(failure._tag, "CodePreviewSettingsSuperseded");
+        assert.deepEqual(issueMessageStyleProblems(formatSettingsSaveError(failure)), []);
+        assert.deepEqual(fake.documents.get("/agent/code-previews.json"), committed);
+        assert.equal(codePreviewSettings, published);
+      }),
+    );
+  },
+);
 
 it.effect("flush in another Layer waits for one-shot rehydrate and save", () =>
   Effect.gen(function* () {
