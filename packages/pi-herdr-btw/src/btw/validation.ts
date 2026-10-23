@@ -1,4 +1,6 @@
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import { isInteractiveShellProcessName } from "pi-cosmic-core";
 import type {
   HerdrClientContract,
@@ -92,7 +94,7 @@ export const validateBtwInput = Effect.fn("HerdrBtw.validateBtwInput")(function*
 
   if (
     prompt !== undefined &&
-    (prompt.includes("\0") || Buffer.byteLength(prompt, "utf8") > MAX_PROMPT_BYTES)
+    (Fn.pipe(prompt, Str.includes("\0")) || Buffer.byteLength(prompt, "utf8") > MAX_PROMPT_BYTES)
   )
     return yield* confirmedFailure(
       "validate prompt",

@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import * as Semaphore from "effect/Semaphore";
+import * as Str from "effect/String";
 import { HerdrClient, type HerdrPane } from "../boundary/herdr-client.ts";
 import { HerdrBtwLinkStore, type HerdrBtwLinkRecordResult } from "../boundary/host-link-store.ts";
 import type { HerdrBtwSessionInput } from "../boundary/host-session.ts";
@@ -53,7 +54,7 @@ export interface HerdrBtwResult {
 }
 
 const failClosedLink = (operation: string, code: string, message: string): HerdrBtwError =>
-  confirmedFailure(operation, code, `${message}; ${NEW_COMMAND_GUIDANCE.toLowerCase()}`);
+  confirmedFailure(operation, code, `${message}; ${Str.toLowerCase(NEW_COMMAND_GUIDANCE)}`);
 
 const linkRecordFailure = (result: Exclude<HerdrBtwLinkRecordResult, "recorded">): HerdrBtwError =>
   result === "refused"

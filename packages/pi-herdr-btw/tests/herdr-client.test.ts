@@ -1,5 +1,10 @@
 import { it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
 import { BoundedProcessError, type BoundedProcessRequest } from "pi-cosmic-core";
 import { expect } from "vitest";
 import { makeHerdrClient, type HerdrProcessRunner } from "../src/boundary/herdr-client.ts";
@@ -114,15 +119,21 @@ it.effect("isolates credentials and hostile arguments while bounding requests", 
       expect(captured.length).toBeGreaterThan(issued);
     }
 
-    const split = captured.find(({ args }) => args[0] === "pane" && args[1] === "split")!;
+    const split = Option.getOrThrow(
+      Arr.findFirst(captured, ({ args }) => args[0] === "pane" && args[1] === "split"),
+    );
     expect(split.args[split.args.indexOf("--cwd") + 1]).toBe(hostilePath);
-    const launch = captured.find(({ args }) => args[0] === "agent" && args[1] === "start")!;
+    const launch = Option.getOrThrow(
+      Arr.findFirst(captured, ({ args }) => args[0] === "agent" && args[1] === "start"),
+    );
     const childArgs = launch.args.slice(launch.args.indexOf("--") + 1);
     expect(childArgs[childArgs.indexOf("--session") + 1]).toBe(hostilePath);
     expect(childArgs).not.toContain("/sessions/parent.jsonl");
     expect(childArgs).not.toContain("--fork");
-    const prompt = captured.find(({ args }) => args[0] === "agent" && args[1] === "prompt")!;
-    expect(prompt.args.filter((arg) => arg === hostilePrompt)).toHaveLength(1);
+    const prompt = Option.getOrThrow(
+      Arr.findFirst(captured, ({ args }) => args[0] === "agent" && args[1] === "prompt"),
+    );
+    expect(Arr.filter(prompt.args, (arg) => arg === hostilePrompt)).toHaveLength(1);
 
     for (const request of captured) {
       expect(request.executable).toBe("herdr");
@@ -148,7 +159,13 @@ it.effect("isolates credentials and hostile arguments while bounding requests", 
       }
       for (const secret of ["never-pass", "private-api-key", "private-session-token"]) {
         expect(
-          [...request.args, ...Object.values(request.environment ?? {})].join("\n"),
+          Arr.join(
+            [
+              ...request.args,
+              ...Arr.map(Rec.values(request.environment ?? {}), (value) => value ?? ""),
+            ],
+            "\n",
+          ),
         ).not.toContain(secret);
       }
       for (const limit of [request.stdoutLimitBytes, request.stderrLimitBytes]) {
@@ -191,7 +208,7 @@ it.effect("sanitizes and bounds uncertain mutation exit diagnostics", () =>
       Effect.succeed({
         ...success(""),
         code: 1,
-        stderr: `password=${credential} \u0000${"x".repeat(3_000)}`,
+        stderr: `password=${credential} \u0000${Fn.pipe("x", Str.repeat(3_000))}`,
       });
     const client = makeHerdrClient({}, { processRunner });
 
@@ -281,7 +298,7 @@ it.effect("keeps live Pi agents when an unrelated agent has an unexpected shape"
       {
         ...parentPane,
         agent: "future-agent",
-        name: "x".repeat(500),
+        name: Fn.pipe("x", Str.repeat(500)),
         agent_session: { source: "herdr:future", agent: "future", kind: "uri", value: "" },
       },
       { pane_id: 7, agent: "claude" },
@@ -297,7 +314,7 @@ it.effect("rejects a snapshot whose Pi agent is malformed", () =>
   Effect.gen(function* () {
     for (const malformed of [
       { ...piAgent, agent_session: { ...piAgent.agent_session, kind: "uri" } },
-      { ...piAgent, agent: "renamed", name: "x".repeat(500) },
+      { ...piAgent, agent: "renamed", name: Fn.pipe("x", Str.repeat(500)) },
       { ...piAgent, agent: null, terminal_id: "" },
     ]) {
       const error = yield* Effect.flip(snapshotClient([piAgent, malformed]).inspectLiveAgents());

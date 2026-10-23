@@ -1,7 +1,12 @@
+import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import {
   decodeUnknownOrUndefined,
   acquireBoundedProcessRunner,
@@ -161,10 +166,12 @@ interface HerdrCommandRequest {
 export type HerdrProcessRunner = BoundedProcessRunner;
 
 const operationCode = (operation: string, suffix: string): string =>
-  `herdr_${operation
-    .toLowerCase()
-    .replaceAll(/[^a-z0-9]+/gu, "_")
-    .replaceAll(/^_|_$/gu, "")}_${suffix}`;
+  `herdr_${Fn.pipe(
+    operation,
+    Str.toLowerCase,
+    Str.replaceAll(/[^a-z0-9]+/gu, "_"),
+    Str.replaceAll(/^_|_$/gu, ""),
+  )}_${suffix}`;
 
 const herdrCommandExitFailure = (
   request: HerdrCommandRequest,
@@ -223,9 +230,10 @@ const HERDR_ENVIRONMENT_KEYS: ReadonlySet<string> = new Set([
 
 const selectHerdrEnvironment = (source: Readonly<NodeJS.ProcessEnv>): NodeJS.ProcessEnv =>
   Object.freeze(
-    Object.fromEntries(
-      Object.entries(source).flatMap(([key, value]) =>
-        value !== undefined && (HERDR_ENVIRONMENT_KEYS.has(key) || key.startsWith("XDG_"))
+    Rec.fromEntries(
+      Arr.flatMap(Rec.toEntries(source), ([key, value]) =>
+        value !== undefined &&
+        (HERDR_ENVIRONMENT_KEYS.has(key) || Fn.pipe(key, Str.startsWith("XDG_")))
           ? ([[key, value]] as const)
           : [],
       ),
@@ -302,7 +310,7 @@ export const makeHerdrClient = (
         if (output.code !== 0) {
           const killedBySignal = output.code === null && output.signal !== null;
           const detail = killedBySignal
-            ? `terminated by ${output.signal} signal${output.stderr ? `: ${output.stderr.trim()}` : ""}`
+            ? `terminated by ${output.signal} signal${output.stderr ? `: ${Str.trim(output.stderr)}` : ""}`
             : output.stderr || output.stdout;
           return Effect.fail(herdrCommandExitFailure(request, detail));
         }
@@ -330,8 +338,8 @@ export const makeHerdrClient = (
         mutation: false,
       }).pipe(
         Effect.map((stdout) => {
-          const piIntegration = stdout.split(/\r?\n/gu).find((line) => line.startsWith("pi:"));
-          return piIntegration !== undefined && /^pi:\s+current\b/u.test(piIntegration);
+          const piIntegration = Arr.findFirst(Str.split(stdout, /\r?\n/gu), Str.startsWith("pi:"));
+          return Option.exists(piIntegration, (line) => /^pi:\s+current\b/u.test(line));
         }),
       ),
     ),

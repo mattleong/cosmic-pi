@@ -1,4 +1,5 @@
 import { describe, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -166,7 +167,7 @@ describe("herdr-btw reuse workflow", () => {
           compareSessionFileIdentity: (left, right) =>
             replaced &&
             replacement === "parent-alias" &&
-            [left, right].every((path) => path === CHILD_FILE || path === SESSION_FILE)
+            Arr.every([left, right], (path) => path === CHILD_FILE || path === SESSION_FILE)
               ? "same"
               : left === right
                 ? "same"

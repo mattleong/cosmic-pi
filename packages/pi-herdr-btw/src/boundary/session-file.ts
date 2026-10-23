@@ -4,8 +4,10 @@ import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import {
   decodeUnknownOrUndefined,
   nodeFs,
@@ -137,7 +139,7 @@ const createBlankChildSessionFileAt = (
   try {
     if (!statSync(input.sessionDir).isDirectory()) return BlankChildSessionFileResult.invalid();
     const timestamp = DateTime.formatIso(DateTime.makeUnsafe(now));
-    const fileTimestamp = timestamp.replace(/[:.]/gu, "-");
+    const fileTimestamp = Fn.pipe(timestamp, Str.replace(/[:.]/gu, "-"));
     const path = pathApi.join(input.sessionDir, `${fileTimestamp}_${input.sessionId}.jsonl`);
     if (!isBoundedSessionPath(path)) return BlankChildSessionFileResult.invalid();
     const header = {

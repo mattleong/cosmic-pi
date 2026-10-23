@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import { registerExtensionCommand } from "pi-cosmic-core";
 import { notifyHerdrBtw } from "../boundary/host-notifier.ts";
 import { HerdrBtwError } from "./errors.ts";
@@ -23,7 +24,7 @@ const sideSession =
       return Promise.resolve();
     }
     const isCurrent = captureAuthority();
-    const trimmed = args.trim();
+    const trimmed = Str.trim(args);
     return run(trimmed === "" ? undefined : trimmed).then(
       (result) =>
         isCurrent() ? notifyHerdrBtw(ctx, SUCCESS_MESSAGES[result.mode], "info") : undefined,

@@ -1,5 +1,7 @@
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import * as TestClock from "effect/testing/TestClock";
 import { nodeFs, nodePath } from "pi-cosmic-core";
 import { temporaryDirectory } from "pi-cosmic-core/testing";
@@ -111,7 +113,7 @@ describe("createBlankChildSessionFile", () => {
       if (BlankChildSessionFileResult.$is("created")(result)) {
         expect(result.path).toContain("2026-08-26T01-02-03-004Z_blank-child-id.jsonl");
         expect(nodeFs.statSync(result.path).mode & 0o777).toBe(0o600);
-        const header = nodeFs.readFileSync(result.path, "utf8").split("\n")[0] ?? "";
+        const header = Str.split(nodeFs.readFileSync(result.path, "utf8"), "\n")[0];
         expect(header).toContain(`"timestamp":"${FIRST_TIMESTAMP}"`);
         expect(header).toContain('"cwd":"/project"');
         expect(probeSessionHeader(result.path)).toEqual(
@@ -142,7 +144,7 @@ describe("createBlankChildSessionFile", () => {
           sessionDir: nodePath.join(dir, "missing-directory"),
         }),
       ).toEqual(BlankChildSessionFileResult.invalid());
-      for (const sessionId of ["x/../escape", "a".repeat(129)])
+      for (const sessionId of ["x/../escape", Fn.pipe("a", Str.repeat(129))])
         expect(yield* createBlankChildSessionFile({ ...input, sessionId })).toEqual(
           BlankChildSessionFileResult.invalid(),
         );

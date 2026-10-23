@@ -2,8 +2,10 @@ import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
+import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
+import * as Str from "effect/String";
 import * as TestClock from "effect/testing/TestClock";
 import {
   HerdrClient,
@@ -50,16 +52,16 @@ const MUTATING_OPERATIONS = new Set([
 const commandFailure = (operation: string): HerdrBtwError =>
   HerdrBtwError.make({
     operation,
-    code: `fixture_${operation.toLowerCase().replaceAll(" ", "_")}`,
+    code: `fixture_${Fn.pipe(operation, Str.toLowerCase, Str.replaceAll(" ", "_"))}`,
     message: `Fixture failure during ${operation}.`,
     outcome: MUTATING_OPERATIONS.has(operation) ? "uncertain" : "confirmed",
   });
 
 export const operationNames = (calls: ReadonlyArray<HerdrBtwClientCall>): string[] =>
-  calls.map((call) => call.operation);
+  Arr.map(calls, (call) => call.operation);
 
 export const operationCount = (calls: ReadonlyArray<HerdrBtwClientCall>, operation: string) =>
-  calls.filter((call) => call.operation === operation).length;
+  Arr.filter(calls, (call) => call.operation === operation).length;
 
 export const operationInputs = (calls: ReadonlyArray<HerdrBtwClientCall>, operation: string) =>
   Arr.filterMap(calls, (call) =>
@@ -85,7 +87,7 @@ export const aliasIdentity =
     aliasResult: SessionFileIdentityComparison = "same",
   ): SessionFileIdentityComparator =>
   (leftPath, rightPath) =>
-    [leftPath, rightPath].every((path) => aliasPaths.includes(path))
+    Arr.every([leftPath, rightPath], (path) => aliasPaths.includes(path))
       ? aliasResult
       : leftPath === rightPath
         ? "same"
