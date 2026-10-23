@@ -1,4 +1,6 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
+import * as Arr from "effect/Array";
+import * as Result from "effect/Result";
 import { padListDetailRow } from "./list-detail.ts";
 import { clipToWidth } from "./chrome.ts";
 
@@ -46,8 +48,8 @@ export const managerTable = (
   return {
     widths,
     row: (cells: ReadonlyArray<string>): string =>
-      columns
-        .flatMap((_, index) => (widths[index] ? [cell(cells[index] ?? "", index)] : []))
-        .join(gap),
+      Arr.filterMap(columns, (_, index) =>
+        widths[index] ? Result.succeed(cell(cells[index] ?? "", index)) : Result.failVoid,
+      ).join(gap),
   };
 };

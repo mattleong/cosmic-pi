@@ -270,91 +270,90 @@ export function createActivityHost(
     deactivate() {
       if (current) release(current);
     },
-    open: (ctx, section) =>
-      Effect.gen(function* () {
-        const binding = current;
-        if (
-          !binding?.active ||
-          !binding.installed ||
-          ctx.mode !== "tui" ||
-          ctx.sessionManager.getSessionId() !== binding.sessionId
-        )
-          return false;
-        if (binding.manager) return yield* new ActivityError({ reason: "stale" });
-        const owner = {};
-        binding.manager = owner;
-        const currentHost = () => binding.active && binding.installed && current === binding;
-        const previousRender = binding.render;
-        let closing = false;
-        let detailController: AbortController | undefined;
-        const action = yield* openOwnedSurface<ActivityActionRequest | undefined>(ctx, {
-          placement: "screen",
-          closedValue: undefined,
-          isCurrent: () => binding.active && current === binding && binding.manager === owner,
-          onControl: (close) => {
-            binding.close = close;
-          },
-          onClose: () => {
-            closing = true;
-            safe(() => detailController?.abort());
-          },
-          create: ({ tui, theme, keybindings, getHeight, finish }) => {
-            binding.render = () => {
-              previousRender();
-              tui.requestRender();
-            };
-            const owned = () =>
-              !closing && binding.active && current === binding && binding.manager === owner;
-            const component = new ActivityComponent({
-              snapshot: () => binding.rows,
-              ...(section && { initialSection: section }),
-              title: section ? MANAGER_TITLES[section] : "Activity",
-              starting: () => binding.starting,
-              presentation: binding.presentation,
-              theme,
-              now: () => binding.now,
-              height: getHeight,
-              close: finish,
-              invoke: (request) => {
-                if (owned()) submit(invokeOrWarn(binding.service, request, ctx, currentHost));
-              },
-              requestRender: () => tui.requestRender(),
-              ...fullScreenKeybindingOptions(keybindings),
-              cancelDetail: () => safe(() => detailController?.abort()),
-              loadDetail: (request, deliver) => {
-                safe(() => detailController?.abort());
-                if (closing) return;
-                const controller = new AbortController();
-                detailController = controller;
-                submit(
-                  serviceDetail(binding.service, request, (text) => {
-                    if (!controller.signal.aborted && owned()) deliver(text);
-                  }),
-                  controller.signal,
-                );
-              },
-            });
-            binding.update = () => {
-              if (owned()) component.update();
-            };
-            return component;
-          },
-        }).pipe(
-          Effect.mapError(() => new ActivityError({ reason: "failed" })),
-          Effect.ensuring(
-            Effect.sync(() => {
-              if (binding.manager !== owner) return;
-              binding.manager = undefined;
-              binding.close = () => undefined;
-              binding.update = () => undefined;
-              binding.render = previousRender;
-              if (binding.active) safe(binding.render);
-            }),
-          ),
-        );
-        if (action && currentHost()) yield* invokeOrWarn(binding.service, action, ctx, currentHost);
-        return true;
-      }),
+    open: Effect.fn("ActivityHost.open")(function* (ctx, section) {
+      const binding = current;
+      if (
+        !binding?.active ||
+        !binding.installed ||
+        ctx.mode !== "tui" ||
+        ctx.sessionManager.getSessionId() !== binding.sessionId
+      )
+        return false;
+      if (binding.manager) return yield* new ActivityError({ reason: "stale" });
+      const owner = {};
+      binding.manager = owner;
+      const currentHost = () => binding.active && binding.installed && current === binding;
+      const previousRender = binding.render;
+      let closing = false;
+      let detailController: AbortController | undefined;
+      const action = yield* openOwnedSurface<ActivityActionRequest | undefined>(ctx, {
+        placement: "screen",
+        closedValue: undefined,
+        isCurrent: () => binding.active && current === binding && binding.manager === owner,
+        onControl: (close) => {
+          binding.close = close;
+        },
+        onClose: () => {
+          closing = true;
+          safe(() => detailController?.abort());
+        },
+        create: ({ tui, theme, keybindings, getHeight, finish }) => {
+          binding.render = () => {
+            previousRender();
+            tui.requestRender();
+          };
+          const owned = () =>
+            !closing && binding.active && current === binding && binding.manager === owner;
+          const component = new ActivityComponent({
+            snapshot: () => binding.rows,
+            ...(section && { initialSection: section }),
+            title: section ? MANAGER_TITLES[section] : "Activity",
+            starting: () => binding.starting,
+            presentation: binding.presentation,
+            theme,
+            now: () => binding.now,
+            height: getHeight,
+            close: finish,
+            invoke: (request) => {
+              if (owned()) submit(invokeOrWarn(binding.service, request, ctx, currentHost));
+            },
+            requestRender: () => tui.requestRender(),
+            ...fullScreenKeybindingOptions(keybindings),
+            cancelDetail: () => safe(() => detailController?.abort()),
+            loadDetail: (request, deliver) => {
+              safe(() => detailController?.abort());
+              if (closing) return;
+              const controller = new AbortController();
+              detailController = controller;
+              submit(
+                serviceDetail(binding.service, request, (text) => {
+                  if (!controller.signal.aborted && owned()) deliver(text);
+                }),
+                controller.signal,
+              );
+            },
+          });
+          binding.update = () => {
+            if (owned()) component.update();
+          };
+          return component;
+        },
+      }).pipe(
+        Effect.mapError(() => new ActivityError({ reason: "failed" })),
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (binding.manager !== owner) return;
+            binding.manager = undefined;
+            binding.close = () => undefined;
+            binding.update = () => undefined;
+            binding.render = previousRender;
+            if (binding.active) safe(binding.render);
+          }),
+        ),
+      );
+      if (action && currentHost()) yield* invokeOrWarn(binding.service, action, ctx, currentHost);
+      return true;
+    }),
   };
   return host;
 }

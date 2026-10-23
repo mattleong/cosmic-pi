@@ -135,7 +135,7 @@ export class VimSettingsAdapter implements Component, Focusable {
       mode: this.mode,
       matchesKeybinding: this.options.matchesKeybinding,
     });
-    const action = resolution?._tag === "Action" ? resolution.action : undefined;
+    const action = Predicate.isTagged(resolution, "Action") ? resolution.action : undefined;
     if (this.mode === "search") this.handleSearchInput(data, action);
     else if (!this.handleNavigationInput(data, action)) return;
     this.syncChildFocus();

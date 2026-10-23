@@ -15,6 +15,8 @@ import {
 } from "./protocol.ts";
 import { renderActivityWidget } from "./widget.ts";
 
+const isActivityEnvelope = Schema.is(ActivityEnvelopeSchema);
+
 export function fakeActivityHost(sessionId = "session") {
   const hostToken = {};
   const listeners = new Map<string, Set<Parameters<ActivityEvents["on"]>[1]>>();
@@ -37,7 +39,7 @@ export function fakeActivityHost(sessionId = "session") {
     events.emit(ACTIVITY_HOST, { version: 1, sessionId, hostToken, available: true }),
   );
   events.on(ACTIVITY_EVENT, (value) => {
-    if (!Schema.is(ActivityEnvelopeSchema)(value)) return;
+    if (!isActivityEnvelope(value)) return;
     envelope = value;
     if (value.operation === "register") {
       capability = value;

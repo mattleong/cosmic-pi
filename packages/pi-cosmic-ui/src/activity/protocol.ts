@@ -114,6 +114,7 @@ const ActivityHostSchema = Schema.Struct({
   hostToken: Schema.ObjectKeyword,
   available: Schema.Boolean,
 });
+const isActivityHost = Schema.is(ActivityHostSchema);
 
 const detachedSummaries = (items: readonly ActivityItem[]): readonly ActivityItem[] =>
   items.slice(0, ACTIVITY_LIMITS.items).map((item) =>
@@ -177,7 +178,7 @@ export function registerActivityProvider(
   };
   const unsubscribe = events.on(ACTIVITY_HOST, (data) => {
     try {
-      if (!Schema.is(ActivityHostSchema)(data) || data.sessionId !== options.sessionId) return;
+      if (!isActivityHost(data) || data.sessionId !== options.sessionId) return;
       if (data.available) {
         if (hostToken !== data.hostToken) acknowledge(false);
         hostToken = data.hostToken;

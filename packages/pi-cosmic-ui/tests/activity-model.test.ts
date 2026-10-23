@@ -5,7 +5,7 @@ import { needsYou } from "../src/activity/attention.ts";
 import { activityRow as row } from "./support/activity.ts";
 
 const members = (tree: readonly GroupedActivityRow[]) =>
-  tree.flatMap((entry) => (entry.type === "member" ? [entry] : []));
+  tree.filter((entry) => entry.type === "member");
 
 describe("activity ownership", () => {
   it("does not archive an owner with a child needing input, including collapsed branches", () => {

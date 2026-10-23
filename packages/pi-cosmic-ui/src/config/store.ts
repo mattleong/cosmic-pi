@@ -26,10 +26,14 @@ import {
 
 export const CONFIG_BASENAME = "pi-cosmic-ui.json";
 
-export class CosmicUiConfigError extends Schema.TaggedError<CosmicUiConfigError>()(
-  "CosmicUiConfigError",
-  { operation: Schema.String, path: Schema.String, message: Schema.String },
-) {}
+export class CosmicUiConfigError extends Schema.TaggedError<
+  CosmicUiConfigError,
+  { readonly brand: unique symbol }
+>()("CosmicUiConfigError", {
+  operation: Schema.String,
+  path: Schema.String,
+  message: Schema.String,
+}) {}
 
 const decodeStrings = flow(decodeUnknownOrUndefined(Schema.Array(Schema.Unknown)), (values) =>
   values?.filter(Predicate.isString),

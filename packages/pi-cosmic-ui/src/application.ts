@@ -152,11 +152,10 @@ export function registerCosmicUiApplication(
         }),
         { agentDirectory: getAgentDir, packageName: "pi-cosmic-ui" },
       ),
-    startup: () =>
-      Effect.gen(function* () {
-        yield* CosmicUiService;
-        return yield* ActivityService;
-      }),
+    startup: Effect.fn("CosmicUiApplication.startup")(function* () {
+      yield* CosmicUiService;
+      return yield* ActivityService;
+    }),
     onActivated: ({ ctx, context, sessionManager, signal }, token, activity) => {
       activatedToken = token;
       currentSession = { context, sessionManager };

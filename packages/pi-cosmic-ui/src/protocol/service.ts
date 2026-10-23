@@ -14,6 +14,7 @@ import {
   frozenProjection,
   createSubscriptionRefresh,
   recoverRefreshFailure,
+  type RefreshRequest,
 } from "pi-cosmic-core";
 import { emptyTotals, readSessionUsageTotals, type FooterTotals } from "../boundary/host-usage.ts";
 import type { ResolvedCosmicUiConfig } from "../config/schema.ts";
@@ -113,42 +114,36 @@ export class CosmicUiService extends Context.Service<CosmicUiService>()(
       const currentKey = state.getState.pipe(
         Effect.map((current) => `${currentCwd()}\u0000${current.probeRevision}`),
       );
+      const fetchGit = Effect.fnUntraced(function* () {
+        const revision = (yield* state.getState).probeRevision;
+        if (!isTui()) return undefined;
+        const cwd = currentCwd();
+        return yield* probes
+          .git(cwd, () => state.getSnapshot().probeRevision === revision && currentCwd() === cwd)
+          .pipe(Effect.orElseSucceed(() => undefined));
+      });
+      const fetchPullRequest = Effect.fnUntraced(function* (request: RefreshRequest) {
+        if (!isTui()) return undefined;
+        const current = yield* state.getState;
+        const now = yield* Clock.currentTimeMillis;
+        if (!request.force && now - current.pullRequestCheckedAt < PULL_REQUEST_REFRESH_INTERVAL_MS)
+          return undefined;
+        const pullRequest = yield* probes
+          .pullRequest(currentCwd())
+          .pipe(Effect.orElseSucceed(() => undefined));
+        return { checkedAt: now, pullRequest };
+      });
       const gitRefresh = yield* createSubscriptionRefresh({
         currentKey,
         interval: Effect.succeed(2_000),
-        fetch: () =>
-          Effect.gen(function* () {
-            const revision = (yield* state.getState).probeRevision;
-            if (!isTui()) return undefined;
-            const cwd = currentCwd();
-            return yield* probes
-              .git(
-                cwd,
-                () => state.getSnapshot().probeRevision === revision && currentCwd() === cwd,
-              )
-              .pipe(Effect.orElseSucceed(() => undefined));
-          }),
+        fetch: fetchGit,
         commit: (gitStatus) => commit((current) => ({ ...current, gitStatus })),
         spanName: "pi-cosmic-ui.refresh.git",
       });
       const pullRefresh = yield* createSubscriptionRefresh({
         currentKey,
         interval: Effect.succeed(PULL_REQUEST_REFRESH_INTERVAL_MS),
-        fetch: (request) =>
-          Effect.gen(function* () {
-            if (!isTui()) return undefined;
-            const current = yield* state.getState;
-            const now = yield* Clock.currentTimeMillis;
-            if (
-              !request.force &&
-              now - current.pullRequestCheckedAt < PULL_REQUEST_REFRESH_INTERVAL_MS
-            )
-              return undefined;
-            const pullRequest = yield* probes
-              .pullRequest(currentCwd())
-              .pipe(Effect.orElseSucceed(() => undefined));
-            return { checkedAt: now, pullRequest };
-          }),
+        fetch: fetchPullRequest,
         commit: (value) =>
           value === undefined
             ? Effect.void

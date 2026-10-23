@@ -7,6 +7,8 @@ import {
   type SettingItem,
 } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
+import * as Result from "effect/Result";
 import type { SettingsOptionDescriptor } from "pi-cosmic-core";
 import { focusedField, managerTone } from "./style.ts";
 import type { FullScreenKeymapOptions } from "./keymap.ts";
@@ -36,7 +38,11 @@ export const withoutGroupRowChanges = (
   items: readonly SettingsSurfaceItem[],
   onChange: (id: string, value: string) => void,
 ): ((id: string, value: string) => void) => {
-  const groupIds = new Set(items.flatMap((item) => (item.kind === "group" ? [item.id] : [])));
+  const groupIds = new Set(
+    Arr.filterMap(items, (item) =>
+      item.kind === "group" ? Result.succeed(item.id) : Result.failVoid,
+    ),
+  );
   return (id, value) => {
     if (!groupIds.has(id)) onChange(id, value);
   };

@@ -5,7 +5,10 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { PiApi } from "pi-cosmic-core";
 
-export class PiExecError extends Schema.TaggedError<PiExecError>()("PiExecError", {
+export class PiExecError extends Schema.TaggedError<
+  PiExecError,
+  { readonly brand: unique symbol }
+>()("PiExecError", {
   operation: Schema.String,
   message: Schema.String,
 }) {}

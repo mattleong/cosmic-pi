@@ -1,4 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import * as Predicate from "effect/Predicate";
 import { stripTerminalControls } from "pi-cosmic-core";
 import {
   fuzzyFilter,
@@ -217,7 +218,7 @@ export class SearchableSelectPage<A> implements Component, Focusable {
       mode: this.searchMode ? "search" : "navigation",
       matchesKeybinding: this.options.matchesKeybinding,
     });
-    if (resolution?._tag === "Action") {
+    if (Predicate.isTagged(resolution, "Action")) {
       if (isListMotion(resolution.action)) {
         if (this.filtered.length > 0) {
           const currentChoice = this.selectedChoice();

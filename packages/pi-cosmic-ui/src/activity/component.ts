@@ -322,15 +322,15 @@ export class ActivityComponent {
       reservedKeys: activityShortcuts,
     });
     if (
-      (result?._tag === "Action" && result.action === "confirm") ||
-      (result?._tag === "Shortcut" &&
+      (Predicate.isTagged(result, "Action") && result.action === "confirm") ||
+      (Predicate.isTagged(result, "Shortcut") &&
         confirmation.key !== undefined &&
         result.key === confirmation.key)
     ) {
       this.confirmation = undefined;
       this.dispatch(confirmation.request, confirmation.action);
     } else if (
-      result?._tag === "Action" &&
+      Predicate.isTagged(result, "Action") &&
       (result.action === "cancel" || result.action === "quit")
     )
       this.confirmation = undefined;

@@ -49,10 +49,10 @@ interface OwnedSurfaceOutcomeDefinition extends Data.TaggedEnum.WithGenerics<1> 
 
 export const OwnedSurfaceOutcome = Data.taggedEnum<OwnedSurfaceOutcomeDefinition>();
 
-export class OwnedSurfaceError extends Schema.TaggedError<OwnedSurfaceError>()(
-  "OwnedSurfaceError",
-  { reason: Schema.Literals(["blocked", "failed"]) },
-) {}
+export class OwnedSurfaceError extends Schema.TaggedError<
+  OwnedSurfaceError,
+  { readonly brand: unique symbol }
+>()("OwnedSurfaceError", { reason: Schema.Literals(["blocked", "failed"]) }) {}
 
 export const hasCustomSurface = (ctx: {
   readonly mode: ExtensionContext["mode"];

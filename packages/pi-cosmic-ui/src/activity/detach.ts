@@ -5,17 +5,6 @@ import type { ActivityItem } from "./protocol.ts";
 const cleanText = (text: string, limit: number) =>
   sanitizeDiagnosticContent(sanitizeTerminalLine(text.slice(0, limit)), { maximumLength: limit });
 
-type ActivityAction = NonNullable<ActivityItem["actions"]>[number];
-
-// Copies rather than mutates: the sliced array still holds the producer's action objects.
-const detachAction = (action: ActivityAction): ActivityAction => ({
-  ...action,
-  label: cleanText(action.label, ACTIVITY_LIMITS.text),
-  ...(action.confirmation !== undefined && {
-    confirmation: cleanText(action.confirmation, ACTIVITY_LIMITS.text),
-  }),
-});
-
 export const detachActivityItem = (
   item: ActivityItem,
   detail: (value: string) => string,
@@ -28,6 +17,13 @@ export const detachActivityItem = (
   ...(item.summary !== undefined && { summary: cleanText(item.summary, ACTIVITY_LIMITS.text) }),
   ...(item.detail !== undefined && { detail: detail(item.detail) }),
   ...(item.actions && {
-    actions: item.actions.slice(0, ACTIVITY_LIMITS.actions).map(detachAction),
+    // Copies rather than mutates: the sliced array still holds the producer's action objects.
+    actions: item.actions.slice(0, ACTIVITY_LIMITS.actions).map((action) => ({
+      ...action,
+      label: cleanText(action.label, ACTIVITY_LIMITS.text),
+      ...(action.confirmation !== undefined && {
+        confirmation: cleanText(action.confirmation, ACTIVITY_LIMITS.text),
+      }),
+    })),
   }),
 });

@@ -23,7 +23,10 @@ import { detachActivityItem } from "./detach.ts";
 import { ACTIVITY_LIMITS } from "./limits.ts";
 import { SPINNER_FRAME_MS } from "../manager/chrome.ts";
 
-export class ActivityError extends Schema.TaggedError<ActivityError>()("ActivityError", {
+export class ActivityError extends Schema.TaggedError<
+  ActivityError,
+  { readonly brand: unique symbol }
+>()("ActivityError", {
   reason: Schema.Literals(["invalid", "stale", "failed"]),
 }) {}
 interface Provider {
@@ -68,7 +71,8 @@ export interface ActivityServiceOptions {
 const invalid = () => new ActivityError({ reason: "invalid" });
 const stale = () => new ActivityError({ reason: "stale" });
 const failed = () => new ActivityError({ reason: "failed" });
-const asActivityError = (cause: unknown) => (cause instanceof ActivityError ? cause : failed());
+const isActivityError = Schema.is(ActivityError);
+const asActivityError = (cause: unknown) => (isActivityError(cause) ? cause : failed());
 const bestEffort = (run: () => void) => Effect.try({ try: run, catch: failed }).pipe(Effect.ignore);
 const cleanDetail = (text: string) =>
   sanitizeDiagnosticContent(
