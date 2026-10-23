@@ -1,6 +1,5 @@
 import { toolArgumentPreparer, type ToolFieldAliases } from "pi-cosmic-core/tool-arguments";
-import { Type, type Static, type TObject } from "typebox";
-import { Check } from "typebox/value";
+import { Type, type TObject } from "typebox";
 import { MAX_IDENTITY_CHARS, MAX_MESSAGE_CHARS } from "../transport/protocol.ts";
 import type { SessionToolName } from "./contract.ts";
 
@@ -44,9 +43,7 @@ const SESSION_FIELD_ALIASES: ToolFieldAliases = {
 
 /** Pi `prepareArguments` hook for one session tool: dropped placeholders and precise errors. */
 const sessionArgumentPreparer = <P extends TObject>(name: SessionToolName, parameters: P) =>
-  toolArgumentPreparer(name, parameters, (value): value is Static<P> => Check(parameters, value), {
-    aliases: SESSION_FIELD_ALIASES,
-  });
+  toolArgumentPreparer(name, parameters, { aliases: SESSION_FIELD_ALIASES });
 
 export const prepareSessionListArguments = sessionArgumentPreparer(
   "session_list",
