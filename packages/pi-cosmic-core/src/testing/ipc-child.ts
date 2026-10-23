@@ -1,5 +1,8 @@
 import type * as Duration from "effect/Duration";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import {
   nodeFsPromises,
   nodePath,
@@ -52,16 +55,19 @@ export const spawnIpcChild = (
       let stderr = "";
       child.stderr?.setEncoding("utf8");
       child.stderr?.on("data", (chunk: string) => {
-        stderr = (stderr + chunk).slice(-STDERR_TAIL);
+        stderr = Fn.pipe(stderr + chunk, Str.slice(-STDERR_TAIL));
       });
       const stuck = (expected: string) =>
         new Error(
-          [
-            `Timed out waiting for ${JSON.stringify(expected)} from ${nodePath.basename(script)} ${args.join(" ")}.`,
-            `Received: ${JSON.stringify(messages)}.`,
-            `Exit: ${child.exitCode ?? child.signalCode ?? "still running"}.`,
-            ...(stderr.trim() === "" ? [] : [`Stderr (tail):\n${stderr.trim()}`]),
-          ].join("\n"),
+          Arr.join(
+            [
+              `Timed out waiting for ${JSON.stringify(expected)} from ${nodePath.basename(script)} ${Arr.join(args, " ")}.`,
+              `Received: ${JSON.stringify(messages)}.`,
+              `Exit: ${child.exitCode ?? child.signalCode ?? "still running"}.`,
+              ...(Str.trim(stderr) === "" ? [] : [`Stderr (tail):\n${Str.trim(stderr)}`]),
+            ],
+            "\n",
+          ),
         );
       const wait = (expected: string) =>
         Effect.callback<void>((resume) => {

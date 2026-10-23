@@ -1,3 +1,7 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+
 const INTERACTIVE_SHELL_PROCESS_NAMES = new Set([
   "sh",
   "bash",
@@ -15,5 +19,5 @@ const INTERACTIVE_SHELL_PROCESS_NAMES = new Set([
 
 export const isInteractiveShellProcessName = (name: string): boolean =>
   INTERACTIVE_SHELL_PROCESS_NAMES.has(
-    (name.split("/").at(-1) ?? name).replace(/^-+/gu, "").toLowerCase(),
+    Fn.pipe(Arr.lastNonEmpty(Str.split(name, "/")), Str.replace(/^-+/gu, ""), Str.toLowerCase),
   );

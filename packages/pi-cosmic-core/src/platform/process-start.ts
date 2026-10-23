@@ -1,4 +1,7 @@
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import { nodeLockFs as fs, nodeSpawnSync } from "./node-builtins.ts";
 import { runBoundedProcessNode } from "./process.ts";
 import { signalProcess } from "./process-tree.ts";
@@ -42,12 +45,13 @@ const utcSeconds = (lstart: string): number | undefined => {
 const procStartIdentity = (pid: number): string | undefined => {
   const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
   // Fields after the parenthesized command name start at field 3; start time is field 22.
-  const ticks = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
+  const commandEnd = Option.getOrElse(Fn.pipe(stat, Str.lastIndexOf(")")), () => -1);
+  const ticks = Str.split(Fn.pipe(stat, Str.slice(commandEnd + 2)), " ")[19];
   return ticks !== undefined && /^\d+$/.test(ticks) ? `${PROC_SCHEME}:${ticks}` : undefined;
 };
 
 const psStartIdentity = (status: number | null, stdout: string): string | undefined => {
-  const seconds = status === 0 ? utcSeconds(stdout.trim()) : undefined;
+  const seconds = status === 0 ? utcSeconds(Str.trim(stdout)) : undefined;
   return seconds === undefined ? undefined : `${PS_UTC_SCHEME}:${seconds}`;
 };
 

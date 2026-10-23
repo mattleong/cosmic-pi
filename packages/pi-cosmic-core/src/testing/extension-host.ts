@@ -18,6 +18,7 @@ import {
   type ExtensionEventNamed,
   type RecordedHandler,
 } from "./extension-events.ts";
+import * as Arr from "effect/Array";
 import { extensionApiFixture } from "./host.ts";
 import { overlay } from "./overlay.ts";
 
@@ -104,7 +105,7 @@ export const recordingExtensionHost = (
         messageRenderers.set(customType, render);
       },
       getAllTools: () =>
-        [...tools.values()].map((tool) => ({
+        Arr.map([...tools.values()], (tool) => ({
           name: tool.name,
           description: tool.description,
           parameters: tool.parameters,
@@ -112,14 +113,14 @@ export const recordingExtensionHost = (
           sourceInfo: options.toolSource ?? source,
         })),
       getCommands: () =>
-        [...commands].map(([name, command]) => {
+        Arr.map([...commands], ([name, command]) => {
           const info: SlashCommandInfo = { name, source: "extension", sourceInfo: source };
           if (command.description !== undefined) info.description = command.description;
           return info;
         }),
       getActiveTools: () => [...active],
       setActiveTools: (names: ReadonlyArray<string>) => {
-        active = names.filter((name) => name === "read" || tools.has(name));
+        active = Arr.filter(names, (name) => name === "read" || tools.has(name));
       },
     }),
     overrides,

@@ -1,3 +1,5 @@
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import { nodeDisplayHomeDirectory, nodePath } from "./node-builtins.ts";
 
 interface PathContainmentAdapter {
@@ -15,7 +17,7 @@ export const isStrictlyInsidePathWith = (
   return (
     relation !== "" &&
     relation !== ".." &&
-    !relation.startsWith(`..${adapter.sep}`) &&
+    !Fn.pipe(relation, Str.startsWith(`..${adapter.sep}`)) &&
     !adapter.isAbsolute(relation)
   );
 };
@@ -26,8 +28,10 @@ export const isStrictlyInsidePath = (root: string, candidate: string): boolean =
 export function abbreviateHomePath(path: string, home?: string): string {
   if (!home) return path;
   if (path === home) return "~";
-  const prefix = home.endsWith("/") ? home : `${home}/`;
-  return path.startsWith(prefix) ? `~/${path.slice(prefix.length)}` : path;
+  const prefix = Fn.pipe(home, Str.endsWith("/")) ? home : `${home}/`;
+  return Fn.pipe(path, Str.startsWith(prefix))
+    ? `~/${Fn.pipe(path, Str.slice(prefix.length))}`
+    : path;
 }
 
 export function formatDisplayPath(

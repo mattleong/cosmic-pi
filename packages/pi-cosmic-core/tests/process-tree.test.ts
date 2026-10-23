@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Str from "effect/String";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
@@ -110,7 +111,7 @@ process.stdout.write(String(child.pid) + "\\n");`,
     let descendant = 0;
     return once(leader, "close")
       .then(() => {
-        descendant = Number(output.trim());
+        descendant = Number(Str.trim(output));
         expect(signalProcess(descendant, 0)).toBe("present");
         expect(signalProcessGroup(leader.pid, "SIGKILL")).toBe("present");
         return Effect.runPromise(

@@ -1,5 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Rec from "effect/Record";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Scheduler from "effect/Scheduler";
@@ -96,7 +97,7 @@ it("preserves an own __proto__ property without changing the clone prototype", (
   });
   const snapshot = freezeSnapshot(source);
 
-  expect(Object.hasOwn(snapshot, "__proto__")).toBe(true);
+  expect(Rec.has<string, unknown>(snapshot, "__proto__")).toBe(true);
   expect(Object.getOwnPropertyDescriptor(snapshot, "__proto__")?.value).toEqual({ polluted: true });
   expect(Object.getPrototypeOf(snapshot)).toBe(Object.prototype);
   expect("polluted" in snapshot).toBe(false);

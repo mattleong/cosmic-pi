@@ -1,5 +1,9 @@
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import { isJsonObject, type JsonObject, type JsonValue } from "./platform/json-document.ts";
 
 interface SettingsCompletionDescriptor {
@@ -23,9 +27,9 @@ const completeSettingIds = (
   extras: ReadonlyArray<SettingsCompletionChoice>,
   scopes: ReadonlyArray<SettingsCompletionChoice>,
 ): SettingsCompletionChoice[] | null => {
-  const query = head.toLowerCase();
+  const query = Str.toLowerCase(head);
   const choices = [
-    ...descriptors.map((descriptor) => ({
+    ...Arr.map(descriptors, (descriptor) => ({
       value: descriptor.id,
       label: descriptor.id,
       description: descriptor.description,
@@ -33,7 +37,9 @@ const completeSettingIds = (
     ...scopes,
     ...extras,
   ];
-  return nonEmpty(choices.filter((choice) => choice.value.toLowerCase().startsWith(query)));
+  return nonEmpty(
+    Arr.filter(choices, (choice) => Fn.pipe(choice.value, Str.toLowerCase, Str.startsWith(query))),
+  );
 };
 
 const completeSettingValues = (
@@ -41,18 +47,22 @@ const completeSettingValues = (
   valuePrefix: string,
   descriptors: ReadonlyArray<SettingsCompletionDescriptor>,
 ): SettingsCompletionChoice[] | null => {
-  const headId = head.toLowerCase();
-  const descriptor = descriptors.find((entry) => entry.id.toLowerCase() === headId);
+  const headId = Str.toLowerCase(head);
+  const descriptor = Option.getOrUndefined(
+    Arr.findFirst(descriptors, (entry) => Str.toLowerCase(entry.id) === headId),
+  );
   if (!descriptor) return null;
-  const query = valuePrefix.toLowerCase();
+  const query = Str.toLowerCase(valuePrefix);
   return nonEmpty(
-    (descriptor.values ?? [])
-      .filter((value) => value.toLowerCase().startsWith(query))
-      .map((value) => ({
+    Fn.pipe(
+      descriptor.values ?? [],
+      Arr.filter((value) => Fn.pipe(value, Str.toLowerCase, Str.startsWith(query))),
+      Arr.map((value) => ({
         value: `${descriptor.id} ${value}`,
         label: `${descriptor.id} ${value}`,
         description: descriptor.description,
       })),
+    ),
   );
 };
 
@@ -62,21 +72,22 @@ export const completeSettingsArguments = (
   extras: ReadonlyArray<SettingsCompletionChoice> = [],
   scopes: ReadonlyArray<SettingsCompletionChoice> = [],
 ): SettingsCompletionChoice[] | null => {
-  const normalized = prefix.replace(/^\s+/, "");
+  const normalized = Fn.pipe(prefix, Str.replace(/^\s+/, ""));
   const scoped = /^(\S+)\s+([\s\S]*)$/u.exec(normalized);
-  const scope = scoped && scopes.find((choice) => choice.value === scoped[1]);
+  const scope =
+    scoped && Option.getOrUndefined(Arr.findFirst(scopes, (choice) => choice.value === scoped[1]));
   if (scoped && scope) {
     const inner = completeSettingsArguments(scoped[2] ?? "", descriptors);
-    return (
-      inner?.map((choice) =>
-        Object.assign({}, choice, {
-          value: `${scope.value} ${choice.value}`,
-          label: `${scope.value} ${choice.label}`,
-        }),
-      ) ?? null
-    );
+    return inner === null
+      ? null
+      : Arr.map(inner, (choice) =>
+          Object.assign({}, choice, {
+            value: `${scope.value} ${choice.value}`,
+            label: `${scope.value} ${choice.label}`,
+          }),
+        );
   }
-  const [head = "", ...rest] = normalized.split(/\s+/);
+  const [head, ...rest] = Str.split(normalized, /\s+/);
   return rest.length === 0 && !/\s$/.test(normalized)
     ? completeSettingIds(head, descriptors, extras, scopes)
     : completeSettingValues(head, rest[0] ?? "", descriptors);
@@ -111,14 +122,20 @@ export const decodeSettingUpdate = <Config>(
   descriptors: ReadonlyArray<Pick<SettingsOptionDescriptor<Config>, "id" | "decoder">>,
 ) =>
   Effect.fn("Settings.decodeSettingUpdate")(function* (id: string, rawValue: string) {
-    const descriptor = descriptors.find((entry) => entry.id === id);
+    const descriptor = Option.getOrUndefined(
+      Arr.findFirst(descriptors, (entry) => entry.id === id),
+    );
     if (!descriptor)
       return yield* InvalidSettingError.make({ id, message: `Unknown setting: ${id}.` });
     const parsedValue = yield* Schema.decodeEffect(descriptor.decoder)(rawValue).pipe(
       Effect.mapError(() => InvalidSettingError.make({ id, message: `Invalid value for ${id}.` })),
     );
-    const separator = id.indexOf(".");
-    if (separator < 0)
+    const separator = Fn.pipe(id, Str.indexOf("."));
+    if (Option.isNone(separator))
       return (current: JsonObject): JsonObject => ({ ...current, [id]: parsedValue });
-    return sectionSettingValue(id.slice(0, separator), id.slice(separator + 1), parsedValue);
+    return sectionSettingValue(
+      Fn.pipe(id, Str.slice(0, separator.value)),
+      Fn.pipe(id, Str.slice(separator.value + 1)),
+      parsedValue,
+    );
   });

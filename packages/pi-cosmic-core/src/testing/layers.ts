@@ -1,7 +1,9 @@
+import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
+import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
@@ -92,7 +94,7 @@ export function makeInMemoryDocuments(
   initial: Readonly<Record<string, JsonObject>> = {},
 ): InMemoryDocuments {
   const storedDocuments = new Map(
-    Object.entries(initial).map(([path, document]) => [path, cloneInitialDocument(document)]),
+    Arr.map(Rec.toEntries(initial), ([path, document]) => [path, cloneInitialDocument(document)]),
   );
   const documents = documentView(storedDocuments);
   const pathSemaphores = new Map<string, Semaphore.Semaphore>();
@@ -328,7 +330,7 @@ export const capturedTelemetrySnapshot = (capture: {
 }): string =>
   JSON.stringify({
     entries: capture.entries ?? [],
-    spans: (capture.spans ?? []).map((span) => ({
+    spans: Arr.map(capture.spans ?? [], (span) => ({
       name: span.name,
       attributes: [...span.attributes],
     })),

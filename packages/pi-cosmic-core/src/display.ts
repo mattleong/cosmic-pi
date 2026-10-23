@@ -1,3 +1,5 @@
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import { safeTextPrefix } from "./text.ts";
 
 const SECOND = 1_000;
@@ -58,7 +60,8 @@ export const formatCost = (cost: number): string => {
   const value = finite(cost);
   if (value === 0) return "$0";
   if (value < 0.0001) return "$<0.0001";
-  if (value < 0.01) return `$${value.toFixed(4).replace(/0+$/u, "").replace(/\.$/u, "")}`;
+  if (value < 0.01)
+    return `$${Fn.pipe(value.toFixed(4), Str.replace(/0+$/u, ""), Str.replace(/\.$/u, ""))}`;
   return `$${value.toFixed(2)}`;
 };
 
@@ -75,5 +78,5 @@ export const clipText = (text: string, limit: number): string => {
   const budget = Math.max(0, Math.floor(limit));
   if (text.length <= budget) return text;
   if (budget <= 1) return safeTextPrefix("…", budget);
-  return `${safeTextPrefix(text, budget - 1).trimEnd()}…`;
+  return `${Str.trimEnd(safeTextPrefix(text, budget - 1))}…`;
 };

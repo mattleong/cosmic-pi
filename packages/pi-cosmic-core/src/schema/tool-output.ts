@@ -1,6 +1,9 @@
 import type * as JsonSchema from "effect/JsonSchema";
+import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
+import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import { freezeSnapshot } from "../projection.ts";
 
 export class ToolOutputSchemaError extends Schema.TaggedError<
@@ -14,11 +17,11 @@ export class ToolOutputSchemaError extends Schema.TaggedError<
 const DEFINITION_REFERENCE_PREFIX = "#/$defs/";
 
 const definitionName = (reference: string): string | undefined => {
-  if (!reference.startsWith(DEFINITION_REFERENCE_PREFIX)) return undefined;
-  const token = reference.slice(DEFINITION_REFERENCE_PREFIX.length);
-  if (token.length === 0 || token.includes("/")) return undefined;
+  if (!Fn.pipe(reference, Str.startsWith(DEFINITION_REFERENCE_PREFIX))) return undefined;
+  const token = Fn.pipe(reference, Str.slice(DEFINITION_REFERENCE_PREFIX.length));
+  if (token.length === 0 || Fn.pipe(token, Str.includes("/"))) return undefined;
   try {
-    return decodeURIComponent(token).replaceAll("~1", "/").replaceAll("~0", "~");
+    return Fn.pipe(decodeURIComponent(token), Str.replaceAll("~1", "/"), Str.replaceAll("~0", "~"));
   } catch {
     return undefined;
   }
@@ -29,11 +32,12 @@ const checkReferences = (
   path: string,
   definitions: JsonSchema.Definitions,
 ): void => {
+  // @effect-diagnostics-next-line preferEffectRecord:off -- node may be an array; Rec.toEntries takes only records
   for (const [key, value] of Object.entries(node)) {
-    const at = `${path}/${key.replaceAll("~", "~0").replaceAll("/", "~1")}`;
+    const at = `${path}/${Fn.pipe(key, Str.replaceAll("~", "~0"), Str.replaceAll("/", "~1"))}`;
     if (key === "$ref" && Predicate.isString(value)) {
       const name = definitionName(value);
-      if (name === undefined || !Object.hasOwn(definitions, name)) {
+      if (name === undefined || !Rec.has(definitions, name)) {
         throw ToolOutputSchemaError.make({
           path: at,
           message: `Output schema reference ${JSON.stringify(value)} is not a local definition.`,
@@ -50,7 +54,7 @@ export const toPiToolOutputSchema = (
 ): Readonly<JsonSchema.JsonSchema> => {
   const document = Schema.toJsonSchemaDocument(schema);
   const root: JsonSchema.JsonSchema =
-    Object.keys(document.definitions).length === 0
+    Rec.keys(document.definitions).length === 0
       ? document.schema
       : { ...document.schema, $defs: document.definitions };
   checkReferences(root, "", document.definitions);

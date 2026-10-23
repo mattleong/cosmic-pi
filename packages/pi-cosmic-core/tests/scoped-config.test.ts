@@ -1,12 +1,16 @@
 import { expect, it, layer as testLayer } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
+import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Rec from "effect/Record";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import { JsonDocumentStore, type JsonObject } from "../src/platform/json-document.ts";
 import { makeCapturedLogger, makeInMemoryDocuments } from "../src/testing/layers.ts";
 import { decodeTolerantFields } from "../src/config/tolerant-fields.ts";
@@ -42,14 +46,14 @@ it("decodes only own __proto__ fields without prototype mutation", () => {
 
   const decodeFields = decodeTolerantFields(fields);
   const decoded = decodeFields(input);
-  expect(Object.hasOwn(decoded.value, "__proto__")).toBe(true);
+  expect(Rec.has<string, unknown>(decoded.value, "__proto__")).toBe(true);
   expect(Object.getOwnPropertyDescriptor(decoded.value, "__proto__")?.value).toEqual({
     enabled: true,
   });
   expect(Object.getPrototypeOf(decoded.value)).toBe(Object.prototype);
 
   const missing = decodeFields({});
-  expect(Object.hasOwn(missing.value, "__proto__")).toBe(false);
+  expect(Rec.has<string, unknown>(missing.value, "__proto__")).toBe(false);
 });
 
 class TestConfigError extends Schema.TaggedError<
@@ -201,7 +205,9 @@ testLayer(Path.layer)("scoped config store", (test) => {
       expect(resolved.project).toEqual({});
       expect(resolved.global).toEqual({ fromGlobal: true });
       expect(memory.operations.length).toBeGreaterThan(0);
-      expect(memory.operations.filter((operation) => operation.includes("/project/"))).toEqual([]);
+      expect(
+        Arr.filter(memory.operations, (operation) => Fn.pipe(operation, Str.includes("/project/"))),
+      ).toEqual([]);
     }).pipe(Effect.provide(memory.layer));
   });
 

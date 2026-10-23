@@ -1,6 +1,9 @@
+import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
+import { indexOfFrom } from "../text-scan.ts";
 import { utf8ByteLength } from "../text.ts";
 
 const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
@@ -33,15 +36,15 @@ export const boundedNdjsonRpcSerialization = (
             : (decoder ??= new TextDecoder()).decode(data, { stream: true });
           const messages: Array<unknown> = [];
           let position = 0;
-          let newline = buffer.indexOf("\n", position);
+          let newline = indexOfFrom(buffer, "\n", position);
           while (newline !== -1) {
-            const line = buffer.slice(position, newline);
+            const line = Fn.pipe(buffer, Str.slice(position, newline));
             checkSize(utf8ByteLength(line));
             if (line.length > 0) messages.push(decodeJson(line));
             position = newline + 1;
-            newline = buffer.indexOf("\n", position);
+            newline = indexOfFrom(buffer, "\n", position);
           }
-          buffer = buffer.slice(position);
+          buffer = Fn.pipe(buffer, Str.slice(position));
           checkSize(utf8ByteLength(buffer));
           return messages;
         },

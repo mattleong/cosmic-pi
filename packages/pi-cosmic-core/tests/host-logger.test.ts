@@ -1,6 +1,8 @@
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
+import * as Str from "effect/String";
 import { nodeFsPromises, nodePath } from "../src/platform/node-builtins.ts";
 import { piHostFileLoggerLayer } from "../src/runtime/runtime.ts";
 import { silencedConsole } from "./support/spies.ts";
@@ -43,7 +45,7 @@ it.live("writes host logs to the package JSONL file and stays off the TTY", () =
 
 it.live("rotates one generation once the host log passes its size bound", () =>
   Effect.gen(function* () {
-    const { directory, logPath } = yield* existingLog("x".repeat(1_000_001));
+    const { directory, logPath } = yield* existingLog(Fn.pipe("x", Str.repeat(1_000_001)));
     yield* logThrough(() => directory, "after rotation");
 
     const rotated = yield* Effect.promise(() => fs.readFile(`${logPath}.1`, "utf8"));

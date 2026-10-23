@@ -1,6 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
+import * as Str from "effect/String";
 import { boundedNdjsonRpcSerialization } from "../src/platform/bounded-ndjson-rpc.ts";
 
 describe("bounded NDJSON RPC framing", () => {
@@ -25,7 +27,11 @@ describe("bounded NDJSON RPC framing", () => {
   });
 
   it("rejects oversized frames, both completed and incomplete", () => {
-    for (const frame of ["x".repeat(9), `"${"x".repeat(9)}"\n`, "🌌🌌🌌"]) {
+    for (const frame of [
+      Fn.pipe("x", Str.repeat(9)),
+      `"${Fn.pipe("x", Str.repeat(9))}"\n`,
+      "🌌🌌🌌",
+    ]) {
       const parser = boundedNdjsonRpcSerialization(8).makeUnsafe();
       expect(() => parser.decode(frame)).toThrow(RpcSerialization.MaxBufferSizeExceeded);
     }

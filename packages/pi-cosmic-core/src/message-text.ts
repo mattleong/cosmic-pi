@@ -1,3 +1,7 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import { clipText } from "./display.ts";
 import { sanitizeTerminalLine } from "./security.ts";
 
@@ -12,20 +16,20 @@ const ADVICE =
 
 const STRUCTURED = /^[[{]\s*(?:"|\{|\[|$)/u;
 
-const withoutFinalPeriod = (text: string): string => text.replace(/(?<!\.)\.$/u, "");
+const withoutFinalPeriod = (text: string): string => Fn.pipe(text, Str.replace(/(?<!\.)\.$/u, ""));
 
 function tidy(line: string): string {
   let text = line;
   for (let pass = 0; pass < 3; pass++) {
-    const next = text.replace(ERROR_PREFIX, "");
+    const next = Fn.pipe(text, Str.replace(ERROR_PREFIX, ""));
     if (next === text) break;
     text = next;
   }
   text = ERROR_WRAPPER.exec(text)?.[1] ?? text;
-  const [first = "", ...rest] = text.split(SENTENCE_BREAK);
-  const advice = rest.findIndex((sentence) => ADVICE.test(sentence));
-  text = [first, ...(advice === -1 ? rest : rest.slice(0, advice))].join(" ");
-  return withoutFinalPeriod(text).trim();
+  const [first, ...rest] = Str.split(text, SENTENCE_BREAK);
+  const advice = Arr.findFirstIndex(rest, (sentence) => ADVICE.test(sentence));
+  text = Arr.join([first, ...(Option.isNone(advice) ? rest : rest.slice(0, advice.value))], " ");
+  return Str.trim(withoutFinalPeriod(text));
 }
 
 export function firstLineMessage(
@@ -33,13 +37,18 @@ export function firstLineMessage(
   fallback: string,
   limit = MESSAGE_TEXT_LIMIT,
 ): string {
-  const line = text.split(/\r?\n/u).map(sanitizeTerminalLine).find(Boolean);
+  const line = Option.getOrUndefined(
+    Arr.findFirst(Arr.map(Str.split(text, /\r?\n/u), sanitizeTerminalLine), Str.isNonEmpty),
+  );
   const message = line === undefined || STRUCTURED.test(line) ? "" : tidy(line);
   return clipText(message || fallback, Math.min(limit, MESSAGE_TEXT_LIMIT));
 }
 
 export function restatesText(text: string, message: string): boolean {
-  return message !== "" && withoutFinalPeriod(text.trim().replace(/\s+/gu, " ")) === message;
+  return (
+    message !== "" &&
+    withoutFinalPeriod(Fn.pipe(text, Str.trim, Str.replace(/\s+/gu, " "))) === message
+  );
 }
 
 interface QuotedText {
@@ -55,7 +64,7 @@ export function quoteText(
   const line = isAgentGuidance(text) ? "" : quote(text, "", options.limit);
   return {
     ...(line && { line }),
-    ...(text.trim() && !restatesText(text, line) && { detail: text }),
+    ...(Str.trim(text) && !restatesText(text, line) && { detail: text }),
   };
 }
 
@@ -96,15 +105,22 @@ export function failureMessage(text: string, fallback: string, limit = MESSAGE_T
   const line = firstLineMessage(text, "");
   const status = STATUS.exec(line)?.[1];
   const code = status === undefined ? undefined : Number(status);
-  const phrase =
-    PHRASE_FAILURES.find(([pattern]) => pattern.test(line))?.[1] ??
-    (code === undefined ? undefined : STATUS_FAILURES.find(([matches]) => matches(code))?.[1]);
+  const phrase = Fn.pipe(
+    Arr.findFirst(PHRASE_FAILURES, ([pattern]) => pattern.test(line)),
+    Option.orElse(() =>
+      code === undefined
+        ? Option.none()
+        : Arr.findFirst(STATUS_FAILURES, ([matches]) => matches(code)),
+    ),
+    Option.map(([, label]) => label),
+    Option.getOrUndefined,
+  );
   if (phrase === undefined) return firstLineMessage(text, fallback, limit);
   const shownCode = code !== undefined && phrase !== "Too long for the model's context";
   return clipText(`${phrase}${shownCode ? ` (${code})` : ""}`, limit);
 }
 
 export function notificationText(message: string): string {
-  if (/\n/u.test(message.trim())) return message;
+  if (/\n/u.test(Str.trim(message))) return message;
   return withoutFinalPeriod(sanitizeTerminalLine(message));
 }

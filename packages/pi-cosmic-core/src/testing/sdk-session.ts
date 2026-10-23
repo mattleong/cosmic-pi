@@ -19,8 +19,11 @@ import {
   type CreateAgentSessionOptions,
   type ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
 import { step } from "./steps.ts";
 
 export const fauxModels = Effect.fn("SdkSession.fauxModels")(function* (provider: string) {
@@ -151,15 +154,20 @@ export const fauxCodemodeSession = Effect.fn("SdkSession.fauxCodemodeSession")(f
       fauxAssistantMessage(options.reply ?? "Workflow fixture finished"),
     ]);
     yield* step(() => session.prompt(options.prompt ?? "Exercise the workflow fixture"));
-    const message = session.agent.state.messages.findLast(
-      (candidate) => candidate.role === "toolResult" && candidate.toolName === name,
+    const message = Option.getOrUndefined(
+      Arr.findLast(
+        session.agent.state.messages,
+        (candidate) => candidate.role === "toolResult" && candidate.toolName === name,
+      ),
     );
     if (message?.role !== "toolResult")
       return yield* Effect.die(new Error("The real agent loop returned no tool result."));
-    const text = message.content
-      .filter((part) => part.type === "text")
-      .map((part) => part.text)
-      .join("\n");
+    const text = Fn.pipe(
+      message.content,
+      Arr.filter((part) => part.type === "text"),
+      Arr.map((part) => part.text),
+      Arr.join("\n"),
+    );
     return { message, text, isError: message.isError };
   });
   return {

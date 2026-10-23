@@ -1,4 +1,5 @@
 import { expect, it } from "@effect/vitest";
+import * as Fn from "effect/Function";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -6,7 +7,9 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import * as Path from "effect/Path";
+import * as Rec from "effect/Record";
 import type * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import {
   JsonDocumentStore,
   type JsonDocumentModification,
@@ -19,7 +22,7 @@ const toBytes = (source: string | Uint8Array) =>
   source instanceof Uint8Array ? source : new TextEncoder().encode(source);
 
 function documentLayer(initial: Readonly<Record<string, string | Uint8Array>>) {
-  const files = new Map(Object.entries(initial));
+  const files = new Map(Rec.toEntries(initial));
   let sequence = 0;
   const fileSystem = {
     ...FileSystem.make(
@@ -39,7 +42,8 @@ function documentLayer(initial: Readonly<Record<string, string | Uint8Array>>) {
         remove: (path) =>
           Effect.sync(() => {
             for (const candidate of files.keys()) {
-              if (candidate === path || candidate.startsWith(`${path}/`)) files.delete(candidate);
+              if (candidate === path || Fn.pipe(candidate, Str.startsWith(`${path}/`)))
+                files.delete(candidate);
             }
           }),
         rename: (from, to) =>

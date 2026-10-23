@@ -1,5 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import { CrossProcessLock } from "../../src/platform/cross-process-lock.ts";
 import { nodeLockFs } from "../../src/platform/node-builtins.ts";
 
@@ -15,7 +17,7 @@ if (mode === "death-before-publish" || mode === "write-fault") {
   const rename = nodeLockFs.renameSync;
   nodeLockFs.renameSync = (from, to) => {
     if (mode === "write-fault") throw new Error("Injected candidate write failure");
-    if (!String(to).endsWith("/owner.json")) process.kill(process.pid, "SIGKILL");
+    if (!Fn.pipe(String(to), Str.endsWith("/owner.json"))) process.kill(process.pid, "SIGKILL");
     return rename(from, to);
   };
 }

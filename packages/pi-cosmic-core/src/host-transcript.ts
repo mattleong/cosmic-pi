@@ -1,4 +1,5 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import { utf8ByteLength, utf8Prefix } from "./text.ts";
 
 export interface AssistantText {
@@ -21,7 +22,10 @@ export const latestAssistantText = (
     if (entry?.type !== "message" || entry.message.role !== "assistant") continue;
     const message = entry.message;
     if (message.stopReason === "aborted" && message.content.length === 0) continue;
-    const text = message.content.map((part) => (part.type === "text" ? part.text : "")).join("");
+    const text = Arr.join(
+      Arr.map(message.content, (part) => (part.type === "text" ? part.text : "")),
+      "",
+    );
     return utf8ByteLength(text) <= limit
       ? { text, truncated: false }
       : { text: utf8Prefix(text, limit), truncated: true };

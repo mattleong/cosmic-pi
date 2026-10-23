@@ -1,8 +1,11 @@
 import { validateToolArguments } from "@earendil-works/pi-ai";
+import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import type { Static, TSchema } from "typebox";
 import type { TLocalizedValidationError } from "typebox/error";
 import { Compile } from "typebox/compile";
@@ -22,7 +25,7 @@ const decodeArgumentsObject = Schema.decodeUnknownOption(
 const decodeJson = Schema.decodeUnknownOption(Schema.MutableJson);
 
 const isJsonArray = (value: Schema.Json | undefined): value is Schema.JsonArray =>
-  Array.isArray(value);
+  Arr.isArray(value);
 const isJsonRecord = (value: Schema.Json | undefined): value is Schema.JsonObject =>
   Predicate.isObject(value);
 
@@ -35,7 +38,7 @@ export type ToolWhitespaceFields = ReadonlyArray<string>;
 const fieldPath = (parent: string, key: string): string => (parent ? `${parent}.${key}` : key);
 
 const isBlank = (value: JsonValue, keepsWhitespace: boolean): boolean =>
-  Predicate.isString(value) && (keepsWhitespace ? value : value.trim()).length === 0;
+  Predicate.isString(value) && (keepsWhitespace ? value : Str.trim(value)).length === 0;
 
 // Pi compiles the property schema the same way and keeps the null when compilation fails.
 const compileSchema = Option.liftThrowable((schema: Schema.JsonObject) => Compile(schema));
@@ -75,10 +78,12 @@ const withoutBlankOptionalProperties = (
   omission: Omission,
 ): JsonObject => {
   const properties: Schema.JsonObject = isJsonRecord(schema.properties) ? schema.properties : {};
-  const required = Array.isArray(schema.required) ? schema.required : [];
-  return Object.fromEntries(
-    Object.entries(value).flatMap(([key, item]) => {
-      const propertySchema = Object.hasOwn(properties, key) ? properties[key] : undefined;
+  const required = Arr.isArray(schema.required) ? schema.required : [];
+  return Rec.fromEntries(
+    Arr.flatMap(Rec.toEntries(value), ([key, item]) => {
+      const propertySchema = Rec.has<string, Schema.Json>(properties, key)
+        ? properties[key]
+        : undefined;
       const propertyPath = fieldPath(path, key);
       if (
         isJsonRecord(propertySchema) &&
@@ -98,8 +103,8 @@ const withoutBlankOptionals = (
   omission: Omission,
 ): JsonValue => {
   if (!isJsonRecord(schema)) return value;
-  if (Array.isArray(value))
-    return value.map((item) => withoutBlankOptionals(item, schema.items, path, omission));
+  if (Arr.isArray(value))
+    return Arr.map(value, (item) => withoutBlankOptionals(item, schema.items, path, omission));
   return isJsonObject(value)
     ? withoutBlankOptionalProperties(value, schema, path, omission)
     : value;
@@ -135,9 +140,10 @@ const childEntries = (
   { path, field }: Location,
 ): ReadonlyArray<readonly [Location, Schema.Json]> => {
   if (isJsonArray(value))
-    return value.map((item, index) => [{ path: `${path}[${index}]`, field }, item] as const);
+    return Arr.map(value, (item, index) => [{ path: `${path}[${index}]`, field }, item] as const);
   return isJsonRecord(value)
-    ? Object.entries(value).map(
+    ? Arr.map(
+        Rec.toEntries(value),
         ([key, item]) =>
           [{ path: fieldPath(path, key), field: fieldPath(field, key) }, item] as const,
       )
@@ -170,31 +176,33 @@ export const blankStringPath = (
 ): string | undefined => firstBlankString(value, { path: "", field: "" }, keepWhitespace);
 
 const pathSegments = (pointer: string): ReadonlyArray<string> =>
-  pointer
-    .replace(/^#?\/?/u, "")
-    .split("/")
-    .filter((segment) => segment.length > 0)
-    .map((segment) => segment.replaceAll("~1", "/").replaceAll("~0", "~"));
+  Fn.pipe(
+    pointer,
+    Str.replace(/^#?\/?/u, ""),
+    Str.split("/"),
+    Arr.filter((segment) => segment.length > 0),
+    Arr.map((segment) => Fn.pipe(segment, Str.replaceAll("~1", "/"), Str.replaceAll("~0", "~"))),
+  );
 
 const valueAt = (root: Schema.Json, pointer: string): Schema.Json | undefined =>
-  pathSegments(pointer).reduce<Schema.Json | undefined>((node, segment) => {
+  Arr.reduce<string, Schema.Json | undefined>(pathSegments(pointer), root, (node, segment) => {
     if (node === undefined) return undefined;
     if (isJsonArray(node)) return node[Number(segment)];
     return isJsonRecord(node) ? node[segment] : undefined;
-  }, root);
+  });
 
 const displayPath = (pointer: string, root: string): string =>
-  pathSegments(pointer).reduce((label, segment) => {
+  Arr.reduce(pathSegments(pointer), root, (label, segment) => {
     if (/^\d+$/u.test(segment)) return `${label}[${segment}]`;
     return label === root ? segment : `${label}.${segment}`;
-  }, root);
+  });
 
 const reportedValue = (value: Schema.Json | undefined): string =>
   value === undefined ? "nothing" : clipText(JSON.stringify(value), MAX_REPORTED_VALUE_CHARS);
 
 const acceptedFields = (schema: Schema.Json | undefined): ReadonlyArray<string> => {
   const properties = isJsonRecord(schema) ? schema.properties : undefined;
-  return isJsonRecord(properties) ? Object.keys(properties) : [];
+  return isJsonRecord(properties) ? Rec.keys<string, Schema.Json>(properties) : [];
 };
 
 /** Field names that models trained on other harnesses send, mapped to this tool's field. */
@@ -209,15 +217,21 @@ export const replacementField = (
   accepted: ReadonlyArray<string>,
   aliases: ToolFieldAliases = {},
 ): string | undefined => {
-  const camel = key.replace(/_([a-z])/gu, (_match, letter: string) => letter.toUpperCase());
-  const alias = [key, camel].find((name) => Object.hasOwn(aliases, name));
-  return [
-    alias === undefined ? undefined : aliases[alias],
-    camel,
-    `${camel}s`,
-    camel.replace(/s$/u, ""),
-  ].find(
-    (candidate) => candidate !== undefined && candidate !== key && accepted.includes(candidate),
+  // @effect-diagnostics-next-line preferEffectString:off -- Str.replace takes no replacer callback
+  const camel = key.replace(/_([a-z])/gu, (_match, letter: string) => Str.toUpperCase(letter));
+  const alias = Option.getOrUndefined(
+    Arr.findFirst([key, camel], (name) => Rec.has(aliases, name)),
+  );
+  return Option.getOrUndefined(
+    Arr.findFirst(
+      [
+        alias === undefined ? undefined : aliases[alias],
+        camel,
+        `${camel}s`,
+        Fn.pipe(camel, Str.replace(/s$/u, "")),
+      ],
+      (candidate) => candidate !== undefined && candidate !== key && accepted.includes(candidate),
+    ),
   );
 };
 
@@ -227,13 +241,13 @@ const unknownFieldsIssue = (
   accepted: ReadonlyArray<string>,
   aliases: ToolFieldAliases,
 ): string => {
-  const named = keys.map((key) => {
+  const named = Arr.map(keys, (key) => {
     const replacement = replacementField(key, accepted, aliases);
     return replacement ? `"${key}" (use "${replacement}")` : `"${key}"`;
   });
   const fields =
-    accepted.length > 0 ? `accepted fields: ${accepted.join(", ")}` : "it takes no fields";
-  return `${subject} does not accept ${named.join(", ")}; ${fields}.`;
+    accepted.length > 0 ? `accepted fields: ${Arr.join(accepted, ", ")}` : "it takes no fields";
+  return `${subject} does not accept ${Arr.join(named, ", ")}; ${fields}.`;
 };
 
 interface IssueContext {
@@ -256,16 +270,19 @@ const issueText = (
       aliases,
     );
   if (error.keyword === "enum")
-    return `${subject} must be one of ${error.params.allowedValues.map(String).join(", ")}; received ${reportedValue(valueAt(args, error.instancePath))}.`;
+    return `${subject} must be one of ${Arr.join(Arr.map(error.params.allowedValues, String), ", ")}; received ${reportedValue(valueAt(args, error.instancePath))}.`;
   if (error.keyword === "required")
-    return `${error.params.requiredProperties
-      .map((field) => displayPath(`${error.instancePath}/${field}`, toolName))
-      .join(", ")} is required.`;
+    return `${Arr.join(
+      Arr.map(error.params.requiredProperties, (field) =>
+        displayPath(`${error.instancePath}/${field}`, toolName),
+      ),
+      ", ",
+    )} is required.`;
   return `${subject} ${error.message}.`;
 };
 
 const isWithin = (pointer: string, ancestor: string): boolean =>
-  pointer === ancestor || pointer.startsWith(`${ancestor}/`);
+  pointer === ancestor || Fn.pipe(pointer, Str.startsWith(`${ancestor}/`));
 
 interface Discriminant {
   readonly error: TLocalizedValidationError;
@@ -280,7 +297,8 @@ interface Discriminant {
 const DISCRIMINANT_SCHEMA_PATH = /^((.*)\/anyOf\/\d+)\/properties\/([^/]+)$/u;
 
 const isEnumOrConst = (schema: Schema.Json | undefined): boolean =>
-  isJsonRecord(schema) && (Object.hasOwn(schema, "enum") || Object.hasOwn(schema, "const"));
+  isJsonRecord(schema) &&
+  (Rec.has<string, Schema.Json>(schema, "enum") || Rec.has<string, Schema.Json>(schema, "const"));
 
 /** A property is a union's discriminant only when every branch declares it as an enum or const. */
 const isUnionDiscriminant = (schema: Schema.Json, union: string, property: string): boolean => {
@@ -288,11 +306,12 @@ const isUnionDiscriminant = (schema: Schema.Json, union: string, property: strin
   return (
     isJsonRecord(node) &&
     isJsonArray(node.anyOf) &&
-    node.anyOf.every(
+    Arr.every(
+      node.anyOf,
       (branch) =>
         isJsonRecord(branch) &&
         isJsonRecord(branch.properties) &&
-        Object.hasOwn(branch.properties, property) &&
+        Rec.has<string, Schema.Json>(branch.properties, property) &&
         isEnumOrConst(branch.properties[property]),
     )
   );
@@ -308,7 +327,13 @@ const discriminant = (
     return undefined;
   const [property] = pathSegments(encodedProperty);
   if (property === undefined || !isUnionDiscriminant(schema, union, property)) return undefined;
-  const value = error.instancePath.slice(0, Math.max(0, error.instancePath.lastIndexOf("/")));
+  const value = Fn.pipe(
+    error.instancePath,
+    Str.slice(
+      0,
+      Option.getOrElse(Fn.pipe(error.instancePath, Str.lastIndexOf("/")), () => 0),
+    ),
+  );
   return { error, value, union, branch };
 };
 
@@ -333,31 +358,35 @@ const selectedBranchErrors = (
   errors: ReadonlyArray<TLocalizedValidationError>,
   schema: Schema.Json,
 ): ReadonlyArray<TLocalizedValidationError> => {
-  const discriminants = errors.flatMap((error) => discriminant(error, schema) ?? []);
+  const discriminants = Arr.flatMap(errors, (error) =>
+    Arr.fromNullishOr(discriminant(error, schema)),
+  );
   const ruledOut = new Map<string, Set<string>>();
   for (const entry of discriminants)
     ruledOut.set(unionKey(entry), (ruledOut.get(unionKey(entry)) ?? new Set()).add(entry.branch));
   const rulesOutAll = (entry: Discriminant): boolean =>
     (ruledOut.get(unionKey(entry))?.size ?? 0) >= unionBranchCount(schema, entry.union);
   const unmatched = (error: TLocalizedValidationError): boolean =>
-    discriminants.some((entry) => entry.error === error && rulesOutAll(entry));
+    Arr.some(discriminants, (entry) => entry.error === error && rulesOutAll(entry));
   const isUnselected = (error: TLocalizedValidationError): boolean =>
-    discriminants.some((entry) => {
+    Arr.some(discriminants, (entry) => {
       if (!isWithin(error.instancePath, entry.value)) return false;
       if (error.keyword === "anyOf")
         return error.instancePath === entry.value && error.schemaPath === entry.union;
       if (!rulesOutAll(entry)) return isWithin(error.schemaPath, entry.branch);
       return isWithin(error.schemaPath, `${entry.union}/anyOf`) && !unmatched(error);
     });
-  const selected = errors.filter((error) => !isUnselected(error));
+  const selected = Arr.filter(errors, (error) => !isUnselected(error));
   const reported = new Set<string>();
-  return selected.flatMap((error): ReadonlyArray<TLocalizedValidationError> => {
+  return Arr.flatMap(selected, (error): ReadonlyArray<TLocalizedValidationError> => {
     if (!unmatched(error)) return [error];
     if (reported.has(error.instancePath)) return [];
     reported.add(error.instancePath);
-    const allowed = selected
-      .filter((other) => other.instancePath === error.instancePath && unmatched(other))
-      .flatMap(allowedValues);
+    const allowed = Fn.pipe(
+      selected,
+      Arr.filter((other) => other.instancePath === error.instancePath && unmatched(other)),
+      Arr.flatMap(allowedValues),
+    );
     return [{ ...error, keyword: "enum", params: { allowedValues: [...new Set(allowed)] } }];
   });
 };
@@ -371,14 +400,14 @@ const validationIssues = (
   const candidate = structuredClone(args);
   Convert(parameters, candidate);
   const errors = selectedBranchErrors([...Errors(parameters, candidate)], context.schema);
-  return [...new Set(errors.map((error) => issueText(error, args, context)))];
+  return [...new Set(Arr.map(errors, (error) => issueText(error, args, context)))];
 };
 
 const clippedStrings = (value: Schema.Json): Schema.Json => {
   if (Predicate.isString(value)) return clipText(value, MAX_ECHO_STRING_CHARS);
-  if (isJsonArray(value)) return value.map(clippedStrings);
+  if (isJsonArray(value)) return Arr.map(value, clippedStrings);
   return isJsonRecord(value)
-    ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, clippedStrings(item)]))
+    ? Rec.fromEntries(Arr.map(Rec.toEntries(value), ([key, item]) => [key, clippedStrings(item)]))
     : value;
 };
 
@@ -391,18 +420,21 @@ const invalidArgumentsError = (
   args?: JsonObject,
   hints: ReadonlyArray<string> = [],
 ): Error => {
-  const listed = issues.slice(0, MAX_REPORTED_ISSUES).map((issue) => `- ${issue}`);
+  const listed = Arr.map(issues.slice(0, MAX_REPORTED_ISSUES), (issue) => `- ${issue}`);
   const more = issues.length - listed.length;
   return new Error(
-    [
-      `[invalid_arguments] ${toolName} arguments are invalid:`,
-      ...listed,
-      ...(more > 0 ? [`- and ${more} more`] : []),
-      ...(args
-        ? [`Received: ${clipText(JSON.stringify(clippedStrings(args)), MAX_ECHO_CHARS)}`]
-        : []),
-      ...hints,
-    ].join("\n"),
+    Arr.join(
+      [
+        `[invalid_arguments] ${toolName} arguments are invalid:`,
+        ...listed,
+        ...(more > 0 ? [`- and ${more} more`] : []),
+        ...(args
+          ? [`Received: ${clipText(JSON.stringify(clippedStrings(args)), MAX_ECHO_CHARS)}`]
+          : []),
+        ...hints,
+      ],
+      "\n",
+    ),
   );
 };
 
@@ -452,7 +484,7 @@ export const toolArgumentPreparer = <const S extends TSchema>(
     const args = omitBlankOptionals(received);
     inspect?.(args);
     // Pi substitutes `{}` for malformed tool-call JSON, so an empty call may have lost its arguments.
-    const hints = Object.keys(received).length === 0 ? [EMPTY_ARGUMENTS_HINT] : [];
+    const hints = Rec.keys<string, JsonValue>(received).length === 0 ? [EMPTY_ARGUMENTS_HINT] : [];
     const validated = Option.getOrThrowWith(Option.flatten(validate(args)), () => {
       const issues = validationIssues(parameters, args, context);
       return invalidArgumentsError(

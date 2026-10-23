@@ -128,6 +128,7 @@ export {
   utf8Prefix,
   utf8Suffix,
 } from "./src/text.ts";
+export { codeUnitAt, indexOfFrom, lastIndexOfFrom } from "./src/text-scan.ts";
 export {
   clampPercent,
   clipText,

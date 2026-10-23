@@ -1,4 +1,7 @@
+import * as Arr from "effect/Array";
 import * as Data from "effect/Data";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 
 interface SettingsDispatchDescriptor {
   readonly id: string;
@@ -32,16 +35,19 @@ export const dispatchSettingsCommand = (
   descriptors: ReadonlyArray<SettingsDispatchDescriptor>,
   scopes: ReadonlyArray<string> = [],
 ): SettingsCommandDispatch => {
-  const trimmed = args.trim();
+  const trimmed = Str.trim(args);
   if (!trimmed) return SettingsCommandDispatch.OpenInteractive();
   if (trimmed === "help") return SettingsCommandDispatch.Help();
   if (trimmed === "status") return SettingsCommandDispatch.Status();
-  const tokens = trimmed.split(/\s+/);
+  // Widened so the scope shift below may empty it.
+  const tokens: Array<string> = Str.split(trimmed, /\s+/);
   const scope = scopes.includes(tokens[0] ?? "") ? tokens.shift() : undefined;
   const [id = "", ...parts] = tokens;
-  const value = parts.join(" ").trim();
+  const value = Str.trim(Arr.join(parts, " "));
   if (!value) return SettingsCommandDispatch.Invalid({ reason: "missing-value", id });
-  const descriptor = descriptors.find((candidate) => candidate.id === id);
+  const descriptor = Option.getOrUndefined(
+    Arr.findFirst(descriptors, (candidate) => candidate.id === id),
+  );
   if (!descriptor) return SettingsCommandDispatch.Invalid({ reason: "unknown-setting", id });
   if (descriptor.values && !descriptor.openValues && !descriptor.values.includes(value)) {
     return SettingsCommandDispatch.Invalid({

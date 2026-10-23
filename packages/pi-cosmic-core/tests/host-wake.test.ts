@@ -7,6 +7,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import { vi } from "vitest";
 import { registerSessionWake, type SessionWakeOptions } from "../src/host-wake.ts";
@@ -88,7 +89,7 @@ const harness = (options: Partial<SessionWakeOptions> = {}) => {
     return Promise.resolve(handler?.(event, ctx));
   };
   const wakes = () =>
-    sendMessage.mock.calls.filter(([message]) => message.customType === WAKE_TYPE);
+    Arr.filter(sendMessage.mock.calls, ([message]) => message.customType === WAKE_TYPE);
   return {
     ...host,
     wake,

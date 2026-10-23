@@ -1,6 +1,9 @@
 import { StringEnum, validateToolArguments } from "@earendil-works/pi-ai";
 import { Type, type Static } from "typebox";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import type * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import { describe, expect, it } from "vitest";
 import {
   omitBlankOptionalArguments,
@@ -120,7 +123,7 @@ const issuesOf = (
     return [];
   } catch (thrown) {
     const message = thrown instanceof Error ? thrown.message : "";
-    return message.split("\n").filter((line) => line.startsWith("- "));
+    return Arr.filter(Str.split(message, "\n"), (line) => Fn.pipe(line, Str.startsWith("- ")));
   }
 };
 
@@ -198,7 +201,7 @@ describe("toolArgumentPreparer", () => {
   });
 
   it("echoes only bounded arguments", () => {
-    const task = "x".repeat(5_000);
+    const task = Fn.pipe("x", Str.repeat(5_000));
     const error = (() => {
       try {
         prepare({ agents: [{ task, isolation: "sandbox" }] });
@@ -267,7 +270,7 @@ describe("toolArgumentPreparer with a union", () => {
     expect(reported).toHaveLength(2);
     expect(reported[0]).toMatch(/shapes\[0\]\.radius/u);
     expect(reported[1]).toMatch(/^- shapes\[1\][^.[][\s\S]*radius/u);
-    expect(reported.join("\n")).not.toMatch(/anyOf|\.kind|\.side/u);
+    expect(Arr.join(reported, "\n")).not.toMatch(/anyOf|\.kind|\.side/u);
   });
 
   it("lists every allowed value once when no branch matches", () => {
@@ -290,7 +293,7 @@ describe("toolArgumentPreparer with a union", () => {
     expect(reported).toHaveLength(1);
     expect(reported[0]).toContain("entry.level");
     expect(reported[0]).toMatch(/low[\s\S]*high/u);
-    expect(reported.join("\n")).not.toMatch(/entry\.kind|entry\.size/u);
+    expect(Arr.join(reported, "\n")).not.toMatch(/entry\.kind|entry\.size/u);
   });
 
   it("reports every branch's issues when the union has no common discriminant", () => {
@@ -301,7 +304,7 @@ describe("toolArgumentPreparer with a union", () => {
       ]),
     });
     const loose = toolArgumentPreparer("loose", Loose);
-    const reported = issuesOf(loose, { entry: { level: "mid" } }).join("\n");
+    const reported = Arr.join(issuesOf(loose, { entry: { level: "mid" } }), "\n");
     expect(reported).toContain("entry.level");
     expect(reported).toContain("entry.size");
   });

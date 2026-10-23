@@ -1,4 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import {
   makeSessionCapabilityProtocol,
   querySessionCapability,
@@ -36,7 +39,7 @@ describe("session capability queries", () => {
     expect(
       unbounded.normalizeQuery({
         version: 1,
-        sessionId: "x".repeat(4096),
+        sessionId: Fn.pipe("x", Str.repeat(4096)),
         respond: inertResponder,
       }),
     ).toBeDefined();
@@ -63,7 +66,7 @@ describe("session capability queries", () => {
 });
 
 type Respond = (candidate: string) => void;
-const all = (deliver: Respond) => ["a", "invalid", "b", "c"].forEach(deliver);
+const all = (deliver: Respond) => Arr.forEach(["a", "invalid", "b", "c"], deliver);
 
 describe("session capability discovery", () => {
   const discover = (emit: (respond: Respond) => void, limit?: number) => {

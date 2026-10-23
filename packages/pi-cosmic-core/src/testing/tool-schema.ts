@@ -1,4 +1,6 @@
+import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
+import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import { isJsonObject, type JsonValue } from "../platform/json-document.ts";
 
@@ -28,18 +30,19 @@ const childSchemas = (
   const properties = node.properties;
   return [
     ...(isJsonObject(properties)
-      ? Object.entries(properties).map(
+      ? Arr.map(
+          Rec.toEntries<string, JsonValue>(properties),
           ([name, child]) => [`${path}.properties.${name}`, child] as const,
         )
       : []),
-    ...SCHEMA_KEYWORDS.flatMap((keyword) => {
+    ...Arr.flatMap(SCHEMA_KEYWORDS, (keyword) => {
       const child = node[keyword];
       return child === undefined ? [] : [[`${path}.${keyword}`, child] as const];
     }),
-    ...SCHEMA_LIST_KEYWORDS.flatMap((keyword) => {
+    ...Arr.flatMap(SCHEMA_LIST_KEYWORDS, (keyword) => {
       const list = node[keyword];
-      return Array.isArray(list)
-        ? list.map((child, index) => [`${path}.${keyword}[${index}]`, child] as const)
+      return Arr.isArray(list)
+        ? Arr.map(list, (child, index) => [`${path}.${keyword}[${index}]`, child] as const)
         : [];
     }),
   ];
@@ -47,15 +50,18 @@ const childSchemas = (
 
 const schemaProblems = (node: JsonValue, path: string): ReadonlyArray<string> => {
   if (!isJsonObject(node)) return [];
-  const problems = NONPORTABLE_KEYWORDS.flatMap((keyword) =>
-    Object.hasOwn(node, keyword) ? [`${path}: ${keyword}`] : [],
+  const problems = Arr.flatMap(NONPORTABLE_KEYWORDS, (keyword) =>
+    Rec.has<string, JsonValue>(node, keyword) ? [`${path}: ${keyword}`] : [],
   );
   const typedUnion =
-    Object.hasOwn(node, "type") && (Object.hasOwn(node, "anyOf") || Object.hasOwn(node, "oneOf"));
+    Rec.has<string, JsonValue>(node, "type") &&
+    (Rec.has<string, JsonValue>(node, "anyOf") || Rec.has<string, JsonValue>(node, "oneOf"));
   return [
     ...problems,
     ...(typedUnion ? [`${path}: type with anyOf or oneOf`] : []),
-    ...childSchemas(node, path).flatMap(([childPath, child]) => schemaProblems(child, childPath)),
+    ...Arr.flatMap(childSchemas(node, path), ([childPath, child]) =>
+      schemaProblems(child, childPath),
+    ),
   ];
 };
 

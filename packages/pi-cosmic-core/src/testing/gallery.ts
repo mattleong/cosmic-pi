@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -17,5 +18,8 @@ export const writeGallerySection = Effect.fn("PresentationGallery.writeSection")
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  yield* fileSystem.writeFileString(path.join(directory, `${name}.txt`), `${lines.join("\n")}\n`);
+  yield* fileSystem.writeFileString(
+    path.join(directory, `${name}.txt`),
+    `${Arr.join(lines, "\n")}\n`,
+  );
 }, Effect.provide(fileLayer));

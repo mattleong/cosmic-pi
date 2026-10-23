@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -110,7 +111,7 @@ const makeJsonDocumentStore = Effect.gen(function* () {
           () => Effect.fail(resolveFailure(path)),
         ),
       );
-      if (Option.isSome(real)) return pathService.join(real.value, ...missing.toReversed());
+      if (Option.isSome(real)) return pathService.join(real.value, ...Arr.reverse(missing));
       const parent = pathService.dirname(current);
       if (parent === current) return directory;
       missing.push(pathService.basename(current));

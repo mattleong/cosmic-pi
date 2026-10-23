@@ -1,9 +1,13 @@
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Arr from "effect/Array";
 import * as Exit from "effect/Exit";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Scope from "effect/Scope";
+import * as Str from "effect/String";
 import { vi } from "vitest";
 import { guardProcessGroupAtHostExit, signalProcessGroup } from "../index.ts";
 import { spawnIpcChild } from "../src/testing/ipc-child.ts";
@@ -27,10 +31,12 @@ const hostExit = (mode: "guarded" | "released") =>
   Effect.gen(function* () {
     const host = yield* spawnIpcChild(childScript, [mode], { timeout: "10 seconds" });
     yield* host.wait("ready");
-    const announced = host.messages
-      .filter(Predicate.isString)
-      .find((message) => message.startsWith("group:"));
-    const pid = Number(announced?.slice("group:".length));
+    const announced = Fn.pipe(
+      host.messages,
+      Arr.filter(Predicate.isString),
+      Arr.findFirst((message) => Fn.pipe(message, Str.startsWith("group:"))),
+    );
+    const pid = Number(Option.getOrUndefined(Option.map(announced, Str.slice("group:".length))));
     expect(Number.isSafeInteger(pid) && pid > 0).toBe(true);
     yield* Effect.addFinalizer(() => Effect.sync(() => signalProcessGroup(pid, "SIGKILL")));
     expect(signalProcessGroup(pid, 0)).toBe("present");

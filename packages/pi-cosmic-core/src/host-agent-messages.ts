@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import { invokeHostCallback } from "./host-session.ts";
 import { latestAssistantText } from "./host-transcript.ts";
 import type { SessionWake, SessionWakeDelivery } from "./host-wake.ts";
@@ -17,11 +18,14 @@ export interface AgentMessageFraming {
 
 /** The sender's line, the text, then when and how to reply and whose authority it lacks. */
 export const frameAgentMessage = (framing: AgentMessageFraming): string =>
-  [
-    `Message from ${framing.sender}:`,
-    framing.text,
-    `Reply with ${framing.replyTool} to ${JSON.stringify(framing.replyTo)} only if the work needs it; don't reply just to acknowledge or thank. ${framing.authority}`,
-  ].join("\n");
+  Arr.join(
+    [
+      `Message from ${framing.sender}:`,
+      framing.text,
+      `Reply with ${framing.replyTool} to ${JSON.stringify(framing.replyTo)} only if the work needs it; don't reply just to acknowledge or thank. ${framing.authority}`,
+    ],
+    "\n",
+  );
 
 /** A displayed custom message carrying an agent message for the session's model. */
 export interface AgentMessageNotice<Details> {

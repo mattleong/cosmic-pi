@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import {
   hasControlCharacter,
   maskIdentifier,
@@ -69,12 +71,16 @@ describe("security formatting", () => {
   it("drops malformed or unbounded SGR sequences", () => {
     expect(sanitizeTerminalStyledText("a\u001b[31?mb")).toBe("ab");
     expect(sanitizeTerminalStyledText("a\u001b[38:5:42mb")).toBe("ab");
-    expect(sanitizeTerminalStyledText(`a\u001b[${"1".repeat(129)}mb`)).toBe("ab");
-    const flooded = sanitizeTerminalStyledText(`${"\u001b[31m".repeat(1_000)}visible`);
-    expect(flooded.split("\u001b[")).toHaveLength(258);
+    expect(sanitizeTerminalStyledText(`a\u001b[${Fn.pipe("1", Str.repeat(129))}mb`)).toBe("ab");
+    const flooded = sanitizeTerminalStyledText(
+      `${Fn.pipe("\u001b[31m", Str.repeat(1_000))}visible`,
+    );
+    expect(Str.split(flooded, "\u001b[")).toHaveLength(258);
     expect(stripTerminalControls(flooded)).toBe("visible");
     expect(
-      sanitizeTerminalStyledText(`${"\u001b[31m".repeat(1_000)}first\n\u001b[32mnext`),
+      sanitizeTerminalStyledText(
+        `${Fn.pipe("\u001b[31m", Str.repeat(1_000))}first\n\u001b[32mnext`,
+      ),
     ).toContain("\n\u001b[32mnext");
   });
 

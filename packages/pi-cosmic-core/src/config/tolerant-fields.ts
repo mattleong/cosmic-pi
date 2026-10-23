@@ -1,4 +1,5 @@
 import * as Option from "effect/Option";
+import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as Fn from "effect/Function";
 
@@ -47,8 +48,8 @@ const collectTolerantFields = <Fields extends TolerantFieldSchemas>(
     ? [{ path: options.path ?? "$", issue: "invalid" }]
     : [];
 
-  for (const [key, schema] of Object.entries(fields)) {
-    if (!Object.hasOwn(raw, key)) continue;
+  for (const [key, schema] of Rec.toEntries(fields)) {
+    if (!Rec.has<string, Schema.MutableJson>(raw, key)) continue;
     const decoded = Schema.decodeOption(schema)(raw[key]);
     if (Option.isNone(decoded)) diagnostics.push({ path: `${prefix}${key}`, issue: "invalid" });
     else

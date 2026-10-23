@@ -1,4 +1,5 @@
 import type { ExtensionUIContext, KeybindingsManager } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import { ignore, overlay } from "./overlay.ts";
 
 type CustomComponentFactory = Parameters<ExtensionUIContext["custom"]>[0];
@@ -96,7 +97,7 @@ export const tuiFixture = (overrides: Partial<HostTui> = {}): HostTui => {
       onTerminalColorSchemeChange: () => ignore,
       setTerminalColorSchemeNotifications: ignore,
       queryTerminalColors: () => Promise.resolve({}),
-      render: (width) => children.flatMap((child) => child.render(width)),
+      render: (width) => Arr.flatMap(children, (child) => child.render(width)),
       invalidate: () => {
         for (const child of children) child.invalidate();
       },

@@ -1,4 +1,5 @@
 import { expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -138,7 +139,7 @@ it.effect("ends captured command authority at the next lifecycle change, never r
     expect(afterFailure()).toBe(true);
     yield* Effect.promise(() => slot.shutdown());
     expect(afterFailure()).toBe(false);
-    expect([beforeStart, duringStartup, active].some((current) => current())).toBe(false);
+    expect(Arr.some([beforeStart, duringStartup, active], (current) => current())).toBe(false);
   }),
 );
 

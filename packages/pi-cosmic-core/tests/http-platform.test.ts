@@ -1,4 +1,5 @@
 import { expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -49,7 +50,7 @@ it.effect("captures stable HTTP spans without URLs, bodies, or credentials", () 
       Effect.flatMap((response) => response.discardRawBody),
       streaming("stream"),
     );
-    const names = captured.spans.map((span) => span.name);
+    const names = Arr.map(captured.spans, (span) => span.name);
     expect(names).toContain("pi-cosmic-core.http.json.request");
     expect(names).toContain("pi-cosmic-core.http.json.decode");
     expect(names).toContain("pi-cosmic-core.http.streaming.request");

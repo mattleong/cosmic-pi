@@ -2,6 +2,9 @@ import { fileURLToPath } from "node:url";
 import { expect, it } from "@effect/vitest";
 import { vi } from "vitest";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import { acquireNativeLock, CrossProcessLock } from "../src/platform/cross-process-lock.ts";
 import {
   nodeFsPromises as fs,
@@ -52,7 +55,11 @@ it.live("does not equate owner death with native service settlement", () =>
     yield* killChild(first.child);
     const failure = yield* Effect.flip(tryAcquire(directory));
     expect(failure).toMatchObject({ reason: "recovery-required" });
-    expect(failure.slot?.startsWith(directory)).toBe(true);
+    expect(
+      Option.getOrUndefined(
+        Option.map(Option.fromUndefinedOr(failure.slot), Str.startsWith(directory)),
+      ),
+    ).toBe(true);
     const evidence = yield* Effect.promise(() =>
       fs.readFile(path.join(failure.slot ?? "", "owner.json"), "utf8"),
     );
@@ -128,7 +135,7 @@ it.live(
       let paused = false;
       let successor: ReturnType<typeof acquireNativeLock>;
       const spy = vi.spyOn(nodeLockFs, "renameSync").mockImplementation((from, to) => {
-        if (!paused && String(to).includes(".retired-")) {
+        if (!paused && Fn.pipe(String(to), Str.includes(".retired-"))) {
           paused = true;
           expect(acquireNativeLock("fixture", { directory })).toBeUndefined();
           for (let index = 0; index < 5; index++)
@@ -167,7 +174,10 @@ it.live("reclaims a lease whose live PID now belongs to a different process", ()
     expect(owner).toContain('"started"');
     nodeLockFs.writeFileSync(
       ownerPath,
-      owner.replace(/"started":"[^"]*"/u, `"started":"${reusedProcessIdentity().started ?? ""}"`),
+      Fn.pipe(
+        owner,
+        Str.replace(/"started":"[^"]*"/u, `"started":"${reusedProcessIdentity().started ?? ""}"`),
+      ),
     );
     expect(acquireNativeLock("fixture", { directory }, true)).toBeDefined();
   }).pipe(Effect.scoped),

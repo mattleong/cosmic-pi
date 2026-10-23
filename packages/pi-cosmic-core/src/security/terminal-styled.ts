@@ -1,5 +1,8 @@
 import * as Arr from "effect/Array";
+import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
+import * as Str from "effect/String";
+import { codeUnitAt } from "../text-scan.ts";
 
 const SAFE_SGR_PARAMETERS = /^[0-9;]*$/u;
 const MAX_SAFE_SGR_PARAMETER_LENGTH = 128;
@@ -72,9 +75,9 @@ const sgrStatePrefix = (state: SgrState): string => {
     ...Arr.filterMap(SGR_ATTRIBUTES, (code) =>
       state.attributes.has(code) ? Result.succeed(String(code)) : Result.failVoid,
     ),
-    ...[state.foreground, state.background].filter((color) => color !== undefined),
+    ...Arr.filter([state.foreground, state.background], Predicate.isString),
   ];
-  return parameters.length === 0 ? "" : `\u001b[${parameters.join(";")}m`;
+  return parameters.length === 0 ? "" : `\u001b[${Arr.join(parameters, ";")}m`;
 };
 
 const isSimpleSafeSgr = (code: number): boolean =>
@@ -94,16 +97,16 @@ const extendedColorLength = (values: ReadonlyArray<number>, index: number): numb
   }
   if (mode !== 2) return undefined;
   const colors = values.slice(index + 2, index + 5);
-  return colors.length !== 3 || colors.some((color) => color > 255) ? undefined : 5;
+  return colors.length !== 3 || Arr.some(colors, (color) => color > 255) ? undefined : 5;
 };
 
 const parseSafeSgr = (parameters: string): ReadonlyArray<number> | undefined => {
   if (parameters.length > MAX_SAFE_SGR_PARAMETER_LENGTH || !SAFE_SGR_PARAMETERS.test(parameters))
     return undefined;
-  const values = (parameters.length === 0 ? [""] : parameters.split(";")).map((part) =>
+  const values = Arr.map(parameters.length === 0 ? [""] : Str.split(parameters, ";"), (part) =>
     part.length === 0 ? 0 : Number(part),
   );
-  if (values.some((value) => !Number.isSafeInteger(value) || value < 0)) return undefined;
+  if (Arr.some(values, (value) => !Number.isSafeInteger(value) || value < 0)) return undefined;
   for (let index = 0; index < values.length; index += 1) {
     const code = values[index] ?? -1;
     if (code !== 38 && code !== 48) {
@@ -131,7 +134,7 @@ const applySafeSgr = (state: SgrState, values: ReadonlyArray<number>): void => {
     else if (code === 49) delete state.background;
     else if (code === 38 || code === 48) {
       const count = values[index + 1] === 5 ? 3 : 5;
-      const color = values.slice(index, index + count).join(";");
+      const color = Arr.join(Arr.map(values.slice(index, index + count), String), ";");
       if (code === 38) state.foreground = color;
       else state.background = color;
       index += count - 1;
@@ -154,7 +157,7 @@ const emitSgr = (writer: StyledFragmentWriter, parameters: string): void => {
   const { state } = writer;
   const values = parseSafeSgr(parameters);
   if (values === undefined || state.lineBudgetExhausted) return;
-  const sequence = `\u001b[${values.join(";")}m`;
+  const sequence = `\u001b[${Arr.join(Arr.map(values, String), ";")}m`;
   if (
     state.lineSequences >= MAX_PRESERVED_SGR_SEQUENCES_PER_LINE ||
     state.lineBytes + sequence.length > MAX_PRESERVED_SGR_BYTES_PER_LINE
@@ -240,7 +243,7 @@ const stepCsi = (writer: StyledFragmentWriter, character: string, code: number):
 };
 
 const stepCharacter = (writer: StyledFragmentWriter, character: string): void => {
-  const code = character.charCodeAt(0);
+  const code = codeUnitAt(character, 0);
   switch (writer.state.mode) {
     case "text":
       return processText(writer, character, code);
@@ -261,7 +264,7 @@ export function sanitizeTerminalStyledFragments<Channel extends string>(
   fragments: ReadonlyArray<TerminalStyledFragment<Channel>>,
 ): ReadonlyArray<SanitizedTerminalStyledFragment<Channel>> {
   const states = new Map<Channel, StyledChannelState>();
-  return fragments.map((fragment) => {
+  return Arr.map(fragments, (fragment) => {
     const state = states.get(fragment.channel) ?? emptyStyledChannelState();
     states.set(fragment.channel, state);
     const reopenSgr = sgrStatePrefix(state.sgr);

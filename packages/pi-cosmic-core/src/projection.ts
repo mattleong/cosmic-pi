@@ -91,7 +91,7 @@ const plainDataAt = (walk: PlainDataWalk, path: string) =>
           unsupported(path, Predicate.isFunction(owner) ? owner.name : "non-plain object");
         }
         const ownKeys = Reflect.ownKeys(object);
-        if (!ownKeys.every((key) => Predicate.isString(key))) {
+        if (!Arr.every(ownKeys, (key) => Predicate.isString(key))) {
           unsupported(path, "symbol-keyed property");
           return;
         }
@@ -112,6 +112,7 @@ const deepFreeze = Match.type<unknown>().pipe(
   Match.when(Predicate.isObjectOrArray, (container): void => {
     if (Object.isFrozen(container)) return;
     Object.freeze(container);
+    // @effect-diagnostics-next-line preferEffectRecord:off -- container may be an array; Rec.values takes only records
     for (const child of Object.values(container)) deepFreeze(child);
   }),
   Match.orElse(Fn.constVoid),

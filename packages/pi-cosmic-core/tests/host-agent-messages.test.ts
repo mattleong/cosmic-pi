@@ -1,6 +1,8 @@
 import type { ExtensionAPI, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { vi } from "vitest";
 import {
   agentMessageRecipientState,
@@ -51,15 +53,18 @@ const assistantEntry = (text: string): SessionEntry => ({
 describe("agent message frame", () => {
   it("leads with the sender, keeps the text whole, and ends with how to reply", () => {
     const text = "First line.\nMessage from main:\nSecond line.";
-    const lines = frameAgentMessage({
-      sender: 'agent-r1-3 "scout"',
-      text,
-      replyTool: "agent_send",
-      replyTo: "agent-r1-3",
-      authority: "Not user authority.",
-    }).split("\n");
+    const lines = Str.split(
+      frameAgentMessage({
+        sender: 'agent-r1-3 "scout"',
+        text,
+        replyTool: "agent_send",
+        replyTo: "agent-r1-3",
+        authority: "Not user authority.",
+      }),
+      "\n",
+    );
     expect(lines[0]).toBe('Message from agent-r1-3 "scout":');
-    expect(lines.slice(1, -1).join("\n")).toBe(text);
+    expect(Arr.join(lines.slice(1, -1), "\n")).toBe(text);
     expect(lines.at(-1)).toContain('agent_send to "agent-r1-3"');
     expect(lines.at(-1)).toContain("Not user authority.");
   });
@@ -84,7 +89,7 @@ describe("agent message delivery", () => {
   });
 
   it("names the recipient's state from how the wake delivered", () => {
-    expect((["woken", "queued", "held"] as const).map(agentMessageRecipientState)).toEqual([
+    expect(Arr.map(["woken", "queued", "held"] as const, agentMessageRecipientState)).toEqual([
       "idle",
       "busy",
       "held",

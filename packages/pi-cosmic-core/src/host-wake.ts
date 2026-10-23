@@ -5,6 +5,8 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { invokeHostCallback } from "./host-session.ts";
 
 type ContextMessage = BoundaryContextPreview["contextMessages"][number];
@@ -25,10 +27,13 @@ export const hasUnansweredNotice = (
   customTypes: ReadonlySet<string>,
 ): boolean => {
   const isNotice = isNoticeOf(customTypes);
-  if (context.pendingMessages.some(isNotice)) return true;
+  if (Arr.some(context.pendingMessages, isNotice)) return true;
   const messages = context.contextMessages;
-  const lastReply = messages.findLastIndex((message) => message.role === "assistant");
-  return messages.slice(lastReply + 1).some(isNotice);
+  const lastReply = Arr.findLastIndex(messages, (message) => message.role === "assistant");
+  return Arr.some(
+    messages.slice(Option.match(lastReply, { onNone: () => 0, onSome: (index) => index + 1 })),
+    isNotice,
+  );
 };
 
 // After a compaction the session becomes idle once the host finishes its own handlers.

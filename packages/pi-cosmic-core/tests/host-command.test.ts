@@ -1,6 +1,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { vi } from "vitest";
 import { registerExtensionCommand, type ExtensionSubcommand } from "../src/host-command.ts";
 import { extensionApiFixture, extensionContextFixture } from "../src/testing/host.ts";
@@ -55,7 +57,11 @@ describe("registered extension command", () => {
       h.command.add(subcommand("settings"));
       const replacement = subcommand("image");
       h.command.add(replacement);
-      const names = (yield* h.complete(""))?.map((choice) => choice.value);
+      const names = Option.getOrUndefined(
+        Option.map(Option.fromNullishOr(yield* h.complete("")), (choices) =>
+          Arr.map(choices, (choice) => choice.value),
+        ),
+      );
       expect(names).toEqual(["usage", "image", "settings"]);
       yield* h.run("image an otter");
       expect(first.handler).not.toHaveBeenCalled();

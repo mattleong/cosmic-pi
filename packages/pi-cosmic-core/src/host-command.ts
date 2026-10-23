@@ -1,6 +1,10 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import * as Data from "effect/Data";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Str from "effect/String";
 import { notifyAtHostBoundary } from "./host-session.ts";
 
 interface CommandCompletion {
@@ -46,11 +50,13 @@ export const routeExtensionCommand = (
   subcommands: ReadonlyArray<ExtensionSubcommand>,
   bare?: ExtensionCommandBare,
 ): ExtensionCommandRoute => {
-  const trimmed = args.trim();
+  const trimmed = Str.trim(args);
   if (!trimmed)
     return bare ? ExtensionCommandRoute.Bare({ args: "" }) : ExtensionCommandRoute.Overview();
   const [head = "", rest = ""] = /^(\S+)\s*([\s\S]*)$/u.exec(trimmed)?.slice(1) ?? [];
-  const subcommand = subcommands.find((entry) => entry.name === head);
+  const subcommand = Option.getOrUndefined(
+    Arr.findFirst(subcommands, (entry) => entry.name === head),
+  );
   if (subcommand) return ExtensionCommandRoute.Subcommand({ subcommand, args: rest });
   return bare?.text
     ? ExtensionCommandRoute.Bare({ args: trimmed })
@@ -61,22 +67,26 @@ export const completeExtensionCommand = (
   prefix: string,
   subcommands: ReadonlyArray<ExtensionSubcommand>,
 ): CommandCompletion[] | null => {
-  const normalized = prefix.trimStart();
+  const normalized = Str.trimStart(prefix);
   const split = /^(\S+)\s([\s\S]*)$/u.exec(normalized);
   if (!split) {
-    const query = normalized.toLowerCase();
-    const matches = subcommands.flatMap((entry) =>
-      entry.name.toLowerCase().startsWith(query)
+    const query = Str.toLowerCase(normalized);
+    const matches = Arr.flatMap(subcommands, (entry) =>
+      Fn.pipe(entry.name, Str.toLowerCase, Str.startsWith(query))
         ? [{ value: entry.name, label: entry.name, description: entry.description }]
         : [],
     );
     return matches.length > 0 ? matches : null;
   }
   const [, head = "", rest = ""] = split;
-  const subcommand = subcommands.find((entry) => entry.name === head);
-  const inner = subcommand?.complete?.(rest.trimStart());
+  const subcommand = Option.getOrUndefined(
+    Arr.findFirst(subcommands, (entry) => entry.name === head),
+  );
+  const inner = subcommand?.complete?.(Str.trimStart(rest));
   if (!inner || inner.length === 0) return null;
-  return inner.map((choice) => Object.assign({}, choice, { value: `${head} ${choice.value}` }));
+  return Arr.map(inner, (choice) =>
+    Object.assign({}, choice, { value: `${head} ${choice.value}` }),
+  );
 };
 
 const extensionCommandOverview = (
@@ -84,20 +94,27 @@ const extensionCommandOverview = (
   description: string,
   subcommands: ReadonlyArray<ExtensionSubcommand>,
 ): string =>
-  [
-    `/${name}: ${description}`,
-    ...subcommands.map(
-      (entry) =>
-        `  /${name} ${entry.name}${entry.arguments ? ` ${entry.arguments}` : ""}  ${entry.description}`,
-    ),
-  ].join("\n");
+  Arr.join(
+    [
+      `/${name}: ${description}`,
+      ...Arr.map(
+        subcommands,
+        (entry) =>
+          `  /${name} ${entry.name}${entry.arguments ? ` ${entry.arguments}` : ""}  ${entry.description}`,
+      ),
+    ],
+    "\n",
+  );
 
 const extensionCommandUsage = (
   name: string,
   subcommands: ReadonlyArray<ExtensionSubcommand>,
   bare?: ExtensionCommandBare,
 ): string => {
-  const names = subcommands.map((entry) => entry.name).join("|");
+  const names = Arr.join(
+    Arr.map(subcommands, (entry) => entry.name),
+    "|",
+  );
   return `Usage: /${name} ${bare ? `[${names}]` : `<${names}>`}`;
 };
 

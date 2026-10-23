@@ -6,7 +6,9 @@ import {
   type ExtensionToolContext,
   type ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import * as Predicate from "effect/Predicate";
+import * as Rec from "effect/Record";
 import { modelRegistryFixture, type HostModelRegistry } from "./model.ts";
 import { ignore, overlay } from "./overlay.ts";
 import { FIXTURE_CWD, sessionManagerFixture, type HostSessionManager } from "./session.ts";
@@ -89,8 +91,11 @@ export const extensionContextFixture = (
     sessionManager: sessionManagerFixture(sessionManager, cwd),
     modelRegistry: modelRegistryFixture(modelRegistry),
   });
-  const flatOverrides = Object.fromEntries(
-    Object.entries(descriptors).filter(([key]) => !nestedContextKeys.has(key)),
+  const flatOverrides = Rec.fromEntries(
+    Arr.filter(
+      Rec.toEntries<string, PropertyDescriptor>(descriptors),
+      ([key]) => !nestedContextKeys.has(key),
+    ),
   );
   return Object.defineProperties(context, flatOverrides);
 };

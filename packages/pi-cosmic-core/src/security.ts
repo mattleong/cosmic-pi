@@ -1,10 +1,15 @@
+import * as Arr from "effect/Array";
 import * as Base64Url from "effect/encoding/Base64Url";
+import * as Fn from "effect/Function";
 import * as Match from "effect/Match";
 import * as Predicate from "effect/Predicate";
+import * as Rec from "effect/Record";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import { clipText } from "./display.ts";
 import { decodeUnknownOrUndefined } from "./schema/decode.ts";
+import { codeUnitAt } from "./text-scan.ts";
 import {
   ESCAPE_STRING_INTRODUCERS,
   isPrintableCode,
@@ -13,6 +18,8 @@ import {
 const ANSI_ESCAPE_PATTERN = String.raw`\u001B\[[0-?]*[ -/]*[@-~]`;
 const ANSI_ESCAPE_REGEXP = new RegExp(ANSI_ESCAPE_PATTERN, "g");
 const CONTROL_CHARACTER_REGEXP = /\p{Cc}/u;
+// Control characters other than newline and tab.
+const CONTENT_CONTROL_CHARACTER_REGEXP = /[^\P{Cc}\n\t]/gu;
 const DIAGNOSTIC_MAX_LENGTH = 500;
 const REDACTED = "[REDACTED]";
 const SENSITIVE_KEY_SUFFIXES = [
@@ -37,18 +44,19 @@ interface DiagnosticSanitizerOptions {
 export const hasControlCharacter = (value: string): boolean => CONTROL_CHARACTER_REGEXP.test(value);
 
 const replaceContentControlCharacters = (value: string): string =>
-  value
-    .replaceAll("\r\n", "\n")
-    .replaceAll("\r", "\n")
-    .replace(/\p{Cc}/gu, (character) =>
-      character === "\n" || character === "\t" ? character : " ",
-    );
+  Fn.pipe(
+    value,
+    Str.replaceAll("\r\n", "\n"),
+    Str.replaceAll("\r", "\n"),
+    Str.replace(CONTENT_CONTROL_CHARACTER_REGEXP, " "),
+  );
 
-export const stripAnsi = (value: string): string => value.replace(ANSI_ESCAPE_REGEXP, "");
+export const stripAnsi = (value: string): string =>
+  Fn.pipe(value, Str.replace(ANSI_ESCAPE_REGEXP, ""));
 
 const skipControlSequence = (value: string, start: number): number => {
   for (let index = start; index < value.length; index += 1) {
-    const current = value.charCodeAt(index);
+    const current = codeUnitAt(value, index);
     if (current >= 0x40 && current <= 0x7e) return index;
   }
   return value.length;
@@ -56,7 +64,7 @@ const skipControlSequence = (value: string, start: number): number => {
 
 const skipTerminalString = (value: string, start: number, acceptC1Terminator: boolean): number => {
   for (let index = start; index < value.length; index += 1) {
-    const current = value.charCodeAt(index);
+    const current = codeUnitAt(value, index);
     if (current === 0x07 || (acceptC1Terminator && current === 0x9c)) return index;
     if (current === 0x1b && value[index + 1] === "\\") return index + 1;
   }
@@ -66,7 +74,7 @@ const skipTerminalString = (value: string, start: number, acceptC1Terminator: bo
 export function stripTerminalControls(value: string): string {
   let result = "";
   for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
+    const code = codeUnitAt(value, index);
     if (code === 0x9b) {
       index = skipControlSequence(value, index + 1);
       continue;
@@ -90,24 +98,26 @@ export function stripTerminalControls(value: string): string {
 }
 
 export const sanitizeTerminalLine = (text: string): string =>
-  stripTerminalControls(text).replace(/\s+/g, " ").trim();
+  Str.trim(Fn.pipe(stripTerminalControls(text), Str.replace(/\s+/g, " ")));
 
 const redactSensitiveText = (message: string): string =>
-  stripAnsi(message)
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]")
-    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, "sk-[REDACTED]")
-    .replace(/\bacct_[A-Za-z0-9_-]{6,}\b/g, "acct_[REDACTED]")
-    .replace(
+  Fn.pipe(
+    stripAnsi(message),
+    Str.replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]"),
+    Str.replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, "sk-[REDACTED]"),
+    Str.replace(/\bacct_[A-Za-z0-9_-]{6,}\b/g, "acct_[REDACTED]"),
+    Str.replace(
       /(["']?(?:access|access[_-]?token|access[_-]?key|refresh|refresh[_-]?token|token|api[_-]?key|authorization|password|passwd|secret|private[_-]?key|credentials?|account[_-]?id|team[_-]?id)["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^,\s}\]]+)/gi,
       "$1[REDACTED]",
-    )
-    .replace(/\[REDACTED\](?:\])+/g, REDACTED);
+    ),
+    Str.replace(/\[REDACTED\](?:\])+/g, REDACTED),
+  );
 
 const clipDiagnostic = (text: string, maximumLength = DIAGNOSTIC_MAX_LENGTH): string =>
   text.length <= maximumLength ? text : maximumLength > 1 ? clipText(text, maximumLength) : "…";
 
 export function decodeJwtPayloadText(token: string): string | undefined {
-  const payload = token.split(".")[1];
+  const payload = Str.split(token, ".")[1];
   return payload ? Result.getOrUndefined(Base64Url.decodeString(payload)) : undefined;
 }
 
@@ -125,18 +135,20 @@ export const redactedTokenSchema = (label: string) =>
   Schema.RedactedFromValue(Schema.Trim.check(Schema.isMinLength(1)), { label });
 
 export function maskIdentifier(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
+  const trimmed = value === undefined ? undefined : Str.trim(value);
   if (!trimmed) return undefined;
-  return trimmed.length <= 8 ? "found" : `${trimmed.slice(0, 4)}...${trimmed.slice(-4)}`;
+  return trimmed.length <= 8
+    ? "found"
+    : `${Fn.pipe(trimmed, Str.slice(0, 4))}...${Fn.pipe(trimmed, Str.slice(-4))}`;
 }
 
 export function sanitizeDiagnosticError(
   message: string,
   options: DiagnosticSanitizerOptions = {},
 ): string {
-  const redacted = redactSensitiveText(message)
-    .replace(/[\p{Cc} ]+/gu, " ")
-    .trim();
+  const redacted = Str.trim(
+    Fn.pipe(redactSensitiveText(message), Str.replace(/[\p{Cc} ]+/gu, " ")),
+  );
   return clipDiagnostic(redacted || "Unknown error.", options.maximumLength);
 }
 
@@ -151,10 +163,10 @@ export function sanitizeDiagnosticContent(
 }
 
 export const isSensitiveDiagnosticKey = (key: string): boolean => {
-  const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const normalized = Fn.pipe(key, Str.toLowerCase, Str.replace(/[^a-z0-9]/g, ""));
   return (
     ["access", "auth", "refresh"].includes(normalized) ||
-    SENSITIVE_KEY_SUFFIXES.some((suffix) => normalized.endsWith(suffix))
+    Arr.some(SENSITIVE_KEY_SUFFIXES, (suffix) => Fn.pipe(normalized, Str.endsWith(suffix)))
   );
 };
 
@@ -169,9 +181,9 @@ const redactNode = (seen: WeakSet<object>, depth: number) =>
       seen.add(container);
       const child = redactNode(seen, depth + 1);
       try {
-        if (Array.isArray(container)) return Array.from(container, (entry) => child(entry));
-        return Object.fromEntries(
-          Object.entries(container).map(([key, entry]) => [
+        if (Arr.isArray(container)) return Array.from(container, (entry) => child(entry));
+        return Rec.fromEntries(
+          Arr.map(Rec.toEntries(container), ([key, entry]) => [
             key,
             isSensitiveDiagnosticKey(key) ? REDACTED : child(entry),
           ]),

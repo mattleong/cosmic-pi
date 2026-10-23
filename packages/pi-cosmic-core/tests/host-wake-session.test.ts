@@ -9,6 +9,7 @@ import {
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import { registerSessionWake } from "../src/host-wake.ts";
 import { temporaryDirectory } from "../src/testing/ipc-child.ts";
@@ -79,7 +80,7 @@ const transcriptText = (context: TranscriptContext): string => JSON.stringify(co
 
 describe("session wake with two extensions in a real Pi session", () => {
   for (const sending of [["first", "second"], ["first"], ["second"]] as const) {
-    it.live(`continues the run for notices from ${sending.join(" and ")}`, () =>
+    it.live(`continues the run for notices from ${Arr.join(sending, " and ")}`, () =>
       Effect.gen(function* () {
         const test = yield* twoWakeSession;
         const noticesArriveMidTurn: FauxResponseFactory = () => {

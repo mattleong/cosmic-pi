@@ -1,5 +1,6 @@
 import * as NodePath from "@effect/platform-node/NodePath";
 import { expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -125,7 +126,7 @@ it.live("reads a stable file and captures a path-free resource span", () => {
     const result = yield* safeFile.readContainedRegularFile(file, root, 32);
     expect(new TextDecoder().decode(result.bytes)).toBe("safe");
     expect(result.path).toBe(file);
-    expect(captured.spans.map((span) => span.name)).toContain(
+    expect(Arr.map(captured.spans, (span) => span.name)).toContain(
       "pi-cosmic-core.safe-file.initialize",
     );
     expect(capturedTelemetrySnapshot(captured)).not.toContain(file);
