@@ -1,13 +1,8 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
-import {
-  codeUnitAt,
-  indexOfFrom,
-  lastIndexOfFrom,
-  utf8ByteLength,
-  utf8Suffix,
-} from "pi-cosmic-core";
+import { codeUnitAt, indexOfFrom, lastIndexOfFrom } from "pi-cosmic-core/text-scan";
+import { utf8ByteLength, utf8Suffix } from "pi-cosmic-core/text";
 import { BACKGROUND_LOG_BOUNDS as LOG_BOUNDS } from "./bounds.ts";
 import type {
   BackgroundLogEvent,

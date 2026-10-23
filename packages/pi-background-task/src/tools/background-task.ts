@@ -18,10 +18,8 @@ import {
   withCodePreviewShell,
   type CompactAnimationScheduler,
 } from "pi-code-previews";
-import {
-  stripTerminalControls as sanitizeTerminalText,
-  toPiToolOutputSchema,
-} from "pi-cosmic-core";
+import { stripTerminalControls as sanitizeTerminalText } from "pi-cosmic-core/security";
+import { toPiToolOutputSchema } from "pi-cosmic-core/schema/tool-output";
 import { composeToolComponent, renderToolHeader, toolRunningLine } from "pi-cosmic-ui/tool";
 import { type BackgroundTaskService } from "../task/service.ts";
 import {

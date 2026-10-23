@@ -12,12 +12,9 @@ import {
   withCodePreviewShell,
   type CompactAnimationScheduler,
 } from "pi-code-previews";
-import {
-  failureMessage,
-  invokeHostCallback,
-  notifyAtHostBoundary,
-  type ExtensionCommand,
-} from "pi-cosmic-core";
+import { failureMessage } from "pi-cosmic-core/message-text";
+import { invokeHostCallback, notifyAtHostBoundary } from "pi-cosmic-core/host-session";
+import { type ExtensionCommand } from "pi-cosmic-core/host-command";
 import { containCommandFailure, safeHostSignal } from "../boundary/host-ui.ts";
 import { imageCompactSummary, isSignInFailure } from "./compact-summary.ts";
 import { renderImageMessage } from "./message.ts";

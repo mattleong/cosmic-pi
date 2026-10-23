@@ -1,15 +1,19 @@
+import {
+  INHERIT,
+  SCOPES,
+  sessionValue,
+  TASK_SETTING_DESCRIPTORS,
+  TASK_SETTINGS_COMMAND,
+} from "./task-settings-options.ts";
 import type { SettingItem } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import {
-  failureMessage,
-  isProjectTrusted,
-  notifyAtHostBoundary,
-  sanitizeTerminalLine,
-  type ExtensionSubcommand,
-} from "pi-cosmic-core";
+import { failureMessage } from "pi-cosmic-core/message-text";
+import { isProjectTrusted, notifyAtHostBoundary } from "pi-cosmic-core/host-session";
+import { sanitizeTerminalLine } from "pi-cosmic-core/security";
+import { type ExtensionSubcommand } from "pi-cosmic-core/host-command";
 import {
   settingsSubcommand,
   withInvocationAuthority,
@@ -40,16 +44,9 @@ export interface TaskSettingsActions {
   ) => Promise<void>;
 }
 
-const SCOPES = [
-  { name: "global", description: "Change a setting everywhere" },
-  { name: "project", description: "Change a setting for this trusted project" },
-] as const;
 type TaskSettingsScope = (typeof SCOPES)[number]["name"];
 
-const INHERIT = "inherit";
 const isConfigError = Schema.is(BackgroundTaskConfigError);
-const sessionValue = (config: BackgroundTaskConfig, id: BackgroundTaskSettingId) =>
-  sanitizeTerminalLine(String(config[id] ?? ""));
 const UNTRUSTED = "Trust this project before changing its background task settings";
 
 type ScopeFile =
@@ -126,16 +123,10 @@ function createTaskSettingsSubcommand(
   return settingsSubcommand<BackgroundTaskConfig>({
     owner,
     root: "tasks",
-    description: "Configure background tasks",
+    description: TASK_SETTINGS_COMMAND.description,
     title: "Background Tasks",
     isCurrent,
-    descriptors: Arr.map(BACKGROUND_TASK_SETTINGS, (setting) => ({
-      id: setting.id,
-      description: setting.description,
-      ...(setting.values.length > 0 && { values: [...setting.values, INHERIT] }),
-      openValues: setting.openValues,
-      currentValue: (config: BackgroundTaskConfig) => sessionValue(config, setting.id),
-    })),
+    descriptors: TASK_SETTING_DESCRIPTORS,
     examples: ["maxRunning 16", "project maxWaitSeconds 60", `project maxRunning ${INHERIT}`],
     notes: () => [
       `Scope defaults to global; ${INHERIT} removes a scope's own value.`,

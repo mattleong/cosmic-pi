@@ -4,7 +4,7 @@ import * as Str from "effect/String";
 import * as Option from "effect/Option";
 import type { BuiltinCompactTool } from "./builtin-subject";
 import type { CompactIssue } from "./compact-issues";
-import { firstLineMessage } from "pi-cosmic-core";
+import { firstLineMessage } from "pi-cosmic-core/message-text";
 
 const filesystemFailures = [
   ["ENOENT: no such file or directory, ", "File not found"],

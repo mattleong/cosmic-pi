@@ -1,5 +1,6 @@
 import * as Arr from "effect/Array";
-import { notifyAtHostBoundary, type ExtensionSubcommand } from "pi-cosmic-core";
+import { notifyAtHostBoundary } from "pi-cosmic-core/host-session";
+import { type ExtensionSubcommand } from "pi-cosmic-core/host-command";
 import { hasCustomSurface, openCommandSurface } from "pi-cosmic-ui/boundary/host-surface";
 import { TextPanelComponent } from "pi-cosmic-ui/manager/panel";
 import { codePreviewSettings, codePreviewSettingsProblems } from "../config/state";

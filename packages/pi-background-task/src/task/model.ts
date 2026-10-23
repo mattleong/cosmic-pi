@@ -6,7 +6,7 @@ import type {
   BackgroundTaskStateSchema,
   BackgroundTaskWaitResultSchema,
 } from "./schema.ts";
-import { countLabel, formatBytes } from "pi-cosmic-core";
+import { countLabel, formatBytes } from "pi-cosmic-core/display";
 
 export type BackgroundTaskState = typeof BackgroundTaskStateSchema.Type;
 export type BackgroundTaskSnapshot = typeof BackgroundTaskSnapshotSchema.Type;

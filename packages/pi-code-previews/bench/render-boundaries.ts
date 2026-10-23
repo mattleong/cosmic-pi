@@ -6,7 +6,7 @@ import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Match from "effect/Match";
 import * as Predicate from "effect/Predicate";
 import * as Arr from "effect/Array";
-import { synchronousNow as previewNow } from "pi-cosmic-core";
+import { synchronousNow as previewNow } from "pi-cosmic-core/platform/native-clock";
 import { createSimpleDiff } from "../src/diff/structured";
 import { DeferredPreview } from "../src/preview/deferred";
 import { hostObject, ownField } from "../src/shared/untrusted-value";

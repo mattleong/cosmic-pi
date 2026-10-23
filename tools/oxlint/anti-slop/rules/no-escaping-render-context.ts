@@ -18,7 +18,7 @@ type Invocation = ESTree.CallExpression | ESTree.NewExpression;
 export interface KnownHelper {
   readonly name: string;
   readonly definition: string;
-  readonly specifier?: string;
+  readonly specifiers?: readonly string[];
   readonly retained?: readonly number[];
   readonly builders?: readonly number[];
   readonly values?: readonly number[];
@@ -28,7 +28,7 @@ export const knownHelpers: readonly KnownHelper[] = [
   {
     name: "composeToolComponent",
     definition: "pi-cosmic-ui/src/tool/presentation",
-    specifier: "pi-cosmic-ui/tool",
+    specifiers: ["pi-cosmic-ui/tool"],
     retained: [0],
   },
   {
@@ -75,7 +75,7 @@ export const knownHelpers: readonly KnownHelper[] = [
   {
     name: "invokeHostCallback",
     definition: "pi-cosmic-core/src/host-session",
-    specifier: "pi-cosmic-core",
+    specifiers: ["pi-cosmic-core", "pi-cosmic-core/host-session"],
     builders: [0],
     values: [1],
   },
@@ -122,7 +122,8 @@ function knownHelper(
     knownHelpers.find(
       (helper) =>
         helper.name === imported.name &&
-        (module === helper.specifier || module.endsWith(`/packages/${helper.definition}`)),
+        (helper.specifiers?.includes(module) === true ||
+          module.endsWith(`/packages/${helper.definition}`)),
     ) ?? null
   );
 }

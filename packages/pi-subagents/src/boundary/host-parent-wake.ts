@@ -6,15 +6,10 @@ import type {
   ExtensionContext,
   SessionBoundaryDraft,
 } from "@earendil-works/pi-coding-agent";
-import {
-  clipText,
-  countLabel,
-  invokeHostCallback,
-  notifyAtHostBoundary,
-  registerSessionWake,
-  sanitizeTerminalLine,
-  type SessionWake,
-} from "pi-cosmic-core";
+import { clipText, countLabel } from "pi-cosmic-core/display";
+import { invokeHostCallback, notifyAtHostBoundary } from "pi-cosmic-core/host-session";
+import { registerSessionWake, type SessionWake } from "pi-cosmic-core/host-wake";
+import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import type { SubagentProjection, SubagentRunView } from "../run/model.ts";
 import { isActiveRunState, SUBAGENT_ROOT_RUN_ID } from "../run/model.ts";
 import { AGENT_MESSAGE_TYPE } from "./host-agent-messages.ts";

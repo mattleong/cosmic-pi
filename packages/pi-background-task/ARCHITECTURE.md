@@ -41,7 +41,11 @@ Session start and successful tree navigation capture cwd, trust, and session ide
 replace the runtime. Deactivation revokes publication and command capabilities before cleanup,
 so settling old processes cannot repopulate replacement UI. Startup loads trusted preview
 settings before the current activation registers its wrapped tool. History replay is
-presentation-only and never starts tasks.
+presentation-only and never starts tasks. Command metadata and completions register eagerly;
+the standalone manager and settings implementation load on invocation, not during startup.
+Invocations capture the session-slot generation and exact host signal before loading, pin that
+signal for downstream handlers without freezing other host getters, and recheck authority before
+opening UI, changing settings, or reporting failures. An available Activity host avoids loading the manager.
 
 Tree navigation joins process-tree cleanup before activating a fresh registry. Tool callbacks
 retain their activation token; `/tasks` captures authority for each invocation. Retained managers,

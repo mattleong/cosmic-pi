@@ -2,7 +2,7 @@ import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { invokeHostCallback } from "pi-cosmic-core";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import { expandPreviewTabs, isToolOutputNoticeLine } from "../shared/helpers";
 import { ownField, type HostObject } from "../shared/untrusted-value";
 import { escapeControlChars, injectVisibleRanges } from "../shared/terminal-text";

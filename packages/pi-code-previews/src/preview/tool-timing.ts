@@ -1,6 +1,8 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
-import { synchronousNow, formatDuration, formatElapsed, invokeHostCallback } from "pi-cosmic-core";
+import { synchronousNow } from "pi-cosmic-core/platform/native-clock";
+import { formatDuration, formatElapsed } from "pi-cosmic-core/display";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import * as Predicate from "effect/Predicate";
 import * as Arr from "effect/Array";
 import { captureCodePreviewSessionCapability } from "../application/capability";

@@ -1,7 +1,7 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import { countLabel } from "pi-cosmic-core";
+import { countLabel } from "pi-cosmic-core/display";
 import { managerActivityGlyph, clipToWidth, spinnerFrameAt } from "../manager/chrome.ts";
 import { compactNotices, needsYou } from "./attention.ts";
 import { activityPath, isFinished, type ActivityRow } from "./model.ts";

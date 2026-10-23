@@ -1,7 +1,7 @@
 import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { makeSessionCapabilityProtocol } from "pi-cosmic-core";
+import { makeSessionCapabilityProtocol } from "pi-cosmic-core/session-capability";
 import {
   decodeQuestionnaireOutcome,
   decodeQuestionnaireRequest,

@@ -5,7 +5,7 @@ import * as FiberSet from "effect/FiberSet";
 import * as Layer from "effect/Layer";
 import * as Schedule from "effect/Schedule";
 import * as Semaphore from "effect/Semaphore";
-import { invokeHostCallback } from "pi-cosmic-core";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
 
 export interface CodePreviewSchedulerServiceContract {
   readonly defer: (task: () => void) => () => void;

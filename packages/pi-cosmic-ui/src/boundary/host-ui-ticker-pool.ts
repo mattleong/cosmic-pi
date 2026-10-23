@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
-import { invokeHostCallback } from "pi-cosmic-core";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
 
 export type HostUiTickerScheduler = (intervalMs: number, tick: () => void) => Fiber.Fiber<void>;
 

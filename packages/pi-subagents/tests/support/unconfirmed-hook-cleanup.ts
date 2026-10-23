@@ -1,9 +1,9 @@
 import * as Effect from "effect/Effect";
 import * as Logger from "effect/Logger";
-import * as Core from "pi-cosmic-core";
+import * as Process from "pi-cosmic-core/platform/process";
 import { vi } from "vitest";
 
-const originalRun = Core.runBoundedProcessNode;
+const originalRun = Process.runBoundedProcessNode;
 
 /**
  * While the returned spy is installed, every `/bin/sh` process (the tests' worktree hooks) runs as
@@ -11,7 +11,7 @@ const originalRun = Core.runBoundedProcessNode;
  */
 export const unconfirmedShellCleanup = () =>
   vi
-    .spyOn(Core, "runBoundedProcessNode")
+    .spyOn(Process, "runBoundedProcessNode")
     .mockImplementation((request) =>
       request.executable === "/bin/sh"
         ? originalRun(request).pipe(

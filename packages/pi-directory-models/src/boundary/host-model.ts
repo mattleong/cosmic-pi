@@ -2,7 +2,8 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { decodeUnknownOrUndefined, invokeHostCallback } from "pi-cosmic-core";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import {
   directoryModelPreference,
   type SavedDirectoryModelPreference,

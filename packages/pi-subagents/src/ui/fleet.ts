@@ -5,7 +5,7 @@ import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { toolStatusLine } from "pi-cosmic-ui/tool";
 import { Input, type Component, type Focusable } from "@earendil-works/pi-tui";
-import { sanitizeTerminalLine } from "pi-cosmic-core";
+import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import type {
   FullScreenAction,
   FullScreenMode,

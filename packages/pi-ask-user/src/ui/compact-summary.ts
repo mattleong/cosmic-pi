@@ -8,7 +8,8 @@ import * as Arr from "effect/Array";
 import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import * as Str from "effect/String";
-import { countLabel, stripTerminalControls } from "pi-cosmic-core";
+import { countLabel } from "pi-cosmic-core/display";
+import { stripTerminalControls } from "pi-cosmic-core/security";
 import {
   callTitles,
   decodeAsyncControl,

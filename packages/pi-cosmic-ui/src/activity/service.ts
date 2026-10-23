@@ -9,14 +9,10 @@ import * as Option from "effect/Option";
 import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
-import {
-  decodeUnknownOrUndefined,
-  freezeSnapshot,
-  frozenProjection,
-  invokeBestEffort,
-  sanitizeTerminalLine,
-  sanitizeDiagnosticContent,
-} from "pi-cosmic-core";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
+import { freezeSnapshot, frozenProjection } from "pi-cosmic-core/projection";
+import { invokeBestEffort } from "pi-cosmic-core/host-session";
+import { sanitizeTerminalLine, sanitizeDiagnosticContent } from "pi-cosmic-core/security";
 import {
   ActivitySnapshotSchema,
   ActivityStartingSchema,

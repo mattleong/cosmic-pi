@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import { JsonDocumentStore } from "../../src/platform/json-document.ts";
-import { fileLayer } from "../../src/platform/node.ts";
+import { nodeFilePlatformLayer as fileLayer } from "pi-cosmic-core/platform/node-file";
 import { incrementDocumentCount } from "../support/json-documents.ts";
 
 const [documentPath = "", mode = "increment", rounds = "1"] = process.argv.slice(2);

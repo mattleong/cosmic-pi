@@ -1,4 +1,5 @@
-import { invokeBestEffort, sanitizeTerminalLine } from "pi-cosmic-core";
+import { invokeBestEffort } from "pi-cosmic-core/host-session";
+import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import type {
   AgentToolUpdateCallback,
   ExtensionAPI,

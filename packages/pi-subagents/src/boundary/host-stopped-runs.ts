@@ -2,13 +2,9 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import {
-  clipText,
-  countLabel,
-  invokeHostCallback,
-  notifyAtHostBoundary,
-  sanitizeTerminalLine,
-} from "pi-cosmic-core";
+import { clipText, countLabel } from "pi-cosmic-core/display";
+import { invokeHostCallback, notifyAtHostBoundary } from "pi-cosmic-core/host-session";
+import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { isActiveRunState, type SubagentRunView } from "../run/model.ts";
 
 export const STOPPED_RUNS_MESSAGE_TYPE = "pi-subagents-stopped";

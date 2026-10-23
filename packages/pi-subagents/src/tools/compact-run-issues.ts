@@ -8,7 +8,8 @@ import { reportFileText, reportTruncationText } from "../run/state.ts";
 import type { SubagentRunCard } from "./details-schema.ts";
 import { steeringDeliveryEvidence } from "./outcome.ts";
 import { cleanupRecoveryText, proposalDiffStatLines, proposalGuidance } from "./format.ts";
-import { countLabel, failureMessage, firstLineMessage, quoteText } from "pi-cosmic-core";
+import { countLabel } from "pi-cosmic-core/display";
+import { failureMessage, firstLineMessage, quoteText } from "pi-cosmic-core/message-text";
 import { isTextFragment } from "./text-fragments.ts";
 
 type AddIssue = (

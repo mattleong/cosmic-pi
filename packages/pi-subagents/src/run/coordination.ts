@@ -3,7 +3,8 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import type { RunRecord } from "./internal.ts";
 import { hasSubagentCapability, isActiveRunState } from "./model.ts";
-import { countLabel, safeTextPrefix } from "pi-cosmic-core";
+import { countLabel } from "pi-cosmic-core/display";
+import { safeTextPrefix } from "pi-cosmic-core/text";
 
 const ownershipSummary = (record: RunRecord): string =>
   record.view.writeIntent === "writer"

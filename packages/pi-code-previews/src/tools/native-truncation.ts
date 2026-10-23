@@ -1,7 +1,7 @@
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
-import { sanitizeDiagnosticContent } from "pi-cosmic-core";
+import { sanitizeDiagnosticContent } from "pi-cosmic-core/security";
 import type { CompactIssue } from "./compact-issues";
 
 const HEADER =

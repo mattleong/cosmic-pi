@@ -8,7 +8,8 @@ import * as Predicate from "effect/Predicate";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
-import { clampPercent, JsonHttpClient } from "pi-cosmic-core";
+import { clampPercent } from "pi-cosmic-core/display";
+import { JsonHttpClient } from "pi-cosmic-core/platform/json-http";
 import type { CodexCredentials } from "../auth/codex-auth.ts";
 
 export type UsageSnapshot = {

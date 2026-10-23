@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Semaphore from "effect/Semaphore";
-import { PiApi } from "pi-cosmic-core";
+import { PiApi } from "pi-cosmic-core/runtime/pi-api";
 import {
   applyHostPreference,
   captureContextModel,

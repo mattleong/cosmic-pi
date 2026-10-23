@@ -3,7 +3,8 @@ import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
-import { decodeUnknownOrUndefined, extractJwtClaim, redactedTokenSchema } from "pi-cosmic-core";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
+import { extractJwtClaim, redactedTokenSchema } from "pi-cosmic-core/security";
 
 const redactedAccessToken = redactedTokenSchema("OpenAI Codex access token");
 const RegistryCredentialsFromJsonSchema = Schema.fromJsonString(

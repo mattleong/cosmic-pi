@@ -1,10 +1,8 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import {
-  countLabel,
-  notifyAtHostBoundary,
-  registerExtensionCommand,
-  sanitizeTerminalLine,
-} from "pi-cosmic-core";
+import { countLabel } from "pi-cosmic-core/display";
+import { notifyAtHostBoundary } from "pi-cosmic-core/host-session";
+import { registerExtensionCommand } from "pi-cosmic-core/host-command";
+import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";

@@ -30,10 +30,17 @@ are ordinary session content, not durable questionnaire state.
 ## Session lifecycle and history
 
 Factory loading registers lifecycle hooks, the resume command, and service-free history/message
-renderers. Session start captures the host, creates the runtime, loads trusted preview settings,
-then registers tools from the current activation. TUI supports blocking and async tools; RPC
-supports blocking interaction. Marked Pi children use the authenticated root relay. Other
-headless modes do not receive questionnaire tools.
+renderers. Service, relay, and capability modules load eagerly; session start captures historical
+receipts in every mode, then admits UI sessions and marked children before constructing the
+session service Layer. Trusted preview settings settle before tools register from the current
+activation; interrupted startup cannot activate a retired session. TUI supports blocking and async
+tools; RPC supports blocking interaction. Marked Pi children use the authenticated root relay.
+Other headless modes create no questionnaire runtime and receive no questionnaire tools, but
+retain receipt-based context filtering and historical rendering.
+
+The local TUI/external-editor adapter loads only when an admitted local questionnaire needs it,
+not during runtime startup, RPC dialogs, or child relay. Dialog acquisition and prompt admission
+remain inside the questionnaire scope, including the post-import admission check.
 
 Replacement, shutdown, and successful tree navigation revoke admission, delivery, and child
 capabilities before disposal. Old tool callbacks cannot use the replacement runtime. Pi's

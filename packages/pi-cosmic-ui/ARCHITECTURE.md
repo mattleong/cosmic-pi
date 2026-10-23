@@ -10,6 +10,12 @@ Replacement revokes the previous session's publication authority before resettin
 
 ## Footer and configuration
 
+Only TUI sessions fold usage history, activate the working row, or start repository/usage polling
+and Activity clocks. Print, JSON, and RPC still resolve settings and publish preference readiness
+with inactive footer ownership; producers retain their fallback UI and visibility policy. Their
+Activity service has no host binding or clock. TUI startup and reconciliation share one incremental
+usage reader rather than folding the same initial history twice.
+
 [CosmicUiService](src/protocol/service.ts) owns resolved configuration, usage totals and their reconciliation, repository probes, and their frozen projection. [config/store.ts](src/config/store.ts) is the persistence boundary; resolution is read-only and explicit updates create documents. Git and pull-request invalidation exclude in-flight publication together, so an old branch result cannot reappear after invalidation. Pull-request polls back off while lookups find none; a forced lookup, including the one after each `bash` tool call, restores the base interval at once.
 
 The [footer registry](src/footer/registry.ts) is synchronous presentation state: a protocol event that changes a contribution publishes a detached snapshot before requesting rendering. It bounds reentrant work and isolates callback failures. This keeps contribution changes observable inside the originating `pi.events.emit` without introducing asynchronous service coordination. [Footer installation](src/footer/installation.ts) owns mounting and render authority; only its current instance can request a render. See [registry tests](tests/registry.test.ts) and [installation tests](tests/footer-installation.test.ts).
@@ -22,7 +28,7 @@ The [footer protocol](src/protocol/protocol.ts) separates active ownership from 
 
 Producers own scheduling, retries, domain state, and action policy. Activity derives grouping and display from explicit parent relationships. [Retention](src/activity/model.ts) protects live work and its ancestors; source-removed history loses its actions. [Grouping](src/activity/grouped-tree.ts), [group summaries](src/activity/group-summary.ts), and [widget allocation](src/activity/widget-projection.ts) own the presentation algorithms rather than prescribing them here.
 
-The [host](src/boundary/host-activity.ts) owns subscriptions, widget installation, and admission to one manager. Producers suppress fallback panels only after installation and accepted publication acknowledge replacement ownership. Detail requests are cancellable and checked for current authority; producers recheck their own authority after awaits before acting. These boundaries are covered by [service](tests/activity-service.test.ts), [host](tests/activity-host.test.ts), and [model](tests/activity-model.test.ts) tests.
+The [host](src/boundary/host-activity.ts) owns subscriptions, widget installation, and admission to one manager. Manager implementation and presentation state load only on opening; the host claims the opening before loading and rechecks its owner afterward. Failure or cancellation releases that claim, and retired loads never call the custom UI. Producers suppress fallback panels only after installation and accepted publication acknowledge replacement ownership. Detail requests are cancellable and checked for current authority; producers recheck their own authority after awaits before acting. These boundaries are covered by [service](tests/activity-service.test.ts), [host](tests/activity-host.test.ts), and [model](tests/activity-model.test.ts) tests.
 
 ## Shared presentation
 

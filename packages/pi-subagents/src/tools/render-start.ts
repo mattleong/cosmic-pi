@@ -14,7 +14,9 @@ import {
   type Component,
 } from "@earendil-works/pi-tui";
 import { escapeControlChars, expandedSection, previewIssuesSlot } from "pi-code-previews";
-import { countLabel, sanitizeTerminalLine, synchronousNow } from "pi-cosmic-core";
+import { countLabel } from "pi-cosmic-core/display";
+import { sanitizeTerminalLine } from "pi-cosmic-core/security";
+import { synchronousNow } from "pi-cosmic-core/platform/native-clock";
 import {
   managerStateGlyph,
   startingSpinnerFrame,

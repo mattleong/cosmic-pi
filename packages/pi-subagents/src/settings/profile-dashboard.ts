@@ -3,7 +3,11 @@ import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { invokeHostCallback, isProjectTrusted, notifyAtHostBoundary } from "pi-cosmic-core";
+import {
+  invokeHostCallback,
+  isProjectTrusted,
+  notifyAtHostBoundary,
+} from "pi-cosmic-core/host-session";
 import { hasCustomSurface, openOwnedSurfacePromise } from "pi-cosmic-ui/boundary/host-surface";
 import { fullScreenKeybindingOptions } from "pi-cosmic-ui/manager/key-labels";
 import { normalizeDeclaredProfileRoute, type ProfileId } from "../profiles/model.ts";

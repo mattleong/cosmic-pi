@@ -3,7 +3,7 @@ import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
-import { indexOfFrom } from "pi-cosmic-core";
+import { indexOfFrom } from "pi-cosmic-core/text-scan";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { renderExpansionAffordance } from "pi-cosmic-ui/tool";
 import { expandPreviewTabs } from "../shared/helpers";

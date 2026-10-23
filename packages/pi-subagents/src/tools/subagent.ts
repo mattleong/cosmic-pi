@@ -42,7 +42,9 @@ import {
   type SubagentToolInput,
   type SubagentToolParameters,
 } from "./schema.ts";
-import { countLabel, invokeHostCallback, toPiToolOutputSchema } from "pi-cosmic-core";
+import { countLabel } from "pi-cosmic-core/display";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
+import { toPiToolOutputSchema } from "pi-cosmic-core/schema/tool-output";
 import { CONTRACT_SCHEMAS, isSubagentContractTool } from "./contract-schema.ts";
 import {
   CUSTOM_AGENT_START_GUIDELINE,

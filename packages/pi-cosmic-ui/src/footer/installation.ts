@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as MutableRef from "effect/MutableRef";
-import { invokeHostCallback } from "pi-cosmic-core";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import type { ResolvedCosmicUiConfig } from "../config/schema.ts";
 import { createFooterComponent } from "./component.ts";
 import type { FooterRegistry } from "./registry.ts";

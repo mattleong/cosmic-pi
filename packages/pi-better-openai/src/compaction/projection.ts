@@ -19,7 +19,7 @@ import * as MutableRef from "effect/MutableRef";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import { decodeUnknownOrUndefined } from "pi-cosmic-core";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import {
   decodeOpenAICompactionDetails,
   JsonObjectSchema,

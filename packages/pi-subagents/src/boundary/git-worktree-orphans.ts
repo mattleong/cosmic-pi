@@ -13,7 +13,7 @@ import type {
   WorkspaceSweepTarget,
   WorkspaceSwept,
 } from "../workspace/model.ts";
-import { nodePath as path } from "pi-cosmic-core";
+import { nodePath as path } from "pi-cosmic-core/platform/node-builtins";
 import { workspaceFailure, workspaceRefusal } from "./git-worktree-process.ts";
 import { treeOf } from "./git-capture.ts";
 import type { BeforeTreeRemoval } from "./git-worktree-hooks.ts";

@@ -27,9 +27,12 @@ The extension never closes user-owned panes.
 
 ## Lifecycle and commit points
 
-Session start inside Herdr captures the parent identity and creates one runtime; sessions outside
-Herdr create none, and commands there report that they need a Herdr pane. Commands revalidate that
-identity before using it. Command notifications retain their originating session's authority.
+Flags, command metadata, environment admission, and the parent-reference bridge load independently
+of the workflow. Session start inside Herdr captures the parent identity and creates one runtime;
+its scoped Layer acquisition loads the workflow implementation. Sessions outside Herdr load no
+workflow and create no runtime; commands there report that they need a Herdr pane. The session slot
+revokes pending import waiters on replacement or shutdown, so late loading cannot publish a parent
+reference. Commands revalidate the captured identity before using it. Command notifications retain their originating session's authority.
 Shutdown revokes that authority and the reference, and disposes workflow resources while leaving
 panes and child sessions available to the user.
 

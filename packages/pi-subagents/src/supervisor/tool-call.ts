@@ -1,4 +1,5 @@
-import { isJsonObject, synchronousRandomUuid } from "pi-cosmic-core";
+import { isJsonObject } from "pi-cosmic-core/platform/json-document";
+import { synchronousRandomUuid } from "pi-cosmic-core/platform/native-crypto";
 import * as Arr from "effect/Array";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";

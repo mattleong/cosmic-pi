@@ -1,6 +1,7 @@
 import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
-import { freezeSnapshot, utf8ByteLength } from "pi-cosmic-core";
+import { freezeSnapshot } from "pi-cosmic-core/projection";
+import { utf8ByteLength } from "pi-cosmic-core/text";
 import { BACKGROUND_TASK_FIELD_BOUNDS as BOUNDS } from "../task/bounds.ts";
 import {
   AppliedWaitSecondsSchema,

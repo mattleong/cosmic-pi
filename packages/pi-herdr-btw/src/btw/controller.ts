@@ -1,11 +1,15 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
-import { registerExtensionCommand } from "pi-cosmic-core";
+import { registerExtensionCommand } from "pi-cosmic-core/host-command";
 import { notifyHerdrBtw } from "../boundary/host-notifier.ts";
 import { HerdrBtwError } from "./errors.ts";
-import { HERDR_BTW_COMMAND, HERDR_BTW_NEW_SUBCOMMAND, type HerdrBtwResult } from "./service.ts";
-import { HERDR_ENVIRONMENT_UNAVAILABLE_MESSAGE } from "./validation.ts";
+import type { HerdrBtwResult } from "./service.ts";
+import {
+  HERDR_BTW_COMMAND,
+  HERDR_BTW_NEW_SUBCOMMAND,
+  HERDR_ENVIRONMENT_UNAVAILABLE_MESSAGE,
+} from "./admission.ts";
 
 type SideSessionRun = (prompt?: string) => Promise<HerdrBtwResult>;
 

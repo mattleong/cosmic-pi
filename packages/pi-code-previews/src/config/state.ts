@@ -1,4 +1,4 @@
-import { freezeSnapshot } from "pi-cosmic-core";
+import { freezeSnapshot } from "pi-cosmic-core/projection";
 import {
   defaultCodePreviewPerformanceConfig,
   defaultCodePreviewSettings,

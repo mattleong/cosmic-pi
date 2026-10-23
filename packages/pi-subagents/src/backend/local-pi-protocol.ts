@@ -1,4 +1,4 @@
-import { decodeUnknownOrUndefined } from "pi-cosmic-core";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Effect from "effect/Effect";

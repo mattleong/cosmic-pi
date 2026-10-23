@@ -10,14 +10,14 @@ import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
+import { AgentDirectory } from "pi-cosmic-core/platform/agent-directory";
 import {
-  AgentDirectory,
   probeProcessLiveness,
-  synchronousRandomHex,
-  utf8ByteLength,
   type ProcessIdentity,
   type ProcessLiveness,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/platform/process-start";
+import { synchronousRandomHex } from "pi-cosmic-core/platform/native-crypto";
+import { utf8ByteLength } from "pi-cosmic-core/text";
 import { DESCRIBE_CONCURRENCY, describeSession } from "../transport/client.ts";
 import {
   createPrivateDirectory,

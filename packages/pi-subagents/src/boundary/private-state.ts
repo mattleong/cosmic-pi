@@ -7,17 +7,18 @@ import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import {
   currentProcessIdentity,
-  nodeFsPromises as fs,
-  nodePath,
-  type PrivateFileError,
   probeProcessLiveness,
   type ProcessIdentity,
   type ProcessLiveness,
+} from "pi-cosmic-core/platform/process-start";
+import { nodeFsPromises as fs, nodePath } from "pi-cosmic-core/platform/node-builtins";
+import {
+  type PrivateFileError,
   removeOwnEntry,
   removePrivateTree,
   replacePrivateFile,
-  synchronousRandomHex,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/platform/private-file";
+import { synchronousRandomHex } from "pi-cosmic-core/platform/native-crypto";
 import { safeAgentDirectory } from "./harness-shared.ts";
 
 /** Private state nobody has touched for this long is abandoned unless a recorded owner may be live. */

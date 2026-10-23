@@ -1,4 +1,4 @@
-import { synchronousRandomUuid } from "pi-cosmic-core";
+import { synchronousRandomUuid } from "pi-cosmic-core/platform/native-crypto";
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import type { Component, Focusable, OverlayHandle, TUI } from "@earendil-works/pi-tui";
 

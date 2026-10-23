@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Predicate from "effect/Predicate";
-import { captureSessionHost, invokeHostCallback } from "pi-cosmic-core";
+import { captureSessionHost, invokeHostCallback } from "pi-cosmic-core/host-session";
 
 export interface HerdrBtwSessionInput {
   readonly cwd: string;

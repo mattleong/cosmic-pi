@@ -9,7 +9,7 @@ import {
   runBoundedProcessNode,
   type BoundedProcessError,
   type BoundedProcessResult,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/platform/process";
 
 export class SharpError extends Schema.TaggedError<SharpError, { readonly brand: unique symbol }>()(
   "SharpError",

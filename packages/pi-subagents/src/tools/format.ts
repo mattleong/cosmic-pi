@@ -7,10 +7,9 @@ import {
   sanitizeTerminalLine,
   sanitizeDiagnosticContent,
   stripTerminalControls as sanitizeTerminalText,
-  synchronousNow,
-  countLabel,
-  clipText,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/security";
+import { synchronousNow } from "pi-cosmic-core/platform/native-clock";
+import { countLabel, clipText } from "pi-cosmic-core/display";
 import {
   failedRunNextCandidate,
   isActiveRunState,

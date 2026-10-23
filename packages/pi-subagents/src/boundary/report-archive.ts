@@ -1,9 +1,6 @@
-import {
-  sanitizeTerminalLine,
-  synchronousRandomUuid,
-  nodeFsPromises as fs,
-  nodePath as path,
-} from "pi-cosmic-core";
+import { sanitizeTerminalLine } from "pi-cosmic-core/security";
+import { synchronousRandomUuid } from "pi-cosmic-core/platform/native-crypto";
+import { nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core/platform/node-builtins";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";

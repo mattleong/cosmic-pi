@@ -9,12 +9,9 @@ import {
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
-import {
-  clipText,
-  countLabel,
-  decodeUnknownOrUndefined,
-  sanitizeTerminalLine,
-} from "pi-cosmic-core";
+import { clipText, countLabel } from "pi-cosmic-core/display";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
+import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { MAIN_AGENT_ID } from "../run/agent-messaging.ts";
 import { SUBAGENT_RUN_STATES } from "../run/model.ts";
 import { AGENT_TOOL_NAME, type AgentToolName } from "../run/tool-policy.ts";

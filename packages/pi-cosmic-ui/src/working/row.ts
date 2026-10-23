@@ -1,6 +1,8 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as MutableRef from "effect/MutableRef";
-import { formatElapsed, invokeHostCallback, synchronousMonotonicNow } from "pi-cosmic-core";
+import { formatElapsed } from "pi-cosmic-core/display";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
+import { synchronousMonotonicNow } from "pi-cosmic-core/platform/native-clock";
 import { startHostUiTicker } from "../boundary/host-status.ts";
 import { createThroughputMeter, type ThroughputRate } from "./throughput.ts";
 

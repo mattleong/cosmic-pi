@@ -4,14 +4,10 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
 import type * as Schema from "effect/Schema";
-import {
-  hasControlCharacter,
-  hasObjectRuntimeType,
-  nodeFsPromises as fs,
-  nodePath,
-  PrivateFileError,
-  tryPrivateFileOperation,
-} from "pi-cosmic-core";
+import { hasControlCharacter } from "pi-cosmic-core/security";
+import { hasObjectRuntimeType } from "pi-cosmic-core/runtime-values";
+import { nodeFsPromises as fs, nodePath } from "pi-cosmic-core/platform/node-builtins";
+import { PrivateFileError, tryPrivateFileOperation } from "pi-cosmic-core/platform/private-file";
 import { homedir } from "node:os";
 import { decodeUnknownJsonOption } from "./wire-shared.ts";
 

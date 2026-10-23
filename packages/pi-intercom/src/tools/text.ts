@@ -3,10 +3,9 @@ import * as Str from "effect/String";
 import {
   agentMessageDeliveryText,
   agentMessageRecipientState,
-  countLabel,
-  formatBytes,
-  sanitizeTerminalLine,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/host-agent-messages";
+import { countLabel, formatBytes } from "pi-cosmic-core/display";
+import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { MAX_MESSAGE_CHARS, MAX_READ_BYTES } from "../transport/protocol.ts";
 import type {
   ListedSession,

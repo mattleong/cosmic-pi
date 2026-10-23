@@ -1,7 +1,8 @@
 import * as Arr from "effect/Array";
 import type { ExtensionAPI, MessageRenderer } from "@earendil-works/pi-coding-agent";
 import { captureCodePreviewPresentationPolicy } from "pi-code-previews";
-import { countLabel, sanitizeTerminalLine } from "pi-cosmic-core";
+import { countLabel } from "pi-cosmic-core/display";
+import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { AGENT_MESSAGE_TYPE } from "../boundary/host-agent-messages.ts";
 import { STOPPED_RUNS_MESSAGE_TYPE } from "../boundary/host-stopped-runs.ts";
 import { renderAgentMessage } from "../ui/agent-message.ts";

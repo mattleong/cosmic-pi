@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
 import * as Str from "effect/String";
-import { invokeHostCallback } from "pi-cosmic-core";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import { claimCompletion, completionClaimOwner, releaseCompletionClaim } from "./completion.ts";
 import { invalidRequest, type SubagentError, type SubagentRuntimeClosedError } from "./errors.ts";
 import { snapshotRun, type RunContext, type RunRecord, type WithRunLock } from "./internal.ts";

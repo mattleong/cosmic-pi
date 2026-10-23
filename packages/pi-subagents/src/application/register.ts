@@ -15,16 +15,18 @@ import {
   loadCodePreviewSettings,
   registerCodePreviewReplay,
 } from "pi-code-previews";
+import { bestEffortHostBootstrap } from "pi-cosmic-core/runtime/host-bootstrap";
 import {
-  bestEffortHostBootstrap,
   captureSessionHost,
   invokeHostCallback,
   isProjectTrusted,
-  makePiManagedRuntime,
+  notifyAtHostBoundary,
+} from "pi-cosmic-core/host-session";
+import { makePiManagedRuntime } from "pi-cosmic-core/runtime";
+import {
   makePiSessionRuntimeSlot,
   type PiSessionRuntimeSlot,
-  notifyAtHostBoundary,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/runtime/session-runtime";
 import {
   promptSubagentActivityInput,
   registerSubagentActivity,
@@ -495,6 +497,7 @@ export function registerSubagentApplication(
     bridge,
     run: slot.run,
     current: () => currentActivation,
+    captureAuthority: slot.captureAuthority,
     isActive: () => slot.isActive(),
   });
 

@@ -4,7 +4,7 @@ import * as Fn from "effect/Function";
 import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
-import { hasControlCharacter } from "pi-cosmic-core";
+import { hasControlCharacter } from "pi-cosmic-core/security";
 import type { CustomAgentTools } from "../profiles/agents.ts";
 import { type InvalidSubagentRequestError, invalidRequest } from "./errors.ts";
 import type { StartSubagentRequest } from "./model.ts";

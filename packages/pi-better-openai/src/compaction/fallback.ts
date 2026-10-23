@@ -13,7 +13,7 @@ import {
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { decodeUnknownOrUndefined } from "pi-cosmic-core";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import { hasExactPrefix, reconstructOpenAIContext } from "./context.ts";
 
 const FileDetails = Schema.Struct({

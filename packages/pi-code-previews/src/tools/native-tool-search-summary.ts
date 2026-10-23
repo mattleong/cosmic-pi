@@ -3,13 +3,10 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
-import {
-  countLabel,
-  decodeUnknownOrUndefined,
-  failureMessage,
-  invokeHostCallback,
-  isAgentGuidance,
-} from "pi-cosmic-core";
+import { countLabel } from "pi-cosmic-core/display";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
+import { failureMessage, isAgentGuidance } from "pi-cosmic-core/message-text";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import type { CompactSummaryProvider } from "./compact-summary";
 import { argumentFailureIssue } from "./argument-failure";
 import { hostContainer, type HostContainer } from "../shared/untrusted-value";

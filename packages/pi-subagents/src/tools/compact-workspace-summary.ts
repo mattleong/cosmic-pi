@@ -4,7 +4,7 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { countLabel } from "pi-cosmic-core";
+import { countLabel } from "pi-cosmic-core/display";
 import { WorkspaceToolDetailsSchema, type WorkspaceToolDetails } from "./details-schema.ts";
 
 function reviewPosition(details: WorkspaceToolDetails): string {

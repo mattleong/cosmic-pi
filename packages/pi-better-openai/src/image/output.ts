@@ -10,7 +10,7 @@ import type * as Path from "effect/Path";
 import * as Random from "effect/Random";
 import * as Scope from "effect/Scope";
 import * as Str from "effect/String";
-import { isStrictlyInsidePathWith } from "pi-cosmic-core";
+import { isStrictlyInsidePathWith } from "pi-cosmic-core/platform/paths";
 import type { SharpAdapterContract } from "../boundary/sharp.ts";
 import { IMAGE_OUTPUT_FORMATS, type ImageOutputFormat } from "../config/schema.ts";
 import { fail, failWith, type ExtractedImageResult } from "./types.ts";

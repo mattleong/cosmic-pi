@@ -5,13 +5,13 @@ import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
 import * as Result from "effect/Result";
 import * as Str from "effect/String";
+import { clipText } from "pi-cosmic-core/display";
+import { safeTextPrefix } from "pi-cosmic-core/text";
 import {
-  clipText,
-  safeTextPrefix,
   sanitizeDiagnosticError,
   sanitizeTerminalLine,
   stripTerminalControls,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/security";
 import { runAttention, runCleanupAttention } from "../run/attention.ts";
 import { MAX_OUTCOME_FILE_PATH_CHARS, MAX_OUTCOME_PREVIEW_CHARS } from "../run/limits.ts";
 import {

@@ -10,6 +10,7 @@ import type { HerdrBtwSessionInput } from "../boundary/host-session.ts";
 import { BlankChildSessionFileResult, HerdrSessionFiles } from "../boundary/session-file.ts";
 import { confirmedFailure, HerdrBtwError, uncertainFailure } from "./errors.ts";
 import { HerdrBtwLinkRestoration, type HerdrBtwLink } from "./link.ts";
+import { HERDR_BTW_COMMAND, HERDR_BTW_NEW_SUBCOMMAND } from "./admission.ts";
 import {
   parentBtwDisplayName,
   selectSplitDirection,
@@ -28,8 +29,6 @@ import {
   waitForAvailableShell,
 } from "./validation.ts";
 
-export const HERDR_BTW_COMMAND = "herdr-btw";
-export const HERDR_BTW_NEW_SUBCOMMAND = "new";
 const NEW_COMMAND_GUIDANCE = `Run /${HERDR_BTW_COMMAND} ${HERDR_BTW_NEW_SUBCOMMAND} to start a fresh side session`;
 
 const retainPaneFailure = (

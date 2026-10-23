@@ -1,12 +1,8 @@
 import { contentText, type SystemMessage } from "@earendil-works/pi-ai";
-import {
-  nodeFsPromises,
-  nodePath,
-  removePrivateTree,
-  sha256Text,
-  synchronousRandomHex,
-  synchronousRandomUuid,
-} from "pi-cosmic-core";
+import { nodeFsPromises, nodePath } from "pi-cosmic-core/platform/node-builtins";
+import { removePrivateTree } from "pi-cosmic-core/platform/private-file";
+import { sha256Text } from "pi-cosmic-core/security/sha256";
+import { synchronousRandomHex, synchronousRandomUuid } from "pi-cosmic-core/platform/native-crypto";
 import { fileURLToPath } from "node:url";
 import { isGitLocalEnvironmentKey } from "./git-local-environment.ts";
 import { FORK_PROMPT_CACHE_KEY_ENV, forkPromptCacheKey } from "./fork-prompt-cache.ts";

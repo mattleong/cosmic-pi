@@ -5,12 +5,9 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import { renderCompactRow } from "pi-code-previews";
-import {
-  clipText,
-  firstLineMessage,
-  sanitizeTerminalLine,
-  stripTerminalControls,
-} from "pi-cosmic-core";
+import { clipText } from "pi-cosmic-core/display";
+import { firstLineMessage } from "pi-cosmic-core/message-text";
+import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core/security";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { composeToolComponent, renderExpansionAffordance } from "pi-cosmic-ui/tool";
 import { decodeMessageEnvelope, messageContentText } from "./message-envelope.ts";

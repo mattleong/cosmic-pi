@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { invokeHostCallback, notifyAtHostBoundary } from "pi-cosmic-core";
+import { invokeHostCallback, notifyAtHostBoundary } from "pi-cosmic-core/host-session";
 
 export const notifyHerdrBtw = (
   ctx: ExtensionContext,

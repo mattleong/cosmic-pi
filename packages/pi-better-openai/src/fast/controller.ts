@@ -1,7 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
 import * as Predicate from "effect/Predicate";
-import { freezeSnapshot } from "pi-cosmic-core";
+import { freezeSnapshot } from "pi-cosmic-core/projection";
 import { FAST_SERVICE_TIER, supportsFastModel } from "./models.ts";
 
 export interface FastSnapshot {

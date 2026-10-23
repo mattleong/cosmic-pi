@@ -3,11 +3,9 @@ import {
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import {
-  makePiManagedRuntime,
-  makePiSessionRuntimeSlot,
-  notifyAtHostBoundary,
-} from "pi-cosmic-core";
+import { makePiManagedRuntime } from "pi-cosmic-core/runtime";
+import { makePiSessionRuntimeSlot } from "pi-cosmic-core/runtime/session-runtime";
+import { notifyAtHostBoundary } from "pi-cosmic-core/host-session";
 import { captureExplicitPreferenceArgument } from "./boundary/host-cli.ts";
 import {
   captureSelectedModel,

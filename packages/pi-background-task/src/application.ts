@@ -13,16 +13,18 @@ import {
   type CodePreviewSchedulerServiceContract,
   type CodePreviewSettings,
 } from "pi-code-previews";
+import { bestEffortHostBootstrap } from "pi-cosmic-core/runtime/host-bootstrap";
 import {
-  bestEffortHostBootstrap,
   captureSessionHost,
   invokeHostCallback,
   isProjectTrusted,
-  makePiManagedRuntime,
+  notifyAtHostBoundary,
+} from "pi-cosmic-core/host-session";
+import { makePiManagedRuntime } from "pi-cosmic-core/runtime";
+import {
   makePiSessionRuntimeSlot,
   PiSessionRuntimeError,
-  notifyAtHostBoundary,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/runtime/session-runtime";
 import { registerBackgroundTaskActivity } from "./boundary/host-activity.ts";
 import { discoverActivityView } from "pi-cosmic-ui/activity/view";
 import { taskProjectionBridge } from "./boundary/host-ui.ts";

@@ -15,6 +15,7 @@ import {
   AskUserHostError,
   AskUserRuntimeClosedError,
   AskUserValidationError,
+  asyncBusy,
 } from "./errors.ts";
 import { MAX_RETAINED_REQUESTS, type AsyncQuestionnaireSnapshot } from "./async-model.ts";
 import {
@@ -40,12 +41,6 @@ interface Entry {
   readonly deliveryAttempts: number;
 }
 
-export const asyncBusy = () =>
-  AskUserAsyncError.make({
-    reason: "busy",
-    message:
-      "A questionnaire is already active. Use ask_user_async_control for the pending request.",
-  });
 const notFound = () =>
   AskUserAsyncError.make({
     reason: "not-found",

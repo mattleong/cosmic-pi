@@ -17,7 +17,7 @@ import {
   type ProfileSettingsInspection,
   type PersistentProfileSetRef,
 } from "../profile-route-editor.ts";
-import { countLabel } from "pi-cosmic-core";
+import { countLabel } from "pi-cosmic-core/display";
 
 interface ProfileSetPreviewProfile {
   readonly id: ProfileId;

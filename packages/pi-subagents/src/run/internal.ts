@@ -27,7 +27,7 @@ import {
   type SubagentReportTruncation,
   type SubagentRunView,
 } from "./model.ts";
-import { freezeSnapshot } from "pi-cosmic-core";
+import { freezeSnapshot } from "pi-cosmic-core/projection";
 import type { CapturedOutputText } from "./state.ts";
 import { runWarningFields, type RunWarningSlots } from "./warnings.ts";
 import type { WriterPoolEntry, WriterPools } from "./writer-pool.ts";

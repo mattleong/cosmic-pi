@@ -1,15 +1,12 @@
 import { StringDecoder } from "node:string_decoder";
+import { awaitProcessGroupExit, signalProcessGroup } from "pi-cosmic-core/platform/process-tree";
 import {
-  awaitProcessGroupExit,
   guardProcessGroupAtHostExit,
-  nodeFilePlatformLayer,
-  nodeSpawn,
-  signalProcessGroup,
-  utf8ByteLength,
-  utf8Suffix,
-  type NodeChildProcess,
   type ProcessGroupExitGuard,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/platform/process-group-exit-guard";
+import { nodeFilePlatformLayer } from "pi-cosmic-core/platform/node-file";
+import { nodeSpawn, type NodeChildProcess } from "pi-cosmic-core/platform/node-builtins";
+import { utf8ByteLength, utf8Suffix } from "pi-cosmic-core/text";
 import * as Arr from "effect/Array";
 import type * as Cause from "effect/Cause";
 import * as Context from "effect/Context";

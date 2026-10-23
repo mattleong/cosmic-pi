@@ -3,9 +3,27 @@ import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
 import { getLanguageFromPath } from "@earendil-works/pi-coding-agent";
-import { bundledLanguages } from "shiki";
-import { nodePath, indexOfFrom } from "pi-cosmic-core";
+import { bundledLanguages, type BundledLanguage } from "shiki/langs";
+import type { SpecialLanguage } from "shiki/types";
+import { nodePath } from "pi-cosmic-core/platform/node-builtins";
+import { indexOfFrom } from "pi-cosmic-core/text-scan";
 import { codePreviewPerformanceConfig } from "../config/state";
+
+const SPECIAL_LANGUAGES = [
+  "text",
+  "plaintext",
+  "txt",
+  "plain",
+  "ansi",
+] as const satisfies readonly SpecialLanguage[];
+
+export function isShikiLanguage(language: string): language is BundledLanguage | SpecialLanguage {
+  return (
+    // @effect-diagnostics-next-line preferEffectRecord:off -- narrows an arbitrary string; Rec.has requires a known key.
+    Object.hasOwn(bundledLanguages, language) ||
+    Arr.some(SPECIAL_LANGUAGES, (special) => special === language)
+  );
+}
 
 const EXACT_BASENAMES = new Map<string, string>([
   ["makefile", "makefile"],

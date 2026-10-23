@@ -7,7 +7,7 @@ import {
   type SelectItem,
 } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
-import { sanitizeTerminalLine } from "pi-cosmic-core";
+import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { managerTone } from "./style.ts";
 import {
   SearchableSelectPage,

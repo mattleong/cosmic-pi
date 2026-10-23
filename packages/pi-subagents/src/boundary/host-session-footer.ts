@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { hasTerminalUI } from "pi-cosmic-core";
+import { hasTerminalUI } from "pi-cosmic-core/host-session";
 import { makeSetStatusSafely } from "pi-cosmic-ui/boundary/host-status";
 import { createCosmicFooterClient, createHostStateWatch } from "pi-cosmic-ui/client";
 import type { SessionProfileSnapshot } from "../profiles/session-overrides.ts";

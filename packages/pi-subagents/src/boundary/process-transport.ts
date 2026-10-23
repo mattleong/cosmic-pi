@@ -7,12 +7,9 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Arr from "effect/Array";
-import {
-  confirmProcessGroupExit,
-  guardProcessGroupAtHostExit,
-  nodeSpawn,
-  type NodeChildProcess,
-} from "pi-cosmic-core";
+import { confirmProcessGroupExit } from "pi-cosmic-core/platform/process-tree";
+import { guardProcessGroupAtHostExit } from "pi-cosmic-core/platform/process-group-exit-guard";
+import { nodeSpawn, type NodeChildProcess } from "pi-cosmic-core/platform/node-builtins";
 import { cleanupFailureDiagnostic } from "../run/cleanup-diagnostic.ts";
 import type { BackendCleanupVerifier } from "../backend/model.ts";
 import type { SubagentCleanupDiagnostic } from "../run/model.ts";

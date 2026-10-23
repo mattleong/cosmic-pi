@@ -1,7 +1,9 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
-import { invokeHostCallback, readLatestReply, safeTextPrefix } from "pi-cosmic-core";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
+import { readLatestReply } from "pi-cosmic-core/host-agent-messages";
+import { safeTextPrefix } from "pi-cosmic-core/text";
 import type { IntercomDelivery } from "../delivery.ts";
 import {
   IntercomRefused,

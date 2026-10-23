@@ -2,12 +2,8 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Predicate from "effect/Predicate";
-import {
-  countLabel,
-  formatRelativeAge,
-  sanitizeDiagnosticContent,
-  sanitizeTerminalLine,
-} from "pi-cosmic-core";
+import { countLabel, formatRelativeAge } from "pi-cosmic-core/display";
+import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core/security";
 import {
   detailFieldRows,
   listDetailHeading,

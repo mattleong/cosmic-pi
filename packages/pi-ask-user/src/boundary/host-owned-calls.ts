@@ -1,9 +1,7 @@
 import type * as Effect from "effect/Effect";
-import {
-  decodeUnknownOrUndefined,
-  invokeHostCallback,
-  makeSessionCapabilityProtocol,
-} from "pi-cosmic-core";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
+import { makeSessionCapabilityProtocol } from "pi-cosmic-core/session-capability";
 import { AskUserService } from "../questionnaire/service.ts";
 import {
   AskUserRuntimeClosedError,

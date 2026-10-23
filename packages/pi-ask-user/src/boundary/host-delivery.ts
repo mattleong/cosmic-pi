@@ -1,7 +1,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { synchronousRandomUuid, decodeUnknownOrUndefined } from "pi-cosmic-core";
+import { synchronousRandomUuid } from "pi-cosmic-core/platform/native-crypto";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import { AskUserHostError } from "../questionnaire/errors.ts";
 import type { AsyncDelivery } from "../questionnaire/async-service.ts";
 import { formatAsyncSnapshot } from "../questionnaire/format.ts";

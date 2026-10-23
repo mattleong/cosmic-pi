@@ -93,6 +93,7 @@ export {
   notifyAtHostBoundary,
   type HostNotificationLevel,
 } from "./src/host-session.ts";
+export { withCapturedHostSignal } from "./src/host-invocation.ts";
 export {
   registerExtensionCommand,
   type ExtensionCommand,
@@ -155,10 +156,8 @@ export {
   SynchronousIngressError,
 } from "./src/coordination/synchronous-ingress.ts";
 export { StreamingHttpClient } from "./src/platform/streaming-http.ts";
-export {
-  fileLayer as nodeFilePlatformLayer,
-  layer as nodePlatformLayer,
-} from "./src/platform/node.ts";
+export { nodeFilePlatformLayer } from "./src/platform/node-file.ts";
+export { nodePlatformLayer } from "./src/platform/node.ts";
 export {
   BoundedProcessError,
   confirmEffectProcessClose,

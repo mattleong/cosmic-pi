@@ -10,7 +10,7 @@ import * as Effect from "effect/Effect";
 import * as Match from "effect/Match";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import { invokeHostCallback } from "pi-cosmic-core";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import { createInputDock } from "./host-input-dock.ts";
 import { createScreenViewport } from "./host-viewport.ts";
 

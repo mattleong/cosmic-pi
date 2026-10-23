@@ -9,16 +9,18 @@ import {
   registerCodePreviewReplay,
   type CodePreviewSettings,
 } from "pi-code-previews";
+import { bestEffortHostBootstrap } from "pi-cosmic-core/runtime/host-bootstrap";
 import {
-  bestEffortHostBootstrap,
   invokeHostCallback,
   isProjectTrusted,
-  isSubagentChildProcess,
-  makePiManagedRuntime,
-  makePiSessionRuntimeSlot,
   notifyAtHostBoundary,
+} from "pi-cosmic-core/host-session";
+import { isSubagentChildProcess } from "pi-cosmic-core/host-environment";
+import { makePiManagedRuntime } from "pi-cosmic-core/runtime";
+import {
+  makePiSessionRuntimeSlot,
   PiSessionRuntimeError,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/runtime/session-runtime";
 import { hostIntercomInbound } from "./boundary/host-inbound.ts";
 import { captureIntercomSession } from "./boundary/host-session.ts";
 import { INTERCOM_COMMAND, registerIntercomCommand } from "./command.ts";

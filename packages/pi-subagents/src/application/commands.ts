@@ -1,8 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import { isProjectTrusted } from "pi-cosmic-core";
+import { isProjectTrusted } from "pi-cosmic-core/host-session";
 import { discoverActivityView } from "pi-cosmic-ui/activity/view";
-import { runSubagentDoctor } from "./doctor.ts";
 import type { SubagentProjectionBridge } from "../boundary/host-ui.ts";
 import { NativeModelCatalog } from "../boundary/native-model-catalog.ts";
 import { SubagentConfigStore, type SubagentConfigStoreContract } from "../config/store.ts";
@@ -30,6 +29,7 @@ interface ApplicationCommandHost {
   ) => Promise<A>;
   readonly current: () => CommandActivation | undefined;
   readonly isActive: () => boolean;
+  readonly captureAuthority: () => () => boolean;
 }
 
 export function registerApplicationCommands(pi: ExtensionAPI, host: ApplicationCommandHost): void {
@@ -68,6 +68,7 @@ export function registerApplicationCommands(pi: ExtensionAPI, host: ApplicationC
       );
 
   const managerActions: FleetManagerActions = {
+    captureAuthority: host.captureAuthority,
     openActivity: (signal) => {
       const activation = current();
       if (!activation || !isActive() || signal?.aborted)
@@ -132,19 +133,23 @@ export function registerApplicationCommands(pi: ExtensionAPI, host: ApplicationC
       run(SubagentService.use((service) => service.inspectWriterWorkspace)),
     runDoctor: (ctx) =>
       withCurrentActivation((activation) =>
-        run(
-          runSubagentDoctor({
-            pi,
-            ctx,
-            agentDirectory: activation.agentDirectory,
-            activityViewAvailable:
-              ctx.mode !== "tui"
-                ? undefined
-                : activation.sessionKey !== undefined &&
-                  discoverActivityView(pi.events, activation.sessionKey) !== undefined,
-            projectTrusted: isProjectTrusted(ctx),
-          }),
-        ),
+        import("./doctor.ts").then(({ runSubagentDoctor }) => {
+          if (current() !== activation || !isActive() || ctx.signal?.aborted)
+            throw new Error("Subagents session was replaced.");
+          return run(
+            runSubagentDoctor({
+              pi,
+              ctx,
+              agentDirectory: activation.agentDirectory,
+              activityViewAvailable:
+                ctx.mode !== "tui"
+                  ? undefined
+                  : activation.sessionKey !== undefined &&
+                    discoverActivityView(pi.events, activation.sessionKey) !== undefined,
+              projectTrusted: isProjectTrusted(ctx),
+            }),
+          );
+        }),
       ),
     setWriterWorkspaceMode: (mode) =>
       withCurrentActivation((activation) => {

@@ -5,12 +5,9 @@ import * as Fn from "effect/Function";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
-import {
-  clipText,
-  runBoundedProcessNode,
-  sanitizeDiagnosticContent,
-  stripTerminalControls,
-} from "pi-cosmic-core";
+import { clipText } from "pi-cosmic-core/display";
+import { runBoundedProcessNode } from "pi-cosmic-core/platform/process";
+import { sanitizeDiagnosticContent, stripTerminalControls } from "pi-cosmic-core/security";
 import {
   DEFAULT_WORKTREE_HOOK_TIMEOUT_SECONDS,
   type WorktreeHook,

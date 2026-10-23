@@ -1,7 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
-import { codeUnitAt } from "pi-cosmic-core";
+import { codeUnitAt } from "pi-cosmic-core/text-scan";
 
 const ESCAPE = 0x1b;
 const BELL = 0x07;

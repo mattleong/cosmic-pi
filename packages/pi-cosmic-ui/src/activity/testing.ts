@@ -1,7 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { stripTerminalControls } from "pi-cosmic-core";
+import { stripTerminalControls } from "pi-cosmic-core/security";
 import { plainTheme } from "pi-cosmic-core/testing";
 import { ActivityComponent, freshActivityPresentation } from "./component.ts";
 import type { ActivityRow } from "./model.ts";

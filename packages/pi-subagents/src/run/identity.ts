@@ -1,4 +1,4 @@
-import { synchronousRandomToken } from "pi-cosmic-core";
+import { synchronousRandomToken } from "pi-cosmic-core/platform/native-crypto";
 
 // 48 random bits as 10 fixed-width base-36 digits, so a counter appended after it stays unambiguous.
 const PROCESS_PREFIX = synchronousRandomToken();

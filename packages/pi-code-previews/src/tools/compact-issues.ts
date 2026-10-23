@@ -2,7 +2,7 @@ import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
-import { MESSAGE_TEXT_LIMIT } from "pi-cosmic-core";
+import { MESSAGE_TEXT_LIMIT } from "pi-cosmic-core/message-text";
 
 export const COMPACT_ISSUE_MESSAGE_LIMIT = MESSAGE_TEXT_LIMIT;
 

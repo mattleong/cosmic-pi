@@ -3,7 +3,6 @@ import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { nodeLockFs as fs, nodeSpawnSync } from "./node-builtins.ts";
-import { runBoundedProcessNode } from "./process.ts";
 import { signalProcess } from "./process-tree.ts";
 
 const PS_EXECUTABLE = "/bin/ps";
@@ -88,14 +87,18 @@ const probeStartIdentity = (pid: number): Effect.Effect<string | undefined> =>
     ? // A procfs read is served from kernel memory and doesn't wait on another process.
       // The process can exit, or procfs can refuse the read, after the signal probe found it.
       Effect.try(() => procStartIdentity(pid)).pipe(Effect.orElseSucceed(() => undefined))
-    : runBoundedProcessNode({
-        executable: PS_EXECUTABLE,
-        args: psArguments(pid),
-        environment: PS_ENVIRONMENT,
-        stdoutLimitBytes: PS_OUTPUT_LIMIT_BYTES,
-        stderrLimitBytes: PS_OUTPUT_LIMIT_BYTES,
-        timeoutMillis: PS_TIMEOUT_MILLIS,
-      }).pipe(
+    : // Synchronous document locks need identity checks, not the asynchronous process runner.
+      Effect.tryPromise(() => import("./process.ts")).pipe(
+        Effect.flatMap(({ runBoundedProcessNode }) =>
+          runBoundedProcessNode({
+            executable: PS_EXECUTABLE,
+            args: psArguments(pid),
+            environment: PS_ENVIRONMENT,
+            stdoutLimitBytes: PS_OUTPUT_LIMIT_BYTES,
+            stderrLimitBytes: PS_OUTPUT_LIMIT_BYTES,
+            timeoutMillis: PS_TIMEOUT_MILLIS,
+          }),
+        ),
         Effect.map((result) =>
           result.overflowed || result.timedOut
             ? undefined

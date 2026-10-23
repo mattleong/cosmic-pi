@@ -2,7 +2,7 @@ import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import { fileLayer } from "../platform/node.ts";
+import { nodeFilePlatformLayer as fileLayer } from "../platform/node-file.ts";
 
 export const galleryDirectory = (
   environment: Readonly<Record<string, string | undefined>>,

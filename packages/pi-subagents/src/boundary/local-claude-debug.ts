@@ -2,13 +2,12 @@ import {
   createPrivateDirectory,
   createPrivateFile,
   ensurePrivateDirectory,
-  nodeFsPromises as fs,
-  nodePath,
   type PrivateFileError,
   removePrivateTree,
-  sha256Text,
-  synchronousRandomHex,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/platform/private-file";
+import { nodeFsPromises as fs, nodePath } from "pi-cosmic-core/platform/node-builtins";
+import { sha256Text } from "pi-cosmic-core/security/sha256";
+import { synchronousRandomHex } from "pi-cosmic-core/platform/native-crypto";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";

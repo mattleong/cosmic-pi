@@ -165,6 +165,9 @@ export function fakeCustomSurfaceHost(
       size.rows = rows;
     },
     mount: () => mounts.shift()?.(),
+    get pendingMounts() {
+      return mounts.length;
+    },
     showUnrelated: (component: Component = empty()) => show(component),
     fail: (fault: CustomSurfaceFault) => {
       faults.add(fault);

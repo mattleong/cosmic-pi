@@ -1,7 +1,8 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
 import * as MutableRef from "effect/MutableRef";
-import { formatDuration, maskIdentifier } from "pi-cosmic-core";
+import { formatDuration } from "pi-cosmic-core/display";
+import { maskIdentifier } from "pi-cosmic-core/security";
 import { currentModelKey } from "../fast/controller.ts";
 import { formatTimestampOrNever, USAGE_URL } from "./format.ts";
 import type { OpenAIProjection } from "./projection.ts";

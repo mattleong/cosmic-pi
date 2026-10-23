@@ -12,7 +12,7 @@ import {
   type WorkspaceError,
   type WorkspaceRecord,
 } from "../workspace/model.ts";
-import { nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core";
+import { nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core/platform/node-builtins";
 import { deleteWorkspaceRefs } from "./git-capture.ts";
 import { listedWorkspaceTrees, removeWorkspaceTree } from "./git-worktree-trees.ts";
 import type { BeforeTreeRemoval } from "./git-worktree-hooks.ts";

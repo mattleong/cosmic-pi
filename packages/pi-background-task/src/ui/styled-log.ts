@@ -2,7 +2,7 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { sanitizeTerminalStyledFragments } from "pi-cosmic-core";
+import { sanitizeTerminalStyledFragments } from "pi-cosmic-core/security/terminal-styled";
 import type { BackgroundLogEvent, BackgroundLogStream } from "../task/model.ts";
 
 const MAX_CACHED_TASKS = 4;

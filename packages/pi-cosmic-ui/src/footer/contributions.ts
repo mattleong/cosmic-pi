@@ -3,7 +3,7 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Order from "effect/Order";
 import * as Str from "effect/String";
-import { sanitizeTerminalLine } from "pi-cosmic-core";
+import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import type {
   CosmicFooterColor,
   CosmicFooterTextContribution,

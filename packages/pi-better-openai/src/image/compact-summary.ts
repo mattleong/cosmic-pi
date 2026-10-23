@@ -12,7 +12,7 @@ import {
   type CompactSummary,
   type CompactSummaryProvider,
 } from "pi-code-previews";
-import { failureMessage } from "pi-cosmic-core";
+import { failureMessage } from "pi-cosmic-core/message-text";
 import {
   CodexImageDetailsSchema,
   IMAGE_ACTIONS,

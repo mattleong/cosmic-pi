@@ -4,7 +4,8 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import { WorkspaceError } from "../workspace/model.ts";
-import { nodeFsPromises as fs, nodePath as path, sha256Text } from "pi-cosmic-core";
+import { nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core/platform/node-builtins";
+import { sha256Text } from "pi-cosmic-core/security/sha256";
 import {
   checkDirectory,
   git,

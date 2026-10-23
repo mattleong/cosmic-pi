@@ -1,7 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
 import * as Predicate from "effect/Predicate";
-import { countLabel, formatCost } from "pi-cosmic-core";
+import { countLabel, formatCost } from "pi-cosmic-core/display";
 import type { SubagentProjection, SubagentRunView } from "./model.ts";
 import { isActiveRunState } from "./model.ts";
 

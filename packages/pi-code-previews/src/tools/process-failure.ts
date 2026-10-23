@@ -1,7 +1,8 @@
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
-import { sanitizeDiagnosticContent, firstLineMessage } from "pi-cosmic-core";
+import { sanitizeDiagnosticContent } from "pi-cosmic-core/security";
+import { firstLineMessage } from "pi-cosmic-core/message-text";
 
 const CAUSE_WORD = /\b(?:error|errors|fail|failed|failure|failures|fatal|panic|panicked)\b/iu;
 const CAUSE_CLASS = /[a-z](?:Error|Exception)\b/u;

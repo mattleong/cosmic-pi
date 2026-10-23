@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Predicate from "effect/Predicate";
-import { captureSessionHost, invokeHostCallback } from "pi-cosmic-core";
+import { captureSessionHost, invokeHostCallback } from "pi-cosmic-core/host-session";
 import type { IntercomSessionInput } from "../session/service.ts";
 
 /** Only sessions another agent can address and a user can see: the TUI and RPC clients. */

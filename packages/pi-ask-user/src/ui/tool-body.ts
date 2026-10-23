@@ -5,7 +5,7 @@ import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { expandedArguments, expandedSection, previewIssuesSlot } from "pi-code-previews";
-import { stripTerminalControls } from "pi-cosmic-core";
+import { stripTerminalControls } from "pi-cosmic-core/security";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import {
   composeToolComponent,

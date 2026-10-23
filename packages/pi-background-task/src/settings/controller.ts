@@ -1,23 +1,11 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import * as Arr from "effect/Array";
-import * as Schema from "effect/Schema";
-import {
-  failureMessage,
-  notifyAtHostBoundary,
-  registerExtensionCommand,
-  sanitizeTerminalLine,
-  synchronousNow,
-} from "pi-cosmic-core";
-import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
-import { openCommandSurface } from "pi-cosmic-ui/boundary/host-surface";
-import { SPINNER_FRAME_MS } from "pi-cosmic-ui/manager";
-import { fullScreenKeybindingOptions } from "pi-cosmic-ui/manager/key-labels";
+import { withCapturedHostSignal } from "pi-cosmic-core/host-invocation";
+import * as Predicate from "effect/Predicate";
+import { captureHostSignal, notifyAtHostBoundary } from "pi-cosmic-core/host-session";
+import { registerExtensionCommand, type ExtensionSubcommand } from "pi-cosmic-core/host-command";
 import type { BackgroundTaskProjectionBridge } from "../boundary/host-ui.ts";
-import { BackgroundTaskNotFoundError } from "../task/errors.ts";
-import { TaskManagerComponent } from "../ui/manager.ts";
-import { taskSettingsSubcommand, type TaskSettingsActions } from "./task-settings.ts";
-
-const isTaskNotFound = Schema.is(BackgroundTaskNotFoundError);
+import type { TaskSettingsActions } from "./task-settings.ts";
+import { TASK_SETTINGS_COMMAND } from "./task-settings-options.ts";
 
 export interface TaskManagerActions {
   readonly isAvailable: () => boolean;
@@ -28,119 +16,90 @@ export interface TaskManagerActions {
 
 export type TaskCommandActions = TaskManagerActions & TaskSettingsActions;
 
-function notifyActionFailure(
-  ctx: ExtensionCommandContext,
-  action: "stop the task" | "clear finished tasks",
-  cause: unknown,
-): void {
-  const reason = isTaskNotFound(cause)
-    ? "it no longer exists"
-    : cause instanceof Error
-      ? failureMessage(sanitizeTerminalLine(cause.message), "")
-      : "";
-  notifyAtHostBoundary(ctx, `Couldn't ${action}${reason ? `: ${reason}` : ""}`, "error");
+interface TaskCommandModules {
+  readonly manager: () => Promise<typeof import("./task-manager.ts")>;
+  readonly settings: () => Promise<typeof import("./task-settings.ts")>;
 }
 
-function openTaskManager(
-  ctx: ExtensionCommandContext,
-  bridge: BackgroundTaskProjectionBridge,
-  actions: TaskManagerActions,
-  isCurrent: () => boolean,
-): Promise<void> {
-  if (!isCurrent()) return Promise.resolve();
-  if (ctx.mode !== "tui") {
-    if (ctx.hasUI)
-      notifyAtHostBoundary(
-        ctx,
-        "Open Pi in an interactive terminal to view background tasks with /tasks.",
-        "warning",
-      );
-    return Promise.resolve();
-  }
-  if (!actions.isAvailable()) {
-    notifyAtHostBoundary(
-      ctx,
-      "Background Tasks aren't running; run /reload, then reopen /tasks",
-      "warning",
-    );
-    return Promise.resolve();
-  }
-  return openCommandSurface(ctx, {
-    placement: "screen",
-    isCurrent,
-    create: ({ tui, theme, keybindings, getHeight, finish }) => {
-      const revoked = () => {
-        if (isCurrent()) return false;
-        finish(undefined);
-        return true;
-      };
-      const manager = new TaskManagerComponent({
-        theme,
-        getProjection: bridge.get,
-        getHeight,
-        getNow: synchronousNow,
-        ...fullScreenKeybindingOptions(keybindings),
-        requestRender: () => tui.requestRender(),
-        close: () => finish(undefined),
-        stop: (id) => {
-          if (!revoked())
-            void actions.stop(id).catch((cause: unknown) => {
-              if (isCurrent()) notifyActionFailure(ctx, "stop the task", cause);
-            });
-        },
-        clear: () => {
-          if (!revoked())
-            void actions.clear().catch((cause: unknown) => {
-              if (isCurrent()) notifyActionFailure(ctx, "clear finished tasks", cause);
-            });
-        },
-      });
-      // Log rows extend incrementally from each projection; only theme changes invalidate them.
-      const unsubscribe = bridge.subscribe(() => {
-        if (!revoked()) tui.requestRender();
-      });
-      const stopSpinnerTicker = startHostUiTicker(SPINNER_FRAME_MS, () => {
-        if (
-          Arr.some(
-            bridge.get().tasks,
-            (task) => task.state === "starting" || task.state === "running",
-          )
-        )
-          tui.requestRender();
-      });
-      return {
-        render: (width) => manager.render(width),
-        handleInput: (data) => manager.handleInput(data),
-        invalidate: () => manager.invalidate(),
-        dispose: () => {
-          stopSpinnerTicker();
-          unsubscribe();
-        },
-      };
-    },
-  });
-}
+const COMMAND_MODULES: TaskCommandModules = {
+  manager: () => import("./task-manager.ts"),
+  settings: () => import("./task-settings.ts"),
+};
 
 export function registerTasksCommand(
   pi: ExtensionAPI,
   bridge: BackgroundTaskProjectionBridge,
   actions: TaskCommandActions,
+  modules: TaskCommandModules = COMMAND_MODULES,
 ): void {
+  // Retain one settings owner so concurrent invocations still serialize their writes.
+  let settings: ExtensionSubcommand | undefined;
+  const invoke = (
+    ctx: ExtensionCommandContext,
+    operation: (invocation: ExtensionCommandContext, isCurrent: () => boolean) => Promise<void>,
+  ): Promise<void> => {
+    const authority = actions.captureAuthority();
+    const captured = captureHostSignal(ctx);
+    if (!Predicate.isTagged(captured, "Captured")) return Promise.resolve();
+    const { signal } = captured;
+    const isCurrent = () => authority() && !signal?.aborted;
+    if (!isCurrent()) return Promise.resolve();
+    const invocation = withCapturedHostSignal(ctx, signal);
+    return operation(invocation, isCurrent).catch((cause: unknown) => {
+      if (isCurrent()) throw cause;
+    });
+  };
+  const openManager = (ctx: ExtensionCommandContext, isCurrent: () => boolean): Promise<void> => {
+    if (!isCurrent()) return Promise.resolve();
+    return modules
+      .manager()
+      .then(({ openTaskManager }) =>
+        isCurrent() ? openTaskManager(ctx, bridge, actions, isCurrent) : undefined,
+      );
+  };
+
   registerExtensionCommand(pi, {
     name: "tasks",
     description: "Open the background task manager, or change its settings",
     bare: {
-      handler: (_args, ctx) => {
-        const isCurrent = actions.captureAuthority();
-        return ctx.mode === "tui" && actions.isAvailable() && actions.openActivity
-          ? actions
-              .openActivity(ctx.signal)
-              .then((opened) =>
-                opened ? undefined : openTaskManager(ctx, bridge, actions, isCurrent),
-              )
-          : openTaskManager(ctx, bridge, actions, isCurrent);
-      },
+      handler: (_args, ctx) =>
+        invoke(ctx, (invocation, isCurrent) => {
+          if (invocation.mode !== "tui") {
+            if (invocation.hasUI)
+              notifyAtHostBoundary(
+                invocation,
+                "Open Pi in an interactive terminal to view background tasks with /tasks.",
+                "warning",
+              );
+            return Promise.resolve();
+          }
+          if (!actions.isAvailable()) {
+            notifyAtHostBoundary(
+              invocation,
+              "Background Tasks aren't running; run /reload, then reopen /tasks",
+              "warning",
+            );
+            return Promise.resolve();
+          }
+          return actions.openActivity
+            ? actions
+                .openActivity(invocation.signal)
+                .then((opened) => (opened ? undefined : openManager(invocation, isCurrent)))
+            : openManager(invocation, isCurrent);
+        }),
     },
-    subcommands: [taskSettingsSubcommand(actions)],
+    subcommands: [
+      {
+        ...TASK_SETTINGS_COMMAND,
+        handler: (args, ctx) =>
+          invoke(ctx, (invocation, isCurrent) =>
+            modules.settings().then(({ taskSettingsSubcommand }) => {
+              if (!isCurrent()) return undefined;
+              settings ??= taskSettingsSubcommand(actions);
+              return settings.handler(args, invocation);
+            }),
+          ),
+      },
+    ],
   });
 }

@@ -2,7 +2,7 @@ import * as Schema from "effect/Schema";
 
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { freezeSnapshot } from "pi-cosmic-core";
+import { freezeSnapshot } from "pi-cosmic-core/projection";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";

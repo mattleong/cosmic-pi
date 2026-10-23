@@ -1,5 +1,5 @@
 import { registerRevisionedActivityProvider, type ActivityEvents } from "pi-cosmic-ui/activity";
-import { sanitizeDiagnosticContent } from "pi-cosmic-core";
+import { sanitizeDiagnosticContent } from "pi-cosmic-core/security";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";

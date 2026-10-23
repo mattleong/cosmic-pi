@@ -1,11 +1,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createCosmicFooterClient, createHostStateWatch } from "../footer/client.ts";
-import {
-  invokeBestEffort,
-  invokeHostCallback,
-  notifyListeners,
-  sanitizeTerminalLine,
-} from "pi-cosmic-core";
+import { invokeBestEffort, invokeHostCallback } from "pi-cosmic-core/host-session";
+import { notifyListeners } from "pi-cosmic-core/coordination/listeners";
+import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import type { CosmicFooterStatusContribution } from "../protocol/protocol.ts";
 import { createHostUiTickerPool, type HostUiTickerPool } from "./host-ui-ticker-pool.ts";
 

@@ -13,18 +13,17 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as Tracer from "effect/Tracer";
+import { AgentDirectory } from "pi-cosmic-core/platform/agent-directory";
 import {
-  AgentDirectory,
   createSubscriptionRefresh,
-  failureMessage,
-  frozenProjection,
-  invokeHostCallback,
-  JsonHttpClient,
-  notifyAtHostBoundary,
   recoverRefreshFailure,
-  sanitizeDiagnosticError,
-  type RefreshRequest,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/coordination/subscription-refresh";
+import { failureMessage } from "pi-cosmic-core/message-text";
+import { frozenProjection } from "pi-cosmic-core/projection";
+import { invokeHostCallback, notifyAtHostBoundary } from "pi-cosmic-core/host-session";
+import { JsonHttpClient } from "pi-cosmic-core/platform/json-http";
+import { sanitizeDiagnosticError } from "pi-cosmic-core/security";
+import { type RefreshRequest } from "pi-cosmic-core/coordination/refresh-coordinator";
 import { getCodexCredentials } from "../auth/codex-auth.ts";
 import type { ResolvedConfig } from "../config/schema.ts";
 import { OpenAIConfigService } from "../config/store.ts";

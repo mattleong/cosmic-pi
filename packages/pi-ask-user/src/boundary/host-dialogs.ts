@@ -5,11 +5,8 @@ import * as Fn from "effect/Function";
 import * as Match from "effect/Match";
 import * as Result from "effect/Result";
 import * as Str from "effect/String";
-import {
-  notifyAtHostBoundary,
-  stripTerminalControls,
-  type HostNotificationLevel,
-} from "pi-cosmic-core";
+import { notifyAtHostBoundary, type HostNotificationLevel } from "pi-cosmic-core/host-session";
+import { stripTerminalControls } from "pi-cosmic-core/security";
 import { AskUserHostError } from "../questionnaire/errors.ts";
 import type { AskUserAnswer, AskUserAnswerDraft, AskUserOutcome } from "../questionnaire/model.ts";
 import { cancelQuestionnaire, finalizeAskUserAnswer } from "../questionnaire/reducer.ts";
@@ -22,7 +19,6 @@ import {
 } from "../questionnaire/schema.ts";
 import { validateQuestionnaireInput } from "../questionnaire/validation.ts";
 import type { AskUserPromptGate } from "./host-prompt.ts";
-import { askUserTuiHost } from "./host-tui.ts";
 import { titleLabel } from "../ui/layout.ts";
 import type { AskUserDialogBridge } from "./host-ui.ts";
 
@@ -300,4 +296,14 @@ export const askUserHost = (
   bridge: AskUserDialogBridge,
   promptGate?: AskUserPromptGate,
 ): AskUserHost =>
-  ctx.mode === "tui" ? askUserTuiHost(ctx, bridge, promptGate) : (request) => runRpc(ctx, request);
+  ctx.mode === "tui"
+    ? (request, presence, queued) =>
+        Effect.tryPromise({
+          try: () => import("./host-tui.ts"),
+          catch: () => hostError("load"),
+        }).pipe(
+          Effect.flatMap(({ askUserTuiHost }) =>
+            askUserTuiHost(ctx, bridge, promptGate)(request, presence, queued),
+          ),
+        )
+    : (request) => runRpc(ctx, request);

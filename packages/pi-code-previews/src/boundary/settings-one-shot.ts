@@ -1,7 +1,9 @@
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { AgentDirectory, nodeFilePlatformLayer, piHostLoggerLayer } from "pi-cosmic-core";
+import { AgentDirectory } from "pi-cosmic-core/platform/agent-directory";
+import { nodeFilePlatformLayer } from "pi-cosmic-core/platform/node-file";
+import { piHostLoggerLayer } from "pi-cosmic-core/runtime";
 import { CodePreviewSettingsService } from "../config/service";
 
 const oneShotSettingsLayer = () =>

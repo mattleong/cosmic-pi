@@ -2,7 +2,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Arr from "effect/Array";
-import { frozenProjection, type ProjectionError } from "pi-cosmic-core";
+import { frozenProjection, type ProjectionError } from "pi-cosmic-core/projection";
 import { acquireProjectionOwnership } from "../shared/projection-ownership";
 import {
   clearWriteProjection,

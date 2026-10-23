@@ -1,7 +1,7 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
-import { toPiToolOutputSchema } from "pi-cosmic-core";
+import { toPiToolOutputSchema } from "pi-cosmic-core/schema/tool-output";
 import { ImageOutputFormatSchema } from "../config/schema.ts";
 import { imageResultText } from "./result-text.ts";
 import { IMAGE_ACTIONS, type CodexImageDetails, type CodexImageResult } from "./types.ts";

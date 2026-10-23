@@ -7,10 +7,9 @@ import * as Str from "effect/String";
 import {
   CrossProcessLock,
   type CrossProcessLease,
-  type SafeFile,
-  nodeFsPromises as fs,
-  nodePath as path,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/platform/cross-process-lock";
+import { type SafeFile } from "pi-cosmic-core/platform/safe-file";
+import { nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core/platform/node-builtins";
 import type { WorktreeHook } from "../config/schema.ts";
 import { OPEN_WORKSPACE_STATUSES, WorkspaceError } from "../workspace/model.ts";
 import { canonicalizeWriterDirectory } from "./writer-lease.ts";

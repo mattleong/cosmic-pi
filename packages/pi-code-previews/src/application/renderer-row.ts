@@ -6,7 +6,7 @@ import type {
   ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
-import { invokeHostCallback } from "pi-cosmic-core";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import { rowPerState, withSelfBackground } from "../preview/self-background";
 import { fallbackArguments } from "../tools/data/args";
 import { hostValue } from "../shared/untrusted-value";

@@ -6,7 +6,7 @@ import * as Option from "effect/Option";
 import * as Order from "effect/Order";
 import type { WorkspaceDiffStatFile } from "../workspace/diffstat.ts";
 import { credentialPrivatePath, credentialWorkspacePath } from "../workspace/policy.ts";
-import { nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core";
+import { nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core/platform/node-builtins";
 import {
   git,
   gitFields,

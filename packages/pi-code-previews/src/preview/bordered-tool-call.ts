@@ -10,7 +10,7 @@ import * as Predicate from "effect/Predicate";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
-import { indexOfFrom } from "pi-cosmic-core";
+import { indexOfFrom } from "pi-cosmic-core/text-scan";
 import type { RendererState } from "../tools/renderers/shared/types";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { renderExpansionAffordance, toolExpandHint } from "pi-cosmic-ui/tool";

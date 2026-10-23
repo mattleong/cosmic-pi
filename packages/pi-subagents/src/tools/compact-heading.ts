@@ -5,7 +5,7 @@ import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
-import { countLabel } from "pi-cosmic-core";
+import { countLabel } from "pi-cosmic-core/display";
 import {
   type CompactSubagentToolDetails,
   type SubagentAwaitDetails,

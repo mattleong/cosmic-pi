@@ -2,7 +2,8 @@ import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { getKeybindings, type Component } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Schema from "effect/Schema";
-import { invokeHostCallback, sanitizeTerminalLine } from "pi-cosmic-core";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
+import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import {
   managerActivityColor,
   managerActivityGlyph,

@@ -1,5 +1,5 @@
 import * as Arr from "effect/Array";
-import { stripTerminalControls } from "pi-cosmic-core";
+import { stripTerminalControls } from "pi-cosmic-core/security";
 import type { AskUserOutcome } from "./model.ts";
 import type { AsyncQuestionnaireSnapshot } from "./async-model.ts";
 

@@ -12,11 +12,11 @@ import {
   type Component,
 } from "@earendil-works/pi-tui";
 import { expandedSection } from "pi-code-previews";
+import { countLabel } from "pi-cosmic-core/display";
 import {
-  countLabel,
   sanitizeTerminalLine,
   stripTerminalControls as sanitizeTerminalText,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/security";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import {
   composeToolComponent as renderComponent,

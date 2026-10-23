@@ -11,7 +11,7 @@ import * as RpcClient from "effect/rpc/RpcClient";
 import type * as RpcClientError from "effect/rpc/RpcClientError";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Socket from "effect/socket/Socket";
-import { boundedNdjsonRpcSerialization } from "pi-cosmic-core";
+import { boundedNdjsonRpcSerialization } from "pi-cosmic-core/platform/bounded-ndjson-rpc";
 import { freshNonce, handshakeKey } from "./handshake.ts";
 import {
   IntercomRpcGroup,

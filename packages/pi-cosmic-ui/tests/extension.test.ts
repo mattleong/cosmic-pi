@@ -30,7 +30,11 @@ import {
   COSMIC_UI_HOST_QUERY,
   COSMIC_UI_PROTOCOL_VERSION,
 } from "../src/protocol/protocol.ts";
-import { ACTIVITY_DISCOVER, ACTIVITY_EVENT } from "../src/activity/protocol.ts";
+import {
+  ACTIVITY_DISCOVER,
+  ACTIVITY_EVENT,
+  registerActivityProvider,
+} from "../src/activity/protocol.ts";
 import { ACTIVITY_VIEW_DISCOVER } from "../src/activity/view-protocol.ts";
 import {
   abortablePendingExec,
@@ -275,6 +279,50 @@ const startWithPendingProbes = (h: ReturnType<typeof harness>) =>
 const byName: Order.Order<string> = (left, right) => Fn.pipe(left, Str.localeCompare(right));
 
 describe("Cosmic UI extension", () => {
+  it.effect.each(["print", "json", "rpc"] as const)(
+    "publishes preference readiness without consuming history or taking producer UI in %s",
+    (mode) =>
+      Effect.gen(function* () {
+        const h = harness();
+        const entries = vi.fn(() => assistantEntries(100));
+        const setWidget = vi.fn();
+        const ctx = withSession(
+          h.ctx,
+          { getEntries: entries, getSessionId: () => "headless" },
+          {
+            mode,
+            hasUI: mode === "rpc",
+            ui: { ...h.ctx.ui, setWidget },
+          },
+        );
+        yield* emit(h, "session_start", ctx);
+        const respond = vi.fn();
+        h.pi.events.emit(COSMIC_UI_HOST_QUERY, {
+          version: COSMIC_UI_PROTOCOL_VERSION,
+          respond,
+        });
+        expect(respond).toHaveBeenLastCalledWith(
+          expect.objectContaining({ ready: true, active: false }),
+        );
+        const producer = registerActivityProvider(h.pi.events, {
+          sessionId: "headless",
+          providerId: "test",
+          snapshot: () => [],
+          invoke: () => Promise.resolve(),
+        });
+        expect(producer.isAvailable()).toBe(false);
+        yield* emit(h, "agent_start", ctx);
+        yield* emitEvent(h, { type: "message_end", message: assistantMessage() }, ctx);
+        yield* emit(h, "agent_settled", ctx);
+        expect(entries).not.toHaveBeenCalled();
+        expect(h.exec).not.toHaveBeenCalled();
+        expect(setWidget).not.toHaveBeenCalled();
+        expect(h.setWorkingMessage).not.toHaveBeenCalled();
+        producer.dispose();
+        yield* emit(h, "session_shutdown", ctx);
+      }),
+  );
+
   it.effect(
     "immediately disposes in-flight startup probes on overlapping session replacement",
     () =>

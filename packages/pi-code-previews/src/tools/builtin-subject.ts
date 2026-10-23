@@ -6,7 +6,7 @@ import { escapeControlChars } from "../shared/terminal-text";
 import { getPathArg, getReadLineRange } from "./data/args";
 import type { CORE_CODE_PREVIEW_TOOLS } from "./names";
 import { normalizeShellCommandWhitespace } from "./shell-command";
-import { formatDisplayPath } from "pi-cosmic-core";
+import { formatDisplayPath } from "pi-cosmic-core/platform/paths";
 
 export type BuiltinCompactTool = (typeof CORE_CODE_PREVIEW_TOOLS)[number];
 

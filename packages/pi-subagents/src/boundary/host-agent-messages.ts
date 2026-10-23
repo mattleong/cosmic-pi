@@ -3,8 +3,8 @@ import {
   agentMessageRecipientState,
   deliverAgentMessage,
   readLatestReply,
-  type SessionWake,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/host-agent-messages";
+import { type SessionWake } from "pi-cosmic-core/host-wake";
 import { MAX_MAIN_READ_CHARS, type AgentMainCapabilities } from "../run/agent-messaging.ts";
 
 export const AGENT_MESSAGE_TYPE = "pi-subagents-agent-message";

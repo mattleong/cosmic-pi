@@ -1,7 +1,8 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { homedir } from "node:os";
-import { type SafeFileContract, nodeFsPromises as fs, nodePath } from "pi-cosmic-core";
+import { type SafeFileContract } from "pi-cosmic-core/platform/safe-file";
+import { nodeFsPromises as fs, nodePath } from "pi-cosmic-core/platform/node-builtins";
 import { isSafeNativeModelSelector } from "../profiles/model.ts";
 
 const MAX_SETTINGS_BYTES = 64 * 1024;

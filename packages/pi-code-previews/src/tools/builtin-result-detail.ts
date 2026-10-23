@@ -8,7 +8,7 @@ import { exceedsWriteDiffBytes, shouldSkipWriteDiffComplexity } from "../write/d
 import { codePreviewPerformanceConfig } from "../config/state";
 import { getEditPreviewOperations } from "./data/args";
 import { isTruncated } from "./data/results";
-import { countLabel } from "pi-cosmic-core";
+import { countLabel } from "pi-cosmic-core/display";
 
 const writeCounts = new WeakMap<
   object,

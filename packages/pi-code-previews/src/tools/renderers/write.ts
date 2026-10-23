@@ -40,7 +40,7 @@ import { renderPreviewError } from "./shared/result-prelude";
 import { stateHeading } from "./shared/state-heading";
 import type { PreviewRenderers } from "./shared/types";
 import { writeBeforeSnapshot, writeDiffPlan } from "./shared/write-result";
-import { countLabel, formatBytes } from "pi-cosmic-core";
+import { countLabel, formatBytes } from "pi-cosmic-core/display";
 import { previewIssuesSlot } from "../../preview/preview-issues";
 
 export function createWritePreviewTool(cwd: string) {

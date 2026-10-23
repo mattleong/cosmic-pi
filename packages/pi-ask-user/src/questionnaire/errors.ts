@@ -21,6 +21,13 @@ export class AskUserAsyncError extends Schema.TaggedError<
   message: Schema.String,
 }) {}
 
+export const asyncBusy = () =>
+  AskUserAsyncError.make({
+    reason: "busy",
+    message:
+      "A questionnaire is already active. Use ask_user_async_control for the pending request.",
+  });
+
 export class AskUserRuntimeClosedError extends Schema.TaggedError<
   AskUserRuntimeClosedError,
   { readonly brand: unique symbol }

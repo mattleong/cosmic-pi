@@ -3,7 +3,7 @@ import * as Deferred from "effect/Deferred";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
-import { formatBytes } from "pi-cosmic-core";
+import { formatBytes } from "pi-cosmic-core/display";
 import type { OversizedLine } from "../boundary/bounded-line-parser.ts";
 import { jsonPrefixScalars } from "../boundary/json-prefix.ts";
 import { MAX_PROCESS_LINE_BYTES } from "../boundary/process-transport.ts";

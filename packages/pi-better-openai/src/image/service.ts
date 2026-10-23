@@ -12,7 +12,9 @@ import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
 import * as Redacted from "effect/Redacted";
 import * as Str from "effect/String";
-import { AgentDirectory, SafeFile, StreamingHttpClient } from "pi-cosmic-core";
+import { AgentDirectory } from "pi-cosmic-core/platform/agent-directory";
+import { SafeFile } from "pi-cosmic-core/platform/safe-file";
+import { StreamingHttpClient } from "pi-cosmic-core/platform/streaming-http";
 import { getCodexCredentials } from "../auth/codex-auth.ts";
 import { SharpAdapter } from "../boundary/sharp.ts";
 import { DEFAULT_IMAGE_CONFIG, type ImageSaveMode, type ResolvedConfig } from "../config/schema.ts";
@@ -146,6 +148,10 @@ export class OpenAIImageService extends Context.Service<OpenAIImageService>()(
           try: () => resolveModel(params, ctx, cfg),
           catch: failWith("context", "Unable to read the Pi model context."),
         });
+        const modelRegistry = yield* Effect.try({
+          try: () => ctx.modelRegistry,
+          catch: failWith("context", "Unable to read the Pi model registry."),
+        });
         const { imageModel, action, outputFormat, save } = requestOptions(params, cfg);
         const output = imageOutputMetadata(outputFormat);
         const saveTarget = resolveSaveTarget(path, save, {
@@ -156,7 +162,7 @@ export class OpenAIImageService extends Context.Service<OpenAIImageService>()(
         });
         if (save === "custom" && !saveTarget)
           return yield* fail("save", "save=custom requires saveDir or PI_IMAGE_SAVE_DIR.");
-        const credentials = yield* getCodexCredentials(ctx);
+        const credentials = yield* getCodexCredentials({ modelRegistry });
         if (!credentials)
           return yield* fail(
             "auth",

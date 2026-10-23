@@ -1,7 +1,9 @@
 import * as Arr from "effect/Array";
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { invokeHostCallback, notifyListeners, synchronousNow } from "pi-cosmic-core";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
+import { notifyListeners } from "pi-cosmic-core/coordination/listeners";
+import { synchronousNow } from "pi-cosmic-core/platform/native-clock";
 import type { SubagentProjection } from "../run/model.ts";
 import {
   EMPTY_ACTIVITY_PRESENTATION,

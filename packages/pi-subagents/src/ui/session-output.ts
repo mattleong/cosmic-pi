@@ -16,10 +16,8 @@ import {
 import {
   sanitizeTerminalLine,
   stripTerminalControls as sanitizeTerminalText,
-  formatDuration,
-  formatElapsed,
-  formatRelativeAge,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/security";
+import { formatDuration, formatElapsed, formatRelativeAge } from "pi-cosmic-core/display";
 import { listDetailHeading } from "pi-cosmic-ui/manager/list-detail-shell";
 import { managerTone } from "pi-cosmic-ui/manager/style";
 import { composeToolComponent } from "pi-cosmic-ui/tool";

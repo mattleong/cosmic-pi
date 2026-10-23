@@ -1,12 +1,12 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
+import { safeTextPrefix } from "pi-cosmic-core/text";
 import {
-  safeTextPrefix,
   sanitizeDiagnosticContent,
   sanitizeTerminalLine,
   stripTerminalControls,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/security";
 import { SUBAGENT_EFFORTS } from "../domain/routing.ts";
 import {
   MAX_CUSTOM_AGENT_DESCRIPTION_CHARS,

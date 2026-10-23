@@ -1,7 +1,8 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
-import { countLabel, indexOfFrom } from "pi-cosmic-core";
+import { countLabel } from "pi-cosmic-core/display";
+import { indexOfFrom } from "pi-cosmic-core/text-scan";
 import type { WorkspaceRevision } from "./model.ts";
 
 /** One changed file of a proposal with Git's line counts; binary files count no lines. */

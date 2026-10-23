@@ -1,7 +1,7 @@
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import * as Rec from "effect/Record";
-import { nodePath } from "pi-cosmic-core";
+import { nodePath } from "pi-cosmic-core/platform/node-builtins";
 import type { PathIconMode } from "../config/schema";
 
 const NERD_FILE = "\uf15b";

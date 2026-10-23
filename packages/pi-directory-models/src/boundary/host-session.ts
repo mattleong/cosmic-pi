@@ -1,6 +1,6 @@
 import * as Predicate from "effect/Predicate";
 import type { ExtensionContext, SessionStartEvent } from "@earendil-works/pi-coding-agent";
-import { captureSessionHost, invokeHostCallback } from "pi-cosmic-core";
+import { captureSessionHost, invokeHostCallback } from "pi-cosmic-core/host-session";
 
 export function captureDirectorySession(event: SessionStartEvent, ctx: ExtensionContext) {
   const host = captureSessionHost(ctx);

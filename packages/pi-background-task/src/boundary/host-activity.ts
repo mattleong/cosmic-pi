@@ -4,7 +4,8 @@ import {
   type ActivityEvents,
   type ActivityItem,
 } from "pi-cosmic-ui/activity";
-import { safeTextSuffix, sanitizeDiagnosticContent } from "pi-cosmic-core";
+import { safeTextSuffix } from "pi-cosmic-core/text";
+import { sanitizeDiagnosticContent } from "pi-cosmic-core/security";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import {

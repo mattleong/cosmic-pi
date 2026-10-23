@@ -1,6 +1,6 @@
 import * as Data from "effect/Data";
 import * as Schema from "effect/Schema";
-import { decodeUnknownOrUndefined } from "pi-cosmic-core";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import { BoundedId, BoundedPath, HerdrBtwSessionIdSchema } from "./marker.ts";
 
 export const HERDR_BTW_LINK_ENTRY_TYPE = "pi-herdr-btw/reusable-link";

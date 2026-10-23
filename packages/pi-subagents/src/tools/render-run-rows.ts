@@ -4,7 +4,8 @@ import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { sanitizeTerminalLine, synchronousNow } from "pi-cosmic-core";
+import { sanitizeTerminalLine } from "pi-cosmic-core/security";
+import { synchronousNow } from "pi-cosmic-core/platform/native-clock";
 import { aggregateUsage } from "../ui/metrics.ts";
 import {
   duplicateRunNames,

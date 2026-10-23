@@ -4,7 +4,7 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import type { CompactIssue } from "./compact-issues";
 import { exitStatusMeaning, outputFailureLine } from "./process-failure";
-import { firstLineMessage } from "pi-cosmic-core";
+import { firstLineMessage } from "pi-cosmic-core/message-text";
 
 const EXITED = /^Command exited with code -?\d+$/u;
 const ABORTED = "Command aborted";

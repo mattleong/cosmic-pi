@@ -2,7 +2,8 @@ import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-ag
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import { CodePreviewSchedulerService } from "pi-code-previews";
-import { AgentDirectory, nodeFilePlatformLayer } from "pi-cosmic-core";
+import { AgentDirectory } from "pi-cosmic-core/platform/agent-directory";
+import { nodeFilePlatformLayer } from "pi-cosmic-core/platform/node-file";
 import { LocalProcess } from "./boundary/local-process.ts";
 import { BackgroundTaskConfigStore, BackgroundTaskSettingsFiles } from "./config/store.ts";
 import { BackgroundTaskService } from "./task/service.ts";

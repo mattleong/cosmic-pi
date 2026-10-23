@@ -177,17 +177,19 @@ function tasksCommandHarness(
     },
     open: (args = "") => {
       const opened = run(args);
-      host.mount();
-      const openedSurface = host.overlays.at(-1);
-      if (!openedSurface) throw new Error("task manager surface did not mount");
-      return {
-        surface: openedSurface,
-        isOpen: () => host.doneCalls === 0,
-        close: Effect.gen(function* () {
-          openedSurface.handleInput?.("\x1b");
-          yield* Effect.promise(() => opened);
-        }),
-      };
+      return vi.waitFor(() => {
+        host.mount();
+        const openedSurface = host.overlays.at(-1);
+        if (!openedSurface) throw new Error("task manager surface did not mount");
+        return {
+          surface: openedSurface,
+          isOpen: () => host.doneCalls === 0,
+          close: Effect.gen(function* () {
+            openedSurface.handleInput?.("\x1b");
+            yield* Effect.promise(() => opened);
+          }),
+        };
+      });
     },
   };
 }
@@ -519,9 +521,12 @@ describe("background-task settings in a session", () => {
         yield* Effect.promise(() => app.emit("session_start", ctx));
         const before = warnings();
         const opened = app.command("", ctx);
-        yield* macrotask;
-        surfaces.mount();
-        expect(custom).toHaveBeenCalledTimes(1);
+        yield* Effect.promise(() =>
+          vi.waitFor(() => {
+            surfaces.mount();
+            expect(custom).toHaveBeenCalledTimes(1);
+          }),
+        );
         surfaces.overlays.at(-1)?.handleInput?.("\x1b");
         yield* Effect.promise(() => opened);
         expect(warnings()).toBe(before);
@@ -551,7 +556,7 @@ describe("/tasks action feedback", () => {
             return () => token === generation;
           },
         });
-        const old = command.open();
+        const old = yield* Effect.promise(() => command.open());
         old.surface.render(120);
         old.surface.handleInput?.(key);
         generation++;
@@ -560,7 +565,7 @@ describe("/tasks action feedback", () => {
         expect(old.isOpen()).toBe(false);
         yield* old.close;
 
-        const current = command.open();
+        const current = yield* Effect.promise(() => command.open());
         current.surface.render(120);
         current.surface.handleInput?.(key);
         current.surface.handleInput?.(key);

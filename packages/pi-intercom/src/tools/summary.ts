@@ -3,7 +3,8 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import type { CompactIssue, CompactSummary, CompactSummaryProvider } from "pi-code-previews";
-import { clipText, countLabel, sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core";
+import { clipText, countLabel } from "pi-cosmic-core/display";
+import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core/security";
 import {
   decodeSessionToolDetails,
   SESSION_TOOL,

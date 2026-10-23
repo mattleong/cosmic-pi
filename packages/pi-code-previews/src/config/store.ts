@@ -1,4 +1,6 @@
-import { failureMessage, formatDisplayPath, nodePath } from "pi-cosmic-core";
+import { failureMessage } from "pi-cosmic-core/message-text";
+import { formatDisplayPath } from "pi-cosmic-core/platform/paths";
+import { nodePath } from "pi-cosmic-core/platform/node-builtins";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";

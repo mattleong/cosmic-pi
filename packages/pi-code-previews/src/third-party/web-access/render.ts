@@ -2,7 +2,7 @@ import type { ToolRenderers } from "@earendil-works/pi-coding-agent";
 import * as Fn from "effect/Function";
 import * as Arr from "effect/Array";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
-import { invokeHostCallback } from "pi-cosmic-core";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import { renderToolHeader } from "pi-cosmic-ui/tool";
 import type { CodePreviewRendererAppearance } from "../../application/renderer-contract";
 import { expandedSection } from "../../preview/expanded-section";

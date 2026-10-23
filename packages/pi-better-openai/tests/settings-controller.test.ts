@@ -29,6 +29,8 @@ interface SettingsHarnessOptions {
   readonly updateSetting?: () => Promise<void>;
   readonly hostCustom?: ExtensionUIContext["custom"];
   readonly captureAuthority?: () => () => boolean;
+  readonly loadMenu?: () => PromiseLike<typeof import("../src/settings/menu.ts")>;
+  readonly signal?: () => AbortSignal | undefined;
 }
 
 function settingsHarness(options: SettingsHarnessOptions = {}) {
@@ -38,12 +40,18 @@ function settingsHarness(options: SettingsHarnessOptions = {}) {
   const notify = vi.fn();
   const surface = fakeCustomSurfaceHost();
   const surfaceUi = surface.ctx.ui;
-  const ctx = extensionContextFixture({
+  const baseContext = extensionContextFixture({
     ...surface.ctx,
     cwd: "/tmp",
     signal: undefined,
     ui: { custom: options.hostCustom ?? surfaceUi.custom.bind(surfaceUi), notify },
   });
+  const ctx = {
+    ...baseContext,
+    get signal() {
+      return options.signal?.();
+    },
+  };
   const host = recordingExtensionHost();
   const services = Layer.mergeAll(
     Layer.succeed(OpenAIConfigService, {
@@ -73,6 +81,7 @@ function settingsHarness(options: SettingsHarnessOptions = {}) {
       resetFastRoutingTransport: vi.fn(),
       run: (effect, signal) => Effect.runPromise(effect.pipe(Effect.provide(services)), { signal }),
       captureAuthority: options.captureAuthority ?? (() => () => true),
+      ...(options.loadMenu && { loadMenu: options.loadMenu }),
     },
   );
 
@@ -126,6 +135,64 @@ const beginRefreshWrite = Effect.gen(function* () {
 });
 
 describe("Better OpenAI settings controller", () => {
+  it.effect("a delayed menu import cannot open for a retired invocation", () =>
+    Effect.gen(function* () {
+      const gate = deferredPromise<typeof import("../src/settings/menu.ts")>();
+      const loadMenu = vi.fn(() => gate.promise);
+      let generation = 1;
+      const h = settingsHarness({
+        loadMenu,
+        captureAuthority: () => {
+          const token = generation;
+          return () => token === generation;
+        },
+      });
+      const pending = h.invoke("");
+      yield* waitUntil(() => loadMenu.mock.calls.length > 0);
+      generation++;
+      gate.resolve(yield* Effect.promise(() => import("../src/settings/menu.ts")));
+      yield* Effect.promise(() => pending);
+      h.surface.mount();
+      expect(h.surface.editor).toBeUndefined();
+      expect(h.notify).not.toHaveBeenCalled();
+      const { closed } = yield* h.open;
+      h.selectedComponent().handleInput?.(input.escape);
+      yield* Effect.promise(() => closed);
+    }),
+  );
+
+  for (const replacement of [undefined, new AbortController().signal])
+    it.effect(
+      `an aborted menu import stays retired when the live signal becomes ${replacement ? "another signal" : "undefined"}`,
+      () =>
+        Effect.gen(function* () {
+          const controller = new AbortController();
+          let signal: AbortSignal | undefined = controller.signal;
+          const gate = deferredPromise<typeof import("../src/settings/menu.ts")>();
+          const loadMenu = vi.fn(() => gate.promise);
+          const h = settingsHarness({ loadMenu, signal: () => signal });
+          const pending = h.invoke("");
+          yield* waitUntil(() => loadMenu.mock.calls.length > 0);
+          controller.abort();
+          signal = replacement;
+          gate.resolve(yield* Effect.promise(() => import("../src/settings/menu.ts")));
+          yield* Effect.promise(() => pending);
+          h.surface.mount();
+          expect(h.surface.editor).toBeUndefined();
+          expect(h.notify).not.toHaveBeenCalled();
+        }),
+    );
+
+  it.effect("menu import failure settles with a warning instead of opening a surface", () =>
+    Effect.gen(function* () {
+      const h = settingsHarness({ loadMenu: () => Promise.reject(new Error("unavailable")) });
+      yield* Effect.promise(() => h.invoke(""));
+      h.surface.mount();
+      expect(h.surface.editor).toBeUndefined();
+      expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
+    }),
+  );
+
   it.effect("closes a picker whose session was replaced instead of accepting unsaved changes", () =>
     Effect.gen(function* () {
       let generation = 1;

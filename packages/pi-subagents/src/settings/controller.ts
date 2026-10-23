@@ -1,21 +1,15 @@
-import { formatDoctorReport, type DoctorCheck } from "../application/doctor.ts";
+import type { DoctorCheck } from "../application/doctor.ts";
 import * as Arr from "effect/Array";
-import * as Effect from "effect/Effect";
+import type * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import {
-  notifyAtHostBoundary,
-  registerExtensionCommand,
-  synchronousNow,
-  type ExtensionSubcommand,
-  type JsonObject,
-} from "pi-cosmic-core";
-import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
-import { hasCustomSurface, openOwnedSurface } from "pi-cosmic-ui/boundary/host-surface";
-import { fullScreenKeybindingOptions } from "pi-cosmic-ui/manager/key-labels";
-import { adaptiveHostRefreshTicker } from "../boundary/host-refresh-ticker.ts";
+import { withCapturedHostSignal } from "pi-cosmic-core/host-invocation";
+import { captureHostSignal, notifyAtHostBoundary } from "pi-cosmic-core/host-session";
+import { registerExtensionCommand, type ExtensionSubcommand } from "pi-cosmic-core/host-command";
+import { type JsonObject } from "pi-cosmic-core/platform/json-document";
 import type { SubagentProjectionBridge } from "../boundary/host-ui.ts";
 import type { SubagentControlExpectation } from "../run/model.ts";
 import type { WriterWorkspaceInspection } from "../run/workspace-control.ts";
@@ -41,11 +35,9 @@ import type {
   SessionProfileSetPatch,
   SessionProfileSnapshot,
 } from "../profiles/session-overrides.ts";
-import { SubagentFleetComponent, type FleetMessageDelivery } from "../ui/fleet.ts";
-import { subagentUiRefreshCadence } from "../ui/refresh.ts";
+import type { FleetMessageDelivery } from "../ui/fleet.ts";
 import type { ProfileSettingsInspection } from "./profile-route-editor.ts";
-import { openProfileDashboard } from "./profile-dashboard.ts";
-import { subagentSettingsSubcommand } from "./subagent-settings.ts";
+import { SUBAGENT_SETTINGS_COMMAND } from "./subagent-settings-options.ts";
 
 interface SessionProfileSetSnapshotWrite extends Omit<
   SubagentCreateProfileSetFromSnapshotPatch,
@@ -55,6 +47,7 @@ interface SessionProfileSetSnapshotWrite extends Omit<
 }
 
 export interface FleetManagerActions {
+  readonly captureAuthority: () => () => boolean;
   readonly openActivity?: (signal?: AbortSignal) => Promise<boolean>;
   readonly isAvailable: () => boolean;
   readonly captureModelRefresh: () => {
@@ -103,167 +96,166 @@ export interface FleetManagerActions {
   ) => Promise<ReadonlyArray<NativeRuntimeModel>>;
 }
 
-function openFleetManager(
-  ctx: ExtensionCommandContext,
-  bridge: SubagentProjectionBridge,
-  actions: FleetManagerActions,
-): Promise<void> {
-  if (!hasCustomSurface(ctx)) {
-    if (ctx.hasUI)
-      notifyAtHostBoundary(ctx, "Open Pi in an interactive terminal to use /subagents", "warning");
-    return Promise.resolve();
-  }
-  if (!actions.isAvailable()) {
-    notifyAtHostBoundary(
-      ctx,
-      "Subagents aren't running; run /reload, then reopen /subagents",
-      "warning",
-    );
-    return Promise.resolve();
-  }
-  const owner = actions.captureModelRefresh();
-  const isCurrent = () => owner.isCurrent() && !ctx.signal?.aborted;
-  let closeSurface: () => void = Fn.constVoid;
-  let dispose: () => void = Fn.constVoid;
-  const surface = openOwnedSurface(ctx, {
-    closedValue: undefined,
-    placement: "screen",
-    isCurrent,
-    onControl: (close) => {
-      closeSurface = close;
-    },
-    onClose: () => {
-      dispose();
-    },
-    create: ({ tui, theme, keybindings, getHeight, finish }) => {
-      let unsubscribe: () => void = Fn.constVoid;
-      const manager = new SubagentFleetComponent({
-        theme,
-        getProjection: bridge.get,
-        getHeight,
-        getNow: synchronousNow,
-        ...fullScreenKeybindingOptions(keybindings),
-        requestRender: () => tui.requestRender(),
-        close: () => finish(undefined),
-        isCurrent,
-        onDispose: () => {
-          refreshTicker.dispose();
-          unsubscribe();
-        },
-        actions: {
-          stop: actions.stop,
-          interrupt: actions.interrupt,
-          resume: actions.resume,
-          // Both modes share the send path, which answers a pending question or steers.
-          message: (id, _mode, message, expected) => actions.send(id, message, expected),
-          rename: actions.rename,
-        },
-      });
-      const refreshTicker = adaptiveHostRefreshTicker({
-        getCadence: () =>
-          subagentUiRefreshCadence(bridge.get().runs, { includeTerminalAges: true }),
-        startTicker: startHostUiTicker,
-        requestRender: () => {
-          if (isCurrent()) tui.requestRender();
-          else closeSurface();
-        },
-      });
-      dispose = () => manager.dispose();
-      unsubscribe = bridge.subscribe(() => {
-        if (!isCurrent()) return closeSurface();
-        manager.invalidate();
-        refreshTicker.sync();
-        tui.requestRender();
-      });
-      return manager;
-    },
-  }).pipe(Effect.orDie);
-  // The command's signal interrupts the surface, closing it even when an idle fleet has no refresh
-  // or projection to notice. Retiring the session disposes its runtime, which interrupts the surface
-  // as well; the refresh and projection checks above also close it. Both settle the command quietly.
-  return owner
-    .run(surface, ctx.signal ?? new AbortController().signal)
-    .then(Fn.constVoid, (cause: unknown) => {
-      if (isCurrent()) throw cause;
-    });
+interface SubagentCommandModules {
+  readonly fleet: () => Promise<typeof import("./fleet-manager.ts")>;
+  readonly profiles: () => Promise<typeof import("./profile-dashboard.ts")>;
+  readonly settings: () => Promise<typeof import("./subagent-settings.ts")>;
+  readonly doctor: () => Promise<
+    Pick<typeof import("../application/doctor.ts"), "formatDoctorReport">
+  >;
 }
 
-const profilesSubcommand = (
-  pi: ExtensionAPI,
-  actions: FleetManagerActions,
-): ExtensionSubcommand => ({
-  name: "profiles",
-  description: "Edit Current Session profiles and saved sets",
-  arguments: "[profile]",
-  complete: (prefix) => {
-    const matches = Fn.pipe(
-      PROFILE_IDS,
-      Arr.filter((profile) => Fn.pipe(profile, Str.startsWith(Str.trim(prefix)))),
-      Arr.map((profile) => ({
-        value: profile,
-        label: profile,
-        description: `Edit ${profile} in Current Session`,
-      })),
-    );
-    return matches.length ? matches : null;
-  },
-  handler: (args, ctx) => {
-    const parts = Fn.pipe(args, Str.trim, Str.split(/\s+/u), Arr.filter(Boolean));
-    const profile = Option.getOrUndefined(Arr.findFirst(PROFILE_IDS, (id) => id === parts[0]));
-    if (parts.length === 0 || (parts.length === 1 && profile))
-      return openProfileDashboard(pi, ctx, actions, {
-        initialProfile: profile ?? PROFILE_IDS[0],
-        initialFocus: profile ? "fields" : "profiles",
-      });
-    notifyAtHostBoundary(
-      ctx,
-      `Usage: /subagents profiles [${Arr.join(PROFILE_IDS, "|")}]`,
-      "warning",
-    );
-    return Promise.resolve();
-  },
-});
-
-const doctorSubcommand = (actions: FleetManagerActions): ExtensionSubcommand => ({
-  name: "doctor",
-  description: "Check subagent setup and route readiness",
-  handler: (_args, ctx) =>
-    actions.runDoctor(ctx).then(
-      (checks) =>
-        notifyAtHostBoundary(
-          ctx,
-          formatDoctorReport(checks),
-          Arr.some(checks, (item) => item.status !== "ok") ? "warning" : "info",
-        ),
-      () =>
-        notifyAtHostBoundary(
-          ctx,
-          "Subagents doctor couldn't run; run /reload and try again",
-          "error",
-        ),
-    ),
-});
+const COMMAND_MODULES: SubagentCommandModules = {
+  fleet: () => import("./fleet-manager.ts"),
+  profiles: () => import("./profile-dashboard.ts"),
+  settings: () => import("./subagent-settings.ts"),
+  doctor: () => import("../application/doctor.ts"),
+};
 
 export function registerSubagentManagerCommand(
   pi: ExtensionAPI,
   bridge: SubagentProjectionBridge,
   actions: FleetManagerActions,
+  modules: SubagentCommandModules = COMMAND_MODULES,
 ): void {
+  // A single settings owner preserves write serialization after the first lazy load.
+  let settings: ExtensionSubcommand | undefined;
+  const invoke = (
+    ctx: ExtensionCommandContext,
+    operation: (invocation: ExtensionCommandContext, isCurrent: () => boolean) => Promise<void>,
+  ): Promise<void> => {
+    const authority = actions.captureAuthority();
+    const captured = captureHostSignal(ctx);
+    if (!Predicate.isTagged(captured, "Captured")) return Promise.resolve();
+    const { signal } = captured;
+    const isCurrent = () => authority() && !signal?.aborted;
+    if (!isCurrent()) return Promise.resolve();
+    const invocation = withCapturedHostSignal(ctx, signal);
+    return operation(invocation, isCurrent).catch((cause: unknown) => {
+      if (isCurrent()) throw cause;
+    });
+  };
+  const openFleet = (ctx: ExtensionCommandContext, isCurrent: () => boolean): Promise<void> => {
+    if (!isCurrent()) return Promise.resolve();
+    return modules
+      .fleet()
+      .then(({ openFleetManager }) =>
+        isCurrent() ? openFleetManager(ctx, bridge, actions) : undefined,
+      );
+  };
   registerExtensionCommand(pi, {
     name: "subagents",
     description: "Open the subagent fleet, or edit profiles and settings",
     bare: {
       handler: (_args, ctx) =>
-        ctx.mode === "tui" && actions.isAvailable() && actions.openActivity
-          ? actions
-              .openActivity(ctx.signal)
-              .then((opened) => (opened ? undefined : openFleetManager(ctx, bridge, actions)))
-          : openFleetManager(ctx, bridge, actions),
+        invoke(ctx, (invocation, isCurrent) => {
+          if (invocation.mode !== "tui") {
+            if (invocation.hasUI)
+              notifyAtHostBoundary(
+                invocation,
+                "Open Pi in an interactive terminal to use /subagents",
+                "warning",
+              );
+            return Promise.resolve();
+          }
+          if (!actions.isAvailable()) {
+            notifyAtHostBoundary(
+              invocation,
+              "Subagents aren't running; run /reload, then reopen /subagents",
+              "warning",
+            );
+            return Promise.resolve();
+          }
+          return actions.openActivity
+            ? actions
+                .openActivity(invocation.signal)
+                .then((opened) => (opened ? undefined : openFleet(invocation, isCurrent)))
+            : openFleet(invocation, isCurrent);
+        }),
     },
     subcommands: [
-      profilesSubcommand(pi, actions),
-      subagentSettingsSubcommand(actions),
-      doctorSubcommand(actions),
+      {
+        name: "profiles",
+        description: "Edit Current Session profiles and saved sets",
+        arguments: "[profile]",
+        complete: (prefix) => {
+          const matches = Fn.pipe(
+            PROFILE_IDS,
+            Arr.filter((profile) => Fn.pipe(profile, Str.startsWith(Str.trim(prefix)))),
+            Arr.map((profile) => ({
+              value: profile,
+              label: profile,
+              description: `Edit ${profile} in Current Session`,
+            })),
+          );
+          return matches.length ? matches : null;
+        },
+        handler: (args, ctx) =>
+          invoke(ctx, (invocation, isCurrent) => {
+            const parts = Fn.pipe(args, Str.trim, Str.split(/\s+/u), Arr.filter(Boolean));
+            const profile = Option.getOrUndefined(
+              Arr.findFirst(PROFILE_IDS, (id) => id === parts[0]),
+            );
+            if (parts.length > 1 || (parts.length === 1 && !profile)) {
+              notifyAtHostBoundary(
+                invocation,
+                `Usage: /subagents profiles [${Arr.join(PROFILE_IDS, "|")}]`,
+                "warning",
+              );
+              return Promise.resolve();
+            }
+            return modules.profiles().then(({ openProfileDashboard }) =>
+              isCurrent()
+                ? openProfileDashboard(pi, invocation, actions, {
+                    initialProfile: profile ?? PROFILE_IDS[0],
+                    initialFocus: profile ? "fields" : "profiles",
+                  })
+                : undefined,
+            );
+          }),
+      },
+      {
+        ...SUBAGENT_SETTINGS_COMMAND,
+        handler: (args, ctx) =>
+          invoke(ctx, (invocation, isCurrent) =>
+            modules.settings().then(({ subagentSettingsSubcommand }) => {
+              if (!isCurrent()) return undefined;
+              settings ??= subagentSettingsSubcommand(actions);
+              return settings.handler(args, invocation);
+            }),
+          ),
+      },
+      {
+        name: "doctor",
+        description: "Check subagent setup and route readiness",
+        handler: (_args, ctx) =>
+          invoke(ctx, (invocation, isCurrent) =>
+            modules
+              .doctor()
+              .then(({ formatDoctorReport }) => {
+                if (!isCurrent()) return undefined;
+                return actions
+                  .runDoctor(invocation)
+                  .then((checks) =>
+                    isCurrent()
+                      ? notifyAtHostBoundary(
+                          invocation,
+                          formatDoctorReport(checks),
+                          Arr.some(checks, (item) => item.status !== "ok") ? "warning" : "info",
+                        )
+                      : undefined,
+                  );
+              })
+              .catch(() => {
+                if (isCurrent())
+                  notifyAtHostBoundary(
+                    invocation,
+                    "Subagents doctor couldn't run; run /reload and try again",
+                    "error",
+                  );
+              }),
+          ),
+      },
     ],
   });
 }

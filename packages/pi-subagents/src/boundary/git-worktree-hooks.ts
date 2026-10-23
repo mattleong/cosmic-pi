@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 import type { SafeFile } from "pi-cosmic-core";
 import type { WorktreeHook } from "../config/schema.ts";
 import type { WorkspaceError, WorkspaceRecord } from "../workspace/model.ts";
-import { nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core";
+import { nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core/platform/node-builtins";
 import { workspaceIOIfPresent } from "./git-worktree-process.ts";
 import { runWorktreeHook, type WorktreeHookInput } from "./worktree-hook.ts";
 

@@ -5,6 +5,7 @@ import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Predicate from "effect/Predicate";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import {
   deferredPromise,
@@ -39,12 +40,20 @@ const item = (id = "a"): ActivityItem => ({
   status: "running",
   revision: "1",
 });
-function harness(mode: "normal" | "deferred" | "throws-after-factory" = "normal") {
+function harness(
+  mode: "normal" | "deferred" | "throws-after-factory" = "normal",
+  loadComponent?: Parameters<typeof createActivityHost>[3],
+) {
   const { events: bus, emitted } = eventBus();
   const work: Array<Effect.Effect<void, ActivityError>> = [];
-  const host = createActivityHost(extensionApiFixture({ events: bus }), (effect) => {
-    work.push(effect);
-  });
+  const host = createActivityHost(
+    extensionApiFixture({ events: bus }),
+    (effect) => {
+      work.push(effect);
+    },
+    undefined,
+    loadComponent,
+  );
   const notifications: string[] = [];
   const tui = tuiFixture();
   const keybindings = piKeybindingsFixture();
@@ -87,6 +96,7 @@ function harness(mode: "normal" | "deferred" | "throws-after-factory" = "normal"
   const openManager = () =>
     Effect.gen(function* () {
       const open = yield* host.open(ctx).pipe(Effect.forkScoped({ startImmediately: true }));
+      yield* yieldUntil(() => surface.pendingMounts > 0);
       surface.mount();
       const component = surface.overlays[0];
       if (!(component instanceof ActivityComponent))
@@ -121,6 +131,48 @@ function harness(mode: "normal" | "deferred" | "throws-after-factory" = "normal"
 }
 
 describe("activity host lifecycle", () => {
+  it.effect("does not open a retired manager after its implementation finishes loading", () =>
+    Effect.gen(function* () {
+      const loaded = deferredPromise<typeof import("../src/activity/component.ts")>();
+      let loading = false;
+      const fixture = harness("normal", () => {
+        loading = true;
+        return loaded.promise;
+      });
+      fixture.host.activate(fixture.ctx, yield* fixture.service());
+      const opening = yield* fixture.host.open(fixture.ctx).pipe(Effect.forkScoped);
+      yield* yieldUntil(() => loading);
+      fixture.host.deactivate();
+      loaded.resolve(yield* Effect.promise(() => import("../src/activity/component.ts")));
+      yield* Fiber.join(opening);
+      expect(fixture.surface.pendingMounts).toBe(0);
+      expect(fixture.surface.overlays).toEqual([]);
+      fixture.host.activate(fixture.ctx, yield* fixture.service());
+      const next = yield* fixture.openManager();
+      next.component.handleInput("q");
+      yield* Fiber.join(next.open);
+    }),
+  );
+
+  it.effect("releases failed manager loading so a subsequent invocation can open", () =>
+    Effect.gen(function* () {
+      let fail = true;
+      const fixture = harness("normal", () =>
+        fail
+          ? Promise.reject(new Error("module unavailable"))
+          : import("../src/activity/component.ts"),
+      );
+      fixture.host.activate(fixture.ctx, yield* fixture.service());
+      const failed = yield* fixture.host.open(fixture.ctx).pipe(Effect.result);
+      expect(Result.isFailure(failed)).toBe(true);
+      expect(fixture.surface.pendingMounts).toBe(0);
+      fail = false;
+      const next = yield* fixture.openManager();
+      next.component.handleInput("q");
+      yield* Fiber.join(next.open);
+    }),
+  );
+
   it.effect("suppresses late action warnings after the host is replaced", () =>
     Effect.gen(function* () {
       const fixture = harness();

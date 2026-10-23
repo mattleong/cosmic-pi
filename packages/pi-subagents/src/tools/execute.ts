@@ -12,7 +12,7 @@ import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import * as Str from "effect/String";
 import type { CompactAnimationScheduler } from "pi-code-previews";
-import { invokeHostCallback } from "pi-cosmic-core";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import type { SubagentToolPresentation } from "../boundary/host-activity-widget.ts";
 import type { SubagentSessionEnvironment } from "../boundary/host-profile-resolution.ts";
 import type { SubagentBackendRegistry } from "../backend/service.ts";

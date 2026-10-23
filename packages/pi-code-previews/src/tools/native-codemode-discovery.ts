@@ -10,7 +10,7 @@ import {
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Arr from "effect/Array";
-import { invokeHostCallback } from "pi-cosmic-core";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import { isNativeMcpName } from "./native-mcp-identity";
 import type { HostContainer } from "../shared/untrusted-value";
 import { ownDataReader } from "./native-safe-content";

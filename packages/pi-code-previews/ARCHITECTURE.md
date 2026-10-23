@@ -78,14 +78,25 @@ Whenever one of its saves settles, the panel rebases its draft on the published 
 still-pending edits, and an explicit selection always saves its setting, even if the draft agrees.
 
 Settings resolution ignores untrusted projects, preserves valid sibling fields after malformed input,
-and reports ignored files/invalid fields. Saves modify only known edited overrides in the latest
+and reports ignored files/invalid fields. Raw reads overlap inside the coordinator's operation permit;
+decoding, inherited fallback, and diagnostics still resolve global, trusted project, then flat overrides.
+No settings snapshot is cached across extensions. Saves modify only known edited overrides in the latest
 locked document, preserving unrelated fields and publishing its resolved values. Reset removes known
 overrides. Failed UI edits cannot undo later successful edits. Save follow-up retains its invoking
 session's authority; retirement prevents panel updates, notifications, or replacement-session syntax
-initialization. Syntax initialization failure cannot roll back a committed theme.
+initialization. Syntax initialization failure cannot roll back a committed theme. Command descriptors
+remain eager; settings panel code loads only when opening the panel or applying an assignment.
+Invocations retain their originating authority and exact abort signal across that import and recheck
+both before mounting or saving. The same guard suppresses late surface actions, syntax follow-up,
+and command notifications even if Pi clears or replaces the live context's signal.
 
 Syntax and write services own resources and authoritative state; renderers consume synchronous
-projections. Bounded, scoped syntax requests remember failed grammars/themes for the session rather
+projections. Theme/language admission uses Shiki's metadata-only public entrypoints. The asynchronous
+highlighter acquisition boundary imports the full implementation on demand, retaining its Oniguruma
+engine. Cancellation during import prevents creation; cancellation during creation disposes late results.
+Speculative initialization runs only in TUI sessions. Historical/export rendering in every mode retains
+the same owned demand-driven ingress and synchronous plain-text fallback while acquisition is pending.
+Bounded, scoped syntax requests remember failed grammars/themes for the session rather
 than retrying on every draw. Arguments that are still streaming render as plain text and stay out of
 the shared highlight cache. A row streams only after its arguments change between draws, before
 they are complete, execution starts, or a result settles. Pi never marks replayed arguments

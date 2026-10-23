@@ -5,7 +5,7 @@ import {
   managerActivityLabel,
   type ManagerActivityKind,
 } from "pi-cosmic-ui/manager";
-import { sanitizeTerminalLine } from "pi-cosmic-core";
+import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import type { BackgroundTaskView } from "../task/model.ts";
 
 export const taskDisplayName = (task: Pick<BackgroundTaskView, "name" | "command">): string => {

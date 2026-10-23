@@ -1,6 +1,7 @@
 import type { Theme, ToolRenderers } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
-import { countLabel, invokeHostCallback } from "pi-cosmic-core";
+import { countLabel } from "pi-cosmic-core/display";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { renderExpansionAffordance, renderToolHeader } from "pi-cosmic-ui/tool";
 import type { CodePreviewRendererAppearance } from "../application/renderer-contract";

@@ -1,7 +1,8 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";
-import { decodeUnknownOrUndefined, type JsonObject } from "pi-cosmic-core";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
+import { type JsonObject } from "pi-cosmic-core/platform/json-document";
 
 const PREFERENCE_VERSION = 1 as const;
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;

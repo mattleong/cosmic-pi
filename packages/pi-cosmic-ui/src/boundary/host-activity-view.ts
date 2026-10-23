@@ -1,5 +1,5 @@
 import type * as Effect from "effect/Effect";
-import { makeSessionCapabilityProtocol } from "pi-cosmic-core";
+import { makeSessionCapabilityProtocol } from "pi-cosmic-core/session-capability";
 import type { ActivityEvents } from "../activity/protocol.ts";
 import { ActivityError } from "../activity/service.ts";
 import {

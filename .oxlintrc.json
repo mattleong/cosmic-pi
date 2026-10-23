@@ -303,6 +303,11 @@
                 "message": "Use clipToWidth from pi-cosmic-ui/manager so clipped text ends in \"…\" everywhere."
               },
               {
+                "name": "pi-cosmic-core/security",
+                "importNames": ["stripAnsi"],
+                "message": "stripAnsi removes only CSI sequences, so OSC and other terminal controls survive. Use stripTerminalControls or sanitizeTerminalLine from pi-cosmic-core/security, or escapeControlChars from pi-code-previews to keep controls visible."
+              },
+              {
                 "name": "pi-cosmic-core",
                 "importNames": ["stripAnsi"],
                 "message": "stripAnsi removes only CSI sequences, so OSC and other terminal controls survive. Use stripTerminalControls or sanitizeTerminalLine from pi-cosmic-core, or escapeControlChars from pi-code-previews to keep controls visible."
@@ -332,6 +337,68 @@
       }
     },
     {
+      "files": ["packages/pi-cosmic-core/src/host-invocation.ts"],
+      "rules": {
+        "anti-slop/no-unknown-returns": "off",
+        "eslint/no-restricted-properties": [
+          "error",
+          {
+            "object": "Reflect",
+            "property": "apply",
+            "message": "Call the function directly with typed arguments."
+          },
+          {
+            "property": "runCallback",
+            "message": "Keep Effect runners at named Pi host or standalone-process boundaries. Return the Effect to its caller or run it through the pi-cosmic-core session runtime."
+          },
+          {
+            "property": "runFork",
+            "message": "Keep Effect runners at named Pi host or standalone-process boundaries. Return the Effect to its caller or run it through the pi-cosmic-core session runtime."
+          },
+          {
+            "property": "runPromise",
+            "message": "Keep Effect runners at named Pi host or standalone-process boundaries. Return the Effect to its caller or run it through the pi-cosmic-core session runtime."
+          },
+          {
+            "property": "runPromiseExit",
+            "message": "Keep Effect runners at named Pi host or standalone-process boundaries. Return the Effect to its caller or run it through the pi-cosmic-core session runtime."
+          },
+          {
+            "property": "runSync",
+            "message": "Keep Effect runners at named Pi host or standalone-process boundaries. Return the Effect to its caller or run it through the pi-cosmic-core session runtime."
+          },
+          {
+            "property": "runSyncExit",
+            "message": "Keep Effect runners at named Pi host or standalone-process boundaries. Return the Effect to its caller or run it through the pi-cosmic-core session runtime."
+          },
+          {
+            "property": "runCallbackWith",
+            "message": "Keep Effect runners at named Pi host or standalone-process boundaries. Return the Effect to its caller or run it through the pi-cosmic-core session runtime."
+          },
+          {
+            "property": "runForkWith",
+            "message": "Keep Effect runners at named Pi host or standalone-process boundaries. Return the Effect to its caller or run it through the pi-cosmic-core session runtime."
+          },
+          {
+            "property": "runPromiseWith",
+            "message": "Keep Effect runners at named Pi host or standalone-process boundaries. Return the Effect to its caller or run it through the pi-cosmic-core session runtime."
+          },
+          {
+            "property": "runPromiseExitWith",
+            "message": "Keep Effect runners at named Pi host or standalone-process boundaries. Return the Effect to its caller or run it through the pi-cosmic-core session runtime."
+          },
+          {
+            "property": "runSyncWith",
+            "message": "Keep Effect runners at named Pi host or standalone-process boundaries. Return the Effect to its caller or run it through the pi-cosmic-core session runtime."
+          },
+          {
+            "property": "runSyncExitWith",
+            "message": "Keep Effect runners at named Pi host or standalone-process boundaries. Return the Effect to its caller or run it through the pi-cosmic-core session runtime."
+          }
+        ]
+      }
+    },
+    {
       "files": ["packages/pi-cosmic-core/src/schema/foreign-callable.ts"],
       "rules": {
         "anti-slop/no-callable-type-predicate": "off"
@@ -344,6 +411,11 @@
           "error",
           {
             "paths": [
+              {
+                "name": "pi-cosmic-core/security",
+                "importNames": ["stripAnsi"],
+                "message": "stripAnsi removes only CSI sequences, so OSC and other terminal controls survive. Use stripTerminalControls or sanitizeTerminalLine from pi-cosmic-core/security, or escapeControlChars from pi-code-previews to keep controls visible."
+              },
               {
                 "name": "pi-cosmic-core",
                 "importNames": ["stripAnsi"],

@@ -5,7 +5,7 @@ import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import * as Order from "effect/Order";
 import { WorkspaceError, type WorkspaceRecord } from "../workspace/model.ts";
-import { nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core";
+import { nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core/platform/node-builtins";
 import { nodeErrorCode } from "./harness-shared.ts";
 import {
   checkDirectory,

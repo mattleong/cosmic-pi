@@ -14,6 +14,8 @@
 
 ## Lifecycle
 
+Command registration, help, and completions stay eager; fleet, profile dashboard, settings, and doctor implementations load only when invoked. Each invocation captures the session-slot generation and exact host signal before loading, pins that signal for downstream handlers without freezing other host getters, and rechecks authority before calling the implementation or publishing failures. Activity remains the first-choice manager; its standalone fallback loads only when needed. Tools and historical rendering are never deferred.
+
 One root runtime owns the descendant tree and its processes, transports, leases, and fibers. Only the current session-slot token may activate tools or publish state. On shutdown, publication is revoked, the operation scope retires so blocked work settles without publishing, and backends close leaf-first.
 
 - Launch planning captures one profile, agent, and nesting-policy revision, and freezes the launch's route. Immediate-parent model, effort, and fork facts come from authenticated Pi snapshots owned by the parent's run record; registry, authentication, trust, and tool policy stay root-owned.

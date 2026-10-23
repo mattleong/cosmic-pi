@@ -2,7 +2,8 @@ import * as Effect from "effect/Effect";
 import * as Str from "effect/String";
 import type * as FileSystem from "effect/FileSystem";
 import type * as Path from "effect/Path";
-import { isStrictlyInsidePathWith, type SafeFileContract } from "pi-cosmic-core";
+import { isStrictlyInsidePathWith } from "pi-cosmic-core/platform/paths";
+import { type SafeFileContract } from "pi-cosmic-core/platform/safe-file";
 import type { SharpAdapterContract } from "../boundary/sharp.ts";
 import { MAX_IMAGE_INPUTS, fail, type ImageInput } from "./types.ts";
 

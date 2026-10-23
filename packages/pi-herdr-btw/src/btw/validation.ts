@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
-import { isInteractiveShellProcessName } from "pi-cosmic-core";
+import { isInteractiveShellProcessName } from "pi-cosmic-core/platform/shell-process-names";
 import type {
   HerdrClientContract,
   HerdrPane,
@@ -16,6 +16,7 @@ import {
 import { confirmedFailure, type HerdrBtwError } from "./errors.ts";
 import type { HerdrBtwLink } from "./link.ts";
 import { parseHerdrBtwSessionId } from "./marker.ts";
+import { HERDR_ENVIRONMENT_UNAVAILABLE_MESSAGE, isHerdrEnvironment } from "./admission.ts";
 
 const MINIMUM_HERDR_PROTOCOL = 17;
 const MAX_PROMPT_BYTES = 32 * 1024;
@@ -30,12 +31,6 @@ export const isValidBlankChildProbe = (
   SessionHeaderProbe.$is("valid")(probe) &&
   probe.header.id === childSessionId &&
   probe.header.parentSession === undefined;
-
-export const HERDR_ENVIRONMENT_UNAVAILABLE_MESSAGE =
-  "Herdr BTW only works in a Pi session inside a Herdr pane";
-
-export const isHerdrEnvironment = (environment: Readonly<NodeJS.ProcessEnv>): boolean =>
-  environment.HERDR_ENV === "1";
 
 export const ensureHerdrProtocol = (protocol: number): Effect.Effect<void, HerdrBtwError> =>
   protocol < MINIMUM_HERDR_PROTOCOL

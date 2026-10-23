@@ -2,13 +2,10 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Predicate from "effect/Predicate";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import {
-  clipText,
-  invokeHostCallback,
-  sanitizeDiagnosticContent,
-  sanitizeTerminalLine,
-  type SessionWakeDelivery,
-} from "pi-cosmic-core";
+import { clipText } from "pi-cosmic-core/display";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
+import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core/security";
+import { type SessionWakeDelivery } from "pi-cosmic-core/host-wake";
 import { MAX_NOTIFICATION_CHARS } from "../run/limits.ts";
 import type {
   SubagentNextCandidate,

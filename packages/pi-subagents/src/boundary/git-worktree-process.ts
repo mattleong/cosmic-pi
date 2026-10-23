@@ -7,9 +7,8 @@ import {
   runBoundedProcessNode,
   type BoundedProcessError,
   type BoundedProcessResult,
-  nodeFsPromises as fs,
-  nodePath as path,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/platform/process";
+import { nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core/platform/node-builtins";
 import { WorkspaceError } from "../workspace/model.ts";
 import { gitInstallation } from "./git-installation.ts";
 import { isGitLocalEnvironmentKey } from "./git-local-environment.ts";

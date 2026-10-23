@@ -7,6 +7,11 @@ const imports = `
   import { Text } from '@earendil-works/pi-tui';
   import { stripTerminalControls, invokeHostCallback } from 'pi-cosmic-core';
 `;
+const narrowImports = `
+  import { Text } from '@earendil-works/pi-tui';
+  import { stripTerminalControls as strip, stripAnsi } from 'pi-cosmic-core/security';
+  import { invokeHostCallback as invoke } from 'pi-cosmic-core/host-session';
+`;
 const error = { messageId: "lossyText" };
 const unescaped = { messageId: "unescapedArguments" };
 
@@ -17,6 +22,17 @@ tester.run("anti-slop/no-lossy-expanded-arguments", noLossyExpandedArgumentsRule
     `${imports} const tool = { renderCall(args) { console.log(stripTerminalControls(JSON.stringify(args))); return new Text('ok', 0, 0); } };`,
     `${imports} const tool = { renderCall(args) { return new Text(stripTerminalControls(JSON.stringify(args.action)), 0, 0); } };`,
     `${imports} const report = (ctx, message) => ctx.ui.notify(stripTerminalControls(message), 'error');`,
+    `${narrowImports} const tool = { renderCall(args) {
+      return new Text(escapeControlChars(invoke(() => JSON.stringify(args), '')), 0, 0);
+    } };`,
+    `${narrowImports} const report = (ctx, message) => ctx.ui.notify(strip(message), 'error');`,
+    `${narrowImports} function body(theme, text, stripAnsi) {
+      return theme.fg('toolOutput', stripAnsi(text));
+    }`,
+    `import { stripTerminalControls } from 'pi-cosmic-core/security/custom';
+      const body = (theme, text) => theme.fg('toolOutput', stripTerminalControls(text));`,
+    `import { invokeHostCallback } from 'pi-cosmic-core/host-session/custom';
+      const tool = { renderCall(args) { return invokeHostCallback(() => JSON.stringify(args), ''); } };`,
   ],
   invalid: [
     {
@@ -46,6 +62,41 @@ tester.run("anti-slop/no-lossy-expanded-arguments", noLossyExpandedArgumentsRule
     {
       name: "raw serialized arguments styled as tool output",
       code: `${imports} const tool = { renderCall(args, theme) { return new Text(theme.fg('toolOutput', JSON.stringify(args, null, 2)), 0, 0); } };`,
+      errors: [unescaped],
+    },
+    {
+      name: "narrow aliased sanitizer and callback preserve argument tracking",
+      code: `${narrowImports} const tool = { renderCall(args) {
+        return new Text(strip(invoke(() => JSON.stringify(args), '')), 0, 0);
+      } };`,
+      errors: [error],
+    },
+    {
+      name: "narrow namespace sanitizer preserves output tracking through an alias",
+      code: `import * as Security from 'pi-cosmic-core/security';
+        const strip = Security.stripTerminalControls;
+        const body = (theme, text) => theme.fg('toolOutput', strip(text));`,
+      errors: [error],
+    },
+    {
+      name: "narrow stripAnsi still loses expanded error evidence",
+      code: `${narrowImports} const tool = { renderResult(result, options, theme) {
+        return new Text(theme.fg('error', stripAnsi(result.text)), 0, 0);
+      } };`,
+      errors: [{ messageId: "lossyText", data: { name: "stripAnsi" } }],
+    },
+    {
+      name: "narrow aliased callback keeps raw serialization unescaped",
+      code: `${narrowImports} const tool = { renderCall(args) {
+        return invoke(() => JSON.stringify(args), '');
+      } };`,
+      errors: [unescaped],
+    },
+    {
+      name: "narrow namespace callback keeps raw serialization unescaped",
+      code: `import * as Host from 'pi-cosmic-core/host-session';
+        const invoke = Host.invokeHostCallback;
+        const tool = { renderCall(args) { return invoke(() => JSON.stringify(args), ''); } };`,
       errors: [unescaped],
     },
   ],

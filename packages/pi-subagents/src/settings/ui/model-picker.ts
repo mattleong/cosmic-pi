@@ -7,7 +7,7 @@ import {
 } from "pi-cosmic-ui/manager/model-picker";
 import type { SearchableSelectHostOptions } from "pi-cosmic-ui/manager/searchable-select";
 import { FAST_SERVICE_TIER } from "pi-better-openai/fast-models";
-import { sanitizeTerminalLine } from "pi-cosmic-core";
+import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import type { NativeRuntimeModel } from "../../boundary/native-model-catalog.ts";
 import {
   isSafeNativeModelSelector,

@@ -9,7 +9,8 @@ import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
-import { JsonHttpClient, mergeHeaders } from "pi-cosmic-core";
+import { JsonHttpClient } from "pi-cosmic-core/platform/json-http";
+import { mergeHeaders } from "pi-cosmic-core/http/headers";
 import {
   JsonObjectSchema,
   NonNegativeIntSchema,

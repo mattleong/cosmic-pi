@@ -2,7 +2,7 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Order from "effect/Order";
 import * as Str from "effect/String";
-import { codeUnitAt, indexOfFrom } from "pi-cosmic-core";
+import { codeUnitAt, indexOfFrom } from "pi-cosmic-core/text-scan";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 

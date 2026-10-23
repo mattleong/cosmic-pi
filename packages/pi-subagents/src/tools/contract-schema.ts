@@ -1,7 +1,8 @@
 import * as Fn from "effect/Function";
 import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
-import { decodeUnknownOrUndefined, freezeSnapshot } from "pi-cosmic-core";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
+import { freezeSnapshot } from "pi-cosmic-core/projection";
 import {
   PROFILE_CANDIDATE_RUNTIMES,
   PROFILE_CANDIDATE_WRITE_INTENTS,

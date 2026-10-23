@@ -7,7 +7,7 @@ import { getCapabilities } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
-import { invokeHostCallback } from "pi-cosmic-core";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import type { ResolvedCosmicUiConfig } from "../config/schema.ts";
 import type {
   CosmicFooterContribution,

@@ -1,4 +1,4 @@
-import { synchronousRandomUuid } from "pi-cosmic-core";
+import { synchronousRandomUuid } from "pi-cosmic-core/platform/native-crypto";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import type { LocalClaudeDebugEntry } from "../boundary/local-claude-debug.ts";

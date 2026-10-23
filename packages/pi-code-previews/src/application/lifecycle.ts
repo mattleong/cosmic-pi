@@ -6,11 +6,10 @@ import {
   captureSessionHost,
   invokeHostCallback,
   isProjectTrusted,
-  makePiManagedRuntime,
-  makePiSessionRuntimeSlot,
   notifyAtHostBoundary,
-  type PiManagedRuntime,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/host-session";
+import { makePiManagedRuntime, type PiManagedRuntime } from "pi-cosmic-core/runtime";
+import { makePiSessionRuntimeSlot } from "pi-cosmic-core/runtime/session-runtime";
 import {
   codePreviewApplicationLayer,
   type CodePreviewApplication,
@@ -44,6 +43,7 @@ type CodePreviewRuntime = PiManagedRuntime<CodePreviewApplication, CodePreviewRu
 type SessionInput = {
   readonly cwd: string;
   readonly projectTrusted: boolean;
+  readonly prewarmSyntax: boolean;
   readonly settingsAdmission: SettingsAdmission;
   readonly presentation: CodePreviewPresentationOwner;
   capability?: CodePreviewSessionCapability;
@@ -150,7 +150,8 @@ export function codePreviewsWithDependencies(
       input.presentation.publish(input.cwd, getEnabledCodePreviewTools(), scheduler);
       for (const problem of codePreviewSettingsProblems)
         input.warn(describeSettingsProblem(problem, input.cwd));
-      if (codePreviewSettings.syntaxHighlighting)
+      // Headless history/export still initializes on demand through the same scoped ingress.
+      if (input.prewarmSyntax && codePreviewSettings.syntaxHighlighting)
         slot.fork(dependencies.initializeSyntax(codePreviewSettings.shikiTheme), input.signal);
     },
     onDeactivated: retirePresentation,
@@ -182,6 +183,7 @@ export function codePreviewsWithDependencies(
     const input: SessionInput = {
       cwd: capturedHost.cwd,
       projectTrusted,
+      prewarmSyntax: invokeHostCallback(() => ctx.mode === "tui", false),
       settingsAdmission: nextSettingsAdmission(),
       presentation,
       signal: capturedHost.signal,

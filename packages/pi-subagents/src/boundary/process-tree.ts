@@ -1,9 +1,6 @@
-import {
-  processGroupSignalError,
-  runBoundedProcessNode,
-  signalProcessGroup,
-  type NodeChildProcess,
-} from "pi-cosmic-core";
+import { processGroupSignalError, signalProcessGroup } from "pi-cosmic-core/platform/process-tree";
+import { runBoundedProcessNode } from "pi-cosmic-core/platform/process";
+import { type NodeChildProcess } from "pi-cosmic-core/platform/node-builtins";
 import * as Effect from "effect/Effect";
 import * as Str from "effect/String";
 import * as Fn from "effect/Function";

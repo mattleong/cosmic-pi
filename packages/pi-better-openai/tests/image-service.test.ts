@@ -263,6 +263,119 @@ describe("OpenAIImageService", () => {
     }).pipe(provideBuiltLayer(nodePlatformLayer)),
   );
 
+  it.effect("concurrent requests retain their admitted workspace and configuration", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const firstCwd = yield* fs
+        .makeTempDirectoryScoped({ prefix: "pi-openai-first-" })
+        .pipe(Effect.flatMap((directory) => fs.realPath(directory)));
+      const secondCwd = yield* fs
+        .makeTempDirectoryScoped({ prefix: "pi-openai-second-" })
+        .pipe(Effect.flatMap((directory) => fs.realPath(directory)));
+      const context = MutableRef.make({
+        ...testContext({ token: registryToken, model: () => unrelatedModel }),
+        cwd: firstCwd,
+      });
+      let config = makeResolvedConfig({
+        image: { ...DEFAULT_IMAGE_CONFIG, defaultModel: "first-model", defaultSave: "project" },
+      });
+      const firstStarted = yield* Deferred.make<void>();
+      const secondStarted = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      let admitted = 0;
+      const http = streamingHttpTestLayer(() =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(admitted++ === 0 ? firstStarted : secondStarted, undefined);
+          yield* Deferred.await(release);
+          return streamingHttpResponse(200, responseBody);
+        }),
+      );
+      const image = OpenAIImageService.layer({ context, config: () => config }).pipe(
+        Layer.provide(
+          Layer.merge(
+            SafeFile.layer,
+            Layer.succeed(SharpAdapter, {
+              decode: () => Effect.succeed({ format: "png" }),
+            }),
+          ),
+        ),
+        Layer.provide(Layer.mergeAll(nodePlatformLayer, http, AgentDirectory.layer("/agent"))),
+      );
+      yield* Effect.gen(function* () {
+        const service = yield* OpenAIImageService;
+        const first = yield* service
+          .generate({ prompt: "first" })
+          .pipe(Effect.forkScoped({ startImmediately: true }));
+        yield* Deferred.await(firstStarted);
+        MutableRef.set(context, { ...MutableRef.get(context), cwd: secondCwd });
+        config = makeResolvedConfig({
+          image: { ...DEFAULT_IMAGE_CONFIG, defaultModel: "second-model", defaultSave: "project" },
+        });
+        const second = yield* service
+          .generate({ prompt: "second" })
+          .pipe(Effect.forkScoped({ startImmediately: true }));
+        yield* Deferred.await(secondStarted);
+        yield* Deferred.succeed(release, undefined);
+        const firstResult = yield* Fiber.join(first);
+        const secondResult = yield* Fiber.join(second);
+        expect(firstResult).toMatchObject({ prompt: "first", model: "first-model" });
+        expect(secondResult).toMatchObject({ prompt: "second", model: "second-model" });
+        expect(
+          firstResult.savedPath && Fn.pipe(firstResult.savedPath, Str.startsWith(`${firstCwd}/`)),
+        ).toBe(true);
+        expect(
+          secondResult.savedPath &&
+            Fn.pipe(secondResult.savedPath, Str.startsWith(`${secondCwd}/`)),
+        ).toBe(true);
+      }).pipe(provideBuiltLayer(image));
+    }).pipe(provideBuiltLayer(nodePlatformLayer)),
+  );
+
+  it.effect("concurrent requests capture each admitted active Codex model", () =>
+    Effect.gen(function* () {
+      let selected = testModel("first-codex-model", "openai-codex");
+      const firstStarted = yield* Deferred.make<void>();
+      const secondStarted = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      let admitted = 0;
+      const body = Stream.fromEffect(
+        Effect.gen(function* () {
+          yield* Deferred.succeed(admitted++ === 0 ? firstStarted : secondStarted, undefined);
+          yield* Deferred.await(release);
+        }),
+      ).pipe(Stream.drain, Stream.concat(responseBody));
+      const image = imageServiceLayer({
+        context: testContext({ token: registryToken, model: () => selected }),
+        config: makeResolvedConfig({
+          image: { ...DEFAULT_IMAGE_CONFIG, defaultModel: "fallback-model", defaultSave: "none" },
+        }),
+        body,
+      });
+      yield* Effect.gen(function* () {
+        const service = yield* OpenAIImageService;
+        const first = yield* service
+          .generate({ prompt: "first" })
+          .pipe(Effect.forkScoped({ startImmediately: true }));
+        yield* Deferred.await(firstStarted);
+        selected = testModel("second-codex-model", "openai-codex");
+        const second = yield* service
+          .generate({ prompt: "second" })
+          .pipe(Effect.forkScoped({ startImmediately: true }));
+        yield* Deferred.await(secondStarted);
+        selected = testModel("later-codex-model", "openai-codex");
+        yield* Deferred.succeed(release, undefined);
+        expect(yield* Fiber.join(first)).toMatchObject({
+          prompt: "first",
+          model: "first-codex-model",
+        });
+        expect(yield* Fiber.join(second)).toMatchObject({
+          prompt: "second",
+          model: "second-codex-model",
+        });
+      }).pipe(provideBuiltLayer(image));
+    }),
+  );
+
   it.effect("returns a typed timeout and finalizes the interrupted response stream", () =>
     Effect.gen(function* () {
       const started = yield* Deferred.make<void>();

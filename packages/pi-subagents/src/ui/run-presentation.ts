@@ -2,7 +2,8 @@ import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { formatElapsed, formatRelativeAge, sanitizeTerminalLine } from "pi-cosmic-core";
+import { formatElapsed, formatRelativeAge } from "pi-cosmic-core/display";
+import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 
 const MAX_SESSION_DISPLAY_AGE = 7 * 24 * 60 * 60 * 1_000;
 

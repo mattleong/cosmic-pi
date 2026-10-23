@@ -29,7 +29,7 @@ import {
 import { setResultDiffShown, unlessResultDiffShown } from "./shared/result-diff";
 import { renderPreviewError } from "./shared/result-prelude";
 import { stateHeading } from "./shared/state-heading";
-import { countLabel } from "pi-cosmic-core";
+import { countLabel } from "pi-cosmic-core/display";
 import { previewIssuesSlot } from "../../preview/preview-issues";
 import { hostObject } from "../../shared/untrusted-value";
 

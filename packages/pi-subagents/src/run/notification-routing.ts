@@ -1,4 +1,5 @@
-import { hasObjectRuntimeType, invokeHostCallback } from "pi-cosmic-core";
+import { hasObjectRuntimeType } from "pi-cosmic-core/runtime-values";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";

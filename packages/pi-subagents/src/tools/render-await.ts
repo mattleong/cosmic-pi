@@ -3,12 +3,10 @@ import * as Fn from "effect/Function";
 import * as Order from "effect/Order";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type Component } from "@earendil-works/pi-tui";
-import {
-  invokeHostCallback,
-  sanitizeTerminalLine,
-  synchronousNow,
-  countLabel,
-} from "pi-cosmic-core";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
+import { sanitizeTerminalLine } from "pi-cosmic-core/security";
+import { synchronousNow } from "pi-cosmic-core/platform/native-clock";
+import { countLabel } from "pi-cosmic-core/display";
 import { clipToWidth, spinnerFrameAt, SPINNER_FRAME_MS } from "pi-cosmic-ui/manager";
 import { isTerminalRunState } from "../run/model.ts";
 import type { SubagentAwaitUntil } from "../run/service.ts";

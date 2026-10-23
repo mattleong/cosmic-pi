@@ -1,6 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as MutableRef from "effect/MutableRef";
-import { freezeSnapshot, isUsingOAuthAtHostBoundary } from "pi-cosmic-core";
+import { freezeSnapshot } from "pi-cosmic-core/projection";
+import { isUsingOAuthAtHostBoundary } from "pi-cosmic-core/host-session";
 import type { ResolvedConfig } from "../config/schema.ts";
 import type { UsageSnapshot } from "./format.ts";
 

@@ -9,14 +9,13 @@ import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import {
   crossProcessLockHolder,
-  SafeFile,
-  synchronousRandomUuid,
   type CrossProcessLease,
   type CrossProcessLockContract,
   type CrossProcessLockError,
-  nodeFsPromises as fs,
-  nodePath as path,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/platform/cross-process-lock";
+import { SafeFile } from "pi-cosmic-core/platform/safe-file";
+import { synchronousRandomUuid } from "pi-cosmic-core/platform/native-crypto";
+import { nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core/platform/node-builtins";
 import { WorkspaceError, WorkspaceRecordSchema, type WorkspaceRecord } from "../workspace/model.ts";
 import { nodeErrorCode } from "./harness-shared.ts";
 import {

@@ -1,7 +1,8 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Fn from "effect/Function";
 import * as Schema from "effect/Schema";
-import { decodeUnknownOrUndefined, invokeHostCallback } from "pi-cosmic-core";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
 
 const NonNegativeFiniteNumberSchema = Schema.Number.check(
   Schema.isFinite(),

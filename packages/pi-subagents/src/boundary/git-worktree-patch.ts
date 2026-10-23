@@ -1,6 +1,6 @@
 import * as Effect from "effect/Effect";
 import type { WorkspaceError, WorkspaceRecord } from "../workspace/model.ts";
-import { nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core";
+import { nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core/platform/node-builtins";
 import { repositoryGit, workspaceFailure, workspaceIO } from "./git-worktree-process.ts";
 import {
   commitRevisionDiff,

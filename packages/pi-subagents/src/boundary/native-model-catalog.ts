@@ -12,16 +12,12 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
-import {
-  confirmEffectProcessClose,
-  confirmProcessGroupExit,
-  guardProcessGroupAtHostExit,
-  hasControlCharacter,
-  nodeFilePlatformLayer,
-  provideNodeProcess,
-  SafeFile,
-  signalProcessGroup,
-} from "pi-cosmic-core";
+import { confirmEffectProcessClose, provideNodeProcess } from "pi-cosmic-core/platform/process";
+import { confirmProcessGroupExit, signalProcessGroup } from "pi-cosmic-core/platform/process-tree";
+import { guardProcessGroupAtHostExit } from "pi-cosmic-core/platform/process-group-exit-guard";
+import { hasControlCharacter } from "pi-cosmic-core/security";
+import { nodeFilePlatformLayer } from "pi-cosmic-core/platform/node-file";
+import { SafeFile } from "pi-cosmic-core/platform/safe-file";
 import { readClaudeModelPreference } from "./claude-model-preference.ts";
 import { initializeRequest, initializedNotification } from "../backend/local-codex-protocol.ts";
 import { claudeInitializeFrame } from "../backend/local-claude-protocol.ts";

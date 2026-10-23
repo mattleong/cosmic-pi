@@ -1,13 +1,8 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
-import {
-  indexOfFrom,
-  lastIndexOfFrom,
-  utf8ByteLength,
-  utf8Prefix,
-  utf8Suffix,
-} from "pi-cosmic-core";
+import { indexOfFrom, lastIndexOfFrom } from "pi-cosmic-core/text-scan";
+import { utf8ByteLength, utf8Prefix, utf8Suffix } from "pi-cosmic-core/text";
 import type { BackgroundLogEvent, BackgroundLogSlice, BackgroundLogStream } from "../task/model.ts";
 import { plainTerminalText } from "../task/terminal-text.ts";
 

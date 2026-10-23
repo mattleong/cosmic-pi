@@ -77,6 +77,7 @@ export const fleetManagerActionsFixture = (
 ): FleetManagerActions => {
   return {
     isAvailable: () => true,
+    captureAuthority: () => overrides.captureModelRefresh?.().isCurrent ?? (() => true),
     captureModelRefresh: () => ({
       isCurrent: () => true,
       run: (effect, signal) => Effect.runPromise(effect, { signal }),

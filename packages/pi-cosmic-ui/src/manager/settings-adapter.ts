@@ -2,7 +2,8 @@ import { type Component, type Focusable } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import { ForeignCallable, invokeBestEffort } from "pi-cosmic-core";
+import { ForeignCallable } from "pi-cosmic-core/schema/foreign-callable";
+import { invokeBestEffort } from "pi-cosmic-core/host-session";
 import {
   decodeFullScreenPrintable,
   FullScreenKeymap,

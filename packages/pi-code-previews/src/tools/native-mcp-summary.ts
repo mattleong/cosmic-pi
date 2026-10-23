@@ -6,14 +6,11 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import * as Rec from "effect/Record";
-import {
-  countLabel,
-  decodeUnknownOrUndefined,
-  failureMessage,
-  invokeHostCallback,
-  isAgentGuidance,
-  sanitizeDiagnosticContent,
-} from "pi-cosmic-core";
+import { countLabel } from "pi-cosmic-core/display";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
+import { failureMessage, isAgentGuidance } from "pi-cosmic-core/message-text";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
+import { sanitizeDiagnosticContent } from "pi-cosmic-core/security";
 import { hostContainer, type HostContainer } from "../shared/untrusted-value";
 import { argumentFailureIssue } from "./argument-failure";
 import { getBoundedTextContent } from "./data/results";

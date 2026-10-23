@@ -2,13 +2,9 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
-import {
-  countLabel,
-  failureMessage,
-  formatCost,
-  sanitizeDiagnosticContent,
-  sanitizeDiagnosticError,
-} from "pi-cosmic-core";
+import { countLabel, formatCost } from "pi-cosmic-core/display";
+import { failureMessage } from "pi-cosmic-core/message-text";
+import { sanitizeDiagnosticContent, sanitizeDiagnosticError } from "pi-cosmic-core/security";
 import type {
   CompactChild,
   CompactPhase,

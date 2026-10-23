@@ -5,13 +5,13 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import * as Rec from "effect/Record";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import {
-  decodeUnknownOrUndefined,
   isSensitiveDiagnosticKey,
   sanitizeDiagnosticContent,
   sanitizeTerminalLine,
-  codeUnitAt,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/security";
+import { codeUnitAt } from "pi-cosmic-core/text-scan";
 
 // Bound once: Pi's loader routes each imported-helper call through an interop proxy.
 const codeAt = codeUnitAt;

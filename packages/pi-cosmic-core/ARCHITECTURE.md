@@ -21,10 +21,24 @@ implementation; the ownership and lifecycle guarantees are what refactors must p
 | [Tool arguments](src/schema/tool-arguments.ts)                                     | Pi `prepareArguments` hooks: blank optionals, Pi-equivalent coercion, errors  | Parameter schemas, field aliases, tool-specific shape checks   |
 | [Test kit](src/testing/)                                                           | Shared deterministic Layers, host fixtures, and scoped process/SDK harnesses  | Feature-specific fakes and behavioral assertions               |
 
-Consumers import the public [root](index.ts), [testing](testing.ts),
-[`testing/sdk`](src/testing/sdk-session.ts), or [`tool-arguments`](src/schema/tool-arguments.ts)
-entrypoint. Core never imports extension packages. Shared helpers belong here when consumers need
-the same contract, not merely similar code.
+Consumers use [narrow public subpaths](README.md#public-entrypoints) mapped directly to cohesive
+source modules. The public [root](index.ts) retains every export, but importing it also loads the
+HTTP, process, and RPC implementations. Root and subpaths share the same service definitions,
+Layers, and module-local state; they do not create parallel owners. Core never imports extension
+packages. Shared helpers belong here when consumers need the same contract, not merely similar code.
+
+The [file-only Node platform](src/platform/node-file.ts) composes document, filesystem, and path
+services without importing HTTP. The [combined platform](src/platform/node.ts) adds HTTP explicitly.
+Managed runtime logging uses only Node filesystem/path modules. Document locks retain synchronous
+process-identity checks; the asynchronous macOS liveness probe loads the bounded process runner only
+when invoked. Importing file helpers therefore does not load the unrelated Effect HTTP, process, or
+RPC graphs. None of these imports acquires resources; consumer scopes still own acquisition.
+
+The dependency-free [`host-environment`](src/host-environment.ts) entrypoint exposes
+`isSubagentChildProcess` so an extension can reject child sessions before loading its application.
+The [isolated source-loader test](tests/public-entrypoints.test.ts) exercises narrow host, runtime,
+and file behavior with unrelated platform imports forbidden, and verifies shared document ownership
+across the root and subpaths.
 
 `tool-arguments` is separate because it imports TypeBox and `pi-ai` values, both optional peers
 that only tool-owning consumers provide. Its preparer drops empty and whitespace-only optional
@@ -60,6 +74,8 @@ static class, `failure` or `defect`, through the runtime's logger before disposa
 messages are never logged. A Layer that fails to build has no logger, so its only signal is the
 consumer's start-failure hook. Services and background fibers acquired inside the runtime close
 with its scope.
+
+[`withCapturedHostSignal`](src/host-invocation.ts) pins the exact signal captured at operation admission on a typed host context. Other Pi getters remain lazy and retain their original receiver, including their retirement checks. The caller still owns session-generation admission and rechecks it after asynchronous loading; the forwarding context never extends session authority.
 
 Synchronous renderers consume detached snapshots. The [projection transaction](src/projection.ts)
 keeps waiting, transition work, and snapshot preparation interruptible; external publication,

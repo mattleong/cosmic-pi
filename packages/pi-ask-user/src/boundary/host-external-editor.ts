@@ -11,7 +11,9 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import * as ChildProcess from "effect/process/ChildProcess";
-import { nodeFilePlatformLayer, nodeProcessLayer, stripTerminalControls } from "pi-cosmic-core";
+import { nodeFilePlatformLayer } from "pi-cosmic-core/platform/node-file";
+import { nodeProcessLayer } from "pi-cosmic-core/platform/process";
+import { stripTerminalControls } from "pi-cosmic-core/security";
 
 const externalEditorLayer = Layer.merge(nodeFilePlatformLayer, nodeProcessLayer);
 

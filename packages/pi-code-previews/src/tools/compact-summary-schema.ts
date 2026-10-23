@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import { invokeHostCallback } from "pi-cosmic-core";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import { CompactIssueSchema } from "./compact-issues";
 
 export const CompactOutcomeSchema = Schema.Literals([

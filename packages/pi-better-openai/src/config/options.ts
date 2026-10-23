@@ -6,7 +6,7 @@ import {
   decodeSettingUpdate,
   FiniteNumberFromJsonSchema,
   type SettingsOptionDescriptor,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/settings-completion";
 import type { ResolvedConfig } from "./schema.ts";
 import {
   IMAGE_OUTPUT_FORMATS,

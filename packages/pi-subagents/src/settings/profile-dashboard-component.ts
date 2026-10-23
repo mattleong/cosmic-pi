@@ -4,7 +4,7 @@ import * as Predicate from "effect/Predicate";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { type Component, type Focusable } from "@earendil-works/pi-tui";
 import { FullScreenKeymap } from "pi-cosmic-ui/manager/keymap";
-import { isProjectTrusted } from "pi-cosmic-core";
+import { isProjectTrusted } from "pi-cosmic-core/host-session";
 import type { FleetManagerActions } from "./controller.ts";
 import { ProfileEditVisit } from "./profile-edit-visit.ts";
 import { ProfileWorkspaceComponent, type ProfileWorkspaceOptions } from "./profile-workspace.ts";

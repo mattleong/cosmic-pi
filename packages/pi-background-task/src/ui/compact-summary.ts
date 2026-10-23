@@ -6,16 +6,9 @@ import type {
   CompactSummary,
   CompactSummaryProvider,
 } from "pi-code-previews";
-import {
-  clipText,
-  countLabel,
-  firstLineMessage,
-  formatBytes,
-  formatDuration,
-  quoteText,
-  sanitizeTerminalLine,
-  stripTerminalControls,
-} from "pi-cosmic-core";
+import { clipText, countLabel, formatBytes, formatDuration } from "pi-cosmic-core/display";
+import { firstLineMessage, quoteText } from "pi-cosmic-core/message-text";
+import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core/security";
 import * as Arr from "effect/Array";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";

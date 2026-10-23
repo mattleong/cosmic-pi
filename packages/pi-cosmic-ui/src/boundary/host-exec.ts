@@ -3,7 +3,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import { PiApi } from "pi-cosmic-core";
+import { PiApi } from "pi-cosmic-core/runtime/pi-api";
 
 export class PiExecError extends Schema.TaggedError<
   PiExecError,

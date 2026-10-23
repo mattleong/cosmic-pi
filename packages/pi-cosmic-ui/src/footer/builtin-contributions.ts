@@ -4,7 +4,8 @@ import * as Option from "effect/Option";
 import * as Order from "effect/Order";
 import * as Str from "effect/String";
 import type { ResolvedCosmicUiConfig } from "../config/schema.ts";
-import { abbreviateHomePath, formatTokens, formatCost } from "pi-cosmic-core";
+import { abbreviateHomePath } from "pi-cosmic-core/platform/paths";
+import { formatTokens, formatCost } from "pi-cosmic-core/display";
 import type {
   CosmicFooterColor,
   CosmicFooterStatusContribution,

@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
+import * as Clock from "effect/Clock";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -100,6 +101,61 @@ const resolveWith = (resolve: Resolve | undefined, value: ExecResult) =>
   Effect.sync(() => resolve?.(value));
 
 describe("Cosmic UI host service", () => {
+  it.effect.each(["print", "json", "rpc"] as const)(
+    "keeps preferences but starts no terminal polling or usage reads in %s",
+    (mode) => {
+      let reads = 0;
+      let probes = 0;
+      const ctx = extensionContextFixture({
+        mode,
+        sessionManager: {
+          getEntries: () => {
+            reads++;
+            return [];
+          },
+        },
+      });
+      const { layer, projection } = serviceLayer({
+        context: MutableRef.make(ctx),
+        startPolling: true,
+        exec: () => {
+          probes++;
+          return execOk();
+        },
+      });
+      return Effect.gen(function* () {
+        const clock = yield* TestClock.testClockWith(Effect.succeed);
+        let sleeps = 0;
+        yield* Effect.gen(function* () {
+          const service = yield* CosmicUiService;
+          yield* service.refreshAll(true);
+          yield* service.reconcileUsage();
+          yield* clock.adjust("2 minutes");
+          expect(reads).toBe(0);
+          expect(probes).toBe(0);
+          expect(sleeps).toBe(0);
+          expect(MutableRef.get(projection).config).toBeDefined();
+          yield* service.setFooterVisibility("openai.usage", false);
+          expect(MutableRef.get(projection).config?.footer.hidden).toContain("openai.usage");
+        }).pipe(
+          provideBuiltLayer(layer),
+          Effect.provideService(Clock.Clock, {
+            currentTimeMillis: clock.currentTimeMillis,
+            currentTimeNanos: clock.currentTimeNanos,
+            monotonicTimeNanos: clock.monotonicTimeNanos,
+            currentTimeMillisUnsafe: () => clock.currentTimeMillisUnsafe(),
+            currentTimeNanosUnsafe: () => clock.currentTimeNanosUnsafe(),
+            monotonicTimeNanosUnsafe: () => clock.monotonicTimeNanosUnsafe(),
+            sleep: (duration) => {
+              sleeps++;
+              return clock.sleep(duration);
+            },
+          }),
+        );
+      });
+    },
+  );
+
   it.effect("coalesces concurrent Git refresh bursts", () => {
     let calls = 0;
     const { layer } = serviceLayer({

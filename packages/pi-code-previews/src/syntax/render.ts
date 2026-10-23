@@ -2,8 +2,8 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { bundledThemesInfo } from "shiki";
-import { isShikiLanguage, type ShikiHighlighter } from "../boundary/shiki";
+import { bundledThemesInfo } from "shiki/themes";
+import type { ShikiHighlighter } from "../boundary/shiki";
 import { codePreviewPerformanceConfig, codePreviewSettings } from "../config/state";
 import { expandPreviewTabs, hashString } from "../shared/helpers";
 import {
@@ -11,7 +11,7 @@ import {
   escapeLineControlChars,
   replaceSgrSequences,
 } from "../shared/terminal-text";
-import { normalizePreviewLanguageAlias } from "./language";
+import { isShikiLanguage, normalizePreviewLanguageAlias } from "./language";
 import {
   requestSyntaxInitialize,
   requestSyntaxLanguage,

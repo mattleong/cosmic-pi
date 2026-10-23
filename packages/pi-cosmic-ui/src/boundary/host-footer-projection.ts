@@ -8,7 +8,8 @@ import * as Fn from "effect/Function";
 import type * as Order from "effect/Order";
 import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
-import { invokeHostCallback, sanitizeTerminalLine } from "pi-cosmic-core";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
+import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { decodeContextUsage, decodeHostCount } from "./host-usage.ts";
 
 export type FooterContextUsage = ReturnType<ExtensionContext["getContextUsage"]>;

@@ -2,7 +2,8 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import { ACTIVITY_LIMITS } from "pi-cosmic-ui/activity";
-import { countLabel, formatCost, formatTokens, sanitizeDiagnosticContent } from "pi-cosmic-core";
+import { countLabel, formatCost, formatTokens } from "pi-cosmic-core/display";
+import { sanitizeDiagnosticContent } from "pi-cosmic-core/security";
 import type { SubagentRunView } from "../run/model.ts";
 import {
   cleanupEvidenceText,

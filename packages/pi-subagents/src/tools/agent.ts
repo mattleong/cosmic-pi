@@ -14,12 +14,9 @@ import {
   withCodePreviewShell,
   type CompactAnimationScheduler,
 } from "pi-code-previews";
-import {
-  countLabel,
-  sanitizeTerminalLine,
-  stripTerminalControls,
-  toPiToolOutputSchema,
-} from "pi-cosmic-core";
+import { countLabel } from "pi-cosmic-core/display";
+import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core/security";
+import { toPiToolOutputSchema } from "pi-cosmic-core/schema/tool-output";
 import { MAX_AGENT_MESSAGE_CHARS, MAX_RESUME_MESSAGE_CHARS } from "../run/agent-messaging.ts";
 import { AGENT_TOOL_NAME, type AgentToolName } from "../run/tool-policy.ts";
 import {

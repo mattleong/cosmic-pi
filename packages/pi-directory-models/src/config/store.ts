@@ -2,7 +2,9 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { AgentDirectory, JsonDocumentStore, nodeFsPromises } from "pi-cosmic-core";
+import { AgentDirectory } from "pi-cosmic-core/platform/agent-directory";
+import { JsonDocumentStore } from "pi-cosmic-core/platform/json-document";
+import { nodeFsPromises } from "pi-cosmic-core/platform/node-builtins";
 import { preferenceFilename } from "./path-key.ts";
 import {
   decodeSavedPreference,

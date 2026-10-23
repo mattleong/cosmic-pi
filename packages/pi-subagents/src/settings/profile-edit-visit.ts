@@ -1,6 +1,6 @@
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
-import { isJsonObject, type JsonObject } from "pi-cosmic-core";
+import { isJsonObject, type JsonObject } from "pi-cosmic-core/platform/json-document";
 import { subagentConfigDecoder } from "../config/schema.ts";
 import { captureRestoreDeclaration, stableJson } from "../config/profile-restore.ts";
 import type { SessionProfileSnapshot } from "../profiles/session-overrides.ts";

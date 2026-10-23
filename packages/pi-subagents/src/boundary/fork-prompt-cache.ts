@@ -2,7 +2,7 @@ import { getCurrentTools, type Api, type Model, type SystemMessage } from "@eare
 import type { ContextWithSystemEvent, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Schema from "effect/Schema";
 import * as Arr from "effect/Array";
-import { invokeHostCallback } from "pi-cosmic-core";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
 
 export const FORK_PROMPT_CACHE_KEY_ENV = "PI_SUBAGENT_PROMPT_CACHE_KEY";
 

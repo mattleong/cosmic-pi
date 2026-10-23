@@ -6,7 +6,7 @@ import type * as Scope from "effect/Scope";
 import type * as Rpc from "effect/rpc/Rpc";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as RpcServer from "effect/rpc/RpcServer";
-import { boundedNdjsonRpcSerialization } from "pi-cosmic-core";
+import { boundedNdjsonRpcSerialization } from "pi-cosmic-core/platform/bounded-ndjson-rpc";
 import { removeOwnEntry, restrictSocket } from "../registry/private-files.ts";
 import {
   DEFAULT_CONNECTION_LIMITS,

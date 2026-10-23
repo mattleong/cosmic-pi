@@ -9,15 +9,16 @@ import * as Str from "effect/String";
 import {
   createPrivateFile,
   ensurePrivateDirectory,
-  nodeFsPromises as fs,
-  nodePath,
   type PrivateFileError,
   removePrivateDirectory,
-  synchronousRandomHex,
+} from "pi-cosmic-core/platform/private-file";
+import { nodeFsPromises as fs, nodePath } from "pi-cosmic-core/platform/node-builtins";
+import { synchronousRandomHex } from "pi-cosmic-core/platform/native-crypto";
+import {
   runBoundedProcessNode,
   type BoundedProcessError,
   type BoundedProcessResult,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/platform/process";
 import type { BackendLaunchRequest } from "../backend/model.ts";
 import {
   claudeArgv,

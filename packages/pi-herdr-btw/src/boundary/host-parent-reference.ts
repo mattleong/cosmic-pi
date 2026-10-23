@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { invokeHostCallback } from "pi-cosmic-core";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import {
   HERDR_BTW_CHILD_SESSION_FLAG,
   HERDR_BTW_PARENT_FILE_FLAG,

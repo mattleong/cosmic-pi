@@ -1,6 +1,6 @@
 import { cleanupSessionResources } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { invokeBestEffort, invokeHostCallback } from "pi-cosmic-core";
+import { invokeBestEffort, invokeHostCallback } from "pi-cosmic-core/host-session";
 
 // Pi resolves the pi-ai root import to its own copy, which owns the pooled Codex WebSockets.
 // Closing them makes the next request reconnect with current routing headers. Without a session id

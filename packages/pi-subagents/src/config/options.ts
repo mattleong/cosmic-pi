@@ -2,7 +2,7 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
-import { freezeSnapshot } from "pi-cosmic-core";
+import { freezeSnapshot } from "pi-cosmic-core/projection";
 import {
   resolveCustomAgents,
   type CustomAgent,

@@ -2,7 +2,7 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { ACTIVITY_LIMITS, type ActivityItem } from "pi-cosmic-ui/activity";
-import { sanitizeDiagnosticContent } from "pi-cosmic-core";
+import { sanitizeDiagnosticContent } from "pi-cosmic-core/security";
 import { runCleanupAttention } from "../run/attention.ts";
 import {
   isActiveRunState,

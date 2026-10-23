@@ -2,12 +2,9 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { decodeUnknownOrUndefined, invokeHostCallback, notifyAtHostBoundary } from "pi-cosmic-core";
-import {
-  ActivityComponent,
-  freshActivityPresentation,
-  type ActivityPresentation,
-} from "../activity/component.ts";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
+import { invokeHostCallback, notifyAtHostBoundary } from "pi-cosmic-core/host-session";
+import type { ActivityPresentation } from "../activity/component.ts";
 import { isFinished, type ActivityRow } from "../activity/model.ts";
 import {
   ACTIVITY_DISCOVER,
@@ -47,7 +44,7 @@ interface Binding {
   rows: readonly ActivityRow[];
   now: number;
   starting: number;
-  readonly presentation: ActivityPresentation;
+  presentation: ActivityPresentation | undefined;
   readonly nonce: object;
   readonly cleanups: Array<() => void>;
   active: boolean;
@@ -75,6 +72,7 @@ export function createActivityHost(
   pi: ExtensionAPI,
   submit: (effect: Effect.Effect<void, ActivityError>, signal?: AbortSignal) => void,
   run?: ActivityHostRun,
+  loadComponent = () => import("../activity/component.ts"),
 ): ActivityHost {
   const bindings = new Map<ActivityServiceContract, Binding>();
   let current: Binding | undefined;
@@ -132,7 +130,7 @@ export function createActivityHost(
             rows: [],
             starting: 0,
             now: 0,
-            presentation: freshActivityPresentation(),
+            presentation: undefined,
             nonce: {},
             cleanups: [],
             active: false,
@@ -250,7 +248,7 @@ export function createActivityHost(
                         starting: binding.starting,
                         theme,
                         now: binding.now,
-                        collapsed: binding.presentation.collapsed,
+                        ...(binding.presentation && { collapsed: binding.presentation.collapsed }),
                       },
                     )
                   : [],
@@ -294,59 +292,63 @@ export function createActivityHost(
       const previousRender = binding.render;
       let closing = false;
       let detailController: AbortController | undefined;
-      const action = yield* openOwnedSurface<ActivityActionRequest | undefined>(ctx, {
-        placement: "screen",
-        closedValue: undefined,
-        isCurrent: () => binding.active && current === binding && binding.manager === owner,
-        onControl: (close) => {
-          binding.close = close;
-        },
-        onClose: () => {
-          closing = true;
-          safe(() => detailController?.abort());
-        },
-        create: ({ tui, theme, keybindings, getHeight, finish }) => {
-          binding.render = () => {
-            previousRender();
-            tui.requestRender();
-          };
-          const owned = () =>
-            !closing && binding.active && current === binding && binding.manager === owner;
-          const component = new ActivityComponent({
-            snapshot: () => binding.rows,
-            ...(section && { initialSection: section }),
-            title: section ? MANAGER_TITLES[section] : "Activity",
-            starting: () => binding.starting,
-            presentation: binding.presentation,
-            theme,
-            now: () => binding.now,
-            height: getHeight,
-            close: finish,
-            invoke: (request) => {
-              if (owned()) submit(invokeOrWarn(binding.service, request, ctx, currentHost));
+      const action = yield* Effect.tryPromise(loadComponent).pipe(
+        Effect.flatMap(({ ActivityComponent, freshActivityPresentation }) => {
+          if (!currentHost() || binding.manager !== owner) return Effect.undefined;
+          return openOwnedSurface<ActivityActionRequest | undefined>(ctx, {
+            placement: "screen",
+            closedValue: undefined,
+            isCurrent: () => binding.active && current === binding && binding.manager === owner,
+            onControl: (close) => {
+              binding.close = close;
             },
-            requestRender: () => tui.requestRender(),
-            ...fullScreenKeybindingOptions(keybindings),
-            cancelDetail: () => safe(() => detailController?.abort()),
-            loadDetail: (request, deliver) => {
+            onClose: () => {
+              closing = true;
               safe(() => detailController?.abort());
-              if (closing) return;
-              const controller = new AbortController();
-              detailController = controller;
-              submit(
-                serviceDetail(binding.service, request, (text) => {
-                  if (!controller.signal.aborted && owned()) deliver(text);
-                }),
-                controller.signal,
-              );
+            },
+            create: ({ tui, theme, keybindings, getHeight, finish }) => {
+              binding.render = () => {
+                previousRender();
+                tui.requestRender();
+              };
+              const owned = () =>
+                !closing && binding.active && current === binding && binding.manager === owner;
+              const component = new ActivityComponent({
+                snapshot: () => binding.rows,
+                ...(section && { initialSection: section }),
+                title: section ? MANAGER_TITLES[section] : "Activity",
+                starting: () => binding.starting,
+                presentation: (binding.presentation ??= freshActivityPresentation()),
+                theme,
+                now: () => binding.now,
+                height: getHeight,
+                close: finish,
+                invoke: (request) => {
+                  if (owned()) submit(invokeOrWarn(binding.service, request, ctx, currentHost));
+                },
+                requestRender: () => tui.requestRender(),
+                ...fullScreenKeybindingOptions(keybindings),
+                cancelDetail: () => safe(() => detailController?.abort()),
+                loadDetail: (request, deliver) => {
+                  safe(() => detailController?.abort());
+                  if (closing) return;
+                  const controller = new AbortController();
+                  detailController = controller;
+                  submit(
+                    serviceDetail(binding.service, request, (text) => {
+                      if (!controller.signal.aborted && owned()) deliver(text);
+                    }),
+                    controller.signal,
+                  );
+                },
+              });
+              binding.update = () => {
+                if (owned()) component.update();
+              };
+              return component;
             },
           });
-          binding.update = () => {
-            if (owned()) component.update();
-          };
-          return component;
-        },
-      }).pipe(
+        }),
         Effect.mapError(() => ActivityError.make({ reason: "failed" })),
         Effect.ensuring(
           Effect.sync(() => {

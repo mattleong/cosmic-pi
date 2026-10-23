@@ -2,7 +2,7 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
-import { codeUnitAt, indexOfFrom } from "pi-cosmic-core";
+import { codeUnitAt, indexOfFrom } from "pi-cosmic-core/text-scan";
 import { diffLines } from "diff";
 
 // Bound once: Pi's loader routes each imported-helper call through an interop proxy.

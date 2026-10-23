@@ -1,7 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
-import { clampPercent } from "pi-cosmic-core";
+import { clampPercent } from "pi-cosmic-core/display";
 import type { CosmicFooterTheme } from "../protocol/protocol.ts";
 
 export type ProgressTone = "success" | "warning" | "error";

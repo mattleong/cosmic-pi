@@ -17,7 +17,8 @@ import {
   previewIssuesSlot,
   withCodePreviewShell,
 } from "pi-code-previews";
-import { stripTerminalControls, toPiToolOutputSchema } from "pi-cosmic-core";
+import { stripTerminalControls } from "pi-cosmic-core/security";
+import { toPiToolOutputSchema } from "pi-cosmic-core/schema/tool-output";
 import { renderToolHeader, toolRunningLine } from "pi-cosmic-ui/tool";
 import type { IntercomRegistry, IntercomRegistryError } from "../registry/store.ts";
 import type { IntercomSession } from "../session/service.ts";

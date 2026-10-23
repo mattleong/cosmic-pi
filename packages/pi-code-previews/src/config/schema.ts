@@ -1,4 +1,4 @@
-import { bundledThemes } from "shiki";
+import { bundledThemes } from "shiki/themes";
 import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";
 import { ALL_CODE_PREVIEW_TOOLS, type CodePreviewToolName } from "../tools/names";

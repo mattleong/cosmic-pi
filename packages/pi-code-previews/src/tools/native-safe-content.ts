@@ -2,12 +2,9 @@ import { Text, type Component } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Arr from "effect/Array";
-import {
-  decodeUnknownOrUndefined,
-  invokeHostCallback,
-  sanitizeDiagnosticError,
-  stripTerminalControls,
-} from "pi-cosmic-core";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
+import { sanitizeDiagnosticError, stripTerminalControls } from "pi-cosmic-core/security";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { toolRunningLine } from "pi-cosmic-ui/tool";
 import type { Theme } from "@earendil-works/pi-coding-agent";

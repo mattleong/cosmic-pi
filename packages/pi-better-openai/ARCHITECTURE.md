@@ -7,15 +7,15 @@ while those responsibilities remain explicit.
 
 ## Ownership and dependencies
 
-| Owner                                                                 | Responsibility                                                                                                        |
-| --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| [Application](src/application.ts) and [Layer](src/layer.ts)           | Pi commands/events, one session runtime, activation authority, synchronous projections, and service composition.      |
-| [Config store](src/config/store.ts)                                   | Resolved configuration, serialized settings/fast commits, and committed-config notifications to consumers.            |
-| [Usage](src/usage/controller.ts)                                      | Refresh admission, polling, stale-result rejection, and usage projections.                                            |
-| [Fast mode](src/fast/service.ts)                                      | Desired versus model-eligible state and the scoped ingress for synchronous request-injection receipts.                |
-| [Compaction](src/compaction/service.ts)                               | Owned checkpoints, complete-context reconstruction, encrypted reuse, and safe native fallback.                        |
-| [Images](src/image/service.ts)                                        | A captured request context/configuration, bounded streaming, validation, and file publication.                        |
-| [Settings](src/settings/controller.ts) and [UI](src/ui/primitives.ts) | Package-specific settings actions and pure footer data. Cosmic UI owns the shared settings surface and custom footer. |
+| Owner                                                                                                | Responsibility                                                                                                              |
+| ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| [Application](src/application.ts) and [Layer](src/layer.ts)                                          | Pi commands/events, one session runtime, activation authority, synchronous projections, and service composition.            |
+| [Config store](src/config/store.ts)                                                                  | Resolved configuration, serialized settings/fast commits, and committed-config notifications to consumers.                  |
+| [Usage](src/usage/controller.ts)                                                                     | Refresh admission, polling, stale-result rejection, and usage projections.                                                  |
+| [Fast mode](src/fast/service.ts)                                                                     | Desired versus model-eligible state and the scoped ingress for synchronous request-injection receipts.                      |
+| [Compaction](src/compaction/service.ts)                                                              | Owned checkpoints, complete-context reconstruction, encrypted reuse, and safe native fallback.                              |
+| [Images](src/image/service.ts)                                                                       | Session-owned eager generator/decoder capabilities, captured requests, bounded streaming, validation, and file publication. |
+| [Settings](src/settings/controller.ts), [menu](src/settings/menu.ts), and [UI](src/ui/primitives.ts) | Eager command routing, optional settings UI, and pure footer data. Cosmic UI owns shared surfaces and the custom footer.    |
 
 Core supplies runtime, configuration, HTTP, process, and file primitives. Code
 Previews supplies the image tool's presentation shell and replay bridge. Pi owns
@@ -34,6 +34,13 @@ bridge publishes only after successful tool registration; startup settlement
 closes unsuccessful adoption. Replacement or shutdown revokes publication and
 scheduling authority before clearing projections and disposing scoped work.
 
+Startup initializes the image generator and decoder capabilities alongside compaction
+state and checkpoint decoding/repair, and settings routing/completion. Compaction
+converters load eagerly; the package-specific settings menu loads only on eligible use,
+not in an awaited factory or startup step. Configuration, trusted preview settings, and
+fast intent still settle before activation. The shared Cosmic UI command shell remains
+eager; separating that shared UI graph is outside this package's ownership.
+
 Commands and retained tool definitions capture their originating session's
 authority. Delayed UI callbacks and queued image delivery check it beside the host
 action, so an old invocation cannot enter a replacement runtime or repaint its UI.
@@ -43,7 +50,16 @@ compaction and prevents delayed context repair or payload rewrites from reaching
 the host. See [compaction lifecycle tests](tests/compaction-lifecycle.test.ts),
 [extension lifecycle tests](tests/extension.test.ts),
 [image admission/delivery tests](tests/image-registration.test.ts), and
-[host failure tests](tests/host-ui.test.ts).
+[host failure tests](tests/host-ui.test.ts). Settings menu waits remain interruptible in
+the originating runtime; module caching never carries session authority. Image decoder
+capabilities initialize with the session Layer, while request fibers own HTTP, process,
+and file work. A menu import rechecks invocation authority before reading configuration
+or opening a surface. Commands and compaction hooks retain the exact admission signal
+across import/queue waits; a cleared or replaced live host signal cannot revive an
+aborted invocation. Menu import failures report a settings failure. See
+[lazy-loading tests](tests/lazy-loading.test.ts),
+[compaction lifecycle tests](tests/compaction-lifecycle.test.ts), and
+[settings tests](tests/settings-controller.test.ts).
 
 `OpenAIConfigService` owns configuration independently of usage. Settings and fast
 mode commit through it; images and compaction read its dedicated configuration
@@ -88,7 +104,10 @@ Injection also emits per-reply `configuration_update` items when the provider
 payload carries them. Projection and injection omit the same leading instruction
 prefix while preserving later system updates. Checkpoints live in ordinary
 branch-local compaction entries with typed extension details; the original branch
-remains navigable.
+remains navigable. Projection also owns version checks, model eligibility, and checkpoint
+matching alongside eagerly imported converters. Each compaction service directly owns
+its covered-input cache; plaintext repair remains independent of whether checkpoint
+creation is enabled.
 
 Pi's extension loader aliases only pi-ai's root, `compat`, `models`, `oauth`, and
 `providers/all` entrypoints, so the converters' public `api/*` and `utils/*`
@@ -129,7 +148,11 @@ See [compaction service tests](tests/compaction-service.test.ts).
 
 ## Image isolation and publication
 
-[Input](src/image/input.ts) enforces workspace containment.
+The image service owns its generator and decoder capabilities from session startup.
+Each request captures context and configuration before generation, so concurrent requests
+keep their own model/workspace/configuration under the same request timeout.
+[Input](src/image/input.ts) enforces workspace containment. See
+[image service tests](tests/image-service.test.ts) for concurrent admission and timeout cleanup.
 [Output](src/image/output.ts) validates generated bytes and owns temporary files
 by identity. It closes the written/synced file before publication, then commits at
 an exclusive hard link. Cleanup removes only the owned temporary file; a

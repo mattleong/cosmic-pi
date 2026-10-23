@@ -5,7 +5,7 @@ import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import { renderExpansionAffordance } from "pi-cosmic-ui/tool";
 import { forEachPreviewTextLine } from "./line-counts";
-import { countLabel } from "pi-cosmic-core";
+import { countLabel } from "pi-cosmic-core/display";
 
 export type PreviewLineEntry<T> =
   | { kind: "line"; line: T; index: number }

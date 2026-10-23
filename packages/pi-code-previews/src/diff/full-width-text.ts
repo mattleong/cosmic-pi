@@ -2,7 +2,7 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
-import { indexOfFrom } from "pi-cosmic-core";
+import { indexOfFrom } from "pi-cosmic-core/text-scan";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { codePreviewPerformanceConfig, codePreviewSettings } from "../config/state";

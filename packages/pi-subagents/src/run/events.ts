@@ -3,7 +3,7 @@ import * as Fn from "effect/Function";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Str from "effect/String";
-import { sanitizeDiagnosticContent, sanitizeDiagnosticError } from "pi-cosmic-core";
+import { sanitizeDiagnosticContent, sanitizeDiagnosticError } from "pi-cosmic-core/security";
 import type { BackendEvent, BackendHandle } from "../backend/model.ts";
 import { type SubagentError, SubagentProcessError, SubagentProtocolError } from "./errors.ts";
 import {

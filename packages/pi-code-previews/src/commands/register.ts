@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { registerExtensionCommand } from "pi-cosmic-core";
+import { registerExtensionCommand } from "pi-cosmic-core/host-command";
 import { codePreviewSettingsSubcommand } from "../settings/controller";
 import { healthSubcommand } from "./health";
 

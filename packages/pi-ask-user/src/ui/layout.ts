@@ -5,7 +5,7 @@ import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import { padListDetailRow } from "pi-cosmic-ui/manager/list-detail";
 import { clipToWidth } from "pi-cosmic-ui/manager";
-import { stripTerminalControls } from "pi-cosmic-core";
+import { stripTerminalControls } from "pi-cosmic-core/security";
 
 // Titles only label tabs, review rows, and headings; the schema admits longer ones than fit there.
 const MAX_TITLE_LABEL_WIDTH = 24;

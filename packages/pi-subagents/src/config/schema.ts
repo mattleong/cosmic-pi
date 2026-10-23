@@ -4,7 +4,8 @@ import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
-import { clipText, decodeUnknownOrUndefined } from "pi-cosmic-core";
+import { clipText } from "pi-cosmic-core/display";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import { SUBAGENT_EFFORTS } from "../domain/routing.ts";
 import {
   isCustomAgentName,

@@ -1,11 +1,11 @@
 import * as Effect from "effect/Effect";
 import {
   isOwnedByCurrentUser,
-  nodeFsPromises as fs,
   PrivateFileError,
   replacePrivateFile,
   tryPrivateFileOperation as attempt,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/platform/private-file";
+import { nodeFsPromises as fs } from "pi-cosmic-core/platform/node-builtins";
 
 // The shared no-follow private-file mechanism lives in core; this module keeps the registry's own
 // operations: record encoding, directory identity for claims by rename, and socket permissions.

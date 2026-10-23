@@ -1,7 +1,8 @@
 import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
-import { AgentDirectory, nodeFilePlatformLayer } from "pi-cosmic-core";
+import { AgentDirectory } from "pi-cosmic-core/platform/agent-directory";
+import { nodeFilePlatformLayer } from "pi-cosmic-core/platform/node-file";
 import { PiExec } from "./boundary/host-exec.ts";
 import type { FooterTotals } from "./boundary/host-usage.ts";
 import { CosmicUiConfigStore } from "./config/store.ts";
@@ -19,6 +20,7 @@ export interface CosmicUiSessionInput {
   readonly signal: AbortSignal | undefined;
   readonly releaseSignal: () => void;
   readonly initialTotals: FooterTotals;
+  readonly readUsageTotals: () => FooterTotals | undefined;
   readonly projectTrusted: boolean;
   readonly publicationOwner: MutableRef.MutableRef<boolean>;
 }
@@ -32,10 +34,12 @@ export interface CosmicUiApplicationLayerOptions {
 
 export const cosmicUiApplicationLayer = (
   {
+    ctx,
     context,
     sessionManager,
     cwd,
     initialTotals,
+    readUsageTotals,
     projectTrusted,
     publicationOwner,
   }: CosmicUiSessionInput,
@@ -47,6 +51,7 @@ export const cosmicUiApplicationLayer = (
     sessionManager,
     cwd,
     initialTotals,
+    readUsageTotals,
     projection: options.projection,
     projectTrusted,
     onChange: options.requestRender,
@@ -60,7 +65,13 @@ export const cosmicUiApplicationLayer = (
       ),
     ),
   );
-  return Layer.mergeAll(service, ActivityService.layer(options.activityHost.serviceOptions()));
+  // Headless sessions retain preferences, but acquire no Activity host binding or clock.
+  return Layer.merge(
+    service,
+    ActivityService.layer(
+      ctx.mode === "tui" ? options.activityHost.serviceOptions() : { publish: () => undefined },
+    ),
+  );
 };
 
 type CosmicUiApplicationLayer = ReturnType<typeof cosmicUiApplicationLayer>;

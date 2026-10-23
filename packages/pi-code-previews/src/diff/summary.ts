@@ -3,7 +3,7 @@ import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { forEachRawTextLine } from "../shared/text-lines";
-import { countLabel } from "pi-cosmic-core";
+import { countLabel } from "pi-cosmic-core/display";
 
 export type DiffSummary = {
   additions: number;

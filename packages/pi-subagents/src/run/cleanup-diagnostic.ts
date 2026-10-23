@@ -6,7 +6,7 @@ import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import type { SubagentCleanupDiagnostic } from "./model.ts";
 import { sanitizeDiagnosticText } from "./state.ts";
-import { sanitizeDiagnosticContent } from "pi-cosmic-core";
+import { sanitizeDiagnosticContent } from "pi-cosmic-core/security";
 
 const FailureDetails = Schema.Struct({
   message: Schema.String,

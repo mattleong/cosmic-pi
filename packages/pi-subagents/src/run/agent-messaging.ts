@@ -1,7 +1,11 @@
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
-import { frameAgentMessage, safeTextPrefix, type AgentMessageRecipientState } from "pi-cosmic-core";
+import {
+  frameAgentMessage,
+  type AgentMessageRecipientState,
+} from "pi-cosmic-core/host-agent-messages";
+import { safeTextPrefix } from "pi-cosmic-core/text";
 import type { SubagentRuntime } from "../domain/routing.ts";
 import {
   agentMessageRefusal,

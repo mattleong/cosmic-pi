@@ -11,7 +11,9 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import * as Rec from "effect/Record";
-import { countLabel, invokeHostCallback, sanitizeDiagnosticContent } from "pi-cosmic-core";
+import { countLabel } from "pi-cosmic-core/display";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
+import { sanitizeDiagnosticContent } from "pi-cosmic-core/security";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import {
   renderExpansionAffordance,

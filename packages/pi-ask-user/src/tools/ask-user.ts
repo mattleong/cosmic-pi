@@ -11,7 +11,7 @@ import {
   withCodePreviewShell,
   type CompactAnimationScheduler,
 } from "pi-code-previews";
-import { toPiToolOutputSchema } from "pi-cosmic-core";
+import { toPiToolOutputSchema } from "pi-cosmic-core/schema/tool-output";
 import { toolRunningLine } from "pi-cosmic-ui/tool";
 import { formatAskUserOutcome } from "../questionnaire/format.ts";
 import type { AskUserOutcome } from "../questionnaire/model.ts";

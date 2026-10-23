@@ -86,6 +86,44 @@ tester.run("anti-slop/no-escaping-render-context", noEscapingRenderContextRule, 
   ],
 });
 
+for (const source of ["pi-cosmic-core", "pi-cosmic-core/host-session"]) {
+  const hostImport = `import { invokeHostCallback as invoke } from '${source}';`;
+  tester.run(`anti-slop/no-escaping-render-context-${source}`, noEscapingRenderContextRule, {
+    valid: [
+      `${hostImport} const tool = { renderCall(args, theme, context) {
+        return invoke(() => new Text(context.args.text), 'fallback');
+      } };`,
+      `${hostImport} const tool = { renderCall(args, theme, context) {
+        const state = context.state;
+        return invoke(() => ({ render: () => [state.summary] }), undefined);
+      } };`,
+      `${hostImport} function makeTool(invoke) {
+        return { renderCall(args, theme, context) {
+          return invoke(() => ({ render: () => [context.state.summary] }), undefined);
+        } };
+      }`,
+    ],
+    invalid: [
+      {
+        name: "an aliased host callback returns a component retaining context",
+        code: `${hostImport} const tool = { renderCall(args, theme, context) {
+          return invoke(() => ({ render: () => [context.state.summary] }), undefined);
+        } };`,
+        errors: [error],
+      },
+      {
+        name: "a namespace host callback's fallback component retains context",
+        code: `import * as Host from '${source}';
+          const invoke = Host.invokeHostCallback;
+          const tool = { renderResult(result, options, theme, context) {
+            return invoke(() => new Text('ok'), { render: () => [context.state.summary] });
+          } };`,
+        errors: [error],
+      },
+    ],
+  });
+}
+
 tester.run("anti-slop/no-escaping-render-context-file-reset", noEscapingRenderContextRule, {
   valid: [
     validRenderer(`const stateHeading = callback => new Text(callback());
@@ -93,6 +131,10 @@ tester.run("anti-slop/no-escaping-render-context-file-reset", noEscapingRenderCo
         return stateHeading(() => context.state.summary);
       } };`),
     `const tool = { renderCall(args, theme, context) { return new Text(context.args.text); } };`,
+    `import { invokeHostCallback } from 'pi-cosmic-core/host-session/custom';
+      const tool = { renderCall(args, theme, context) {
+        return invokeHostCallback(() => ({ render: () => [context.state.summary] }), undefined);
+      } };`,
   ],
   invalid: [],
 });

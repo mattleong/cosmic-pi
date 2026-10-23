@@ -1,5 +1,5 @@
 import type { AskUserRequest, QuestionnaireOwner } from "pi-ask-user/protocol";
-import { invokeHostCallback } from "pi-cosmic-core";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import { questionnaireLifetimes } from "./questionnaire-lifetime.ts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";

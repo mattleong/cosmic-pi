@@ -9,18 +9,17 @@ import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
 import {
   captureHostSignal,
-  forwardAbortSignal,
   invokeHostCallback,
   isProjectTrusted,
-  makePiManagedRuntime,
-  makePiSessionRuntimeSlot,
   notifyAtHostBoundary,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/host-session";
+import { forwardAbortSignal, makePiManagedRuntime } from "pi-cosmic-core/runtime";
+import { makePiSessionRuntimeSlot } from "pi-cosmic-core/runtime/session-runtime";
 import { capturedHostSignal } from "./boundary/host-abort-signal.ts";
 import {
   decodeCompletedAssistantOutput,
   emptyTotals,
-  readSessionUsageTotals,
+  createSessionUsageReader,
 } from "./boundary/host-usage.ts";
 import { shutdownHostUiTickers } from "./boundary/host-status.ts";
 import { defaultResolvedCosmicUiConfig, type ResolvedCosmicUiConfig } from "./config/schema.ts";
@@ -159,14 +158,15 @@ export function registerCosmicUiApplication(
     onActivated: ({ ctx, context, sessionManager, signal }, token, activity) => {
       activatedToken = token;
       currentSession = { context, sessionManager };
-      workingRow.activate(context);
+      if (ctx.mode === "tui") workingRow.activate(context);
       invokeHostCallback(() => activityHost.activate(ctx, activity), undefined);
       footerInstallation.update(ctx);
       publishHostState();
-      slot.fork(
-        CosmicUiService.use((service) => service.refreshAll(true)),
-        signal,
-      );
+      if (ctx.mode === "tui")
+        slot.fork(
+          CosmicUiService.use((service) => service.refreshAll(true)),
+          signal,
+        );
     },
     onDeactivated: ({ context, releaseSignal, publicationOwner }, token) => {
       retirePublication(publicationOwner);
@@ -281,7 +281,9 @@ export function registerCosmicUiApplication(
     const projectTrusted = isProjectTrusted(ctx);
     ensureSubscriptions();
     footerInstallation.uninstall();
-    const initialTotals = readSessionUsageTotals(sessionManager) ?? emptyTotals();
+    const readUsageTotals =
+      ctx.mode === "tui" ? createSessionUsageReader(sessionManager) : () => undefined;
+    const initialTotals = readUsageTotals() ?? emptyTotals();
     resetProjection(projection, initialTotals);
     const context = MutableRef.make(ctx);
     currentSession = { context, sessionManager };
@@ -297,6 +299,7 @@ export function registerCosmicUiApplication(
           signal: abort?.signal,
           releaseSignal,
           initialTotals,
+          readUsageTotals,
           projectTrusted,
           publicationOwner,
         },
@@ -311,7 +314,7 @@ export function registerCosmicUiApplication(
 
   /** Repaints at once; the service reconciles persisted totals and repaints if they changed. */
   const refreshUsage = (ctx: ExtensionContext, refreshGit: boolean) => {
-    if (!updateContext(ctx)) return undefined;
+    if (!updateContext(ctx) || ctx.mode !== "tui") return undefined;
     footerInstallation.invalidateContextUsage();
     footerInstallation.requestRender();
     const reconciled = runFrom(
@@ -338,7 +341,7 @@ export function registerCosmicUiApplication(
     updateContext(ctx);
   });
   pi.on("tool_execution_end", (event, ctx) => {
-    if (!updateContext(ctx)) return;
+    if (!updateContext(ctx) || ctx.mode !== "tui") return;
     // Only a shell command can open a pull request, such as with `gh pr create`.
     if (event.toolName === "bash")
       forkFrom(
@@ -386,7 +389,7 @@ export function registerCosmicUiApplication(
     workingRow.output(update.delta.length);
   });
   pi.on("message_end", (event, ctx) => {
-    updateContext(ctx);
+    if (!updateContext(ctx) || ctx.mode !== "tui") return;
     if (event.message?.role === "assistant")
       workingRow.callEnd(decodeCompletedAssistantOutput(event.message));
     invalidateContextUsage(ctx);

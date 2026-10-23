@@ -1,11 +1,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Result from "effect/Result";
-import {
-  deliverAgentMessage,
-  frameAgentMessage,
-  registerSessionWake,
-  sanitizeTerminalLine,
-} from "pi-cosmic-core";
+import { deliverAgentMessage, frameAgentMessage } from "pi-cosmic-core/host-agent-messages";
+import { registerSessionWake } from "pi-cosmic-core/host-wake";
+import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import type { Disposition, InboundMessage, RefusalCode, Sender } from "./transport/protocol.ts";
 
 export const INTERCOM_MESSAGE_TYPE = "pi-intercom-message";

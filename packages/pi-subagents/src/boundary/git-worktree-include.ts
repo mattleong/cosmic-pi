@@ -4,7 +4,9 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import * as Order from "effect/Order";
-import { clipText, SafeFile, nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core";
+import { clipText } from "pi-cosmic-core/display";
+import { SafeFile } from "pi-cosmic-core/platform/safe-file";
+import { nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core/platform/node-builtins";
 import {
   checkDirectory,
   git,

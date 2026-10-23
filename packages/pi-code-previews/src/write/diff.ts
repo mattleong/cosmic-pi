@@ -6,7 +6,7 @@ import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import { codePreviewPerformanceConfig } from "../config/state";
 import type { HostObject } from "../shared/untrusted-value";
-import { formatBytes } from "pi-cosmic-core";
+import { formatBytes } from "pi-cosmic-core/display";
 
 const PreviewByteLength = Schema.Natural;
 const SkippedExistingFilePreview = Schema.Struct({

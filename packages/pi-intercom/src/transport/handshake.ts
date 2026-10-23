@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import { synchronousRandomHex } from "pi-cosmic-core";
+import { synchronousRandomHex } from "pi-cosmic-core/platform/native-crypto";
 
 /** Bytes in each side's fresh challenge. */
 export const NONCE_BYTES = 32;

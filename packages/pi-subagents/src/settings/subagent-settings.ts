@@ -1,11 +1,26 @@
+import {
+  DELEGATION,
+  DELEGATION_DESCRIPTION,
+  INHERIT,
+  isNestingField,
+  NESTING_FIELDS,
+  NESTING_FIELD_IDS,
+  SCOPES,
+  SUBAGENT_SETTING_DESCRIPTORS,
+  SUBAGENT_SETTINGS_COMMAND,
+  WORKSPACE,
+  WORKSPACE_DESCRIPTION,
+  type NestingField,
+} from "./subagent-settings-options.ts";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { SettingItem } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Rec from "effect/Record";
 import * as Result from "effect/Result";
-import * as Schema from "effect/Schema";
-import { failureMessage, isProjectTrusted, type ExtensionSubcommand } from "pi-cosmic-core";
+import { failureMessage } from "pi-cosmic-core/message-text";
+import { isProjectTrusted } from "pi-cosmic-core/host-session";
+import { type ExtensionSubcommand } from "pi-cosmic-core/host-command";
 import {
   settingsSubcommand,
   withInvocationAuthority,
@@ -15,13 +30,7 @@ import {
 import {
   DELEGATION_MODES,
   isDelegationMode,
-  MAX_DIRECT_CHILDREN,
-  MAX_SUBAGENT_DEPTH,
-  MIN_DIRECT_CHILDREN,
   DEFAULT_MAX_ACTIVE_RUNS,
-  MIN_ACTIVE_RUNS,
-  MAX_ACTIVE_RUNS,
-  MIN_SUBAGENT_DEPTH,
   WRITER_WORKSPACE_MODES,
   isWriterWorkspaceMode,
   type DelegationMode,
@@ -40,64 +49,7 @@ type SettingsResult = Result.Result<
   undefined,
   { readonly message: string; readonly stale?: boolean }
 >;
-type NestingField = keyof SubagentNestingOverrides;
-
-const WORKSPACE = "writerWorkspace";
-const DELEGATION = "delegation";
-const INHERIT = "inherit";
-
-const DELEGATION_DESCRIPTION =
-  "How much the main agent delegates to subagents. normal leaves its prompt unchanged, encouraged prefers subagents, and orchestration delegates nearly all substantive work.";
-
-interface NestingFieldInfo {
-  readonly label: string;
-  readonly description: string;
-  readonly minimum: number;
-  readonly maximum: number;
-  readonly presets: readonly string[];
-}
-
-const NESTING_FIELDS = {
-  maxDirectChildren: {
-    label: "max children",
-    description: "How many subagents one subagent may start at a time.",
-    minimum: MIN_DIRECT_CHILDREN,
-    maximum: MAX_DIRECT_CHILDREN,
-    presets: ["4", "8", "12", "16", "32"],
-  },
-  maxDepth: {
-    label: "max depth",
-    description: "How many levels of subagents may start further subagents.",
-    minimum: MIN_SUBAGENT_DEPTH,
-    maximum: MAX_SUBAGENT_DEPTH,
-    presets: ["0", "1", "2", "3", "5", "8"],
-  },
-  maxActiveRuns: {
-    label: "max active",
-    description: "How many subagents may run at once across the whole tree.",
-    minimum: MIN_ACTIVE_RUNS,
-    maximum: MAX_ACTIVE_RUNS,
-    presets: ["4", "8", "16", "32", "64"],
-  },
-} as const satisfies Record<NestingField, NestingFieldInfo>;
-
-const NESTING_FIELD_IDS = Rec.keys(NESTING_FIELDS);
-
-const isNestingField = Schema.is(Schema.Literals(NESTING_FIELD_IDS));
-
-const SCOPES = [
-  { name: "session", description: "Change delegation and nesting limits for this session only" },
-  {
-    name: "global",
-    description: "Change delegation and nesting limits for new sessions everywhere",
-  },
-  { name: "project", description: "Change delegation and nesting limits for this trusted project" },
-] as const;
-
 const UNTRUSTED = "Trust this project before changing its subagent settings";
-
-const WORKSPACE_DESCRIPTION =
-  "Default for writers that don't set isolation. Saved for new sessions.";
 
 const unresolvedSummary = ({ unresolvedWorkspaceCount }: WriterWorkspaceInspection) =>
   unresolvedWorkspaceCount === undefined
@@ -197,12 +149,7 @@ const scopedSettingItem = (
 };
 
 export function subagentSettingsSubcommand(actions: FleetManagerActions): ExtensionSubcommand {
-  const captureAuthority = (): (() => boolean) => {
-    if (!actions.isAvailable()) return () => !actions.isAvailable();
-    const owner = actions.captureModelRefresh();
-    return () => owner.isCurrent() && actions.isAvailable();
-  };
-  return withInvocationAuthority(captureAuthority, (isCurrent, owner) =>
+  return withInvocationAuthority(actions.captureAuthority, (isCurrent, owner) =>
     subagentSettingsCommand(actions, isCurrent, owner),
   );
 }
@@ -394,29 +341,9 @@ function subagentSettingsCommand(
     owner: saveOwner,
     root: "subagents",
     isCurrent,
-    description: "Configure delegation, the writer workspace, and nesting limits",
+    description: SUBAGENT_SETTINGS_COMMAND.description,
     title: "Subagents",
-    descriptors: [
-      {
-        id: WORKSPACE,
-        description: WORKSPACE_DESCRIPTION,
-        values: [...WRITER_WORKSPACE_MODES],
-        currentValue: () => "",
-      },
-      {
-        id: DELEGATION,
-        description: DELEGATION_DESCRIPTION,
-        values: [...DELEGATION_MODES, INHERIT],
-        currentValue: () => "",
-      },
-      ...Arr.map(NESTING_FIELD_IDS, (field) => ({
-        id: field,
-        description: NESTING_FIELDS[field].description,
-        values: [...NESTING_FIELDS[field].presets, INHERIT],
-        openValues: true,
-        currentValue: () => "",
-      })),
-    ],
+    descriptors: SUBAGENT_SETTING_DESCRIPTORS,
     examples: [
       "delegation orchestration",
       "global delegation encouraged",

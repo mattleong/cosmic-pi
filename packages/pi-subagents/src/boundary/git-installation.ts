@@ -2,13 +2,13 @@ import * as Effect from "effect/Effect";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
+import { hasControlCharacter } from "pi-cosmic-core/security";
+import { runBoundedProcessNode } from "pi-cosmic-core/platform/process";
 import {
-  hasControlCharacter,
-  runBoundedProcessNode,
   nodeFsConstants,
   nodeFsPromises as fs,
   nodePath as path,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/platform/node-builtins";
 import { WorkspaceError } from "../workspace/model.ts";
 import { isGitLocalEnvironmentKey } from "./git-local-environment.ts";
 

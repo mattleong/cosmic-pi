@@ -3,7 +3,7 @@ import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
-import * as Core from "pi-cosmic-core";
+import * as NativeCrypto from "pi-cosmic-core/platform/native-crypto";
 import { hostNotifier } from "../src/boundary/host-notifier.ts";
 import { nodeFsPromises as fs, nodePath as path } from "./support/node-builtins.ts";
 import {
@@ -179,7 +179,7 @@ describe("subagent report archive", () => {
       const agent = yield* temporaryAgent;
       const archive = sessionReportArchive(agent, "session-1");
       const uuid = vi
-        .spyOn(Core, "synchronousRandomUuid")
+        .spyOn(NativeCrypto, "synchronousRandomUuid")
         .mockReturnValue("fixed-archive-identity");
       try {
         const original = yield* archive.save({

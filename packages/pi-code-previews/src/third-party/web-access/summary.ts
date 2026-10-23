@@ -1,6 +1,8 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import { countLabel, failureMessage, sanitizeDiagnosticContent } from "pi-cosmic-core";
+import { countLabel } from "pi-cosmic-core/display";
+import { failureMessage } from "pi-cosmic-core/message-text";
+import { sanitizeDiagnosticContent } from "pi-cosmic-core/security";
 import type { CompactIssue } from "../../tools/compact-issues";
 import type { CompactSummaryProvider } from "../../tools/compact-summary";
 import {

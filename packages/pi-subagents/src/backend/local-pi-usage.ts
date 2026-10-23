@@ -1,4 +1,4 @@
-import { decodeUnknownOrUndefined } from "pi-cosmic-core";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import * as Schema from "effect/Schema";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";

@@ -3,7 +3,8 @@ import * as Str from "effect/String";
 import * as Schema from "effect/Schema";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
-import { decodeUnknownOrUndefined, invokeHostCallback } from "pi-cosmic-core";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import type { HostContainer } from "../shared/untrusted-value";
 import { ownContainer, ownDataReader } from "./native-safe-content";
 

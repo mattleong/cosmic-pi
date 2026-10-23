@@ -4,7 +4,7 @@ import type {
   ToolRenderers,
   ToolRendererResolver,
 } from "@earendil-works/pi-coding-agent";
-import { invokeHostCallback } from "pi-cosmic-core";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import { codePreviewSettings } from "../config/state";
 import { capturePreviewHostTools, type PreviewHostTools } from "../boundary/host-tool-renderers";
 import {

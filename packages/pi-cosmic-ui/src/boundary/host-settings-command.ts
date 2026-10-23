@@ -9,13 +9,15 @@ import * as Result from "effect/Result";
 import * as Str from "effect/String";
 import {
   captureHostSignal,
-  completeSettingsArguments,
-  dispatchSettingsCommand,
   invokeHostCallback,
   notifyAtHostBoundary,
-  type ExtensionSubcommand,
+} from "pi-cosmic-core/host-session";
+import {
+  completeSettingsArguments,
   type SettingsOptionDescriptor,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/settings-completion";
+import { dispatchSettingsCommand } from "pi-cosmic-core/settings-dispatch";
+import { type ExtensionSubcommand } from "pi-cosmic-core/host-command";
 import type { HostKeybindingSource } from "../manager/key-labels.ts";
 import type { FullScreenKeymapOptions } from "../manager/keymap.ts";
 import {

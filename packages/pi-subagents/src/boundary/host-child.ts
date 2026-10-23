@@ -16,17 +16,17 @@ import {
   type CompactAnimationScheduler,
   type CodePreviewSettings,
 } from "pi-code-previews";
+import { bestEffortHostBootstrap } from "pi-cosmic-core/runtime/host-bootstrap";
 import {
-  bestEffortHostBootstrap,
   captureSessionHost,
   invokeBestEffort,
   invokeHostCallback,
   isProjectTrusted,
-  isSubagentChildProcess,
-  makePiManagedRuntime,
-  makePiSessionRuntimeSlot,
-  safeTextPrefix,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/host-session";
+import { isSubagentChildProcess } from "pi-cosmic-core/host-environment";
+import { makePiManagedRuntime } from "pi-cosmic-core/runtime";
+import { makePiSessionRuntimeSlot } from "pi-cosmic-core/runtime/session-runtime";
+import { safeTextPrefix } from "pi-cosmic-core/text";
 import { registerSubagentMessageRenderers } from "../application/messages.ts";
 import type { LocalPiContact, LocalPiParentControl } from "../backend/local-pi-protocol.ts";
 import { MAX_PARENT_MESSAGE_CHARS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";

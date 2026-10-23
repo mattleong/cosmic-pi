@@ -1,6 +1,6 @@
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
-import { sha256Text } from "pi-cosmic-core";
+import { sha256Text } from "pi-cosmic-core/security/sha256";
 
 const MAX_SLUG_CHARS = 48;
 const HASH_CHARS = 12;

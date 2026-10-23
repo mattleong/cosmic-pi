@@ -7,7 +7,8 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
-import { JsonDocumentStore, configDocumentErrorFactory, type JsonObject } from "pi-cosmic-core";
+import { JsonDocumentStore, type JsonObject } from "pi-cosmic-core/platform/json-document";
+import { configDocumentErrorFactory } from "pi-cosmic-core/config/document-ops";
 import {
   isProfileId,
   PROFILE_IDS,

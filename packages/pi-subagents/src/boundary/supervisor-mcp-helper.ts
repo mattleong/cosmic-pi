@@ -11,7 +11,7 @@ import * as Result from "effect/Result";
 import * as Runtime from "effect/Runtime";
 import * as Schema from "effect/Schema";
 import * as Rec from "effect/Record";
-import { isJsonObject } from "pi-cosmic-core";
+import { isJsonObject } from "pi-cosmic-core/platform/json-document";
 import { attachBoundedLineParser } from "./bounded-line-parser.ts";
 import { decodeUnknownJsonOption } from "./wire-shared.ts";
 import { MAX_SUPERVISOR_CHANNEL_LINE_BYTES } from "../supervisor/protocol.ts";

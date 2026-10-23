@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import { decodeUnknownOrUndefined } from "pi-cosmic-core";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 
 export const HERDR_BTW_PARENT_FLAG = "herdr-btw-parent";
 export const HERDR_BTW_PARENT_FILE_FLAG = "herdr-btw-parent-file";

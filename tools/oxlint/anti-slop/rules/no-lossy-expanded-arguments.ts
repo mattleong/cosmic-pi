@@ -16,6 +16,7 @@ import {
 import { resolveVariable } from "../shared/scope.ts";
 
 const CORE = "pi-cosmic-core";
+const SECURITY_SOURCES = new Set([CORE, "pi-cosmic-core/security"]);
 const DESTRUCTIVE = new Set(["stripTerminalControls", "stripAnsi"]);
 const STYLED_TEXT = new Map([
   ["fg", 1],
@@ -46,7 +47,9 @@ function destructiveSanitizer(
   expression: ESTree.Expression,
 ): string | null {
   const binding = importedMember(sourceCode, expression);
-  return binding?.source === CORE && DESTRUCTIVE.has(binding.name) ? binding.name : null;
+  return binding !== null && SECURITY_SOURCES.has(binding.source) && DESTRUCTIVE.has(binding.name)
+    ? binding.name
+    : null;
 }
 
 const VALUE_WRAPPERS = new Set([
@@ -208,7 +211,10 @@ function jsonStringify(sourceCode: SourceCode, callee: ESTree.Expression): boole
 
 function serializedCall(sourceCode: SourceCode, node: ESTree.CallExpression, depth = 0): boolean {
   const callee = unwrapExpression(node.callee);
-  if (imported(sourceCode, callee, CORE, "invokeHostCallback")) {
+  if (
+    imported(sourceCode, callee, CORE, "invokeHostCallback") ||
+    imported(sourceCode, callee, "pi-cosmic-core/host-session", "invokeHostCallback")
+  ) {
     const callback = node.arguments[0];
     const fn =
       callback === undefined || callback.type === "SpreadElement"

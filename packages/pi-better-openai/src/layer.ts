@@ -3,7 +3,9 @@ import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-ag
 import * as Layer from "effect/Layer";
 import { CodePreviewSchedulerService } from "pi-code-previews";
 import * as MutableRef from "effect/MutableRef";
-import { AgentDirectory, SafeFile, nodePlatformLayer } from "pi-cosmic-core";
+import { AgentDirectory } from "pi-cosmic-core/platform/agent-directory";
+import { SafeFile } from "pi-cosmic-core/platform/safe-file";
+import { nodePlatformLayer } from "pi-cosmic-core/platform/node";
 import { OpenAICompactionClient } from "./boundary/openai-compaction.ts";
 import { SharpAdapter } from "./boundary/sharp.ts";
 import { OpenAICompactionService } from "./compaction/service.ts";

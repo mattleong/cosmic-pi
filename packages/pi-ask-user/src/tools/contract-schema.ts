@@ -1,6 +1,6 @@
 import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
-import { freezeSnapshot } from "pi-cosmic-core";
+import { freezeSnapshot } from "pi-cosmic-core/projection";
 import { MAX_RETAINED_REQUESTS } from "../questionnaire/async-model.ts";
 import { QuestionnaireOutcomeSchema } from "../questionnaire/protocol.ts";
 import { MAX_WORK_DESCRIPTION_LENGTH } from "../questionnaire/schema.ts";

@@ -1,5 +1,7 @@
 import * as Schema from "effect/Schema";
-import { decodeUnknownOrUndefined, ForeignCallable, querySessionCapability } from "pi-cosmic-core";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
+import { ForeignCallable } from "pi-cosmic-core/schema/foreign-callable";
+import { querySessionCapability } from "pi-cosmic-core/session-capability";
 import type { ActivityEvents } from "./protocol.ts";
 import { ActivityError } from "./service.ts";
 

@@ -34,7 +34,8 @@ import {
 } from "pi-cosmic-ui/manager/list-detail-shell";
 import type { BackgroundTaskView, BackgroundTaskProjection } from "../task/model.ts";
 import { countTaskStates, isActiveTaskState } from "../task/model.ts";
-import { sanitizeTerminalLine, formatElapsed, formatBytes, countLabel } from "pi-cosmic-core";
+import { sanitizeTerminalLine } from "pi-cosmic-core/security";
+import { formatElapsed, formatBytes, countLabel } from "pi-cosmic-core/display";
 import { StyledLogRows } from "./styled-log.ts";
 import { taskStatePresentation, taskDisplayName } from "./task-state.ts";
 

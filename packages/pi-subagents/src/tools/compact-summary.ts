@@ -3,7 +3,7 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
-import { countLabel } from "pi-cosmic-core";
+import { countLabel } from "pi-cosmic-core/display";
 import { hasUnresolvedSteeringDelivery } from "../run/model.ts";
 import { runCleanupAttention } from "../run/attention.ts";
 import { runStateLabel } from "../ui/run-state.ts";

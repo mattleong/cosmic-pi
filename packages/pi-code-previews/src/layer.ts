@@ -1,6 +1,7 @@
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import * as Layer from "effect/Layer";
-import { AgentDirectory, nodeFilePlatformLayer } from "pi-cosmic-core";
+import { AgentDirectory } from "pi-cosmic-core/platform/agent-directory";
+import { nodeFilePlatformLayer } from "pi-cosmic-core/platform/node-file";
 import { CodePreviewSchedulerService } from "./application/scheduler";
 import { ShikiAdapter } from "./boundary/shiki";
 import { CodePreviewSettingsService } from "./config/service";

@@ -15,7 +15,8 @@ import type { FooterPatch } from "../config/store.ts";
 import { settingsSubcommand, withInvocationAuthority } from "../boundary/host-settings-command.ts";
 import { CosmicUiService } from "../protocol/service.ts";
 import { settingsItemsFromDescriptors } from "../manager/settings-surface.ts";
-import { decodeUnknownOrUndefined, registerExtensionCommand } from "pi-cosmic-core";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
+import { registerExtensionCommand } from "pi-cosmic-core/host-command";
 
 const BooleanSettingSchema = Schema.Literals(["true", "false"]);
 const UsageSettingSchema = Schema.Literals(["automatic", "hidden"]);

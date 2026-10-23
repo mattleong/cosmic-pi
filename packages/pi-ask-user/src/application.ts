@@ -14,15 +14,15 @@ import {
   type CompactAnimationScheduler,
   type CodePreviewSettings,
 } from "pi-code-previews";
+import { bestEffortHostBootstrap } from "pi-cosmic-core/runtime/host-bootstrap";
 import {
-  bestEffortHostBootstrap,
   captureSessionHost,
   invokeHostCallback,
   isProjectTrusted,
-  makePiManagedRuntime,
-  makePiSessionRuntimeSlot,
   notifyAtHostBoundary,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/host-session";
+import { makePiManagedRuntime } from "pi-cosmic-core/runtime";
+import { makePiSessionRuntimeSlot } from "pi-cosmic-core/runtime/session-runtime";
 import {
   acceptsAsyncMessage,
   captureHistoricalDeliveries,
@@ -33,17 +33,17 @@ import {
   createQuestionnaireActivity,
   type QuestionnaireActivityBridge,
 } from "./boundary/host-activity.ts";
+import { requiresQuestionnaireRelay } from "./boundary/host-environment.ts";
 import { registerQuestionnaireCapability } from "./boundary/host-owned-calls.ts";
-import { askAtQuestionnaireBoundary, requiresQuestionnaireRelay } from "./boundary/host-relay.ts";
+import { askAtQuestionnaireBoundary } from "./boundary/host-relay.ts";
 import {
   registerAsyncAskUserMessageRenderer,
   registerAsyncAskUserTools,
 } from "./tools/ask-user-async.ts";
 import { createAskUserPromptGate } from "./boundary/host-prompt.ts";
-import { asyncBusy } from "./questionnaire/async-service.ts";
 import { createAskUserDialogBridge } from "./boundary/host-ui.ts";
 import { askUserLayer, type AskUserApplication, type AskUserRuntimeError } from "./layer.ts";
-import { AskUserRuntimeClosedError } from "./questionnaire/errors.ts";
+import { asyncBusy, AskUserRuntimeClosedError } from "./questionnaire/errors.ts";
 import { AskUserService } from "./questionnaire/service.ts";
 import { registerAskUserTool } from "./tools/ask-user.ts";
 

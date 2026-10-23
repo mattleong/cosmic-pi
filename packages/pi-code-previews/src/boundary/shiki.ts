@@ -2,32 +2,11 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import * as Arr from "effect/Array";
-import { invokeHostCallback } from "pi-cosmic-core";
-import {
-  bundledLanguages,
-  createHighlighter,
-  type BundledLanguage,
-  type SpecialLanguage,
-} from "shiki";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
+import type { createHighlighter } from "shiki/bundle/full";
+import { isShikiLanguage } from "../syntax/language";
 
 export type ShikiHighlighter = Awaited<ReturnType<typeof createHighlighter>>;
-
-const SPECIAL_LANGUAGES = [
-  "text",
-  "plaintext",
-  "txt",
-  "plain",
-  "ansi",
-] as const satisfies readonly SpecialLanguage[];
-
-export function isShikiLanguage(language: string): language is BundledLanguage | SpecialLanguage {
-  return (
-    // @effect-diagnostics-next-line preferEffectRecord:off -- narrows an arbitrary string; Rec.has requires a known key.
-    Object.hasOwn(bundledLanguages, language) ||
-    Arr.some(SPECIAL_LANGUAGES, (special) => special === language)
-  );
-}
 
 export class ShikiBoundaryError extends Schema.TaggedError<
   ShikiBoundaryError,
@@ -127,9 +106,11 @@ export class ShikiAdapter extends Context.Service<ShikiAdapter, ShikiAdapterCont
   static readonly layer = Layer.succeed(this, this.live);
 }
 
-function createShikiHighlighter(
+export function createShikiHighlighter(
   theme: string,
   languages: readonly string[],
+  load: () => Promise<typeof createHighlighter> = () =>
+    import("shiki/bundle/full").then((module) => module.createHighlighter),
 ): Effect.Effect<ShikiHighlighter, ShikiBoundaryError> {
   return Effect.callback<ShikiHighlighter, ShikiBoundaryError>((resume) => {
     let cancelled = false;
@@ -145,13 +126,18 @@ function createShikiHighlighter(
         );
     };
     try {
-      void createHighlighter({ themes: [theme], langs: [...languages] })
-        .then((highlighter) => {
-          if (cancelled) disposeShikiHighlighterSafely(highlighter);
-          else resume(Effect.succeed(highlighter));
-          return undefined;
-        }, failInitialization)
-        .catch(() => undefined);
+      // Import and creation are not cancellable. A retired owner must not begin creation after
+      // import, and a highlighter already being created is disposed on late settlement.
+      void load()
+        .then((create) => {
+          if (cancelled) return undefined;
+          return create({ themes: [theme], langs: [...languages] }).then((highlighter) => {
+            if (cancelled) disposeShikiHighlighterSafely(highlighter);
+            else resume(Effect.succeed(highlighter));
+            return undefined;
+          });
+        })
+        .catch(failInitialization);
     } catch {
       failInitialization();
     }

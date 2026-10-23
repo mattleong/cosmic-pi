@@ -1,7 +1,8 @@
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { CodePreviewSchedulerService } from "pi-code-previews";
-import { nodeFilePlatformLayer, SafeFile } from "pi-cosmic-core";
+import { nodeFilePlatformLayer } from "pi-cosmic-core/platform/node-file";
+import { SafeFile } from "pi-cosmic-core/platform/safe-file";
 import { localClaudeBackendDriver } from "./backend/local-claude.ts";
 import { localCodexBackendDriver } from "./backend/local-codex.ts";
 import { localPiBackendDriver } from "./backend/local-pi.ts";

@@ -8,15 +8,15 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
+import { AgentDirectory } from "pi-cosmic-core/platform/agent-directory";
+import { freezeSnapshot } from "pi-cosmic-core/projection";
 import {
-  AgentDirectory,
-  freezeSnapshot,
   isJsonObject,
-  JsonDocumentError,
   JsonDocumentStore,
   type JsonDocumentModification,
   type JsonObject,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/platform/json-document";
+import { JsonDocumentError } from "pi-cosmic-core/platform/errors";
 import {
   flushSettingsCoordinator,
   type SettingsAdmission,
@@ -183,19 +183,24 @@ export class CodePreviewSettingsService extends Context.Service<
         }),
       );
 
-      const loadFile = Effect.fn("CodePreviewSettings.loadFile")(function* (
-        settingsPath: string,
+      const readFile = (settingsPath: string) =>
+        documents.readObject(settingsPath).pipe(
+          Effect.map((document) => ({ settingsPath, document, readable: true })),
+          Effect.catchTag("JsonDocumentError", () =>
+            Effect.succeed({ settingsPath, document: undefined, readable: false }),
+          ),
+        );
+
+      const resolveFile = Effect.fn("CodePreviewSettings.resolveFile")(function* (
+        read: Effect.Success<ReturnType<typeof readFile>>,
         extract: (document: JsonObject) => JsonObject,
         fallback: CodePreviewSettings,
       ) {
-        const read = yield* documents.readObject(settingsPath).pipe(
-          Effect.map((document) => ({ document, readable: true })),
-          Effect.catchTag("JsonDocumentError", () =>
-            Effect.logWarning(
-              "Failed to load settings for code previews; ignoring that document.",
-            ).pipe(Effect.as({ document: undefined, readable: false })),
-          ),
-        );
+        const { settingsPath } = read;
+        if (!read.readable)
+          yield* Effect.logWarning(
+            "Failed to load settings for code previews; ignoring that document.",
+          );
         if (!read.document)
           return {
             settings: fallback,
@@ -222,20 +227,29 @@ export class CodePreviewSettingsService extends Context.Service<
       const loadSaveContext = Effect.fn("CodePreviewSettings.loadSaveContext")(function* (
         options: LoadSettingsOptions,
       ) {
-        const global = yield* loadFile(
-          path.join(agentDir, "settings.json"),
+        // Only raw reads overlap. Trust admission, fallback decoding, diagnostics, and the
+        // coordinator's whole load/save permit retain their original ordering.
+        const files = yield* Effect.all(
+          {
+            global: readFile(path.join(agentDir, "settings.json")),
+            project: options.projectTrusted
+              ? readFile(path.join(options.projectCwd, ".pi", "settings.json"))
+              : Effect.void,
+            flat: readFile(flatSettingsPath),
+          },
+          { concurrency: "unbounded" },
+        );
+        const global = yield* resolveFile(
+          files.global,
           nestedCodePreviewSettings,
           defaultCodePreviewSettings,
         );
-        const project = options.projectTrusted
-          ? yield* loadFile(
-              path.join(options.projectCwd, ".pi", "settings.json"),
-              nestedCodePreviewSettings,
-              global.settings,
-            )
-          : undefined;
+        const project =
+          files.project !== undefined
+            ? yield* resolveFile(files.project, nestedCodePreviewSettings, global.settings)
+            : undefined;
         const baseline = project?.settings ?? global.settings;
-        const flat = yield* loadFile(flatSettingsPath, Fn.identity, baseline);
+        const flat = yield* resolveFile(files.flat, Fn.identity, baseline);
         const context: SettingsSaveContext = {
           globalBaseline: global.settings,
           baseline,

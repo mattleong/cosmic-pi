@@ -8,12 +8,9 @@ import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
-import {
-  decodeUnknownOrUndefined,
-  nodeFs,
-  nodePath as pathApi,
-  synchronousRandomUuid,
-} from "pi-cosmic-core";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
+import { nodeFs, nodePath as pathApi } from "pi-cosmic-core/platform/node-builtins";
+import { synchronousRandomUuid } from "pi-cosmic-core/platform/native-crypto";
 import { BoundedId, BoundedPath, parseHerdrBtwSessionId } from "../btw/marker.ts";
 
 const { closeSync, constants, fstatSync, lstatSync, openSync, readSync, statSync, writeFileSync } =

@@ -7,7 +7,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { JsonDocumentStore } from "../src/platform/json-document.ts";
 import { JsonDocumentLock } from "../src/platform/json-document-lock.ts";
-import { fileLayer } from "../src/platform/node.ts";
+import { nodeFilePlatformLayer as fileLayer } from "pi-cosmic-core/platform/node-file";
 import { nodeFsPromises as fs, nodePath as path } from "../src/platform/node-builtins.ts";
 import { killChild, spawnIpcChild, temporaryDirectory } from "../src/testing/ipc-child.ts";
 import { incrementDocumentCount } from "./support/json-documents.ts";

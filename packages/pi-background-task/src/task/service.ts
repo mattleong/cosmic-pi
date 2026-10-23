@@ -13,13 +13,11 @@ import * as Rec from "effect/Record";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import {
-  clipText,
-  invokeHostCallback,
-  sanitizeDiagnosticError,
-  synchronousRandomToken,
-  utf8ByteLength,
-} from "pi-cosmic-core";
+import { clipText } from "pi-cosmic-core/display";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
+import { sanitizeDiagnosticError } from "pi-cosmic-core/security";
+import { synchronousRandomToken } from "pi-cosmic-core/platform/native-crypto";
+import { utf8ByteLength } from "pi-cosmic-core/text";
 import {
   LocalProcess,
   type LocalProcessError,

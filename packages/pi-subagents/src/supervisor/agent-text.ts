@@ -1,6 +1,6 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
-import { agentMessageDeliveryText } from "pi-cosmic-core";
+import { agentMessageDeliveryText } from "pi-cosmic-core/host-agent-messages";
 import type {
   SupervisorAgentListResult,
   SupervisorAgentReadResult,

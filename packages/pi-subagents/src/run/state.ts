@@ -2,19 +2,15 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
+import { countLabel, clipText } from "pi-cosmic-core/display";
+import { freezeSnapshot } from "pi-cosmic-core/projection";
+import { safeTextPrefix, safeTextSuffix, utf8ByteLength, utf8Prefix } from "pi-cosmic-core/text";
 import {
-  countLabel,
-  freezeSnapshot,
-  safeTextPrefix,
-  safeTextSuffix,
   sanitizeDiagnosticError,
   sanitizeTerminalLine,
   stripTerminalControls,
-  utf8ByteLength,
-  utf8Prefix,
-  clipText,
-  indexOfFrom,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/security";
+import { indexOfFrom } from "pi-cosmic-core/text-scan";
 import type {
   SubagentReportArchive,
   SubagentReportTruncation,

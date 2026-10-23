@@ -3,7 +3,7 @@ import type { ToolRenderContext } from "../tools/renderers/shared/types";
 import { Container, type Component } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
 import * as Arr from "effect/Array";
-import { invokeHostCallback } from "pi-cosmic-core";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { composeToolComponent, toolStatusLine } from "pi-cosmic-ui/tool";
 import { codePreviewSettings } from "../config/state";

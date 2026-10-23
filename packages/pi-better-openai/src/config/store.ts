@@ -9,16 +9,15 @@ import * as Rec from "effect/Record";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
+import { AgentDirectory } from "pi-cosmic-core/platform/agent-directory";
 import {
-  AgentDirectory,
   commitPreferredScope,
-  decodeTolerantFields,
-  freezeSnapshot,
-  type JsonDocumentStore,
   makeScopedConfigStore,
-  type JsonObject,
   type ScopedConfigMetadata,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/config/scoped-config-store";
+import { decodeTolerantFields } from "pi-cosmic-core/config/tolerant-fields";
+import { freezeSnapshot } from "pi-cosmic-core/projection";
+import { type JsonDocumentStore, type JsonObject } from "pi-cosmic-core/platform/json-document";
 import { prepareSettingUpdate } from "./options.ts";
 import {
   CONFIG_BASENAME,

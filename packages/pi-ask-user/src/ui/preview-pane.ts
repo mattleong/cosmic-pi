@@ -2,7 +2,7 @@ import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import { Markdown } from "@earendil-works/pi-tui";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
-import { stripTerminalControls } from "pi-cosmic-core";
+import { stripTerminalControls } from "pi-cosmic-core/security";
 import type { AskUserChoice } from "../questionnaire/schema.ts";
 import { padListDetailRow } from "pi-cosmic-ui/manager/list-detail";
 

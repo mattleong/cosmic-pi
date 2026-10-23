@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { decodeUnknownOrUndefined } from "pi-cosmic-core";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import { applyGitNumstat, parseGitStatus } from "../footer/git.ts";
 import { isSafeWebUrl } from "../footer/hyperlink.ts";
 import { PiExec, type PiExecContract } from "../boundary/host-exec.ts";

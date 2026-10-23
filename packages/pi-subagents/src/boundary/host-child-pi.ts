@@ -1,7 +1,8 @@
 import * as Arr from "effect/Array";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { FAST_SERVICE_TIER, supportsFastModel } from "pi-better-openai/fast-models";
-import { hasObjectRuntimeType, invokeHostCallback } from "pi-cosmic-core";
+import { hasObjectRuntimeType } from "pi-cosmic-core/runtime-values";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import { decodeSubagentEffort } from "../domain/routing.ts";
 import type { SubagentParentContext } from "../run/model.ts";
 

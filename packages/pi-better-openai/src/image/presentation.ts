@@ -16,7 +16,10 @@ import {
   getTextContent,
   previewIssuesSlot,
 } from "pi-code-previews";
-import { formatBytes, formatDisplayPath, restatesText, sanitizeTerminalLine } from "pi-cosmic-core";
+import { formatBytes } from "pi-cosmic-core/display";
+import { formatDisplayPath } from "pi-cosmic-core/platform/paths";
+import { restatesText } from "pi-cosmic-core/message-text";
+import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import {
   composeToolComponent,

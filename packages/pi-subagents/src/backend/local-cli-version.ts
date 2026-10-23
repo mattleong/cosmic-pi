@@ -1,6 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import { clipText, sanitizeTerminalLine } from "pi-cosmic-core";
+import { clipText } from "pi-cosmic-core/display";
+import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import type { SubagentRuntime } from "../domain/routing.ts";
 
 type LocalCliRuntime = Extract<SubagentRuntime, "claude" | "codex">;

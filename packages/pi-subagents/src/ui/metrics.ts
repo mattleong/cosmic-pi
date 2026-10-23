@@ -1,5 +1,5 @@
 import * as Arr from "effect/Array";
-import { formatTokens, formatCost } from "pi-cosmic-core";
+import { formatTokens, formatCost } from "pi-cosmic-core/display";
 
 interface FormatUsageInput {
   readonly totalTokens: number;

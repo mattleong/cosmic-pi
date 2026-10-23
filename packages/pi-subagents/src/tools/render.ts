@@ -7,10 +7,8 @@ import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import { escapeControlChars, expandedSection, getTextContent } from "pi-code-previews";
-import {
-  decodeUnknownOrUndefined,
-  stripTerminalControls as sanitizeTerminalText,
-} from "pi-cosmic-core";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
+import { stripTerminalControls as sanitizeTerminalText } from "pi-cosmic-core/security";
 import {
   composeToolComponent as renderComponent,
   renderExpansionAffordance,

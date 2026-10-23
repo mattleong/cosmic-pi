@@ -1,10 +1,10 @@
 import * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import {
-  invokeHostCallback,
   makeSynchronousIngress,
   type SynchronousIngressError,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/coordination/synchronous-ingress";
 import type { ProjectionOwnership } from "../shared/projection-ownership";
 import { installSyntaxRequests } from "./projection";
 

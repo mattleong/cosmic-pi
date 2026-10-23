@@ -14,13 +14,10 @@ import {
   type CompactSummary,
   type CompactSummaryProvider,
 } from "pi-code-previews";
-import {
-  decodeUnknownOrUndefined,
-  quoteText,
-  safeTextPrefix,
-  sanitizeTerminalLine,
-  stripTerminalControls,
-} from "pi-cosmic-core";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
+import { quoteText } from "pi-cosmic-core/message-text";
+import { safeTextPrefix } from "pi-cosmic-core/text";
+import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core/security";
 import { MAX_PARENT_MESSAGE_CHARS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import { rejectedCallIssue } from "./compact-action-failures.ts";
 import { QUOTED_TEXT_LIMIT } from "./compact-run-issues.ts";

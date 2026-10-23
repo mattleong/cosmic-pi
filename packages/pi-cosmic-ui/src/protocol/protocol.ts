@@ -3,12 +3,10 @@ import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Schema from "effect/Schema";
 import type * as Types from "effect/Types";
-import {
-  decodeUnknownOrUndefined,
-  ForeignCallable,
-  invokeBestEffort,
-  sanitizeTerminalLine,
-} from "pi-cosmic-core";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
+import { ForeignCallable } from "pi-cosmic-core/schema/foreign-callable";
+import { invokeBestEffort } from "pi-cosmic-core/host-session";
+import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 
 export const COSMIC_UI_PROTOCOL_VERSION = 2 as const;
 export const COSMIC_UI_HOST_QUERY = "cosmic-ui:v2:host:query";

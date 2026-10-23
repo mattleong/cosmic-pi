@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import { formatElapsed } from "pi-cosmic-core";
+import { formatElapsed } from "pi-cosmic-core/display";
 import { managerTone } from "../manager/style.ts";
 import {
   managerActivityColor,

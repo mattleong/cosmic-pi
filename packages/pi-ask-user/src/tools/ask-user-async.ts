@@ -12,7 +12,7 @@ import {
   type MessageRenderer,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
-import { toPiToolOutputSchema } from "pi-cosmic-core";
+import { toPiToolOutputSchema } from "pi-cosmic-core/schema/tool-output";
 import {
   AskUserAsyncParameters,
   AskUserAsyncControlParameters,

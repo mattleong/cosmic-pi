@@ -5,7 +5,7 @@ import type { CustomEntry, CustomMessageEntry } from "@earendil-works/pi-coding-
 import { layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import { nodeFilePlatformLayer } from "pi-cosmic-core";
+import { makeSessionCapabilityProtocol, nodeFilePlatformLayer } from "pi-cosmic-core";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import {
@@ -18,6 +18,8 @@ import { afterEach, expect, vi } from "vitest";
 import * as externalEditor from "../src/boundary/host-external-editor.ts";
 import type { AskUserRequest } from "../src/questionnaire/schema.ts";
 import { AskUserRuntimeClosedError } from "../src/questionnaire/errors.ts";
+import { ASYNC_MESSAGE_TYPE, ASYNC_RECEIPT_TYPE } from "../src/boundary/host-delivery.ts";
+import { QUESTIONNAIRE_RELAY_QUERY, type QuestionnaireRelay } from "../src/protocol.ts";
 
 withoutRelayMarker();
 afterEach(() => {
@@ -82,6 +84,112 @@ const request = {
 } satisfies AskUserRequest;
 
 layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
+  for (const mode of ["print", "json"] as const) {
+    it.effect(
+      `keeps receipt-backed history without starting questionnaire tools or preview settings in ${mode}`,
+      () =>
+        Effect.gen(function* () {
+          const loadPreviewSettings = vi.fn(() => Promise.resolve());
+          const metadata = { generation: "previous", deliveryId: "answer" };
+          const receipt = {
+            id: "receipt",
+            parentId: null,
+            timestamp: "2026-01-01T00:00:00Z",
+            type: "custom",
+            customType: ASYNC_RECEIPT_TYPE,
+            data: { version: 1, ...metadata },
+          } satisfies CustomEntry;
+          const h = yield* harness(loadPreviewSettings, {
+            mode,
+            hasUI: false,
+            sessionManager: { getBranch: () => [receipt] },
+          });
+          yield* Effect.promise(() => h.emit("session_start"));
+          const recorded = {
+            role: "custom" as const,
+            customType: ASYNC_MESSAGE_TYPE,
+            content: "answer",
+            display: true,
+            details: metadata,
+            timestamp: 0,
+          };
+          const late = { ...recorded, details: { ...metadata, deliveryId: "unreceipted" } };
+          const result = yield* Effect.promise(() =>
+            Promise.resolve(
+              h.handlers.get("context")[0]!({ type: "context", messages: [recorded, late] }, h.ctx),
+            ),
+          );
+          expect(result).toEqual({ messages: [recorded] });
+          expect(h.tools.size).toBe(0);
+          expect(loadPreviewSettings).not.toHaveBeenCalled();
+          expect(h.messageRenderers.has(ASYNC_MESSAGE_TYPE)).toBe(true);
+          yield* Effect.promise(() => h.emit("session_shutdown"));
+        }),
+    );
+  }
+
+  it.effect(
+    "retires startup interrupted during preview settings loading without publishing tools, then starts cleanly",
+    () =>
+      Effect.gen(function* () {
+        const pending = deferredPromise();
+        let loadSignal: AbortSignal | undefined;
+        const h = yield* harness((_cwd, _projectTrusted, signal) => {
+          loadSignal = signal;
+          return pending.promise;
+        });
+        const starting = h.emit("session_start");
+        yield* eventually(() => expect(loadSignal).toBeInstanceOf(AbortSignal));
+        yield* Effect.promise(() => h.emit("session_shutdown"));
+        yield* Effect.promise(() => starting);
+        expect(loadSignal?.aborted).toBe(true);
+        pending.resolve();
+        yield* Effect.promise(() => pending.promise);
+        yield* Effect.yieldNow;
+        expect(h.tools.size).toBe(0);
+        yield* Effect.promise(() => h.emit("session_start"));
+        expect(h.tools.has("ask_user")).toBe(true);
+        yield* Effect.promise(() => h.emit("session_shutdown"));
+      }),
+  );
+
+  it.effect("admits a marked print child only through its current root relay", () =>
+    Effect.gen(function* () {
+      vi.stubEnv("PI_SUBAGENT_CHILD", "1");
+      vi.stubEnv("PI_SUBAGENT_RUN_ID", "child-run");
+      const custom = vi.fn();
+      const h = yield* harness(() => Promise.resolve(), {
+        mode: "print",
+        hasUI: false,
+        sessionManager: { getSessionId: () => "child" },
+        ui: { custom },
+      });
+      const queries = makeSessionCapabilityProtocol({ version: 1 });
+      const ask = vi.fn<QuestionnaireRelay["ask"]>(() =>
+        Promise.resolve({ outcome: "cancelled", answers: [] }),
+      );
+      const off = h.pi.events.on(QUESTIONNAIRE_RELAY_QUERY, (data) => {
+        queries.normalizeQuery(data)?.respond({ version: 1, sessionId: "child", ask });
+      });
+      yield* Effect.promise(() => h.emit("session_start"));
+      const tool = h.tools.get("ask_user")!;
+      const result = yield* Effect.promise(() =>
+        tool.execute("call", request, undefined, undefined, h.ctx),
+      );
+      expect(result.details).toMatchObject({ outcome: "cancelled" });
+      expect(ask).toHaveBeenCalled();
+      expect(h.tools.has("ask_user_async")).toBe(false);
+      off();
+      yield* Effect.promise(() =>
+        expect(tool.execute("revoked", request, undefined, undefined, h.ctx)).rejects.toMatchObject(
+          { operation: "relay" },
+        ),
+      );
+      expect(custom).not.toHaveBeenCalled();
+      yield* Effect.promise(() => h.emit("session_shutdown"));
+    }),
+  );
+
   it.effect("defers tool registration until preview settings resolve", () =>
     Effect.gen(function* () {
       const preview = deferredPromise();

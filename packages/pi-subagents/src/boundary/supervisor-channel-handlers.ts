@@ -1,4 +1,4 @@
-import { safeTextPrefix } from "pi-cosmic-core";
+import { safeTextPrefix } from "pi-cosmic-core/text";
 import type * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";

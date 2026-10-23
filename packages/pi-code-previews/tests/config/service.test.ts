@@ -132,7 +132,7 @@ it.effect("a cancelled newer load does not suppress an older successful publicat
       service.load(newerAdmission),
     ).pipe(Effect.forkScoped);
     yield* Effect.yieldNow;
-    assert.equal(gate.reads(), 1);
+    assert.equal(gate.reads(), 2, "the waiting newer load must not start any reads");
     yield* Fiber.interrupt(newer);
 
     yield* Deferred.succeed(gate.release, undefined);
@@ -162,7 +162,8 @@ it.effect("a later save waits for an earlier load and publishes after it", () =>
           .save({ ...defaultCodePreviewSettings, readCollapsedLines: 42 }, nextSettingsAdmission())
           .pipe(Effect.forkScoped);
         yield* Effect.yieldNow;
-        assert.deepEqual(events, ["read-1"]);
+        assert.equal(events.includes("save"), false);
+        assert.equal(fake.documents.get("/agent/code-previews.json"), undefined);
         yield* Deferred.succeed(gate.release, undefined);
         yield* Fiber.join(load);
         yield* Fiber.join(save);
@@ -171,6 +172,107 @@ it.effect("a later save waits for an earlier load and publishes after it", () =>
 
     assert.deepEqual(events, ["read-1", "read-2", "save"]);
     assert.equal(fake.documents.get("/agent/code-previews.json")?.readCollapsedLines, 42);
+    assert.equal(codePreviewSettings.readCollapsedLines, 42);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("overlapping raw reads retain precedence and ordered field diagnostics", () =>
+  Effect.gen(function* () {
+    const fake = makeInMemoryDocuments({
+      "/agent/settings.json": {
+        codePreview: { readCollapsedLines: 31, shikiTheme: "github-dark" },
+      },
+      "/project/.pi/settings.json": {
+        codePreview: { readCollapsedLines: -1, readLineNumbers: false },
+      },
+      "/agent/code-previews.json": { readCollapsedLines: 41, shikiTheme: "invalid-theme" },
+    });
+    const started = new Set<string>();
+    const allStarted = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const documents = JsonDocumentStore.of({
+      ...fake.service,
+      readObject: (path) =>
+        Effect.sync(() => {
+          started.add(path);
+          if (started.size === 3) Deferred.doneUnsafe(allStarted, Effect.void);
+        }).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.andThen(fake.service.readObject(path)),
+        ),
+    });
+    setCodePreviewSettings(defaultCodePreviewSettings);
+    const load = yield* usingSettings(documents, (service) =>
+      service.load(nextSettingsAdmission(), { projectCwd: "/project", projectTrusted: true }),
+    ).pipe(Effect.forkScoped);
+    yield* Deferred.await(allStarted);
+    assert.deepEqual(codePreviewSettings, defaultCodePreviewSettings);
+    yield* Deferred.succeed(release, undefined);
+    const loaded = yield* Fiber.join(load);
+    assert.equal(loaded.readCollapsedLines, 41);
+    assert.equal(loaded.readLineNumbers, false);
+    assert.equal(loaded.shikiTheme, "github-dark");
+    assert.deepEqual(codePreviewSettingsProblems, [
+      { path: "/project/.pi/settings.json", fields: ["readCollapsedLines"] },
+      { path: "/agent/code-previews.json", fields: ["shikiTheme"] },
+    ]);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("untrusted project documents are not read by the raw-read batch", () => {
+  const projectPath = "/project/.pi/settings.json";
+  const fake = makeInMemoryDocuments({
+    "/agent/settings.json": { codePreview: { readCollapsedLines: 31 } },
+    [projectPath]: { codePreview: { readCollapsedLines: 99 } },
+    "/agent/code-previews.json": { readLineNumbers: false },
+  });
+  let projectRead = false;
+  const documents = JsonDocumentStore.of({
+    ...fake.service,
+    readObject: (path) => {
+      if (path === projectPath) projectRead = true;
+      return fake.service.readObject(path);
+    },
+  });
+  return usingSettings(documents, (service) =>
+    service.load(nextSettingsAdmission(), { projectCwd: "/project", projectTrusted: false }),
+  ).pipe(
+    Effect.tap((loaded) =>
+      Effect.sync(() => {
+        assert.equal(projectRead, false);
+        assert.equal(loaded.readCollapsedLines, 31);
+        assert.equal(loaded.readLineNumbers, false);
+      }),
+    ),
+  );
+});
+
+it.effect("cancelling a raw-read batch joins its reads and releases publication admission", () =>
+  Effect.gen(function* () {
+    const fake = makeInMemoryDocuments({
+      "/agent/code-previews.json": { readCollapsedLines: 42 },
+    });
+    const started = yield* Deferred.make<void>();
+    const active = new Set<string>();
+    const documents = JsonDocumentStore.of({
+      ...fake.service,
+      readObject: (path) =>
+        Effect.sync(() => {
+          active.add(path);
+          if (active.size === 2) Deferred.doneUnsafe(started, Effect.void);
+        }).pipe(
+          Effect.andThen(Effect.never),
+          Effect.ensuring(Effect.sync(() => active.delete(path))),
+        ),
+    });
+    setCodePreviewSettings(defaultCodePreviewSettings);
+    const load = yield* usingSettings(documents, loadSettings).pipe(Effect.forkScoped);
+    yield* Deferred.await(started);
+    yield* Fiber.interrupt(load);
+    assert.equal(active.size, 0);
+    assert.deepEqual(codePreviewSettings, defaultCodePreviewSettings);
+    const loaded = yield* usingSettings(fake.service, loadSettings);
+    assert.equal(loaded.readCollapsedLines, 42);
     assert.equal(codePreviewSettings.readCollapsedLines, 42);
   }).pipe(Effect.scoped),
 );

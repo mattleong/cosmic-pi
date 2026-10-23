@@ -11,7 +11,9 @@ import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
-import { sanitizeTerminalLine, countLabel, formatBytes, utf8ByteLength } from "pi-cosmic-core";
+import { sanitizeTerminalLine } from "pi-cosmic-core/security";
+import { countLabel, formatBytes } from "pi-cosmic-core/display";
+import { utf8ByteLength } from "pi-cosmic-core/text";
 import { BACKGROUND_TASK_FIELD_BOUNDS } from "../task/bounds.ts";
 import { InvalidBackgroundCommandError } from "../task/errors.ts";
 import {

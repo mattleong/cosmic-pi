@@ -1,7 +1,7 @@
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import type { ActivityItem } from "pi-cosmic-ui/activity";
-import { sha256Text } from "pi-cosmic-core";
+import { sha256Text } from "pi-cosmic-core/security/sha256";
 
 type UnrevisionedItem<Item extends ActivityItem = ActivityItem> = Item extends ActivityItem
   ? Omit<Item, "revision">

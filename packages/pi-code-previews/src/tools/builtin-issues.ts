@@ -1,6 +1,6 @@
 import * as Predicate from "effect/Predicate";
 import * as Arr from "effect/Array";
-import { sanitizeDiagnosticContent } from "pi-cosmic-core";
+import { sanitizeDiagnosticContent } from "pi-cosmic-core/security";
 import { ownField, ownObject, type HostObject } from "../shared/untrusted-value";
 import { escapeControlChars } from "../shared/terminal-text";
 import { getBashWarnings } from "../warnings/bash";

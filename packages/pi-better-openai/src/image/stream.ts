@@ -8,7 +8,8 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Str from "effect/String";
 import * as Sse from "effect/encoding/Sse";
-import { sanitizeDiagnosticError, type StreamingHttpError } from "pi-cosmic-core";
+import { sanitizeDiagnosticError } from "pi-cosmic-core/security";
+import { type StreamingHttpError } from "pi-cosmic-core/platform/errors";
 import { decodeImageStreamEvent } from "./protocol.ts";
 import { fail, type ExtractedImageResult, type OpenAIImageError } from "./types.ts";
 

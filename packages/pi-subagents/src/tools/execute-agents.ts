@@ -6,13 +6,10 @@ import * as Option from "effect/Option";
 import * as Order from "effect/Order";
 import * as Str from "effect/String";
 import type { CompactIssue } from "pi-code-previews";
-import {
-  agentMessageDeliveryText,
-  clipText,
-  MESSAGE_TEXT_LIMIT,
-  sanitizeTerminalLine,
-  stripTerminalControls,
-} from "pi-cosmic-core";
+import { agentMessageDeliveryText } from "pi-cosmic-core/host-agent-messages";
+import { clipText } from "pi-cosmic-core/display";
+import { MESSAGE_TEXT_LIMIT } from "pi-cosmic-core/message-text";
+import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core/security";
 import { isCustomAgentName } from "../profiles/agents.ts";
 import { PROFILE_IDS } from "../profiles/model.ts";
 import {

@@ -18,7 +18,7 @@ import {
   type SelectItem,
   type SettingItem,
 } from "@earendil-works/pi-tui";
-import { bundledThemes } from "shiki";
+import { bundledThemes } from "shiki/themes";
 import { ON_OFF_VALUES, formatOnOff } from "../../config/values";
 import {
   ALL_CODE_PREVIEW_TOOLS,

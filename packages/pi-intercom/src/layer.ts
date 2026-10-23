@@ -1,6 +1,7 @@
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import * as Layer from "effect/Layer";
-import { AgentDirectory, nodeFilePlatformLayer } from "pi-cosmic-core";
+import { AgentDirectory } from "pi-cosmic-core/platform/agent-directory";
+import { nodeFilePlatformLayer } from "pi-cosmic-core/platform/node-file";
 import { IntercomRegistry, type IntercomRegistryOptions } from "./registry/store.ts";
 import { IntercomSession, type IntercomSessionInput } from "./session/service.ts";
 import { IntercomInbound, type IntercomInboundContract } from "./transport/server.ts";

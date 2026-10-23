@@ -1,4 +1,5 @@
-import { sha256Text, synchronousRandomUuid } from "pi-cosmic-core";
+import { sha256Text } from "pi-cosmic-core/security/sha256";
+import { synchronousRandomUuid } from "pi-cosmic-core/platform/native-crypto";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";

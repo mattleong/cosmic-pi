@@ -9,7 +9,7 @@ import { getReadLineRange, numericArg } from "./data/args";
 import type { NativeArgumentPreview } from "./native-codemode-args";
 import { nativeMcpResourceAction, nativeMcpResourceSubject } from "./native-mcp-identity";
 import { isCorePreviewName } from "./preview-admission";
-import { formatDisplayPath } from "pi-cosmic-core";
+import { formatDisplayPath } from "pi-cosmic-core/platform/paths";
 
 type CallSubject = Pick<CompactChild, "subject" | "action"> & { readonly label?: string };
 type FieldText = (key: string) => string;

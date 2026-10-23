@@ -2,15 +2,14 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import { sha256Text } from "pi-cosmic-core/security/sha256";
 import {
-  sha256Text,
   CrossProcessLock,
   type CrossProcessLease,
   type CrossProcessLockContract,
-  ensurePrivateDirectory,
-  nodeFsPromises as fs,
-  nodePath,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/platform/cross-process-lock";
+import { ensurePrivateDirectory } from "pi-cosmic-core/platform/private-file";
+import { nodeFsPromises as fs, nodePath } from "pi-cosmic-core/platform/node-builtins";
 import { SUBAGENT_STATE_ROOT, WRITER_LEASE_ROOT } from "./private-state.ts";
 
 const MAX_FILESYSTEM_IDENTITY_CHARS = 256;

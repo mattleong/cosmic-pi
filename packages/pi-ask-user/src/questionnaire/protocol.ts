@@ -2,7 +2,9 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Fn from "effect/Function";
 import * as Schema from "effect/Schema";
 import * as Predicate from "effect/Predicate";
-import { decodeUnknownOrUndefined, ForeignCallable, querySessionCapability } from "pi-cosmic-core";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
+import { ForeignCallable } from "pi-cosmic-core/schema/foreign-callable";
+import { querySessionCapability } from "pi-cosmic-core/session-capability";
 import { MAX_CHOICES, MAX_QUESTIONS, MAX_TITLE_LENGTH, type AskUserRequest } from "./schema.ts";
 import {
   normalizeAskUserRequest,

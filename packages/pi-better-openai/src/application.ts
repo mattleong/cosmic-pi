@@ -16,19 +16,19 @@ import {
   type CodePreviewSchedulerServiceContract,
   type CodePreviewSettings,
 } from "pi-code-previews";
+import { bestEffortHostBootstrap } from "pi-cosmic-core/runtime/host-bootstrap";
 import {
-  bestEffortHostBootstrap,
   captureSessionHost,
   hasTerminalUI,
   invokeBestEffort,
   invokeHostCallback,
   isProjectTrusted,
-  makePiManagedRuntime,
-  makePiSessionRuntimeSlot,
   notifyAtHostBoundary,
-  failureMessage,
-  registerExtensionCommand,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/host-session";
+import { makePiManagedRuntime } from "pi-cosmic-core/runtime";
+import { makePiSessionRuntimeSlot } from "pi-cosmic-core/runtime/session-runtime";
+import { failureMessage } from "pi-cosmic-core/message-text";
+import { registerExtensionCommand } from "pi-cosmic-core/host-command";
 import { createCosmicFooterClient, createHostStateWatch } from "pi-cosmic-ui/client";
 import { makeSetStatusSafely } from "pi-cosmic-ui/boundary/host-status";
 import {
@@ -111,6 +111,7 @@ export interface BetterOpenAIExtensionDependencies {
   readonly resetOpenAICodexTransport?: (ctx: ExtensionContext) => void;
   readonly imageMessageRenderer?: OpenAIImageMessageRenderer;
   readonly piAiVersions?: PiAiVersions;
+  readonly loadSettingsMenu?: () => PromiseLike<typeof import("./settings/menu.ts")>;
 }
 
 export function betterOpenAIWithDependencies(
@@ -369,6 +370,7 @@ export function betterOpenAIWithDependencies(
     fastProjection,
     resetFastRoutingTransport: providerTransport.request,
     captureAuthority: slot.captureAuthority,
+    ...(dependencies.loadSettingsMenu && { loadMenu: dependencies.loadSettingsMenu }),
     run,
   });
 
@@ -408,18 +410,16 @@ export function betterOpenAIWithDependencies(
     invokeHostCallback(() => isEligibleOpenAICompactionModel(ctx.model), false);
   const runCompaction = <A, E>(
     use: (service: OpenAICompactionService["Service"]) => Effect.Effect<A, E>,
-    signal: () => AbortSignal | undefined,
+    signal: AbortSignal | undefined,
     isCurrent: () => boolean,
-  ) => Promise.resolve().then(() => runWhen(isCurrent)(OpenAICompactionService.use(use), signal()));
+  ) => Promise.resolve().then(() => runWhen(isCurrent)(OpenAICompactionService.use(use), signal));
   pi.on("session_before_compact", (event, ctx) => {
     updateContext(ctx);
     if (!currentContext) return needsContextRepair(ctx) ? { cancel: true } : undefined;
-    const isCurrent = slot.captureAuthority();
-    return runCompaction(
-      (service) => service.compact(event),
-      () => event.signal,
-      isCurrent,
-    )
+    const signal = event.signal;
+    const sessionCurrent = slot.captureAuthority();
+    const isCurrent = () => sessionCurrent() && !signal.aborted;
+    return runCompaction((service) => service.compact(event), signal, isCurrent)
       .then((compaction) => {
         if (!isCurrent()) return { cancel: true };
         if (projectionMismatch && openAICompactionRequested(ctx))
@@ -454,7 +454,7 @@ export function betterOpenAIWithDependencies(
     if (!currentContext) return undefined;
     return runCompaction(
       (service) => service.resetRetryOmissions(),
-      () => safeHostSignal(ctx),
+      safeHostSignal(ctx),
       slot.captureAuthority(),
     ).catch(() => undefined);
   });
@@ -495,12 +495,10 @@ export function betterOpenAIWithDependencies(
       if (needsContextRepair(ctx)) abortIncompleteContext(ctx);
       return undefined;
     }
-    const isCurrent = slot.captureAuthority();
-    return runCompaction(
-      (service) => service.filterContext(event.messages),
-      () => safeHostSignal(ctx),
-      isCurrent,
-    )
+    const signal = safeHostSignal(ctx);
+    const sessionCurrent = slot.captureAuthority();
+    const isCurrent = () => sessionCurrent() && !signal?.aborted;
+    return runCompaction((service) => service.filterContext(event.messages), signal, isCurrent)
       .then((messages) => (isCurrent() && messages ? { messages } : undefined))
       .catch(() => {
         if (isCurrent() && needsContextRepair(ctx)) abortIncompleteContext(ctx);
@@ -521,10 +519,12 @@ export function betterOpenAIWithDependencies(
       recordFastInjection,
     );
     if (!currentContext) return fastPayload;
-    const isCurrent = slot.captureAuthority();
-    return run(
+    const signal = safeHostSignal(ctx);
+    const sessionCurrent = slot.captureAuthority();
+    const isCurrent = () => sessionCurrent() && !signal?.aborted;
+    return runWhen(isCurrent)(
       OpenAICompactionService.use((service) => service.inject(fastPayload ?? event.payload)),
-      safeHostSignal(ctx),
+      signal,
     )
       .then((compactedPayload) => (isCurrent() ? (compactedPayload ?? fastPayload) : undefined))
       .catch(() => (isCurrent() ? fastPayload : undefined));

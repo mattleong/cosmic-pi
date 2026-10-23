@@ -7,15 +7,15 @@ import * as Option from "effect/Option";
 import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import {
-  decodeUnknownOrUndefined,
   acquireBoundedProcessRunner,
   nodeProcessLayer,
-  sanitizeDiagnosticContent,
   type BoundedProcessError,
   type BoundedProcessRunner,
-  firstLineMessage,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/platform/process";
+import { sanitizeDiagnosticContent } from "pi-cosmic-core/security";
+import { firstLineMessage } from "pi-cosmic-core/message-text";
 import { HerdrBtwError } from "../btw/errors.ts";
 import { BoundedId, BoundedPath, herdrBtwParentMarkerArguments } from "../btw/marker.ts";
 

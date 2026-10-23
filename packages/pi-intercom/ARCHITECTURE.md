@@ -8,6 +8,7 @@ among the agents of one session belongs to pi-subagents' `agent_*` tools.
 
 ## Ownership and boundaries
 
+- [Entrypoint](src/extension.ts) checks the child marker through core\'s dependency-free environment subpath before loading the application. Root loading still awaits factory registration, including replay. The application retains its defensive child check.
 - [Application](src/application.ts) registers Pi events, the inbound message renderer, the
   `/intercom` command, and replay at factory time, owns the session-runtime slot, and registers
   the tools once a runtime is active. [Layer composition](src/layer.ts) supplies the registry and
@@ -179,6 +180,7 @@ compact issue; the agent's procedure stays in the expanded detail. Replay is anc
 
 ## Tests
 
+[Entrypoint tests](tests/entrypoint.test.ts) protect child import exclusion and root replay registration.
 [Registry tests](tests/registry.test.ts) cover private atomic writes, refused links and unsafe
 records, listing diagnostics, the evidence-based sweep, and socket path reservation.
 [Transport tests](tests/transport.test.ts) cover the handshake against rogue listeners, connection

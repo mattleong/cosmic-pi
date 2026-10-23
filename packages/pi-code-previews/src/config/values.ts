@@ -5,9 +5,9 @@ import * as Schema from "effect/Schema";
 import * as Arr from "effect/Array";
 import {
   decodeTolerantFields,
-  type JsonObject,
   type TolerantFieldDiagnostic,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/config/tolerant-fields";
+import { type JsonObject } from "pi-cosmic-core/platform/json-document";
 import {
   ALL_CODE_PREVIEW_TOOLS,
   parseCodePreviewTools,

@@ -6,13 +6,10 @@ import * as Layer from "effect/Layer";
 import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import type * as Path from "effect/Path";
-import {
-  AgentDirectory,
-  type JsonDocumentStore,
-  decodeTolerantFields,
-  makeScopedConfigStore,
-  type JsonObject,
-} from "pi-cosmic-core";
+import { AgentDirectory } from "pi-cosmic-core/platform/agent-directory";
+import { type JsonDocumentStore, type JsonObject } from "pi-cosmic-core/platform/json-document";
+import { decodeTolerantFields } from "pi-cosmic-core/config/tolerant-fields";
+import { makeScopedConfigStore } from "pi-cosmic-core/config/scoped-config-store";
 import { normalizeConfig } from "./options.ts";
 import {
   BackgroundTaskConfigSchema,

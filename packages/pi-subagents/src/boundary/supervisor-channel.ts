@@ -1,14 +1,13 @@
 import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer";
+import { boundedNdjsonRpcSerialization } from "pi-cosmic-core/platform/bounded-ndjson-rpc";
 import {
-  boundedNdjsonRpcSerialization,
   createPrivateFile,
   ensurePrivateDirectory,
-  makeTokenVerifier,
-  nodeFsPromises as fs,
-  nodePath,
   PrivateFileError,
-  synchronousRandomHex,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/platform/private-file";
+import { makeTokenVerifier } from "pi-cosmic-core/platform/token-verifier";
+import { nodeFsPromises as fs, nodePath } from "pi-cosmic-core/platform/node-builtins";
+import { synchronousRandomHex } from "pi-cosmic-core/platform/native-crypto";
 import { fileURLToPath } from "node:url";
 import type * as Cause from "effect/Cause";
 import * as Context from "effect/Context";

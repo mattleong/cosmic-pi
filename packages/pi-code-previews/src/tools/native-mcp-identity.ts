@@ -1,4 +1,4 @@
-import { sha256Text } from "pi-cosmic-core";
+import { sha256Text } from "pi-cosmic-core/security/sha256";
 import type { ToolInfo } from "@earendil-works/pi-coding-agent";
 import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";

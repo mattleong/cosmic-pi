@@ -9,7 +9,11 @@ import {
   type SupervisorChannelConfig,
 } from "../supervisor/protocol.ts";
 import { boundedTextSchema } from "../supervisor/mcp-wire.ts";
-import { nodeFsConstants as constants, nodeFsPromises, nodePath } from "pi-cosmic-core";
+import {
+  nodeFsConstants as constants,
+  nodeFsPromises,
+  nodePath,
+} from "pi-cosmic-core/platform/node-builtins";
 
 const { lstat, open } = nodeFsPromises;
 

@@ -1,6 +1,6 @@
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
-import { indexOfFrom } from "pi-cosmic-core";
+import { indexOfFrom } from "pi-cosmic-core/text-scan";
 import { forEachRawTextLine } from "../shared/text-lines";
 
 // Bound once: Pi's loader routes each imported-helper call through an interop proxy.

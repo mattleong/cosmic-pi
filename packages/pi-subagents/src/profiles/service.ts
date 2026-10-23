@@ -4,7 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Semaphore from "effect/Semaphore";
-import { frozenProjection, type ProjectionError } from "pi-cosmic-core";
+import { frozenProjection, type ProjectionError } from "pi-cosmic-core/projection";
 import type { ResolvedSubagentConfig } from "../config/options.ts";
 import type { WriterWorkspaceMode } from "../config/schema.ts";
 import { SubagentConfigStore } from "../config/store.ts";

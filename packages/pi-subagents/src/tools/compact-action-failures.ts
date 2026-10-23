@@ -4,7 +4,7 @@ import * as Option from "effect/Option";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import { argumentFailureIssue, type CompactIssue, type CompactSummary } from "pi-code-previews";
-import { failureMessage, quoteText } from "pi-cosmic-core";
+import { failureMessage, quoteText } from "pi-cosmic-core/message-text";
 import type { AgentMessageRefusalCode } from "../run/errors.ts";
 import type { CompactToolActionFailure, SubagentRunCard } from "./details-schema.ts";
 import {

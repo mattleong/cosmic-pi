@@ -7,7 +7,7 @@ import { QUOTED_TEXT_LIMIT, quoted } from "./compact-run-issues.ts";
 import type { SubagentCardFailure, SubagentStartDetails } from "./details-schema.ts";
 import { failedStartRecoveryAction, formatFailedStartRecovery } from "./format.ts";
 import { isUncertainToolFailure } from "./outcome.ts";
-import { failureMessage } from "pi-cosmic-core";
+import { failureMessage } from "pi-cosmic-core/message-text";
 
 type AdmittedRun = NonNullable<
   NonNullable<SubagentStartDetails["startFailures"]>[number]["admittedRun"]

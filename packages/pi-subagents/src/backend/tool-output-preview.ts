@@ -5,7 +5,7 @@ import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
-import { indexOfFrom } from "pi-cosmic-core";
+import { indexOfFrom } from "pi-cosmic-core/text-scan";
 
 const TOOL_PREVIEW_LINES = 7;
 const TOOL_PREVIEW_CHARS = 1_000;

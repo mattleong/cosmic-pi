@@ -2,13 +2,13 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { isCustomAgentName } from "../profiles/agents.ts";
+import { safeTextPrefix } from "pi-cosmic-core/text";
 import {
-  safeTextPrefix,
   sanitizeDiagnosticContent,
   sanitizeDiagnosticError,
   sanitizeTerminalLine,
   stripTerminalControls,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/security";
 import { PROFILE_IDS, type ProfileId } from "../profiles/model.ts";
 import {
   isTerminalRunState,

@@ -5,7 +5,7 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import * as Rec from "effect/Record";
-import { sanitizeDiagnosticContent } from "pi-cosmic-core";
+import { sanitizeDiagnosticContent } from "pi-cosmic-core/security";
 import type { CompactIssue } from "./compact-issues";
 
 // Pi rejects a call before it runs with these results: final arguments that are not a JSON object

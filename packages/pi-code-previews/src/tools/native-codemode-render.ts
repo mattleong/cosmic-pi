@@ -34,7 +34,7 @@ import {
   type NativeCallEvidence,
 } from "./native-codemode-evidence";
 import { ownString, runningLine, safeContent } from "./native-safe-content";
-import { sanitizeDiagnosticContent } from "pi-cosmic-core";
+import { sanitizeDiagnosticContent } from "pi-cosmic-core/security";
 import { argumentsStreaming } from "./renderers/shared/preview-text";
 import {
   createNativeDiscoveryProjector,

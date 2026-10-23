@@ -4,7 +4,7 @@ import { compactIssueSeverity, type CompactIssue } from "./compact-issues";
 import { isSafeCompactSummary, type CompactOutcomeSchema } from "./compact-summary-schema";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type { ToolRenderContext } from "./renderers/shared/types";
-import { failureMessage } from "pi-cosmic-core";
+import { failureMessage } from "pi-cosmic-core/message-text";
 
 export type CompactAnimationScheduler = (
   intervalMs: number,

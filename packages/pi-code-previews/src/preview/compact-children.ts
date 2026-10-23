@@ -7,7 +7,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import type { CompactChild, CompactSummary } from "../tools/compact-summary";
 import { layoutCompactRow, type CompactRowInput } from "./compact-row";
 import { compactIssueLabel, renderCompactIssues, wrapHanging } from "./compact-issues";
-import { formatDuration } from "pi-cosmic-core";
+import { formatDuration } from "pi-cosmic-core/display";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 
 const MAX_CHILDREN = 5;

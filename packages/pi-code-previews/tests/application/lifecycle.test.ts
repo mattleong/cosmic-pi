@@ -29,6 +29,7 @@ import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import type { CodePreviewSettings } from "../../src/config/schema";
 import { setCodePreviewSettings, setCodePreviewSettingsProblems } from "../../src/config/state";
 import { codePreviewApplicationLayer } from "../../src/layer";
+import { getShikiStatus, renderWithShiki } from "../../src/syntax/render";
 import { registerWritePreviewTool } from "../../src/tools/renderers/registration";
 import { effectTest, settle, step } from "../support/effect-test";
 import { builtinToolInfo } from "../support/renderer-host";
@@ -312,6 +313,54 @@ effectTest("startup loads settings before renderers and activates the scheduler"
   assert.deepEqual(h.signals().fork, []);
   yield* step(() => shutdown(h));
 });
+
+effectTest(
+  "TUI startup does not await speculative syntax and shutdown interrupts it",
+  function* () {
+    const entered = yield* Deferred.make<void>();
+    let interrupted = false;
+    const h = yield* registered({
+      load: () => Effect.succeed({ ...settings, syntaxHighlighting: true }),
+      initializeSyntax: () =>
+        Deferred.succeed(entered, undefined).pipe(
+          Effect.andThen(Effect.never),
+          Effect.ensuring(Effect.sync(() => (interrupted = true))),
+        ),
+    });
+    yield* step(() => start(h, h.context({ mode: "tui" })));
+    yield* Deferred.await(entered);
+    assert.equal(hasCodePreviewSessionCapability(), true);
+    yield* step(() => shutdown(h));
+    assert.equal(interrupted, true);
+  },
+);
+
+for (const mode of ["print", "json", "rpc"] as const)
+  effectTest(
+    `${mode} skips speculative syntax but historical rendering initializes on demand`,
+    function* () {
+      const h = yield* registered({
+        load: () => Effect.succeed({ ...settings, syntaxHighlighting: true }),
+      });
+      yield* Effect.addFinalizer(() => step(() => shutdown(h)));
+      yield* step(() => start(h, h.context({ mode })));
+      assert.deepEqual(h.syntaxThemes, []);
+      assert.equal(getShikiStatus().initialized, false);
+      const ready = yield* Deferred.make<void>();
+      const source = "const preserved = 1;";
+      assert.equal(
+        renderWithShiki(source, "typescript", () => Deferred.doneUnsafe(ready, Effect.void)),
+        undefined,
+      );
+      yield* Deferred.await(ready);
+      assert.equal(getShikiStatus().initialized, true);
+      const rendered = renderWithShiki(source, "typescript");
+      assert.ok(rendered);
+      assert.match(Arr.join(rendered, "\n"), /preserved/);
+      yield* step(() => shutdown(h));
+      assert.equal(getShikiStatus().initialized, false);
+    },
+  );
 
 effectTest("replacement interrupts startup and releases each application Layer once", function* () {
   let interrupted = 0;

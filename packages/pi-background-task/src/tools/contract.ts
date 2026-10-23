@@ -1,5 +1,5 @@
 import * as Arr from "effect/Array";
-import { sanitizeDiagnosticError, sanitizeTerminalLine } from "pi-cosmic-core";
+import { sanitizeDiagnosticError, sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { BACKGROUND_TASK_FIELD_BOUNDS as BOUNDS } from "../task/bounds.ts";
 import {
   isActiveTaskState,

@@ -9,14 +9,13 @@ import * as MutableRef from "effect/MutableRef";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 import * as Semaphore from "effect/Semaphore";
+import { freezeSnapshot, frozenProjection } from "pi-cosmic-core/projection";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import {
-  freezeSnapshot,
-  invokeHostCallback,
-  frozenProjection,
   createSubscriptionRefresh,
   recoverRefreshFailure,
-  type RefreshRequest,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/coordination/subscription-refresh";
+import { type RefreshRequest } from "pi-cosmic-core/coordination/refresh-coordinator";
 import {
   emptyTotals,
   createSessionUsageReader,
@@ -82,6 +81,7 @@ export interface CosmicUiServiceOptions {
   readonly sessionManager: ExtensionContext["sessionManager"];
   readonly cwd: string;
   readonly initialTotals?: FooterTotals;
+  readonly readUsageTotals?: () => FooterTotals | undefined;
   readonly projection: MutableRef.MutableRef<CosmicUiProjection>;
   readonly onChange: () => void;
   /** Runs before `onChange` when reconciled usage totals change. */
@@ -212,12 +212,14 @@ export class CosmicUiService extends Context.Service<CosmicUiService>()(
        * commit leaves them behind, so the next reconciliation repairs the missed notification.
        */
       let notifiedTotals = initialTotals;
-      const readUsageTotals = createSessionUsageReader(options.sessionManager);
+      const readUsageTotals =
+        options.readUsageTotals ?? createSessionUsageReader(options.sessionManager);
       /**
        * Totals change when the host persists usage, and some of that, such as cache warming, has no
        * event. An unreadable session keeps the last complete totals, which the state already holds.
        */
       const reconcileUsage = Effect.fn("CosmicUiService.reconcileUsage")(function* () {
+        if (!isTui()) return;
         // Serialized so an older read cannot replace totals a newer read already committed.
         yield* usageLock.withPermit(
           Effect.gen(function* () {
@@ -235,7 +237,7 @@ export class CosmicUiService extends Context.Service<CosmicUiService>()(
           }),
         );
       });
-      if (options.startPolling !== false) {
+      if (isTui() && options.startPolling !== false) {
         yield* gitRefresh.startPolling({}).pipe(Effect.forkScoped);
         yield* pullRefresh.startPolling({}).pipe(Effect.forkScoped);
         yield* reconcileUsage().pipe(

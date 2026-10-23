@@ -1,5 +1,5 @@
 import { defineTool, type ExtensionAPI, type ToolRenderers } from "@earendil-works/pi-coding-agent";
-import { invokeHostCallback } from "pi-cosmic-core";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import { capturePreviewHostTools } from "../boundary/host-tool-renderers";
 import { withCodePreviewShell } from "../tools/cooperative-tools";
 import { isSameExtensionSource } from "../tools/preview-admission";

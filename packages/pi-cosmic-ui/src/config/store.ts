@@ -7,17 +7,19 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import { AgentDirectory } from "pi-cosmic-core/platform/agent-directory";
 import {
-  AgentDirectory,
   commitPreferredScope,
-  decodeTolerantFields,
-  decodeUnknownOrUndefined,
+  makeScopedConfigStore,
+  type ScopedConfigMetadata,
+} from "pi-cosmic-core/config/scoped-config-store";
+import { decodeTolerantFields } from "pi-cosmic-core/config/tolerant-fields";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
+import {
   isJsonObject,
   type JsonDocumentStore,
-  makeScopedConfigStore,
   type JsonObject,
-  type ScopedConfigMetadata,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/platform/json-document";
 import {
   DEFAULT_CONFIG,
   FooterDensitySchema,

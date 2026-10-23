@@ -1,4 +1,5 @@
-import { synchronousRandomHex, type TokenVerifier } from "pi-cosmic-core";
+import { synchronousRandomHex } from "pi-cosmic-core/platform/native-crypto";
+import { type TokenVerifier } from "pi-cosmic-core/platform/token-verifier";
 import type * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";

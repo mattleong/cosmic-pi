@@ -89,15 +89,18 @@ use Oxlint's AST and lexical scopes. They report without fixes because each find
   closure is created in the same function. It follows immutable aliases, known builders, and the
   whole context passed to same-file helpers, not imported helpers, classes, or wrappers. Its
   helper table lists exact callback positions; linting each definition verifies them, and the
-  rule test fails when a definition moves.
+  rule test fails when a definition moves. `invokeHostCallback` resolves from both
+  `pi-cosmic-core` and its exact public `pi-cosmic-core/host-session` subpath.
 - **`no-lossy-expanded-arguments`** catches lossy or unescaped text in expanded tool output.
-  Imported `stripTerminalControls` or `stripAnsi` output is reported when it reaches
+  Imported `stripTerminalControls` or `stripAnsi` from `pi-cosmic-core` or its exact public
+  `pi-cosmic-core/security` subpath is reported when its output reaches
   `theme.fg("toolOutput", ...)` anywhere, `theme.fg("error", ...)` inside a `renderCall` or
   `renderResult`, or, for serialized `renderCall` arguments, a pi-tui `Text` or the renderer's
   return. Raw `JSON.stringify(args)` of renderer arguments reaching those sinks is also reported,
   because it keeps C1 controls. Text flows through immutable `const` aliases, conditional branches,
   templates, concatenation, and theme styling, not through other calls. Arguments resolve through
-  one same-file helper and `invokeHostCallback`; a renderer is a `renderCall`/`renderResult`
+  one same-file helper and `invokeHostCallback` from the core root or `host-session` subpath;
+  a renderer is a `renderCall`/`renderResult`
   property or a function bound to one. Prefer `expandedArguments` or `escapeControlChars`. Collapsed
   summaries, issues, notifications, logs, other colors, and test fakes under `tests/` remain valid.
 - **`no-manual-abort-listener`** rejects `addEventListener("abort", ...)` member calls. Pass the

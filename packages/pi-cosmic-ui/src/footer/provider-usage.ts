@@ -2,7 +2,7 @@ import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
-import { sanitizeTerminalLine } from "pi-cosmic-core";
+import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import type { CosmicFooterTheme } from "../protocol/protocol.ts";
 import { alignSides } from "./contributions.ts";
 import { progressBar, remainingCapacityTone } from "./meter.ts";

@@ -2,7 +2,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type Editor } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import { stripTerminalControls } from "pi-cosmic-core";
+import { stripTerminalControls } from "pi-cosmic-core/security";
 import { isQuestionnaireComplete } from "../questionnaire/reducer.ts";
 import type { QuestionnaireState } from "../questionnaire/model.ts";
 import {
