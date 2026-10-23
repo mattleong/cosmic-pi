@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { describe, expect, it } from "vitest";
 import {
   cancelQuestionnaire,
@@ -49,7 +50,7 @@ describe("questionnaire reducer", () => {
     });
 
     expect(isQuestionnaireComplete(state)).toBe(true);
-    expect(state.drafts.map((draft) => draft.answer)).toEqual([
+    expect(Arr.map(state.drafts, (draft) => draft.answer)).toEqual([
       { kind: "choices", values: ["luxon"] },
       { kind: "custom", text: "Run the smoke suite." },
     ]);

@@ -1,4 +1,5 @@
 import type { Component } from "@earendil-works/pi-tui";
+import * as Arr from "effect/Array";
 import { describe, expect, it } from "vitest";
 import { plainTheme as theme } from "pi-cosmic-core/testing";
 import { ASYNC_MESSAGE_TYPE } from "../src/boundary/host-delivery.ts";
@@ -15,7 +16,7 @@ import { hostile, hostileContent } from "./support/questionnaire.ts";
 type ResultDetails = Parameters<typeof renderAsyncResult>[0]["details"];
 type MessageInput = Parameters<typeof renderAsyncMessage>[0];
 
-const output = (component: Component) => component.render(240).join("\n");
+const output = (component: Component) => Arr.join(component.render(240), "\n");
 const callContext = (expanded = false) => ({ expanded, state: {} });
 const outcome = {
   outcome: "submitted",
@@ -85,7 +86,7 @@ describe("async questionnaire replay rendering", () => {
     expect(contentText(hostileContent("safe"))).toBe("safe fallback\nafter");
     const hostileId = hostile({ ...snapshot }, "requestId");
     for (const rendered of [
-      ...[...invalid, hostileId, { requests: [hostileId] }].map((details) =>
+      ...Arr.map([...invalid, hostileId, { requests: [hostileId] }], (details) =>
         output(
           renderAsyncResult({ details, content }, { expanded: false, isPartial: false }, theme),
         ),

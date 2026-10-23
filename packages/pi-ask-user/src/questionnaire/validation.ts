@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { AskUserValidationError } from "./errors.ts";
 import {
   MAX_CUSTOM_ANSWER_LENGTH,
@@ -12,7 +14,7 @@ export function validateQuestionnaireInput(
   value: string,
   kind: "custom" | "text" | "note",
 ): { readonly value: string; readonly error?: undefined } | { readonly error: string } {
-  const trimmed = value.trim();
+  const trimmed = Str.trim(value);
   const maximum = kind === "note" ? MAX_NOTE_LENGTH : MAX_CUSTOM_ANSWER_LENGTH;
   if (kind !== "note" && trimmed.length === 0) return { error: "Write an answer first" };
   if (trimmed.length > maximum)
@@ -37,26 +39,26 @@ interface QuestionnaireInput {
 }
 
 export const normalizeAskUserRequest = (request: QuestionnaireInput): AskUserRequest => ({
-  questions: request.questions.map((question) => {
+  questions: Arr.map(request.questions, (question) => {
     const base = {
-      key: question.key.trim(),
-      title: question.title.trim(),
-      prompt: question.prompt.trim(),
+      key: Str.trim(question.key),
+      title: Str.trim(question.title),
+      prompt: Str.trim(question.prompt),
     };
     if (question.mode === "text") return { ...base, mode: question.mode };
     return {
       ...base,
       mode: question.mode,
-      choices: question.choices.map((choice) => {
+      choices: Arr.map(question.choices, (choice) => {
         const baseChoice = {
           ...choice,
-          value: choice.value.trim(),
-          label: choice.label.trim(),
-          description: choice.description.trim(),
+          value: Str.trim(choice.value),
+          label: Str.trim(choice.label),
+          description: Str.trim(choice.description),
         };
         return choice.preview === undefined
           ? baseChoice
-          : { ...baseChoice, preview: choice.preview.trim() };
+          : { ...baseChoice, preview: Str.trim(choice.preview) };
       }),
     };
   }),
@@ -89,7 +91,7 @@ export function validateAskUserRequest(
     const values = new Set<string>();
     const labels = new Set<string>();
     for (const [choiceIndex, choice] of question.choices.entries()) {
-      const label = choice.label.toLowerCase();
+      const label = Str.toLowerCase(choice.label);
       const position = `Question ${questionIndex + 1}, choice ${choiceIndex + 1}`;
       if (values.has(choice.value)) return fail(position, "has a duplicate value");
       if (labels.has(label)) return fail(position, "has a duplicate label");

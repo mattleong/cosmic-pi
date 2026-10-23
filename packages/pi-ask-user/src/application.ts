@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import {
@@ -224,7 +225,7 @@ export function askUserWithDependencies(
   });
   pi.on("session_tree", (_event, ctx) => startSession(ctx, false));
   pi.on("context", (event) => ({
-    messages: event.messages.filter((message) =>
+    messages: Arr.filter(event.messages, (message) =>
       acceptsAsyncMessage(message, currentGeneration, historicalDeliveries),
     ),
   }));

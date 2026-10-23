@@ -7,6 +7,7 @@ import type {
 import * as Arr from "effect/Array";
 import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
+import * as Str from "effect/String";
 import { countLabel, stripTerminalControls } from "pi-cosmic-core";
 import {
   callTitles,
@@ -57,14 +58,15 @@ function verifiedLabels(
   const labels = answer.labels;
   const verified =
     labels.length > 0 &&
-    labels.every(
+    Arr.every(
+      labels,
       (label) =>
-        label.trim() &&
+        Str.isNonEmpty(Str.trim(label)) &&
         label.length <= 40 &&
         !/[\r\n]/u.test(label) &&
-        question.choices.some((choice) => choice.label === label),
+        Arr.some(question.choices, (choice) => choice.label === label),
     );
-  return verified ? labels.map(stripTerminalControls) : undefined;
+  return verified ? Arr.map(labels, stripTerminalControls) : undefined;
 }
 
 function answerCounters(args: QuestionnaireArgs, answers: readonly ReplayedAnswer[]): string[] {
@@ -74,7 +76,7 @@ function answerCounters(args: QuestionnaireArgs, answers: readonly ReplayedAnswe
   if (answer.kind === "custom") return ["custom answer", count];
   if (answer.kind === "text") return ["written answer", count];
   const labels = verifiedLabels(args, answer);
-  return labels ? [labels.join(", "), countLabel(labels.length, "choice")] : [count];
+  return labels ? [Arr.join(labels, ", "), countLabel(labels.length, "choice")] : [count];
 }
 
 function settledSummary(
@@ -113,8 +115,8 @@ function answersPending(
   states: readonly QuestionnaireState[],
   list: boolean,
 ): CompactIssue | undefined {
-  const queued = states.filter((state) => state === "queued").length;
-  const pending = queued + states.filter((state) => state === "waiting").length;
+  const queued = Arr.filter(states, (state) => state === "queued").length;
+  const pending = queued + Arr.filter(states, (state) => state === "waiting").length;
   if (pending === 0) return undefined;
   const one = pending === 1;
   const message =
@@ -169,22 +171,25 @@ const classified = <Row extends { readonly state: QuestionnaireState | undefined
 ): row is Row & { readonly state: QuestionnaireState } => row.state !== undefined;
 
 function rowsSummary(args: QuestionnaireArgs, rows: readonly ClassifiedRow[]): CompactSummary {
-  const states = rows.map((row) => row.state);
+  const states = Arr.map(rows, (row) => row.state);
   const list = isStatusList(args) || rows.length !== 1;
-  const issues = [
-    questionnaireFailed(states.filter((state) => state === "failed").length, list),
-    deliveryFailed(
-      Arr.filterMap(rows, (row) =>
-        row.delivery === "failed" && (row.state === "answered" || row.state === "cancelled")
-          ? Result.succeed(row.state)
-          : Result.failVoid,
+  const issues = Arr.filter(
+    [
+      questionnaireFailed(Arr.filter(states, (state) => state === "failed").length, list),
+      deliveryFailed(
+        Arr.filterMap(rows, (row) =>
+          row.delivery === "failed" && (row.state === "answered" || row.state === "cancelled")
+            ? Result.succeed(row.state)
+            : Result.failVoid,
+        ),
       ),
-    ),
-    answersPending(states, list),
-  ].filter(Predicate.isNotUndefined);
+      answersPending(states, list),
+    ],
+    Predicate.isNotUndefined,
+  );
   const outcome: CompactOutcome = states.includes("failed")
     ? "error"
-    : states.length > 0 && states.every((state) => state === "cancelled")
+    : states.length > 0 && Arr.every(states, (state) => state === "cancelled")
       ? "cancelled"
       : "success";
   const [only] = rows;
@@ -208,11 +213,12 @@ export const asyncAskUserCompactSummary: CompactSummaryProvider<
   AskUserAsyncRequest | AskUserAsyncControl
 > = ({ phase, args, result, context }) => {
   if (phase !== "settled") return context.isError ? undefined : liveSummary(args);
-  const rows = decodeCompactAsyncRows(result?.details)?.map((row) =>
-    Object.assign({}, row, { state: questionnaireState(row) }),
-  );
-  if (rows?.every(classified)) {
-    const cancelled = rows.length > 0 && rows.every((row) => row.state === "cancelled");
+  const decoded = decodeCompactAsyncRows(result?.details);
+  const rows =
+    decoded &&
+    Arr.map(decoded, (row) => Object.assign({}, row, { state: questionnaireState(row) }));
+  if (rows && Arr.every(rows, classified)) {
+    const cancelled = rows.length > 0 && Arr.every(rows, (row) => row.state === "cancelled");
     if (!context.isError || cancelled) return rowsSummary(args, rows);
   }
   if (context.isError) return { ...identity(args), outcome: "error" };

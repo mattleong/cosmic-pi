@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import {
   registerActivityProvider,
@@ -52,11 +53,17 @@ export function createQuestionnaireActivity(options: {
           item: {
             id,
             kind: "question",
-            title: questions.map((question) => titleLabel(question.title)).join(" / "),
+            title: Arr.join(
+              Arr.map(questions, (question) => titleLabel(question.title)),
+              " / ",
+            ),
             status: "pending",
             revision: "",
             summary: "queued",
-            detail: questions.map((question) => question.prompt).join("\n\n"),
+            detail: Arr.join(
+              Arr.map(questions, (question) => question.prompt),
+              "\n\n",
+            ),
             actions: [cancelAction],
             ...(owner && { parent: { providerId: "pi-subagents", itemId: owner.runId } }),
           },
@@ -82,7 +89,7 @@ export function createQuestionnaireActivity(options: {
             actions: [],
           },
         });
-        const settled = [...rows.values()].filter((entry) => !entry.cancel);
+        const settled = Arr.filter([...rows.values()], (entry) => !entry.cancel);
         for (const old of settled.slice(0, Math.max(0, settled.length - 16)))
           rows.delete(old.item.id);
         publish();
@@ -116,7 +123,7 @@ export function createQuestionnaireActivity(options: {
       registration = registerActivityProvider(events, {
         sessionId,
         providerId: "pi-ask-user",
-        snapshot: () => (current() ? [...rows.values()].map((row) => row.item) : []),
+        snapshot: () => (current() ? Arr.map([...rows.values()], (row) => row.item) : []),
         onAvailability: (available) => options.bridge.setManaged(available),
         invoke: (id, action, expected, signal) =>
           Promise.resolve().then(() => {
@@ -126,7 +133,7 @@ export function createQuestionnaireActivity(options: {
               !current() ||
               !row ||
               row.item.revision !== expected ||
-              !row.item.actions?.some((item) => item.id === action)
+              !Arr.some(row.item.actions ?? [], (item) => item.id === action)
             )
               throw new Error("Questionnaire action is no longer available.");
             if (action === "resume" && row.token !== undefined) {

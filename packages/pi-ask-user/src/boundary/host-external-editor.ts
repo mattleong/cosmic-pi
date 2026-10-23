@@ -3,11 +3,13 @@ import type { TUI } from "@earendil-works/pi-tui";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import * as ChildProcess from "effect/process/ChildProcess";
 import { nodeFilePlatformLayer, nodeProcessLayer, stripTerminalControls } from "pi-cosmic-core";
 
@@ -67,7 +69,10 @@ const editorSession = (tui: TUI, configuredCommand: string | undefined, value: s
         return yield* ExternalEditorError.make({
           message: `External editor exited with status ${status}.`,
         });
-      return stripTerminalControls(yield* fs.readFileString(file)).replace(/\n$/u, "");
+      return Fn.pipe(
+        stripTerminalControls(yield* fs.readFileString(file)),
+        Str.replace(/\n$/u, ""),
+      );
     }),
   );
 

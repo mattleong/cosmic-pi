@@ -1,5 +1,9 @@
 import type { Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Container, Text, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import { expandedArguments, expandedSection, previewIssuesSlot } from "pi-code-previews";
 import { stripTerminalControls } from "pi-cosmic-core";
 import { clipToWidth } from "pi-cosmic-ui/manager";
@@ -32,13 +36,13 @@ export function stacked(parts: readonly Component[]): Component {
 export const cancelledLine = (theme: Pick<Theme, "fg">): Component =>
   new Text(toolStatusLine(theme, "stopped", "Cancelled"), 0, 0);
 
-const sentenceCase = (text: string): string => text.charAt(0).toUpperCase() + text.slice(1);
-
 export const mutedState = (alternatives: readonly string[], theme: Pick<Theme, "fg">): Component =>
   composeToolComponent((width) => {
-    const text =
-      alternatives.find((entry) => visibleWidth(entry) <= width) ?? alternatives.at(-1) ?? "";
-    return text ? [clipToWidth(theme.fg("muted", sentenceCase(text)), width)] : [];
+    const text = Option.getOrElse(
+      Arr.findFirst(alternatives, (entry) => visibleWidth(entry) <= width),
+      () => alternatives.at(-1) ?? "",
+    );
+    return text ? [clipToWidth(theme.fg("muted", Str.capitalize(text)), width)] : [];
   });
 
 interface AnswerEntry {
@@ -51,16 +55,16 @@ const answerEntries = (
   answers: readonly ReplayedAnswer[],
   titles: ReadonlyMap<string, string>,
 ): AnswerEntry[] =>
-  answers.map((answer) => ({
+  Arr.map(answers, (answer) => ({
     label: titleLabel(titles.get(answer.key) ?? answer.key),
     value: stripTerminalControls(
-      answer.kind === "choices" ? answer.labels.join(", ") : answer.text,
+      answer.kind === "choices" ? Arr.join(answer.labels, ", ") : answer.text,
     ),
     note: answer.note === undefined ? undefined : stripTerminalControls(answer.note),
   }));
 
 const indentLines = (text: string, indent: string): string =>
-  text.replace(/\r?\n/gu, `\n${indent}`);
+  Fn.pipe(text, Str.replace(/\r?\n/gu, `\n${indent}`));
 
 export function answersBody(
   answers: readonly ReplayedAnswer[],
@@ -71,24 +75,26 @@ export function answersBody(
   const entries = answerEntries(answers, titles);
   if (!bounded)
     return new Text(
-      entries
-        .flatMap(({ label, value, note }) => [
+      Arr.join(
+        Arr.flatMap(entries, ({ label, value, note }) => [
           `${theme.fg("muted", `${label}:`)} ${indentLines(value, "  ")}`,
           ...(note === undefined ? [] : [theme.fg("dim", `  Note: ${indentLines(note, "    ")}`)]),
-        ])
-        .join("\n"),
+        ]),
+        "\n",
+      ),
       0,
       0,
     );
   return composeToolComponent((width) => {
     let cut = false;
     const fit = (prefix: string, text: string, style: (line: string) => string): string => {
-      const [first = "", ...rest] = text.split(/\r?\n/u);
+      const [first, ...rest] = Str.split(text, /\r?\n/u);
       const line = `${prefix}${style(first)}`;
-      if (rest.some((entry) => entry.trim()) || visibleWidth(line) > width) cut = true;
+      if (Arr.some(rest, (entry) => Str.isNonEmpty(Str.trim(entry))) || visibleWidth(line) > width)
+        cut = true;
       return clipToWidth(line, width);
     };
-    const rendered = entries.flatMap(({ label, value, note }) => {
+    const rendered = Arr.flatMap(entries, ({ label, value, note }) => {
       const answerLine = fit(`${theme.fg("muted", `${label}:`)} `, value, (line) => line);
       return note === undefined
         ? [answerLine]

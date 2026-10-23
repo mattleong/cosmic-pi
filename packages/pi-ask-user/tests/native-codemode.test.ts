@@ -1,11 +1,15 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Match from "effect/Match";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import type { AskUserOutcome } from "../src/questionnaire/model.ts";
 import { AskUserService } from "../src/questionnaire/service.ts";
@@ -20,9 +24,11 @@ const acquireService = (...args: Parameters<typeof AskUserService.layer>) =>
 const decodeOutput = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const literal = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const output = (text: string) => {
-  const line = text.split("\n").find((candidate) => candidate.startsWith("WORKFLOW_RESULT "));
+  const line = Option.getOrUndefined(
+    Arr.findFirst(Str.split(text, "\n"), Str.startsWith("WORKFLOW_RESULT ")),
+  );
   expect(line, text).toBeDefined();
-  return decodeOutput(line!.slice("WORKFLOW_RESULT ".length));
+  return decodeOutput(Fn.pipe(line!, Str.slice("WORKFLOW_RESULT ".length)));
 };
 const print = (expression: string) => `text('WORKFLOW_RESULT ' + JSON.stringify(${expression}));`;
 const request = literal(asyncRequest);

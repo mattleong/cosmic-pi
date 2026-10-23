@@ -16,7 +16,10 @@ import {
 } from "../src/tools/ask-user-async.ts";
 import { formatAskUserOutcome, formatAsyncSnapshot } from "../src/questionnaire/format.ts";
 import { noExecution } from "./support/questionnaire.ts";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Match from "effect/Match";
+import * as Str from "effect/String";
 
 const outcome = {
   outcome: "submitted",
@@ -96,7 +99,9 @@ describe("registered questionnaire presentation", () => {
       const harness = createToolPresentationHarness(tool, { width: 160 });
       const isBlocking = tool.name === "ask_user";
       harness.call(
-        tool.name.endsWith("control") ? { action: "status", requestId: row.requestId } : questions,
+        Fn.pipe(tool.name, Str.endsWith("control"))
+          ? { action: "status", requestId: row.requestId }
+          : questions,
         { expanded: true },
       );
       harness.result(
@@ -113,11 +118,12 @@ describe("registered questionnaire presentation", () => {
         },
         { expanded: true },
       );
-      const text = harness.render().join("\n");
+      const text = Arr.join(harness.render(), "\n");
       expect(text).toContain("ACTUAL_VALUE");
       expect(text).toContain("Answer note");
       expect(text).toContain("Independent raw evidence");
-      if (!tool.name.endsWith("control")) expect(text).toContain("FULL_PROMPT_EVIDENCE");
+      if (!Fn.pipe(tool.name, Str.endsWith("control")))
+        expect(text).toContain("FULL_PROMPT_EVIDENCE");
     }
     const message = {
       role: "custom" as const,
@@ -133,9 +139,10 @@ describe("registered questionnaire presentation", () => {
       },
     };
     expect(
-      renderAskUserAsyncMessage(message, { expanded: true, outputPad: 0 }, theme)!
-        .render(160)
-        .join("\n"),
+      Arr.join(
+        renderAskUserAsyncMessage(message, { expanded: true, outputPad: 0 }, theme)!.render(160),
+        "\n",
+      ),
     ).toContain("ACTUAL_VALUE");
   });
   it("uses the registering owner's scheduler and releases it when the call settles", () => {

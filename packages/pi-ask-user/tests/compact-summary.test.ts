@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { describe, expect, it } from "vitest";
 import type { CompactSummaryProvider } from "pi-code-previews";
 import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
@@ -111,9 +112,10 @@ describe("questionnaire compact outcome projection", () => {
       summarize(asyncAskUserCompactSummary, broken),
       summarize(asyncAskUserCompactSummary, { requests: [broken, broken] }, list),
     ];
-    const messages = summaries
-      .flatMap((summary) => summary?.issues ?? [])
-      .map((issue) => issue.message);
+    const messages = Arr.map(
+      Arr.flatMap(summaries, (summary) => summary?.issues ?? []),
+      (issue) => issue.message,
+    );
     expect(messages.length).toBe(summaries.length);
     for (const message of messages)
       expect({

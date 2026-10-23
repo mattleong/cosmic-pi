@@ -1,4 +1,8 @@
 import { CURSOR_MARKER } from "@earendil-works/pi-tui";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 
 export const SELECTION_MARKER = "\x1b_ask-user-selection\x07";
@@ -15,7 +19,7 @@ export class DialogViewport {
   }
 
   page(action: string): boolean {
-    const direction = action.endsWith("up") ? -1 : 1;
+    const direction = Fn.pipe(action, Str.endsWith("up")) ? -1 : 1;
     const distance = this.pending === "first" || this.pending === "last" ? 0 : (this.pending ?? 0);
     if (action === "first" || action === "last") this.pending = action;
     else if (action === "full-page-up" || action === "full-page-down")
@@ -36,8 +40,14 @@ export class DialogViewport {
   }
 
   private revealFocus(lines: readonly string[], bodyHeight: number): void {
-    const cursor = lines.findIndex((line) => line.includes(CURSOR_MARKER));
-    const selected = lines.findIndex((line) => line.includes(SELECTION_MARKER));
+    const cursor = Option.getOrElse(
+      Arr.findFirstIndex(lines, Str.includes(CURSOR_MARKER)),
+      () => -1,
+    );
+    const selected = Option.getOrElse(
+      Arr.findFirstIndex(lines, Str.includes(SELECTION_MARKER)),
+      () => -1,
+    );
     const focus = cursor >= 0 ? cursor : this.followSelection ? selected : -1;
     if (focus < 0) return;
     if (focus < this.offset) this.offset = focus;
@@ -57,12 +67,13 @@ export class DialogViewport {
         feedback ??
           `${this.offset + 1}-${this.offset + visible.length}/${lines.length} • PgUp/PgDn scroll • Home/End`,
       );
-    return visible.map((line) => {
-      const clean = line.replaceAll(SELECTION_MARKER, "");
+    return Arr.map(visible, (line) => {
+      const clean = Fn.pipe(line, Str.replaceAll(SELECTION_MARKER, ""));
       const bounded = clipToWidth(clean, width, "");
-      const marker = clean.indexOf(CURSOR_MARKER);
-      return marker >= 0 && !bounded.includes(CURSOR_MARKER)
-        ? CURSOR_MARKER + clipToWidth(clean.slice(marker + CURSOR_MARKER.length), width, "")
+      const marker = Fn.pipe(clean, Str.indexOf(CURSOR_MARKER));
+      return Option.isSome(marker) && !Fn.pipe(bounded, Str.includes(CURSOR_MARKER))
+        ? CURSOR_MARKER +
+            clipToWidth(Fn.pipe(clean, Str.slice(marker.value + CURSOR_MARKER.length)), width, "")
         : bounded;
     });
   }

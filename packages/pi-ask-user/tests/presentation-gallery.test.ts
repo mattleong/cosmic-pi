@@ -11,7 +11,9 @@ import {
 } from "pi-code-previews/testing";
 import { extensionContextFixture } from "pi-cosmic-core/testing";
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import { ASYNC_MESSAGE_TYPE } from "../src/boundary/host-delivery.ts";
 import type { AsyncQuestionnaireSnapshot } from "../src/questionnaire/async-model.ts";
 import { formatAsyncSnapshot } from "../src/questionnaire/format.ts";
@@ -155,9 +157,9 @@ const executed = (
   register: (pi: ExtensionAPI) => void,
 ) =>
   Effect.promise(() =>
-    captureRegistrations(register)
-      .tools.find((entry) => entry.name === tool)!
-      .execute("gallery", args, undefined, undefined, extensionContextFixture()),
+    Option.getOrThrow(
+      Arr.findFirst(captureRegistrations(register).tools, (entry) => entry.name === tool),
+    ).execute("gallery", args, undefined, undefined, extensionContextFixture()),
   ).pipe(Effect.map((result): ToolScenario => ({ tool, title, args, result })));
 
 const asked = (title: string, args: AskUserRequest, outcome: AskUserOutcome) =>
@@ -300,10 +302,13 @@ describe.skipIf(!directory)("presentation gallery", () => {
           const { tools, messageRenderers } = captureRegistrations(registerAll);
           for (const { tool, ...scenario } of scenarios)
             lines.push(
-              ...galleryFrames(tools.find((entry) => entry.name === tool)!, {
-                ...scenario,
-                title: `${style} · ${tool} · ${scenario.title}`,
-              }),
+              ...galleryFrames(
+                Option.getOrThrow(Arr.findFirst(tools, (entry) => entry.name === tool)),
+                {
+                  ...scenario,
+                  title: `${style} · ${tool} · ${scenario.title}`,
+                },
+              ),
             );
           expect(messageRenderers.get(ASYNC_MESSAGE_TYPE)).toBe(renderAskUserAsyncMessage);
           const render = renderAskUserAsyncMessage;

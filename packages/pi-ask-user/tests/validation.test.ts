@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import { describe, expect, it } from "vitest";
 import {
   normalizeAskUserRequest,
@@ -37,14 +40,20 @@ describe("ask-user validation", () => {
     for (const kind of ["text", "custom"] as const) {
       expect(validateQuestionnaireInput(" \n\t ", kind).error).toBeDefined();
       expect(validateQuestionnaireInput(" x\ny ", kind)).toEqual({ value: "x\ny" });
-      expect(validateQuestionnaireInput(" " + "😀".repeat(2000) + " ", kind)).toEqual({
-        value: "😀".repeat(2000),
-      });
-      expect(validateQuestionnaireInput("😀".repeat(2000) + "x", kind).error).toBeDefined();
+      expect(validateQuestionnaireInput(" " + Fn.pipe("😀", Str.repeat(2000)) + " ", kind)).toEqual(
+        {
+          value: Fn.pipe("😀", Str.repeat(2000)),
+        },
+      );
+      expect(
+        validateQuestionnaireInput(Fn.pipe("😀", Str.repeat(2000)) + "x", kind).error,
+      ).toBeDefined();
     }
     expect(validateQuestionnaireInput(" ", "note")).toEqual({ value: "" });
-    expect(validateQuestionnaireInput("x".repeat(2000), "note").error).toBeUndefined();
-    expect(validateQuestionnaireInput("x".repeat(2001), "note").error).toBeDefined();
+    expect(
+      validateQuestionnaireInput(Fn.pipe("x", Str.repeat(2000)), "note").error,
+    ).toBeUndefined();
+    expect(validateQuestionnaireInput(Fn.pipe("x", Str.repeat(2001)), "note").error).toBeDefined();
   });
 
   it("rejects blank fields before duplicate checks and collisions by position without content", () => {
@@ -54,14 +63,14 @@ describe("ask-user validation", () => {
       request.questions.splice(
         0,
         1,
-        ...values.map((key) => Object.assign({}, firstQuestion(request), { key })),
+        ...Arr.map(values, (key) => Object.assign({}, firstQuestion(request), { key })),
       );
     const choices = (
       request: Request,
       field: "value" | "label" | "description",
       ...values: string[]
     ) =>
-      values.forEach((value, i) =>
+      Arr.forEach(values, (value, i) =>
         Object.assign(firstQuestion(request).choices[i]!, { [field]: value }),
       );
     const cases: ReadonlyArray<readonly [(request: Request) => void, string, string, ...string[]]> =
@@ -109,7 +118,7 @@ describe("ask-user validation", () => {
       ["Submit answers", "Review"],
     ]) {
       const request = base();
-      firstQuestion(request).choices.forEach((choice, index) =>
+      Arr.forEach(firstQuestion(request).choices, (choice, index) =>
         Object.assign(choice, { label: labels[index] }),
       );
       expect(validateAskUserRequest(normalizeAskUserRequest(request))).toBeUndefined();

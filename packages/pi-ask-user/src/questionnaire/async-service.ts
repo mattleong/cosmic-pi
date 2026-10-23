@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -8,6 +9,7 @@ import * as Predicate from "effect/Predicate";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
+import * as Str from "effect/String";
 import {
   AskUserAsyncError,
   AskUserHostError,
@@ -86,13 +88,15 @@ export const acquireAsyncQuestionnaires = Effect.fn("AskUserService.acquireAsync
   const get = (id: string) =>
     Ref.get(state).pipe(
       Effect.flatMap((entries) => {
-        const entry = entries.find((item) => item.snapshot.requestId === id);
+        const entry = Option.getOrUndefined(
+          Arr.findFirst(entries, (item) => item.snapshot.requestId === id),
+        );
         return entry ? Effect.succeed(entry) : Effect.fail(notFound());
       }),
     );
   const update = (id: string, f: (entry: Entry) => Entry) =>
     Ref.update(state, (entries) =>
-      entries.map((entry) => (entry.snapshot.requestId === id ? f(entry) : entry)),
+      Arr.map(entries, (entry) => (entry.snapshot.requestId === id ? f(entry) : entry)),
     );
   const patch = (
     id: string,
@@ -108,7 +112,9 @@ export const acquireAsyncQuestionnaires = Effect.fn("AskUserService.acquireAsync
   ): Effect.fn.Return<void> {
     if (!delivery || (yield* Ref.get(closed))) return;
     const claimed = yield* Ref.modify(state, (entries) => {
-      const entry = entries.find((item) => item.snapshot.requestId === id);
+      const entry = Option.getOrUndefined(
+        Arr.findFirst(entries, (item) => item.snapshot.requestId === id),
+      );
       if (
         !entry ||
         entry.waiter ||
@@ -121,7 +127,7 @@ export const acquireAsyncQuestionnaires = Effect.fn("AskUserService.acquireAsync
         snapshot: { ...entry.snapshot, delivery: "sending" },
         deliveryAttempts: entry.deliveryAttempts + 1,
       };
-      return [next, entries.map((item) => (item === entry ? next : item))] as const;
+      return [next, Arr.map(entries, (item) => (item === entry ? next : item))] as const;
     });
     if (!claimed) return;
     const result = yield* Effect.exit(delivery(claimed.snapshot));
@@ -204,8 +210,9 @@ export const acquireAsyncQuestionnaires = Effect.fn("AskUserService.acquireAsync
     const validationError = validateAskUserRequest(normalized);
     if (validationError) return yield* validationError;
     if (
-      [request.independentWork, request.blockedWork].some(
-        (text) => !text.trim() || text.length > MAX_WORK_DESCRIPTION_LENGTH,
+      Arr.some(
+        [request.independentWork, request.blockedWork],
+        (text) => !Str.trim(text) || text.length > MAX_WORK_DESCRIPTION_LENGTH,
       )
     ) {
       return yield* AskUserValidationError.make({
@@ -226,8 +233,8 @@ export const acquireAsyncQuestionnaires = Effect.fn("AskUserService.acquireAsync
             status: "pending",
             presentation: reserved ? "opening" : "queued",
             delivery: "pending",
-            independentWork: request.independentWork.trim(),
-            blockedWork: request.blockedWork.trim(),
+            independentWork: Str.trim(request.independentWork),
+            blockedWork: Str.trim(request.blockedWork),
           };
           const entry: Entry = {
             snapshot,
@@ -239,18 +246,21 @@ export const acquireAsyncQuestionnaires = Effect.fn("AskUserService.acquireAsync
           const admitted = yield* Ref.modify(state, (entries) => {
             const evict =
               entries.length >= MAX_RETAINED_REQUESTS
-                ? entries.find(
-                    (item) =>
-                      !item.waiter &&
-                      item.snapshot.status !== "pending" &&
-                      ["sent", "waiter"].includes(item.snapshot.delivery),
+                ? Option.getOrUndefined(
+                    Arr.findFirst(
+                      entries,
+                      (item) =>
+                        !item.waiter &&
+                        item.snapshot.status !== "pending" &&
+                        ["sent", "waiter"].includes(item.snapshot.delivery),
+                    ),
                   )
                 : undefined;
             if (entries.length >= MAX_RETAINED_REQUESTS && !evict)
               return [undefined, entries] as const;
             return [
               { evicted: evict?.snapshot.requestId },
-              [...entries.filter((item) => item !== evict), entry],
+              [...Arr.filter(entries, (item) => item !== evict), entry],
             ] as const;
           });
           if (!admitted) {
@@ -285,11 +295,13 @@ export const acquireAsyncQuestionnaires = Effect.fn("AskUserService.acquireAsync
           const claimed = yield* Ref.modify(
             state,
             (entries): readonly [Entry | "busy" | "missing", ReadonlyArray<Entry>] => {
-              const entry = entries.find((item) => item.snapshot.requestId === id);
+              const entry = Option.getOrUndefined(
+                Arr.findFirst(entries, (item) => item.snapshot.requestId === id),
+              );
               if (!entry || entry.waiter) return [entry ? "busy" : "missing", entries] as const;
               return [
                 entry,
-                entries.map((item) => (item === entry ? { ...item, waiter: owner } : item)),
+                Arr.map(entries, (item) => (item === entry ? { ...item, waiter: owner } : item)),
               ] as const;
             },
           );
@@ -339,7 +351,7 @@ export const acquireAsyncQuestionnaires = Effect.fn("AskUserService.acquireAsync
       return {
         requests: input.requestId
           ? [(yield* get(input.requestId)).snapshot]
-          : (yield* Ref.get(state)).map((entry): AsyncQuestionnaireSnapshot => {
+          : Arr.map(yield* Ref.get(state), (entry): AsyncQuestionnaireSnapshot => {
               const { outcome: _outcome, ...summary } = entry.snapshot;
               return summary;
             }),

@@ -1,6 +1,8 @@
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { layer } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Str from "effect/String";
 import type { CodePreviewSettings } from "pi-code-previews";
 import {
   applyPresentationSettings,
@@ -94,17 +96,17 @@ layer(nodeFilePlatformLayer)("ask-user history replay", (it) => {
           toolCallTiming: false,
         }),
       );
-      const rows = names.map((name) => ({ name, row: h.row(name) }));
-      const cold = rows.map(({ row }) => drawToolRow(row));
+      const rows = Arr.map(names, (name) => ({ name, row: h.row(name) }));
+      const cold = Arr.map(rows, ({ row }) => drawToolRow(row));
       yield* Effect.promise(() => h.emit("session_start", context("tui")));
       expect(new Set(h.tools.keys())).toEqual(new Set(names));
-      rows.forEach(({ name, row }, index) => {
+      Arr.forEach(rows, ({ name, row }, index) => {
         expect(drawToolRow(row)).not.toBe(cold[index]);
         expect(toolRowFrames(row)).toEqual(toolRowFrames(h.row(name)));
         const expanded = drawToolRow(row, true);
-        for (const line of history[name].text.split("\n")) expect(expanded).toContain(line);
+        for (const line of Str.split(history[name].text, "\n")) expect(expanded).toContain(line);
       });
-      expect(drawToolRow(rows[0]!.row, true)).toContain(defaultQuestion.prompt);
+      expect(drawToolRow(rows[0].row, true)).toContain(defaultQuestion.prompt);
       expect(drawToolRow(rows[2]!.row, true)).toContain("request-1");
       yield* Effect.promise(() => h.emit("session_shutdown", context("tui")));
     }),

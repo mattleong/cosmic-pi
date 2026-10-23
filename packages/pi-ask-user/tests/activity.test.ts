@@ -1,8 +1,10 @@
 import { routeRequest as request } from "./support/questionnaire.ts";
 import { expect } from "vitest";
 import { it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Option from "effect/Option";
 import { makeActivityFixture as fixture } from "./support/activity.ts";
 
 it.effect(
@@ -39,7 +41,11 @@ it.effect(
       );
       expect(resumed).toBe(0);
       const cancel = f.items()[0]!;
-      expect(cancel.actions?.find((action) => action.id === "cancel")?.confirmation).toBeTruthy();
+      expect(
+        Option.getOrUndefined(
+          Arr.findFirst(cancel.actions ?? [], (action) => action.id === "cancel"),
+        )?.confirmation,
+      ).toBeTruthy();
       yield* f.invoke("owned", "cancel", cancel.revision);
       expect(cancelled).toBe(1);
       f.replace();

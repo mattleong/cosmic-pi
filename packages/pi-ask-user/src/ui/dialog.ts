@@ -8,6 +8,8 @@ import {
   type KeyId,
   type TUI,
 } from "@earendil-works/pi-tui";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import { invokeHostCallback } from "pi-cosmic-core";
 import {
@@ -313,9 +315,9 @@ export class AskUserDialog implements Focusable {
       this.options.done(cancelQuestionnaire());
       return;
     }
-    const unanswered = this.state.drafts.findIndex((draft) => draft.answer === undefined);
-    if (unanswered >= 0) {
-      this.dispatch({ type: "set-tab", tab: unanswered });
+    const unanswered = Arr.findFirstIndex(this.state.drafts, (draft) => draft.answer === undefined);
+    if (Option.isSome(unanswered)) {
+      this.dispatch({ type: "set-tab", tab: unanswered.value });
       this.inputError = "Answer this question to finish.";
       this.refresh();
       return;
@@ -332,11 +334,11 @@ export class AskUserDialog implements Focusable {
       if (this.options.keybindings.matches(data, "tui.select.confirm")) this.openInput("text");
       return;
     }
-    const shortcut = CHOICE_SHORTCUTS.slice(0, question.choices.length).findIndex((key) =>
+    const shortcut = Arr.findFirstIndex(CHOICE_SHORTCUTS.slice(0, question.choices.length), (key) =>
       matchesKey(data, key),
     );
-    if (shortcut >= 0) {
-      if (!isKeyRepeat(data)) this.activateChoice(question, shortcut);
+    if (Option.isSome(shortcut)) {
+      if (!isKeyRepeat(data)) this.activateChoice(question, shortcut.value);
       return;
     }
     if (

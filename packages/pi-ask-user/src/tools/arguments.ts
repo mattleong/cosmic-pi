@@ -1,7 +1,9 @@
+import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import type { JsonObject, JsonValue } from "pi-cosmic-core";
 import { omitBlankOptionalArguments, toolArgumentPreparer } from "pi-cosmic-core/tool-arguments";
 import type { TSchema } from "typebox";
@@ -14,8 +16,8 @@ const omitBlankChoiceQuestionOptionals = omitBlankOptionalArguments(AskUserChoic
 
 const isEmpty = (value: JsonValue): boolean =>
   value === null ||
-  (Predicate.isString(value) && value.trim().length === 0) ||
-  (Array.isArray(value) && value.length === 0);
+  (Predicate.isString(value) && Str.trim(value).length === 0) ||
+  (Arr.isArray(value) && value.length === 0);
 
 // Blank optionals are dropped only through declared properties, not into the question union, so
 // each question gets the shape its mode selects: text questions ignore empty choices, which they
@@ -27,10 +29,10 @@ const withSelectedShape = (question: JsonObject): JsonObject => {
 };
 
 const withSelectedQuestionShapes = (args: JsonObject): JsonObject =>
-  Array.isArray(args.questions)
+  Arr.isArray(args.questions)
     ? {
         ...args,
-        questions: args.questions.map((question) =>
+        questions: Arr.map(args.questions, (question) =>
           Option.match(decodeArgumentsObject(question), {
             onNone: () => question,
             onSome: withSelectedShape,

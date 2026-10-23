@@ -97,7 +97,13 @@ export const decodeCallQuestions = decodeUnknownOrUndefined(
 );
 
 export const callTitles = Fn.flow(decodeCallQuestions, (decoded): string | undefined => {
-  const titles = decoded?.questions.map((question) => titleLabel(question.title)).join(", ");
+  const titles =
+    decoded === undefined
+      ? undefined
+      : Arr.join(
+          Arr.map(decoded.questions, (question) => titleLabel(question.title)),
+          ", ",
+        );
   return titles === "" ? undefined : titles;
 });
 
@@ -135,10 +141,13 @@ const replayContent = decodeUnknownOrUndefined(
 );
 
 const partsText = (decoded: ReadonlyArray<unknown> | undefined): string =>
-  Arr.filterMap(decoded ?? [], (part) => {
-    const text = textPart(part);
-    return text ? Result.succeed(stripTerminalControls(text.text)) : Result.failVoid;
-  }).join("\n");
+  Arr.join(
+    Arr.filterMap(decoded ?? [], (part) => {
+      const text = textPart(part);
+      return text ? Result.succeed(stripTerminalControls(text.text)) : Result.failVoid;
+    }),
+    "\n",
+  );
 
 export const fallbackText = Fn.flow(parts, partsText);
 
@@ -199,10 +208,13 @@ export const stateWords = (state: QuestionnaireState): readonly string[] => [
 export function stateCounts(states: readonly QuestionnaireState[]): readonly string[] {
   if (states.length === 0) return ["none retained", "none"];
   const counted = Arr.filterMap(STATE_ORDER, (state) => {
-    const count = states.filter((entry) => entry === state).length;
+    const count = Arr.filter(states, (entry) => entry === state).length;
     return count === 0 ? Result.failVoid : Result.succeed([count, STATE_WORDS[state]] as const);
   });
   const wording = (short: 0 | 1) =>
-    counted.map(([count, words]) => `${count} ${words[short]}`).join(", ");
+    Arr.join(
+      Arr.map(counted, ([count, words]) => `${count} ${words[short]}`),
+      ", ",
+    );
   return [...new Set([wording(0), wording(1), countLabel(states.length, "questionnaire")])];
 }

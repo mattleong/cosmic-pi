@@ -1,5 +1,6 @@
 import { asyncRequest as request } from "./support/questionnaire.ts";
 import { it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Context from "effect/Context";
 import * as Layer from "effect/Layer";
@@ -330,7 +331,7 @@ it.effect("failed openings report the host failure and recover a full registry",
     const listed = yield* service.controlAsync({ action: "status" });
     expect(listed.requests).toHaveLength(MAX_RETAINED_REQUESTS);
     expect(
-      listed.requests.every((item) => item.status === "failed" && item.delivery === "none"),
+      Arr.every(listed.requests, (item) => item.status === "failed" && item.delivery === "none"),
     ).toBe(true);
     expect(yield* Effect.flip(service.startAsync(request))).toMatchObject({ reason: "busy" });
     for (const item of listed.requests) {

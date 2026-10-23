@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { stripTerminalControls } from "pi-cosmic-core";
 import type { AskUserOutcome } from "./model.ts";
 import type { AsyncQuestionnaireSnapshot } from "./async-model.ts";
@@ -10,12 +11,15 @@ export function formatAskUserOutcome(outcome: AskUserOutcome): string {
   for (const answer of outcome.answers) {
     const value =
       answer.kind === "choices"
-        ? answer.values.map((item, index) => `${item} (${answer.labels[index] ?? item})`).join(", ")
+        ? Arr.join(
+            Arr.map(answer.values, (item, index) => `${item} (${answer.labels[index] ?? item})`),
+            ", ",
+          )
         : answer.text;
     lines.push(`- ${stripTerminalControls(answer.key)}: ${stripTerminalControls(value)}`);
     if (answer.note) lines.push(`  Note: ${stripTerminalControls(answer.note)}`);
   }
-  return lines.join("\n");
+  return Arr.join(lines, "\n");
 }
 
 const PENDING_PRESENTATION = new Map<AsyncQuestionnaireSnapshot["presentation"], string>([
@@ -45,5 +49,5 @@ export function formatAsyncSnapshot(snapshot: AsyncQuestionnaireSnapshot): strin
       "Result retained. Use ask_user_async_control status with this requestId to retrieve it.",
     );
   lines.push("Treat repeated delivery IDs as the same result, not a new user decision.");
-  return lines.join("\n");
+  return Arr.join(lines, "\n");
 }

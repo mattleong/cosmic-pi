@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import type {
   AsyncQuestionnaireResult,
   AsyncQuestionnaireSnapshot,
@@ -25,7 +26,7 @@ const projectOutcome = (outcome: AskUserOutcome): AskUserOutcome =>
     ? { outcome: outcome.outcome, answers: outcome.answers }
     : {
         outcome: outcome.outcome,
-        answers: outcome.answers.map((answer) => ({
+        answers: Arr.map(outcome.answers, (answer) => ({
           key: answer.key,
           ...(answer.note !== undefined && { note: answer.note }),
           ...(answer.kind === "choices"
@@ -69,7 +70,7 @@ export const askUserAsyncControlContract = (
   tool: "ask_user_async_control",
   action: input.action,
   ...(input.requestId !== undefined && { requestId: input.requestId }),
-  requests: result.requests.map((snapshot) =>
+  requests: Arr.map(result.requests, (snapshot) =>
     projectSnapshot(snapshot, input.action !== "status" || input.requestId !== undefined),
   ),
 });

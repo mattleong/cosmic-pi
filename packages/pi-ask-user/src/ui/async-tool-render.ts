@@ -9,8 +9,10 @@ import type { Component } from "@earendil-works/pi-tui";
 import { Text } from "@earendil-works/pi-tui";
 import { planCompactPresentation, renderCompactIssues, renderCompactRow } from "pi-code-previews";
 import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import { countLabel, decodeUnknownOrUndefined } from "pi-cosmic-core";
 import { composeToolComponent, renderToolHeader, toolRunningLine } from "pi-cosmic-ui/tool";
 import {
@@ -111,7 +113,9 @@ export function renderAsyncResult(
   const result = envelope(input);
   const decoded = decodeExpandedAsyncRows(result?.details);
   const rows = decoded ?? [];
-  const states = Arr.getSomes(rows.map((row) => Option.fromNullishOr(questionnaireState(row))));
+  const states = Arr.getSomes(
+    Arr.map(rows, (row) => Option.fromNullishOr(questionnaireState(row))),
+  );
   const list = rows.length !== 1 || isStatusList(context.args);
   if (options.expanded) {
     const content = renderAsyncContent(input, options, theme, context);
@@ -144,9 +148,12 @@ function collapsedRows(
 function padded(parts: readonly Component[], pad: number): Component {
   return {
     render(width) {
-      const margin = " ".repeat(Math.max(0, pad));
+      const margin = Fn.pipe(" ", Str.repeat(Math.max(0, pad)));
       const inner = Math.max(1, width - Math.max(0, pad) * 2);
-      return parts.flatMap((part) => part.render(inner)).map((line) => `${margin}${line}`);
+      return Arr.map(
+        Arr.flatMap(parts, (part) => part.render(inner)),
+        (line) => `${margin}${line}`,
+      );
     },
     invalidate() {
       for (const part of parts) part.invalidate();

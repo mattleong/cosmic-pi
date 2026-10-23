@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import {
   captureCodePreviewPresentationPolicy,
   expandedArguments,
@@ -136,7 +137,7 @@ export function registerAsyncAskUserTools(
           return control(input, signal).then((result) =>
             questionnaireToolResult(
               result.requests.length
-                ? result.requests.map(formatAsyncSnapshot).join("\n\n")
+                ? Arr.join(Arr.map(result.requests, formatAsyncSnapshot), "\n\n")
                 : "No async questionnaires are retained in this runtime.",
               result,
               askUserAsyncControlContract(input, result),

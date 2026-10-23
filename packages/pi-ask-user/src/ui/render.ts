@@ -1,5 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type Editor } from "@earendil-works/pi-tui";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { stripTerminalControls } from "pi-cosmic-core";
 import { isQuestionnaireComplete } from "../questionnaire/reducer.ts";
 import type { QuestionnaireState } from "../questionnaire/model.ts";
@@ -30,7 +32,7 @@ interface QuestionnaireRenderModel {
 }
 
 function renderTabs(model: QuestionnaireRenderModel, width: number): string[] {
-  const parts = model.state.request.questions.map((question, index) => {
+  const parts = Arr.map(model.state.request.questions, (question, index) => {
     const answered = model.state.drafts[index]?.answer !== undefined;
     const text = ` ${answered ? "●" : "○"} ${titleLabel(question.title)} `;
     return index === model.state.currentTab
@@ -44,14 +46,14 @@ function renderTabs(model: QuestionnaireRenderModel, width: number): string[] {
       : model.theme.fg(isQuestionnaireComplete(model.state) ? "success" : "dim", review),
   );
   const lines: string[] = [];
-  appendWrapped(lines, " ", parts.join(" "), width);
+  appendWrapped(lines, " ", Arr.join(parts, " "), width);
   return lines;
 }
 
 function renderProgress(model: QuestionnaireRenderModel, width: number): string[] {
   const lines: string[] = [];
   const total = model.state.request.questions.length;
-  const answered = model.state.drafts.filter((draft) => draft.answer !== undefined).length;
+  const answered = Arr.filter(model.state.drafts, (draft) => draft.answer !== undefined).length;
   const text =
     model.state.currentTab === total
       ? `Review • ${answered} of ${total} answered`
@@ -78,7 +80,7 @@ function appendChoices(
   append: (prefix: string, value: string) => void,
 ): void {
   const choices = question.mode === "text" ? [] : question.choices;
-  choices.forEach((choice, index) => {
+  Arr.forEach(choices, (choice, index) => {
     const focused = draft.cursor === index;
     const selected = draft.answer?.kind === "choices" && draft.answer.values.includes(choice.value);
     append(
@@ -154,15 +156,18 @@ function renderReview(model: QuestionnaireRenderModel, width: number): string[] 
   const append = (prefix: string, value: string) => appendWrapped(lines, prefix, value, width);
   append(" ", model.theme.fg("accent", model.theme.bold("Review your answers")));
   lines.push("");
-  model.state.request.questions.forEach((question, index) => {
+  Arr.forEach(model.state.request.questions, (question, index) => {
     const draft = model.state.drafts[index];
     const answer = draft?.answer;
     const value =
       answer?.kind === "choices" && question.mode !== "text"
-        ? question.choices
-            .filter((choice) => answer.values.includes(choice.value))
-            .map((choice) => choice.label)
-            .join(", ")
+        ? Arr.join(
+            Arr.map(
+              Arr.filter(question.choices, (choice) => answer.values.includes(choice.value)),
+              (choice) => choice.label,
+            ),
+            ", ",
+          )
         : answer?.kind === "custom" || answer?.kind === "text"
           ? answer.text
           : "Unanswered";
@@ -176,7 +181,7 @@ function renderReview(model: QuestionnaireRenderModel, width: number): string[] 
   lines.push("");
   const complete = isQuestionnaireComplete(model.state);
   const actions = [complete ? "Submit answers" : "Answer next question", "Cancel"];
-  actions.forEach((action, index) => {
+  Arr.forEach(actions, (action, index) => {
     const focused = model.state.reviewCursor === index;
     append(focusPrefix(model, focused), model.theme.fg(focused ? "accent" : "text", action));
   });
@@ -203,7 +208,7 @@ function renderInput(
   );
   lines.push(...model.editor.render(width));
   const maximum = note ? MAX_NOTE_LENGTH : MAX_CUSTOM_ANSWER_LENGTH;
-  const characterCount = model.editor.getExpandedText().trim().length;
+  const characterCount = Str.trim(model.editor.getExpandedText()).length;
   append(
     " ",
     model.theme.fg(
@@ -232,7 +237,8 @@ function renderQuestionPane(
   const choices = question.mode === "text" ? [] : question.choices;
   const choice = choices[draft.cursor];
   model.preview.setChoice(choice?.preview ? choice : undefined);
-  const hasAnyPreview = choices.some(
+  const hasAnyPreview = Arr.some(
+    choices,
     (candidate) => candidate.preview !== undefined && candidate.preview !== "",
   );
   const lines: string[] = [];

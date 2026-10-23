@@ -1,8 +1,12 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import * as JsonSchema from "effect/JsonSchema";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SchemaRepresentation from "effect/SchemaRepresentation";
+import * as Str from "effect/String";
 import { captureRegistrations, issueMessageStyleProblems } from "pi-code-previews/testing";
 import { extensionContextFixture, toolSchemaPortabilityProblems } from "pi-cosmic-core/testing";
 import type { AsyncQuestionnaireSnapshot } from "../src/questionnaire/async-model.ts";
@@ -54,7 +58,14 @@ const execute = (
   name: string,
   input: AskUserRequest | AskUserAsyncControl = asyncRequest,
   signal?: AbortSignal,
-) => tools.find((tool) => tool.name === name)!.execute("call", input, signal, undefined, ctx);
+) =>
+  Option.getOrThrow(Arr.findFirst(tools, (tool) => tool.name === name)).execute(
+    "call",
+    input,
+    signal,
+    undefined,
+    ctx,
+  );
 const call = (...args: Parameters<typeof execute>) => Effect.promise(() => execute(...args));
 const declaredAccepts = (
   tool: ReturnType<typeof registered>[number],
@@ -88,7 +99,9 @@ describe("registered questionnaire parameters", () => {
 });
 
 const preparer = (name: string) => {
-  const prepareArguments = registered().find((tool) => tool.name === name)?.prepareArguments;
+  const prepareArguments = Option.getOrUndefined(
+    Arr.findFirst(registered(), (tool) => tool.name === name),
+  )?.prepareArguments;
   if (prepareArguments === undefined) throw new Error(`${name} has no argument preparation`);
   return prepareArguments;
 };
@@ -99,7 +112,7 @@ const issueLines = (name: string, args: Schema.Json): ReadonlyArray<string> => {
   } catch (thrown) {
     const message = thrown instanceof Error ? thrown.message : "";
     expect(message).toMatch(/\[invalid_arguments\]/u);
-    return message.split("\n").filter((line) => line.startsWith("- "));
+    return Arr.filter(Str.split(message, "\n"), Str.startsWith("- "));
   }
 };
 const textQuestion = { key: "wording", title: "Wording", prompt: "What wording?", mode: "text" };
@@ -147,16 +160,14 @@ describe("registered questionnaire arguments", () => {
       ],
     });
     expect(issues.length).toBeGreaterThan(0);
-    const choiceShape = issues.filter((issue) => issue.includes("questions[1]"));
-    expect(choiceShape.some((issue) => issue.includes("questions[1].choices[0].description"))).toBe(
-      true,
-    );
-    expect(choiceShape.some((issue) => issue.includes("questions[1].choices "))).toBe(true);
-    expect(choiceShape.some((issue) => /mode|anyOf|does not accept/u.test(issue))).toBe(false);
-    const unknownMode = issues.filter((issue) => issue.includes("questions[2]"));
+    const choiceShape = Arr.filter(issues, Str.includes("questions[1]"));
+    expect(Arr.some(choiceShape, Str.includes("questions[1].choices[0].description"))).toBe(true);
+    expect(Arr.some(choiceShape, Str.includes("questions[1].choices "))).toBe(true);
+    expect(Arr.some(choiceShape, (issue) => /mode|anyOf|does not accept/u.test(issue))).toBe(false);
+    const unknownMode = Arr.filter(issues, Str.includes("questions[2]"));
     expect(unknownMode).toHaveLength(1);
     expect(unknownMode[0]).toMatch(/questions\[2\]\.mode.*single.*multiple.*text/u);
-    expect(issues.some((issue) => issue.includes("questions[0]"))).toBe(false);
+    expect(Arr.some(issues, Str.includes("questions[0]"))).toBe(false);
   });
 
   it("accepts titles longer than a tab shows and up to six choices", () => {
@@ -207,9 +218,13 @@ describe("registered questionnaire structured results", () => {
               kind: "choices",
               values: ["api_key=literal\u001b[0m"],
               labels: ["Bearer literal"],
-              note: "n".repeat(2000),
+              note: Fn.pipe("n", Str.repeat(2000)),
             },
-            { key: "text", kind: "text", text: "\u001b[31mBearer literal\n".padEnd(4000, "x") },
+            {
+              key: "text",
+              kind: "text",
+              text: Fn.pipe("\u001b[31mBearer literal\n", Str.padEnd(4000, "x")),
+            },
             { key: "custom", kind: "custom", text: "  password=literal\nkeep whitespace  " },
           ],
         };
@@ -282,11 +297,13 @@ describe("registered questionnaire structured results", () => {
       Effect.gen(function* () {
         const invalidOutcome: AskUserOutcome = {
           outcome: "submitted",
-          answers: [{ key: "text", kind: "text", text: "private codec input".repeat(300) }],
+          answers: [
+            { key: "text", kind: "text", text: Fn.pipe("private codec input", Str.repeat(300)) },
+          ],
         };
-        const badId = snapshot({ requestId: "r".repeat(101) });
-        const badDelivery = snapshot({ deliveryId: "d".repeat(121) });
-        const badWork = snapshot({ independentWork: "w".repeat(501) });
+        const badId = snapshot({ requestId: Fn.pipe("r", Str.repeat(101)) });
+        const badDelivery = snapshot({ deliveryId: Fn.pipe("d", Str.repeat(121)) });
+        const badWork = snapshot({ independentWork: Fn.pipe("w", Str.repeat(501)) });
         const tooMany = { requests: Array.from({ length: 17 }, () => snapshot()) };
         const cases = [
           {
@@ -296,7 +313,7 @@ describe("registered questionnaire structured results", () => {
             text: formatAskUserOutcome(invalidOutcome),
             callbacks: { ask: () => Promise.resolve(invalidOutcome) },
           },
-          ...[badId, badDelivery, badWork].map((request) => ({
+          ...Arr.map([badId, badDelivery, badWork], (request) => ({
             name: "ask_user_async",
             input: asyncRequest,
             details: request,
@@ -307,7 +324,7 @@ describe("registered questionnaire structured results", () => {
             name: "ask_user_async_control",
             input: { action: "status" as const },
             details: tooMany,
-            text: tooMany.requests.map(formatAsyncSnapshot).join("\n\n"),
+            text: Arr.join(Arr.map(tooMany.requests, formatAsyncSnapshot), "\n\n"),
             callbacks: { control: () => Promise.resolve(tooMany) },
           },
         ];
@@ -319,10 +336,12 @@ describe("registered questionnaire structured results", () => {
           expect(result.content).toHaveLength(1);
           const part = result.content[0];
           const text = part?.type === "text" ? part.text : "";
-          const newline = text.indexOf("\n");
-          expect(issueMessageStyleProblems(text.slice(0, newline))).toEqual([]);
-          expect(text.slice(newline + 1)).toBe(entry.text);
-          expect(text.slice(0, newline)).not.toMatch(/Schema|Parse|private codec input/);
+          const newline = Option.getOrThrow(Fn.pipe(text, Str.indexOf("\n")));
+          expect(issueMessageStyleProblems(Fn.pipe(text, Str.slice(0, newline)))).toEqual([]);
+          expect(Fn.pipe(text, Str.slice(newline + 1))).toBe(entry.text);
+          expect(Fn.pipe(text, Str.slice(0, newline))).not.toMatch(
+            /Schema|Parse|private codec input/,
+          );
         }
       }),
   );

@@ -1,8 +1,10 @@
 import type { ExtensionContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import * as Match from "effect/Match";
 import * as Result from "effect/Result";
+import * as Str from "effect/String";
 import {
   notifyAtHostBoundary,
   stripTerminalControls,
@@ -56,7 +58,7 @@ const boundedInput = Effect.fn("AskUserHost.boundedInput")(function* (
     const checked = validateQuestionnaireInput(value, kind);
     if (checked.error === undefined) return checked.value;
     yield* notifyBestEffort(ui, checked.error, "warning");
-    rejected = value.trim() ? { text: value, error: checked.error } : undefined;
+    rejected = Str.trim(value) ? { text: value, error: checked.error } : undefined;
   }
 });
 
@@ -65,22 +67,23 @@ const previewText = (question: AskUserQuestion): string => {
   const previews = Arr.filterMap(question.choices, (choice, index) =>
     choice.preview
       ? Result.succeed(
-          `\n--- ${index + 1}. ${stripTerminalControls(choice.label)} preview ---\n${stripTerminalControls(choice.preview).slice(0, 600)}`,
+          `\n--- ${index + 1}. ${stripTerminalControls(choice.label)} preview ---\n${Fn.pipe(stripTerminalControls(choice.preview), Str.slice(0, 600))}`,
         )
       : Result.failVoid,
   );
-  return previews.join("\n").slice(0, 1_500);
+  return Fn.pipe(Arr.join(previews, "\n"), Str.slice(0, 1_500));
 };
 
 const optionLines = (question: AskUserChoiceQuestion): string[] =>
-  question.choices.map(
+  Arr.map(
+    question.choices,
     (choice, index) =>
       `${index + 1}. ${stripTerminalControls(choice.label)} — ${stripTerminalControls(choice.description)}`,
   );
 
 const choiceDraft = (choices: ReadonlyArray<AskUserChoice>): AskUserAnswerDraft => ({
   kind: "choices",
-  values: choices.map((choice) => choice.value),
+  values: Arr.map(choices, (choice) => choice.value),
 });
 
 const askSingleQuestion = Effect.fn("AskUserHost.askSingleQuestion")(function* (
@@ -135,7 +138,7 @@ const askMultipleQuestion = Effect.fn("AskUserHost.askMultipleQuestion")(functio
     while (true) {
       const value = yield* boundedInput(
         ui,
-        `${title}\n\n${optionLines(question).join("\n")}\n\nEnter choice numbers separated by commas.`,
+        `${title}\n\n${Arr.join(optionLines(question), "\n")}\n\nEnter choice numbers separated by commas.`,
         "1,3",
       );
       if (value === undefined) {
@@ -146,8 +149,8 @@ const askMultipleQuestion = Effect.fn("AskUserHost.askMultipleQuestion")(functio
         );
         break;
       }
-      const tokens = value.split(/[\s,]+/).filter(Boolean);
-      if (tokens.length === 0 || !tokens.every((token) => /^\d+\.?$/.test(token))) {
+      const tokens = Arr.filter(Str.split(value, /[\s,]+/), Str.isNonEmpty);
+      if (tokens.length === 0 || !Arr.every(tokens, (token) => /^\d+\.?$/.test(token))) {
         yield* notifyBestEffort(
           ui,
           'Enter only choice numbers, or go back and choose "Write a custom answer"',
@@ -155,8 +158,8 @@ const askMultipleQuestion = Effect.fn("AskUserHost.askMultipleQuestion")(functio
         );
         continue;
       }
-      const indices = tokens.map((token) => Number.parseInt(token, 10) - 1);
-      if (indices.some((index) => index < 0 || index >= question.choices.length)) {
+      const indices = Arr.map(tokens, (token) => Number.parseInt(token, 10) - 1);
+      if (Arr.some(indices, (index) => index < 0 || index >= question.choices.length)) {
         yield* notifyBestEffort(
           ui,
           `Use choice numbers from 1 to ${question.choices.length}`,
@@ -164,7 +167,9 @@ const askMultipleQuestion = Effect.fn("AskUserHost.askMultipleQuestion")(functio
         );
         continue;
       }
-      return choiceDraft(Arr.getSomes(indices.map((index) => Arr.get(question.choices, index))));
+      return choiceDraft(
+        Arr.getSomes(Arr.map(indices, (index) => Arr.get(question.choices, index))),
+      );
     }
   }
 });
@@ -186,7 +191,7 @@ const askOptionalNote = Effect.fn("AskUserHost.askOptionalNote")(function* (
       ? ["Keep current note", "Edit note", "Remove note"]
       : ["Continue without a note", "Add a note"];
     const currentNote = existingNote
-      ? `\n\nCurrent note: ${stripTerminalControls(existingNote).slice(0, 600)}`
+      ? `\n\nCurrent note: ${Fn.pipe(stripTerminalControls(existingNote), Str.slice(0, 600))}`
       : "";
     const selected = yield* dialogCall((signal) =>
       ui.select(`${title}${currentNote}`, options, { signal }),
@@ -228,9 +233,11 @@ const askRpcQuestion = Effect.fn("AskUserHost.askRpcQuestion")(function* (
 });
 
 const answerSummary = (answer: AskUserAnswer): string => {
-  const value = answer.kind === "choices" ? answer.labels.join(", ") : answer.text;
-  const note = answer.note ? ` · note: ${stripTerminalControls(answer.note).slice(0, 80)}` : "";
-  return `${stripTerminalControls(value).slice(0, 120)}${note}`;
+  const value = answer.kind === "choices" ? Arr.join(answer.labels, ", ") : answer.text;
+  const note = answer.note
+    ? ` · note: ${Fn.pipe(stripTerminalControls(answer.note), Str.slice(0, 80))}`
+    : "";
+  return `${Fn.pipe(stripTerminalControls(value), Str.slice(0, 120))}${note}`;
 };
 
 const answeredQuestions = (request: AskUserRequest, drafts: readonly AskUserAnswerDraft[]) =>
@@ -253,14 +260,19 @@ const runRpc = Effect.fn("AskUserHost.runRpc")(function* (
   }
 
   while (true) {
-    const reviewTitle = [
-      "Review answers",
-      ...answeredQuestions(request, drafts).map(
-        ({ question, answer }, index) =>
-          `${index + 1}. [${titleLabel(question.title)}] ${answerSummary(answer)}`,
-      ),
-    ].join("\n");
-    const editOptions = request.questions.map(
+    const reviewTitle = Arr.join(
+      [
+        "Review answers",
+        ...Arr.map(
+          answeredQuestions(request, drafts),
+          ({ question, answer }, index) =>
+            `${index + 1}. [${titleLabel(question.title)}] ${answerSummary(answer)}`,
+        ),
+      ],
+      "\n",
+    );
+    const editOptions = Arr.map(
+      request.questions,
       (question, index) => `Edit ${index + 1}. ${titleLabel(question.title)}`,
     );
     const options = ["Submit answers", ...editOptions, "Cancel questionnaire"];
@@ -271,7 +283,7 @@ const runRpc = Effect.fn("AskUserHost.runRpc")(function* (
     if (selected === options[0]) {
       return {
         outcome: "submitted",
-        answers: answeredQuestions(request, drafts).map(({ answer }) => answer),
+        answers: Arr.map(answeredQuestions(request, drafts), ({ answer }) => answer),
       };
     }
     const editIndex = editOptions.indexOf(selected);

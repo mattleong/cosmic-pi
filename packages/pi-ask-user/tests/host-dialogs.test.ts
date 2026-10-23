@@ -3,8 +3,11 @@ import type { ExtensionContext, ExtensionUIContext } from "@earendil-works/pi-co
 import { deferredPromise, extensionContextFixture } from "pi-cosmic-core/testing";
 import { eventually, makeTuiHost } from "./support/host.ts";
 import { it as effectIt } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import { describe, expect, it, vi } from "vitest";
 import { issueMessageStyleProblems } from "pi-code-previews/testing";
 import { failureMessage } from "pi-cosmic-core";
@@ -72,7 +75,9 @@ describe("RPC questionnaire boundary", () => {
     return rpc({ select }).then((outcome) => {
       expect(outcome).toEqual(submitted(chooseB));
       expect(select).toHaveBeenCalledTimes(3);
-      expect(select.mock.calls.every((call) => call[2]?.signal instanceof AbortSignal)).toBe(true);
+      expect(Arr.every(select.mock.calls, (call) => call[2]?.signal instanceof AbortSignal)).toBe(
+        true,
+      );
       return undefined;
     });
   });
@@ -108,7 +113,7 @@ describe("RPC questionnaire boundary", () => {
   });
 
   it("reopens a too-long typed answer with its text so the user can trim it", () => {
-    const tooLong = "Keep this wording. ".repeat(220);
+    const tooLong = Fn.pipe("Keep this wording. ", Str.repeat(220));
     const trimmed = "Keep this wording.";
     const input = vi.fn(() => Promise.resolve(tooLong));
     const editor = vi.fn((_title: string, _prefill?: string) => Promise.resolve(trimmed));
@@ -127,7 +132,7 @@ describe("RPC questionnaire boundary", () => {
   effectIt.effect("settles an interrupted questionnaire while the trimming editor is open", () =>
     Effect.gen(function* () {
       const editor = vi.fn(() => deferredPromise<string | undefined>().promise);
-      const input = vi.fn(() => Promise.resolve("x".repeat(4_001)));
+      const input = vi.fn(() => Promise.resolve(Fn.pipe("x", Str.repeat(4_001))));
       const controller = new AbortController();
       const pending = rpc({ select: scriptedSelect(2), input, editor }, request, {
         signal: controller.signal,
