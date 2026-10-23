@@ -73,7 +73,7 @@ const summary = projectBuiltinCompactSummary("write", {
 });
 ```
 
-Both helpers are public exports. The policy snapshot contains `secretWarnings`, `bashWarnings`, `secretScanChars`, `maxWriteDiffBytes`, and `maxWriteDiffChangedLineCells`. Before-write evidence is explicitly `unknown`, `new`, or `{ kind: "snapshot", value }`. Only an observed absent file warrants `new`. Nested execution must not wrap writes or read files merely to obtain preview evidence. Unknown or unsafe projections return `undefined` and require a conservative fallback.
+Import both helpers from `pi-code-previews/builtin-projection`; the root entry omits the builtin rules so extensions that don't project builtin results don't load them. The policy snapshot contains `secretWarnings`, `bashWarnings`, `secretScanChars`, `maxWriteDiffBytes`, and `maxWriteDiffChangedLineCells`. Before-write evidence is explicitly `unknown`, `new`, or `{ kind: "snapshot", value }`. Only an observed absent file warrants `new`. Nested execution must not wrap writes or read files merely to obtain preview evidence. Unknown or unsafe projections return `undefined` and require a conservative fallback.
 
 The projector never returns raw output. Redact sensitive text and bound all retained subjects, counters, metadata, and issues before storing them.
 

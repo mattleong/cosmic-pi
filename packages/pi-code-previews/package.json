@@ -21,6 +21,7 @@
   },
   "files": [
     "index.ts",
+    "builtin-projection.ts",
     "testing.ts",
     "src/**/*.ts",
     "docs",
@@ -37,6 +38,7 @@
   "types": "./index.ts",
   "exports": {
     ".": "./index.ts",
+    "./builtin-projection": "./builtin-projection.ts",
     "./testing": "./testing.ts",
     "./package.json": "./package.json"
   },
@@ -90,7 +92,7 @@
   },
   "pi": {
     "extensions": [
-      "./index.ts"
+      "./src/extension.ts"
     ]
   }
 }

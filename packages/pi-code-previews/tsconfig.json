@@ -4,5 +4,5 @@
     "module": "ESNext",
     "moduleResolution": "Bundler"
   },
-  "include": ["index.ts", "tests/**/*.ts", "src/**/*.ts", "bench/**/*.ts"]
+  "include": ["index.ts", "builtin-projection.ts", "tests/**/*.ts", "src/**/*.ts", "bench/**/*.ts"]
 }

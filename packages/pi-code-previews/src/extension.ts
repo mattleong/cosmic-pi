@@ -1,1 +1,1 @@
-export { codePreviewsWithDependencies as codePreviews } from "./application/lifecycle";
+export { codePreviewsWithDependencies as default } from "./application/lifecycle";

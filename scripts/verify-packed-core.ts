@@ -213,12 +213,13 @@ try {
     const manager = await load("pi-cosmic-ui/manager");
     const fastModels = await load("pi-better-openai/fast-models");
     const previews = await load("pi-code-previews");
+    const builtinProjection = await load("pi-code-previews/builtin-projection");
     if (!api.PiApi || !api.makePiRuntime || !api.JsonDocumentStore || !api.JsonHttpClient || !api.nodePlatformLayer) throw new Error("missing core exports");
     if (typeof testing.makeInMemoryDocuments !== "function" || typeof testing.makeCapturedTracer !== "function") throw new Error("missing core testing exports");
     const { Type } = await import("typebox");
     const prepareSmoke = toolArguments.toolArgumentPreparer("smoke", Type.Object({ task: Type.String(), name: Type.Optional(Type.String()) }), () => true);
     if (JSON.stringify(prepareSmoke({ task: 1, name: " " })) !== '{"task":"1"}') throw new Error("packed core tool-argument preparation is unavailable");
-    if (typeof previews.default !== "function" || typeof previews.loadCodePreviewSettings !== "function" || typeof previews.withCodePreviewShell !== "function" || typeof previews.withCodePreviewRenderers !== "function") throw new Error("missing code-preview public exports");
+    if (typeof previews.loadCodePreviewSettings !== "function" || typeof previews.withCodePreviewShell !== "function" || typeof previews.withCodePreviewRenderers !== "function" || typeof builtinProjection.projectBuiltinCompactSummary !== "function") throw new Error("missing code-preview public exports");
     const previewTesting = await load("pi-code-previews/testing");
     if (protocol.COSMIC_UI_PROTOCOL_VERSION !== 2) throw new Error("missing Cosmic UI v2 protocol exports");
     if (typeof client.createCosmicFooterClient !== "function") throw new Error("missing Cosmic UI client export");
@@ -415,6 +416,7 @@ try {
       "pi-cosmic-core/testing.ts",
       "pi-cosmic-core/src/runtime/runtime.ts",
       "pi-code-previews/index.ts",
+      "pi-code-previews/builtin-projection.ts",
       "pi-code-previews/src/extension.ts",
       "pi-code-previews/src/application/tool-renderers.ts",
       "pi-code-previews/src/tools/preview-admission.ts",

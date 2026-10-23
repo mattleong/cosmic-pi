@@ -17,6 +17,9 @@ preservation are the constraints a refactor must retain.
 | [Preview shell](src/preview/) and [tool projectors](src/tools/)                                        | Synchronous rendering, semantic summaries, bounded evidence, fallback           |
 | [Third-party registry](src/third-party/registry.ts)                                                    | Explicit, independently admitted external renderer adapters                     |
 
+The Pi manifest loads [the extension entry](src/extension.ts). The package root and its subpaths are
+library entrypoints for cooperating extensions and must not import the extension implementation:
+Pi gives each extension its own module instances, so every consumer evaluates whatever they import.
 Public APIs and integration examples live in [extension authors](docs/extension-authors.md).
 The [reference](docs/reference.md) documents user settings; the
 [tool presentation standard](../../docs/architecture/tool-presentation.md) owns shell/issue policy.

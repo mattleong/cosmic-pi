@@ -1,5 +1,3 @@
-export { codePreviews as default } from "./src/extension";
-
 export { loadCodePreviewSettings } from "./src/config/store";
 
 export {
@@ -56,14 +54,6 @@ export {
   type CompactSummary,
   type CompactSummaryProvider,
 } from "./src/tools/compact-summary";
-
-export {
-  projectBuiltinCompactSummary,
-  type BuiltinCompactPolicy,
-  type BuiltinBeforeWrite,
-  type BuiltinCompactProjectionInput,
-} from "./src/tools/builtin-projection";
-export { captureBuiltinCompactPolicy } from "./src/tools/builtin-compact-summary";
 
 export { selectCompactChildren, renderCompactChildren } from "./src/preview/compact-children";
 export { compactPlainText, renderCompactRow } from "./src/preview/compact-row";
