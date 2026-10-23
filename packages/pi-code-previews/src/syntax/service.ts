@@ -255,16 +255,14 @@ export class CodePreviewSyntaxService extends Context.Service<
               ],
         );
         if (generation === undefined) return;
-        const succeeded = yield* Effect.isSuccess(
-          highlighterLifecycle.withPermits(1)(
-            SynchronizedRef.get(state).pipe(
-              Effect.flatMap((current) =>
-                current.generation === generation && current.highlighter
-                  ? adapter.loadLanguage(current.highlighter, language)
-                  : Effect.void,
-              ),
-            ),
+        const succeeded = yield* SynchronizedRef.get(state).pipe(
+          Effect.flatMap((current) =>
+            current.generation === generation && current.highlighter
+              ? adapter.loadLanguage(current.highlighter, language)
+              : Effect.void,
           ),
+          highlighterLifecycle.withPermits(1),
+          Effect.isSuccess,
         );
         yield* modify((current) =>
           current.generation !== generation

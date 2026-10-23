@@ -66,7 +66,6 @@ for (const cancellation of ["abort", "replacement", "shutdown"] as const) {
       );
       yield* Deferred.await(predecessorEntered);
       // Stands in for the host's abort signal, which Pi passes to the write tool.
-      // @effect-diagnostics-next-line abortControllerInEffect:off
       const controller = new AbortController();
       let outcome: "pending" | "success" | "failure" = "pending";
       const pending = executeWriteWithPreview(

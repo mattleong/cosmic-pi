@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import { constVoid } from "effect/Function";
+import * as Result from "effect/Result";
 import { renderSyntaxHighlightedDiff } from "../../src/diff/render";
 import { parseDiffLine } from "../../src/diff/parse";
 import { emphasizedChangedPairs } from "../../src/diff/word/change-block";
@@ -71,7 +74,9 @@ function buildWordEmphasisAccuracyReport(
   results: WordEmphasisAccuracyCaseResult[],
 ): WordEmphasisAccuracyReport {
   const spanCounts = sumMetrics(results.map((result) => result.spans));
-  const pairResults = results.flatMap((result) => (result.pairs ? [result.pairs] : []));
+  const pairResults = Arr.filterMap(results, (result) =>
+    Result.fromNullishOr(result.pairs, constVoid),
+  );
   const pairCounts = sumMetrics(pairResults);
 
   return {

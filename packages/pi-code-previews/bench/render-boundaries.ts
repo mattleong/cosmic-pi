@@ -1,6 +1,5 @@
 import { performance } from "node:perf_hooks";
 import { Text } from "@earendil-works/pi-tui";
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Match from "effect/Match";
@@ -114,7 +113,7 @@ const sampleCancellation = Effect.gen(function* () {
     () => undefined,
   );
   preview.cancel();
-  yield* Effect.sleep(Duration.zero);
+  yield* Effect.yieldNow;
   cancellationSamplesMs.push(performance.now() - cancellationStart);
 });
 await Effect.runPromise(

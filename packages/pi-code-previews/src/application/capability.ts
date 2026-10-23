@@ -13,10 +13,10 @@ type SessionRequirements =
   | CodePreviewWriteService
   | Layer.Success<typeof nodeFilePlatformLayer>;
 
-class CodePreviewSessionUnavailable extends Schema.TaggedError<CodePreviewSessionUnavailable>()(
-  "CodePreviewSessionUnavailable",
-  { operation: Schema.String, message: Schema.String },
-) {}
+class CodePreviewSessionUnavailable extends Schema.TaggedError<
+  CodePreviewSessionUnavailable,
+  { readonly brand: unique symbol }
+>()("CodePreviewSessionUnavailable", { operation: Schema.String, message: Schema.String }) {}
 
 export interface CodePreviewSessionCapability extends CodePreviewSchedulerServiceContract {
   readonly run: <A, E>(

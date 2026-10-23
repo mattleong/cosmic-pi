@@ -13,6 +13,7 @@ import {
 import { step } from "../support/effect-test";
 import { offlineModels, scopedSession } from "../support/sdk-session";
 import { quietLoader, quietSettings } from "pi-cosmic-core/testing/sdk";
+import { resultText } from "../support/render";
 import { setPlainPreviewSettings } from "../support/renderer-host";
 import { drawToolRow, hostToolRow } from "../../testing";
 
@@ -38,12 +39,7 @@ for (const foreign of [false])
             return Promise.resolve({ content: [], details: undefined });
           },
           renderCall: (args) => new Text(`OWNED_INPUT ${JSON.stringify(args)}`, 0, 0),
-          renderResult: (value) =>
-            new Text(
-              value.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n"),
-              0,
-              0,
-            ),
+          renderResult: (value) => new Text(resultText(value.content), 0, 0),
         };
         const loader = yield* quietLoader({
           cwd: directory,

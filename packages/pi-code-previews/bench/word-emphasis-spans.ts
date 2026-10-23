@@ -1,3 +1,8 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Stdio from "effect/Stdio";
+import * as Stream from "effect/Stream";
 import { plainTheme } from "pi-cosmic-core/testing";
 import { renderSyntaxHighlightedDiff } from "../src/diff/render";
 import { codePreviewSettings, setCodePreviewSettings } from "../src/config/state";
@@ -5,14 +10,21 @@ import { renderedWordEmphasisSpans } from "../tests/support/rendered-word-emphas
 import { wordEmphasisTelemetry } from "../tests/support/word-emphasis-telemetry";
 import { benchLog } from "./helpers";
 
-const nodeFsModule = process.getBuiltinModule("node:fs");
-if (!nodeFsModule) throw new Error("Node fs builtin is unavailable.");
-const { readFileSync } = nodeFsModule;
+const readInput = Effect.gen(function* () {
+  const stdio = yield* Stdio.Stdio;
+  const args = yield* stdio.args;
+  const file = args.find((arg) => !arg.startsWith("--"));
+  const text =
+    file === undefined
+      ? yield* stdio.stdin.pipe(Stream.decodeText, Stream.mkString)
+      : yield* FileSystem.FileSystem.pipe(Effect.flatMap((fs) => fs.readFileString(file)));
+  return {
+    mode: args.includes("--smart") ? ("smart" as const) : ("all" as const),
+    diff: text.replace(/\r?\n$/, ""),
+  };
+});
 
-const args = process.argv.slice(2);
-const mode = args.includes("--smart") ? "smart" : "all";
-const file = args.find((arg) => !arg.startsWith("--"));
-const diff = (file ? readFileSync(file, "utf8") : readFileSync(0, "utf8")).replace(/\r?\n$/, "");
+const { mode, diff } = await Effect.runPromise(readInput.pipe(Effect.provide(NodeServices.layer)));
 
 setCodePreviewSettings({ ...codePreviewSettings, wordEmphasis: mode });
 

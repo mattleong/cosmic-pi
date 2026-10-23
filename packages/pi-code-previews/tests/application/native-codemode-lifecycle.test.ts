@@ -17,6 +17,7 @@ import { setCodePreviewSettings } from "../../src/config/state";
 import { codePreviewApplicationLayer } from "../../src/layer";
 import { getCodePreviewToolStatuses } from "../../src/tools/status";
 import { step } from "../support/effect-test";
+import { resultText } from "../support/render";
 
 const preview = {
   ...defaultCodePreviewSettings,
@@ -47,15 +48,7 @@ const info = (sourceInfo: ToolInfo["sourceInfo"] = builtin): ToolInfo => ({
 });
 const downstream: ToolRenderers = {
   renderCall: () => new Text("NATIVE_CALL_RETAINED", 0, 0),
-  renderResult: (result) =>
-    new Text(
-      result.content
-        .filter((part) => part.type === "text")
-        .map((part) => part.text)
-        .join("\n"),
-      0,
-      0,
-    ),
+  renderResult: (result) => new Text(resultText(result.content), 0, 0),
 };
 const running = {
   content: [],

@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
+import * as NodePath from "@effect/platform-node/NodePath";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { SettingsList } from "@earendil-works/pi-tui";
 import type { JsonObject } from "pi-cosmic-core";
-import { deferredPromise, temporaryDirectory } from "pi-cosmic-core/testing";
+import { deferredPromise } from "pi-cosmic-core/testing";
 import { afterEach } from "vitest";
 import { effectTest, step } from "../support/effect-test";
 import { inertScheduler } from "../support/renderer-host";
@@ -29,14 +34,7 @@ import {
 import type { CodePreviewSettings } from "../../src/config/schema";
 import { createCodePreviewSettingsModel } from "../../src/settings/panel";
 
-const nodeFsModule = process.getBuiltinModule("node:fs");
-const nodePathModule = process.getBuiltinModule("node:path");
-if (!nodeFsModule || !nodePathModule) throw new Error("Node fs/path builtins are unavailable.");
-const { mkdir, readFile, writeFile } = nodeFsModule.promises;
-const dirname = nodePathModule.dirname.bind(nodePathModule);
-const join = nodePathModule.join.bind(nodePathModule);
-
-const processEnv: NodeJS.ProcessEnv = process.env;
+const fileServices = Layer.merge(NodeFileSystem.layer, NodePath.layer);
 
 const loadSettingsFromDisk = (options: LoadSettingsOptions = {}) =>
   step(() =>
@@ -48,48 +46,68 @@ const loadSettingsFromDisk = (options: LoadSettingsOptions = {}) =>
 const saveSettingsToDisk = (settings: CodePreviewSettings, options?: LoadSettingsOptions) =>
   step(() => queueSettingsSave(settings, options));
 
-const settingsRoots = (prefix: string) =>
-  temporaryDirectory(prefix).pipe(
-    Effect.map((root) => {
-      const roots = {
-        root,
-        home: join(root, "home"),
-        agentDir: join(root, "agent"),
-        project: join(root, "project"),
-      };
-      processEnv.HOME = roots.home;
-      processEnv.PI_CODING_AGENT_DIR = roots.agentDir;
-      return roots;
-    }),
-  );
+const settingsRoots = Effect.fn("StoreTest.settingsRoots")(
+  function* (prefix: string) {
+    const fs = yield* FileSystem.FileSystem;
+    const { join } = yield* Path.Path;
+    const root = yield* fs.makeTempDirectoryScoped({ prefix });
+    const roots = {
+      root,
+      home: join(root, "home"),
+      agentDir: join(root, "agent"),
+      project: join(root, "project"),
+    };
+    // Settings resolve the agent directory and home from the process environment.
+    process.env.HOME = roots.home;
+    process.env.PI_CODING_AGENT_DIR = roots.agentDir;
+    return { ...roots, join };
+  },
+  Effect.orDie,
+  Effect.provide(fileServices),
+);
 
 const installRunOnlyCapability = (run: CodePreviewSessionCapability["run"]) =>
   installCodePreviewSessionCapability({ run, ...inertScheduler });
 
-const decodeSavedDocument = Schema.decodeUnknownSync(
-  Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json)),
+const JsonDocument = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json));
+
+const readSavedDocument = Effect.fn("StoreTest.readSavedDocument")(
+  function* (path: string) {
+    const fs = yield* FileSystem.FileSystem;
+    return yield* Schema.decodeEffect(JsonDocument)(yield* fs.readFileString(path));
+  },
+  Effect.orDie,
+  Effect.provide(fileServices),
 );
 
-const readSavedDocument = (path: string) =>
-  step(() => readFile(path, "utf8").then(decodeSavedDocument));
+const writeJson = Effect.fn("StoreTest.writeJson")(
+  function* (path: string, data: JsonObject) {
+    const fs = yield* FileSystem.FileSystem;
+    const { dirname } = yield* Path.Path;
+    yield* fs.makeDirectory(dirname(path), { recursive: true });
+    yield* fs.writeFileString(path, `${yield* Schema.encodeEffect(JsonDocument)(data)}\n`);
+  },
+  Effect.orDie,
+  Effect.provide(fileServices),
+);
 
 const loadPreviewSettings = (project: string, trusted?: boolean) =>
   step(() => loadCodePreviewSettings(project, trusted));
 
-const originalPiCodingAgentDir = processEnv.PI_CODING_AGENT_DIR;
-const originalHome = processEnv.HOME;
+const originalPiCodingAgentDir = process.env.PI_CODING_AGENT_DIR;
+const originalHome = process.env.HOME;
 
 afterEach(() => {
-  if (originalPiCodingAgentDir === undefined) delete processEnv.PI_CODING_AGENT_DIR;
-  else processEnv.PI_CODING_AGENT_DIR = originalPiCodingAgentDir;
-  if (originalHome === undefined) delete processEnv.HOME;
-  else processEnv.HOME = originalHome;
+  if (originalPiCodingAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+  else process.env.PI_CODING_AGENT_DIR = originalPiCodingAgentDir;
+  if (originalHome === undefined) delete process.env.HOME;
+  else process.env.HOME = originalHome;
   clearCodePreviewSessionCapability();
   setCodePreviewSettings(defaultCodePreviewSettings);
 });
 
 effectTest("saveSettingsToDisk and loadSettingsFromDisk respect PI_CODING_AGENT_DIR", function* () {
-  const { agentDir } = yield* settingsRoots("pi-code-previews-settings-");
+  const { agentDir, join } = yield* settingsRoots("pi-code-previews-settings-");
 
   yield* saveSettingsToDisk({
     ...defaultCodePreviewSettings,
@@ -113,7 +131,7 @@ effectTest("saveSettingsToDisk and loadSettingsFromDisk respect PI_CODING_AGENT_
 });
 
 effectTest("concurrent queued saves publish in invocation order", function* () {
-  const { agentDir } = yield* settingsRoots("pi-code-previews-concurrent-save-");
+  const { agentDir, join } = yield* settingsRoots("pi-code-previews-concurrent-save-");
   const loaded = (yield* loadSettingsFromDisk()) ?? defaultCodePreviewSettings;
   const first = queueSettingsSave({ ...loaded, readCollapsedLines: 41 });
   const second = queueSettingsSave({ ...loaded, readCollapsedLines: 42 });
@@ -123,7 +141,7 @@ effectTest("concurrent queued saves publish in invocation order", function* () {
 });
 
 effectTest("rapid panel edits preserve fields merged from an external settings edit", function* () {
-  const { agentDir, project } = yield* settingsRoots("pi-code-previews-panel-merge-");
+  const { agentDir, project, join } = yield* settingsRoots("pi-code-previews-panel-merge-");
   const file = join(agentDir, "code-previews.json");
   yield* writeJson(file, { shikiTheme: "github-dark", readCollapsedLines: 17 });
   const runtime = ManagedRuntime.make(codePreviewApplicationLayer);
@@ -181,7 +199,7 @@ effectTest("rapid panel edits preserve fields merged from an external settings e
 });
 
 effectTest("loadSettingsFromDisk merges only current locations in precedence order", function* () {
-  const { home, agentDir, project } = yield* settingsRoots("pi-code-previews-precedence-");
+  const { home, agentDir, project, join } = yield* settingsRoots("pi-code-previews-precedence-");
 
   yield* writeJson(join(home, ".pi", "settings.json"), {
     codePreview: { readCollapsedLines: 11, writeCollapsedLines: 21, writeContentPreview: false },
@@ -231,7 +249,9 @@ const globalOverrideCases = [
 
 for (const { name, existing, saved, secondRead } of globalOverrideCases)
   effectTest(name, function* () {
-    const { root, agentDir, project } = yield* settingsRoots("pi-code-previews-global-overrides-");
+    const { root, agentDir, project, join } = yield* settingsRoots(
+      "pi-code-previews-global-overrides-",
+    );
     const secondProject = join(root, "second");
     yield* writeJson(join(project, ".pi", "settings.json"), {
       codePreview: { readCollapsedLines: 77 },
@@ -255,7 +275,7 @@ for (const { name, existing, saved, secondRead } of globalOverrideCases)
   });
 
 effectTest("an older live fallback cannot replace a newer successful publication", function* () {
-  const { agentDir, project } = yield* settingsRoots("pi-code-previews-stale-fallback-");
+  const { agentDir, project, join } = yield* settingsRoots("pi-code-previews-stale-fallback-");
   yield* writeJson(join(agentDir, "code-previews.json"), { readCollapsedLines: 11 });
 
   const liveFailure = deferredPromise<never>();
@@ -312,7 +332,7 @@ effectTest(
 effectTest(
   "an aborted session settings load does not retry through the one-shot runtime",
   function* () {
-    const { project } = yield* settingsRoots("pi-code-previews-aborted-bootstrap-");
+    const { project, join } = yield* settingsRoots("pi-code-previews-aborted-bootstrap-");
     yield* writeJson(join(project, ".pi", "settings.json"), {
       codePreview: { readCollapsedLines: 31 },
     });
@@ -328,11 +348,3 @@ effectTest(
     assert.equal(receivedSignal, controller.signal);
   },
 );
-
-function writeJson(path: string, data: JsonObject): Effect.Effect<void> {
-  return step(() =>
-    mkdir(dirname(path), { recursive: true }).then(() =>
-      writeFile(path, `${JSON.stringify(data)}\n`, "utf8"),
-    ),
-  );
-}

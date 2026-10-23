@@ -54,10 +54,10 @@ type LoadedSettingsFile = {
 
 type SettingKey = keyof CodePreviewSettings;
 
-export class CodePreviewSettingsSuperseded extends Schema.TaggedError<CodePreviewSettingsSuperseded>()(
-  "CodePreviewSettingsSuperseded",
-  { message: Schema.String },
-) {}
+export class CodePreviewSettingsSuperseded extends Schema.TaggedError<
+  CodePreviewSettingsSuperseded,
+  { readonly brand: unique symbol }
+>()("CodePreviewSettingsSuperseded", { message: Schema.String }) {}
 
 type SettingsWriteError = JsonDocumentError | CodePreviewSettingsSuperseded;
 

@@ -7,10 +7,10 @@ import { withLastComponent } from "./tool-timing";
 
 export type CompactSlot = "call" | "result";
 
-export class CompactSlotDrawFailure extends Schema.TaggedError<CompactSlotDrawFailure>()(
-  "CompactSlotDrawFailure",
-  {},
-) {}
+export class CompactSlotDrawFailure extends Schema.TaggedError<
+  CompactSlotDrawFailure,
+  { readonly brand: unique symbol }
+>()("CompactSlotDrawFailure", {}) {}
 
 type Entry = {
   component: Component | undefined;

@@ -17,6 +17,7 @@ import {
   hostToolRow,
   withPresentationSettings,
 } from "../../testing";
+import { resultText } from "../support/render";
 import { executeDescriptor } from "../support/tool-identity";
 
 beforeAll(() => initTheme("dark", false));
@@ -65,11 +66,7 @@ const fixture = () => {
     renderCall: (input) => new Text(`OWNED_CALL ${JSON.stringify(input)}`, 0, 0),
     renderResult: (value) => {
       observed = value.content;
-      return new Text(
-        value.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n"),
-        0,
-        0,
-      );
+      return new Text(resultText(value.content), 0, 0);
     },
   };
   const stage = () => {

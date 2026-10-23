@@ -3,6 +3,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { expect, it } from "vitest";
 import { withCodePreviewRenderers } from "../../index";
 import { createToolPresentationHarness, withPresentationSettings } from "../../testing";
+import { resultText } from "../support/render";
 
 for (const style of ["preview", "compact"] as const) {
   for (const mode of ["on", "off", "border"] as const) {
@@ -22,13 +23,7 @@ for (const style of ["preview", "compact"] as const) {
             renderCall: (args) => new Text(JSON.stringify(args), 0, 0),
             renderResult: (value) => {
               observed = value;
-              return new Text(
-                value.content
-                  .flatMap((part) => (part.type === "text" ? [part.text] : []))
-                  .join("\n"),
-                0,
-                0,
-              );
+              return new Text(resultText(value.content), 0, 0);
             },
           };
           const renderers = withCodePreviewRenderers({ name: "late-tool" }, raw, {

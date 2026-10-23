@@ -14,6 +14,7 @@ import * as Schema from "effect/Schema";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { getCodePreviewToolStatuses } from "../../src/tools/status";
 import { step } from "../support/effect-test";
+import { resultText } from "../support/render";
 import { codePreviewsUnderTest, offlineModels, scopedSession } from "../support/sdk-session";
 import { quietLoader, quietSettings } from "pi-cosmic-core/testing/sdk";
 import { createToolPresentationHarness, renderContextFixture } from "../../testing";
@@ -126,7 +127,6 @@ it.live(
                     modelRegistry: ctx.modelRegistry,
                     executeTool(name, rawArgs) {
                       // The host calls this Promise callback outside the test's fiber.
-                      // @effect-diagnostics-next-line runEffectInsideEffect:off
                       return Effect.runPromise(
                         Effect.gen(function* () {
                           const session = bound.session;
@@ -230,10 +230,7 @@ it.live(
       const saved = yield* step(() =>
         run("store('answer', 41); text(await tools.echo({value:'hello'}));"),
       );
-      const text = saved.content
-        .filter((part) => part.type === "text")
-        .map((part) => part.text)
-        .join("\n");
+      const text = resultText(saved.content);
       assert.ok(text.includes("hook:hello\nRESULT_HOOK"), text);
       assert.ok(updates.length > 0);
       assert.deepEqual(hooks, ["call", "result"]);

@@ -5,6 +5,8 @@ import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
+import { runBoundedProcessNode } from "pi-cosmic-core";
 import { provideBuiltLayer } from "pi-cosmic-core/testing";
 import { test } from "vitest";
 import { defaultCodePreviewPerformanceConfig } from "../../src/config/defaults";
@@ -15,16 +17,12 @@ import {
   shouldSkipWriteDiffComplexity,
 } from "../../src/write/diff";
 
-const nodePathModule = process.getBuiltinModule("node:path");
-const childProcessModule = process.getBuiltinModule("node:child_process");
-if (!nodePathModule || !childProcessModule) throw new Error("Node builtins are unavailable.");
-const join = nodePathModule.join.bind(nodePathModule);
-
 const previewFileLayer = Layer.merge(NodeFileSystem.layer, NodePath.layer);
 
 it.effect("previous content is bounded, exact and skipped with measured reasons", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
+    const { join } = yield* Path.Path;
     const dir = yield* fs.makeTempDirectoryScoped({ prefix: "pi-code-previews-" });
     const read = (name: string) => readExistingFileForPreviewEffect(join(dir, name), "after");
     yield* fs.writeFileString(join(dir, "small.txt"), "before");
@@ -47,6 +45,7 @@ it.effect("previous content is bounded, exact and skipped with measured reasons"
 it.effect("previous content stays complete and bounded across short filesystem reads", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
+    const { join } = yield* Path.Path;
     const dir = yield* fs.makeTempDirectoryScoped({ prefix: "pi-code-previews-short-read-" });
     const path = join(dir, "unicode.txt");
     const content = "\uFEFFbefore 😀\nlast line";
@@ -95,8 +94,16 @@ it.effect("previous content stays complete and bounded across short filesystem r
 it.effect("a named pipe is skipped without waiting for a writer", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
+    const { join } = yield* Path.Path;
     const dir = yield* fs.makeTempDirectoryScoped({ prefix: "pi-code-previews-fifo-" });
-    childProcessModule.execFileSync("mkfifo", [join(dir, "pipe")]);
+    const mkfifo = yield* runBoundedProcessNode({
+      executable: "mkfifo",
+      args: [join(dir, "pipe")],
+      stdoutLimitBytes: 4_096,
+      stderrLimitBytes: 4_096,
+      timeoutMillis: 5_000,
+    });
+    assert.equal(mkfifo.code, 0);
     const skipped = yield* readExistingFileForPreviewEffect(join(dir, "pipe"), "after");
     assert.match(getWriteDiffSkipReason(skipped, "after") ?? "", /not a regular file/);
   }).pipe(provideBuiltLayer(previewFileLayer)),

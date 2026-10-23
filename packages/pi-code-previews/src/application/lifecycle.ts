@@ -57,10 +57,10 @@ function retirePresentation(input: SessionInput): void {
   if (input.capability) clearCodePreviewSessionCapability(input.capability);
 }
 
-class CodePreviewRendererRegistrationError extends Schema.TaggedError<CodePreviewRendererRegistrationError>()(
-  "CodePreviewRendererRegistrationError",
-  { message: Schema.String },
-) {}
+class CodePreviewRendererRegistrationError extends Schema.TaggedError<
+  CodePreviewRendererRegistrationError,
+  { readonly brand: unique symbol }
+>()("CodePreviewRendererRegistrationError", { message: Schema.String }) {}
 
 export interface CodePreviewExtensionDependencies {
   readonly makeRuntime: (pi: ExtensionAPI) => CodePreviewRuntime;
@@ -102,26 +102,25 @@ export function codePreviewsWithDependencies(
   pi.registerToolRenderer(createCodePreviewRendererResolver(pi, () => presentation, ownedTools));
   dependencies.registerCommands(pi);
 
-  const startup = (input: SessionInput) =>
-    Effect.gen(function* () {
-      yield* dependencies.loadSettings(input.settingsAdmission, input.cwd, input.projectTrusted);
-      const scheduler = yield* CodePreviewSchedulerService;
-      yield* Effect.try({
-        try: () => {
-          publishPreviewToolStatuses(
-            capturePreviewHostTools(pi),
-            getEnabledCodePreviewTools(),
-            ownedTools,
-          );
-          dependencies.registerRenderers(pi, input.cwd, { ownedTools, installedTools });
-        },
-        catch: () =>
-          new CodePreviewRendererRegistrationError({
-            message: "Code preview renderer registration failed.",
-          }),
-      });
-      return scheduler;
+  const startup = Effect.fn("CodePreviews.startup")(function* (input: SessionInput) {
+    yield* dependencies.loadSettings(input.settingsAdmission, input.cwd, input.projectTrusted);
+    const scheduler = yield* CodePreviewSchedulerService;
+    yield* Effect.try({
+      try: () => {
+        publishPreviewToolStatuses(
+          capturePreviewHostTools(pi),
+          getEnabledCodePreviewTools(),
+          ownedTools,
+        );
+        dependencies.registerRenderers(pi, input.cwd, { ownedTools, installedTools });
+      },
+      catch: () =>
+        new CodePreviewRendererRegistrationError({
+          message: "Code preview renderer registration failed.",
+        }),
     });
+    return scheduler;
+  });
   const slot = makePiSessionRuntimeSlot<
     SessionInput,
     CodePreviewApplication,

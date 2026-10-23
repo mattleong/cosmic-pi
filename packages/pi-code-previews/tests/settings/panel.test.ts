@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import * as NodePath from "@effect/platform-node/NodePath";
 import { SettingsList } from "@earendil-works/pi-tui";
 import * as Context from "effect/Context";
-import * as Data from "effect/Data";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import { constVoid } from "effect/Function";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import { AgentDirectory } from "pi-cosmic-core";
 import { makeInMemoryDocuments, type InMemoryDocuments } from "pi-cosmic-core/testing";
 import { nextSettingsAdmission } from "../../src/config/coordinator";
@@ -87,7 +87,10 @@ const listFor = (model: ReturnType<typeof createCodePreviewSettingsModel>) =>
     () => undefined,
   );
 
-class DiskFull extends Data.TaggedError("DiskFull")<{ readonly message: string }> {}
+class DiskFull extends Schema.TaggedError<DiskFull, { readonly brand: unique symbol }>()(
+  "DiskFull",
+  { message: Schema.String },
+) {}
 
 for (const operation of ["save", "reset", "failure"] as const)
   effectTest(`retired settings panels suppress delayed ${operation} follow-up`, function* () {

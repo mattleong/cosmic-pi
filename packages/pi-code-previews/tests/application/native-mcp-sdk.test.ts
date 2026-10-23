@@ -219,7 +219,6 @@ it.live(
       assert.equal(manager.executions(), executed);
       block = false;
       // Stands in for the host's abort signal, which codemode passes to `executeTool`.
-      // @effect-diagnostics-next-line abortControllerInEffect:off
       const controller = new AbortController();
       const pending = context.executeTool(name, { mode: "abort" }, { signal: controller.signal });
       controller.abort();

@@ -1,6 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type SettingsList, type SettingItem } from "@earendil-works/pi-tui";
 import { constTrue, constVoid } from "effect/Function";
+import * as Schema from "effect/Schema";
 import { CODE_PREVIEW_SETTING_KEYS, type CodePreviewSettings } from "../config/schema";
 import { cloneCodePreviewSettings, codePreviewSettings } from "../config/state";
 import { updateSetting } from "../config/values";
@@ -16,6 +17,8 @@ import { initializeShiki } from "../syntax/shiki";
 import { createSettingsCategoryItems } from "./ui/index";
 
 type SettingKey = keyof CodePreviewSettings;
+
+const isSettingsSuperseded = Schema.is(CodePreviewSettingsSuperseded);
 
 function copySetting<K extends SettingKey>(
   target: Pick<CodePreviewSettings, K>,
@@ -149,7 +152,7 @@ export function createCodePreviewSettingsModel({
       if (!isCurrent()) return;
       if (id === "resetToDefaults") settle(list, () => false);
       // A later panel change to the same setting already saved the user's newest value.
-      if (revision !== changeRevision && cause instanceof CodePreviewSettingsSuperseded) return;
+      if (revision !== changeRevision && isSettingsSuperseded(cause)) return;
       notify(formatSettingsSaveError(cause), "warning");
     });
   };

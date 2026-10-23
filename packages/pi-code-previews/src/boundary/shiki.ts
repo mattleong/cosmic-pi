@@ -27,10 +27,10 @@ export function isShikiLanguage(language: string): language is BundledLanguage |
   );
 }
 
-export class ShikiBoundaryError extends Schema.TaggedError<ShikiBoundaryError>()(
-  "ShikiBoundaryError",
-  { operation: Schema.String, message: Schema.String },
-) {}
+export class ShikiBoundaryError extends Schema.TaggedError<
+  ShikiBoundaryError,
+  { readonly brand: unique symbol }
+>()("ShikiBoundaryError", { operation: Schema.String, message: Schema.String }) {}
 
 type HighlighterUseState = {
   activeLoads: number;

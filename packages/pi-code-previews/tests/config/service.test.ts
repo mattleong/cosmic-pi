@@ -5,6 +5,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import {
   AgentDirectory,
   JsonDocumentError,
@@ -32,6 +33,8 @@ import {
   type CodePreviewSettingsServiceContract,
 } from "../../src/config/store";
 import { issueMessageStyleProblems } from "../../testing";
+
+const isJsonDocumentError = Schema.is(JsonDocumentError);
 
 const loadSettings = (service: CodePreviewSettingsServiceContract) =>
   service.load(nextSettingsAdmission());
@@ -402,7 +405,7 @@ it.effect("failed persistence leaves the published settings unchanged", () => {
       const failure = yield* saveSettings(service, { ...loaded, readCollapsedLines: 42 }).pipe(
         Effect.flip,
       );
-      assert.ok(failure instanceof JsonDocumentError);
+      assert.ok(isJsonDocumentError(failure));
       assert.equal(codePreviewSettings, published);
       assert.equal(codePreviewSettings.readCollapsedLines, loaded.readCollapsedLines);
     }),

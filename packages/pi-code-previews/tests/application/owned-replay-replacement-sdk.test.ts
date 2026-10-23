@@ -23,6 +23,7 @@ import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/st
 import { step } from "../support/effect-test";
 import { QUIET_RESOURCES, quietSettings } from "pi-cosmic-core/testing/sdk";
 import { offlineModels } from "../support/sdk-session";
+import { resultText } from "../support/render";
 import { setPlainPreviewSettings } from "../support/renderer-host";
 import { executeDescriptor } from "../support/tool-identity";
 
@@ -165,11 +166,7 @@ it.live(
         },
         renderResult: (value) => {
           observedResult = value;
-          return new Text(
-            value.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n"),
-            0,
-            0,
-          );
+          return new Text(resultText(value.content), 0, 0);
         },
       };
       let startupStyle: "compact" | "preview" = "preview";

@@ -9,25 +9,25 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
 import { provideBuiltLayer } from "pi-cosmic-core/testing";
 import { executeWriteWithPreviewEffect } from "../../src/write/preview-execution";
 import { lookupBeforeWrite } from "../../src/write/projection";
 import { CodePreviewWriteService } from "../../src/write/service";
 
-const nodeFsModule = process.getBuiltinModule("node:fs");
-const nodePathModule = process.getBuiltinModule("node:path");
-if (!nodeFsModule || !nodePathModule) throw new Error("Node fs/path builtins are unavailable.");
-const { lstat } = nodeFsModule.promises;
-const join = nodePathModule.join.bind(nodePathModule);
-
+// Only a symbolic link has a readable link target.
 const isSymlink = (path: string) =>
-  Effect.promise(() => lstat(path).then((stats) => stats.isSymbolicLink()));
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) => fs.readLink(path)),
+    Effect.isSuccess,
+  );
 
 const fixture = (prefix: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    return { fs, dir: yield* fs.makeTempDirectoryScoped({ prefix }) };
+    const { join } = yield* Path.Path;
+    return { fs, join, dir: yield* fs.makeTempDirectoryScoped({ prefix }) };
   });
 
 const testLayer = Layer.mergeAll(
@@ -39,7 +39,7 @@ const testLayer = Layer.mergeAll(
 layer(testLayer)("session write service", (it) => {
   it.effect("writes follow mixed relative and absolute final symlink chains", () =>
     Effect.gen(function* () {
-      const { fs, dir } = yield* fixture("pi-code-preview-chain-");
+      const { fs, dir, join } = yield* fixture("pi-code-preview-chain-");
       const target = join(dir, "target.txt");
       yield* fs.writeFileString(target, "before");
       yield* fs.symlink(target, join(dir, "absolute-link.txt"));
@@ -53,7 +53,7 @@ layer(testLayer)("session write service", (it) => {
 
   it.effect("resolves relative final links from their physical symlinked directory", () =>
     Effect.gen(function* () {
-      const { fs, dir } = yield* fixture("pi-code-preview-parent-link-");
+      const { fs, dir, join } = yield* fixture("pi-code-preview-parent-link-");
       const real = join(dir, "real");
       const nested = join(real, "sub");
       yield* fs.makeDirectory(nested, { recursive: true });
@@ -70,7 +70,7 @@ layer(testLayer)("session write service", (it) => {
 
   it.effect("writes preserve target inode, mode, hard-link aliases, and open descriptors", () =>
     Effect.gen(function* () {
-      const { fs, dir } = yield* fixture("pi-code-preview-inode-");
+      const { fs, dir, join } = yield* fixture("pi-code-preview-inode-");
       const target = join(dir, "target.txt");
       const alias = join(dir, "alias.txt");
       yield* fs.writeFileString(target, "before");
@@ -92,7 +92,7 @@ layer(testLayer)("session write service", (it) => {
 
   it.effect("dangling symlinks do not create target directories", () =>
     Effect.gen(function* () {
-      const { fs, dir } = yield* fixture("pi-code-preview-dangling-");
+      const { fs, dir, join } = yield* fixture("pi-code-preview-dangling-");
       const link = join(dir, "link.txt");
       yield* fs.symlink("missing/target.txt", link);
       const error = yield* Effect.flip(
@@ -106,7 +106,7 @@ layer(testLayer)("session write service", (it) => {
 
   it.effect("cyclic and over-depth final symlink chains fail without replacing links", () =>
     Effect.gen(function* () {
-      const { fs, dir } = yield* fixture("pi-code-preview-cycle-");
+      const { fs, dir, join } = yield* fixture("pi-code-preview-cycle-");
       yield* fs.symlink("b.txt", join(dir, "a.txt"));
       yield* fs.symlink("a.txt", join(dir, "b.txt"));
       yield* Effect.flip(executeWriteWithPreviewEffect("tool-cycle", "a.txt", "after", dir));
@@ -126,7 +126,7 @@ layer(testLayer)("session write service", (it) => {
 
   it.effect("captures before-state only after a native predecessor has committed", () =>
     Effect.gen(function* () {
-      const { fs, dir } = yield* fixture("pi-code-preview-native-first-");
+      const { fs, dir, join } = yield* fixture("pi-code-preview-native-first-");
       const target = join(dir, "file");
       yield* fs.writeFileString(target, "original");
       const entered = yield* Deferred.make<void>();
@@ -169,7 +169,7 @@ layer(testLayer)("session write service", (it) => {
 
   it.effect("cancellation during mkdir settles the operation without admitting a write", () =>
     Effect.gen(function* () {
-      const { fs, dir } = yield* fixture("pi-code-preview-mkdir-");
+      const { fs, dir, join } = yield* fixture("pi-code-preview-mkdir-");
       const started = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
       let wrote = false;
@@ -207,7 +207,7 @@ layer(testLayer)("session write service", (it) => {
 
   it.effect("cancellation during the queued before-state read cannot mutate the file", () =>
     Effect.gen(function* () {
-      const { fs, dir } = yield* fixture("pi-code-preview-read-");
+      const { fs, dir, join } = yield* fixture("pi-code-preview-read-");
       const target = join(dir, "file");
       yield* fs.writeFileString(target, "before");
       const started = yield* Deferred.make<void>();
@@ -232,7 +232,7 @@ layer(testLayer)("session write service", (it) => {
 
   it.effect("interruption holds Pi's queue through mutation and correlation settlement", () =>
     Effect.gen(function* () {
-      const { fs, dir } = yield* fixture("pi-code-preview-write-");
+      const { fs, dir, join } = yield* fixture("pi-code-preview-write-");
       yield* fs.writeFileString(join(dir, "target.txt"), "before");
       const started = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();

@@ -18,10 +18,11 @@ type RedactedCodePreviewBeforeWrite =
   | Exclude<ExistingFilePreview, { kind: "content" }>
   | { kind: "content"; byteLength: number }
   | undefined;
-class CodePreviewWriteError extends Schema.TaggedError<CodePreviewWriteError>()(
-  "CodePreviewWriteError",
-  { message: Schema.String },
-) {}
+class CodePreviewWriteError extends Schema.TaggedError<
+  CodePreviewWriteError,
+  { readonly brand: unique symbol }
+>()("CodePreviewWriteError", { message: Schema.String }) {}
+const isWriteError = Schema.is(CodePreviewWriteError);
 
 export function getCodePreviewBeforeWrite(
   toolCallId: string | undefined,
@@ -58,9 +59,7 @@ export const executeWriteWithPreviewEffect = Effect.fn("CodePreviewWrite.execute
   const fs = yield* FileSystem.FileSystem;
   let before: CodePreviewBeforeWrite;
   const failure = (cause: unknown) =>
-    cause instanceof CodePreviewWriteError
-      ? cause
-      : new CodePreviewWriteError({ message: nativeErrorMessage(cause) });
+    isWriteError(cause) ? cause : new CodePreviewWriteError({ message: nativeErrorMessage(cause) });
   const result = yield* executeNativeWrite(
     toolCallId,
     path,
@@ -71,17 +70,20 @@ export const executeWriteWithPreviewEffect = Effect.fn("CodePreviewWrite.execute
         fs
           .makeDirectory(directory, { recursive: true })
           .pipe(Effect.uninterruptible, Effect.mapError(failure)),
-      writeFile: (target, next, signal) =>
-        Effect.gen(function* () {
-          before = yield* readExistingFileForPreviewEffect(target, next);
-          yield* Effect.uninterruptible(
-            Effect.gen(function* () {
-              if (signal.aborted) return yield* Effect.interrupt;
-              yield* fs.writeFileString(target, next);
-              return yield* writeService.rememberBeforeWrite(toolCallId, before);
-            }),
-          );
-        }).pipe(Effect.mapError(failure)),
+      writeFile: Effect.fn("CodePreviewWrite.writeFile")(function* (
+        target: string,
+        next: string,
+        signal: AbortSignal,
+      ) {
+        before = yield* readExistingFileForPreviewEffect(target, next);
+        yield* Effect.uninterruptible(
+          Effect.gen(function* () {
+            if (signal.aborted) return yield* Effect.interrupt;
+            yield* fs.writeFileString(target, next);
+            return yield* writeService.rememberBeforeWrite(toolCallId, before);
+          }),
+        );
+      }, Effect.mapError(failure)),
     },
     failure,
     ctx,

@@ -1,6 +1,7 @@
 import type { AgentToolResult, Theme } from "@earendil-works/pi-coding-agent";
 import type { ToolRenderContext } from "../tools/renderers/shared/types";
 import { Box, Container, Text, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import * as Schema from "effect/Schema";
 import { composeToolComponent } from "pi-cosmic-ui/tool";
 import type { ToolCallBackgroundMode } from "../config/schema";
 import { codePreviewSettings } from "../config/state";
@@ -36,6 +37,8 @@ import {
 } from "./tool-timing";
 import type { CodePreviewToolShell, ShellRenderBody } from "./tool-shell";
 import { CompactSlots, CompactSlotDrawFailure, type CompactSlot } from "./compact-slots";
+
+const isSlotDrawFailure = Schema.is(CompactSlotDrawFailure);
 
 export interface CompactShellOptions<TArgs, TDetails, TState> {
   name: string;
@@ -186,7 +189,7 @@ class CompactShell<TArgs, TDetails, TState> implements Component {
         rows = this.display.render(width);
         break;
       } catch (error) {
-        if (!(error instanceof CompactSlotDrawFailure)) throw error;
+        if (!isSlotDrawFailure(error)) throw error;
         this.display = this.renderDetails(result !== undefined, plan, true);
       }
     }

@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import * as Result from "effect/Result";
+
 interface IssueMessageStyleOptions {
   readonly forbidden?: readonly string[];
   readonly maxLength?: number;
@@ -25,7 +28,9 @@ export function issueMessageStyleProblems(
   options: IssueMessageStyleOptions = {},
 ): string[] {
   if (!message.trim()) return ["is blank"];
-  const problems = RULES.flatMap(([pattern, problem]) => (pattern.test(message) ? [problem] : []));
+  const problems = Arr.filterMap(RULES, ([pattern, problem]) =>
+    pattern.test(message) ? Result.succeed(problem) : Result.failVoid,
+  );
   const maxLength = options.maxLength ?? 120;
   if (message.length > maxLength) problems.push(`is longer than ${maxLength} characters`);
   for (const token of options.forbidden ?? [])
