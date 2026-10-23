@@ -45,7 +45,7 @@ presentation-only and never starts tasks.
 
 Tree navigation joins process-tree cleanup before activating a fresh registry. Tool callbacks
 retain their activation token; `/tasks` captures authority for each invocation. Retained managers,
-settings pickers, and Activity actions cannot target a later registry, even when task IDs repeat.
+settings pickers, and Activity actions cannot target a later registry, even if a task ID repeats.
 Shutdown closes admission and attempts to settle active processes before interrupting their monitors.
 If Pi exits without shutdown, core's host-exit guard kills every task group that has not settled.
 

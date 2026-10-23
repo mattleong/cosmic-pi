@@ -112,7 +112,7 @@ export function registerBackgroundTaskTool(
     name: "background_task",
     label: "Background Task",
     description:
-      "Start and manage session-scoped local background commands. Actions: start, list, status, logs, wait, stop, stop_all, clear. Each action accepts only its own parameters; empty, false, or zero placeholders in other fields are ignored, and other values there are rejected. Output is bounded; each task's process group is terminated when the Pi session closes, but processes that start their own session or process group, such as daemons, are not tracked.",
+      "Start and manage session-scoped local background commands. Actions: start, list, status, logs, wait, stop, stop_all, clear. Task IDs are opaque and come only from a start result, so a call that names a new task must wait for it. Each action accepts only its own parameters; empty, false, or zero placeholders in other fields are ignored, and other values there are rejected. Output is bounded; each task's process group is terminated when the Pi session closes, but processes that start their own session or process group, such as daemons, are not tracked.",
     promptSnippet: "Start and manage long-running local commands without blocking the current turn",
     promptGuidelines: [
       "Use background_task only when a server, watcher, long test suite, or other command can run independently; use bash when validation or the next step must finish before responding.",
@@ -120,7 +120,7 @@ export function registerBackgroundTaskTool(
       "Use logs only when output is needed for a decision, the task fails, or the user asks. For one bounded snapshot, omit afterCursor and set a small tailLines value. For incremental reads, set afterCursor to the previous nextCursor and optionally waitSeconds; don't combine tailLines with afterCursor.",
       "Stop background tasks when they are no longer needed; every task's process group is terminated when the Pi session is replaced or shut down. Run services in the foreground: daemonized or detached processes escape that cleanup.",
       "Native codemode receives version-1 structured results. Print successful task IDs immediately and check the contract envelope before using them. A task's finished flag means terminal state, not command success or cleanup confirmation.",
-      "Rejected or cancelled calls do not roll back admitted starts or stop signals. Hand uncertainty to the main agent for list/status recovery before replaying a command. Task IDs can be reused after reload or tree navigation; discard old workflow checkpoints.",
+      "Rejected or cancelled calls do not roll back admitted starts or stop signals. Hand uncertainty to the main agent for list/status recovery before replaying a command. Task IDs from before a reload or tree navigation name no current task; discard old workflow checkpoints.",
     ],
     parameters: BackgroundTaskParameters,
     prepareArguments: prepareBackgroundTaskArguments,

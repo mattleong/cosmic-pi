@@ -246,6 +246,7 @@ const exitWait = (id: string, waitSeconds = 30): WaitForBackgroundTask => ({
   waitSeconds,
 });
 const forkNow = Effect.forkScoped({ startImmediately: true });
+const TASK_ID = /^task-[0-9a-z]{10}$/u;
 const emitAndRead = (
   service: BackgroundTaskServiceContract,
   control: FakeProcessControl | undefined,
@@ -329,7 +330,8 @@ describe("BackgroundTaskService", () => {
     const harness = serviceHarness({}, terminal.publish);
     return harness.run(function* (service) {
       const started = yield* service.start({ command: "watch", cwd: ".", name: "watcher" });
-      expect(started).toMatchObject({ id: "task-1", state: "running", pid: 10_000 });
+      expect(started).toMatchObject({ state: "running", pid: 10_000 });
+      expect(started.id).toMatch(TASK_ID);
 
       const waiting = yield* service.logs({ id: started.id, waitSeconds: 30 }).pipe(forkNow);
       harness.controls[0]?.offer("stdout", "ready\n");
@@ -378,7 +380,6 @@ describe("BackgroundTaskService", () => {
           name: ` ${Fn.pipe("n", Str.repeat(BACKGROUND_TASK_FIELD_BOUNDS.maxNameChars))} `,
         });
         expect(started).toMatchObject({
-          id: "task-1",
           cwd: cwdAtLimit,
           name: Fn.pipe("n", Str.repeat(BACKGROUND_TASK_FIELD_BOUNDS.maxNameChars)),
         });
@@ -408,10 +409,12 @@ describe("BackgroundTaskService", () => {
           yield* service.start({ command: "valid", cwd: `${cwdAtLimit}d` }).pipe(Effect.flip),
         ).toBeInstanceOf(InvalidBackgroundCwdError);
         expect(harness.controls).toHaveLength(1);
-        expect(Arr.map(yield* service.list(), (task) => task.id)).toEqual(["task-1"]);
+        expect(Arr.map(yield* service.list(), (task) => task.id)).toEqual([started.id]);
 
+        // A random token, with no counter a model could increment to predict this ID.
         const next = yield* service.start(taskInput({ command: "next" }));
-        expect(next.id).toBe("task-2");
+        for (const task of [started, next]) expect(task.id).toMatch(TASK_ID);
+        expect(next.id).not.toBe(started.id);
         expect(harness.controls).toHaveLength(2);
         yield* service.stopAll();
       });
@@ -754,17 +757,19 @@ describe("BackgroundTaskService", () => {
     return harness.run(function* (service) {
       const starting = yield* service.start(taskInput()).pipe(forkNow);
       yield* Effect.yieldNow;
-      const stopping = yield* service.stop("task-1").pipe(forkNow);
+      const [admitted] = yield* service.list();
+      const id = admitted!.id;
+      const stopping = yield* service.stop(id).pipe(forkNow);
       yield* Effect.yieldNow;
       yield* TestClock.adjust("10 seconds");
       const failure = yield* Fiber.join(stopping).pipe(Effect.flip);
       expect(failure).toBeInstanceOf(BackgroundTerminationError);
-      expect(failure).toMatchObject({ id: "task-1" });
-      expect((yield* service.status("task-1")).state).toBe("stopping");
+      expect(failure).toMatchObject({ id });
+      expect((yield* service.status(id)).state).toBe("stopping");
       yield* Deferred.succeed(spawnGate, undefined);
       yield* Deferred.await(harness.spawned);
       yield* Effect.yieldNow;
-      expect((yield* service.status("task-1")).state).toBe("stopped");
+      expect((yield* service.status(id)).state).toBe("stopped");
       expect(harness.controls[0]?.modes).toContain("force");
       yield* Fiber.await(starting);
     });

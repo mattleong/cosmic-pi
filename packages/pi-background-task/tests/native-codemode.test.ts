@@ -38,7 +38,12 @@ describe("native scripted background task workflows", () => {
       Effect.gen(function* () {
         const entered = yield* Deferred.make<void>();
         const released = yield* Deferred.make<void>();
-        const running = taskStatus({ id: "task-6", name: "server", state: "running", pid: 4747 });
+        const running = taskStatus({
+          id: "task-0000000006",
+          name: "server",
+          state: "running",
+          pid: 4747,
+        });
         let block = true;
         const service = taskServiceDouble({
           wait: () =>
@@ -51,7 +56,7 @@ describe("native scripted background task workflows", () => {
         });
         const h = yield* nativeCodemodeSession(service);
         const script = yield* h
-          .run("await tools.background_task({action:'wait',id:'task-6',until:'exit'});")
+          .run("await tools.background_task({action:'wait',id:'task-0000000006',until:'exit'});")
           .pipe(Effect.forkScoped);
         yield* Deferred.await(entered);
         yield* Effect.promise(() => h.session.abort());
@@ -59,7 +64,7 @@ describe("native scripted background task workflows", () => {
         yield* Deferred.await(released);
         block = false;
         const later = yield* h.run(`
-          const r = await tools.background_task({action:'wait',id:'task-6',until:'output',contains:'ready'});
+          const r = await tools.background_task({action:'wait',id:'task-0000000006',until:'output',contains:'ready'});
           ${print("{outcome:r.outcome,state:r.task.state}")}
         `);
         expect(output(later.text)).toEqual({ outcome: "matched", state: "running" });
@@ -86,7 +91,7 @@ describe("native scripted background task workflows", () => {
         const h = yield* nativeCodemodeSession(service);
         const result = yield* h.run(`
           const outcomes = [];
-          for (const args of [{action:'stop_all',id:'task-1'},{action:'clear',id:'task-1'}]) {
+          for (const args of [{action:'stop_all',id:'task-0000000001'},{action:'clear',id:'task-0000000001'}]) {
             try { await tools.background_task(args); outcomes.push('accepted'); }
             catch (error) { outcomes.push(String(error?.message ?? error)); }
           }

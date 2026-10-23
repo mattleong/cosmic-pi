@@ -28,12 +28,12 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-const args = { action: "status", id: "task-1" };
-const text = "task-1 failed (exit 2)\ncause: FULL_CAUSE recovery /tmp/task-1.log";
+const args = { action: "status", id: "task-0000000001" };
+const text = "task-0000000001 failed (exit 2)\ncause: FULL_CAUSE recovery /tmp/task-0000000001.log";
 const details = {
   action: "status",
   snapshot: {
-    id: "task-1",
+    id: "task-0000000001",
     name: "replay-task",
     command: "run",
     cwd: "/task-working-directory",
@@ -98,7 +98,7 @@ layer(nodeFilePlatformLayer)("background task history replay", (it) => {
       expect(toolRowFrames(row)).toEqual(toolRowFrames(h.row()));
       const expanded = drawToolRow(row, true);
       for (const line of Str.split(text, "\n")) expect(expanded).toContain(line);
-      expect(expanded).toContain("task-1");
+      expect(expanded).toContain("task-0000000001");
       yield* Effect.promise(() => h.emit("session_shutdown", context()));
     }),
   );

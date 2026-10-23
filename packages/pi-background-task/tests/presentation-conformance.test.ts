@@ -14,7 +14,7 @@ import { registerBackgroundTaskTool } from "../src/tools/background-task.ts";
 const restoreSettings = applyPresentationSettings({});
 afterEach(restoreSettings);
 const snapshot = {
-  id: "task-1",
+  id: "task-0000000001",
   command: "run",
   cwd: "/task-working-directory",
   pid: 87654,
@@ -81,7 +81,7 @@ it("uses the registering owner's scheduler and releases it when the call settles
   const scheduler = animationSchedulerProbe();
   const tool = registeredTool("on", "compact", scheduler.schedule);
   const [probe] = probeAnimationOwnership([tool], scheduler, {
-    args: () => ({ action: "wait", id: "task-1" }),
+    args: () => ({ action: "wait", id: "task-0000000001" }),
   });
   expect(probe?.scheduled).toBeGreaterThan(0);
   expect(probe?.invalidated).toBe(true);
@@ -94,7 +94,7 @@ it.each(["compact", "preview"] as const)(
     const failureCause = "FAIL tests/auth.test.ts > adds";
     const harness = createToolPresentationHarness(registeredTool("on", style));
     const [collapsed] = harness.cycle(
-      { action: "status", id: "task-1" },
+      { action: "status", id: "task-0000000001" },
       {
         content: [{ type: "text", text: "Rewritten by a tool_result hook" }],
         details: {
@@ -113,13 +113,15 @@ it.each(["compact", "preview"] as const)(
   (style) => {
     const harness = createToolPresentationHarness(registeredTool("on", style));
     const [collapsed] = harness.cycle(
-      { action: "logs", id: "task-1" },
+      { action: "logs", id: "task-0000000001" },
       {
-        content: [{ type: "text", text: "[task-1 state=running cursor=10 earliest=1]\nready\n" }],
+        content: [
+          { type: "text", text: "[task-0000000001 state=running cursor=10 earliest=1]\nready\n" },
+        ],
         details: {
           action: "logs",
           logs: {
-            id: "task-1",
+            id: "task-0000000001",
             state: "running",
             nextCursor: 10,
             earliestAvailableCursor: 1,

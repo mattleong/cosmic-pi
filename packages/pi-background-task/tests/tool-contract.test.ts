@@ -40,7 +40,7 @@ afterEach(restoreSettings);
 type ServiceOverrides = Partial<BackgroundTaskServiceContract>;
 
 const task = (overrides: Partial<BackgroundTaskStatus> = {}): BackgroundTaskStatus => ({
-  id: "task-1",
+  id: "task-0000000001",
   name: "dev server",
   command: "command-marker pnpm dev",
   cwd: "/cwd-marker",
@@ -89,7 +89,7 @@ describe("background_task parameters", () => {
 describe("background_task contract", () => {
   it.effect("projects every successful action from domain facts into one strict contract", () =>
     Effect.gen(function* () {
-      const failed = task({ id: "task-2", state: "failed", endedAt: 200, exitCode: 1 });
+      const failed = task({ id: "task-0000000002", state: "failed", endedAt: 200, exitCode: 1 });
       const services: ServiceOverrides = {
         start: () => Effect.succeed(task({ state: "starting" })),
         status: () => Effect.succeed(task()),
@@ -101,7 +101,7 @@ describe("background_task contract", () => {
           Effect.succeed(
             taskLogs(
               {
-                id: "task-1",
+                id: "task-0000000001",
                 state: "running",
                 nextCursor: 4,
                 earliestAvailableCursor: 1,
@@ -124,12 +124,12 @@ describe("background_task contract", () => {
       };
       const inputs: ReadonlyArray<BackgroundTaskToolInput> = [
         { action: "start", command: "pnpm dev", name: "dev server" },
-        { action: "status", id: "task-1" },
-        { action: "stop", id: "task-1" },
+        { action: "status", id: "task-0000000001" },
+        { action: "stop", id: "task-0000000001" },
         { action: "list" },
         { action: "stop_all" },
-        { action: "logs", id: "task-1" },
-        { action: "wait", id: "task-1", until: "output", contains: "ready" },
+        { action: "logs", id: "task-0000000001" },
+        { action: "wait", id: "task-0000000001", until: "output", contains: "ready" },
         { action: "clear" },
       ];
       for (const input of inputs) {
@@ -147,14 +147,14 @@ describe("background_task contract", () => {
       }
       const list = (yield* execute({ action: "list" }, services)).contract;
       expect(list.action === "list" && Arr.map(list.tasks, (entry) => entry.id)).toEqual([
-        "task-1",
-        "task-2",
+        "task-0000000001",
+        "task-0000000002",
       ]);
       const wait = (yield* execute(inputs[6]!, services)).contract;
       expect(wait).toMatchObject({
         outcome: "matched",
         matchCursor: 2,
-        task: { id: "task-1" },
+        task: { id: "task-0000000001" },
         appliedWaitSeconds: 30,
       });
       expect((yield* execute({ action: "clear" }, services)).contract).toMatchObject({
@@ -206,7 +206,7 @@ describe("background_task contract", () => {
         failureCause: "FAIL auth password=cause-secret",
       });
       const result = yield* execute(
-        { action: "status", id: "task-1" },
+        { action: "status", id: "task-0000000001" },
         { status: () => Effect.succeed(failed) },
       );
       const { contract } = result;
@@ -214,7 +214,7 @@ describe("background_task contract", () => {
       const json = serialize(encoded(contract));
       for (const secret of ["name-secret", "error-secret", "cause-secret", "\u001b"])
         expect(json).not.toContain(secret);
-      expect(contract.task.id).toBe("task-1");
+      expect(contract.task.id).toBe("task-0000000001");
       expect(contract.task.cause).toMatch(/^FAIL auth password=/u);
       expect(contract.task.name!.length).toBeLessThanOrEqual(256);
       expect(contract.task.error!.length).toBeLessThanOrEqual(2_048);
@@ -224,7 +224,7 @@ describe("background_task contract", () => {
 
       const blank = task({ name: "\u001b[0m  ", signal: "", error: "\t" });
       const projected = (yield* execute(
-        { action: "status", id: "task-1" },
+        { action: "status", id: "task-0000000001" },
         { status: () => Effect.succeed(blank) },
       )).contract;
       if (projected.action !== "status") throw new Error("status returned the wrong contract");
@@ -249,7 +249,7 @@ describe("registered background_task output", () => {
           JsonSchema.fromSchemaDraft2020_12({ ...tool.outputSchema }),
         ),
       );
-      const input = { action: "status", id: "task-1" } as const;
+      const input = { action: "status", id: "task-0000000001" } as const;
       const direct = yield* execute(input, services);
       const result = yield* call(tool, input);
       expect(result.isError).toBeUndefined();
@@ -265,7 +265,7 @@ describe("registered background_task output", () => {
     () =>
       Effect.gen(function* () {
         const services: ServiceOverrides = {
-          start: () => Effect.succeed(task({ id: "task-7", startedAt: -1 })),
+          start: () => Effect.succeed(task({ id: "task-0000000007", startedAt: -1 })),
         };
         const input = { action: "start", command: "pnpm dev" } as const;
         const direct = yield* execute(input, services);
@@ -279,7 +279,7 @@ describe("registered background_task output", () => {
         const newline = Option.getOrElse(Fn.pipe(text, Str.indexOf("\n")), () => -1);
         expect(issueMessageStyleProblems(Fn.pipe(text, Str.slice(0, newline)))).toEqual([]);
         expect(Fn.pipe(text, Str.slice(newline + 1))).toBe(direct.text);
-        expect(direct.text).toContain("task-7");
+        expect(direct.text).toContain("task-0000000007");
       }),
   );
 });

@@ -17,6 +17,7 @@ import {
   clipText,
   invokeHostCallback,
   sanitizeDiagnosticError,
+  synchronousRandomToken,
   utf8ByteLength,
 } from "pi-cosmic-core";
 import {
@@ -140,6 +141,13 @@ const checkCursor = (record: TaskRecord, afterCursor: number | undefined) =>
       : Effect.fail(afterCursorAhead(record.snapshot.id, afterCursor, latest));
   });
 
+// Random IDs keep a model from predicting the next one before its start returns.
+const freshTaskId = (tasks: TaskRegistry): string => {
+  let id = `task-${synchronousRandomToken()}`;
+  while (tasks.has(id)) id = `task-${synchronousRandomToken()}`;
+  return id;
+};
+
 const makeService = Effect.fn("BackgroundTaskService.make")(function* (
   options: BackgroundTaskServiceOptions,
 ) {
@@ -150,7 +158,6 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
   const monitorScope = yield* Scope.fork(ownerScope);
   const lock = yield* Semaphore.make(1);
   const tasks: TaskRegistry = new Map();
-  let nextId = 1;
   let admissionsClosed = false;
   // Output still in flight has its own per-task bound, outside the retained budgets.
   const ingressBufferBytes = Math.max(
@@ -425,14 +432,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
                 message: `Background task capacity reached (${config.maxRunning}).`,
               });
             }
-            if (!Number.isSafeInteger(nextId)) {
-              return yield* BackgroundTaskCapacityError.make({
-                limit: Number.MAX_SAFE_INTEGER,
-                message: "Background task identity capacity reached.",
-              });
-            }
-            const id = `task-${nextId}`;
-            nextId += 1;
+            const id = yield* Effect.sync(() => freshTaskId(tasks));
             const startedAt = yield* Clock.currentTimeMillis;
             // The record keeps a display copy; the monitor runs the full prepared command.
             const created = taskRecord({

@@ -37,7 +37,8 @@ const execute = (
   );
 
 const bufferService = (buffer: LogBuffer): Partial<BackgroundTaskServiceContract> => ({
-  logs: (request) => Effect.succeed(taskLogs(readLogBuffer("task-1", buffer, "running", request))),
+  logs: (request) =>
+    Effect.succeed(taskLogs(readLogBuffer("task-0000000001", buffer, "running", request))),
 });
 
 // A logs result's text after its header and notice lines, exactly as returned.
@@ -72,7 +73,7 @@ describe("shared background task command", () => {
       let cursor = 0;
       for (let page = 0; page < 20; page++) {
         const result = yield* execute(
-          { action: "logs", id: "task-1", afterCursor: cursor },
+          { action: "logs", id: "task-0000000001", afterCursor: cursor },
           service,
         );
         expect(Buffer.byteLength(result.text)).toBeLessThanOrEqual(DEFAULT_MAX_BYTES);
@@ -95,7 +96,7 @@ describe("shared background task command", () => {
       expect(Arr.join(pages, "")).toBe(`${Arr.join(lines, "\n")}\n`);
 
       const { contract } = yield* execute(
-        { action: "logs", id: "task-1", afterCursor: 0 },
+        { action: "logs", id: "task-0000000001", afterCursor: 0 },
         service,
       );
       expect(contract).toMatchObject({
@@ -116,7 +117,7 @@ describe("shared background task command", () => {
       let cursor = 0;
       for (let page = 0; page < 5 && cursor < buffer.latestCursor; page++) {
         const { contract } = yield* execute(
-          { action: "logs", id: "task-1", afterCursor: cursor },
+          { action: "logs", id: "task-0000000001", afterCursor: cursor },
           service,
         );
         if (contract.action !== "logs") throw new Error("logs returned another contract");
@@ -137,10 +138,15 @@ describe("shared background task command", () => {
       const buffer = new LogBuffer();
       const lines = Array.from({ length: 300 }, (_, index) => `line ${index + 1}`);
       buffer.append("stdout", `${Arr.join(lines, "\n")}\n`, 0, 1 << 20);
-      const result = yield* execute({ action: "logs", id: "task-1" }, bufferService(buffer));
+      const result = yield* execute(
+        { action: "logs", id: "task-0000000001" },
+        bufferService(buffer),
+      );
       if (result.details.action !== "logs") throw new Error("logs returned other details");
       const [header, notice] = Str.split(result.text, "\n");
-      expect(header).toBe(`[task-1 state=running cursor=${buffer.latestCursor} earliest=0]`);
+      expect(header).toBe(
+        `[task-0000000001 state=running cursor=${buffer.latestCursor} earliest=0]`,
+      );
       const omitted = Buffer.byteLength(`${Arr.join(lines.slice(0, 100), "\n")}\n`);
       expect(result.details.truncation).toEqual({
         omitted: "earlier",
@@ -157,7 +163,7 @@ describe("shared background task command", () => {
       });
 
       const all = yield* execute(
-        { action: "logs", id: "task-1", afterCursor: 0 },
+        { action: "logs", id: "task-0000000001", afterCursor: 0 },
         bufferService(buffer),
       );
       expect(all.details).not.toHaveProperty("truncation");
@@ -174,7 +180,7 @@ describe("shared background task command", () => {
       for (let index = 0; index < 8; index++)
         buffer.append("stdout", `${Fn.pipe(String(index), Str.repeat(3_000))}\n`, index, 4 * 3_097);
       const result = yield* execute(
-        { action: "logs", id: "task-1", afterCursor: 0 },
+        { action: "logs", id: "task-0000000001", afterCursor: 0 },
         bufferService(buffer),
         8_000,
       );
@@ -185,7 +191,7 @@ describe("shared background task command", () => {
       });
       // Each loss has its own line: what was discarded, then what the next page holds.
       const [header, loss, notice] = Str.split(result.text, "\n");
-      expect(header).toBe("[task-1 state=running cursor=6 earliest=4]");
+      expect(header).toBe("[task-0000000001 state=running cursor=6 earliest=4]");
       expect(loss).toContain(formatBytes(4 * 3_001));
       expect(loss).not.toContain(formatBytes(2 * 3_001));
       expect(notice).toContain(formatBytes(2 * 3_001));
@@ -209,7 +215,10 @@ describe("shared background task command", () => {
       const service = bufferService(buffer);
       const expected =
         "building \n[stderr] warn: a\n[stderr] warn: b\n[stderr] Error: boom\ndone\n";
-      const result = yield* execute({ action: "logs", id: "task-1", afterCursor: 0 }, service);
+      const result = yield* execute(
+        { action: "logs", id: "task-0000000001", afterCursor: 0 },
+        service,
+      );
       if (result.details.action !== "logs") throw new Error("logs returned other details");
       expect(logBody(result.text, result.details)).toBe(expected);
       expect(result.contract).toMatchObject({ output: expected });
@@ -229,7 +238,7 @@ describe("shared background task command", () => {
         bytes: 2_000,
       };
       const slice = {
-        id: "task-1",
+        id: "task-0000000001",
         state: "running" as const,
         nextCursor: 1,
         earliestAvailableCursor: 0,
@@ -238,7 +247,7 @@ describe("shared background task command", () => {
         events: [event],
       };
       const result = yield* execute(
-        { action: "logs", id: "task-1" },
+        { action: "logs", id: "task-0000000001" },
         { logs: () => Effect.succeed(taskLogs(slice)) },
         700,
       );
@@ -356,7 +365,7 @@ const recordingService = () => {
       requests.push(...args);
       return Effect.succeed(value);
     };
-  const running = taskStatus({ id: "task-1", state: "running" });
+  const running = taskStatus({ id: "task-0000000001", state: "running" });
   const service: Partial<BackgroundTaskServiceContract> = {
     start: record("start", running),
     list: record("list", [running]),
@@ -364,7 +373,7 @@ const recordingService = () => {
     logs: record(
       "logs",
       taskLogs({
-        id: "task-1",
+        id: "task-0000000001",
         state: "running" as const,
         nextCursor: 0,
         earliestAvailableCursor: 0,
@@ -388,18 +397,21 @@ describe("background task action parameters", () => {
   it.effect("rejects fields the action does not use before touching any task", () =>
     Effect.gen(function* () {
       const rejected: ReadonlyArray<readonly [BackgroundTaskToolInput, ReadonlyArray<string>]> = [
-        [{ action: "stop_all", id: "task-1" }, ["id"]],
-        [{ action: "clear", id: "task-1" }, ["id"]],
+        [{ action: "stop_all", id: "task-0000000001" }, ["id"]],
+        [{ action: "clear", id: "task-0000000001" }, ["id"]],
         [{ action: "clear", force: true }, ["force"]],
-        [{ action: "wait", id: "task-1", until: "exit", timeoutSeconds: 600 }, ["timeoutSeconds"]],
         [
-          { action: "logs", id: "task-1", until: "output", contains: "ready" },
+          { action: "wait", id: "task-0000000001", until: "exit", timeoutSeconds: 600 },
+          ["timeoutSeconds"],
+        ],
+        [
+          { action: "logs", id: "task-0000000001", until: "output", contains: "ready" },
           ["until", "contains"],
         ],
-        [{ action: "list", state: "active", id: "task-1" }, ["id"]],
-        [{ action: "status", id: "task-1", force: true }, ["force"]],
+        [{ action: "list", state: "active", id: "task-0000000001" }, ["id"]],
+        [{ action: "status", id: "task-0000000001", force: true }, ["force"]],
         [{ action: "start", command: "pnpm dev", waitSeconds: 5 }, ["waitSeconds"]],
-        [{ action: "logs", id: "task-1", afterCursor: 3, tailLines: 20 }, ["afterCursor"]],
+        [{ action: "logs", id: "task-0000000001", afterCursor: 3, tailLines: 20 }, ["afterCursor"]],
       ];
       for (const [input, fields] of rejected) {
         const { calls, service } = recordingService();
@@ -416,12 +428,18 @@ describe("background task action parameters", () => {
       const accepted: ReadonlyArray<BackgroundTaskToolInput> = [
         { action: "start", command: "pnpm dev", cwd: ".", name: "dev", timeoutSeconds: 60 },
         { action: "list", state: "completed" },
-        { action: "status", id: "task-1" },
-        { action: "logs", id: "task-1", afterCursor: 2, waitSeconds: 5 },
-        { action: "logs", id: "task-1", tailLines: 20 },
-        { action: "wait", id: "task-1", until: "output", contains: "ready", afterCursor: 2 },
-        { action: "wait", id: "task-1", until: "exit", waitSeconds: 10 },
-        { action: "stop", id: "task-1", force: true },
+        { action: "status", id: "task-0000000001" },
+        { action: "logs", id: "task-0000000001", afterCursor: 2, waitSeconds: 5 },
+        { action: "logs", id: "task-0000000001", tailLines: 20 },
+        {
+          action: "wait",
+          id: "task-0000000001",
+          until: "output",
+          contains: "ready",
+          afterCursor: 2,
+        },
+        { action: "wait", id: "task-0000000001", until: "exit", waitSeconds: 10 },
+        { action: "stop", id: "task-0000000001", force: true },
         { action: "stop_all", force: true },
         { action: "clear" },
       ];
@@ -446,12 +464,25 @@ describe("background task argument leniency", () => {
           [{ command: "pnpm dev", cwd: "/" }],
         ],
         [
-          { action: "wait", id: "task-1", until: "exit", contains: "", afterCursor: 0, cwd: "" },
-          [{ id: "task-1", until: "exit" }],
+          {
+            action: "wait",
+            id: "task-0000000001",
+            until: "exit",
+            contains: "",
+            afterCursor: 0,
+            cwd: "",
+          },
+          [{ id: "task-0000000001", until: "exit" }],
         ],
         [
-          { action: "logs", id: "task-1", afterCursor: 3, tailLines: 0, timeoutSeconds: 0 },
-          [{ id: "task-1", afterCursor: 3 }],
+          {
+            action: "logs",
+            id: "task-0000000001",
+            afterCursor: 3,
+            tailLines: 0,
+            timeoutSeconds: 0,
+          },
+          [{ id: "task-0000000001", afterCursor: 3 }],
         ],
       ];
       for (const [input, expected] of lenient) {
@@ -481,8 +512,13 @@ describe("background task argument leniency", () => {
   it("keeps whitespace-only text to match in contains", () => {
     for (const contains of [" ", "\n"])
       expect(
-        prepareBackgroundTaskArguments({ action: "wait", id: "task-1", until: "output", contains }),
-      ).toEqual({ action: "wait", id: "task-1", until: "output", contains });
+        prepareBackgroundTaskArguments({
+          action: "wait",
+          id: "task-0000000001",
+          until: "output",
+          contains,
+        }),
+      ).toEqual({ action: "wait", id: "task-0000000001", until: "output", contains });
   });
 
   it("names the invalid field and its allowed values", () => {
@@ -496,12 +532,12 @@ describe("background task argument leniency", () => {
 describe("background task results", () => {
   it.effect("reports the applied wait limit and whether the setting capped it", () =>
     Effect.gen(function* () {
-      const running = taskStatus({ id: "task-1", state: "running" });
+      const running = taskStatus({ id: "task-0000000001", state: "running" });
       const waitFor = (waitSeconds: number | undefined, appliedWaitSeconds: number) =>
         execute(
           {
             action: "wait",
-            id: "task-1",
+            id: "task-0000000001",
             until: "exit",
             ...(waitSeconds !== undefined && { waitSeconds }),
           },
@@ -524,15 +560,20 @@ describe("background task results", () => {
   it.effect("does not report stopping a task that had already finished", () =>
     Effect.gen(function* () {
       // A task can finish after a status read but before its stop lands; only the stop knows.
-      const finished = taskStatus({ id: "task-1", state: "exited", endedAt: 2, exitCode: 0 });
-      const running = taskStatus({ id: "task-2", state: "running" });
+      const finished = taskStatus({
+        id: "task-0000000001",
+        state: "exited",
+        endedAt: 2,
+        exitCode: 0,
+      });
+      const running = taskStatus({ id: "task-0000000002", state: "running" });
       const stopped = { ...running, state: "stopped" as const, endedAt: 3, signal: "SIGTERM" };
       const noop = yield* execute(
-        { action: "stop", id: "task-1" },
+        { action: "stop", id: "task-0000000001" },
         { stop: () => Effect.succeed(taskStop(finished, true)) },
       );
       const real = yield* execute(
-        { action: "stop", id: "task-2" },
+        { action: "stop", id: "task-0000000002" },
         { stop: () => Effect.succeed(taskStop(stopped)) },
       );
       expect(noop.details).toMatchObject({ action: "stop", alreadyFinished: true });
@@ -544,8 +585,8 @@ describe("background task results", () => {
       });
       expect(real.contract).toMatchObject({ action: "stop", alreadyFinished: false });
       expect(Str.split(noop.text, " ")[0]).not.toBe(Str.split(real.text, " ")[0]);
-      expect(summarize({ action: "stop", id: "task-1" }, noop)?.outcome).toBe("returned");
-      expect(summarize({ action: "stop", id: "task-2" }, real)?.outcome).toBe("success");
+      expect(summarize({ action: "stop", id: "task-0000000001" }, noop)?.outcome).toBe("returned");
+      expect(summarize({ action: "stop", id: "task-0000000002" }, real)?.outcome).toBe("success");
     }),
   );
 
@@ -554,7 +595,7 @@ describe("background task results", () => {
       const submitted: string[] = [];
       const start: BackgroundTaskServiceContract["start"] = (request) => {
         submitted.push(request.command);
-        return Effect.succeed(taskStatus({ id: "task-1", state: "running", ...request }));
+        return Effect.succeed(taskStatus({ id: "task-0000000001", state: "running", ...request }));
       };
       const command = "printf '<%s>\\n' 'trailing'\\ ";
       const result = yield* execute({ action: "start", command, name: "  echo  " }, { start });

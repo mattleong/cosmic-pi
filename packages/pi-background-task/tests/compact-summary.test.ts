@@ -11,7 +11,7 @@ import type { BackgroundTaskToolInput } from "../src/tools/schema.ts";
 
 type Input = Parameters<typeof projectBackgroundTaskCompactSummary>[0];
 const snapshot = {
-  id: "task-1",
+  id: "task-0000000001",
   command: "test",
   cwd: "/tmp",
   state: "running",
@@ -97,7 +97,7 @@ describe("background task compact semantics", () => {
   ])("projects status causes as issues: %j", (fields, outcome, code, severity) => {
     const result = project({ action: "status", snapshot: { ...snapshot, ...fields } });
     expect(result?.outcome).toBe(outcome);
-    expect(find(result, `task-1:${code}`)?.severity).toBe(severity);
+    expect(find(result, `task-0000000001:${code}`)?.severity).toBe(severity);
   });
 
   it("writes every issue message in the shared style, without task IDs", () => {
@@ -116,7 +116,10 @@ describe("background task compact semantics", () => {
       project(
         {
           action: "list",
-          tasks: Arr.map(snapshots, (value, index) => ({ ...value, id: `task-${index}` })),
+          tasks: Arr.map(snapshots, (value, index) => ({
+            ...value,
+            id: `task-${Fn.pipe(`${index}`, Str.padStart(10, "0"))}`,
+          })),
         },
         "list",
       ),
@@ -145,7 +148,7 @@ describe("background task compact semantics", () => {
     for (const { message } of issues)
       expect({
         message,
-        problems: issueMessageStyleProblems(message, { forbidden: ["task-1"] }),
+        problems: issueMessageStyleProblems(message, { forbidden: ["task-0000000001"] }),
       }).toEqual({
         message,
         problems: [],
@@ -203,13 +206,13 @@ describe("background task row outcomes", () => {
   it("renders the failure cause stored in details", () => {
     const failureCause = "FAIL tests/auth.test.ts > adds";
     const summary = project({ action: "status", snapshot: { ...failed, failureCause } });
-    expect(find(summary, "task-1:exit-code")?.message).toContain(failureCause);
+    expect(find(summary, "task-0000000001:exit-code")?.message).toContain(failureCause);
   });
 
   it("keeps each task's label in aggregate issues, even for error-like names", () => {
     const tasks = [
-      { ...failed, id: "task-1", name: "BuildError" },
-      { ...failed, id: "task-2", name: "TypeError: lint" },
+      { ...failed, id: "task-0000000001", name: "BuildError" },
+      { ...failed, id: "task-0000000002", name: "TypeError: lint" },
     ];
     const messages = Arr.map(
       project({ action: "list", tasks }, "list")?.issues ?? [],
@@ -228,7 +231,7 @@ describe("background task row outcomes", () => {
           until: "exit",
           waitSeconds,
         }),
-        "task-1:wait-timeout",
+        "task-0000000001:wait-timeout",
       );
     const capped = issueFor(120);
     const exact = issueFor(30);

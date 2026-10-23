@@ -34,7 +34,7 @@ import {
 
 const task = (fields: Parameters<typeof taskStatus>[0]) => taskStatus({ logCursor: 12, ...fields });
 const failed = task({
-  id: "task-1",
+  id: "task-0000000001",
   name: "tests",
   state: "failed",
   endedAt: 2,
@@ -42,7 +42,7 @@ const failed = task({
   failureCause: "FAIL tests/auth.test.ts > rejects expired tokens",
 });
 const killed = task({
-  id: "task-2",
+  id: "task-0000000002",
   name: "build",
   command: "pnpm build",
   state: "failed",
@@ -50,21 +50,21 @@ const killed = task({
   exitCode: 137,
 });
 const running = task({
-  id: "task-3",
+  id: "task-0000000003",
   name: "server",
   command: "pnpm dev",
   state: "running",
   pid: 48213,
 });
 const stopping = task({
-  id: "task-4",
+  id: "task-0000000004",
   name: "e2e",
   command: "pnpm test:e2e",
   state: "stopping",
   pid: 48377,
 });
 const timedOut = task({
-  id: "task-5",
+  id: "task-0000000005",
   name: "migrate",
   command: "pnpm db:migrate",
   state: "timed_out",
@@ -74,7 +74,7 @@ const timedOut = task({
   signal: "SIGTERM",
 });
 const exitUnknown = task({
-  id: "task-6",
+  id: "task-0000000006",
   name: "lint",
   command: "pnpm lint",
   state: "exited",
@@ -82,7 +82,7 @@ const exitUnknown = task({
   exitCode: null,
 });
 const spawnFailed = task({
-  id: "task-7",
+  id: "task-0000000007",
   name: "deploy",
   command: "./scripts/deploy.sh",
   state: "failed",
@@ -91,7 +91,7 @@ const spawnFailed = task({
   error: "Couldn't start the process",
 });
 const finished = task({
-  id: "task-8",
+  id: "task-0000000008",
   name: "typecheck",
   command: "pnpm typecheck",
   state: "exited",
@@ -106,7 +106,7 @@ const stoppedServer: BackgroundTaskStatus = {
   signal: "SIGTERM",
 };
 const noisy = task({
-  id: "task-9",
+  id: "task-0000000009",
   name: "watch",
   command: "pnpm build --watch",
   state: "running",
@@ -122,14 +122,14 @@ const stoppedWatcher: BackgroundTaskStatus = {
   signal: "SIGTERM",
 };
 const unnamed = task({
-  id: "task-12",
+  id: "task-0000000012",
   command: "node scripts/seed.js --fixtures=large",
   state: "failed",
   endedAt: 2,
   exitCode: 127,
 });
 const errorNamed = task({
-  id: "task-14",
+  id: "task-0000000014",
   name: "BuildError",
   command: "pnpm build:errors",
   state: "failed",
@@ -217,7 +217,7 @@ const scenarios: ReadonlyArray<Scenario> = [
   {
     title: "started a named task",
     input: { action: "start", command: "pnpm docs:dev", name: "docs" },
-    service: { start: started("task-10", 48590) },
+    service: { start: started("task-0000000010", 48590) },
   },
   {
     title: "started an unnamed task in a subdirectory",
@@ -226,7 +226,7 @@ const scenarios: ReadonlyArray<Scenario> = [
       command: "pnpm vitest --watch --reporter=dot tests/task-service.test.ts",
       cwd: "packages/pi-background-task",
     },
-    service: { start: started("task-11", 48612) },
+    service: { start: started("task-0000000011", 48612) },
   },
   {
     title: "start in a missing directory",
@@ -241,39 +241,45 @@ const scenarios: ReadonlyArray<Scenario> = [
         ),
     },
   },
-  { title: "running task", input: { action: "status", id: "task-3" } },
-  { title: "finished task", input: { action: "status", id: "task-8" } },
-  { title: "failed task with a cause", input: { action: "status", id: "task-1" } },
-  { title: "task killed without output", input: { action: "status", id: "task-2" } },
-  { title: "task still stopping", input: { action: "status", id: "task-4" } },
-  { title: "task timed out", input: { action: "status", id: "task-5" } },
-  { title: "task exited with an unknown code", input: { action: "status", id: "task-6" } },
-  { title: "task that failed to spawn", input: { action: "status", id: "task-7" } },
-  { title: "task that lost output", input: { action: "status", id: "task-9" } },
-  { title: "unnamed task whose command was not found", input: { action: "status", id: "task-12" } },
-  { title: "status of an unknown task", input: { action: "status", id: "task-42" } },
+  { title: "running task", input: { action: "status", id: "task-0000000003" } },
+  { title: "finished task", input: { action: "status", id: "task-0000000008" } },
+  { title: "failed task with a cause", input: { action: "status", id: "task-0000000001" } },
+  { title: "task killed without output", input: { action: "status", id: "task-0000000002" } },
+  { title: "task still stopping", input: { action: "status", id: "task-0000000004" } },
+  { title: "task timed out", input: { action: "status", id: "task-0000000005" } },
+  { title: "task exited with an unknown code", input: { action: "status", id: "task-0000000006" } },
+  { title: "task that failed to spawn", input: { action: "status", id: "task-0000000007" } },
+  { title: "task that lost output", input: { action: "status", id: "task-0000000009" } },
+  {
+    title: "unnamed task whose command was not found",
+    input: { action: "status", id: "task-0000000012" },
+  },
+  { title: "status of an unknown task", input: { action: "status", id: "task-0000000042" } },
   {
     title: "short log slice",
-    input: { action: "logs", id: "task-3", tailLines: 5 },
+    input: { action: "logs", id: "task-0000000003", tailLines: 5 },
     service: {
-      logs: () => Effect.succeed(slice("task-3", "running", serverLog, { from: 9, task: running })),
+      logs: () =>
+        Effect.succeed(slice("task-0000000003", "running", serverLog, { from: 9, task: running })),
     },
   },
   {
     title: "long log slice",
-    input: { action: "logs", id: "task-3", tailLines: 30 },
+    input: { action: "logs", id: "task-0000000003", tailLines: 30 },
     service: {
       logs: () =>
-        Effect.succeed(slice("task-3", "running", requestLog, { from: 40, task: running })),
+        Effect.succeed(
+          slice("task-0000000003", "running", requestLog, { from: 40, task: running }),
+        ),
     },
   },
   {
     title: "logs after output was discarded",
-    input: { action: "logs", id: "task-3", afterCursor: 4 },
+    input: { action: "logs", id: "task-0000000003", afterCursor: 4 },
     service: {
       logs: () =>
         Effect.succeed(
-          slice("task-3", "running", requestLog.slice(0, 3), {
+          slice("task-0000000003", "running", requestLog.slice(0, 3), {
             from: 212,
             droppedBytes: 18_432,
             task: running,
@@ -283,80 +289,90 @@ const scenarios: ReadonlyArray<Scenario> = [
   },
   {
     title: "tail read that leaves earlier output out",
-    input: { action: "logs", id: "task-9", tailLines: 3 },
+    input: { action: "logs", id: "task-0000000009", tailLines: 3 },
     service: {
-      logs: () => Effect.succeed(slice("task-9", "running", bundleLog, { from: 7, task: noisy })),
+      logs: () =>
+        Effect.succeed(slice("task-0000000009", "running", bundleLog, { from: 7, task: noisy })),
     },
   },
   {
     title: "log page with more output to read",
-    input: { action: "logs", id: "task-9", afterCursor: 6 },
+    input: { action: "logs", id: "task-0000000009", afterCursor: 6 },
     service: {
-      logs: () => Effect.succeed(slice("task-9", "running", bundleLog, { from: 7, task: noisy })),
+      logs: () =>
+        Effect.succeed(slice("task-0000000009", "running", bundleLog, { from: 7, task: noisy })),
     },
   },
   {
     title: "logs of a failed task",
-    input: { action: "logs", id: "task-1", tailLines: 4 },
+    input: { action: "logs", id: "task-0000000001", tailLines: 4 },
     service: {
-      logs: () => Effect.succeed(slice("task-1", "failed", testLog, { from: 9, task: failed })),
+      logs: () =>
+        Effect.succeed(slice("task-0000000001", "failed", testLog, { from: 9, task: failed })),
     },
   },
   {
     title: "logs with no new output",
-    input: { action: "logs", id: "task-3", afterCursor: 11, waitSeconds: 5 },
+    input: { action: "logs", id: "task-0000000003", afterCursor: 11, waitSeconds: 5 },
     service: {
-      logs: () => Effect.succeed(slice("task-3", "running", [], { from: 12, task: running })),
+      logs: () =>
+        Effect.succeed(slice("task-0000000003", "running", [], { from: 12, task: running })),
     },
   },
   {
     title: "logs from a cursor ahead of the task's output",
-    input: { action: "logs", id: "task-3", afterCursor: 40 },
-    service: { logs: () => Effect.fail(afterCursorAhead("task-3", 40, 12)) },
+    input: { action: "logs", id: "task-0000000003", afterCursor: 40 },
+    service: { logs: () => Effect.fail(afterCursorAhead("task-0000000003", 40, 12)) },
   },
   {
     title: "wait in progress",
-    input: { action: "wait", id: "task-3", until: "exit" },
+    input: { action: "wait", id: "task-0000000003", until: "exit" },
     phase: "running",
   },
   {
     title: "wait matched output",
-    input: { action: "wait", id: "task-3", until: "output", contains: "ready in" },
+    input: { action: "wait", id: "task-0000000003", until: "output", contains: "ready in" },
     service: { wait: () => Effect.succeed(taskWait(running, "matched", { matchCursor: 9 })) },
   },
   {
     title: "wait completed",
-    input: { action: "wait", id: "task-8", until: "exit" },
+    input: { action: "wait", id: "task-0000000008", until: "exit" },
     service: { wait: () => Effect.succeed(taskWait(finished, "completed")) },
   },
   {
     title: "wait completed with a failure",
-    input: { action: "wait", id: "task-1", until: "exit" },
+    input: { action: "wait", id: "task-0000000001", until: "exit" },
     service: { wait: () => Effect.succeed(taskWait(failed, "completed")) },
   },
   {
     title: "wait timed out",
-    input: { action: "wait", id: "task-3", until: "exit", waitSeconds: 30 },
+    input: { action: "wait", id: "task-0000000003", until: "exit", waitSeconds: 30 },
     service: { wait: () => Effect.succeed(taskWait(running, "timeout")) },
   },
   {
     title: "wait capped by the maxWaitSeconds setting",
-    input: { action: "wait", id: "task-3", until: "output", contains: "ready", waitSeconds: 120 },
+    input: {
+      action: "wait",
+      id: "task-0000000003",
+      until: "output",
+      contains: "ready",
+      waitSeconds: 120,
+    },
     service: { wait: () => Effect.succeed(taskWait(running, "timeout")) },
   },
   {
     title: "stop",
-    input: { action: "stop", id: "task-3" },
+    input: { action: "stop", id: "task-0000000003" },
     service: { stop: () => Effect.succeed(taskStop(stoppedServer)) },
   },
   {
     title: "stop of a task that already finished",
-    input: { action: "stop", id: "task-8" },
+    input: { action: "stop", id: "task-0000000008" },
     service: { stop: () => Effect.succeed(taskStop(finished, true)) },
   },
   {
     title: "stop all with a task ID it does not accept",
-    input: { action: "stop_all", id: "task-3" },
+    input: { action: "stop_all", id: "task-0000000003" },
   },
   {
     title: "stop all",
@@ -395,7 +411,7 @@ const scenarios: ReadonlyArray<Scenario> = [
   },
   {
     title: "stop that could not confirm cleanup",
-    input: { action: "stop", id: "task-4", force: true },
+    input: { action: "stop", id: "task-0000000004", force: true },
     service: { stop: () => Effect.succeed(taskStop(stopping)) },
   },
   {
@@ -445,7 +461,7 @@ const registeredScenarios: ReadonlyArray<RegisteredScenario> = [
     service: {
       start: (request) =>
         started(
-          "task-13",
+          "task-0000000013",
           48701,
         )(request).pipe(Effect.map((snapshot) => ({ ...snapshot, startedAt: -1 }))),
     },

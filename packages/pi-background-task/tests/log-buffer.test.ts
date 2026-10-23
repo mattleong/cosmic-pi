@@ -17,7 +17,7 @@ const budgetFor = (count: number, bytes: number) => count * (bytes + OVERHEAD);
 const tailText = (buffer: LogBuffer, tailLines: number) =>
   Arr.join(
     Arr.map(
-      readLogBuffer("task-1", buffer, "running", { tailLines }).events,
+      readLogBuffer("task-0000000001", buffer, "running", { tailLines }).events,
       (event) => event.text,
     ),
     "",
@@ -38,7 +38,7 @@ describe("background log buffer", () => {
     for (let index = 0; index < 64; index++) buffer.append("stdout", "🙂", index, budget);
     const events = buffer.events;
     const original = Arr.map(events, (event) => ({ ...event }));
-    const slice = readLogBuffer("task-1", buffer, "running", { afterCursor: 0 });
+    const slice = readLogBuffer("task-0000000001", buffer, "running", { afterCursor: 0 });
     expect(buffer.events).toBe(events);
 
     for (let index = 64; index < 256; index++) buffer.append("stderr", "🙂", index, budget);
@@ -60,9 +60,9 @@ describe("background log buffer", () => {
     const budget = budgetFor(1, 8);
     const buffer = new LogBuffer().append("stdout", "one\ntwo\n", 1, budget);
     const cached = buffer.events;
-    const full = readLogBuffer("task-1", buffer, "running", { afterCursor: 0 });
-    const tail = readLogBuffer("task-1", buffer, "running", { tailLines: 1 });
-    const empty = readLogBuffer("task-1", buffer, "running", { tailLines: 0 });
+    const full = readLogBuffer("task-0000000001", buffer, "running", { afterCursor: 0 });
+    const tail = readLogBuffer("task-0000000001", buffer, "running", { tailLines: 1 });
+    const empty = readLogBuffer("task-0000000001", buffer, "running", { tailLines: 0 });
     for (const events of [cached, full.events, tail.events, empty.events]) {
       expect(Reflect.set(events, "0", { text: "corrupted", bytes: 999 })).toBe(false);
       expect(Reflect.set(events, "length", 0)).toBe(false);
@@ -80,7 +80,7 @@ describe("background log buffer", () => {
     ]);
     expect(tail.events[0]).toMatchObject({ text: "two\n", bytes: 4 });
     buffer.append("stderr", "🙂🙂", 2, budget);
-    expect(readLogBuffer("task-1", buffer, "running", { afterCursor: 0 })).toMatchObject({
+    expect(readLogBuffer("task-0000000001", buffer, "running", { afterCursor: 0 })).toMatchObject({
       events: [{ cursor: 2, text: "🙂🙂", bytes: 8 }],
       earliestAvailableCursor: 1,
       droppedBytes: 8,
@@ -106,9 +106,9 @@ describe("background log buffer", () => {
 
     const boundary = new LogBuffer().append("stdout", "one\n", 1, 1024);
     boundary.append("stdout", "two\n", 2, 1024);
-    expect(readLogBuffer("task-1", boundary, "running", { tailLines: 1 }).events).toMatchObject([
-      { cursor: 2, text: "two\n" },
-    ]);
+    expect(
+      readLogBuffer("task-0000000001", boundary, "running", { tailLines: 1 }).events,
+    ).toMatchObject([{ cursor: 2, text: "two\n" }]);
   });
 
   it("reads after any cursor, and from the reported earliest cursor, once older events are gone", () => {
@@ -124,15 +124,15 @@ describe("background log buffer", () => {
     expect(Arr.map(buffer.events, (event) => event.cursor)).toEqual(
       Array.from({ length: 40 }, (_, index) => index + 61),
     );
-    const earliest = readLogBuffer("task-1", buffer, "running", { tailLines: 1 });
+    const earliest = readLogBuffer("task-0000000001", buffer, "running", { tailLines: 1 });
     expect(earliest.earliestAvailableCursor).toBe(60);
-    const fromEarliest = readLogBuffer("task-1", buffer, "running", {
+    const fromEarliest = readLogBuffer("task-0000000001", buffer, "running", {
       afterCursor: earliest.earliestAvailableCursor,
     });
     expect(fromEarliest.events[0]?.text).toBe("e061\n");
     expect(fromEarliest.events).toHaveLength(40);
     for (const cursor of [0, 59, 60, 61, 80, 99, 100]) {
-      const after = readLogBuffer("task-1", buffer, "running", { afterCursor: cursor });
+      const after = readLogBuffer("task-0000000001", buffer, "running", { afterCursor: cursor });
       expect(Arr.map(after.events, (event) => event.cursor)).toEqual(
         Arr.filter(
           Arr.map(buffer.events, (event) => event.cursor),
@@ -141,7 +141,7 @@ describe("background log buffer", () => {
       );
     }
     const drained = new LogBuffer().append("stdout", "x", 0, budget).dropOldest();
-    expect(readLogBuffer("task-1", drained, "exited", { afterCursor: 0 })).toMatchObject({
+    expect(readLogBuffer("task-0000000001", drained, "exited", { afterCursor: 0 })).toMatchObject({
       events: [],
       nextCursor: 1,
       earliestAvailableCursor: 1,
