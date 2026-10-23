@@ -228,7 +228,7 @@ const scenarios: ReadonlyArray<Scenario> = [
     service: {
       start: (request) =>
         Effect.fail(
-          new InvalidBackgroundCwdError({
+          InvalidBackgroundCwdError.make({
             cwd: request.cwd,
             message: `Couldn't find the working directory ${request.cwd}`,
           }),

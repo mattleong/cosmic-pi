@@ -116,7 +116,7 @@ function fakeProcessLayer(options: FakeProcessOptions = {}) {
                 Deferred.doneUnsafe(modeRequested[mode], Effect.void);
                 if (options.failTermination)
                   return Effect.fail(
-                    new LocalProcessError({
+                    LocalProcessError.make({
                       operation: "terminate process tree",
                       reason: "terminate",
                       message: "Fixture termination failed.",

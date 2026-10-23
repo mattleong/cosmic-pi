@@ -125,7 +125,7 @@ const leaderExited = (record: TaskRecord) =>
   );
 
 const runtimeClosed = () =>
-  new BackgroundRuntimeClosedError({ message: "Background task runtime is closed." });
+  BackgroundRuntimeClosedError.make({ message: "Background task runtime is closed." });
 
 /** Explicit stops escalate a stopping task to force; internal stops join its grace window. */
 type StopRequest = "explicit" | "internal";
@@ -255,8 +255,8 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
             if (mode === "force") forced = true;
             return handle.terminate(mode);
           }).pipe(
-            Effect.mapError(
-              (error) => new BackgroundTerminationError({ id, message: error.message }),
+            Effect.mapError((error) =>
+              BackgroundTerminationError.make({ id, message: error.message }),
             ),
           );
         const stopPhase = Effect.gen(function* () {
@@ -306,7 +306,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
             snapshot: finalWait.value,
             alreadyFinished: false,
           } satisfies BackgroundTaskStopResult;
-        return yield* new BackgroundTerminationError({
+        return yield* BackgroundTerminationError.make({
           id,
           message: forced
             ? "Background process did not confirm exit after forced termination."
@@ -413,18 +413,18 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
           Effect.gen(function* () {
             if (admissionsClosed) return yield* runtimeClosed();
             if (!config.enabled) {
-              return yield* new BackgroundTasksDisabledError({
+              return yield* BackgroundTasksDisabledError.make({
                 message: "Background tasks are disabled.",
               });
             }
             if (activeRecords(tasks).length >= config.maxRunning) {
-              return yield* new BackgroundTaskCapacityError({
+              return yield* BackgroundTaskCapacityError.make({
                 limit: config.maxRunning,
                 message: `Background task capacity reached (${config.maxRunning}).`,
               });
             }
             if (!Number.isSafeInteger(nextId)) {
-              return yield* new BackgroundTaskCapacityError({
+              return yield* BackgroundTaskCapacityError.make({
                 limit: Number.MAX_SAFE_INTEGER,
                 message: "Background task identity capacity reached.",
               });
@@ -456,8 +456,8 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
           Effect.catchTag("LocalProcessError", (error) =>
             Effect.fail(
               error.reason === "cwd"
-                ? new InvalidBackgroundCwdError({ cwd, message: error.message })
-                : new BackgroundSpawnError({ message: error.message }),
+                ? InvalidBackgroundCwdError.make({ cwd, message: error.message })
+                : BackgroundSpawnError.make({ message: error.message }),
             ),
           ),
         );
@@ -610,7 +610,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
       { concurrency: "unbounded" },
     );
     if (failures.length > 0) {
-      return yield* new BackgroundTerminationError({
+      return yield* BackgroundTerminationError.make({
         id: failures.map((failure) => failure.id).join(", "),
         message: failures.map((failure) => `${failure.id}: ${failure.message}`).join(" · "),
       });

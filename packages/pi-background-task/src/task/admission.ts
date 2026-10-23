@@ -5,7 +5,7 @@ import { BACKGROUND_TASK_FIELD_BOUNDS } from "./bounds.ts";
 import { InvalidBackgroundCommandError, InvalidBackgroundCwdError } from "./errors.ts";
 import type { StartBackgroundTask, WaitForBackgroundTask } from "./model.ts";
 
-const invalidCommand = (message: string) => new InvalidBackgroundCommandError({ message });
+const invalidCommand = (message: string) => InvalidBackgroundCommandError.make({ message });
 
 const validTimeout = (timeoutSeconds: number | undefined) =>
   timeoutSeconds === undefined || (Number.isFinite(timeoutSeconds) && timeoutSeconds > 0);
@@ -31,7 +31,7 @@ export const normalizeStartRequest = Effect.fn("BackgroundTaskAdmission.normaliz
       );
     const cwd = path.resolve(request.cwd);
     if (cwd.length > BACKGROUND_TASK_FIELD_BOUNDS.maxCwdChars) {
-      return yield* new InvalidBackgroundCwdError({
+      return yield* InvalidBackgroundCwdError.make({
         cwd,
         message: `Resolved background working directory must not exceed ${BACKGROUND_TASK_FIELD_BOUNDS.maxCwdChars} characters.`,
       });

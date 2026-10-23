@@ -62,7 +62,7 @@ function processFixture(behavior: Behavior, gated = false) {
       Effect.gen(function* () {
         yield* Deferred.succeed(mode === "force" ? forced : graceful, undefined);
         if (failTermination) {
-          return yield* new LocalProcessError({
+          return yield* LocalProcessError.make({
             operation: "terminate process tree",
             reason: "terminate",
             message: "Fixture termination failed.",

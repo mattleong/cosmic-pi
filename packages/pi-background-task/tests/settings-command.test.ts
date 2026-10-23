@@ -177,7 +177,7 @@ describe("/tasks settings", () => {
       const h = pickerHarness(true, (location) =>
         location.scope === "project"
           ? Promise.reject(
-              new BackgroundTaskConfigError({ operation: "read", path, message: "Unreadable." }),
+              BackgroundTaskConfigError.make({ operation: "read", path, message: "Unreadable." }),
             )
           : Promise.resolve({}),
       );

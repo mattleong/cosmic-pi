@@ -154,7 +154,7 @@ export function registerBackgroundTaskApplication(
       isCurrent()
         ? slot.run(effect, signal)
         : Promise.reject(
-            new PiSessionRuntimeError({
+            PiSessionRuntimeError.make({
               operation: "run",
               message: "Background Tasks isn't running in this session",
             }),

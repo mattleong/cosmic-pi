@@ -8,7 +8,7 @@ import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
-import * as Record from "effect/Record";
+import * as Rec from "effect/Record";
 import { sanitizeTerminalLine, countLabel, formatBytes, utf8ByteLength } from "pi-cosmic-core";
 import { BACKGROUND_TASK_FIELD_BOUNDS } from "../task/bounds.ts";
 import { InvalidBackgroundCommandError } from "../task/errors.ts";
@@ -57,7 +57,7 @@ const present = (
 ): Effect.Effect<string, InvalidBackgroundCommandError> =>
   value?.trim()
     ? Effect.succeed(value)
-    : new InvalidBackgroundCommandError({ message: `The ${action} action requires ${field}.` });
+    : InvalidBackgroundCommandError.make({ message: `The ${action} action requires ${field}.` });
 
 const required = (value: string | undefined, field: string, action: BackgroundTaskAction) =>
   Effect.map(present(value, field, action), (text) => text.trim());
@@ -88,7 +88,7 @@ const fieldList = (fields: ReadonlyArray<string>): string =>
     : `${fields.slice(0, -1).join(", ")}, or ${fields.at(-1) ?? ""}`;
 
 const invalidCommand = (message: string) =>
-  Effect.fail(new InvalidBackgroundCommandError({ message }));
+  Effect.fail(InvalidBackgroundCommandError.make({ message }));
 
 // Placeholders that models fill unused fields with; they carry no request, so an action that
 // does not use the field ignores them instead of rejecting the call.
@@ -103,7 +103,7 @@ const validateFields = (
 ): Effect.Effect<void, InvalidBackgroundCommandError> => {
   const { action } = input;
   if (!Arr.contains(BACKGROUND_TASK_ACTIONS, action)) return invalidCommand(UNKNOWN_ACTION);
-  const rejected = Record.keys(FIELD_ACTIONS).filter(
+  const rejected = Rec.keys(FIELD_ACTIONS).filter(
     (field) =>
       !isPlaceholder(input[field]) && !FIELD_ACTIONS[field].some((accepted) => accepted === action),
   );
@@ -282,7 +282,7 @@ const waitRequest = Effect.fn("BackgroundTaskCommand.waitRequest")(function* (
 ) {
   const until = input.until;
   if (until === undefined) {
-    return yield* new InvalidBackgroundCommandError({
+    return yield* InvalidBackgroundCommandError.make({
       message: "The wait action requires until.",
     });
   }
@@ -411,5 +411,5 @@ export const executeBackgroundTaskCommand = Effect.fn("BackgroundTaskCommand.exe
       );
     }
   }
-  return yield* new InvalidBackgroundCommandError({ message: UNKNOWN_ACTION });
+  return yield* InvalidBackgroundCommandError.make({ message: UNKNOWN_ACTION });
 });

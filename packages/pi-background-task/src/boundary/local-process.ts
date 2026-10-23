@@ -91,7 +91,7 @@ const PROCESS_FAILURES = {
 >;
 
 const processError = (reason: LocalProcessError["reason"], subject?: string) =>
-  new LocalProcessError({
+  LocalProcessError.make({
     reason,
     operation: PROCESS_FAILURES[reason].operation,
     message: subject
@@ -184,7 +184,7 @@ const verifyCwd = (fs: FileSystem.FileSystem, cwd: string) =>
       info.type === "Directory"
         ? Effect.void
         : Effect.fail(
-            new LocalProcessError({
+            LocalProcessError.make({
               operation: PROCESS_FAILURES.cwd.operation,
               reason: "cwd",
               message: `The working directory is not a directory: ${cwd}`,
