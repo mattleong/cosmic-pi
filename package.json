@@ -36,7 +36,7 @@
     "version:set": "node scripts/set-version.ts"
   },
   "devDependencies": {
-    "@effect/tsgo": "0.47.2",
+    "@effect/tsgo": "0.56.0",
     "@oxlint/plugins": "catalog:",
     "@types/node": "catalog:",
     "effect": "catalog:",
@@ -44,7 +44,8 @@
     "oxfmt": "catalog:",
     "oxlint": "catalog:",
     "oxlint-tsgolint": "catalog:",
-    "typescript": "catalog:"
+    "typescript": "catalog:",
+    "yaml": "catalog:"
   },
   "engines": {
     "node": "^22.22.2 || ^24.15.0 || >=26.0.0"

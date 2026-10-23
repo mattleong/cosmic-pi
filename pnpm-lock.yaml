@@ -16,11 +16,11 @@ catalogs:
       specifier: 1.4.0
       version: 1.4.0
     '@effect/platform-node':
-      specifier: 4.0.0
-      version: 4.0.0
+      specifier: 4.0.6
+      version: 4.0.6
     '@effect/vitest':
-      specifier: 4.0.0
-      version: 4.0.0
+      specifier: 4.0.6
+      version: 4.0.6
     '@oxlint/plugins':
       specifier: 1.78.0
       version: 1.78.0
@@ -28,8 +28,8 @@ catalogs:
       specifier: ~22.19.0
       version: 22.19.21
     effect:
-      specifier: 4.0.0
-      version: 4.0.0
+      specifier: 4.0.6
+      version: 4.0.6
     fast-sha256:
       specifier: 1.3.0
       version: 1.3.0
@@ -51,14 +51,17 @@ catalogs:
     vitest:
       specifier: ^5.0.3
       version: 5.0.3
+    yaml:
+      specifier: 2.9.0
+      version: 2.9.0
 
 importers:
 
   .:
     devDependencies:
       '@effect/tsgo':
-        specifier: 0.47.2
-        version: 0.47.2
+        specifier: 0.56.0
+        version: 0.56.0
       '@oxlint/plugins':
         specifier: 'catalog:'
         version: 1.78.0
@@ -67,7 +70,7 @@ importers:
         version: 22.19.21
       effect:
         specifier: 'catalog:'
-        version: 4.0.0
+        version: 4.0.6
       jiti:
         specifier: 2.7.0
         version: 2.7.0
@@ -83,12 +86,15 @@ importers:
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
+      yaml:
+        specifier: 'catalog:'
+        version: 2.9.0
 
   packages/pi-ask-user:
     dependencies:
       effect:
         specifier: 'catalog:'
-        version: 4.0.0
+        version: 4.0.6
       pi-code-previews:
         specifier: workspace:*
         version: link:../pi-code-previews
@@ -101,7 +107,7 @@ importers:
     devDependencies:
       '@earendil-works/pi-ai':
         specifier: 'catalog:'
-        version: 1.4.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(undici@8.11.2)(ws@8.22.0)(zod@4.4.3)
+        version: 1.4.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(undici@8.12.3)(ws@8.22.0)(zod@4.4.3)
       '@earendil-works/pi-coding-agent':
         specifier: 'catalog:'
         version: 1.4.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(ws@8.22.0)(zod@4.4.3)
@@ -110,7 +116,7 @@ importers:
         version: 1.4.0
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0(effect@4.0.0)(vitest@5.0.3(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
+        version: 4.0.6(effect@4.0.6)(vitest@5.0.3(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
       '@types/node':
         specifier: 'catalog:'
         version: 22.19.21
@@ -131,7 +137,7 @@ importers:
     dependencies:
       effect:
         specifier: 'catalog:'
-        version: 4.0.0
+        version: 4.0.6
       pi-code-previews:
         specifier: workspace:*
         version: link:../pi-code-previews
@@ -144,7 +150,7 @@ importers:
     devDependencies:
       '@earendil-works/pi-ai':
         specifier: 'catalog:'
-        version: 1.4.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(undici@8.11.2)(ws@8.22.0)(zod@4.4.3)
+        version: 1.4.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(undici@8.12.3)(ws@8.22.0)(zod@4.4.3)
       '@earendil-works/pi-coding-agent':
         specifier: 'catalog:'
         version: 1.4.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(ws@8.22.0)(zod@4.4.3)
@@ -153,7 +159,7 @@ importers:
         version: 1.4.0
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0(effect@4.0.0)(vitest@5.0.3(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
+        version: 4.0.6(effect@4.0.6)(vitest@5.0.3(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
       '@types/node':
         specifier: 'catalog:'
         version: 22.19.21
@@ -174,7 +180,7 @@ importers:
     dependencies:
       effect:
         specifier: 'catalog:'
-        version: 4.0.0
+        version: 4.0.6
       pi-code-previews:
         specifier: workspace:*
         version: link:../pi-code-previews
@@ -190,7 +196,7 @@ importers:
     devDependencies:
       '@earendil-works/pi-ai':
         specifier: 'catalog:'
-        version: 1.4.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(undici@8.11.2)(ws@8.22.0)(zod@4.4.3)
+        version: 1.4.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(undici@8.12.3)(ws@8.22.0)(zod@4.4.3)
       '@earendil-works/pi-coding-agent':
         specifier: 'catalog:'
         version: 1.4.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(ws@8.22.0)(zod@4.4.3)
@@ -199,7 +205,7 @@ importers:
         version: 1.4.0
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0(effect@4.0.0)(vitest@5.0.3(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
+        version: 4.0.6(effect@4.0.6)(vitest@5.0.3(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
       '@types/node':
         specifier: 'catalog:'
         version: 22.19.21
@@ -226,7 +232,7 @@ importers:
         version: 8.0.4
       effect:
         specifier: 'catalog:'
-        version: 4.0.0
+        version: 4.0.6
       pi-cosmic-core:
         specifier: workspace:*
         version: link:../pi-cosmic-core
@@ -245,10 +251,10 @@ importers:
         version: 1.4.0
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0(effect@4.0.0)(redis@6.2.1(@opentelemetry/api@1.9.0))
+        version: 4.0.6(effect@4.0.6)(redis@6.2.1(@opentelemetry/api@1.9.0))
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0(effect@4.0.0)(vitest@5.0.3(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
+        version: 4.0.6(effect@4.0.6)(vitest@5.0.3(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
       '@types/node':
         specifier: 'catalog:'
         version: 22.19.21
@@ -269,23 +275,23 @@ importers:
     dependencies:
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0(effect@4.0.0)(redis@6.2.1(@opentelemetry/api@1.9.0))
+        version: 4.0.6(effect@4.0.6)(redis@6.2.1(@opentelemetry/api@1.9.0))
       effect:
         specifier: 'catalog:'
-        version: 4.0.0
+        version: 4.0.6
       fast-sha256:
         specifier: 'catalog:'
         version: 1.3.0
     devDependencies:
       '@earendil-works/pi-ai':
         specifier: 'catalog:'
-        version: 1.4.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(undici@8.11.2)(ws@8.22.0)(zod@4.4.3)
+        version: 1.4.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(undici@8.12.3)(ws@8.22.0)(zod@4.4.3)
       '@earendil-works/pi-coding-agent':
         specifier: 'catalog:'
         version: 1.4.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(ws@8.22.0)(zod@4.4.3)
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0(effect@4.0.0)(vitest@5.0.3(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
+        version: 4.0.6(effect@4.0.6)(vitest@5.0.3(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
       '@types/node':
         specifier: 'catalog:'
         version: 22.19.21
@@ -306,7 +312,7 @@ importers:
     dependencies:
       effect:
         specifier: 'catalog:'
-        version: 4.0.0
+        version: 4.0.6
       pi-cosmic-core:
         specifier: workspace:*
         version: link:../pi-cosmic-core
@@ -319,7 +325,7 @@ importers:
         version: 1.4.0
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0(effect@4.0.0)(vitest@5.0.3(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
+        version: 4.0.6(effect@4.0.6)(vitest@5.0.3(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
       '@types/node':
         specifier: 'catalog:'
         version: 22.19.21
@@ -337,7 +343,7 @@ importers:
     dependencies:
       effect:
         specifier: 'catalog:'
-        version: 4.0.0
+        version: 4.0.6
       pi-cosmic-core:
         specifier: workspace:*
         version: link:../pi-cosmic-core
@@ -347,7 +353,7 @@ importers:
         version: 1.4.0
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0(effect@4.0.0)(vitest@5.0.3(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
+        version: 4.0.6(effect@4.0.6)(vitest@5.0.3(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
       '@types/node':
         specifier: 'catalog:'
         version: 22.19.21
@@ -365,7 +371,7 @@ importers:
     dependencies:
       effect:
         specifier: 'catalog:'
-        version: 4.0.0
+        version: 4.0.6
       pi-cosmic-core:
         specifier: workspace:*
         version: link:../pi-cosmic-core
@@ -375,7 +381,7 @@ importers:
         version: 1.4.0
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0(effect@4.0.0)(vitest@5.0.3(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
+        version: 4.0.6(effect@4.0.6)(vitest@5.0.3(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
       '@types/node':
         specifier: 'catalog:'
         version: 22.19.21
@@ -393,10 +399,10 @@ importers:
     dependencies:
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0(effect@4.0.0)(redis@6.2.1(@opentelemetry/api@1.9.0))
+        version: 4.0.6(effect@4.0.6)(redis@6.2.1(@opentelemetry/api@1.9.0))
       effect:
         specifier: 'catalog:'
-        version: 4.0.0
+        version: 4.0.6
       pi-code-previews:
         specifier: workspace:*
         version: link:../pi-code-previews
@@ -409,7 +415,7 @@ importers:
     devDependencies:
       '@earendil-works/pi-ai':
         specifier: 'catalog:'
-        version: 1.4.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(undici@8.11.2)(ws@8.22.0)(zod@4.4.3)
+        version: 1.4.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(undici@8.12.3)(ws@8.22.0)(zod@4.4.3)
       '@earendil-works/pi-coding-agent':
         specifier: 'catalog:'
         version: 1.4.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(ws@8.22.0)(zod@4.4.3)
@@ -418,7 +424,7 @@ importers:
         version: 1.4.0
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0(effect@4.0.0)(vitest@5.0.3(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
+        version: 4.0.6(effect@4.0.6)(vitest@5.0.3(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
       '@types/node':
         specifier: 'catalog:'
         version: 22.19.21
@@ -439,10 +445,10 @@ importers:
     dependencies:
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0(effect@4.0.0)(redis@6.2.1(@opentelemetry/api@1.9.0))
+        version: 4.0.6(effect@4.0.6)(redis@6.2.1(@opentelemetry/api@1.9.0))
       effect:
         specifier: 'catalog:'
-        version: 4.0.0
+        version: 4.0.6
       jiti:
         specifier: 2.7.0
         version: 2.7.0
@@ -464,7 +470,7 @@ importers:
     devDependencies:
       '@earendil-works/pi-ai':
         specifier: 'catalog:'
-        version: 1.4.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(undici@8.11.2)(ws@8.22.0)(zod@4.4.3)
+        version: 1.4.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(undici@8.12.3)(ws@8.22.0)(zod@4.4.3)
       '@earendil-works/pi-coding-agent':
         specifier: 'catalog:'
         version: 1.4.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(ws@8.22.0)(zod@4.4.3)
@@ -473,7 +479,7 @@ importers:
         version: 1.4.0
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0(effect@4.0.0)(vitest@5.0.3(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
+        version: 4.0.6(effect@4.0.6)(vitest@5.0.3(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))
       '@types/node':
         specifier: 'catalog:'
         version: 22.19.21
@@ -615,62 +621,62 @@ packages:
     resolution: {integrity: sha512-4obPOjgOD7g4mGSlngIvxyujC1UPdmyI9zdVthbr8GufacFEX+Ce0+scPgHg++k2xj5+QjESM2d5TxvIuzCVmg==}
     engines: {node: '>=22.19.0'}
 
-  '@effect/platform-node-shared@4.0.0':
-    resolution: {integrity: sha512-VBXHJU9UXVZPdQGGDRjGXpo+TpOzRwZuMrdKAtIxi1qwcRftmacZ1zTgIrzBa0Z2RA2KVkoOecQUsTlt/nJZhw==}
+  '@effect/platform-node-shared@4.0.6':
+    resolution: {integrity: sha512-0PhyC4uG30xGtsajnxjkcBWfTjNRzUh4ZKl1Kvo/MNyCTb+W2O+fBzf7wCRCoqt+nLudiq4V7vX40Q8XIBuMaQ==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
-      effect: ^4.0.0
+      effect: ^4.0.6
 
-  '@effect/platform-node@4.0.0':
-    resolution: {integrity: sha512-/L+4MUbl8FejPKLHLROYSOebvHnfixkP8KiblSD/DE5uH5xENZBHaux4nH6XMnRP+lr8ajpEJFS8sUrmmxFJeQ==}
+  '@effect/platform-node@4.0.6':
+    resolution: {integrity: sha512-gXvGHAy0/8PZbWvMMguloDUyeSP+rzYEo3FSEqUuGduxo9ORcGioDxPI+GOLCIFfam7VuNkmSUxBOiRMIrMrBw==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
-      effect: ^4.0.0
+      effect: ^4.0.6
       redis: '>=5.0.0 <7.0.0'
 
-  '@effect/tsgo-darwin-arm64@0.47.2':
-    resolution: {integrity: sha512-sLYKt201VdTjSHG3rbyIdpLMNGEMiArm0OgO7kYfnA0yRV0ux0blgcucf97bx90gIvDJFSSL17QCSDPGs9jsKQ==}
+  '@effect/tsgo-darwin-arm64@0.56.0':
+    resolution: {integrity: sha512-08yYRU3OOw/jKzy582EF741xKvLJ2HK6GO+L2zuSR97b61ES7fER2fxg1xp4mv8u2Fc3bBRvk7026GzdKEGFgw==}
     cpu: [arm64]
     os: [darwin]
 
-  '@effect/tsgo-darwin-x64@0.47.2':
-    resolution: {integrity: sha512-gW0fdFjSIacCDOjLa+vS/xWmyElbM0jX3cCTlKXGzNCyMKsP/T0MkvT2GZO/njB2jIt/XXG9qEQ5FE/Rcqt7Zg==}
+  '@effect/tsgo-darwin-x64@0.56.0':
+    resolution: {integrity: sha512-UQvYvVaam+EVMYm9gfHBx1WpKwLlW+ptjb2UD7qGhZdg+GzxMbl26AhuuqV2t/dN9shZ6EcFE2+++ThISMp/9g==}
     cpu: [x64]
     os: [darwin]
 
-  '@effect/tsgo-linux-arm64@0.47.2':
-    resolution: {integrity: sha512-hA3SoKGuLd0HNqJ34QcYEWwpE6tvit3xpKupwj1TaPtHpLLGdtSF7czBIknp6kR8fOvnuYLjB6aEkxXmJsTVWg==}
+  '@effect/tsgo-linux-arm64@0.56.0':
+    resolution: {integrity: sha512-zzzo/w7lLqiCMuJOI+jbjIuhHob3ccmth1bD9m1E98ukMuHhIqQMOXKU9EreoQkCGeoVrxGqHbXkl6E/+68/Sg==}
     cpu: [arm64]
     os: [linux]
 
-  '@effect/tsgo-linux-arm@0.47.2':
-    resolution: {integrity: sha512-GT8fgQ3Pnzr0ax/AtYptztVquLAWeWoyLvQTpfI5APrs+Me+/rSwOLSA7//17ZVmNYbcGbKImX8laUYeDqByNQ==}
+  '@effect/tsgo-linux-arm@0.56.0':
+    resolution: {integrity: sha512-3WuPwP8vQPqKVpfGmKlnguuAZb7NGUyAhIHQjZnaINU6Aim7WczOy2WOmKjDPSKRlonU2WyYT+Q5T3B7f0VTLw==}
     cpu: [arm]
     os: [linux]
 
-  '@effect/tsgo-linux-x64@0.47.2':
-    resolution: {integrity: sha512-vELwVsUQ5VlM2jbvv7zaIPOkFsxmaS0nLqq+p0RodtkQiuScg27febnLClzKAv/Tl6GrXTBz4IBh78aBF2CvbQ==}
+  '@effect/tsgo-linux-x64@0.56.0':
+    resolution: {integrity: sha512-R0d3dGf8qKPtvjff+J9HL0UjIBIES6xZiU16rMMezI4K52b+DGQkaWi1OX3tSgGivjlV+NSN7UhPJ2pYKufglw==}
     cpu: [x64]
     os: [linux]
 
-  '@effect/tsgo-win32-arm64@0.47.2':
-    resolution: {integrity: sha512-FSwpJp3XaJK9o7cOXtJcYIsvZWR/mrY4ZZyyTuRgphEZju7FwOzLeVhLr9ziyScfmisOpX2i+8v1H+PlMMZ1TQ==}
+  '@effect/tsgo-win32-arm64@0.56.0':
+    resolution: {integrity: sha512-uVaLdXULUZx9U30YxlVu5PBiu+1a+9/UT2Ex7jQpIasnJy1CHWlhMbfCD/+7Ez1vqG5fLOvUESoQu5XSjs3Lnw==}
     cpu: [arm64]
     os: [win32]
 
-  '@effect/tsgo-win32-x64@0.47.2':
-    resolution: {integrity: sha512-Lh/N7E2p6E0tBZM+uZ40Hv/AUG81WGtw76H4pLLPAG7wFANwGSx984NwKypXqGtOXBmKqb0R/cYpszDyzbNyYA==}
+  '@effect/tsgo-win32-x64@0.56.0':
+    resolution: {integrity: sha512-Cf6SDixFTkp7Aoeg2eRwJps/2BG9lvx2m+iVRjUzxdqkTbCCNKmmOAIyDslNZm2sMwaDUw/iN/BPGqxx7xMxww==}
     cpu: [x64]
     os: [win32]
 
-  '@effect/tsgo@0.47.2':
-    resolution: {integrity: sha512-mGIelPZhTJg8g+RgiAe7wrB8NLw/lOzPGntAYBBqEJS0/I8ir1/ULKcpFQyuAfPjwkDYrg93KWv1PDGwgsgBIA==}
+  '@effect/tsgo@0.56.0':
+    resolution: {integrity: sha512-/S5G8RJjtaVjE/RhwFNTvWQwFAQyDGc+3Ig4Oynvlo3gJu8le4MUgM/DBjoiwkwBsQ+BhufGDCBpwojplerGlw==}
     hasBin: true
 
-  '@effect/vitest@4.0.0':
-    resolution: {integrity: sha512-kGElCPFGtP+CgMCwV/HjJWqtE3zYo6I1+8MSA54l+EI24lPU9p2Efa+TBp1jfkg9j711KKzEqgSAy3VzTsb76Q==}
+  '@effect/vitest@4.0.6':
+    resolution: {integrity: sha512-oKNbtyUHK5+0o730CXwojULEu7f3+c235pYFD4U5T//o+hHrJbYbZU4bRkcv936tPr5IOnmujeyQiC/LuJJjHw==}
     peerDependencies:
-      effect: ^4.0.0
+      effect: ^4.0.6
       vitest: '>=5.0.0 <6.0.0'
 
   '@emnapi/core@1.11.1':
@@ -1728,8 +1734,8 @@ packages:
   '@types/unist@3.0.3':
     resolution: {integrity: sha512-ko/gIFJRv177XgZsZcBwnqJN5x/Gien8qNOn0D5bQU/zAzVf9Zt3BlcUiLqhV9y4ARk0GbT3tnUiPNgnTXzc/Q==}
 
-  '@types/ws@8.18.1':
-    resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
+  '@types/ws@8.18.2':
+    resolution: {integrity: sha512-67MQl+fpWKVTT1NYdnmo3U4sc/xPo/zQBncVnI74qmQa0z/b+1g6iYqNmGCPbxO+zz2aklb08a0oHfegiVd0/w==}
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     resolution: {integrity: sha512-MTKKkWB7p/0E9xi1d1tHtZ5PiLkGEMIq88pK2CubZjOsLtYTLqhgIgi6zepFa+9GHZ6h05NMCkQxGKiPXMxXtQ==}
@@ -2030,8 +2036,8 @@ packages:
   ee-first@1.1.1:
     resolution: {integrity: sha512-WMwm9LhRUo+WUaRN+vRuETqG89IgZphVSNkdFgeb6sS/E4OrDIN7t48CAewSHXc6C8lefD8KKfr5vY61brQlow==}
 
-  effect@4.0.0:
-    resolution: {integrity: sha512-ooc1TG5t+FfzgYnFz2ff6BBKyZ7EwBRVXC7c4RhQUAD6/TZ2gTXXMeb4WX7a19ozQo4J73/QW+S00YAIresoMQ==}
+  effect@4.0.6:
+    resolution: {integrity: sha512-Tc3mkzuLR6t6P9dhLt0D2GrxYtmU5td4XEJEiXCmILz53IRIfJyHsKZWjTA3xEjiwpNTtXBgI4iqYPxMztBDrw==}
 
   encodeurl@2.0.0:
     resolution: {integrity: sha512-Q0n9HRi4m6JuGIV1eFlmvJB7ZEVxu93IrMyiMsGC0lrMJMWzRgx6WGquyfQgZVb31vhGgXnfmPNNXmxnOkRBrg==}
@@ -2744,8 +2750,8 @@ packages:
     resolution: {integrity: sha512-/y4/bH9YNU5hi9NIrpOuvGXFcxrj3CMrV+/AYpowAYTpHn8gX/XPFjNy766FPoYY0miQhdW977JFWKGNhBdwyQ==}
     engines: {node: '>=22.19.0'}
 
-  undici@8.11.2:
-    resolution: {integrity: sha512-u4UB2/IrKdU6lFxumHmmo1a3fCQO5tzQllRorfoRS63txhrB7xTpSn1PftwC4qEHkOaqP95fCWW4lJzwErwzhQ==}
+  undici@8.12.3:
+    resolution: {integrity: sha512-+fdndUTwBP86cVjihTp21hZHo7d6oj1c/47XPA3lL8mM0XHs+C4EkcjmgRsFnFk2f/UONGDy9ItBItmXsLOQHw==}
     engines: {node: '>=22.19.0'}
 
   unist-util-is@6.0.1:
@@ -3158,7 +3164,7 @@ snapshots:
       - ws
       - zod
 
-  '@earendil-works/pi-ai@1.4.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(undici@8.11.2)(ws@8.22.0)(zod@4.4.3)':
+  '@earendil-works/pi-ai@1.4.0(@aws-sdk/credential-provider-node@3.972.83)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@smithy/signature-v4@5.7.3)(undici@8.12.3)(ws@8.22.0)(zod@4.4.3)':
     dependencies:
       '@anthropic-ai/sdk': 0.129.0(zod@4.4.3)
       '@aws-sdk/client-bedrock-runtime': 3.1127.0
@@ -3167,7 +3173,7 @@ snapshots:
       '@smithy/node-http-handler': 4.12.1
       http-proxy-agent: 9.1.0
       https-proxy-agent: 9.1.0
-      openai: 7.19.0(@aws-sdk/credential-provider-node@3.972.83)(@smithy/signature-v4@5.7.3)(undici@8.11.2)(ws@8.22.0)(zod@4.4.3)
+      openai: 7.19.0(@aws-sdk/credential-provider-node@3.972.83)(@smithy/signature-v4@5.7.3)(undici@8.12.3)(ws@8.22.0)(zod@4.4.3)
       partial-json: 0.1.7
       typebox: 1.3.27
     transitivePeerDependencies:
@@ -3296,59 +3302,59 @@ snapshots:
       marked: 18.0.11
       marked-cjk-friendly: 0.1.2(marked@18.0.11)
 
-  '@effect/platform-node-shared@4.0.0(effect@4.0.0)':
+  '@effect/platform-node-shared@4.0.6(effect@4.0.6)':
     dependencies:
-      '@types/ws': 8.18.1
-      effect: 4.0.0
+      '@types/ws': 8.18.2
+      effect: 4.0.6
       ws: 8.22.0
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
 
-  '@effect/platform-node@4.0.0(effect@4.0.0)(redis@6.2.1(@opentelemetry/api@1.9.0))':
+  '@effect/platform-node@4.0.6(effect@4.0.6)(redis@6.2.1(@opentelemetry/api@1.9.0))':
     dependencies:
-      '@effect/platform-node-shared': 4.0.0(effect@4.0.0)
-      effect: 4.0.0
+      '@effect/platform-node-shared': 4.0.6(effect@4.0.6)
+      effect: 4.0.6
       redis: 6.2.1(@opentelemetry/api@1.9.0)
-      undici: 8.11.2
+      undici: 8.12.3
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
 
-  '@effect/tsgo-darwin-arm64@0.47.2':
+  '@effect/tsgo-darwin-arm64@0.56.0':
     optional: true
 
-  '@effect/tsgo-darwin-x64@0.47.2':
+  '@effect/tsgo-darwin-x64@0.56.0':
     optional: true
 
-  '@effect/tsgo-linux-arm64@0.47.2':
+  '@effect/tsgo-linux-arm64@0.56.0':
     optional: true
 
-  '@effect/tsgo-linux-arm@0.47.2':
+  '@effect/tsgo-linux-arm@0.56.0':
     optional: true
 
-  '@effect/tsgo-linux-x64@0.47.2':
+  '@effect/tsgo-linux-x64@0.56.0':
     optional: true
 
-  '@effect/tsgo-win32-arm64@0.47.2':
+  '@effect/tsgo-win32-arm64@0.56.0':
     optional: true
 
-  '@effect/tsgo-win32-x64@0.47.2':
+  '@effect/tsgo-win32-x64@0.56.0':
     optional: true
 
-  '@effect/tsgo@0.47.2':
+  '@effect/tsgo@0.56.0':
     optionalDependencies:
-      '@effect/tsgo-darwin-arm64': 0.47.2
-      '@effect/tsgo-darwin-x64': 0.47.2
-      '@effect/tsgo-linux-arm': 0.47.2
-      '@effect/tsgo-linux-arm64': 0.47.2
-      '@effect/tsgo-linux-x64': 0.47.2
-      '@effect/tsgo-win32-arm64': 0.47.2
-      '@effect/tsgo-win32-x64': 0.47.2
+      '@effect/tsgo-darwin-arm64': 0.56.0
+      '@effect/tsgo-darwin-x64': 0.56.0
+      '@effect/tsgo-linux-arm': 0.56.0
+      '@effect/tsgo-linux-arm64': 0.56.0
+      '@effect/tsgo-linux-x64': 0.56.0
+      '@effect/tsgo-win32-arm64': 0.56.0
+      '@effect/tsgo-win32-x64': 0.56.0
 
-  '@effect/vitest@4.0.0(effect@4.0.0)(vitest@5.0.3(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))':
+  '@effect/vitest@4.0.6(effect@4.0.6)(vitest@5.0.3(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))':
     dependencies:
-      effect: 4.0.0
+      effect: 4.0.6
       vitest: 5.0.3(@opentelemetry/api@1.9.0)(@types/node@22.19.21)(vite@8.1.4(@types/node@22.19.21)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
 
   '@emnapi/core@1.11.1':
@@ -4022,7 +4028,7 @@ snapshots:
 
   '@types/unist@3.0.3': {}
 
-  '@types/ws@8.18.1':
+  '@types/ws@8.18.2':
     dependencies:
       '@types/node': 22.19.21
 
@@ -4244,7 +4250,7 @@ snapshots:
   ee-first@1.1.1:
     optional: true
 
-  effect@4.0.0: {}
+  effect@4.0.6: {}
 
   encodeurl@2.0.0:
     optional: true
@@ -4776,11 +4782,11 @@ snapshots:
       ws: 8.22.0
       zod: 4.4.3
 
-  openai@7.19.0(@aws-sdk/credential-provider-node@3.972.83)(@smithy/signature-v4@5.7.3)(undici@8.11.2)(ws@8.22.0)(zod@4.4.3):
+  openai@7.19.0(@aws-sdk/credential-provider-node@3.972.83)(@smithy/signature-v4@5.7.3)(undici@8.12.3)(ws@8.22.0)(zod@4.4.3):
     optionalDependencies:
       '@aws-sdk/credential-provider-node': 3.972.83
       '@smithy/signature-v4': 5.7.3
-      undici: 8.11.2
+      undici: 8.12.3
       ws: 8.22.0
       zod: 4.4.3
 
@@ -5179,7 +5185,7 @@ snapshots:
 
   undici@8.10.2: {}
 
-  undici@8.11.2: {}
+  undici@8.12.3: {}
 
   unist-util-is@6.0.1:
     dependencies:
