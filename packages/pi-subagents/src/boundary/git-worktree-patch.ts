@@ -20,42 +20,41 @@ interface PatchRange {
  * Plumbing with explicit prefixes keeps the user's diff settings out of a patch `git apply`
  * reads back.
  */
-const withPatchFile = <A, R>(
+const withPatchFile = Effect.fn("GitWorktreePatch.withPatchFile")(function* <A, R>(
   registry: string,
   record: WorkspaceRecord,
   range: PatchRange,
   operation: string,
   use: (file: string) => Effect.Effect<A, WorkspaceError, R>,
-) =>
-  Effect.gen(function* () {
-    const output = path.join(workspaceArtifact(registry, record), `${yield* newWorkspaceId}.diff`);
-    return yield* Effect.gen(function* () {
-      yield* repositoryGit(record.repository, [
-        "diff-tree",
-        "-r",
-        "-p",
-        "--binary",
-        "--full-index",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--no-renames",
-        "--no-color",
-        "--src-prefix=a/",
-        "--dst-prefix=b/",
-        `--output=${output}`,
-        range.from,
-        range.to,
-      ]);
-      const size = (yield* workspaceIO(operation, () => fs.lstat(output))).size;
-      if (size > MAX_REVISION_DIFF_BYTES)
-        return yield* workspaceFailure(operation, "The proposal's patch is too large.");
-      return yield* use(output);
-    }).pipe(
-      Effect.ensuring(
-        workspaceIO(operation, () => fs.rm(output, { force: true })).pipe(Effect.ignore),
-      ),
-    );
-  });
+) {
+  const output = path.join(workspaceArtifact(registry, record), `${yield* newWorkspaceId}.diff`);
+  return yield* Effect.gen(function* () {
+    yield* repositoryGit(record.repository, [
+      "diff-tree",
+      "-r",
+      "-p",
+      "--binary",
+      "--full-index",
+      "--no-ext-diff",
+      "--no-textconv",
+      "--no-renames",
+      "--no-color",
+      "--src-prefix=a/",
+      "--dst-prefix=b/",
+      `--output=${output}`,
+      range.from,
+      range.to,
+    ]);
+    const size = (yield* workspaceIO(operation, () => fs.lstat(output))).size;
+    if (size > MAX_REVISION_DIFF_BYTES)
+      return yield* workspaceFailure(operation, "The proposal's patch is too large.");
+    return yield* use(output);
+  }).pipe(
+    Effect.ensuring(
+      workspaceIO(operation, () => fs.rm(output, { force: true })).pipe(Effect.ignore),
+    ),
+  );
+});
 
 export const patchBytes = (
   registry: string,

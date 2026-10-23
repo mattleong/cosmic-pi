@@ -1,3 +1,4 @@
+import * as Predicate from "effect/Predicate";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { type Component, type Focusable } from "@earendil-works/pi-tui";
 import { FullScreenKeymap } from "pi-cosmic-ui/manager/keymap";
@@ -336,12 +337,12 @@ export class ProfileDashboardComponent implements Component, Focusable {
       matchesKeybinding: withoutNavigationKeys(this.options.workspace.matchesKeybinding),
       reservedKeys: new Set(["s"]),
     });
-    const action = resolution?._tag === "Action" ? resolution.action : undefined;
+    const action = Predicate.isTagged(resolution, "Action") ? resolution.action : undefined;
     if (this.blocked) {
       if (action === "cancel" || action === "quit") this.options.workspace.close();
       return;
     }
-    this.route(child, data, action, resolution?._tag === "Shortcut");
+    this.route(child, data, action, Predicate.isTagged(resolution, "Shortcut"));
     this.focused = this.focusState;
     this.renderSoon();
   }

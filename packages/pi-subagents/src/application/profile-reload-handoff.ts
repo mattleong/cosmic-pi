@@ -21,10 +21,10 @@ interface ProfileReloadEnvelope {
   readonly seed: SessionProfileOverrideSeed;
 }
 
-export class IncompatibleProfileReloadHandoffError extends Schema.TaggedError<IncompatibleProfileReloadHandoffError>()(
-  "IncompatibleProfileReloadHandoffError",
-  { message: Schema.String },
-) {}
+export class IncompatibleProfileReloadHandoffError extends Schema.TaggedError<
+  IncompatibleProfileReloadHandoffError,
+  { readonly brand: unique symbol }
+>()("IncompatibleProfileReloadHandoffError", { message: Schema.String }) {}
 
 // An envelope may come from an earlier module instance, so it is decoded as unknown input.
 const decodeEnvelope = decodeUnknownOrUndefined(

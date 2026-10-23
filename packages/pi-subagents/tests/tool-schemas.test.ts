@@ -6,7 +6,9 @@ import {
 } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Result from "effect/Result";
 import { captureRegistrations } from "pi-code-previews/testing";
 import { temporaryDirectory, toolSchemaPortabilityProblems } from "pi-cosmic-core/testing";
 import {
@@ -139,9 +141,11 @@ describe("subagent argument preparation", () => {
         (message): message is ToolResultMessage => message.role === "toolResult",
       );
       expect(result).toMatchObject({ toolName: "agent_start", isError: true });
-      const shown = result?.content.flatMap((part) => (part.type === "text" ? [part.text] : []));
-      expect(shown?.join("\n")).toContain(parseError);
-      expect(shown?.join("\n")).not.toContain("[invalid_arguments]");
+      const shown = Arr.filterMap(result?.content ?? [], (part) =>
+        part.type === "text" ? Result.succeed(part.text) : Result.failVoid,
+      ).join("\n");
+      expect(shown).toContain(parseError);
+      expect(shown).not.toContain("[invalid_arguments]");
     }),
   );
 

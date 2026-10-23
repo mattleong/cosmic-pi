@@ -1,7 +1,6 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { SettingItem } from "@earendil-works/pi-tui";
 import * as Result from "effect/Result";
-import * as Schema from "effect/Schema";
 import { failureMessage, isProjectTrusted, type ExtensionSubcommand } from "pi-cosmic-core";
 import {
   settingsSubcommand,
@@ -11,7 +10,7 @@ import {
 } from "pi-cosmic-ui/boundary/host-settings-command";
 import {
   DELEGATION_MODES,
-  DelegationModeSchema,
+  isDelegationMode,
   MAX_DIRECT_CHILDREN,
   MAX_SUBAGENT_DEPTH,
   MIN_DIRECT_CHILDREN,
@@ -20,7 +19,7 @@ import {
   MAX_ACTIVE_RUNS,
   MIN_SUBAGENT_DEPTH,
   WRITER_WORKSPACE_MODES,
-  WriterWorkspaceModeSchema,
+  isWriterWorkspaceMode,
   type DelegationMode,
   type SubagentNestingOverrides,
 } from "../config/schema.ts";
@@ -100,9 +99,6 @@ const unresolvedSummary = ({ unresolvedWorkspaceCount }: WriterWorkspaceInspecti
   unresolvedWorkspaceCount === undefined
     ? undefined
     : `Unresolved workspaces: ${unresolvedWorkspaceCount}`;
-
-const isWorkspaceMode = Schema.is(WriterWorkspaceModeSchema);
-const isDelegationMode = Schema.is(DelegationModeSchema);
 
 const settingScope = (scope: string | undefined): ProfileSettingsScope =>
   scope === "global" || scope === "project" ? scope : "session";
@@ -259,7 +255,7 @@ function subagentSettingsCommand(
       actions
         .inspectWriterWorkspace()
         .then((snapshot): SettingsResult | Promise<SettingsResult> => {
-          if (!isWorkspaceMode(value))
+          if (!isWriterWorkspaceMode(value))
             return failed(`${WORKSPACE} must be ${WRITER_WORKSPACE_MODES.join(" or ")}`);
           if (snapshot.mode === value || !stillCurrent()) return succeeded;
           return actions

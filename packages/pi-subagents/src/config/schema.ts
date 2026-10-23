@@ -35,12 +35,13 @@ export const WRITER_WORKSPACE_MODES = ["worktree", "shared-checkout"] as const;
 export type WriterWorkspaceMode = (typeof WRITER_WORKSPACE_MODES)[number];
 export const DEFAULT_WRITER_WORKSPACE_MODE: WriterWorkspaceMode = "shared-checkout";
 export const WriterWorkspaceModeSchema = Schema.Literals(WRITER_WORKSPACE_MODES);
-const isWriterWorkspaceMode = Schema.is(WriterWorkspaceModeSchema);
+export const isWriterWorkspaceMode = Schema.is(WriterWorkspaceModeSchema);
 
 export const DELEGATION_MODES = ["normal", "encouraged", "orchestration"] as const;
 export type DelegationMode = (typeof DELEGATION_MODES)[number];
 export const DEFAULT_DELEGATION_MODE: DelegationMode = "normal";
 export const DelegationModeSchema = Schema.Literals(DELEGATION_MODES);
+export const isDelegationMode = Schema.is(DelegationModeSchema);
 
 export const WORKTREE_HOOK_EVENTS = ["WorktreeCreate", "WorktreeRemove"] as const;
 export type WorktreeHookEvent = (typeof WORKTREE_HOOK_EVENTS)[number];

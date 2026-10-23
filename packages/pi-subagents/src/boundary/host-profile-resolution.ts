@@ -115,60 +115,59 @@ interface ResolvedModel {
   readonly runtimeApiKey?: RuntimeApiKey | undefined;
 }
 
-const resolvePiModel = (
+const resolvePiModel = Effect.fn("HostProfileResolution.resolvePiModel")(function* (
   selector: string,
   effort: SubagentEffort,
   effortWasExplicit: boolean,
   registry: ModelRegistry,
-): Effect.Effect<ResolvedModel, InvalidSubagentRequestError> =>
-  Effect.gen(function* () {
-    const availableModels = registry
-      .getAvailable()
-      .map((model) => ({ provider: model.provider, id: model.id }));
-    const resolution = resolvePiModelSelector(selector, availableModels);
-    if (resolution.kind === "ambiguous")
-      return yield* new InvalidSubagentRequestError({
-        code: "pi_model_ambiguous",
-        message: `Pi model "${selector}" matches multiple authenticated providers: ${resolution.candidates.join(", ")}. Configure one canonical provider/model value.`,
-      });
-    if (resolution.kind === "unknown")
-      return yield* new InvalidSubagentRequestError({
-        code: "pi_model_unknown",
-        message: `Profile route references unknown or unauthenticated Pi model "${selector}".${resolution.nearMatches.length > 0 ? ` Close authenticated matches: ${resolution.nearMatches.join(", ")}.` : ""} Update the profile route and reload.`,
-      });
-    const modelId = `${resolution.provider}/${resolution.id}`;
-    const model = registry.find(resolution.provider, resolution.id);
-    if (!model || !registry.hasConfiguredAuth(model))
-      return yield* new InvalidSubagentRequestError({
-        code: "pi_model_unauthenticated",
-        message: `Model is unavailable or unauthenticated: ${modelId}`,
-      });
-    const supportedEfforts = getSupportedThinkingLevels(model);
-    if (effortWasExplicit && !supportedEfforts.includes(effort))
-      return yield* new InvalidSubagentRequestError({
-        code: "pi_effort_unsupported",
-        message: `Pi model ${modelId} does not support required effort ${effort}; supported efforts: ${supportedEfforts.join(", ") || "none"}.`,
-      });
-    const authSource = registry.getProviderAuthStatus(model.provider).source;
-    if (authSource !== "runtime") return { model: modelId };
-    const auth = yield* Effect.tryPromise({
-      try: () => registry.getApiKeyAndHeaders(model),
-      catch: () =>
-        new InvalidSubagentRequestError({
-          code: "pi_auth_resolution_failed",
-          message: `Unable to resolve runtime authentication for ${modelId}.`,
-        }),
+): Effect.fn.Return<ResolvedModel, InvalidSubagentRequestError> {
+  const availableModels = registry
+    .getAvailable()
+    .map((model) => ({ provider: model.provider, id: model.id }));
+  const resolution = resolvePiModelSelector(selector, availableModels);
+  if (resolution.kind === "ambiguous")
+    return yield* new InvalidSubagentRequestError({
+      code: "pi_model_ambiguous",
+      message: `Pi model "${selector}" matches multiple authenticated providers: ${resolution.candidates.join(", ")}. Configure one canonical provider/model value.`,
     });
-    if (!auth.ok || !transferableRuntimeApiKey(auth.apiKey))
-      return yield* new InvalidSubagentRequestError({
-        code: "pi_auth_unavailable",
-        message: `Transferable runtime authentication is unavailable for ${modelId}.`,
-      });
-    return {
-      model: modelId,
-      runtimeApiKey: Redacted.make(auth.apiKey, { label: "Subagent runtime API key" }),
-    };
+  if (resolution.kind === "unknown")
+    return yield* new InvalidSubagentRequestError({
+      code: "pi_model_unknown",
+      message: `Profile route references unknown or unauthenticated Pi model "${selector}".${resolution.nearMatches.length > 0 ? ` Close authenticated matches: ${resolution.nearMatches.join(", ")}.` : ""} Update the profile route and reload.`,
+    });
+  const modelId = `${resolution.provider}/${resolution.id}`;
+  const model = registry.find(resolution.provider, resolution.id);
+  if (!model || !registry.hasConfiguredAuth(model))
+    return yield* new InvalidSubagentRequestError({
+      code: "pi_model_unauthenticated",
+      message: `Model is unavailable or unauthenticated: ${modelId}`,
+    });
+  const supportedEfforts = getSupportedThinkingLevels(model);
+  if (effortWasExplicit && !supportedEfforts.includes(effort))
+    return yield* new InvalidSubagentRequestError({
+      code: "pi_effort_unsupported",
+      message: `Pi model ${modelId} does not support required effort ${effort}; supported efforts: ${supportedEfforts.join(", ") || "none"}.`,
+    });
+  const authSource = registry.getProviderAuthStatus(model.provider).source;
+  if (authSource !== "runtime") return { model: modelId };
+  const auth = yield* Effect.tryPromise({
+    try: () => registry.getApiKeyAndHeaders(model),
+    catch: () =>
+      new InvalidSubagentRequestError({
+        code: "pi_auth_resolution_failed",
+        message: `Unable to resolve runtime authentication for ${modelId}.`,
+      }),
   });
+  if (!auth.ok || !transferableRuntimeApiKey(auth.apiKey))
+    return yield* new InvalidSubagentRequestError({
+      code: "pi_auth_unavailable",
+      message: `Transferable runtime authentication is unavailable for ${modelId}.`,
+    });
+  return {
+    model: modelId,
+    runtimeApiKey: Redacted.make(auth.apiKey, { label: "Subagent runtime API key" }),
+  };
+});
 
 const profileEnvironment = (
   registry: ModelRegistry,
@@ -186,52 +185,52 @@ const profileEnvironment = (
   forkAvailable: Boolean(parent.sessionFile && parent.leafId),
 });
 
-export const hostProfileEnvironment = (
-  pi: ExtensionAPI,
-  ctx: ExtensionContext,
-  parent?: SubagentParentContext,
-): Effect.Effect<ProfileResolutionEnvironment, InvalidSubagentRequestError> =>
-  Effect.gen(function* () {
+export const hostProfileEnvironment = Effect.fn("HostProfileResolution.hostProfileEnvironment")(
+  function* (
+    pi: ExtensionAPI,
+    ctx: ExtensionContext,
+    parent?: SubagentParentContext,
+  ): Effect.fn.Return<ProfileResolutionEnvironment, InvalidSubagentRequestError> {
     const captured = parent ?? (yield* captureHostParentContext(pi, ctx));
     return yield* readHost(() => profileEnvironment(ctx.modelRegistry, captured));
-  });
+  },
+);
 
-const resolveConcreteModel = (
+const resolveConcreteModel = Effect.fn("HostProfileResolution.resolveConcreteModel")(function* (
   attempt: ProfileCandidateAttempt,
   modelRegistry: ModelRegistry,
   cwd: string,
-): Effect.Effect<ResolvedModel, InvalidSubagentRequestError, SubagentBackendRegistry> =>
-  Effect.gen(function* () {
-    const registry = yield* SubagentBackendRegistry;
-    const resolved =
-      attempt.runtime === "pi"
-        ? yield* resolvePiModel(
-            attempt.model,
-            attempt.effort,
-            attempt.effortWasExplicit,
-            modelRegistry,
-          )
-        : { model: attempt.model };
-    if (attempt.openaiFastMode && !supportsSubagentFastMode(attempt.runtime, resolved.model))
-      return yield* new InvalidSubagentRequestError({
-        code: "fast_mode_unsupported",
-        message: `Fast mode is unavailable for ${attempt.runtime}/${resolved.model}.`,
-      });
-    yield* registry.preflight(
-      {
-        runtime: attempt.runtime,
-        context: attempt.effectiveContext,
-      },
-      {
-        context: attempt.effectiveContext,
-        writeIntent: attempt.writeIntent,
-        model: resolved.model,
-        effort: attempt.effort,
-        cwd,
-      },
-    );
-    return resolved;
-  });
+): Effect.fn.Return<ResolvedModel, InvalidSubagentRequestError, SubagentBackendRegistry> {
+  const registry = yield* SubagentBackendRegistry;
+  const resolved =
+    attempt.runtime === "pi"
+      ? yield* resolvePiModel(
+          attempt.model,
+          attempt.effort,
+          attempt.effortWasExplicit,
+          modelRegistry,
+        )
+      : { model: attempt.model };
+  if (attempt.openaiFastMode && !supportsSubagentFastMode(attempt.runtime, resolved.model))
+    return yield* new InvalidSubagentRequestError({
+      code: "fast_mode_unsupported",
+      message: `Fast mode is unavailable for ${attempt.runtime}/${resolved.model}.`,
+    });
+  yield* registry.preflight(
+    {
+      runtime: attempt.runtime,
+      context: attempt.effectiveContext,
+    },
+    {
+      context: attempt.effectiveContext,
+      writeIntent: attempt.writeIntent,
+      model: resolved.model,
+      effort: attempt.effort,
+      cwd,
+    },
+  );
+  return resolved;
+});
 
 const dynamicCandidateSkip = (
   attempt: ProfileCandidateAttempt,
@@ -344,115 +343,118 @@ const exhaustedRoute = (
   });
 };
 
-const selectCandidate = (input: PlannedStartInput, registry: ModelRegistry, cwd: string) =>
-  Effect.gen(function* () {
-    const skipped: SkippedProfileCandidate[] = [];
-    for (const attempt of input.plan.attempts) {
-      skipped.push(...(attempt.skippedBefore ?? []));
-      const outcome = yield* Effect.result(resolveConcreteModel(attempt, registry, cwd));
-      if (Result.isSuccess(outcome)) return { attempt, resolved: outcome.success, skipped };
-      if (isCleanupUnconfirmed(outcome.failure) || isOutcomeUncertain(outcome.failure))
-        return yield* outcome.failure;
-      skipped.push(dynamicCandidateSkip(attempt, outcome.failure));
-    }
-    return yield* exhaustedRoute(input, [...skipped, ...input.plan.trailingSkippedCandidates]);
-  });
+const selectCandidate = Effect.fn("HostProfileResolution.selectCandidate")(function* (
+  input: PlannedStartInput,
+  registry: ModelRegistry,
+  cwd: string,
+) {
+  const skipped: SkippedProfileCandidate[] = [];
+  for (const attempt of input.plan.attempts) {
+    skipped.push(...(attempt.skippedBefore ?? []));
+    const outcome = yield* Effect.result(resolveConcreteModel(attempt, registry, cwd));
+    if (Result.isSuccess(outcome)) return { attempt, resolved: outcome.success, skipped };
+    if (isCleanupUnconfirmed(outcome.failure) || isOutcomeUncertain(outcome.failure))
+      return yield* outcome.failure;
+    skipped.push(dynamicCandidateSkip(attempt, outcome.failure));
+  }
+  return yield* exhaustedRoute(input, [...skipped, ...input.plan.trailingSkippedCandidates]);
+});
 
-const validatedStartInput = (rawInput: SubagentProfileStartSpec) =>
-  Effect.gen(function* () {
-    const task = rawInput.task.trim();
-    if (!task)
-      return yield* new InvalidSubagentRequestError({
-        code: "task_required",
-        message: "agent_start requires every agent to have a task.",
-      });
-    const disallowedField = firstDisallowedLaunchOverride(rawInput);
-    if (disallowedField)
-      return yield* new InvalidSubagentRequestError({
-        code: "launch_override_not_allowed",
-        message: disallowedLaunchOverrideMessage(disallowedField),
-      });
-    return task;
-  });
+const validatedStartInput = Effect.fn("HostProfileResolution.validatedStartInput")(function* (
+  rawInput: SubagentProfileStartSpec,
+) {
+  const task = rawInput.task.trim();
+  if (!task)
+    return yield* new InvalidSubagentRequestError({
+      code: "task_required",
+      message: "agent_start requires every agent to have a task.",
+    });
+  const disallowedField = firstDisallowedLaunchOverride(rawInput);
+  if (disallowedField)
+    return yield* new InvalidSubagentRequestError({
+      code: "launch_override_not_allowed",
+      message: disallowedLaunchOverrideMessage(disallowedField),
+    });
+  return task;
+});
 
-const resolvePlannedStart = (
+const resolvePlannedStart = Effect.fn("HostProfileResolution.resolvePlannedStart")(function* (
   pi: ExtensionAPI,
   input: PlannedStartInput,
   registry: ModelRegistry,
   environment: SubagentSessionEnvironment,
   parent: SubagentParentContext,
-): Effect.Effect<StartSubagentRequest, InvalidSubagentRequestError, SubagentBackendRegistry> =>
-  Effect.gen(function* () {
-    const task = yield* validatedStartInput(input.rawInput);
-    const { attempt, resolved, skipped } = yield* selectCandidate(input, registry, environment.cwd);
-    const modelOverride = input.routeSource === "override" ? input.rawInput.model : undefined;
-    // An item's isolation wins over the agent's.
-    const requestedIsolation = input.rawInput.isolation ?? input.agent?.isolation;
-    const writer = attempt.writeIntent === "writer";
-    const isolation = writer ? requestedIsolation : undefined;
-    const isolationWarning =
-      !writer && requestedIsolation !== undefined
-        ? yield* readOnlyIsolation(input, requestedIsolation)
-        : undefined;
-    const selection: SubagentSelectionProvenance = {
-      source: attempt.source,
-      routeSource: attempt.routeSource,
-      candidateIndex: attempt.candidateIndex,
-      reason: attempt.reason,
-      skippedCandidates: skipped,
-      ...(isolationWarning && { warning: isolationWarning }),
-    };
-    const parentSessionFile = parent.sessionFile;
-    const parentLeafId = parent.leafId;
-    if (attempt.effectiveContext === "fork" && (!parentSessionFile || !parentLeafId))
-      return yield* new InvalidSubagentRequestError({
-        code: "fork_context_unavailable",
-        message: "Forked context requires a persisted parent session with a stable leaf.",
-      });
-    const routeContinuation = freezeSnapshot({
-      candidates: input.routeCandidates,
-      selectedCandidateIndex: attempt.candidateIndex,
+): Effect.fn.Return<StartSubagentRequest, InvalidSubagentRequestError, SubagentBackendRegistry> {
+  const task = yield* validatedStartInput(input.rawInput);
+  const { attempt, resolved, skipped } = yield* selectCandidate(input, registry, environment.cwd);
+  const modelOverride = input.routeSource === "override" ? input.rawInput.model : undefined;
+  // An item's isolation wins over the agent's.
+  const requestedIsolation = input.rawInput.isolation ?? input.agent?.isolation;
+  const writer = attempt.writeIntent === "writer";
+  const isolation = writer ? requestedIsolation : undefined;
+  const isolationWarning =
+    !writer && requestedIsolation !== undefined
+      ? yield* readOnlyIsolation(input, requestedIsolation)
+      : undefined;
+  const selection: SubagentSelectionProvenance = {
+    source: attempt.source,
+    routeSource: attempt.routeSource,
+    candidateIndex: attempt.candidateIndex,
+    reason: attempt.reason,
+    skippedCandidates: skipped,
+    ...(isolationWarning && { warning: isolationWarning }),
+  };
+  const parentSessionFile = parent.sessionFile;
+  const parentLeafId = parent.leafId;
+  if (attempt.effectiveContext === "fork" && (!parentSessionFile || !parentLeafId))
+    return yield* new InvalidSubagentRequestError({
+      code: "fork_context_unavailable",
+      message: "Forked context requires a persisted parent session with a stable leaf.",
     });
-    const activeTools =
-      attempt.runtime === "pi"
-        ? customAgentToolSnapshot(
-            yield* piRootActiveToolSnapshot(yield* readHost(() => pi.getActiveTools())),
-            input.agent?.tools,
-          )
-        : [];
-    // Every copy of the name, including a worktree's recorded launch, keeps the display bound.
-    const name = sanitizeName(input.rawInput.name ?? "");
-    const request: StartSubagentRequest = {
-      ...(name && { name }),
-      ...(isolation && { writerWorkspaceModeOverride: isolation }),
-      runtime: attempt.runtime,
-      openaiFastMode: attempt.openaiFastMode,
-      task,
-      profile: input.definition.id,
-      ...(input.agent && { agent: input.agent.name }),
-      // An agent's instructions replace its routed profile's guidance.
-      profileGuidance: input.agent?.instructions ?? input.definition.guidance,
-      selection,
-      ...(modelOverride && { modelOverride }),
-      routeContinuation,
-      cwd: environment.cwd,
-      context: attempt.effectiveContext,
-      writeIntent: attempt.writeIntent,
-      model: resolved.model,
-      ...(resolved.runtimeApiKey && { runtimeApiKey: resolved.runtimeApiKey }),
-      effort: attempt.effort,
-      effortWasExplicit: attempt.effortWasExplicit,
-      activeTools,
-      projectTrusted: environment.projectTrusted,
-      parentSessionId: parent.sessionId,
-      ...(parentSessionFile && { parentSessionFile }),
-      ...(parentLeafId && { parentLeafId }),
-      ...(sharesParentPromptCache(registry, parent, attempt.effectiveContext, resolved.model) && {
-        sharesParentPromptCache: true,
-      }),
-    };
-    return request;
+  const routeContinuation = freezeSnapshot({
+    candidates: input.routeCandidates,
+    selectedCandidateIndex: attempt.candidateIndex,
   });
+  const activeTools =
+    attempt.runtime === "pi"
+      ? customAgentToolSnapshot(
+          yield* piRootActiveToolSnapshot(yield* readHost(() => pi.getActiveTools())),
+          input.agent?.tools,
+        )
+      : [];
+  // Every copy of the name, including a worktree's recorded launch, keeps the display bound.
+  const name = sanitizeName(input.rawInput.name ?? "");
+  const request: StartSubagentRequest = {
+    ...(name && { name }),
+    ...(isolation && { writerWorkspaceModeOverride: isolation }),
+    runtime: attempt.runtime,
+    openaiFastMode: attempt.openaiFastMode,
+    task,
+    profile: input.definition.id,
+    ...(input.agent && { agent: input.agent.name }),
+    // An agent's instructions replace its routed profile's guidance.
+    profileGuidance: input.agent?.instructions ?? input.definition.guidance,
+    selection,
+    ...(modelOverride && { modelOverride }),
+    routeContinuation,
+    cwd: environment.cwd,
+    context: attempt.effectiveContext,
+    writeIntent: attempt.writeIntent,
+    model: resolved.model,
+    ...(resolved.runtimeApiKey && { runtimeApiKey: resolved.runtimeApiKey }),
+    effort: attempt.effort,
+    effortWasExplicit: attempt.effortWasExplicit,
+    activeTools,
+    projectTrusted: environment.projectTrusted,
+    parentSessionId: parent.sessionId,
+    ...(parentSessionFile && { parentSessionFile }),
+    ...(parentLeafId && { parentLeafId }),
+    ...(sharesParentPromptCache(registry, parent, attempt.effectiveContext, resolved.model) && {
+      sharesParentPromptCache: true,
+    }),
+  };
+  return request;
+});
 
 /** The agent a start item names, from the batch's captured configuration. */
 const launchedAgent = (
@@ -460,7 +462,7 @@ const launchedAgent = (
   profileSnapshot: SessionProfileSnapshot,
 ): Effect.Effect<CustomAgent | undefined, InvalidSubagentRequestError> => {
   const name = rawInput.agent?.trim();
-  if (!name) return Effect.succeed(undefined);
+  if (!name) return Effect.undefined;
   if (rawInput.profile !== undefined)
     return Effect.fail(
       new InvalidSubagentRequestError({
@@ -485,18 +487,18 @@ const launchedAgent = (
   );
 };
 
-export const resolveProfileStart = (
-  pi: ExtensionAPI,
-  rawInput: SubagentProfileStartSpec,
-  ctx: ExtensionContext,
-  environment: SubagentSessionEnvironment,
-  capturedProfiles?: SessionProfileSnapshot,
-): Effect.Effect<
-  StartSubagentRequest,
-  InvalidSubagentRequestError,
-  SubagentProfileService | SubagentBackendRegistry
-> =>
-  Effect.gen(function* () {
+export const resolveProfileStart = Effect.fn("HostProfileResolution.resolveProfileStart")(
+  function* (
+    pi: ExtensionAPI,
+    rawInput: SubagentProfileStartSpec,
+    ctx: ExtensionContext,
+    environment: SubagentSessionEnvironment,
+    capturedProfiles?: SessionProfileSnapshot,
+  ): Effect.fn.Return<
+    StartSubagentRequest,
+    InvalidSubagentRequestError,
+    SubagentProfileService | SubagentBackendRegistry
+  > {
     const profiles = yield* SubagentProfileService;
     const profileSnapshot = capturedProfiles ?? (yield* profiles.capture);
     const agent = yield* launchedAgent(rawInput, profileSnapshot);
@@ -562,4 +564,5 @@ export const resolveProfileStart = (
       environment,
       parent,
     );
-  });
+  },
+);

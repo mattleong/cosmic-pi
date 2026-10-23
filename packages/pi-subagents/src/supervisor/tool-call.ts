@@ -53,10 +53,10 @@ const CONTACTS = {
   warning: { rpc: "SupervisorWarning", text: "Warning recorded in parent-visible run status." },
 } as const;
 
-export class SupervisorToolFailure extends Schema.TaggedError<SupervisorToolFailure>()(
-  "SupervisorToolFailure",
-  { code: Schema.String, message: Schema.String },
-) {}
+export class SupervisorToolFailure extends Schema.TaggedError<
+  SupervisorToolFailure,
+  { readonly brand: unique symbol }
+>()("SupervisorToolFailure", { code: Schema.String, message: Schema.String }) {}
 
 export interface SupervisorToolClient {
   readonly rpc: RpcClient.FromGroup<typeof SupervisorRpcGroup, RpcClientError.RpcClientError>;
@@ -442,92 +442,91 @@ const questionReply = (
     ),
   );
 
-const answerSupervisorTool = (
+const answerSupervisorTool = Effect.fn("SupervisorToolCall.answerSupervisorTool")(function* (
   { rpc, auth, assignmentEpoch, requestId, identity }: SupervisorCallContext,
   call: Exclude<SupervisorToolCall, { readonly kind: "question" }>,
-) =>
-  Effect.gen(function* () {
-    switch (call.kind) {
-      case "report": {
-        const { deliveryId, report: text } = call;
-        return yield* rpc
-          .SupervisorReport({ ...auth, assignmentEpoch, requestId, deliveryId, text, ...identity })
-          .pipe(
-            Effect.timeout(CALL_TIMEOUT_MILLIS),
-            Effect.map((result) =>
-              ok(
-                `${result.duplicate ? "Final report retry accepted" : "Final report accepted"}; sequence ${result.sequence}.`,
-              ),
-            ),
-            Effect.catchTag("SupervisorRpcFailure", refusalAsToolError),
-          );
-      }
-      case "progress":
-      case "warning": {
-        const contact = CONTACTS[call.kind];
-        return yield* rpc[contact.rpc]({
-          ...auth,
-          assignmentEpoch,
-          requestId,
-          message: call.message,
-          ...identity,
-        }).pipe(
+) {
+  switch (call.kind) {
+    case "report": {
+      const { deliveryId, report: text } = call;
+      return yield* rpc
+        .SupervisorReport({ ...auth, assignmentEpoch, requestId, deliveryId, text, ...identity })
+        .pipe(
           Effect.timeout(CALL_TIMEOUT_MILLIS),
-          Effect.as(ok(contact.text)),
+          Effect.map((result) =>
+            ok(
+              `${result.duplicate ? "Final report retry accepted" : "Final report accepted"}; sequence ${result.sequence}.`,
+            ),
+          ),
           Effect.catchTag("SupervisorRpcFailure", refusalAsToolError),
         );
-      }
-      case "agent_list":
-        return yield* rpc
-          .SupervisorAgentList({
-            ...auth,
-            assignmentEpoch,
-            ...(call.ids !== undefined && { ids: call.ids }),
-          })
-          .pipe(
-            Effect.timeout(CALL_TIMEOUT_MILLIS),
-            Effect.map((result) => ok(agentListText(result))),
-            Effect.catchTags({
-              SupervisorAgentRefusal: agentRefusalAsToolError,
-              SupervisorRpcFailure: refusalAsToolError,
-            }),
-          );
-      case "agent_read":
-        return yield* rpc
-          .SupervisorAgentRead({
-            ...auth,
-            assignmentEpoch,
-            ids: call.ids,
-            ...(call.verbose === true && { verbose: true }),
-          })
-          .pipe(
-            Effect.timeout(CALL_TIMEOUT_MILLIS),
-            Effect.map((result) => ok(agentReadText(result))),
-            Effect.catchTags({
-              SupervisorAgentRefusal: agentRefusalAsToolError,
-              SupervisorRpcFailure: refusalAsToolError,
-            }),
-          );
-      case "agent_send":
-        return yield* rpc
-          .SupervisorAgentSend({
-            ...auth,
-            assignmentEpoch,
-            to: call.to,
-            message: call.message,
-            ...identity,
-          })
-          .pipe(
-            Effect.timeout(AGENT_SEND_TIMEOUT_MILLIS),
-            Effect.map((result) => ok(agentSendText(result))),
-            Effect.catchTags({
-              SupervisorAgentRefusal: agentRefusalAsToolError,
-              SupervisorRpcFailure: refusalAsToolError,
-            }),
-          );
     }
-    return absurd<SupervisorToolResult>(call);
-  });
+    case "progress":
+    case "warning": {
+      const contact = CONTACTS[call.kind];
+      return yield* rpc[contact.rpc]({
+        ...auth,
+        assignmentEpoch,
+        requestId,
+        message: call.message,
+        ...identity,
+      }).pipe(
+        Effect.timeout(CALL_TIMEOUT_MILLIS),
+        Effect.as(ok(contact.text)),
+        Effect.catchTag("SupervisorRpcFailure", refusalAsToolError),
+      );
+    }
+    case "agent_list":
+      return yield* rpc
+        .SupervisorAgentList({
+          ...auth,
+          assignmentEpoch,
+          ...(call.ids !== undefined && { ids: call.ids }),
+        })
+        .pipe(
+          Effect.timeout(CALL_TIMEOUT_MILLIS),
+          Effect.map((result) => ok(agentListText(result))),
+          Effect.catchTags({
+            SupervisorAgentRefusal: agentRefusalAsToolError,
+            SupervisorRpcFailure: refusalAsToolError,
+          }),
+        );
+    case "agent_read":
+      return yield* rpc
+        .SupervisorAgentRead({
+          ...auth,
+          assignmentEpoch,
+          ids: call.ids,
+          ...(call.verbose === true && { verbose: true }),
+        })
+        .pipe(
+          Effect.timeout(CALL_TIMEOUT_MILLIS),
+          Effect.map((result) => ok(agentReadText(result))),
+          Effect.catchTags({
+            SupervisorAgentRefusal: agentRefusalAsToolError,
+            SupervisorRpcFailure: refusalAsToolError,
+          }),
+        );
+    case "agent_send":
+      return yield* rpc
+        .SupervisorAgentSend({
+          ...auth,
+          assignmentEpoch,
+          to: call.to,
+          message: call.message,
+          ...identity,
+        })
+        .pipe(
+          Effect.timeout(AGENT_SEND_TIMEOUT_MILLIS),
+          Effect.map((result) => ok(agentSendText(result))),
+          Effect.catchTags({
+            SupervisorAgentRefusal: agentRefusalAsToolError,
+            SupervisorRpcFailure: refusalAsToolError,
+          }),
+        );
+  }
+  return absurd<SupervisorToolResult>(call);
+});
 
 // The call's request, then the commit that turns its response into the result.
 const requestSupervisorTool = (

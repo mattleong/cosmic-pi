@@ -304,12 +304,12 @@ export class SubagentFleetComponent implements Component, Focusable {
 
   private handlePromptInput(data: string, prompt: FleetPrompt): void {
     const resolution = this.resolveInput(data, "text-input");
-    if (resolution?._tag === "Action" && resolution.action === "cancel") {
+    const action = Predicate.isTagged(resolution, "Action") ? resolution.action : undefined;
+    if (action === "cancel") {
       this.prompt = undefined;
       this.notice = { kind: "info", text: "Input cancelled" };
       this.options.requestRender();
-    } else if (resolution?._tag === "Action" && resolution.action === "confirm")
-      this.submitPrompt();
+    } else if (action === "confirm") this.submitPrompt();
     else {
       prompt.feedback = undefined;
       prompt.input.handleInput(data);
@@ -324,10 +324,8 @@ export class SubagentFleetComponent implements Component, Focusable {
   ): void {
     const key = CONFIRMATION_KEYS[pending.action];
     const resolution = this.resolveInput(data, "confirmation", new Set([key]));
-    if (
-      (resolution?._tag === "Action" && resolution.action === "confirm") ||
-      confirmedReservedShortcut(resolution, data, key)
-    ) {
+    const action = Predicate.isTagged(resolution, "Action") ? resolution.action : undefined;
+    if (action === "confirm" || confirmedReservedShortcut(resolution, data, key)) {
       this.pending = undefined;
       const name = sanitizeTerminalLine(run.name);
       if (pending.action === "stop")
@@ -342,7 +340,7 @@ export class SubagentFleetComponent implements Component, Focusable {
         );
       return;
     }
-    if (resolution?._tag === "Action" && resolution.action === "cancel") {
+    if (action === "cancel") {
       this.pending = undefined;
       this.notice = {
         kind: "info",
@@ -354,11 +352,8 @@ export class SubagentFleetComponent implements Component, Focusable {
 
   private handleBusyInput(data: string): void {
     const resolution = this.resolveInput(data, "busy");
-    if (
-      resolution?._tag === "Action" &&
-      (resolution.action === "cancel" || resolution.action === "quit")
-    )
-      this.options.close();
+    const action = Predicate.isTagged(resolution, "Action") ? resolution.action : undefined;
+    if (action === "cancel" || action === "quit") this.options.close();
   }
 
   private handleFixedTreeInput(

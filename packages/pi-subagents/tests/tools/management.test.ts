@@ -1,5 +1,7 @@
 import { initTheme, type AgentToolResult } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Result from "effect/Result";
 import * as Deferred from "effect/Deferred";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import { beforeAll, describe, expect } from "vitest";
@@ -18,7 +20,9 @@ import {
 const resultText = (result: {
   readonly content: ReadonlyArray<AgentToolResult<unknown>["content"][number]>;
 }): string =>
-  result.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
+  Arr.filterMap(result.content, (part) =>
+    part.type === "text" ? Result.succeed(part.text) : Result.failVoid,
+  ).join("\n");
 
 describe("subagent tool", () => {
   beforeAll(() => initTheme("dark", false));

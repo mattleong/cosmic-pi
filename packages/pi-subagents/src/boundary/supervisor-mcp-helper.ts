@@ -38,10 +38,10 @@ scrubEnvironment(process.env);
 
 const SERVER_NAME = "pi-subagents-supervisor";
 
-class HelperStartupFailure extends Schema.TaggedError<HelperStartupFailure>()(
-  "HelperStartupFailure",
-  { diagnostic: Schema.String },
-) {
+class HelperStartupFailure extends Schema.TaggedError<
+  HelperStartupFailure,
+  { readonly brand: unique symbol }
+>()("HelperStartupFailure", { diagnostic: Schema.String }) {
   override readonly [Runtime.errorExitCode] = 2;
   override readonly [Runtime.errorReported] = false;
 }

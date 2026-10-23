@@ -30,18 +30,13 @@ export const ReportArchiveEntry = Schema.Struct({
 });
 export type ReportArchiveEntry = typeof ReportArchiveEntry.Type;
 
-export class ReportArchiveError extends Schema.TaggedError<ReportArchiveError>()(
-  "ReportArchiveError",
-  {
-    reason: Schema.Literals([
-      "path_unrepresentable",
-      "file_exists",
-      "write_failed",
-      "remove_failed",
-    ]),
-    message: Schema.String,
-  },
-) {}
+export class ReportArchiveError extends Schema.TaggedError<
+  ReportArchiveError,
+  { readonly brand: unique symbol }
+>()("ReportArchiveError", {
+  reason: Schema.Literals(["path_unrepresentable", "file_exists", "write_failed", "remove_failed"]),
+  message: Schema.String,
+}) {}
 
 export interface ReportArchive {
   /** Creates the entry's file exclusively; a failure leaves no file this call created. */
@@ -125,8 +120,8 @@ export const sessionReportArchive = (agentDirectory: string, sessionKey: string)
     reportArchiveRoot(agentDirectory),
     safeSubagentDirectorySegment(sessionKey),
   );
-  const save = (entry: ReportArchiveEntry) =>
-    Effect.gen(function* () {
+  const save = Effect.fn("ReportArchive.save")(
+    function* (entry: ReportArchiveEntry) {
       const file = path.join(
         directory,
         `${safeSubagentDirectorySegment(entry.id)}-${entry.kind ? `${entry.kind}-` : ""}${entry.generation}-${synchronousRandomUuid()}.md`,
@@ -149,10 +144,10 @@ export const sessionReportArchive = (agentDirectory: string, sessionKey: string)
         lines: countLines(entry.text),
         complete: content === entry.text,
       } satisfies SubagentReportArchive;
-    }).pipe(
-      // A bounded local write; an interrupted one could leave a file that no caller owns.
-      Effect.uninterruptible,
-    );
+    },
+    // A bounded local write; an interrupted one could leave a file that no caller owns.
+    Effect.uninterruptible,
+  );
   const discard = (archive: SubagentReportArchive) =>
     archiveIO("remove_failed", "An uncommitted report file couldn't be removed.", () =>
       fs.unlink(archive.path),
@@ -206,24 +201,25 @@ const archivedFiles = (directory: string): Effect.Effect<ReadonlyArray<ArchivedF
  * Removes reports older than a week, then the oldest reports beyond the size cap, then session
  * directories left empty. A file or directory that can't be read or removed is skipped.
  */
-export const pruneReportArchive = (agentDirectory: string): Effect.Effect<void> =>
-  Effect.gen(function* () {
-    const now = yield* Clock.currentTimeMillis;
-    const directories = yield* sessionDirectories(reportArchiveRoot(agentDirectory));
-    const files = (yield* Effect.forEach(directories, archivedFiles)).flat();
-    const expired = files.filter((file) => now - file.modified > PRIVATE_STATE_RETENTION_MILLIS);
-    const kept = files
-      .filter((file) => now - file.modified <= PRIVATE_STATE_RETENTION_MILLIS)
-      .toSorted((left, right) => right.modified - left.modified);
-    let total = 0;
-    const overflow = kept.filter((file) => (total += file.size) > MAX_ARCHIVE_BYTES);
-    yield* Effect.forEach(
-      [...expired, ...overflow],
-      (file) => attempt(() => fs.rm(file.file, { force: true })),
-      { discard: true },
-    );
-    // rmdir removes only directories that are now empty.
-    yield* Effect.forEach(directories, (directory) => attempt(() => fs.rmdir(directory)), {
-      discard: true,
-    });
+export const pruneReportArchive = Effect.fn("ReportArchive.pruneReportArchive")(function* (
+  agentDirectory: string,
+): Effect.fn.Return<void> {
+  const now = yield* Clock.currentTimeMillis;
+  const directories = yield* sessionDirectories(reportArchiveRoot(agentDirectory));
+  const files = (yield* Effect.forEach(directories, archivedFiles)).flat();
+  const expired = files.filter((file) => now - file.modified > PRIVATE_STATE_RETENTION_MILLIS);
+  const kept = files
+    .filter((file) => now - file.modified <= PRIVATE_STATE_RETENTION_MILLIS)
+    .toSorted((left, right) => right.modified - left.modified);
+  let total = 0;
+  const overflow = kept.filter((file) => (total += file.size) > MAX_ARCHIVE_BYTES);
+  yield* Effect.forEach(
+    [...expired, ...overflow],
+    (file) => attempt(() => fs.rm(file.file, { force: true })),
+    { discard: true },
+  );
+  // rmdir removes only directories that are now empty.
+  yield* Effect.forEach(directories, (directory) => attempt(() => fs.rmdir(directory)), {
+    discard: true,
   });
+});

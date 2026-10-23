@@ -2,7 +2,9 @@ import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Result from "effect/Result";
 import * as Layer from "effect/Layer";
 import { makePiManagedRuntime } from "pi-cosmic-core";
 import { recordingExtensionHost } from "pi-cosmic-core/testing";
@@ -30,7 +32,9 @@ import { captureSubagentTools, executeTool, view } from "./fixtures/tool-harness
 const resultText = (result: {
   readonly content: ReadonlyArray<AgentToolResult<unknown>["content"][number]>;
 }): string =>
-  result.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
+  Arr.filterMap(result.content, (part) =>
+    part.type === "text" ? Result.succeed(part.text) : Result.failVoid,
+  ).join("\n");
 
 const ARCHIVE_PATH = `/home/user/.pi/agent/subagents/reports/session-1/agent-1-1-${"a".repeat(36)}.md`;
 const REPORT_FILE = { path: ARCHIVE_PATH, chars: 500_000, lines: 40_000, complete: true };

@@ -1,7 +1,9 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import { absurd } from "effect/Function";
 import * as Predicate from "effect/Predicate";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { extensionApiFixture } from "pi-cosmic-core/testing";
 import { describe, expect, it, vi } from "vitest";
@@ -285,7 +287,9 @@ describe("worst-case model-facing output", () => {
           expect(block).toContain("agent_read");
       }
       expect(consumed).toEqual(
-        observations.flatMap(({ run, completionReceipt }) => (completionReceipt ? [run.id] : [])),
+        Arr.filterMap(observations, ({ run, completionReceipt }) =>
+          completionReceipt ? Result.succeed(run.id) : Result.failVoid,
+        ),
       );
       const contract = decodeSubagentContract("agent_await")(result.structuredContent);
       expect(JSON.stringify(contract).length).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_CHARS);

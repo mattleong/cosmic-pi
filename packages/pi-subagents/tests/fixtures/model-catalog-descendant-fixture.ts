@@ -1,10 +1,10 @@
 #!/usr/bin/env node
+import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import * as path from "node:path";
+import { createInterface } from "node:readline";
 import * as Schema from "effect/Schema";
 
-const { spawn } = process.getBuiltinModule("node:child_process");
-const { writeFileSync } = process.getBuiltinModule("node:fs");
-const { createInterface } = process.getBuiltinModule("node:readline");
-const path = process.getBuiltinModule("node:path");
 const decodeRequest = Schema.decodeUnknownSync(
   Schema.fromJsonString(Schema.Struct({ request_id: Schema.String })),
 );

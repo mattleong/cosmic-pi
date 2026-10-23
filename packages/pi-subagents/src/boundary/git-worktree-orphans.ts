@@ -65,24 +65,23 @@ export const orphanWorkspaceOperations = (engine: OrphanEngine) => {
   const ownerEnded = <A, E, R>(ownerLease: string, effect: Effect.Effect<A, E, R>) =>
     withFreeLock(locks, lockDirectory, ownerLockNamespace(ownerLease), effect);
   // Runs `effect` holding the orphan's free owner lease, which proves its creating session ended.
-  const whileOwnerEnded = <A>(
+  const whileOwnerEnded = Effect.fn("GitWorkspaceEngine.whileOwnerEnded")(function* <A>(
     record: WorkspaceRecord,
     effect: Effect.Effect<A, WorkspaceError, SafeFile>,
-  ) =>
-    Effect.gen(function* () {
-      if (owned.has(record.handle.workspaceId))
-        return yield* workspaceFailure(
-          "authorization",
-          "This session owns the workspace; discard it as its parent.",
-        );
-      const result = yield* ownerEnded(record.ownerLease, effect);
-      if (Option.isNone(result))
-        return yield* workspaceFailure(
-          "authorization",
-          "The session that created this workspace is still running.",
-        );
-      return result.value;
-    });
+  ) {
+    if (owned.has(record.handle.workspaceId))
+      return yield* workspaceFailure(
+        "authorization",
+        "This session owns the workspace; discard it as its parent.",
+      );
+    const result = yield* ownerEnded(record.ownerLease, effect);
+    if (Option.isNone(result))
+      return yield* workspaceFailure(
+        "authorization",
+        "The session that created this workspace is still running.",
+      );
+    return result.value;
+  });
   // An orphan's creating session has ended (its owner lease is free); the caller separately
   // proves no writer still holds the worker tree.
   const discardOrphan = Effect.fn("GitWorkspaceEngine.discardOrphan")(function* (
@@ -160,17 +159,18 @@ export const orphanWorkspaceOperations = (engine: OrphanEngine) => {
    * Records the orphan sweep may discard. A plain candidate scan: `sweepOrphan` rechecks each one
    * under its checkout's lock and owner lease.
    */
-  const sweepCandidates = (input: { readonly minimumAgeMillis: number }) =>
-    Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis;
-      const { records } = yield* listWorkspaceRecords(registry);
-      return records.filter(
-        (record) =>
-          !owned.has(record.handle.workspaceId) &&
-          OPEN_WORKSPACE_STATUSES.has(record.status) &&
-          oldEnough(record, now, input.minimumAgeMillis),
-      );
-    });
+  const sweepCandidates = Effect.fn("GitWorkspaceEngine.sweepCandidates")(function* (input: {
+    readonly minimumAgeMillis: number;
+  }) {
+    const now = yield* Clock.currentTimeMillis;
+    const { records } = yield* listWorkspaceRecords(registry);
+    return records.filter(
+      (record) =>
+        !owned.has(record.handle.workspaceId) &&
+        OPEN_WORKSPACE_STATUSES.has(record.status) &&
+        oldEnough(record, now, input.minimumAgeMillis),
+    );
+  });
   /**
    * Discards an orphan unchanged for `minimumAgeMillis`, keeping its worker's changes as the
    * revision patch beside the record until collection removes both. Returns undefined, changing

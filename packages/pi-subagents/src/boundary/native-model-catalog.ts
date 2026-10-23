@@ -5,6 +5,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/process/ChildProcess";
@@ -141,14 +142,14 @@ export interface NativeRuntimeModel {
   readonly isDefault: boolean;
 }
 
-class NativeModelCatalogError extends Schema.TaggedError<NativeModelCatalogError>()(
-  "NativeModelCatalogError",
-  {
-    runtime: Schema.Literals(["claude", "codex"]),
-    code: Schema.String,
-    message: Schema.String,
-  },
-) {}
+class NativeModelCatalogError extends Schema.TaggedError<
+  NativeModelCatalogError,
+  { readonly brand: unique symbol }
+>()("NativeModelCatalogError", {
+  runtime: Schema.Literals(["claude", "codex"]),
+  code: Schema.String,
+  message: Schema.String,
+}) {}
 
 export interface NativeModelCatalogContract {
   readonly list: (
@@ -251,7 +252,7 @@ const runCatalogProcess = (
                 : Effect.succeed(chunk),
             ),
             Stream.mapError((error) =>
-              error instanceof NativeModelCatalogError
+              Predicate.isTagged(error, "NativeModelCatalogError")
                 ? error
                 : catalogError(
                     runtime,
@@ -492,29 +493,27 @@ const loadNativeModelCatalog =
     });
   };
 
-const makeNativeModelCatalog = (
+const makeNativeModelCatalog = Effect.fn("NativeModelCatalog.make")(function* (
   options: NativeModelCatalogLayerOptions = {},
-): Effect.Effect<NativeModelCatalogContract, never, SafeFile> =>
-  Effect.gen(function* () {
-    const safeFile = yield* SafeFile;
-    const cache = yield* Cache.makeWith(loadNativeModelCatalog(options), {
-      capacity: 2,
-      timeToLive: (exit) => (Exit.isSuccess(exit) ? Duration.infinity : Duration.zero),
-    });
-    return {
-      list: (runtime, cwd) =>
-        Effect.gen(function* () {
-          const probeSelector =
-            runtime === "claude"
-              ? yield* readClaudeModelPreference(
-                  sanitizeLocalCliEnvironment(options.environment ?? process.env, runtime),
-                  safeFile,
-                )
-              : "default";
-          return yield* Cache.get(cache, new CatalogCacheKey({ runtime, cwd, probeSelector }));
-        }),
-    } satisfies NativeModelCatalogContract;
+): Effect.fn.Return<NativeModelCatalogContract, never, SafeFile> {
+  const safeFile = yield* SafeFile;
+  const cache = yield* Cache.makeWith(loadNativeModelCatalog(options), {
+    capacity: 2,
+    timeToLive: (exit) => (Exit.isSuccess(exit) ? Duration.infinity : Duration.zero),
   });
+  return {
+    list: Effect.fn("NativeModelCatalog.list")(function* (runtime, cwd) {
+      const probeSelector =
+        runtime === "claude"
+          ? yield* readClaudeModelPreference(
+              sanitizeLocalCliEnvironment(options.environment ?? process.env, runtime),
+              safeFile,
+            )
+          : "default";
+      return yield* Cache.get(cache, new CatalogCacheKey({ runtime, cwd, probeSelector }));
+    }),
+  } satisfies NativeModelCatalogContract;
+});
 
 export class NativeModelCatalog extends Context.Service<
   NativeModelCatalog,

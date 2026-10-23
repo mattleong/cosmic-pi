@@ -12,11 +12,8 @@ const UserModelPreference = Schema.fromJsonString(
 );
 const decodePreference = Schema.decodeUnknownEffect(UserModelPreference);
 
-export const readClaudeModelPreference = (
-  environment: NodeJS.ProcessEnv,
-  safeFile: SafeFileContract,
-): Effect.Effect<string> =>
-  Effect.gen(function* () {
+export const readClaudeModelPreference = Effect.fn("ClaudeModelPreference.read")(
+  function* (environment: NodeJS.ProcessEnv, safeFile: SafeFileContract) {
     const home = (environment.HOME ?? "") || homedir();
     if (!nodePath.isAbsolute(home) || home.length > 4_096 || /\p{Cc}/u.test(home)) return "default";
     const path = yield* Effect.tryPromise(() =>
@@ -29,4 +26,6 @@ export const readClaudeModelPreference = (
     );
     const preference = yield* decodePreference(new TextDecoder().decode(file.bytes));
     return preference.model;
-  }).pipe(Effect.orElseSucceed(() => "default"));
+  },
+  Effect.orElseSucceed(() => "default"),
+);

@@ -22,6 +22,7 @@ import {
   type ProcessTransportRuntime,
 } from "../src/boundary/process-transport.ts";
 import { backendLaunch } from "./fixtures/backend-supervisor.ts";
+import { scriptedChildProcess } from "./fixtures/scripted-child-process.ts";
 import { stringMatching } from "./support/matchers.ts";
 import { processAlive } from "./support/process-liveness.ts";
 
@@ -44,49 +45,12 @@ const acquireNative = (writer = false) =>
   acquireLocalCliTransport({ ...nativeRequest, writer }, boundary);
 const notification = { method: "initialized" as const };
 
-const { ChildProcess: NodeChildProcessClass } = process.getBuiltinModule("node:child_process");
-const { PassThrough, Writable } = process.getBuiltinModule("node:stream");
-
 const foreignListener = () => {};
 const fixture = () => {
-  const child: NodeChildProcess = new NodeChildProcessClass();
-  const stdout = new PassThrough();
-  const stderr = new PassThrough();
-  const writes: string[] = [];
-  let stalled = false;
-  let completeWrite: ((error?: Error | null) => void) | undefined;
-  const stdin = new Writable({
-    decodeStrings: false,
-    write(chunk: string, _encoding, callback) {
-      writes.push(chunk);
-      if (stalled) completeWrite = callback;
-      else callback();
-    },
-  });
-  Object.defineProperties(child, {
-    pid: { value: 4242 },
-    stdin: { value: stdin },
-    stdout: { value: stdout },
-    stderr: { value: stderr },
-  });
-  const finish = () => {
-    Object.defineProperty(child, "exitCode", { value: 0 });
-    child.emit("close", 0, null);
-  };
-  boundary.spawn.mockReturnValue(child);
-  boundary.terminate.mockImplementation(() => Effect.sync(finish));
-  return {
-    child,
-    stdout,
-    stderr,
-    stdin,
-    writes,
-    finish,
-    stall: () => {
-      stalled = true;
-    },
-    completeWrite: (error?: Error) => completeWrite?.(error),
-  };
+  const scripted = scriptedChildProcess();
+  boundary.spawn.mockReturnValue(scripted.child);
+  boundary.terminate.mockImplementation(() => Effect.sync(scripted.finish));
+  return scripted;
 };
 
 // Three unacknowledged 3 MiB lines exceed the 8 MiB process backlog budget.

@@ -36,14 +36,14 @@ export const SupervisorRunIdSchema = Schema.String.check(
   Schema.isMaxLength(MAX_SUPERVISOR_RUN_ID_CHARS),
   Schema.isPattern(RUN_ID_PATTERN),
 ).pipe(Schema.brand("SupervisorRunId"));
-export type SupervisorRunId = Schema.Schema.Type<typeof SupervisorRunIdSchema>;
+export type SupervisorRunId = typeof SupervisorRunIdSchema.Type;
 
 export const SupervisorChannelIdSchema = Schema.String.check(
   Schema.isMinLength(1),
   Schema.isMaxLength(MAX_SUPERVISOR_CHANNEL_ID_CHARS),
   Schema.isPattern(CHANNEL_ID_PATTERN),
 ).pipe(Schema.brand("SupervisorChannelId"));
-export type SupervisorChannelId = Schema.Schema.Type<typeof SupervisorChannelIdSchema>;
+export type SupervisorChannelId = typeof SupervisorChannelIdSchema.Type;
 
 export const isSupervisorRunId = (value: string): value is SupervisorRunId =>
   RUN_ID_PATTERN.test(value);
@@ -59,7 +59,7 @@ export const SupervisorDeliveryIdSchema = Schema.String.check(
   Schema.isMaxLength(MAX_SUPERVISOR_MCP_DELIVERY_ID_CHARS),
   Schema.isPattern(DELIVERY_ID_PATTERN),
 ).pipe(Schema.brand("SupervisorDeliveryId"));
-export type SupervisorDeliveryId = Schema.Schema.Type<typeof SupervisorDeliveryIdSchema>;
+export type SupervisorDeliveryId = typeof SupervisorDeliveryIdSchema.Type;
 
 const SupervisorAssignmentEpochSchema = Schema.Number.check(
   Schema.isInt(),
@@ -91,7 +91,7 @@ export const SupervisorChannelConfigSchema = Schema.Struct({
   ),
   token: SupervisorAuthTokenSchema,
 });
-export type SupervisorChannelConfig = Schema.Schema.Type<typeof SupervisorChannelConfigSchema>;
+export type SupervisorChannelConfig = typeof SupervisorChannelConfigSchema.Type;
 
 const AuthenticatedPayload = {
   version: Schema.Literal(SUPERVISOR_CHANNEL_VERSION),
@@ -117,13 +117,13 @@ const MainAgentCallPayload = {
   ),
 };
 
-export class SupervisorRpcFailure extends Schema.TaggedError<SupervisorRpcFailure>()(
-  "SupervisorRpcFailure",
-  {
-    code: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128)),
-    message: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512)),
-  },
-) {}
+export class SupervisorRpcFailure extends Schema.TaggedError<
+  SupervisorRpcFailure,
+  { readonly brand: unique symbol }
+>()("SupervisorRpcFailure", {
+  code: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128)),
+  message: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512)),
+}) {}
 
 export const SupervisorOpenSessionRpc = Rpc.make("SupervisorOpenSession", {
   payload: AuthenticatedPayload,
@@ -195,13 +195,13 @@ const SupervisorReportRpc = Rpc.make("SupervisorReport", {
 });
 
 /** A refusal the child's model can act on, such as an unknown agent. */
-export class SupervisorAgentRefusal extends Schema.TaggedError<SupervisorAgentRefusal>()(
-  "SupervisorAgentRefusal",
-  {
-    code: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128)),
-    message: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512)),
-  },
-) {}
+export class SupervisorAgentRefusal extends Schema.TaggedError<
+  SupervisorAgentRefusal,
+  { readonly brand: unique symbol }
+>()("SupervisorAgentRefusal", {
+  code: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128)),
+  message: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512)),
+}) {}
 
 export const MAX_SUPERVISOR_AGENT_NAME_CHARS = 128;
 /** A run's whole retained message or report; main's longer message is cut here. */

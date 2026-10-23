@@ -118,142 +118,142 @@ const ORPHAN_GUIDANCE =
 // Model-facing list output; entries beyond it are counted, not shown.
 const MAX_LIST_CHARS = 32_000;
 
-const executeWorkspaceList = (service: SubagentServiceContract, callerRunId: string) =>
-  Effect.gen(function* () {
-    const listing = yield* service.workspaceList(callerRunId);
-    const entries = [
-      ...listing.records.map((record) => ({
-        workspaceId: record.handle.workspaceId,
-        ownerId: record.handle.ownerId,
-        status: record.status,
-        cwd: record.handle.cwd,
-        sourceCwd: record.handle.sourceCwd,
-        ...(record.revision && { revisionId: record.revision.revisionId }),
-        ...(record.preparation && { preparationId: record.preparation.preparationId }),
-        ...(listing.orphans?.has(record.handle.workspaceId) && {
-          orphan: listing.orphans.get(record.handle.workspaceId),
-        }),
-      })),
-      ...listing.unavailable,
-    ].toSorted((a, b) => a.workspaceId.localeCompare(b.workspaceId));
-    const lines: string[] = [];
-    let chars = 0;
-    for (const entry of entries) {
-      const line = yield* encodeWorkspaceMetadata(entry).pipe(
-        Effect.mapError(() =>
-          invalidRequest(
-            "workspace_metadata_invalid",
-            "Worktree metadata could not be encoded safely; inspect private worktree state manually.",
-          ),
+const executeWorkspaceList = Effect.fn("SubagentTools.workspaceList")(function* (
+  service: SubagentServiceContract,
+  callerRunId: string,
+) {
+  const listing = yield* service.workspaceList(callerRunId);
+  const entries = [
+    ...listing.records.map((record) => ({
+      workspaceId: record.handle.workspaceId,
+      ownerId: record.handle.ownerId,
+      status: record.status,
+      cwd: record.handle.cwd,
+      sourceCwd: record.handle.sourceCwd,
+      ...(record.revision && { revisionId: record.revision.revisionId }),
+      ...(record.preparation && { preparationId: record.preparation.preparationId }),
+      ...(listing.orphans?.has(record.handle.workspaceId) && {
+        orphan: listing.orphans.get(record.handle.workspaceId),
+      }),
+    })),
+    ...listing.unavailable,
+  ].toSorted((a, b) => a.workspaceId.localeCompare(b.workspaceId));
+  const lines: string[] = [];
+  let chars = 0;
+  for (const entry of entries) {
+    const line = yield* encodeWorkspaceMetadata(entry).pipe(
+      Effect.mapError(() =>
+        invalidRequest(
+          "workspace_metadata_invalid",
+          "Worktree metadata could not be encoded safely; inspect private worktree state manually.",
         ),
-      );
-      if (line.length > MAX_LIST_CHARS)
-        return yield* invalidRequest(
-          "workspace_metadata_too_large",
-          "Worktree metadata exceeds the safe output bound; inspect private worktree state manually.",
-        );
-      if (chars + line.length > MAX_LIST_CHARS) break;
-      chars += line.length;
-      lines.push(line);
-    }
-    const omitted = entries.length - lines.length;
-    const adoptableCount = [...(listing.orphans?.values() ?? [])].filter(
-      (disposition) => disposition === "adoptable",
-    ).length;
-    return result(
-      [
-        ...lines,
-        ...(listing.unavailable.length > 0
-          ? [
-              "Incomplete worktree metadata: some recovery records are missing, invalid, or unreadable. Their ownership, source identity, and cleanup are unknown; manual recovery is required.",
-            ]
-          : []),
-        omitted === 0
-          ? "End of worktree list."
-          : `${countLabel(omitted, "more worktree")} didn't fit the output and ${omitted === 1 ? "was" : "were"} left out.`,
-        ...(listing.orphans !== undefined && listing.orphans.size > 0 ? [ORPHAN_GUIDANCE] : []),
-      ].join("\n"),
-      {
-        operation: "list",
-        workspaceCount: entries.length,
-        ...(adoptableCount > 0 && { adoptableCount }),
-        unavailableCount: listing.unavailable.length,
-        listedCount: lines.length,
-        displayContent: { offset: 0, length: lines.join("\n").length },
-      },
+      ),
     );
-  });
+    if (line.length > MAX_LIST_CHARS)
+      return yield* invalidRequest(
+        "workspace_metadata_too_large",
+        "Worktree metadata exceeds the safe output bound; inspect private worktree state manually.",
+      );
+    if (chars + line.length > MAX_LIST_CHARS) break;
+    chars += line.length;
+    lines.push(line);
+  }
+  const omitted = entries.length - lines.length;
+  const adoptableCount = [...(listing.orphans?.values() ?? [])].filter(
+    (disposition) => disposition === "adoptable",
+  ).length;
+  return result(
+    [
+      ...lines,
+      ...(listing.unavailable.length > 0
+        ? [
+            "Incomplete worktree metadata: some recovery records are missing, invalid, or unreadable. Their ownership, source identity, and cleanup are unknown; manual recovery is required.",
+          ]
+        : []),
+      omitted === 0
+        ? "End of worktree list."
+        : `${countLabel(omitted, "more worktree")} didn't fit the output and ${omitted === 1 ? "was" : "were"} left out.`,
+      ...(listing.orphans !== undefined && listing.orphans.size > 0 ? [ORPHAN_GUIDANCE] : []),
+    ].join("\n"),
+    {
+      operation: "list",
+      workspaceCount: entries.length,
+      ...(adoptableCount > 0 && { adoptableCount }),
+      unavailableCount: listing.unavailable.length,
+      listedCount: lines.length,
+      displayContent: { offset: 0, length: lines.join("\n").length },
+    },
+  );
+});
 
 type WorkspaceReceipt = Pick<WorkspaceToolDetails, "operation" | "workspaceId">;
 
-const executeWorkspaceReview = (
+const executeWorkspaceReview = Effect.fn("SubagentTools.workspaceReview")(function* (
   service: SubagentServiceContract,
   operation: SubagentWorkspaceInput,
   receipt: WorkspaceReceipt,
   callerRunId: string,
-) =>
-  Effect.gen(function* () {
-    const workspaceId = operation.workspaceId ?? "";
-    const review = yield* service.workspaceReview(
-      workspaceId,
-      {
-        ...(operation.revisionId !== undefined && { revisionId: operation.revisionId }),
-        offset: operation.offset ?? 0,
-      },
-      callerRunId,
-    );
-    const prefix = [
-      `Worktree ${workspaceId}; immutable revision ${review.revisionId}.`,
-      `Review characters ${review.offset}..${review.offset + review.text.length} of ${review.totalChars}: a summary of changed files and line counts, then the diff.`,
-      review.nextOffset !== undefined
-        ? `More pages: review workspaceId=${workspaceId} offset=${review.nextOffset}.`
-        : "End of review. Apply it, or prepare it and test in the returned cwd first.",
-      "BEGIN IMMUTABLE REVIEW PAGE",
-    ].join("\n");
-    return result([prefix, review.text, "END IMMUTABLE REVIEW PAGE"].join("\n"), {
-      ...receipt,
-      revisionId: review.revisionId,
-      offset: review.offset,
-      totalChars: review.totalChars,
-      displayContent: { offset: prefix.length + 1, length: review.text.length },
-      ...(review.nextOffset !== undefined && { nextOffset: review.nextOffset }),
-    });
+) {
+  const workspaceId = operation.workspaceId ?? "";
+  const review = yield* service.workspaceReview(
+    workspaceId,
+    {
+      ...(operation.revisionId !== undefined && { revisionId: operation.revisionId }),
+      offset: operation.offset ?? 0,
+    },
+    callerRunId,
+  );
+  const prefix = [
+    `Worktree ${workspaceId}; immutable revision ${review.revisionId}.`,
+    `Review characters ${review.offset}..${review.offset + review.text.length} of ${review.totalChars}: a summary of changed files and line counts, then the diff.`,
+    review.nextOffset !== undefined
+      ? `More pages: review workspaceId=${workspaceId} offset=${review.nextOffset}.`
+      : "End of review. Apply it, or prepare it and test in the returned cwd first.",
+    "BEGIN IMMUTABLE REVIEW PAGE",
+  ].join("\n");
+  return result([prefix, review.text, "END IMMUTABLE REVIEW PAGE"].join("\n"), {
+    ...receipt,
+    revisionId: review.revisionId,
+    offset: review.offset,
+    totalChars: review.totalChars,
+    displayContent: { offset: prefix.length + 1, length: review.text.length },
+    ...(review.nextOffset !== undefined && { nextOffset: review.nextOffset }),
   });
+});
 
-const executeWorkspacePrepare = (
+const executeWorkspacePrepare = Effect.fn("SubagentTools.workspacePrepare")(function* (
   service: SubagentServiceContract,
   operation: SubagentWorkspaceInput,
   receipt: WorkspaceReceipt,
   callerRunId: string,
-) =>
-  Effect.gen(function* () {
-    const preparation = yield* service.workspacePrepare(
-      operation.workspaceId ?? "",
-      operation.revisionId ?? "",
-      callerRunId,
-    );
-    const prefix = `Prepared revision ${preparation.revisionId}; preparationId=${preparation.preparationId}.`;
-    const cwdLine = `Combined test cwd: ${preparation.cwd}`;
-    const warnings = leftOutWarnings(preparation.leftOutPaths);
-    return result(
-      [
-        prefix,
-        cwdLine,
-        `Run relevant tests in this cwd, which combines the proposal with your current edits; don't edit it. Then apply workspaceId=${operation.workspaceId ?? ""}, which integrates this preparation.`,
-        ...warnings.map((warning) => `Warning: ${warning.detail}`),
-      ].join("\n"),
-      {
-        ...receipt,
-        revisionId: preparation.revisionId,
-        preparationId: preparation.preparationId,
-        ...(warnings.length > 0 && { warnings }),
-        ...preparedCwdMetadata(preparation.cwd, {
-          offset: prefix.length + 1,
-          length: cwdLine.length,
-        }),
-      },
-    );
-  });
+) {
+  const preparation = yield* service.workspacePrepare(
+    operation.workspaceId ?? "",
+    operation.revisionId ?? "",
+    callerRunId,
+  );
+  const prefix = `Prepared revision ${preparation.revisionId}; preparationId=${preparation.preparationId}.`;
+  const cwdLine = `Combined test cwd: ${preparation.cwd}`;
+  const warnings = leftOutWarnings(preparation.leftOutPaths);
+  return result(
+    [
+      prefix,
+      cwdLine,
+      `Run relevant tests in this cwd, which combines the proposal with your current edits; don't edit it. Then apply workspaceId=${operation.workspaceId ?? ""}, which integrates this preparation.`,
+      ...warnings.map((warning) => `Warning: ${warning.detail}`),
+    ].join("\n"),
+    {
+      ...receipt,
+      revisionId: preparation.revisionId,
+      preparationId: preparation.preparationId,
+      ...(warnings.length > 0 && { warnings }),
+      ...preparedCwdMetadata(preparation.cwd, {
+        offset: prefix.length + 1,
+        length: cwdLine.length,
+      }),
+    },
+  );
+});
 
 const APPLY_TESTING_LINES = {
   "parent-tested":
@@ -262,44 +262,43 @@ const APPLY_TESTING_LINES = {
     "Untested: apply prepared and integrated in one call without running anything. Run relevant tests in the parent checkout.",
 } as const;
 
-const executeWorkspaceApply = (
+const executeWorkspaceApply = Effect.fn("SubagentTools.workspaceApply")(function* (
   service: SubagentServiceContract,
   operation: SubagentWorkspaceInput,
   receipt: WorkspaceReceipt,
   callerRunId: string,
-) =>
-  Effect.gen(function* () {
-    const workspaceId = operation.workspaceId ?? "";
-    const applied = yield* service.workspaceApply(
-      workspaceId,
-      { revisionId: operation.revisionId },
-      callerRunId,
-    );
-    const ids = `worktree ${workspaceId}, revision ${applied.revisionId}, preparationId=${applied.preparationId}`;
-    const changed = `Changed files (${applied.changedPathCount}): ${applied.changedPaths.length > 0 ? listedPaths(applied.changedPaths) : "none listed"}${applied.changedPathCount > applied.changedPaths.length ? ` (${applied.changedPathCount - applied.changedPaths.length} not listed)` : ""}`;
-    const metadata = {
-      ...receipt,
-      revisionId: applied.revisionId,
-      preparationId: applied.preparationId,
-      changedPathCount: applied.changedPathCount,
-      testing: applied.testing,
-      ...(applied.preparedCwd.length <= 1_024 && { preparedCwd: applied.preparedCwd }),
-    };
-    const warnings = [...integrationWarnings(applied), ...leftOutWarnings(applied.leftOutPaths)];
-    const heading = [
-      `Applied ${ids} as uncommitted parent edits. The parent index was preserved. Do not stage or commit unless the user asks.`,
-      APPLY_TESTING_LINES[applied.testing],
-    ].join("\n");
-    const body = changed;
-    return result(
-      [heading, body, ...warnings.map((warning) => `Warning: ${warning.detail}`)].join("\n"),
-      {
-        ...metadata,
-        ...(warnings.length > 0 && { warnings }),
-        displayContent: { offset: heading.length + 1, length: body.length },
-      },
-    );
-  });
+) {
+  const workspaceId = operation.workspaceId ?? "";
+  const applied = yield* service.workspaceApply(
+    workspaceId,
+    { revisionId: operation.revisionId },
+    callerRunId,
+  );
+  const ids = `worktree ${workspaceId}, revision ${applied.revisionId}, preparationId=${applied.preparationId}`;
+  const changed = `Changed files (${applied.changedPathCount}): ${applied.changedPaths.length > 0 ? listedPaths(applied.changedPaths) : "none listed"}${applied.changedPathCount > applied.changedPaths.length ? ` (${applied.changedPathCount - applied.changedPaths.length} not listed)` : ""}`;
+  const metadata = {
+    ...receipt,
+    revisionId: applied.revisionId,
+    preparationId: applied.preparationId,
+    changedPathCount: applied.changedPathCount,
+    testing: applied.testing,
+    ...(applied.preparedCwd.length <= 1_024 && { preparedCwd: applied.preparedCwd }),
+  };
+  const warnings = [...integrationWarnings(applied), ...leftOutWarnings(applied.leftOutPaths)];
+  const heading = [
+    `Applied ${ids} as uncommitted parent edits. The parent index was preserved. Do not stage or commit unless the user asks.`,
+    APPLY_TESTING_LINES[applied.testing],
+  ].join("\n");
+  const body = changed;
+  return result(
+    [heading, body, ...warnings.map((warning) => `Warning: ${warning.detail}`)].join("\n"),
+    {
+      ...metadata,
+      ...(warnings.length > 0 && { warnings }),
+      displayContent: { offset: heading.length + 1, length: body.length },
+    },
+  );
+});
 
 /**
  * `resolveLaunch` resolves an adopted workspace's recorded launch for its first revision; the

@@ -1,5 +1,6 @@
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -16,9 +17,8 @@ import { backendLaunch, takeBackendEvent } from "./fixtures/backend-supervisor.t
 import { localCliProcess } from "./support/local-cli-process.ts";
 import { nodeFsPromises as fs, nodePath as path } from "./support/node-builtins.ts";
 
-const sourceEnvironment = { ...process.env };
 // Captured before any child environment is built, since every child gets a private TMPDIR.
-const parentTemporaryDirectory = sourceEnvironment.TMPDIR ?? tmpdir();
+const parentTemporaryDirectory = process.env.TMPDIR ?? tmpdir();
 /** Claude Code's per-user temp directory, which every Claude Code session of this user shares. */
 const sharedClaudeTemporaryDirectory = path.join("/tmp", `claude-${process.getuid?.() ?? ""}`);
 const ORIGINAL = "ORIGINAL";
@@ -26,7 +26,7 @@ const CANARY = "CANARY";
 
 const RUNTIMES = {
   claude: {
-    enabled: sourceEnvironment.PI_SUBAGENTS_REAL_CLAUDE_SANDBOX_SMOKE === "1",
+    enabled: process.env.PI_SUBAGENTS_REAL_CLAUDE_SANDBOX_SMOKE === "1",
     modelVariable: "PI_SUBAGENTS_REAL_CLAUDE_MODEL",
     driver: localClaudeBackendDriver,
     /** Claude Code gives sandboxed Bash `<CLAUDE_CODE_TMPDIR>/claude-<uid>` as its `$TMPDIR`. */
@@ -36,7 +36,7 @@ const RUNTIMES = {
     readOnlyWritesPrivateTemporary: true,
   },
   codex: {
-    enabled: sourceEnvironment.PI_SUBAGENTS_REAL_CODEX_SANDBOX_SMOKE === "1",
+    enabled: process.env.PI_SUBAGENTS_REAL_CODEX_SANDBOX_SMOKE === "1",
     modelVariable: "PI_SUBAGENTS_REAL_CODEX_MODEL",
     driver: localCodexBackendDriver,
     shellTemporaryDirectory: (root: string) => root,
@@ -206,7 +206,7 @@ const CANARY_SYSTEM_PROMPT = [
 const runCanary = (runtime: Runtime, writeIntent: SubagentWriteIntent) =>
   Effect.gen(function* () {
     const { driver, modelVariable } = RUNTIMES[runtime];
-    const model = sourceEnvironment[modelVariable];
+    const model = yield* Config.String(modelVariable).pipe(Config.withDefault(""));
     if (!model) return yield* Effect.die(`Set ${modelVariable} for the live sandbox canary.`);
     const { root, tag } = yield* canarySetup;
     // Claude Code creates it the same way; a missing directory would block the write for the
@@ -218,7 +218,7 @@ const runCanary = (runtime: Runtime, writeIntent: SubagentWriteIntent) =>
     const agentDirectory = yield* temporaryDirectory("pi-subagents-sandbox-agent-").pipe(
       Effect.flatMap((directory) => Effect.promise(() => fs.realpath(directory))),
     );
-    const processes = yield* localCliProcess({ agentDirectory, environment: sourceEnvironment });
+    const processes = yield* localCliProcess({ agentDirectory, environment: process.env });
     const privateTemporaryDirectory = yield* Ref.make<string | undefined>(undefined);
     const observedProcesses: LocalCliProcessContract = {
       ...processes,

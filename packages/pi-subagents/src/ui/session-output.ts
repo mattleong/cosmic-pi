@@ -1,4 +1,6 @@
 import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
+import * as Result from "effect/Result";
 import {
   Container,
   Markdown,
@@ -138,7 +140,9 @@ function addToolGroup(
   if (events.length > 1) {
     const targets = [
       ...new Set(
-        events.flatMap((event) => (event.target ? [sanitizeTerminalLine(event.target)] : [])),
+        Arr.filterMap(events, (event) =>
+          event.target ? Result.succeed(sanitizeTerminalLine(event.target)) : Result.failVoid,
+        ),
       ),
     ];
     if (targets.length > 0) {
@@ -231,7 +235,9 @@ const addLiveActivity = (
     else addStyledRow(container, NOTICE_STYLES[item.event.kind], noticeText(item.event), theme);
   }
   const noticeKinds = new Set(
-    items.flatMap((item) => (item.type === "notice" ? [item.event.kind] : [])),
+    Arr.filterMap(items, (item) =>
+      item.type === "notice" ? Result.succeed(item.event.kind) : Result.failVoid,
+    ),
   );
   const liveFields = [
     [noticeKinds.has("question"), NOTICE_STYLES.question, run.question?.message],

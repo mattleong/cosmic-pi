@@ -86,163 +86,164 @@ const responseRequestId = (response: RpcMessage.FromServerEncoded): string | num
 
 const ignoreRequest = (): Effect.Effect<void> => Effect.void;
 
-export const supervisorRpcServerProtocol = (
+export const supervisorRpcServerProtocol = Effect.fn("SupervisorRpcProtocol.server")(function* (
   options: SupervisorRpcServerProtocolOptions,
-): Effect.Effect<
+): Effect.fn.Return<
   RpcServer.Protocol["Service"],
   never,
   RpcSerialization.RpcSerialization | Scope.Scope
-> =>
-  Effect.gen(function* () {
-    const serialization = yield* RpcSerialization.RpcSerialization;
-    const disconnects = yield* Queue.unbounded<number>();
-    const clients = new Map<number, ClientTransport>();
-    let nextClientId = 0;
-    let writeRequest: (
-      clientId: number,
-      message: RpcMessage.FromClientEncoded,
-    ) => Effect.Effect<void> = ignoreRequest;
+> {
+  const serialization = yield* RpcSerialization.RpcSerialization;
+  const disconnects = yield* Queue.unbounded<number>();
+  const clients = new Map<number, ClientTransport>();
+  let nextClientId = 0;
+  let writeRequest: (
+    clientId: number,
+    message: RpcMessage.FromClientEncoded,
+  ) => Effect.Effect<void> = ignoreRequest;
 
-    const protocol = yield* RpcServer.Protocol.make((write) => {
-      writeRequest = write;
-      return Effect.succeed({
-        disconnects,
-        send: (clientId, response) =>
-          Effect.sync(() => {
-            const client = clients.get(clientId);
-            if (!client) return;
-            try {
-              const encoded = client.encode(response);
-              if (encoded === undefined) return;
-              if (!Queue.offerUnsafe(client.output, encoded)) return client.close();
-              if (RpcMessage.isTerminalResponse(response)) {
-                const requestId = responseRequestId(response);
-                if (requestId !== undefined) client.activeRequests.delete(requestId);
-              }
-            } catch {
-              client.close();
-            }
-          }),
-        end: (clientId) =>
-          Effect.sync(() => {
-            clients.get(clientId)?.close();
-          }),
-        clientIds: Effect.sync(() => new Set(clients.keys())),
-        initialMessage: Effect.succeedNone,
-        supportsAck: true,
-        supportsTransferables: false,
-        supportsSpanPropagation: true,
-        supportsNotifications: true,
-        codecFor: serialization.codecFor,
-      });
-    });
-
-    const runConnection = (socket: Socket.Socket) =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const netSocketOption = yield* Effect.serviceOption(NodeSocket.NetSocket);
-          if (Option.isNone(netSocketOption)) return yield* Effect.never;
-          const netSocket = netSocketOption.value;
-          if (
-            clients.size >= MAX_CONNECTIONS ||
-            (netSocket.remoteAddress !== "127.0.0.1" &&
-              netSocket.remoteAddress !== "::ffff:127.0.0.1")
-          ) {
-            netSocket.destroy();
-            return undefined;
-          }
-          const clientId = nextClientId;
-          nextClientId += 1;
-          const output = yield* Queue.bounded<Uint8Array | string | Socket.CloseEvent, Cause.Done>(
-            MAX_PENDING_WRITES,
+  const protocol = yield* RpcServer.Protocol.make((write) => {
+    writeRequest = write;
+    return Effect.succeed({
+      disconnects,
+      send: (clientId, response) =>
+        Effect.suspend(() => {
+          const client = clients.get(clientId);
+          if (!client) return Effect.void;
+          return Effect.try(() => client.encode(response)).pipe(
+            Effect.flatMap((encoded) =>
+              Effect.sync(() => {
+                if (encoded === undefined) return;
+                if (!Queue.offerUnsafe(client.output, encoded)) return client.close();
+                if (RpcMessage.isTerminalResponse(response)) {
+                  const requestId = responseRequestId(response);
+                  if (requestId !== undefined) client.activeRequests.delete(requestId);
+                }
+              }),
+            ),
+            Effect.catch(() => Effect.sync(client.close)),
           );
-          const activeRequests = new Set<string | number>();
-          const guard: SupervisorRpcConnectionContract = {
-            authenticated: Deferred.makeUnsafe<void>(),
-            close: () => {
-              guard.closed = true;
-              netSocket.destroy();
-            },
-            clientId,
-            accepted: false,
-            closed: false,
-          };
-          const parser = serialization.makeUnsafe();
-          const client: ClientTransport = {
-            activeRequests,
-            output,
-            encode: (response) => parser.encode(response),
-            close: guard.close,
-          };
-          clients.set(clientId, client);
-          yield* Effect.addFinalizer(() =>
-            Effect.sync(() => {
-              guard.closed = true;
-              clients.delete(clientId);
-              Queue.endUnsafe(output);
-              options.onDisconnect(clientId);
-              Queue.offerUnsafe(disconnects, clientId);
-            }),
-          );
-
-          const writeRaw = yield* socket.writer;
-          yield* Stream.fromQueue(output).pipe(
-            Stream.runForEach(writeRaw.write),
-            Effect.catchCause(() => Effect.sync(guard.close)),
-            Effect.forkScoped,
-          );
-          yield* Deferred.await(guard.authenticated).pipe(
-            Effect.timeoutOrElse({
-              duration: options.authTimeoutMillis,
-              orElse: () => Effect.sync(guard.close),
-            }),
-            Effect.forkScoped,
-          );
-
-          yield* Stream.fromPull(socket.reader.pipe(Effect.map((reader) => reader.pull))).pipe(
-            Stream.runForEach((data) => {
-              const decoded = Result.try(() => parser.decode(data));
-              if (Result.isFailure(decoded) || !isClientMessages(decoded.success)) {
-                guard.close();
-                return Effect.void;
-              }
-              return Effect.forEach(
-                decoded.success,
-                (message) => {
-                  const admitted = Match.value(message).pipe(
-                    Match.tag("Request", (request) => {
-                      if (
-                        request.isNotification === true ||
-                        !validRequestId(request.id) ||
-                        activeRequests.has(request.id) ||
-                        activeRequests.size >= MAX_ACTIVE_REQUESTS ||
-                        (!guard.accepted && request.tag !== SupervisorOpenSessionRpc._tag)
-                      )
-                        return false;
-                      activeRequests.add(request.id);
-                      return true;
-                    }),
-                    Match.tag("Ping", () => guard.accepted),
-                    Match.tag("Eof", () => true),
-                    Match.orElse((reply) => validRequestId(reply.requestId)),
-                  );
-                  if (!admitted) {
-                    guard.close();
-                    return Effect.void;
-                  }
-                  return writeRequest(clientId, message).pipe(
-                    Effect.provideService(SupervisorRpcConnection, guard),
-                  );
-                },
-                { discard: true },
-              );
-            }),
-            Effect.catchTag("SocketError", () => Effect.void),
-          );
-          return undefined;
         }),
-      );
-
-    yield* options.server.run(runConnection).pipe(Effect.forkScoped);
-    return protocol;
+      end: (clientId) =>
+        Effect.sync(() => {
+          clients.get(clientId)?.close();
+        }),
+      clientIds: Effect.sync(() => new Set(clients.keys())),
+      initialMessage: Effect.succeedNone,
+      supportsAck: true,
+      supportsTransferables: false,
+      supportsSpanPropagation: true,
+      supportsNotifications: true,
+      codecFor: serialization.codecFor,
+    });
   });
+
+  const runConnection = (socket: Socket.Socket) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const netSocketOption = yield* Effect.serviceOption(NodeSocket.NetSocket);
+        if (Option.isNone(netSocketOption)) return yield* Effect.never;
+        const netSocket = netSocketOption.value;
+        if (
+          clients.size >= MAX_CONNECTIONS ||
+          (netSocket.remoteAddress !== "127.0.0.1" &&
+            netSocket.remoteAddress !== "::ffff:127.0.0.1")
+        ) {
+          netSocket.destroy();
+          return undefined;
+        }
+        const clientId = nextClientId;
+        nextClientId += 1;
+        const output = yield* Queue.bounded<Uint8Array | string | Socket.CloseEvent, Cause.Done>(
+          MAX_PENDING_WRITES,
+        );
+        const activeRequests = new Set<string | number>();
+        const guard: SupervisorRpcConnectionContract = {
+          authenticated: Deferred.makeUnsafe<void>(),
+          close: () => {
+            guard.closed = true;
+            netSocket.destroy();
+          },
+          clientId,
+          accepted: false,
+          closed: false,
+        };
+        const parser = serialization.makeUnsafe();
+        const client: ClientTransport = {
+          activeRequests,
+          output,
+          encode: (response) => parser.encode(response),
+          close: guard.close,
+        };
+        clients.set(clientId, client);
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            guard.closed = true;
+            clients.delete(clientId);
+            Queue.endUnsafe(output);
+            options.onDisconnect(clientId);
+            Queue.offerUnsafe(disconnects, clientId);
+          }),
+        );
+
+        const writeRaw = yield* socket.writer;
+        yield* Stream.fromQueue(output).pipe(
+          Stream.runForEach(writeRaw.write),
+          Effect.catchCause(() => Effect.sync(guard.close)),
+          Effect.forkScoped,
+        );
+        yield* Deferred.await(guard.authenticated).pipe(
+          Effect.timeoutOrElse({
+            duration: options.authTimeoutMillis,
+            orElse: () => Effect.sync(guard.close),
+          }),
+          Effect.forkScoped,
+        );
+
+        yield* Stream.fromPull(socket.reader.pipe(Effect.map((reader) => reader.pull))).pipe(
+          Stream.runForEach((data) => {
+            const decoded = Result.try(() => parser.decode(data));
+            if (Result.isFailure(decoded) || !isClientMessages(decoded.success)) {
+              guard.close();
+              return Effect.void;
+            }
+            return Effect.forEach(
+              decoded.success,
+              (message) => {
+                const admitted = Match.value(message).pipe(
+                  Match.tag("Request", (request) => {
+                    if (
+                      request.isNotification === true ||
+                      !validRequestId(request.id) ||
+                      activeRequests.has(request.id) ||
+                      activeRequests.size >= MAX_ACTIVE_REQUESTS ||
+                      (!guard.accepted && request.tag !== SupervisorOpenSessionRpc._tag)
+                    )
+                      return false;
+                    activeRequests.add(request.id);
+                    return true;
+                  }),
+                  Match.tag("Ping", () => guard.accepted),
+                  Match.tag("Eof", () => true),
+                  Match.orElse((reply) => validRequestId(reply.requestId)),
+                );
+                if (!admitted) {
+                  guard.close();
+                  return Effect.void;
+                }
+                return writeRequest(clientId, message).pipe(
+                  Effect.provideService(SupervisorRpcConnection, guard),
+                );
+              },
+              { discard: true },
+            );
+          }),
+          Effect.catchTag("SocketError", () => Effect.void),
+        );
+        return undefined;
+      }),
+    );
+
+  yield* options.server.run(runConnection).pipe(Effect.forkScoped);
+  return protocol;
+});

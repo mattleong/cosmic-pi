@@ -24,7 +24,10 @@ export const configArgument = (argv: ReadonlyArray<string>): string | undefined 
   return nodePath.resolve(argument);
 };
 
-class HelperConfigError extends Schema.TaggedError<HelperConfigError>()("HelperConfigError", {
+class HelperConfigError extends Schema.TaggedError<
+  HelperConfigError,
+  { readonly brand: unique symbol }
+>()("HelperConfigError", {
   code: Schema.String,
 }) {}
 
@@ -34,48 +37,47 @@ const decodeConfigJsonOption = Schema.decodeUnknownOption(
   { onExcessProperty: "error" },
 );
 
-export const readConfig = (
+export const readConfig = Effect.fn("SupervisorMcpHelper.readConfig")(function* (
   path: string,
-): Effect.Effect<SupervisorChannelConfig, HelperConfigError> =>
-  Effect.gen(function* () {
-    const directoryStat = yield* Effect.tryPromise({
-      try: () => lstat(nodePath.dirname(path)),
-      catch: () => helperConfigError("unsafe-config-directory"),
-    });
-    if (
-      !directoryStat.isDirectory() ||
-      directoryStat.isSymbolicLink() ||
-      (directoryStat.mode & 0o077) !== 0
-    )
-      return yield* helperConfigError("unsafe-config-directory");
-    return yield* Effect.acquireUseRelease(
-      Effect.tryPromise({
-        try: () => open(path, constants.O_RDONLY | constants.O_NOFOLLOW),
-        catch: () => helperConfigError("unsafe-config-file"),
-      }),
-      (handle) =>
-        Effect.gen(function* () {
-          const stat = yield* Effect.tryPromise({
-            try: () => handle.stat(),
-            catch: () => helperConfigError("unsafe-config-file"),
-          });
-          if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_SUPERVISOR_CONFIG_BYTES)
-            return yield* helperConfigError("unsafe-config-file");
-          if ((stat.mode & 0o077) !== 0) return yield* helperConfigError("unsafe-config-mode");
-          const source = yield* Effect.tryPromise({
-            try: () => handle.readFile({ encoding: "utf8" }),
-            catch: () => helperConfigError("invalid-config"),
-          });
-          if (Buffer.byteLength(source, "utf8") > MAX_SUPERVISOR_CONFIG_BYTES)
-            return yield* helperConfigError("oversized-config");
-          const decoded = decodeConfigJsonOption(source);
-          if (Option.isNone(decoded)) return yield* helperConfigError("invalid-config");
-          return decoded.value;
-        }),
-      (handle) =>
-        Effect.tryPromise({
-          try: () => handle.close(),
-          catch: () => helperConfigError("config-close-failed"),
-        }).pipe(Effect.ignore),
-    );
+): Effect.fn.Return<SupervisorChannelConfig, HelperConfigError> {
+  const directoryStat = yield* Effect.tryPromise({
+    try: () => lstat(nodePath.dirname(path)),
+    catch: () => helperConfigError("unsafe-config-directory"),
   });
+  if (
+    !directoryStat.isDirectory() ||
+    directoryStat.isSymbolicLink() ||
+    (directoryStat.mode & 0o077) !== 0
+  )
+    return yield* helperConfigError("unsafe-config-directory");
+  return yield* Effect.acquireUseRelease(
+    Effect.tryPromise({
+      try: () => open(path, constants.O_RDONLY | constants.O_NOFOLLOW),
+      catch: () => helperConfigError("unsafe-config-file"),
+    }),
+    (handle) =>
+      Effect.gen(function* () {
+        const stat = yield* Effect.tryPromise({
+          try: () => handle.stat(),
+          catch: () => helperConfigError("unsafe-config-file"),
+        });
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_SUPERVISOR_CONFIG_BYTES)
+          return yield* helperConfigError("unsafe-config-file");
+        if ((stat.mode & 0o077) !== 0) return yield* helperConfigError("unsafe-config-mode");
+        const source = yield* Effect.tryPromise({
+          try: () => handle.readFile({ encoding: "utf8" }),
+          catch: () => helperConfigError("invalid-config"),
+        });
+        if (Buffer.byteLength(source, "utf8") > MAX_SUPERVISOR_CONFIG_BYTES)
+          return yield* helperConfigError("oversized-config");
+        const decoded = decodeConfigJsonOption(source);
+        if (Option.isNone(decoded)) return yield* helperConfigError("invalid-config");
+        return decoded.value;
+      }),
+    (handle) =>
+      Effect.tryPromise({
+        try: () => handle.close(),
+        catch: () => helperConfigError("config-close-failed"),
+      }).pipe(Effect.ignore),
+  );
+});

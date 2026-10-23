@@ -123,7 +123,7 @@ export type CaptureOptions = {
 
 const textResult = <Details>(result: AgentToolResult<Details>): CapturedToolResult => ({
   ...result,
-  content: result.content.flatMap((part) => (part.type === "text" ? [part] : [])),
+  content: result.content.filter((part) => part.type === "text"),
 });
 
 const capturedTool = (tool: RegisteredTool): CapturedTool => ({

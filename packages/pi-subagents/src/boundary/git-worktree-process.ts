@@ -280,28 +280,30 @@ export const oid = (text: string) =>
     ? Effect.succeed(text.trim())
     : Effect.fail(workspaceFailure("git", "Unsupported Git object identifier."));
 
-export const checkDirectory = (directory: string, allowMissing = false) =>
-  Effect.gen(function* () {
-    const absolute = path.resolve(directory);
-    const parts = absolute.slice(path.parse(absolute).root.length).split(path.sep).filter(Boolean);
-    let current = path.parse(absolute).root;
-    for (const part of parts) {
-      current = path.join(current, part);
-      const stat = yield* (allowMissing ? workspaceIOIfPresent : workspaceIO)("path", () =>
-        fs.lstat(current),
+export const checkDirectory = Effect.fn("GitWorktreeProcess.checkDirectory")(function* (
+  directory: string,
+  allowMissing: boolean = false,
+) {
+  const absolute = path.resolve(directory);
+  const parts = absolute.slice(path.parse(absolute).root.length).split(path.sep).filter(Boolean);
+  let current = path.parse(absolute).root;
+  for (const part of parts) {
+    current = path.join(current, part);
+    const stat = yield* (allowMissing ? workspaceIOIfPresent : workspaceIO)("path", () =>
+      fs.lstat(current),
+    );
+    if (!stat) return absolute;
+    if (!stat.isDirectory() || stat.isSymbolicLink())
+      return yield* workspaceRefusal(
+        "path",
+        "Symlink or non-directory path component is unsupported.",
+        {
+          path: current,
+          rule: "every directory leading to a workspace file must be a real directory, never a symlink or file",
+          remedy:
+            "Replace the symlink or file with a real directory, or use the shared-checkout writer workspace.",
+        },
       );
-      if (!stat) return absolute;
-      if (!stat.isDirectory() || stat.isSymbolicLink())
-        return yield* workspaceRefusal(
-          "path",
-          "Symlink or non-directory path component is unsupported.",
-          {
-            path: current,
-            rule: "every directory leading to a workspace file must be a real directory, never a symlink or file",
-            remedy:
-              "Replace the symlink or file with a real directory, or use the shared-checkout writer workspace.",
-          },
-        );
-    }
-    return absolute;
-  });
+  }
+  return absolute;
+});

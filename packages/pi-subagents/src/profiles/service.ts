@@ -92,70 +92,69 @@ type SubagentProfileServiceOptions = Pick<
   "initialSessionOverrides" | "publishSession"
 >;
 
-const subagentProfileService = (
+const subagentProfileService = Effect.fn("SubagentProfileService.make")(function* (
   config: ResolvedSubagentConfig,
   options: SubagentProfileServiceOptions,
-): Effect.Effect<SubagentProfileServiceContract, ProjectionError> =>
-  Effect.gen(function* () {
-    // A failed publication leaves the committed snapshot unchanged, so the handoff that /reload
-    // and /tree restore from never disagrees with this service.
-    const projection = yield* frozenProjection<SessionProfileSnapshot, SessionProfileSnapshot>(
-      sessionProfileSnapshot(config, options.initialSessionOverrides),
-      identity,
-      (snapshot) => options.publishSession?.(snapshot),
+): Effect.fn.Return<SubagentProfileServiceContract, ProjectionError> {
+  // A failed publication leaves the committed snapshot unchanged, so the handoff that /reload
+  // and /tree restore from never disagrees with this service.
+  const projection = yield* frozenProjection<SessionProfileSnapshot, SessionProfileSnapshot>(
+    sessionProfileSnapshot(config, options.initialSessionOverrides),
+    identity,
+    (snapshot) => options.publishSession?.(snapshot),
+  );
+  // Serializes edits with saved-set writes, which read the snapshot without republishing it, so
+  // a failed publication cannot report a saved-set write that already committed as failed.
+  const lock = yield* Semaphore.make(1);
+  const commit = <E>(
+    transition: (current: SessionProfileSnapshot) => Effect.Effect<SessionProfileSnapshot, E>,
+  ): Effect.Effect<SessionProfileSnapshot, E | ProjectionError> =>
+    lock.withPermit(
+      projection.transition((current) =>
+        transition(current).pipe(Effect.map((next) => [next, next] as const)),
+      ),
     );
-    // Serializes edits with saved-set writes, which read the snapshot without republishing it, so
-    // a failed publication cannot report a saved-set write that already committed as failed.
-    const lock = yield* Semaphore.make(1);
-    const commit = <E>(
-      transition: (current: SessionProfileSnapshot) => Effect.Effect<SessionProfileSnapshot, E>,
-    ): Effect.Effect<SessionProfileSnapshot, E | ProjectionError> =>
+  return SubagentProfileService.of({
+    capture: projection.getState,
+    definition: (profile) => (isProfileId(profile) ? PROFILE_DEFINITIONS[profile] : undefined),
+    resolve: (snapshot, profile, environment, agent) =>
+      resolveProfilePlan(profile, snapshot.effectiveConfig, environment, agent),
+    withSnapshotAtRevision: <A, E, R>(
+      expectedRevision: number,
+      operation: (snapshot: SessionProfileSnapshot) => Effect.Effect<A, E, R>,
+    ) =>
       lock.withPermit(
-        projection.transition((current) =>
-          transition(current).pipe(Effect.map((next) => [next, next] as const)),
+        Effect.flatMap(
+          projection.getState,
+          (current): Effect.Effect<A, E | SessionProfileConflictError, R> =>
+            current.revision === expectedRevision
+              ? operation(current)
+              : conflict(
+                  current,
+                  expectedRevision,
+                  "Current Session changed while the saved-set write was pending; review it and try again.",
+                ),
         ),
-      );
-    return SubagentProfileService.of({
-      capture: projection.getState,
-      definition: (profile) => (isProfileId(profile) ? PROFILE_DEFINITIONS[profile] : undefined),
-      resolve: (snapshot, profile, environment, agent) =>
-        resolveProfilePlan(profile, snapshot.effectiveConfig, environment, agent),
-      withSnapshotAtRevision: <A, E, R>(
-        expectedRevision: number,
-        operation: (snapshot: SessionProfileSnapshot) => Effect.Effect<A, E, R>,
-      ) =>
-        lock.withPermit(
-          Effect.flatMap(
-            projection.getState,
-            (current): Effect.Effect<A, E | SessionProfileConflictError, R> =>
-              current.revision === expectedRevision
-                ? operation(current)
-                : conflict(
-                    current,
-                    expectedRevision,
-                    "Current Session changed while the saved-set write was pending; review it and try again.",
-                  ),
+      ),
+    patchSessionProfile: (patch) =>
+      commit((current) => patchSessionProfileSnapshot(current, patch)),
+    replaceSessionProfiles: (patch) =>
+      commit((current) => replaceSessionProfileSnapshot(current, patch)),
+    patchSessionNesting: (patch) =>
+      commit((current) => patchSessionNestingSnapshot(current, patch)),
+    patchSessionDelegation: (patch) =>
+      commit((current) => patchSessionDelegationSnapshot(current, patch)),
+    recordWriterWorkspaceMode: (mode) =>
+      commit((current) =>
+        Effect.succeed(
+          sessionProfileSnapshot(
+            { ...current.baseConfig, writerWorkspaceMode: mode },
+            sessionProfileSeed(current),
           ),
         ),
-      patchSessionProfile: (patch) =>
-        commit((current) => patchSessionProfileSnapshot(current, patch)),
-      replaceSessionProfiles: (patch) =>
-        commit((current) => replaceSessionProfileSnapshot(current, patch)),
-      patchSessionNesting: (patch) =>
-        commit((current) => patchSessionNestingSnapshot(current, patch)),
-      patchSessionDelegation: (patch) =>
-        commit((current) => patchSessionDelegationSnapshot(current, patch)),
-      recordWriterWorkspaceMode: (mode) =>
-        commit((current) =>
-          Effect.succeed(
-            sessionProfileSnapshot(
-              { ...current.baseConfig, writerWorkspaceMode: mode },
-              sessionProfileSeed(current),
-            ),
-          ),
-        ).pipe(Effect.asVoid),
-    });
+      ).pipe(Effect.asVoid),
   });
+});
 
 export const subagentProfileServiceLayer = (options: SubagentProfileLayerOptions) =>
   Layer.effect(

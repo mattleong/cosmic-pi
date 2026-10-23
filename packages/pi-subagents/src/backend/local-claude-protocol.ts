@@ -1,8 +1,10 @@
 import { toolOutputPreview } from "./tool-output-preview.ts";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core";
+import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Effect from "effect/Effect";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import type { OversizedLine } from "../boundary/bounded-line-parser.ts";
 import { jsonPrefixScalars } from "../boundary/json-prefix.ts";
@@ -126,7 +128,7 @@ const StreamEvent = Schema.Struct({
   type: Schema.Literal("stream_event"),
   event: Schema.optional(Schema.Unknown),
 });
-const Result = Schema.Struct({
+const ResultEvent = Schema.Struct({
   type: Schema.Literal("result"),
   subtype: Schema.optional(Name),
   is_error: Schema.optional(Schema.Boolean),
@@ -193,7 +195,7 @@ export type ClaudeInboundFrame =
   | typeof BackgroundTasksChanged.Type
   | typeof TaskNotification.Type
   | typeof StreamEvent.Type
-  | typeof Result.Type
+  | typeof ResultEvent.Type
   | typeof ControlResponse.Type
   | typeof HookCallbackRequest.Type;
 
@@ -291,7 +293,7 @@ const textFromContent = (content: string | ReadonlyArray<unknown>): string =>
     ? content
     : content.flatMap((part) => decodeTextPart(part)?.text ?? []).join("\n");
 
-const usageFromNative = (usage: Schema.Schema.Type<typeof Usage> | undefined): SubagentUsage => {
+const usageFromNative = (usage: typeof Usage.Type | undefined): SubagentUsage => {
   const input = usage?.input_tokens ?? 0;
   const output = usage?.output_tokens ?? 0;
   const cacheRead = usage?.cache_read_input_tokens ?? 0;
@@ -305,9 +307,7 @@ const usageFromNative = (usage: Schema.Schema.Type<typeof Usage> | undefined): S
   };
 };
 
-const cumulativeUsageFromNative = (
-  modelUsage: Schema.Schema.Type<typeof ModelUsage>,
-): UsageComponents =>
+const cumulativeUsageFromNative = (modelUsage: typeof ModelUsage.Type): UsageComponents =>
   Object.values(modelUsage).reduce<UsageComponents>(
     (total, model) => ({
       input: total.input + (model.inputTokens ?? 0),
@@ -368,7 +368,7 @@ const assistantProtocolEvent = (event: typeof Assistant.Type): ClaudeProtocolEve
   };
 };
 
-const resultProtocolEvent = (event: typeof Result.Type): ClaudeProtocolEvent => {
+const resultProtocolEvent = (event: typeof ResultEvent.Type): ClaudeProtocolEvent => {
   const diagnostic =
     (event.result?.trim() ?? "") ||
     event.errors
@@ -392,58 +392,58 @@ const resultProtocolEvent = (event: typeof Result.Type): ClaudeProtocolEvent => 
   };
 };
 
-const decodeSystemEvent = (
+const decodeSystemEvent = Effect.fnUntraced(function* (
   value: Schema.Json,
-): Effect.Effect<ClaudeProtocolEvent, Schema.SchemaError> =>
-  Effect.gen(function* () {
-    const system = yield* Schema.decodeUnknownEffect(SystemEvent)(value);
-    if (system.subtype === "status") return { type: "activity" };
-    if (system.subtype === "background_tasks_changed") {
-      const changed = yield* Schema.decodeUnknownEffect(BackgroundTasksChanged)(value);
-      return {
-        type: "background_tasks",
-        taskIds: changed.tasks.flatMap((task) => (isBackgroundTaskId(task) ? [task.task_id] : [])),
-        ...(changed.session_id && { sessionId: changed.session_id }),
-      };
-    }
-    if (system.subtype === "task_notification") {
-      const notification = yield* Schema.decodeUnknownEffect(TaskNotification)(value);
-      return {
-        type: "task_notification",
-        taskId: notification.task_id,
-        ...(notification.session_id && { sessionId: notification.session_id }),
-      };
-    }
-    if (system.subtype !== "init") return { type: "ignored" };
-    const event = yield* Schema.decodeUnknownEffect(SystemInit)(value);
+): Effect.fn.Return<ClaudeProtocolEvent, Schema.SchemaError> {
+  const system = yield* Schema.decodeUnknownEffect(SystemEvent)(value);
+  if (system.subtype === "status") return { type: "activity" };
+  if (system.subtype === "background_tasks_changed") {
+    const changed = yield* Schema.decodeUnknownEffect(BackgroundTasksChanged)(value);
     return {
-      type: "init",
-      cwd: event.cwd,
-      sessionId: event.session_id,
-      model: event.model,
-      hasMcpServerErrors: (event.mcp_server_errors?.length ?? 0) > 0,
-      cliVersion: event.claude_code_version,
+      type: "background_tasks",
+      taskIds: Arr.filterMap(changed.tasks, (task) =>
+        isBackgroundTaskId(task) ? Result.succeed(task.task_id) : Result.failVoid,
+      ),
+      ...(changed.session_id && { sessionId: changed.session_id }),
     };
-  });
+  }
+  if (system.subtype === "task_notification") {
+    const notification = yield* Schema.decodeUnknownEffect(TaskNotification)(value);
+    return {
+      type: "task_notification",
+      taskId: notification.task_id,
+      ...(notification.session_id && { sessionId: notification.session_id }),
+    };
+  }
+  if (system.subtype !== "init") return { type: "ignored" };
+  const event = yield* Schema.decodeUnknownEffect(SystemInit)(value);
+  return {
+    type: "init",
+    cwd: event.cwd,
+    sessionId: event.session_id,
+    model: event.model,
+    hasMcpServerErrors: (event.mcp_server_errors?.length ?? 0) > 0,
+    cliVersion: event.claude_code_version,
+  };
+});
 
-const decodeControlResponseEvent = (
+const decodeControlResponseEvent = Effect.fnUntraced(function* (
   value: Schema.Json,
-): Effect.Effect<ClaudeProtocolEvent, Schema.SchemaError> =>
-  Effect.gen(function* () {
-    const event = yield* Schema.decodeUnknownEffect(ControlResponse)(value);
-    const requestId = event.request_id ?? event.response?.request_id;
-    if (!requestId) {
-      yield* Schema.decodeUnknownEffect(Schema.Struct({ request_id: Id }))(value);
-      return { type: "ignored" } as const;
-    }
-    return {
-      type: "control_response",
-      requestId,
-      success: event.response?.subtype === "success",
-      ...(event.response?.error && { diagnostic: event.response.error }),
-      ...(event.response?.response !== undefined && { response: event.response.response }),
-    };
-  });
+): Effect.fn.Return<ClaudeProtocolEvent, Schema.SchemaError> {
+  const event = yield* Schema.decodeUnknownEffect(ControlResponse)(value);
+  const requestId = event.request_id ?? event.response?.request_id;
+  if (!requestId) {
+    yield* Schema.decodeUnknownEffect(Schema.Struct({ request_id: Id }))(value);
+    return { type: "ignored" } as const;
+  }
+  return {
+    type: "control_response",
+    requestId,
+    success: event.response?.subtype === "success",
+    ...(event.response?.error && { diagnostic: event.response.error }),
+    ...(event.response?.response !== undefined && { response: event.response.response }),
+  };
+});
 
 // The driver registers only hook callbacks, so it expects no other control request from Claude.
 const decodeControlRequestEvent = (
@@ -461,38 +461,37 @@ const decodeControlRequestEvent = (
       )
     : Effect.succeed({ type: "ignored" as const });
 
-export const decodeClaudeProtocolEvent = (
+export const decodeClaudeProtocolEvent = Effect.fnUntraced(function* (
   value: Schema.Json,
-): Effect.Effect<ClaudeProtocolEvent, Schema.SchemaError> =>
-  Effect.gen(function* () {
-    const discriminant = yield* Schema.decodeUnknownEffect(Discriminant)(value);
-    switch (discriminant.type) {
-      case "system":
-        return yield* decodeSystemEvent(value);
-      case "user": {
-        const event = yield* Schema.decodeUnknownEffect(User)(value);
-        return userProtocolEvent(event);
-      }
-      case "assistant": {
-        const event = yield* Schema.decodeUnknownEffect(Assistant)(value);
-        return assistantProtocolEvent(event);
-      }
-      case "stream_event":
-        yield* Schema.decodeUnknownEffect(StreamEvent)(value);
-        return { type: "activity" };
-      case "result": {
-        const event = yield* Schema.decodeUnknownEffect(Result)(value);
-        return resultProtocolEvent(event);
-      }
-      case "control_response":
-        return yield* decodeControlResponseEvent(value);
-      case "control_request":
-        return yield* decodeControlRequestEvent(value);
-      case undefined:
-      default:
-        return { type: "ignored" };
+): Effect.fn.Return<ClaudeProtocolEvent, Schema.SchemaError> {
+  const discriminant = yield* Schema.decodeUnknownEffect(Discriminant)(value);
+  switch (discriminant.type) {
+    case "system":
+      return yield* decodeSystemEvent(value);
+    case "user": {
+      const event = yield* Schema.decodeUnknownEffect(User)(value);
+      return userProtocolEvent(event);
     }
-  });
+    case "assistant": {
+      const event = yield* Schema.decodeUnknownEffect(Assistant)(value);
+      return assistantProtocolEvent(event);
+    }
+    case "stream_event":
+      yield* Schema.decodeUnknownEffect(StreamEvent)(value);
+      return { type: "activity" };
+    case "result": {
+      const event = yield* Schema.decodeUnknownEffect(ResultEvent)(value);
+      return resultProtocolEvent(event);
+    }
+    case "control_response":
+      return yield* decodeControlResponseEvent(value);
+    case "control_request":
+      return yield* decodeControlRequestEvent(value);
+    case undefined:
+    default:
+      return { type: "ignored" };
+  }
+});
 
 const OversizedClaudeFields = Schema.Struct({
   type: Schema.optional(Name),

@@ -1,10 +1,10 @@
 #!/usr/bin/env node
+import * as readline from "node:readline";
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-const readline = process.getBuiltinModule("node:readline");
 const decodeSettings = Schema.decodeUnknownSync(
   Schema.fromJsonString(Schema.Struct({ disableAllHooks: Schema.optionalKey(Schema.Json) })),
 );

@@ -1,5 +1,7 @@
+import * as Arr from "effect/Array";
 import { absurd } from "effect/Function";
 import * as Predicate from "effect/Predicate";
+import * as Result from "effect/Result";
 import {
   clipText,
   safeTextPrefix,
@@ -253,7 +255,9 @@ export const withInlineReports = (
   reports: ReadonlyArray<InlineReport | undefined>,
   maximum: number,
 ): string => {
-  const sections = reports.flatMap((report) => (report ? [inlineReportSection(report)] : []));
+  const sections = Arr.filterMap(reports, (report) =>
+    report ? Result.succeed(inlineReportSection(report)) : Result.failVoid,
+  );
   let room = maximum - blocks.length;
   const shown = new Set<string>();
   for (const section of sections.toSorted((left, right) => left.length - right.length)) {

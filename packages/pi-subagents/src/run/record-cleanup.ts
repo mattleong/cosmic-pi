@@ -28,58 +28,59 @@ export function recordCleanup(
 ) {
   const { withLock, publish, writerPools } = dependencies;
 
-  const reclaimRecordRunState = (record: RunRecord) =>
-    Effect.gen(function* () {
-      const claimed = yield* withLock(
-        Effect.sync(() => {
-          if (record.runStateReclaimState !== "pending") return false;
-          record.runStateReclaimState = "running";
-          return true;
-        }),
-      );
-      if (!claimed) return;
-      const reclaim = record.driver.reclaimRunState;
-      if (reclaim)
-        yield* reclaim({
-          parentSessionId: record.launch.parentSessionId,
-          runId: record.view.id,
-        }).pipe(
-          Effect.timeoutOrElse({
-            duration: "5 seconds",
-            orElse: () =>
-              Effect.fail(
-                processError(
-                  "reclaim private run state",
-                  "run_state_reclaim_timeout",
-                  "Timed out while reclaiming private subagent run state.",
-                ),
+  const reclaimRecordRunState = Effect.fn("SubagentRecordCleanup.reclaimRecordRunState")(function* (
+    record: RunRecord,
+  ) {
+    const claimed = yield* withLock(
+      Effect.sync(() => {
+        if (record.runStateReclaimState !== "pending") return false;
+        record.runStateReclaimState = "running";
+        return true;
+      }),
+    );
+    if (!claimed) return;
+    const reclaim = record.driver.reclaimRunState;
+    if (reclaim)
+      yield* reclaim({
+        parentSessionId: record.launch.parentSessionId,
+        runId: record.view.id,
+      }).pipe(
+        Effect.timeoutOrElse({
+          duration: "5 seconds",
+          orElse: () =>
+            Effect.fail(
+              processError(
+                "reclaim private run state",
+                "run_state_reclaim_timeout",
+                "Timed out while reclaiming private subagent run state.",
               ),
-          }),
-          Effect.tapError((error) =>
-            withLock(
-              Effect.sync(() => {
-                record.runStateReclaimState = "pending";
-              }),
-            ).pipe(
-              Effect.andThen(
-                Effect.logWarning(
-                  `Could not reclaim private subagent run state: ${failureDiagnostic("backend-scope", Cause.fail(error)).message}`,
-                ),
+            ),
+        }),
+        Effect.tapError((error) =>
+          withLock(
+            Effect.sync(() => {
+              record.runStateReclaimState = "pending";
+            }),
+          ).pipe(
+            Effect.andThen(
+              Effect.logWarning(
+                `Could not reclaim private subagent run state: ${failureDiagnostic("backend-scope", Cause.fail(error)).message}`,
               ),
             ),
           ),
-          Effect.annotateLogs("runId", record.view.id),
-        );
-      yield* withLock(
-        Effect.gen(function* () {
-          record.runStateReclaimState = "reclaimed";
-          if (record.view.sessionFile === undefined) return;
-          const { sessionFile: _reclaimed, ...view } = record.view;
-          record.view = view;
-          yield* publish;
-        }),
+        ),
+        Effect.annotateLogs("runId", record.view.id),
       );
-    });
+    yield* withLock(
+      Effect.gen(function* () {
+        record.runStateReclaimState = "reclaimed";
+        if (record.view.sessionFile === undefined) return;
+        const { sessionFile: _reclaimed, ...view } = record.view;
+        record.view = view;
+        yield* publish;
+      }),
+    );
+  });
   const markCleanupPending = (record: RunRecord) =>
     withLock(
       Effect.gen(function* () {
@@ -147,51 +148,45 @@ export function recordCleanup(
       }),
     );
 
-  const detachWriterPoolAfterCleanup = (
-    record: RunRecord,
-    scope: Scope.Closeable,
-    expectedProcess?: BackendHandle,
-  ) =>
-    Effect.gen(function* () {
-      const pool = record.writerPool;
-      if (!pool) return;
-      const preparation = yield* withLock(
-        Effect.sync(() =>
-          record.scope === scope && pool.state === "preparing"
-            ? pool.preparationSettled
-            : undefined,
-        ),
-      );
-      if (preparation) yield* Deferred.await(preparation).pipe(Effect.ignore);
-      const release = yield* withLock(
-        Effect.gen(function* () {
-          if (
-            record.scope !== scope ||
-            record.writerPool !== pool ||
-            (expectedProcess && record.process !== expectedProcess)
-          )
-            return undefined;
-          if (pool.leaseCleanupUncertain)
-            return yield* processError(
-              "release writer lease",
-              "writer_lease_cleanup_uncertain",
-              "Writer lease cleanup is uncertain; its commit cannot be retried.",
-            );
-          const releasing = pool.detachAfterCleanupLocked(record.view.id);
-          if (!pool.members.has(record.view.id)) record.writerPool = undefined;
-          return releasing;
-        }),
-      );
-      if (!release) return;
-      yield* Scope.close(release, Exit.void);
-      yield* withLock(
-        Effect.sync(() => {
-          if (record.scope !== scope || record.writerPool !== pool) return;
-          if (writerPools.completeReleaseLocked(pool, record.view.id))
-            record.writerPool = undefined;
-        }),
-      );
-    });
+  const detachWriterPoolAfterCleanup = Effect.fn(
+    "SubagentRecordCleanup.detachWriterPoolAfterCleanup",
+  )(function* (record: RunRecord, scope: Scope.Closeable, expectedProcess?: BackendHandle) {
+    const pool = record.writerPool;
+    if (!pool) return;
+    const preparation = yield* withLock(
+      Effect.sync(() =>
+        record.scope === scope && pool.state === "preparing" ? pool.preparationSettled : undefined,
+      ),
+    );
+    if (preparation) yield* Deferred.await(preparation).pipe(Effect.ignore);
+    const release = yield* withLock(
+      Effect.gen(function* () {
+        if (
+          record.scope !== scope ||
+          record.writerPool !== pool ||
+          (expectedProcess && record.process !== expectedProcess)
+        )
+          return undefined;
+        if (pool.leaseCleanupUncertain)
+          return yield* processError(
+            "release writer lease",
+            "writer_lease_cleanup_uncertain",
+            "Writer lease cleanup is uncertain; its commit cannot be retried.",
+          );
+        const releasing = pool.detachAfterCleanupLocked(record.view.id);
+        if (!pool.members.has(record.view.id)) record.writerPool = undefined;
+        return releasing;
+      }),
+    );
+    if (!release) return;
+    yield* Scope.close(release, Exit.void);
+    yield* withLock(
+      Effect.sync(() => {
+        if (record.scope !== scope || record.writerPool !== pool) return;
+        if (writerPools.completeReleaseLocked(pool, record.view.id)) record.writerPool = undefined;
+      }),
+    );
+  });
 
   const scopeFailure = (record: RunRecord, scope: Scope.Closeable, cause: Cause.Cause<unknown>) => {
     const process = record.process;

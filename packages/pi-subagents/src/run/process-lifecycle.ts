@@ -14,30 +14,29 @@ import type { RunSettlement } from "./settlement.ts";
 import type { WriterPreparation } from "./writer-preparation.ts";
 
 export function processControlOperations(withLock: WithRunLock) {
-  const runControl = <A>(
+  const runControl = Effect.fn("SubagentProcessLifecycle.runControl")(function* <A>(
     record: RunRecord,
     use: (handle: BackendHandle) => Effect.Effect<A, SubagentError>,
-  ): Effect.Effect<A, SubagentError> =>
-    Effect.gen(function* () {
-      const transport = yield* withLock(
-        Effect.gen(function* () {
-          const process = record.process;
-          if (
-            !process ||
-            record.stoppedByParent ||
-            isCleanupOwed(record) ||
-            record.view.state === "stopping" ||
-            isTerminalRunState(record.view.state)
-          )
-            return yield* new SubagentProcessError({
-              operation: "control",
-              message: `Subagent ${record.view.id} has no active backend handle.`,
-            });
-          return yield* use(process).pipe(Effect.forkChild({ startImmediately: true }));
-        }),
-      );
-      return yield* Fiber.join(transport);
-    });
+  ): Effect.fn.Return<A, SubagentError> {
+    const transport = yield* withLock(
+      Effect.gen(function* () {
+        const process = record.process;
+        if (
+          !process ||
+          record.stoppedByParent ||
+          isCleanupOwed(record) ||
+          record.view.state === "stopping" ||
+          isTerminalRunState(record.view.state)
+        )
+          return yield* new SubagentProcessError({
+            operation: "control",
+            message: `Subagent ${record.view.id} has no active backend handle.`,
+          });
+        return yield* use(process).pipe(Effect.forkChild({ startImmediately: true }));
+      }),
+    );
+    return yield* Fiber.join(transport);
+  });
 
   return {
     initialize: (record: RunRecord) => runControl(record, (process) => process.controls.initialize),
@@ -188,6 +187,7 @@ export function processInitializer(dependencies: RunProcessInitializerDependenci
           ),
         ),
         Effect.catch((error) => failRun(record, error.message, error).pipe(Effect.asVoid)),
+        // A closing session scope refuses this fork; shutdown then closes every run's scope.
         Effect.ensuring(
           closeExitedScope(record, scope).pipe(
             Effect.forkIn(ownerScope, { startImmediately: true }),

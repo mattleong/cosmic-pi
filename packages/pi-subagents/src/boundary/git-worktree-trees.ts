@@ -36,25 +36,24 @@ const CHECKOUT_TIMEOUT_MILLIS = 10 * 60 * 1000;
  * `commit`. `checkout` is any existing tree of the repository; Git runs the checkout there like a
  * user's `git worktree add`, filters included, but never a hook.
  */
-export const addWorkspaceTree = (
+export const addWorkspaceTree = Effect.fn("GitWorktreeTrees.addWorkspaceTree")(function* (
   record: WorkspaceRecord,
   checkout: string,
   tree: string,
   commit: string,
-) =>
-  Effect.gen(function* () {
-    yield* git(checkout, ["worktree", "add", "--detach", tree, commit], {
-      timeoutMillis: CHECKOUT_TIMEOUT_MILLIS,
-    });
-    // Locked separately (Git 2.31 has no `add --lock --reason`), so gc never prunes it.
-    yield* repositoryGit(record.repository, [
-      "worktree",
-      "lock",
-      "--reason",
-      lockReason(record.handle.workspaceId),
-      tree,
-    ]);
+) {
+  yield* git(checkout, ["worktree", "add", "--detach", tree, commit], {
+    timeoutMillis: CHECKOUT_TIMEOUT_MILLIS,
   });
+  // Locked separately (Git 2.31 has no `add --lock --reason`), so gc never prunes it.
+  yield* repositoryGit(record.repository, [
+    "worktree",
+    "lock",
+    "--reason",
+    lockReason(record.handle.workspaceId),
+    tree,
+  ]);
+});
 
 interface ListedTree {
   readonly path: string;
@@ -62,43 +61,44 @@ interface ListedTree {
 }
 
 /** The repository's linked worktrees inside the workspace's private directory. */
-export const listedWorkspaceTrees = (registry: string, record: WorkspaceRecord) =>
-  Effect.gen(function* () {
-    const artifact = workspaceArtifact(registry, record);
-    const output = yield* repositoryGit(record.repository, ["worktree", "list", "--porcelain"]);
-    const trees: ListedTree[] = [];
-    for (const block of output.split("\n\n")) {
-      const lines = block.split("\n");
-      const tree = lines.find((line) => line.startsWith("worktree "))?.slice("worktree ".length);
-      if (tree?.startsWith(`${artifact}${path.sep}`))
-        trees.push({ path: tree, locked: lines.some((line) => /^locked(?: |$)/u.test(line)) });
-    }
-    return trees;
-  });
+export const listedWorkspaceTrees = Effect.fn("GitWorktreeTrees.listedWorkspaceTrees")(function* (
+  registry: string,
+  record: WorkspaceRecord,
+) {
+  const artifact = workspaceArtifact(registry, record);
+  const output = yield* repositoryGit(record.repository, ["worktree", "list", "--porcelain"]);
+  const trees: ListedTree[] = [];
+  for (const block of output.split("\n\n")) {
+    const lines = block.split("\n");
+    const tree = lines.find((line) => line.startsWith("worktree "))?.slice("worktree ".length);
+    if (tree?.startsWith(`${artifact}${path.sep}`))
+      trees.push({ path: tree, locked: lines.some((line) => /^locked(?: |$)/u.test(line)) });
+  }
+  return trees;
+});
 
 /**
  * Removes one linked worktree and Git's entry for it, even when its directory is already gone;
  * a directory Git doesn't list, such as one a failed add left, is deleted. Never prunes: that
  * would also drop the user's own entries whose directories are missing.
  */
-export const removeWorkspaceTree = (
+export const removeWorkspaceTree = Effect.fn("GitWorktreeTrees.removeWorkspaceTree")(function* (
   registry: string,
   record: WorkspaceRecord,
   tree: string,
   listed?: ReadonlyArray<ListedTree>,
-) =>
-  Effect.gen(function* () {
-    const entry = (listed ?? (yield* listedWorkspaceTrees(registry, record))).find(
-      (candidate) => candidate.path === tree,
-    );
-    const present = yield* workspaceIOIfPresent("discard", () => fs.lstat(tree));
-    if (entry?.locked) yield* repositoryGit(record.repository, ["worktree", "unlock", tree]);
-    if (present) yield* checkDirectory(tree);
-    if (entry)
-      return yield* repositoryGit(record.repository, ["worktree", "remove", "--force", tree]);
-    if (present) yield* workspaceIO("discard", () => fs.rm(tree, { recursive: true, force: true }));
-    return "";
-  });
+) {
+  const entry = (listed ?? (yield* listedWorkspaceTrees(registry, record))).find(
+    (candidate) => candidate.path === tree,
+  );
+  const present = yield* workspaceIOIfPresent("discard", () => fs.lstat(tree));
+  if (entry?.locked) yield* repositoryGit(record.repository, ["worktree", "unlock", tree]);
+  if (present) yield* checkDirectory(tree);
+  if (entry)
+    return yield* repositoryGit(record.repository, ["worktree", "remove", "--force", tree]);
+  if (present) yield* workspaceIO("discard", () => fs.rm(tree, { recursive: true, force: true }));
+  return "";
+});
 
 /**
  * Best effort: a tree that can't be removed stays for integrate or discard to clean up. A

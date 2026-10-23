@@ -125,74 +125,75 @@ export function workspaceOrphanOperations(
               ),
         );
   /** Finds the orphan among this checkout's records. */
-  const orphanRecord = (
+  const orphanRecord = Effect.fn("SubagentWorkspace.orphanRecord")(function* (
     service: WorkspaceServiceContract,
     workspaceId: string,
-  ): Effect.Effect<WorkspaceRecord, SubagentError> =>
-    Effect.gen(function* () {
-      const listing = yield* service.listAll.pipe(
-        Effect.mapError(mapWorkspaceError),
-        Effect.flatMap(visibleRecords),
-      );
-      const record = listing.records.find((entry) => entry.handle.workspaceId === workspaceId);
-      if (!record) return yield* invalid("workspace_owner_unavailable", ORPHAN_UNAVAILABLE);
-      return record;
-    });
-  const discardOrphan = (workspaceId: string): Effect.Effect<void, SubagentError> =>
-    Effect.gen(function* () {
-      const service = yield* requireEngine;
-      const record = yield* orphanRecord(service, workspaceId);
-      const discard = service.discardOrphan({ workspaceId }).pipe(Effect.mapError(orphanError));
-      // A mid-integration record stays so until its discard, whose rollback writes the parent's
-      // files like integration.
-      return yield* operations.withPermits(1)(
-        withStoppedWriter(
-          workspaceId,
-          record.handle,
-          record.status === "integrating"
-            ? withLock(
-                checkout
-                  .requireIdleLocked(record.handle.sourceRoot)
-                  .pipe(Effect.andThen(checkout.holdLocked(workspaceId, record.handle, discard))),
-              ).pipe(Effect.asVoid)
-            : discard,
-        ),
-      );
-    });
+  ): Effect.fn.Return<WorkspaceRecord, SubagentError> {
+    const listing = yield* service.listAll.pipe(
+      Effect.mapError(mapWorkspaceError),
+      Effect.flatMap(visibleRecords),
+    );
+    const record = listing.records.find((entry) => entry.handle.workspaceId === workspaceId);
+    if (!record) return yield* invalid("workspace_owner_unavailable", ORPHAN_UNAVAILABLE);
+    return record;
+  });
+  const discardOrphan = Effect.fn("SubagentWorkspace.discardOrphan")(function* (
+    workspaceId: string,
+  ): Effect.fn.Return<void, SubagentError> {
+    const service = yield* requireEngine;
+    const record = yield* orphanRecord(service, workspaceId);
+    const discard = service.discardOrphan({ workspaceId }).pipe(Effect.mapError(orphanError));
+    // A mid-integration record stays so until its discard, whose rollback writes the parent's
+    // files like integration.
+    return yield* operations.withPermits(1)(
+      withStoppedWriter(
+        workspaceId,
+        record.handle,
+        record.status === "integrating"
+          ? withLock(
+              checkout
+                .requireIdleLocked(record.handle.sourceRoot)
+                .pipe(Effect.andThen(checkout.holdLocked(workspaceId, record.handle, discard))),
+            ).pipe(Effect.asVoid)
+          : discard,
+      ),
+    );
+  });
   /**
    * Takes over an orphan for the root, which then reviews, applies, revises, or discards it like
    * its own: the coordinator binds it without a run, unreviewed, with its recorded launch for a
    * revision successor. Mid-integration orphans stay discard-only.
    */
-  const adopt = (workspaceId: string): Effect.Effect<void, SubagentError> =>
-    Effect.gen(function* () {
-      const service = yield* requireEngine;
-      yield* operations.withPermits(1)(
-        Effect.gen(function* () {
-          // An earlier call may have adopted it while this one waited.
-          if (yield* withLock(Effect.sync(() => state.bindings.has(workspaceId)))) return;
-          const record = yield* orphanRecord(service, workspaceId);
-          const handle = yield* withStoppedWriter(
-            workspaceId,
-            record.handle,
-            service
-              .adopt({ workspaceId, ownerId: ownerFor(SUBAGENT_ROOT_RUN_ID) })
-              .pipe(Effect.mapError(orphanError)),
-          );
-          yield* withLock(
-            Effect.sync(() => {
-              if (state.bindings.has(workspaceId)) return;
-              const binding: WorkspaceBinding = {
-                handle,
-                state: UNREVIEWED,
-                ...(record.launch && { launch: record.launch }),
-              };
-              state.bindings.set(workspaceId, binding);
-            }),
-          );
-        }),
-      );
-    });
+  const adopt = Effect.fn("SubagentWorkspace.adopt")(function* (
+    workspaceId: string,
+  ): Effect.fn.Return<void, SubagentError> {
+    const service = yield* requireEngine;
+    yield* operations.withPermits(1)(
+      Effect.gen(function* () {
+        // An earlier call may have adopted it while this one waited.
+        if (yield* withLock(Effect.sync(() => state.bindings.has(workspaceId)))) return;
+        const record = yield* orphanRecord(service, workspaceId);
+        const handle = yield* withStoppedWriter(
+          workspaceId,
+          record.handle,
+          service
+            .adopt({ workspaceId, ownerId: ownerFor(SUBAGENT_ROOT_RUN_ID) })
+            .pipe(Effect.mapError(orphanError)),
+        );
+        yield* withLock(
+          Effect.sync(() => {
+            if (state.bindings.has(workspaceId)) return;
+            const binding: WorkspaceBinding = {
+              handle,
+              state: UNREVIEWED,
+              ...(record.launch && { launch: record.launch }),
+            };
+            state.bindings.set(workspaceId, binding);
+          }),
+        );
+      }),
+    );
+  });
   /**
    * Discards this checkout's orphans unchanged for 30 days, skipping any a takeover would refuse.
    * Each keeps its revision patch beside its record until collection.

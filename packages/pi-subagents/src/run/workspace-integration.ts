@@ -69,71 +69,69 @@ export function integrationTarget(context: WorkspaceControlContext) {
    * `beforeRelease` runs once `use` ends, however it ends. A release that can't be confirmed
    * quarantines integration and writer admission until restart.
    */
-  const holdLocked = <A>(
+  const holdLocked = Effect.fn("SubagentWorkspace.holdLocked")(function* <A>(
     workspaceId: string,
     handle: WorkspaceHandle,
     use: Effect.Effect<A, SubagentError>,
     beforeRelease: Effect.Effect<void> = Effect.void,
-  ): Effect.Effect<
+  ): Effect.fn.Return<
     { readonly value: A; readonly leaseReleaseUnconfirmed: boolean },
     SubagentError
-  > =>
-    Effect.gen(function* () {
-      const roots = yield* Effect.forEach([handle.sourceRoot, handle.sourceCwd], (cwd) =>
-        leases.canonicalize(cwd).pipe(Effect.mapError(mapWorkspaceError)),
-      );
-      const sources = [...new Map(roots.map((cwd) => [cwd.digest, cwd])).values()].toSorted(
-        (left, right) => left.digest.localeCompare(right.digest),
-      );
-      return yield* Effect.uninterruptibleMask((restore) =>
-        Effect.gen(function* () {
-          const owned: WriterLease[] = [];
-          let releaseFailed = false;
-          const value = yield* Effect.gen(function* () {
-            for (const cwd of sources)
-              owned.push(
-                yield* leases
-                  .acquire({ cwd, runId: workspaceId })
-                  .pipe(
-                    Effect.mapError((error) =>
-                      Predicate.isTagged(error, "WriterLeaseConflictError") &&
-                      error.reason === "live"
-                        ? invalid(
-                            "workspace_target_busy",
-                            `A shared-checkout writer of another session holds the integration target.\n${error.message}`,
-                          )
-                        : mapWorkspaceError(error),
-                    ),
+  > {
+    const roots = yield* Effect.forEach([handle.sourceRoot, handle.sourceCwd], (cwd) =>
+      leases.canonicalize(cwd).pipe(Effect.mapError(mapWorkspaceError)),
+    );
+    const sources = [...new Map(roots.map((cwd) => [cwd.digest, cwd])).values()].toSorted(
+      (left, right) => left.digest.localeCompare(right.digest),
+    );
+    return yield* Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const owned: WriterLease[] = [];
+        let releaseFailed = false;
+        const value = yield* Effect.gen(function* () {
+          for (const cwd of sources)
+            owned.push(
+              yield* leases
+                .acquire({ cwd, runId: workspaceId })
+                .pipe(
+                  Effect.mapError((error) =>
+                    Predicate.isTagged(error, "WriterLeaseConflictError") && error.reason === "live"
+                      ? invalid(
+                          "workspace_target_busy",
+                          `A shared-checkout writer of another session holds the integration target.\n${error.message}`,
+                        )
+                      : mapWorkspaceError(error),
                   ),
-              );
-            yield* restore(Effect.void);
-            for (const lease of owned)
-              yield* leases.markSpawnStarted(lease).pipe(Effect.mapError(mapWorkspaceError));
-            return yield* use;
-          }).pipe(
-            Effect.ensuring(
-              Effect.gen(function* () {
-                yield* beforeRelease;
-                for (const lease of owned.toReversed())
-                  yield* leases.release(lease).pipe(
-                    Effect.catch(() =>
-                      Effect.sync(() => {
-                        releaseFailed = true;
-                        state.integrationQuarantined = true;
-                      }),
-                    ),
-                  );
-              }),
-            ),
-          );
-          if (releaseFailed)
-            yield* Effect.logWarning(
-              "Integration lease release is unconfirmed. Further writer admission is blocked pending manual recovery.",
-            ).pipe(Effect.annotateLogs("workspaceId", workspaceId));
-          return { value, leaseReleaseUnconfirmed: releaseFailed };
-        }),
-      );
-    });
+                ),
+            );
+          yield* restore(Effect.void);
+          for (const lease of owned)
+            yield* leases.markSpawnStarted(lease).pipe(Effect.mapError(mapWorkspaceError));
+          return yield* use;
+        }).pipe(
+          Effect.ensuring(
+            Effect.gen(function* () {
+              yield* beforeRelease;
+              for (const lease of owned.toReversed())
+                yield* leases.release(lease).pipe(
+                  Effect.catch(() =>
+                    Effect.sync(() => {
+                      releaseFailed = true;
+                      state.integrationQuarantined = true;
+                    }),
+                  ),
+                );
+            }),
+          ),
+        );
+        if (releaseFailed)
+          yield* Effect.logWarning(
+            "Integration lease release is unconfirmed. Further writer admission is blocked pending manual recovery.",
+          ).pipe(Effect.annotateLogs("workspaceId", workspaceId));
+        return { value, leaseReleaseUnconfirmed: releaseFailed };
+      }),
+    );
+  });
   return { requireIdleLocked, holdLocked };
 }
 
@@ -148,85 +146,84 @@ export function workspaceIntegrationOperations(
    * Integrates the exact prepared pair. Callers hold the operations permit and run lock; `held`
    * admits a binding that operation's token keeps busy.
    */
-  const integrateLocked = (
+  const integrateLocked = Effect.fn("SubagentWorkspace.integrateLocked")(function* (
     workspaceId: string,
     revisionId: string,
     preparationId: string,
     caller: string,
     held?: symbol,
-  ): Effect.Effect<WorkspaceIntegrationResult, SubagentError> =>
-    Effect.gen(function* () {
-      const binding = yield* requireBinding(workspaceId, caller, held);
-      const service = yield* requireEngine;
-      if (state.integrationQuarantined)
-        return yield* invalid(
-          "workspace_integration_quarantined",
-          "Integration ownership is quarantined; further integration is blocked pending manual recovery.",
-        );
-      yield* checkout.requireIdleLocked(binding.handle.sourceRoot);
-      const knowledge = revisionKnowledge(binding);
-      const recorded = knowledge?.kind === "prepared" && knowledge.preparationId === preparationId;
-      const artifact = yield* service
-        .inspect({ workspaceId, ownerId: binding.handle.ownerId })
-        .pipe(Effect.mapError(mapWorkspaceError));
-      if (
-        !recorded ||
-        !artifact.preparation ||
-        artifact.preparation.preparationId !== preparationId ||
-        artifact.preparation.revisionId !== revisionId ||
-        artifact.revision?.revisionId !== revisionId
-      )
-        return yield* invalid(
-          "workspace_preparation_stale",
-          "The tested integration preparation no longer matches this revision.",
-        );
-      const known = {
-        changedPaths: artifact.revision.changedPaths,
-        leftOutPaths: artifact.revision.uncapturedPaths ?? [],
-        preparedCwd: artifact.preparation.cwd,
-      };
-      const retainTrees = [...runsWithin(records, [artifact.handle.artifactRoot]).keys()].some(
-        runHoldsCwd,
+  ): Effect.fn.Return<WorkspaceIntegrationResult, SubagentError> {
+    const binding = yield* requireBinding(workspaceId, caller, held);
+    const service = yield* requireEngine;
+    if (state.integrationQuarantined)
+      return yield* invalid(
+        "workspace_integration_quarantined",
+        "Integration ownership is quarantined; further integration is blocked pending manual recovery.",
       );
-      let applying = false;
-      const { value, leaseReleaseUnconfirmed } = yield* checkout.holdLocked(
-        workspaceId,
-        binding.handle,
-        Effect.gen(function* () {
-          applying = true;
-          const integration = yield* service
-            .integrate({
-              workspaceId,
-              ownerId: binding.handle.ownerId,
-              revisionId,
-              preparationId,
-              processCleanupConfirmed: true,
-              retainTrees,
-            })
-            .pipe(Effect.mapError(mapWorkspaceError));
-          applying = false;
-          settleBinding(binding, { phase: "finished", outcome: "integrated" });
-          recordWorkspaceOutcomeLocked(binding, { status: "integrated" });
-          yield* publish;
-          return integration;
-        }),
-        Effect.gen(function* () {
-          if (!applying) return;
-          const current = yield* service
-            .inspect({ workspaceId, ownerId: binding.handle.ownerId })
-            .pipe(Effect.option);
-          if (Option.isNone(current)) {
-            state.integrationQuarantined = true;
-            settleBinding(binding, { phase: "finished", outcome: "unknown" });
-            return;
-          }
-          // Only discard, which rolls the touched files back, may follow.
-          if (current.value.status === "integrating")
-            settleBinding(binding, { phase: "stopped-integration" });
-        }),
+    yield* checkout.requireIdleLocked(binding.handle.sourceRoot);
+    const knowledge = revisionKnowledge(binding);
+    const recorded = knowledge?.kind === "prepared" && knowledge.preparationId === preparationId;
+    const artifact = yield* service
+      .inspect({ workspaceId, ownerId: binding.handle.ownerId })
+      .pipe(Effect.mapError(mapWorkspaceError));
+    if (
+      !recorded ||
+      !artifact.preparation ||
+      artifact.preparation.preparationId !== preparationId ||
+      artifact.preparation.revisionId !== revisionId ||
+      artifact.revision?.revisionId !== revisionId
+    )
+      return yield* invalid(
+        "workspace_preparation_stale",
+        "The tested integration preparation no longer matches this revision.",
       );
-      const { record: _record, ...committed } = value;
-      return { ...committed, ...known, leaseReleaseUnconfirmed };
-    });
+    const known = {
+      changedPaths: artifact.revision.changedPaths,
+      leftOutPaths: artifact.revision.uncapturedPaths ?? [],
+      preparedCwd: artifact.preparation.cwd,
+    };
+    const retainTrees = [...runsWithin(records, [artifact.handle.artifactRoot]).keys()].some(
+      runHoldsCwd,
+    );
+    let applying = false;
+    const { value, leaseReleaseUnconfirmed } = yield* checkout.holdLocked(
+      workspaceId,
+      binding.handle,
+      Effect.gen(function* () {
+        applying = true;
+        const integration = yield* service
+          .integrate({
+            workspaceId,
+            ownerId: binding.handle.ownerId,
+            revisionId,
+            preparationId,
+            processCleanupConfirmed: true,
+            retainTrees,
+          })
+          .pipe(Effect.mapError(mapWorkspaceError));
+        applying = false;
+        settleBinding(binding, { phase: "finished", outcome: "integrated" });
+        recordWorkspaceOutcomeLocked(binding, { status: "integrated" });
+        yield* publish;
+        return integration;
+      }),
+      Effect.gen(function* () {
+        if (!applying) return;
+        const current = yield* service
+          .inspect({ workspaceId, ownerId: binding.handle.ownerId })
+          .pipe(Effect.option);
+        if (Option.isNone(current)) {
+          state.integrationQuarantined = true;
+          settleBinding(binding, { phase: "finished", outcome: "unknown" });
+          return;
+        }
+        // Only discard, which rolls the touched files back, may follow.
+        if (current.value.status === "integrating")
+          settleBinding(binding, { phase: "stopped-integration" });
+      }),
+    );
+    const { record: _record, ...committed } = value;
+    return { ...committed, ...known, leaseReleaseUnconfirmed };
+  });
   return integrateLocked;
 }

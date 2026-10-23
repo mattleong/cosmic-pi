@@ -8,6 +8,7 @@ import {
   decodeProfileRoute,
   decodeSubagentNestingOverrides,
   DelegationModeSchema,
+  isDelegationMode,
   isProfileSetName,
   mergeSubagentNesting,
   ProfileRouteSchema,
@@ -72,20 +73,20 @@ export interface SessionDelegationPatch {
   readonly expectedRevision: number;
 }
 
-export class SessionProfileConflictError extends Schema.TaggedError<SessionProfileConflictError>()(
-  "SessionProfileConflictError",
-  {
-    expectedRevision: Schema.Number,
-    actualRevision: Schema.Number,
-    message: Schema.String,
-  },
-) {}
+export class SessionProfileConflictError extends Schema.TaggedError<
+  SessionProfileConflictError,
+  { readonly brand: unique symbol }
+>()("SessionProfileConflictError", {
+  expectedRevision: Schema.Finite,
+  actualRevision: Schema.Finite,
+  message: Schema.String,
+}) {}
 
 /** The edit itself cannot be applied; refreshing and retrying the same edit won't help. */
-export class SessionProfileInvalidError extends Schema.TaggedError<SessionProfileInvalidError>()(
-  "SessionProfileInvalidError",
-  { message: Schema.String },
-) {}
+export class SessionProfileInvalidError extends Schema.TaggedError<
+  SessionProfileInvalidError,
+  { readonly brand: unique symbol }
+>()("SessionProfileInvalidError", { message: Schema.String }) {}
 
 export type SessionProfileEditError = SessionProfileConflictError | SessionProfileInvalidError;
 
@@ -361,7 +362,7 @@ export const patchSessionDelegationSnapshot = (
   patch: SessionDelegationPatch,
 ): Effect.Effect<SessionProfileSnapshot, SessionProfileEditError> =>
   editSnapshot(snapshot, patch.expectedRevision, STALE_SETTINGS, () => {
-    if (patch.delegation !== undefined && !Schema.is(DelegationModeSchema)(patch.delegation))
+    if (patch.delegation !== undefined && !isDelegationMode(patch.delegation))
       return "The delegation mode is invalid and was not applied.";
     return snapshot.delegation === patch.delegation ? undefined : { delegation: patch.delegation };
   });

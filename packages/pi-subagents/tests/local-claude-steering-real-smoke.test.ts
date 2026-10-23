@@ -19,8 +19,7 @@ import { InvalidSubagentRequestError, SubagentProcessError } from "../src/run/er
 import { backendLaunch } from "./fixtures/backend-supervisor.ts";
 import { localCliProcess } from "./support/local-cli-process.ts";
 
-const sourceEnvironment = { ...process.env };
-const enabled = sourceEnvironment.PI_SUBAGENTS_REAL_CLAUDE_STEERING_SMOKE === "1";
+const enabled = process.env.PI_SUBAGENTS_REAL_CLAUDE_STEERING_SMOKE === "1";
 type Scenario = "tool" | "generation" | "native-agent";
 // Claude Code refuses long foreground `sleep` commands, even chained, so the delay uses Perl.
 const delayCommand = "perl -e 'select(undef, undef, undef, 25)' && echo waited";
@@ -37,11 +36,13 @@ const tasks = {
   ].join(" "),
 } satisfies Record<Scenario, string>;
 
+const isOwnedError = Schema.is(Schema.Union([SubagentProcessError, InvalidSubagentRequestError]));
+
 const failureCode = (cause: Cause.Cause<unknown>): string => {
   const failure = Cause.findErrorOption(cause);
   if (Option.isSome(failure)) {
     const error = failure.value;
-    if (error instanceof SubagentProcessError || error instanceof InvalidSubagentRequestError)
+    if (isOwnedError(error))
       return error.code && /^[a-z][a-z0-9_]{0,79}$/.test(error.code) ? error.code : "owned_error";
     if (Cause.isTimeoutError(error)) return "probe_timeout";
   }
@@ -196,9 +197,9 @@ const classifySteering = (observation: ProbeObservation, failed: string | undefi
 
 describe.skipIf(!enabled)("installed local Claude steering smoke", () => {
   it("observes requested activity before classifying steering replay and report evidence", () => {
-    const model = sourceEnvironment.PI_SUBAGENTS_REAL_CLAUDE_MODEL;
+    const model = process.env.PI_SUBAGENTS_REAL_CLAUDE_MODEL;
     if (!model) throw new Error("Set PI_SUBAGENTS_REAL_CLAUDE_MODEL for the live steering smoke.");
-    const selected = sourceEnvironment.PI_SUBAGENTS_REAL_CLAUDE_STEERING_SCENARIO ?? "tool";
+    const selected = process.env.PI_SUBAGENTS_REAL_CLAUDE_STEERING_SCENARIO ?? "tool";
     if (selected !== "tool" && selected !== "generation" && selected !== "native-agent")
       throw new Error("Select tool, generation, or native-agent for the steering smoke.");
     const scenario: Scenario = selected;
@@ -250,7 +251,7 @@ describe.skipIf(!enabled)("installed local Claude steering smoke", () => {
       const elapsed = Clock.currentTimeMillis.pipe(Effect.map((now) => now - startedAt));
       const processes = yield* localCliProcess({
         agentDirectory,
-        environment: { ...sourceEnvironment, PI_SUBAGENTS_CLAUDE_DEBUG: "0" },
+        environment: { ...process.env, PI_SUBAGENTS_CLAUDE_DEBUG: "0" },
       });
       const traced: LocalCliProcessContract = {
         ...processes,

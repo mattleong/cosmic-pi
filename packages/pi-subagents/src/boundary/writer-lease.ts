@@ -17,30 +17,33 @@ const MAX_FILESYSTEM_IDENTITY_CHARS = 256;
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/;
 const FILESYSTEM_IDENTITY_PATTERN = /^dev:[a-f0-9]+;ino:[a-f0-9]+$/;
 
-class WriterCwdCanonicalizationError extends Schema.TaggedError<WriterCwdCanonicalizationError>()(
-  "WriterCwdCanonicalizationError",
-  { message: Schema.String },
-) {}
+class WriterCwdCanonicalizationError extends Schema.TaggedError<
+  WriterCwdCanonicalizationError,
+  { readonly brand: unique symbol }
+>()("WriterCwdCanonicalizationError", { message: Schema.String }) {}
 
-export class WriterLeaseConflictError extends Schema.TaggedError<WriterLeaseConflictError>()(
-  "WriterLeaseConflictError",
-  { message: Schema.String, reason: Schema.Literals(["live", "recovery-required"]) },
-) {}
+export class WriterLeaseConflictError extends Schema.TaggedError<
+  WriterLeaseConflictError,
+  { readonly brand: unique symbol }
+>()("WriterLeaseConflictError", {
+  message: Schema.String,
+  reason: Schema.Literals(["live", "recovery-required"]),
+}) {}
 
-export class WriterLeaseAcquireError extends Schema.TaggedError<WriterLeaseAcquireError>()(
-  "WriterLeaseAcquireError",
-  { message: Schema.String },
-) {}
+export class WriterLeaseAcquireError extends Schema.TaggedError<
+  WriterLeaseAcquireError,
+  { readonly brand: unique symbol }
+>()("WriterLeaseAcquireError", { message: Schema.String }) {}
 
-export class WriterLeaseMarkError extends Schema.TaggedError<WriterLeaseMarkError>()(
-  "WriterLeaseMarkError",
-  { message: Schema.String },
-) {}
+export class WriterLeaseMarkError extends Schema.TaggedError<
+  WriterLeaseMarkError,
+  { readonly brand: unique symbol }
+>()("WriterLeaseMarkError", { message: Schema.String }) {}
 
-export class WriterLeaseReleaseError extends Schema.TaggedError<WriterLeaseReleaseError>()(
-  "WriterLeaseReleaseError",
-  { message: Schema.String },
-) {}
+export class WriterLeaseReleaseError extends Schema.TaggedError<
+  WriterLeaseReleaseError,
+  { readonly brand: unique symbol }
+>()("WriterLeaseReleaseError", { message: Schema.String }) {}
 
 export interface CanonicalWriterCwd {
   readonly path: string;
@@ -146,39 +149,41 @@ const makeWriterLease = (
       return Effect.succeed(lease);
     });
 
-  const acquire: WriterLeaseContract["acquire"] = ({ cwd, runId }) =>
-    Effect.gen(function* () {
-      if (!validFilesystemIdentity(cwd))
-        return yield* denied("Writer-lease ownership input was invalid");
-      yield* Effect.interruptible(prepare);
-      return yield* lock.tryAcquire(cwd.digest).pipe(
-        Effect.mapError((error) =>
-          error.reason === "recovery-required"
-            ? new WriterLeaseConflictError({
-                reason: "recovery-required",
-                message: recoveryMessage(error.slot),
-              })
-            : denied("Unable to acquire private writer-lease state"),
-        ),
-        Effect.flatMap((handle) => {
-          if (!handle)
-            return Effect.fail(
-              new WriterLeaseConflictError({
-                reason: "live",
-                message: "Another live writer already owns this filesystem directory identity.",
-              }),
-            );
-          const lease: WriterLease = {
-            canonicalCwd: cwd.path,
-            filesystemIdentityDigest: cwd.digest,
-            runId,
-          };
-          owners.set(lease, { handle, phase: "reserved" });
-          return Effect.succeed(lease);
-        }),
-        Effect.uninterruptible,
-      );
-    });
+  const acquire: WriterLeaseContract["acquire"] = Effect.fn("WriterLease.acquire")(function* ({
+    cwd,
+    runId,
+  }) {
+    if (!validFilesystemIdentity(cwd))
+      return yield* denied("Writer-lease ownership input was invalid");
+    yield* Effect.interruptible(prepare);
+    return yield* lock.tryAcquire(cwd.digest).pipe(
+      Effect.mapError((error) =>
+        error.reason === "recovery-required"
+          ? new WriterLeaseConflictError({
+              reason: "recovery-required",
+              message: recoveryMessage(error.slot),
+            })
+          : denied("Unable to acquire private writer-lease state"),
+      ),
+      Effect.flatMap((handle) => {
+        if (!handle)
+          return Effect.fail(
+            new WriterLeaseConflictError({
+              reason: "live",
+              message: "Another live writer already owns this filesystem directory identity.",
+            }),
+          );
+        const lease: WriterLease = {
+          canonicalCwd: cwd.path,
+          filesystemIdentityDigest: cwd.digest,
+          runId,
+        };
+        owners.set(lease, { handle, phase: "reserved" });
+        return Effect.succeed(lease);
+      }),
+      Effect.uninterruptible,
+    );
+  });
 
   return {
     canonicalize: canonicalizeWriterDirectory,

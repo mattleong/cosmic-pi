@@ -345,7 +345,7 @@ const cliVersionCheck = (
   runtime: LocalCliRuntime,
 ): Effect.Effect<DoctorCheck | undefined> =>
   backends.resolve({ runtime, context: "fresh" }).pipe(
-    Effect.flatMap((driver) => driver.cliVersion ?? Effect.succeed(undefined)),
+    Effect.flatMap((driver) => driver.cliVersion ?? Effect.undefined),
     Effect.map((version) => version && versionCheck(runtime, version)),
     Effect.orElseSucceed(() => undefined),
   );

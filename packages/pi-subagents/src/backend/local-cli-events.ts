@@ -54,18 +54,16 @@ export const makeLocalCliRawEventOwnership = <Raw = LocalCliWireEvent>(
   return { offer, release, acknowledge, acknowledgeAll };
 };
 
-export const localCliEventIngress = <Raw = LocalCliWireEvent>(
-  acknowledgeRaw: (raw: Raw) => void,
-  label?: string,
-) =>
-  Effect.gen(function* () {
-    const events = yield* Queue.bounded<BackendEvent, Cause.Done>(512);
-    const ownership = makeLocalCliRawEventOwnership(events, acknowledgeRaw, label);
-    yield* Effect.addFinalizer(() =>
-      Effect.sync(() => {
-        ownership.acknowledgeAll();
-        Queue.endUnsafe(events);
-      }),
-    );
-    return { events, ...ownership };
-  });
+export const localCliEventIngress = Effect.fn("LocalCliEvents.ingress")(function* <
+  Raw = LocalCliWireEvent,
+>(acknowledgeRaw: (raw: Raw) => void, label?: string) {
+  const events = yield* Queue.bounded<BackendEvent, Cause.Done>(512);
+  const ownership = makeLocalCliRawEventOwnership(events, acknowledgeRaw, label);
+  yield* Effect.addFinalizer(() =>
+    Effect.sync(() => {
+      ownership.acknowledgeAll();
+      Queue.endUnsafe(events);
+    }),
+  );
+  return { events, ...ownership };
+});

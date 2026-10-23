@@ -142,21 +142,20 @@ type ClaimedSend =
 /** A claim either admits the message or finds its target still starting. */
 type SendClaim = ClaimedSend | { readonly kind: "starting" };
 
-const deliverToMain = (
+const deliverToMain = Effect.fn("SubagentMessages.deliverToMain")(function* (
   claimed: Extract<ClaimedSend, { kind: "main" }>,
   frame: Parameters<AgentMainCapabilities["deliver"]>[0],
-) =>
-  Effect.gen(function* () {
-    const disposition = yield* Effect.sync(() =>
-      invokeHostCallback(() => claimed.main.deliver(frame), "unavailable" as const),
+) {
+  const disposition = yield* Effect.sync(() =>
+    invokeHostCallback(() => claimed.main.deliver(frame), "unavailable" as const),
+  );
+  if (disposition === "unavailable")
+    return yield* agentMessageRefusal(
+      "agent_unavailable",
+      "The main agent's session is no longer accepting messages.",
     );
-    if (disposition === "unavailable")
-      return yield* agentMessageRefusal(
-        "agent_unavailable",
-        "The main agent's session is no longer accepting messages.",
-      );
-    return { disposition: "guided" as const, confirmed: true, mainState: disposition };
-  });
+  return { disposition: "guided" as const, confirmed: true, mainState: disposition };
+});
 
 /**
  * `agent_*` messaging: any authenticated agent reaches every agent in the root tree plus `main`.
@@ -181,60 +180,56 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
       ? invokeHostCallback<AgentMainReadout | undefined>(() => main.read(), undefined)
       : undefined;
 
-  const list = (
+  const list = Effect.fn("SubagentMessages.list")(function* (
     caller: AgentCaller,
     ids?: ReadonlyArray<string>,
-  ): Effect.Effect<AgentListResult, SubagentError> =>
-    Effect.gen(function* () {
-      const selected = ids === undefined ? undefined : yield* validateTargets(ids);
-      const mainState =
-        selected === undefined || selected.includes(MAIN_AGENT_ID)
-          ? (readMain()?.state ?? "unavailable")
-          : "unavailable";
-      return yield* withLock(
-        Effect.gen(function* () {
-          const sender = yield* resolveSenderLocked(caller);
-          const runs = sortRuns(projectRunTree(records)).map((view) =>
-            runListEntry(view, sender.id),
-          );
-          const everyone = [mainListEntry(mainState, sender.id), ...runs];
-          if (selected === undefined) return { agents: everyone, missingIds: [] };
-          return {
-            agents: everyone.filter((entry) => selected.includes(entry.id)),
-            missingIds: selected.filter((id) => !everyone.some((entry) => entry.id === id)),
-          };
-        }),
-      );
-    });
+  ): Effect.fn.Return<AgentListResult, SubagentError> {
+    const selected = ids === undefined ? undefined : yield* validateTargets(ids);
+    const mainState =
+      selected === undefined || selected.includes(MAIN_AGENT_ID)
+        ? (readMain()?.state ?? "unavailable")
+        : "unavailable";
+    return yield* withLock(
+      Effect.gen(function* () {
+        const sender = yield* resolveSenderLocked(caller);
+        const runs = sortRuns(projectRunTree(records)).map((view) => runListEntry(view, sender.id));
+        const everyone = [mainListEntry(mainState, sender.id), ...runs];
+        if (selected === undefined) return { agents: everyone, missingIds: [] };
+        return {
+          agents: everyone.filter((entry) => selected.includes(entry.id)),
+          missingIds: selected.filter((id) => !everyone.some((entry) => entry.id === id)),
+        };
+      }),
+    );
+  });
 
   // Reads never claim or consume a report, so the parent's delivery is unaffected.
-  const read = (
+  const read = Effect.fn("SubagentMessages.read")(function* (
     caller: AgentCaller,
     ids: ReadonlyArray<string>,
-  ): Effect.Effect<AgentReadResult, SubagentError> =>
-    Effect.gen(function* () {
-      const selected = yield* validateTargets(ids);
-      if (selected.length === 0)
-        return yield* invalidRequest("agent_ids_required", "Name at least one agent to read.");
-      const mainRead = selected.includes(MAIN_AGENT_ID) ? readMain() : undefined;
-      return yield* withLock(
-        Effect.gen(function* () {
-          yield* resolveSenderLocked(caller);
-          const views = new Map(projectRunTree(records).map((view) => [view.id, view]));
-          const agents: Array<AgentReadResult["agents"][number]> = [];
-          const missingIds: string[] = [];
-          for (const id of selected) {
-            const record = id === MAIN_AGENT_ID ? undefined : records.get(id);
-            const view = views.get(id);
-            if (record && view) agents.push(runReadout(record, view));
-            else if (id === MAIN_AGENT_ID)
-              agents.push(mainRead ? mainReadout(mainRead) : unavailableMainReadout);
-            else missingIds.push(id);
-          }
-          return { agents, missingIds };
-        }),
-      );
-    });
+  ): Effect.fn.Return<AgentReadResult, SubagentError> {
+    const selected = yield* validateTargets(ids);
+    if (selected.length === 0)
+      return yield* invalidRequest("agent_ids_required", "Name at least one agent to read.");
+    const mainRead = selected.includes(MAIN_AGENT_ID) ? readMain() : undefined;
+    return yield* withLock(
+      Effect.gen(function* () {
+        yield* resolveSenderLocked(caller);
+        const views = new Map(projectRunTree(records).map((view) => [view.id, view]));
+        const agents: Array<AgentReadResult["agents"][number]> = [];
+        const missingIds: string[] = [];
+        for (const id of selected) {
+          const record = id === MAIN_AGENT_ID ? undefined : records.get(id);
+          const view = views.get(id);
+          if (record && view) agents.push(runReadout(record, view));
+          else if (id === MAIN_AGENT_ID)
+            agents.push(mainRead ? mainReadout(mainRead) : unavailableMainReadout);
+          else missingIds.push(id);
+        }
+        return { agents, missingIds };
+      }),
+    );
+  });
 
   const requireTargetLocked = (to: string) => {
     const record = records.get(to);
@@ -251,15 +246,18 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
   // A run that is starting takes messages once it runs, so a send waits a few seconds for it
   // instead of refusing at once. The revision is read before the state, so a change between them
   // still wakes the wait. The wait holds nothing and ends when the sender is interrupted.
-  const waitWhileStarting = (id: string) =>
-    Effect.gen(function* () {
+  const waitWhileStarting = Effect.fn("SubagentMessages.waitWhileStarting")(
+    function* (id: string) {
       while (true) {
         const observed = yield* dependencies.revision;
         if (!(yield* withLock(Effect.sync(() => records.get(id)?.view.state === "starting"))))
           return;
         yield* dependencies.waitForRevision(observed);
       }
-    }).pipe(Effect.timeoutOption(STARTING_TARGET_WAIT), Effect.asVoid);
+    },
+    Effect.timeoutOption(STARTING_TARGET_WAIT),
+    Effect.asVoid,
+  );
 
   const claimSend = (caller: AgentCaller, to: string, text: string) =>
     withLock(
@@ -308,13 +306,17 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
       }),
     );
 
-  const recordSentLocked = (sender: AgentSender, to: string, text: string, now: number) =>
-    Effect.gen(function* () {
-      const record = sender.id === MAIN_AGENT_ID ? undefined : records.get(sender.id);
-      if (!record) return;
-      recordMessageLocked(record, "out", to, text, now);
-      yield* publish;
-    });
+  const recordSentLocked = Effect.fn("SubagentMessages.recordSentLocked")(function* (
+    sender: AgentSender,
+    to: string,
+    text: string,
+    now: number,
+  ) {
+    const record = sender.id === MAIN_AGENT_ID ? undefined : records.get(sender.id);
+    if (!record) return;
+    recordMessageLocked(record, "out", to, text, now);
+    yield* publish;
+  });
 
   const deliverRunMessage = (
     claimed: Extract<ClaimedSend, { kind: "answer" | "guide" }>,
@@ -371,42 +373,41 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
       );
   };
 
-  const commitSend = (
+  const commitSend = Effect.fn("SubagentMessages.commitSend")(function* (
     claimed: ClaimedSend,
     to: string,
     text: string,
     messageId: string,
-  ): Effect.Effect<AgentSendResult, SubagentError> =>
-    Effect.gen(function* () {
-      let delivered: Omit<AgentSendResult, "messageId" | "to">;
-      if (claimed.kind === "main") {
-        const { sender } = claimed;
-        delivered = {
-          name: MAIN_AGENT_ID,
-          ...(yield* deliverToMain(claimed, {
-            messageId,
-            from: sender.id,
-            fromName: sender.name,
-            to,
-            content: agentMessageContent(sender, text),
-          })),
-        };
-      } else if (claimed.kind === "resume") {
-        const { sender } = claimed;
-        const run = yield* dependencies.resume(to, {
-          prompt: agentMessageContent(sender, text),
-          recordNoticeLocked: (record, now) =>
-            recordMessageLocked(record, "in", sender.id, text, now),
-        });
-        delivered = { name: run.name, disposition: "resumed", confirmed: true, run };
-      } else delivered = yield* deliverRunMessage(claimed, to, text);
+  ): Effect.fn.Return<AgentSendResult, SubagentError> {
+    let delivered: Omit<AgentSendResult, "messageId" | "to">;
+    if (claimed.kind === "main") {
       const { sender } = claimed;
-      if (sender) {
-        const now = yield* Clock.currentTimeMillis;
-        yield* withLock(recordSentLocked(sender, to, text, now));
-      }
-      return { messageId, to, ...delivered };
-    });
+      delivered = {
+        name: MAIN_AGENT_ID,
+        ...(yield* deliverToMain(claimed, {
+          messageId,
+          from: sender.id,
+          fromName: sender.name,
+          to,
+          content: agentMessageContent(sender, text),
+        })),
+      };
+    } else if (claimed.kind === "resume") {
+      const { sender } = claimed;
+      const run = yield* dependencies.resume(to, {
+        prompt: agentMessageContent(sender, text),
+        recordNoticeLocked: (record, now) =>
+          recordMessageLocked(record, "in", sender.id, text, now),
+      });
+      delivered = { name: run.name, disposition: "resumed", confirmed: true, run };
+    } else delivered = yield* deliverRunMessage(claimed, to, text);
+    const { sender } = claimed;
+    if (sender) {
+      const now = yield* Clock.currentTimeMillis;
+      yield* withLock(recordSentLocked(sender, to, text, now));
+    }
+    return { messageId, to, ...delivered };
+  });
 
   // The claim admits the message under the run lock, so a send that would be refused is refused
   // before any wait; once admitted, delivery commits in the session scope so a cancelled sender

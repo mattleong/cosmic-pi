@@ -167,71 +167,68 @@ export function workspaceReviewOperations(
     caller: string,
     use: (held: HeldBinding) => Effect.Effect<A, SubagentError>,
   ): Effect.Effect<A, SubagentError> => operations.withPermits(1)(hold(workspaceId, caller, use));
-  const reviewedRevision = (
+  const reviewedRevision = Effect.fn("SubagentWorkspace.reviewedRevision")(function* (
     service: WorkspaceServiceContract,
     binding: WorkspaceBinding,
     revisionId: string | undefined,
-  ): Effect.Effect<WorkspaceRevision, SubagentError> =>
-    Effect.gen(function* () {
-      const target: WorkspaceSettledTarget = {
-        workspaceId: binding.handle.workspaceId,
-        ownerId: binding.handle.ownerId,
-        processCleanupConfirmed: true,
-      };
-      if (revisionKnowledge(binding)?.kind === "reopened") {
-        if (revisionId) return yield* staleRevision();
-        yield* service.revise(target).pipe(Effect.mapError(mapWorkspaceError));
-        return yield* service.freeze(target).pipe(Effect.mapError(mapWorkspaceError));
-      }
-      const { status, revision } = yield* engineRecord(service, binding);
-      if (revisionId) {
-        if (revision?.revisionId !== revisionId) return yield* staleRevision();
-        return yield* engineRevision(service, binding);
-      }
-      // The engine freezes only active workspaces; a frozen or prepared one keeps its revision.
-      if (revision && (status === "frozen" || status === "prepared"))
-        return yield* engineRevision(service, binding);
+  ): Effect.fn.Return<WorkspaceRevision, SubagentError> {
+    const target: WorkspaceSettledTarget = {
+      workspaceId: binding.handle.workspaceId,
+      ownerId: binding.handle.ownerId,
+      processCleanupConfirmed: true,
+    };
+    if (revisionKnowledge(binding)?.kind === "reopened") {
+      if (revisionId) return yield* staleRevision();
+      yield* service.revise(target).pipe(Effect.mapError(mapWorkspaceError));
       return yield* service.freeze(target).pipe(Effect.mapError(mapWorkspaceError));
-    });
+    }
+    const { status, revision } = yield* engineRecord(service, binding);
+    if (revisionId) {
+      if (revision?.revisionId !== revisionId) return yield* staleRevision();
+      return yield* engineRevision(service, binding);
+    }
+    // The engine freezes only active workspaces; a frozen or prepared one keeps its revision.
+    if (revision && (status === "frozen" || status === "prepared"))
+      return yield* engineRevision(service, binding);
+    return yield* service.freeze(target).pipe(Effect.mapError(mapWorkspaceError));
+  });
   /** Freezes or reuses the current revision; a freeze after resume or revision settles its reopen. */
-  const settledRevision = (
+  const settledRevision = Effect.fn("SubagentWorkspace.settledRevision")(function* (
     service: WorkspaceServiceContract,
     { binding, heldLocked }: HeldBinding,
     revisionId: string | undefined,
-  ): Effect.Effect<WorkspaceRevision, SubagentError> =>
-    Effect.gen(function* () {
-      const reopened = revisionKnowledge(binding)?.kind === "reopened" && !revisionId;
-      const revision = yield* reviewedRevision(service, binding, revisionId);
-      yield* withLock(
-        heldLocked().pipe(
-          Effect.andThen(
-            Effect.sync(() => {
-              if (reopened) updateKnowledge(binding, () => ({ kind: "unreviewed" }));
-            }),
-          ),
+  ): Effect.fn.Return<WorkspaceRevision, SubagentError> {
+    const reopened = revisionKnowledge(binding)?.kind === "reopened" && !revisionId;
+    const revision = yield* reviewedRevision(service, binding, revisionId);
+    yield* withLock(
+      heldLocked().pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            if (reopened) updateKnowledge(binding, () => ({ kind: "unreviewed" }));
+          }),
         ),
-      );
-      return revision;
-    });
+      ),
+    );
+    return revision;
+  });
   /**
    * Prepares the revision. The preparation isn't integrable until the caller records it, after
    * `provisionHeld` runs its WorktreeCreate hooks when it is for testing.
    */
-  const prepareHeld = (
+  const prepareHeld = Effect.fn("SubagentWorkspace.prepareHeld")(function* (
     service: WorkspaceServiceContract,
     { binding }: HeldBinding,
     revisionId: string,
-  ): Effect.Effect<WorkspacePreparation, SubagentError> =>
-    Effect.gen(function* () {
-      yield* withLock(Effect.sync(() => updateKnowledge(binding, withoutPreparation)));
-      return yield* service
-        .prepare({
-          workspaceId: binding.handle.workspaceId,
-          ownerId: binding.handle.ownerId,
-          revisionId,
-        })
-        .pipe(Effect.mapError(mapWorkspaceError));
-    });
+  ): Effect.fn.Return<WorkspacePreparation, SubagentError> {
+    yield* withLock(Effect.sync(() => updateKnowledge(binding, withoutPreparation)));
+    return yield* service
+      .prepare({
+        workspaceId: binding.handle.workspaceId,
+        ownerId: binding.handle.ownerId,
+        revisionId,
+      })
+      .pipe(Effect.mapError(mapWorkspaceError));
+  });
   /** Runs the WorktreeCreate hooks in a held binding's prepared tree. */
   const provisionHeld = (
     service: WorkspaceServiceContract,
@@ -259,107 +256,103 @@ export function workspaceReviewOperations(
    * parent's files, so it also holds the integration target. Natural writer completion does not
    * stop its read-only descendants.
    */
-  const discardLocked = (
+  const discardLocked = Effect.fn("SubagentWorkspace.discardLocked")(function* (
     service: WorkspaceServiceContract,
     binding: WorkspaceBinding,
     outcome: "discarded" | "auto-discarded" = "discarded",
-  ): Effect.Effect<void, SubagentError> =>
-    Effect.gen(function* () {
-      const { workspaceId, ownerId } = binding.handle;
-      const artifact = yield* service
-        .inspect({ workspaceId, ownerId })
-        .pipe(Effect.mapError(mapWorkspaceError));
-      if ([...runsWithin(records, [artifact.handle.artifactRoot]).keys()].some(runHoldsCwd))
-        return yield* invalid(
-          "workspace_process_unsettled",
-          "A run still uses this workspace. Stop it and confirm cleanup before discard.",
-        );
-      const discard = service
-        .discard({ workspaceId, ownerId, processCleanupConfirmed: true })
-        .pipe(Effect.mapError(mapWorkspaceError));
-      if (artifact.status === "integrating") {
-        yield* checkout.requireIdleLocked(artifact.handle.sourceRoot);
-        yield* checkout.holdLocked(workspaceId, artifact.handle, discard);
-      } else yield* discard;
-      settleBinding(binding, { phase: "finished", outcome });
-      recordWorkspaceOutcomeLocked(binding, { status: outcome });
-      yield* publish;
-      return undefined;
-    });
-  const workspaceReview = (
+  ): Effect.fn.Return<void, SubagentError> {
+    const { workspaceId, ownerId } = binding.handle;
+    const artifact = yield* service
+      .inspect({ workspaceId, ownerId })
+      .pipe(Effect.mapError(mapWorkspaceError));
+    if ([...runsWithin(records, [artifact.handle.artifactRoot]).keys()].some(runHoldsCwd))
+      return yield* invalid(
+        "workspace_process_unsettled",
+        "A run still uses this workspace. Stop it and confirm cleanup before discard.",
+      );
+    const discard = service
+      .discard({ workspaceId, ownerId, processCleanupConfirmed: true })
+      .pipe(Effect.mapError(mapWorkspaceError));
+    if (artifact.status === "integrating") {
+      yield* checkout.requireIdleLocked(artifact.handle.sourceRoot);
+      yield* checkout.holdLocked(workspaceId, artifact.handle, discard);
+    } else yield* discard;
+    settleBinding(binding, { phase: "finished", outcome });
+    recordWorkspaceOutcomeLocked(binding, { status: outcome });
+    yield* publish;
+    return undefined;
+  });
+  const workspaceReview = Effect.fn("SubagentWorkspace.workspaceReview")(function* (
     workspaceId: string,
     options: WorkspaceReviewOptions = {},
-    caller = SUBAGENT_ROOT_RUN_ID,
-  ): Effect.Effect<WorkspaceReview, SubagentError> =>
-    Effect.gen(function* () {
-      const offset = options.offset ?? 0;
-      if (!Number.isSafeInteger(offset) || offset < 0)
-        return yield* invalid(
-          "workspace_diff_bounds",
-          "Review offset must be a nonnegative integer.",
-        );
-      const service = yield* requireEngine;
-      return yield* operate(workspaceId, caller, (held) =>
-        Effect.gen(function* () {
-          const { binding, heldLocked } = held;
-          const current = yield* settledRevision(service, held, options.revisionId);
-          const text = revisionReviewText(current);
-          const { diff: _diff, ...revision } = current;
-          return yield* withLock(
-            Effect.gen(function* () {
-              yield* heldLocked();
-              if (offset > text.length)
-                return yield* invalid(
-                  "workspace_diff_bounds",
-                  "Review offset exceeds this revision.",
-                );
-              const nextOffset = pageEnd(text, offset);
-              updateKnowledge(binding, (knowledge) => reviewed(knowledge, revision.revisionId));
-              return {
-                ...revision,
-                text: text.slice(offset, nextOffset),
-                offset,
-                totalChars: text.length,
-                ...(nextOffset < text.length && { nextOffset }),
-              };
-            }),
-          );
-        }),
+    caller: string = SUBAGENT_ROOT_RUN_ID,
+  ): Effect.fn.Return<WorkspaceReview, SubagentError> {
+    const offset = options.offset ?? 0;
+    if (!Number.isSafeInteger(offset) || offset < 0)
+      return yield* invalid(
+        "workspace_diff_bounds",
+        "Review offset must be a nonnegative integer.",
       );
-    });
-  const workspacePrepare = (
+    const service = yield* requireEngine;
+    return yield* operate(workspaceId, caller, (held) =>
+      Effect.gen(function* () {
+        const { binding, heldLocked } = held;
+        const current = yield* settledRevision(service, held, options.revisionId);
+        const text = revisionReviewText(current);
+        const { diff: _diff, ...revision } = current;
+        return yield* withLock(
+          Effect.gen(function* () {
+            yield* heldLocked();
+            if (offset > text.length)
+              return yield* invalid(
+                "workspace_diff_bounds",
+                "Review offset exceeds this revision.",
+              );
+            const nextOffset = pageEnd(text, offset);
+            updateKnowledge(binding, (knowledge) => reviewed(knowledge, revision.revisionId));
+            return {
+              ...revision,
+              text: text.slice(offset, nextOffset),
+              offset,
+              totalChars: text.length,
+              ...(nextOffset < text.length && { nextOffset }),
+            };
+          }),
+        );
+      }),
+    );
+  });
+  const workspacePrepare = Effect.fn("SubagentWorkspace.workspacePrepare")(function* (
     workspaceId: string,
     revisionId: string,
-    caller = SUBAGENT_ROOT_RUN_ID,
-  ): Effect.Effect<WorkspacePrepared, SubagentError> =>
-    Effect.gen(function* () {
-      const service = yield* requireEngine;
-      return yield* operate(workspaceId, caller, (held) =>
-        Effect.gen(function* () {
-          const { binding } = held;
-          const { revision } = yield* engineRecord(service, binding);
-          const reopened = yield* withLock(
-            Effect.sync(() => revisionKnowledge(binding)?.kind === "reopened"),
-          );
-          if (reopened || revision?.revisionId !== revisionId) return yield* staleRevision();
-          // The careful path leaves testing to the parent in the prepared tree.
-          const preparation = yield* prepareHeld(service, held, revisionId);
-          yield* provisionHeld(service, held, preparation);
-          yield* withLock(markPrepared(held, preparation, "prepare"));
-          return { ...preparation, leftOutPaths: revision.uncapturedPaths ?? [] };
-        }),
-      );
-    });
-  const workspaceDiscard = (
+    caller: string = SUBAGENT_ROOT_RUN_ID,
+  ): Effect.fn.Return<WorkspacePrepared, SubagentError> {
+    const service = yield* requireEngine;
+    return yield* operate(workspaceId, caller, (held) =>
+      Effect.gen(function* () {
+        const { binding } = held;
+        const { revision } = yield* engineRecord(service, binding);
+        const reopened = yield* withLock(
+          Effect.sync(() => revisionKnowledge(binding)?.kind === "reopened"),
+        );
+        if (reopened || revision?.revisionId !== revisionId) return yield* staleRevision();
+        // The careful path leaves testing to the parent in the prepared tree.
+        const preparation = yield* prepareHeld(service, held, revisionId);
+        yield* provisionHeld(service, held, preparation);
+        yield* withLock(markPrepared(held, preparation, "prepare"));
+        return { ...preparation, leftOutPaths: revision.uncapturedPaths ?? [] };
+      }),
+    );
+  });
+  const workspaceDiscard = Effect.fn("SubagentWorkspace.workspaceDiscard")(function* (
     workspaceId: string,
-    caller = SUBAGENT_ROOT_RUN_ID,
-  ): Effect.Effect<void, SubagentError> =>
-    Effect.gen(function* () {
-      const service = yield* requireEngine;
-      yield* operate(workspaceId, caller, ({ binding, heldLocked }) =>
-        withLock(heldLocked().pipe(Effect.andThen(discardLocked(service, binding)))),
-      );
-    });
+    caller: string = SUBAGENT_ROOT_RUN_ID,
+  ): Effect.fn.Return<void, SubagentError> {
+    const service = yield* requireEngine;
+    yield* operate(workspaceId, caller, ({ binding, heldLocked }) =>
+      withLock(heldLocked().pipe(Effect.andThen(discardLocked(service, binding)))),
+    );
+  });
   return {
     workspaceReview,
     workspacePrepare,

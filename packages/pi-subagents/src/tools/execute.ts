@@ -5,6 +5,7 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import { absurd } from "effect/Function";
 import * as Predicate from "effect/Predicate";
@@ -99,13 +100,12 @@ const forEachOutcome = <R>(
       ),
     { concurrency: 8 },
   ).pipe(
-    Effect.map((outcomes) => ({
-      outcomes,
-      runs: outcomes.flatMap((outcome) => ("run" in outcome ? [outcome.run] : [])),
-      actionFailures: outcomes.flatMap((outcome) =>
-        "failure" in outcome ? [outcome.failure] : [],
-      ),
-    })),
+    Effect.map((outcomes) => {
+      const [runs, actionFailures] = Arr.partition(outcomes, (outcome) =>
+        "run" in outcome ? Result.succeed(outcome.run) : Result.fail(outcome.failure),
+      );
+      return { outcomes, runs, actionFailures };
+    }),
   );
 
 // Runs asking this caller a question appear beside the awaited hierarchy.
@@ -188,62 +188,64 @@ export const executeSubagentActionEffect = Effect.fn("SubagentTools.execute")(fu
         ? service.startScriptSessionOwned(request)
         : service.startSessionOwned(request);
   // Every awaited run's block fits, so the result delivers every claimed report.
-  const completeObservations = (
+  const completeObservations = Effect.fn("SubagentTools.completeObservations")(function* (
     state: AwaitExecution,
     args: AwaitToolInput["args"],
     observations: ReadonlyArray<SubagentRunObservation>,
     questions: ReadonlyArray<SubagentRunView> = [],
-  ) =>
-    Effect.gen(function* () {
-      const runs = observations.map((observation) => observation.run);
-      const attention = [...runs, ...questions];
-      const attentionRequired = attention.some(isParentActionRequiredRun);
-      if (scripted && attentionRequired)
-        return yield* invalidRequest(
-          "scripted_parent_attention_required",
-          `Subagents need parent attention\n\nEnd the script and handle this directly.\n\n${attentionRecoveryText(attention)}`,
-        );
-      const outcome = {
-        runs,
-        attentionRequired,
-        text: awaitResultText(state.progressSummary(runs), observations, questions),
-        awaitContextRuns: withQuestionRuns(state.contextRuns(), questions),
-        contract: awaitContract({
-          observations,
-          until: awaitUntil(args),
-          requestedRunIds: state.requestedIds,
-          questionsElsewhere: questions.length > 0,
-        }),
-      };
-      const result = yield* Effect.sync(() =>
-        presentSubagentResult(input, outcome, state.requestedIds),
+  ) {
+    const runs = observations.map((observation) => observation.run);
+    const attention = [...runs, ...questions];
+    const attentionRequired = attention.some(isParentActionRequiredRun);
+    if (scripted && attentionRequired)
+      return yield* invalidRequest(
+        "scripted_parent_attention_required",
+        `Subagents need parent attention\n\nEnd the script and handle this directly.\n\n${attentionRecoveryText(attention)}`,
       );
-      const receipts = observations.flatMap((observation) =>
-        observation.completionReceipt ? [observation.completionReceipt] : [],
+    const outcome = {
+      runs,
+      attentionRequired,
+      text: awaitResultText(state.progressSummary(runs), observations, questions),
+      awaitContextRuns: withQuestionRuns(state.contextRuns(), questions),
+      contract: awaitContract({
+        observations,
+        until: awaitUntil(args),
+        requestedRunIds: state.requestedIds,
+        questionsElsewhere: questions.length > 0,
+      }),
+    };
+    const result = yield* Effect.sync(() =>
+      presentSubagentResult(input, outcome, state.requestedIds),
+    );
+    const receipts = Arr.filterMap(observations, (observation) =>
+      observation.completionReceipt
+        ? Result.succeed(observation.completionReceipt)
+        : Result.failVoid,
+    );
+    yield* Effect.sync(() => state.markDeliveryAttempt(receipts.map((receipt) => receipt.id)));
+    yield* service.consumeCompletions(receipts);
+    return result;
+  });
+  const executeLifecycle = Effect.fn("SubagentTools.lifecycle")(function* (
+    args: SubagentLifecycleInput,
+  ) {
+    if (scripted && args.action !== "stop")
+      return yield* invalidRequest(
+        "scripted_lifecycle_not_supported",
+        "Codemode scripts support lifecycle stop only. Hand interrupt decisions back to the parent agent.",
       );
-      yield* Effect.sync(() => state.markDeliveryAttempt(receipts.map((receipt) => receipt.id)));
-      yield* service.consumeCompletions(receipts);
-      return result;
-    });
-  const executeLifecycle = (args: SubagentLifecycleInput) =>
-    Effect.gen(function* () {
-      if (scripted && args.action !== "stop")
-        return yield* invalidRequest(
-          "scripted_lifecycle_not_supported",
-          "Codemode scripts support lifecycle stop only. Hand interrupt decisions back to the parent agent.",
-        );
-      const ids = yield* requiredTargetIds(action, args.runIds, MAX_LIFECYCLE_TARGET_RUNS);
-      yield* authorize(ids);
-      const result = yield* forEachOutcome(ids, (id) =>
-        args.action === "interrupt" ? service.interrupt(id, expected) : service.stop(id, expected),
-      );
-      return yield* Effect.sync(() =>
-        presentSubagentResult(input, {
-          ...result,
-          contract: lifecycleContract(args.action, result.outcomes),
-        }),
-      );
-    });
+    const ids = yield* requiredTargetIds(action, args.runIds, MAX_LIFECYCLE_TARGET_RUNS);
+    yield* authorize(ids);
+    const result = yield* forEachOutcome(ids, (id) =>
+      args.action === "interrupt" ? service.interrupt(id, expected) : service.stop(id, expected),
+    );
+    return yield* Effect.sync(() =>
+      presentSubagentResult(input, {
+        ...result,
+        contract: lifecycleContract(args.action, result.outcomes),
+      }),
+    );
+  });
 
   switch (input.tool) {
     case SUBAGENT_TOOL_NAME.start: {

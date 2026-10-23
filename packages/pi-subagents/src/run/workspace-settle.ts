@@ -63,8 +63,8 @@ export function workspaceSettleOperations(
       return undefined;
     return binding;
   };
-  const settle = (record: RunRecord, assignmentEpoch: number) =>
-    Effect.gen(function* () {
+  const settle = Effect.fn("WorkspaceSettle.settle")(
+    function* (record: RunRecord, assignmentEpoch: number) {
       if (!engine) return;
       const cleanup = yield* withLock(
         Effect.sync(() =>
@@ -107,12 +107,15 @@ export function workspaceSettleOperations(
           );
         }),
       );
-    }).pipe(
-      Effect.catch((error: SubagentError) =>
-        Effect.logWarning(`Kept a completed writer's workspace: ${error.message}`).pipe(
-          Effect.annotateLogs({ runId: record.view.id, workspaceId: record.view.workspaceId }),
+    },
+    (effect, record) =>
+      effect.pipe(
+        Effect.catch((error: SubagentError) =>
+          Effect.logWarning(`Kept a completed writer's workspace: ${error.message}`).pipe(
+            Effect.annotateLogs({ runId: record.view.id, workspaceId: record.view.workspaceId }),
+          ),
         ),
       ),
-    );
+  );
   return settle;
 }

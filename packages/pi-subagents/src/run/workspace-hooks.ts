@@ -12,13 +12,13 @@ const MAX_LISTED_CHANGES = 5;
  * only ignored or credential files so dependencies never become part of a proposal or test tree.
  * Setup with an invalid declaration fails before any hook runs, so no tree skips a setup step.
  */
-export const runWorktreeCreateHooks = (
-  service: WorkspaceServiceContract,
-  setup: WorktreeCreateSetup,
-  handle: WorkspaceHandle,
-  tree: { readonly preparationId?: string | undefined; readonly runId?: string | undefined },
-): Effect.Effect<void, SubagentError> =>
-  Effect.gen(function* () {
+export const runWorktreeCreateHooks = Effect.fn("SubagentWorkspace.runWorktreeCreateHooks")(
+  function* (
+    service: WorkspaceServiceContract,
+    setup: WorktreeCreateSetup,
+    handle: WorkspaceHandle,
+    tree: { readonly preparationId?: string | undefined; readonly runId?: string | undefined },
+  ): Effect.fn.Return<void, SubagentError> {
     if ("invalid" in setup)
       return yield* invalid(
         "workspace_hook_failed",
@@ -52,4 +52,5 @@ export const runWorktreeCreateHooks = (
       "workspace_hook_failed",
       `WorktreeCreate hooks changed project files (${listed}${more}); add their outputs to .gitignore.`,
     );
-  });
+  },
+);

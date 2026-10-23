@@ -168,13 +168,13 @@ interface StagedNodeChannelAcquisition {
   close: Effect.Effect<void, SupervisorChannelError> | undefined;
 }
 
-class SupervisorPrivateStateError extends Schema.TaggedError<SupervisorPrivateStateError>()(
-  "SupervisorPrivateStateError",
-  {
-    operation: Schema.String,
-    code: Schema.String,
-  },
-) {}
+class SupervisorPrivateStateError extends Schema.TaggedError<
+  SupervisorPrivateStateError,
+  { readonly brand: unique symbol }
+>()("SupervisorPrivateStateError", {
+  operation: Schema.String,
+  code: Schema.String,
+}) {}
 
 const privateStateError = (operation: string, cause: unknown) =>
   new SupervisorPrivateStateError({
@@ -199,45 +199,44 @@ const privateStateStep = <Value>(
     Effect.mapError((error) => new SupervisorPrivateStateError({ operation, code: error.reason })),
   );
 
-const prepareStateDirectory = (
+const prepareStateDirectory = Effect.fn("SupervisorChannel.prepareStateDirectory")(function* (
   agentDirectory: string,
   runId: string,
   onCreated: (prepared: PreparedStateDirectory) => void,
-): Effect.Effect<PreparedStateDirectory, SupervisorPrivateStateError> =>
-  Effect.gen(function* () {
-    const canonicalAgentDirectory = yield* privateStateStep(
-      "resolve-agent-directory",
-      safeAgentDirectory(agentDirectory),
-    );
-    const packageRoot = nodePath.join(canonicalAgentDirectory, SUBAGENT_STATE_ROOT);
-    const channelRoot = nodePath.join(packageRoot, SUPERVISOR_CHANNEL_ROOT);
-    yield* privateStateStep("prepare-package-root", ensurePrivateDirectory(packageRoot));
-    yield* privateStateStep("prepare-channel-root", ensurePrivateDirectory(channelRoot));
-    const stateDirectory = nodePath.join(channelRoot, `${runId}-${synchronousRandomHex(12)}`);
-    const prepared = {
-      stateDirectory,
-      connectionConfigPath: nodePath.join(stateDirectory, CONNECTION_CONFIG_FILE),
-    } satisfies PreparedStateDirectory;
-    // The mkdir stays interruptible, so a stalled filesystem can't hold cancellation. A directory
-    // created after its caller left reaches no cleanup, so the late settlement removes it here.
-    yield* privateStateOperation("prepare-state-directory", (signal) =>
-      fs
-        .mkdir(stateDirectory, { mode: 0o700 })
-        .then(() =>
-          signal.aborted ? fs.rmdir(stateDirectory).catch(() => undefined) : onCreated(prepared),
-        ),
-    );
-    const stateStat = yield* privateStateOperation("prepare-state-directory", () =>
-      fs.lstat(stateDirectory),
-    );
-    if (!stateStat.isDirectory() || stateStat.isSymbolicLink())
-      return yield* new SupervisorPrivateStateError({
-        operation: "prepare-state-directory",
-        code: "UNSAFE_ENTRY",
-      });
-    yield* privateStateStep("prepare-state-directory", recordPrivateStateOwner(stateDirectory));
-    return prepared;
-  });
+): Effect.fn.Return<PreparedStateDirectory, SupervisorPrivateStateError> {
+  const canonicalAgentDirectory = yield* privateStateStep(
+    "resolve-agent-directory",
+    safeAgentDirectory(agentDirectory),
+  );
+  const packageRoot = nodePath.join(canonicalAgentDirectory, SUBAGENT_STATE_ROOT);
+  const channelRoot = nodePath.join(packageRoot, SUPERVISOR_CHANNEL_ROOT);
+  yield* privateStateStep("prepare-package-root", ensurePrivateDirectory(packageRoot));
+  yield* privateStateStep("prepare-channel-root", ensurePrivateDirectory(channelRoot));
+  const stateDirectory = nodePath.join(channelRoot, `${runId}-${synchronousRandomHex(12)}`);
+  const prepared = {
+    stateDirectory,
+    connectionConfigPath: nodePath.join(stateDirectory, CONNECTION_CONFIG_FILE),
+  } satisfies PreparedStateDirectory;
+  // The mkdir stays interruptible, so a stalled filesystem can't hold cancellation. A directory
+  // created after its caller left reaches no cleanup, so the late settlement removes it here.
+  yield* privateStateOperation("prepare-state-directory", (signal) =>
+    fs
+      .mkdir(stateDirectory, { mode: 0o700 })
+      .then(() =>
+        signal.aborted ? fs.rmdir(stateDirectory).catch(() => undefined) : onCreated(prepared),
+      ),
+  );
+  const stateStat = yield* privateStateOperation("prepare-state-directory", () =>
+    fs.lstat(stateDirectory),
+  );
+  if (!stateStat.isDirectory() || stateStat.isSymbolicLink())
+    return yield* new SupervisorPrivateStateError({
+      operation: "prepare-state-directory",
+      code: "UNSAFE_ENTRY",
+    });
+  yield* privateStateStep("prepare-state-directory", recordPrivateStateOwner(stateDirectory));
+  return prepared;
+});
 
 const writePrivateConfig = (
   path: string,
@@ -249,40 +248,39 @@ const writePrivateConfig = (
   return createPrivateFile(path, source);
 };
 
-const removePrivateState = ({
+const removePrivateState = Effect.fn("SupervisorChannel.removePrivateState")(function* ({
   stateDirectory,
   connectionConfigPath,
-}: PreparedStateDirectory): Effect.Effect<void, SupervisorPrivateStateError> =>
-  Effect.gen(function* () {
-    const configStat = yield* privateStateOperation("stat-channel-config", () =>
-      fs.lstat(connectionConfigPath),
-    ).pipe(
-      Effect.asSome,
-      Effect.catchIf(
-        (error) => error.code === "ENOENT",
-        () => Effect.succeedNone,
-      ),
-    );
-    if (Option.isSome(configStat)) {
-      if (!configStat.value.isFile() || configStat.value.isSymbolicLink())
-        return yield* new SupervisorPrivateStateError({
-          operation: "validate-channel-config",
-          code: "UNSAFE_ENTRY",
-        });
-      yield* privateStateOperation("remove-channel-config", () => fs.unlink(connectionConfigPath));
-    }
-    yield* privateStateStep("remove-channel-owner", removePrivateStateOwner(stateDirectory));
-    const entries = yield* privateStateOperation("read-channel-state", () =>
-      fs.readdir(stateDirectory),
-    );
-    if (entries.length !== 0)
+}: PreparedStateDirectory): Effect.fn.Return<void, SupervisorPrivateStateError> {
+  const configStat = yield* privateStateOperation("stat-channel-config", () =>
+    fs.lstat(connectionConfigPath),
+  ).pipe(
+    Effect.asSome,
+    Effect.catchIf(
+      (error) => error.code === "ENOENT",
+      () => Effect.succeedNone,
+    ),
+  );
+  if (Option.isSome(configStat)) {
+    if (!configStat.value.isFile() || configStat.value.isSymbolicLink())
       return yield* new SupervisorPrivateStateError({
-        operation: "validate-channel-state",
-        code: "UNEXPECTED_ENTRIES",
+        operation: "validate-channel-config",
+        code: "UNSAFE_ENTRY",
       });
-    yield* privateStateOperation("remove-channel-state", () => fs.rmdir(stateDirectory));
-    return undefined;
-  });
+    yield* privateStateOperation("remove-channel-config", () => fs.unlink(connectionConfigPath));
+  }
+  yield* privateStateStep("remove-channel-owner", removePrivateStateOwner(stateDirectory));
+  const entries = yield* privateStateOperation("read-channel-state", () =>
+    fs.readdir(stateDirectory),
+  );
+  if (entries.length !== 0)
+    return yield* new SupervisorPrivateStateError({
+      operation: "validate-channel-state",
+      code: "UNEXPECTED_ENTRIES",
+    });
+  yield* privateStateOperation("remove-channel-state", () => fs.rmdir(stateDirectory));
+  return undefined;
+});
 
 const cryptoUnavailable = () =>
   channelError(

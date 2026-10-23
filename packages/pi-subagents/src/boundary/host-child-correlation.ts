@@ -1,6 +1,7 @@
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Schema from "effect/Schema";
 import { ParentContactError } from "./local-pi-ipc.ts";
 
 export const parentCorrelations = <A>() => {
@@ -53,5 +54,7 @@ export const parentCorrelations = <A>() => {
   };
 };
 
+const isParentContactError = Schema.is(ParentContactError);
+
 export const parentContactRejection = <E>(error: E): Error | E =>
-  error instanceof ParentContactError ? new Error(error.message) : error;
+  isParentContactError(error) ? new Error(error.message) : error;

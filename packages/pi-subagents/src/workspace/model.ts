@@ -10,7 +10,10 @@ const WORKSPACE_ERROR_CODES = [
   "workspace_local_override",
 ] as const;
 
-export class WorkspaceError extends Schema.TaggedError<WorkspaceError>()("WorkspaceError", {
+export class WorkspaceError extends Schema.TaggedError<
+  WorkspaceError,
+  { readonly brand: unique symbol }
+>()("WorkspaceError", {
   operation: Schema.String,
   message: Schema.String,
   code: Schema.optional(Schema.Literals(WORKSPACE_ERROR_CODES)),

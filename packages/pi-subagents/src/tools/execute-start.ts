@@ -4,7 +4,9 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Result from "effect/Result";
 import {
   captureHostParentContext,
   resolveProfileStart,
@@ -56,25 +58,24 @@ interface StartBatchResult {
   readonly startOutcomes: ReadonlyArray<SubagentStartOutcome>;
 }
 
-const startSpecs = (
+const startSpecs = Effect.fn("SubagentTools.startSpecs")(function* (
   agents: ReadonlyArray<SubagentStartSpec>,
-): Effect.Effect<ReadonlyArray<SubagentStartSpec>, InvalidSubagentRequestError> =>
-  Effect.gen(function* () {
-    if (agents.length === 0 || agents.length > MAX_START_BATCH)
+): Effect.fn.Return<ReadonlyArray<SubagentStartSpec>, InvalidSubagentRequestError> {
+  if (agents.length === 0 || agents.length > MAX_START_BATCH)
+    return yield* invalidRequest(
+      "agent_count_invalid",
+      `agent_start requires between 1 and ${MAX_START_BATCH} agents.`,
+    );
+  for (const agent of agents) {
+    const disallowedField = firstDisallowedLaunchOverride(agent);
+    if (disallowedField)
       return yield* invalidRequest(
-        "agent_count_invalid",
-        `agent_start requires between 1 and ${MAX_START_BATCH} agents.`,
+        "launch_override_not_allowed",
+        disallowedLaunchOverrideMessage(disallowedField),
       );
-    for (const agent of agents) {
-      const disallowedField = firstDisallowedLaunchOverride(agent);
-      if (disallowedField)
-        return yield* invalidRequest(
-          "launch_override_not_allowed",
-          disallowedLaunchOverrideMessage(disallowedField),
-        );
-    }
-    return agents;
-  });
+  }
+  return agents;
+});
 
 const entryName = (spec: SubagentStartSpec, index: number): string =>
   sanitizeTerminalLine((spec.name?.trim() ?? "") || `launch ${index + 1}`);
@@ -164,11 +165,10 @@ const failureFor = (
 
 const settleStartOutcomes = (outcomes: Iterable<SubagentStartOutcome>) => {
   const ordered = [...outcomes].toSorted((left, right) => left.index - right.index);
-  return {
-    ordered,
-    launched: ordered.flatMap((outcome) => ("run" in outcome ? [outcome.run] : [])),
-    failures: ordered.flatMap((outcome) => ("failure" in outcome ? [outcome.failure] : [])),
-  };
+  const [launched, failures] = Arr.partition(ordered, (outcome) =>
+    "run" in outcome ? Result.succeed(outcome.run) : Result.fail(outcome.failure),
+  );
+  return { ordered, launched, failures };
 };
 
 const admissionError = (
@@ -252,41 +252,39 @@ export const executeStartBatch = Effect.fn("SubagentTools.start")(function* (
  * so its revision successor runs the profile or custom agent its original writer did. An agent
  * this session no longer configures, or that fails closed, can't be relaunched.
  */
-export const resolveRecordedLaunch = (
+export const resolveRecordedLaunch = Effect.fn("SubagentTools.resolveRecordedLaunch")(function* (
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   environment: SubagentSessionEnvironment,
   launch: WorkspaceLaunch,
   task: string,
-): Effect.Effect<
+): Effect.fn.Return<
   StartSubagentRequest,
   InvalidSubagentRequestError,
   SubagentProfileService | SubagentBackendRegistry
-> =>
-  Effect.gen(function* () {
-    const profileSnapshot = yield* (yield* SubagentProfileService).capture;
-    const route =
-      launch.agent === undefined ? { profile: launch.profile } : { agent: launch.agent };
-    const request = yield* resolveProfileStart(
-      pi,
-      { task, ...route, name: launch.name, isolation: "worktree" },
-      ctx,
-      {
-        ...environment,
-        parentContext: environment.parentContext ?? (yield* captureHostParentContext(pi, ctx)),
-      },
-      profileSnapshot,
-    ).pipe(
-      Effect.catchIf(
-        (error) => error.code === "agent_unknown" || error.code === "agent_invalid",
-        () =>
-          Effect.fail(
-            invalidRequest(
-              "workspace_launch_unavailable",
-              `This workspace's writer was started as custom agent ${sanitizeTerminalLine(launch.agent ?? "")}, which this session no longer configures. Apply or discard the workspace, or start a new writer.`,
-            ),
+> {
+  const profileSnapshot = yield* (yield* SubagentProfileService).capture;
+  const route = launch.agent === undefined ? { profile: launch.profile } : { agent: launch.agent };
+  const request = yield* resolveProfileStart(
+    pi,
+    { task, ...route, name: launch.name, isolation: "worktree" },
+    ctx,
+    {
+      ...environment,
+      parentContext: environment.parentContext ?? (yield* captureHostParentContext(pi, ctx)),
+    },
+    profileSnapshot,
+  ).pipe(
+    Effect.catchIf(
+      (error) => error.code === "agent_unknown" || error.code === "agent_invalid",
+      () =>
+        Effect.fail(
+          invalidRequest(
+            "workspace_launch_unavailable",
+            `This workspace's writer was started as custom agent ${sanitizeTerminalLine(launch.agent ?? "")}, which this session no longer configures. Apply or discard the workspace, or start a new writer.`,
           ),
-      ),
-    );
-    return { ...request, nestingPolicy: profileSnapshot.effectiveConfig.nesting };
-  });
+        ),
+    ),
+  );
+  return { ...request, nestingPolicy: profileSnapshot.effectiveConfig.nesting };
+});

@@ -202,6 +202,22 @@ describe("report files saved during settlement", () => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("settles at once without a file once the session scope is closing", () =>
+    Effect.gen(function* () {
+      const gate = yield* gatedReportArchive;
+      const ownerScope = yield* Scope.make();
+      const { record, settle } = yield* fixture(gate.archive, quietDelivery, { ownerScope });
+      yield* Scope.close(ownerScope, Exit.void);
+
+      // The test clock never reaches the save deadline, so only an immediate settlement returns.
+      yield* settle("Final report.");
+
+      expect(record.view).toMatchObject({ state: "completed", finalText: "Final report." });
+      expect(record.view.reportArchive).toBeUndefined();
+      expect(gate.saved).toEqual([]);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("removes the saved file when the settlement fails after saving it", () =>
     Effect.gen(function* () {
       const gate = yield* gatedReportArchive;

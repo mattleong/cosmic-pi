@@ -109,24 +109,25 @@ function workspaceControlOperations(
 ) {
   const { engine, ownerId, withLock, isClosed, state, ownerFor } = context;
   const { requireEngine, sourceCwd, writerLeases } = context;
-  const sourceRecords = (listing: WorkspaceListing) =>
-    Effect.gen(function* () {
-      const entries = listing.records;
-      const owned = (record: WorkspaceRecord) => record.handle.ownerId.startsWith(`${ownerId}/`);
-      const source =
-        sourceCwd !== undefined && entries.some((record) => !owned(record))
-          ? (yield* writerLeases.canonicalize(sourceCwd).pipe(Effect.mapError(mapWorkspaceError)))
-              .path
-          : undefined;
-      return {
-        unavailable: listing.unavailable,
-        endedOwners: listing.endedOwners,
-        records: entries.filter(
-          (record) =>
-            owned(record) || (source !== undefined && isWithin(source, record.handle.sourceRoot)),
-        ),
-      };
-    });
+  const sourceRecords = Effect.fn("SubagentWorkspace.sourceRecords")(function* (
+    listing: WorkspaceListing,
+  ) {
+    const entries = listing.records;
+    const owned = (record: WorkspaceRecord) => record.handle.ownerId.startsWith(`${ownerId}/`);
+    const source =
+      sourceCwd !== undefined && entries.some((record) => !owned(record))
+        ? (yield* writerLeases.canonicalize(sourceCwd).pipe(Effect.mapError(mapWorkspaceError)))
+            .path
+        : undefined;
+    return {
+      unavailable: listing.unavailable,
+      endedOwners: listing.endedOwners,
+      records: entries.filter(
+        (record) =>
+          owned(record) || (source !== undefined && isWithin(source, record.handle.sourceRoot)),
+      ),
+    };
+  });
   // A count needs no orphan verdicts, so it never probes other sessions' owner leases.
   const unresolvedWorkspaceCount = Effect.gen(function* () {
     if (!engine) return 0;
@@ -193,44 +194,43 @@ function workspaceControlOperations(
     }
     return record;
   };
-  const workspaceList: WorkspaceCoordinatorContract["workspaceList"] = (
-    caller = SUBAGENT_ROOT_RUN_ID,
-  ) =>
-    Effect.gen(function* () {
-      const service = yield* requireEngine;
-      const listing: WorkspaceCoordinatorListing =
-        caller === SUBAGENT_ROOT_RUN_ID
-          ? yield* service.listAll.pipe(
-              Effect.mapError(mapWorkspaceError),
-              Effect.flatMap(sourceRecords),
-            )
-          : {
-              records: yield* service
-                .list({ ownerId: ownerFor(caller) })
-                .pipe(Effect.mapError(mapWorkspaceError)),
-              unavailable: [],
-            };
-      return yield* withLock(
-        Effect.sync(() => {
-          const orphans = new Map(
-            caller === SUBAGENT_ROOT_RUN_ID
-              ? listing.records.flatMap((record) => {
-                  const { workspaceId } = record.handle;
-                  const disposition = state.bindings.has(workspaceId)
-                    ? undefined
-                    : orphanDisposition(record, listing);
-                  return disposition ? [[workspaceId, disposition] as const] : [];
-                })
-              : [],
-          );
-          return {
-            ...listing,
-            records: listing.records.map(currentRecord),
-            ...(orphans.size > 0 && { orphans }),
+  const workspaceList: WorkspaceCoordinatorContract["workspaceList"] = Effect.fn(
+    "SubagentWorkspace.workspaceList",
+  )(function* (caller = SUBAGENT_ROOT_RUN_ID) {
+    const service = yield* requireEngine;
+    const listing: WorkspaceCoordinatorListing =
+      caller === SUBAGENT_ROOT_RUN_ID
+        ? yield* service.listAll.pipe(
+            Effect.mapError(mapWorkspaceError),
+            Effect.flatMap(sourceRecords),
+          )
+        : {
+            records: yield* service
+              .list({ ownerId: ownerFor(caller) })
+              .pipe(Effect.mapError(mapWorkspaceError)),
+            unavailable: [],
           };
-        }),
-      );
-    });
+    return yield* withLock(
+      Effect.sync(() => {
+        const orphans = new Map(
+          caller === SUBAGENT_ROOT_RUN_ID
+            ? listing.records.flatMap((record) => {
+                const { workspaceId } = record.handle;
+                const disposition = state.bindings.has(workspaceId)
+                  ? undefined
+                  : orphanDisposition(record, listing);
+                return disposition ? [[workspaceId, disposition] as const] : [];
+              })
+            : [],
+        );
+        return {
+          ...listing,
+          records: listing.records.map(currentRecord),
+          ...(orphans.size > 0 && { orphans }),
+        };
+      }),
+    );
+  });
   const review = workspaceReviewOperations(context, publish);
   const integrateLocked = workspaceIntegrationOperations(context, publish);
   const orphans = workspaceOrphanOperations(context, sourceRecords);

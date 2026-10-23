@@ -186,43 +186,44 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
       (slot) => slot !== own && (caller === undefined || slot.caller === caller),
     ).length;
   };
-  const worktreeCapacityLocked = (request: StartSubagentRequest, caller: string) =>
-    Effect.gen(function* () {
-      const nesting = request.nestingPolicy ?? DEFAULT_SUBAGENT_NESTING_POLICY;
-      const direct = nesting.maxDirectChildren;
-      const tree = nesting.maxActiveRuns ?? DEFAULT_MAX_ACTIVE_RUNS;
-      const capacityFailure =
-        processCapacityError(records, caller, direct) ?? treeCapacityError(records, tree);
-      if (capacityFailure) return yield* capacityFailure;
-      // Only launches still creating workspaces fill the limit, so wait for one to resolve.
-      return (processCapacityError(records, caller, direct, undefined, heldLaunchSlots(caller)) ??
-        treeCapacityError(records, tree, undefined, heldLaunchSlots()))
-        ? state.slotReleased
-        : undefined;
-    });
-  const checkLaunchLocked = (
+  const worktreeCapacityLocked = Effect.fn("SubagentWorkspace.worktreeCapacityLocked")(function* (
     request: StartSubagentRequest,
-  ): Effect.Effect<LaunchSelection, SubagentError> =>
-    Effect.gen(function* () {
-      if (isClosed())
-        return yield* invalid("workspace_runtime_closed", "The subagent session is closed.");
-      if (state.integrationQuarantined) return yield* integrationQuarantinedError();
-      const caller = request.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
-      // Only the root starts worktree writers. A nested writer shares its parent's checkout or
-      // worker tree, whatever the session default, unless its custom agent asks for a worktree.
-      if (caller !== SUBAGENT_ROOT_RUN_ID) {
-        if (request.writerWorkspaceModeOverride === "worktree")
-          return yield* invalid(
-            "workspace_nested_writer_unsupported",
-            "Only the root parent may start worktree writers, and this agent asks for one. Ask the root to launch this writer; nested read-only work and shared-checkout writers remain available.",
-          );
-        return { mode: "shared-checkout" };
-      }
-      const mode = request.writerWorkspaceModeOverride ?? state.mode;
-      if (mode !== "worktree") return { mode };
-      const slotWait = yield* worktreeCapacityLocked(request, caller);
-      return { mode, ...(slotWait && { slotWait }) };
-    });
+    caller: string,
+  ) {
+    const nesting = request.nestingPolicy ?? DEFAULT_SUBAGENT_NESTING_POLICY;
+    const direct = nesting.maxDirectChildren;
+    const tree = nesting.maxActiveRuns ?? DEFAULT_MAX_ACTIVE_RUNS;
+    const capacityFailure =
+      processCapacityError(records, caller, direct) ?? treeCapacityError(records, tree);
+    if (capacityFailure) return yield* capacityFailure;
+    // Only launches still creating workspaces fill the limit, so wait for one to resolve.
+    return (processCapacityError(records, caller, direct, undefined, heldLaunchSlots(caller)) ??
+      treeCapacityError(records, tree, undefined, heldLaunchSlots()))
+      ? state.slotReleased
+      : undefined;
+  });
+  const checkLaunchLocked = Effect.fn("SubagentWorkspace.checkLaunchLocked")(function* (
+    request: StartSubagentRequest,
+  ): Effect.fn.Return<LaunchSelection, SubagentError> {
+    if (isClosed())
+      return yield* invalid("workspace_runtime_closed", "The subagent session is closed.");
+    if (state.integrationQuarantined) return yield* integrationQuarantinedError();
+    const caller = request.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
+    // Only the root starts worktree writers. A nested writer shares its parent's checkout or
+    // worker tree, whatever the session default, unless its custom agent asks for a worktree.
+    if (caller !== SUBAGENT_ROOT_RUN_ID) {
+      if (request.writerWorkspaceModeOverride === "worktree")
+        return yield* invalid(
+          "workspace_nested_writer_unsupported",
+          "Only the root parent may start worktree writers, and this agent asks for one. Ask the root to launch this writer; nested read-only work and shared-checkout writers remain available.",
+        );
+      return { mode: "shared-checkout" };
+    }
+    const mode = request.writerWorkspaceModeOverride ?? state.mode;
+    if (mode !== "worktree") return { mode };
+    const slotWait = yield* worktreeCapacityLocked(request, caller);
+    return { mode, ...(slotWait && { slotWait }) };
+  });
   const discardUnadmitted = (binding: WorkspaceBinding) => {
     const { workspaceId, ownerId } = binding.handle;
     return Effect.gen(function* () {
@@ -350,42 +351,43 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
    * WorktreeCreate hooks there like a new launch. Once the tree changed, no earlier review or
    * preparation describes it, even if the hooks or the successor's admission then fail.
    */
-  const rebaseHeld = (held: Succession): Effect.Effect<WorkspaceRebase, SubagentError> =>
-    Effect.gen(function* () {
-      const service = yield* requireEngine;
-      const { binding } = held;
-      const { workspaceId, ownerId } = binding.handle;
-      yield* withLock(
-        Effect.gen(function* () {
-          if (!holdsRevision(held))
-            return yield* invalid(
-              "workspace_owner_unavailable",
-              "The revision that requested this rebase no longer holds its workspace.",
-            );
-          // A rebase removes and rewrites the worker's files, like discard removes them.
-          if ([...runsWithin(records, [binding.handle.artifactRoot]).keys()].some(runHoldsCwd))
-            return yield* invalid(
-              "workspace_process_unsettled",
-              "A run still uses this workspace's tree. Stop it and confirm cleanup before a rebase rebuilds the tree.",
-            );
-          return undefined;
-        }),
-      );
-      const rebased = yield* service
-        .rebase({ workspaceId, ownerId, processCleanupConfirmed: true })
-        .pipe(Effect.mapError(mapWorkspaceError));
-      yield* withLock(
-        Effect.sync(() => {
-          const { state: current } = binding;
-          if (current.phase === "revising" && current.hold === held.revision)
-            binding.state = { ...current, knowledge: { kind: "unreviewed" } };
-        }),
-      );
-      yield* runWorktreeCreateHooks(service, worktreeCreate, binding.handle, {
-        runId: binding.record?.view.id,
-      });
-      return rebased;
+  const rebaseHeld = Effect.fn("SubagentWorkspace.rebaseHeld")(function* (
+    held: Succession,
+  ): Effect.fn.Return<WorkspaceRebase, SubagentError> {
+    const service = yield* requireEngine;
+    const { binding } = held;
+    const { workspaceId, ownerId } = binding.handle;
+    yield* withLock(
+      Effect.gen(function* () {
+        if (!holdsRevision(held))
+          return yield* invalid(
+            "workspace_owner_unavailable",
+            "The revision that requested this rebase no longer holds its workspace.",
+          );
+        // A rebase removes and rewrites the worker's files, like discard removes them.
+        if ([...runsWithin(records, [binding.handle.artifactRoot]).keys()].some(runHoldsCwd))
+          return yield* invalid(
+            "workspace_process_unsettled",
+            "A run still uses this workspace's tree. Stop it and confirm cleanup before a rebase rebuilds the tree.",
+          );
+        return undefined;
+      }),
+    );
+    const rebased = yield* service
+      .rebase({ workspaceId, ownerId, processCleanupConfirmed: true })
+      .pipe(Effect.mapError(mapWorkspaceError));
+    yield* withLock(
+      Effect.sync(() => {
+        const { state: current } = binding;
+        if (current.phase === "revising" && current.hold === held.revision)
+          binding.state = { ...current, knowledge: { kind: "unreviewed" } };
+      }),
+    );
+    yield* runWorktreeCreateHooks(service, worktreeCreate, binding.handle, {
+      runId: binding.record?.view.id,
     });
+    return rebased;
+  });
   const launchSuccessor = (
     held: Succession,
     start: WorkspaceStart,
@@ -416,22 +418,23 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
     request.writeIntent === "writer"
       ? launchWriter(request, start)
       : start({ ...request, workspace: undefined, writerWorkspaceMode: undefined });
-  const invalidateForResume = (record: RunRecord): Effect.Effect<() => void, SubagentError> =>
-    Effect.gen(function* () {
-      if (!record.view.workspaceId) return () => {};
-      const binding = state.bindings.get(record.view.workspaceId);
-      const phase = binding?.state.phase;
-      if (!binding || binding.record !== record || phase === "creating" || phase === "revising")
-        return yield* invalid(
-          "workspace_owner_unavailable",
-          "Workspace resume ownership is unavailable or belongs to a revision successor.",
-        );
-      if (phase === "busy") return yield* workspaceBusyError();
-      if (isBindingFinished(binding)) return yield* workspaceFinishedError(binding);
-      if (state.integrationQuarantined) return yield* integrationQuarantinedError();
-      if (record.process !== undefined) return () => {};
-      return () => reopenBindingLocked(binding);
-    });
+  const invalidateForResume = Effect.fn("SubagentWorkspace.invalidateForResume")(function* (
+    record: RunRecord,
+  ): Effect.fn.Return<() => void, SubagentError> {
+    if (!record.view.workspaceId) return () => {};
+    const binding = state.bindings.get(record.view.workspaceId);
+    const phase = binding?.state.phase;
+    if (!binding || binding.record !== record || phase === "creating" || phase === "revising")
+      return yield* invalid(
+        "workspace_owner_unavailable",
+        "Workspace resume ownership is unavailable or belongs to a revision successor.",
+      );
+    if (phase === "busy") return yield* workspaceBusyError();
+    if (isBindingFinished(binding)) return yield* workspaceFinishedError(binding);
+    if (state.integrationQuarantined) return yield* integrationQuarantinedError();
+    if (record.process !== undefined) return () => {};
+    return () => reopenBindingLocked(binding);
+  });
   const revise =
     (start: WorkspaceStart) =>
     (
@@ -440,22 +443,24 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
       caller = SUBAGENT_ROOT_RUN_ID,
       options: WorkspaceReviseOptions = {},
     ): Effect.Effect<WorkspaceRevised, SubagentError> => {
-      const resolveAdopted = (launch: WorkspaceLaunch, task: string) =>
-        Effect.gen(function* () {
-          const { resolveLaunch } = options;
-          if (!resolveLaunch)
-            return yield* invalid(
-              "workspace_launch_unavailable",
-              "This adopted workspace has no writer request to extend; revise it through agent_worktree.",
-            );
-          const resolved = yield* resolveLaunch(launch, task);
-          if (resolved.writeIntent !== "writer")
-            return yield* invalid(
-              "workspace_launch_unavailable",
-              `The recorded launch profile ${resolved.profile ?? "generalist"} no longer starts writers. Apply or discard this workspace, or start a new writer.`,
-            );
-          return resolved;
-        });
+      const resolveAdopted = Effect.fn("SubagentWorkspace.resolveAdopted")(function* (
+        launch: WorkspaceLaunch,
+        task: string,
+      ) {
+        const { resolveLaunch } = options;
+        if (!resolveLaunch)
+          return yield* invalid(
+            "workspace_launch_unavailable",
+            "This adopted workspace has no writer request to extend; revise it through agent_worktree.",
+          );
+        const resolved = yield* resolveLaunch(launch, task);
+        if (resolved.writeIntent !== "writer")
+          return yield* invalid(
+            "workspace_launch_unavailable",
+            `The recorded launch profile ${resolved.profile ?? "generalist"} no longer starts writers. Apply or discard this workspace, or start a new writer.`,
+          );
+        return resolved;
+      });
       return Effect.uninterruptibleMask((restore) => {
         let held: Succession | undefined;
         return Effect.gen(function* () {

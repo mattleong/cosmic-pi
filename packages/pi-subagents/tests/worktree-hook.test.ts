@@ -29,7 +29,7 @@ describe("worktree hook", () => {
         fs.mkdtemp(path.join(os.tmpdir(), "pi-worktree-hook-")),
       );
       yield* run('test -z "$GIT_DIR" && cat > stdin.json && pwd -P > cwd.txt', undefined, tree);
-      const received = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(
+      const received = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))(
         yield* Effect.promise(() => fs.readFile(path.join(tree, "stdin.json"), "utf8")),
       );
       expect(received).toEqual(input(tree));

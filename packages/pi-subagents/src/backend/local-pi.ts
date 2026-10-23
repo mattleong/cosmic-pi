@@ -485,17 +485,16 @@ export const localPiBackendDriver = (
             message: "Pi model selector is empty, excessive, or unsafe.",
           }),
         ),
-  spawn: (request: BackendLaunchRequest) =>
-    Effect.gen(function* () {
-      const { resumeToken, ...launch } = request;
-      const resumeSessionFile = resumeToken
-        ? (yield* decodeLocalPiResumeToken(resumeToken)).sessionFile
-        : undefined;
-      const child = yield* childProcesses.spawn({
-        ...launch,
-        ...(resumeSessionFile && { resumeSessionFile }),
-      });
-      return yield* makeLocalPiHandle(child);
-    }),
+  spawn: Effect.fn("LocalPiBackend.spawn")(function* (request: BackendLaunchRequest) {
+    const { resumeToken, ...launch } = request;
+    const resumeSessionFile = resumeToken
+      ? (yield* decodeLocalPiResumeToken(resumeToken)).sessionFile
+      : undefined;
+    const child = yield* childProcesses.spawn({
+      ...launch,
+      ...(resumeSessionFile && { resumeSessionFile }),
+    });
+    return yield* makeLocalPiHandle(child);
+  }),
   reclaimRunState: (request) => childProcesses.reclaimRunState(request),
 });

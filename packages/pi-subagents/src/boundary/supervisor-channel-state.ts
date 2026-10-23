@@ -190,39 +190,33 @@ export const removePeer = (state: SupervisorChannelState, clientId: number): voi
     );
 };
 
-export const authorize = (
+export const authorize = Effect.fn("SupervisorChannel.authorize")(function* (
   state: SupervisorChannelState,
   clientId: number,
   payload: AuthenticatedRequest,
-): Effect.Effect<SupervisorRpcConnectionContract, SupervisorRpcFailure> =>
-  Effect.gen(function* () {
-    const guard = yield* Effect.serviceOption(SupervisorRpcConnection).pipe(
-      Effect.flatMap(
-        Effect.fromOption(() =>
-          rpcFailure("connection_context_missing", "Supervisor connection context is missing."),
-        ),
+): Effect.fn.Return<SupervisorRpcConnectionContract, SupervisorRpcFailure> {
+  const guard = yield* Effect.serviceOption(SupervisorRpcConnection).pipe(
+    Effect.flatMap(
+      Effect.fromOption(() =>
+        rpcFailure("connection_context_missing", "Supervisor connection context is missing."),
       ),
-    );
-    const refuse = () => {
-      guard.close();
-      return rpcFailure("authentication_failed", "Supervisor authentication failed.");
-    };
-    if (
-      state.closed ||
-      guard.closed ||
-      payload.runId !== state.runId ||
-      guard.clientId !== clientId
-    )
-      return yield* refuse();
-    const { verifyToken } = state;
-    const authenticated = yield* verifyToken(payload.token).pipe(Effect.orElseSucceed(() => false));
-    if (!authenticated || state.closed || guard.closed) return yield* refuse();
-    if (!guard.accepted) {
-      guard.accepted = true;
-      Deferred.doneUnsafe(guard.authenticated, Effect.void);
-    }
-    return guard;
-  });
+    ),
+  );
+  const refuse = () => {
+    guard.close();
+    return rpcFailure("authentication_failed", "Supervisor authentication failed.");
+  };
+  if (state.closed || guard.closed || payload.runId !== state.runId || guard.clientId !== clientId)
+    return yield* refuse();
+  const { verifyToken } = state;
+  const authenticated = yield* verifyToken(payload.token).pipe(Effect.orElseSucceed(() => false));
+  if (!authenticated || state.closed || guard.closed) return yield* refuse();
+  if (!guard.accepted) {
+    guard.accepted = true;
+    Deferred.doneUnsafe(guard.authenticated, Effect.void);
+  }
+  return guard;
+});
 
 export const authorizePeer = (
   state: SupervisorChannelState,

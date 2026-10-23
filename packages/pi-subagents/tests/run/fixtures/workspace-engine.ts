@@ -2,6 +2,7 @@ import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Predicate from "effect/Predicate";
 import {
   type WriterLeaseContract,
   WriterLeaseService,
@@ -240,7 +241,7 @@ export function workspaceFixture({
         gated("inspectWorkerChanges", requireEntry(target)).pipe(
           Effect.andThen(
             Effect.suspend(() =>
-              hooks.workerChanges instanceof WorkspaceError
+              Predicate.isTagged(hooks.workerChanges, "WorkspaceError")
                 ? Effect.fail(hooks.workerChanges)
                 : Effect.succeed(hooks.workerChanges),
             ),
@@ -336,7 +337,8 @@ export function workspaceFixture({
       rebase: (target) =>
         requireEntry(target).pipe(
           Effect.flatMap((entry) => {
-            if (hooks.rebase instanceof WorkspaceError) return Effect.fail(hooks.rebase);
+            if (Predicate.isTagged(hooks.rebase, "WorkspaceError"))
+              return Effect.fail(hooks.rebase);
             rebases.push(target.workspaceId);
             const { revision: _revision, preparation: _preparation, ...rest } = entry;
             entries.set(target.workspaceId, { ...rest, status: "active" });

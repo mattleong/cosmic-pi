@@ -19,78 +19,77 @@ import { SupervisorToolFailure, type SupervisorToolClient } from "../supervisor/
 
 const CONNECT_TIMEOUT_MILLIS = 5_000;
 
-export const openSupervisorClient = (
+export const openSupervisorClient = Effect.fn("SupervisorClient.open")(function* (
   config: SupervisorChannelConfig,
-): Effect.Effect<
+): Effect.fn.Return<
   SupervisorToolClient,
   RpcClientError.RpcClientError | SupervisorRpcFailure | Cause.TimeoutError,
   Scope.Scope
-> =>
-  Effect.gen(function* () {
-    const parent = yield* Effect.scope;
-    const auth = { version: config.version, runId: config.runId, token: config.token };
-    return yield* Effect.uninterruptibleMask((restore) =>
-      Effect.gen(function* () {
-        const connection = yield* Scope.fork(parent);
-        const { rpc, opened } = yield* restore(
+> {
+  const parent = yield* Effect.scope;
+  const auth = { version: config.version, runId: config.runId, token: config.token };
+  return yield* Effect.uninterruptibleMask((restore) =>
+    Effect.gen(function* () {
+      const connection = yield* Scope.fork(parent);
+      const { rpc, opened } = yield* restore(
+        Effect.gen(function* () {
+          const socket = yield* NodeSocket.makeNet({
+            host: config.host,
+            port: config.port,
+            openTimeout: CONNECT_TIMEOUT_MILLIS,
+          });
+          const protocol = yield* RpcClient.makeProtocolSocket().pipe(
+            Effect.provideService(
+              RpcSerialization.RpcSerialization,
+              RpcSerialization.makeNdjson({ maxBufferSize: MAX_SUPERVISOR_CHANNEL_LINE_BYTES }),
+            ),
+            Effect.provideService(Socket.Socket, socket),
+          );
+          const client = yield* RpcClient.make(SupervisorRpcGroup).pipe(
+            Effect.provideService(RpcClient.Protocol, protocol),
+          );
+          const session = yield* client
+            .SupervisorOpenSession(auth)
+            .pipe(Effect.timeout(CONNECT_TIMEOUT_MILLIS));
+          return { rpc: client, opened: session } as const;
+        }).pipe(Scope.provide(connection)),
+      ).pipe(
+        Effect.onExit((exit) =>
+          Exit.isFailure(exit) ? Scope.close(connection, exit) : Effect.void,
+        ),
+      );
+      let assignmentEpoch = opened.assignmentEpoch;
+      const closed = Deferred.makeUnsafe<void>();
+      yield* rpc.SupervisorWatchAssignments(auth).pipe(
+        Stream.runForEach((update) =>
           Effect.gen(function* () {
-            const socket = yield* NodeSocket.makeNet({
-              host: config.host,
-              port: config.port,
-              openTimeout: CONNECT_TIMEOUT_MILLIS,
-            });
-            const protocol = yield* RpcClient.makeProtocolSocket().pipe(
-              Effect.provideService(
-                RpcSerialization.RpcSerialization,
-                RpcSerialization.makeNdjson({ maxBufferSize: MAX_SUPERVISOR_CHANNEL_LINE_BYTES }),
-              ),
-              Effect.provideService(Socket.Socket, socket),
-            );
-            const client = yield* RpcClient.make(SupervisorRpcGroup).pipe(
-              Effect.provideService(RpcClient.Protocol, protocol),
-            );
-            const session = yield* client
-              .SupervisorOpenSession(auth)
-              .pipe(Effect.timeout(CONNECT_TIMEOUT_MILLIS));
-            return { rpc: client, opened: session } as const;
-          }).pipe(Scope.provide(connection)),
-        ).pipe(
-          Effect.onExit((exit) =>
-            Exit.isFailure(exit) ? Scope.close(connection, exit) : Effect.void,
-          ),
-        );
-        let assignmentEpoch = opened.assignmentEpoch;
-        const closed = Deferred.makeUnsafe<void>();
-        yield* rpc.SupervisorWatchAssignments(auth).pipe(
-          Stream.runForEach((update) =>
-            Effect.gen(function* () {
-              if (update.assignmentEpoch <= assignmentEpoch)
-                return yield* new SupervisorToolFailure({
-                  code: "non_monotonic_assignment_epoch",
-                  message: "Supervisor assignment epoch did not advance.",
-                });
-              assignmentEpoch = update.assignmentEpoch;
-              yield* rpc.SupervisorAcknowledgeAssignment({
-                ...auth,
-                assignmentEpoch,
-                updateId: update.updateId,
+            if (update.assignmentEpoch <= assignmentEpoch)
+              return yield* new SupervisorToolFailure({
+                code: "non_monotonic_assignment_epoch",
+                message: "Supervisor assignment epoch did not advance.",
               });
-              return undefined;
-            }),
-          ),
-          Effect.ensuring(Deferred.succeed(closed, undefined)),
-          Effect.forkIn(parent, { startImmediately: true }),
-        );
-        yield* Deferred.await(closed).pipe(
-          Effect.andThen(Effect.uninterruptible(Scope.close(connection, Exit.void))),
-          Effect.forkIn(parent, { startImmediately: true }),
-        );
-        return {
-          rpc,
-          auth,
-          assignmentEpoch: () => assignmentEpoch,
-          closed,
-        } satisfies SupervisorToolClient;
-      }),
-    );
-  });
+            assignmentEpoch = update.assignmentEpoch;
+            yield* rpc.SupervisorAcknowledgeAssignment({
+              ...auth,
+              assignmentEpoch,
+              updateId: update.updateId,
+            });
+            return undefined;
+          }),
+        ),
+        Effect.ensuring(Deferred.succeed(closed, undefined)),
+        Effect.forkIn(parent, { startImmediately: true }),
+      );
+      yield* Deferred.await(closed).pipe(
+        Effect.andThen(Effect.uninterruptible(Scope.close(connection, Exit.void))),
+        Effect.forkIn(parent, { startImmediately: true }),
+      );
+      return {
+        rpc,
+        auth,
+        assignmentEpoch: () => assignmentEpoch,
+        closed,
+      } satisfies SupervisorToolClient;
+    }),
+  );
+});

@@ -73,11 +73,8 @@ export interface LocalCliProcessContract {
   ) => Effect.Effect<LocalCliProcessHandle, SubagentProcessError, Scope.Scope>;
 }
 
-const validateLocalPreflightRequest = (
-  options: LocalCliHarnessOptions,
-  request: LocalCliPreflightRequest,
-) =>
-  Effect.gen(function* () {
+const validateLocalPreflightRequest = Effect.fn("LocalCliProcess.validateLocalPreflightRequest")(
+  function* (options: LocalCliHarnessOptions, request: LocalCliPreflightRequest) {
     if (request.context !== "fresh")
       return yield* preflightError(
         "context_unsupported",
@@ -120,7 +117,8 @@ const validateLocalPreflightRequest = (
       ),
     );
     return undefined;
-  });
+  },
+);
 
 const runVersionProbe = (
   options: LocalCliHarnessOptions,
@@ -154,11 +152,8 @@ const requireSupportedVersion = (runtime: LocalCliRuntime, version: LocalCliVers
       )
     : Effect.void;
 
-const resolveCodexApiKeyFallback = (
-  request: LocalCliPreflightRequest,
-  environment: NodeJS.ProcessEnv,
-) =>
-  Effect.gen(function* () {
+const resolveCodexApiKeyFallback = Effect.fn("LocalCliProcess.resolveCodexApiKeyFallback")(
+  function* (request: LocalCliPreflightRequest, environment: NodeJS.ProcessEnv) {
     if (request.runtime !== "codex") return false;
     const auth = yield* readValidatedCodexAuth(environment);
     const fallback = !auth && approvedCodexApiKey(environment) !== undefined;
@@ -168,7 +163,8 @@ const resolveCodexApiKeyFallback = (
         "Codex has no bounded valid auth.json to copy and no approved OPENAI_API_KEY fallback.",
       );
     return fallback;
-  });
+  },
+);
 
 const runLocalPreflightProbe = (
   options: LocalCliHarnessOptions,
@@ -198,47 +194,46 @@ const runLocalPreflightProbe = (
   );
 };
 
-const validateLocalProbeResult = (
+const validateLocalProbeResult = Effect.fn("LocalCliProcess.validateLocalProbeResult")(function* (
   request: LocalCliPreflightRequest,
   result: ProbeResult,
   codexApiKeyFallback: boolean,
-) =>
-  Effect.gen(function* () {
-    if (result.cleanupUnconfirmed)
-      return yield* preflightError(
-        `${request.runtime}_preflight_cleanup_unconfirmed`,
-        `${request.runtime} readiness probe cleanup could not be confirmed; no later candidate will be attempted.`,
-      );
-    if (result.timedOut || result.overflowed)
-      return yield* preflightError(
-        `${request.runtime}_preflight_unbounded`,
-        `${request.runtime} readiness preflight exceeded its time or output bound.`,
-      );
-    if (result.code !== 0)
-      return yield* preflightError(
-        result.code === null
-          ? `${request.runtime}_executable_unavailable`
-          : `${request.runtime}_unauthenticated`,
-        result.code === null
-          ? `${request.runtime} executable is unavailable.`
-          : `${request.runtime} authentication is unavailable.`,
-      );
-    if (request.runtime === "claude" && !claudeAuthLoggedIn(result.stdout))
-      return yield* preflightError(
-        "claude_unauthenticated",
-        "Claude Code auth status did not confirm an authenticated account.",
-      );
-    if (
-      request.runtime === "codex" &&
-      !codexApiKeyFallback &&
-      !/logged in/i.test(`${result.stdout}\n${result.stderr}`)
-    )
-      return yield* preflightError(
-        "codex_unauthenticated",
-        "Codex login status did not confirm an authenticated account.",
-      );
-    return undefined;
-  });
+) {
+  if (result.cleanupUnconfirmed)
+    return yield* preflightError(
+      `${request.runtime}_preflight_cleanup_unconfirmed`,
+      `${request.runtime} readiness probe cleanup could not be confirmed; no later candidate will be attempted.`,
+    );
+  if (result.timedOut || result.overflowed)
+    return yield* preflightError(
+      `${request.runtime}_preflight_unbounded`,
+      `${request.runtime} readiness preflight exceeded its time or output bound.`,
+    );
+  if (result.code !== 0)
+    return yield* preflightError(
+      result.code === null
+        ? `${request.runtime}_executable_unavailable`
+        : `${request.runtime}_unauthenticated`,
+      result.code === null
+        ? `${request.runtime} executable is unavailable.`
+        : `${request.runtime} authentication is unavailable.`,
+    );
+  if (request.runtime === "claude" && !claudeAuthLoggedIn(result.stdout))
+    return yield* preflightError(
+      "claude_unauthenticated",
+      "Claude Code auth status did not confirm an authenticated account.",
+    );
+  if (
+    request.runtime === "codex" &&
+    !codexApiKeyFallback &&
+    !/logged in/i.test(`${result.stdout}\n${result.stderr}`)
+  )
+    return yield* preflightError(
+      "codex_unauthenticated",
+      "Codex login status did not confirm an authenticated account.",
+    );
+  return undefined;
+});
 
 const acquireLocalCli = Effect.fn("LocalCliProcess.acquire")(function* (
   options: LocalCliHarnessOptions,
@@ -282,46 +277,45 @@ const acquireLocalCli = Effect.fn("LocalCliProcess.acquire")(function* (
   return handle;
 });
 
-const makeLocalCliProcess = (
+const makeLocalCliProcess = Effect.fn("LocalCliProcess.make")(function* (
   options: LocalCliHarnessOptions,
-): Effect.Effect<LocalCliProcessContract> =>
-  Effect.gen(function* () {
-    const environment = options.environment ?? process.env;
-    // A CLI rarely changes within a session; an unavailable one is probed again next time.
-    const versions = yield* Cache.makeWith(
-      (runtime: LocalCliRuntime) => runVersionProbe(options, runtime, environment),
-      {
-        capacity: 2,
-        timeToLive: (exit) =>
-          Exit.isSuccess(exit) && exit.value.status !== "unavailable"
-            ? Duration.infinity
-            : Duration.zero,
-      },
+): Effect.fn.Return<LocalCliProcessContract> {
+  const environment = options.environment ?? process.env;
+  // A CLI rarely changes within a session; an unavailable one is probed again next time.
+  const versions = yield* Cache.makeWith(
+    (runtime: LocalCliRuntime) => runVersionProbe(options, runtime, environment),
+    {
+      capacity: 2,
+      timeToLive: (exit) =>
+        Exit.isSuccess(exit) && exit.value.status !== "unavailable"
+          ? Duration.infinity
+          : Duration.zero,
+    },
+  );
+  const cachedVersion = (runtime: LocalCliRuntime) => Cache.get(versions, runtime);
+  const version = (runtime: LocalCliRuntime): Effect.Effect<LocalCliVersion> =>
+    cachedVersion(runtime).pipe(
+      Effect.orElseSucceed((): LocalCliVersion => ({ status: "unavailable" })),
     );
-    const cachedVersion = (runtime: LocalCliRuntime) => Cache.get(versions, runtime);
-    const version = (runtime: LocalCliRuntime): Effect.Effect<LocalCliVersion> =>
-      cachedVersion(runtime).pipe(
-        Effect.orElseSucceed((): LocalCliVersion => ({ status: "unavailable" })),
+  return {
+    preflight: Effect.fn("LocalCliProcess.preflight")(function* (
+      request: LocalCliPreflightRequest,
+    ) {
+      yield* validateLocalPreflightRequest(options, request);
+      yield* requireSupportedVersion(request.runtime, yield* cachedVersion(request.runtime));
+      const codexApiKeyFallback = yield* resolveCodexApiKeyFallback(request, environment);
+      const result = yield* runLocalPreflightProbe(
+        options,
+        request,
+        environment,
+        codexApiKeyFallback,
       );
-    return {
-      preflight: Effect.fn("LocalCliProcess.preflight")(function* (
-        request: LocalCliPreflightRequest,
-      ) {
-        yield* validateLocalPreflightRequest(options, request);
-        yield* requireSupportedVersion(request.runtime, yield* cachedVersion(request.runtime));
-        const codexApiKeyFallback = yield* resolveCodexApiKeyFallback(request, environment);
-        const result = yield* runLocalPreflightProbe(
-          options,
-          request,
-          environment,
-          codexApiKeyFallback,
-        );
-        yield* validateLocalProbeResult(request, result, codexApiKeyFallback);
-      }),
-      version,
-      spawn: (request) => acquireLocalCli(options, request),
-    } satisfies LocalCliProcessContract;
-  });
+      yield* validateLocalProbeResult(request, result, codexApiKeyFallback);
+    }),
+    version,
+    spawn: (request) => acquireLocalCli(options, request),
+  } satisfies LocalCliProcessContract;
+});
 
 export class LocalCliProcess extends Context.Service<LocalCliProcess, LocalCliProcessContract>()(
   "pi-subagents/boundary/local-cli-process/LocalCliProcess",

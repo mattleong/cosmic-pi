@@ -119,53 +119,56 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
     workspaces,
   } = dependencies;
 
-  const enforceScriptedAdmissionLocked = (request: StartSubagentRequest, scriptedRoot: boolean) =>
-    Effect.gen(function* () {
+  const enforceScriptedAdmissionLocked = Effect.fn("SubagentLaunch.enforceScriptedAdmissionLocked")(
+    function* (request: StartSubagentRequest, scriptedRoot: boolean) {
       if (request.writeIntent === "writer" && scriptOriginForStart(records, request, scriptedRoot))
         return yield* scriptedWriterAdmissionError();
       return undefined;
-    });
+    },
+  );
 
-  const parentLocked = (request: StartSubagentRequest) =>
-    Effect.gen(function* () {
-      const parentRunId = request.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
-      const { maxDepth } = request.nestingPolicy ?? DEFAULT_SUBAGENT_NESTING_POLICY;
-      const parent = parentRunId === SUBAGENT_ROOT_RUN_ID ? undefined : records.get(parentRunId);
-      if (parentRunId !== SUBAGENT_ROOT_RUN_ID && !parent)
-        return yield* invalidRequest(
-          "parent_run_not_found",
-          `Subagent parent ${parentRunId} is no longer registered.`,
-        );
-      if (parent && (parent.stoppedByParent || !isActiveRunState(parent.view.state)))
-        return yield* invalidRequest(
-          "parent_run_disconnected",
-          `Subagent parent ${parentRunId} is not connected and cannot spawn a child.`,
-        );
-      const parentDepth = parent?.view.depth ?? 0;
-      if (parentDepth >= maxDepth)
-        return yield* invalidRequest(
-          "nesting_depth_limit",
-          `Subagent nesting depth reached (${maxDepth}); ${parentRunId} cannot spawn another Pi run node.`,
-        );
-      return parent;
-    });
+  const parentLocked = Effect.fn("SubagentLaunch.parentLocked")(function* (
+    request: StartSubagentRequest,
+  ) {
+    const parentRunId = request.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
+    const { maxDepth } = request.nestingPolicy ?? DEFAULT_SUBAGENT_NESTING_POLICY;
+    const parent = parentRunId === SUBAGENT_ROOT_RUN_ID ? undefined : records.get(parentRunId);
+    if (parentRunId !== SUBAGENT_ROOT_RUN_ID && !parent)
+      return yield* invalidRequest(
+        "parent_run_not_found",
+        `Subagent parent ${parentRunId} is no longer registered.`,
+      );
+    if (parent && (parent.stoppedByParent || !isActiveRunState(parent.view.state)))
+      return yield* invalidRequest(
+        "parent_run_disconnected",
+        `Subagent parent ${parentRunId} is not connected and cannot spawn a child.`,
+      );
+    const parentDepth = parent?.view.depth ?? 0;
+    if (parentDepth >= maxDepth)
+      return yield* invalidRequest(
+        "nesting_depth_limit",
+        `Subagent nesting depth reached (${maxDepth}); ${parentRunId} cannot spawn another Pi run node.`,
+      );
+    return parent;
+  });
 
-  const spendLimitLocked = (spendLimit: SessionSpendLimit | undefined) =>
-    Effect.gen(function* () {
-      const refusal = spendLimitRefusalLocked(dependencies.sessionUsage, records, spendLimit);
-      if (refusal?.kind === "invalid")
-        return yield* invalidRequest(
-          "session_spend_limit_invalid",
-          `The configured sessionSpendLimit is invalid (${refusal.diagnostic}); no new runs start until it is fixed.`,
-        );
-      if (refusal)
-        return yield* new SubagentCapacityError({
-          limit: refusal.dollars,
-          code: "session_spend_limit",
-          message: `This session's subagents have spent $${refusal.spent.toFixed(2)} of its $${refusal.dollars.toFixed(2)} limit (sessionSpendLimit); no new runs start.`,
-        });
-      return undefined;
-    });
+  const spendLimitLocked = Effect.fn("SubagentLaunch.spendLimitLocked")(function* (
+    spendLimit: SessionSpendLimit | undefined,
+  ) {
+    const refusal = spendLimitRefusalLocked(dependencies.sessionUsage, records, spendLimit);
+    if (refusal?.kind === "invalid")
+      return yield* invalidRequest(
+        "session_spend_limit_invalid",
+        `The configured sessionSpendLimit is invalid (${refusal.diagnostic}); no new runs start until it is fixed.`,
+      );
+    if (refusal)
+      return yield* new SubagentCapacityError({
+        limit: refusal.dollars,
+        code: "session_spend_limit",
+        message: `This session's subagents have spent $${refusal.spent.toFixed(2)} of its $${refusal.dollars.toFixed(2)} limit (sessionSpendLimit); no new runs start.`,
+      });
+    return undefined;
+  });
 
   // Writers check what admission will refuse before canonicalizing a cwd or acquiring a
   // workspace; admission repeats every check under the same lock.
@@ -239,8 +242,8 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
             }),
           );
 
-        const validateCapacityLocked = (ownReservation: RunRecord | undefined) =>
-          Effect.gen(function* () {
+        const validateCapacityLocked = Effect.fn("SubagentLaunch.validateCapacityLocked")(
+          function* (ownReservation: RunRecord | undefined) {
             const capacityFailure = processCapacityError(
               records,
               parentRunId,
@@ -266,70 +269,74 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
             );
             if (writerFailure) return yield* writerFailure;
             return undefined;
-          });
+          },
+        );
 
-        const checkAdmissionLocked = (ownReservation?: RunRecord) =>
-          Effect.gen(function* () {
-            yield* enforceScriptedAdmissionLocked(request, scriptedRoot);
-            const parent = yield* parentLocked(request);
-            yield* validateCapacityLocked(ownReservation);
-            return parent;
-          });
+        const checkAdmissionLocked = Effect.fn("SubagentLaunch.checkAdmissionLocked")(function* (
+          ownReservation?: RunRecord,
+        ) {
+          yield* enforceScriptedAdmissionLocked(request, scriptedRoot);
+          const parent = yield* parentLocked(request);
+          yield* validateCapacityLocked(ownReservation);
+          return parent;
+        });
 
         const plan: LaunchPlan = { request, parentRunId, cwd };
         const evictionEligible = (record: RunRecord) => isEvictionEligible({ records }, record);
 
-        const admitLocked = (evicted: RunRecord | undefined, parent: RunRecord | undefined) =>
-          Effect.gen(function* () {
-            if (evicted) {
-              evicted.evictionClaim = undefined;
-              retireRunUsageLocked(dependencies.sessionUsage, evicted);
-              records.delete(evicted.view.id);
-              delivery.discardQuestionLocked(evicted.view.id);
-            }
-            const scope = yield* Scope.make();
-            const initializationSettled = yield* Deferred.make<void>();
-            const cleanupSettlement = yield* Deferred.make<"confirmed" | "quarantined">();
-            const { id, name } = allocateRunIdentity(requestedName);
-            const attemptToken = allocateAssignmentAttemptToken();
-            const writerPool = canonicalWriterCwd
-              ? yield* writerPools.joinLocked(canonicalWriterCwd, id)
-              : undefined;
-            const record: RunRecord = {
-              scriptOrigin: scriptOriginForStart(records, request, scriptedRoot),
-              view: initialRunView(plan, parent, id, driver.capabilities, now),
-              scope,
-              driver,
-              launch: backendLaunchRequest(plan, { id, name }),
-              activeTools: new Map(),
-              nativeAgents: new Set(),
-              cleanupSettlement,
-              cleanupDisposition: "none",
-              pauseRequested: false,
-              stoppedByParent: false,
-              runStateReclaimState: "pending",
-              ...(canonicalWriterCwd && { canonicalWriterCwd, writerPool }),
-              initialization: { settled: initializationSettled },
-              notificationGeneration: 0,
-              completionGeneration: 0,
-              warningSlots: {},
-              completionGenerations: new Map(),
-              completionClaims: new Map(),
-              assignment: {
-                epoch: 1,
-                phase: "preparing",
-                attemptToken,
-                startedObserved: false,
-                outcomeUncertain: false,
-                pendingRunSettled: false,
-              },
-              nextAssignmentEpoch: 2,
-            };
-            records.set(id, record);
-            workspaces.bind(request, record);
-            yield* publish;
-            return record;
-          });
+        const admitLocked = Effect.fn("SubagentLaunch.admitLocked")(function* (
+          evicted: RunRecord | undefined,
+          parent: RunRecord | undefined,
+        ) {
+          if (evicted) {
+            evicted.evictionClaim = undefined;
+            retireRunUsageLocked(dependencies.sessionUsage, evicted);
+            records.delete(evicted.view.id);
+            delivery.discardQuestionLocked(evicted.view.id);
+          }
+          const scope = yield* Scope.make();
+          const initializationSettled = yield* Deferred.make<void>();
+          const cleanupSettlement = yield* Deferred.make<"confirmed" | "quarantined">();
+          const { id, name } = allocateRunIdentity(requestedName);
+          const attemptToken = allocateAssignmentAttemptToken();
+          const writerPool = canonicalWriterCwd
+            ? yield* writerPools.joinLocked(canonicalWriterCwd, id)
+            : undefined;
+          const record: RunRecord = {
+            scriptOrigin: scriptOriginForStart(records, request, scriptedRoot),
+            view: initialRunView(plan, parent, id, driver.capabilities, now),
+            scope,
+            driver,
+            launch: backendLaunchRequest(plan, { id, name }),
+            activeTools: new Map(),
+            nativeAgents: new Set(),
+            cleanupSettlement,
+            cleanupDisposition: "none",
+            pauseRequested: false,
+            stoppedByParent: false,
+            runStateReclaimState: "pending",
+            ...(canonicalWriterCwd && { canonicalWriterCwd, writerPool }),
+            initialization: { settled: initializationSettled },
+            notificationGeneration: 0,
+            completionGeneration: 0,
+            warningSlots: {},
+            completionGenerations: new Map(),
+            completionClaims: new Map(),
+            assignment: {
+              epoch: 1,
+              phase: "preparing",
+              attemptToken,
+              startedObserved: false,
+              outcomeUncertain: false,
+              pendingRunSettled: false,
+            },
+            nextAssignmentEpoch: 2,
+          };
+          records.set(id, record);
+          workspaces.bind(request, record);
+          yield* publish;
+          return record;
+        });
         const reserveOrClaim = () =>
           withLock(
             Effect.gen(function* () {

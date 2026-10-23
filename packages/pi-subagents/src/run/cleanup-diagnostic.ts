@@ -10,9 +10,7 @@ const FailureDetails = Schema.Struct({
   code: Schema.optional(Schema.String),
 });
 
-const failureDetails = (
-  reason: Cause.Reason<unknown>,
-): Schema.Schema.Type<typeof FailureDetails> => {
+const failureDetails = (reason: Cause.Reason<unknown>): typeof FailureDetails.Type => {
   if (Cause.isInterruptReason(reason)) return { message: "Cleanup was interrupted." };
   const value = Cause.isFailReason(reason) ? reason.error : reason.defect;
   const details = Schema.decodeUnknownOption(FailureDetails)(value);

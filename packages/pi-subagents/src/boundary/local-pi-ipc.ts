@@ -20,10 +20,10 @@ export interface LocalPiIpcPort<Outbound> {
   readonly events: Pick<NodeJS.EventEmitter, "on" | "off">;
 }
 
-export class ParentContactError extends Schema.TaggedError<ParentContactError>()(
-  "ParentContactError",
-  { message: Schema.String, code: Schema.optional(Schema.String) },
-) {}
+export class ParentContactError extends Schema.TaggedError<
+  ParentContactError,
+  { readonly brand: unique symbol }
+>()("ParentContactError", { message: Schema.String, code: Schema.optional(Schema.String) }) {}
 
 const boundedSend = <Message, Failure>(
   port: LocalPiIpcPort<Message>,

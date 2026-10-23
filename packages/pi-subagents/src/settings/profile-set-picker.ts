@@ -300,7 +300,7 @@ export class ProfileSetPickerComponent implements Component, Focusable {
       mode: "search",
       matchesKeybinding: this.options.matchesKeybinding,
     });
-    if (resolution?._tag === "Action") {
+    if (Predicate.isTagged(resolution, "Action")) {
       this.handleSearchAction(resolution.action, pageSteps(this.options.getHeight() - 8));
     } else if (data === "\u007f" || data === "\b") {
       this.query = this.query.slice(0, -1);

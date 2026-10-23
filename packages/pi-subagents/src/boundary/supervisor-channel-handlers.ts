@@ -166,8 +166,8 @@ const dispatchAgent = <A>(
 export const supervisorChannelHandlers = (state: SupervisorChannelState) =>
   SupervisorRpcGroup.toHandlers(
     SupervisorRpcGroup.of({
-      SupervisorOpenSession: (payload, options) =>
-        Effect.gen(function* () {
+      SupervisorOpenSession: Effect.fn("SupervisorChannelHandlers.openSession")(
+        function* (payload, options) {
           const guard = yield* authorize(state, options.client.id, payload);
           // Allocate before the check so a concurrent open can't replace the first peer's queue.
           const assignments = yield* Queue.bounded<AssignmentUpdate, Cause.Done>(4);
@@ -180,7 +180,8 @@ export const supervisorChannelHandlers = (state: SupervisorChannelState) =>
             });
           }
           return { assignmentEpoch: state.currentAssignmentEpoch };
-        }),
+        },
+      ),
 
       SupervisorWatchAssignments: (payload, options) =>
         Stream.unwrap(
@@ -204,8 +205,8 @@ export const supervisorChannelHandlers = (state: SupervisorChannelState) =>
           }),
         ),
 
-      SupervisorAcknowledgeAssignment: (payload, options) =>
-        Effect.gen(function* () {
+      SupervisorAcknowledgeAssignment: Effect.fn("SupervisorChannelHandlers.acknowledgeAssignment")(
+        function* (payload, options) {
           yield* authorizePeer(state, options.client.id, payload);
           const acknowledgement = state.epochAcknowledgements.get(payload.updateId);
           if (
@@ -230,15 +231,16 @@ export const supervisorChannelHandlers = (state: SupervisorChannelState) =>
           }
           Deferred.doneUnsafe(acknowledgement.firstAcknowledgement, Effect.void);
           return undefined;
-        }),
+        },
+      ),
 
       SupervisorProgress: (payload, options) =>
         dispatchContact(state, "progress", payload, options.client.id),
       SupervisorWarning: (payload, options) =>
         dispatchContact(state, "warning", payload, options.client.id),
 
-      SupervisorQuestion: (payload, options) =>
-        Effect.gen(function* () {
+      SupervisorQuestion: Effect.fn("SupervisorChannelHandlers.question")(
+        function* (payload, options) {
           yield* authorizeAssignment(state, options.client.id, payload);
           yield* refuseNativeSubAgent(state, payload);
           if (state.pendingQuestion)
@@ -275,81 +277,82 @@ export const supervisorChannelHandlers = (state: SupervisorChannelState) =>
               }),
             ),
           );
-        }),
+        },
+      ),
 
-      SupervisorAcknowledgeQuestionReply: (payload, options) =>
-        Effect.gen(function* () {
-          yield* authorize(state, options.client.id, payload);
-          const pending = state.pendingQuestion;
+      SupervisorAcknowledgeQuestionReply: Effect.fn(
+        "SupervisorChannelHandlers.acknowledgeQuestionReply",
+      )(function* (payload, options) {
+        yield* authorize(state, options.client.id, payload);
+        const pending = state.pendingQuestion;
+        if (
+          !pending ||
+          pending.peerId !== options.client.id ||
+          pending.requestId !== payload.questionId ||
+          pending.epoch !== payload.assignmentEpoch ||
+          !pending.replyStarted
+        )
+          return yield* rpcFailure(
+            "reply_ack_mismatch",
+            "Question reply acknowledgement did not match the pending reply.",
+          );
+        state.pendingQuestion = undefined;
+        Deferred.doneUnsafe(pending.acknowledgement, Effect.void);
+        return undefined;
+      }),
+
+      SupervisorReport: Effect.fn("SupervisorChannelHandlers.report")(function* (payload, options) {
+        yield* authorizeAssignment(state, options.client.id, payload);
+        yield* refuseNativeSubAgent(state, payload);
+        const previous = state.reports.get(payload.deliveryId);
+        if (previous) {
           if (
-            !pending ||
-            pending.peerId !== options.client.id ||
-            pending.requestId !== payload.questionId ||
-            pending.epoch !== payload.assignmentEpoch ||
-            !pending.replyStarted
+            previous.assignmentEpoch !== payload.assignmentEpoch ||
+            previous.text !== payload.text
           )
             return yield* rpcFailure(
-              "reply_ack_mismatch",
-              "Question reply acknowledgement did not match the pending reply.",
+              "delivery_identity_conflict",
+              "The report delivery identity was already used for different evidence.",
             );
-          state.pendingQuestion = undefined;
-          Deferred.doneUnsafe(pending.acknowledgement, Effect.void);
-          return undefined;
-        }),
-
-      SupervisorReport: (payload, options) =>
-        Effect.gen(function* () {
-          yield* authorizeAssignment(state, options.client.id, payload);
-          yield* refuseNativeSubAgent(state, payload);
-          const previous = state.reports.get(payload.deliveryId);
-          if (previous) {
-            if (
-              previous.assignmentEpoch !== payload.assignmentEpoch ||
-              previous.text !== payload.text
-            )
-              return yield* rpcFailure(
-                "delivery_identity_conflict",
-                "The report delivery identity was already used for different evidence.",
-              );
-            return {
-              duplicate: true,
-              sequence: previous.sequence,
-              assignmentEpoch: previous.assignmentEpoch,
-            };
-          }
-          if (state.reports.size >= MAX_REPORT_DELIVERIES)
-            return yield* rpcFailure(
-              "report_identity_capacity",
-              "The report delivery identity map is full.",
-            );
-          const sequence = state.nextReportSequence;
-          const report: BackendReport & { readonly type: "report" } = {
-            type: "report",
-            runId: state.runId,
-            assignmentEpoch: payload.assignmentEpoch,
-            sequence,
-            deliveryId: payload.deliveryId,
-            text: payload.text,
-            evidence: REPORT_EVIDENCE,
+          return {
+            duplicate: true,
+            sequence: previous.sequence,
+            assignmentEpoch: previous.assignmentEpoch,
           };
-          const cancelsQuestion =
-            state.pendingQuestion !== undefined &&
-            state.pendingQuestion.epoch <= payload.assignmentEpoch;
-          if (
-            !hasEventCapacity(state, state.pendingQuestion === undefined ? 1 : 2) ||
-            !Queue.offerUnsafe(state.events, report)
-          )
-            return yield* eventQueueFull();
-          if (cancelsQuestion)
-            failPendingQuestion(
-              state,
-              "question_cancelled_by_report",
-              "The pending question was cancelled because its assignment report was accepted.",
-            );
-          state.reports.set(payload.deliveryId, report);
-          state.nextReportSequence += 1;
-          return { duplicate: false, sequence, assignmentEpoch: payload.assignmentEpoch };
-        }),
+        }
+        if (state.reports.size >= MAX_REPORT_DELIVERIES)
+          return yield* rpcFailure(
+            "report_identity_capacity",
+            "The report delivery identity map is full.",
+          );
+        const sequence = state.nextReportSequence;
+        const report: BackendReport & { readonly type: "report" } = {
+          type: "report",
+          runId: state.runId,
+          assignmentEpoch: payload.assignmentEpoch,
+          sequence,
+          deliveryId: payload.deliveryId,
+          text: payload.text,
+          evidence: REPORT_EVIDENCE,
+        };
+        const cancelsQuestion =
+          state.pendingQuestion !== undefined &&
+          state.pendingQuestion.epoch <= payload.assignmentEpoch;
+        if (
+          !hasEventCapacity(state, state.pendingQuestion === undefined ? 1 : 2) ||
+          !Queue.offerUnsafe(state.events, report)
+        )
+          return yield* eventQueueFull();
+        if (cancelsQuestion)
+          failPendingQuestion(
+            state,
+            "question_cancelled_by_report",
+            "The pending question was cancelled because its assignment report was accepted.",
+          );
+        state.reports.set(payload.deliveryId, report);
+        state.nextReportSequence += 1;
+        return { duplicate: false, sequence, assignmentEpoch: payload.assignmentEpoch };
+      }),
 
       SupervisorAgentList: (payload, options) =>
         dispatchAgent(state, options.client.id, payload, (agents) =>

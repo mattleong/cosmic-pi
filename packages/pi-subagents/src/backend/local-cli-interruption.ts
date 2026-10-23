@@ -3,8 +3,9 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import type { LocalCliWireEvent } from "../boundary/local-cli-transport.ts";
-import { processError, SubagentProcessError, type SubagentError } from "../run/errors.ts";
+import { processError, type SubagentError } from "../run/errors.ts";
 import type { LocalCliRawEventOwnership } from "./local-cli-events.ts";
 
 const INTERRUPT_TIMEOUT = "10 seconds";
@@ -17,7 +18,8 @@ const classifyLocalCliInterruptOwnership = <A>(
   return Cause.findErrorOption(exit.cause).pipe(
     Option.exists(
       (error) =>
-        error instanceof SubagentProcessError && error.code === "interrupt_outcome_uncertain",
+        Predicate.isTagged(error, "SubagentProcessError") &&
+        error.code === "interrupt_outcome_uncertain",
     ),
   )
     ? "retain"

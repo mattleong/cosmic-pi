@@ -147,8 +147,8 @@ const LocalPiParentControlSchema = Schema.Union([
   ProxyNotificationSchema,
   TurnInputBarrierSchema,
 ]);
-export type LocalPiContact = Schema.Schema.Type<typeof LocalPiContactSchema>;
-export type LocalPiParentControl = Schema.Schema.Type<typeof LocalPiParentControlSchema>;
+export type LocalPiContact = typeof LocalPiContactSchema.Type;
+export type LocalPiParentControl = typeof LocalPiParentControlSchema.Type;
 export const decodeLocalPiContactOption = Schema.decodeUnknownOption(LocalPiContactSchema);
 export const decodeLocalPiParentControlOption = Schema.decodeUnknownOption(
   LocalPiParentControlSchema,
@@ -172,21 +172,20 @@ const RpcEventSchema = Schema.Union([
 const RPC_EVENT_TYPES: ReadonlySet<string> = new Set(
   RpcEventSchema.members.map((member) => member.fields.type.literal),
 );
-export type RpcResponse = Schema.Schema.Type<typeof RpcResponseSchema>;
+export type RpcResponse = typeof RpcResponseSchema.Type;
 export type RpcChildEnvelope =
   | typeof RpcEventSchema.Type
   | { readonly type: "ignored"; readonly eventType: string };
 
-export const decodeRpcEnvelope = (
+export const decodeRpcEnvelope = Effect.fnUntraced(function* (
   value: Schema.Json,
-): Effect.Effect<RpcChildEnvelope, Schema.SchemaError> =>
-  Effect.gen(function* () {
-    const discriminant = yield* Schema.decodeUnknownEffect(RpcDiscriminantSchema)(value);
-    if (RPC_EVENT_TYPES.has(discriminant.type ?? ""))
-      return yield* Schema.decodeUnknownEffect(RpcEventSchema)(value);
-    const ignored = yield* Schema.decodeUnknownEffect(IgnoredEventSchema)(value);
-    return { type: "ignored" as const, eventType: ignored.type };
-  });
+): Effect.fn.Return<RpcChildEnvelope, Schema.SchemaError> {
+  const discriminant = yield* Schema.decodeUnknownEffect(RpcDiscriminantSchema)(value);
+  if (RPC_EVENT_TYPES.has(discriminant.type ?? ""))
+    return yield* Schema.decodeUnknownEffect(RpcEventSchema)(value);
+  const ignored = yield* Schema.decodeUnknownEffect(IgnoredEventSchema)(value);
+  return { type: "ignored" as const, eventType: ignored.type };
+});
 
 const OversizedRpcFieldsSchema = Schema.Struct({
   type: ProtocolNameSchema,
@@ -251,7 +250,7 @@ const RpcStateDataSchema = Schema.Struct({
   sessionId: RpcStateSessionIdSchema,
 });
 
-type RpcStateData = Schema.Schema.Type<typeof RpcStateDataSchema>;
+type RpcStateData = typeof RpcStateDataSchema.Type;
 
 export const decodeRpcStateData = Schema.decodeUnknownEffect(RpcStateDataSchema);
 
@@ -275,28 +274,24 @@ const AssistantMessageSchema = Schema.Struct({
 });
 const MessageDiscriminantSchema = Schema.Struct({ role: Schema.optional(Schema.String) });
 
-export const decodeAssistantMessage = Effect.fn("SubagentProtocol.decodeAssistantMessage")(
-  function* (value: Schema.Json) {
-    const discriminant = yield* Schema.decodeUnknownEffect(MessageDiscriminantSchema)(value);
-    if (discriminant.role !== "assistant") return undefined;
-    return yield* Schema.decodeUnknownEffect(AssistantMessageSchema)(value);
-  },
-);
+export const decodeAssistantMessage = Effect.fnUntraced(function* (value: Schema.Json) {
+  const discriminant = yield* Schema.decodeUnknownEffect(MessageDiscriminantSchema)(value);
+  if (discriminant.role !== "assistant") return undefined;
+  return yield* Schema.decodeUnknownEffect(AssistantMessageSchema)(value);
+});
 
 const TextPartSchema = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String });
 const decodeTextPart = decodeUnknownOrUndefined(TextPartSchema);
 
 /** The `provider/model` selector a reply came from; extensions can switch it mid-run. */
-export const assistantModel = (
-  message: Schema.Schema.Type<typeof AssistantMessageSchema>,
-): string | undefined => {
+export const assistantModel = (message: typeof AssistantMessageSchema.Type): string | undefined => {
   const selector = `${message.provider ?? ""}/${message.model ?? ""}`;
   return message.provider && message.model && isSafeNativeModelSelector(selector)
     ? selector
     : undefined;
 };
 
-export const assistantText = (message: Schema.Schema.Type<typeof AssistantMessageSchema>): string =>
+export const assistantText = (message: typeof AssistantMessageSchema.Type): string =>
   message.content
     .flatMap((part) => decodeTextPart(part)?.text ?? [])
     .join("\n")

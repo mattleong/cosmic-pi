@@ -71,8 +71,8 @@ export function assignmentOperations(dependencies: RunAssignmentDependencies) {
   const { withLock, publish, startPrompt, activateAssignmentLocked, replayAssignmentActivation } =
     dependencies;
 
-  const confirmIssuedAssignment = (record: RunRecord, attemptToken: string) =>
-    Effect.gen(function* () {
+  const confirmIssuedAssignment = Effect.fn("SubagentAssignment.confirmIssuedAssignment")(
+    function* (record: RunRecord, attemptToken: string) {
       const result = yield* withLock(
         Effect.gen(function* () {
           if (!isCurrentIssuingAssignment(record, attemptToken))
@@ -85,28 +85,31 @@ export function assignmentOperations(dependencies: RunAssignmentDependencies) {
       return result.kind === "unchanged"
         ? result.view
         : yield* replayAssignmentActivation(record, result);
-    });
+    },
+  );
 
   // A report the attempt already accepted proves its task was issued, so it answers a start
   // request that failed afterwards, as one does when the exit following the report cancels it.
-  const answerFailedStart = (record: RunRecord, attemptToken: string) =>
-    Effect.gen(function* () {
-      const answer = yield* withLock(
-        Effect.gen(function* () {
-          if (record.assignment.attemptToken !== attemptToken) return undefined;
-          if (record.assignment.phase === "reported")
-            return { kind: "unchanged" as const, view: snapshotRun(record) };
-          if (!isCurrentIssuingAssignment(record, attemptToken) || !record.assignment.pendingReport)
-            return undefined;
-          const now = yield* Clock.currentTimeMillis;
-          return yield* activateAssignmentLocked(record, runningView(record, now));
-        }),
-      );
-      if (!answer) return undefined;
-      return answer.kind === "unchanged"
-        ? answer.view
-        : yield* replayAssignmentActivation(record, answer);
-    });
+  const answerFailedStart = Effect.fn("SubagentAssignment.answerFailedStart")(function* (
+    record: RunRecord,
+    attemptToken: string,
+  ) {
+    const answer = yield* withLock(
+      Effect.gen(function* () {
+        if (record.assignment.attemptToken !== attemptToken) return undefined;
+        if (record.assignment.phase === "reported")
+          return { kind: "unchanged" as const, view: snapshotRun(record) };
+        if (!isCurrentIssuingAssignment(record, attemptToken) || !record.assignment.pendingReport)
+          return undefined;
+        const now = yield* Clock.currentTimeMillis;
+        return yield* activateAssignmentLocked(record, runningView(record, now));
+      }),
+    );
+    if (!answer) return undefined;
+    return answer.kind === "unchanged"
+      ? answer.view
+      : yield* replayAssignmentActivation(record, answer);
+  });
 
   const submitPrompt = (
     record: RunRecord,
@@ -146,8 +149,8 @@ export function assignmentOperations(dependencies: RunAssignmentDependencies) {
       ),
     );
 
-  const retainUncertainAssignment = (record: RunRecord, attemptToken: string, warning: string) =>
-    Effect.gen(function* () {
+  const retainUncertainAssignment = Effect.fn("SubagentAssignment.retainUncertainAssignment")(
+    function* (record: RunRecord, attemptToken: string, warning: string) {
       const replay = yield* withLock(
         Effect.gen(function* () {
           if (!isCurrentIssuingAssignment(record, attemptToken)) return undefined;
@@ -172,7 +175,8 @@ export function assignmentOperations(dependencies: RunAssignmentDependencies) {
         }),
       );
       if (replay) yield* replayAssignmentActivation(record, replay);
-    });
+    },
+  );
 
   return { submitPrompt, retainUncertainAssignment };
 }

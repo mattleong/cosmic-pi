@@ -1,5 +1,6 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -72,7 +73,9 @@ it.live("returns a question's preview in the await result while its notice deliv
     });
     yield* Effect.sleep(Duration.millis(50));
     expect(
-      fixture.notifications.flatMap((item) => (item.type === "question" ? [item.message] : [])),
+      Arr.filterMap(fixture.notifications, (item) =>
+        item.type === "question" ? Result.succeed(item.message) : Result.failVoid,
+      ),
     ).toEqual(["Which change should I make?"]);
   }),
 );

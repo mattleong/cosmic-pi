@@ -191,48 +191,50 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
     return release(raw);
   };
 
-  const onAssistant = (event: ClaudeAssistantProtocolEvent, raw: LocalCliWireEvent) =>
-    Effect.gen(function* () {
-      if (event.parentToolUseId === undefined) handleState.continuationActivity = true;
-      for (const tool of event.tools) {
-        if (CLAUDE_NATIVE_AGENT_TOOL_NAMES.has(tool.name)) {
-          nativeToolNames.set(tool.id, tool.name);
-          yield* offer({
-            type: "native_agent_activity",
-            assignmentEpoch: handleState.assignmentEpoch,
-            activityId: tool.id,
-            kind: tool.name,
-            state: CLAUDE_NATIVE_AGENT_START_TOOLS.has(tool.name) ? "running" : "completed",
-          });
-          continue;
-        }
-        toolNames.set(tool.id, tool.name);
+  const onAssistant = Effect.fnUntraced(function* (
+    event: ClaudeAssistantProtocolEvent,
+    raw: LocalCliWireEvent,
+  ) {
+    if (event.parentToolUseId === undefined) handleState.continuationActivity = true;
+    for (const tool of event.tools) {
+      if (CLAUDE_NATIVE_AGENT_TOOL_NAMES.has(tool.name)) {
+        nativeToolNames.set(tool.id, tool.name);
         yield* offer({
-          type: "tool_started",
+          type: "native_agent_activity",
           assignmentEpoch: handleState.assignmentEpoch,
-          toolCallId: tool.id,
-          toolName: tool.name,
-          args: tool.input,
+          activityId: tool.id,
+          kind: tool.name,
+          state: CLAUDE_NATIVE_AGENT_START_TOOLS.has(tool.name) ? "running" : "completed",
         });
+        continue;
       }
-      const { delta, inconsistent } = usage.assistantDelta(event.messageId, event.usage);
-      if (inconsistent)
-        yield* offer({
-          type: "warning",
-          message:
-            "Claude reported a regressing cumulative assistant usage total; accounting stays monotone and the regression was ignored.",
-        });
-      const { text, originalSize } = boundOutputText(event.text ?? "");
-      yield* offer(
-        {
-          type: "assistant_message" as const,
-          assignmentEpoch: handleState.assignmentEpoch,
-          ...(text && { text, ...(originalSize && { originalSize }) }),
-          usage: { ...delta, totalTokens: usageComponentsTotal(delta) },
-        },
-        raw,
-      );
-    });
+      toolNames.set(tool.id, tool.name);
+      yield* offer({
+        type: "tool_started",
+        assignmentEpoch: handleState.assignmentEpoch,
+        toolCallId: tool.id,
+        toolName: tool.name,
+        args: tool.input,
+      });
+    }
+    const { delta, inconsistent } = usage.assistantDelta(event.messageId, event.usage);
+    if (inconsistent)
+      yield* offer({
+        type: "warning",
+        message:
+          "Claude reported a regressing cumulative assistant usage total; accounting stays monotone and the regression was ignored.",
+      });
+    const { text, originalSize } = boundOutputText(event.text ?? "");
+    yield* offer(
+      {
+        type: "assistant_message" as const,
+        assignmentEpoch: handleState.assignmentEpoch,
+        ...(text && { text, ...(originalSize && { originalSize }) }),
+        usage: { ...delta, totalTokens: usageComponentsTotal(delta) },
+      },
+      raw,
+    );
+  });
 
   const consumeEvent = (
     event: ClaudeProtocolEvent,

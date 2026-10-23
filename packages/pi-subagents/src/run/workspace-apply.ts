@@ -70,66 +70,65 @@ export function workspaceApplyOperations(
    * busy throughout; the operations permit is held per phase. Only a committed integration
    * publishes.
    */
-  const workspaceApply = (
+  const workspaceApply = Effect.fn("SubagentWorkspace.workspaceApply")(function* (
     workspaceId: string,
     { revisionId: pinnedRevisionId }: WorkspaceApplyOptions = {},
-    caller = SUBAGENT_ROOT_RUN_ID,
-  ): Effect.Effect<WorkspaceApplyResult, SubagentError> =>
-    Effect.gen(function* () {
-      const service = yield* requireEngine;
-      return yield* phases.hold(workspaceId, caller, (held) =>
-        Effect.gen(function* () {
-          const { binding, token } = held;
-          const integrate = (revisionId: string, preparationId: string) =>
-            integrateLocked(workspaceId, revisionId, preparationId, caller, token);
-          const prepared = yield* withLock(
-            Effect.gen(function* () {
-              if (isBindingFinished(binding)) return yield* workspaceFinishedError(binding);
-              if (state.integrationQuarantined)
-                return yield* invalid(
-                  "workspace_integration_quarantined",
-                  "Integration ownership is quarantined; further integration is blocked pending manual recovery.",
-                );
-              const knowledge = revisionKnowledge(binding);
-              return knowledge?.kind === "prepared" &&
-                knowledge.origin === "prepare" &&
-                (pinnedRevisionId === undefined || pinnedRevisionId === knowledge.revisionId)
-                ? knowledge
-                : undefined;
-            }),
-          );
-          if (prepared) {
-            const integration = yield* operations.withPermits(1)(
-              withLock(integrate(prepared.revisionId, prepared.preparationId)),
-            );
-            return appliedResult(
-              integration,
-              prepared.revisionId,
-              prepared.preparationId,
-              "parent-tested",
-            );
-          }
-          const revision = yield* operations.withPermits(1)(
-            phases.settledRevision(service, held, pinnedRevisionId),
-          );
-          const preparation = yield* operations.withPermits(1)(
-            phases.prepareHeld(service, held, revision.revisionId),
-          );
+    caller: string = SUBAGENT_ROOT_RUN_ID,
+  ): Effect.fn.Return<WorkspaceApplyResult, SubagentError> {
+    const service = yield* requireEngine;
+    return yield* phases.hold(workspaceId, caller, (held) =>
+      Effect.gen(function* () {
+        const { binding, token } = held;
+        const integrate = (revisionId: string, preparationId: string) =>
+          integrateLocked(workspaceId, revisionId, preparationId, caller, token);
+        const prepared = yield* withLock(
+          Effect.gen(function* () {
+            if (isBindingFinished(binding)) return yield* workspaceFinishedError(binding);
+            if (state.integrationQuarantined)
+              return yield* invalid(
+                "workspace_integration_quarantined",
+                "Integration ownership is quarantined; further integration is blocked pending manual recovery.",
+              );
+            const knowledge = revisionKnowledge(binding);
+            return knowledge?.kind === "prepared" &&
+              knowledge.origin === "prepare" &&
+              (pinnedRevisionId === undefined || pinnedRevisionId === knowledge.revisionId)
+              ? knowledge
+              : undefined;
+          }),
+        );
+        if (prepared) {
           const integration = yield* operations.withPermits(1)(
-            withLock(
-              phases
-                .markPrepared(held, preparation, "apply")
-                .pipe(Effect.andThen(integrate(revision.revisionId, preparation.preparationId))),
-            ),
+            withLock(integrate(prepared.revisionId, prepared.preparationId)),
           );
           return appliedResult(
             integration,
-            revision.revisionId,
-            preparation.preparationId,
-            "untested",
+            prepared.revisionId,
+            prepared.preparationId,
+            "parent-tested",
           );
-        }),
-      );
-    });
+        }
+        const revision = yield* operations.withPermits(1)(
+          phases.settledRevision(service, held, pinnedRevisionId),
+        );
+        const preparation = yield* operations.withPermits(1)(
+          phases.prepareHeld(service, held, revision.revisionId),
+        );
+        const integration = yield* operations.withPermits(1)(
+          withLock(
+            phases
+              .markPrepared(held, preparation, "apply")
+              .pipe(Effect.andThen(integrate(revision.revisionId, preparation.preparationId))),
+          ),
+        );
+        return appliedResult(
+          integration,
+          revision.revisionId,
+          preparation.preparationId,
+          "untested",
+        );
+      }),
+    );
+  });
   return workspaceApply;
 }

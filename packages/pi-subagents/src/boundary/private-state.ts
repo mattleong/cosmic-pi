@@ -129,13 +129,15 @@ const ownerLiveness = (
  * owner whose liveness can't be decided, such as one recorded in another identity format, may be
  * a live session, so its state is never aged out.
  */
-const isAbandoned = (context: SweepContext, directory: string): Effect.Effect<boolean> =>
-  Effect.gen(function* () {
-    const owner = yield* readOwner(directory);
-    if (Option.isSome(owner)) return (yield* ownerLiveness(context, owner.value)) === "dead";
-    const modified = yield* newestModification(directory);
-    return Option.isSome(modified) && context.now - modified.value > PRIVATE_STATE_RETENTION_MILLIS;
-  });
+const isAbandoned = Effect.fnUntraced(function* (
+  context: SweepContext,
+  directory: string,
+): Effect.fn.Return<boolean> {
+  const owner = yield* readOwner(directory);
+  if (Option.isSome(owner)) return (yield* ownerLiveness(context, owner.value)) === "dead";
+  const modified = yield* newestModification(directory);
+  return Option.isSome(modified) && context.now - modified.value > PRIVATE_STATE_RETENTION_MILLIS;
+});
 
 /**
  * Renames the entry to a tombstone first, so a concurrent Pi never finds it half deleted and a
@@ -182,29 +184,28 @@ const PRIVATE_ROOT_POLICY: SweepPolicy = {
 };
 
 /** Sweeps one directory's entries; returns how many it removed. */
-const sweepEntries = (
+const sweepEntries = Effect.fn("PrivateState.sweepEntries")(function* (
   context: SweepContext,
   parent: string,
   policy: SweepPolicy,
-): Effect.Effect<number> =>
-  Effect.gen(function* () {
-    let removed = 0;
-    for (const entry of yield* directoryEntries(parent)) {
-      const tombstone = policy.isTombstone(entry.name);
-      if (!tombstone && (!entry.isDirectory() || !policy.isCandidate(entry.name))) continue;
-      const path = nodePath.join(parent, entry.name);
-      if (policy.ownerUid !== undefined && !(yield* isOwnedRealDirectory(path, policy.ownerUid)))
-        continue;
-      if (tombstone) {
-        yield* Effect.option(removePrivateTree(path));
-        removed += 1;
-        continue;
-      }
-      if (!(yield* isAbandoned(context, path))) continue;
-      if (yield* removeEntry(parent, entry.name)) removed += 1;
+): Effect.fn.Return<number> {
+  let removed = 0;
+  for (const entry of yield* directoryEntries(parent)) {
+    const tombstone = policy.isTombstone(entry.name);
+    if (!tombstone && (!entry.isDirectory() || !policy.isCandidate(entry.name))) continue;
+    const path = nodePath.join(parent, entry.name);
+    if (policy.ownerUid !== undefined && !(yield* isOwnedRealDirectory(path, policy.ownerUid)))
+      continue;
+    if (tombstone) {
+      yield* Effect.option(removePrivateTree(path));
+      removed += 1;
+      continue;
     }
-    return removed;
-  });
+    if (!(yield* isAbandoned(context, path))) continue;
+    if (yield* removeEntry(parent, entry.name)) removed += 1;
+  }
+  return removed;
+});
 
 /** Claude temp roots share `/tmp` with every user, so only this user's real directories qualify. */
 const sweepClaudeTemporaryRoots = (context: SweepContext, parent: string): Effect.Effect<void> => {
@@ -229,11 +230,11 @@ interface PrivateStateSweepOptions {
  * writer leases, debug ledgers, and writer workspaces have their own owners and are never
  * touched. Every entry failure is ignored.
  */
-export const sweepAbandonedPrivateState = (
-  agentDirectory: string,
-  options: PrivateStateSweepOptions = {},
-): Effect.Effect<void> =>
-  Effect.gen(function* () {
+export const sweepAbandonedPrivateState = Effect.fn("PrivateState.sweepAbandonedPrivateState")(
+  function* (
+    agentDirectory: string,
+    options: PrivateStateSweepOptions = {},
+  ): Effect.fn.Return<void> {
     const context: SweepContext = { now: yield* Clock.currentTimeMillis, liveness: new Map() };
     yield* sweepClaudeTemporaryRoots(
       context,
@@ -259,4 +260,5 @@ export const sweepAbandonedPrivateState = (
       // late cleanup had to leave because it couldn't prove it created the directory.
       yield* io(() => fs.rmdir(session));
     }
-  });
+  },
+);

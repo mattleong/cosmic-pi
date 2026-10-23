@@ -1,3 +1,4 @@
+import * as Predicate from "effect/Predicate";
 import {
   Input,
   Key,
@@ -67,11 +68,12 @@ export class ProfileDashboardDialog implements Component, Focusable {
       mode: this.options.kind === "name" ? "text-input" : "confirmation",
       matchesKeybinding: this.options.matchesKeybinding,
     });
-    if (resolution?._tag === "Action" && resolution.action === "cancel") {
+    const action = Predicate.isTagged(resolution, "Action") ? resolution.action : undefined;
+    if (action === "cancel") {
       this.options.close(undefined);
       return;
     }
-    if (resolution?._tag === "Action" && resolution.action === "confirm") this.submit();
+    if (action === "confirm") this.submit();
     else if (this.options.kind === "name") {
       if (!this.toggleDestination(data)) this.input.handleInput(data);
       this.message = "";
@@ -80,7 +82,7 @@ export class ProfileDashboardDialog implements Component, Focusable {
         mode: "navigation",
         matchesKeybinding: this.options.matchesKeybinding,
       });
-      if (motion?._tag === "Action" && isListMotion(motion.action))
+      if (Predicate.isTagged(motion, "Action") && isListMotion(motion.action))
         this.offset = nextListMotionIndex(
           motion.action,
           this.offset,

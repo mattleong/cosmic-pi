@@ -33,8 +33,8 @@ import {
  * Refuses unless the worker path still names its original writer-directory identity. The caller
  * holds the original writer lease, so a matching identity proves no writer is left there.
  */
-export const requireOriginalWorker = (record: WorkspaceRecord, operation: string) =>
-  Effect.gen(function* () {
+export const requireOriginalWorker = Effect.fn("GitWorktreeRecovery.requireOriginalWorker")(
+  function* (record: WorkspaceRecord, operation: string) {
     const refusal = () =>
       workspaceRefusal(
         operation,
@@ -52,7 +52,8 @@ export const requireOriginalWorker = (record: WorkspaceRecord, operation: string
     );
     if (!isOriginalWorker(record.handle, current)) return yield* refusal();
     return undefined;
-  });
+  },
+);
 
 const editableTreeName = (name: string) =>
   name === "worker" || /^prepare-[a-f0-9-]{36}$/u.test(name);
@@ -62,15 +63,15 @@ const editableTreeName = (name: string) =>
  * for them, and its refs. Proves the removal complete. `beforeRemove` runs before each removal and
  * keeps the tree when it fails.
  */
-export const removeWorkspaceTrees = (
-  registry: string,
-  record: WorkspaceRecord,
-  options: {
-    readonly requireOriginalWorker?: boolean;
-    readonly beforeRemove?: BeforeTreeRemoval | undefined;
-  } = {},
-) =>
-  Effect.gen(function* () {
+export const removeWorkspaceTrees = Effect.fn("GitWorktreeRecovery.removeWorkspaceTrees")(
+  function* (
+    registry: string,
+    record: WorkspaceRecord,
+    options: {
+      readonly requireOriginalWorker?: boolean;
+      readonly beforeRemove?: BeforeTreeRemoval | undefined;
+    } = {},
+  ) {
     const directory = workspaceDirectory(registry, record.handle.workspaceId);
     const worker = path.join(directory, "worker");
     const remaining = Effect.gen(function* () {
@@ -102,23 +103,25 @@ export const removeWorkspaceTrees = (
       );
     yield* deleteWorkspaceRefs(record.repository, record.handle.workspaceId);
     return undefined;
-  });
+  },
+);
 
-const inspectRegistry = (registry: string) =>
-  Effect.gen(function* () {
-    yield* checkDirectory(registry, true);
-    const stat = yield* workspaceIOIfPresent("registry", () => fs.lstat(registry));
-    if (!stat) return undefined;
-    if (!stat.isDirectory() || stat.isSymbolicLink() || isSharedOrForeign(stat))
-      return yield* workspaceFailure(
-        "registry",
-        "Workspace registry path or permissions are invalid.",
-      );
-    return stat;
-  });
+const inspectRegistry = Effect.fn("GitWorktreeRecovery.inspectRegistry")(function* (
+  registry: string,
+) {
+  yield* checkDirectory(registry, true);
+  const stat = yield* workspaceIOIfPresent("registry", () => fs.lstat(registry));
+  if (!stat) return undefined;
+  if (!stat.isDirectory() || stat.isSymbolicLink() || isSharedOrForeign(stat))
+    return yield* workspaceFailure(
+      "registry",
+      "Workspace registry path or permissions are invalid.",
+    );
+  return stat;
+});
 
-export const listWorkspaceRecords = (registry: string) =>
-  Effect.gen(function* () {
+export const listWorkspaceRecords = Effect.fn("GitWorktreeRecovery.listWorkspaceRecords")(
+  function* (registry: string) {
     const records: WorkspaceRecord[] = [];
     const unavailable: UnavailableWorkspaceArtifact[] = [];
     const before = yield* inspectRegistry(registry);
@@ -140,7 +143,8 @@ export const listWorkspaceRecords = (registry: string) =>
     if (!after || before.dev !== after.dev || before.ino !== after.ino)
       return yield* workspaceFailure("registry", "Workspace registry changed during listing.");
     return { records, unavailable };
-  });
+  },
+);
 
 const finished = (record: WorkspaceRecord) =>
   record.status === "discarded" || record.status === "integrated";
@@ -151,33 +155,38 @@ const WORKSPACE_RECORD_RETENTION = Duration.days(7);
 const COLLECTED_PREFIX = ".collected-";
 
 // Renaming first keeps a half-removed directory out of every listing.
-const removeCollected = (registry: string, workspaceId: string) =>
-  Effect.gen(function* () {
-    const retired = path.join(registry, `${COLLECTED_PREFIX}${workspaceId}`);
-    yield* Effect.gen(function* () {
-      yield* workspaceIO("collect", () =>
-        fs.rename(workspaceDirectory(registry, workspaceId), retired),
-      );
-      yield* syncWorkspaceDirectory(registry);
-    }).pipe(Effect.uninterruptible);
-    yield* workspaceIO("collect", () => fs.rm(retired, { recursive: true, force: true }));
-  });
+const removeCollected = Effect.fn("GitWorktreeRecovery.removeCollected")(function* (
+  registry: string,
+  workspaceId: string,
+) {
+  const retired = path.join(registry, `${COLLECTED_PREFIX}${workspaceId}`);
+  yield* Effect.gen(function* () {
+    yield* workspaceIO("collect", () =>
+      fs.rename(workspaceDirectory(registry, workspaceId), retired),
+    );
+    yield* syncWorkspaceDirectory(registry);
+  }).pipe(Effect.uninterruptible);
+  yield* workspaceIO("collect", () => fs.rm(retired, { recursive: true, force: true }));
+});
 
-const collectRecord = (registry: string, workspaceId: string, now: number) =>
-  Effect.gen(function* () {
-    const record = yield* readWorkspaceRecord(registry, workspaceId);
-    if (!finished(record)) return false;
-    const directory = workspaceDirectory(registry, workspaceId);
-    yield* checkDirectory(directory);
-    const saved = yield* workspaceIO("collect", () => fs.stat(path.join(directory, "record.json")));
-    if (now - saved.mtimeMs < Duration.toMillis(WORKSPACE_RECORD_RETENTION)) return false;
-    const names = yield* workspaceIO("collect", () => fs.readdir(directory));
-    if (names.some(editableTreeName)) return false;
-    // Discard already deleted them; a repository that is gone has none left to delete.
-    yield* deleteWorkspaceRefs(record.repository, workspaceId).pipe(Effect.ignore);
-    yield* removeCollected(registry, workspaceId);
-    return true;
-  });
+const collectRecord = Effect.fn("GitWorktreeRecovery.collectRecord")(function* (
+  registry: string,
+  workspaceId: string,
+  now: number,
+) {
+  const record = yield* readWorkspaceRecord(registry, workspaceId);
+  if (!finished(record)) return false;
+  const directory = workspaceDirectory(registry, workspaceId);
+  yield* checkDirectory(directory);
+  const saved = yield* workspaceIO("collect", () => fs.stat(path.join(directory, "record.json")));
+  if (now - saved.mtimeMs < Duration.toMillis(WORKSPACE_RECORD_RETENTION)) return false;
+  const names = yield* workspaceIO("collect", () => fs.readdir(directory));
+  if (names.some(editableTreeName)) return false;
+  // Discard already deleted them; a repository that is gone has none left to delete.
+  yield* deleteWorkspaceRefs(record.repository, workspaceId).pipe(Effect.ignore);
+  yield* removeCollected(registry, workspaceId);
+  return true;
+});
 
 interface WorkspaceCollection {
   readonly now: number;
@@ -199,20 +208,23 @@ interface WorkspaceCollection {
 
 // A create that crashed after adding its worker left a locked worktree in the user's repository
 // that no run was ever given; once its session has provably ended, its trees and refs go.
-const abandonCreate = (registry: string, workspaceId: string, collection: WorkspaceCollection) =>
-  Effect.gen(function* () {
-    const record = yield* readWorkspaceRecord(registry, workspaceId);
-    if (record.status !== "creating") return false;
-    const removed = yield* collection.whenOwnerEnded(
-      record.ownerLease,
-      Effect.gen(function* () {
-        yield* removeWorkspaceTrees(registry, record);
-        yield* saveWorkspaceRecord(registry, { ...record, status: "discarded" });
-        return false;
-      }),
-    );
-    return Option.getOrElse(removed, () => false);
-  });
+const abandonCreate = Effect.fn("GitWorktreeRecovery.abandonCreate")(function* (
+  registry: string,
+  workspaceId: string,
+  collection: WorkspaceCollection,
+) {
+  const record = yield* readWorkspaceRecord(registry, workspaceId);
+  if (record.status !== "creating") return false;
+  const removed = yield* collection.whenOwnerEnded(
+    record.ownerLease,
+    Effect.gen(function* () {
+      yield* removeWorkspaceTrees(registry, record);
+      yield* saveWorkspaceRecord(registry, { ...record, status: "discarded" });
+      return false;
+    }),
+  );
+  return Option.getOrElse(removed, () => false);
+});
 
 const hasEditableTree = (registry: string, workspaceId: string) =>
   workspaceIOIfPresent("collect", () => fs.readdir(workspaceDirectory(registry, workspaceId))).pipe(
@@ -221,32 +233,31 @@ const hasEditableTree = (registry: string, workspaceId: string) =>
 
 // Integration keeps trees a run still uses. Once its session has provably ended, so no run can
 // still use them, its trees and refs go; the record stays for collection.
-const removeRetainedTrees = (
+const removeRetainedTrees = Effect.fn("GitWorktreeRecovery.removeRetainedTrees")(function* (
   registry: string,
   workspaceId: string,
   collection: WorkspaceCollection,
-) =>
-  Effect.gen(function* () {
-    const record = yield* readWorkspaceRecord(registry, workspaceId);
-    if (!finished(record)) return false;
-    yield* checkDirectory(workspaceDirectory(registry, workspaceId));
-    if (!(yield* hasEditableTree(registry, workspaceId))) return false;
-    const removed = yield* collection.whenOwnerEnded(
-      record.ownerLease,
-      removeWorkspaceTrees(registry, record, { beforeRemove: collection.beforeRemove }).pipe(
-        Effect.as(true),
-      ),
-    );
-    return Option.getOrElse(removed, () => false);
-  });
+) {
+  const record = yield* readWorkspaceRecord(registry, workspaceId);
+  if (!finished(record)) return false;
+  yield* checkDirectory(workspaceDirectory(registry, workspaceId));
+  if (!(yield* hasEditableTree(registry, workspaceId))) return false;
+  const removed = yield* collection.whenOwnerEnded(
+    record.ownerLease,
+    removeWorkspaceTrees(registry, record, { beforeRemove: collection.beforeRemove }).pipe(
+      Effect.as(true),
+    ),
+  );
+  return Option.getOrElse(removed, () => false);
+});
 
 /**
  * Deletes discarded and integrated records once they are a week old, unless an editable tree
  * remains, and discards creates whose session ended before they finished. Trees integration kept
  * go first, once nothing can still use them. Unreadable artifacts are never touched.
  */
-export const collectWorkspaceRecords = (registry: string, collection: WorkspaceCollection) =>
-  Effect.gen(function* () {
+export const collectWorkspaceRecords = Effect.fn("GitWorktreeRecovery.collectWorkspaceRecords")(
+  function* (registry: string, collection: WorkspaceCollection) {
     const { records } = yield* listWorkspaceRecords(registry);
     const collected: string[] = [];
     for (const record of records) {
@@ -300,4 +311,5 @@ export const collectWorkspaceRecords = (registry: string, collection: WorkspaceC
           fs.rm(path.join(registry, name), { recursive: true, force: true }),
         );
     return collected;
-  });
+  },
+);

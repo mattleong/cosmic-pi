@@ -160,30 +160,27 @@ export const localCliBackendDriver =
       supportsContext: (context) => context === "fresh",
       preflight: (request) => processes.preflight({ runtime, ...request }),
       ...(processes.version && { cliVersion: processes.version(runtime) }),
-      spawn: (request, agents) =>
-        Effect.gen(function* () {
-          const launch = withLocalSupervisorInstructions(request);
-          const supervisor = yield* Effect.mapError(
-            supervisors.open({ runId: request.runId, agents }),
-            supervisorError("open supervisor channel"),
-          );
-          const child = yield* processes.spawn({
-            runtime,
-            launch,
-            supervisor: supervisor.metadata,
-          });
-          const handle = yield* makeHandle(launch, child, supervisor);
-          return {
-            ...handle,
-            controls: {
-              ...handle.controls,
-              reply: (requestId: string, message: string) =>
-                supervisor
-                  .reply(requestId, message)
-                  .pipe(Effect.mapError(supervisorError("reply"))),
-              notifyPeers: () => unsupported("peer-notice"),
-            },
-          };
-        }),
+      spawn: Effect.fn("LocalCliDriver.spawn")(function* (request, agents) {
+        const launch = withLocalSupervisorInstructions(request);
+        const supervisor = yield* Effect.mapError(
+          supervisors.open({ runId: request.runId, agents }),
+          supervisorError("open supervisor channel"),
+        );
+        const child = yield* processes.spawn({
+          runtime,
+          launch,
+          supervisor: supervisor.metadata,
+        });
+        const handle = yield* makeHandle(launch, child, supervisor);
+        return {
+          ...handle,
+          controls: {
+            ...handle.controls,
+            reply: (requestId: string, message: string) =>
+              supervisor.reply(requestId, message).pipe(Effect.mapError(supervisorError("reply"))),
+            notifyPeers: () => unsupported("peer-notice"),
+          },
+        };
+      }),
     };
   };

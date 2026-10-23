@@ -33,22 +33,26 @@ import {
   SUBAGENT_CONFIG_BASENAME,
   SUBAGENT_CONFIG_VERSION,
   type DelegationMode,
-  DelegationModeSchema,
+  isDelegationMode,
   type SubagentNestingOverrides,
   type WriterWorkspaceMode,
-  WriterWorkspaceModeSchema,
+  isWriterWorkspaceMode,
 } from "./schema.ts";
 
-export class SubagentConfigStoreError extends Schema.TaggedError<SubagentConfigStoreError>()(
-  "SubagentConfigStoreError",
-  { operation: Schema.String, path: Schema.String, message: Schema.String },
-) {}
+export class SubagentConfigStoreError extends Schema.TaggedError<
+  SubagentConfigStoreError,
+  { readonly brand: unique symbol }
+>()("SubagentConfigStoreError", {
+  operation: Schema.String,
+  path: Schema.String,
+  message: Schema.String,
+}) {}
 
 /** The document changed after the caller inspected it; the caller may refresh and retry. */
-export class SubagentConfigConflictError extends Schema.TaggedError<SubagentConfigConflictError>()(
-  "SubagentConfigConflictError",
-  { path: Schema.String, message: Schema.String },
-) {}
+export class SubagentConfigConflictError extends Schema.TaggedError<
+  SubagentConfigConflictError,
+  { readonly brand: unique symbol }
+>()("SubagentConfigConflictError", { path: Schema.String, message: Schema.String }) {}
 
 export interface SubagentConfigInspection {
   readonly config: ResolvedSubagentConfig;
@@ -393,7 +397,7 @@ const applyNestingPatch: ApplyPatch<SubagentNestingPatch> = Effect.fnUntraced(
 const applyWriterWorkspacePatch: ApplyPatch<SubagentWriterWorkspacePatch> = Effect.fnUntraced(
   function* (current, patch, path) {
     const mode = patch.writerWorkspaceMode;
-    if (mode !== undefined && !Schema.is(WriterWorkspaceModeSchema)(mode))
+    if (mode !== undefined && !isWriterWorkspaceMode(mode))
       return yield* mutationError(path, "Invalid writer workspace mode.");
     return withEntry(current, "writerWorkspaceMode", mode);
   },
@@ -402,7 +406,7 @@ const applyWriterWorkspacePatch: ApplyPatch<SubagentWriterWorkspacePatch> = Effe
 const applyDelegationPatch: ApplyPatch<SubagentDelegationPatch> = Effect.fnUntraced(
   function* (current, patch, path) {
     const mode = patch.delegation;
-    if (mode !== undefined && !Schema.is(DelegationModeSchema)(mode))
+    if (mode !== undefined && !isDelegationMode(mode))
       return yield* mutationError(path, "Invalid delegation mode.");
     return withEntry(current, "delegation", mode);
   },

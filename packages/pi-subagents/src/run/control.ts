@@ -1,7 +1,6 @@
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
 import * as Predicate from "effect/Predicate";
 import {
   hasSubagentCapability,
@@ -32,7 +31,7 @@ import {
 import type { RunProcessControls } from "./process-lifecycle.ts";
 import type { RunRecordCleanup } from "./record-cleanup.ts";
 import type { RunSettlement } from "./settlement.ts";
-import { runSessionOwned } from "./session-owned.ts";
+import { commitSessionOwned, runSessionOwned } from "./session-owned.ts";
 import { MAX_ERROR_CHARS, sanitizeDiagnosticText, sanitizeName } from "./state.ts";
 import { recordRunWarning } from "./warnings.ts";
 import { requireControlExpectation } from "./control-admission.ts";
@@ -80,111 +79,88 @@ export function controlOperations(dependencies: RunControlDependencies) {
     settle,
   } = dependencies;
 
-  const retainControlWarning = (record: RunRecord, warning: string) =>
-    Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis;
-      const diagnostic = sanitizeDiagnosticText(warning, MAX_ERROR_CHARS);
-      yield* withLock(
-        Effect.gen(function* () {
-          if (isTerminalRunState(record.view.state) || record.view.state === "stopping") return;
-          record.view = {
-            ...record.view,
-            ...recordRunWarning(record, record.view.sessionEvents, "system", diagnostic, now),
-          };
-          yield* publish;
-        }),
-      );
-    });
+  const retainControlWarning = Effect.fn("SubagentControl.retainControlWarning")(function* (
+    record: RunRecord,
+    warning: string,
+  ) {
+    const now = yield* Clock.currentTimeMillis;
+    const diagnostic = sanitizeDiagnosticText(warning, MAX_ERROR_CHARS);
+    yield* withLock(
+      Effect.gen(function* () {
+        if (isTerminalRunState(record.view.state) || record.view.state === "stopping") return;
+        record.view = {
+          ...record.view,
+          ...recordRunWarning(record, record.view.sessionEvents, "system", diagnostic, now),
+        };
+        yield* publish;
+      }),
+    );
+  });
 
-  const finalizeGuidance = (
+  const finalizeGuidance = Effect.fn("SubagentControl.finalizeGuidance")(function* (
     record: RunRecord,
     message: RunControlMessage,
-  ): Effect.Effect<SubagentRunView, InvalidSubagentRequestError> =>
-    Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis;
-      return yield* withLock(
-        Effect.gen(function* () {
-          const steerable =
-            record.view.state === "running" ||
-            (message.answer === undefined && record.view.state === "waiting_for_parent");
-          if (!steerable)
-            return yield* invalidRequest(
-              "guidance_outcome_uncertain",
-              `Subagent ${record.view.id} changed state after guidance was sent, so delivery may already have applied. Inspect it with agent_read before retrying.`,
-            );
-          if (record.replyPendingRequestId)
-            return yield* invalidRequest(
-              "guidance_outcome_uncertain",
-              `Subagent ${record.view.id} claimed a parent reply after guidance was sent, so delivery may already have applied. Inspect it with agent_read before retrying.`,
-            );
-          message.recordNoticeLocked(record, "guided", now);
-          yield* publish;
-          return snapshotRun(record);
-        }),
-      );
-    });
+  ): Effect.fn.Return<SubagentRunView, InvalidSubagentRequestError> {
+    const now = yield* Clock.currentTimeMillis;
+    return yield* withLock(
+      Effect.gen(function* () {
+        const steerable =
+          record.view.state === "running" ||
+          (message.answer === undefined && record.view.state === "waiting_for_parent");
+        if (!steerable)
+          return yield* invalidRequest(
+            "guidance_outcome_uncertain",
+            `Subagent ${record.view.id} changed state after guidance was sent, so delivery may already have applied. Inspect it with agent_read before retrying.`,
+          );
+        if (record.replyPendingRequestId)
+          return yield* invalidRequest(
+            "guidance_outcome_uncertain",
+            `Subagent ${record.view.id} claimed a parent reply after guidance was sent, so delivery may already have applied. Inspect it with agent_read before retrying.`,
+          );
+        message.recordNoticeLocked(record, "guided", now);
+        yield* publish;
+        return snapshotRun(record);
+      }),
+    );
+  });
 
   // Both claims run under the run lock that claimDelivery holds.
-  const claimAnswerLocked = (record: RunRecord) =>
-    Effect.gen(function* () {
-      const id = record.view.id;
-      yield* requireCapability(record, "parent-contact");
-      const question = record.view.question;
-      if (!question)
-        return yield* invalidRequest(
-          "parent_question_missing",
-          `Subagent ${id} has no pending parent question.`,
-        );
-      if (record.pauseRequested)
-        return yield* invalidRequest(
-          "interrupt_in_flight",
-          `Subagent ${id} already has an interrupt pending and cannot receive a parent reply.`,
-        );
-      const process = record.process;
-      if (!process)
-        return yield* new SubagentProcessError({
-          operation: "reply to",
-          message: `Subagent ${id} has no active process.`,
-        });
-      admitTurnInput(record);
-      record.replyPendingRequestId = question.requestId;
-      record.view = { ...record.view, state: "running", question: undefined };
-      yield* publish;
-      return { delivery: "answered" as const, record, process, question };
-    });
+  const claimAnswerLocked = Effect.fn("SubagentControl.claimAnswerLocked")(function* (
+    record: RunRecord,
+  ) {
+    const id = record.view.id;
+    yield* requireCapability(record, "parent-contact");
+    const question = record.view.question;
+    if (!question)
+      return yield* invalidRequest(
+        "parent_question_missing",
+        `Subagent ${id} has no pending parent question.`,
+      );
+    if (record.pauseRequested)
+      return yield* invalidRequest(
+        "interrupt_in_flight",
+        `Subagent ${id} already has an interrupt pending and cannot receive a parent reply.`,
+      );
+    const process = record.process;
+    if (!process)
+      return yield* new SubagentProcessError({
+        operation: "reply to",
+        message: `Subagent ${id} has no active process.`,
+      });
+    admitTurnInput(record);
+    record.replyPendingRequestId = question.requestId;
+    record.view = { ...record.view, state: "running", question: undefined };
+    yield* publish;
+    return { delivery: "answered" as const, record, process, question };
+  });
 
-  const claimGuidanceLocked = (record: RunRecord, steerWaiting: boolean) =>
-    Effect.gen(function* () {
-      const id = record.view.id;
-      yield* requireCapability(record, "steer");
-      if (steerWaiting && record.view.state === "waiting_for_parent") {
-        if (record.pauseRequested)
-          return yield* invalidRequest(
-            "interrupt_in_flight",
-            `Subagent ${id} already has an interrupt pending and cannot receive new guidance.`,
-          );
-        admitTurnInput(record);
-        return { delivery: "guided" as const, record };
-      }
-      if (record.view.state === "paused" || record.view.state === "completed") {
-        const recovery = hasSubagentCapability(record.view, "resume")
-          ? `send the message with agent_send({ to: "${id}", message: "..." }) to resume it`
-          : `this backend cannot resume it; stop it with agent_lifecycle({ action: "stop", runIds: ["${id}"] }) and start a replacement`;
-        return yield* invalidRequest(
-          "run_not_running",
-          `Subagent ${id} is ${record.view.state}; ${recovery}.`,
-        );
-      }
-      if (record.view.state === "starting")
-        return yield* invalidRequest(
-          "run_starting",
-          `Subagent ${id} is still starting; wait for it to start before sending again.`,
-        );
-      if (record.view.state !== "running")
-        return yield* invalidRequest(
-          "run_not_running",
-          `Subagent ${id} is ${record.view.state} and cannot receive guidance; inspect it with agent_read or start a replacement run.`,
-        );
+  const claimGuidanceLocked = Effect.fn("SubagentControl.claimGuidanceLocked")(function* (
+    record: RunRecord,
+    steerWaiting: boolean,
+  ) {
+    const id = record.view.id;
+    yield* requireCapability(record, "steer");
+    if (steerWaiting && record.view.state === "waiting_for_parent") {
       if (record.pauseRequested)
         return yield* invalidRequest(
           "interrupt_in_flight",
@@ -192,7 +168,34 @@ export function controlOperations(dependencies: RunControlDependencies) {
         );
       admitTurnInput(record);
       return { delivery: "guided" as const, record };
-    });
+    }
+    if (record.view.state === "paused" || record.view.state === "completed") {
+      const recovery = hasSubagentCapability(record.view, "resume")
+        ? `send the message with agent_send({ to: "${id}", message: "..." }) to resume it`
+        : `this backend cannot resume it; stop it with agent_lifecycle({ action: "stop", runIds: ["${id}"] }) and start a replacement`;
+      return yield* invalidRequest(
+        "run_not_running",
+        `Subagent ${id} is ${record.view.state}; ${recovery}.`,
+      );
+    }
+    if (record.view.state === "starting")
+      return yield* invalidRequest(
+        "run_starting",
+        `Subagent ${id} is still starting; wait for it to start before sending again.`,
+      );
+    if (record.view.state !== "running")
+      return yield* invalidRequest(
+        "run_not_running",
+        `Subagent ${id} is ${record.view.state} and cannot receive guidance; inspect it with agent_read or start a replacement run.`,
+      );
+    if (record.pauseRequested)
+      return yield* invalidRequest(
+        "interrupt_in_flight",
+        `Subagent ${id} already has an interrupt pending and cannot receive new guidance.`,
+      );
+    admitTurnInput(record);
+    return { delivery: "guided" as const, record };
+  });
 
   const claimDelivery = (
     id: string,
@@ -313,11 +316,10 @@ export function controlOperations(dependencies: RunControlDependencies) {
         claimDelivery(id, expected, message.answer !== undefined),
         (claimed): Effect.Effect<SubagentSendOutcome, SubagentError> =>
           claimed.delivery === "answered" && message.answer !== undefined
-            ? Effect.flatMap(
-                Effect.forkIn(answer(claimed, message, message.answer), ownerScope, {
-                  startImmediately: true,
-                }),
-                (fiber) => restore(Fiber.join(fiber)),
+            ? commitSessionOwned(
+                ownerScope,
+                answer(claimed, message, message.answer),
+                restore,
               ).pipe(Effect.map((run) => ({ delivery: claimed.delivery, run })))
             : restore(guide(claimed.record, message)).pipe(
                 Effect.ensuring(releaseTurnInput(claimed.record)),
@@ -406,26 +408,25 @@ export function controlOperations(dependencies: RunControlDependencies) {
     );
 
   // Renaming is root-owned and changes only the display name; the child session never sees it.
-  const rename = (
+  const rename = Effect.fn("SubagentControl.rename")(function* (
     id: string,
     rawName: string,
     expected?: SubagentControlExpectation,
-  ): Effect.Effect<SubagentRunView, SubagentError> =>
-    Effect.gen(function* () {
-      const name = sanitizeName(rawName);
-      if (!name) return yield* invalidRequest("name_required", "Subagent name is required.");
-      const view = yield* withLock(
-        Effect.gen(function* () {
-          const record = yield* requireRecord(id);
-          yield* requireControlExpectation(record, expected);
-          record.launch = { ...record.launch, name };
-          yield* publish;
-          return snapshotRun(record);
-        }),
-      );
-      yield* sendPeerNotices(id);
-      return view;
-    });
+  ): Effect.fn.Return<SubagentRunView, SubagentError> {
+    const name = sanitizeName(rawName);
+    if (!name) return yield* invalidRequest("name_required", "Subagent name is required.");
+    const view = yield* withLock(
+      Effect.gen(function* () {
+        const record = yield* requireRecord(id);
+        yield* requireControlExpectation(record, expected);
+        record.launch = { ...record.launch, name };
+        yield* publish;
+        return snapshotRun(record);
+      }),
+    );
+    yield* sendPeerNotices(id);
+    return view;
+  });
 
   const stop = (
     id: string,

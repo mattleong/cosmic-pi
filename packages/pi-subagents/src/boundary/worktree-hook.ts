@@ -13,10 +13,10 @@ import {
 } from "../config/schema.ts";
 import { isGitLocalEnvironmentKey } from "./git-local-environment.ts";
 
-export class WorktreeHookError extends Schema.TaggedError<WorktreeHookError>()(
-  "WorktreeHookError",
-  { message: Schema.String },
-) {}
+export class WorktreeHookError extends Schema.TaggedError<
+  WorktreeHookError,
+  { readonly brand: unique symbol }
+>()("WorktreeHookError", { message: Schema.String }) {}
 
 /** The JSON object a hook reads on stdin. */
 export interface WorktreeHookInput {

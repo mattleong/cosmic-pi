@@ -1,14 +1,18 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
-import * as Data from "effect/Data";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import { SubagentRuntimeClosedError } from "../../src/run/errors.ts";
 import { runSessionOwned } from "../../src/run/session-owned.ts";
 
-class ClaimRejected extends Data.TaggedError("ClaimRejected") {}
+class ClaimRejected extends Schema.TaggedError<ClaimRejected, { readonly brand: unique symbol }>()(
+  "ClaimRejected",
+  {},
+) {}
 
 describe("runSessionOwned", () => {
   it.effect("fails the waiter with the claim error and never starts a commit", () =>
@@ -21,6 +25,18 @@ describe("runSessionOwned", () => {
       expect(failure).toBeInstanceOf(ClaimRejected);
       expect(commits).toBe(0);
       yield* Scope.close(ownerScope, Exit.void);
+    }),
+  );
+
+  it.effect("fails the waiter as shut down when the session closes before its commit starts", () =>
+    Effect.gen(function* () {
+      const ownerScope = yield* Scope.make();
+      let commits = 0;
+      const failure = yield* runSessionOwned(ownerScope, Scope.close(ownerScope, Exit.void), () =>
+        Effect.sync(() => void commits++),
+      ).pipe(Effect.flip);
+      expect(failure).toBeInstanceOf(SubagentRuntimeClosedError);
+      expect(commits).toBe(0);
     }),
   );
 

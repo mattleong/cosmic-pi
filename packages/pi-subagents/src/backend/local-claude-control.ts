@@ -179,43 +179,44 @@ export const localClaudeControl = (
     return yield* awaitSupervisorMcp(native);
   });
 
-  const awaitSupervisorMcp = (native: ClaudeInitProtocolEvent) =>
-    Effect.gen(function* () {
-      for (let attempt = 0; attempt < MCP_READY_ATTEMPTS; attempt += 1) {
-        const status = yield* requestControl("mcp_status", claudeMcpStatusFrame).pipe(
-          Effect.flatMap((value) =>
-            decodeClaudeMcpStatusControlResponse(value).pipe(
-              Effect.mapError(() =>
-                processError(
-                  "initialize",
-                  "claude_mcp_status_invalid",
-                  "Claude Code returned an invalid mandatory MCP status response.",
-                ),
+  const awaitSupervisorMcp = Effect.fn("LocalClaudeControl.awaitSupervisorMcp")(function* (
+    native: ClaudeInitProtocolEvent,
+  ) {
+    for (let attempt = 0; attempt < MCP_READY_ATTEMPTS; attempt += 1) {
+      const status = yield* requestControl("mcp_status", claudeMcpStatusFrame).pipe(
+        Effect.flatMap((value) =>
+          decodeClaudeMcpStatusControlResponse(value).pipe(
+            Effect.mapError(() =>
+              processError(
+                "initialize",
+                "claude_mcp_status_invalid",
+                "Claude Code returned an invalid mandatory MCP status response.",
               ),
             ),
           ),
-        );
-        const server = status.mcpServers.find(
-          (candidate) => candidate.name === SUPERVISOR_MCP_REGISTRATION,
-        );
-        if (server?.status === "connected") {
-          if (!hasSupervisorToolInventory(server.tools ?? []))
-            return yield* processError(
-              "initialize",
-              "claude_supervisor_tools_missing",
-              "Claude Code connected the private supervisor MCP server without its mandatory tool inventory.",
-            );
-          return { model: native.model, effort: request.effort, sessionId: native.sessionId };
-        }
-        if (server && server.status !== "pending" && server.status !== "connecting") break;
-        yield* Effect.sleep("50 millis");
-      }
-      return yield* processError(
-        "initialize",
-        "claude_supervisor_mcp_unavailable",
-        "Claude Code did not connect the mandatory pi_subagents_supervisor MCP server.",
+        ),
       );
-    });
+      const server = status.mcpServers.find(
+        (candidate) => candidate.name === SUPERVISOR_MCP_REGISTRATION,
+      );
+      if (server?.status === "connected") {
+        if (!hasSupervisorToolInventory(server.tools ?? []))
+          return yield* processError(
+            "initialize",
+            "claude_supervisor_tools_missing",
+            "Claude Code connected the private supervisor MCP server without its mandatory tool inventory.",
+          );
+        return { model: native.model, effort: request.effort, sessionId: native.sessionId };
+      }
+      if (server && server.status !== "pending" && server.status !== "connecting") break;
+      yield* Effect.sleep("50 millis");
+    }
+    return yield* processError(
+      "initialize",
+      "claude_supervisor_mcp_unavailable",
+      "Claude Code did not connect the mandatory pi_subagents_supervisor MCP server.",
+    );
+  });
 
   const interruptRequest = (): Pick<PendingInterrupt, "requestId" | "response"> => {
     const requestId = `interrupt-${nextControlId++}`;

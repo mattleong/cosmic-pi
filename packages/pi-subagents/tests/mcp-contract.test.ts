@@ -110,14 +110,14 @@ describe("supervisor MCP arguments", () => {
     expect(Result.isSuccess(decodeSupervisorToolCall(REPORT, report("delivery-1", atCap)))).toBe(
       true,
     );
-    expect(Schema.decodeUnknownSync(SupervisorReportTextSchema)(atCap)).toBe(atCap);
+    expect(Schema.decodeSync(SupervisorReportTextSchema)(atCap)).toBe(atCap);
     expect(problem(REPORT, report("delivery-1", `${atCap}y`))).toContain("report");
   });
 
   it("checks a blank line at the cap in linear time", () => {
     const decodes = (text: string) =>
       Result.isSuccess(decodeSupervisorToolCall(REPORT, report("delivery-1", text))) &&
-      Option.isSome(Schema.decodeUnknownOption(SupervisorReportTextSchema)(text));
+      Option.isSome(Schema.decodeOption(SupervisorReportTextSchema)(text));
     const started = performance.now();
     expect(decodes(" ".repeat(MAX_SUPERVISOR_MCP_REPORT_CHARS))).toBe(false);
     expect(decodes(`${" ".repeat(MAX_SUPERVISOR_MCP_REPORT_CHARS - 2)}\nx`)).toBe(true);

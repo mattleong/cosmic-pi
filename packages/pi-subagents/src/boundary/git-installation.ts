@@ -40,22 +40,22 @@ const executableFile = (candidate: string) =>
   );
 
 // Prefer the system Git, then the first absolute `git` on the user's PATH (NixOS has no /usr/bin/git).
-const locateGit = (environment: NodeJS.ProcessEnv) =>
-  Effect.gen(function* () {
-    const searched = [
-      PREFERRED_GIT,
-      ...(environment.PATH ?? "")
-        .split(path.delimiter)
-        .filter((directory) => usablePath(directory))
-        .map((directory) => path.join(directory, "git")),
-    ];
-    for (const candidate of new Set(searched))
-      if (yield* executableFile(candidate)) return candidate;
-    return yield* unavailable(
-      "Git isn't installed, so isolated writer workspaces are unavailable.",
-      `Searched ${PREFERRED_GIT} and every absolute directory on PATH. Install Git ${MINIMUM_GIT_VERSION.join(".")} or later, or use the shared-checkout writer workspace.`,
-    );
-  });
+const locateGit = Effect.fn("GitInstallation.locateGit")(function* (
+  environment: NodeJS.ProcessEnv,
+) {
+  const searched = [
+    PREFERRED_GIT,
+    ...(environment.PATH ?? "")
+      .split(path.delimiter)
+      .filter((directory) => usablePath(directory))
+      .map((directory) => path.join(directory, "git")),
+  ];
+  for (const candidate of new Set(searched)) if (yield* executableFile(candidate)) return candidate;
+  return yield* unavailable(
+    "Git isn't installed, so isolated writer workspaces are unavailable.",
+    `Searched ${PREFERRED_GIT} and every absolute directory on PATH. Install Git ${MINIMUM_GIT_VERSION.join(".")} or later, or use the shared-checkout writer workspace.`,
+  );
+});
 
 const userEnvironment = (environment: NodeJS.ProcessEnv) =>
   Object.fromEntries(
@@ -85,23 +85,22 @@ export const gitVersionSupported = (version: string): boolean => {
   return major > requiredMajor || (major === requiredMajor && minor >= requiredMinor);
 };
 
-const resolveGitInstallation = (
+const resolveGitInstallation = Effect.fn("GitInstallation.resolveGitInstallation")(function* (
   environment: NodeJS.ProcessEnv,
-): Effect.Effect<GitInstallation, WorkspaceError> =>
-  Effect.gen(function* () {
-    const executable = yield* locateGit(environment);
-    const output = yield* runGit(executable, ["--version"], environment).pipe(
-      Effect.map((result) => (result.code === 0 ? result.stdout : "")),
-      Effect.orElseSucceed(() => ""),
+): Effect.fn.Return<GitInstallation, WorkspaceError> {
+  const executable = yield* locateGit(environment);
+  const output = yield* runGit(executable, ["--version"], environment).pipe(
+    Effect.map((result) => (result.code === 0 ? result.stdout : "")),
+    Effect.orElseSucceed(() => ""),
+  );
+  const match = VERSION.exec(output);
+  if (!match)
+    return yield* unavailable(
+      "Git didn't report its version, so isolated writer workspaces are unavailable.",
+      `Executable: ${executable}`,
     );
-    const match = VERSION.exec(output);
-    if (!match)
-      return yield* unavailable(
-        "Git didn't report its version, so isolated writer workspaces are unavailable.",
-        `Executable: ${executable}`,
-      );
-    return { executable, version: match.slice(1).filter(Boolean).join(".") };
-  });
+  return { executable, version: match.slice(1).filter(Boolean).join(".") };
+});
 
 let resolved: GitInstallation | undefined;
 

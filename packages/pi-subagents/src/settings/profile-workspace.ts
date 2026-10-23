@@ -215,19 +215,23 @@ export class ProfileWorkspaceComponent
         mode: "confirmation",
         matchesKeybinding: this.options.matchesKeybinding,
       });
-      if (resolution?._tag === "Action" && resolution.action === "cancel") {
+      const action = Predicate.isTagged(resolution, "Action") ? resolution.action : undefined;
+      if (action === "cancel") {
         this.pendingAction = undefined;
         this.message = undefined;
         this.renderSoon();
-      } else if (resolution?._tag === "Action" && resolution.action === "confirm")
-        this.performDraftAction(this.pendingAction);
+      } else if (action === "confirm") this.performDraftAction(this.pendingAction);
       return;
     }
     const resolution = this.keymap.resolve(data, {
       mode: "busy",
       matchesKeybinding: this.options.matchesKeybinding,
     });
-    if (this.catalogLoad && resolution?._tag === "Action" && resolution.action === "cancel")
+    if (
+      this.catalogLoad &&
+      Predicate.isTagged(resolution, "Action") &&
+      resolution.action === "cancel"
+    )
       this.cancelCatalogLoad();
   }
 

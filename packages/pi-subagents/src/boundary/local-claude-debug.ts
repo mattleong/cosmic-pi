@@ -113,10 +113,10 @@ const appendBounded = (state: LedgerState, line: string): void => {
   }
 };
 
-class LocalClaudeDebugIoError extends Schema.TaggedError<LocalClaudeDebugIoError>()(
-  "LocalClaudeDebugIoError",
-  {},
-) {}
+class LocalClaudeDebugIoError extends Schema.TaggedError<
+  LocalClaudeDebugIoError,
+  { readonly brand: unique symbol }
+>()("LocalClaudeDebugIoError", {}) {}
 
 const diagnosticIo = <A>(
   operation: () => PromiseLike<A>,

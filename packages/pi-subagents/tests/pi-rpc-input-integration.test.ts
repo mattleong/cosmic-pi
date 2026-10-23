@@ -3,7 +3,6 @@ import { fileURLToPath } from "node:url";
 import * as Effect from "effect/Effect";
 import * as Config from "effect/Config";
 import * as Deferred from "effect/Deferred";
-import * as Data from "effect/Data";
 import * as Schema from "effect/Schema";
 import * as Queue from "effect/Queue";
 import type * as Cause from "effect/Cause";
@@ -20,7 +19,12 @@ import { nodePath as path, nodeSpawn } from "./support/node-builtins.ts";
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const decodeJson = Schema.decodeEffect(Schema.fromJsonString(Schema.Json));
 
-class RpcFixtureError extends Data.TaggedError("RpcFixtureError")<{ readonly message: string }> {}
+class RpcFixtureError extends Schema.TaggedError<
+  RpcFixtureError,
+  { readonly brand: unique symbol }
+>()("RpcFixtureError", {
+  message: Schema.String,
+}) {}
 
 interface RpcCommand {
   readonly type: string;

@@ -96,13 +96,13 @@ interface OwnedHarnessDirectories {
   readonly temporaryDirectory?: string | undefined;
 }
 
-class LocalCliHarnessError extends Schema.TaggedError<LocalCliHarnessError>()(
-  "LocalCliHarnessError",
-  {
-    reason: Schema.Literals(["prepare_failed", "cleanup_unconfirmed"]),
-    message: Schema.String,
-  },
-) {}
+class LocalCliHarnessError extends Schema.TaggedError<
+  LocalCliHarnessError,
+  { readonly brand: unique symbol }
+>()("LocalCliHarnessError", {
+  reason: Schema.Literals(["prepare_failed", "cleanup_unconfirmed"]),
+  message: Schema.String,
+}) {}
 
 const harnessPrepareFailed = () =>
   new LocalCliHarnessError({
@@ -287,20 +287,19 @@ const prepareOwnedHarness = <Harness>(
     }),
   );
 
-const prepareCodexHome = (
+const prepareCodexHome = Effect.fn("LocalCliHarness.prepareCodexHome")(function* (
   directory: string,
   config: string,
   environment: NodeJS.ProcessEnv,
-): Effect.Effect<string, LocalCliHarnessError> =>
-  Effect.gen(function* () {
-    const codexHome = nodePath.join(directory, "codex-home");
-    yield* prepareStep(() => fs.mkdir(codexHome, { mode: 0o700 }));
-    yield* preparePrivate(createPrivateFile(nodePath.join(codexHome, "config.toml"), config));
-    const auth = yield* readValidatedCodexAuth(environment);
-    if (auth) yield* preparePrivate(createPrivateFile(nodePath.join(codexHome, "auth.json"), auth));
-    else if (!approvedCodexApiKey(environment)) return yield* harnessPrepareFailed();
-    return codexHome;
-  });
+): Effect.fn.Return<string, LocalCliHarnessError> {
+  const codexHome = nodePath.join(directory, "codex-home");
+  yield* prepareStep(() => fs.mkdir(codexHome, { mode: 0o700 }));
+  yield* preparePrivate(createPrivateFile(nodePath.join(codexHome, "config.toml"), config));
+  const auth = yield* readValidatedCodexAuth(environment);
+  if (auth) yield* preparePrivate(createPrivateFile(nodePath.join(codexHome, "auth.json"), auth));
+  else if (!approvedCodexApiKey(environment)) return yield* harnessPrepareFailed();
+  return codexHome;
+});
 
 interface HarnessLaunch {
   readonly executable: string;
@@ -346,88 +345,85 @@ const claudeSettingsSource = (...settings: Parameters<typeof claudeSettings>): s
 const claudeMcpSource = (supervisor: SupervisorConnectionMetadata): string =>
   `${JSON.stringify(supervisor.claudeMcp)}\n`;
 
-const buildClaudeHarness = (
+const buildClaudeHarness = Effect.fn("LocalCliHarness.buildClaudeHarness")(function* (
   options: LocalCliHarnessOptions,
   request: LocalCliHarnessRequest,
   directory: string,
   temporaryDirectory: string,
-): Effect.Effect<LocalCliHarness, LocalCliHarnessError> =>
-  Effect.gen(function* () {
-    const [launch, sharedTemporaryDirectory] = yield* Effect.all(
-      [harnessLaunch(options, request, directory), sharedClaudeTemporaryDirectory()],
-      { concurrency: "unbounded" },
-    );
-    const settingsPath = nodePath.join(directory, "settings.json");
-    const mcpPath = nodePath.join(directory, "mcp.json");
-    const promptPath = nodePath.join(directory, "system-prompt.md");
-    const writerPolicy = claudeWriterCwdPolicy(request.launch.cwd);
-    yield* preparePrivate(
-      createPrivateFile(
-        settingsPath,
-        claudeSettingsSource(request.launch, writerPolicy, sharedTemporaryDirectory),
-      ),
-    );
-    if (options.harnessFault === "after-claude-settings") return yield* harnessPrepareFailed();
-    yield* preparePrivate(createPrivateFile(mcpPath, claudeMcpSource(request.supervisor)));
-    yield* preparePrivate(createPrivateFile(promptPath, request.launch.systemPrompt));
-    return {
-      directory,
-      executable: launch.executable,
-      args: claudeArgv(request.launch, { settingsPath, mcpPath, promptPath }, writerPolicy),
-      env: {
-        ...launch.env,
-        ...temporaryEnvironment(temporaryDirectory),
-        CLAUDE_CODE_TMPDIR: temporaryDirectory,
-      },
-      temporaryDirectory,
-    };
-  });
+): Effect.fn.Return<LocalCliHarness, LocalCliHarnessError> {
+  const [launch, sharedTemporaryDirectory] = yield* Effect.all(
+    [harnessLaunch(options, request, directory), sharedClaudeTemporaryDirectory()],
+    { concurrency: "unbounded" },
+  );
+  const settingsPath = nodePath.join(directory, "settings.json");
+  const mcpPath = nodePath.join(directory, "mcp.json");
+  const promptPath = nodePath.join(directory, "system-prompt.md");
+  const writerPolicy = claudeWriterCwdPolicy(request.launch.cwd);
+  yield* preparePrivate(
+    createPrivateFile(
+      settingsPath,
+      claudeSettingsSource(request.launch, writerPolicy, sharedTemporaryDirectory),
+    ),
+  );
+  if (options.harnessFault === "after-claude-settings") return yield* harnessPrepareFailed();
+  yield* preparePrivate(createPrivateFile(mcpPath, claudeMcpSource(request.supervisor)));
+  yield* preparePrivate(createPrivateFile(promptPath, request.launch.systemPrompt));
+  return {
+    directory,
+    executable: launch.executable,
+    args: claudeArgv(request.launch, { settingsPath, mcpPath, promptPath }, writerPolicy),
+    env: {
+      ...launch.env,
+      ...temporaryEnvironment(temporaryDirectory),
+      CLAUDE_CODE_TMPDIR: temporaryDirectory,
+    },
+    temporaryDirectory,
+  };
+});
 
-const buildCodexHarness = (
+const buildCodexHarness = Effect.fn("LocalCliHarness.buildCodexHarness")(function* (
   options: LocalCliHarnessOptions,
   request: LocalCliHarnessRequest,
   directory: string,
-): Effect.Effect<LocalCliHarness, LocalCliHarnessError> =>
-  Effect.gen(function* () {
-    const launch = yield* harnessLaunch(options, request, directory);
-    // Codex writers may not write the shared /tmp or $TMPDIR; this is their private temp space.
-    const temporaryDirectory = nodePath.join(directory, CODEX_TEMPORARY_DIRECTORY);
-    yield* prepareStep(() => fs.mkdir(temporaryDirectory, { mode: 0o700 }));
-    const codexHome = yield* prepareCodexHome(
-      directory,
-      codexConfig(request.supervisor, request.launch.openaiFastMode, temporaryDirectory),
-      launch.sourceEnvironment,
-    );
-    return {
-      directory,
-      executable: launch.executable,
-      args: codexArgv(),
-      env: { ...launch.env, ...temporaryEnvironment(temporaryDirectory), CODEX_HOME: codexHome },
-      temporaryDirectory,
-    };
-  });
+): Effect.fn.Return<LocalCliHarness, LocalCliHarnessError> {
+  const launch = yield* harnessLaunch(options, request, directory);
+  // Codex writers may not write the shared /tmp or $TMPDIR; this is their private temp space.
+  const temporaryDirectory = nodePath.join(directory, CODEX_TEMPORARY_DIRECTORY);
+  yield* prepareStep(() => fs.mkdir(temporaryDirectory, { mode: 0o700 }));
+  const codexHome = yield* prepareCodexHome(
+    directory,
+    codexConfig(request.supervisor, request.launch.openaiFastMode, temporaryDirectory),
+    launch.sourceEnvironment,
+  );
+  return {
+    directory,
+    executable: launch.executable,
+    args: codexArgv(),
+    env: { ...launch.env, ...temporaryEnvironment(temporaryDirectory), CODEX_HOME: codexHome },
+    temporaryDirectory,
+  };
+});
 
 /**
  * Claude Code puts its own temp files and sandboxed Bash's `$TMPDIR` under `CLAUDE_CODE_TMPDIR`,
  * so each Claude child gets a fresh 0700 root there instead of the user's shared directory.
  */
-const prepareClaudeHarness = (
+const prepareClaudeHarness = Effect.fn("LocalCliHarness.prepareClaudeHarness")(function* (
   options: LocalCliHarnessOptions,
   request: LocalCliHarnessRequest,
   directory: string,
-): Effect.Effect<LocalCliHarness, LocalCliHarnessError> =>
-  Effect.gen(function* () {
-    const parent = options.claudeTemporaryParent ?? CLAUDE_TEMPORARY_PARENT;
-    const temporaryDirectory = yield* prepareStep(() =>
-      fs.mkdtemp(nodePath.join(parent, CLAUDE_TEMPORARY_PREFIX)),
-    );
-    return yield* cleanupOnFailure(
-      preparePrivate(recordPrivateStateOwner(temporaryDirectory)).pipe(
-        Effect.andThen(buildClaudeHarness(options, request, directory, temporaryDirectory)),
-      ),
-      removePrivateDirectory(temporaryDirectory).pipe(Effect.mapError(harnessCleanupFailed)),
-    );
-  });
+): Effect.fn.Return<LocalCliHarness, LocalCliHarnessError> {
+  const parent = options.claudeTemporaryParent ?? CLAUDE_TEMPORARY_PARENT;
+  const temporaryDirectory = yield* prepareStep(() =>
+    fs.mkdtemp(nodePath.join(parent, CLAUDE_TEMPORARY_PREFIX)),
+  );
+  return yield* cleanupOnFailure(
+    preparePrivate(recordPrivateStateOwner(temporaryDirectory)).pipe(
+      Effect.andThen(buildClaudeHarness(options, request, directory, temporaryDirectory)),
+    ),
+    removePrivateDirectory(temporaryDirectory).pipe(Effect.mapError(harnessCleanupFailed)),
+  );
+});
 
 export const prepareLocalCliHarness = (
   options: LocalCliHarnessOptions,

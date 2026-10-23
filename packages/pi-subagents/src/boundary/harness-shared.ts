@@ -31,22 +31,21 @@ const isRealDirectory = (path: string): Effect.Effect<boolean, PrivateFileError>
   );
 
 /** The canonical path of an absolute agent directory that is a real directory, never a link. */
-export const safeAgentDirectory = (
+export const safeAgentDirectory = Effect.fn("HarnessShared.safeAgentDirectory")(function* (
   agentDirectory: string,
-): Effect.Effect<string, PrivateFileError> =>
-  Effect.gen(function* () {
-    if (
-      !nodePath.isAbsolute(agentDirectory) ||
-      agentDirectory.length > MAX_PATH_CHARS ||
-      hasControlCharacter(agentDirectory)
-    )
-      return yield* unsafeEntry();
-    const requested = nodePath.resolve(agentDirectory);
-    if (!(yield* isRealDirectory(requested))) return yield* unsafeEntry();
-    const canonical = yield* tryPrivateFileOperation(() => fs.realpath(requested));
-    if (!(yield* isRealDirectory(canonical))) return yield* unsafeEntry();
-    return canonical;
-  });
+): Effect.fn.Return<string, PrivateFileError> {
+  if (
+    !nodePath.isAbsolute(agentDirectory) ||
+    agentDirectory.length > MAX_PATH_CHARS ||
+    hasControlCharacter(agentDirectory)
+  )
+    return yield* unsafeEntry();
+  const requested = nodePath.resolve(agentDirectory);
+  if (!(yield* isRealDirectory(requested))) return yield* unsafeEntry();
+  const canonical = yield* tryPrivateFileOperation(() => fs.realpath(requested));
+  if (!(yield* isRealDirectory(canonical))) return yield* unsafeEntry();
+  return canonical;
+});
 
 const isJsonArray = (value: Schema.Json): value is ReadonlyArray<Schema.Json> =>
   Array.isArray(value);

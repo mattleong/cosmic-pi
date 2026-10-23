@@ -1,14 +1,14 @@
 import * as Schema from "effect/Schema";
 import { SupervisorRpcFailure } from "../supervisor/protocol.ts";
 
-export class SupervisorChannelError extends Schema.TaggedError<SupervisorChannelError>()(
-  "SupervisorChannelError",
-  {
-    operation: Schema.String,
-    code: Schema.String,
-    message: Schema.String,
-  },
-) {}
+export class SupervisorChannelError extends Schema.TaggedError<
+  SupervisorChannelError,
+  { readonly brand: unique symbol }
+>()("SupervisorChannelError", {
+  operation: Schema.String,
+  code: Schema.String,
+  message: Schema.String,
+}) {}
 
 export const channelError = (operation: string, code: string, message: string) =>
   new SupervisorChannelError({ operation, code, message });

@@ -39,20 +39,19 @@ interface ParentDrainDependencies {
  * direct child waits for the parent's reply. A headless parent uses it before ending its turn so
  * reports reach the conversation instead of dying with the process.
  */
-export const parentDrainAwaiter = ({
+export const parentDrainAwaiter = Effect.fn("SubagentParentDrain.await")(function* ({
   records,
   withLock,
   revision,
   waitForRevision,
   outboxChangedLocked,
-}: ParentDrainDependencies): Effect.Effect<void, SubagentRuntimeClosedError> =>
-  Effect.gen(function* () {
-    while (true) {
-      const observed = yield* revision;
-      const outboxChanged = yield* withLock(
-        Effect.sync(() => (drainSettled(records) ? undefined : outboxChangedLocked())),
-      );
-      if (!outboxChanged) return;
-      yield* Effect.raceFirst(waitForRevision(observed), Deferred.await(outboxChanged));
-    }
-  });
+}: ParentDrainDependencies): Effect.fn.Return<void, SubagentRuntimeClosedError> {
+  while (true) {
+    const observed = yield* revision;
+    const outboxChanged = yield* withLock(
+      Effect.sync(() => (drainSettled(records) ? undefined : outboxChangedLocked())),
+    );
+    if (!outboxChanged) return;
+    yield* Effect.raceFirst(waitForRevision(observed), Deferred.await(outboxChanged));
+  }
+});

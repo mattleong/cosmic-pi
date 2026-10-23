@@ -29,10 +29,10 @@ export type SubagentActivityRequest =
   | { readonly action: "resume"; readonly input: string | undefined }
   | { readonly action: "message" | "reply" | "rename"; readonly input: string };
 
-class SubagentActivityInputError extends Schema.TaggedError<SubagentActivityInputError>()(
-  "SubagentActivityInputError",
-  { message: Schema.String },
-) {}
+class SubagentActivityInputError extends Schema.TaggedError<
+  SubagentActivityInputError,
+  { readonly brand: unique symbol }
+>()("SubagentActivityInputError", { message: Schema.String }) {}
 
 export const promptSubagentActivityInput = (
   ctx: ExtensionContext,

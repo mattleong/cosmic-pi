@@ -43,8 +43,8 @@ export const syncWorkspaceDirectory = (directory: string) =>
     (handle) => workspaceIO("registry", () => handle.close()).pipe(Effect.ignore),
   );
 
-export const initializeWorkspaceStore = (root: string) =>
-  Effect.gen(function* () {
+export const initializeWorkspaceStore = Effect.fn("GitWorktreeStore.initializeWorkspaceStore")(
+  function* (root: string) {
     const absolute = path.resolve(root);
     let current = path.parse(absolute).root;
     for (const part of absolute.slice(current.length).split(path.sep).filter(Boolean)) {
@@ -73,37 +73,35 @@ export const initializeWorkspaceStore = (root: string) =>
         "Workspace registry must be private and owned by the current user.",
       );
     return undefined;
-  });
+  },
+);
 
-export const saveWorkspaceRecord = (
+export const saveWorkspaceRecord = Effect.fn("GitWorktreeStore.saveWorkspaceRecord")(function* (
   root: string,
   record: WorkspaceRecord,
   onCommitted?: () => void,
-) =>
-  Effect.gen(function* () {
-    const directory = workspaceDirectory(root, record.handle.workspaceId);
-    yield* checkDirectory(directory);
-    const id = yield* newWorkspaceId;
-    const temporary = path.join(directory, `${id}.tmp`);
-    const lastChangedAt = yield* Clock.currentTimeMillis;
-    const data = yield* encodeRecord({ ...record, lastChangedAt }).pipe(
-      Effect.mapError(() => workspaceFailure("registry", "Invalid workspace record.")),
+) {
+  const directory = workspaceDirectory(root, record.handle.workspaceId);
+  yield* checkDirectory(directory);
+  const id = yield* newWorkspaceId;
+  const temporary = path.join(directory, `${id}.tmp`);
+  const lastChangedAt = yield* Clock.currentTimeMillis;
+  const data = yield* encodeRecord({ ...record, lastChangedAt }).pipe(
+    Effect.mapError(() => workspaceFailure("registry", "Invalid workspace record.")),
+  );
+  if (Buffer.byteLength(data, "utf8") > MAX_RECORD_BYTES)
+    return yield* workspaceFailure(
+      "registry",
+      "Encoded workspace record exceeds recovery size limit.",
     );
-    if (Buffer.byteLength(data, "utf8") > MAX_RECORD_BYTES)
-      return yield* workspaceFailure(
-        "registry",
-        "Encoded workspace record exceeds recovery size limit.",
-      );
-    yield* writeWorkspaceFile(temporary, new TextEncoder().encode(data), 0o600);
-    yield* Effect.gen(function* () {
-      yield* workspaceIO("registry", () =>
-        fs.rename(temporary, path.join(directory, "record.json")),
-      );
-      yield* syncWorkspaceDirectory(directory);
-      onCommitted?.();
-    }).pipe(Effect.uninterruptible);
-    return undefined;
-  });
+  yield* writeWorkspaceFile(temporary, new TextEncoder().encode(data), 0o600);
+  yield* Effect.gen(function* () {
+    yield* workspaceIO("registry", () => fs.rename(temporary, path.join(directory, "record.json")));
+    yield* syncWorkspaceDirectory(directory);
+    onCommitted?.();
+  }).pipe(Effect.uninterruptible);
+  return undefined;
+});
 
 // Git's own stdout bound for workspace commands.
 export const MAX_REVISION_DIFF_BYTES = 48 * 1024 * 1024;
@@ -114,46 +112,51 @@ export const revisionDiffFile = (root: string, id: string) =>
  * Moves a checked patch file into place as the workspace's current revision patch. Freeze commits
  * it before the record that names the revision, so a frozen record's patch is always this file.
  */
-export const commitRevisionDiff = (root: string, id: string, file: string) =>
-  Effect.gen(function* () {
-    yield* workspaceIO("freeze", () => fs.rename(file, revisionDiffFile(root, id)));
-    yield* syncWorkspaceDirectory(workspaceDirectory(root, id));
-  }).pipe(Effect.uninterruptible);
+export const commitRevisionDiff = Effect.fn("GitWorktreeStore.commitRevisionDiff")(function* (
+  root: string,
+  id: string,
+  file: string,
+) {
+  yield* workspaceIO("freeze", () => fs.rename(file, revisionDiffFile(root, id)));
+  yield* syncWorkspaceDirectory(workspaceDirectory(root, id));
+}, Effect.uninterruptible);
 
 /** The current revision patch's bytes, kept out of the record so listings stay small. */
-export const readRevisionDiff = (root: string, id: string) =>
-  Effect.gen(function* () {
-    const safe = yield* SafeFile;
-    const { bytes } = yield* safe
-      .readContainedRegularFile(revisionDiffFile(root, id), root, MAX_REVISION_DIFF_BYTES)
-      .pipe(Effect.mapError(() => workspaceFailure("revision", "Cannot read the revision patch.")));
-    return bytes;
-  });
+export const readRevisionDiff = Effect.fn("GitWorktreeStore.readRevisionDiff")(function* (
+  root: string,
+  id: string,
+) {
+  const safe = yield* SafeFile;
+  const { bytes } = yield* safe
+    .readContainedRegularFile(revisionDiffFile(root, id), root, MAX_REVISION_DIFF_BYTES)
+    .pipe(Effect.mapError(() => workspaceFailure("revision", "Cannot read the revision patch.")));
+  return bytes;
+});
 
-export const readWorkspaceRecord = (root: string, id: string) =>
-  Effect.gen(function* () {
-    if (!validWorkspaceId(id))
-      return yield* workspaceFailure("authorization", "Unknown workspace identity.");
-    const directory = workspaceDirectory(root, id);
-    yield* checkDirectory(directory);
-    const safe = yield* SafeFile;
-    const { bytes } = yield* safe
-      .readContainedRegularFile(path.join(directory, "record.json"), root, MAX_RECORD_BYTES)
-      .pipe(
-        Effect.mapError(() =>
-          workspaceFailure("registry", "Cannot read workspace recovery record."),
-        ),
-      );
-    const record = yield* decodeRecord(new TextDecoder().decode(bytes)).pipe(
-      Effect.mapError(() => workspaceFailure("registry", "Invalid workspace recovery record.")),
+export const readWorkspaceRecord = Effect.fn("GitWorktreeStore.readWorkspaceRecord")(function* (
+  root: string,
+  id: string,
+) {
+  if (!validWorkspaceId(id))
+    return yield* workspaceFailure("authorization", "Unknown workspace identity.");
+  const directory = workspaceDirectory(root, id);
+  yield* checkDirectory(directory);
+  const safe = yield* SafeFile;
+  const { bytes } = yield* safe
+    .readContainedRegularFile(path.join(directory, "record.json"), root, MAX_RECORD_BYTES)
+    .pipe(
+      Effect.mapError(() => workspaceFailure("registry", "Cannot read workspace recovery record.")),
     );
-    if (
-      record.handle.workspaceId !== id ||
-      path.dirname(record.handle.cwd) === record.handle.sourceRoot
-    )
-      return yield* workspaceFailure("registry", "Workspace recovery identity is invalid.");
-    return record;
-  });
+  const record = yield* decodeRecord(new TextDecoder().decode(bytes)).pipe(
+    Effect.mapError(() => workspaceFailure("registry", "Invalid workspace recovery record.")),
+  );
+  if (
+    record.handle.workspaceId !== id ||
+    path.dirname(record.handle.cwd) === record.handle.sourceRoot
+  )
+    return yield* workspaceFailure("registry", "Workspace recovery identity is invalid.");
+  return record;
+});
 
 /** How long a workspace operation waits for another session's operation on the same checkout. */
 const WORKSPACE_LOCK_WAIT = Duration.minutes(2);

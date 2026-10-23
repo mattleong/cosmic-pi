@@ -1,45 +1,56 @@
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 
-export class InvalidSubagentRequestError extends Schema.TaggedError<InvalidSubagentRequestError>()(
-  "InvalidSubagentRequestError",
-  { message: Schema.String, code: Schema.optional(Schema.String) },
-) {}
+export class InvalidSubagentRequestError extends Schema.TaggedError<
+  InvalidSubagentRequestError,
+  { readonly brand: unique symbol }
+>()("InvalidSubagentRequestError", {
+  message: Schema.String,
+  code: Schema.optional(Schema.String),
+}) {}
 
-export class SubagentNotFoundError extends Schema.TaggedError<SubagentNotFoundError>()(
-  "SubagentNotFoundError",
-  { id: Schema.String, message: Schema.String },
-) {}
+export class SubagentNotFoundError extends Schema.TaggedError<
+  SubagentNotFoundError,
+  { readonly brand: unique symbol }
+>()("SubagentNotFoundError", { id: Schema.String, message: Schema.String }) {}
 
-export class SubagentCapacityError extends Schema.TaggedError<SubagentCapacityError>()(
-  "SubagentCapacityError",
-  { limit: Schema.Finite, code: Schema.optional(Schema.String), message: Schema.String },
-) {}
+export class SubagentCapacityError extends Schema.TaggedError<
+  SubagentCapacityError,
+  { readonly brand: unique symbol }
+>()("SubagentCapacityError", {
+  limit: Schema.Finite,
+  code: Schema.optional(Schema.String),
+  message: Schema.String,
+}) {}
 
-export class SubagentHistoryCapacityError extends Schema.TaggedError<SubagentHistoryCapacityError>()(
-  "SubagentHistoryCapacityError",
-  { limit: Schema.Finite, code: Schema.String, message: Schema.String },
-) {}
+export class SubagentHistoryCapacityError extends Schema.TaggedError<
+  SubagentHistoryCapacityError,
+  { readonly brand: unique symbol }
+>()("SubagentHistoryCapacityError", {
+  limit: Schema.Finite,
+  code: Schema.String,
+  message: Schema.String,
+}) {}
 
-export class SubagentWriterConflictError extends Schema.TaggedError<SubagentWriterConflictError>()(
-  "SubagentWriterConflictError",
-  {
-    activeId: Schema.String,
-    activeName: Schema.String,
-    message: Schema.String,
-    transient: Schema.optional(Schema.Boolean),
-  },
-) {}
+export class SubagentWriterConflictError extends Schema.TaggedError<
+  SubagentWriterConflictError,
+  { readonly brand: unique symbol }
+>()("SubagentWriterConflictError", {
+  activeId: Schema.String,
+  activeName: Schema.String,
+  message: Schema.String,
+  transient: Schema.optional(Schema.Boolean),
+}) {}
 
-export class SubagentProcessError extends Schema.TaggedError<SubagentProcessError>()(
-  "SubagentProcessError",
-  {
-    operation: Schema.String,
-    message: Schema.String,
-    code: Schema.optional(Schema.String),
-    pendingDelivery: Schema.optional(Schema.Boolean),
-  },
-) {}
+export class SubagentProcessError extends Schema.TaggedError<
+  SubagentProcessError,
+  { readonly brand: unique symbol }
+>()("SubagentProcessError", {
+  operation: Schema.String,
+  message: Schema.String,
+  code: Schema.optional(Schema.String),
+  pendingDelivery: Schema.optional(Schema.Boolean),
+}) {}
 
 export const processError = (
   operation: string,
@@ -95,20 +106,24 @@ export const isCleanupUnconfirmed = (error: { readonly code?: string | undefined
 /** The code of guidance whose native delivery is still being confirmed. */
 export const PENDING_STEER_DELIVERY_CODE = "steer_outcome_uncertain";
 
-export class SubagentProtocolError extends Schema.TaggedError<SubagentProtocolError>()(
-  "SubagentProtocolError",
-  { message: Schema.String },
-) {}
+export class SubagentProtocolError extends Schema.TaggedError<
+  SubagentProtocolError,
+  { readonly brand: unique symbol }
+>()("SubagentProtocolError", { message: Schema.String }) {}
 
-export class SubagentRuntimeClosedError extends Schema.TaggedError<SubagentRuntimeClosedError>()(
-  "SubagentRuntimeClosedError",
-  { message: Schema.String },
-) {}
+export class SubagentRuntimeClosedError extends Schema.TaggedError<
+  SubagentRuntimeClosedError,
+  { readonly brand: unique symbol }
+>()("SubagentRuntimeClosedError", { message: Schema.String }) {}
 
-export class UnsupportedSubagentCapabilityError extends Schema.TaggedError<UnsupportedSubagentCapabilityError>()(
-  "UnsupportedSubagentCapabilityError",
-  { backend: Schema.String, capability: Schema.String, message: Schema.String },
-) {}
+export class UnsupportedSubagentCapabilityError extends Schema.TaggedError<
+  UnsupportedSubagentCapabilityError,
+  { readonly brand: unique symbol }
+>()("UnsupportedSubagentCapabilityError", {
+  backend: Schema.String,
+  capability: Schema.String,
+  message: Schema.String,
+}) {}
 
 export type SubagentError =
   | InvalidSubagentRequestError

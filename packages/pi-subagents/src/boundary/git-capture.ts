@@ -41,32 +41,28 @@ const unmergedRefusal = (name: string) =>
   });
 
 /** Runs `use` with a temporary index in `scratch`, so Git never reads or writes a real one. */
-export const withScratchIndex = <A, E, R>(
+export const withScratchIndex = Effect.fn("GitCapture.withScratchIndex")(function* <A, E, R>(
   scratch: string,
   use: (environment: { readonly GIT_INDEX_FILE: string }) => Effect.Effect<A, E, R>,
-) =>
-  Effect.gen(function* () {
-    const index = path.join(scratch, `${yield* newWorkspaceId}.index`);
-    return yield* use({ GIT_INDEX_FILE: index }).pipe(
-      Effect.ensuring(
-        workspaceIO("index", () => fs.rm(index, { force: true })).pipe(Effect.ignore),
-      ),
-    );
-  });
+) {
+  const index = path.join(scratch, `${yield* newWorkspaceId}.index`);
+  return yield* use({ GIT_INDEX_FILE: index }).pipe(
+    Effect.ensuring(workspaceIO("index", () => fs.rm(index, { force: true })).pipe(Effect.ignore)),
+  );
+});
 
 // Git trusts an entry's cached stat data only when the file's mtime is older than the index
 // file's, so a copy keeps the original's mtime, a second earlier: a file rewritten with the same
 // size just after the index was written must still be rehashed. A checkout without an index file
 // has nothing staged.
-const copyIndex = (real: string, copy: string) =>
-  Effect.gen(function* () {
-    const stat = yield* workspaceIOIfPresent("snapshot", () => fs.stat(real));
-    if (!stat) return;
-    yield* workspaceIO("snapshot", () => fs.copyFile(real, copy));
-    yield* workspaceIO("snapshot", () =>
-      fs.utimes(copy, stat.atimeMs / 1000, (stat.mtimeMs - 1000) / 1000),
-    );
-  });
+const copyIndex = Effect.fn("GitCapture.copyIndex")(function* (real: string, copy: string) {
+  const stat = yield* workspaceIOIfPresent("snapshot", () => fs.stat(real));
+  if (!stat) return;
+  yield* workspaceIO("snapshot", () => fs.copyFile(real, copy));
+  yield* workspaceIO("snapshot", () =>
+    fs.utimes(copy, stat.atimeMs / 1000, (stat.mtimeMs - 1000) / 1000),
+  );
+});
 
 /**
  * Captures the tree at `root` as Git would commit `git add -A` without touching its index: a copy
@@ -116,23 +112,22 @@ export const captureTree = (
   );
 
 /** Commits `tree` unsigned with the placeholder identity; the nonce keeps every capture distinct. */
-export const commitTree = (
+export const commitTree = Effect.fn("GitCapture.commitTree")(function* (
   repository: string,
   tree: string,
   parents: ReadonlyArray<string>,
   message: string,
-) =>
-  Effect.gen(function* () {
-    const nonce = yield* newWorkspaceId;
-    return yield* repositoryGit(repository, [
-      "commit-tree",
-      "--no-gpg-sign",
-      ...parents.flatMap((parent) => ["-p", parent]),
-      "-m",
-      `${message} ${nonce}`,
-      tree,
-    ]).pipe(Effect.flatMap(oid));
-  });
+) {
+  const nonce = yield* newWorkspaceId;
+  return yield* repositoryGit(repository, [
+    "commit-tree",
+    "--no-gpg-sign",
+    ...parents.flatMap((parent) => ["-p", parent]),
+    "-m",
+    `${message} ${nonce}`,
+    tree,
+  ]).pipe(Effect.flatMap(oid));
+});
 
 const workspaceRefPrefix = (workspaceId: string) => `refs/pi/workspaces/${workspaceId}/`;
 
@@ -148,20 +143,22 @@ export const setWorkspaceRef = (
 ) => repositoryGit(repository, ["update-ref", workspaceRef(workspaceId, name), commit]);
 
 /** Deletes every ref the workspace keeps in the repository. */
-export const deleteWorkspaceRefs = (repository: string, workspaceId: string) =>
-  Effect.gen(function* () {
-    const refs = (yield* repositoryGit(repository, [
-      "for-each-ref",
-      "--format=%(refname)",
-      workspaceRefPrefix(workspaceId),
-    ]))
-      .split("\n")
-      .filter(Boolean);
-    if (refs.length === 0) return;
-    yield* repositoryGit(repository, ["update-ref", "--stdin"], {
-      stdin: new TextEncoder().encode(refs.map((ref) => `delete ${ref}\n`).join("")),
-    });
+export const deleteWorkspaceRefs = Effect.fn("GitCapture.deleteWorkspaceRefs")(function* (
+  repository: string,
+  workspaceId: string,
+) {
+  const refs = (yield* repositoryGit(repository, [
+    "for-each-ref",
+    "--format=%(refname)",
+    workspaceRefPrefix(workspaceId),
+  ]))
+    .split("\n")
+    .filter(Boolean);
+  if (refs.length === 0) return;
+  yield* repositoryGit(repository, ["update-ref", "--stdin"], {
+    stdin: new TextEncoder().encode(refs.map((ref) => `delete ${ref}\n`).join("")),
   });
+});
 
 export const treeOf = (repository: string, revision: string) =>
   repositoryGit(repository, [
@@ -261,21 +258,24 @@ const numstatFile = (
 };
 
 /** Git's line counts for each path that differs between two stored trees. */
-export const diffStat = (repository: string, from: string, to: string) =>
-  Effect.gen(function* () {
-    const modes = new Map(
-      (yield* changedEntries(repository, from, to)).map((entry) => [entry.path, entry]),
-    );
-    const lines = yield* repositoryGitFields(repository, [
-      "diff-tree",
-      "-r",
-      "-z",
-      "--numstat",
-      "--no-renames",
-      "--no-ext-diff",
-      "--no-textconv",
-      from,
-      to,
-    ]);
-    return lines.map((line) => numstatFile(line, modes));
-  });
+export const diffStat = Effect.fn("GitCapture.diffStat")(function* (
+  repository: string,
+  from: string,
+  to: string,
+) {
+  const modes = new Map(
+    (yield* changedEntries(repository, from, to)).map((entry) => [entry.path, entry]),
+  );
+  const lines = yield* repositoryGitFields(repository, [
+    "diff-tree",
+    "-r",
+    "-z",
+    "--numstat",
+    "--no-renames",
+    "--no-ext-diff",
+    "--no-textconv",
+    from,
+    to,
+  ]);
+  return lines.map((line) => numstatFile(line, modes));
+});

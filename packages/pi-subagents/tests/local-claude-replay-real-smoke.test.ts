@@ -9,15 +9,14 @@ import { SupervisorChannel } from "../src/boundary/supervisor-channel.ts";
 import { backendLaunch, takeBackendEvent } from "./fixtures/backend-supervisor.ts";
 import { localCliProcess } from "./support/local-cli-process.ts";
 
-const sourceEnvironment = { ...process.env };
-const enabled = sourceEnvironment.PI_SUBAGENTS_REAL_CLAUDE_REPLAY_SMOKE === "1";
+const enabled = process.env.PI_SUBAGENTS_REAL_CLAUDE_REPLAY_SMOKE === "1";
 
 describe.skipIf(!enabled)("installed local Claude replay smoke", () => {
   it("exercises a background Agent, SendMessage, and report delivery after its notification", () => {
-    const model = sourceEnvironment.PI_SUBAGENTS_REAL_CLAUDE_MODEL;
+    const model = process.env.PI_SUBAGENTS_REAL_CLAUDE_MODEL;
     if (!model) throw new Error("Set PI_SUBAGENTS_REAL_CLAUDE_MODEL for the live replay smoke.");
     const agentDirectory = getAgentDir();
-    const environment = { ...sourceEnvironment, PI_SUBAGENTS_CLAUDE_DEBUG: "1" };
+    const environment = { ...process.env, PI_SUBAGENTS_CLAUDE_DEBUG: "1" };
     const launch = backendLaunch({
       runId: `real-local-claude-${synchronousRandomHex(4)}`,
       name: "real-local-claude-replay",

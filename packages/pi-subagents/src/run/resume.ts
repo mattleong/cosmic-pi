@@ -195,14 +195,14 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
       ? settlement.failRun(record, pending.error ?? "Subagent failed while resuming.")
       : settlement.settle(record, pending.state, pending.error);
 
-  const commitResume = (
-    id: string,
-    claimed: ClaimedResume,
-    prompt: string,
-    now: number,
-    agentMessage: AgentMessageResume | undefined,
-  ): Effect.Effect<SubagentRunView, SubagentError> =>
-    Effect.gen(function* () {
+  const commitResume = Effect.fn("SubagentResume.commitResume")(
+    function* (
+      id: string,
+      claimed: ClaimedResume,
+      prompt: string,
+      now: number,
+      agentMessage: AgentMessageResume | undefined,
+    ): Effect.fn.Return<SubagentRunView, SubagentError> {
       const record = claimed.record;
       if (claimed.needsRespawn) {
         const nextScope = yield* Scope.make();
@@ -285,8 +285,9 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
         });
       yield* sendPeerNotices(id);
       return view;
-    }).pipe(
-      Effect.tapError((error) =>
+    },
+    (effect, _id, claimed) =>
+      Effect.tapError(effect, (error) =>
         withLock(Effect.sync(() => completeRunInitialization(claimed.record))).pipe(
           Effect.flatMap((pending) => {
             if (
@@ -307,7 +308,7 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
           Effect.asVoid,
         ),
       ),
-    );
+  );
 
   const resume = (
     id: string,
@@ -349,49 +350,47 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
             currentCwd !== undefined &&
             currentCwd.filesystemIdentity === record.canonicalWriterCwd?.filesystemIdentity &&
             currentCwd.digest === record.canonicalWriterCwd?.digest;
-          const writerFailureLocked = (selected: RunRecord, needsRespawn: boolean) =>
-            Effect.gen(function* () {
-              const canonicalCwd = selected.canonicalWriterCwd;
-              if (!canonicalCwd)
-                return yield* invalidRequest(
-                  "writer_cwd_canonicalization_missing",
-                  `Subagent ${id} has no canonical writer cwd ownership evidence.`,
-                );
-              if (needsRespawn && !hasCurrentWriterCwd(selected))
-                return yield* invalidRequest(
-                  "writer_cwd_identity_changed",
-                  `Subagent ${id} cannot resume because its writer directory identity changed.`,
-                );
-              const writerFailure = writerConflictError(
-                records,
-                writerPools,
-                canonicalCwd,
-                selected,
+          const writerFailureLocked = Effect.fn("SubagentResume.writerFailureLocked")(function* (
+            selected: RunRecord,
+            needsRespawn: boolean,
+          ) {
+            const canonicalCwd = selected.canonicalWriterCwd;
+            if (!canonicalCwd)
+              return yield* invalidRequest(
+                "writer_cwd_canonicalization_missing",
+                `Subagent ${id} has no canonical writer cwd ownership evidence.`,
               );
-              if (writerFailure) return yield* writerFailure;
-              return undefined;
-            });
-          const respawnCapacityFailureLocked = (selected: RunRecord) =>
-            Effect.gen(function* () {
-              const parentRunId = selected.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
-              const nesting = yield* dependencies.currentNesting;
-              const capacityFailure =
-                processCapacityError(
-                  records,
-                  parentRunId,
-                  nesting.maxDirectChildren,
-                  selected,
-                  workspaces.heldLaunchSlots(parentRunId),
-                ) ??
-                treeCapacityError(
-                  records,
-                  nesting.maxActiveRuns ?? DEFAULT_MAX_ACTIVE_RUNS,
-                  selected,
-                  workspaces.heldLaunchSlots(),
-                );
-              if (capacityFailure) return yield* capacityFailure;
-              return undefined;
-            });
+            if (needsRespawn && !hasCurrentWriterCwd(selected))
+              return yield* invalidRequest(
+                "writer_cwd_identity_changed",
+                `Subagent ${id} cannot resume because its writer directory identity changed.`,
+              );
+            const writerFailure = writerConflictError(records, writerPools, canonicalCwd, selected);
+            if (writerFailure) return yield* writerFailure;
+            return undefined;
+          });
+          const respawnCapacityFailureLocked = Effect.fn(
+            "SubagentResume.respawnCapacityFailureLocked",
+          )(function* (selected: RunRecord) {
+            const parentRunId = selected.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
+            const nesting = yield* dependencies.currentNesting;
+            const capacityFailure =
+              processCapacityError(
+                records,
+                parentRunId,
+                nesting.maxDirectChildren,
+                selected,
+                workspaces.heldLaunchSlots(parentRunId),
+              ) ??
+              treeCapacityError(
+                records,
+                nesting.maxActiveRuns ?? DEFAULT_MAX_ACTIVE_RUNS,
+                selected,
+                workspaces.heldLaunchSlots(),
+              );
+            if (capacityFailure) return yield* capacityFailure;
+            return undefined;
+          });
           const admitLocked = Effect.gen(function* () {
             const selected = yield* requireRecord(id);
             yield* requireControlExpectation(selected, expected);

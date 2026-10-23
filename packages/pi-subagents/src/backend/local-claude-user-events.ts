@@ -61,34 +61,33 @@ export const localClaudeUserEvents = (context: LocalClaudeHandleContext) => {
     nativeToolNames,
   } = context;
 
-  const handleToolResults = (
+  const handleToolResults = Effect.fnUntraced(function* (
     toolResults: ClaudeUserProtocolEvent["toolResults"],
     raw: LocalCliWireEvent,
-  ) =>
-    Effect.gen(function* () {
-      for (const [index, result] of toolResults.entries()) {
-        const nativeName = nativeToolNames.get(result.id);
-        nativeToolNames.delete(result.id);
-        const finished: BackendEvent = nativeName
-          ? {
-              type: "native_agent_activity",
-              assignmentEpoch: state.assignmentEpoch,
-              activityId: result.id,
-              kind: nativeName,
-              state: result.isError ? "failed" : "completed",
-            }
-          : {
-              type: "tool_finished",
-              assignmentEpoch: state.assignmentEpoch,
-              toolCallId: result.id,
-              toolName: toolNames.get(result.id) ?? "ClaudeTool",
-              isError: result.isError,
-              outputPreview: result.outputPreview,
-            };
-        if (!nativeName) toolNames.delete(result.id);
-        yield* offer(finished, index === toolResults.length - 1 ? raw : undefined);
-      }
-    });
+  ) {
+    for (const [index, result] of toolResults.entries()) {
+      const nativeName = nativeToolNames.get(result.id);
+      nativeToolNames.delete(result.id);
+      const finished: BackendEvent = nativeName
+        ? {
+            type: "native_agent_activity",
+            assignmentEpoch: state.assignmentEpoch,
+            activityId: result.id,
+            kind: nativeName,
+            state: result.isError ? "failed" : "completed",
+          }
+        : {
+            type: "tool_finished",
+            assignmentEpoch: state.assignmentEpoch,
+            toolCallId: result.id,
+            toolName: toolNames.get(result.id) ?? "ClaudeTool",
+            isError: result.isError,
+            outputPreview: result.outputPreview,
+          };
+      if (!nativeName) toolNames.delete(result.id);
+      yield* offer(finished, index === toolResults.length - 1 ? raw : undefined);
+    }
+  });
 
   const isExactSession = (event: ClaudeUserProtocolEvent): boolean =>
     event.sessionId !== undefined && event.sessionId === state.nativeSessionId;

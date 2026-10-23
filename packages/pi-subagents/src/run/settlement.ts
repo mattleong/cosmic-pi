@@ -55,6 +55,7 @@ import {
   type SettledReport,
   type SettlementState,
 } from "./settlement-outcome.ts";
+import { isScopeClosed } from "./session-owned.ts";
 import { foldRunWarnings, recordRunWarning } from "./warnings.ts";
 
 interface RunSettlementDependencies extends Pick<
@@ -237,12 +238,18 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
   // settlement waits only until its deadline and then settles without the file: the parent gets a
   // preview and agent_read, as for any file that can't be saved. The save itself can't be cut short
   // without risking a partial file, so it finishes in the session scope and removes a file it made
-  // after the settlement stopped waiting; nothing names that file.
+  // after the settlement stopped waiting; nothing names that file. A closing session scope would
+  // refuse the save without running it, and nothing delivers a completion by then, so the
+  // settlement goes on without a file rather than waiting out the deadline.
   const saveArchiveLocked = (
     entry: ReportArchiveEntry,
   ): Effect.Effect<SubagentReportArchive | undefined> =>
     archiveReport
       ? Effect.gen(function* () {
+          if (isScopeClosed(ownerScope)) {
+            yield* Effect.logWarning("Subagent report file wasn't saved (session closing).");
+            return undefined;
+          }
           // The file, or none once the deadline passed first. Whichever completes it first owns
           // the outcome, so a save that loses removes its file.
           const outcome = yield* Deferred.make<Option.Option<SubagentReportArchive | undefined>>();
@@ -252,7 +259,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
                 Effect.flatMap((won) => (won ? Effect.void : discardArchive(file))),
               ),
             ),
-            // Uninterruptible from its start, so it runs even once the session scope is closing.
+            // Uninterruptible from its start, so closing the session scope waits for the write.
             Effect.forkIn(ownerScope, { startImmediately: true, uninterruptible: true }),
           );
           const deadline = yield* Effect.sleep(Duration.millis(REPORT_SAVE_DEADLINE_MILLIS)).pipe(
@@ -268,27 +275,26 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
       : Effect.undefined;
 
   // Only an admitted generation is archived, so every file names the generation that delivers it.
-  const archiveReportLocked = (
+  const archiveReportLocked = Effect.fn("SubagentSettlement.archiveReportLocked")(function* (
     record: RunRecord,
     finalText: string,
     generation: number | undefined,
-  ): Effect.Effect<SettledReport> =>
-    Effect.gen(function* () {
-      const truncation = record.latestAssistantTruncation;
-      const reportArchive =
-        generation === undefined
-          ? undefined
-          : yield* saveArchiveLocked({
-              id: record.view.id,
-              generation,
-              text: record.latestAssistantFullText ?? finalText,
-              ...(truncation && { originalChars: truncation.originalChars }),
-            });
-      return {
-        ...(truncation && { finalTextTruncation: truncation }),
-        ...(reportArchive && { reportArchive }),
-      };
-    });
+  ): Effect.fn.Return<SettledReport> {
+    const truncation = record.latestAssistantTruncation;
+    const reportArchive =
+      generation === undefined
+        ? undefined
+        : yield* saveArchiveLocked({
+            id: record.view.id,
+            generation,
+            text: record.latestAssistantFullText ?? finalText,
+            ...(truncation && { originalChars: truncation.originalChars }),
+          });
+    return {
+      ...(truncation && { finalTextTruncation: truncation }),
+      ...(reportArchive && { reportArchive }),
+    };
+  });
 
   // Like a report, only an admitted failure generation is archived.
   const archiveFailureLocked = (
@@ -322,125 +328,119 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
     });
   };
 
-  const commitSettlementLocked = (
+  const commitSettlementLocked = Effect.fn("SubagentSettlement.commitSettlementLocked")(function* (
     record: RunRecord,
     state: SettlementState,
     generation: number | undefined,
     finalText: string | undefined,
     settledError: string | undefined,
     report: SettledReport,
-  ) =>
-    Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis;
-      const { completedScope, pauseOutcome } = yield* Effect.sync(() => {
-        const scope =
-          state === "completed" && record.process !== undefined ? record.scope : undefined;
-        if (scope) beginCleanup(record);
-        const outcome = record.pauseOutcome;
-        record.pauseOutcome = undefined;
-        record.pauseRequested = false;
-        clearRunActivity(record);
-        record.latestAssistantFullText = undefined;
-        queueCompletionLocked(record, state, generation, finalText, settledError, report);
-        return { completedScope: scope, pauseOutcome: outcome };
-      }).pipe(
-        // Until the completion outbox owns them, nothing else owns the files this settlement
-        // saved. Once queued, later failures must keep them: the parent is told their paths.
-        Effect.onError(() =>
-          discardArchive(report.reportArchive).pipe(
-            Effect.andThen(discardArchive(report.errorArchive)),
-          ),
+  ) {
+    const now = yield* Clock.currentTimeMillis;
+    const { completedScope, pauseOutcome } = yield* Effect.sync(() => {
+      const scope =
+        state === "completed" && record.process !== undefined ? record.scope : undefined;
+      if (scope) beginCleanup(record);
+      const outcome = record.pauseOutcome;
+      record.pauseOutcome = undefined;
+      record.pauseRequested = false;
+      clearRunActivity(record);
+      record.latestAssistantFullText = undefined;
+      queueCompletionLocked(record, state, generation, finalText, settledError, report);
+      return { completedScope: scope, pauseOutcome: outcome };
+    }).pipe(
+      // Until the completion outbox owns them, nothing else owns the files this settlement
+      // saved. Once queued, later failures must keep them: the parent is told their paths.
+      Effect.onError(() =>
+        discardArchive(report.reportArchive).pipe(
+          Effect.andThen(discardArchive(report.errorArchive)),
         ),
+      ),
+    );
+    record.notificationGeneration += 1;
+    delivery.discardQuestionLocked(record.view.id);
+    record.replyPendingRequestId = undefined;
+    if (state === "completed") record.assignment.phase = "reported";
+    record.view = viewForSettlement(record, state, now, finalText, settledError, report);
+    yield* publish;
+    const view = snapshotRun(record);
+    if (pauseOutcome) Deferred.doneUnsafe(pauseOutcome, Effect.succeed(view));
+    // Transfer post-commit work with the outcome, not with its interruptible waiter. Peer notices
+    // still precede backend closure, and their interruption cannot abandon cleanup. This fork
+    // never joins under the run lock; its session-owned work acquires it independently. A closing
+    // session scope refuses both forks; shutdown then closes every run's scope leaf-first.
+    if (completedScope)
+      yield* sendPeerNotices(record.view.id).pipe(
+        Effect.ensuring(closeRecordScope(record, completedScope)),
+        Effect.forkIn(ownerScope),
       );
-      record.notificationGeneration += 1;
-      delivery.discardQuestionLocked(record.view.id);
-      record.replyPendingRequestId = undefined;
-      if (state === "completed") record.assignment.phase = "reported";
-      record.view = viewForSettlement(record, state, now, finalText, settledError, report);
-      yield* publish;
-      const view = snapshotRun(record);
-      if (pauseOutcome) Deferred.doneUnsafe(pauseOutcome, Effect.succeed(view));
-      // Transfer post-commit work with the outcome, not with its interruptible waiter. Peer notices
-      // still precede backend closure, and their interruption cannot abandon cleanup. This fork
-      // never joins under the run lock; its session-owned work acquires it independently.
-      if (completedScope)
-        yield* sendPeerNotices(record.view.id).pipe(
-          Effect.ensuring(closeRecordScope(record, completedScope)),
-          Effect.forkIn(ownerScope),
-        );
-      if (
-        state === "completed" &&
-        record.view.workspaceId !== undefined &&
-        settleCompletedWorkspace
-      )
-        yield* settleCompletedWorkspace(record, record.assignment.epoch).pipe(
-          Effect.forkIn(ownerScope),
-        );
-      return { notifyPeers: completedScope === undefined, view };
-    });
+    if (state === "completed" && record.view.workspaceId !== undefined && settleCompletedWorkspace)
+      yield* settleCompletedWorkspace(record, record.assignment.epoch).pipe(
+        Effect.forkIn(ownerScope),
+      );
+    return { notifyPeers: completedScope === undefined, view };
+  });
 
-  const settleLocked = (
+  const settleLocked = Effect.fn("SubagentSettlement.settleLocked")(function* (
     record: RunRecord,
     state: SettlementState,
     error?: string,
     assignmentEpoch?: number,
-  ): Effect.Effect<SettlementCommit> =>
-    Effect.gen(function* () {
-      if (
-        settlementBlocked(record, state) ||
-        (assignmentEpoch !== undefined && record.assignment.epoch !== assignmentEpoch)
-      ) {
-        // This settlement never reports, so its full text is never archived.
-        record.latestAssistantFullText = undefined;
-        return { notifyPeers: false, view: snapshotRun(record) };
-      }
-      if (record.initialization && state !== "stopped") {
-        record.initialization.pendingSettlement = { state, ...(error && { error }) };
-        return { notifyPeers: false, view: snapshotRun(record) };
-      }
-      const acceptedReport =
-        state === "failed" && record.assignment.phase === "issuing"
-          ? record.assignment.pendingReport
-          : undefined;
-      if (acceptedReport) {
-        // An accepted report proves the assignment ran, so an exit or failure before its start
-        // confirmed never replaces it with a retryable failure. Only an explicit stop does.
-        record.assignment.pendingReport = undefined;
-        record.assignment.pendingRunSettled = false;
-        return yield* commitReportLocked(record, acceptedReport);
-      }
-      const finalText = state === "completed" ? record.latestAssistantText : undefined;
-      const generation = allocateCompletionLocked(record, state);
-      const reportArchive = finalText
-        ? yield* archiveReportLocked(record, finalText, generation)
-        : {};
-      const settledError = state === "failed" ? (error ?? "Run failed.") : error;
-      const errorArchive =
-        state === "failed" && settledError !== undefined
-          ? yield* archiveFailureLocked(record, settledError, generation)
-          : undefined;
-      const report: SettledReport = { ...reportArchive, ...(errorArchive && { errorArchive }) };
-      return yield* commitSettlementLocked(
-        record,
-        state,
-        generation,
-        finalText,
-        settledError,
-        report,
-      );
-    }).pipe(Effect.uninterruptible);
+  ): Effect.fn.Return<SettlementCommit> {
+    if (
+      settlementBlocked(record, state) ||
+      (assignmentEpoch !== undefined && record.assignment.epoch !== assignmentEpoch)
+    ) {
+      // This settlement never reports, so its full text is never archived.
+      record.latestAssistantFullText = undefined;
+      return { notifyPeers: false, view: snapshotRun(record) };
+    }
+    if (record.initialization && state !== "stopped") {
+      record.initialization.pendingSettlement = { state, ...(error && { error }) };
+      return { notifyPeers: false, view: snapshotRun(record) };
+    }
+    const acceptedReport =
+      state === "failed" && record.assignment.phase === "issuing"
+        ? record.assignment.pendingReport
+        : undefined;
+    if (acceptedReport) {
+      // An accepted report proves the assignment ran, so an exit or failure before its start
+      // confirmed never replaces it with a retryable failure. Only an explicit stop does.
+      record.assignment.pendingReport = undefined;
+      record.assignment.pendingRunSettled = false;
+      return yield* commitReportLocked(record, acceptedReport);
+    }
+    const finalText = state === "completed" ? record.latestAssistantText : undefined;
+    const generation = allocateCompletionLocked(record, state);
+    const reportArchive = finalText
+      ? yield* archiveReportLocked(record, finalText, generation)
+      : {};
+    const settledError = state === "failed" ? (error ?? "Run failed.") : error;
+    const errorArchive =
+      state === "failed" && settledError !== undefined
+        ? yield* archiveFailureLocked(record, settledError, generation)
+        : undefined;
+    const report: SettledReport = { ...reportArchive, ...(errorArchive && { errorArchive }) };
+    return yield* commitSettlementLocked(
+      record,
+      state,
+      generation,
+      finalText,
+      settledError,
+      report,
+    );
+  }, Effect.uninterruptible);
 
-  const settle = (
+  const settle = Effect.fn("SubagentSettlement.settle")(function* (
     record: RunRecord,
     state: SettlementState,
     error?: string,
     assignmentEpoch?: number,
-  ) =>
-    Effect.gen(function* () {
-      const result = yield* withLock(settleLocked(record, state, error, assignmentEpoch));
-      if (result.notifyPeers) yield* sendPeerNotices(record.view.id);
-      return result.view;
-    });
+  ) {
+    const result = yield* withLock(settleLocked(record, state, error, assignmentEpoch));
+    if (result.notifyPeers) yield* sendPeerNotices(record.view.id);
+    return result.view;
+  });
 
   const failRun = (
     record: RunRecord,
@@ -485,8 +485,8 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
     );
   };
 
-  const rejectReportAndPublishLocked = (record: RunRecord, reason: string, now: number) =>
-    Effect.gen(function* () {
+  const rejectReportAndPublishLocked = Effect.fn("SubagentSettlement.rejectReportAndPublishLocked")(
+    function* (record: RunRecord, reason: string, now: number) {
       const warning = sanitizeDiagnosticText(
         `Rejected protocol-invalid backend report: ${reason}`,
         MAX_ERROR_CHARS,
@@ -498,21 +498,24 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
       const view = snapshotRun(record);
       yield* publish;
       return { kind: "unchanged" as const, view };
-    });
+    },
+  );
 
-  const commitReportLocked = (record: RunRecord, report: BackendReport) =>
-    Effect.gen(function* () {
-      recordLatestAssistantText(record, captureOutputText({ text: report.text ?? "" }));
-      record.lastBackendReport = {
-        assignmentEpoch: report.assignmentEpoch,
-        sequence: report.sequence,
-        deliveryId: report.deliveryId,
-      };
-      return yield* settleLocked(record, "completed", undefined, report.assignmentEpoch);
-    }).pipe(Effect.uninterruptible);
+  const commitReportLocked = Effect.fn("SubagentSettlement.commitReportLocked")(function* (
+    record: RunRecord,
+    report: BackendReport,
+  ) {
+    recordLatestAssistantText(record, captureOutputText({ text: report.text ?? "" }));
+    record.lastBackendReport = {
+      assignmentEpoch: report.assignmentEpoch,
+      sequence: report.sequence,
+      deliveryId: report.deliveryId,
+    };
+    return yield* settleLocked(record, "completed", undefined, report.assignmentEpoch);
+  }, Effect.uninterruptible);
 
-  const acceptValidatedBackendReport = (record: RunRecord, report: BackendReport) =>
-    Effect.gen(function* () {
+  const acceptValidatedBackendReport = Effect.fn("SubagentSettlement.acceptValidatedBackendReport")(
+    function* (record: RunRecord, report: BackendReport) {
       const now = yield* Clock.currentTimeMillis;
       const decision = yield* withLock(
         Effect.gen(function* () {
@@ -554,13 +557,14 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
       if (decision.kind === "committed" && decision.notifyPeers)
         yield* sendPeerNotices(record.view.id);
       return decision.view;
-    });
+    },
+  );
 
-  const activateAssignmentLocked = (
-    record: RunRecord,
-    runningView: StoredRunView,
-  ): Effect.Effect<AssignmentActivationReplay> =>
-    Effect.gen(function* () {
+  const activateAssignmentLocked = Effect.fn("SubagentSettlement.activateAssignmentLocked")(
+    function* (
+      record: RunRecord,
+      runningView: StoredRunView,
+    ): Effect.fn.Return<AssignmentActivationReplay> {
       const pendingReport = record.assignment.pendingReport;
       const pendingRunSettled = record.assignment.pendingRunSettled;
       record.assignment.phase = "running";
@@ -582,7 +586,9 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
         : { kind: "running", view: snapshotRun(record) };
       yield* publish;
       return replay;
-    }).pipe(Effect.uninterruptible);
+    },
+    Effect.uninterruptible,
+  );
 
   const replayAssignmentActivation = (
     record: RunRecord,
@@ -603,8 +609,8 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
     return absurd(replay);
   };
 
-  const acceptBackendReport = (record: RunRecord, rawReport: BackendReport) =>
-    Effect.gen(function* () {
+  const acceptBackendReport = Effect.fn("SubagentSettlement.acceptBackendReport")(
+    function* (record: RunRecord, rawReport: BackendReport) {
       const current = yield* withLock(
         Effect.sync(
           () =>
@@ -642,93 +648,97 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
         deliveryId: rawReport.deliveryId.trim(),
         text,
       });
-    }).pipe(
-      Effect.catch((error) =>
-        withLock(
-          Effect.suspend(() =>
-            isInactiveRunRecord(record) || record.assignment.epoch !== rawReport.assignmentEpoch
-              ? Effect.succeed(snapshotRun(record))
-              : Effect.fail(error),
+    },
+    (effect, record, rawReport) =>
+      effect.pipe(
+        Effect.catch((error) =>
+          withLock(
+            Effect.suspend(() =>
+              isInactiveRunRecord(record) || record.assignment.epoch !== rawReport.assignmentEpoch
+                ? Effect.succeed(snapshotRun(record))
+                : Effect.fail(error),
+            ),
           ),
         ),
       ),
+  );
+
+  const runStartedFromBackend = Effect.fn("SubagentSettlement.runStartedFromBackend")(function* (
+    record: RunRecord,
+    assignmentEpoch: number,
+  ) {
+    const now = yield* Clock.currentTimeMillis;
+    const replay = yield* withLock(
+      Effect.gen(function* () {
+        if (
+          record.assignment.epoch !== assignmentEpoch ||
+          record.assignment.phase === "preparing" ||
+          record.assignment.phase === "reported" ||
+          isInactiveRunRecord(record)
+        )
+          return undefined;
+        record.assignment.startedObserved = true;
+        record.pausedAssignmentEpoch = undefined;
+        const running: StoredRunView = {
+          ...record.view,
+          state: "running",
+          endedAt: undefined,
+          error: undefined,
+          lastActivityAt: now,
+        };
+        if (record.assignment.phase === "issuing" && !record.assignment.outcomeUncertain) {
+          record.view = running;
+          yield* publish;
+          return undefined;
+        }
+        return yield* activateAssignmentLocked(record, running);
+      }),
     );
+    if (replay) yield* replayAssignmentActivation(record, replay);
+  });
 
-  const runStartedFromBackend = (record: RunRecord, assignmentEpoch: number) =>
-    Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis;
-      const replay = yield* withLock(
-        Effect.gen(function* () {
-          if (
-            record.assignment.epoch !== assignmentEpoch ||
-            record.assignment.phase === "preparing" ||
-            record.assignment.phase === "reported" ||
-            isInactiveRunRecord(record)
-          )
-            return undefined;
-          record.assignment.startedObserved = true;
-          record.pausedAssignmentEpoch = undefined;
-          const running: StoredRunView = {
-            ...record.view,
-            state: "running",
-            endedAt: undefined,
-            error: undefined,
-            lastActivityAt: now,
-          };
-          if (record.assignment.phase === "issuing" && !record.assignment.outcomeUncertain) {
-            record.view = running;
-            yield* publish;
-            return undefined;
-          }
-          return yield* activateAssignmentLocked(record, running);
-        }),
-      );
-      if (replay) yield* replayAssignmentActivation(record, replay);
-    });
-
-  const runSettledFromBackend = (
+  const runSettledFromBackend = Effect.fn("SubagentSettlement.runSettledFromBackend")(function* (
     record: RunRecord,
     assignmentEpoch: number,
     terminal?: BackendAssistantTerminal,
     isCurrent: () => boolean = () => true,
-  ): Effect.Effect<void> =>
-    Effect.gen(function* () {
-      const phase = yield* withLock(
-        Effect.sync(() => settledAssignmentLocked(record, assignmentEpoch, terminal)),
-      );
-      if (phase !== "running") return;
-      // Guidance or a descendant notice admitted before this settlement may restart the child.
-      const turnInputsDrained = yield* Deferred.make<void>();
-      yield* withLock(Effect.sync(() => claimTurnInputDrain(record, turnInputsDrained)));
-      yield* Deferred.await(turnInputsDrained);
-      if (!isCurrent()) return;
-      if (record.pauseRequested) {
-        const now = yield* Clock.currentTimeMillis;
-        if (yield* pauseFromEvent(record, now, assignmentEpoch)) return;
-      }
-      if (record.stoppedByParent) return;
-      const finalText =
-        terminal?.stopReason === "stop" && terminal.text
-          ? captureOutputText({ text: terminal.text, originalSize: terminal.originalSize })
-          : undefined;
-      const outcome = yield* withLock(
-        Effect.sync(() => {
-          if (
-            isInactiveRunRecord(record) ||
-            record.assignment.epoch !== assignmentEpoch ||
-            record.assignment.phase !== "running"
-          )
-            return "ignored";
-          if (!finalText) return "failed";
-          recordLatestAssistantText(record, finalText);
-          record.pausedAssignmentEpoch = undefined;
-          return "completed";
-        }),
-      );
-      if (outcome === "completed") yield* settle(record, "completed", undefined, assignmentEpoch);
-      if (outcome === "failed")
-        yield* failRun(record, settledFailureMessage(terminal), undefined, assignmentEpoch);
-    });
+  ): Effect.fn.Return<void> {
+    const phase = yield* withLock(
+      Effect.sync(() => settledAssignmentLocked(record, assignmentEpoch, terminal)),
+    );
+    if (phase !== "running") return;
+    // Guidance or a descendant notice admitted before this settlement may restart the child.
+    const turnInputsDrained = yield* Deferred.make<void>();
+    yield* withLock(Effect.sync(() => claimTurnInputDrain(record, turnInputsDrained)));
+    yield* Deferred.await(turnInputsDrained);
+    if (!isCurrent()) return;
+    if (record.pauseRequested) {
+      const now = yield* Clock.currentTimeMillis;
+      if (yield* pauseFromEvent(record, now, assignmentEpoch)) return;
+    }
+    if (record.stoppedByParent) return;
+    const finalText =
+      terminal?.stopReason === "stop" && terminal.text
+        ? captureOutputText({ text: terminal.text, originalSize: terminal.originalSize })
+        : undefined;
+    const outcome = yield* withLock(
+      Effect.sync(() => {
+        if (
+          isInactiveRunRecord(record) ||
+          record.assignment.epoch !== assignmentEpoch ||
+          record.assignment.phase !== "running"
+        )
+          return "ignored";
+        if (!finalText) return "failed";
+        recordLatestAssistantText(record, finalText);
+        record.pausedAssignmentEpoch = undefined;
+        return "completed";
+      }),
+    );
+    if (outcome === "completed") yield* settle(record, "completed", undefined, assignmentEpoch);
+    if (outcome === "failed")
+      yield* failRun(record, settledFailureMessage(terminal), undefined, assignmentEpoch);
+  });
 
   return {
     mutateEventView,

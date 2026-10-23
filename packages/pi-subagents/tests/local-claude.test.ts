@@ -183,6 +183,32 @@ describe("Claude input delivery ownership", () => {
       expect(counts.sends).toBe(0);
     }),
   );
+  it.effect("transport closure racing preparation fails before delivery starts", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const preparing = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const states: Array<string> = [];
+        const { inputs, counts } = deliveryHarness(yield* Scope.Scope, {
+          recordOutbound: Deferred.succeed(preparing, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+          ),
+          observers: { onState: (_, state) => Effect.sync(() => states.push(state)) },
+        });
+        const caller = yield* Effect.forkChild(inputs.send("Guidance", 1, "steer"));
+        yield* Deferred.await(preparing);
+        const closed = processError("send", "transport_closed", "Transport closed.");
+        inputs.cancel(closed);
+        yield* Deferred.succeed(release, undefined);
+        const exit = yield* Fiber.await(caller);
+        expect(exit).toStrictEqual(Exit.fail(closed));
+        expect(states).toStrictEqual([]);
+        expect(counts.sends).toBe(0);
+        expect(inputs.pending).toBeUndefined();
+      }),
+    ),
+  );
+
   it.effect("cancellation before native send releases admission without sending later", () =>
     Effect.scoped(
       Effect.gen(function* () {

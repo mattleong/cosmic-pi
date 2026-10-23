@@ -67,11 +67,7 @@ import { registerSubagentTools } from "../tools/subagent.ts";
 import { registerApplicationCommands } from "./commands.ts";
 import { orphanSweepNotice, registerSubagentMessageRenderers } from "./messages.ts";
 import { createProfileOverrideHandoff } from "./profile-override-handoff.ts";
-import {
-  IncompatibleProfileReloadHandoffError,
-  profileReloadHandoff,
-  profileReloadSessionKey,
-} from "./profile-reload-handoff.ts";
+import { profileReloadHandoff, profileReloadSessionKey } from "./profile-reload-handoff.ts";
 
 const ROOT_TOOL_NAME_SET: ReadonlySet<string> = new Set(ROOT_TOOL_NAMES);
 const PARENT_IDLE_CHECK_INTERVAL = "50 millis";
@@ -233,7 +229,7 @@ export function registerSubagentApplication(
               ? profileReloadHandoff.capture(activation.sessionKey)
               : undefined;
         } catch (error) {
-          incompatibleReload = error instanceof IncompatibleProfileReloadHandoffError;
+          incompatibleReload = Predicate.isTagged(error, "IncompatibleProfileReloadHandoffError");
           throw error;
         }
         if (restoredReload) profileOverrideHandoff.publish(owner, restoredReload);
@@ -291,8 +287,8 @@ export function registerSubagentApplication(
                     }),
                   ),
             ),
-          proxyHandler: (service, callerRunId, request) =>
-            Effect.gen(function* () {
+          proxyHandler: Effect.fn("SubagentsExtension.proxyHandler")(
+            function* (service, callerRunId, request) {
               if (!ownsActivation() || currentActivation !== activation)
                 return yield* new InvalidSubagentRequestError({
                   code: "proxy_caller_disconnected",
@@ -338,36 +334,36 @@ export function registerSubagentApplication(
                 undefined,
                 false,
               ).pipe(Effect.provideService(SubagentService, service));
-            }),
+            },
+          ),
         });
         return makePiManagedRuntime(pi, layer, {
           agentDirectory: () => activation.agentDirectory,
           packageName: "pi-subagents",
         });
       },
-      startup: (activation) =>
-        Effect.gen(function* () {
-          yield* bestEffortHostBootstrap("pi-subagents.preview-settings", (signal) =>
-            boundaries.loadSettings(activation.cwd, activation.projectTrusted, signal),
-          );
-          const projection = yield* SubagentService.use((service) => service.projection);
-          const scheduler = yield* CodePreviewSchedulerService;
-          // The start schema lists the agents this activation's configuration declares.
-          const profiles = yield* SubagentProfileService.use((service) => service.capture);
-          return {
-            scheduler,
-            projection,
-            toolRuntime: {
-              environment: {
-                cwd: activation.cwd,
-                projectTrusted: activation.projectTrusted,
-              },
-              agents: profiles.effectiveConfig.agents,
-              toolPresentation: bridge.bindToolPresentation(),
-              run: slot.run,
+      startup: Effect.fn("SubagentsExtension.startup")(function* (activation) {
+        yield* bestEffortHostBootstrap("pi-subagents.preview-settings", (signal) =>
+          boundaries.loadSettings(activation.cwd, activation.projectTrusted, signal),
+        );
+        const projection = yield* SubagentService.use((service) => service.projection);
+        const scheduler = yield* CodePreviewSchedulerService;
+        // The start schema lists the agents this activation's configuration declares.
+        const profiles = yield* SubagentProfileService.use((service) => service.capture);
+        return {
+          scheduler,
+          projection,
+          toolRuntime: {
+            environment: {
+              cwd: activation.cwd,
+              projectTrusted: activation.projectTrusted,
             },
-          };
-        }),
+            agents: profiles.effectiveConfig.agents,
+            toolPresentation: bridge.bindToolPresentation(),
+            run: slot.run,
+          },
+        };
+      }),
       onActivated: (activation, token, prepared) => {
         if (!slot.isCurrent(token)) return;
         const run: typeof slot.run = (effect, signal) =>

@@ -1,7 +1,9 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
+import * as Result from "effect/Result";
 import * as TestClock from "effect/testing/TestClock";
 import { eventLoopTurn, extensionApiFixture, step, yieldUntil } from "pi-cosmic-core/testing";
 import { vi } from "vitest";
@@ -127,7 +129,9 @@ describe("report retention", () => {
         expect(readout?.text?.length).toBeLessThanOrEqual(MAX_FINAL_TEXT_CHARS);
         expect(readout?.text).toMatch(/^finding 0\nfinding 1\n/u);
         expect(yield* readFile(reportFile?.path ?? "missing")).toBe(report);
-        const readText = read.content.flatMap((part) => (part.type === "text" ? [part.text] : []));
+        const readText = Arr.filterMap(read.content, (part) =>
+          part.type === "text" ? Result.succeed(part.text) : Result.failVoid,
+        );
         expect(readText.join("\n")).toContain(reportFile?.path);
         expect(readText.join("\n")).toContain("finding 0\n");
 

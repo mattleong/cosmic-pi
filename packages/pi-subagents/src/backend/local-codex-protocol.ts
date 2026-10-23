@@ -41,9 +41,7 @@ const EnvelopeDiscriminant = Schema.Struct({
   method: Schema.optional(Schema.Unknown),
 });
 
-export const decodeCodexEnvelope = Effect.fn("LocalCodexProtocol.decodeEnvelope")(function* (
-  value: Schema.Json,
-) {
+export const decodeCodexEnvelope = Effect.fnUntraced(function* (value: Schema.Json) {
   const discriminant = yield* Schema.decodeUnknownEffect(EnvelopeDiscriminant)(value);
   if (discriminant.method !== undefined && discriminant.id !== undefined) {
     const request = yield* Schema.decodeUnknownEffect(ServerRequest)(value);
@@ -269,87 +267,89 @@ const decodeNativeAgentItem = (
     ),
   );
 
-const decodeCodexItemNotification = Effect.fn("LocalCodexProtocol.decodeItemNotification")(
-  function* (method: "item/started" | "item/completed", params: Schema.Json | undefined) {
-    const envelope = yield* Schema.decodeUnknownEffect(NativeItemEnvelope)(params);
-    const discriminant = yield* Schema.decodeUnknownEffect(NativeItemDiscriminant)(envelope.item);
-    // Codex repeats each sub-agent activity item on completion, which carries the same state.
-    if (discriminant.type === "subAgentActivity" && method === "item/started")
-      return { type: "ignored" as const };
-    if (discriminant.type === "collabAgentToolCall" || discriminant.type === "subAgentActivity")
-      return yield* decodeNativeAgentItem(method, envelope, discriminant.type);
-    return {
-      type: method === "item/started" ? ("item_started" as const) : ("item_completed" as const),
-      threadId: envelope.threadId,
-      turnId: envelope.turnId,
-      item: yield* Schema.decodeUnknownEffect(Item)(envelope.item),
-    };
-  },
-);
+const decodeCodexItemNotification = Effect.fnUntraced(function* (
+  method: "item/started" | "item/completed",
+  params: Schema.Json | undefined,
+) {
+  const envelope = yield* Schema.decodeUnknownEffect(NativeItemEnvelope)(params);
+  const discriminant = yield* Schema.decodeUnknownEffect(NativeItemDiscriminant)(envelope.item);
+  // Codex repeats each sub-agent activity item on completion, which carries the same state.
+  if (discriminant.type === "subAgentActivity" && method === "item/started")
+    return { type: "ignored" as const };
+  if (discriminant.type === "collabAgentToolCall" || discriminant.type === "subAgentActivity")
+    return yield* decodeNativeAgentItem(method, envelope, discriminant.type);
+  return {
+    type: method === "item/started" ? ("item_started" as const) : ("item_completed" as const),
+    threadId: envelope.threadId,
+    turnId: envelope.turnId,
+    item: yield* Schema.decodeUnknownEffect(Item)(envelope.item),
+  };
+});
 
-export const decodeCodexNotification = Effect.fn("LocalCodexProtocol.decodeNotification")(
-  function* (method: string, params: Schema.Json | undefined) {
-    switch (method) {
-      case "turn/started": {
-        const value = yield* Schema.decodeUnknownEffect(TurnStarted)(params);
-        return {
-          type: "turn_started" as const,
-          threadId: value.threadId,
-          turnId: value.turn.id,
-        };
-      }
-      case "item/started":
-      case "item/completed":
-        return yield* decodeCodexItemNotification(method, params);
-      case "item/agentMessage/delta": {
-        const value = yield* Schema.decodeUnknownEffect(AgentDelta)(params);
-        return { type: "agent_delta" as const, ...value };
-      }
-      case "thread/tokenUsage/updated": {
-        const value = yield* Schema.decodeUnknownEffect(TokenUsage)(params);
-        return {
-          type: "usage" as const,
-          threadId: value.threadId,
-          turnId: value.turnId,
-          total: value.tokenUsage.total,
-        };
-      }
-      case "turn/completed": {
-        const value = yield* Schema.decodeUnknownEffect(TurnCompleted)(params);
-        return {
-          type: "turn_completed" as const,
-          threadId: value.threadId,
-          turnId: value.turn.id,
-          status: value.turn.status,
-          ...(value.turn.error && { diagnostic: value.turn.error.message }),
-        };
-      }
-      case "warning": {
-        const value = yield* Schema.decodeUnknownEffect(Warning)(params);
-        return { type: "warning" as const, message: normalizedWarning(value.message) };
-      }
-      case "configWarning":
-      case "deprecationNotice": {
-        const value = yield* Schema.decodeUnknownEffect(SummaryWarning)(params);
-        return {
-          type: "warning" as const,
-          message: normalizedWarning(value.summary, value.details),
-        };
-      }
-      case "error": {
-        const value = yield* Schema.decodeUnknownEffect(ErrorNotification)(params);
-        return {
-          type: "warning" as const,
-          message: value.willRetry
-            ? `Codex transient error: ${value.error.message}`
-            : `Codex error: ${value.error.message}`,
-        };
-      }
-      default:
-        return { type: "ignored" as const };
+export const decodeCodexNotification = Effect.fnUntraced(function* (
+  method: string,
+  params: Schema.Json | undefined,
+) {
+  switch (method) {
+    case "turn/started": {
+      const value = yield* Schema.decodeUnknownEffect(TurnStarted)(params);
+      return {
+        type: "turn_started" as const,
+        threadId: value.threadId,
+        turnId: value.turn.id,
+      };
     }
-  },
-);
+    case "item/started":
+    case "item/completed":
+      return yield* decodeCodexItemNotification(method, params);
+    case "item/agentMessage/delta": {
+      const value = yield* Schema.decodeUnknownEffect(AgentDelta)(params);
+      return { type: "agent_delta" as const, ...value };
+    }
+    case "thread/tokenUsage/updated": {
+      const value = yield* Schema.decodeUnknownEffect(TokenUsage)(params);
+      return {
+        type: "usage" as const,
+        threadId: value.threadId,
+        turnId: value.turnId,
+        total: value.tokenUsage.total,
+      };
+    }
+    case "turn/completed": {
+      const value = yield* Schema.decodeUnknownEffect(TurnCompleted)(params);
+      return {
+        type: "turn_completed" as const,
+        threadId: value.threadId,
+        turnId: value.turn.id,
+        status: value.turn.status,
+        ...(value.turn.error && { diagnostic: value.turn.error.message }),
+      };
+    }
+    case "warning": {
+      const value = yield* Schema.decodeUnknownEffect(Warning)(params);
+      return { type: "warning" as const, message: normalizedWarning(value.message) };
+    }
+    case "configWarning":
+    case "deprecationNotice": {
+      const value = yield* Schema.decodeUnknownEffect(SummaryWarning)(params);
+      return {
+        type: "warning" as const,
+        message: normalizedWarning(value.summary, value.details),
+      };
+    }
+    case "error": {
+      const value = yield* Schema.decodeUnknownEffect(ErrorNotification)(params);
+      return {
+        type: "warning" as const,
+        message: value.willRetry
+          ? `Codex transient error: ${value.error.message}`
+          : `Codex error: ${value.error.message}`,
+      };
+    }
+    default:
+      return { type: "ignored" as const };
+  }
+});
 
 export type CodexNotification = Effect.Success<ReturnType<typeof decodeCodexNotification>>;
 

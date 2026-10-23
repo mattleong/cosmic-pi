@@ -1,4 +1,6 @@
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Result from "effect/Result";
 import { WorkspaceError, type WorkspaceRecord } from "../workspace/model.ts";
 import { nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core";
 import { nodeErrorCode } from "./harness-shared.ts";
@@ -67,8 +69,8 @@ const refuseLinkedAncestors = (root: string, changes: ReadonlyArray<ChangedEntry
  * real, or a parent file at a changed path is one captures leave out, such as an ignored file,
  * which would be replaced untested.
  */
-export const refuseUntestedTargets = (root: string, changes: ReadonlyArray<ChangedEntry>) =>
-  Effect.gen(function* () {
+export const refuseUntestedTargets = Effect.fn("GitWorktreeIntegration.refuseUntestedTargets")(
+  function* (root: string, changes: ReadonlyArray<ChangedEntry>) {
     yield* refuseLinkedAncestors(root, changes);
     const hidden: string[] = [];
     for (const change of changes)
@@ -76,7 +78,8 @@ export const refuseUntestedTargets = (root: string, changes: ReadonlyArray<Chang
         hidden.push(change.path);
     if (hidden.length > 0) return yield* touchedParentDrift(hidden);
     return undefined;
-  });
+  },
+);
 
 const isAttributesFile = (name: string) => path.basename(name) === ".gitattributes";
 
@@ -110,24 +113,26 @@ const checkoutPaths = (root: string, scratch: string, tree: string, paths: Reado
 
 // Removes `paths`, then directories that left empty, as `git apply` would; the source root and
 // the session directory and its ancestors stay.
-const removePaths = (record: WorkspaceRecord, paths: ReadonlyArray<string>) =>
-  Effect.gen(function* () {
-    const { sourceRoot, sourceCwd } = record.handle;
-    for (const name of paths)
-      yield* workspaceIO("integrate", () => fs.rm(path.join(sourceRoot, name), { force: true }));
-    const directories = new Set<string>();
-    for (const name of paths)
-      for (let parent = path.dirname(name); parent !== "."; parent = path.dirname(parent))
-        directories.add(parent);
-    for (const directory of [...directories].toSorted(
-      (left, right) => right.split(path.sep).length - left.split(path.sep).length,
-    )) {
-      const full = path.join(sourceRoot, directory);
-      if (full === sourceCwd || sourceCwd.startsWith(`${full}${path.sep}`)) continue;
-      // A directory that isn't empty, or is no longer one, stays.
-      yield* workspaceIO("integrate", () => fs.rmdir(full).catch(() => undefined));
-    }
-  });
+const removePaths = Effect.fn("GitWorktreeIntegration.removePaths")(function* (
+  record: WorkspaceRecord,
+  paths: ReadonlyArray<string>,
+) {
+  const { sourceRoot, sourceCwd } = record.handle;
+  for (const name of paths)
+    yield* workspaceIO("integrate", () => fs.rm(path.join(sourceRoot, name), { force: true }));
+  const directories = new Set<string>();
+  for (const name of paths)
+    for (let parent = path.dirname(name); parent !== "."; parent = path.dirname(parent))
+      directories.add(parent);
+  for (const directory of [...directories].toSorted(
+    (left, right) => right.split(path.sep).length - left.split(path.sep).length,
+  )) {
+    const full = path.join(sourceRoot, directory);
+    if (full === sourceCwd || sourceCwd.startsWith(`${full}${path.sep}`)) continue;
+    // A directory that isn't empty, or is no longer one, stays.
+    yield* workspaceIO("integrate", () => fs.rmdir(full).catch(() => undefined));
+  }
+});
 
 const deleted = (change: ChangedEntry) => change.to === ABSENT_MODE;
 
@@ -136,24 +141,18 @@ const deleted = (change: ChangedEntry) => change.to === ABSENT_MODE;
  * files are checked out from it, then deleted ones are removed. The checkout's index is never read
  * or written.
  */
-export const writeChanges = (
+export const writeChanges = Effect.fn("GitWorktreeIntegration.writeChanges")(function* (
   record: WorkspaceRecord,
   scratch: string,
   preparedTree: string,
   changes: ReadonlyArray<ChangedEntry>,
-) =>
-  Effect.gen(function* () {
-    yield* checkoutPaths(
-      record.handle.sourceRoot,
-      scratch,
-      preparedTree,
-      changes.flatMap((change) => (deleted(change) ? [] : [change.path])),
-    );
-    yield* removePaths(
-      record,
-      changes.flatMap((change) => (deleted(change) ? [change.path] : [])),
-    );
-  });
+) {
+  const [removed, written] = Arr.partition(changes, (change) =>
+    deleted(change) ? Result.succeed(change.path) : Result.fail(change.path),
+  );
+  yield* checkoutPaths(record.handle.sourceRoot, scratch, preparedTree, written);
+  yield* removePaths(record, removed);
+});
 
 // Paths whose file in the checkout differs from its entry, as `git status` judges a file: its
 // content through clean filters, its executable bit, or its symlink target. A missing file differs.
@@ -198,8 +197,8 @@ const rollbackRefused = (record: WorkspaceRecord, paths: ReadonlyArray<string>) 
  * the proposal's content, or nothing, is put back from the parent tree, and paths the parent
  * didn't have are removed. If any holds something else, nothing changes and the refusal names it.
  */
-export const rollbackIntegration = (record: WorkspaceRecord, scratch: string) =>
-  Effect.gen(function* () {
+export const rollbackIntegration = Effect.fn("GitWorktreeIntegration.rollbackIntegration")(
+  function* (record: WorkspaceRecord, scratch: string) {
     const { parentTree, preparedTree } = record;
     const root = record.handle.sourceRoot;
     if (parentTree === undefined || preparedTree === undefined)
@@ -252,4 +251,5 @@ export const rollbackIntegration = (record: WorkspaceRecord, scratch: string) =>
       ),
     );
     return undefined;
-  });
+  },
+);
