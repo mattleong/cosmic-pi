@@ -1,5 +1,8 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Str from "effect/String";
 
 const BRAILLE_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 const STARTING_SPINNER_FRAMES = ["◌", "◔", "◑", "◕"] as const;
@@ -86,7 +89,7 @@ export const clipToWidth = (text: string, width: number, marker = "…"): string
   truncateToWidth(text, width, marker);
 
 export const managerTabs = (tabs: ReadonlyArray<string>, active: number, width: number): string => {
-  const full = `  ${tabs.join("  ")}`;
+  const full = `  ${Arr.join(tabs, "  ")}`;
   return visibleWidth(full) <= width
     ? full
     : truncateToWidth(`  ${tabs[active] ?? ""}`, Math.max(0, width), "");
@@ -100,9 +103,19 @@ export const renderResponsiveManagerFooter = (
 ): string => {
   const safeWidth = Math.max(0, Math.floor(contentWidth));
   if (safeWidth === 0 || variants.length === 0) return "";
-  const lines = variants.map((groups) => ` ${groups.filter(Predicate.isTruthy).join(" │ ")} `);
+  const lines = Arr.map(
+    variants,
+    (groups) =>
+      ` ${Arr.join(
+        Arr.filter(
+          groups,
+          (group): group is string => Predicate.isString(group) && Str.isNonEmpty(group),
+        ),
+        " │ ",
+      )} `,
+  );
   return (
-    lines.find((line) => visibleWidth(line) <= safeWidth) ??
+    Option.getOrUndefined(Arr.findFirst(lines, (line) => visibleWidth(line) <= safeWidth)) ??
     truncateToWidth(lines.at(-1) ?? "", safeWidth, "")
   );
 };

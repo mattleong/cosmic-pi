@@ -1,5 +1,7 @@
 import { countLabel } from "pi-cosmic-core";
 import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { focusedField } from "../manager/style.ts";
 import {
   renderResponsiveManagerFooter,
@@ -46,7 +48,7 @@ function rowLine(
   if (entry.type === "member")
     return groupedMemberLine(entry, width, paint, "manager", focusedStyle);
   const fold = entry.children ? (entry.expanded ? "▾ " : "▸ ") : "  ";
-  const summary = groupSummaryLabels(entry.summary).join(" · ");
+  const summary = Arr.join(groupSummaryLabels(entry.summary), " · ");
   return clipToWidth(
     `${theme.fg("dim", fold)}${focused ? focusedField(theme, entry.title) : theme.fg("accent", entry.title)}${summary ? theme.fg("muted", ` · ${summary}`) : ""}`,
     width,
@@ -66,7 +68,7 @@ function confirmationFooterVariants(
   ];
 }
 
-const bare = (keys: ReadonlyArray<string>) => keys.join(" · ");
+const bare = (keys: ReadonlyArray<string>) => Arr.join(keys, " · ");
 
 function helpFooterVariants(
   actions: ActivityActionHints,
@@ -148,7 +150,7 @@ function activityList(
     entries.length,
     listHeight - Number(showHeading) - Number(first !== undefined),
   );
-  const list = entries.slice(window.start, window.end).map((entry) => {
+  const list = Arr.map(entries.slice(window.start, window.end), (entry) => {
     const isSelected = entry.id === selected?.id;
     const prefix = isSelected ? "> " : "  ";
     return padListDetailRow(
@@ -192,7 +194,7 @@ function activityDetail(
   });
   const showFreshness = detailHeight > 1;
   const details = state.shell.detailWindow(
-    detailText.split("\n").flatMap((line) => wrapTextWithAnsi(line, detailWidth)),
+    Arr.flatMap(Str.split(detailText, "\n"), (line) => wrapTextWithAnsi(line, detailWidth)),
     detailHeight - Number(showFreshness),
     state.detailPosition,
   );
@@ -223,7 +225,7 @@ export function renderGroupedActivity(
   const inner = Math.max(0, width - 2);
   const frame = listDetailFrame(options.theme, shell.state.pane);
   const urgent = needsYou(rows);
-  const attention = activityAttentionLabels(summarizeGroup(rows).attention).join(" · ");
+  const attention = Arr.join(activityAttentionLabels(summarizeGroup(rows).attention), " · ");
   const startup = activityStartupGlyph(rows, options.starting?.() ?? 0, options.now?.());
   const { key: hint } = configuredKeyLabels(options.keybindingLabel, activityShortcuts);
   const confirm = hint("tui.select.confirm", "Enter");
@@ -257,57 +259,60 @@ export function renderGroupedActivity(
             [shortNavigation, `? More · ${cancel}/q`],
           ],
   );
-  return framedScreen(frame, {
-    width,
-    height,
-    top: options.theme.fg(
-      "accent",
-      clipToWidth(
-        ` ${options.title ?? "/activity"} · ${countLabel(rows.length, "item")}${attention ? ` · ${attention}` : ""}${startup ? ` ${startup}` : ""} `,
-        inner,
-        "",
+  return Arr.map(
+    framedScreen(frame, {
+      width,
+      height,
+      top: options.theme.fg(
+        "accent",
+        clipToWidth(
+          ` ${options.title ?? "/activity"} · ${countLabel(rows.length, "item")}${attention ? ` · ${attention}` : ""}${startup ? ` ${startup}` : ""} `,
+          inner,
+          "",
+        ),
       ),
-    ),
-    bottom,
-    body: (bodyHeight) => {
-      if (state.confirmation)
+      bottom,
+      body: (bodyHeight) => {
+        if (state.confirmation)
+          return framedFill(
+            frame,
+            wrapTextWithAnsi(state.confirmation.text, Math.max(1, inner)),
+            bodyHeight,
+            inner,
+          );
+        const listHeight =
+          tier === "stacked"
+            ? Math.min(bodyHeight, stackedListHeight(bodyHeight, entries.length))
+            : bodyHeight;
+        const { listWidth, detailWidth } =
+          tier === "wide"
+            ? wideListDetailGeometry(width, 38, 0.42)
+            : { listWidth: inner, detailWidth: Math.max(1, inner) };
+        const list = activityList(context, listHeight, listWidth);
+        const detailRows = activityDetail(
+          context,
+          tier === "stacked" ? Math.max(0, bodyHeight - listHeight - 1) : bodyHeight,
+          detailWidth,
+        );
+        if (tier === "wide")
+          return framedWideRows(frame, {
+            left: list,
+            right: detailRows,
+            height: bodyHeight,
+            listWidth,
+            detailWidth,
+          });
+        if (tier === "stacked")
+          return framedStackedRows(frame, { list, detail: detailRows, height: bodyHeight, inner });
         return framedFill(
           frame,
-          wrapTextWithAnsi(state.confirmation.text, Math.max(1, inner)),
+          shell.state.details ? detailRows : list,
           bodyHeight,
           inner,
+          shell.state.pane,
         );
-      const listHeight =
-        tier === "stacked"
-          ? Math.min(bodyHeight, stackedListHeight(bodyHeight, entries.length))
-          : bodyHeight;
-      const { listWidth, detailWidth } =
-        tier === "wide"
-          ? wideListDetailGeometry(width, 38, 0.42)
-          : { listWidth: inner, detailWidth: Math.max(1, inner) };
-      const list = activityList(context, listHeight, listWidth);
-      const detailRows = activityDetail(
-        context,
-        tier === "stacked" ? Math.max(0, bodyHeight - listHeight - 1) : bodyHeight,
-        detailWidth,
-      );
-      if (tier === "wide")
-        return framedWideRows(frame, {
-          left: list,
-          right: detailRows,
-          height: bodyHeight,
-          listWidth,
-          detailWidth,
-        });
-      if (tier === "stacked")
-        return framedStackedRows(frame, { list, detail: detailRows, height: bodyHeight, inner });
-      return framedFill(
-        frame,
-        shell.state.details ? detailRows : list,
-        bodyHeight,
-        inner,
-        shell.state.pane,
-      );
-    },
-  }).map((line) => clipToWidth(line, width, ""));
+      },
+    }),
+    (line) => clipToWidth(line, width, ""),
+  );
 }

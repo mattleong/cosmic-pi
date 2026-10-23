@@ -1,5 +1,9 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import { ForeignCallable, sanitizeDiagnosticContent } from "pi-cosmic-core";
 import { detachActivityItem } from "./detach.ts";
 import { ACTIVITY_LIMITS } from "./limits.ts";
@@ -123,9 +127,9 @@ const ActivityHostSchema = Schema.Struct({
 const isActivityHost = Schema.is(ActivityHostSchema);
 
 const detachedSummaries = (items: readonly ActivityItem[]): readonly ActivityItem[] =>
-  items.slice(0, ACTIVITY_LIMITS.items).map((item) =>
+  Arr.map(items.slice(0, ACTIVITY_LIMITS.items), (item) =>
     detachActivityItem(item, (detail) =>
-      sanitizeDiagnosticContent(detail.slice(0, ACTIVITY_LIMITS.detail), {
+      sanitizeDiagnosticContent(Fn.pipe(detail, Str.slice(0, ACTIVITY_LIMITS.detail)), {
         maximumLength: ACTIVITY_LIMITS.detail,
       }),
     ),
@@ -234,9 +238,12 @@ export function registerRevisionedActivityProvider(
   const current = () => live && options.isCurrent();
   const lookup = (id: string, revision: string, signal: AbortSignal) => {
     if (!current() || signal.aborted) throw new Error("Activity provider is unavailable.");
-    const item = options
-      .items()
-      .find((candidate) => candidate.id === id && candidate.revision === revision);
+    const item = Option.getOrUndefined(
+      Arr.findFirst(
+        options.items(),
+        (candidate) => candidate.id === id && candidate.revision === revision,
+      ),
+    );
     if (!item) throw new Error("Activity item changed.");
     return item;
   };
@@ -258,7 +265,7 @@ export function registerRevisionedActivityProvider(
       return Promise.resolve().then(() => {
         if (!invocationCurrent()) throw new Error("Activity provider is unavailable.");
         const item = lookup(id, revision, signal);
-        if (!item.actions?.some((allowed) => allowed.id === action))
+        if (!item.actions || !Arr.some(item.actions, (allowed) => allowed.id === action))
           throw new Error("Activity action is unavailable.");
         return options.act(item, action, signal, invocationCurrent);
       });
@@ -268,7 +275,7 @@ export function registerRevisionedActivityProvider(
       onAvailability?.(available, current);
     },
   });
-  const unsubscribes = options.subscriptions.map((subscribe) =>
+  const unsubscribes = Arr.map(options.subscriptions, (subscribe) =>
     subscribe(() => registration.publish()),
   );
   registration.publish();

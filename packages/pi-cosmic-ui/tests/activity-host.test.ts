@@ -1,6 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Predicate from "effect/Predicate";
@@ -105,7 +106,11 @@ function harness(mode: "normal" | "deferred" | "throws-after-factory" = "normal"
     host,
     ctx,
     surface,
-    envelopes: () => emitted.filter(({ name }) => name === ACTIVITY_EVENT).map(({ data }) => data),
+    envelopes: () =>
+      Arr.map(
+        Arr.filter(emitted, ({ name }) => name === ACTIVITY_EVENT),
+        ({ data }) => data,
+      ),
     service,
     rows: () => rows,
     drain,
@@ -284,16 +289,21 @@ describe("activity host lifecycle", () => {
       const decoded = yield* Schema.decodeUnknownEffect(
         Schema.Array(Schema.Struct({ items: ActivitySnapshotSchema })),
       )(fixture.envelopes());
-      const broadcast = decoded
-        .flatMap((event) =>
-          event.items.flatMap((activity) => [
+      // Absent fields join as empty lines, matching the native join this replaced.
+      const broadcast = Arr.join(
+        Arr.flatMap(decoded, (event) =>
+          Arr.flatMap(event.items, (activity) => [
             activity.title,
-            activity.summary,
-            activity.detail,
-            ...(activity.actions ?? []).flatMap((action) => [action.label, action.confirmation]),
+            activity.summary ?? "",
+            activity.detail ?? "",
+            ...Arr.flatMap(activity.actions ?? [], (action) => [
+              action.label,
+              action.confirmation ?? "",
+            ]),
           ]),
-        )
-        .join("\n");
+        ),
+        "\n",
+      );
       expect(broadcast).not.toContain("private-value");
       expect(broadcast).not.toContain("hunter2");
       expect(broadcast).not.toContain("do-not-leak");

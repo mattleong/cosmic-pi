@@ -1,3 +1,8 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
+import * as Order from "effect/Order";
+import * as Str from "effect/String";
 import type { ResolvedCosmicUiConfig } from "../config/schema.ts";
 import { abbreviateHomePath, formatTokens, formatCost } from "pi-cosmic-core";
 import type {
@@ -11,8 +16,9 @@ import type { FooterHostProjection } from "../boundary/host-footer-projection.ts
 import type { FooterTotals } from "../boundary/host-usage.ts";
 
 function basename(path: string): string {
-  const normalized = path.replace(/\/$/, "");
-  return normalized.slice(normalized.lastIndexOf("/") + 1) || normalized;
+  const normalized = Fn.pipe(path, Str.replace(/\/$/, ""));
+  const start = Option.getOrElse(Fn.pipe(normalized, Str.lastIndexOf("/")), () => -1) + 1;
+  return Fn.pipe(normalized, Str.slice(start)) || normalized;
 }
 
 const DEFAULT_STATUS_REGION = "details" as const;
@@ -153,7 +159,7 @@ const gitContributions = (
       priority: 80,
       order: 300,
     });
-  const lineStats = GIT_LINE_STATS.flatMap(([key, sign]) =>
+  const lineStats = Arr.flatMap(GIT_LINE_STATS, ([key, sign]) =>
     gitStatus[key] ? [`${sign}${gitStatus[key]}L`] : [],
   );
   if (lineStats.length)
@@ -161,7 +167,7 @@ const gitContributions = (
       kind: "text",
       id: "git.lines",
       region: "identity",
-      text: lineStats.join(" "),
+      text: Arr.join(lineStats, " "),
       align: "right",
       priority: 75,
       order: 310,
@@ -210,7 +216,7 @@ const metricContributions = (
   totals: FooterTotals,
   subscription: boolean,
 ): CosmicFooterTextContribution[] => [
-  ...TOKEN_METRICS.flatMap(([key, prefix, order]) =>
+  ...Arr.flatMap(TOKEN_METRICS, ([key, prefix, order]) =>
     totals[key] ? [metric(`metrics.${key}`, `${prefix}${formatTokens(totals[key])}`, order)] : [],
   ),
   ...(totals.cost || subscription
@@ -252,7 +258,7 @@ export function builtinContributions(
     ...gitContributions(gitStatus),
     ...sessionContributions(host.sessionName),
     ...metricContributions(totals, host.subscription),
-    ...host.extensionStatuses.map((status) =>
+    ...Arr.map(host.extensionStatuses, (status) =>
       extensionStatusContribution(status, statusPlacements),
     ),
   ];
@@ -266,12 +272,12 @@ export function applyTextDecorations(
   for (const entry of entries) {
     const target = entry.decorates;
     if (target === undefined) continue;
-    if (!entries.some((candidate) => candidate !== entry && candidate.id === target)) continue;
+    if (!Arr.some(entries, (candidate) => candidate !== entry && candidate.id === target)) continue;
     consumed.add(entry);
     prefixes.set(target, (prefixes.get(target) ?? "") + entry.text);
   }
   if (prefixes.size === 0) return [...entries];
-  return entries.flatMap((entry) => {
+  return Arr.flatMap(entries, (entry) => {
     if (consumed.has(entry)) return [];
     const prefix = prefixes.get(entry.id);
     if (prefix === undefined) return [entry];
@@ -290,15 +296,15 @@ export function orderedContributions(
   values: CosmicFooterTextContribution[],
   config: ResolvedCosmicUiConfig,
 ): CosmicFooterTextContribution[] {
-  const order = new Map(config.footer.order.map((id, index) => [id, index]));
+  const order = new Map(Arr.map(config.footer.order, (id, index) => [id, index] as const));
   const hidden = config.footer.hidden;
-  return values
-    .flatMap((value) => {
+  return Arr.sort(
+    Arr.flatMap(values, (value) => {
       if (
         hidden.includes(value.id) ||
-        (value.id.startsWith("metrics.") && hidden.includes("metrics")) ||
-        (value.id.startsWith("git.") && hidden.includes("git")) ||
-        (value.id.startsWith("extension.") && hidden.includes("extensions"))
+        (Fn.pipe(value.id, Str.startsWith("metrics.")) && hidden.includes("metrics")) ||
+        (Fn.pipe(value.id, Str.startsWith("git.")) && hidden.includes("git")) ||
+        (Fn.pipe(value.id, Str.startsWith("extension.")) && hidden.includes("extensions"))
       ) {
         return [];
       }
@@ -308,8 +314,10 @@ export function orderedContributions(
           ? value
           : Object.assign({}, value, { order: configuredOrder }),
       ];
-    })
-    .toSorted(
-      (a, b) => (a.order ?? DEFAULT_CONTRIBUTION_ORDER) - (b.order ?? DEFAULT_CONTRIBUTION_ORDER),
-    );
+    }),
+    Order.mapInput(
+      Order.Number,
+      (entry: CosmicFooterTextContribution) => entry.order ?? DEFAULT_CONTRIBUTION_ORDER,
+    ),
+  );
 }

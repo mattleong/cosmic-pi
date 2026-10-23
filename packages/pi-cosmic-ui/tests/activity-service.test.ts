@@ -1,9 +1,13 @@
 import { describe, expect, it } from "@effect/vitest";
 import assert from "node:assert/strict";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Option from "effect/Option";
 import * as Fiber from "effect/Fiber";
+import * as Fn from "effect/Function";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import * as TestClock from "effect/testing/TestClock";
 import { deferredPromise, yieldUntil } from "pi-cosmic-core/testing";
 import {
@@ -102,7 +106,7 @@ const recordingService = (connect?: ActivityServiceOptions["connect"]) =>
       rejectsEach,
     };
   });
-const near = (limit: number) => `${"a".repeat(limit - 8)} token=x`;
+const near = (limit: number) => `${Fn.pipe("a", Str.repeat(limit - 8))} token=x`;
 
 describe("activity service", () => {
   it.effect(
@@ -117,7 +121,7 @@ describe("activity service", () => {
           yield* service.receive({ ...registration({}), providerId: `provider-${index}` });
         yield* service.receive({ ...registration({}), providerId: "additional" });
         expect(rows()).toHaveLength(32);
-        expect(rows().some((row) => row.providerId === "additional")).toBe(false);
+        expect(Arr.some(rows(), (row) => row.providerId === "additional")).toBe(false);
         let replacementAvailable = false;
         let invoked = false;
         yield* service.receive(
@@ -138,7 +142,9 @@ describe("activity service", () => {
         expect(yield* service.invoke(originalAction).pipe(Effect.flip)).toMatchObject({
           reason: "stale",
         });
-        const replacement = rows().find((row) => row.providerId === original.providerId)!;
+        const replacement = Option.getOrThrow(
+          Arr.findFirst(rows(), (row) => row.providerId === original.providerId),
+        );
         yield* service.invoke(action(replacement));
         expect(invoked).toBe(true);
       }),
@@ -236,7 +242,7 @@ describe("activity service", () => {
           ...registration(token),
           getDetail: () => {
             calls++;
-            return Promise.resolve(`token=private-value\n${"x".repeat(20000)}`);
+            return Promise.resolve(`token=private-value\n${Fn.pipe("x", Str.repeat(20000))}`);
           },
         }),
       );

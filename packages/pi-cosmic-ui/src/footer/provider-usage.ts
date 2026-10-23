@@ -1,4 +1,7 @@
 import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import { sanitizeTerminalLine } from "pi-cosmic-core";
 import type { CosmicFooterTheme } from "../protocol/protocol.ts";
 import { alignSides } from "./contributions.ts";
@@ -18,16 +21,16 @@ interface WindowEntry {
 type ProviderEntry = WindowEntry | { kind: "text"; text: string };
 
 function resetDisplay(segment: string, body: string | undefined): string {
-  const reset = body?.trim();
+  const reset = body === undefined ? undefined : Str.trim(body);
   if (!reset) return segment;
-  return reset.replace(/^[^-]+-\s+(.+)$/u, "$1").trim();
+  return Fn.pipe(reset, Str.replace(/^[^-]+-\s+(.+)$/u, "$1"), Str.trim);
 }
 
 function providerEntries(body: string): ProviderEntry[] {
   const entries: ProviderEntry[] = [];
   const byLabel = new Map<string, WindowEntry>();
   const windowFor = (label: string): WindowEntry => {
-    const key = label.toLowerCase();
+    const key = Str.toLowerCase(label);
     const existing = byLabel.get(key);
     if (existing) return existing;
     const entry: WindowEntry = { kind: "window", label, percent: null, raw: "" };
@@ -35,7 +38,7 @@ function providerEntries(body: string): ProviderEntry[] {
     entries.push(entry);
     return entry;
   };
-  for (const segment of body.split(/\s*\|\s*/u).filter(Boolean)) {
+  for (const segment of Arr.filter(Str.split(body, /\s*\|\s*/u), Str.isNonEmpty)) {
     const window = WINDOW_PATTERN.exec(segment);
     if (window) {
       const entry = windowFor(window[1] ?? segment);
@@ -58,7 +61,7 @@ function entryText(
 ): string {
   if (entry.kind === "text") return theme.fg("text", entry.text);
   if (entry.percent === null) return theme.fg("text", entry.raw || entry.label);
-  const label = entry.label.toLowerCase();
+  const label = Str.toLowerCase(entry.label);
   const color = remainingCapacityTone(entry.percent);
   const meter = withMeter ? `${progressBar(entry.percent, compact ? 6 : 10, theme, color)} ` : "";
   return `${theme.fg(color, label)} ${meter}${theme.fg(color, `${Math.round(entry.percent)}% left`)}`;
@@ -90,7 +93,7 @@ function wrappedEntry(
 ): string[] {
   const available = Math.max(1, width - visibleWidth(prefix));
   const wrappedLeft = wrapTextWithAnsi(entryText(entry, theme, compact, false), available);
-  const lines = wrappedLeft.map((part, index) =>
+  const lines = Arr.map(wrappedLeft, (part, index) =>
     clipToWidth(`${index === 0 ? prefix : continuation}${part}`, width, ""),
   );
   const right = entry.kind === "window" ? entry.resetText : undefined;
@@ -110,7 +113,7 @@ export function renderProviderUsageLines(
   compact: boolean,
 ): string[] {
   if (width <= 0) return [];
-  const body = sanitizeTerminalLine(text).replace(/^Usage:\s*/iu, "");
+  const body = Fn.pipe(sanitizeTerminalLine(text), Str.replace(/^Usage:\s*/iu, ""));
   const entries = providerEntries(body);
   if (entries.length === 0) return [];
 
@@ -118,8 +121,8 @@ export function renderProviderUsageLines(
   const fullPrefix = theme.fg("mdLink", `${provider} `);
   const prefixWidth = Math.min(visibleWidth(fullPrefix), Math.max(0, width - 1));
   const firstPrefix = clipToWidth(fullPrefix, prefixWidth, "");
-  const continuation = " ".repeat(prefixWidth);
-  return entries.flatMap((entry, index) => {
+  const continuation = Fn.pipe(" ", Str.repeat(prefixWidth));
+  return Arr.flatMap(entries, (entry, index) => {
     const prefix = index === 0 ? firstPrefix : continuation;
     const simple =
       simpleEntry(entry, prefix, width, theme, compact, true) ??

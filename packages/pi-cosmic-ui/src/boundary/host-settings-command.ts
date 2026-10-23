@@ -1,8 +1,12 @@
 import type { ExtensionCommandContext as ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text, type Component, type SettingsList } from "@earendil-works/pi-tui";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Match from "effect/Match";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
+import * as Str from "effect/String";
 import {
   captureHostSignal,
   completeSettingsArguments,
@@ -193,7 +197,7 @@ export function settingsSubcommand<Config>(
   const owner = options.owner ?? settingsCommandOwner();
   const command = `${options.root} settings`;
   const scopes = options.scopes ?? [];
-  const scopeNames = scopes.map((scope) => scope.name);
+  const scopeNames = Arr.map(scopes, (scope) => scope.name);
   const unavailable = `${title} settings aren't available right now`;
   const { isCurrent } = options;
   const notify = (ctx: ExtensionContext, message: string, level: "info" | "warning" | "error") => {
@@ -223,7 +227,9 @@ export function settingsSubcommand<Config>(
   ): Promise<void> =>
     owner.run(isCurrent, () => {
       invoked(ctx);
-      const descriptor = descriptors.find((entry) => entry.id === id);
+      const descriptor = Option.getOrUndefined(
+        Arr.findFirst(descriptors, (entry) => entry.id === id),
+      );
       const persisted = (): string | undefined => {
         if (options.displayValue)
           return invokeHostCallback(() => options.displayValue?.(ctx, id, scope), undefined);
@@ -280,8 +286,12 @@ export function settingsSubcommand<Config>(
     });
 
   const rowSetting = (row: string): readonly [scope: string | undefined, id: string] => {
-    const scope = scopeNames.find((name) => row.startsWith(`${name}:`));
-    return scope === undefined ? [undefined, row] : [scope, row.slice(scope.length + 1)];
+    const scope = Option.getOrUndefined(
+      Arr.findFirst(scopeNames, (name) => Fn.pipe(row, Str.startsWith(`${name}:`))),
+    );
+    return scope === undefined
+      ? [undefined, row]
+      : [scope, Fn.pipe(row, Str.slice(scope.length + 1))];
   };
 
   const openInteractive = (ctx: ExtensionContext) => {
@@ -357,13 +367,14 @@ export function settingsSubcommand<Config>(
       });
   };
 
-  const scopeToken = scopes.length > 0 ? `[${scopeNames.join("|")}] ` : "";
+  const scopeToken = scopes.length > 0 ? `[${Arr.join(scopeNames, "|")}] ` : "";
   const showHelp = (ctx: ExtensionContext) => {
     const cfg = readConfig(ctx);
     const notes = invokeHostCallback(() => options.notes?.(ctx) ?? [], []);
     const lines = [
       `${title} settings`,
-      ...descriptors.map(
+      ...Arr.map(
+        descriptors,
         (descriptor) =>
           `  ${descriptor.id}${cfg ? ` = ${descriptor.currentValue(cfg)}` : ""}  — ${descriptor.description}`,
       ),
@@ -375,10 +386,10 @@ export function settingsSubcommand<Config>(
       `  /${command} help  Show this help`,
       "",
       "Examples:",
-      ...options.examples.map((example) => `  /${command} ${example}`),
+      ...Arr.map(options.examples, (example) => `  /${command} ${example}`),
       ...(notes.length > 0 ? ["", ...notes] : []),
     ];
-    notify(ctx, lines.join("\n"), "info");
+    notify(ctx, Arr.join(lines, "\n"), "info");
   };
 
   const handle = (args: string, ctx: ExtensionContext) => {
@@ -405,7 +416,7 @@ export function settingsSubcommand<Config>(
             Match.value(invalid).pipe(
               Match.discriminatorsExhaustive("reason")({
                 "invalid-value": ({ id, allowedValues }) =>
-                  `${id} must be one of: ${allowedValues.join(", ")}`,
+                  `${id} must be one of: ${Arr.join(allowedValues, ", ")}`,
                 "missing-value": () => `Usage: /${command} ${scopeToken}<id> <value>`,
                 "unknown-setting": ({ id }) => `Unknown setting: ${id}`,
               }),
@@ -432,7 +443,7 @@ export function settingsSubcommand<Config>(
           { value: "status", label: "status", description: "Show effective values" },
           { value: "help", label: "help", description: "Show setting ids and usage" },
         ],
-        scopes.map((scope) => ({
+        Arr.map(scopes, (scope) => ({
           value: scope.name,
           label: scope.name,
           description: scope.description,

@@ -1,6 +1,8 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import * as Data from "effect/Data";
+import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
+import * as Str from "effect/String";
 import type { ManagerLayoutTier } from "./chrome.ts";
 import {
   decodeFullScreenPrintable,
@@ -20,7 +22,7 @@ export type ListDetailPane = "list" | "detail";
 
 export const padListDetailRow = (text: string, width: number): string => {
   const clipped = clipToWidth(text, Math.max(0, width), "");
-  return `${clipped}${" ".repeat(Math.max(0, width - visibleWidth(clipped)))}`;
+  return `${clipped}${Fn.pipe(" ", Str.repeat(Math.max(0, width - visibleWidth(clipped))))}`;
 };
 
 export interface ListSelectionChange {

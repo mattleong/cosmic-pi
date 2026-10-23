@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { groupedDetail } from "../src/activity/grouped-detail.ts";
 import { groupedActivityTree } from "../src/activity/grouped-tree.ts";
 import { plainTheme } from "pi-cosmic-core/testing";
@@ -12,7 +14,9 @@ describe("grouped activity detail", () => {
       revision: "revision\r\ntoken=private-value",
     });
     const text = groupedDetail({
-      selected: groupedActivityTree([row]).find((entry) => entry.type === "member"),
+      selected: Option.getOrUndefined(
+        Arr.findFirst(groupedActivityTree([row]), (entry) => entry.type === "member"),
+      ),
       theme: plainTheme,
       focused: false,
       now: undefined,

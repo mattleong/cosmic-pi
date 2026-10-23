@@ -1,5 +1,7 @@
 import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import * as Arr from "effect/Array";
 import * as Match from "effect/Match";
+import * as Option from "effect/Option";
 import type { CosmicFooterTextContribution, CosmicFooterTheme } from "../protocol/protocol.ts";
 import {
   alignSides,
@@ -20,11 +22,11 @@ function metricCacheGroup(
   compact: boolean,
   theme: CosmicFooterTheme,
 ): string {
-  const values = CACHE_IDS.flatMap((id) => {
-    const entry = entries.find((candidate) => candidate.id === id);
+  const values = Arr.flatMap(CACHE_IDS, (id) => {
+    const entry = Option.getOrUndefined(Arr.findFirst(entries, (candidate) => candidate.id === id));
     return entry ? [theme.fg("syntaxType", contributionText(entry, compact))] : [];
   });
-  return `${theme.fg("syntaxType", "⇄")} ${values.join(theme.fg("dim", " / "))}`;
+  return `${theme.fg("syntaxType", "⇄")} ${Arr.join(values, theme.fg("dim", " / "))}`;
 }
 
 function metricParts(
@@ -99,15 +101,18 @@ export function renderMetricsLines(
   compact: boolean,
 ): string[] {
   if (width <= 0) return [];
-  const visible = ranked(contributions).filter((entry) =>
+  const visible = Arr.filter(ranked(contributions), (entry) =>
     Boolean(contributionText(entry, compact)),
   );
   const left = metricParts(
-    visible.filter((entry) => entry.align !== "right" && entry.id !== "metrics.cost"),
+    Arr.filter(visible, (entry) => entry.align !== "right" && entry.id !== "metrics.cost"),
     compact,
     theme,
   );
-  const right = visible.filter((entry) => entry.align === "right" || entry.id === "metrics.cost");
+  const right = Arr.filter(
+    visible,
+    (entry) => entry.align === "right" || entry.id === "metrics.cost",
+  );
   const rightRaw = rawContributionLine(right, compact);
   const rightRendered = styledContributionLine(right, compact, rightRaw, rightRaw, theme);
   const rightRows = rightRendered ? wrapTextWithAnsi(rightRendered, Math.max(1, width)) : [];

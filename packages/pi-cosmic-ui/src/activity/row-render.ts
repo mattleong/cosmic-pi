@@ -1,5 +1,8 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import { clipToWidth } from "../manager/chrome.ts";
 import { managerTone } from "../manager/style.ts";
 
@@ -38,11 +41,12 @@ export interface ActivityRowVisual {
 const treeGuide = (continuations: readonly boolean[], levels: number): string => {
   const clipped = continuations.length > levels;
   const shown = levels > 0 ? continuations.slice(-levels) : [];
-  return `${clipped ? "… " : ""}${shown
-    .map((continues, index) =>
+  return `${clipped ? "… " : ""}${Arr.join(
+    Arr.map(shown, (continues, index) =>
       index === shown.length - 1 ? (continues ? "├─ " : "└─ ") : continues ? "│  " : "   ",
-    )
-    .join("")}`;
+    ),
+    "",
+  )}`;
 };
 
 const mostDroppable = (parts: readonly ActivityStatusPart[]) => {
@@ -59,8 +63,12 @@ const fitStatus = (
   separator: string,
   budget: number,
 ): string => {
-  const kept = parts.filter((part) => part.text.length > 0);
-  const text = () => kept.map((part) => part.text).join(separator);
+  const kept = Arr.filter(parts, (part) => part.text.length > 0);
+  const text = () =>
+    Arr.join(
+      Arr.map(kept, (part) => part.text),
+      separator,
+    );
   while (visibleWidth(text()) > budget) {
     const found = mostDroppable(kept);
     if (!found) break;
@@ -194,5 +202,5 @@ export function renderActivityRow(
   const left = route ? `${identity}  ${route}` : identity;
   return rightWidth === undefined
     ? left
-    : `${left}${" ".repeat(Math.max(1, width - visibleWidth(left) - rightWidth))}${paint(row.statusColor, clipToWidth(status, rightWidth, "…"))}`;
+    : `${left}${Fn.pipe(" ", Str.repeat(Math.max(1, width - visibleWidth(left) - rightWidth)))}${paint(row.statusColor, clipToWidth(status, rightWidth, "…"))}`;
 }

@@ -1,9 +1,13 @@
+import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Predicate from "effect/Predicate";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import {
   decodeUnknownOrUndefined,
   frozenProjection,
@@ -77,14 +81,20 @@ const asActivityError = (cause: unknown) => (isActivityError(cause) ? cause : fa
 const bestEffort = (run: () => void) => Effect.sync(() => invokeBestEffort(run));
 const cleanDetail = (text: string) =>
   sanitizeDiagnosticContent(
-    text.slice(0, ACTIVITY_LIMITS.detail).split("\n").map(sanitizeTerminalLine).join("\n"),
+    Arr.join(
+      Arr.map(
+        Str.split(Fn.pipe(text, Str.slice(0, ACTIVITY_LIMITS.detail)), "\n"),
+        sanitizeTerminalLine,
+      ),
+      "\n",
+    ),
     { maximumLength: ACTIVITY_LIMITS.detail },
   );
 type Acknowledgement = readonly [Provider, boolean];
 const uniqueIds = (ids: readonly string[]) => new Set(ids).size === ids.length;
 const consistentSnapshot = (items: readonly ActivityItem[]) =>
-  uniqueIds(items.map((item) => item.id)) &&
-  items.every((item) => uniqueIds(item.actions?.map((action) => action.id) ?? []));
+  uniqueIds(Arr.map(items, (item) => item.id)) &&
+  Arr.every(items, (item) => uniqueIds(Arr.map(item.actions ?? [], (action) => action.id)));
 type Transition = readonly [readonly Acknowledgement[], State];
 type ProviderIdentity = Omit<Provider, "items" | "starting">;
 interface DecodedSnapshot {
@@ -92,7 +102,7 @@ interface DecodedSnapshot {
   readonly starting: number;
 }
 const withoutProviderRows = (rows: readonly ActivityRow[], providerId: string) =>
-  rows.filter((row) => row.providerId !== providerId);
+  Arr.filter(rows, (row) => row.providerId !== providerId);
 const revokeProvider = (
   old: State,
   event: ActivityEnvelope,
@@ -116,7 +126,7 @@ const decodeSnapshot = (event: ActivityEnvelope): DecodedSnapshot | undefined =>
   const decoded = decodeSnapshotItems(event.items);
   const starting = decodeStarting(event.starting === undefined ? 0 : event.starting);
   if (decoded === undefined || starting === undefined) return undefined;
-  const items = decoded.map((item) => detachActivityItem(item, cleanDetail));
+  const items = Arr.map(decoded, (item) => detachActivityItem(item, cleanDetail));
   return consistentSnapshot(items) ? { items, starting } : undefined;
 };
 const registeredProvider = (old: State, event: ActivityEnvelope): ProviderIdentity | undefined => {
@@ -145,7 +155,7 @@ const publishSnapshot = (
   const isNew = current?.token !== event.token;
   const identity = isNew ? registeredProvider(old, event) : current;
   if (!identity) return undefined;
-  const items: readonly ActivityRow[] = snapshot.items.map((item) => ({
+  const items: readonly ActivityRow[] = Arr.map(snapshot.items, (item) => ({
     ...item,
     actions: item.actions ?? [],
     key: activityKey(event.providerId, item.id),
@@ -161,7 +171,7 @@ const publishSnapshot = (
     acknowledgements.push([current, false]);
   }
   acknowledgements.push([provider, true]);
-  const live = [...providers.values()].flatMap((entry) => entry.items);
+  const live = Arr.flatMap([...providers.values()], (entry) => entry.items);
   return [
     acknowledgements,
     {
@@ -175,12 +185,15 @@ const publishSnapshot = (
 };
 const startingWork = (item: ActivityItem) => item.kind === "agent" && item.status === "pending";
 const currentRow = (rows: readonly ActivityRow[], request: ActivityDetailRequest) =>
-  rows.find(
-    (row) =>
-      row.key === request.key &&
-      !row.retained &&
-      row.generation === request.generation &&
-      row.revision === request.revision,
+  Option.getOrUndefined(
+    Arr.findFirst(
+      rows,
+      (row) =>
+        row.key === request.key &&
+        !row.retained &&
+        row.generation === request.generation &&
+        row.revision === request.revision,
+    ),
   );
 export class ActivityService extends Context.Service<ActivityService, ActivityServiceContract>()(
   "pi-cosmic-ui/activity/service/ActivityService",
@@ -190,10 +203,11 @@ export class ActivityService extends Context.Service<ActivityService, ActivitySe
       { closed: false, serial: 0, providers: new Map(), retired: new Set(), rows: [] },
       (value) => ({
         rows: value.rows,
-        starting: [...value.providers.values()].reduce(
-          (count, provider) =>
-            count + (provider.starting || provider.items.filter(startingWork).length),
+        starting: Arr.reduce(
+          [...value.providers.values()],
           0,
+          (count, provider) =>
+            count + (provider.starting || Arr.filter(provider.items, startingWork).length),
         ),
       }),
       (view) => options.publish(view.rows, view.starting),
@@ -266,7 +280,8 @@ export class ActivityService extends Context.Service<ActivityService, ActivitySe
       const { provider, row } = yield* providerFor(request);
       yield* Effect.tryPromise({
         try: (signal) => {
-          if (!checkedRow(request).actions?.some((action) => action.id === request.actionId))
+          const actions = checkedRow(request).actions;
+          if (!actions || !Arr.some(actions, (action) => action.id === request.actionId))
             throw stale();
           return Promise.resolve<unknown>(
             provider.invoke(row.id, request.actionId, request.revision, signal),
@@ -328,7 +343,7 @@ export class ActivityService extends Context.Service<ActivityService, ActivitySe
             const { rows, starting } = state.getSnapshot();
             return Effect.sleep(
               starting > 0 ||
-                rows.some((row) => row.status === "running" || row.status === "pending")
+                Arr.some(rows, (row) => row.status === "running" || row.status === "pending")
                 ? `${SPINNER_FRAME_MS} millis`
                 : "1 second",
             ).pipe(Effect.andThen(updateClock));

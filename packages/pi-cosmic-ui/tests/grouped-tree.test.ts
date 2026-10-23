@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import {
   activitySectionId,
   groupedActivitySource,
@@ -10,9 +12,12 @@ import { activityRow, memberRow, withStatus } from "./support/activity.ts";
 
 const checklist = { hideHistory: true } as const;
 const entryOf = (tree: readonly GroupedActivityRow[], row: ActivityRow) =>
-  tree.find((entry) => entry.id === row.key);
+  Option.getOrUndefined(Arr.findFirst(tree, (entry) => entry.id === row.key));
 const sources = (tree: readonly GroupedActivityRow[]) =>
-  tree.flatMap((entry) => groupedActivitySource(entry) ?? []);
+  Arr.flatMap(tree, (entry) => {
+    const source = groupedActivitySource(entry);
+    return source ? [source] : [];
+  });
 
 describe("grouped activity projection", () => {
   it("nests owned work at any depth beneath its root owner's section", () => {
@@ -29,7 +34,7 @@ describe("grouped activity projection", () => {
       context: [parent, found],
     });
     expect(sources(tree)).toHaveLength(rows.length);
-    expect(new Set(sources(tree).map((row) => row.key)).size).toBe(rows.length);
+    expect(new Set(Arr.map(sources(tree), (row) => row.key)).size).toBe(rows.length);
     expect(entryOf(tree, parent)?.summary).toMatchObject({
       items: rows.length,
       running: 3,
@@ -41,7 +46,7 @@ describe("grouped activity projection", () => {
     const member = memberRow("member", parent);
     const tree = groupedActivityTree([parent, member]);
     expect(sources(tree)).toHaveLength(2);
-    expect(new Set(sources(tree).map((row) => row.key)).size).toBe(2);
+    expect(new Set(Arr.map(sources(tree), (row) => row.key)).size).toBe(2);
     expect(entryOf(tree, parent)?.parentId).toBe(activitySectionId("subagents"));
   });
   it("moves a parent into history only when its row and whole subtree are finished", () => {

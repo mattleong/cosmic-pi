@@ -1,6 +1,9 @@
 import type { ExtensionEvent } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import {
   extensionContextFixture,
   recordingExtensionHost,
@@ -66,7 +69,10 @@ const workingHost = Effect.gen(function* () {
     },
     rate: () => {
       tick?.();
-      const value = message?.match(/(~?)([\d.]+) tok\/s/u);
+      const value =
+        message === undefined
+          ? undefined
+          : Option.getOrUndefined(Fn.pipe(message, Str.match(/(~?)([\d.]+) tok\/s/u)));
       return value ? { approximate: value[1] === "~", value: Number(value[2]) } : undefined;
     },
   };
@@ -126,7 +132,7 @@ describe("working throughput through registered Pi events", () => {
       h.at(10_000);
       yield* h.emitEvent({ type: "message_start", message: assistant() });
       for (const type of ["text_delta", "thinking_delta", "toolcall_delta"] as const)
-        yield* h.emitEvent(delta(type, "a".repeat(40)));
+        yield* h.emitEvent(delta(type, Fn.pipe("a", Str.repeat(40))));
       yield* h.emitEvent(textStart());
       expect(h.rate()).toEqual({ approximate: true, value: 3 });
       yield* h.emitEvent(completion(500));

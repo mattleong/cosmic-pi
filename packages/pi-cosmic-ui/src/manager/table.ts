@@ -1,5 +1,6 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
+import * as Order from "effect/Order";
 import * as Result from "effect/Result";
 import { padListDetailRow } from "./list-detail.ts";
 import { clipToWidth } from "./chrome.ts";
@@ -9,6 +10,13 @@ interface ManagerTableColumn {
   readonly priority: number;
 }
 
+type IndexedColumn = ManagerTableColumn & { readonly index: number };
+
+const columnPriorityOrder = Order.combine(
+  Order.mapInput(Order.flip(Order.Number), (column: IndexedColumn) => column.priority),
+  Order.mapInput(Order.Number, (column: IndexedColumn) => column.index),
+);
+
 export const managerTable = (
   rows: ReadonlyArray<ReadonlyArray<string>>,
   columns: ReadonlyArray<ManagerTableColumn>,
@@ -16,14 +24,15 @@ export const managerTable = (
 ) => {
   const available = Math.max(0, Math.floor(width));
   const gap = "  ";
-  const widths = columns.map(() => 0);
-  const priority = columns
-    .map((column, index) => ({
+  const widths = Arr.map(columns, () => 0);
+  const priority = Arr.sort(
+    Arr.map(columns, (column, index) => ({
       ...column,
       index,
-      natural: Math.max(column.minWidth, ...rows.map((row) => visibleWidth(row[index] ?? ""))),
-    }))
-    .toSorted((a, b) => b.priority - a.priority || a.index - b.index);
+      natural: Math.max(column.minWidth, ...Arr.map(rows, (row) => visibleWidth(row[index] ?? ""))),
+    })),
+    columnPriorityOrder,
+  );
   let remaining = available;
   let admitted = 0;
   for (const column of priority) {
@@ -48,8 +57,11 @@ export const managerTable = (
   return {
     widths,
     row: (cells: ReadonlyArray<string>): string =>
-      Arr.filterMap(columns, (_, index) =>
-        widths[index] ? Result.succeed(cell(cells[index] ?? "", index)) : Result.failVoid,
-      ).join(gap),
+      Arr.join(
+        Arr.filterMap(columns, (_, index) =>
+          widths[index] ? Result.succeed(cell(cells[index] ?? "", index)) : Result.failVoid,
+        ),
+        gap,
+      ),
   };
 };

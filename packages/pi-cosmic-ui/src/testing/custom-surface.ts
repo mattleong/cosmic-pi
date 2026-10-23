@@ -4,6 +4,7 @@ import type {
   Theme,
 } from "@earendil-works/pi-coding-agent";
 import type { Component, OverlayHandle, OverlayOptions } from "@earendil-works/pi-tui";
+import * as Arr from "effect/Array";
 import * as Predicate from "effect/Predicate";
 import {
   deferredPromise,
@@ -169,7 +170,7 @@ export function fakeCustomSurfaceHost(
       faults.add(fault);
     },
     get overlays() {
-      return stack.flatMap((entry) => (entry.hidden ? [] : [entry.component]));
+      return Arr.flatMap(stack, (entry) => (entry.hidden ? [] : [entry.component]));
     },
     get widgets(): ReadonlyMap<string, Component> {
       return widgets;

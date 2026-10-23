@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { managerActivityLabel } from "../manager/chrome.ts";
 import type { ActivityRow } from "./model.ts";
 import type { ActivityItem } from "./protocol.ts";
@@ -8,7 +10,7 @@ export function activityAttention(item: ActivityItem): "user" | "parent" | "bloc
 }
 
 export const needsYou = (rows: readonly ActivityRow[]): readonly ActivityRow[] =>
-  rows.filter((row) => activityAttention(row) === "user");
+  Arr.filter(rows, (row) => activityAttention(row) === "user");
 
 const blockedLabels = {
   "parent-review": "parent needs to review",
@@ -65,12 +67,15 @@ export const addAttention = (
 });
 
 export const activityAttentionLabels = (counts: ActivityAttentionCounts): string[] =>
-  [
-    counts.user ? `${counts.user} ${counts.user === 1 ? "needs" : "need"} your input` : "",
-    counts.parent ? `${counts.parent} waiting for parent` : "",
-    counts.blocked ? `${counts.blocked} blocked` : "",
-    counts.failed ? `${counts.failed} failed` : "",
-  ].filter(Boolean);
+  Arr.filter(
+    [
+      counts.user ? `${counts.user} ${counts.user === 1 ? "needs" : "need"} your input` : "",
+      counts.parent ? `${counts.parent} waiting for parent` : "",
+      counts.blocked ? `${counts.blocked} blocked` : "",
+      counts.failed ? `${counts.failed} failed` : "",
+    ],
+    Str.isNonEmpty,
+  );
 
 export const compactNotices = (attention: ActivityAttentionCounts): string[] => [
   ...(attention.user ? [`${attention.user} ${attention.user === 1 ? "needs" : "need"} you`] : []),

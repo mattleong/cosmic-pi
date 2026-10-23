@@ -1,4 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { formatElapsed } from "pi-cosmic-core";
 import { managerTone } from "../manager/style.ts";
 import {
@@ -48,7 +50,7 @@ export const activityElapsed = (row: ActivityRow, now?: number, compact = false)
 };
 export const elapsedLabel = (elapsed: number, compact: boolean): string => {
   const text = formatElapsed(elapsed);
-  return compact ? (text.split(" ")[0] ?? text) : text;
+  return compact ? Str.split(text, " ")[0] : text;
 };
 const activityTypes = {
   agent: "SUBAGENT",
@@ -75,7 +77,9 @@ export interface RowPaint {
 
 const memberReason = (row: ActivityRow, widget: boolean): string | undefined =>
   (widget && row.status === "failed") || (row.status === "cancelled" && row.startedAt === undefined)
-    ? row.summary?.trim()
+    ? row.summary === undefined
+      ? undefined
+      : Str.trim(row.summary)
     : undefined;
 
 const memberAttention = (row: ActivityRow): string =>
@@ -112,9 +116,12 @@ export function groupedMemberLine(
   const interactive = presentation === "manager";
   const warnings = entry.expanded
     ? ""
-    : activityAttentionLabels(
-        addAttention(entry.summary.attention, activityAttentionCounts(row), -1),
-      ).join(" · ");
+    : Arr.join(
+        activityAttentionLabels(
+          addAttention(entry.summary.attention, activityAttentionCounts(row), -1),
+        ),
+        " · ",
+      );
   const attention = memberAttention(row);
   const ended = memberReason(row, !interactive);
   const reason = ended

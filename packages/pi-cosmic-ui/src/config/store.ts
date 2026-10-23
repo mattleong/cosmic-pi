@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
@@ -36,7 +37,7 @@ export class CosmicUiConfigError extends Schema.TaggedError<
 }) {}
 
 const decodeStrings = Fn.flow(decodeUnknownOrUndefined(Schema.Array(Schema.Unknown)), (values) =>
-  values?.filter(Predicate.isString),
+  values === undefined ? undefined : Arr.filter(values, Predicate.isString),
 );
 const decodeRoot = decodeTolerantFields(
   { footer: Schema.Record(Schema.String, Schema.Unknown) },

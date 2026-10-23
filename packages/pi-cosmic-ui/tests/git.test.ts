@@ -1,16 +1,20 @@
 import { describe, expect, test } from "vitest";
+import * as Arr from "effect/Array";
 import { applyGitNumstat, parseGitStatus } from "../src/footer/git.ts";
 
 describe("git footer status", () => {
   test("summarizes staged, modified, untracked, conflicted, and diverged files", () => {
     const status = parseGitStatus(
-      [
-        "## main...origin/main [ahead 2, behind 1]",
-        "M  staged.ts",
-        " M modified.ts",
-        "?? new.ts",
-        "UU conflict.ts",
-      ].join("\n"),
+      Arr.join(
+        [
+          "## main...origin/main [ahead 2, behind 1]",
+          "M  staged.ts",
+          " M modified.ts",
+          "?? new.ts",
+          "UU conflict.ts",
+        ],
+        "\n",
+      ),
     );
 
     expect(status).toEqual({
@@ -30,7 +34,7 @@ describe("git footer status", () => {
     const status = parseGitStatus("## main\n M first.ts\n M second.ts\n")!;
     const withLines = applyGitNumstat(
       status,
-      ["10\t4\tfirst.ts", "2\t7\tsecond.ts", "-\t-\timage.png"].join("\n"),
+      Arr.join(["10\t4\tfirst.ts", "2\t7\tsecond.ts", "-\t-\timage.png"], "\n"),
     );
 
     expect(withLines).toMatchObject({ linesAdded: 6, linesRemoved: 5, linesChanged: 6 });

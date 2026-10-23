@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Order from "effect/Order";
 import { activityKey, type ActivityItem } from "./protocol.ts";
 
 export type ActivityRow = ActivityItem & {
@@ -51,7 +53,7 @@ const withRetainedRows = (
   previous: readonly ActivityRow[],
   current: readonly ActivityRow[],
 ): Map<string, ActivityRow> => {
-  const next = new Map(current.map((row) => [row.key, row]));
+  const next = new Map(Arr.map(current, (row) => [row.key, row] as const));
   for (const row of previous)
     if (!next.has(row.key) && isFinished(row))
       next.set(row.key, { ...row, retained: true, actions: [], awaited: false });
@@ -63,7 +65,7 @@ const protectedActivityKeys = (
   parents: ReadonlyMap<string, string>,
 ): Set<string> => {
   const protectedKeys = new Set<string>();
-  for (const row of rows.filter((value) => !isFinished(value) || value.awaited)) {
+  for (const row of Arr.filter(rows, (value) => !isFinished(value) || value.awaited === true)) {
     let key: string | undefined = row.key;
     while (key && !protectedKeys.has(key)) {
       protectedKeys.add(key);
@@ -78,18 +80,22 @@ const keptWithinHistoryLimit = (
   { parents, roots }: Ownership,
   protectedKeys: ReadonlySet<string>,
 ): Set<string> => {
-  const history = rows.filter((row) => !parents.has(row.key) && !protectedKeys.has(row.key));
+  const history = Arr.filter(rows, (row) => !parents.has(row.key) && !protectedKeys.has(row.key));
   const evictionOrder = [
-    ...history.filter((row) => row.retained).toReversed(),
-    ...history
-      .filter((row) => !row.retained)
-      .toSorted((left, right) => endedAt(left) - endedAt(right)),
+    ...Arr.reverse(Arr.filter(history, (row) => row.retained === true)),
+    ...Arr.sort(
+      Arr.filter(history, (row) => !row.retained),
+      Order.mapInput(Order.Number, endedAt),
+    ),
   ];
   const evictedRoots = new Set(
-    evictionOrder.slice(0, Math.max(0, history.length - HISTORY_ROOT_LIMIT)).map((row) => row.key),
+    Arr.map(
+      evictionOrder.slice(0, Math.max(0, history.length - HISTORY_ROOT_LIMIT)),
+      (row) => row.key,
+    ),
   );
   return new Set(
-    rows.flatMap((row) => (evictedRoots.has(roots.get(row.key) ?? row.key) ? [] : [row.key])),
+    Arr.flatMap(rows, (row) => (evictedRoots.has(roots.get(row.key) ?? row.key) ? [] : [row.key])),
   );
 };
 
@@ -127,7 +133,8 @@ const trimCompleted = (
   const { childCounts, branchCounts } = counts;
   let completed = counts.completed;
   const omitted = new Map<string, number>();
-  const queue = rows.filter(
+  const queue = Arr.filter(
+    rows,
     (row) =>
       keep.has(row.key) &&
       isFinished(row) &&
@@ -161,14 +168,14 @@ export function retainActivity(
   previous: readonly ActivityRow[],
   current: readonly ActivityRow[],
 ): readonly ActivityRow[] {
-  const old = new Map(previous.map((row) => [row.key, row]));
+  const old = new Map(Arr.map(previous, (row) => [row.key, row] as const));
   const next = withRetainedRows(previous, current);
   const rows = [...next.values()];
   const ownership = resolveActivityOwnership(next);
   const protectedKeys = protectedActivityKeys(rows, ownership.parents);
   const keep = keptWithinHistoryLimit(rows, ownership, protectedKeys);
   const omitted = trimCompleted(rows, next, keep, ownership, protectedKeys);
-  return rows.flatMap((row) => {
+  return Arr.flatMap(rows, (row) => {
     if (!keep.has(row.key)) return [];
     const omittedChildren = Math.max(
       omitted.get(row.key) ?? 0,
@@ -179,7 +186,7 @@ export function retainActivity(
 }
 
 export function activityPath(rows: readonly ActivityRow[], key: string): readonly ActivityRow[] {
-  const byKey = new Map(rows.map((row) => [row.key, row]));
+  const byKey = new Map(Arr.map(rows, (row) => [row.key, row] as const));
   const { parents } = resolveActivityOwnership(byKey);
   const path: ActivityRow[] = [];
   let cursor = byKey.get(key);

@@ -1,4 +1,6 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { countLabel } from "pi-cosmic-core";
 import { managerActivityGlyph, clipToWidth, spinnerFrameAt } from "../manager/chrome.ts";
 import { compactNotices, needsYou } from "./attention.ts";
@@ -22,7 +24,7 @@ export const activityStartupGlyph = (
   starting: number,
   now = 0,
 ): string =>
-  starting > 0 && !rows.some((row) => !isFinished(row))
+  starting > 0 && !Arr.some(rows, (row) => !isFinished(row))
     ? managerActivityGlyph("pending", spinnerFrameAt(now))
     : "";
 export function activityOwnerLabel(
@@ -30,12 +32,12 @@ export function activityOwnerLabel(
   row: ActivityRow,
   width: number,
 ): string {
-  const parts = activityPath(rows, row.key).map((item) => item.title);
-  const full = parts.join(" › ");
+  const parts = Arr.map(activityPath(rows, row.key), (item) => item.title);
+  const full = Arr.join(parts, " › ");
   if (visibleWidth(full) <= width) return full;
   while (parts.length > 1) {
     parts.shift();
-    const suffix = `… › ${parts.join(" › ")}`;
+    const suffix = `… › ${Arr.join(parts, " › ")}`;
     if (visibleWidth(suffix) <= width) return suffix;
   }
   return clipToWidth(parts[0] ?? "", Math.max(0, width), "…");
@@ -47,23 +49,29 @@ const widgetGroupLine = (
   omissions: readonly string[],
 ): string => {
   const title = "…";
-  const omitted = omissions.join(" · ");
+  const omitted = Arr.join(omissions, " · ");
   const notices = [...compactNotices(summary.attention), ...omissions];
-  const full = [
-    title,
-    ...notices,
-    ...endedWorkLabels(summary),
-    ...activeWorkLabels(summary),
-    ...(summary.awaited ? [`${summary.awaited} awaited`] : []),
-  ].join(" · ");
+  const full = Arr.join(
+    [
+      title,
+      ...notices,
+      ...endedWorkLabels(summary),
+      ...activeWorkLabels(summary),
+      ...(summary.awaited ? [`${summary.awaited} awaited`] : []),
+    ],
+    " · ",
+  );
   if (visibleWidth(full) <= width) return full;
-  let evidence = notices.join(" · ");
+  let evidence = Arr.join(notices, " · ");
   if (visibleWidth(evidence) + Math.min(12, visibleWidth(title)) + 3 > width)
-    evidence = notices.join(" ");
+    evidence = Arr.join(notices, " ");
   if (visibleWidth(evidence) > width) {
     const { user, parent, blocked, failed } = summary.attention;
     const attention = user + parent + blocked + failed;
-    evidence = [attention ? `${attention} attention` : "", omitted].filter(Boolean).join(" · ");
+    evidence = Arr.join(
+      Arr.filter([attention ? `${attention} attention` : "", omitted], Str.isNonEmpty),
+      " · ",
+    );
   }
   const active = summary.running + summary.pending + summary.stopping;
   const progress = active
@@ -71,8 +79,11 @@ const widgetGroupLine = (
     : summary.awaited
       ? `${summary.awaited} awaited`
       : "";
-  if (progress && visibleWidth([title, evidence, progress].filter(Boolean).join(" · ")) <= width)
-    evidence = [evidence, progress].filter(Boolean).join(" · ");
+  if (
+    progress &&
+    visibleWidth(Arr.join(Arr.filter([title, evidence, progress], Str.isNonEmpty), " · ")) <= width
+  )
+    evidence = Arr.join(Arr.filter([evidence, progress], Str.isNonEmpty), " · ");
   if (!evidence) return clipToWidth(title, width, "…");
   if (visibleWidth(evidence) + 4 > width) return clipToWidth(evidence, width, "…");
   return `${clipToWidth(title, Math.max(1, width - visibleWidth(evidence) - 3), "…")} · ${evidence}`;
@@ -86,12 +97,15 @@ const overflowLine = (
   width: number,
   style: (text: string) => string,
 ): string => {
-  const total = sections
-    .map(({ heading }) => heading.summary)
-    .reduce(addGroupSummaries, emptyGroupSummary);
-  const hidden = sections.reduce(
-    (subtotal, section) => subtotal + section.entries.length + section.omittedRows,
+  const total = Arr.reduce(
+    Arr.map(sections, ({ heading }) => heading.summary),
+    emptyGroupSummary,
+    addGroupSummaries,
+  );
+  const hidden = Arr.reduce(
+    sections,
     0,
+    (subtotal, section) => subtotal + section.entries.length + section.omittedRows,
   );
   return style(widgetGroupLine(total, width, omissionLabels(hidden)));
 };
@@ -102,7 +116,7 @@ const sectionLines = (
   options: WidgetOptions,
   style: (text: string) => string,
 ): string[] => {
-  const lines = section.entries.flatMap((entry) =>
+  const lines = Arr.flatMap(section.entries, (entry) =>
     entry.type === "member" ? [groupedMemberLine(entry, width, options, "widget")] : [],
   );
   if (section.omittedRows)
@@ -135,5 +149,5 @@ export function renderActivityWidget(
   const starting = options.starting ?? 0;
   if (!lines.length && starting > 0)
     lines.push(style(`Subagents ${activityStartupGlyph(rows, starting, options.now)}`));
-  return lines.slice(0, maxRows).map((line) => clipToWidth(line, width, ""));
+  return Arr.map(lines.slice(0, maxRows), (line) => clipToWidth(line, width, ""));
 }

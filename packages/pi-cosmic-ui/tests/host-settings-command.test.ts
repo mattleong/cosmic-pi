@@ -1,5 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Result from "effect/Result";
@@ -80,7 +81,7 @@ describe("provider settings command shell", () => {
         let captured = 0;
         const h = harness(
           {
-            descriptors: ["mode", "other"].map((id) => ({
+            descriptors: Arr.map(["mode", "other"], (id) => ({
               id,
               description: id,
               values: ["on", "off"],
@@ -116,7 +117,7 @@ describe("provider settings command shell", () => {
           ["other", "off"],
           ["mode", "off"],
         ]);
-        expect(h.notify.mock.calls.some(([, level]) => level === "warning")).toBe(true);
+        expect(Arr.some(h.notify.mock.calls, ([, level]) => level === "warning")).toBe(true);
       }),
   );
 
@@ -137,11 +138,11 @@ describe("provider settings command shell", () => {
       yield* yieldUntil(() => captures === 2);
       activation = 2;
       yield* h.invoke("mode on");
-      expect(h.apply.mock.calls.map(([, , value]) => value)).toEqual(["on", "on"]);
+      expect(Arr.map(h.apply.mock.calls, ([, , value]) => value)).toEqual(["on", "on"]);
       pending.resolve(Result.succeed(undefined));
       yield* Fiber.join(first);
       yield* Fiber.join(queued);
-      expect(h.apply.mock.calls.map(([, , value]) => value)).toEqual(["on", "on"]);
+      expect(Arr.map(h.apply.mock.calls, ([, , value]) => value)).toEqual(["on", "on"]);
       expect(h.notify).toHaveBeenCalledTimes(1);
     }),
   );
@@ -169,11 +170,11 @@ describe("provider settings command shell", () => {
       yield* Effect.promise(() => retiredApply?.("mode", "off") ?? Promise.resolve());
       const second = h.start("mode off");
       yield* Effect.yieldNow;
-      expect(h.apply.mock.calls.map(([, , value]) => value)).toEqual(["on"]);
+      expect(Arr.map(h.apply.mock.calls, ([, , value]) => value)).toEqual(["on"]);
       pending.resolve(Result.succeed(undefined));
       yield* Fiber.join(first);
       yield* Effect.promise(() => second);
-      expect(h.apply.mock.calls.map(([, , value]) => value)).toEqual(["on", "off"]);
+      expect(Arr.map(h.apply.mock.calls, ([, , value]) => value)).toEqual(["on", "off"]);
       closing.resolve(OwnedSurfaceOutcome.Settled({ value: undefined }));
       yield* Fiber.join(oldPicker);
     }),
@@ -196,7 +197,7 @@ describe("provider settings command shell", () => {
       expect(h.notify).not.toHaveBeenCalled();
       expect(afterApply).not.toHaveBeenCalled();
       yield* h.invoke("mode off");
-      expect(h.apply.mock.calls.map(([, , value]) => value)).toEqual(["off"]);
+      expect(Arr.map(h.apply.mock.calls, ([, , value]) => value)).toEqual(["off"]);
       expect(afterApply).toHaveBeenCalledTimes(1);
     }),
   );

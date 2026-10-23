@@ -1,5 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, type Component } from "@earendil-works/pi-tui";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import {
   framedFill,
   framedScreen,
@@ -33,7 +35,7 @@ export class TextPanelComponent implements Component {
     const { theme, title } = this.options;
     const footer = this.options.dismiss === "any-key" ? " Press any key to close " : " Esc/q Back ";
     const inner = Math.max(0, safeWidth - 2);
-    const body = this.options.lines.map((line) => clipToWidth(line, inner, "…"));
+    const body = Arr.map(this.options.lines, (line) => clipToWidth(line, inner, "…"));
     return framedScreen(this.frame, {
       width: safeWidth,
       height: body.length + 2,
@@ -48,7 +50,7 @@ export class TextPanelComponent implements Component {
       this.options.dismiss === "any-key" ||
       matchesKey(data, Key.escape) ||
       matchesKey(data, Key.ctrl("c")) ||
-      data.toLowerCase() === "q"
+      Str.toLowerCase(data) === "q"
     )
       this.options.done();
   }

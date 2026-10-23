@@ -57,7 +57,7 @@ export const settingsItemsFromDescriptors = <Config>(
   >,
   config: Config,
 ): SettingsSurfaceItem[] =>
-  descriptors.map((descriptor) => ({
+  Arr.map(descriptors, (descriptor) => ({
     id: descriptor.id,
     label: descriptor.label,
     currentValue: descriptor.currentValue(config),

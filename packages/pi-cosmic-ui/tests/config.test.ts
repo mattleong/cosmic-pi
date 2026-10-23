@@ -1,8 +1,11 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Str from "effect/String";
 import {
   JsonDocumentError,
   JsonDocumentStore,
@@ -121,9 +124,11 @@ describe("Cosmic UI config", () => {
         });
 
         expect(memory.operations.length).toBeGreaterThan(0);
-        expect(memory.operations.filter((operation) => operation.includes(paths.project))).toEqual(
-          [],
-        );
+        expect(
+          Arr.filter(memory.operations, (operation) =>
+            Fn.pipe(operation, Str.includes(paths.project)),
+          ),
+        ).toEqual([]);
         expect(memory.documents.get(paths.project)).toEqual({
           footer: { enabled: false, density: "compact" },
         });

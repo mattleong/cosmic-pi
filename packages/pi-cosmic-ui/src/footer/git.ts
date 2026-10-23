@@ -1,3 +1,8 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
+
 export interface FooterGitStatus {
   staged: number;
   modified: number;
@@ -13,8 +18,10 @@ export interface FooterGitStatus {
 const CONFLICT_CODES = new Set(["DD", "AU", "UD", "UA", "DU", "AA", "UU"]);
 
 export function parseGitStatus(output: string): FooterGitStatus | undefined {
-  const lines = output.split(/\r?\n/).filter(Boolean);
-  const header = lines.find((line) => line.startsWith("## "));
+  const lines = Arr.filter(Str.split(output, /\r?\n/), Str.isNonEmpty);
+  const header = Option.getOrUndefined(
+    Arr.findFirst(lines, (line) => Fn.pipe(line, Str.startsWith("## "))),
+  );
   if (header === undefined) return undefined;
 
   const status: FooterGitStatus = {
@@ -22,26 +29,26 @@ export function parseGitStatus(output: string): FooterGitStatus | undefined {
     modified: 0,
     untracked: 0,
     conflicts: 0,
-    ahead: Number(header.match(/\bahead (\d+)/)?.[1] ?? 0),
-    behind: Number(header.match(/\bbehind (\d+)/)?.[1] ?? 0),
+    ahead: Number(Option.getOrUndefined(Fn.pipe(header, Str.match(/\bahead (\d+)/)))?.[1] ?? 0),
+    behind: Number(Option.getOrUndefined(Fn.pipe(header, Str.match(/\bbehind (\d+)/)))?.[1] ?? 0),
     linesAdded: 0,
     linesRemoved: 0,
     linesChanged: 0,
   };
 
   for (const line of lines) {
-    if (line.startsWith("## ") || line.length < 2) continue;
-    const code = line.slice(0, 2);
+    if (Fn.pipe(line, Str.startsWith("## ")) || line.length < 2) continue;
+    const code = Fn.pipe(line, Str.slice(0, 2));
     if (code === "??") {
       status.untracked++;
       continue;
     }
     if (code === "!!") continue;
-    if (CONFLICT_CODES.has(code) || code.includes("U")) {
+    if (CONFLICT_CODES.has(code) || Fn.pipe(code, Str.includes("U"))) {
       status.conflicts++;
       continue;
     }
-    if (!code.startsWith(" ")) status.staged++;
+    if (!Fn.pipe(code, Str.startsWith(" "))) status.staged++;
     if (code[1] !== " ") status.modified++;
   }
 
@@ -52,9 +59,9 @@ export function applyGitNumstat(status: FooterGitStatus, output: string): Footer
   let linesAdded = 0;
   let linesRemoved = 0;
   let linesChanged = 0;
-  for (const line of output.split(/\r?\n/)) {
+  for (const line of Str.split(output, /\r?\n/)) {
     if (!line) continue;
-    const [rawAdded, rawRemoved] = line.split("\t", 3);
+    const [rawAdded, rawRemoved] = Str.split(line, "\t");
     if (!rawAdded || !rawRemoved || rawAdded === "-" || rawRemoved === "-") continue;
     const added = Number(rawAdded);
     const removed = Number(rawRemoved);
@@ -75,5 +82,5 @@ export function formatGitStatus(status: FooterGitStatus): string {
   if (status.untracked) parts.push(`?${status.untracked}`);
   if (status.ahead) parts.push(`↑${status.ahead}`);
   if (status.behind) parts.push(`↓${status.behind}`);
-  return parts.join(" ");
+  return Arr.join(parts, " ");
 }

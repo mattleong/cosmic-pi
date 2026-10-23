@@ -1,6 +1,10 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey } from "@earendil-works/pi-tui";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Str from "effect/String";
 import { FullScreenResolution } from "../manager/keymap.ts";
 import type {
   FullScreenAction,
@@ -68,7 +72,7 @@ interface VisibleCache extends TreeCache {
   readonly expandedHistory: ReadonlySet<string>;
 }
 const sameSet = (left: ReadonlySet<string>, right: ReadonlySet<string>) =>
-  left.size === right.size && [...left].every((value) => right.has(value));
+  left.size === right.size && Arr.every([...left], (value) => right.has(value));
 type ActivityAction = NonNullable<ActivityRow["actions"]>[number];
 const handsOff = (action: ActivityAction) => action.handoff !== false;
 const sameAction = (left: ActivityAction, right: ActivityAction) =>
@@ -116,7 +120,7 @@ export class ActivityComponent {
     const rows = this.options.snapshot();
     if (this.fullTree?.rows === rows) return this.fullTree.entries;
     const entries = groupedActivityTree(rows, {
-      expandedHistory: new Set(rows.map((row) => row.key)),
+      expandedHistory: new Set(Arr.map(rows, (row) => row.key)),
     });
     this.fullTree = { rows, entries };
     return entries;
@@ -125,7 +129,7 @@ export class ActivityComponent {
     const prefs = this.presentation;
     const rows = this.options.snapshot();
     const all = this.allEntries();
-    if (prefs.focus && !all.some((entry) => entry.id === prefs.focus)) prefs.focus = undefined;
+    if (prefs.focus && !Arr.some(all, (entry) => entry.id === prefs.focus)) prefs.focus = undefined;
     const cached = this.visibleTree;
     if (
       cached?.rows === rows &&
@@ -157,27 +161,34 @@ export class ActivityComponent {
     }
     const entries = this.entries();
     this.shell.select(
-      entries.findIndex((entry) => entry.id === id),
-      entries.map((entry) => entry.id),
+      Option.getOrElse(
+        Arr.findFirstIndex(entries, (entry) => entry.id === id),
+        () => -1,
+      ),
+      Arr.map(entries, (entry) => entry.id),
     );
   }
   private initialEntry(): GroupedActivityRow | undefined {
     const all = this.allEntries();
     const section = this.options.initialSection;
     if (!section)
-      return this.shell.state.selectedId ? undefined : all.find((entry) => entry.type === "member");
+      return this.shell.state.selectedId
+        ? undefined
+        : Option.getOrUndefined(Arr.findFirst(all, (entry) => entry.type === "member"));
     const matching = (entry: GroupedActivityRow) =>
       source(entry)?.kind === (section === "tasks" ? "command" : "agent");
     return (
-      all.find((entry) => entry.section === section && matching(entry)) ??
-      all.find(matching) ??
-      all.find((entry) => entry.id === activitySectionId(section))
+      Option.getOrUndefined(
+        Arr.findFirst(all, (entry) => entry.section === section && matching(entry)),
+      ) ??
+      Option.getOrUndefined(Arr.findFirst(all, matching)) ??
+      Option.getOrUndefined(Arr.findFirst(all, (entry) => entry.id === activitySectionId(section)))
     );
   }
   private selectableEntries(): readonly GroupedActivityRow[] {
     const entries = this.entries();
     const id = this.shell.state.selectedId;
-    if (!id || entries.some((entry) => entry.id === id)) return entries;
+    if (!id || Arr.some(entries, (entry) => entry.id === id)) return entries;
     for (const ancestor of groupedActivityPath(this.allEntries(), id))
       if (ancestor.history) this.presentation.expandedHistory.add(ancestor.id);
     return this.entries();
@@ -201,7 +212,7 @@ export class ActivityComponent {
       if (initial) this.reveal(initial.id);
     }
     const entries = this.selectableEntries();
-    this.shell.reconcile(entries.map((entry) => entry.id));
+    this.shell.reconcile(Arr.map(entries, (entry) => entry.id));
     const selected = entries[this.shell.state.selected];
     const row = source(selected);
     const identity = row ? JSON.stringify([row.key, row.generation]) : selected?.id;
@@ -227,12 +238,15 @@ export class ActivityComponent {
     this.options.close(request);
   }
   private dispatch(displayed: ActivityActionRequest, action: ActivityAction): void {
-    const row = this.options.snapshot().find((candidate) => candidate.key === displayed.key);
+    const row = Option.getOrUndefined(
+      Arr.findFirst(this.options.snapshot(), (candidate) => candidate.key === displayed.key),
+    );
     const request =
       row &&
       !row.retained &&
       row.generation === displayed.generation &&
-      row.actions?.some((offered) => sameAction(offered, action))
+      row.actions !== undefined &&
+      Arr.some(row.actions, (offered) => sameAction(offered, action))
         ? { ...displayed, revision: row.revision }
         : displayed;
     const invoke = this.options.invoke;
@@ -250,7 +264,9 @@ export class ActivityComponent {
     this.requested = request;
     this.options.loadDetail?.(request, (text) => {
       const current = source(
-        this.allEntries().find((entry) => entry.id === this.shell.state.selectedId),
+        Option.getOrUndefined(
+          Arr.findFirst(this.allEntries(), (entry) => entry.id === this.shell.state.selectedId),
+        ),
       );
       if (
         this.closed ||
@@ -261,7 +277,7 @@ export class ActivityComponent {
         current.generation !== request.generation
       )
         return;
-      this.loaded = { request, text: text.slice(0, ACTIVITY_LIMITS.detail) };
+      this.loaded = { request, text: Fn.pipe(text, Str.slice(0, ACTIVITY_LIMITS.detail)) };
       this.preserveDetailPosition = preservePosition;
       if (preservePosition) this.openAtTop = false;
       this.options.requestRender();
@@ -349,11 +365,18 @@ export class ActivityComponent {
       this.options.requestRender();
       return true;
     }
-    if (!back || !selected.parentId || !entries.some((entry) => entry.id === selected.parentId))
+    if (
+      !back ||
+      !selected.parentId ||
+      !Arr.some(entries, (entry) => entry.id === selected.parentId)
+    )
       return false;
     this.shell.select(
-      entries.findIndex((entry) => entry.id === selected.parentId),
-      entries.map((entry) => entry.id),
+      Option.getOrElse(
+        Arr.findFirstIndex(entries, (entry) => entry.id === selected.parentId),
+        () => -1,
+      ),
+      Arr.map(entries, (entry) => entry.id),
     );
     this.selected();
     this.flushCancellation();
@@ -392,7 +415,14 @@ export class ActivityComponent {
   private revealNextWaiting(row: ActivityRow | undefined): void {
     const waiting = needsYou(this.options.snapshot());
     const urgent =
-      waiting[(waiting.findIndex((item) => item.key === row?.key) + 1) % waiting.length];
+      waiting[
+        (Option.getOrElse(
+          Arr.findFirstIndex(waiting, (item) => item.key === row?.key),
+          () => -1,
+        ) +
+          1) %
+          waiting.length
+      ];
     if (urgent) this.reveal(urgent.key);
   }
   private toggleFollow(row: ActivityRow): void {
@@ -445,7 +475,7 @@ export class ActivityComponent {
     if (changed.movedSelection)
       this.shell.select(
         changed.state.selected,
-        entries.map((entry) => entry.id),
+        Arr.map(entries, (entry) => entry.id),
       );
     if (changed.scrolledDetail) this.keepDetailPlace();
     if (changed.scrolledDetail && this.shell.state.detailScroll > 0 && this.follow) {

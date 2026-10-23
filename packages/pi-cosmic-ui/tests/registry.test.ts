@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import * as Arr from "effect/Array";
 import type { CosmicFooterTextContribution } from "../src/protocol/protocol.ts";
 import {
   FOOTER_PRE_SESSION_KEY_LIMIT,
@@ -17,7 +18,7 @@ const text = (id: string, value = id): CosmicFooterTextContribution => ({
 function registry(onRender: (registry: FooterRegistry) => void = () => undefined) {
   const renders = vi.fn(() => onRender(store));
   const store = createFooterRegistry({ requestRender: renders, sessionActive: () => true });
-  const ids = () => store.snapshot().contributions.map((entry) => entry.id);
+  const ids = () => Arr.map(store.snapshot().contributions, (entry) => entry.id);
   return { store, renders, ids };
 }
 
@@ -86,7 +87,7 @@ describe("footer registry", () => {
       for (let index = 0; index < count; index++) store.upsert("owner", text(`${prefix}${index}`));
     };
     upsertMany("early", FOOTER_PRE_SESSION_KEY_LIMIT + 2);
-    const early = store.snapshot().contributions.map((entry) => entry.id);
+    const early = Arr.map(store.snapshot().contributions, (entry) => entry.id);
     expect(early).toHaveLength(FOOTER_PRE_SESSION_KEY_LIMIT);
     expect(early[0]).toBe("early2");
     store.upsert("owner", text("early2", "replaced"));

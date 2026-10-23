@@ -54,10 +54,10 @@ const isExpandKey = Schema.is(Schema.String.check(Schema.isMaxLength(32)));
 export const toolExpandHint = (): string => {
   const keys = invokeHostCallback((): ReadonlyArray<string> => {
     const configured: unknown = getKeybindings().getKeys("app.tools.expand");
-    return Arr.isArray(configured) ? configured.slice(0, 4).filter(isExpandKey) : [];
+    return Arr.isArray(configured) ? Arr.filter(configured.slice(0, 4), isExpandKey) : [];
   }, []);
   return keys.length > 0
-    ? `${keys.map(sanitizeTerminalLine).join("/")} to expand`
+    ? `${Arr.join(Arr.map(keys, sanitizeTerminalLine), "/")} to expand`
     : "ctrl+o to expand";
 };
 

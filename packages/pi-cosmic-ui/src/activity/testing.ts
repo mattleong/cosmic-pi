@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { stripTerminalControls } from "pi-cosmic-core";
 import { plainTheme } from "pi-cosmic-core/testing";
@@ -60,12 +62,12 @@ interface ActivityGalleryOptions {
   readonly now?: number;
 }
 
-const plain = (frame: readonly string[]) => frame.map((line) => stripTerminalControls(line));
+const plain = (frame: readonly string[]) => Arr.map(frame, (line) => stripTerminalControls(line));
 
 export function activityGalleryFrames(options: ActivityGalleryOptions): string[] {
   const { providerId } = options;
   const rows: readonly ActivityRow[] = Object.freeze(
-    options.items.map((item) => ({
+    Arr.map(options.items, (item) => ({
       ...item,
       key: activityKey(providerId, item.id),
       providerId,
@@ -94,7 +96,7 @@ export function activityGalleryFrames(options: ActivityGalleryOptions): string[]
       close: () => undefined,
       requestRender: () => undefined,
       loadDetail: (request, deliver) => {
-        const id = rows.find((row) => row.key === request.key)?.id;
+        const id = Option.getOrUndefined(Arr.findFirst(rows, (row) => row.key === request.key))?.id;
         const text = id === undefined ? undefined : options.detail?.(id);
         if (text !== undefined) deliver(text);
       },

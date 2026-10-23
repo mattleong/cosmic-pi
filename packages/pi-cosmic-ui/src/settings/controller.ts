@@ -1,6 +1,8 @@
 import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import * as Data from "effect/Data";
 import type * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import {
@@ -65,7 +67,7 @@ const settingDescriptors = [
       return density && CosmicUiSettingChange.UpdateFooter({ patch: { density } });
     },
   },
-  ...DEFAULT_FOOTER_ORDER.map((item) => {
+  ...Arr.map(DEFAULT_FOOTER_ORDER, (item) => {
     const usage = item === "openai.usage";
     const schema = usage ? UsageSettingSchema : BooleanSettingSchema;
     const [shown, hidden] = schema.literals;
@@ -110,16 +112,22 @@ export function registerSettingsCommand(
       config: () => options.config(),
       status: () => {
         const config = options.config();
-        return [
-          "Cosmic UI settings",
-          ...settingDescriptors.map(
-            (descriptor) => `  ${descriptor.id} = ${descriptor.currentValue(config)}`,
-          ),
-        ].join("\n");
+        return Arr.join(
+          [
+            "Cosmic UI settings",
+            ...Arr.map(
+              settingDescriptors,
+              (descriptor) => `  ${descriptor.id} = ${descriptor.currentValue(config)}`,
+            ),
+          ],
+          "\n",
+        );
       },
       onInvoke: options.updateContext,
       apply: (_ctx, id, value, signal) => {
-        const change = settingDescriptors.find((descriptor) => descriptor.id === id)?.change(value);
+        const change = Option.getOrUndefined(
+          Arr.findFirst(settingDescriptors, (descriptor) => descriptor.id === id),
+        )?.change(value);
         if (!change) return Promise.resolve(Result.fail({ message: `Unknown setting: ${id}` }));
         const update = CosmicUiService.use((service) =>
           CosmicUiSettingChange.$match(change, {

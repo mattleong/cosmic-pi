@@ -1,4 +1,7 @@
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Str from "effect/String";
 import type { ActivityRow } from "./model.ts";
 
 type ActivityAction = NonNullable<ActivityRow["actions"]>[number];
@@ -21,7 +24,7 @@ export const activityShortcuts: ReadonlySet<string> = new Set([
   "z",
   "f",
   "t",
-  ...ACTIVITY_ACTION_KEYS.map(([key]) => key),
+  ...Arr.map(ACTIVITY_ACTION_KEYS, ([key]) => key),
   "1",
   "2",
   "3",
@@ -36,10 +39,12 @@ export const activityShortcuts: ReadonlySet<string> = new Set([
 export const activityActionForKey = (
   actions: ReadonlyArray<ActivityAction>,
   key: string,
-): ActivityAction | undefined =>
-  ACTIVITY_ACTION_KEYS.find(([candidate]) => candidate === key)?.[1]
-    .flatMap((id) => actions.filter((action) => action.id === id))
-    .at(0);
+): ActivityAction | undefined => {
+  const ids = Option.getOrUndefined(
+    Arr.findFirst(ACTIVITY_ACTION_KEYS, ([candidate]) => candidate === key),
+  )?.[1];
+  return ids && Arr.flatMap(ids, (id) => Arr.filter(actions, (action) => action.id === id)).at(0);
+};
 
 export const activityActionPages = (actions: ReadonlyArray<ActivityAction> | undefined): number =>
   Math.max(1, Math.ceil((actions?.length ?? 0) / ACTIVITY_ACTION_PAGE_SIZE));
@@ -51,18 +56,21 @@ export interface ActivityActionHints {
 }
 
 const join = (parts: ReadonlyArray<string | undefined>) =>
-  parts.filter(Predicate.isTruthy).join(" · ") || undefined;
+  Arr.join(
+    Arr.filter(parts, (part): part is string => Predicate.isString(part) && Str.isNonEmpty(part)),
+    " · ",
+  ) || undefined;
 
 export function activityActionHints(
   row: ActivityRow | undefined,
   page: number,
 ): ActivityActionHints {
   const actions = row && !row.retained ? (row.actions ?? []) : [];
-  const keyed = ACTIVITY_ACTION_KEYS.flatMap(([key]) => {
+  const keyed = Arr.flatMap(ACTIVITY_ACTION_KEYS, ([key]) => {
     const action = activityActionForKey(actions, key);
     return action ? [{ key, action }] : [];
   });
-  const direct = join(keyed.map(({ key, action }) => `${key} ${action.label}`));
+  const direct = join(Arr.map(keyed, ({ key, action }) => `${key} ${action.label}`));
   const paged = actions.length > ACTIVITY_ACTION_PAGE_SIZE;
   const start =
     Math.min(Math.max(0, page), activityActionPages(actions) - 1) * ACTIVITY_ACTION_PAGE_SIZE;
@@ -81,7 +89,7 @@ export function activityActionHints(
     primary: join([keyed.length === 1 ? direct : undefined, numbered]),
     all: join([direct, numbered]),
     keys: [
-      ...keyed.map(({ key }) => key),
+      ...Arr.map(keyed, ({ key }) => key),
       ...(numberKeys ? [numberKeys] : []),
       ...(paged ? ["a"] : []),
     ],

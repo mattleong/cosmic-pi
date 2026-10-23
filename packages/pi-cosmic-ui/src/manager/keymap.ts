@@ -6,6 +6,8 @@ import {
   type KeyId,
 } from "@earendil-works/pi-tui";
 import * as Data from "effect/Data";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 
 export type FullScreenMode = "navigation" | "search" | "text-input" | "confirmation" | "busy";
 
@@ -53,8 +55,12 @@ export interface FullScreenKeymapOptions {
 
 export const decodeFullScreenPrintable = (data: string): string | undefined => {
   const printable =
-    data.length === 1 && data.charCodeAt(0) >= 32 ? data : decodeKittyPrintable(data);
-  return printable?.charCodeAt(0) === 127 ? undefined : printable;
+    data.length === 1 && Option.exists(Str.charCodeAt(data, 0), (code) => code >= 32)
+      ? data
+      : decodeKittyPrintable(data);
+  return printable !== undefined && Option.contains(Str.charCodeAt(printable, 0), 127)
+    ? undefined
+    : printable;
 };
 
 const action = (value: FullScreenAction): FullScreenResolution =>
@@ -159,13 +165,16 @@ const resolveConfirmation = (
 ): FullScreenResolution | undefined => {
   if (isReserved(input, reservedKeys)) return shortcut(input);
   if (isKeyRepeat(input.data)) return undefined;
-  if (cancels(input) || input.printable?.toLowerCase() === "q") return action("cancel");
+  if (cancels(input) || (input.printable !== undefined && Str.toLowerCase(input.printable) === "q"))
+    return action("cancel");
   return confirms(input) ? action("confirm") : undefined;
 };
 
 const resolveBusy = (input: KeyInput): FullScreenResolution | undefined => {
   if (cancels(input)) return action("cancel");
-  return input.printable?.toLowerCase() === "q" ? action("quit") : undefined;
+  return input.printable !== undefined && Str.toLowerCase(input.printable) === "q"
+    ? action("quit")
+    : undefined;
 };
 
 const resolveTextInput = (input: KeyInput): FullScreenResolution | undefined => {

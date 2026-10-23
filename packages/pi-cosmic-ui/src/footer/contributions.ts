@@ -1,4 +1,8 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Order from "effect/Order";
+import * as Str from "effect/String";
 import { sanitizeTerminalLine } from "pi-cosmic-core";
 import type {
   CosmicFooterColor,
@@ -13,12 +17,14 @@ export function alignSides(left: string, right: string, width: number): string {
   if (!right) return clipToWidth(left, width, "");
   const rightWidth = Math.min(visibleWidth(right), width);
   const clippedRight = clipToWidth(right, rightWidth, "");
-  if (!left) return `${" ".repeat(Math.max(0, width - visibleWidth(clippedRight)))}${clippedRight}`;
+  if (!left)
+    return `${Fn.pipe(" ", Str.repeat(Math.max(0, width - visibleWidth(clippedRight))))}${clippedRight}`;
 
   const leftWidth = Math.max(0, width - visibleWidth(clippedRight) - 2);
   const clippedLeft = clipToWidth(left, leftWidth, "…");
-  const padding = " ".repeat(
-    Math.max(1, width - visibleWidth(clippedLeft) - visibleWidth(clippedRight)),
+  const padding = Fn.pipe(
+    " ",
+    Str.repeat(Math.max(1, width - visibleWidth(clippedLeft) - visibleWidth(clippedRight))),
   );
   return clipToWidth(`${clippedLeft}${padding}${clippedRight}`, width, "");
 }
@@ -58,23 +64,22 @@ export function tone(
   contribution: CosmicFooterTextContribution,
   text: string,
 ): string {
-  if (contribution.id === "effort" && text.startsWith("⚡")) {
-    const effort = text.slice(1);
+  if (contribution.id === "effort" && Fn.pipe(text, Str.startsWith("⚡"))) {
+    const effort = Fn.pipe(text, Str.slice(1));
     return `${theme.fg("warning", "⚡")}${effort ? theme.fg(contributionColor(contribution), effort) : ""}`;
   }
   if (contribution.id === "git.lines") {
-    return text
-      .split(" ")
-      .filter(Boolean)
-      .map((value) => {
-        const color = value.startsWith("+")
+    return Arr.join(
+      Arr.map(Arr.filter(Str.split(text, " "), Str.isNonEmpty), (value) => {
+        const color = Fn.pipe(value, Str.startsWith("+"))
           ? "success"
-          : value.startsWith("-")
+          : Fn.pipe(value, Str.startsWith("-"))
             ? "error"
             : "syntaxNumber";
         return theme.fg(color, value);
-      })
-      .join(theme.fg("dim", " "));
+      }),
+      theme.fg("dim", " "),
+    );
   }
   return theme.fg(contributionColor(contribution), text);
 }
@@ -84,10 +89,18 @@ export const DEFAULT_CONTRIBUTION_ORDER = 500;
 export function ranked(
   contributions: readonly CosmicFooterTextContribution[],
 ): CosmicFooterTextContribution[] {
-  return contributions.toSorted(
-    (a, b) =>
-      (a.order ?? DEFAULT_CONTRIBUTION_ORDER) - (b.order ?? DEFAULT_CONTRIBUTION_ORDER) ||
-      (b.priority ?? 50) - (a.priority ?? 50),
+  return Arr.sort(
+    contributions,
+    Order.combine(
+      Order.mapInput(
+        Order.Number,
+        (entry: CosmicFooterTextContribution) => entry.order ?? DEFAULT_CONTRIBUTION_ORDER,
+      ),
+      Order.mapInput(
+        Order.flip(Order.Number),
+        (entry: CosmicFooterTextContribution) => entry.priority ?? 50,
+      ),
+    ),
   );
 }
 
@@ -119,12 +132,13 @@ export function rawContributionLine(
   entries: readonly CosmicFooterTextContribution[],
   compact: boolean,
 ): string {
-  return entries
-    .flatMap((entry) => {
+  return Arr.join(
+    Arr.flatMap(entries, (entry) => {
       const text = contributionText(entry, compact);
       return text ? [text] : [];
-    })
-    .join(" • ");
+    }),
+    " • ",
+  );
 }
 
 export function styledContributionLine(
@@ -137,14 +151,15 @@ export function styledContributionLine(
 ): string {
   // Link only complete, fitted text so clipping cannot leave an open hyperlink.
   if (clipped !== raw) return theme.fg("text", clipped);
-  return entries
-    .flatMap((entry) => {
+  return Arr.join(
+    Arr.flatMap(entries, (entry) => {
       const text = contributionText(entry, compact);
       if (!text) return [];
       const styled = tone(theme, entry, text);
       return [entry.id === "pullRequest" ? webHyperlink(styled, pullRequestUrl) : styled];
-    })
-    .join(theme.fg("dim", " • "));
+    }),
+    theme.fg("dim", " • "),
+  );
 }
 
 export function renderContributionLine(
@@ -156,8 +171,8 @@ export function renderContributionLine(
 ): string {
   if (width <= 0) return "";
   const visible = ranked(contributions);
-  const left = visible.filter((entry) => entry.align !== "right");
-  const right = visible.filter((entry) => entry.align === "right");
+  const left = Arr.filter(visible, (entry) => entry.align !== "right");
+  const right = Arr.filter(visible, (entry) => entry.align === "right");
 
   const fittedRight = fitContributions(right, width, compact);
   const rightRaw = rawContributionLine(fittedRight, compact);
@@ -190,6 +205,6 @@ export function renderContributionLine(
   if (!clippedRight) return clipToWidth(styledLeft, width, "");
   if (!clippedLeft) return clipToWidth(styledRight, width, "");
 
-  const padding = " ".repeat(Math.max(1, width - leftWidth - rightWidth));
+  const padding = Fn.pipe(" ", Str.repeat(Math.max(1, width - leftWidth - rightWidth)));
   return clipToWidth(`${styledLeft}${padding}${styledRight}`, width, "");
 }

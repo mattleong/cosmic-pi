@@ -1,5 +1,9 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Str from "effect/String";
 import { stripTerminalControls } from "pi-cosmic-core";
 import {
   fuzzyFilter,
@@ -130,7 +134,11 @@ export class SearchableSelectPage<A> implements Component, Focusable {
 
   private selectedChoice(): SearchableSelectPageChoice<A> | undefined {
     const selected = this.list?.getSelectedItem();
-    return selected ? this.filtered.find((entry) => entry.value === selected.value) : undefined;
+    return selected
+      ? Option.getOrUndefined(
+          Arr.findFirst(this.filtered, (entry) => entry.value === selected.value),
+        )
+      : undefined;
   }
 
   private buildList(): SelectList {
@@ -141,7 +149,7 @@ export class SearchableSelectPage<A> implements Component, Focusable {
     );
     const theme = this.options.theme;
     const list = new SelectList(
-      this.filtered.map((choice) => {
+      Arr.map(this.filtered, (choice) => {
         const item = this.alternateHelp
           ? choice.item
           : { value: choice.item.value, label: choice.item.label };
@@ -173,7 +181,10 @@ export class SearchableSelectPage<A> implements Component, Focusable {
       },
     );
     const preferredIndex = this.selectedIdentity
-      ? this.filtered.findIndex((choice) => choice.value === this.selectedIdentity)
+      ? Option.getOrElse(
+          Arr.findFirstIndex(this.filtered, (choice) => choice.value === this.selectedIdentity),
+          () => -1,
+        )
       : -1;
     if (preferredIndex >= 0) list.setSelectedIndex(preferredIndex);
     return list;
@@ -317,10 +328,9 @@ export class SearchableSelectPage<A> implements Component, Focusable {
       ? theme.fg("warning", clipToWidth(activeNotice, inner, "…"))
       : undefined;
     const inputLine = this.searchMode
-      ? this.input
-          .render(Math.max(1, inner))
-          .slice(0, 1)
-          .map((line) => focusedField(theme, line))[0]
+      ? Arr.map(this.input.render(Math.max(1, inner)).slice(0, 1), (line) =>
+          focusedField(theme, line),
+        )[0]
       : undefined;
     if (bodyHeight === 1) {
       const single = inputLine ?? noticeLine;
@@ -350,9 +360,9 @@ export class SearchableSelectPage<A> implements Component, Focusable {
     };
     const bodyHeight = Math.max(0, height - 2);
     const noticeLines = activeNotice
-      ? limitedWrap(activeNotice, 2).map((line) => theme.fg("warning", line))
+      ? Arr.map(limitedWrap(activeNotice, 2), (line) => theme.fg("warning", line))
       : [];
-    const subtitleLines = limitedWrap(this.options.subtitle, 1).map((line) =>
+    const subtitleLines = Arr.map(limitedWrap(this.options.subtitle, 1), (line) =>
       theme.fg("dim", line),
     );
     const searchLines = this.searchMode
@@ -361,7 +371,7 @@ export class SearchableSelectPage<A> implements Component, Focusable {
             "dim",
             `Type to filter · ${this.keys().key("tui.select.confirm", "Enter")} Select · ${this.searchCancel()}`,
           ),
-          ...this.input.render(Math.max(1, inner)).map((line) => focusedField(theme, line)),
+          ...Arr.map(this.input.render(Math.max(1, inner)), (line) => focusedField(theme, line)),
         ]
       : [];
     const header = [
@@ -380,7 +390,8 @@ export class SearchableSelectPage<A> implements Component, Focusable {
     const safeWidth = Math.max(0, Math.floor(width));
     const height = Math.max(0, Math.floor(this.options.getHeight()));
     if (safeWidth === 0 || height === 0) return [];
-    if (safeWidth < 4) return Array.from({ length: height }, () => " ".repeat(safeWidth));
+    if (safeWidth < 4)
+      return Array.from({ length: height }, () => Fn.pipe(" ", Str.repeat(safeWidth)));
     const inner = safeWidth - 2;
     const title = clipToWidth(` ${this.options.breadcrumb} `, inner, "");
     const frame = listDetailFrame(this.options.theme, "list");

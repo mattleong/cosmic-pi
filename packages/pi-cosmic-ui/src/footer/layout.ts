@@ -1,4 +1,6 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { formatTokens } from "pi-cosmic-core";
 import type { CosmicFooterTextContribution, CosmicFooterTheme } from "../protocol/protocol.ts";
 import {
@@ -47,8 +49,9 @@ export function renderModelContextLine(
   const contextBudget = leftRaw ? Math.max(1, width - leftWidth - 2) : width;
   const candidates = contextUsageCandidates(usage, theme, compact);
   const context =
-    candidates.find((candidate) => visibleWidth(candidate) <= contextBudget) ??
-    clipToWidth(candidates.at(-1) ?? "", width, "");
+    Option.getOrUndefined(
+      Arr.findFirst(candidates, (candidate) => visibleWidth(candidate) <= contextBudget),
+    ) ?? clipToWidth(candidates.at(-1) ?? "", width, "");
   const contextWidth = visibleWidth(context);
   const leftBudget = Math.max(0, width - contextWidth - (leftRaw ? 2 : 0));
   const left = modelIdentity.length

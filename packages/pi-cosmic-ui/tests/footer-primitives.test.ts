@@ -8,6 +8,9 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { afterEach, expect, it } from "vitest";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import {
   extensionApiFixture,
   extensionContextFixture,
@@ -65,7 +68,7 @@ const supportHyperlinks = (hyperlinks: boolean) =>
   setCapabilities({ ...getCapabilities(), hyperlinks });
 
 const links = (lines: readonly string[]) =>
-  lines.flatMap((line) =>
+  Arr.flatMap(lines, (line) =>
     Array.from({ length: visibleWidth(line) }, (_, column) => getOsc8LinkAtColumn(line, column)),
   );
 
@@ -86,7 +89,7 @@ it.each([true, false])(
       }).render(120);
     const lines = render(url);
     expect(links(lines).includes(url)).toBe(supported);
-    expect(lines.join("\n") === render(undefined).join("\n")).toBe(!supported);
+    expect(Arr.join(lines, "\n") === Arr.join(render(undefined), "\n")).toBe(!supported);
   },
 );
 
@@ -109,7 +112,7 @@ it("does not link a partially clipped PR or leak into following right-aligned te
   for (let width = 1; width < 13; width++) {
     for (const line of component.render(width)) {
       const text = stripTerminalSequences(line);
-      if (text.includes("PR")) clippedLines++;
+      if (Fn.pipe(text, Str.includes("PR"))) clippedLines++;
       expect(text).not.toContain("PR #1742");
       expect(visibleWidth(line)).toBeLessThanOrEqual(width);
       for (let column = 0; column <= visibleWidth(line) + 1; column++)

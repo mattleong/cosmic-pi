@@ -3,7 +3,11 @@ import type {
   ExtensionContext,
   ReadonlyFooterDataProvider,
 } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import type * as Order from "effect/Order";
 import * as Predicate from "effect/Predicate";
+import * as Str from "effect/String";
 import { invokeHostCallback, sanitizeTerminalLine } from "pi-cosmic-core";
 import { decodeContextUsage, decodeHostCount } from "./host-usage.ts";
 
@@ -62,6 +66,9 @@ export const materializeContextUsage = (ctx: ExtensionContext): FooterContextUsa
     return decoded ? Object.freeze(decoded) : undefined;
   }, undefined);
 
+const byStatusId: Order.Order<readonly [string, string]> = ([left], [right]) =>
+  Fn.pipe(left, Str.localeCompare(right));
+
 export const materializeFooterHostProjection = (options: {
   readonly pi: ExtensionAPI;
   readonly ctx: ExtensionContext | undefined;
@@ -71,12 +78,13 @@ export const materializeFooterHostProjection = (options: {
   const { pi, ctx, footerData, model } = options;
   const extensionStatuses = invokeHostCallback<FooterHostProjection["extensionStatuses"]>(
     () =>
-      [...footerData.getExtensionStatuses().entries()]
-        .toSorted(([a], [b]) => a.localeCompare(b))
-        .flatMap(([id, raw]) => {
+      Arr.flatMap(
+        Arr.sort([...footerData.getExtensionStatuses().entries()], byStatusId),
+        ([id, raw]: readonly [string, string]) => {
           const text = sanitizeTerminalLine(raw);
           return text ? [{ id, text }] : [];
-        }),
+        },
+      ),
     [],
   );
   return Object.freeze({

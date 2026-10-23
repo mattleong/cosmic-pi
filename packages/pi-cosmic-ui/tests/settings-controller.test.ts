@@ -5,8 +5,11 @@ import {
   TUI_KEYBINDINGS,
 } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import {
   deferredPromise,
   extensionApiFixture,
@@ -79,11 +82,15 @@ function settingsHarness() {
       return command("settings", ctx);
     },
     close: () => input("\u001b"),
-    line: (label: string) =>
-      host.editor
-        ?.render(100)
-        .filter((line) => line.includes(label))
-        .join("\n") ?? "",
+    line: (label: string) => {
+      const editor = host.editor;
+      return editor
+        ? Arr.join(
+            Arr.filter(editor.render(100), (line) => Fn.pipe(line, Str.includes(label))),
+            "\n",
+          )
+        : "";
+    },
     retire: () => {
       current = false;
     },

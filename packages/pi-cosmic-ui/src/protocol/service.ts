@@ -1,4 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
@@ -26,7 +27,7 @@ const PULL_REQUEST_REFRESH_INTERVAL_MS = 30_000;
 const USAGE_RECONCILE_INTERVAL = "1 second";
 const TOTAL_KEYS = ["input", "output", "cacheRead", "cacheWrite", "cost"] as const;
 const sameTotals = (left: FooterTotals, right: FooterTotals) =>
-  TOTAL_KEYS.every((key) => left[key] === right[key]);
+  Arr.every(TOTAL_KEYS, (key) => left[key] === right[key]);
 export interface CosmicUiProjection extends FooterRepositoryProjection {
   readonly config: ResolvedCosmicUiConfig | undefined;
   readonly pullRequestCheckedAt: number;

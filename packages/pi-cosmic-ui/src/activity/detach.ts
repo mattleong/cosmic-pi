@@ -1,9 +1,14 @@
 import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import { ACTIVITY_LIMITS } from "./limits.ts";
 import type { ActivityItem } from "./protocol.ts";
 
 const cleanText = (text: string, limit: number) =>
-  sanitizeDiagnosticContent(sanitizeTerminalLine(text.slice(0, limit)), { maximumLength: limit });
+  sanitizeDiagnosticContent(sanitizeTerminalLine(Fn.pipe(text, Str.slice(0, limit))), {
+    maximumLength: limit,
+  });
 
 export const detachActivityItem = (
   item: ActivityItem,
@@ -18,7 +23,7 @@ export const detachActivityItem = (
   ...(item.detail !== undefined && { detail: detail(item.detail) }),
   ...(item.actions && {
     // Copies rather than mutates: the sliced array still holds the producer's action objects.
-    actions: item.actions.slice(0, ACTIVITY_LIMITS.actions).map((action) => ({
+    actions: Arr.map(item.actions.slice(0, ACTIVITY_LIMITS.actions), (action) => ({
       ...action,
       label: cleanText(action.label, ACTIVITY_LIMITS.text),
       ...(action.confirmation !== undefined && {

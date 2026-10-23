@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { renderActivityWidget } from "../src/activity/widget.ts";
 import { activityWidgetSections } from "../src/activity/widget-projection.ts";
 import { activityRow, memberRow } from "./support/activity.ts";
@@ -8,8 +10,8 @@ const standalone = [
   activityRow("standalone-task", "running", undefined, { kind: "command" }),
 ];
 const expectParentsFirst = (sections: ReturnType<typeof activityWidgetSections>) => {
-  const seen = new Set(sections.map((section) => section.heading.id));
-  for (const entry of sections.flatMap((section) => section.entries)) {
+  const seen = new Set(Arr.map(sections, (section) => section.heading.id));
+  for (const entry of Arr.flatMap(sections, (section) => section.entries)) {
     expect(seen.has(entry.id)).toBe(false);
     if (entry.parentId) expect(seen.has(entry.parentId)).toBe(true);
     seen.add(entry.id);
@@ -31,6 +33,9 @@ describe("grouped activity widget", () => {
       expect(renderActivityWidget(rows, 80, budget).length).toBeLessThanOrEqual(budget);
     }
     const full = activityWidgetSections(rows, 20)[0]!;
-    expect(full.entries.find((entry) => entry.id === loose.key)?.parentId).toBe(parent.key);
+    expect(
+      Option.getOrUndefined(Arr.findFirst(full.entries, (entry) => entry.id === loose.key))
+        ?.parentId,
+    ).toBe(parent.key);
   });
 });

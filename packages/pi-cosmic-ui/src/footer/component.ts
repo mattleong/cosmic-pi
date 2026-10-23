@@ -3,6 +3,9 @@ import type {
   ExtensionContext,
   ReadonlyFooterDataProvider,
 } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import { invokeHostCallback } from "pi-cosmic-core";
 import type { ResolvedCosmicUiConfig } from "../config/schema.ts";
 import type {
@@ -37,7 +40,7 @@ const isRepositoryIdentity = (entry: CosmicFooterTextContribution) =>
   entry.id === "location" ||
   entry.id === "branch" ||
   entry.id === "pullRequest" ||
-  entry.id.startsWith("git");
+  Fn.pipe(entry.id, Str.startsWith("git"));
 
 function detailLines(
   details: readonly CosmicFooterTextContribution[],
@@ -45,12 +48,18 @@ function detailLines(
   theme: CosmicFooterTheme,
   compact: boolean,
 ): string[] {
-  const labeledDetails = details.filter(
+  const labeledDetails = Arr.filter(
+    details,
     (entry): entry is LabeledContribution => entry.label !== undefined,
   );
-  const unlabeled = details.filter((entry) => entry.label === undefined);
-  const extensionDetails = unlabeled.filter((entry) => entry.id.startsWith("extension."));
-  const otherDetails = unlabeled.filter((entry) => !entry.id.startsWith("extension."));
+  const unlabeled = Arr.filter(details, (entry) => entry.label === undefined);
+  const extensionDetails = Arr.filter(unlabeled, (entry) =>
+    Fn.pipe(entry.id, Str.startsWith("extension.")),
+  );
+  const otherDetails = Arr.filter(
+    unlabeled,
+    (entry) => !Fn.pipe(entry.id, Str.startsWith("extension.")),
+  );
   const lines: string[] = [];
   for (const usage of labeledDetails)
     lines.push(
@@ -81,12 +90,12 @@ function footerLines(
   currentContextUsage: FooterContextUsage,
   pullRequestUrl: string | undefined,
 ): string[] {
-  const identity = text.filter((entry) => entry.region === "identity");
-  const repositoryIdentity = identity.filter(isRepositoryIdentity);
-  const modelIdentity = identity.filter((entry) => !repositoryIdentity.includes(entry));
-  const metrics = text.filter((entry) => entry.region === "metrics");
-  const contextVisible = metrics.some((entry) => entry.id === "context");
-  const metricEntries = metrics.filter((entry) => entry.id !== "context");
+  const identity = Arr.filter(text, (entry) => entry.region === "identity");
+  const repositoryIdentity = Arr.filter(identity, isRepositoryIdentity);
+  const modelIdentity = Arr.filter(identity, (entry) => !repositoryIdentity.includes(entry));
+  const metrics = Arr.filter(text, (entry) => entry.region === "metrics");
+  const contextVisible = Arr.some(metrics, (entry) => entry.id === "context");
+  const metricEntries = Arr.filter(metrics, (entry) => entry.id !== "context");
   const lines: string[] = [];
   if (modelIdentity.length || contextVisible)
     lines.push(
@@ -99,7 +108,7 @@ function footerLines(
   if (metricEntries.length) lines.push(...renderMetricsLines(metricEntries, width, theme, compact));
   lines.push(
     ...detailLines(
-      text.filter((entry) => entry.region === "details"),
+      Arr.filter(text, (entry) => entry.region === "details"),
       width,
       theme,
       compact,
@@ -157,7 +166,7 @@ export function createFooterComponent(options: {
         const host = materializeFooterHostProjection({ pi, ctx, footerData, model });
         const registrySnapshot = registry.snapshot();
         const statusPlacements: FooterStatusPlacements = new Map(
-          registrySnapshot.contributions.flatMap((entry) =>
+          Arr.flatMap(registrySnapshot.contributions, (entry) =>
             entry.kind === "status" ? [[entry.id, entry] as const] : [],
           ),
         );
@@ -168,7 +177,7 @@ export function createFooterComponent(options: {
         ];
         const text = applyTextDecorations(
           orderedContributions(
-            contributions.filter((entry) => entry.kind === "text"),
+            Arr.filter(contributions, (entry) => entry.kind === "text"),
             config,
           ),
         );
@@ -182,7 +191,7 @@ export function createFooterComponent(options: {
           currentContextUsage,
           projection.pullRequestUrl,
         );
-        return lines.map((line) => clipToWidth(line, width, ""));
+        return Arr.map(lines, (line) => clipToWidth(line, width, ""));
       }, []);
     },
   };

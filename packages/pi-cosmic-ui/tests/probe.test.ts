@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import {
@@ -40,7 +41,7 @@ describe("repository probe", () => {
         url: "https://git.private.example/team/project/pull/17",
       });
       const telemetry = capturedTelemetrySnapshot(captured);
-      expect(captured.spans.map((span) => span.name)).toEqual(
+      expect(Arr.map(captured.spans, (span) => span.name)).toEqual(
         expect.arrayContaining(["pi-cosmic-ui.probe.git", "pi-cosmic-ui.probe.pull-request"]),
       );
       expect(telemetry).not.toContain("secret");
@@ -51,7 +52,8 @@ describe("repository probe", () => {
 
   it.effect.each([
     "not JSON",
-    ...["javascript:alert(17)", "https://github.com/team/project/pull/17\x1b]52;c;payload\x07"].map(
+    ...Arr.map(
+      ["javascript:alert(17)", "https://github.com/team/project/pull/17\x1b]52;c;payload\x07"],
       (url) => JSON.stringify({ number: 17, url }),
     ),
   ])("ignores malformed or unsafe PR output %j", (stdout) =>

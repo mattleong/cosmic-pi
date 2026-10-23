@@ -1,4 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import { needsYou } from "./attention.ts";
 import type { ActivityRow } from "./model.ts";
 import { groupedActivityTree, type GroupedActivityRow } from "./grouped-tree.ts";
@@ -28,7 +29,7 @@ const checklist = (rows: readonly ActivityRow[]): readonly GroupedActivityRow[] 
 };
 
 export function activityWidgetHeight(rows: readonly ActivityRow[], terminalRows: number): number {
-  const failures = checklist(rows).filter(isFailedEntry).length;
+  const failures = Arr.filter(checklist(rows), isFailedEntry).length;
   return Math.max(1, Math.min(Math.floor(terminalRows / 2), Math.max(8, failures + 4)));
 }
 
@@ -42,7 +43,7 @@ export function activityWidgetSections(
 ): readonly ActivityWidgetSection[] {
   const all = checklist(rows);
   const hiddenDetail = new Set<string>();
-  const tree = all.flatMap((entry): GroupedActivityRow[] => {
+  const tree = Arr.flatMap(all, (entry): GroupedActivityRow[] => {
     const suppressed = entry.parentId !== undefined && hiddenDetail.has(entry.parentId);
     const collapsed = options.collapsed?.has(entry.id);
     if (!suppressed && !collapsed) return [entry];
@@ -50,15 +51,16 @@ export function activityWidgetSections(
     if (entry.type === "member" && suppressed) return [];
     return [{ ...entry, expanded: false }];
   });
-  const slots = tree
-    .filter((entry) => entry.type === "section")
-    .map((heading) => {
-      const candidates = tree.filter(inSection(heading));
-      const offered = all.filter(inSection(heading));
+  const slots = Arr.map(
+    Arr.filter(tree, (entry) => entry.type === "section"),
+    (heading) => {
+      const candidates = Arr.filter(tree, inSection(heading));
+      const offered = Arr.filter(all, inSection(heading));
       return { heading, candidates, offered, allocated: 0 };
-    });
+    },
+  );
   const budget = Math.max(0, maxRows - Number(needsYou(rows).length > 0));
-  let used = slots.filter((slot) => slot.offered.length > 0).length;
+  let used = Arr.filter(slots, (slot) => slot.offered.length > 0).length;
   while (true) {
     let changed = false;
     for (const slot of slots) {
@@ -72,7 +74,7 @@ export function activityWidgetSections(
     }
     if (!changed) break;
   }
-  return slots.map(({ heading, candidates, offered, allocated }) => {
+  return Arr.map(slots, ({ heading, candidates, offered, allocated }) => {
     const entries = candidates.slice(0, allocated);
     return { heading, entries, omittedRows: offered.length - entries.length };
   });

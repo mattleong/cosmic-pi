@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -8,6 +9,7 @@ import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import * as TestClock from "effect/testing/TestClock";
 import {
   AgentDirectory,
@@ -198,12 +200,12 @@ describe("Cosmic UI host service", () => {
         ],
         { concurrency: "unbounded", discard: true },
       );
-      expect((MutableRef.get(projection).config?.footer.hidden ?? []).toSorted()).toEqual([
+      expect(Arr.sort(MutableRef.get(projection).config?.footer.hidden ?? [], Str.Order)).toEqual([
         "metrics",
         "session",
       ]);
       const saved = decodeUnknownOrUndefined(SavedFooter)(documents.get(configPath)?.footer);
-      expect((saved?.hidden ?? []).toSorted()).toEqual(["metrics", "session"]);
+      expect(Arr.sort(saved?.hidden ?? [], Str.Order)).toEqual(["metrics", "session"]);
     }).pipe(provideBuiltLayer(layer));
   });
 

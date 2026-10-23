@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import {
@@ -22,6 +23,8 @@ const agent = (actions: number): ActivityItem => ({
     label: `Action ${index}`,
   })),
 });
+const ids = (entries: ReadonlyArray<{ readonly id: string }> | undefined) =>
+  entries === undefined ? undefined : Arr.map(entries, (entry) => entry.id);
 
 describe("activity producer protocol", () => {
   it("publishes the bounded prefix of oversized snapshots and cleans text before sending", () => {
@@ -42,11 +45,9 @@ describe("activity producer protocol", () => {
     });
     registration.publish();
     const published = Schema.decodeUnknownSync(ActivitySnapshotSchema)(host.get()?.items);
-    expect(published.map((entry) => entry.id)).toEqual(
-      items.slice(0, ACTIVITY_LIMITS.items).map((entry) => entry.id),
-    );
-    expect(published[0]?.actions?.map((action) => action.id)).toEqual(
-      items[0]?.actions?.slice(0, ACTIVITY_LIMITS.actions).map((action) => action.id),
+    expect(ids(published)).toEqual(ids(items.slice(0, ACTIVITY_LIMITS.items)));
+    expect(ids(published[0]?.actions)).toEqual(
+      ids(items[0]?.actions?.slice(0, ACTIVITY_LIMITS.actions)),
     );
     items = [{ ...agent(1), title: "Find\u001b[31m", summary: "Look\u0007 around" }];
     registration.publish();

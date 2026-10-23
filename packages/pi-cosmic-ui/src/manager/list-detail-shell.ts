@@ -1,6 +1,9 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
+import * as Str from "effect/String";
 import type * as Types from "effect/Types";
 import { managerLayoutTier, type ManagerLayoutTier, clipToWidth } from "./chrome.ts";
 import { FullScreenKeymap, pageSteps } from "./keymap.ts";
@@ -165,8 +168,9 @@ export const detailFieldRows = (
   theme: Pick<Theme, "fg">,
   fields: ReadonlyArray<ListDetailField>,
 ): ReadonlyArray<string> => {
-  const labelWidth = Math.max(10, ...fields.map((field) => visibleWidth(field.label)));
-  return fields.map(
+  const labelWidth = Math.max(10, ...Arr.map(fields, (field) => visibleWidth(field.label)));
+  return Arr.map(
+    fields,
     (field) =>
       `${theme.fg("dim", padListDetailRow(field.label, labelWidth))}  ${theme.fg(field.tone ?? "text", field.value)}`,
   );
@@ -220,11 +224,11 @@ export const framedStackedRows = (
     readonly inner: number;
   },
 ) => {
-  const divider = `${frame.outer("├")}${frame.inner("─".repeat(options.inner))}${frame.outer("┤")}`;
+  const divider = `${frame.outer("├")}${frame.inner(Fn.pipe("─", Str.repeat(options.inner)))}${frame.outer("┤")}`;
   const rows = [
-    ...options.list.map((line) => framedRow(frame, line, options.inner, "list")),
+    ...Arr.map(options.list, (line) => framedRow(frame, line, options.inner, "list")),
     divider,
-    ...options.detail.map((line) => framedRow(frame, line, options.inner, "detail")),
+    ...Arr.map(options.detail, (line) => framedRow(frame, line, options.inner, "detail")),
   ].slice(0, Math.max(0, options.height));
   return [
     ...rows,
@@ -245,12 +249,12 @@ export const framedScreen = (
   const { width, height } = options;
   if (width <= 0 || height <= 0) return [];
   const top = `${frame.outer("╭")}${options.top}${frame.outer(
-    `${"─".repeat(Math.max(0, width - visibleWidth(options.top) - 2))}╮`,
+    `${Fn.pipe("─", Str.repeat(Math.max(0, width - visibleWidth(options.top) - 2)))}╮`,
   )}`;
   if (height === 1) return [clipToWidth(top, width, "")];
   if (width === 1) return Array.from({ length: height }, () => " ");
   const bottom = `${frame.outer(
-    `╰${"─".repeat(Math.max(0, width - visibleWidth(options.bottom) - 2))}`,
+    `╰${Fn.pipe("─", Str.repeat(Math.max(0, width - visibleWidth(options.bottom) - 2)))}`,
   )}${options.bottom}${frame.outer("╯")}`;
   return [clipToWidth(top, width, ""), ...options.body(height - 2), clipToWidth(bottom, width, "")];
 };

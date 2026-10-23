@@ -1,8 +1,12 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
 import type { FullScreenSelectionKeybindingId } from "./keymap.ts";
 
-const SPECIAL_KEY_LABELS = new Map(
-  Object.entries({
+const SPECIAL_KEY_LABELS = new Map<string, string>(
+  Rec.toEntries({
     up: "↑",
     down: "↓",
     left: "←",
@@ -18,8 +22,8 @@ const SPECIAL_KEY_LABELS = new Map(
   }),
 );
 
-const MODIFIER_LABELS = new Map(
-  Object.entries({
+const MODIFIER_LABELS = new Map<string, string>(
+  Rec.toEntries({
     ctrl: "C-",
     shift: "⇧",
     alt: "A-",
@@ -28,11 +32,14 @@ const MODIFIER_LABELS = new Map(
 );
 
 const formatFullScreenKeyId = (value: string): string => {
-  const parts = value.split("+");
+  const parts = Str.split(value, "+");
   const base = parts.pop() ?? value;
-  const modifiers = parts.map((part) => MODIFIER_LABELS.get(part) ?? `${part}-`).join("");
+  const modifiers = Arr.join(
+    Arr.map(parts, (part) => MODIFIER_LABELS.get(part) ?? `${part}-`),
+    "",
+  );
   const label = SPECIAL_KEY_LABELS.get(base) ?? base;
-  return `${modifiers}${parts.includes("shift") && base.length === 1 ? label.toUpperCase() : label}`;
+  return `${modifiers}${parts.includes("shift") && base.length === 1 ? Str.toUpperCase(label) : label}`;
 };
 
 export interface HostKeybindingSource {
@@ -44,9 +51,13 @@ export const fullScreenKeybindingOptions = (keybindings: HostKeybindingSource) =
   matchesKeybinding: (data: string, id: FullScreenSelectionKeybindingId) =>
     keybindings.matches(data, id),
   keybindingLabel: (id: FullScreenSelectionKeybindingId, fallback: string) =>
-    (Predicate.isFunction(keybindings.getKeys) ? keybindings.getKeys(id) : [])
-      .map(formatFullScreenKeyId)
-      .join("/") || fallback,
+    Arr.join(
+      Arr.map(
+        Predicate.isFunction(keybindings.getKeys) ? keybindings.getKeys(id) : Arr.empty<string>(),
+        formatFullScreenKeyId,
+      ),
+      "/",
+    ) || fallback,
 });
 
 const SHIFT_LABEL_PREFIX = "⇧";
@@ -57,14 +68,20 @@ const filterReservedKeyLabel = (
   fallback: string,
 ): string => {
   if (label === "/") return reservedKeys.has("/") ? fallback : label;
-  const parts = label.split("/");
-  if (parts.some((part) => part.length === 0)) return label;
+  // Widened so the negated Arr.some guard cannot narrow the non-empty split result to never.
+  const parts: ReadonlyArray<string> = Str.split(label, "/");
+  if (Arr.some(parts, (part) => part.length === 0)) return label;
   const collides = (part: string): boolean =>
     reservedKeys.has(part) ||
     (part.length === 2 &&
-      part.startsWith(SHIFT_LABEL_PREFIX) &&
-      reservedKeys.has(part.slice(SHIFT_LABEL_PREFIX.length)));
-  return parts.filter((part) => !collides(part)).join("/") || fallback;
+      Fn.pipe(part, Str.startsWith(SHIFT_LABEL_PREFIX)) &&
+      reservedKeys.has(Fn.pipe(part, Str.slice(SHIFT_LABEL_PREFIX.length))));
+  return (
+    Arr.join(
+      Arr.filter(parts, (part) => !collides(part)),
+      "/",
+    ) || fallback
+  );
 };
 
 export const TEXT_INPUT_KEY_LABELS: ReadonlySet<string> = new Set([

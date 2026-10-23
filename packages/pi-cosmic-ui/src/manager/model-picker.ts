@@ -6,6 +6,7 @@ import {
   type Focusable,
   type SelectItem,
 } from "@earendil-works/pi-tui";
+import * as Arr from "effect/Array";
 import { sanitizeTerminalLine } from "pi-cosmic-core";
 import { managerTone } from "./style.ts";
 import {
@@ -40,11 +41,14 @@ export const boundedMiddle = (value: string, maximum: number): string => {
   const characters = Array.from(graphemes.segment(value), ({ segment }) => segment);
   if (characters.length <= maximum) return value;
   const left = Math.max(1, Math.floor((maximum - 1) / 2));
-  return `${characters.slice(0, left).join("")}…${characters.slice(characters.length - (maximum - left - 1)).join("")}`;
+  return `${Arr.join(characters.slice(0, left), "")}…${Arr.join(characters.slice(characters.length - (maximum - left - 1)), "")}`;
 };
 
 const effortLabel = (supportedEfforts: ModelPickerModel["supportedEfforts"]): string => {
-  const efforts = supportedEfforts?.map(sanitizeTerminalLine).join(", ");
+  const efforts =
+    supportedEfforts === undefined
+      ? undefined
+      : Arr.join(Arr.map(supportedEfforts, sanitizeTerminalLine), ", ");
   return efforts === undefined || efforts === "" ? "default" : efforts;
 };
 
@@ -89,7 +93,7 @@ export const createModelPickerChoices = <M extends ModelPickerModel>(
   models: ReadonlyArray<M>,
   current?: string,
 ): Array<SearchableSelectPageChoice<M>> =>
-  models.map((model) => {
+  Arr.map(models, (model) => {
     const item = modelItem(model, current);
     return {
       value: item.value,

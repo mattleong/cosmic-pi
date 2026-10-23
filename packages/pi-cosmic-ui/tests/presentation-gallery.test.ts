@@ -1,6 +1,10 @@
 import { describe, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import * as MutableRef from "effect/MutableRef";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import { stripTerminalControls } from "pi-cosmic-core";
 import {
   extensionContextFixture,
@@ -48,7 +52,7 @@ const found = memberRow("finder", review, "done", {
   startedAt: 0,
   endedAt: 30_000,
 });
-const reviewers = ["Session handling", "Token refresh"].map((title, index) =>
+const reviewers = Arr.map(["Session handling", "Token refresh"], (title, index) =>
   memberRow(`reviewer-${index}`, review, "running", {
     title,
     profile: "reviewer",
@@ -56,7 +60,7 @@ const reviewers = ["Session handling", "Token refresh"].map((title, index) =>
     actions: [{ id: "stop", label: "Stop" }],
   }),
 );
-const queued = ["Password reset", "OAuth callback", "Rate limits"].map((title, index) =>
+const queued = Arr.map(["Password reset", "OAuth callback", "Rate limits"], (title, index) =>
   memberRow(`queued-${index}`, review, "pending", {
     title,
     profile: "reviewer",
@@ -220,7 +224,7 @@ const managerFrames = (rows: readonly ActivityRow[], tiers: boolean) => {
     ["manager · 140 cols", component.render(140)],
   ];
   if (tiers) frames.push(["stacked manager · 80 cols", component.render(80)]);
-  if (!rows.some((row) => row.parent !== undefined)) return frames;
+  if (!Arr.some(rows, (row) => row.parent !== undefined)) return frames;
   component.handleInput("\r");
   frames.push(["inspect parent", component.render(140)]);
   component.handleInput("h");
@@ -228,7 +232,9 @@ const managerFrames = (rows: readonly ActivityRow[], tiers: boolean) => {
   component.handleInput("\r");
   frames.push(["inspect first child", component.render(140)]);
   component.handleInput("h");
-  const placeholder = rows.find((row) => row.status === "pending" && row.startedAt === undefined);
+  const placeholder = Option.getOrUndefined(
+    Arr.findFirst(rows, (row) => row.status === "pending" && row.startedAt === undefined),
+  );
   if (placeholder && select(component, placeholder.key, 11)) {
     component.handleInput("\r");
     frames.push(["inspect queued placeholder", component.render(140)]);
@@ -278,18 +284,19 @@ const footerFrames = (rows: readonly ActivityRow[], key: string) => {
     if (line === undefined) throw new Error("Manager footer was not rendered");
     return `${help}${width} cols ${line}`;
   };
-  const footers = (help: string) => [140, 100, 80, 50].map((width) => footer(width, help));
+  const footers = (help: string) => Arr.map([140, 100, 80, 50], (width) => footer(width, help));
   const lines = footers("");
   component.handleInput("?");
   const help = footers("? ");
   component.handleInput("?");
-  const confirmable = rows.find((row) => row.key === key)?.actions?.[0]?.confirmation;
+  const confirmable = Option.getOrUndefined(Arr.findFirst(rows, (row) => row.key === key))
+    ?.actions?.[0]?.confirmation;
   if (!confirmable) return [...lines, ...help];
   component.handleInput("x");
   return [
     ...lines,
     ...help,
-    ...component.render(80).map((line) => `confirm 80 cols ${line}`),
+    ...Arr.map(component.render(80), (line) => `confirm 80 cols ${line}`),
     footer(50, "confirm "),
   ];
 };
@@ -349,7 +356,8 @@ describe.skipIf(!directory)("presentation gallery", () => {
       const lines: string[] = [];
       for (const scenario of scenarios) {
         const widgets: ReadonlyArray<readonly [string, number, number]> = [
-          ...[60, 80, 100].map(
+          ...Arr.map(
+            [60, 80, 100],
             (width) => [`${width} cols`, width, activityWidgetHeight(scenario.rows, 24)] as const,
           ),
           ...(scenario.tiers ? [["compact beside an input dock · 80 cols", 80, 3] as const] : []),
@@ -372,7 +380,7 @@ describe.skipIf(!directory)("presentation gallery", () => {
       yield* writeGallerySection(
         directory,
         "pi-cosmic-ui",
-        lines.map((line) => stripTerminalControls(line).replace(/\s+$/u, "")),
+        Arr.map(lines, (line) => Fn.pipe(stripTerminalControls(line), Str.replace(/\s+$/u, ""))),
       );
     }),
   );

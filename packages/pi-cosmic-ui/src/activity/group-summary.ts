@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import {
   activityAttentionCounts,
   activityAttentionLabels,
@@ -58,7 +59,7 @@ const rowSummary = (row: ActivityRow): GroupSummary => ({
 });
 
 export const summarizeGroup = (rows: readonly ActivityRow[]): GroupSummary =>
-  rows.reduce((total, row) => addGroupSummaries(total, rowSummary(row)), emptyGroupSummary);
+  Arr.reduce(rows, emptyGroupSummary, (total, row) => addGroupSummaries(total, rowSummary(row)));
 
 export const activeWorkLabels = (summary: GroupSummary): string[] => [
   ...(summary.running ? [`${summary.running} running`] : []),

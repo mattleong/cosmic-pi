@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Order from "effect/Order";
 import {
   addGroupSummaries,
   emptyGroupSummary,
@@ -107,7 +109,7 @@ const rowContext = (
 
 function buildNodes(rows: readonly ActivityRow[], parents: ReadonlyMap<string, string>) {
   const { byName, ordered } = makeSections();
-  const nodes = new Map<string, Node>(ordered.map((node) => [node.id, node]));
+  const nodes = new Map<string, Node>(Arr.map(ordered, (node) => [node.id, node]));
   for (const row of rows)
     nodes.set(row.key, { ...blankNode(row.key, row.title), type: "member", row });
   for (const row of rows) {
@@ -125,7 +127,7 @@ const sumSummaries = (
   nodes: readonly Node[],
   pick: (node: Node) => GroupSummary,
   own: GroupSummary,
-): GroupSummary => nodes.reduce((sum, child) => addGroupSummaries(sum, pick(child)), own);
+): GroupSummary => Arr.reduce(nodes, own, (sum, child) => addGroupSummaries(sum, pick(child)));
 
 function completeNode(node: Node, section: Section, hideHistory: boolean): void {
   node.section = section;
@@ -136,7 +138,7 @@ function completeNode(node: Node, section: Section, hideHistory: boolean): void 
   node.total = sumSummaries(node.children, (child) => child.total, own);
   node.summary = hideHistory
     ? sumSummaries(
-        node.children.filter((child) => !child.history),
+        Arr.filter(node.children, (child) => !child.history),
         (child) => child.summary,
         own,
       )
@@ -153,7 +155,7 @@ export function groupedActivityTree(
   rows: readonly ActivityRow[],
   options: GroupedActivityTreeOptions = {},
 ): readonly GroupedActivityRow[] {
-  const byKey = new Map(rows.map((row) => [row.key, row]));
+  const byKey = new Map(Arr.map(rows, (row) => [row.key, row] as const));
   const { parents } = resolveActivityOwnership(byKey);
   const context = rowContext(byKey, parents);
   const { sections, nodes } = buildNodes(rows, parents);
@@ -163,7 +165,7 @@ export function groupedActivityTree(
   const result: GroupedActivityRow[] = [];
   const visit = (node: Node, continuations: readonly boolean[], breadcrumbs: readonly string[]) => {
     if (!visible(node)) return;
-    const children = node.children.filter(visible);
+    const children = Arr.filter(node.children, visible);
     if (
       node.type === "section" &&
       !children.length &&
@@ -193,10 +195,11 @@ export function groupedActivityTree(
         : { ...base, type: "member", row: node.row, context: context(node.row) },
     );
     if (!expanded) return;
-    const ordered = children.toSorted(
-      (left, right) => Number(left.history) - Number(right.history),
+    const ordered = Arr.sort(
+      children,
+      Order.mapInput(Order.Boolean, (child: Node) => child.history),
     );
-    ordered.forEach((child, index) =>
+    Arr.forEach(ordered, (child, index) =>
       visit(child, [...continuations, index < ordered.length - 1], base.breadcrumbs),
     );
   };
@@ -210,7 +213,7 @@ export function groupedActivityPath(
   entries: readonly GroupedActivityRow[],
   id: string,
 ): readonly GroupedActivityRow[] {
-  const byId = new Map(entries.map((entry) => [entry.id, entry]));
+  const byId = new Map(Arr.map(entries, (entry) => [entry.id, entry] as const));
   const path: GroupedActivityRow[] = [];
   let entry = byId.get(id);
   while (entry) {

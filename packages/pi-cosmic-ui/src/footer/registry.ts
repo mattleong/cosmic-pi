@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { invokeHostCallback } from "pi-cosmic-core";
 import {
   detachCosmicFooterContribution,
@@ -36,7 +38,7 @@ export const createFooterRegistry = (options: {
   const publish = (next: readonly RegistryEntry[]) => {
     entries = next;
     snapshot = Object.freeze({
-      contributions: Object.freeze(next.map((entry) => entry.contribution)),
+      contributions: Object.freeze(Arr.map(next, (entry) => entry.contribution)),
     });
   };
   const serialized = (operation: () => void) => {
@@ -60,8 +62,12 @@ export const createFooterRegistry = (options: {
     upsert: (owner, input) => {
       const contribution = detachCosmicFooterContribution(input);
       serialized(() => {
-        const index = entries.findIndex(
-          (entry) => entry.owner === owner && entry.contribution.id === contribution.id,
+        const index = Option.getOrElse(
+          Arr.findFirstIndex(
+            entries,
+            (entry) => entry.owner === owner && entry.contribution.id === contribution.id,
+          ),
+          () => -1,
         );
         if (entries[index]?.contribution !== contribution) {
           const next = [...entries];
@@ -78,7 +84,8 @@ export const createFooterRegistry = (options: {
     },
     remove: (owner, id) =>
       serialized(() => {
-        const next = entries.filter(
+        const next = Arr.filter(
+          entries,
           (entry) => entry.owner !== owner || (id !== undefined && entry.contribution.id !== id),
         );
         if (next.length === entries.length) return;

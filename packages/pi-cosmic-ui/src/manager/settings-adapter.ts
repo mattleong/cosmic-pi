@@ -1,4 +1,5 @@
 import { type Component, type Focusable } from "@earendil-works/pi-tui";
+import * as Arr from "effect/Array";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { ForeignCallable, invokeBestEffort } from "pi-cosmic-core";
@@ -149,7 +150,9 @@ export class VimSettingsAdapter implements Component, Focusable {
     const safeWidth = Math.max(0, Math.floor(width));
     if (safeWidth === 0) return [];
     this.syncChildFocus();
-    const lines = [...this.child.render(safeWidth)].map((line) => clipToWidth(line, safeWidth, ""));
+    const lines = Arr.map([...this.child.render(safeWidth)], (line) =>
+      clipToWidth(line, safeWidth, ""),
+    );
     const hint = this.options.renderHint?.(this.mode, this.helpExpanded);
     if (hint && settingsSubmenu(this.child) === null && lines.at(-2) === "") lines.pop();
     return hint ? [...lines, clipToWidth(hint, safeWidth, "")] : lines;
@@ -183,7 +186,7 @@ export const settingsSurfaceBridge = (
       const safeWidth = Math.max(0, Math.floor(width));
       if (safeWidth === 0) return [];
       return invoke(
-        () => container.render(safeWidth).map((line) => clipToWidth(line, safeWidth, "")),
+        () => Arr.map(container.render(safeWidth), (line) => clipToWidth(line, safeWidth, "")),
         [],
       );
     },

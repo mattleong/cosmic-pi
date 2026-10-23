@@ -5,8 +5,12 @@ import type {
   ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Fn from "effect/Function";
+import type * as Order from "effect/Order";
+import * as Str from "effect/String";
 import { vi } from "vitest";
 import {
   deferredPromise,
@@ -157,7 +161,7 @@ function capturedFooter(
 }
 
 const expectFooterShows = (footer: { render(width: number): string[] }, ...values: string[]) => {
-  const rendered = footer.render(100).join("\n");
+  const rendered = Arr.join(footer.render(100), "\n");
   for (const value of values) expect(rendered).toContain(value);
 };
 
@@ -184,7 +188,7 @@ const nativeUsage = (input: number) => ({
 });
 
 function assistantEntries(...inputs: number[]): SessionEntries {
-  return inputs.map((input) => ({
+  return Arr.map(inputs, (input) => ({
     id: entryBase.id,
     parentId: entryBase.parentId,
     timestamp: entryBase.timestamp,
@@ -266,7 +270,7 @@ const startWithPendingProbes = (h: ReturnType<typeof harness>) =>
     return { startup, aborted: () => aborted };
   });
 
-const byName = (left: string, right: string) => left.localeCompare(right);
+const byName: Order.Order<string> = (left, right) => Fn.pipe(left, Str.localeCompare(right));
 
 describe("Cosmic UI extension", () => {
   it.effect(
@@ -287,7 +291,7 @@ describe("Cosmic UI extension", () => {
           getSessionName: () => "replacement",
         });
         const second = Promise.all(
-          (h.handlers.get("session_start") ?? []).map((handler) =>
+          Arr.map(h.handlers.get("session_start") ?? [], (handler) =>
             Promise.resolve(handler({ type: "session_start", reason: "startup" }, secondContext)),
           ),
         );
@@ -296,7 +300,7 @@ describe("Cosmic UI extension", () => {
         expect(aborted()).toBe(2);
         expect(h.setFooter).toHaveBeenNthCalledWith(2, undefined);
         const footer = capturedFooter(h, -1);
-        expect(footer.render(100).join("\n")).toContain("/tmp/replacement");
+        expect(Arr.join(footer.render(100), "\n")).toContain("/tmp/replacement");
       }),
   );
 
@@ -315,7 +319,7 @@ describe("Cosmic UI extension", () => {
           throw new Error("render");
         });
         const footer = capturedFooter(h, 0, {}, requestRender);
-        expect(footer.render(100).join("\n")).toContain("pending-text");
+        expect(Arr.join(footer.render(100), "\n")).toContain("pending-text");
         const shutdown = yield* emit(h, "session_shutdown").pipe(
           Effect.forkScoped({ startImmediately: true }),
         );
@@ -387,7 +391,7 @@ describe("Cosmic UI extension", () => {
       h.ctx.sessionManager.getEntries = vi.fn(() => entries);
       yield* emit(h, "session_start");
       const footer = capturedFooter(h);
-      expect(footer.render(100).join("\n")).toContain("↑90");
+      expect(Arr.join(footer.render(100), "\n")).toContain("↑90");
       const input = vi.fn(() => {
         throw new Error("nested usage failure");
       });
@@ -396,10 +400,10 @@ describe("Cosmic UI extension", () => {
       yield* emitEvent(h, turnEnd(assistantMessage(usage)));
       yield* emit(h, "agent_settled");
       expect(input).not.toHaveBeenCalled();
-      expect(footer.render(100).join("\n")).toContain("↑90");
+      expect(Arr.join(footer.render(100), "\n")).toContain("↑90");
       entries.push(usageEntry("cache_warm", 10));
       yield* emit(h, "agent_settled");
-      expect(footer.render(100).join("\n")).toContain("↑100");
+      expect(Arr.join(footer.render(100), "\n")).toContain("↑100");
       yield* emit(h, "session_shutdown");
     }),
   );
@@ -573,7 +577,7 @@ describe("Cosmic UI extension", () => {
 
         yield* Effect.promise(() => vi.advanceTimersByTimeAsync(2_000));
         expect(h.exec).toHaveBeenCalledTimes(4);
-        const cleanFooter = footer.render(100).join("\n");
+        const cleanFooter = Arr.join(footer.render(100), "\n");
         expect(cleanFooter).not.toContain("~1 ?1");
 
         yield* emit(h, "session_shutdown");
@@ -620,16 +624,22 @@ describe("Cosmic UI extension", () => {
       const h = harness();
       yield* emit(h, "session_start");
       yield* emit(h, "session_shutdown");
-      const released = h.unsubscribed.mock.calls.map(([name]) => name).toSorted(byName);
+      const released = Arr.sort(
+        Arr.map(h.unsubscribed.mock.calls, ([name]) => name),
+        byName,
+      );
       expect(released).toEqual(
-        [
-          COSMIC_UI_HOST_QUERY,
-          COSMIC_UI_FOOTER_UPSERT,
-          COSMIC_UI_FOOTER_REMOVE,
-          ACTIVITY_EVENT,
-          ACTIVITY_DISCOVER,
-          ACTIVITY_VIEW_DISCOVER,
-        ].toSorted(byName),
+        Arr.sort(
+          [
+            COSMIC_UI_HOST_QUERY,
+            COSMIC_UI_FOOTER_UPSERT,
+            COSMIC_UI_FOOTER_REMOVE,
+            ACTIVITY_EVENT,
+            ACTIVITY_DISCOVER,
+            ACTIVITY_VIEW_DISCOVER,
+          ],
+          byName,
+        ),
       );
       yield* emit(h, "session_shutdown");
       expect(h.unsubscribed).toHaveBeenCalledTimes(released.length);

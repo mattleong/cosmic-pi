@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import type { ActivityRow } from "../src/activity/model.ts";
 import { activityRow, memberRow, mountActivity } from "./support/activity.ts";
 import { activitySectionId } from "../src/activity/grouped-tree.ts";
@@ -13,10 +14,10 @@ describe("activity presentation", () => {
     component.handleInput("r");
     component.handleInput("r");
     loads[1]!.deliver("obsolete-log");
-    expect(component.render(120).join("\n")).toContain("baseline-log");
+    expect(Arr.join(component.render(120), "\n")).toContain("baseline-log");
     loads[2]!.deliver("latest-log");
     loads[1]!.deliver("obsolete-log");
-    const text = component.render(120).join("\n");
+    const text = Arr.join(component.render(120), "\n");
     expect(text).toContain("latest-log");
     expect(text).not.toContain("obsolete-log");
   });
@@ -115,10 +116,10 @@ describe("grouped activity interaction", () => {
     expect(component.shell.state.selectedId).toBe(parent.key);
     component.handleInput("j");
     loads[1]!.deliver("revoked-log");
-    expect(component.render(120).join("\n")).not.toContain("revoked-log");
+    expect(Arr.join(component.render(120), "\n")).not.toContain("revoked-log");
     component.handleInput("q");
     loads[0]!.deliver("closed-log");
-    expect(component.render(120).join("\n")).not.toContain("closed-log");
+    expect(Arr.join(component.render(120), "\n")).not.toContain("closed-log");
   });
   it("never dispatches an old source generation after provider replacement", () => {
     let row = activityRow("same", "running", undefined, {
