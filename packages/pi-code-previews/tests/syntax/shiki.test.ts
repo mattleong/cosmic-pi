@@ -158,7 +158,7 @@ describe("session syntax service", () => {
     const captured = makeCapturedLogger();
     const layer = syntaxLayer(() =>
       Effect.fail(
-        new ShikiBoundaryError({
+        ShikiBoundaryError.make({
           operation: "initialize",
           message: "secret-theme /secret/path sk-secret",
         }),
@@ -298,7 +298,7 @@ describe("session syntax service", () => {
       theme === "old"
         ? Effect.succeed(old)
         : Effect.fail(
-            new ShikiBoundaryError({ operation: "initialize", message: "expected failure" }),
+            ShikiBoundaryError.make({ operation: "initialize", message: "expected failure" }),
           ),
     );
     return CodePreviewSyntaxService.use((service) =>

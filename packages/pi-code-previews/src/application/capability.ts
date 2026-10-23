@@ -60,7 +60,7 @@ export function runCodePreviewSessionEffect<A, E>(
 
 export function rejectInactiveCodePreviewSession(operation: string): Promise<never> {
   return Promise.reject(
-    new CodePreviewSessionUnavailable({
+    CodePreviewSessionUnavailable.make({
       operation,
       message: "Code preview session is not active.",
     }),

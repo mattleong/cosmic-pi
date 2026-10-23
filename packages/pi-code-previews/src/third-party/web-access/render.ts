@@ -1,5 +1,5 @@
 import type { ToolRenderers } from "@earendil-works/pi-coding-agent";
-import { constUndefined, constVoid } from "effect/Function";
+import * as Fn from "effect/Function";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import { invokeHostCallback } from "pi-cosmic-core";
 import { renderToolHeader } from "pi-cosmic-ui/tool";
@@ -93,10 +93,10 @@ export function createWebAccessRenderers(
           () => fallback.render(width),
         ),
       invalidate() {
-        guarded(() => body.invalidate(), constVoid);
+        guarded(() => body.invalidate(), Fn.constVoid);
         fallback.invalidate();
       },
-      handleMouse: (event) => guarded(() => body.handleMouse?.(event), constUndefined),
+      handleMouse: (event) => guarded(() => body.handleMouse?.(event), Fn.constUndefined),
     };
     if (original) originals.set(component, original);
     return component;

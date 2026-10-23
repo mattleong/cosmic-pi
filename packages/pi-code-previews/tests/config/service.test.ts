@@ -89,7 +89,7 @@ it.effect("logs a sanitized warning and continues after a malformed settings doc
       reads++;
       return reads === 1
         ? Effect.fail(
-            new JsonDocumentError({
+            JsonDocumentError.make({
               operation: "decode",
               path: "/secret/settings.json",
               message: "secret malformed payload",
@@ -352,7 +352,7 @@ it.effect.each(["failure", "reset"] as const)(
           if (!failNext) return fake.service.modifyObject(path, modify);
           failNext = false;
           return Effect.fail(
-            new JsonDocumentError({ operation: "write", path, message: "disk full" }),
+            JsonDocumentError.make({ operation: "write", path, message: "disk full" }),
           );
         }),
     });
@@ -388,7 +388,7 @@ it.effect("failed persistence leaves the published settings unchanged", () => {
         modify(document).pipe(
           Effect.andThen(
             Effect.fail(
-              new JsonDocumentError({
+              JsonDocumentError.make({
                 operation: "write",
                 path: "/secret/settings.json",
                 message: "expected failure",
@@ -546,7 +546,7 @@ it.effect("loads publish which files were ignored and which fields were invalid"
     ...fake.service,
     readObject: (path) =>
       path === "/agent/settings.json"
-        ? Effect.fail(new JsonDocumentError({ operation: "read", path, message: "Invalid JSON." }))
+        ? Effect.fail(JsonDocumentError.make({ operation: "read", path, message: "Invalid JSON." }))
         : fake.service.readObject(path),
   });
   return usingSettings(documents, (service) =>

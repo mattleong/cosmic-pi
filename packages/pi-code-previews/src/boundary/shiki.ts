@@ -135,7 +135,7 @@ function createShikiHighlighter(
       if (!cancelled)
         resume(
           Effect.fail(
-            new ShikiBoundaryError({
+            ShikiBoundaryError.make({
               operation: "initialize",
               message: "Unable to initialize syntax highlighting.",
             }),
@@ -166,7 +166,7 @@ function loadShikiLanguage(
   return Effect.callback<void, ShikiBoundaryError>((resume) => {
     const failure = () =>
       Effect.fail(
-        new ShikiBoundaryError({
+        ShikiBoundaryError.make({
           operation: "language",
           message: "Unable to load syntax language.",
         }),

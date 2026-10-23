@@ -115,7 +115,7 @@ export function codePreviewsWithDependencies(
         dependencies.registerRenderers(pi, input.cwd, { ownedTools, installedTools });
       },
       catch: () =>
-        new CodePreviewRendererRegistrationError({
+        CodePreviewRendererRegistrationError.make({
           message: "Code preview renderer registration failed.",
         }),
     });

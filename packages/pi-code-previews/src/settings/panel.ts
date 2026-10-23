@@ -1,6 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type SettingsList, type SettingItem } from "@earendil-works/pi-tui";
-import { constTrue, constVoid } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Schema from "effect/Schema";
 import { CODE_PREVIEW_SETTING_KEYS, type CodePreviewSettings } from "../config/schema";
 import { cloneCodePreviewSettings, codePreviewSettings } from "../config/state";
@@ -59,7 +59,7 @@ export function persistSettingsChange(
   previous: CodePreviewSettings,
   loadOptions: LoadSettingsOptions,
   effects: SettingsPanelSaveEffects = liveSettingsPanelSaveEffects,
-  isCurrent: () => boolean = constTrue,
+  isCurrent: () => boolean = Fn.constTrue,
   editedKeys?: readonly (keyof CodePreviewSettings)[],
 ): Promise<void> {
   return effects.queueSave(settings, loadOptions, previous, editedKeys).then(() => {
@@ -81,7 +81,7 @@ export function createCodePreviewSettingsModel({
   done,
   loadOptions,
   theme,
-  isCurrent = constTrue,
+  isCurrent = Fn.constTrue,
   effects = liveSettingsPanelSaveEffects,
 }: SettingsListControllerOptions): CodePreviewSettingsModel {
   let activeList: SettingsList | undefined;
@@ -91,7 +91,7 @@ export function createCodePreviewSettingsModel({
   const pendingEdits = new Map<SettingKey, number>();
   const sync = (list: SettingsList) => {
     if (!isCurrent()) return;
-    for (const item of createSettingsCategoryItems(() => draftSettings, constVoid))
+    for (const item of createSettingsCategoryItems(() => draftSettings, Fn.constVoid))
       list.updateValue(item.id, item.currentValue);
   };
   // Saves may settle out of admission order, so each settlement rebases the draft on the canonical

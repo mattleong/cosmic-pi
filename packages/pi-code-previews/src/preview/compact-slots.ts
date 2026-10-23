@@ -81,7 +81,7 @@ export class CompactSlots<TArgs, TDetails, TState> {
         } catch {
           entry.component = undefined;
           entry.failed = true;
-          throw new CompactSlotDrawFailure();
+          throw CompactSlotDrawFailure.make();
         }
       },
       handleMouse: (event) => (entry.failed ? undefined : component.handleMouse?.(event)),

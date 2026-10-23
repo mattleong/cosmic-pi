@@ -1,7 +1,7 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
-import { identity } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
@@ -92,13 +92,12 @@ const decodeCommittedSettings = (settings: CodePreviewSettings, settingsPath: st
         tools: [...decoded.tools],
       }),
     ),
-    Effect.mapError(
-      () =>
-        new JsonDocumentError({
-          operation: "validate",
-          path: settingsPath,
-          message: "Code preview settings are invalid.",
-        }),
+    Effect.mapError(() =>
+      JsonDocumentError.make({
+        operation: "validate",
+        path: settingsPath,
+        message: "Code preview settings are invalid.",
+      }),
     ),
   );
 
@@ -151,7 +150,7 @@ const failIfSuperseded = (
   Effect.suspend(() =>
     coordinator.isSuperseded(editedKeys)
       ? Effect.fail(
-          new CodePreviewSettingsSuperseded({
+          CodePreviewSettingsSuperseded.make({
             message: "A newer change to the same setting was saved first",
           }),
         )
@@ -232,7 +231,7 @@ export class CodePreviewSettingsService extends Context.Service<
             )
           : undefined;
         const baseline = project?.settings ?? global.settings;
-        const flat = yield* loadFile(flatSettingsPath, identity, baseline);
+        const flat = yield* loadFile(flatSettingsPath, Fn.identity, baseline);
         const context: SettingsSaveContext = {
           globalBaseline: global.settings,
           baseline,

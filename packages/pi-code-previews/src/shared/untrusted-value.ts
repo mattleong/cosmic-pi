@@ -1,4 +1,4 @@
-import { flow } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
@@ -6,7 +6,10 @@ import * as Schema from "effect/Schema";
 export const HostObjectSchema = Schema.declare(Predicate.isObject);
 export type HostObject = typeof HostObjectSchema.Type;
 
-export const hostObject = flow(Schema.decodeUnknownOption(HostObjectSchema), Option.getOrUndefined);
+export const hostObject = Fn.flow(
+  Schema.decodeUnknownOption(HostObjectSchema),
+  Option.getOrUndefined,
+);
 
 export function ownField(value: HostObject | undefined, key: string) {
   if (!value || !Object.hasOwn(value, key)) return undefined;
@@ -20,7 +23,7 @@ export function ownObject(value: HostObject | undefined, key: string): HostObjec
 export const HostContainerSchema = Schema.declare(Predicate.isObjectOrArray);
 export type HostContainer = typeof HostContainerSchema.Type;
 
-export const hostContainer = flow(
+export const hostContainer = Fn.flow(
   Schema.decodeUnknownOption(HostContainerSchema),
   Option.getOrUndefined,
 );
@@ -36,4 +39,7 @@ export const HostValueSchema = Schema.Union([
 ]);
 export type HostValue = typeof HostValueSchema.Type;
 
-export const hostValue = flow(Schema.decodeUnknownOption(HostValueSchema), Option.getOrUndefined);
+export const hostValue = Fn.flow(
+  Schema.decodeUnknownOption(HostValueSchema),
+  Option.getOrUndefined,
+);

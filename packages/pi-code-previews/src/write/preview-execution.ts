@@ -59,7 +59,9 @@ export const executeWriteWithPreviewEffect = Effect.fn("CodePreviewWrite.execute
   const fs = yield* FileSystem.FileSystem;
   let before: CodePreviewBeforeWrite;
   const failure = (cause: unknown) =>
-    isWriteError(cause) ? cause : new CodePreviewWriteError({ message: nativeErrorMessage(cause) });
+    isWriteError(cause)
+      ? cause
+      : CodePreviewWriteError.make({ message: nativeErrorMessage(cause) });
   const result = yield* executeNativeWrite(
     toolCallId,
     path,

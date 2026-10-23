@@ -4,7 +4,7 @@ import { SettingsList } from "@earendil-works/pi-tui";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import { constVoid } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { AgentDirectory } from "pi-cosmic-core";
@@ -132,7 +132,7 @@ for (const operation of ["save", "reset", "failure"] as const)
     current = false;
     setCodePreviewSettings({ ...defaultCodePreviewSettings, shikiTheme: "github-dark" });
     if (operation === "failure")
-      yield* Deferred.fail(pending, new DiskFull({ message: "disk full" }));
+      yield* Deferred.fail(pending, DiskFull.make({ message: "disk full" }));
     else yield* Deferred.succeed(pending, undefined);
     yield* step(eventLoopTurn);
     model.onChange("readCollapsedLines", "40", list);
@@ -162,7 +162,7 @@ effectTest(
             next,
             pass: () => Deferred.doneUnsafe(save, Effect.void),
             fail: () =>
-              Deferred.doneUnsafe(save, Effect.fail(new DiskFull({ message: "disk full" }))),
+              Deferred.doneUnsafe(save, Effect.fail(DiskFull.make({ message: "disk full" }))),
           });
           return Effect.runPromise(Deferred.await(save));
         },
@@ -206,7 +206,7 @@ effectTest("only the latest superseded panel edit reports that it was not saved"
         pending.push(() =>
           Deferred.doneUnsafe(
             save,
-            Effect.fail(new CodePreviewSettingsSuperseded({ message: "superseded" })),
+            Effect.fail(CodePreviewSettingsSuperseded.make({ message: "superseded" })),
           ),
         );
         return Effect.runPromise(Deferred.await(save));
@@ -281,7 +281,7 @@ function gatedPanelSaves(service: CodePreviewSettingsServiceContract) {
 
 const panelValuesFor = (settings: CodePreviewSettings) =>
   new Map(
-    createSettingsCategoryItems(() => settings, constVoid).map((item) => [
+    createSettingsCategoryItems(() => settings, Fn.constVoid).map((item) => [
       item.id,
       item.currentValue,
     ]),
