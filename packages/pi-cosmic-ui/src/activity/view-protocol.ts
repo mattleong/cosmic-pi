@@ -36,11 +36,11 @@ export function discoverActivityView(
       return Object.freeze({
         open: (section: ActivitySection, signal?: AbortSignal): Promise<boolean> =>
           Promise.resolve().then(() => {
-            if (!isActivitySection(section)) throw new ActivityError({ reason: "invalid" });
-            if (signal?.aborted) throw new ActivityError({ reason: "stale" });
+            if (!isActivitySection(section)) throw ActivityError.make({ reason: "invalid" });
+            if (signal?.aborted) throw ActivityError.make({ reason: "stale" });
             return Promise.resolve<unknown>(open(section, signal)).then((output) => {
               const result = decodeOpened(output);
-              if (result === undefined) throw new ActivityError({ reason: "failed" });
+              if (result === undefined) throw ActivityError.make({ reason: "failed" });
               return result;
             });
           }),

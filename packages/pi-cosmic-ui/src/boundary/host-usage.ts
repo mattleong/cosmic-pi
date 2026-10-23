@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { flow } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Schema from "effect/Schema";
 import { decodeUnknownOrUndefined, invokeHostCallback } from "pi-cosmic-core";
 
@@ -39,7 +39,7 @@ export type DecodedContextUsage = typeof ContextUsageSchema.Type;
 
 export const decodeAssistantUsage = decodeUnknownOrUndefined(AssistantUsageSchema);
 
-export const decodeCompletedAssistantOutput = flow(
+export const decodeCompletedAssistantOutput = Fn.flow(
   decodeUnknownOrUndefined(CompletedAssistantOutputSchema),
   (completed) => completed?.usage.output,
 );

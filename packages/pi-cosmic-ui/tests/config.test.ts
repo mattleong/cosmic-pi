@@ -133,7 +133,7 @@ describe("Cosmic UI config", () => {
 
   it.effect("logs a safe diagnostic when an existing config cannot be read", () => {
     const captured = makeCapturedLogger();
-    const failure = new JsonDocumentError({
+    const failure = JsonDocumentError.make({
       operation: "read",
       path: "/secret/path",
       message: "credential=do-not-log",

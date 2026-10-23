@@ -30,7 +30,7 @@ describe("activity view discovery", () => {
   it.effect("rejects instead of throwing when the opener returns garbage or throws", () =>
     Effect.gen(function* () {
       const garbage = yield* Effect.flip(opening(discoverOpener(() => "opened")));
-      expect(garbage.cause).toEqual(new ActivityError({ reason: "failed" }));
+      expect(garbage.cause).toEqual(ActivityError.make({ reason: "failed" }));
       const hostile = discoverOpener(() => {
         throw new Error("hostile opener");
       });

@@ -37,8 +37,8 @@ export function installActivityView(
       hostToken: installation.hostToken,
       open: (section: ActivitySection, signal?: AbortSignal) =>
         Promise.resolve().then(() => {
-          if (!current() || signal?.aborted) throw new ActivityError({ reason: "stale" });
-          if (!isActivitySection(section)) throw new ActivityError({ reason: "invalid" });
+          if (!current() || signal?.aborted) throw ActivityError.make({ reason: "stale" });
+          if (!isActivitySection(section)) throw ActivityError.make({ reason: "invalid" });
           return installation.open(section, signal);
         }),
     });

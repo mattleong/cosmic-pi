@@ -1,4 +1,4 @@
-import { flow } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import * as Context from "effect/Context";
@@ -35,7 +35,7 @@ export class CosmicUiConfigError extends Schema.TaggedError<
   message: Schema.String,
 }) {}
 
-const decodeStrings = flow(decodeUnknownOrUndefined(Schema.Array(Schema.Unknown)), (values) =>
+const decodeStrings = Fn.flow(decodeUnknownOrUndefined(Schema.Array(Schema.Unknown)), (values) =>
   values?.filter(Predicate.isString),
 );
 const decodeRoot = decodeTolerantFields(

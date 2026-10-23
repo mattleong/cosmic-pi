@@ -205,7 +205,7 @@ export function createActivityHost(
                   Effect.suspend(() =>
                     isCurrent() && binding.installed
                       ? host.open(ctx, section)
-                      : Effect.fail(new ActivityError({ reason: "stale" })),
+                      : Effect.fail(ActivityError.make({ reason: "stale" })),
                   ),
                   signal,
                 ),
@@ -279,7 +279,7 @@ export function createActivityHost(
         ctx.sessionManager.getSessionId() !== binding.sessionId
       )
         return false;
-      if (binding.manager) return yield* new ActivityError({ reason: "stale" });
+      if (binding.manager) return yield* ActivityError.make({ reason: "stale" });
       const owner = {};
       binding.manager = owner;
       const currentHost = () => binding.active && binding.installed && current === binding;
@@ -339,7 +339,7 @@ export function createActivityHost(
           return component;
         },
       }).pipe(
-        Effect.mapError(() => new ActivityError({ reason: "failed" })),
+        Effect.mapError(() => ActivityError.make({ reason: "failed" })),
         Effect.ensuring(
           Effect.sync(() => {
             if (binding.manager !== owner) return;

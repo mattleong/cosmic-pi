@@ -204,8 +204,8 @@ export const openOwnedSurface = <A>(
       resume(
         OwnedSurfaceOutcome.$match(outcome, {
           Settled: ({ value }): Effect.Effect<A, OwnedSurfaceError> => Effect.succeed(value),
-          Blocked: () => Effect.fail(new OwnedSurfaceError({ reason: "blocked" })),
-          Failed: () => Effect.fail(new OwnedSurfaceError({ reason: "failed" })),
+          Blocked: () => Effect.fail(OwnedSurfaceError.make({ reason: "blocked" })),
+          Failed: () => Effect.fail(OwnedSurfaceError.make({ reason: "failed" })),
         }),
       ),
     );

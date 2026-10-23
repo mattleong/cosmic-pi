@@ -1,6 +1,6 @@
 import type { ThemeColor } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import { flow } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Schema from "effect/Schema";
 import type * as Types from "effect/Types";
 import {
@@ -162,14 +162,17 @@ const hostQuery = (query: typeof HostQueryData.Type | undefined): CosmicUiHostQu
   });
 };
 
-export const normalizeCosmicUiHostQuery = flow(decodeUnknownOrUndefined(HostQueryData), hostQuery);
+export const normalizeCosmicUiHostQuery = Fn.flow(
+  decodeUnknownOrUndefined(HostQueryData),
+  hostQuery,
+);
 
 const hostStateEvent = (
   event: typeof HostStateData.Type | undefined,
 ): CosmicUiHostStateEvent | undefined =>
   event && Object.freeze({ version: event.version, ...detachHostState(event) });
 
-export const normalizeCosmicUiHostStateEvent = flow(
+export const normalizeCosmicUiHostStateEvent = Fn.flow(
   decodeUnknownOrUndefined(HostStateData),
   hostStateEvent,
 );
@@ -198,7 +201,7 @@ const footerUpsertEvent = (
   });
 };
 
-export const normalizeCosmicFooterUpsertEvent = flow(
+export const normalizeCosmicFooterUpsertEvent = Fn.flow(
   decodeUnknownOrUndefined(UpsertData),
   footerUpsertEvent,
 );
@@ -211,7 +214,7 @@ const footerRemoveEvent = (
   return Object.freeze({ version, owner, ...(id !== undefined && { id }) });
 };
 
-export const normalizeCosmicFooterRemoveEvent = flow(
+export const normalizeCosmicFooterRemoveEvent = Fn.flow(
   decodeUnknownOrUndefined(RemoveData),
   footerRemoveEvent,
 );

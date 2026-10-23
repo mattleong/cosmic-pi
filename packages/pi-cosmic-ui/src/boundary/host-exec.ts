@@ -32,7 +32,7 @@ export const makePiExec = (exec: ExtensionAPI["exec"]): PiExecContract => ({
           signal,
         }),
       catch: () =>
-        new PiExecError({
+        PiExecError.make({
           operation: command,
           message: `Unable to inspect ${command === "git" ? "Git" : "pull request"} status.`,
         }),

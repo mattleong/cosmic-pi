@@ -68,9 +68,9 @@ export interface ActivityServiceOptions {
   readonly tick?: (now: number) => void;
   readonly connect?: (service: ActivityServiceContract) => () => void;
 }
-const invalid = () => new ActivityError({ reason: "invalid" });
-const stale = () => new ActivityError({ reason: "stale" });
-const failed = () => new ActivityError({ reason: "failed" });
+const invalid = () => ActivityError.make({ reason: "invalid" });
+const stale = () => ActivityError.make({ reason: "stale" });
+const failed = () => ActivityError.make({ reason: "failed" });
 const isActivityError = Schema.is(ActivityError);
 const asActivityError = (cause: unknown) => (isActivityError(cause) ? cause : failed());
 // Foreign callbacks may throw or return a rejected thenable; both are contained.
