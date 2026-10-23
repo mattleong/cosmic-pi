@@ -1,3 +1,7 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import type { CompactAnimationScheduler } from "pi-code-previews";
 import {
   animationSchedulerProbe,
@@ -14,7 +18,7 @@ const backgrounds = ["on"] as const;
 const details = {
   id: "image-identity",
   status: "completed",
-  prompt: "Full original prompt " + "long prompt ".repeat(20) + "PROMPT_END",
+  prompt: "Full original prompt " + Fn.pipe("long prompt ", Str.repeat(20)) + "PROMPT_END",
   revisedPrompt: "Full revised prompt",
   savedPath: "/project/saved image.png",
   mimeType: image.mimeType,
@@ -37,7 +41,9 @@ function register(
 afterEach(applyPresentationSettings({}));
 
 describe("registered image presentation", () => {
-  it.each(styles.flatMap((style) => backgrounds.map((background) => ({ style, background }))))(
+  it.each(
+    Arr.flatMap(styles, (style) => Arr.map(backgrounds, (background) => ({ style, background }))),
+  )(
     "leaves image-only and text/image attachments with Pi in $style/$background mode",
     ({ style, background }) => {
       const { tool } = register(style, background);
@@ -55,7 +61,9 @@ describe("registered image presentation", () => {
             expect(rendered).toContain("saved image.png");
           }
           expect(rendered).not.toContain(image.data);
-          expect(result.content.find((part) => part.type === "image")).toBe(image);
+          expect(
+            Option.getOrUndefined(Arr.findFirst(result.content, (part) => part.type === "image")),
+          ).toBe(image);
         }
         expect(result).toEqual(before);
       }

@@ -1,4 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -253,7 +254,7 @@ export const makeUsageRefreshController = Effect.fn("UsageRefreshController.make
       String(options.backgroundEnabled?.() ?? true),
       String(current.config?.usage.showOnlyOnSubscriptionModels ?? true),
     ];
-    return segments.join(":");
+    return Arr.join(segments, ":");
   });
   const refreshEngine = yield* createSubscriptionRefresh<
     string,

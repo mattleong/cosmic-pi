@@ -1,5 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Box, Image, type Component } from "@earendil-works/pi-tui";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import {
@@ -41,7 +43,9 @@ export function renderImageMessage<Details>(
   const { expanded, compact } = options;
   const record = imageRecord(message.details);
   const content = message.content;
-  const image = Predicate.isString(content) ? undefined : content.find(isImagePart);
+  const image = Predicate.isString(content)
+    ? undefined
+    : Option.getOrUndefined(Arr.findFirst(content, isImagePart));
   const { collapsedSummary } = planCompactPresentation({
     summary: record && imageRecordSummary(record, { hasImage: image !== undefined, expanded }),
     phase: "settled",

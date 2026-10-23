@@ -21,10 +21,14 @@ import type {
   SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import { extensionContextFixture, provideBuiltLayer } from "pi-cosmic-core/testing";
 import {
   OpenAICompactionBoundaryError,
@@ -182,7 +186,12 @@ const isConfigurationUpdate = Schema.is(
   Schema.Struct({ type: Schema.Literal("configuration_update") }),
 );
 const tailStart = (input: readonly unknown[]) =>
-  input.findIndex((item) => serializedSnapshot(item).includes("tail question"));
+  Option.getOrElse(
+    Arr.findFirstIndex(input, (item) =>
+      Fn.pipe(serializedSnapshot(item), Str.includes("tail question")),
+    ),
+    () => -1,
+  );
 
 /** Runs pi-ai's real OpenAI Responses provider and stops it at the payload hook, before any request. */
 const nativeProviderPayload = (
@@ -310,9 +319,9 @@ describe("OpenAICompactionService", () => {
               expect(result.usage?.cost.total).toBeCloseTo(0.000062);
               const compactedMessages = manager.buildSessionContext().messages;
               const compactedPrompt = getCurrentSystemPrompt(convertToLlm(compactedMessages));
-              expect(compactedPrompt.split("opaque initial content")).toHaveLength(2);
+              expect(Str.split(compactedPrompt, "opaque initial content")).toHaveLength(2);
               expect(
-                getCurrentTools(convertToLlm(compactedMessages)).map((tool) => tool.name),
+                Arr.map(getCurrentTools(convertToLlm(compactedMessages)), (tool) => tool.name),
               ).toEqual([previousTool(round)]);
               expect(compactedPrompt).toContain(
                 round === 0 ? "initial rules" : `updated rules ${round - 1}`,
@@ -328,7 +337,7 @@ describe("OpenAICompactionService", () => {
                 encrypted_content: `checkpoint-${round + 1}`,
               });
               expect(
-                manager.buildContextEntries().filter((item) => item.type === "compaction"),
+                Arr.filter(manager.buildContextEntries(), (item) => item.type === "compaction"),
               ).toHaveLength(1);
               expect((yield* service.compact(compactEvent()).pipe(Effect.result))._tag).toBe(
                 "Failure",
@@ -342,7 +351,7 @@ describe("OpenAICompactionService", () => {
               const injected = yield* service.inject({ input });
               expect(injected?.input).toHaveLength(supportsMidConvoSystemMessages ? 6 : 5);
               expect(
-                serializedSnapshot(injected?.input).split(`new question ${round}`),
+                Str.split(serializedSnapshot(injected?.input), `new question ${round}`),
               ).toHaveLength(2);
               expect(injected?.input.slice(-2)).toEqual(input.slice(-2));
               expect(injected?.input[1]).toMatchObject({
@@ -358,12 +367,14 @@ describe("OpenAICompactionService", () => {
           expect(requests[1]?.input).toHaveLength(supportsMidConvoSystemMessages ? 5 : 4);
           expect(serializedSnapshot(requests[2]?.input)).not.toContain("new question 0");
           expect(serializedSnapshot(requests[2]?.input)).not.toContain("updated rules 0");
-          expect(manager.getEntries().filter((entry) => entry.type === "usage")).toHaveLength(0);
+          expect(Arr.filter(manager.getEntries(), (entry) => entry.type === "usage")).toHaveLength(
+            0,
+          );
           expect(
-            manager
-              .getEntries()
-              .filter((entry) => entry.type === "compaction")
-              .map((entry) => entry.usage?.totalTokens),
+            Arr.map(
+              Arr.filter(manager.getEntries(), (entry) => entry.type === "compaction"),
+              (entry) => entry.usage?.totalTokens,
+            ),
           ).toEqual([15, 15, 15, 15]);
           manager.appendCompaction("ordinary summary", manager.getLeafId(), 10);
           expect(yield* service.inject({ input: [] })).toBeUndefined();
@@ -417,11 +428,11 @@ describe("OpenAICompactionService", () => {
               expect(injected?.input[1]).toMatchObject({
                 encrypted_content: `anchor-${round + 1}`,
               });
-              expect(serializedSnapshot(injected?.input).split("opaque anchor rules")).toHaveLength(
-                2,
-              );
+              expect(
+                Str.split(serializedSnapshot(injected?.input), "opaque anchor rules"),
+              ).toHaveLength(2);
               const requestText = serializedSnapshot(requests[round]?.input);
-              expect(requestText.split(`question-${round}`)).toHaveLength(2);
+              expect(Str.split(requestText, `question-${round}`)).toHaveLength(2);
               if (round > 0) {
                 expect(requestText).toContain(`anchor-${round}`);
                 expect(requestText).not.toContain(`question-${round - 1}`);
@@ -470,7 +481,7 @@ describe("OpenAICompactionService", () => {
           );
           const providerInput = decodePayload(payload).input;
           // Precondition: pi-ai emits per-reply configuration_update items exactly when expected.
-          expect(providerInput.some(isConfigurationUpdate)).toBe(configurationUpdates);
+          expect(Arr.some(providerInput, isConfigurationUpdate)).toBe(configurationUpdates);
           const injected = decodePayload(yield* service.inject(payload)).input;
           expect(injected.slice(tailStart(injected))).toEqual(
             providerInput.slice(tailStart(providerInput)),
@@ -628,10 +639,10 @@ describe("OpenAICompactionService", () => {
         const target = fixture({ enabled: true, manager, currentModel: requestModel });
         const omitted = new Set<string>();
         const nativeMessages = () =>
-          manager
-            .buildContextEntries()
-            .filter((entry) => !omitted.has(entry.id))
-            .flatMap(sessionEntryToContextMessages);
+          Arr.flatMap(
+            Arr.filter(manager.buildContextEntries(), (entry) => !omitted.has(entry.id)),
+            sessionEntryToContextMessages,
+          );
         const { requests, client } = recordingClient("retry-checkpoint");
         return Effect.gen(function* () {
           const service = yield* OpenAICompactionService;
@@ -667,7 +678,13 @@ describe("OpenAICompactionService", () => {
           expect(serializedSnapshot(continued)).not.toContain("TRUNCATED MUST NOT RESURRECT");
           const input = responsesInput(requestModel, continued!);
           const injected = yield* service.inject({ input });
-          expect(injected?.input.filter((item) => item.type === "compaction")).toHaveLength(1);
+          expect(
+            injected &&
+              Arr.filter(
+                injected.input,
+                (item: ReturnType<typeof responsesInput>[number]) => item.type === "compaction",
+              ),
+          ).toHaveLength(1);
           manager.appendMessage({ role: "user", content: "after overflow", timestamp: 8 });
           yield* service.filterContext(nativeMessages());
           commit(manager, yield* service.compact(compactEvent()));
@@ -685,7 +702,13 @@ describe("OpenAICompactionService", () => {
             const optimized = yield* fresh.inject({
               input: responsesInput(requestModel, restored!),
             });
-            expect(optimized?.input.filter((item) => item.type === "compaction")).toHaveLength(1);
+            expect(
+              optimized &&
+                Arr.filter(
+                  optimized.input,
+                  (item: ReturnType<typeof responsesInput>[number]) => item.type === "compaction",
+                ),
+            ).toHaveLength(1);
           }).pipe(provideBuiltLayer(serviceLayer(reloaded, client)));
         }).pipe(provideBuiltLayer(serviceLayer(target, client)));
       },

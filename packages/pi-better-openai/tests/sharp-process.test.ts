@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Str from "effect/String";
 import { nodeFilePlatformLayer, runBoundedProcessNode } from "pi-cosmic-core";
 import { NodeChildProcess } from "pi-cosmic-core/testing";
 import sharp from "sharp";
@@ -70,7 +71,7 @@ const waitForPid = (marker: string) =>
     for (;;) {
       const text = yield* fs.readFileString(marker).pipe(Effect.orElseSucceed(() => ""));
       if (text) {
-        const pid = Number(text.split("\n")[0]);
+        const pid = Number(Str.split(text, "\n")[0]);
         if (Number.isSafeInteger(pid) && pid > 0) return pid;
       }
       yield* Effect.sleep(10);

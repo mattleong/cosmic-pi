@@ -14,6 +14,8 @@ import {
   sessionEntryToContextMessages,
   type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core";
@@ -32,8 +34,12 @@ const InputJsonSchema = Schema.fromJsonString(Schema.Array(JsonObjectSchema));
 const COVERED_CONFIGURATION_UPDATE_EFFORT = "medium";
 
 function leadingInstructionCount(input: readonly unknown[]): number {
-  const end = input.findIndex(
-    (item) => !Predicate.isObject(item) || (item.role !== "system" && item.role !== "developer"),
+  const end = Option.getOrElse(
+    Arr.findFirstIndex(
+      input,
+      (item) => !Predicate.isObject(item) || (item.role !== "system" && item.role !== "developer"),
+    ),
+    () => -1,
   );
   return end < 0 ? input.length : end;
 }
@@ -109,7 +115,7 @@ export function projectOpenAIResponseInput(
   options: CoveredProjectionOptions = {},
 ): readonly OpenAICompactionJsonObject[] | undefined {
   const flags = compatFlags(model);
-  const messages = convertToLlm(entries.flatMap(projectedEntryMessages));
+  const messages = convertToLlm(Arr.flatMap(entries, projectedEntryMessages));
   const context = resolveTranscript(
     normalizeContext({ messages }),
     flags.supportsMidConvoSystemMessages,
@@ -143,9 +149,11 @@ export function injectOpenAICompactionCheckpoint<PayloadInput>(
     options: CoveredProjectionOptions,
   ) => readonly OpenAICompactionJsonObject[] | undefined,
 ) {
-  if (!Predicate.isObject(payload) || !Array.isArray(payload.input)) return undefined;
+  if (!Predicate.isObject(payload) || !Arr.isArray(payload.input)) return undefined;
   const input: readonly unknown[] = payload.input;
-  const coveredInput = projectCovered({ configurationUpdates: input.some(isConfigurationUpdate) });
+  const coveredInput = projectCovered({
+    configurationUpdates: Arr.some(input, isConfigurationUpdate),
+  });
   const instructionCount = leadingInstructionCount(input);
   const providerInput = input.slice(instructionCount);
   if (!coveredInput || !hasExactPrefix(providerInput, coveredInput)) return undefined;

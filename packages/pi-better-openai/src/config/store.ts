@@ -5,6 +5,7 @@ import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Num from "effect/Number";
 import type * as Path from "effect/Path";
+import * as Rec from "effect/Record";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
@@ -79,9 +80,9 @@ function decodeConfig(value: JsonObject) {
   return {
     ...(root.persistState !== undefined && { persistState: root.persistState }),
     ...(root.desiredActive !== undefined && { desiredActive: root.desiredActive }),
-    ...(Object.keys(usage).length > 0 && { usage }),
+    ...(Rec.keys<string, unknown>(usage).length > 0 && { usage }),
     ...(compaction.enabled !== undefined && { compaction }),
-    ...(Object.keys(image).length > 0 && { image }),
+    ...(Rec.keys<string, unknown>(image).length > 0 && { image }),
   };
 }
 

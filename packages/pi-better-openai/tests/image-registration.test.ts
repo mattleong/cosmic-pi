@@ -1,6 +1,9 @@
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ExtensionCommand, ExtensionSubcommand } from "pi-cosmic-core";
 import {
@@ -96,9 +99,9 @@ describe("image tool parameters", () => {
     expect(prepare?.({ prompt: "draw a comet", images: ["", "  "] })).toEqual({
       prompt: "draw a comet",
     });
-    expect(() => prepare?.({ prompt: "draw a comet", images: ["x".repeat(5_000)] })).toThrow(
-      /images\[0\]/u,
-    );
+    expect(() =>
+      prepare?.({ prompt: "draw a comet", images: [Fn.pipe("x", Str.repeat(5_000))] }),
+    ).toThrow(/images\[0\]/u);
     expect(() => prepare?.({ prompt: "draw a comet", outputFormat: "gif" })).toThrow(
       /outputFormat/u,
     );
@@ -175,7 +178,7 @@ describe("image command delivery authority", () => {
         });
         expect(h.sendMessage.mock.calls[0]?.[0]).not.toHaveProperty("structuredContent");
         const message = h.sendMessage.mock.calls[0]?.[0];
-        if (!message || !Array.isArray(message.content))
+        if (!message || !Arr.isArray(message.content))
           throw new Error("Expected a structured image message");
         for (const delivered of [
           { details: message.details, content: message.content },
@@ -183,11 +186,16 @@ describe("image command delivery authority", () => {
         ]) {
           expect(delivered.details).toEqual(details);
           const parts: ReadonlyArray<{ type: string; text?: string }> = delivered.content;
-          expect(parts.filter((part) => part.type === "image")).toEqual([
+          expect(Arr.filter(parts, (part) => part.type === "image")).toEqual([
             { type: "image", data, mimeType: image.mimeType },
           ]);
-          expect(parts.some((part) => part.type === "text")).toBe(true);
-          expect(parts.some((part) => part.text?.includes(data))).toBe(false);
+          expect(Arr.some(parts, (part) => part.type === "text")).toBe(true);
+          expect(
+            Arr.some(
+              parts,
+              (part) => part.text !== undefined && Fn.pipe(part.text, Str.includes(data)),
+            ),
+          ).toBe(false);
         }
       }),
   );

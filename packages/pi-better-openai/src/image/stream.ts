@@ -1,10 +1,12 @@
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Random from "effect/Random";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as Str from "effect/String";
 import * as Sse from "effect/encoding/Sse";
 import { sanitizeDiagnosticError, type StreamingHttpError } from "pi-cosmic-core";
 import { decodeImageStreamEvent } from "./protocol.ts";
@@ -29,13 +31,15 @@ const decodeErrorBody = Schema.decodeUnknownOption(
 );
 const messageText = (message: typeof ProviderMessageSchema.Type) =>
   Predicate.isString(message) ? message : message.message;
-const errorBodyReason = (text: string) =>
-  Option.getOrUndefined(
+const errorBodyReason = (text: string) => {
+  const reason = Option.getOrUndefined(
     Option.map(decodeErrorBody(text), (body) => {
       if ("error" in body) return messageText(body.error);
       return "detail" in body ? messageText(body.detail) : body.message;
     }),
-  )?.trim();
+  );
+  return reason === undefined ? undefined : Str.trim(reason);
+};
 
 const leadingBytes = (body: Stream.Stream<Uint8Array, StreamingHttpError>, limit: number) => {
   let remaining = limit;
@@ -76,7 +80,7 @@ export const parseImageSse = Effect.fn("OpenAIImage.parseSse")(function* (
   body: Stream.Stream<Uint8Array, StreamingHttpError>,
   mimeType: string,
 ) {
-  const fallbackId = `ig_${(yield* Random.nextIntBetween(0, 0xffff_ffff)).toString(16).padStart(8, "0")}`;
+  const fallbackId = `ig_${Fn.pipe((yield* Random.nextIntBetween(0, 0xffff_ffff)).toString(16), Str.padStart(8, "0"))}`;
   let totalBytes = 0;
   let completed: ExtractedImageResult | undefined;
   let providerFailure: OpenAIImageError | undefined;
@@ -92,7 +96,7 @@ export const parseImageSse = Effect.fn("OpenAIImage.parseSse")(function* (
   );
 
   const processData = Effect.fn("OpenAIImage.processSseData")(function* (source: string) {
-    const data = source.trim();
+    const data = Str.trim(source);
     if (!data) return true;
     if (data === "[DONE]") {
       terminated = true;

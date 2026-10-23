@@ -1,5 +1,8 @@
 import { expect, layer } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import { applyPresentationSettings, createToolPresentationHarness } from "pi-code-previews/testing";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { plainTheme as theme } from "pi-cosmic-core/testing";
@@ -58,17 +61,17 @@ layer(nodeFilePlatformLayer)("Better OpenAI history before session_start", (it) 
           const before = structuredClone(result);
           row.call(args);
           row.result(result);
-          expect(row.render().join("\n")).toContain(PROVIDER_TEXT);
+          expect(Arr.join(row.render(), "\n")).toContain(PROVIDER_TEXT);
 
           yield* h.emit("session_start");
-          expect(h.tools.map((tool) => tool.name)).toEqual([OPENAI_IMAGE_TOOL]);
+          expect(Arr.map(h.tools, (tool) => tool.name)).toEqual([OPENAI_IMAGE_TOOL]);
           for (const { expanded, text: rendered } of row.cycle(args, result)) {
             expect(rendered).not.toContain(image.data);
             if (expanded) {
               expect(rendered).toContain(PROVIDER_TEXT);
               if (owner === "owned") expect(rendered).toContain(details.revisedPrompt);
             } else {
-              expect(rendered.includes(PROVIDER_TEXT)).toBe(owner === "foreign");
+              expect(Fn.pipe(rendered, Str.includes(PROVIDER_TEXT))).toBe(owner === "foreign");
             }
           }
           expect(result).toEqual(before);

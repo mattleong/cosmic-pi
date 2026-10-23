@@ -1,8 +1,12 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import { nodeFilePlatformLayer, registerExtensionCommand } from "pi-cosmic-core";
 import { fauxCodemodeSession } from "pi-cosmic-core/testing/sdk";
 import { registerOpenAIImage } from "../src/image/register.ts";
@@ -39,9 +43,13 @@ const literal = Schema.encodeSync(Schema.fromJsonString(Schema.String));
 const serialize = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const print = (expression: string) => `text('IMAGE_RESULT ' + JSON.stringify(${expression}));`;
 const output = (text: string) => {
-  const line = text.split("\n").find((candidate) => candidate.startsWith("IMAGE_RESULT "));
+  const line = Option.getOrUndefined(
+    Arr.findFirst(Str.split(text, "\n"), (candidate) =>
+      Fn.pipe(candidate, Str.startsWith("IMAGE_RESULT ")),
+    ),
+  );
   expect(line, text).toBeDefined();
-  return decodeOutput(line!.slice("IMAGE_RESULT ".length));
+  return decodeOutput(Fn.pipe(line!, Str.slice("IMAGE_RESULT ".length)));
 };
 
 const nativeImageSession = (
@@ -95,7 +103,9 @@ describe("native scripted image workflows", () => {
         expect(result.isError, result.text).toBe(false);
         const { data: _data, mimeType: _mimeType, ...metadata } = generated({ prompt });
         expect(output(result.text)).toEqual({ ...envelope, ...metadata });
-        expect(result.message.content.filter((part) => part.type === "image")).toEqual([block]);
+        expect(Arr.filter(result.message.content, (part) => part.type === "image")).toEqual([
+          block,
+        ]);
         expect(result.text).not.toContain(png);
         expect(requests[0]).toEqual({ prompt, save: "none" });
 
@@ -108,15 +118,16 @@ describe("native scripted image workflows", () => {
         expect(direct.message.details).toEqual({ ...metadata, mimeType: "image/png" });
         expect(requests[1]).toEqual({ prompt, save: "none" });
 
-        const persisted = h.session.sessionManager
-          .getEntries()
-          .filter((entry) => entry.type === "message" && entry.message.role === "toolResult");
+        const persisted = Arr.filter(
+          h.session.sessionManager.getEntries(),
+          (entry) => entry.type === "message" && entry.message.role === "toolResult",
+        );
         expect(persisted).toHaveLength(2);
         for (const entry of persisted) {
           expect(entry).not.toHaveProperty("message.structuredContent");
-          expect(serialize(entry).split(png)).toHaveLength(2);
+          expect(Str.split(serialize(entry), png)).toHaveLength(2);
         }
-        expect(serialize(h.session.sessionManager.getEntries()).split(png)).toHaveLength(3);
+        expect(Str.split(serialize(h.session.sessionManager.getEntries()), png)).toHaveLength(3);
       }).pipe(Effect.provide(nodeFilePlatformLayer)),
     15_000,
   );
@@ -136,10 +147,10 @@ describe("native scripted image workflows", () => {
         `);
         expect(output(result.text)).toEqual({ rejected: true });
         expect(result.text).toContain("Image generation unavailable");
-        expect(result.message.content.some((part) => part.type === "image")).toBe(false);
+        expect(Arr.some(result.message.content, (part) => part.type === "image")).toBe(false);
         const direct = yield* h.call("openai_image", { prompt });
         expect(direct.isError).toBe(true);
-        expect(direct.message.content.some((part) => part.type === "image")).toBe(false);
+        expect(Arr.some(direct.message.content, (part) => part.type === "image")).toBe(false);
       }).pipe(Effect.provide(nodeFilePlatformLayer)),
     15_000,
   );
@@ -174,7 +185,7 @@ describe("native scripted image workflows", () => {
         `);
         expect(later.isError, later.text).toBe(false);
         expect(output(later.text)).toEqual({ id: "image-1", status: "completed" });
-        expect(later.message.content.filter((part) => part.type === "image")).toEqual([block]);
+        expect(Arr.filter(later.message.content, (part) => part.type === "image")).toEqual([block]);
       }).pipe(Effect.provide(nodeFilePlatformLayer)),
     15_000,
   );

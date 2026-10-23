@@ -11,12 +11,15 @@ import type {
   ExtensionContext,
   SessionBeforeCompactEvent,
 } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import { isFastActive, type FastSnapshot } from "../fast/controller.ts";
 import type { ResolvedConfig } from "../config/schema.ts";
@@ -47,13 +50,17 @@ import {
 import { prepareOpenAIFallback } from "./fallback.ts";
 
 const compactionInstructions = (systemPrompt: string, guidance: string | undefined) => {
-  const customInstructions = guidance?.trim();
-  return [
-    systemPrompt.trim(),
-    customInstructions ? `Compaction guidance:\n${customInstructions}` : undefined,
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+  const customInstructions = guidance === undefined ? undefined : Str.trim(guidance);
+  return Arr.join(
+    Arr.filter(
+      [
+        Str.trim(systemPrompt),
+        customInstructions ? `Compaction guidance:\n${customInstructions}` : undefined,
+      ],
+      (part): part is string => Predicate.isString(part) && Str.isNonEmpty(part),
+    ),
+    "\n\n",
+  );
 };
 
 const checkpointedInput = (

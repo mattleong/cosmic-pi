@@ -1,9 +1,13 @@
 import { initTheme, type ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import { formatDuration, registerExtensionCommand, type JsonObject } from "pi-cosmic-core";
 import {
   deferredPromise,
@@ -103,7 +107,9 @@ const input = {
 };
 
 function renderedRow(component: Component, label: string): string | undefined {
-  return component.render(100).find((line) => line.includes(label));
+  return Option.getOrUndefined(
+    Arr.findFirst(component.render(100), (line) => Fn.pipe(line, Str.includes(label))),
+  );
 }
 
 const beginRefreshWrite = Effect.gen(function* () {
@@ -156,7 +162,7 @@ describe("Better OpenAI settings controller", () => {
 
   it.effect("renders redacted config as terminal-safe JSON", () =>
     Effect.gen(function* () {
-      const syntheticToken = ["sk", "private-token-123456"].join("-");
+      const syntheticToken = Arr.join(["sk", "private-token-123456"], "-");
       const h = settingsHarness({
         configDocument: {
           access: syntheticToken,
@@ -173,7 +179,7 @@ describe("Better OpenAI settings controller", () => {
       component.handleInput?.(input.down);
       component.handleInput?.(input.enter);
 
-      const rendered = component.render(100).join("\n");
+      const rendered = Arr.join(component.render(100), "\n");
       expect(rendered).toContain("[REDACTED]");
       expect(rendered).not.toContain(syntheticToken);
       expect(rendered).not.toContain("\u001b");

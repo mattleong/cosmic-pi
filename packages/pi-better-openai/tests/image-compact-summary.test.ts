@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { compactIssueSeverity } from "pi-code-previews";
 import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
 import { describe, expect, it } from "vitest";
@@ -23,7 +24,7 @@ const input = (status = "completed", expanded = false): Input => ({
   result: { content: [{ type: "text", text: "Generated image" }, image], details: record(status) },
 });
 const styleProblems = (summary: ReturnType<typeof imageCompactSummary>) =>
-  (summary?.issues ?? []).flatMap((issue) => issueMessageStyleProblems(issue.message));
+  Arr.flatMap(summary?.issues ?? [], (issue) => issueMessageStyleProblems(issue.message));
 
 describe("image compact summary", () => {
   it.each([

@@ -1,4 +1,6 @@
+import * as Arr from "effect/Array";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import {
   BooleanFromJsonSchema,
   decodeSettingUpdate,
@@ -14,7 +16,7 @@ import {
 } from "./schema.ts";
 
 const NonBlankStringSchema = Schema.String.check(
-  Schema.makeFilter((value: string) => value.trim().length > 0, {
+  Schema.makeFilter((value: string) => Str.trim(value).length > 0, {
     identifier: "NonBlankSettingString",
   }),
 );
@@ -112,7 +114,7 @@ export const imageSettingDescriptors = (
 ): readonly SettingsOptionDescriptor<ResolvedConfig>[] =>
   modelIds.length === 0
     ? IMAGE_SETTING_DESCRIPTORS
-    : IMAGE_SETTING_DESCRIPTORS.map((descriptor) =>
+    : Arr.map(IMAGE_SETTING_DESCRIPTORS, (descriptor) =>
         descriptor.id === "image.defaultModel" ? { ...descriptor, values: modelIds } : descriptor,
       );
 export const SETTINGS_OPTION_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfig>[] = [

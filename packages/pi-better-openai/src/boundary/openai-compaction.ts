@@ -1,10 +1,14 @@
 import type { Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Predicate from "effect/Predicate";
+import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import { JsonHttpClient, mergeHeaders } from "pi-cosmic-core";
 import {
   JsonObjectSchema,
@@ -85,8 +89,9 @@ export interface OpenAICompactionClientContract {
 type Registry = Pick<ExtensionContext["modelRegistry"], "getApiKeyAndHeaders">;
 
 function hasAuthorization(headers: Readonly<Record<string, string>>): boolean {
-  return Object.entries(headers).some(
-    ([name, value]) => name.toLowerCase() === "authorization" && value.trim().length > 0,
+  return Arr.some(
+    Rec.toEntries(headers),
+    ([name, value]) => Str.toLowerCase(name) === "authorization" && Str.trim(value).length > 0,
   );
 }
 
@@ -121,7 +126,7 @@ export class OpenAICompactionClient extends Context.Service<
           const response = yield* http
             .requestJson(
               {
-                url: `${request.model.baseUrl.replace(/\/$/, "")}/responses/compact`,
+                url: `${Fn.pipe(request.model.baseUrl, Str.replace(/\/$/, ""))}/responses/compact`,
                 method: "POST",
                 headers,
                 responseSchema: CompactedResponseSchema,
@@ -150,7 +155,7 @@ export class OpenAICompactionClient extends Context.Service<
               status: response.status,
             });
           const { output, usage } = response.body;
-          if (!output.some((item) => item.type === "compaction"))
+          if (!Arr.some(output, (item) => item.type === "compaction"))
             return yield* boundaryError(
               "decode",
               "OpenAI compaction response did not contain a compaction item.",

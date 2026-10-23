@@ -3,9 +3,11 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
+import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Stream from "effect/Stream";
+import * as Str from "effect/String";
 import * as TestClock from "effect/testing/TestClock";
 import { AgentDirectory, nodePlatformLayer, SafeFile } from "pi-cosmic-core";
 import {
@@ -95,7 +97,7 @@ describe("OpenAIImageService", () => {
       const cases: ReadonlyArray<readonly [ToolParams, string | undefined]> = [
         [extraKey, "detail"],
         [{ prompt: " \n\t " }, "prompt"],
-        [{ prompt: "long directory", saveDir: "d".repeat(5_000) }, "saveDir"],
+        [{ prompt: "long directory", saveDir: Fn.pipe("d", Str.repeat(5_000)) }, "saveDir"],
         [hostile, undefined],
         [throwingPrompt, undefined],
       ];

@@ -1,6 +1,7 @@
 import { getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { expect, layer } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
@@ -176,9 +177,12 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
         if (!repaired) throw new Error("Expected a repaired context");
         expect(repaired[0]?.role).toBe("system");
         expect(getCurrentSystemPrompt(repaired)).toBe("system authority");
-        expect(getCurrentTools(repaired).map((tool) => tool.name)).toEqual(["read"]);
+        expect(Arr.map(getCurrentTools(repaired), (tool) => tool.name)).toEqual(["read"]);
         expect(
-          repaired.some((message) => "content" in message && message.content === "covered history"),
+          Arr.some(
+            repaired,
+            (message) => "content" in message && message.content === "covered history",
+          ),
         ).toBe(true);
         expect(ctx.abort).not.toHaveBeenCalled();
         const rejected = yield* Effect.promise(() =>

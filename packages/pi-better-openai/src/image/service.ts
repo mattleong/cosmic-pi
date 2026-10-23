@@ -1,14 +1,17 @@
 import { CONFIG_DIR_NAME, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
 import * as Redacted from "effect/Redacted";
+import * as Str from "effect/String";
 import { AgentDirectory, SafeFile, StreamingHttpClient } from "pi-cosmic-core";
 import { getCodexCredentials } from "../auth/codex-auth.ts";
 import { SharpAdapter } from "../boundary/sharp.ts";
@@ -33,9 +36,9 @@ const resolveModel = (
   ctx: ExtensionContext,
   cfg: ResolvedConfig,
 ): string => {
-  const requested = params.model?.trim();
+  const requested = params.model === undefined ? undefined : Str.trim(params.model);
   if (requested) {
-    const unqualified = requested.split("/").at(-1) ?? "";
+    const unqualified = Arr.lastNonEmpty(Str.split(requested, "/"));
     return unqualified.length > 0 ? unqualified : requested;
   }
   const currentModel = ctx.model;
@@ -59,7 +62,8 @@ interface SaveTarget {
 const resolveCustomDirectory = (path: Path.Path, { cwd, custom, home }: SaveLocations) => {
   if (!custom) return undefined;
   if (custom === "~") return home;
-  if (custom.startsWith("~/")) return home ? path.resolve(home, custom.slice(2)) : undefined;
+  if (Fn.pipe(custom, Str.startsWith("~/")))
+    return home ? path.resolve(home, Fn.pipe(custom, Str.slice(2))) : undefined;
   return path.resolve(cwd, custom);
 };
 
@@ -99,10 +103,10 @@ const requestOptions = (params: ToolParams, cfg: ResolvedConfig) => ({
 });
 
 const customDirectory = (params: ToolParams, configured: Option.Option<string>) => {
-  const requested = params.saveDir?.trim();
+  const requested = params.saveDir === undefined ? undefined : Str.trim(params.saveDir);
   return requested !== undefined && requested.length > 0
     ? requested
-    : Option.getOrUndefined(configured)?.trim();
+    : Option.getOrUndefined(Option.map(configured, Str.trim));
 };
 
 interface OpenAIImageServiceOptions {

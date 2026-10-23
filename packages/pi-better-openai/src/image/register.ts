@@ -6,6 +6,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import {
   captureCodePreviewPresentationPolicy,
   withCodePreviewShell,
@@ -98,7 +99,7 @@ export function registerOpenAIImage(
     description: "Generate an image with OpenAI Codex image generation",
     handler: (args, ctx) => {
       if (!isCurrent()) return Promise.resolve();
-      const prompt = args.trim();
+      const prompt = Str.trim(args);
       if (!prompt) {
         notifyAtHostBoundary(ctx, "Usage: /openai image <prompt>", "warning");
         return Promise.resolve();

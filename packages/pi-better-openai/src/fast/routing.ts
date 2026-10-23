@@ -1,3 +1,5 @@
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import type { ProviderHeaders } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { isFastActive, type FastSnapshot } from "./controller.ts";
@@ -13,7 +15,7 @@ function isCanonicalCodexEndpoint(baseUrl: string | undefined): boolean {
   if (!baseUrl) return false;
   try {
     const url = new URL(baseUrl);
-    const path = url.pathname.replace(/\/+$/, "");
+    const path = Fn.pipe(url.pathname, Str.replace(/\/+$/, ""));
     return (
       url.protocol === "https:" &&
       url.hostname === "chatgpt.com" &&

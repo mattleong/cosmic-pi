@@ -1,6 +1,7 @@
 import { registerSessionResourceCleanup } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { expect, layer } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import {
@@ -25,7 +26,7 @@ const transportHarness = Effect.gen(function* () {
   const ctx = { ...h.ctx, isIdle: () => idle };
   const deliver = <Name extends ExtensionEventName>(name: Name, event: ExtensionEventNamed<Name>) =>
     Effect.promise(() =>
-      Promise.all(h.handlers.get(name).map((handler) => Promise.resolve(handler(event, ctx)))),
+      Promise.all(Arr.map(h.handlers.get(name), (handler) => Promise.resolve(handler(event, ctx)))),
     ).pipe(Effect.asVoid);
   yield* h.emit("session_start", ctx);
   reset.mockClear();

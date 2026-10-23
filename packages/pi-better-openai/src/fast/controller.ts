@@ -1,4 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import * as Predicate from "effect/Predicate";
 import { freezeSnapshot } from "pi-cosmic-core";
 import { FAST_SERVICE_TIER, supportsFastModel } from "./models.ts";
@@ -55,6 +56,16 @@ export function fastDebugLines(ctx: ExtensionContext, snapshot: FastSnapshot): s
     `Current model: ${currentModelKey(ctx)}`,
     `Supported model: ${supportsFast(ctx)}`,
     `Configured service_tier: ${FAST_SERVICE_TIER}`,
-    `Last injected: ${snapshot.lastInjectedModel ? [snapshot.lastInjectedModel, snapshot.lastInjectedTier].filter((value) => value !== undefined).join(", ") : "never"}`,
+    `Last injected: ${
+      snapshot.lastInjectedModel
+        ? Arr.join(
+            Arr.filter(
+              [snapshot.lastInjectedModel, snapshot.lastInjectedTier],
+              (value) => value !== undefined,
+            ),
+            ", ",
+          )
+        : "never"
+    }`,
   ];
 }

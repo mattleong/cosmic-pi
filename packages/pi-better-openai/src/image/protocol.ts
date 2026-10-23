@@ -2,6 +2,7 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import { ImageOutputFormatSchema, type ImageOutputFormat } from "../config/schema.ts";
 import {
   ImageModelSchema,
@@ -63,7 +64,7 @@ const ignoredEvent = ImageStreamEvent.Ignored();
 const imageData = (value: string, expectedMimeType: string) => {
   const match = /^data:[^;,]+;base64,(.*)$/s.exec(value);
   return {
-    data: (match?.[1] ?? value).trim(),
+    data: Str.trim(match?.[1] ?? value),
     mimeType: expectedMimeType,
   };
 };
@@ -74,7 +75,8 @@ const normalizeImageItem = (
   fallbackId: string,
 ): ImageStreamEvent => {
   if (item.status === "failed") return ImageStreamEvent.ImageFailed();
-  const raw = item.result?.trim() ? item.result : item.b64_json;
+  const raw =
+    Predicate.isString(item.result) && Str.trim(item.result) ? item.result : item.b64_json;
   if (!raw) return ignoredEvent;
   const base = {
     id: item.id ?? fallbackId,

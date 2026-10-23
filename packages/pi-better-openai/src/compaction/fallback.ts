@@ -10,6 +10,8 @@ import {
   type SessionBeforeCompactEvent,
   type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core";
 import { hasExactPrefix, reconstructOpenAIContext } from "./context.ts";
@@ -33,31 +35,40 @@ const nativeSystemMatches = (branch: readonly SessionEntry[], restored: Restored
   );
 
 const retainableTailIds = (branch: readonly SessionEntry[], restored: RestoredContext) => {
-  const lastOmitted = branch.findLastIndex((entry) => restored.omittedEntryIds.includes(entry.id));
+  const lastOmitted = Option.getOrElse(
+    Arr.findLastIndex(branch, (entry) => restored.omittedEntryIds.includes(entry.id)),
+    () => -1,
+  );
   return new Set(
-    branch
-      .slice(Math.max(branch.indexOf(restored.checkpoint), lastOmitted) + 1)
-      .map((entry) => entry.id),
+    Arr.map(
+      branch.slice(Math.max(branch.indexOf(restored.checkpoint), lastOmitted) + 1),
+      (entry) => entry.id,
+    ),
   );
 };
 
 const firstRetainedMessageIndex = (entries: readonly SessionEntry[], firstKept: number) => {
-  const index = entries.findIndex(
-    (entry, position) =>
-      position >= firstKept &&
-      sessionEntryToContextMessages(entry).some((message) => message.role !== "system"),
+  const index = Option.getOrElse(
+    Arr.findFirstIndex(
+      entries,
+      (entry, position) =>
+        position >= firstKept &&
+        Arr.some(sessionEntryToContextMessages(entry), (message) => message.role !== "system"),
+    ),
+    () => -1,
   );
   const retained = entries[index];
   return retained &&
-    !sessionEntryToContextMessages(retained).some((message) => message.role === "toolResult")
+    !Arr.some(sessionEntryToContextMessages(retained), (message) => message.role === "toolResult")
     ? index
     : undefined;
 };
 
 const summaryMessages = (selected: readonly SessionEntry[]) =>
-  selected
-    .flatMap(sessionEntryToContextMessages)
-    .filter((message) => message.role !== "system" && message.role !== "compactionSummary");
+  Arr.filter(
+    Arr.flatMap(selected, sessionEntryToContextMessages),
+    (message) => message.role !== "system" && message.role !== "compactionSummary",
+  );
 
 const decodeFileDetails = decodeUnknownOrUndefined(FileDetails);
 
@@ -81,7 +92,10 @@ export function prepareOpenAIFallback(
   if (!restored || !nativeSystemMatches(branch, restored)) return undefined;
   const tailIds = retainableTailIds(branch, restored);
   const entries = restored.entries;
-  const start = entries.findIndex((entry) => tailIds.has(entry.id));
+  const start = Option.getOrElse(
+    Arr.findFirstIndex(entries, (entry) => tailIds.has(entry.id)),
+    () => -1,
+  );
   if (start < 0) return undefined;
   const cut = findCutPoint(entries, start, entries.length, original.settings.keepRecentTokens);
   const kept = entries[cut.firstKeptEntryIndex];
@@ -89,7 +103,9 @@ export function prepareOpenAIFallback(
   const retainedMessageIndex = firstRetainedMessageIndex(entries, cut.firstKeptEntryIndex);
   if (retainedMessageIndex === undefined) return undefined;
   const summarized = entries.slice(0, cut.firstKeptEntryIndex);
-  const previous = summarized.findLast((entry) => entry.type === "compaction");
+  const previous = Option.getOrUndefined(
+    Arr.findLast(summarized, (entry) => entry.type === "compaction"),
+  );
   const turnStart = findTurnStartIndex(entries, retainedMessageIndex, 0);
   const isSplitTurn = turnStart >= 0 && turnStart < cut.firstKeptEntryIndex;
   const messagesToSummarize = summaryMessages(
@@ -106,7 +122,7 @@ export function prepareOpenAIFallback(
     isSplitTurn,
     tokensBefore: Math.max(
       original.tokensBefore,
-      restored.messages.reduce((total, message) => total + estimateTokens(message), 0),
+      Arr.reduce(restored.messages, 0, (total, message) => total + estimateTokens(message)),
     ),
     fileOps: summarizedFileOps(summarized, previous),
     settings: original.settings,

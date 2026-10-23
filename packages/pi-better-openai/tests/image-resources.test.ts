@@ -1,10 +1,13 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
+import * as Fn from "effect/Function";
 import * as Path from "effect/Path";
 import * as Random from "effect/Random";
+import * as Str from "effect/String";
 import { provideBuiltLayer } from "pi-cosmic-core/testing";
 import { nodePlatformLayer } from "pi-cosmic-core";
 import { imageOutput } from "../src/image/output.ts";
@@ -31,9 +34,11 @@ describe("OpenAI image resources", () => {
       const destination = yield* persist;
       expect(yield* fs.exists(destination)).toBe(true);
       expect(Array.from(yield* fs.readFile(destination))).toEqual(Array.from(content));
-      expect((yield* fs.readDirectory(directory)).filter((name) => name.endsWith(".tmp"))).toEqual(
-        [],
-      );
+      expect(
+        Arr.filter(yield* fs.readDirectory(directory), (name) =>
+          Fn.pipe(name, Str.endsWith(".tmp")),
+        ),
+      ).toEqual([]);
 
       const collision = yield* output
         .persistImage(directory, root, bytes("replacement"), "png", "provider/id")
@@ -43,7 +48,7 @@ describe("OpenAI image resources", () => {
       expect(Array.from(yield* fs.readFile(destination))).toEqual(Array.from(content));
       const visible = yield* fs.readDirectory(directory);
       expect(visible).toHaveLength(1);
-      expect(visible.some((name) => name.endsWith(".tmp"))).toBe(false);
+      expect(Arr.some(visible, (name) => Fn.pipe(name, Str.endsWith(".tmp")))).toBe(false);
     }).pipe(provideBuiltLayer(nodePlatformLayer)),
   );
 
@@ -77,7 +82,9 @@ describe("OpenAI image resources", () => {
         Array.from(foreignBytes),
       );
       expect(
-        (yield* realFs.readDirectory(directory)).filter((name) => name.endsWith(".tmp")),
+        Arr.filter(yield* realFs.readDirectory(directory), (name) =>
+          Fn.pipe(name, Str.endsWith(".tmp")),
+        ),
       ).toEqual([]);
       return undefined;
     }).pipe(provideBuiltLayer(nodePlatformLayer)),

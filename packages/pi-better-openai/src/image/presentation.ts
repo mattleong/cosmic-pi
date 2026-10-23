@@ -4,7 +4,12 @@ import type {
   ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Text, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
 import {
   compactPlainText,
   expandedSection,
@@ -45,12 +50,14 @@ export interface ImageResultContext {
 }
 
 export const base64ByteLength = (data: string): number => {
-  const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
+  const padding = Fn.pipe(data, Str.endsWith("==")) ? 2 : Fn.pipe(data, Str.endsWith("=")) ? 1 : 0;
   return Math.max(0, Math.floor((data.length * 3) / 4) - padding);
 };
 
 export const imageViewOf = <Details>(result: AgentToolResult<Details>, cwd: string): ImageView => {
-  const image = result.content.find((part) => part.type === "image");
+  const image = Option.getOrUndefined(
+    Arr.findFirst(result.content, (part) => part.type === "image"),
+  );
   return {
     record: imageRecord(result.details),
     text: getTextContent(result.content),
@@ -93,11 +100,11 @@ export interface ImageRequestOptions {
 }
 
 const optionLines = (args: Partial<ToolParams>, shown: ImageRequestOptions): string[] =>
-  Object.entries(args).flatMap(([key, value]) => {
+  Arr.flatMap(Rec.toEntries<string, unknown>(args), ([key, value]) => {
     if (key === "prompt" || (key === "action" && shown.action) || value === undefined) return [];
     const label = OPTION_LABELS.get(key) ?? key;
-    const entries: readonly unknown[] = Array.isArray(value) ? value : [value];
-    return entries.map((entry) => {
+    const entries: readonly unknown[] = Arr.isArray(value) ? value : [value];
+    return Arr.map(entries, (entry) => {
       const encoded: string | undefined = Predicate.isString(entry) ? entry : JSON.stringify(entry);
       return `${label}: ${compactPlainText(encoded ?? "undefined")}`;
     });
@@ -120,7 +127,7 @@ export function renderImageRequest(
   const options = optionLines(args, shown);
   if (options.length > 0)
     container.addChild(
-      expandedSection(theme, undefined, new Text(theme.fg("muted", options.join("\n")), 0, 0)),
+      expandedSection(theme, undefined, new Text(theme.fg("muted", Arr.join(options, "\n")), 0, 0)),
     );
   return container;
 }
@@ -148,7 +155,9 @@ export function renderImageCall(
 }
 
 const rawText = (view: ImageView): string =>
-  view.text.trim() && (!view.record || view.text !== imageResultText(view.record)) ? view.text : "";
+  Str.trim(view.text) && (!view.record || view.text !== imageResultText(view.record))
+    ? view.text
+    : "";
 
 const recordFacts = (
   record: CodexImageDetails,
@@ -157,14 +166,23 @@ const recordFacts = (
   theme: Theme,
 ): Component[] => {
   const models = expanded
-    ? [record.imageModel, `via ${record.model}`].filter(Boolean).join(" ")
+    ? Arr.join(
+        Arr.filter(
+          [record.imageModel, `via ${record.model}`],
+          (part): part is string => Predicate.isString(part) && Str.isNonEmpty(part),
+        ),
+        " ",
+      )
     : record.imageModel;
-  const summary = [
-    record.outputFormat.toUpperCase(),
-    view.imageBytes === undefined ? undefined : formatBytes(view.imageBytes),
-    models,
-  ].filter(Boolean);
-  const facts = [new Text(theme.fg("muted", sanitizeTerminalLine(summary.join(" · "))), 0, 0)];
+  const summary = Arr.filter(
+    [
+      Str.toUpperCase(record.outputFormat),
+      view.imageBytes === undefined ? undefined : formatBytes(view.imageBytes),
+      models,
+    ],
+    (part): part is string => Predicate.isString(part) && Str.isNonEmpty(part),
+  );
+  const facts = [new Text(theme.fg("muted", sanitizeTerminalLine(Arr.join(summary, " · "))), 0, 0)];
   if (record.savedPath)
     facts.push(
       new Text(
@@ -196,7 +214,11 @@ const expandedDetails = (
         expandedSection(
           theme,
           error ? "Error" : "Raw result",
-          new Text(theme.fg(error ? "error" : "toolOutput", compactPlainText(raw).trimEnd()), 0, 0),
+          new Text(
+            theme.fg(error ? "error" : "toolOutput", Str.trimEnd(compactPlainText(raw))),
+            0,
+            0,
+          ),
         ),
       ]
     : []),

@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import * as Str from "effect/String";
 import type * as FileSystem from "effect/FileSystem";
 import type * as Path from "effect/Path";
 import { isStrictlyInsidePathWith, type SafeFileContract } from "pi-cosmic-core";
@@ -73,7 +74,7 @@ export const imageInputReader = (dependencies: {
     const validated: ImageInput[] = [];
     let total = 0;
     for (const raw of rawPaths ?? []) {
-      const trimmed = raw.trim();
+      const trimmed = Str.trim(raw);
       if (!trimmed) continue;
       const candidate = path.resolve(workspace, trimmed);
       if (!isInside(workspace, candidate)) return yield* outsideWorkspace(candidate);

@@ -1,12 +1,15 @@
+import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import type * as FileSystem from "effect/FileSystem";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import type * as Path from "effect/Path";
 import * as Random from "effect/Random";
 import * as Scope from "effect/Scope";
+import * as Str from "effect/String";
 import { isStrictlyInsidePathWith } from "pi-cosmic-core";
 import type { SharpAdapterContract } from "../boundary/sharp.ts";
 import { IMAGE_OUTPUT_FORMATS, type ImageOutputFormat } from "../config/schema.ts";
@@ -64,7 +67,9 @@ export const imageOutput = (dependencies: {
         ),
       );
     const actual = metadata.format === "jpg" ? "jpeg" : metadata.format;
-    const actualFormat = IMAGE_OUTPUT_FORMATS.find((format) => format === actual);
+    const actualFormat = Option.getOrUndefined(
+      Arr.findFirst(IMAGE_OUTPUT_FORMATS, (format) => format === actual),
+    );
     if (actualFormat === undefined)
       return yield* fail(
         "response",
@@ -126,14 +131,19 @@ export const imageOutput = (dependencies: {
     )
       return yield* fail("save", "Image output directory escapes its protected root.");
     const now = yield* Clock.currentTimeMillis;
-    const stamp = DateTime.formatIso(DateTime.makeUnsafe(now)).replace(/[:.]/g, "-");
-    const safeId = providerId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 48) || "image";
-    const nonce = [
-      yield* Random.nextIntBetween(0, 0xffff_ffff),
-      yield* Random.nextIntBetween(0, 0xffff_ffff),
-    ]
-      .map((value) => value.toString(16).padStart(8, "0"))
-      .join("");
+    const stamp = Fn.pipe(DateTime.formatIso(DateTime.makeUnsafe(now)), Str.replace(/[:.]/g, "-"));
+    const safeId =
+      Fn.pipe(providerId, Str.replace(/[^a-zA-Z0-9_-]/g, "_"), Str.slice(0, 48)) || "image";
+    const nonce = Arr.join(
+      Arr.map(
+        [
+          yield* Random.nextIntBetween(0, 0xffff_ffff),
+          yield* Random.nextIntBetween(0, 0xffff_ffff),
+        ],
+        (value) => Fn.pipe(value.toString(16), Str.padStart(8, "0")),
+      ),
+      "",
+    );
     const format = imageOutputMetadata(outputFormat);
     const destination = path.join(
       canonicalDirectory,

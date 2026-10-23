@@ -3,10 +3,12 @@ import {
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as MutableRef from "effect/MutableRef";
 import * as Predicate from "effect/Predicate";
+import * as Str from "effect/String";
 import {
   loadCodePreviewSettings,
   registerCodePreviewReplay,
@@ -169,9 +171,13 @@ export function betterOpenAIWithDependencies(
       ctx,
       hasTerminalUI(ctx) && cosmicUi.active
         ? undefined
-        : [fast ? statusSegment(ctx, MutableRef.get(fastProjection)) : undefined, usage?.text]
-            .filter(Boolean)
-            .join(" | ") || undefined,
+        : Arr.join(
+            Arr.filter(
+              [fast ? statusSegment(ctx, MutableRef.get(fastProjection)) : undefined, usage?.text],
+              (part): part is string => Predicate.isString(part) && Str.isNonEmpty(part),
+            ),
+            " | ",
+          ) || undefined,
     );
   };
   /** Renders, then lets the usage service react if the render found usage shown or hidden. */
@@ -319,7 +325,7 @@ export function betterOpenAIWithDependencies(
     description: "Toggle OpenAI fast mode",
     handler: (args, ctx) => {
       updateContext(ctx);
-      if (args.trim()) {
+      if (Str.trim(args)) {
         notifyAtHostBoundary(ctx, "Usage: /openai fast", "warning");
         return Promise.resolve();
       }
@@ -340,17 +346,20 @@ export function betterOpenAIWithDependencies(
   });
   const formatDebugStatus = (ctx: ExtensionContext) => {
     const cfg = config();
-    return [
-      ...fastDebugLines(ctx, MutableRef.get(fastProjection)),
-      `Footer usage: ${cosmicUi.isVisible("openai.usage") ? "automatic" : "hidden"} (Cosmic UI)`,
-      `OpenAI compaction: ${cfg.compaction.enabled ? "enabled" : "disabled"}${projectionMismatch ? ` (unavailable: ${projectionMismatch})` : ""}`,
-      "",
-      formatDebug(projection, ctx),
-      "",
-      `Image enabled: ${cfg.image.enabled}`,
-      `Image default save: ${cfg.image.defaultSave}`,
-      `Config: ${cfg.configPath}`,
-    ].join("\n");
+    return Arr.join(
+      [
+        ...fastDebugLines(ctx, MutableRef.get(fastProjection)),
+        `Footer usage: ${cosmicUi.isVisible("openai.usage") ? "automatic" : "hidden"} (Cosmic UI)`,
+        `OpenAI compaction: ${cfg.compaction.enabled ? "enabled" : "disabled"}${projectionMismatch ? ` (unavailable: ${projectionMismatch})` : ""}`,
+        "",
+        formatDebug(projection, ctx),
+        "",
+        `Image enabled: ${cfg.image.enabled}`,
+        `Image default save: ${cfg.image.defaultSave}`,
+        `Config: ${cfg.configPath}`,
+      ],
+      "\n",
+    );
   };
   registerSettingsController(command, {
     config: () => MutableRef.get(configProjection),

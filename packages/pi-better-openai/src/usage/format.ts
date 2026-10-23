@@ -2,10 +2,12 @@ import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import { clampPercent, JsonHttpClient } from "pi-cosmic-core";
 import type { CodexCredentials } from "../auth/codex-auth.ts";
 
@@ -109,15 +111,17 @@ function formatShortReset(label: string, seconds: number | null, now: number): s
     month: "numeric",
     day: "numeric",
   });
-  const time = DateTime.formatLocal(at.reset, {
-    locale: "en-US",
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  })
-    .replace(/\s+/gu, "")
-    .replace(/AM$/u, "a")
-    .replace(/PM$/u, "p");
+  const time = Fn.pipe(
+    DateTime.formatLocal(at.reset, {
+      locale: "en-US",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    }),
+    Str.replace(/\s+/gu, ""),
+    Str.replace(/AM$/u, "a"),
+    Str.replace(/PM$/u, "p"),
+  );
   return `${label} ↺ ${at.countdown} - ${date} • ${time}`;
 }
 
@@ -170,10 +174,14 @@ function formatWindowedUsageLine(
   now: number,
   capturedAt: number,
 ): string {
-  const visible = windows.filter(
+  const visible = Arr.filter(
+    windows,
     (window) => window.leftPercent !== null || window.resetInSeconds !== null,
   );
-  const labels = visible.map((window) => `${window.label}: ${formatPercent(window.leftPercent)}`);
+  const labels = Arr.map(
+    visible,
+    (window) => `${window.label}: ${formatPercent(window.leftPercent)}`,
+  );
   const resets = options.showResetTimes
     ? Arr.flatMapNullishOr(visible, (window) =>
         formatShortReset(
@@ -183,7 +191,7 @@ function formatWindowedUsageLine(
         ),
       )
     : [];
-  return `Usage: ${labels.length ? labels.join(" | ") : "--"}${resets.length ? ` | ${resets.join(" | ")}` : ""}`;
+  return `Usage: ${labels.length ? Arr.join(labels, " | ") : "--"}${resets.length ? ` | ${Arr.join(resets, " | ")}` : ""}`;
 }
 
 export function formatUsageSnapshot(
@@ -211,13 +219,16 @@ export function formatUsageSnapshot(
 }
 
 export function formatUsageDetails(snapshot: UsageSnapshot, now: number): string {
-  return [
-    "OpenAI subscription usage",
-    `  5 hour: ${formatPercent(snapshot.fiveHourLeftPercent)} left`,
-    `  7 day:  ${formatPercent(snapshot.sevenDayLeftPercent)} left`,
-    `  Source: ${USAGE_URL}`,
-    `  Updated: ${formatTimestamp(now)}`,
-  ].join("\n");
+  return Arr.join(
+    [
+      "OpenAI subscription usage",
+      `  5 hour: ${formatPercent(snapshot.fiveHourLeftPercent)} left`,
+      `  7 day:  ${formatPercent(snapshot.sevenDayLeftPercent)} left`,
+      `  Source: ${USAGE_URL}`,
+      `  Updated: ${formatTimestamp(now)}`,
+    ],
+    "\n",
+  );
 }
 
 export const requestCodexUsageWithCredentials = Effect.fn("CodexUsage.requestWithCredentials")(

@@ -1,3 +1,7 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import { getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
 import {
   buildSessionContext,
@@ -116,7 +120,7 @@ describe("owned checkpoint reconstruction", () => {
     expect(serializedSnapshot(restored.messages)).toContain("second dialogue");
     expect(serializedSnapshot(restored.messages)).toContain("tail dialogue");
     expect(serializedSnapshot(restored.messages)).not.toContain(OPENAI_COMPACTION_SUMMARY);
-    expect(restored.messages.filter((message) => message.role === "system")).toHaveLength(2);
+    expect(Arr.filter(restored.messages, (message) => message.role === "system")).toHaveLength(2);
     expect(serializedSnapshot(restored.coveredEntries)).not.toContain("tail dialogue");
     expect(serializedSnapshot(restored.coveredEntries)).not.toContain("tail instruction");
     expect(serializedSnapshot(branch)).toBe(before);
@@ -177,7 +181,7 @@ describe("owned checkpoint reconstruction", () => {
       appendCheckpoint(manager, first);
       appendUser(manager, "otherwise safe fallback tail");
       expect(prepareOpenAIFallback(manager.getBranch(), preparation)).toBeDefined();
-      const branch = manager.getBranch().map((entry) => {
+      const branch = Arr.map(manager.getBranch(), (entry) => {
         if (entry.type !== "compaction") return entry;
         const { systemMessage: _ignored, ...withoutSnapshot } = entry;
         return omitSnapshots
@@ -186,10 +190,10 @@ describe("owned checkpoint reconstruction", () => {
       });
       const repaired = repairOpenAIContext(branch, buildSessionContext(branch).messages)!.messages!;
       const prompt = getCurrentSystemPrompt(repaired);
-      expect(prompt.split("opaque original")).toHaveLength(2);
+      expect(Str.split(prompt, "opaque original")).toHaveLength(2);
       expect(prompt).toContain("current");
       expect(prompt).not.toContain("old");
-      expect(getCurrentTools(repaired).map((tool) => tool.name)).toEqual(["current"]);
+      expect(Arr.map(getCurrentTools(repaired), (tool) => tool.name)).toEqual(["current"]);
       expect(serializedSnapshot(repaired)).toContain("first dialogue");
       expect(serializedSnapshot(repaired)).toContain("second dialogue");
       expect(prepareOpenAIFallback(branch, preparation)).toBeUndefined();
@@ -228,21 +232,20 @@ describe("owned checkpoint reconstruction", () => {
       expect(serializedSnapshot(repaired)).not.toContain("omitted user dialogue");
       expect(serializedSnapshot(repaired)).not.toContain("obsolete");
       expect(serializedSnapshot(repaired)).toContain("edited custom content");
-      expect(repaired.find((message) => message.role === "toolResult")?.content).toEqual([
-        { type: "text", text: "edited tool content" },
-      ]);
+      expect(
+        Option.getOrUndefined(Arr.findFirst(repaired, (message) => message.role === "toolResult"))
+          ?.content,
+      ).toEqual([{ type: "text", text: "edited tool content" }]);
       expect(reconstructOpenAIContext(branch)?.coverageChanged).toBe(editAfterCheckpoint);
       const fallback = prepareOpenAIFallback(branch, preparation)!;
       expect(serializedSnapshot(fallback.messagesToSummarize)).toContain("edited custom content");
       expect(serializedSnapshot(fallback.messagesToSummarize)).not.toContain("obsolete");
       expect(serializedSnapshot(branch)).toBe(before);
-      const tampered = manager
-        .buildSessionContext()
-        .messages.map((message) =>
-          message.role === "toolResult"
-            ? Object.assign({}, message, { content: [{ type: "text" as const, text: "foreign" }] })
-            : message,
-        );
+      const tampered = Arr.map(manager.buildSessionContext().messages, (message) =>
+        message.role === "toolResult"
+          ? Object.assign({}, message, { content: [{ type: "text" as const, text: "foreign" }] })
+          : message,
+      );
       expect(() => repairOpenAIContext(branch, tampered)).toThrow();
     });
 
@@ -262,7 +265,7 @@ describe("owned checkpoint reconstruction", () => {
       isError: false,
       timestamp: 5,
       content: [
-        { type: "text" as const, text: "full tool result ".repeat(1000) },
+        { type: "text" as const, text: Fn.pipe("full tool result ", Str.repeat(1000)) },
         { type: "image" as const, data: "AA==", mimeType: "image/png" },
       ],
     };
@@ -273,12 +276,16 @@ describe("owned checkpoint reconstruction", () => {
       manager.getBranch(),
       manager.buildSessionContext().messages,
     )!.messages!;
-    expect(repaired.find((message) => message.role === "toolResult")).toEqual(result);
+    expect(
+      Option.getOrUndefined(Arr.findFirst(repaired, (message) => message.role === "toolResult")),
+    ).toEqual(result);
     appendUser(manager, "safe retained boundary");
     const fallback = prepareOpenAIFallback(manager.getBranch(), preparation)!;
-    expect(fallback.messagesToSummarize.find((message) => message.role === "toolResult")).toEqual(
-      result,
-    );
+    expect(
+      Option.getOrUndefined(
+        Arr.findFirst(fallback.messagesToSummarize, (message) => message.role === "toolResult"),
+      ),
+    ).toEqual(result);
     expect(fallback.fileOps.read.has("body.txt")).toBe(true);
   });
 
@@ -298,7 +305,7 @@ describe("owned checkpoint reconstruction", () => {
     const truncatedId = appendAssistant(manager, "length", "omitted length");
     appendCheckpoint(manager);
     const futureId = appendAssistant(manager, "length", "future length remains");
-    const branch = manager.getBranch().map((entry) =>
+    const branch = Arr.map(manager.getBranch(), (entry) =>
       entry.type === "compaction"
         ? Object.assign({}, entry, {
             details: {
@@ -340,13 +347,21 @@ describe("owned checkpoint reconstruction", () => {
     const retained = appendUser(manager, "retained tail");
     const fallback = prepareOpenAIFallback(manager.getBranch(), preparation)!;
     expect(
-      manager.getBranch().findIndex((entry) => entry.id === fallback.firstKeptEntryId),
-    ).toBeGreaterThan(manager.getBranch().findLastIndex((entry) => entry.type === "compaction"));
+      Option.getOrElse(
+        Arr.findFirstIndex(manager.getBranch(), (entry) => entry.id === fallback.firstKeptEntryId),
+        () => -1,
+      ),
+    ).toBeGreaterThan(
+      Option.getOrElse(
+        Arr.findLastIndex(manager.getBranch(), (entry) => entry.type === "compaction"),
+        () => -1,
+      ),
+    );
     expect(serializedSnapshot(fallback.messagesToSummarize)).toContain("original dialogue");
     expect(serializedSnapshot(fallback.messagesToSummarize)).toContain("second dialogue");
     expect(serializedSnapshot(fallback.messagesToSummarize)).not.toContain("retained tail");
     manager.appendCompaction("ordinary fallback", fallback.firstKeptEntryId, 100);
-    expect(manager.buildContextEntries().some((entry) => entry.id === retained)).toBe(true);
+    expect(Arr.some(manager.buildContextEntries(), (entry) => entry.id === retained)).toBe(true);
     expect(reconstructOpenAIContext(manager.getBranch())).toBeUndefined();
   });
 });

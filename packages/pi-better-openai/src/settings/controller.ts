@@ -1,7 +1,9 @@
 import { type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type SettingsList, type SettingItem } from "@earendil-works/pi-tui";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
+import * as Str from "effect/String";
 import {
   invokeBestEffort,
   invokeHostCallback,
@@ -118,10 +120,13 @@ export function registerSettingsController(
               invokeHostCallback(
                 () => [
                   ...new Set(
-                    ctx.modelRegistry
-                      .getAll()
-                      .filter((model) => model.provider === "openai-codex")
-                      .map((model) => model.id),
+                    Arr.map(
+                      Arr.filter(
+                        ctx.modelRegistry.getAll(),
+                        (model) => model.provider === "openai-codex",
+                      ),
+                      (model) => model.id,
+                    ),
                   ),
                 ],
                 [],
@@ -146,7 +151,7 @@ export function registerSettingsController(
                     currentValue: "open",
                     description: "Show Better OpenAI diagnostics.",
                     submenu: (_value, complete) =>
-                      textPanel("Debug info", formatDebugStatus(ctx).split("\n"), complete),
+                      textPanel("Debug info", Str.split(formatDebugStatus(ctx), "\n"), complete),
                   },
                   {
                     id: "config.paths",
@@ -172,7 +177,7 @@ export function registerSettingsController(
                     submenu: (_value, complete) =>
                       textPanel(
                         "Redacted config",
-                        JSON.stringify(redactedConfig, null, 2).split("\n"),
+                        Str.split(JSON.stringify(redactedConfig, null, 2), "\n"),
                         complete,
                       ),
                   },
@@ -228,7 +233,8 @@ export function registerSettingsController(
                   },
                 ];
                 const sections = () =>
-                  groups.map(
+                  Arr.map(
+                    groups,
                     (group): SettingsSurfaceItem => ({
                       kind: "group",
                       id: group.id,

@@ -9,6 +9,7 @@ import {
 import * as Arr from "effect/Array";
 import * as Equal from "effect/Equal";
 import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { decodeOpenAICompactionDetails } from "./protocol.ts";
@@ -20,12 +21,12 @@ const asJson = Fn.flow(encodeJson, decodeJson);
 export function hasExactPrefix(actual: readonly unknown[], expected: readonly unknown[]): boolean {
   return (
     actual.length >= expected.length &&
-    expected.every((item, index) => Equal.equals(asJson(item), asJson(actual[index])))
+    Arr.every(expected, (item, index) => Equal.equals(asJson(item), asJson(actual[index])))
   );
 }
 
 export function latestOwnedCheckpoint(branch: readonly SessionEntry[]) {
-  const entry = branch.findLast((item) => item.type === "compaction");
+  const entry = Option.getOrUndefined(Arr.findLast(branch, (item) => item.type === "compaction"));
   const details = entry && decodeOpenAICompactionDetails(entry.details);
   return entry && details ? { entry, checkpoint: details.checkpoint } : undefined;
 }
@@ -48,8 +49,11 @@ export function retryOmissions(
   const persisted = new Set(owned?.checkpoint.omittedEntryIds);
   const requested = new Set(observed);
   if (willRetry) {
-    const last = buildContextEntries([...branch]).findLast(
-      (entry) => sessionEntryToContextMessages(entry).length > 0,
+    const last = Option.getOrUndefined(
+      Arr.findLast(
+        buildContextEntries([...branch]),
+        (entry) => sessionEntryToContextMessages(entry).length > 0,
+      ),
     );
     if (last && isRetryOmittable(last)) requested.add(last.id);
   }
@@ -62,10 +66,11 @@ export function retryOmissions(
 }
 
 export function projectContextEntries(branch: readonly SessionEntry[]): SessionEntry[] {
-  return buildSessionProjection([...branch]).entries.flatMap(
+  return Arr.flatMap(
+    buildSessionProjection([...branch]).entries,
     ({ sourceEntry, messages }): SessionEntry[] => {
       if (sourceEntry.type === "message")
-        return messages.map((message) => ({ ...sourceEntry, message }));
+        return Arr.map(messages, (message) => ({ ...sourceEntry, message }));
       if (sourceEntry.type === "custom_message") {
         const message = messages[0];
         return message?.role === "custom" ? [{ ...sourceEntry, content: message.content }] : [];
@@ -84,11 +89,11 @@ export function reconstructOpenAIContext(
   if (!checkpoint) return undefined;
   const checkpointIndex = branch.indexOf(checkpoint);
   if (
-    new Set(branch.map((entry) => entry.id)).size !== branch.length ||
-    branch.some((entry, index) => entry.parentId !== (branch[index - 1]?.id ?? null))
+    new Set(Arr.map(branch, (entry) => entry.id)).size !== branch.length ||
+    Arr.some(branch, (entry, index) => entry.parentId !== (branch[index - 1]?.id ?? null))
   )
     throw new Error("Unable to reconstruct a complete session branch.");
-  const unwrapped: SessionEntry[] = branch.map((entry) =>
+  const unwrapped: SessionEntry[] = Arr.map(branch, (entry) =>
     entry.type === "compaction" && decodeOpenAICompactionDetails(entry.details)
       ? {
           type: "custom",
@@ -101,16 +106,17 @@ export function reconstructOpenAIContext(
       : entry,
   );
   const visible = projectContextEntries(unwrapped);
-  const coveredIds = new Set(branch.slice(0, checkpointIndex + 1).map((entry) => entry.id));
+  const coveredIds = new Set(Arr.map(branch.slice(0, checkpointIndex + 1), (entry) => entry.id));
   const omittedEntryIds = retryOmissions(branch, observedOmissions);
   const omitted = new Set(omittedEntryIds);
   const persistedOmissions = new Set(retryOmissions(branch));
   const coverageChanged =
-    omittedEntryIds.some((id) => coveredIds.has(id) && !persistedOmissions.has(id)) ||
-    branch
-      .slice(checkpointIndex + 1)
-      .some((entry) => entry.type === "context_edit" && coveredIds.has(entry.targetId));
-  const conversation = visible.flatMap((entry): SessionEntry[] => {
+    Arr.some(omittedEntryIds, (id) => coveredIds.has(id) && !persistedOmissions.has(id)) ||
+    Arr.some(
+      branch.slice(checkpointIndex + 1),
+      (entry) => entry.type === "context_edit" && coveredIds.has(entry.targetId),
+    );
+  const conversation = Arr.flatMap(visible, (entry): SessionEntry[] => {
     if (omitted.has(entry.id)) return [];
     if (!coveredIds.has(entry.id)) return [entry];
     if (entry.type === "message" && entry.message.role === "system") return [];
@@ -140,8 +146,8 @@ export function reconstructOpenAIContext(
     omittedEntryIds,
     coverageChanged,
     entries,
-    coveredEntries: [...snapshot, ...conversation.filter((entry) => coveredIds.has(entry.id))],
-    messages: entries.flatMap(sessionEntryToContextMessages),
+    coveredEntries: [...snapshot, ...Arr.filter(conversation, (entry) => coveredIds.has(entry.id))],
+    messages: Arr.flatMap(entries, sessionEntryToContextMessages),
   };
 }
 
@@ -152,10 +158,13 @@ export function repairOpenAIContext(
 ) {
   const nativeEntries = buildSessionProjection([...branch]).entries;
   const visibleIds = new Set(
-    nativeEntries.filter((entry) => entry.messages.length).map((entry) => entry.sourceEntry.id),
+    Arr.map(
+      Arr.filter(nativeEntries, (entry) => entry.messages.length > 0),
+      (entry) => entry.sourceEntry.id,
+    ),
   );
   const omitted = new Set(
-    retryOmissions(branch, observedOmissions).filter((id) => !visibleIds.has(id)),
+    Arr.filter(retryOmissions(branch, observedOmissions), (id) => !visibleIds.has(id)),
   );
   let cursor = 0;
   for (const { sourceEntry: entry, messages: projected } of nativeEntries) {

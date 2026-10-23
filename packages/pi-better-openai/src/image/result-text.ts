@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import type { CodexImageDetails } from "./types.ts";
 
 export const imageResultText = (result: CodexImageDetails): string => {
@@ -10,5 +11,5 @@ export const imageResultText = (result: CodexImageDetails): string => {
   if (result.revisedPrompt) parts.push(`Revised prompt: ${result.revisedPrompt}`);
   if (result.savedPath) parts.push(`Saved: ${result.savedPath}`);
   if (result.note) parts.push(`Note: ${result.note}.`);
-  return parts.join("\n");
+  return Arr.join(parts, "\n");
 };

@@ -2,6 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import { decodeUnknownOrUndefined, extractJwtClaim, redactedTokenSchema } from "pi-cosmic-core";
 
 const redactedAccessToken = redactedTokenSchema("OpenAI Codex access token");
@@ -38,11 +39,13 @@ const decodeRegistryCredentials = decodeUnknownOrUndefined(RegistryCredentialsFr
 const parseRegistryCredentials = (value: string): CodexCredentials | undefined => {
   const parsed = decodeRegistryCredentials(value);
   const parsedToken = parsed?.access ?? parsed?.token;
-  const parsedAccountId = (parsed?.accountId ?? parsed?.account_id)?.trim();
+  const rawAccountId = parsed?.accountId ?? parsed?.account_id;
+  const parsedAccountId = rawAccountId === undefined ? undefined : Str.trim(rawAccountId);
   if (parsedToken && parsedAccountId)
     return { accessToken: parsedToken, accountId: parsedAccountId };
   const claims = extractJwtClaim(value, JwtPayloadFromJsonSchema);
-  const accountId = claims?.["https://api.openai.com/auth"]?.chatgpt_account_id?.trim();
+  const claimedAccountId = claims?.["https://api.openai.com/auth"]?.chatgpt_account_id;
+  const accountId = claimedAccountId === undefined ? undefined : Str.trim(claimedAccountId);
   if (!accountId) return undefined;
   return { accessToken: Redacted.make(value, { label: "OpenAI Codex access token" }), accountId };
 };
@@ -60,7 +63,7 @@ export const getCodexCredentials = Effect.fn("CodexAuth.getCredentials")(functio
       }),
   });
   if (!apiKey) return undefined;
-  const credentials = parseRegistryCredentials(apiKey.trim());
+  const credentials = parseRegistryCredentials(Str.trim(apiKey));
   if (credentials) return credentials;
   return yield* CodexAuthError.make({
     operation: "registry-decode",

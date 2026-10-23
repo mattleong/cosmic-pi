@@ -1,7 +1,9 @@
+import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import type { JsonObject, JsonValue } from "pi-cosmic-core";
 import { toolArgumentPreparer } from "pi-cosmic-core/tool-arguments";
 import type { Static } from "typebox";
@@ -68,12 +70,12 @@ const decodeArgumentsObject = Schema.decodeUnknownOption(
   Schema.Record(Schema.String, Schema.MutableJson),
 );
 const isBlankEntry = (entry: JsonValue) =>
-  entry === null || (Predicate.isString(entry) && entry.trim().length === 0);
+  entry === null || (Predicate.isString(entry) && Str.trim(entry).length === 0);
 
 // Blank entries in `images` name no file, so they are dropped like blank optional fields.
 const withoutBlankImages = ({ images, ...rest }: JsonObject): JsonObject => {
-  if (!Array.isArray(images)) return images === undefined ? rest : { ...rest, images };
-  const named = images.filter((entry) => !isBlankEntry(entry));
+  if (!Arr.isArray(images)) return images === undefined ? rest : { ...rest, images };
+  const named = Arr.filter(images, (entry) => !isBlankEntry(entry));
   return named.length > 0 ? { ...rest, images: named } : rest;
 };
 

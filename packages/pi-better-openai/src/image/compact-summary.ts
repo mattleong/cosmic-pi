@@ -1,8 +1,11 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import {
   getTextContent,
   type CompactIssue,
@@ -20,7 +23,7 @@ import {
 const ACTIONS: ReadonlySet<string> = new Set(IMAGE_ACTIONS);
 
 export const imagePromptSubject = (prompt: string): string =>
-  prompt.replace(/\s+/g, " ").trim().slice(0, 100);
+  Fn.pipe(prompt, Str.replace(/\s+/g, " "), Str.trim, Str.slice(0, 100));
 
 const ImageRecordSchema = Schema.Struct({
   ...CodexImageDetailsSchema.fields,
@@ -32,7 +35,8 @@ export const imageRecord = Fn.flow(
   Option.getOrUndefined,
 );
 
-const savedFileName = (path: string | undefined): string => path?.split("/").pop()?.trim() ?? "";
+const savedFileName = (path: string | undefined): string =>
+  path === undefined ? "" : Str.trim(Arr.lastNonEmpty(Str.split(path, "/")));
 
 type StatusSummary = Pick<CompactSummary, "outcome" | "issues">;
 const uncertain = (code: string, message: string): StatusSummary => ({
@@ -87,7 +91,12 @@ const SIGN_IN =
   /\/login openai-codex\b|\bopenai-codex OAuth credentials\b|\bcredentials are malformed\b/iu;
 
 export const isSignInFailure = (text: string): boolean =>
-  SIGN_IN.test(text.split(/\r?\n/u).find((line) => line.trim()) ?? "");
+  SIGN_IN.test(
+    Option.getOrElse(
+      Arr.findFirst(Str.split(text, /\r?\n/u), (line) => Str.isNonEmpty(Str.trim(line))),
+      () => "",
+    ),
+  );
 
 export function imageFailureIssue(text: string): CompactIssue {
   return isSignInFailure(text)
@@ -100,13 +109,13 @@ export function imageFailureIssue(text: string): CompactIssue {
 }
 
 const textOnlyFailure = (result: AgentToolResult<unknown> | undefined): string | undefined => {
-  if (!result?.content.length || result.content.some((part) => part.type !== "text"))
+  if (!result?.content.length || Arr.some(result.content, (part) => part.type !== "text"))
     return undefined;
   const details = result.details;
-  if (details !== undefined && !(Predicate.isObject(details) && Object.keys(details).length === 0))
+  if (details !== undefined && !(Predicate.isObject(details) && Rec.keys(details).length === 0))
     return undefined;
   const text = getTextContent(result.content);
-  return text.trim() ? text : undefined;
+  return Str.trim(text) ? text : undefined;
 };
 
 export const imageCompactSummary: CompactSummaryProvider<ToolParams> = ({
@@ -130,7 +139,7 @@ export const imageCompactSummary: CompactSummaryProvider<ToolParams> = ({
 
   if (!record) return undefined;
   return imageRecordSummary(record, {
-    hasImage: result?.content.some((part) => part.type === "image") ?? false,
+    hasImage: result !== undefined && Arr.some(result.content, (part) => part.type === "image"),
     expanded: context.expanded,
     prompt: args.prompt,
   });
