@@ -104,6 +104,7 @@
     "oxc/no-barrel-file": "error",
     "oxc/no-map-spread": "off",
     "promise/catch-or-return": "error",
+    "promise/valid-params": "off",
     "typescript/ban-types": "error",
     "typescript/consistent-type-assertions": [
       "error",
@@ -191,6 +192,7 @@
       "files": ["packages/*/src/**/*.ts"],
       "rules": {
         "typescript/no-non-null-assertion": "error",
+        "anti-slop/no-callable-type-predicate": "error",
         "anti-slop-effect/prefer-effect-fn": "error",
         "anti-slop-effect/no-effect-runner-imports": "error",
         "eslint/no-restricted-properties": [
@@ -325,7 +327,14 @@
             "objectLiteralTypeAssertions": "never"
           }
         ],
-        "typescript/no-unsafe-type-assertion": "off"
+        "typescript/no-unsafe-type-assertion": "off",
+        "anti-slop/no-callable-type-predicate": "off"
+      }
+    },
+    {
+      "files": ["packages/pi-cosmic-core/src/schema/foreign-callable.ts"],
+      "rules": {
+        "anti-slop/no-callable-type-predicate": "off"
       }
     },
     {

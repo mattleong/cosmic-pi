@@ -42,6 +42,12 @@ and `require-safety-comment-for-type-assertion` unreachable, so they were remove
 `no-conditional-empty-object-spread` was removed because it only exchanged one conditional-spread
 spelling for another.
 
+Oxlint's `promise/valid-params` is off: it matches Promise method names on any receiver, so
+Effect's data-first `Effect.catch(effect, handler)` reads as `Promise.catch()` with two arguments.
+TypeScript already checks Effect and Promise signatures. `promise/catch-or-return` stays on; it
+misreads only a discarded expression statement such as `Effect.catch(...).pipe(...);`, which is
+already a floating Effect.
+
 Upstream presentation rules are not vendored because they constrain presentation rather than
 protecting correctness: `no-shape-in-symbol-names` (identifier spelling) and
 `require-readable-spacing` (blank-line layout, with its vendored eslint-stylistic dependency).
@@ -58,6 +64,16 @@ Workspace-owned rules supplement the upstream rules where no native Oxlint rule 
 policy. They run as errors in regular `pnpm lint` and
 use Oxlint's AST and lexical scopes. They report without fixes because each finding needs an author's decision:
 
+- **`no-callable-type-predicate`** (package `src/` only, not `src/testing`) reports a type predicate,
+  or a `Schema.declare<T>` guard, whose only evidence for a claimed callable is a callability check:
+  `Predicate.isFunction`, `typeof x === "function"`, `instanceof Function`, or
+  `Function.prototype.isPrototypeOf`. The check may target the subject or a static member path of it;
+  the claimed type at that path counts as callable when it is a function or constructor type, has a
+  call signature or method, or is opaque (a type parameter, imported or nested type, or computed
+  type). Same-file top-level aliases and interfaces are resolved; the subject's own type parameter
+  in `V & T`, `Function`, and members the claim does not declare remain valid. Admit callbacks
+  with pi-cosmic-core's `ForeignCallable` and decode the result; its implementation file is
+  exempt through an exact-file override.
 - **`no-eager-effect-finalizer-condition`** catches a conditional/logical `Effect.ensuring`
   decision that reads a binding mutated by a callback in its wrapped Effect pipeline. Defer the
   decision with `Effect.suspend`. Immutable decisions and reads inside lazy callbacks are valid.

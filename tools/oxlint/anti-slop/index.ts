@@ -1,6 +1,7 @@
 import { eslintCompatPlugin } from "@oxlint/plugins";
 
 import { noArrayFilterMapRule } from "./rules/no-array-filter-map.ts";
+import { noCallableTypePredicateRule } from "./rules/no-callable-type-predicate.ts";
 import { noEagerEffectFinalizerConditionRule } from "./rules/no-eager-effect-finalizer-condition.ts";
 import { noEscapingRenderContextRule } from "./rules/no-escaping-render-context.ts";
 import { noKnownValueWideningRule } from "./rules/no-known-value-widening.ts";
@@ -22,6 +23,7 @@ const antiSlopPlugin = eslintCompatPlugin({
   meta: { name: "anti-slop" },
   rules: {
     "no-array-filter-map": noArrayFilterMapRule,
+    "no-callable-type-predicate": noCallableTypePredicateRule,
     "no-eager-effect-finalizer-condition": noEagerEffectFinalizerConditionRule,
     "no-escaping-render-context": noEscapingRenderContextRule,
     "no-known-value-widening": noKnownValueWideningRule,
