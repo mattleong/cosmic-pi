@@ -4,7 +4,8 @@ import type { ActivityEvents } from "./protocol.ts";
 import { ActivityError } from "./service.ts";
 
 export const ACTIVITY_VIEW_DISCOVER = "cosmic-ui:activity:view:discover:v1";
-export type ActivitySection = "subagents" | "tasks";
+const ActivitySectionSchema = Schema.Literals(["subagents", "tasks"]);
+export type ActivitySection = typeof ActivitySectionSchema.Type;
 export interface ActivityViewCapability {
   readonly open: (section: ActivitySection, signal?: AbortSignal) => Promise<boolean>;
 }
@@ -15,8 +16,7 @@ const ViewCapability = Schema.Struct({
   hostToken: Schema.ObjectKeyword,
   open: ForeignCallable<[section: ActivitySection, signal?: AbortSignal]>(),
 });
-export const isActivitySection = (section: string): section is ActivitySection =>
-  section === "subagents" || section === "tasks";
+export const isActivitySection = Schema.is(ActivitySectionSchema);
 
 const decodeViewCapability = decodeUnknownOrUndefined(ViewCapability);
 const decodeOpened = decodeUnknownOrUndefined(Schema.Boolean);

@@ -7,6 +7,7 @@ import * as Schema from "effect/Schema";
 import {
   decodeUnknownOrUndefined,
   frozenProjection,
+  invokeBestEffort,
   sanitizeTerminalLine,
   sanitizeDiagnosticContent,
 } from "pi-cosmic-core";
@@ -72,7 +73,8 @@ const stale = () => new ActivityError({ reason: "stale" });
 const failed = () => new ActivityError({ reason: "failed" });
 const isActivityError = Schema.is(ActivityError);
 const asActivityError = (cause: unknown) => (isActivityError(cause) ? cause : failed());
-const bestEffort = (run: () => void) => Effect.try({ try: run, catch: failed }).pipe(Effect.ignore);
+// Foreign callbacks may throw or return a rejected thenable; both are contained.
+const bestEffort = (run: () => void) => Effect.sync(() => invokeBestEffort(run));
 const cleanDetail = (text: string) =>
   sanitizeDiagnosticContent(
     text.slice(0, ACTIVITY_LIMITS.detail).split("\n").map(sanitizeTerminalLine).join("\n"),

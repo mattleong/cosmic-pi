@@ -1,3 +1,4 @@
+import * as Predicate from "effect/Predicate";
 import type { ActivityRow } from "./model.ts";
 
 type ActivityAction = NonNullable<ActivityRow["actions"]>[number];
@@ -50,7 +51,7 @@ export interface ActivityActionHints {
 }
 
 const join = (parts: ReadonlyArray<string | undefined>) =>
-  parts.filter((part): part is string => Boolean(part)).join(" · ") || undefined;
+  parts.filter(Predicate.isTruthy).join(" · ") || undefined;
 
 export function activityActionHints(
   row: ActivityRow | undefined,

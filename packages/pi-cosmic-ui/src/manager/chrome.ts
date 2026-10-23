@@ -1,4 +1,5 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import * as Predicate from "effect/Predicate";
 
 const BRAILLE_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 const STARTING_SPINNER_FRAMES = ["◌", "◔", "◑", "◕"] as const;
@@ -99,9 +100,7 @@ export const renderResponsiveManagerFooter = (
 ): string => {
   const safeWidth = Math.max(0, Math.floor(contentWidth));
   if (safeWidth === 0 || variants.length === 0) return "";
-  const lines = variants.map(
-    (groups) => ` ${groups.filter((group): group is string => Boolean(group)).join(" │ ")} `,
-  );
+  const lines = variants.map((groups) => ` ${groups.filter(Predicate.isTruthy).join(" │ ")} `);
   return (
     lines.find((line) => visibleWidth(line) <= safeWidth) ??
     truncateToWidth(lines.at(-1) ?? "", safeWidth, "")

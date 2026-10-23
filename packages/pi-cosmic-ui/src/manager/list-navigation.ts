@@ -1,3 +1,5 @@
+import * as Schema from "effect/Schema";
+import * as Struct from "effect/Struct";
 import type { PageSteps } from "./keymap.ts";
 
 const MOVEMENT_OFFSETS = {
@@ -10,14 +12,14 @@ const MOVEMENT_OFFSETS = {
 };
 
 type MovementMotion = keyof typeof MOVEMENT_OFFSETS;
+const MOVEMENT_MOTIONS = Struct.keys(MOVEMENT_OFFSETS);
 
-export type ListMotion = MovementMotion | "first" | "last";
+const ListMotionSchema = Schema.Literals([...MOVEMENT_MOTIONS, "first", "last"]);
+export type ListMotion = typeof ListMotionSchema.Type;
 
-export const isMovementMotion = (action: string): action is MovementMotion =>
-  Object.hasOwn(MOVEMENT_OFFSETS, action);
+export const isMovementMotion = Schema.is(Schema.Literals(MOVEMENT_MOTIONS));
 
-export const isListMotion = (action: string): action is ListMotion =>
-  action === "first" || action === "last" || isMovementMotion(action);
+export const isListMotion = Schema.is(ListMotionSchema);
 
 export const movementOffset = (motion: MovementMotion, steps: PageSteps): number =>
   MOVEMENT_OFFSETS[motion](steps);

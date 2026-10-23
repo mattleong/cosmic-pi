@@ -337,4 +337,19 @@ describe("activity service", () => {
       expect(rows()).toEqual([]);
     }),
   );
+  it.live("contains a rejected acknowledgement", () =>
+    Effect.gen(function* () {
+      const { service, rows } = yield* recordingService();
+      const event = envelope({
+        ...registration({}),
+        acknowledge: () => Promise.reject(new Error("private producer error")),
+      });
+      yield* service.receive(event);
+      expect(rows()).toHaveLength(1);
+      yield* service.receive({ ...event, operation: "revoke" });
+      expect(rows()).toEqual([]);
+      // Vitest fails the run on an unhandled rejection; let it surface before the test ends.
+      yield* Effect.sleep("1 millis");
+    }),
+  );
 });

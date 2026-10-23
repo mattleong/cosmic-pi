@@ -1,6 +1,7 @@
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { getKeybindings, type Component } from "@earendil-works/pi-tui";
-import * as Predicate from "effect/Predicate";
+import * as Arr from "effect/Array";
+import * as Schema from "effect/Schema";
 import { invokeHostCallback, sanitizeTerminalLine } from "pi-cosmic-core";
 import {
   managerActivityColor,
@@ -31,8 +32,7 @@ export const renderToolHeader = (header: ToolHeader, theme: Pick<Theme, "bold" |
 
 type ToolStatusKind = ManagerActivityKind | ManagerNoticeKind;
 
-const isNotice = (kind: ToolStatusKind): kind is ManagerNoticeKind =>
-  kind === "info" || kind === "success" || kind === "warning" || kind === "error";
+const isNotice = Schema.is(Schema.Literals(["info", "success", "warning", "error"]));
 
 export const toolStatusLine = (
   theme: Pick<Theme, "fg">,
@@ -49,14 +49,12 @@ export const toolStatusLine = (
 export const toolRunningLine = (theme: Pick<Theme, "fg">, frame = 0): string =>
   toolStatusLine(theme, "running", "Running…", frame);
 
+const isExpandKey = Schema.is(Schema.String.check(Schema.isMaxLength(32)));
+
 export const toolExpandHint = (): string => {
   const keys = invokeHostCallback((): ReadonlyArray<string> => {
     const configured: unknown = getKeybindings().getKeys("app.tools.expand");
-    return Array.isArray(configured)
-      ? configured
-          .slice(0, 4)
-          .filter((key): key is string => Predicate.isString(key) && key.length <= 32)
-      : [];
+    return Arr.isArray(configured) ? configured.slice(0, 4).filter(isExpandKey) : [];
   }, []);
   return keys.length > 0
     ? `${keys.map(sanitizeTerminalLine).join("/")} to expand`

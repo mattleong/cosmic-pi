@@ -168,9 +168,7 @@ export function createFooterComponent(options: {
         ];
         const text = applyTextDecorations(
           orderedContributions(
-            contributions.filter(
-              (entry): entry is CosmicFooterTextContribution => entry.kind === "text",
-            ),
+            contributions.filter((entry) => entry.kind === "text"),
             config,
           ),
         );
