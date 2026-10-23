@@ -24,7 +24,7 @@ export class AgentDirectory extends Context.Service<AgentDirectory, string>()(
       Effect.try({
         try: load,
         catch: () =>
-          new AgentDirectoryError({ message: "Unable to resolve the Pi agent directory." }),
+          AgentDirectoryError.make({ message: "Unable to resolve the Pi agent directory." }),
       }),
     );
 }

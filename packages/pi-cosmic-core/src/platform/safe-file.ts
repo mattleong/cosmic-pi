@@ -31,7 +31,7 @@ const READ_FAILURE = "Unable to read a stable contained regular file.";
 const OPEN_FAILURE = "Unable to open a stable regular file.";
 
 const safeFileError = (operation: string, message: string) => () =>
-  new SafeFileError({ operation, message });
+  SafeFileError.make({ operation, message });
 
 const nodePromise = <Value>(
   operation: string,

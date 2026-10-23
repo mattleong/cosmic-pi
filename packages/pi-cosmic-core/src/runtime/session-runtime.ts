@@ -177,7 +177,7 @@ export function makePiSessionRuntimeSlot<
     return current
       ? current.runtime.run(effect, signal)
       : Promise.reject(
-          new PiSessionRuntimeError({
+          PiSessionRuntimeError.make({
             operation: "run",
             message: "Pi session runtime is not active.",
           }),

@@ -8,7 +8,7 @@ class TokenVerificationError extends Schema.TaggedError<
 
 export type TokenVerifier = (supplied: string) => Effect.Effect<boolean, TokenVerificationError>;
 
-const cryptoFailure = () => new TokenVerificationError();
+const cryptoFailure = () => TokenVerificationError.make();
 const utf8 = new TextEncoder();
 
 export const makeTokenVerifier = Effect.fn("TokenVerifier.make")(function* (expected: string) {

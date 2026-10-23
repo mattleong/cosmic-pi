@@ -47,7 +47,7 @@ export interface JsonHttpClientContract {
 }
 
 const jsonHttpError = (operation: JsonHttpError["operation"], message: string) => () =>
-  new JsonHttpError({ operation, message });
+  JsonHttpError.make({ operation, message });
 const bodyEncodeError = jsonHttpError(
   "encode",
   "HTTP request body did not match the expected schema.",

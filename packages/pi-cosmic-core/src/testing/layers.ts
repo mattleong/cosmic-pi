@@ -83,8 +83,8 @@ const documentView = (stored: Map<string, JsonObject>): InMemoryDocumentMap => (
 const cloneDocument = (operation: string, path: string, document: JsonObject) =>
   Schema.encodeUnknownEffect(JsonObjectFromString)(document).pipe(
     Effect.flatMap((source) => Schema.decodeEffect(JsonObjectFromString)(source)),
-    Effect.mapError(
-      () => new JsonDocumentError({ operation, path, message: "Unable to clone JSON document." }),
+    Effect.mapError(() =>
+      JsonDocumentError.make({ operation, path, message: "Unable to clone JSON document." }),
     ),
   );
 

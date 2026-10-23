@@ -91,7 +91,7 @@ const boundedOutput = (
           total.size += retained.byteLength;
         }
         return chunk.byteLength > remaining
-          ? Effect.fail(new BoundedProcessOverflow({ stream: streamName }))
+          ? Effect.fail(BoundedProcessOverflow.make({ stream: streamName }))
           : Effect.void;
       }),
     ),
@@ -175,9 +175,8 @@ const runBoundedProcess = Effect.fn("BoundedProcess.run")(function* (
       const onCleanup = request.onCleanup;
       if (onCleanup) yield* Effect.addFinalizer(() => Effect.sync(() => onCleanup(confirmed)));
       const acquired = yield* command.pipe(
-        Effect.mapError(
-          () =>
-            new BoundedProcessError({ operation: "spawn", message: "Unable to start process." }),
+        Effect.mapError(() =>
+          BoundedProcessError.make({ operation: "spawn", message: "Unable to start process." }),
         ),
       );
       if (request.onCleanup)
@@ -217,9 +216,8 @@ const runBoundedProcess = Effect.fn("BoundedProcess.run")(function* (
     Effect.catchTag("BoundedProcessOverflow", () =>
       Effect.succeed(ObservedProcessOutcome.Overflow()),
     ),
-    Effect.mapError(
-      () =>
-        new BoundedProcessError({ operation: "stream", message: "Unable to read process output." }),
+    Effect.mapError(() =>
+      BoundedProcessError.make({ operation: "stream", message: "Unable to read process output." }),
     ),
   );
   const outcome = yield* observed.pipe(

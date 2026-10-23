@@ -199,7 +199,7 @@ it.effect("records only a static failure class before disposing a failed startup
   Effect.gen(function* () {
     const secret = "sk-live-0123456789";
     const typed = yield* failedStartupLogs(() =>
-      Effect.fail(new CredentialRejected({ message: `rejected ${secret}` })),
+      Effect.fail(CredentialRejected.make({ message: `rejected ${secret}` })),
     );
     // A tag is caller-controlled text, so even a well-formed one is never echoed.
     const secretTag = yield* failedStartupLogs(() => Effect.fail({ _tag: secret }));

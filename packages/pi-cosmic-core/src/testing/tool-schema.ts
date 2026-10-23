@@ -1,4 +1,4 @@
-import { flow } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Schema from "effect/Schema";
 import { isJsonObject, type JsonValue } from "../platform/json-document.ts";
 
@@ -64,7 +64,7 @@ const schemaProblems = (node: JsonValue, path: string): ReadonlyArray<string> =>
  * `path: keyword` entries. Pi sends providers the schema's JSON serialization, so that is what
  * gets inspected.
  */
-export const toolSchemaPortabilityProblems = flow(
+export const toolSchemaPortabilityProblems = Fn.flow(
   JSON.stringify,
   decodeSerializedSchema,
   (schema): ReadonlyArray<string> => schemaProblems(schema, "#"),

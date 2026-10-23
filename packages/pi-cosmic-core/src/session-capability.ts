@@ -1,5 +1,5 @@
 import type { EventBus } from "@earendil-works/pi-coding-agent";
-import { flow } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Schema from "effect/Schema";
 import { invokeBestEffort } from "./host-session.ts";
 import { decodeUnknownOrUndefined } from "./schema/decode.ts";
@@ -31,7 +31,7 @@ export const makeSessionCapabilityProtocol = <const Version extends number>(
     respond: ForeignCallable<[candidate: CapabilityCandidate]>(),
   });
 
-  const normalizeQuery = flow(
+  const normalizeQuery = Fn.flow(
     decodeUnknownOrUndefined(Query),
     (decoded): SessionCapabilityQuery<Version> | undefined => {
       if (decoded === undefined) return undefined;

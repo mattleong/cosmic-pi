@@ -31,7 +31,7 @@ const JsonObjectSchema = Schema.Record(Schema.String, Schema.MutableJson);
 export const JsonObjectFromString = Schema.fromJsonString(JsonObjectSchema, { space: 2 });
 
 const documentError = (operation: string, path: string, message: string) =>
-  new JsonDocumentError({ operation, path, message });
+  JsonDocumentError.make({ operation, path, message });
 const failAs = (operation: string, path: string, message: string) =>
   Effect.mapError(() => documentError(operation, path, message));
 

@@ -29,7 +29,7 @@ export const makeSynchronousIngress = Effect.fn("SynchronousIngress.make")(funct
 ): Effect.fn.Return<SynchronousIngress<A>, SynchronousIngressError, Scope.Scope | R> {
   const capacity = options.capacity;
   if (!(Number.isSafeInteger(capacity) && capacity > 0)) {
-    return yield* new SynchronousIngressError({
+    return yield* SynchronousIngressError.make({
       message: "Ingress capacity must be a positive safe integer.",
     });
   }

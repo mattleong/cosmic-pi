@@ -62,7 +62,7 @@ export class ProcessTreeError extends Schema.TaggedError<
 }) {}
 
 export const processGroupSignalError = (result: "permission" | "failed") =>
-  new ProcessTreeError({
+  ProcessTreeError.make({
     operation: "signal process group",
     code: "group_signal_failed",
     message: `Unable to signal the owned process tree.${result === "permission" ? " (EPERM)" : ""}`,

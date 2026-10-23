@@ -14,6 +14,6 @@ export const yieldUntil = (
 ): Effect.Effect<void, TestPollingTimeout> =>
   Effect.suspend(() => {
     if (predicate()) return Effect.void;
-    if (attempts <= 0) return new TestPollingTimeout({ attempts: 0 });
+    if (attempts <= 0) return TestPollingTimeout.make({ attempts: 0 });
     return Effect.yieldNow.pipe(Effect.andThen(yieldUntil(predicate, attempts - 1)));
   });

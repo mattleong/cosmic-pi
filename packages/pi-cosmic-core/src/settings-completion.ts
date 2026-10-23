@@ -113,9 +113,9 @@ export const decodeSettingUpdate = <Config>(
   Effect.fn("Settings.decodeSettingUpdate")(function* (id: string, rawValue: string) {
     const descriptor = descriptors.find((entry) => entry.id === id);
     if (!descriptor)
-      return yield* new InvalidSettingError({ id, message: `Unknown setting: ${id}.` });
+      return yield* InvalidSettingError.make({ id, message: `Unknown setting: ${id}.` });
     const parsedValue = yield* Schema.decodeEffect(descriptor.decoder)(rawValue).pipe(
-      Effect.mapError(() => new InvalidSettingError({ id, message: `Invalid value for ${id}.` })),
+      Effect.mapError(() => InvalidSettingError.make({ id, message: `Invalid value for ${id}.` })),
     );
     const separator = id.indexOf(".");
     if (separator < 0)

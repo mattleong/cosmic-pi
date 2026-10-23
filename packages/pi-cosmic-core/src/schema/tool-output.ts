@@ -34,7 +34,7 @@ const checkReferences = (
     if (key === "$ref" && Predicate.isString(value)) {
       const name = definitionName(value);
       if (name === undefined || !Object.hasOwn(definitions, name)) {
-        throw new ToolOutputSchemaError({
+        throw ToolOutputSchemaError.make({
           path: at,
           message: `Output schema reference ${JSON.stringify(value)} is not a local definition.`,
         });

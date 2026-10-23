@@ -21,7 +21,7 @@ const errorCode = (cause: unknown): string | undefined =>
 
 const classify = (cause: unknown): PrivateFileError => {
   const code = errorCode(cause);
-  return new PrivateFileError({
+  return PrivateFileError.make({
     reason:
       code === "ENOENT"
         ? "missing"
@@ -38,7 +38,7 @@ export const tryPrivateFileOperation = <A>(
   evaluate: () => PromiseLike<A>,
 ): Effect.Effect<A, PrivateFileError> => Effect.tryPromise({ try: evaluate, catch: classify });
 
-const unsafe = () => Effect.fail(new PrivateFileError({ reason: "unsafe" }));
+const unsafe = () => Effect.fail(PrivateFileError.make({ reason: "unsafe" }));
 
 export const currentUserId = (): number | undefined => process.getuid?.();
 

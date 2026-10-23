@@ -1,5 +1,5 @@
 import * as Data from "effect/Data";
-import { constVoid } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import { notificationText } from "./message-text.ts";
 
@@ -75,7 +75,7 @@ export function invokeBestEffort(callback: () => void): void {
     if (!Predicate.isObjectKeyword(result)) return;
     const candidate: { readonly then?: unknown } = result;
     const then = candidate.then;
-    if (Predicate.isFunction(then)) then.call(result, constVoid, constVoid);
+    if (Predicate.isFunction(then)) then.call(result, Fn.constVoid, Fn.constVoid);
   } catch {}
 }
 

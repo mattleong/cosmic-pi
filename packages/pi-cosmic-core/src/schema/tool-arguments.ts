@@ -1,5 +1,5 @@
 import { validateToolArguments } from "@earendil-works/pi-ai";
-import { flow } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
@@ -467,7 +467,7 @@ export const toolArgumentPreparer = <const S extends TSchema>(
       throw invalidArgumentsError(toolName, [`${blank} must contain non-whitespace text.`]);
     return validated;
   };
-  return flow(
+  return Fn.flow(
     decodeArgumentsObject,
     Option.getOrThrowWith(() =>
       invalidArgumentsError(toolName, ["arguments must be a JSON object."]),

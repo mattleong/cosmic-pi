@@ -43,7 +43,7 @@ const decode = Schema.decodeUnknownSync(Schema.fromJsonString(Owner));
 const encode = Schema.encodeSync(Schema.fromJsonString(Owner));
 const randomToken = () => synchronousRandomHex(32);
 const recovery = (slot?: string) =>
-  new CrossProcessLockError({ reason: "recovery-required", ...(slot !== undefined && { slot }) });
+  CrossProcessLockError.make({ reason: "recovery-required", ...(slot !== undefined && { slot }) });
 const code = (...expected: string[]) =>
   Schema.is(Schema.Struct({ code: Schema.Literals(expected) }));
 const isExists = code("EEXIST");
@@ -270,7 +270,7 @@ export const crossProcessLockHolder = (
 const isCrossProcessLockError = Schema.is(CrossProcessLockError);
 
 const failure = (cause: unknown) =>
-  isCrossProcessLockError(cause) ? cause : new CrossProcessLockError({ reason: "unavailable" });
+  isCrossProcessLockError(cause) ? cause : CrossProcessLockError.make({ reason: "unavailable" });
 
 export class CrossProcessLock extends Context.Service<CrossProcessLock, CrossProcessLockContract>()(
   "pi-cosmic-core/platform/cross-process-lock/CrossProcessLock",

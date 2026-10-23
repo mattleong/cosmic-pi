@@ -1,6 +1,6 @@
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { flow, identity } from "effect/Function";
+import * as Fn from "effect/Function";
 
 const JsonRecordSchema = Schema.Record(Schema.String, Schema.MutableJson);
 
@@ -29,8 +29,8 @@ export const decodeTolerantFields = <const Fields extends TolerantFieldSchemas>(
   fields: Fields,
   options: TolerantFieldOptions = {},
 ) =>
-  flow(
-    identity<unknown>,
+  Fn.flow(
+    Fn.identity<unknown>,
     Schema.decodeUnknownOption(JsonRecordSchema),
     (root): TolerantFieldResult<Fields> => collectTolerantFields(root, fields, options),
   );

@@ -1,5 +1,5 @@
 import * as Arr from "effect/Array";
-import { constVoid } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Match from "effect/Match";
 import * as Predicate from "effect/Predicate";
 import { runtimeTypeName } from "./runtime-values.ts";
@@ -27,7 +27,7 @@ interface FrozenProjection<State, Snapshot> {
 
 const isProjectionError = Schema.is(ProjectionError);
 
-const projectionError = (path: string, message: string) => new ProjectionError({ path, message });
+const projectionError = (path: string, message: string) => ProjectionError.make({ path, message });
 
 const unsupported = (path: string, kind: string): never => {
   throw projectionError(path, `Projection snapshot value at ${path} is not plain data (${kind}).`);
@@ -71,10 +71,10 @@ const checkArray = (walk: PlainDataWalk, path: string, entries: ReadonlyArray<un
 
 const plainDataAt = (walk: PlainDataWalk, path: string) =>
   Match.type<unknown>().pipe(
-    Match.when(Predicate.isUndefined, constVoid),
-    Match.when(Predicate.isNull, constVoid),
-    Match.when(Predicate.isString, constVoid),
-    Match.when(Predicate.isBoolean, constVoid),
+    Match.when(Predicate.isUndefined, Fn.constVoid),
+    Match.when(Predicate.isNull, Fn.constVoid),
+    Match.when(Predicate.isString, Fn.constVoid),
+    Match.when(Predicate.isBoolean, Fn.constVoid),
     Match.when(Predicate.isNumber, (count): void => {
       if (!Number.isFinite(count)) unsupported(path, "non-finite number");
     }),
@@ -114,7 +114,7 @@ const deepFreeze = Match.type<unknown>().pipe(
     Object.freeze(container);
     for (const child of Object.values(container)) deepFreeze(child);
   }),
-  Match.orElse(constVoid),
+  Match.orElse(Fn.constVoid),
 );
 
 export const freezeSnapshot = <Snapshot>(snapshot: Snapshot): Snapshot => {

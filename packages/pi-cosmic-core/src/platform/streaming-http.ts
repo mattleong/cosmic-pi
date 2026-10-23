@@ -36,7 +36,7 @@ interface StreamingHttpClientContract {
 }
 
 const streamingHttpError = (operation: StreamingHttpError["operation"], message: string) => () =>
-  new StreamingHttpError({ operation, message });
+  StreamingHttpError.make({ operation, message });
 
 export const withStreamingJsonBody =
   (

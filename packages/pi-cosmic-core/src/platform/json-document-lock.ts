@@ -47,11 +47,11 @@ const isCrossProcessLockError = Schema.is(CrossProcessLockError);
 
 const lockError = (cause: unknown): JsonDocumentLockError =>
   isCrossProcessLockError(cause) && cause.reason === "recovery-required"
-    ? new JsonDocumentLockError({
+    ? JsonDocumentLockError.make({
         reason: "recovery-required",
         ...(cause.slot !== undefined && { slot: cause.slot }),
       })
-    : new JsonDocumentLockError({ reason: "unavailable" });
+    : JsonDocumentLockError.make({ reason: "unavailable" });
 
 // An unconfirmed release leaves the slot held until this process exits; writers then reclaim it.
 const releaseLease = (lease: CrossProcessLease) =>
@@ -75,7 +75,7 @@ const makeNodeJsonDocumentLock = (options: JsonDocumentLockOptions): JsonDocumen
       const lease = yield* tryAcquire(documentPath, directory);
       if (lease !== undefined) return lease;
       if ((yield* Clock.currentTimeMillis) >= deadline)
-        return yield* new JsonDocumentLockError({ reason: "busy" });
+        return yield* JsonDocumentLockError.make({ reason: "busy" });
       yield* restore(Effect.sleep(delay));
       delay = Math.min(delay * 2, MAX_RETRY_MILLIS);
     }
