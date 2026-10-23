@@ -82,6 +82,13 @@ export const agentMessageRefusal = (
 export const runNotFound = (id: string): SubagentNotFoundError =>
   SubagentNotFoundError.make({ id, message: `Subagent run not found: ${id}` });
 
+/** The calling run, not a target, is gone; refreshing target IDs can't help it. */
+export const callerNotRegistered = (id: string): InvalidSubagentRequestError =>
+  invalidRequest(
+    "caller_not_registered",
+    `The calling run ${id} is no longer registered in this session.`,
+  );
+
 const hasCodePrefix = (message: string, code: string): boolean =>
   Fn.pipe(message, Str.startsWith(`[${code}]`));
 

@@ -61,6 +61,10 @@ const START_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
 ];
 const ACTION_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
   SCRIPTED_WRITER_RECOVERY,
+  [
+    ["caller_not_registered"],
+    "This run was removed from the session, so it can't act on other agents; finish with your final report.",
+  ],
   [["notfound", "not_found"], "Refresh run IDs with agent_list.", ["not found"]],
   [
     ["completion_claim_conflict"],
@@ -154,6 +158,7 @@ export const failureRecovery = (
 type Phrase = (subject: string) => string;
 
 const FAILURE_PHRASES: ReadonlyArray<readonly [ReadonlyArray<string>, Phrase]> = [
+  [["caller_not_registered"], () => "The calling agent is no longer registered"],
   [["notfound", "not_found"], () => "A requested subagent was not found"],
   [["parent_question_missing"], (subject) => `${subject} has no question waiting for a reply`],
   [["question_ownership_mismatch"], (subject) => `${subject}'s question is no longer waiting`],

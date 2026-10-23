@@ -6,8 +6,9 @@ import { formatElapsed, formatRelativeAge, sanitizeTerminalLine } from "pi-cosmi
 
 const MAX_SESSION_DISPLAY_AGE = 7 * 24 * 60 * 60 * 1_000;
 
+// Wide enough for a whole minted `agent-<10 base-36 digits>` ID.
 export const shortRunId = (id: string): string =>
-  id.length <= 14 ? id : `…${Fn.pipe(id, Str.slice(-13))}`;
+  id.length <= 16 ? id : `…${Fn.pipe(id, Str.slice(-15))}`;
 
 export const duplicateRunNames = (
   runs: Iterable<{ readonly name: string }>,

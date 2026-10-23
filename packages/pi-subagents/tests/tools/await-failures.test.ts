@@ -11,6 +11,7 @@ import {
 import { makePiManagedRuntime, stripAnsi } from "pi-cosmic-core";
 import { recordingExtensionHost } from "pi-cosmic-core/testing";
 import { beforeEach, expect } from "vitest";
+import { callerNotRegistered, codedFailure, runNotFound } from "../../src/run/errors.ts";
 import { SUBAGENT_TOOL_NAME } from "../../src/run/tool-policy.ts";
 import { createSubagentCompactSummary } from "../../src/tools/compact-summary.ts";
 import { registerSubagentTools } from "../../src/tools/subagent.ts";
@@ -23,6 +24,14 @@ beforeEach(() =>
 );
 
 const MISSING = "agent-0123456789";
+
+const settledIssue = (args: { readonly runIds: ReadonlyArray<string> }, text: string) =>
+  createSubagentCompactSummary(SUBAGENT_TOOL_NAME.await)({
+    phase: "settled",
+    args,
+    result: { content: [{ type: "text", text }], details: {} },
+    context: renderContextFixture({ isError: true }),
+  })?.issues?.[0];
 
 it.live("names an unknown awaited run without its ID until the call is expanded", () =>
   Effect.gen(function* () {
@@ -47,17 +56,8 @@ it.live("names an unknown awaited run without its ID until the call is expanded"
     }).pipe(Effect.flip);
     expect(text).toContain(MISSING);
 
-    const summary = createSubagentCompactSummary(SUBAGENT_TOOL_NAME.await)({
-      phase: "settled",
-      args,
-      result: { content: [{ type: "text", text }], details: {} },
-      context: renderContextFixture({ isError: true }),
-    });
-    const [issue] = summary?.issues ?? [];
-    expect(issue).toMatchObject({
-      severity: "error",
-      message: "A requested subagent was not found",
-    });
+    const issue = settledIssue(args, text);
+    expect(issue).toMatchObject({ severity: "error", code: "agent:subagent_runs_not_found" });
     expect(issueMessageStyleProblems(issue?.message ?? "", { forbidden: [MISSING] })).toEqual([]);
     expect(issue?.detail).toContain(MISSING);
     expect(issue?.detail).toContain("agent_list");
@@ -70,8 +70,21 @@ it.live("names an unknown awaited run without its ID until the call is expanded"
       ),
       (frame) => stripAnsi(frame.text),
     );
-    expect(collapsed).toContain("A requested subagent was not found");
-    expect(expanded).toContain("A requested subagent was not found");
-    expect(expanded).toContain("agent_list");
+    expect(collapsed).not.toContain(MISSING);
+    expect(expanded).toContain(MISSING);
   }),
 );
+
+it("tells a caller that is no longer registered apart from a missing target", () => {
+  const args = { runIds: [MISSING] };
+  const caller = "agent-gonecaller";
+  const missingTarget = settledIssue(args, codedFailure(runNotFound(MISSING)).message);
+  const missingCaller = settledIssue(args, codedFailure(callerNotRegistered(caller)).message);
+  expect(missingCaller).toMatchObject({ severity: "error", code: "agent:caller_not_registered" });
+  expect(missingCaller?.message).not.toBe(missingTarget?.message);
+  expect(issueMessageStyleProblems(missingCaller?.message ?? "", { forbidden: [caller] })).toEqual(
+    [],
+  );
+  expect(missingCaller?.detail).toContain(caller);
+  expect(missingCaller?.detail).not.toContain("agent_list");
+});

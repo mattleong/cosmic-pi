@@ -22,6 +22,7 @@ import type {
 import type { ReportArchive } from "../boundary/report-archive.ts";
 import { WriterLeaseService } from "../boundary/writer-lease.ts";
 import {
+  type InvalidSubagentRequestError,
   runNotFound,
   type SubagentError,
   type SubagentNotFoundError,
@@ -146,7 +147,7 @@ export interface SubagentServiceContract extends WorkspaceCoordinatorContract {
   readonly authorizeTargets: (
     callerRunId: string,
     ids: ReadonlyArray<string>,
-  ) => Effect.Effect<void, SubagentNotFoundError>;
+  ) => Effect.Effect<void, InvalidSubagentRequestError | SubagentNotFoundError>;
   readonly withAwaitTerminalObservations: <A, E, R>(
     ids: ReadonlyArray<string>,
     until: SubagentAwaitUntil,

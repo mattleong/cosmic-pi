@@ -30,12 +30,11 @@ import {
 } from "./agent-messaging.ts";
 import {
   agentMessageRefusal,
+  callerNotRegistered,
   invalidRequest,
   isPendingSteerDelivery,
   type InvalidSubagentRequestError,
-  runNotFound,
   type SubagentError,
-  type SubagentNotFoundError,
   type SubagentRuntimeClosedError,
 } from "./errors.ts";
 import { snapshotRun, type RunContext, type RunRecord } from "./internal.ts";
@@ -169,12 +168,12 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
   // Only the root binds the caller, so a run cannot speak as another agent.
   const resolveSenderLocked = (
     caller: AgentCaller,
-  ): Effect.Effect<AgentSender, SubagentNotFoundError> => {
+  ): Effect.Effect<AgentSender, InvalidSubagentRequestError> => {
     if (caller.kind === "main") return Effect.succeed(MAIN_AGENT_SENDER);
     const record = records.get(caller.runId);
     return record
       ? Effect.succeed(runSender(snapshotRun(record)))
-      : Effect.fail(runNotFound(caller.runId));
+      : Effect.fail(callerNotRegistered(caller.runId));
   };
 
   const readMain = (): AgentMainReadout | undefined =>

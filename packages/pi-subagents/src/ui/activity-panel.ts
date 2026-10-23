@@ -3,7 +3,6 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { formatElapsed, sanitizeTerminalLine } from "pi-cosmic-core";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
-import * as Num from "effect/Number";
 import * as Option from "effect/Option";
 import * as Order from "effect/Order";
 import * as Str from "effect/String";
@@ -32,8 +31,6 @@ import {
 } from "./run-presentation.ts";
 import { projectFleetTree, runTreeBranch, type FleetTreeRow } from "./run-tree-rows.ts";
 import { runStateColor, runStateGlyph, runStateLabel } from "./run-state.ts";
-
-const RUN_ID_COLLATOR = new Intl.Collator("en", { numeric: true });
 
 export type SubagentActivityAwaitMode = "all_finished" | "any_finished";
 
@@ -161,13 +158,8 @@ export const projectSubagentActivityPanel = (
   const includedRuns = Fn.pipe(
     projection.runs,
     Arr.filter((run) => includedIds.has(run.id)),
-    Arr.sortBy(
-      Order.mapInput(Order.Number, (run) => run.startedAt),
-      Order.mapInput(
-        (left: string, right: string) => Num.sign(RUN_ID_COLLATOR.compare(left, right)),
-        (run) => run.id,
-      ),
-    ),
+    // The sort is stable, so runs started together keep the projection's admission order.
+    Arr.sortWith((run) => run.startedAt, Order.Number),
   );
   const awaitedRunIds = new Set(Arr.flatMap(presentation.awaits, (awaiting) => awaiting.runIds));
   return {

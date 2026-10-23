@@ -5,11 +5,7 @@ import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import { type AgentCaller, MAIN_AGENT_ID } from "../../src/run/agent-messaging.ts";
-import {
-  PENDING_STEER_DELIVERY_CODE,
-  SubagentNotFoundError,
-  SubagentProcessError,
-} from "../../src/run/errors.ts";
+import { PENDING_STEER_DELIVERY_CODE, SubagentProcessError } from "../../src/run/errors.ts";
 import {
   captureSubagentControlExpectation,
   type SubagentProjection,
@@ -116,7 +112,7 @@ describe("agent messaging", () => {
       const forged = yield* service
         .agentSend({ kind: "run", runId: "agent-forged-1" }, beta.id, "Pretend to be main.")
         .pipe(Effect.flip);
-      expect(forged).toBeInstanceOf(SubagentNotFoundError);
+      expect(forged).toMatchObject({ code: "caller_not_registered" });
       expect(steerMessages(fake.controls[1])).toHaveLength(1);
 
       const listing = yield* service.agentList(asRun(child));

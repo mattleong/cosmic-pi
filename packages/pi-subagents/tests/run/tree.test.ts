@@ -15,7 +15,11 @@ import {
   waitForCompleted,
   withService,
 } from "./fixtures/service-harness.ts";
-import { InvalidSubagentRequestError, SubagentNotFoundError } from "../../src/run/errors.ts";
+import {
+  codedFailure,
+  InvalidSubagentRequestError,
+  SubagentNotFoundError,
+} from "../../src/run/errors.ts";
 import { objectContaining } from "../support/matchers.ts";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
@@ -100,6 +104,18 @@ describe("root-owned subagent run tree", () => {
         .pipe(Effect.flip);
       expect(unauthorized).toBeInstanceOf(SubagentNotFoundError);
       expect(unauthorized).toMatchObject({ id: sibling.id });
+      // A nested caller's tool text carries the code exactly once, ahead of the ID it names.
+      const coded = codedFailure(codedFailure(unauthorized));
+      expect(coded).toBeInstanceOf(SubagentNotFoundError);
+      expect(coded.message).toMatch(/^\[subagent_run_not_found\] [^[]*$/u);
+      expect(coded.message).toContain(sibling.id);
+
+      // A caller that is gone is told so, not that its target is missing.
+      const orphaned = yield* service
+        .authorizeTargets("agent-0000000000", [sibling.id])
+        .pipe(Effect.flip);
+      expect(orphaned).toBeInstanceOf(InvalidSubagentRequestError);
+      expect(orphaned).toMatchObject({ code: "caller_not_registered" });
     }),
   );
 

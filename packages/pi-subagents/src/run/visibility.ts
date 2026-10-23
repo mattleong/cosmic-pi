@@ -1,6 +1,11 @@
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
-import { runNotFound, type SubagentNotFoundError } from "./errors.ts";
+import {
+  callerNotRegistered,
+  runNotFound,
+  type InvalidSubagentRequestError,
+  type SubagentNotFoundError,
+} from "./errors.ts";
 import type { RunContext } from "./internal.ts";
 import type { SubagentRunView } from "./model.ts";
 import { sortRuns } from "./projection.ts";
@@ -21,10 +26,10 @@ export function visibilityOperations(dependencies: Pick<RunContext, "records" | 
   const authorizeTargets = (
     callerRunId: string,
     ids: ReadonlyArray<string>,
-  ): Effect.Effect<void, SubagentNotFoundError> =>
+  ): Effect.Effect<void, InvalidSubagentRequestError | SubagentNotFoundError> =>
     withLock(
       Effect.gen(function* () {
-        if (!records.has(callerRunId)) return yield* runNotFound(callerRunId);
+        if (!records.has(callerRunId)) return yield* callerNotRegistered(callerRunId);
         for (const id of ids)
           if (!isRunInSubtree(records, callerRunId, id)) return yield* runNotFound(id);
         return undefined;

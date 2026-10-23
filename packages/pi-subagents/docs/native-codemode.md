@@ -30,7 +30,7 @@ All six script-callable tools expose `outputSchema` and `structuredContent` with
 
 Target `report.status` is `delivered` with the report's file (`path`, `chars`, `lines`, and `complete`, false past the 1 MiB archive cap), or, only when no file was saved, with a `text` preview of at most 240 characters and `truncated`; `agent_read` returns the retained report. Otherwise it is `deferred` (the result didn't deliver it: a cancelled, timed-out, or user-ended wait held it, or a newer generation appeared unclaimed during the wait), `claimed`, `already_delivered`, `missing`, `not_finished`, or `unknown`. A finished await delivers every report it claimed. Read a delivered file with `tools.read`, or hand its path to the next subagent. A deferred report is not consumed. A target's `error`, question `attention.message`, and `warnings` are previews; a longer failure's file is `errorFile`, and a read's `status` carries the whole pending question, both retained warnings, and the whole error. Don't treat an absent report as an empty deliverable.
 
-Batch `outcome` and entry `status: "failed"` describe receipts, not rollback or absence of admitted work. Check `failure.disposition` (`failed` versus `unconfirmed`) and admitted cleanup before recovery; a failed stop can still have an unconfirmed effect. Partial and domain failures resolve to objects even when Pi marks the call as an error. Validation, blocked calls, parent attention, and whole-call failures reject. Never parse exception prose to choose recovery.
+Batch `outcome` and entry `status: "failed"` describe receipts, not rollback or absence of admitted work. Check `failure.disposition` (`failed` versus `unconfirmed`) and admitted cleanup before recovery; a failed stop can still have an unconfirmed effect. Partial and domain failures resolve to objects even when Pi marks the call as an error. Validation, blocked calls, parent attention, and whole-call failures reject. Errors thrown by `agent_await` and `agent_lifecycle` begin with a bracketed code, such as `[subagent_runs_not_found]`. Never parse exception prose to choose recovery.
 
 ## Example: launch, checkpoint, then branch
 
@@ -195,7 +195,7 @@ When pi-background-task is loaded, `background_task` also returns structured res
 
 - Scripts have the same local-user authority as model-issued calls. `stop` accepts any task in the session, and `stop_all` and `clear` act on every task. Stop only tasks the script started, and don't use `stop_all` or `clear` in a script.
 - A wait timeout is data: the task keeps running. `finished` means terminal, not successful; branch on `state` and `exitCode`, never on log or exception text.
-- Task IDs restart at `task-1` whenever the registry is replaced by reload, session replacement, or tree navigation, but `store()` checkpoints survive on the branch. Never reuse task IDs from a checkpoint written before the current runtime; clear it with `store(key, undefined)`. Comparing `startedAt` is a useful guard, not runtime identity.
+- Reload, session replacement, and tree navigation replace the task registry, but `store()` checkpoints survive on the branch, and an old task ID names nothing in the new registry. Never reuse task IDs from a checkpoint written before the current runtime; clear it with `store(key, undefined)`. Comparing `startedAt` is a useful guard, not runtime identity.
 
 ### Example: agents plus a background test run
 
