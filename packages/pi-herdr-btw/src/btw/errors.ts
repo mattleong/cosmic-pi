@@ -12,7 +12,7 @@ export class HerdrBtwError extends Schema.TaggedError<
 }) {}
 
 export const confirmedFailure = (operation: string, code: string, message: string): HerdrBtwError =>
-  new HerdrBtwError({ operation, code, message, outcome: "confirmed" });
+  HerdrBtwError.make({ operation, code, message, outcome: "confirmed" });
 
 export const uncertainFailure = (operation: string, code: string, message: string): HerdrBtwError =>
-  new HerdrBtwError({ operation, code, message, outcome: "uncertain" });
+  HerdrBtwError.make({ operation, code, message, outcome: "uncertain" });

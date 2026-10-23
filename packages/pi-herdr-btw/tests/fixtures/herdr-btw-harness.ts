@@ -48,7 +48,7 @@ const MUTATING_OPERATIONS = new Set([
 ]);
 
 const commandFailure = (operation: string): HerdrBtwError =>
-  new HerdrBtwError({
+  HerdrBtwError.make({
     operation,
     code: `fixture_${operation.toLowerCase().replaceAll(" ", "_")}`,
     message: `Fixture failure during ${operation}.`,

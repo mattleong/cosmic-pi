@@ -38,7 +38,7 @@ const retainPaneFailure = (
 ): HerdrBtwError =>
   failure.paneId === paneId
     ? failure
-    : new HerdrBtwError({
+    : HerdrBtwError.make({
         operation: failure.operation,
         code: failure.code,
         outcome: failure.outcome,

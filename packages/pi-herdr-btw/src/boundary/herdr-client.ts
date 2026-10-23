@@ -181,7 +181,7 @@ const herdrCommandExitFailure = (
     herdrCode !== undefined &&
     request.confirmedRejectionCodes?.includes(herdrCode) === true;
   const uncertain = request.mutation && !rejected;
-  return new HerdrBtwError({
+  return HerdrBtwError.make({
     operation: request.operation,
     code: operationCode(
       request.operation,
@@ -237,7 +237,7 @@ const herdrTransportFailure = (
   failure?: BoundedProcessError,
 ): HerdrBtwError => {
   const uncertain = request.mutation && failure?.operation !== "spawn";
-  return new HerdrBtwError({
+  return HerdrBtwError.make({
     operation: request.operation,
     code: operationCode(request.operation, uncertain ? "outcome_uncertain" : "failed"),
     message: uncertain
@@ -252,7 +252,7 @@ const herdrDecodeFailure = (
   kind: "json" | "protocol",
 ): HerdrBtwError => {
   const description = kind === "json" ? "invalid" : "unexpected";
-  return new HerdrBtwError({
+  return HerdrBtwError.make({
     operation: request.operation,
     code: operationCode(
       request.operation,

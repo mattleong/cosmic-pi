@@ -167,7 +167,7 @@ it.effect("confirms only mutation failures that occur before process dispatch", 
   Effect.gen(function* () {
     for (const operation of ["spawn", "stream"] as const) {
       const processRunner: HerdrProcessRunner = () =>
-        Effect.fail(new BoundedProcessError({ operation, message: "bounded fixture failure" }));
+        Effect.fail(BoundedProcessError.make({ operation, message: "bounded fixture failure" }));
       const client = makeHerdrClient({}, { processRunner });
       const error = yield* Effect.flip(
         client.splitPane({ parentPaneId: "w1:p1", direction: "right", cwd: "/project" }),
