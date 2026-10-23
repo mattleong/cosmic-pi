@@ -6,17 +6,17 @@ import {
   unwrapArrayExpression,
 } from "../shared/array-method.ts";
 
-/** Reject eager array filter/map pipelines; lazy iterator helpers remain allowed. */
+/** Reject adjacent array filter/map passes in favor of one Effect `Array` transformation. */
 export const noArrayFilterMapRule = defineRule({
   meta: {
     type: "suggestion",
     docs: {
       description:
-        "Disallow adjacent array filter/map passes in favor of lazy iterator helpers or a single transformation.",
+        "Disallow adjacent array filter/map passes in favor of a single `effect/Array` transformation.",
     },
     messages: {
       arrayFilterMap:
-        "Avoid consecutive array `{{first}}` and `{{second}}` passes. Prefer `.values().{{first}}(...).{{second}}(...).toArray()` where iterator helpers are supported, or a single `flatMap`/mutating reducer. Preserve callback ordering, indexes, and filtering semantics.",
+        "Avoid consecutive array `{{first}}` and `{{second}}` passes. Use one `effect/Array` pass: `Array.filterMap(items, (item) => ... ? Result.succeed(value) : Result.failVoid)`, `Array.partition` to keep both sides, or `Array.getSomes` for Options; reserve `flatMap` for elements that yield several values. Preserve callback ordering, indexes, and filtering semantics.",
     },
   },
   createOnce(context) {

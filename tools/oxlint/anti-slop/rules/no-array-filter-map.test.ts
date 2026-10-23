@@ -7,7 +7,7 @@ const error = { messageId: "arrayFilterMap" };
 
 tester.run("anti-slop/no-array-filter-map", noArrayFilterMapRule, {
   valid: [
-    "const users = []; users.values().filter(active).map(email).toArray();",
+    "const users = []; Array.filterMap(users, (user) => user.active ? Result.succeed(user.email) : Result.failVoid);",
     "const users = []; users.flatMap(user => user.active ? [user.email] : []);",
     "function collect(unknownReceiver) { return unknownReceiver.filter(active).map(email); }",
   ],

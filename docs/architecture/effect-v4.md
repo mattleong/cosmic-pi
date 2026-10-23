@@ -6,12 +6,14 @@ This document defines shared lifecycle and concurrency guarantees. Package `ARCH
 
 ## Services and boundaries
 
-- Import Effect modules through explicit namespace subpaths. Use `Context.Service` with stable language-service keys for injected capabilities, and compose their implementations with Layers. Hide implementation dependencies in Layer construction rather than leaking them through service methods.
-- The `make<Name>` prefix is reserved for service constructors, which stay local to their owning module; runtime callers yield the service from its Layer. Name plain value factories and helpers for the value or action they produce. Build tagged values with Schema, tagged class/error, or `Data.taggedEnum` constructors and branch on them with `Match` or `Predicate.isTagged`, not literal `_tag` objects or comparisons. The `anti-slop-effect` lint rules enforce these conventions.
-- Keep runners at named Pi or standalone-process boundaries. A resource-owning extension uses core's session-runtime slot to create one runtime at `session_start`, replace it safely, and dispose it explicitly. Registration-only extensions do not need a runtime. Internal services never create or run one.
+- Import Effect modules through explicit namespace subpaths; lint rejects value imports from the bare `effect` barrel. Use `Context.Service` with stable language-service keys for injected capabilities, and compose their implementations with Layers. Hide implementation dependencies in Layer construction rather than leaking them through service methods.
+- The `make<Name>` prefix is reserved for service constructors, which stay local to their owning module; runtime callers yield the service from its Layer. Name plain value factories and helpers for the value or action they produce. Build tagged values with Schema, tagged class/error, or `Data.taggedEnum` constructors and branch on them with `Match` or `Predicate.isTagged`, not literal `_tag` objects or comparisons, including optional chains. Handle tagged errors with `Effect.catchTag`, `catchTags`, or `catchReason`. The `anti-slop-effect` lint rules and Effect diagnostics enforce these conventions.
+- Define a named function whose body is only `Effect.gen`, optionally followed by `.pipe(...)`, with `Effect.fn("Owner.name")`, or `Effect.fnUntraced` on hot paths; pass the pipe steps as further `Effect.fn` arguments. Function declarations, functions bound to variables or class fields, and members of object literals count as named. Inline callbacks passed positionally, class methods, overloads, and generators bound to `this` keep their form.
+- Prefer `effect/Array` and `Predicate` helpers over adjacent `filter`/`map` passes and `typeof` checks.
+- Keep runners at named Pi or standalone-process boundaries. Lint rejects `run*` calls and named `run*` imports from `effect/Effect` in package source outside an allowlist of exact boundary files and core's `src/testing/**`. A resource-owning extension uses core's session-runtime slot to create one runtime at `session_start`, replace it safely, and dispose it explicitly. Registration-only extensions do not need a runtime. Internal services never create or run one.
 - Carry the exact `Layer.Error` type through runtime facades. Do not erase initialization failures with casts or default them to `never`.
-- Decode unknown input with Effect Schema. Model expected failures with schema-backed tagged errors; reserve defects for broken invariants. Provider-local decoders accept HTTP response bodies. Rejected JSON responses retain their status; streaming boundaries retain only the response evidence their owner needs. Never copy raw bodies into errors or telemetry.
-- Use `Effect.try` for callbacks that may throw and `Effect.tryPromise` for Promises that may reject. `Effect.sync` and `Effect.promise` require a total or non-rejecting contract. Translate cleanup rejection into a typed failure even when the caller deliberately recovers it.
+- Decode unknown input with Effect Schema. A parameter may be typed `unknown` only when it is the subject of a `Schema.decodeUnknown*(schema)` decoder or `Schema.is(schema)` guard on its first read, an error `cause`, or the subject of a type predicate. Model expected failures with schema-backed tagged errors; reserve defects for broken invariants. Provider-local decoders accept HTTP response bodies. Rejected JSON responses retain their status; streaming boundaries retain only the response evidence their owner needs. Never copy raw bodies into errors or telemetry.
+- Use `Effect.try` for callbacks that may throw and `Effect.tryPromise` for Promises that may reject. `Effect.sync` and `Effect.promise` require a total or non-rejecting contract, so they never wrap a catching `try`. Translate cleanup rejection into a typed failure even when the caller deliberately recovers it.
 - Use Effect clocks, randomness, configuration, scheduling, and scoped concurrency for application work. Narrow synchronous host capabilities are described in the boundary guide. Keep shared platform mechanisms in `pi-cosmic-core`; keep package policy with its owner.
 
 ## Resource ownership and cancellation
@@ -28,7 +30,7 @@ The host session slot is the small imperative owner of runtime creation and repl
 
 Give each state transition one owner. Prefer `Ref` or `SynchronizedRef`; a keyed registry may use plain mutable state behind a semaphore when that makes independent ownership clearer. Every read-modify-write spanning a yield holds its lock for the full transition. Work prepared outside the lock must revalidate its evidence under that lock before committing. A guard checked before an RPC is stale when that RPC returns.
 
-Pi rendering is synchronous. Services publish immutable snapshots for renderers; local input, focus, selection, and layout state may remain in widgets. Rendering does not own application resources or run services. Frozen events and cached slices may be shared when later updates cannot mutate old snapshots.
+Pi rendering is synchronous. Services publish immutable snapshots for renderers; local input, focus, selection, and layout state may remain in widgets. Rendering does not own application resources or run services. Frozen events and cached slices may be shared when later updates cannot mutate old snapshots. Spreading records inside `map` is how updates build fresh snapshots instead of mutating published ones, so the Oxlint performance rule `oxc/no-map-spread` is off.
 
 Keep stale-result validation, state replacement, and context/configuration invalidation in the same serialized transition. Persistence and projection publication must also commit together when interruption could otherwise expose contradictory state. Publishing inside an effectful `SynchronizedRef` callback alone does not protect the backing assignment that follows it.
 
@@ -38,7 +40,7 @@ For atomic file replacement, finish creation, writing, validation, and permissio
 
 ## Versions and source loading
 
-`pnpm-workspace.yaml` pins jointly released Effect packages to synchronized exact versions; independently versioned tooling is pinned separately. The workspace currently uses stable Effect `4.0.0`. Follow v4 documentation and treat the pinned declarations as authoritative when they differ. Domain APIs can still be marked unstable within a stable release.
+`pnpm-workspace.yaml` pins jointly released Effect packages to synchronized exact versions; independently versioned tooling is pinned separately. The workspace currently uses stable Effect `4.0.6`; the root `package.json` pins `@effect/tsgo` `0.56.0` for the TypeScript `7.0.2` compiler. Follow v4 documentation and treat the pinned declarations as authoritative when they differ. Domain APIs can still be marked unstable within a stable release.
 
 Relevant v4 APIs:
 
@@ -46,6 +48,7 @@ Relevant v4 APIs:
 - `ManagedRuntime.make(layer, { memoMap })` takes an options object.
 - Pass parser policy directly to schema decoders; annotations do not apply it.
 - `Effect.partition` returns successes before failures.
+- `FileSystem.File.Info` reports 64-bit metadata as `bigint`: `dev` is a `bigint`, and `ino`, `rdev`, `nlink`, and `blocks` are `Option<bigint>`. Compare file identities without converting to `number`.
 - HTTP, process, RPC, socket, and encoding use published domain subpaths, not `effect/unstable/*`. HTTP receives its Node platform Layer separately; streaming JSON requests use a caller-supplied Codec.
 - `@effect/vitest` v4 uses Vitest 5 and exports `it.effect`, `it.live`, and `layer`.
 

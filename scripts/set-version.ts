@@ -1,6 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 
 import {
   decodeManifestDocument,

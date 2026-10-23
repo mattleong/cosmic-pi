@@ -40,17 +40,17 @@ function isExistenceProbe(node: ESTree.UnaryExpression): boolean {
   return other.type === "Literal" && other.value === "undefined";
 }
 
-/** Disallow runtime typeof checks that narrow unparsed values instead of decoding them. */
+/** Disallow runtime typeof checks; Effect `Predicate` guards and Schema decoders replace them. */
 export const noRuntimeTypeofRule = defineRule({
   meta: {
     type: "problem",
     docs: {
       description:
-        "Disallow runtime typeof checks; external values must be decoded into meaningful types at their I/O boundary.",
+        "Disallow runtime typeof checks in favor of Effect `Predicate` guards or Schema decoding.",
     },
     messages: {
       runtimeTypeof:
-        "A `typeof` check narrows a representation without establishing its contract. Parse input at its I/O boundary, then branch on the domain value.",
+        "Use an Effect `Predicate` guard such as `Predicate.isString` or `Predicate.isFunction` instead of `typeof`. Decode structured external input with Schema at its I/O boundary.",
     },
     schema: [
       {

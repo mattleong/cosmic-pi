@@ -1,10 +1,6 @@
 import { defineRule } from "@oxlint/plugins";
 
-import {
-  isInsideBroadEffectHandler,
-  isTagMember,
-  tagMemberFromComparison,
-} from "../shared/tagged-values.ts";
+import { isTagComparison, isTagMember } from "../shared/tagged-values.ts";
 
 export const noManualTagComparisonRule = defineRule({
   meta: {
@@ -14,7 +10,7 @@ export const noManualTagComparisonRule = defineRule({
     },
     messages: {
       manualComparison:
-        "Use Match.tag/Match.tags for tagged-value branching, or Predicate.isTagged for a simple reusable predicate.",
+        "Use Match.tag/Match.tags for tagged-value branching, or Predicate.isTagged for a simple reusable predicate; it also accepts absent values. Use Effect.catchTag/catchTags/catchReason for tagged errors.",
       manualSwitch:
         "Use Match.value(value).pipe(Match.tag/Match.tags/Match.tagsExhaustive) or the tagged enum `$match` helper instead of switching on `_tag`.",
     },
@@ -22,16 +18,10 @@ export const noManualTagComparisonRule = defineRule({
   createOnce(context) {
     return {
       BinaryExpression(node) {
-        if (tagMemberFromComparison(node) === undefined || isInsideBroadEffectHandler(node)) {
-          return;
-        }
-        context.report({ node, messageId: "manualComparison" });
+        if (isTagComparison(node)) context.report({ node, messageId: "manualComparison" });
       },
       SwitchStatement(node) {
-        if (!isTagMember(node.discriminant) || isInsideBroadEffectHandler(node)) {
-          return;
-        }
-        context.report({ node, messageId: "manualSwitch" });
+        if (isTagMember(node.discriminant)) context.report({ node, messageId: "manualSwitch" });
       },
     };
   },

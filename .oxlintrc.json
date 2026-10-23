@@ -33,7 +33,6 @@
   ],
   "rules": {
     "anti-slop/no-array-filter-map": "error",
-    "anti-slop/no-conditional-empty-object-spread": "error",
     "anti-slop/no-eager-effect-finalizer-condition": "error",
     "anti-slop/no-escaping-render-context": "error",
     "anti-slop/no-known-value-widening": "error",
@@ -64,6 +63,11 @@
             "name": "@earendil-works/pi-tui",
             "importNames": ["truncateToWidth"],
             "message": "Use clipToWidth from pi-cosmic-ui/manager so clipped text ends in \"…\" everywhere."
+          },
+          {
+            "name": "effect",
+            "allowTypeImports": true,
+            "message": "Import Effect modules through namespace subpaths, such as `import * as Effect from \"effect/Effect\"`."
           }
         ]
       }
@@ -98,7 +102,7 @@
     "import/no-self-import": "error",
     "oxc/no-accumulating-spread": "error",
     "oxc/no-barrel-file": "error",
-    "oxc/no-map-spread": "error",
+    "oxc/no-map-spread": "off",
     "promise/catch-or-return": "error",
     "typescript/ban-types": "error",
     "typescript/consistent-type-assertions": [
@@ -177,7 +181,6 @@
     {
       "files": ["packages/**", "scripts/**"],
       "rules": {
-        "anti-slop-effect/no-manual-effect-error-tag": "error",
         "anti-slop-effect/no-manual-tag-comparison": "error",
         "anti-slop-effect/no-manual-tagged-construction": "error",
         "anti-slop-effect/no-service-constructor-imports": "error",
@@ -187,7 +190,96 @@
     {
       "files": ["packages/*/src/**/*.ts"],
       "rules": {
-        "typescript/no-non-null-assertion": "error"
+        "typescript/no-non-null-assertion": "error",
+        "anti-slop-effect/prefer-effect-fn": "error",
+        "anti-slop-effect/no-effect-runner-imports": "error",
+        "eslint/no-restricted-properties": [
+          "error",
+          {
+            "object": "Reflect",
+            "property": "get",
+            "message": "Use typed property access, or parse dynamic input into a named domain type first."
+          },
+          {
+            "object": "Reflect",
+            "property": "apply",
+            "message": "Call the function directly with typed arguments."
+          },
+          {
+            "property": "runCallback",
+            "message": "Keep Effect runners at named Pi host or standalone-process boundaries. Return the Effect to its caller or run it through the pi-cosmic-core session runtime."
+          },
+          {
+            "property": "runFork",
+            "message": "Keep Effect runners at named Pi host or standalone-process boundaries. Return the Effect to its caller or run it through the pi-cosmic-core session runtime."
+          },
+          {
+            "property": "runPromise",
+            "message": "Keep Effect runners at named Pi host or standalone-process boundaries. Return the Effect to its caller or run it through the pi-cosmic-core session runtime."
+          },
+          {
+            "property": "runPromiseExit",
+            "message": "Keep Effect runners at named Pi host or standalone-process boundaries. Return the Effect to its caller or run it through the pi-cosmic-core session runtime."
+          },
+          {
+            "property": "runSync",
+            "message": "Keep Effect runners at named Pi host or standalone-process boundaries. Return the Effect to its caller or run it through the pi-cosmic-core session runtime."
+          },
+          {
+            "property": "runSyncExit",
+            "message": "Keep Effect runners at named Pi host or standalone-process boundaries. Return the Effect to its caller or run it through the pi-cosmic-core session runtime."
+          },
+          {
+            "property": "runCallbackWith",
+            "message": "Keep Effect runners at named Pi host or standalone-process boundaries. Return the Effect to its caller or run it through the pi-cosmic-core session runtime."
+          },
+          {
+            "property": "runForkWith",
+            "message": "Keep Effect runners at named Pi host or standalone-process boundaries. Return the Effect to its caller or run it through the pi-cosmic-core session runtime."
+          },
+          {
+            "property": "runPromiseWith",
+            "message": "Keep Effect runners at named Pi host or standalone-process boundaries. Return the Effect to its caller or run it through the pi-cosmic-core session runtime."
+          },
+          {
+            "property": "runPromiseExitWith",
+            "message": "Keep Effect runners at named Pi host or standalone-process boundaries. Return the Effect to its caller or run it through the pi-cosmic-core session runtime."
+          },
+          {
+            "property": "runSyncWith",
+            "message": "Keep Effect runners at named Pi host or standalone-process boundaries. Return the Effect to its caller or run it through the pi-cosmic-core session runtime."
+          },
+          {
+            "property": "runSyncExitWith",
+            "message": "Keep Effect runners at named Pi host or standalone-process boundaries. Return the Effect to its caller or run it through the pi-cosmic-core session runtime."
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "packages/pi-code-previews/src/boundary/settings-one-shot.ts",
+        "packages/pi-code-previews/src/boundary/shiki.ts",
+        "packages/pi-cosmic-core/src/runtime/runtime.ts",
+        "packages/pi-cosmic-core/src/testing/**",
+        "packages/pi-cosmic-ui/src/boundary/host-surface.ts",
+        "packages/pi-cosmic-ui/src/boundary/host-ui-ticker-pool.ts"
+      ],
+      "rules": {
+        "anti-slop-effect/no-effect-runner-imports": "off",
+        "eslint/no-restricted-properties": [
+          "error",
+          {
+            "object": "Reflect",
+            "property": "get",
+            "message": "Use typed property access, or parse dynamic input into a named domain type first."
+          },
+          {
+            "object": "Reflect",
+            "property": "apply",
+            "message": "Call the function directly with typed arguments."
+          }
+        ]
       }
     },
     {
@@ -212,6 +304,11 @@
                 "name": "pi-cosmic-core",
                 "importNames": ["stripAnsi"],
                 "message": "stripAnsi removes only CSI sequences, so OSC and other terminal controls survive. Use stripTerminalControls or sanitizeTerminalLine from pi-cosmic-core, or escapeControlChars from pi-code-previews to keep controls visible."
+              },
+              {
+                "name": "effect",
+                "allowTypeImports": true,
+                "message": "Import Effect modules through namespace subpaths, such as `import * as Effect from \"effect/Effect\"`."
               }
             ]
           }
@@ -219,12 +316,13 @@
       }
     },
     {
-      "files": ["packages/pi-cosmic-core/src/testing/pi-keybindings.ts"],
+      "files": ["packages/*/tests/**/*.ts", "packages/*/src/testing/**/*.ts"],
       "rules": {
         "typescript/consistent-type-assertions": [
           "error",
           {
-            "assertionStyle": "as"
+            "assertionStyle": "as",
+            "objectLiteralTypeAssertions": "never"
           }
         ],
         "typescript/no-unsafe-type-assertion": "off"
@@ -241,6 +339,11 @@
                 "name": "pi-cosmic-core",
                 "importNames": ["stripAnsi"],
                 "message": "stripAnsi removes only CSI sequences, so OSC and other terminal controls survive. Use stripTerminalControls or sanitizeTerminalLine from pi-cosmic-core, or escapeControlChars from pi-code-previews to keep controls visible."
+              },
+              {
+                "name": "effect",
+                "allowTypeImports": true,
+                "message": "Import Effect modules through namespace subpaths, such as `import * as Effect from \"effect/Effect\"`."
               }
             ]
           }

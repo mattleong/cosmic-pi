@@ -29,7 +29,7 @@ Read the package's `ARCHITECTURE.md` and the relevant [shared contracts](docs/ar
 - Services own application state, resources, and concurrency. Renderers consume synchronous projections without running services or acquiring application resources. Widgets may own local input, selection, focus, and layout state.
 - File size and function complexity are review signals. Split when responsibilities diverge or a unit becomes hard to understand; keep cohesive logic together. Do not split or merge solely to meet a count.
 - Use names and types to explain what code does. Add concise comments for nonobvious reasons, ownership handoffs, or external constraints; avoid narrating the implementation.
-- Keep strict TypeScript: no explicit `any` or type assertions other than `as const`. Decode unknown external input with Effect Schema.
+- Keep strict TypeScript: no explicit `any` or type assertions other than `as const` in package source. Tests and `src/testing` entrypoints may use `as` for intentionally malformed fixtures and SDK doubles, never on object literals; valid fixtures use `satisfies`. Decode unknown external input with Effect Schema. A type predicate must check everything it claims; the only sanctioned way to admit a callback received from another package is `ForeignCallable` from `pi-cosmic-core`, with the call wrapped in `Effect.try` and its result decoded.
 - Accept input generously; reject only what would change the outcome or break a safety, security, or integrity guarantee.
   - Tool arguments: treat null or blank optional values as absent. Ignore empty, `false`, or zero values in fields the chosen action doesn't use, but reject meaningful ones. Clamp out-of-range numbers in the service and state the cap in the description rather than as a schema maximum, since Pi rejects arguments before `execute`. Truncate display-only text such as names and titles instead of rejecting it.
   - Configuration and producer protocols: decode per field. An invalid field falls back to its inherited value or default with a diagnostic, and the rest of the document still applies.
@@ -71,6 +71,7 @@ Mock owned domain boundaries, not external provider protocols. Test command hand
 - Use Effect v4 documentation and treat pinned declarations as authoritative when they differ. Review release notes and run the full validation gate on every Effect upgrade.
 - New or migrated packages must extend `tsconfig.effect.json`; all packages must inherit the Effect language-service plugin.
 - Keep Effect runners at named Pi host boundaries, scope every resource and background fiber, use Effect Schema at unknown boundaries, and model expected failures with typed tagged errors.
+- Effect diagnostics fail validation only at `error` severity, so enforced guards are errors in `tsconfig.effect.json`. Lint enforces subpath Effect imports, the runner-boundary allowlist, `Effect.fn` for named `Effect.gen` wrappers, and `Match`/`Predicate.isTagged` over `_tag` comparisons. Grant exceptions only at genuine boundaries, and prefer exact-file overrides to inline directives.
 - Do not import Zod, define schemas with it, or declare it as a direct workspace dependency. Third-party packages may use Zod internally through transitive dependencies. TypeBox or literal JSON Schema is allowed only where Pi requires tool parameter schemas.
 
 ## Verification

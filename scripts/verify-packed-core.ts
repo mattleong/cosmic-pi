@@ -2,32 +2,46 @@ import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import { Match } from "effect";
+import * as Arr from "effect/Array";
+import * as Match from "effect/Match";
+import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
+import { parse as parseYaml } from "yaml";
 
 import { decodePackageManifest, type PackageManifest } from "./package-manifest.ts";
+import { workspacePackageDirectories } from "./workspace-manifest-paths.ts";
 
 const root = resolve(import.meta.dirname, "..");
-const workspace = await readFile(join(root, "pnpm-workspace.yaml"), "utf8");
-const expectedEffectVersion = /\n  effect: ([^\n]+)/.exec(workspace)?.[1];
-if (!expectedEffectVersion) throw new Error("Missing Effect version from the pnpm catalog.");
-const extensionPackages = [
-  "pi-ask-user",
-  "pi-better-openai",
-  "pi-cosmic-ui",
-  "pi-code-previews",
-  "pi-directory-models",
-  "pi-intercom",
-  "pi-background-task",
-  "pi-subagents",
-];
-const packageNames = ["pi-cosmic-core", ...extensionPackages];
+const WorkspaceDocument = Schema.Struct({ catalog: Schema.Record(Schema.String, Schema.String) });
+const { catalog } = Schema.decodeUnknownSync(WorkspaceDocument)(
+  // The failsafe schema keeps bare-number catalog versions as strings.
+  parseYaml(await readFile(join(root, "pnpm-workspace.yaml"), "utf8"), { schema: "failsafe" }),
+);
+const catalogVersion = (name: string): string => {
+  const version = catalog[name];
+  if (version === undefined) throw new Error(`Missing ${name} from the pnpm catalog.`);
+  return version;
+};
+const expectedEffectVersion = catalogVersion("effect");
+// Every public workspace package is packed; private packages never reach consumers.
 const manifests = new Map(
-  await Promise.all(
-    packageNames.map(async (packageName): Promise<[string, PackageManifest]> => {
-      const path = join(root, "packages", packageName, "package.json");
-      return [packageName, decodePackageManifest(await readFile(path, "utf8"))];
-    }),
+  Arr.filterMap(
+    await Promise.all(
+      (await workspacePackageDirectories(root)).map(async (directory) =>
+        decodePackageManifest(await readFile(join(directory, "package.json"), "utf8")),
+      ),
+    ),
+    (manifest) =>
+      manifest.private === true
+        ? Result.failVoid
+        : Result.succeed<[string, PackageManifest]>([manifest.name, manifest]),
   ),
+);
+const packageNames = [...manifests.keys()];
+const extensionPackages = packageNames.filter((packageName) => packageName !== "pi-cosmic-core");
+// Code Previews loads through Pi's resource loader below rather than a bare default import.
+const directlyLoadedExtensions = extensionPackages.filter(
+  (packageName) => packageName !== "pi-code-previews",
 );
 const sourceManifest = (packageName: string): PackageManifest => {
   const manifest = manifests.get(packageName);
@@ -35,12 +49,6 @@ const sourceManifest = (packageName: string): PackageManifest => {
   return manifest;
 };
 const coreManifest = sourceManifest("pi-cosmic-core");
-const catalogVersion = (name: string): string => {
-  const escaped = name.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const version = new RegExp(`\\n  "?${escaped}"?: ([^\\n]+)`).exec(workspace)?.[1];
-  if (!version) throw new Error(`Missing ${name} from the pnpm catalog.`);
-  return version;
-};
 const piVersion = catalogVersion("@earendil-works/pi-coding-agent");
 const tuiVersion = catalogVersion("@earendil-works/pi-tui");
 const temporaryDirectory = await mkdtemp(join(tmpdir(), "cosmic-pi-pack-"));
@@ -196,7 +204,7 @@ try {
     const api = await load("pi-cosmic-core");
     const testing = await load("pi-cosmic-core/testing");
     const toolArguments = await load("pi-cosmic-core/tool-arguments");
-    for (const packageName of ["pi-ask-user","pi-better-openai","pi-cosmic-ui","pi-directory-models","pi-intercom","pi-background-task","pi-subagents"]) {
+    for (const packageName of ${JSON.stringify(directlyLoadedExtensions)}) {
       const extension = await load(packageName);
       if (typeof extension.default !== "function") throw new Error("missing " + packageName + " extension export");
     }

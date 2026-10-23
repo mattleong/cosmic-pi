@@ -3,58 +3,29 @@ import type { ESTree } from "@oxlint/plugins";
 import { isStringLiteral as isAstStringLiteral } from "../../shared/ast.ts";
 
 const equalityOperators = new Set(["==", "===", "!=", "!=="]);
-const broadEffectCatchMethods = new Set(["catch", "catchAll", "catchIf"]);
 
 export const isStringLiteral = (
   node: ESTree.Node | null | undefined,
 ): node is ESTree.StringLiteral => node !== null && node !== undefined && isAstStringLiteral(node);
 
-export const isTagMember = (
-  node: ESTree.Node | null | undefined,
-): node is ESTree.MemberExpression =>
-  node?.type === "MemberExpression" &&
-  ((!node.computed && node.property.type === "Identifier" && node.property.name === "_tag") ||
-    (node.computed && isStringLiteral(node.property) && node.property.value === "_tag"));
-
-export const tagMemberFromComparison = (
-  node: ESTree.BinaryExpression,
-): ESTree.MemberExpression | undefined => {
-  if (!equalityOperators.has(node.operator)) return undefined;
-  if (isTagMember(node.left) && isStringLiteral(node.right)) return node.left;
-  if (isTagMember(node.right) && isStringLiteral(node.left)) return node.right;
-  return undefined;
+// Optional chains (`value?._tag`) wrap the member in a ChainExpression.
+const tagMember = (node: ESTree.Node | null | undefined): ESTree.MemberExpression | undefined => {
+  const member = node?.type === "ChainExpression" ? node.expression : node;
+  if (member?.type !== "MemberExpression") return undefined;
+  const { computed, property } = member;
+  const isTag =
+    (!computed && property.type === "Identifier" && property.name === "_tag") ||
+    (computed && isStringLiteral(property) && property.value === "_tag");
+  return isTag ? member : undefined;
 };
 
-const isBroadEffectCatchCall = (
-  node: ESTree.Node | null | undefined,
-): node is ESTree.CallExpression =>
-  node?.type === "CallExpression" &&
-  node.callee.type === "MemberExpression" &&
-  node.callee.object.type === "Identifier" &&
-  node.callee.object.name === "Effect" &&
-  !node.callee.computed &&
-  node.callee.property.type === "Identifier" &&
-  broadEffectCatchMethods.has(node.callee.property.name);
+export const isTagMember = (node: ESTree.Node | null | undefined): boolean =>
+  tagMember(node) !== undefined;
 
-export const isInsideBroadEffectHandler = (node: ESTree.Node): boolean => {
-  let current: ESTree.Node | null | undefined = node.parent;
-  while (current !== null && current !== undefined) {
-    if (current.type === "ArrowFunctionExpression" || current.type === "FunctionExpression") {
-      return isBroadEffectCatchCall(current.parent) && current.parent.arguments.includes(current);
-    }
-    current = current.parent;
-  }
-  return false;
-};
-
-export const isReasonTagMember = (node: ESTree.MemberExpression): boolean =>
-  node.object.type === "MemberExpression" &&
-  ((!node.object.computed &&
-    node.object.property.type === "Identifier" &&
-    node.object.property.name === "reason") ||
-    (node.object.computed &&
-      isStringLiteral(node.object.property) &&
-      node.object.property.value === "reason"));
+export const isTagComparison = (node: ESTree.BinaryExpression): boolean =>
+  equalityOperators.has(node.operator) &&
+  ((isStringLiteral(node.right) && isTagMember(node.left)) ||
+    (isStringLiteral(node.left) && isTagMember(node.right)));
 
 export const propertyName = (property: ESTree.ObjectProperty): string | undefined => {
   if (!property.computed && property.key.type === "Identifier") {

@@ -1,7 +1,7 @@
 import { writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
-import { Schema } from "effect";
+import * as Schema from "effect/Schema";
 
 const Request = Schema.Struct({
   id: Schema.optional(Schema.Json),

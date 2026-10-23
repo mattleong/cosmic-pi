@@ -15,6 +15,16 @@ adjustments let the plugin pass its own rules (`no-runtime-typeof`, `no-param-re
 `PlatformError.systemError(...)` and `new PlatformError.SystemError(...)`, whose public API takes the
 system error tag as an argument field.
 
+Local policy changes to vendored rules:
+
+- `no-array-filter-map` recommends one `effect/Array` pass (`Array.filterMap`, `Array.partition`,
+  `Array.getSomes`) instead of iterator helpers, which the workspace `ES2023` library lacks.
+- `no-runtime-typeof` recommends Effect `Predicate` guards or Schema decoding.
+- `no-manual-tag-comparison` also reports optional chains such as `value?._tag === "A"`, and no
+  longer exempts broad `Effect.catch` handlers.
+- `no-unknown-parameters` allows an `unknown` parameter whose first read passes it straight to
+  `Schema.decodeUnknown*(schema)` or `Schema.is(schema)`, directly or through a `const` alias.
+
 Upstream walks visitor-key properties through an untyped record to collect type bindings and
 `infer` declarations. Locally, `shared/type-alias-resolution.ts` and
 `shared/lexical-type-parameters.ts` find those declarations through tokens and
@@ -27,6 +37,10 @@ Upstream rules with a native Oxlint equivalent were removed in favor of the nati
 Oxlint's `typescript/consistent-type-assertions` with `assertionStyle: "never"` bans every type
 assertion except `as const`. That ban made `no-chained-type-assertions`, `no-widen-then-assert`,
 and `require-safety-comment-for-type-assertion` unreachable, so they were removed too.
+`no-manual-effect-error-tag` was replaced by the type-aware `@effect/tsgo` diagnostics
+`catchAllTagDispatchToCatchTag`, `catchIfTagToCatchTag`, and `catchTagToCatchReason`.
+`no-conditional-empty-object-spread` was removed because it only exchanged one conditional-spread
+spelling for another.
 
 Upstream presentation rules are not vendored because they constrain presentation rather than
 protecting correctness: `no-shape-in-symbol-names` (identifier spelling) and
@@ -93,6 +107,20 @@ use Oxlint's AST and lexical scopes. They report without fixes because each find
   and conservative, not flow-sensitive.
   Code Previews' write hook in `src/tools/renderers/registration.ts` and files under `tests/` are
   exempt.
+- **`anti-slop-effect/prefer-effect-fn`** (package `src/` only) reports a named function whose
+  body is exactly `Effect.gen(function* ...)`, optionally followed by `.pipe(...)` calls: a
+  function declaration, or a function bound to a variable, object-literal member, or class field.
+  `gen` resolves through its `effect/Effect` import, including renamed namespace and named
+  imports. Define it with `Effect.fn("Owner.name")`, or `Effect.fnUntraced` on hot paths, passing
+  pipe steps as further arguments; `Effect.fn` preserves generic signatures. Inline callbacks
+  passed positionally, async and generator functions, bodies with eager statements before
+  `Effect.gen`, overloaded declarations (including inside namespaces and `export default`),
+  accessors and class methods, and `Effect.gen({ self: this }, ...)` remain valid.
+- **`anti-slop-effect/no-effect-runner-imports`** (package `src/` only) rejects named imports and
+  re-exports of `run*` runners from `effect/Effect`, closing the gap in the `run*` property ban.
+  `eslint/no-restricted-imports` cannot express it: with `importNames` or `importNamePattern` it
+  also rejects every `import * as Effect` namespace import. Type-only imports remain valid, and
+  the property ban's boundary files are exempt.
 
 The local rules share import, alias, and function resolution from `shared/ast.ts`, and the
 boundary rules match their exempt files through `shared/workspace-path.ts`; rule policy
