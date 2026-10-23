@@ -25,7 +25,7 @@ export class DirectoryModelStoreError extends Schema.TaggedError<
 }) {}
 
 const storeError = (reason: DirectoryModelStoreError["reason"]) => () =>
-  new DirectoryModelStoreError({ reason });
+  DirectoryModelStoreError.make({ reason });
 
 export class DirectoryModelStore extends Context.Service<DirectoryModelStore>()(
   "pi-directory-models/config/store/DirectoryModelStore",

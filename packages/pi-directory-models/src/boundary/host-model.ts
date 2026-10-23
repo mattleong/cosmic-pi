@@ -25,7 +25,7 @@ export class DirectoryModelHostError extends Schema.TaggedError<
 >()("DirectoryModelHostError", { operation: Schema.String, message: Schema.String }) {}
 
 const hostError = (operation: string, message: string) => () =>
-  new DirectoryModelHostError({ operation, message });
+  DirectoryModelHostError.make({ operation, message });
 
 export const captureThinkingLevel = decodeUnknownOrUndefined(ThinkingLevelSchema);
 
