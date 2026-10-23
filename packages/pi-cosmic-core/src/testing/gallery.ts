@@ -10,9 +10,12 @@ export const galleryDirectory = (
   return directory === undefined || directory === "" ? undefined : directory;
 };
 
-export const writeGallerySection = (directory: string, name: string, lines: readonly string[]) =>
-  Effect.gen(function* () {
-    const fileSystem = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    yield* fileSystem.writeFileString(path.join(directory, `${name}.txt`), `${lines.join("\n")}\n`);
-  }).pipe(Effect.provide(fileLayer));
+export const writeGallerySection = Effect.fn("PresentationGallery.writeSection")(function* (
+  directory: string,
+  name: string,
+  lines: readonly string[],
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  yield* fileSystem.writeFileString(path.join(directory, `${name}.txt`), `${lines.join("\n")}\n`);
+}, Effect.provide(fileLayer));

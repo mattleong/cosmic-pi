@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import * as Result from "effect/Result";
+
 const SAFE_SGR_PARAMETERS = /^[0-9;]*$/u;
 const MAX_SAFE_SGR_PARAMETER_LENGTH = 128;
 const MAX_PRESERVED_SGR_SEQUENCES_PER_LINE = 256;
@@ -66,7 +69,9 @@ const isBasicColor = (code: number, base: number): boolean =>
 
 const sgrStatePrefix = (state: SgrState): string => {
   const parameters = [
-    ...SGR_ATTRIBUTES.flatMap((code) => (state.attributes.has(code) ? [String(code)] : [])),
+    ...Arr.filterMap(SGR_ATTRIBUTES, (code) =>
+      state.attributes.has(code) ? Result.succeed(String(code)) : Result.failVoid,
+    ),
     ...[state.foreground, state.background].filter((color) => color !== undefined),
   ];
   return parameters.length === 0 ? "" : `\u001b[${parameters.join(";")}m`;

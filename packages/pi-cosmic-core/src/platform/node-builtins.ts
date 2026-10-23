@@ -1,37 +1,35 @@
-const nodeFsModule = process.getBuiltinModule("node:fs");
-const nodePathModule = process.getBuiltinModule("node:path");
-if (!nodeFsModule || !nodePathModule) throw new Error("Node fs/path builtins are unavailable.");
+import * as NodeChildProcessModule from "node:child_process";
+import * as NodeFs from "node:fs";
+import * as NodeOs from "node:os";
+import * as NodePath from "node:path";
 
 /**
  * Node builtins for boundaries whose protocol Effect's platform modules cannot express, such as
- * no-follow opens, handle-level ownership checks, or synchronous host callbacks. Loading them
- * through `process.getBuiltinModule` keeps direct `node:` imports flagged everywhere else.
+ * no-follow opens, handle-level ownership checks, or synchronous host callbacks. This is the single
+ * module exempt from `nodeBuiltinImport`; everything else reaches Node through these exports.
  */
-export const nodeFs = nodeFsModule;
-export const nodeFsConstants = nodeFsModule.constants;
-export const nodeFsPromises = nodeFsModule.promises;
-export const nodePath = nodePathModule;
+export const nodeFs = NodeFs;
+export const nodeFsConstants = NodeFs.constants;
+export const nodeFsPromises = NodeFs.promises;
+export const nodePath = NodePath;
 export const nodeLockFs = {
-  mkdirSync: nodeFsModule.mkdirSync,
-  lstatSync: nodeFsModule.lstatSync,
-  openSync: nodeFsModule.openSync,
-  fstatSync: nodeFsModule.fstatSync,
-  readFileSync: nodeFsModule.readFileSync,
-  readdirSync: nodeFsModule.readdirSync,
-  writeFileSync: nodeFsModule.writeFileSync,
-  fsyncSync: nodeFsModule.fsyncSync,
-  closeSync: nodeFsModule.closeSync,
-  renameSync: nodeFsModule.renameSync,
-  unlinkSync: nodeFsModule.unlinkSync,
-  rmdirSync: nodeFsModule.rmdirSync,
+  mkdirSync: NodeFs.mkdirSync,
+  lstatSync: NodeFs.lstatSync,
+  openSync: NodeFs.openSync,
+  fstatSync: NodeFs.fstatSync,
+  readFileSync: NodeFs.readFileSync,
+  readdirSync: NodeFs.readdirSync,
+  writeFileSync: NodeFs.writeFileSync,
+  fsyncSync: NodeFs.fsyncSync,
+  closeSync: NodeFs.closeSync,
+  renameSync: NodeFs.renameSync,
+  unlinkSync: NodeFs.unlinkSync,
+  rmdirSync: NodeFs.rmdirSync,
 };
-const nodeOsModule = process.getBuiltinModule("node:os");
-if (!nodeOsModule) throw new Error("Node OS builtins are unavailable.");
-export const nodeDisplayHomeDirectory = () => nodeOsModule.homedir();
-export const nodeTemporaryRoot = () => nodeOsModule.tmpdir();
+export const nodeDisplayHomeDirectory = () => NodeOs.homedir();
+export const nodeTemporaryRoot = () => NodeOs.tmpdir();
 
-const nodeChildProcessModule = process.getBuiltinModule("node:child_process");
-if (!nodeChildProcessModule) throw new Error("Node child-process builtin is unavailable.");
-export const nodeSpawn = nodeChildProcessModule.spawn;
-export const nodeSpawnSync = nodeChildProcessModule.spawnSync;
-export type NodeChildProcess = InstanceType<typeof nodeChildProcessModule.ChildProcess>;
+export const nodeSpawn = NodeChildProcessModule.spawn;
+export const nodeSpawnSync = NodeChildProcessModule.spawnSync;
+export const NodeChildProcess = NodeChildProcessModule.ChildProcess;
+export type NodeChildProcess = NodeChildProcessModule.ChildProcess;

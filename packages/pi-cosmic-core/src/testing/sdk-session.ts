@@ -23,24 +23,21 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import { step } from "./steps.ts";
 
-export const fauxModels = (provider: string) =>
-  Effect.gen(function* () {
-    const fake = fauxProvider({ provider, tokensPerSecond: 0 });
-    const models = yield* step(() =>
-      ModelRuntime.create({
-        credentials: new InMemoryCredentialStore(),
-        modelsStore: new InMemoryModelsStore(),
-        modelsPath: null,
-        refreshOnCreate: false,
-        allowModelNetwork: false,
-      }),
-    );
-    models.registerNativeProvider(fake.provider);
-    yield* Effect.addFinalizer(() =>
-      Effect.sync(() => models.unregisterProvider(fake.provider.id)),
-    );
-    return { fake, models };
-  });
+export const fauxModels = Effect.fn("SdkSession.fauxModels")(function* (provider: string) {
+  const fake = fauxProvider({ provider, tokensPerSecond: 0 });
+  const models = yield* step(() =>
+    ModelRuntime.create({
+      credentials: new InMemoryCredentialStore(),
+      modelsStore: new InMemoryModelsStore(),
+      modelsPath: null,
+      refreshOnCreate: false,
+      allowModelNetwork: false,
+    }),
+  );
+  models.registerNativeProvider(fake.provider);
+  yield* Effect.addFinalizer(() => Effect.sync(() => models.unregisterProvider(fake.provider.id)));
+  return { fake, models };
+});
 
 /**
  * The result text Pi returns when it rejects a call before the tool runs: providers parse the
@@ -88,21 +85,22 @@ export const quietLoader = (options: ConstructorParameters<typeof DefaultResourc
   return step(() => loader.reload()).pipe(Effect.as(loader));
 };
 
-export const scopedPrintSession = (options: CreateAgentSessionOptions) =>
-  Effect.gen(function* () {
-    const { session } = yield* Effect.acquireRelease(
-      step(() => createAgentSession(options)),
-      ({ session: created }) =>
-        step(() => created.abort()).pipe(
-          Effect.andThen(
-            step(() => created.extensionRunner.emit({ type: "session_shutdown", reason: "quit" })),
-          ),
-          Effect.ensuring(Effect.sync(() => created.dispose())),
+export const scopedPrintSession = Effect.fn("SdkSession.scopedPrintSession")(function* (
+  options: CreateAgentSessionOptions,
+) {
+  const { session } = yield* Effect.acquireRelease(
+    step(() => createAgentSession(options)),
+    ({ session: created }) =>
+      step(() => created.abort()).pipe(
+        Effect.andThen(
+          step(() => created.extensionRunner.emit({ type: "session_shutdown", reason: "quit" })),
         ),
-    );
-    yield* step(() => session.bindExtensions({ mode: "print" }));
-    return session;
-  });
+        Effect.ensuring(Effect.sync(() => created.dispose())),
+      ),
+  );
+  yield* step(() => session.bindExtensions({ mode: "print" }));
+  return session;
+});
 
 interface FauxCodemodeSessionOptions {
   readonly prefix: string;
@@ -116,58 +114,58 @@ interface FauxCodemodeSessionOptions {
   readonly reply?: string;
 }
 
-export const fauxCodemodeSession = (options: FauxCodemodeSessionOptions) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const directory = yield* fs.makeTempDirectoryScoped({ prefix: options.prefix });
-    const { fake, models } = yield* fauxModels(options.provider);
-    options.prepareModels?.(models);
-    const settings = quietSettings({ defaultTools: ["+codemode"] });
-    const loader = yield* quietLoader({
-      cwd: directory,
-      agentDir: directory,
-      settingsManager: settings,
-      extensionFactories: [
-        { name: "codemode", builtin: true, factory: createCodemodeExtension() },
-        { name: options.extension.name, factory: options.extension.factory(directory) },
-      ],
-    });
-    const session = yield* scopedPrintSession({
-      cwd: directory,
-      agentDir: directory,
-      model: fake.getModel(),
-      modelRuntime: models,
-      settingsManager: settings,
-      sessionManager: SessionManager.inMemory(directory),
-      resourceLoader: loader,
-    });
-    const call = (name: string, args: JsonObject, callId?: string) =>
-      Effect.gen(function* () {
-        const toolCall = fauxToolCall(
-          name,
-          args,
-          callId === undefined ? undefined : { id: callId },
-        );
-        fake.setResponses([
-          fauxAssistantMessage(toolCall, { stopReason: "toolUse" }),
-          fauxAssistantMessage(options.reply ?? "Workflow fixture finished"),
-        ]);
-        yield* step(() => session.prompt(options.prompt ?? "Exercise the workflow fixture"));
-        const message = session.agent.state.messages.findLast(
-          (candidate) => candidate.role === "toolResult" && candidate.toolName === name,
-        );
-        if (message?.role !== "toolResult")
-          return yield* Effect.die(new Error("The real agent loop returned no tool result."));
-        const text = message.content
-          .filter((part) => part.type === "text")
-          .map((part) => part.text)
-          .join("\n");
-        return { message, text, isError: message.isError };
-      });
-    return {
-      session,
-      fake,
-      call,
-      run: (code: string, callId?: string) => call("codemode", { code }, callId),
-    };
+export const fauxCodemodeSession = Effect.fn("SdkSession.fauxCodemodeSession")(function* (
+  options: FauxCodemodeSessionOptions,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const directory = yield* fs.makeTempDirectoryScoped({ prefix: options.prefix });
+  const { fake, models } = yield* fauxModels(options.provider);
+  options.prepareModels?.(models);
+  const settings = quietSettings({ defaultTools: ["+codemode"] });
+  const loader = yield* quietLoader({
+    cwd: directory,
+    agentDir: directory,
+    settingsManager: settings,
+    extensionFactories: [
+      { name: "codemode", builtin: true, factory: createCodemodeExtension() },
+      { name: options.extension.name, factory: options.extension.factory(directory) },
+    ],
   });
+  const session = yield* scopedPrintSession({
+    cwd: directory,
+    agentDir: directory,
+    model: fake.getModel(),
+    modelRuntime: models,
+    settingsManager: settings,
+    sessionManager: SessionManager.inMemory(directory),
+    resourceLoader: loader,
+  });
+  const call = Effect.fn("FauxCodemodeSession.call")(function* (
+    name: string,
+    args: JsonObject,
+    callId?: string,
+  ) {
+    const toolCall = fauxToolCall(name, args, callId === undefined ? undefined : { id: callId });
+    fake.setResponses([
+      fauxAssistantMessage(toolCall, { stopReason: "toolUse" }),
+      fauxAssistantMessage(options.reply ?? "Workflow fixture finished"),
+    ]);
+    yield* step(() => session.prompt(options.prompt ?? "Exercise the workflow fixture"));
+    const message = session.agent.state.messages.findLast(
+      (candidate) => candidate.role === "toolResult" && candidate.toolName === name,
+    );
+    if (message?.role !== "toolResult")
+      return yield* Effect.die(new Error("The real agent loop returned no tool result."));
+    const text = message.content
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join("\n");
+    return { message, text, isError: message.isError };
+  });
+  return {
+    session,
+    fake,
+    call,
+    run: (code: string, callId?: string) => call("codemode", { code }, callId),
+  };
+});

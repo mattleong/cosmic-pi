@@ -62,6 +62,7 @@ export { galleryDirectory, writeGallerySection } from "./src/testing/gallery.ts"
 export { spawnIpcChild, temporaryDirectory } from "./src/testing/ipc-child.ts";
 export { yieldUntil } from "./src/testing/polling.ts";
 export { reusedProcessIdentity } from "./src/testing/process.ts";
+export { NodeChildProcess } from "./src/platform/node-builtins.ts";
 export { eventLoopTurn, macrotask, maybe, settle, step } from "./src/testing/steps.ts";
 export { interruptingScheduler, pausedScheduler } from "./src/testing/scheduler.ts";
 export { toolSchemaPortabilityProblems } from "./src/testing/tool-schema.ts";

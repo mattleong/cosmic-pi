@@ -142,13 +142,12 @@ export function makeInMemoryDocuments(
   const service: JsonDocumentStoreContract = {
     exists: (path) =>
       record("exists", path).pipe(Effect.andThen(Effect.sync(() => storedDocuments.has(path)))),
-    readObject: (path) =>
-      Effect.gen(function* () {
-        yield* record("read", path);
-        const value = storedDocuments.get(path);
-        if (value === undefined) return undefined;
-        return yield* cloneDocument("read", path, value);
-      }),
+    readObject: Effect.fnUntraced(function* (path) {
+      yield* record("read", path);
+      const value = storedDocuments.get(path);
+      if (value === undefined) return undefined;
+      return yield* cloneDocument("read", path, value);
+    }),
     writeObject: (path, document) =>
       record("write", path).pipe(
         Effect.andThen(

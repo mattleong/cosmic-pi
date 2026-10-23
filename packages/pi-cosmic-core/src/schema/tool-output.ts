@@ -3,13 +3,13 @@ import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { freezeSnapshot } from "../projection.ts";
 
-export class ToolOutputSchemaError extends Schema.TaggedError<ToolOutputSchemaError>()(
-  "ToolOutputSchemaError",
-  {
-    path: Schema.String,
-    message: Schema.String,
-  },
-) {}
+export class ToolOutputSchemaError extends Schema.TaggedError<
+  ToolOutputSchemaError,
+  { readonly brand: unique symbol }
+>()("ToolOutputSchemaError", {
+  path: Schema.String,
+  message: Schema.String,
+}) {}
 
 const DEFINITION_REFERENCE_PREFIX = "#/$defs/";
 

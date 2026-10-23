@@ -38,46 +38,50 @@ export const recoverRefreshFailure =
       ),
     );
 
-export const createSubscriptionRefresh = <Key, Value, E, R>(
+export const createSubscriptionRefresh = Effect.fn("SubscriptionRefresh.create")(function* <
+  Key,
+  Value,
+  E,
+  R,
+>(
   options: SubscriptionRefreshOptions<Key, Value, E, R>,
-): Effect.Effect<SubscriptionRefresh<E, R>> =>
-  Effect.gen(function* () {
-    const coordinator = yield* createRefreshCoordinator<E>();
-    const revisionRef = yield* Ref.make(0);
-    const commitGate = yield* TxReentrantLock.make();
-    const wakeLatch = yield* Latch.make();
-    const spanName = options.spanName ?? "pi-cosmic-core.subscription.refresh";
+): Effect.fn.Return<SubscriptionRefresh<E, R>> {
+  const coordinator = yield* createRefreshCoordinator<E>();
+  const revisionRef = yield* Ref.make(0);
+  const commitGate = yield* TxReentrantLock.make();
+  const wakeLatch = yield* Latch.make();
+  const spanName = options.spanName ?? "pi-cosmic-core.subscription.refresh";
 
-    const withCommitPermit = <A, E2, R2>(effect: Effect.Effect<A, E2, R2>) =>
-      TxReentrantLock.withLock(commitGate, effect);
+  const withCommitPermit = <A, E2, R2>(effect: Effect.Effect<A, E2, R2>) =>
+    TxReentrantLock.withLock(commitGate, effect);
 
-    const invalidateWith: SubscriptionRefresh<E, R>["invalidateWith"] = (effect) =>
-      withCommitPermit(
-        Ref.update(revisionRef, (revision) => revision + 1).pipe(Effect.andThen(effect)),
-      ).pipe(Effect.tap(() => Latch.release(wakeLatch)));
+  const invalidateWith: SubscriptionRefresh<E, R>["invalidateWith"] = (effect) =>
+    withCommitPermit(
+      Ref.update(revisionRef, (revision) => revision + 1).pipe(Effect.andThen(effect)),
+    ).pipe(Effect.tap(() => Latch.release(wakeLatch)));
 
-    const perform = Effect.fnUntraced(function* (request: RefreshRequest) {
-      const capturedRevision = yield* Ref.get(revisionRef);
-      const capturedKey = yield* options.currentKey;
-      const value = yield* options.fetch(request);
-      yield* withCommitPermit(
-        Effect.gen(function* () {
-          if (capturedRevision !== (yield* Ref.get(revisionRef))) return;
-          const currentKey = yield* options.currentKey;
-          if (Object.is(capturedKey, currentKey)) yield* options.commit(value);
-        }),
-      );
-    }, Effect.withSpan(spanName));
+  const perform = Effect.fnUntraced(function* (request: RefreshRequest) {
+    const capturedRevision = yield* Ref.get(revisionRef);
+    const capturedKey = yield* options.currentKey;
+    const value = yield* options.fetch(request);
+    yield* withCommitPermit(
+      Effect.gen(function* () {
+        if (capturedRevision !== (yield* Ref.get(revisionRef))) return;
+        const currentKey = yield* options.currentKey;
+        if (Object.is(capturedKey, currentKey)) yield* options.commit(value);
+      }),
+    );
+  }, Effect.withSpan(spanName));
 
-    const request = (next: RefreshRequest) => coordinator.run(next, perform);
+  const request = (next: RefreshRequest) => coordinator.run(next, perform);
 
-    const startPolling = (pollRequest: RefreshRequest) =>
-      Effect.forever(
-        options.interval.pipe(
-          Effect.flatMap((interval) => Latch.await(wakeLatch).pipe(Effect.timeoutOption(interval))),
-          Effect.andThen(request(pollRequest).pipe(recoverRefreshFailure(`${spanName}.poll`))),
-        ),
-      );
+  const startPolling = (pollRequest: RefreshRequest) =>
+    Effect.forever(
+      options.interval.pipe(
+        Effect.flatMap((interval) => Latch.await(wakeLatch).pipe(Effect.timeoutOption(interval))),
+        Effect.andThen(request(pollRequest).pipe(recoverRefreshFailure(`${spanName}.poll`))),
+      ),
+    );
 
-    return { request, invalidateWith, startPolling };
-  });
+  return { request, invalidateWith, startPolling };
+});

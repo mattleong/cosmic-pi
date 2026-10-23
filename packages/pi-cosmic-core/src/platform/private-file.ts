@@ -9,7 +9,10 @@ import { nodeFsConstants as constants, nodeFsPromises as fs, nodePath } from "./
  * by others, or too large; `failed`: the OS refused otherwise. Paths and OS messages are never
  * retained.
  */
-export class PrivateFileError extends Schema.TaggedError<PrivateFileError>()("PrivateFileError", {
+export class PrivateFileError extends Schema.TaggedError<
+  PrivateFileError,
+  { readonly brand: unique symbol }
+>()("PrivateFileError", {
   reason: Schema.Literals(["missing", "exists", "unsafe", "failed"]),
 }) {}
 
@@ -143,44 +146,43 @@ const EXCLUSIVE_CREATE =
  * interruption while the file is still held. Unless `commit` succeeded, the file this call created
  * is removed; an entry that was already at `path` is never this call's and stays.
  */
-const withExclusiveFile = (
+const withExclusiveFile = Effect.fnUntraced(function* (
   path: string,
   source: string,
   commit: Effect.Effect<void, PrivateFileError>,
-): Effect.Effect<void, PrivateFileError> =>
-  Effect.gen(function* () {
-    let committed = false;
-    yield* Effect.scoped(
-      Effect.gen(function* () {
-        const handle = yield* Effect.acquireRelease(
-          tryPrivateFileOperation(() => fs.open(path, EXCLUSIVE_CREATE, 0o600)),
-          (opened) =>
-            Effect.ignore(tryPrivateFileOperation(() => opened.close())).pipe(
-              Effect.andThen(
-                Effect.suspend(() =>
-                  committed
-                    ? Effect.void
-                    : Effect.ignore(tryPrivateFileOperation(() => fs.unlink(path))),
-                ),
+): Effect.fn.Return<void, PrivateFileError> {
+  let committed = false;
+  yield* Effect.scoped(
+    Effect.gen(function* () {
+      const handle = yield* Effect.acquireRelease(
+        tryPrivateFileOperation(() => fs.open(path, EXCLUSIVE_CREATE, 0o600)),
+        (opened) =>
+          Effect.ignore(tryPrivateFileOperation(() => opened.close())).pipe(
+            Effect.andThen(
+              Effect.suspend(() =>
+                committed
+                  ? Effect.void
+                  : Effect.ignore(tryPrivateFileOperation(() => fs.unlink(path))),
               ),
             ),
-        );
-        yield* tryPrivateFileOperation(() => handle.writeFile(source, "utf8"));
-        yield* tryPrivateFileOperation(() => handle.sync());
-        yield* tryPrivateFileOperation(() => handle.chmod(0o600));
-        // Recording the commit in the same uninterruptible region keeps a late interruption from
-        // removing a file the commit already published.
-        yield* commit.pipe(
-          Effect.andThen(
-            Effect.sync(() => {
-              committed = true;
-            }),
           ),
-          Effect.uninterruptible,
-        );
-      }),
-    );
-  });
+      );
+      yield* tryPrivateFileOperation(() => handle.writeFile(source, "utf8"));
+      yield* tryPrivateFileOperation(() => handle.sync());
+      yield* tryPrivateFileOperation(() => handle.chmod(0o600));
+      // Recording the commit in the same uninterruptible region keeps a late interruption from
+      // removing a file the commit already published.
+      yield* commit.pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            committed = true;
+          }),
+        ),
+        Effect.uninterruptible,
+      );
+    }),
+  );
+});
 
 /** Creates `path` as a new 0600 file holding `source`; fails with `exists` when anything is there. */
 export const createPrivateFile = (

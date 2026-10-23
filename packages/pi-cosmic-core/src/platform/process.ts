@@ -8,6 +8,7 @@ import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -29,18 +30,18 @@ type ObservedProcessOutcome = Data.TaggedEnum<{
 }>;
 const ObservedProcessOutcome = Data.taggedEnum<ObservedProcessOutcome>();
 
-export class BoundedProcessError extends Schema.TaggedError<BoundedProcessError>()(
-  "BoundedProcessError",
-  {
-    operation: Schema.Literals(["spawn", "stream"]),
-    message: Schema.String,
-  },
-) {}
+export class BoundedProcessError extends Schema.TaggedError<
+  BoundedProcessError,
+  { readonly brand: unique symbol }
+>()("BoundedProcessError", {
+  operation: Schema.Literals(["spawn", "stream"]),
+  message: Schema.String,
+}) {}
 
-class BoundedProcessOverflow extends Schema.TaggedError<BoundedProcessOverflow>()(
-  "BoundedProcessOverflow",
-  { stream: Schema.Literals(["stdout", "stderr"]) },
-) {}
+class BoundedProcessOverflow extends Schema.TaggedError<
+  BoundedProcessOverflow,
+  { readonly brand: unique symbol }
+>()("BoundedProcessOverflow", { stream: Schema.Literals(["stdout", "stderr"]) }) {}
 
 export interface BoundedProcessRequest {
   readonly executable: string;
@@ -131,28 +132,28 @@ const sweepExitedProcessTree = (
       : confirmProcessGroupExit(Number(handle.pid), timeoutMillis);
   });
 
-export const confirmEffectProcessClose = (
-  handle: ChildProcessSpawner.ChildProcessHandle,
-  timeoutMillis: number,
-): Effect.Effect<boolean> =>
-  Effect.gen(function* () {
+export const confirmEffectProcessClose = Effect.fn("BoundedProcess.confirmClose")(
+  function* (handle: ChildProcessSpawner.ChildProcessHandle, timeoutMillis: number) {
     const running = yield* handle.isRunning;
     if (!running) return true;
     yield* handle
       .kill({ killSignal: "SIGTERM", forceKillAfter: Math.max(1, timeoutMillis / 2) })
       .pipe(Effect.ignore);
     return !(yield* handle.isRunning);
-  }).pipe(
-    Effect.interruptible,
-    Effect.timeoutOption(Math.max(1, timeoutMillis)),
-    Effect.map((result) => Option.isSome(result) && result.value),
-    Effect.catchCause(() => Effect.succeed(false)),
-  );
+  },
+  Effect.interruptible,
+  (effect, _handle, timeoutMillis) => Effect.timeoutOption(effect, Math.max(1, timeoutMillis)),
+  Effect.map((result) => Option.isSome(result) && result.value),
+  Effect.catchCause(() => Effect.succeed(false)),
+);
 
 const runBoundedProcess = Effect.fn("BoundedProcess.run")(function* (
   request: BoundedProcessRequest,
 ) {
   const cleanupTimeoutMillis = Math.max(1, request.cleanupTimeoutMillis ?? 2_000);
+  // Only a closed leader's group can be swept, and only when the request asks for it.
+  const sweepOwed = (leaderClosed: boolean) =>
+    leaderClosed && request.sweepProcessTreeOnExit === true;
   const command = ChildProcess.make(request.executable, [...request.args], {
     cwd: request.cwd,
     env: request.environment ? { ...request.environment } : undefined,
@@ -182,10 +183,8 @@ const runBoundedProcess = Effect.fn("BoundedProcess.run")(function* (
       if (request.onCleanup)
         yield* Effect.addFinalizer(() =>
           confirmEffectProcessClose(acquired, cleanupTimeoutMillis).pipe(
-            Effect.flatMap((closed) =>
-              closed && request.sweepProcessTreeOnExit
-                ? sweepExitedProcessTree(acquired, cleanupTimeoutMillis)
-                : Effect.succeed(closed),
+            Effect.filterOrElse(Predicate.not(sweepOwed), () =>
+              sweepExitedProcessTree(acquired, cleanupTimeoutMillis),
             ),
             Effect.tap((closed) =>
               Effect.sync(() => {
@@ -232,10 +231,9 @@ const runBoundedProcess = Effect.fn("BoundedProcess.run")(function* (
   const leaderClosed =
     ObservedProcessOutcome.$is("Completed")(outcome) ||
     (yield* confirmEffectProcessClose(handle, cleanupTimeoutMillis));
-  const cleanupConfirmed =
-    leaderClosed && request.sweepProcessTreeOnExit
-      ? yield* sweepExitedProcessTree(handle, cleanupTimeoutMillis)
-      : leaderClosed;
+  const cleanupConfirmed = sweepOwed(leaderClosed)
+    ? yield* sweepExitedProcessTree(handle, cleanupTimeoutMillis)
+    : leaderClosed;
   // Only a swept group is confirmed gone; any other group stays guarded until the scope closes.
   if (exitGuard && cleanupConfirmed && request.sweepProcessTreeOnExit) yield* exitGuard.release;
   return {

@@ -49,7 +49,7 @@ const collectTolerantFields = <Fields extends TolerantFieldSchemas>(
 
   for (const [key, schema] of Object.entries(fields)) {
     if (!Object.hasOwn(raw, key)) continue;
-    const decoded = Schema.decodeUnknownOption(schema)(raw[key]);
+    const decoded = Schema.decodeOption(schema)(raw[key]);
     if (Option.isNone(decoded)) diagnostics.push({ path: `${prefix}${key}`, issue: "invalid" });
     else
       Object.defineProperty(value, key, {

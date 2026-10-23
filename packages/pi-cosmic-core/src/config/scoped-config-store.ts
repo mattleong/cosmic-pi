@@ -222,27 +222,28 @@ export type PreferredScopeStore<Resolved extends ScopedConfigMetadata, E> = Pick
   "readRawConfig" | "modifyConfig" | "resolveCommittedConfig"
 >;
 
-export const commitPreferredScope = <Resolved extends ScopedConfigMetadata, E, R = never>(
+export const commitPreferredScope = Effect.fn("ScopedConfig.commitPreferredScope")(function* <
+  Resolved extends ScopedConfigMetadata,
+  E,
+  R = never,
+>(
   store: PreferredScopeStore<Resolved, E>,
   current: Resolved,
   change: (document: JsonObject) => JsonObject,
   afterCommit: (next: Resolved) => Effect.Effect<void, never, R>,
   options: { readonly fallbackWarning?: string } = {},
-): Effect.Effect<Resolved, E, JsonDocumentStore | R> =>
-  Effect.gen(function* () {
-    const { fallbackWarning } = options;
-    const read: Effect.Effect<JsonObject | undefined, E, JsonDocumentStore> =
-      current.configPath === current.projectConfigPath && current.globalConfigExists
-        ? store.readRawConfig(current.globalConfigPath)
-        : Effect.undefined;
-    const fallback = yield* fallbackWarning === undefined
-      ? read
-      : read.pipe(
-          Effect.catch(() => Effect.logWarning(fallbackWarning).pipe(Effect.as(undefined))),
-        );
-    return yield* store.modifyConfig(current.configPath, (document) => {
-      const committed = change(document);
-      const next = store.resolveCommittedConfig(current, committed, fallback);
-      return { value: next, document: committed, afterCommit: afterCommit(next) };
-    });
+): Effect.fn.Return<Resolved, E, JsonDocumentStore | R> {
+  const { fallbackWarning } = options;
+  const read: Effect.Effect<JsonObject | undefined, E, JsonDocumentStore> =
+    current.configPath === current.projectConfigPath && current.globalConfigExists
+      ? store.readRawConfig(current.globalConfigPath)
+      : Effect.undefined;
+  const fallback = yield* fallbackWarning === undefined
+    ? read
+    : read.pipe(Effect.catch(() => Effect.logWarning(fallbackWarning).pipe(Effect.as(undefined))));
+  return yield* store.modifyConfig(current.configPath, (document) => {
+    const committed = change(document);
+    const next = store.resolveCommittedConfig(current, committed, fallback);
+    return { value: next, document: committed, afterCommit: afterCommit(next) };
   });
+});

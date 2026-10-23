@@ -32,16 +32,17 @@ export const signalProcess = (pid: number | undefined, signal: NodeJS.Signals | 
  * Waits, without a deadline, until the process group is gone (true) or can no longer be inspected
  * (false). Interruptible, so callers can race it with their own stop condition.
  */
-export const awaitProcessGroupExit = (pid: number | undefined): Effect.Effect<boolean> =>
-  Effect.gen(function* () {
-    while (true) {
-      const observed = signalProcessGroup(pid, 0);
-      if (observed === "absent") return true;
-      if (observed === "failed") return false;
-      // macOS may report EPERM briefly while a terminated group is being reaped.
-      yield* Effect.sleep(10);
-    }
-  }).pipe(Effect.interruptible);
+export const awaitProcessGroupExit = Effect.fnUntraced(function* (
+  pid: number | undefined,
+): Effect.fn.Return<boolean> {
+  while (true) {
+    const observed = signalProcessGroup(pid, 0);
+    if (observed === "absent") return true;
+    if (observed === "failed") return false;
+    // macOS may report EPERM briefly while a terminated group is being reaped.
+    yield* Effect.sleep(10);
+  }
+}, Effect.interruptible);
 
 export const confirmProcessGroupExit = (
   pid: number | undefined,
@@ -52,7 +53,10 @@ export const confirmProcessGroupExit = (
     Effect.map((result) => Option.isSome(result) && result.value),
   );
 
-export class ProcessTreeError extends Schema.TaggedError<ProcessTreeError>()("ProcessTreeError", {
+export class ProcessTreeError extends Schema.TaggedError<
+  ProcessTreeError,
+  { readonly brand: unique symbol }
+>()("ProcessTreeError", {
   operation: Schema.String,
   code: Schema.Literal("group_signal_failed"),
   message: Schema.String,

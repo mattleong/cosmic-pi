@@ -6,10 +6,13 @@ import * as Schema from "effect/Schema";
 import { nodeFsConstants as constants, nodeFsPromises as fs } from "./node-builtins.ts";
 import { isStrictlyInsidePath } from "./paths.ts";
 
-class SafeFileError extends Schema.TaggedError<SafeFileError>()("SafeFileError", {
-  operation: Schema.String,
-  message: Schema.String,
-}) {}
+class SafeFileError extends Schema.TaggedError<SafeFileError, { readonly brand: unique symbol }>()(
+  "SafeFileError",
+  {
+    operation: Schema.String,
+    message: Schema.String,
+  },
+) {}
 
 interface SafeFileResult {
   readonly path: string;
@@ -51,31 +54,30 @@ interface FileIdentity {
 const sameFile = (left: FileIdentity, right: FileIdentity): boolean =>
   left.dev === right.dev && left.ino === right.ino;
 
-const readExactly = (handle: OpenedFile, size: bigint) =>
-  Effect.gen(function* () {
-    const bytes = yield* Effect.try({
-      try: () => new Uint8Array(Number(size)),
-      catch: safeFileError("read", READ_FAILURE),
-    });
-    let offset = 0;
-    while (offset < bytes.byteLength) {
-      const { bytesRead } = yield* readStep(() =>
-        handle.read({
-          buffer: bytes,
-          offset,
-          length: bytes.byteLength - offset,
-          position: offset,
-        }),
-      );
-      if (bytesRead === 0) return yield* failRead();
-      offset += bytesRead;
-    }
-    const extra = yield* readStep(() =>
-      handle.read({ buffer: new Uint8Array(1), position: bytes.byteLength }),
-    );
-    if (extra.bytesRead !== 0) return yield* failRead();
-    return bytes;
+const readExactly = Effect.fnUntraced(function* (handle: OpenedFile, size: bigint) {
+  const bytes = yield* Effect.try({
+    try: () => new Uint8Array(Number(size)),
+    catch: safeFileError("read", READ_FAILURE),
   });
+  let offset = 0;
+  while (offset < bytes.byteLength) {
+    const { bytesRead } = yield* readStep(() =>
+      handle.read({
+        buffer: bytes,
+        offset,
+        length: bytes.byteLength - offset,
+        position: offset,
+      }),
+    );
+    if (bytesRead === 0) return yield* failRead();
+    offset += bytesRead;
+  }
+  const extra = yield* readStep(() =>
+    handle.read({ buffer: new Uint8Array(1), position: bytes.byteLength }),
+  );
+  if (extra.bytesRead !== 0) return yield* failRead();
+  return bytes;
+});
 
 const readContainedRegularFile = (paths: Path.Path) =>
   Effect.fn("SafeFile.readContainedRegularFile")(function* (

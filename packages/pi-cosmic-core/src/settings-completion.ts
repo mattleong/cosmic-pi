@@ -90,10 +90,10 @@ export const sectionSettingValue =
     return { ...current, [section]: { ...sectionObject, [key]: value } };
   };
 
-export class InvalidSettingError extends Schema.TaggedError<InvalidSettingError>()(
-  "InvalidSettingError",
-  { id: Schema.String, message: Schema.String },
-) {}
+export class InvalidSettingError extends Schema.TaggedError<
+  InvalidSettingError,
+  { readonly brand: unique symbol }
+>()("InvalidSettingError", { id: Schema.String, message: Schema.String }) {}
 
 export interface SettingsOptionDescriptor<Config = unknown> {
   readonly id: string;
@@ -105,9 +105,7 @@ export interface SettingsOptionDescriptor<Config = unknown> {
 }
 
 export const BooleanFromJsonSchema = Schema.fromJsonString(Schema.Boolean);
-export const FiniteNumberFromJsonSchema = Schema.fromJsonString(
-  Schema.Number.check(Schema.isFinite()),
-);
+export const FiniteNumberFromJsonSchema = Schema.fromJsonString(Schema.Finite);
 
 export const decodeSettingUpdate = <Config>(
   descriptors: ReadonlyArray<Pick<SettingsOptionDescriptor<Config>, "id" | "decoder">>,
@@ -116,7 +114,7 @@ export const decodeSettingUpdate = <Config>(
     const descriptor = descriptors.find((entry) => entry.id === id);
     if (!descriptor)
       return yield* new InvalidSettingError({ id, message: `Unknown setting: ${id}.` });
-    const parsedValue = yield* Schema.decodeUnknownEffect(descriptor.decoder)(rawValue).pipe(
+    const parsedValue = yield* Schema.decodeEffect(descriptor.decoder)(rawValue).pipe(
       Effect.mapError(() => new InvalidSettingError({ id, message: `Invalid value for ${id}.` })),
     );
     const separator = id.indexOf(".");

@@ -24,18 +24,20 @@ interface PiHostLogTarget {
 
 const MAX_HOST_LOG_BYTES = 1_000_000;
 
-const rotateHostLog = (fs: FileSystem.FileSystem, logPath: string) =>
-  Effect.gen(function* () {
+const rotateHostLog = Effect.fn("PiHostLogger.rotate")(
+  function* (fs: FileSystem.FileSystem, logPath: string) {
     const info = yield* fs.stat(logPath);
     if (ByteSize.toBigInt(info.size) < BigInt(MAX_HOST_LOG_BYTES)) return;
     const previous = `${logPath}.1`;
     yield* fs.remove(previous).pipe(Effect.ignore);
     yield* fs.rename(logPath, previous);
     yield* fs.chmod(previous, 0o600);
-  }).pipe(Effect.ignoreCause);
+  },
+  (effect) => Effect.ignoreCause(effect),
+);
 
-const makePiHostFileLogger = (target: PiHostLogTarget) =>
-  Effect.gen(function* () {
+const makePiHostFileLogger = Effect.fn("PiHostLogger.make")(
+  function* (target: PiHostLogTarget) {
     const path = yield* Path.Path;
     const fs = yield* FileSystem.FileSystem;
     const agentDirectory = yield* Effect.try(target.agentDirectory);
@@ -44,7 +46,9 @@ const makePiHostFileLogger = (target: PiHostLogTarget) =>
     const logPath = path.join(directory, `${target.packageName}.jsonl`);
     yield* rotateHostLog(fs, logPath);
     return yield* Logger.formatJson.pipe(Logger.toFile(logPath, { mode: 0o600 }));
-  }).pipe(Effect.catchCause(() => Effect.succeed(discardLogger)));
+  },
+  Effect.catchCause(() => Effect.succeed(discardLogger)),
+);
 
 export const piHostFileLoggerLayer = (target: PiHostLogTarget): Layer.Layer<never> =>
   Logger.layer([Logger.tracerLogger, makePiHostFileLogger(target)]).pipe(

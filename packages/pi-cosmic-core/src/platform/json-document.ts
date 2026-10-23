@@ -15,8 +15,10 @@ export type JsonValue = Schema.MutableJson;
 
 export type JsonObject = Schema.MutableJsonObject;
 
+const isMutableJson = Schema.is(Schema.MutableJson);
+
 export const isJsonObject = <Value>(value: Value): value is Value & JsonObject =>
-  Schema.is(Schema.MutableJson)(value) && Predicate.isObject(value);
+  isMutableJson(value) && Predicate.isObject(value);
 
 export interface JsonDocumentModification<A, AfterCommitR = never> {
   readonly value: A;
@@ -77,7 +79,7 @@ const makeJsonDocumentStore = Effect.gen(function* () {
       Effect.catchReason(
         "PlatformError",
         "NotFound",
-        () => Effect.succeed(undefined),
+        () => Effect.undefined,
         () => Effect.fail(documentError("read", path, "Unable to read JSON document.")),
       ),
     );

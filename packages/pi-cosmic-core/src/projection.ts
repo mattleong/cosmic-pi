@@ -9,7 +9,10 @@ import * as Schema from "effect/Schema";
 import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
 
-export class ProjectionError extends Schema.TaggedError<ProjectionError>()("ProjectionError", {
+export class ProjectionError extends Schema.TaggedError<
+  ProjectionError,
+  { readonly brand: unique symbol }
+>()("ProjectionError", {
   path: Schema.String,
   message: Schema.String,
 }) {}
@@ -21,6 +24,8 @@ interface FrozenProjection<State, Snapshot> {
     update: (state: State) => Effect.Effect<readonly [A, State], E, R>,
   ) => Effect.Effect<A, E | ProjectionError, R>;
 }
+
+const isProjectionError = Schema.is(ProjectionError);
 
 const projectionError = (path: string, message: string) => new ProjectionError({ path, message });
 
@@ -126,48 +131,50 @@ const projectSnapshot = <State, Snapshot>(
   Effect.try({
     try: () => freezeSnapshot(project(state)),
     catch: (error) =>
-      error instanceof ProjectionError
+      isProjectionError(error)
         ? error
         : projectionError("$", "Unable to publish a plain immutable state snapshot."),
   });
 
-export const frozenProjection = <State, Snapshot>(
+export const frozenProjection = Effect.fn("Projection.frozenProjection")(function* <
+  State,
+  Snapshot,
+>(
   initialState: State,
   project: (state: State) => Snapshot,
   publish: (snapshot: Snapshot) => void,
-): Effect.Effect<FrozenProjection<State, Snapshot>, ProjectionError> =>
-  Effect.gen(function* () {
-    const initialSnapshot = yield* projectSnapshot(initialState, project);
-    const state = yield* Ref.make(initialState);
-    const lock = yield* Semaphore.make(1);
-    const snapshot = MutableRef.make(initialSnapshot);
-    yield* Effect.try({
-      try: () => publish(initialSnapshot),
-      catch: () => projectionError("$", "Unable to publish the initial snapshot."),
-    });
-
-    const transition: FrozenProjection<State, Snapshot>["transition"] = (update) =>
-      lock.withPermit(
-        Effect.gen(function* () {
-          const current = yield* Ref.get(state);
-          const [result, next] = yield* update(current);
-          const published = yield* projectSnapshot(next, project);
-          yield* Effect.uninterruptible(
-            Effect.try({
-              try: () => {
-                publish(published);
-                MutableRef.set(snapshot, published);
-              },
-              catch: () => projectionError("$", "Unable to publish the snapshot."),
-            }).pipe(Effect.andThen(Ref.set(state, next))),
-          );
-          return result;
-        }),
-      );
-
-    return {
-      getSnapshot: () => MutableRef.get(snapshot),
-      getState: Ref.get(state),
-      transition,
-    };
+): Effect.fn.Return<FrozenProjection<State, Snapshot>, ProjectionError> {
+  const initialSnapshot = yield* projectSnapshot(initialState, project);
+  const state = yield* Ref.make(initialState);
+  const lock = yield* Semaphore.make(1);
+  const snapshot = MutableRef.make(initialSnapshot);
+  yield* Effect.try({
+    try: () => publish(initialSnapshot),
+    catch: () => projectionError("$", "Unable to publish the initial snapshot."),
   });
+
+  const transition: FrozenProjection<State, Snapshot>["transition"] = (update) =>
+    lock.withPermit(
+      Effect.gen(function* () {
+        const current = yield* Ref.get(state);
+        const [result, next] = yield* update(current);
+        const published = yield* projectSnapshot(next, project);
+        yield* Effect.uninterruptible(
+          Effect.try({
+            try: () => {
+              publish(published);
+              MutableRef.set(snapshot, published);
+            },
+            catch: () => projectionError("$", "Unable to publish the snapshot."),
+          }).pipe(Effect.andThen(Ref.set(state, next))),
+        );
+        return result;
+      }),
+    );
+
+  return {
+    getSnapshot: () => MutableRef.get(snapshot),
+    getState: Ref.get(state),
+    transition,
+  };
+});

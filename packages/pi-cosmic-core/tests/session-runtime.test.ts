@@ -86,10 +86,7 @@ it.effect("replaces a stalled runtime and releases every acquired layer exactly 
         ),
       startup: (input) =>
         input === 1
-          ? Effect.sync(() => undefined).pipe(
-              Effect.andThen(Deferred.succeed(firstStarted, undefined)),
-              Effect.andThen(Effect.never),
-            )
+          ? Deferred.succeed(firstStarted, undefined).pipe(Effect.andThen(Effect.never))
           : Effect.void,
       onActivated: (input) => void activations.push(input),
     });
@@ -160,7 +157,10 @@ it.effect("releases acquired resources after startup failure", () =>
   }),
 );
 
-class CredentialRejected extends Schema.TaggedError<CredentialRejected>()("CredentialRejected", {
+class CredentialRejected extends Schema.TaggedError<
+  CredentialRejected,
+  { readonly brand: unique symbol }
+>()("CredentialRejected", {
   message: Schema.String,
 }) {}
 

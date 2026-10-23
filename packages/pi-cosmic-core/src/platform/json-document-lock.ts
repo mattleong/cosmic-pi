@@ -14,13 +14,13 @@ import { nodePath as path } from "./node-builtins.ts";
 const INITIAL_RETRY_MILLIS = 5;
 const MAX_RETRY_MILLIS = 100;
 
-export class JsonDocumentLockError extends Schema.TaggedError<JsonDocumentLockError>()(
-  "JsonDocumentLockError",
-  {
-    reason: Schema.Literals(["busy", "unavailable", "recovery-required"]),
-    slot: Schema.optionalKey(Schema.String),
-  },
-) {}
+export class JsonDocumentLockError extends Schema.TaggedError<
+  JsonDocumentLockError,
+  { readonly brand: unique symbol }
+>()("JsonDocumentLockError", {
+  reason: Schema.Literals(["busy", "unavailable", "recovery-required"]),
+  slot: Schema.optionalKey(Schema.String),
+}) {}
 
 export interface JsonDocumentLockContract {
   /** Runs `effect` while this process exclusively owns the canonical document path. */
@@ -43,22 +43,19 @@ export interface JsonDocumentLockOptions {
 const jsonDocumentLockDirectory = (documentPath: string): string =>
   path.join(path.dirname(documentPath), `.${path.basename(documentPath)}.lock`);
 
+const isCrossProcessLockError = Schema.is(CrossProcessLockError);
+
 const lockError = (cause: unknown): JsonDocumentLockError =>
-  cause instanceof CrossProcessLockError && cause.reason === "recovery-required"
+  isCrossProcessLockError(cause) && cause.reason === "recovery-required"
     ? new JsonDocumentLockError({
         reason: "recovery-required",
         ...(cause.slot !== undefined && { slot: cause.slot }),
       })
     : new JsonDocumentLockError({ reason: "unavailable" });
 
+// An unconfirmed release leaves the slot held until this process exits; writers then reclaim it.
 const releaseLease = (lease: CrossProcessLease) =>
-  Effect.sync(() => {
-    try {
-      lease.release();
-    } catch {
-      // An unconfirmed release leaves the slot held until this process exits; writers then reclaim it.
-    }
-  });
+  Effect.try({ try: () => lease.release(), catch: lockError }).pipe(Effect.ignore);
 
 const makeNodeJsonDocumentLock = (options: JsonDocumentLockOptions): JsonDocumentLockContract => {
   const timeoutMillis = Duration.toMillis(options.timeout);

@@ -20,7 +20,7 @@ import {
 
 it("decodes valid siblings and bounds redacted diagnostics", () => {
   const decoded = decodeTolerantFields(
-    { enabled: Schema.Boolean, interval: Schema.Number, mode: Schema.Literal("known") },
+    { enabled: Schema.Boolean, interval: Schema.Finite, mode: Schema.Literal("known") },
     { path: "usage", maxDiagnostics: 1 },
   )({ enabled: true, interval: "bad", mode: "bad", future: { secret: "retained" } });
   expect(decoded.value).toEqual({ enabled: true });
@@ -52,7 +52,10 @@ it("decodes only own __proto__ fields without prototype mutation", () => {
   expect(Object.hasOwn(missing.value, "__proto__")).toBe(false);
 });
 
-class TestConfigError extends Schema.TaggedError<TestConfigError>()("TestConfigError", {
+class TestConfigError extends Schema.TaggedError<
+  TestConfigError,
+  { readonly brand: unique symbol }
+>()("TestConfigError", {
   operation: Schema.String,
   path: Schema.String,
   message: Schema.String,

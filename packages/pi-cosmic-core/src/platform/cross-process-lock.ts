@@ -8,13 +8,13 @@ import { nodeFsConstants as flags, nodeLockFs as fs, nodePath as path } from "./
 import { hasPrivateMode, isOwnedByCurrentUser, isPrivateDirectoryInfo } from "./private-file.ts";
 import { currentProcessIdentity, processLiveness } from "./process-start.ts";
 
-export class CrossProcessLockError extends Schema.TaggedError<CrossProcessLockError>()(
-  "CrossProcessLockError",
-  {
-    reason: Schema.Literals(["unavailable", "recovery-required"]),
-    slot: Schema.optionalKey(Schema.String),
-  },
-) {}
+export class CrossProcessLockError extends Schema.TaggedError<
+  CrossProcessLockError,
+  { readonly brand: unique symbol }
+>()("CrossProcessLockError", {
+  reason: Schema.Literals(["unavailable", "recovery-required"]),
+  slot: Schema.optionalKey(Schema.String),
+}) {}
 
 export interface CrossProcessLease {
   readonly mutationStarted: () => void;
@@ -46,6 +46,10 @@ const recovery = (slot?: string) =>
   new CrossProcessLockError({ reason: "recovery-required", ...(slot !== undefined && { slot }) });
 const code = (...expected: string[]) =>
   Schema.is(Schema.Struct({ code: Schema.Literals(expected) }));
+const isExists = code("EEXIST");
+const isMissing = code("ENOENT");
+const isRetireRace = code("ENOENT", "ENOTEMPTY", "EEXIST");
+const isSlotOccupied = code("EEXIST", "ENOTEMPTY");
 // Synchronous, unlike the private-file module, because lease callbacks such as `release` are.
 const privateDirectory = (directory: string, slot?: string) => {
   if (!isPrivateDirectoryInfo(fs.lstatSync(directory))) throw recovery(slot);
@@ -116,7 +120,7 @@ const ensurePrivateRoot = (root: string): void => {
   try {
     fs.mkdirSync(root, { mode: 0o700 });
   } catch (error) {
-    if (!code("EEXIST")(error)) throw error;
+    if (!isExists(error)) throw error;
   }
   privateDirectory(root, root);
 };
@@ -127,12 +131,12 @@ const readPreviousOwner = (directory: string, attempt = 1): Owner | undefined =>
   try {
     return readOwner(directory);
   } catch (error) {
-    if (!code("ENOENT")(error)) throw recovery(directory);
+    if (!isMissing(error)) throw recovery(directory);
   }
   try {
     fs.lstatSync(directory);
   } catch (statError) {
-    if (code("ENOENT")(statError)) return undefined;
+    if (isMissing(statError)) return undefined;
     throw statError;
   }
   // A releasing owner can move its slot away and a successor publish a new one between the two
@@ -146,7 +150,7 @@ const retireDeadOwner = (directory: string, previous: Owner, root: string): void
   try {
     retire(directory, previous, root);
   } catch (retireError) {
-    if (!code("ENOENT", "ENOTEMPTY", "EEXIST")(retireError)) throw retireError;
+    if (!isRetireRace(retireError)) throw retireError;
   }
 };
 
@@ -159,7 +163,7 @@ const publishOwner = (root: string, directory: string, owner: Owner): boolean =>
   } catch (error) {
     fs.unlinkSync(path.join(candidate, "owner.json"));
     fs.rmdirSync(candidate);
-    if (code("EEXIST", "ENOTEMPTY")(error)) return false;
+    if (isSlotOccupied(error)) return false;
     throw error;
   }
   try {
@@ -263,10 +267,10 @@ export const crossProcessLockHolder = (
   }
 };
 
+const isCrossProcessLockError = Schema.is(CrossProcessLockError);
+
 const failure = (cause: unknown) =>
-  cause instanceof CrossProcessLockError
-    ? cause
-    : new CrossProcessLockError({ reason: "unavailable" });
+  isCrossProcessLockError(cause) ? cause : new CrossProcessLockError({ reason: "unavailable" });
 
 export class CrossProcessLock extends Context.Service<CrossProcessLock, CrossProcessLockContract>()(
   "pi-cosmic-core/platform/cross-process-lock/CrossProcessLock",

@@ -9,10 +9,10 @@ import type { PiManagedRuntime } from "./runtime.ts";
 
 declare const PiSessionRuntimeSlotRuntimeError: unique symbol;
 
-export class PiSessionRuntimeError extends Schema.TaggedError<PiSessionRuntimeError>()(
-  "PiSessionRuntimeError",
-  { operation: Schema.String, message: Schema.String },
-) {}
+export class PiSessionRuntimeError extends Schema.TaggedError<
+  PiSessionRuntimeError,
+  { readonly brand: unique symbol }
+>()("PiSessionRuntimeError", { operation: Schema.String, message: Schema.String }) {}
 
 interface PiSessionRuntimeHooks<Input, R, StartupError, RuntimeError, StartupValue = void> {
   readonly makeRuntime: (input: Input) => PiManagedRuntime<R, RuntimeError>;
