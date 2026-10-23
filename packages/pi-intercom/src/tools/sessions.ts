@@ -36,13 +36,13 @@ import {
 const MESSAGE_ID_BYTES = 16;
 
 /** A send or read that didn't happen; the code says why. */
-export class SessionToolRefusal extends Schema.TaggedError<SessionToolRefusal>()(
-  "SessionToolRefusal",
-  {
-    code: ToolRefusalCodeSchema,
-    session: Schema.optionalKey(SessionViewSchema),
-  },
-) {}
+export class SessionToolRefusal extends Schema.TaggedError<
+  SessionToolRefusal,
+  { readonly brand: unique symbol }
+>()("SessionToolRefusal", {
+  code: ToolRefusalCodeSchema,
+  session: Schema.optionalKey(SessionViewSchema),
+}) {}
 
 const viewOf = (record: Pick<SessionRecord, "sessionId" | "name" | "cwd">): SessionView => ({
   sessionId: safeTextPrefix(record.sessionId, MAX_IDENTITY_CHARS),
@@ -63,13 +63,14 @@ const answered = (result: Result.Result<unknown, IntercomClientError | IntercomR
   Result.isSuccess(result) || Predicate.isTagged(result.failure, "IntercomRefused");
 
 /** Describes each record, dropping one that didn't answer when its owner is dead. */
-const describeLive = (records: ReadonlyArray<SessionRecord>) =>
-  Effect.gen(function* () {
-    const described = yield* describeSessions(records);
-    return yield* Effect.filter(described, ({ target, result }) =>
-      answered(result) ? Effect.succeed(true) : Effect.map(ownerIsDead(target), (dead) => !dead),
-    );
-  });
+const describeLive = Effect.fn("IntercomTools.describeLive")(function* (
+  records: ReadonlyArray<SessionRecord>,
+) {
+  const described = yield* describeSessions(records);
+  return yield* Effect.filter(described, ({ target, result }) =>
+    answered(result) ? Effect.succeed(true) : Effect.map(ownerIsDead(target), (dead) => !dead),
+  );
+});
 
 const clientRefusalCode = (error: IntercomClientError): ToolRefusalCode =>
   error.reason === "timeout" || error.reason === "unresponsive"
@@ -133,12 +134,14 @@ const resolvePeer = Effect.fn("IntercomTools.resolvePeer")(function* (to: string
 });
 
 /** A recipient that never answered isn't a session anymore when its owner is dead. */
-const unanswered = (record: SessionRecord, error: IntercomClientError | IntercomRefused) =>
-  Effect.gen(function* () {
-    if (Predicate.isTagged(error, "IntercomClientError") && (yield* ownerIsDead(record)))
-      return yield* new SessionToolRefusal({ code: "session_not_found" });
-    return yield* refusedBy(record)(error);
-  });
+const unanswered = Effect.fn("IntercomTools.unanswered")(function* (
+  record: SessionRecord,
+  error: IntercomClientError | IntercomRefused,
+) {
+  if (Predicate.isTagged(error, "IntercomClientError") && (yield* ownerIsDead(record)))
+    return yield* new SessionToolRefusal({ code: "session_not_found" });
+  return yield* refusedBy(record)(error);
+});
 
 /** A refusal comes from the session itself, which proved it holds its token. */
 const silentState = (error: IntercomClientError | IntercomRefused): ListedSession["state"] => {

@@ -52,10 +52,10 @@ export type IntercomClientFailure = typeof IntercomClientFailureSchema.Type;
  * recipient never handled the request; after any other failure a `Deliver` may still have been
  * delivered.
  */
-export class IntercomClientError extends Schema.TaggedError<IntercomClientError>()(
-  "IntercomClientError",
-  { reason: IntercomClientFailureSchema },
-) {}
+export class IntercomClientError extends Schema.TaggedError<
+  IntercomClientError,
+  { readonly brand: unique symbol }
+>()("IntercomClientError", { reason: IntercomClientFailureSchema }) {}
 
 /** Where a session listens and the token it proves, as its registry record states. */
 export interface IntercomTarget {
@@ -89,20 +89,22 @@ const transportFailure = (error: RpcClientError.RpcClientError | IntercomUnautho
  * anything else is sent; only then does the client prove its own. The token itself never crosses
  * the socket.
  */
-const authenticate = (client: IntercomClient, token: string) =>
-  Effect.gen(function* () {
-    const key = yield* handshakeKey(token).pipe(Effect.mapError(() => failWith("protocol")));
-    const clientNonce = yield* freshNonce;
-    const challenge = yield* client.Hello({ nonce: clientNonce });
-    const genuine = yield* key
-      .check("server", clientNonce, challenge.nonce, challenge.proof)
-      .pipe(Effect.mapError(() => failWith("protocol")));
-    if (!genuine) return yield* failWith("unauthorized");
-    const proof = yield* key
-      .prove("client", clientNonce, challenge.nonce)
-      .pipe(Effect.mapError(() => failWith("protocol")));
-    return yield* client.Authenticate({ proof });
-  });
+const authenticate = Effect.fn("IntercomClient.authenticate")(function* (
+  client: IntercomClient,
+  token: string,
+) {
+  const key = yield* handshakeKey(token).pipe(Effect.mapError(() => failWith("protocol")));
+  const clientNonce = yield* freshNonce;
+  const challenge = yield* client.Hello({ nonce: clientNonce });
+  const genuine = yield* key
+    .check("server", clientNonce, challenge.nonce, challenge.proof)
+    .pipe(Effect.mapError(() => failWith("protocol")));
+  if (!genuine) return yield* failWith("unauthorized");
+  const proof = yield* key
+    .prove("client", clientNonce, challenge.nonce)
+    .pipe(Effect.mapError(() => failWith("protocol")));
+  return yield* client.Authenticate({ proof });
+});
 
 /**
  * Runs one request on its own connection to `target`, bounded by `deadline` from connecting to

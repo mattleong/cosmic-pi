@@ -155,162 +155,161 @@ export interface GuardedProtocol {
  * flight, and a bounded write backlog. Anything outside the handshake order or those bounds
  * closes the connection.
  */
-export const guardedRpcProtocol = (
+export const guardedRpcProtocol = Effect.fn("IntercomConnections.guardedRpcProtocol")(function* (
   server: SocketServer.SocketServer["Service"],
   limits: ConnectionLimits,
-): Effect.Effect<GuardedProtocol, never, RpcSerialization.RpcSerialization | Scope.Scope> =>
-  Effect.gen(function* () {
-    const serialization = yield* RpcSerialization.RpcSerialization;
-    const disconnects = yield* Queue.unbounded<number>();
-    const transports = new Map<number, ConnectionTransport>();
-    const idleMillis = Duration.toMillis(Duration.fromInputUnsafe(limits.idleDeadline));
-    let nextClientId = 0;
-    let writeRequest: (
-      clientId: number,
-      message: RpcMessage.FromClientEncoded,
-    ) => Effect.Effect<void> = ignoreRequest;
+): Effect.fn.Return<GuardedProtocol, never, RpcSerialization.RpcSerialization | Scope.Scope> {
+  const serialization = yield* RpcSerialization.RpcSerialization;
+  const disconnects = yield* Queue.unbounded<number>();
+  const transports = new Map<number, ConnectionTransport>();
+  const idleMillis = Duration.toMillis(Duration.fromInputUnsafe(limits.idleDeadline));
+  let nextClientId = 0;
+  let writeRequest: (
+    clientId: number,
+    message: RpcMessage.FromClientEncoded,
+  ) => Effect.Effect<void> = ignoreRequest;
 
-    const protocol = yield* RpcServer.Protocol.make((write) => {
-      writeRequest = write;
-      return Effect.succeed({
-        disconnects,
-        send: (clientId, response) =>
-          Effect.flatMap(Clock.currentTimeMillis, (now) =>
+  const protocol = yield* RpcServer.Protocol.make((write) => {
+    writeRequest = write;
+    return Effect.succeed({
+      disconnects,
+      send: (clientId, response) =>
+        Effect.flatMap(Clock.currentTimeMillis, (now) =>
+          Effect.sync(() => {
+            const transport = transports.get(clientId);
+            if (transport) queueResponse(transport, response, now);
+          }),
+        ),
+      end: (clientId) =>
+        Effect.sync(() => {
+          transports.get(clientId)?.connection.close();
+        }),
+      clientIds: Effect.sync(() => new Set(transports.keys())),
+      initialMessage: Effect.succeedNone,
+      supportsAck: true,
+      supportsTransferables: false,
+      supportsSpanPropagation: false,
+      supportsNotifications: false,
+      codecFor: serialization.codecFor,
+    });
+  });
+
+  const runConnection = (socket: Socket.Socket) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const netSocket = yield* Effect.serviceOption(NodeSocket.NetSocket);
+        if (Option.isNone(netSocket)) return;
+        const output = yield* Queue.bounded<Uint8Array | string, Cause.Done>(MAX_PENDING_WRITES);
+        const arrived = yield* Clock.currentTimeMillis;
+        // From the bound check to taking the slot nothing yields, so concurrent connections can't
+        // both take the last one.
+        if (transports.size >= limits.maxConnections) {
+          netSocket.value.destroy();
+          return;
+        }
+        const clientId = nextClientId;
+        nextClientId += 1;
+        let phase: ConnectionPhase = "fresh";
+        const connection: IntercomConnection = {
+          get phase() {
+            return phase;
+          },
+          clientNonce: "",
+          serverNonce: "",
+          advance: (from, to) => {
+            if (phase !== from) return false;
+            phase = to;
+            return true;
+          },
+          close: () => {
+            phase = "refused";
+            netSocket.value.destroy();
+          },
+        };
+        const parser = serialization.makeUnsafe();
+        const transport: ConnectionTransport = {
+          connection,
+          activeRequests: new Set(),
+          output,
+          encode: (response) => parser.encode(response),
+          lastActivity: arrived,
+        };
+        transports.set(clientId, transport);
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            phase = "refused";
+            transports.delete(clientId);
+            Queue.endUnsafe(output);
+            Queue.offerUnsafe(disconnects, clientId);
+          }),
+        );
+
+        const writer = yield* socket.writer;
+        yield* Stream.fromQueue(output).pipe(
+          Stream.runForEach(writer.write),
+          Effect.catchCause(() => Effect.sync(connection.close)),
+          Effect.forkScoped,
+        );
+        yield* Effect.sleep(limits.authenticationDeadline).pipe(
+          Effect.andThen(
             Effect.sync(() => {
-              const transport = transports.get(clientId);
-              if (transport) queueResponse(transport, response, now);
+              if (connection.phase !== "authenticated") connection.close();
             }),
           ),
-        end: (clientId) =>
-          Effect.sync(() => {
-            transports.get(clientId)?.connection.close();
-          }),
-        clientIds: Effect.sync(() => new Set(transports.keys())),
-        initialMessage: Effect.succeedNone,
-        supportsAck: true,
-        supportsTransferables: false,
-        supportsSpanPropagation: false,
-        supportsNotifications: false,
-        codecFor: serialization.codecFor,
-      });
-    });
+          Effect.forkScoped,
+        );
+        yield* Effect.gen(function* () {
+          const now = yield* Clock.currentTimeMillis;
+          if (transport.activeRequests.size === 0 && now - transport.lastActivity >= idleMillis)
+            connection.close();
+        }).pipe(Effect.delay(limits.idleDeadline), Effect.forever, Effect.forkScoped);
 
-    const runConnection = (socket: Socket.Socket) =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const netSocket = yield* Effect.serviceOption(NodeSocket.NetSocket);
-          if (Option.isNone(netSocket)) return;
-          const output = yield* Queue.bounded<Uint8Array | string, Cause.Done>(MAX_PENDING_WRITES);
-          const arrived = yield* Clock.currentTimeMillis;
-          // From the bound check to taking the slot nothing yields, so concurrent connections can't
-          // both take the last one.
-          if (transports.size >= limits.maxConnections) {
-            netSocket.value.destroy();
-            return;
-          }
-          const clientId = nextClientId;
-          nextClientId += 1;
-          let phase: ConnectionPhase = "fresh";
-          const connection: IntercomConnection = {
-            get phase() {
-              return phase;
-            },
-            clientNonce: "",
-            serverNonce: "",
-            advance: (from, to) => {
-              if (phase !== from) return false;
-              phase = to;
+        const admit = (message: RpcMessage.FromClientEncoded): boolean =>
+          Match.value(message).pipe(
+            Match.tag("Request", (request) => {
+              const { activeRequests } = transport;
+              if (
+                request.isNotification === true ||
+                !validRequestId(request.id) ||
+                activeRequests.has(request.id) ||
+                activeRequests.size >= MAX_PENDING_REQUESTS ||
+                !admits(connection.phase, request.tag, activeRequests.size)
+              )
+                return false;
+              activeRequests.add(request.id);
               return true;
-            },
-            close: () => {
-              phase = "refused";
-              netSocket.value.destroy();
-            },
-          };
-          const parser = serialization.makeUnsafe();
-          const transport: ConnectionTransport = {
-            connection,
-            activeRequests: new Set(),
-            output,
-            encode: (response) => parser.encode(response),
-            lastActivity: arrived,
-          };
-          transports.set(clientId, transport);
-          yield* Effect.addFinalizer(() =>
-            Effect.sync(() => {
-              phase = "refused";
-              transports.delete(clientId);
-              Queue.endUnsafe(output);
-              Queue.offerUnsafe(disconnects, clientId);
             }),
+            Match.tag("Ping", () => connection.phase === "authenticated"),
+            Match.tag("Eof", () => true),
+            Match.orElse((reply) => validRequestId(reply.requestId)),
           );
 
-          const writer = yield* socket.writer;
-          yield* Stream.fromQueue(output).pipe(
-            Stream.runForEach(writer.write),
-            Effect.catchCause(() => Effect.sync(connection.close)),
-            Effect.forkScoped,
-          );
-          yield* Effect.sleep(limits.authenticationDeadline).pipe(
-            Effect.andThen(
-              Effect.sync(() => {
-                if (connection.phase !== "authenticated") connection.close();
-              }),
-            ),
-            Effect.forkScoped,
-          );
-          yield* Effect.gen(function* () {
-            const now = yield* Clock.currentTimeMillis;
-            if (transport.activeRequests.size === 0 && now - transport.lastActivity >= idleMillis)
-              connection.close();
-          }).pipe(Effect.delay(limits.idleDeadline), Effect.forever, Effect.forkScoped);
-
-          const admit = (message: RpcMessage.FromClientEncoded): boolean =>
-            Match.value(message).pipe(
-              Match.tag("Request", (request) => {
-                const { activeRequests } = transport;
-                if (
-                  request.isNotification === true ||
-                  !validRequestId(request.id) ||
-                  activeRequests.has(request.id) ||
-                  activeRequests.size >= MAX_PENDING_REQUESTS ||
-                  !admits(connection.phase, request.tag, activeRequests.size)
-                )
-                  return false;
-                activeRequests.add(request.id);
-                return true;
-              }),
-              Match.tag("Ping", () => connection.phase === "authenticated"),
-              Match.tag("Eof", () => true),
-              Match.orElse((reply) => validRequestId(reply.requestId)),
-            );
-
-          yield* Stream.fromPull(socket.reader.pipe(Effect.map((reader) => reader.pull))).pipe(
-            Stream.runForEach((data) =>
-              Effect.gen(function* () {
-                transport.lastActivity = yield* Clock.currentTimeMillis;
-                const decoded = Result.try(() => parser.decode(data));
-                if (Result.isFailure(decoded) || !isClientMessages(decoded.success)) {
+        yield* Stream.fromPull(socket.reader.pipe(Effect.map((reader) => reader.pull))).pipe(
+          Stream.runForEach((data) =>
+            Effect.gen(function* () {
+              transport.lastActivity = yield* Clock.currentTimeMillis;
+              const decoded = Result.try(() => parser.decode(data));
+              if (Result.isFailure(decoded) || !isClientMessages(decoded.success)) {
+                connection.close();
+                return;
+              }
+              for (const message of decoded.success) {
+                if (!admit(message)) {
                   connection.close();
                   return;
                 }
-                for (const message of decoded.success) {
-                  if (!admit(message)) {
-                    connection.close();
-                    return;
-                  }
-                  yield* writeRequest(clientId, message);
-                }
-              }),
-            ),
-            Effect.catchTag("SocketError", () => Effect.void),
-          );
-        }),
-      );
+                yield* writeRequest(clientId, message);
+              }
+            }),
+          ),
+          Effect.catchTag("SocketError", () => Effect.void),
+        );
+      }),
+    );
 
-    yield* server.run(runConnection).pipe(Effect.forkScoped);
-    return {
-      protocol,
-      connection: (clientId: number) => transports.get(clientId)?.connection,
-    } satisfies GuardedProtocol;
-  });
+  yield* server.run(runConnection).pipe(Effect.forkScoped);
+  return {
+    protocol,
+    connection: (clientId: number) => transports.get(clientId)?.connection,
+  } satisfies GuardedProtocol;
+});

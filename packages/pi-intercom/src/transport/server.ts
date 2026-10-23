@@ -39,10 +39,10 @@ export class IntercomInbound extends Context.Service<IntercomInbound, IntercomIn
   "pi-intercom/transport/server/IntercomInbound",
 ) {}
 
-export class IntercomServerError extends Schema.TaggedError<IntercomServerError>()(
-  "IntercomServerError",
-  { operation: Schema.Literals(["authenticate", "listen"]) },
-) {}
+export class IntercomServerError extends Schema.TaggedError<
+  IntercomServerError,
+  { readonly brand: unique symbol }
+>()("IntercomServerError", { operation: Schema.Literals(["authenticate", "listen"]) }) {}
 
 export interface IntercomServerOptions {
   /** A path this runtime reserved; nothing else may be bound there. */
@@ -121,18 +121,17 @@ export const serveIntercom = Effect.fn("IntercomServer.serve")(function* (
           return { nonce: serverNonce, proof };
         }).pipe(Effect.catchTag("IntercomHandshakeError", () => refuse));
       },
-      Authenticate: ({ proof }, { client }) =>
-        Effect.gen(function* () {
-          const peer = connection(client.id);
-          if (peer?.phase !== "challenged") return yield* new IntercomUnauthorized();
-          const valid = yield* key
-            .check("client", peer.clientNonce, peer.serverNonce, proof)
-            .pipe(Effect.orElseSucceed(() => false));
-          // A failed proof admits nothing more; the authentication deadline closes the peer. A
-          // peer closed during the check stays refused.
-          const admitted = peer.advance("challenged", valid ? "authenticated" : "refused") && valid;
-          return admitted ? undefined : yield* new IntercomUnauthorized();
-        }),
+      Authenticate: Effect.fnUntraced(function* ({ proof }, { client }) {
+        const peer = connection(client.id);
+        if (peer?.phase !== "challenged") return yield* new IntercomUnauthorized();
+        const valid = yield* key
+          .check("client", peer.clientNonce, peer.serverNonce, proof)
+          .pipe(Effect.orElseSucceed(() => false));
+        // A failed proof admits nothing more; the authentication deadline closes the peer. A
+        // peer closed during the check stays refused.
+        const admitted = peer.advance("challenged", valid ? "authenticated" : "refused") && valid;
+        return admitted ? undefined : yield* new IntercomUnauthorized();
+      }),
       Describe: (_payload, { client }) => authenticated(client, inbound.describe),
       Deliver: (message, { client }) =>
         authenticated(

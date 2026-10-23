@@ -66,10 +66,10 @@ export const LastMessageSchema = Schema.Struct({
 export type LastMessage = typeof LastMessageSchema.Type;
 
 /** The proof didn't match: the caller read another runtime's record, or none. */
-export class IntercomUnauthorized extends Schema.TaggedError<IntercomUnauthorized>()(
-  "IntercomUnauthorized",
-  {},
-) {}
+export class IntercomUnauthorized extends Schema.TaggedError<
+  IntercomUnauthorized,
+  { readonly brand: unique symbol }
+>()("IntercomUnauthorized", {}) {}
 
 /**
  * `session_unavailable`: the runtime is retired or Pi didn't take the message;
@@ -82,7 +82,10 @@ export const RefusalCodeSchema = Schema.Literals([
 export type RefusalCode = typeof RefusalCodeSchema.Type;
 
 /** The recipient declined the request; the code says why. */
-export class IntercomRefused extends Schema.TaggedError<IntercomRefused>()("IntercomRefused", {
+export class IntercomRefused extends Schema.TaggedError<
+  IntercomRefused,
+  { readonly brand: unique symbol }
+>()("IntercomRefused", {
   code: RefusalCodeSchema,
 }) {}
 

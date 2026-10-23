@@ -25,68 +25,66 @@ export interface IntercomSessionInput {
 export class IntercomSession extends Context.Service<IntercomSession>()(
   "pi-intercom/session/service/IntercomSession",
   {
-    make: (input: IntercomSessionInput) =>
-      Effect.gen(function* () {
-        const registry = yield* IntercomRegistry;
-        yield* registry.sweep().pipe(
-          Effect.tap(({ records, socketDirectories }) =>
-            records + socketDirectories > 0
-              ? Effect.logDebug("Swept intercom registrations of dead sessions.").pipe(
-                  Effect.annotateLogs({ records, socketDirectories }),
-                )
-              : Effect.void,
-          ),
-          Effect.catch(() => Effect.logWarning("Couldn't sweep the intercom registry.")),
-        );
+    make: Effect.fn("IntercomSession.make")(function* (input: IntercomSessionInput) {
+      const registry = yield* IntercomRegistry;
+      yield* registry.sweep().pipe(
+        Effect.tap(({ records, socketDirectories }) =>
+          records + socketDirectories > 0
+            ? Effect.logDebug("Swept intercom registrations of dead sessions.").pipe(
+                Effect.annotateLogs({ records, socketDirectories }),
+              )
+            : Effect.void,
+        ),
+        Effect.catch(() => Effect.logWarning("Couldn't sweep the intercom registry.")),
+      );
 
-        const instance = yield* Effect.sync(() => synchronousRandomHex(INSTANCE_BYTES));
-        const token = yield* Effect.sync(() => synchronousRandomHex(TOKEN_BYTES));
-        const owner = yield* Effect.sync(currentProcessIdentity);
-        const socket = yield* registry.reserveSocket(instance, owner);
-        const initial = sessionRecord({
-          instance,
-          pid: owner.pid,
-          started: owner.started,
-          sessionId: input.sessionId,
-          name: input.name,
-          cwd: input.cwd,
-          socket,
-          token,
-        });
+      const instance = yield* Effect.sync(() => synchronousRandomHex(INSTANCE_BYTES));
+      const token = yield* Effect.sync(() => synchronousRandomHex(TOKEN_BYTES));
+      const owner = yield* Effect.sync(currentProcessIdentity);
+      const socket = yield* registry.reserveSocket(instance, owner);
+      const initial = sessionRecord({
+        instance,
+        pid: owner.pid,
+        started: owner.started,
+        sessionId: input.sessionId,
+        name: input.name,
+        cwd: input.cwd,
+        socket,
+        token,
+      });
 
-        const writes = yield* Semaphore.make(1);
-        const current = yield* Ref.make(initial);
-        let retired = false;
-        yield* Effect.acquireRelease(registry.write(initial), () =>
-          writes
-            .withPermit(
-              Effect.suspend(() => {
-                retired = true;
-                return registry.remove(instance);
-              }),
-            )
-            .pipe(Effect.catch(() => Effect.logWarning("Couldn't remove the intercom record."))),
-        );
-
-        yield* serveIntercom({ socket, token });
-
-        const rename = Effect.fn("IntercomSession.rename")((name: string | undefined) =>
-          writes.withPermit(
-            Effect.gen(function* () {
-              if (retired) return;
-              const previous = yield* Ref.get(current);
-              const next = sessionRecord({ ...previous, started: previous.started, name });
-              yield* registry.write(next);
-              yield* Ref.set(current, next);
+      const writes = yield* Semaphore.make(1);
+      const current = yield* Ref.make(initial);
+      let retired = false;
+      yield* Effect.acquireRelease(registry.write(initial), () =>
+        writes
+          .withPermit(
+            Effect.suspend(() => {
+              retired = true;
+              return registry.remove(instance);
             }),
-          ),
-        );
+          )
+          .pipe(Effect.catch(() => Effect.logWarning("Couldn't remove the intercom record."))),
+      );
 
-        /** This runtime's current record: its own instance and the identity it sends as. */
-        const record = Ref.get(current);
+      yield* serveIntercom({ socket, token });
 
-        return { rename, record };
-      }),
+      const rename = Effect.fn("IntercomSession.rename")(
+        function* (name: string | undefined) {
+          if (retired) return;
+          const previous = yield* Ref.get(current);
+          const next = sessionRecord({ ...previous, started: previous.started, name });
+          yield* registry.write(next);
+          yield* Ref.set(current, next);
+        },
+        (effect) => writes.withPermit(effect),
+      );
+
+      /** This runtime's current record: its own instance and the identity it sends as. */
+      const record = Ref.get(current);
+
+      return { rename, record };
+    }),
   },
 ) {
   static readonly layer = (input: IntercomSessionInput) => Layer.effect(this, this.make(input));

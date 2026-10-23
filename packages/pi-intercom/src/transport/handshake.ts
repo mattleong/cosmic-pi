@@ -15,10 +15,10 @@ export const PROOF_BYTES = 32;
  */
 type Role = "server" | "client";
 
-export class IntercomHandshakeError extends Schema.TaggedError<IntercomHandshakeError>()(
-  "IntercomHandshakeError",
-  {},
-) {}
+export class IntercomHandshakeError extends Schema.TaggedError<
+  IntercomHandshakeError,
+  { readonly brand: unique symbol }
+>()("IntercomHandshakeError", {}) {}
 
 const failure = () => new IntercomHandshakeError();
 const utf8 = new TextEncoder();
