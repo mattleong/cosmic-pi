@@ -163,7 +163,7 @@ const recordFacts = (
     record.outputFormat.toUpperCase(),
     view.imageBytes === undefined ? undefined : formatBytes(view.imageBytes),
     models,
-  ].filter((fact): fact is string => Boolean(fact));
+  ].filter(Boolean);
   const facts = [new Text(theme.fg("muted", sanitizeTerminalLine(summary.join(" · "))), 0, 0)];
   if (record.savedPath)
     facts.push(

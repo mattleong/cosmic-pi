@@ -89,9 +89,7 @@ export function prepareOpenAIFallback(
   const retainedMessageIndex = firstRetainedMessageIndex(entries, cut.firstKeptEntryIndex);
   if (retainedMessageIndex === undefined) return undefined;
   const summarized = entries.slice(0, cut.firstKeptEntryIndex);
-  const previous = summarized.findLast(
-    (entry): entry is CompactionEntry => entry.type === "compaction",
-  );
+  const previous = summarized.findLast((entry) => entry.type === "compaction");
   const turnStart = findTurnStartIndex(entries, retainedMessageIndex, 0);
   const isSplitTurn = turnStart >= 0 && turnStart < cut.firstKeptEntryIndex;
   const messagesToSummarize = summaryMessages(

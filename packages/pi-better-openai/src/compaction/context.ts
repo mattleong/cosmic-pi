@@ -3,7 +3,6 @@ import {
   buildContextEntries,
   buildSessionProjection,
   sessionEntryToContextMessages,
-  type CompactionEntry,
   type ContextWithSystemEvent,
   type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
@@ -26,7 +25,7 @@ export function hasExactPrefix(actual: readonly unknown[], expected: readonly un
 }
 
 export function latestOwnedCheckpoint(branch: readonly SessionEntry[]) {
-  const entry = branch.findLast((item): item is CompactionEntry => item.type === "compaction");
+  const entry = branch.findLast((item) => item.type === "compaction");
   const details = entry && decodeOpenAICompactionDetails(entry.details);
   return entry && details ? { entry, checkpoint: details.checkpoint } : undefined;
 }

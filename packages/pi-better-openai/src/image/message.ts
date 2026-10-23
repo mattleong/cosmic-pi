@@ -1,6 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Box, Image, type Component } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
+import * as Schema from "effect/Schema";
 import {
   getTextContent,
   planCompactPresentation,
@@ -17,11 +18,9 @@ import {
   renderImageRequest,
 } from "./presentation.ts";
 
-interface ImagePart {
-  readonly type: "image";
-  readonly data: string;
-  readonly mimeType: string;
-}
+const isImagePart = Schema.is(
+  Schema.Struct({ type: Schema.Literal("image"), data: Schema.String, mimeType: Schema.String }),
+);
 
 export interface ImageMessage<Details> {
   readonly content: string | ReadonlyArray<{ readonly type: string; readonly text?: string }>;
@@ -33,12 +32,6 @@ export interface ImageMessageOptions {
   readonly compact: boolean;
   readonly cwd: string;
 }
-
-const isImagePart = <Value>(value: Value): value is Value & ImagePart =>
-  Predicate.isObject(value) &&
-  value.type === "image" &&
-  Predicate.isString(value.data) &&
-  Predicate.isString(value.mimeType);
 
 export function renderImageMessage<Details>(
   message: ImageMessage<Details>,

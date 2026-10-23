@@ -52,7 +52,7 @@ const compactionInstructions = (systemPrompt: string, guidance: string | undefin
     systemPrompt.trim(),
     customInstructions ? `Compaction guidance:\n${customInstructions}` : undefined,
   ]
-    .filter((value): value is string => Boolean(value))
+    .filter(Boolean)
     .join("\n\n");
 };
 
