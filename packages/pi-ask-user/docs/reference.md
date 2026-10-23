@@ -32,7 +32,9 @@ The tool is named `ask_user`:
 }
 ````
 
-Question keys and choice values must be unique in their scope.
+Question keys and choice values must be unique in their scope. Titles label tabs and review rows, which shorten long titles; answers match questions by `key`. A choice cannot be labeled "Write a custom answer", because it would pose as the built-in custom-answer action.
+
+Arguments are prepared before validation: null or blank optional fields, blank choice previews, and null or empty `choices` on text questions are dropped. An invalid question reports only the issues of the shape its `mode` selects, or the allowed modes when `mode` is unrecognized.
 
 For a required free-text answer, use `mode: "text"` and omit `choices`:
 
@@ -49,7 +51,7 @@ For a required free-text answer, use `mode: "text"` and omit `choices`:
 }
 ```
 
-Text answers return `{ "key": "details", "kind": "text", "text": "The supplied wording" }`, with an optional `note`. Choice results keep `kind: "choices"`; their custom answers keep `kind: "custom"`. Text and custom answers are trimmed, must be nonblank, and allow at most 4,000 JavaScript code units. Notes are trimmed and allow at most 2,000 code units. Invalid input is rejected for editing, never truncated. Text questions cannot include choices, defaults, placeholders, or configurable limits.
+Text answers return `{ "key": "details", "kind": "text", "text": "The supplied wording" }`, with an optional `note`. Choice results keep `kind: "choices"`; their custom answers keep `kind: "custom"`. Text and custom answers are trimmed, must be nonblank, and allow at most 4,000 JavaScript code units. Notes are trimmed and allow at most 2,000 code units. Invalid input is rejected for editing, never truncated. Text questions cannot include nonempty choices, defaults, placeholders, or configurable limits.
 
 Submitted results contain stable values and user-facing labels:
 
@@ -151,7 +153,7 @@ The overlay shows question/answer progress, live text limits, mode-specific cont
 
 ## RPC behavior
 
-RPC hosts cannot show Pi's custom overlay, so tabs, collapse, external editing, and side-by-side preview layout are TUI-only. RPC text questions open a bounded native input directly, followed by the same optional-note and review/edit flow. RPC includes bounded preview text in question titles. Multi-select questions first ask whether to choose listed options or write a custom answer; the listed path re-prompts invalid input. The final native review shows sanitized answer summaries.
+RPC hosts cannot show Pi's custom overlay, so tabs, collapse, external editing, and side-by-side preview layout are TUI-only. RPC text questions open a bounded native input directly, followed by the same optional-note and review/edit flow. RPC includes bounded preview text in question titles. Multi-select questions first ask whether to choose listed options or write a custom answer; the listed path re-prompts invalid input. A typed answer or note that is too long reopens in the native editor with its text, so it can be trimmed. Pi's native editor accepts no cancel signal, so if the questionnaire is cancelled while that editor is open, the questionnaire still settles but the RPC client's editor stays open until dismissed. The final native review shows sanitized answer summaries.
 
 ## Transcript cards
 

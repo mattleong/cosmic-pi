@@ -2,7 +2,9 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { type Static, Type } from "typebox";
 
 export const MAX_QUESTIONS = 6;
-export const MAX_CHOICES = 4;
+export const MAX_CHOICES = 6;
+// Titles only label tabs and review rows, which shorten them; this bounds memory, not display.
+export const MAX_TITLE_LENGTH = 120;
 export const MAX_CUSTOM_ANSWER_LENGTH = 4_000;
 export const MAX_NOTE_LENGTH = 2_000;
 
@@ -39,8 +41,8 @@ const questionFields = {
   }),
   title: Type.String({
     minLength: 1,
-    maxLength: 16,
-    description: "Very short tab title, at most 16 characters.",
+    maxLength: MAX_TITLE_LENGTH,
+    description: "Very short tab title, ideally 1-2 words; long titles are shortened in tabs.",
   }),
   prompt: Type.String({
     minLength: 1,
@@ -49,7 +51,7 @@ const questionFields = {
   }),
 };
 
-const AskUserChoiceQuestionSchema = Type.Object({
+export const AskUserChoiceQuestionSchema = Type.Object({
   ...questionFields,
   mode: StringEnum(["single", "multiple"] as const, {
     description: "Whether the user chooses one choice or any number of choices.",
@@ -57,7 +59,7 @@ const AskUserChoiceQuestionSchema = Type.Object({
   choices: Type.Array(AskUserChoiceSchema, {
     minItems: 2,
     maxItems: MAX_CHOICES,
-    description: "Two to four concrete choices. A custom-answer action is appended automatically.",
+    description: "Two to six concrete choices. A custom-answer action is appended automatically.",
   }),
 });
 

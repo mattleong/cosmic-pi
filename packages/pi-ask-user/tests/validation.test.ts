@@ -86,7 +86,12 @@ describe("ask-user validation", () => {
           "Private",
           "PRIVATE",
         ],
-        [(r) => choices(r, "label", "Small", "Continue"), c2, "reserved label", "Continue"],
+        [
+          (r) => choices(r, "label", "Small", "Write a custom answer"),
+          c2,
+          "reserved label",
+          "Write a custom answer",
+        ],
       ];
     for (const [edit, position, reason, ...privateText] of cases) {
       const request = base();
@@ -95,6 +100,19 @@ describe("ask-user validation", () => {
       expect(message).toContain(position);
       expect(message).toContain(reason);
       for (const text of privateText) expect(message).not.toContain(text);
+    }
+  });
+
+  it("accepts labels that match built-in actions other than the custom answer", () => {
+    for (const labels of [
+      ["Continue", "Cancel"],
+      ["Submit answers", "Review"],
+    ]) {
+      const request = base();
+      firstQuestion(request).choices.forEach((choice, index) =>
+        Object.assign(choice, { label: labels[index] }),
+      );
+      expect(validateAskUserRequest(normalizeAskUserRequest(request))).toBeUndefined();
     }
   });
 });

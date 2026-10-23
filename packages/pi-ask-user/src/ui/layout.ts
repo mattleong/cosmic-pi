@@ -3,6 +3,13 @@ import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { EditorTheme } from "@earendil-works/pi-tui";
 import { padListDetailRow } from "pi-cosmic-ui/manager/list-detail";
 import { clipToWidth } from "pi-cosmic-ui/manager";
+import { stripTerminalControls } from "pi-cosmic-core";
+
+// Titles only label tabs, review rows, and headings; the schema admits longer ones than fit there.
+const MAX_TITLE_LABEL_WIDTH = 24;
+
+export const titleLabel = (title: string): string =>
+  clipToWidth(stripTerminalControls(title), MAX_TITLE_LABEL_WIDTH);
 
 export function appendWrapped(lines: string[], prefix: string, value: string, width: number): void {
   const safeWidth = Math.max(1, width);

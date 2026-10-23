@@ -22,7 +22,9 @@ export function validateQuestionnaireInput(
   return { value: trimmed };
 }
 
-const RESERVED_LABELS = new Set(["write a custom answer", "continue", "submit answers", "cancel"]);
+// A choice with this label would pose as the built-in custom-answer action but return its value
+// instead of the user's text. Continue, review, and cancel actions never sit among choices.
+const RESERVED_LABELS = new Set(["write a custom answer"]);
 
 const fail = (position: string, problem: string): AskUserValidationError =>
   new AskUserValidationError({ message: `${position} ${problem}` });

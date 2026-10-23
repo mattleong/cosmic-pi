@@ -96,6 +96,22 @@ const textRequest: AskUserRequest = {
 };
 
 describe("AskUserDialog", () => {
+  it("picks each of six choices by its digit shortcut", () => {
+    const choices = Array.from({ length: 6 }, (_, index) => ({
+      value: `v${index + 1}`,
+      label: `Choice ${index + 1}`,
+      description: "A concrete option.",
+    }));
+    const { dialog, done } = makeDialog({
+      questions: [{ key: "pick", title: "Pick", prompt: "Pick one.", mode: "single", choices }],
+    });
+    dialog.handleInput("6");
+    dialog.handleInput(ENTER);
+    expect(done).toHaveBeenCalledWith(
+      submitted({ key: "pick", kind: "choices", values: ["v6"], labels: ["Choice 6"] }),
+    );
+  });
+
   it("opens text input directly, preserves literal shortcuts and drafts across escape, notes, hide and review", () => {
     const { dialog, done, collapse } = makeDialog(textRequest);
     dialog.focused = true;

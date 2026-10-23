@@ -31,6 +31,7 @@ import {
   renderAsyncMessage,
   renderAsyncContent,
 } from "../ui/async-tool-render.ts";
+import { questionnaireArgumentPreparer } from "./arguments.ts";
 import {
   AskUserAsyncContractSchema,
   AskUserAsyncControlContractSchema,
@@ -91,6 +92,7 @@ export function registerAsyncAskUserTools(
         },
         renderResult: renderAsyncResult,
         parameters: AskUserAsyncParameters,
+        prepareArguments: questionnaireArgumentPreparer("ask_user_async", AskUserAsyncParameters),
         outputSchema: START_OUTPUT_SCHEMA,
         executionMode: "sequential",
         execute(_id, input, signal) {
@@ -124,6 +126,10 @@ export function registerAsyncAskUserTools(
         },
         renderResult: renderAsyncResult,
         parameters: AskUserAsyncControlParameters,
+        prepareArguments: questionnaireArgumentPreparer(
+          "ask_user_async_control",
+          AskUserAsyncControlParameters,
+        ),
         outputSchema: CONTROL_OUTPUT_SCHEMA,
         executionMode: "sequential",
         execute(_id, input, signal) {

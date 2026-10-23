@@ -19,6 +19,7 @@ import {
 import { validateQuestionnaireInput } from "../questionnaire/validation.ts";
 import type { AskUserPromptGate } from "./host-prompt.ts";
 import { askUserTuiHost } from "./host-tui.ts";
+import { titleLabel } from "../ui/layout.ts";
 import type { AskUserDialogBridge } from "./host-ui.ts";
 
 const hostError = (operation: string) =>
@@ -42,12 +43,19 @@ const boundedInput = (
   kind: "custom" | "text" | "note" = "custom",
 ): Effect.Effect<string | undefined, AskUserHostError> =>
   Effect.gen(function* () {
+    let rejected: { readonly text: string; readonly error: string } | undefined;
     while (true) {
-      const value = yield* dialogCall((signal) => ui.input(title, placeholder, { signal }));
+      const draft = rejected;
+      // Native input can't be prefilled, so a nonblank answer that was too long reopens in the
+      // editor for trimming. Pi's editor dialog takes no abort signal.
+      const value = yield* draft === undefined
+        ? dialogCall((signal) => ui.input(title, placeholder, { signal }))
+        : dialogCall(() => ui.editor(`${title}\n\n${draft.error}`, draft.text));
       if (value === undefined) return undefined;
       const checked = validateQuestionnaireInput(value, kind);
       if (checked.error === undefined) return checked.value;
       yield* notifyBestEffort(ui, checked.error, "warning");
+      rejected = value.trim() ? { text: value, error: checked.error } : undefined;
     }
   });
 
@@ -179,7 +187,7 @@ const askOptionalNote = (
   existingNote: string | undefined,
 ): Effect.Effect<AskUserAnswerDraft | undefined, AskUserHostError> =>
   Effect.gen(function* () {
-    const title = `Optional note for [${stripTerminalControls(question.title)}]`;
+    const title = `Optional note for [${titleLabel(question.title)}]`;
     while (true) {
       const options = existingNote
         ? ["Keep current note", "Edit note", "Remove note"]
@@ -212,7 +220,7 @@ const askRpcQuestion = (
   existingNote?: string,
 ): Effect.Effect<AskUserAnswerDraft | undefined, AskUserHostError> =>
   Effect.gen(function* () {
-    const title = `[${stripTerminalControls(question.title)}] ${stripTerminalControls(question.prompt)}${previewText(question)}`;
+    const title = `[${titleLabel(question.title)}] ${stripTerminalControls(question.prompt)}${previewText(question)}`;
     const answer = yield* Match.value(question).pipe(
       Match.when({ mode: "text" }, () =>
         boundedInput(ui, title, "Your answer", "text").pipe(
@@ -258,11 +266,11 @@ const runRpc = (
         "Review answers",
         ...answeredQuestions(request, drafts).map(
           ({ question, answer }, index) =>
-            `${index + 1}. [${stripTerminalControls(question.title)}] ${answerSummary(answer)}`,
+            `${index + 1}. [${titleLabel(question.title)}] ${answerSummary(answer)}`,
         ),
       ].join("\n");
       const editOptions = request.questions.map(
-        (question, index) => `Edit ${index + 1}. ${stripTerminalControls(question.title)}`,
+        (question, index) => `Edit ${index + 1}. ${titleLabel(question.title)}`,
       );
       const options = ["Submit answers", ...editOptions, "Cancel questionnaire"];
       const selected = yield* dialogCall((signal) =>

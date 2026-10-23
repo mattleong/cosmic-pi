@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 import { countLabel, decodeUnknownOrUndefined, stripTerminalControls } from "pi-cosmic-core";
 import { MAX_RETAINED_REQUESTS } from "../questionnaire/async-model.ts";
 import { MAX_CHOICES, MAX_QUESTIONS } from "../questionnaire/schema.ts";
+import { titleLabel } from "./layout.ts";
 
 const note = { note: Schema.optional(Schema.String) };
 
@@ -94,9 +95,7 @@ export const decodeCallQuestions = decodeUnknownOrUndefined(
 );
 
 export const callTitles = flow(decodeCallQuestions, (decoded): string | undefined => {
-  const titles = decoded?.questions
-    .map((question) => stripTerminalControls(question.title))
-    .join(", ");
+  const titles = decoded?.questions.map((question) => titleLabel(question.title)).join(", ");
   return titles === "" ? undefined : titles;
 });
 

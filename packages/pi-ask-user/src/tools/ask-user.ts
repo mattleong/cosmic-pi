@@ -32,6 +32,7 @@ import {
   titlesByKey,
 } from "../ui/tool-render-projection.ts";
 
+import { questionnaireArgumentPreparer } from "./arguments.ts";
 import { AskUserContractSchema } from "./contract-schema.ts";
 import { askUserContract, questionnaireToolResult } from "./contract.ts";
 
@@ -47,7 +48,7 @@ export function registerAskUserTool(
     name: "ask_user",
     label: "Ask User",
     description:
-      "Present one structured questionnaire containing one to six questions. Use single/multiple mode with two to four concrete choices and an automatic custom-answer action, or text mode without choices for a required free-text answer. Text answers are trimmed and limited to 4000 code units. All questions support optional notes up to 2000 code units; choices may include markdown previews. Use this only when a decision is needed to proceed safely. Questionnaires open automatically in FIFO order, sharing a session queue of at most 16 pending requests; the tool waits for answers, not merely admission. Local Pi child requests route to the root UI with authenticated run ownership.",
+      "Present one structured questionnaire containing one to six questions. Use single/multiple mode with two to six concrete choices and an automatic custom-answer action, or text mode without choices for a required free-text answer. Text answers are trimmed and limited to 4000 code units. All questions support optional notes up to 2000 code units; choices may include markdown previews. Use this only when a decision is needed to proceed safely. Questionnaires open automatically in FIFO order, sharing a session queue of at most 16 pending requests; the tool waits for answers, not merely admission. Local Pi child requests route to the root UI with authenticated run ownership.",
     promptSnippet:
       "Ask one structured batch of questions when concrete user decisions are required",
     promptGuidelines: [
@@ -61,6 +62,7 @@ export function registerAskUserTool(
       "Native codemode receives structured pi-ask-user/questionnaire version-1 results. Check contract, version, tool, and outcome before branching on answers. Rejected or cancelled scripts do not undo answers; do not blindly retry a questionnaire. Codemode scripts share a small pool of Pi workers, so call ask_user or await an async questionnaire directly rather than from codemode, where a long user wait blocks other scripts.",
     ],
     parameters: AskUserParameters,
+    prepareArguments: questionnaireArgumentPreparer("ask_user", AskUserParameters),
     outputSchema: OUTPUT_SCHEMA,
     executionMode: "sequential",
     execute(_toolCallId, input, signal) {

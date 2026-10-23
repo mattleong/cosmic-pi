@@ -104,6 +104,38 @@ describe("RPC questionnaire boundary", () => {
     return expect(rpc({ select: scriptedSelect(...script), input })).resolves.toEqual(cancelled);
   });
 
+  it("reopens a too-long typed answer with its text so the user can trim it", () => {
+    const tooLong = "Keep this wording. ".repeat(220);
+    const trimmed = "Keep this wording.";
+    const input = vi.fn(() => Promise.resolve(tooLong));
+    const editor = vi.fn((_title: string, _prefill?: string) => Promise.resolve(trimmed));
+    const wording: AskUserRequest = {
+      questions: [{ key: "wording", title: "Wording", prompt: "What wording?", mode: "text" }],
+    };
+    return rpc({ select: scriptedSelect(0, 0), input, editor }, wording).then((outcome) => {
+      expect(outcome).toEqual(submitted({ key: "wording", kind: "text", text: trimmed }));
+      expect(input).toHaveBeenCalledOnce();
+      expect(editor).toHaveBeenCalledOnce();
+      expect(editor.mock.calls[0]?.[1]).toBe(tooLong);
+      return undefined;
+    });
+  });
+
+  effectIt.effect("settles an interrupted questionnaire while the trimming editor is open", () =>
+    Effect.gen(function* () {
+      const editor = vi.fn(() => deferredPromise<string | undefined>().promise);
+      const input = vi.fn(() => Promise.resolve("x".repeat(4_001)));
+      const controller = new AbortController();
+      const pending = rpc({ select: scriptedSelect(2), input, editor }, request, {
+        signal: controller.signal,
+      });
+
+      yield* eventually(() => expect(editor).toHaveBeenCalledOnce());
+      controller.abort();
+      yield* Effect.promise(() => expect(pending).rejects.toBeDefined());
+    }),
+  );
+
   it("reports a failed native dialog in plain words without host details", () =>
     rpc({ select: vi.fn(() => Promise.reject(new Error("secret host failure"))) }).then(
       () => expect.unreachable(),

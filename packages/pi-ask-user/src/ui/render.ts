@@ -9,7 +9,7 @@ import {
   type AskUserQuestion,
 } from "../questionnaire/schema.ts";
 import type { PreviewPane } from "./preview-pane.ts";
-import { appendWrapped, borderLine, joinColumns } from "./layout.ts";
+import { appendWrapped, borderLine, joinColumns, titleLabel } from "./layout.ts";
 import { SELECTION_MARKER } from "./viewport.ts";
 import { clipToWidth, managerNoticeGlyph } from "pi-cosmic-ui/manager";
 
@@ -32,7 +32,7 @@ interface QuestionnaireRenderModel {
 function renderTabs(model: QuestionnaireRenderModel, width: number): string[] {
   const parts = model.state.request.questions.map((question, index) => {
     const answered = model.state.drafts[index]?.answer !== undefined;
-    const text = ` ${answered ? "●" : "○"} ${stripTerminalControls(question.title)} `;
+    const text = ` ${answered ? "●" : "○"} ${titleLabel(question.title)} `;
     return index === model.state.currentTab
       ? model.theme.bg("selectedBg", model.theme.fg("text", text))
       : model.theme.fg(answered ? "success" : "muted", text);
@@ -168,7 +168,7 @@ function renderReview(model: QuestionnaireRenderModel, width: number): string[] 
           : "Unanswered";
     append(
       " ",
-      `${model.theme.fg(answer ? "success" : "warning", answer ? `${managerNoticeGlyph("success")} ` : `${managerNoticeGlyph("warning")} `)}${model.theme.fg(answer ? "muted" : "warning", `${stripTerminalControls(question.title)}: `)}${model.theme.fg(answer ? "text" : "warning", stripTerminalControls(value))}`,
+      `${model.theme.fg(answer ? "success" : "warning", answer ? `${managerNoticeGlyph("success")} ` : `${managerNoticeGlyph("warning")} `)}${model.theme.fg(answer ? "muted" : "warning", `${titleLabel(question.title)}: `)}${model.theme.fg(answer ? "text" : "warning", stripTerminalControls(value))}`,
     );
     if (draft?.note)
       append("   ", model.theme.fg("dim", `Note: ${stripTerminalControls(draft.note)}`));
@@ -197,9 +197,7 @@ function renderInput(
     model.theme.fg(
       "accent",
       model.theme.bold(
-        note
-          ? `Note for ${stripTerminalControls(question.title)}`
-          : stripTerminalControls(question.prompt),
+        note ? `Note for ${titleLabel(question.title)}` : stripTerminalControls(question.prompt),
       ),
     ),
   );

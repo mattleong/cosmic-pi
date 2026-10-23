@@ -3,7 +3,7 @@ import { flow } from "effect/Function";
 import * as Schema from "effect/Schema";
 import * as Predicate from "effect/Predicate";
 import { decodeUnknownOrUndefined, querySessionCapability } from "pi-cosmic-core";
-import { MAX_CHOICES, MAX_QUESTIONS, type AskUserRequest } from "./schema.ts";
+import { MAX_CHOICES, MAX_QUESTIONS, MAX_TITLE_LENGTH, type AskUserRequest } from "./schema.ts";
 import {
   normalizeAskUserRequest,
   validateAskUserRequest,
@@ -43,7 +43,7 @@ export const QuestionnaireRequestSchema = Schema.Struct({
     Schema.Union([
       Schema.Struct({
         key: text(32),
-        title: text(16),
+        title: text(MAX_TITLE_LENGTH),
         prompt: text(500),
         mode: Schema.Literals(["single", "multiple"]),
         choices: Schema.Array(
@@ -57,7 +57,7 @@ export const QuestionnaireRequestSchema = Schema.Struct({
       }),
       Schema.Struct({
         key: text(32),
-        title: text(16),
+        title: text(MAX_TITLE_LENGTH),
         prompt: text(500),
         mode: Schema.Literal("text"),
         choices: Schema.optionalKey(Schema.Never),

@@ -1,5 +1,4 @@
 import * as Effect from "effect/Effect";
-import { stripTerminalControls } from "pi-cosmic-core";
 import {
   registerActivityProvider,
   type ActivityEvents,
@@ -7,6 +6,7 @@ import {
   type ActivityProviderRegistration,
 } from "pi-cosmic-ui/activity";
 import type { QuestionnaireActivity } from "../questionnaire/service.ts";
+import { titleLabel } from "../ui/layout.ts";
 import type { AskUserDialogBridge } from "./host-ui.ts";
 
 interface Row {
@@ -52,7 +52,7 @@ export function createQuestionnaireActivity(options: {
           item: {
             id,
             kind: "question",
-            title: stripTerminalControls(questions.map((question) => question.title).join(" / ")),
+            title: questions.map((question) => titleLabel(question.title)).join(" / "),
             status: "pending",
             revision: "",
             summary: "queued",

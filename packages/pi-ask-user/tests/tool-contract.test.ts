@@ -12,7 +12,7 @@ import type { AskUserRequest, AskUserAsyncControl } from "../src/questionnaire/s
 import { registerAskUserTool } from "../src/tools/ask-user.ts";
 import { registerAsyncAskUserTools } from "../src/tools/ask-user-async.ts";
 import { QuestionnaireContractSchema } from "../src/tools/contract-schema.ts";
-import { asyncRequest, cancelled } from "./support/questionnaire.ts";
+import { asyncRequest, cancelled, defaultQuestion } from "./support/questionnaire.ts";
 
 const envelope = { contract: "pi-ask-user/questionnaire", version: 1 };
 const snapshot = (
@@ -84,6 +84,93 @@ describe("registered questionnaire parameters", () => {
     const tools = registered();
     expect(tools.length).toBe(3);
     for (const tool of tools) expect(toolSchemaPortabilityProblems(tool.parameters)).toEqual([]);
+  });
+});
+
+const preparer = (name: string) => {
+  const prepareArguments = registered().find((tool) => tool.name === name)?.prepareArguments;
+  if (prepareArguments === undefined) throw new Error(`${name} has no argument preparation`);
+  return prepareArguments;
+};
+const issueLines = (name: string, args: Schema.Json): ReadonlyArray<string> => {
+  try {
+    preparer(name)(args);
+    return [];
+  } catch (thrown) {
+    const message = thrown instanceof Error ? thrown.message : "";
+    expect(message).toMatch(/\[invalid_arguments\]/u);
+    return message.split("\n").filter((line) => line.startsWith("- "));
+  }
+};
+const textQuestion = { key: "wording", title: "Wording", prompt: "What wording?", mode: "text" };
+const sixChoices = Array.from({ length: 6 }, (_, index) => ({
+  value: `v${index}`,
+  label: `Choice ${index + 1}`,
+  description: "A concrete option.",
+}));
+
+describe("registered questionnaire arguments", () => {
+  it("ignores empty choices on text questions and blank optional previews", () => {
+    for (const choices of [[], null]) {
+      expect(preparer("ask_user")({ questions: [{ ...textQuestion, choices }] })).toEqual({
+        questions: [textQuestion],
+      });
+      expect(
+        preparer("ask_user_async")({ ...asyncRequest, questions: [{ ...textQuestion, choices }] }),
+      ).toEqual({ ...asyncRequest, questions: [textQuestion] });
+    }
+    const [first, second] = defaultQuestion.choices;
+    expect(
+      preparer("ask_user")({
+        questions: [{ ...defaultQuestion, choices: [{ ...first, preview: " " }, second] }],
+      }),
+    ).toEqual({ questions: [defaultQuestion] });
+    expect(preparer("ask_user_async_control")({ action: "status", requestId: null })).toEqual({
+      action: "status",
+    });
+  });
+
+  it("still rejects meaningful choices on a text question", () => {
+    const issues = issueLines("ask_user", {
+      questions: [{ ...textQuestion, choices: defaultQuestion.choices }],
+    });
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toMatch(/questions\[0\].*"choices"/u);
+  });
+
+  it("reports only the issues of the shape a question's mode selects", () => {
+    const issues = issueLines("ask_user", {
+      questions: [
+        textQuestion,
+        { ...defaultQuestion, choices: [{ value: "a", label: "A" }] },
+        { ...defaultQuestion, mode: "choice" },
+      ],
+    });
+    expect(issues.length).toBeGreaterThan(0);
+    const choiceShape = issues.filter((issue) => issue.includes("questions[1]"));
+    expect(choiceShape.some((issue) => issue.includes("questions[1].choices[0].description"))).toBe(
+      true,
+    );
+    expect(choiceShape.some((issue) => issue.includes("questions[1].choices "))).toBe(true);
+    expect(choiceShape.some((issue) => /mode|anyOf|does not accept/u.test(issue))).toBe(false);
+    const unknownMode = issues.filter((issue) => issue.includes("questions[2]"));
+    expect(unknownMode).toHaveLength(1);
+    expect(unknownMode[0]).toMatch(/questions\[2\]\.mode.*single.*multiple.*text/u);
+    expect(issues.some((issue) => issue.includes("questions[0]"))).toBe(false);
+  });
+
+  it("accepts titles longer than a tab shows and up to six choices", () => {
+    const question = {
+      ...defaultQuestion,
+      title: "Database migration strategy",
+      choices: sixChoices,
+    };
+    expect(preparer("ask_user")({ questions: [question] })).toEqual({ questions: [question] });
+    expect(
+      issueLines("ask_user", {
+        questions: [{ ...question, choices: [...sixChoices, { ...sixChoices[0], value: "v7" }] }],
+      }),
+    ).toHaveLength(1);
   });
 });
 

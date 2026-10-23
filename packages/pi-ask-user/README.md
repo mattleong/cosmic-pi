@@ -42,7 +42,7 @@ The agent calls the tools and you answer in the overlay. A typical call:
 }
 ```
 
-- Each call takes 1–6 questions, with 2–4 choices per choice question. Use `mode: "text"` without `choices` for a free-text answer.
+- Each call takes 1–6 questions, with 2–6 choices per choice question. Use `mode: "text"` without `choices` for a free-text answer; empty `choices` is ignored.
 - Results return stable `values` alongside their labels. Cancelling returns no answers and never means approval.
 - `ask_user_async` also requires `independentWork` and `blockedWork` descriptions. `ask_user_async_control` can `status`, `await`, or `cancel` a pending request.
 - Questionnaires must never collect passwords, API keys, or other credentials.
@@ -50,7 +50,7 @@ The agent calls the tools and you answer in the overlay. A typical call:
 | Key               | Action                              |
 | ----------------- | ----------------------------------- |
 | `Tab`, `←`/`→`    | Move between questions and Review   |
-| `↑`/`↓`, `1`–`4`  | Move through or pick choices        |
+| `↑`/`↓`, `1`–`6`  | Move through or pick choices        |
 | `Enter` / `Space` | Choose / toggle a multi-select item |
 | `n`               | Add or edit a note                  |
 | `b`               | Hide the questionnaire              |

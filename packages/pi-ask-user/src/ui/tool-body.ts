@@ -15,6 +15,7 @@ import type {
   AskUserAsyncRequest,
   AskUserRequest,
 } from "../questionnaire/schema.ts";
+import { titleLabel } from "./layout.ts";
 import type { ReplayedAnswer } from "./tool-render-projection.ts";
 
 export type RenderContext = Parameters<NonNullable<ToolDefinition["renderCall"]>>[2];
@@ -51,7 +52,7 @@ const answerEntries = (
   titles: ReadonlyMap<string, string>,
 ): AnswerEntry[] =>
   answers.map((answer) => ({
-    label: stripTerminalControls(titles.get(answer.key) ?? answer.key),
+    label: titleLabel(titles.get(answer.key) ?? answer.key),
     value: stripTerminalControls(
       answer.kind === "choices" ? answer.labels.join(", ") : answer.text,
     ),
