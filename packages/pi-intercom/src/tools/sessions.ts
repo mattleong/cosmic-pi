@@ -98,7 +98,7 @@ const byEvidence = (left: Described, right: Described): number =>
 
 /** The caller couldn't reach the recipient, or the recipient refused before handling anything. */
 const refusedBy = (record: SessionRecord) => (error: IntercomClientError | IntercomRefused) =>
-  new SessionToolRefusal({
+  SessionToolRefusal.make({
     code: Predicate.isTagged(error, "IntercomRefused") ? error.code : clientRefusalCode(error),
     session: viewOf(record),
   });
@@ -114,20 +114,20 @@ const resolvePeer = Effect.fn("IntercomTools.resolvePeer")(function* (to: string
   const matches = (yield* peerRecords).filter((record) => record.sessionId === to);
   if (matches.length <= 1) {
     const [only] = matches;
-    if (only === undefined) return yield* new SessionToolRefusal({ code: "session_not_found" });
+    if (only === undefined) return yield* SessionToolRefusal.make({ code: "session_not_found" });
     return only;
   }
   const live = yield* describeLive(matches);
   const answering = live.filter(({ result }) => Result.isSuccess(result));
   const [first] = answering;
   if (first !== undefined && answering.length > 1)
-    return yield* new SessionToolRefusal({
+    return yield* SessionToolRefusal.make({
       code: "session_ambiguous",
       session: viewOf(first.target),
     });
   if (first !== undefined) return first.target;
   const [silent] = live.toSorted(byEvidence);
-  if (silent === undefined) return yield* new SessionToolRefusal({ code: "session_not_found" });
+  if (silent === undefined) return yield* SessionToolRefusal.make({ code: "session_not_found" });
   if (Result.isFailure(silent.result))
     return yield* refusedBy(silent.target)(silent.result.failure);
   return silent.target;
@@ -139,7 +139,7 @@ const unanswered = Effect.fn("IntercomTools.unanswered")(function* (
   error: IntercomClientError | IntercomRefused,
 ) {
   if (Predicate.isTagged(error, "IntercomClientError") && (yield* ownerIsDead(record)))
-    return yield* new SessionToolRefusal({ code: "session_not_found" });
+    return yield* SessionToolRefusal.make({ code: "session_not_found" });
   return yield* refusedBy(record)(error);
 });
 
@@ -193,7 +193,7 @@ export const listSessions = Effect.fn("IntercomTools.list")(function* () {
  */
 export const sendToSession = Effect.fn("IntercomTools.send")(function* (to: string, text: string) {
   if (text.length > MAX_MESSAGE_CHARS)
-    return yield* new SessionToolRefusal({ code: "session_message_too_long" });
+    return yield* SessionToolRefusal.make({ code: "session_message_too_long" });
   const record = yield* resolvePeer(to);
   const self = yield* IntercomSession.use((session) => session.record);
   const session = viewOf(record);

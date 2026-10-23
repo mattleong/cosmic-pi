@@ -279,7 +279,7 @@ layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom transport"
       yield* startServer(
         socket,
         fakeInbound({
-          deliver: () => Effect.fail(new IntercomRefused({ code: "session_unavailable" })),
+          deliver: () => Effect.fail(IntercomRefused.make({ code: "session_unavailable" })),
         }),
       );
 

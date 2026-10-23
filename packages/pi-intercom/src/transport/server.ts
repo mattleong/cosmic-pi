@@ -63,7 +63,7 @@ export const serveIntercom = Effect.fn("IntercomServer.serve")(function* (
 ): Effect.fn.Return<void, IntercomServerError, IntercomInbound | Scope.Scope> {
   const inbound = yield* IntercomInbound;
   const key = yield* handshakeKey(options.token).pipe(
-    Effect.mapError(() => new IntercomServerError({ operation: "authenticate" })),
+    Effect.mapError(() => IntercomServerError.make({ operation: "authenticate" })),
   );
 
   let bound = false;
@@ -77,11 +77,11 @@ export const serveIntercom = Effect.fn("IntercomServer.serve")(function* (
     ),
   );
   const server = yield* NodeSocketServer.make({ path: options.socket }).pipe(
-    Effect.mapError(() => new IntercomServerError({ operation: "listen" })),
+    Effect.mapError(() => IntercomServerError.make({ operation: "listen" })),
   );
   bound = true;
   yield* restrictSocket(options.socket).pipe(
-    Effect.mapError(() => new IntercomServerError({ operation: "listen" })),
+    Effect.mapError(() => IntercomServerError.make({ operation: "listen" })),
   );
 
   const { protocol, connection } = yield* guardedRpcProtocol(
@@ -98,7 +98,7 @@ export const serveIntercom = Effect.fn("IntercomServer.serve")(function* (
   const authenticated = <A, E>(client: Rpc.ServerClient, effect: Effect.Effect<A, E>) =>
     connection(client.id)?.phase === "authenticated"
       ? effect
-      : Effect.fail(new IntercomUnauthorized());
+      : Effect.fail(IntercomUnauthorized.make());
 
   const handlers = yield* IntercomRpcGroup.toHandlers(
     IntercomRpcGroup.of({
@@ -123,14 +123,14 @@ export const serveIntercom = Effect.fn("IntercomServer.serve")(function* (
       },
       Authenticate: Effect.fnUntraced(function* ({ proof }, { client }) {
         const peer = connection(client.id);
-        if (peer?.phase !== "challenged") return yield* new IntercomUnauthorized();
+        if (peer?.phase !== "challenged") return yield* IntercomUnauthorized.make();
         const valid = yield* key
           .check("client", peer.clientNonce, peer.serverNonce, proof)
           .pipe(Effect.orElseSucceed(() => false));
         // A failed proof admits nothing more; the authentication deadline closes the peer. A
         // peer closed during the check stays refused.
         const admitted = peer.advance("challenged", valid ? "authenticated" : "refused") && valid;
-        return admitted ? undefined : yield* new IntercomUnauthorized();
+        return admitted ? undefined : yield* IntercomUnauthorized.make();
       }),
       Describe: (_payload, { client }) => authenticated(client, inbound.describe),
       Deliver: (message, { client }) =>

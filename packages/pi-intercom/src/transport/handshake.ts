@@ -20,7 +20,7 @@ export class IntercomHandshakeError extends Schema.TaggedError<
   { readonly brand: unique symbol }
 >()("IntercomHandshakeError", {}) {}
 
-const failure = () => new IntercomHandshakeError();
+const failure = () => IntercomHandshakeError.make();
 const utf8 = new TextEncoder();
 
 const transcript = (role: Role, clientNonce: string, serverNonce: string) =>

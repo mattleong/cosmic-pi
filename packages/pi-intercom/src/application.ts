@@ -105,7 +105,7 @@ export function registerIntercomApplication(
             slot.isCurrent(token)
               ? slot.run(effect, signal)
               : Promise.reject(
-                  new PiSessionRuntimeError({
+                  PiSessionRuntimeError.make({
                     operation: "run",
                     message: "Intercom isn't running in this session",
                   }),

@@ -438,7 +438,7 @@ layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom registry",
       yield* serveIntercom({ socket: refusing.socket, token: refusing.token }).pipe(
         Effect.provideService(IntercomInbound, {
           ...inbound,
-          describe: Effect.fail(new IntercomRefused({ code: "session_unavailable" })),
+          describe: Effect.fail(IntercomRefused.make({ code: "session_unavailable" })),
         }),
       );
       const silent = h.record("2");

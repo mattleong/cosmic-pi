@@ -65,7 +65,7 @@ export interface IntercomTarget {
 
 type IntercomClient = RpcClient.FromGroup<typeof IntercomRpcGroup, RpcClientError.RpcClientError>;
 
-const failWith = (reason: IntercomClientFailure) => new IntercomClientError({ reason });
+const failWith = (reason: IntercomClientFailure) => IntercomClientError.make({ reason });
 
 /** Failures that leave a request's outcome open once it went out. */
 const UNCERTAIN = new Set<IntercomClientFailure>(["disconnected", "timeout", "protocol"]);

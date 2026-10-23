@@ -405,7 +405,7 @@ layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
       const paths = yield* Path.Path;
       const socket = paths.join(a.shared.base, "reloading.sock");
       const token = synchronousRandomHex(32);
-      const unavailable = Effect.fail(new IntercomRefused({ code: "session_unavailable" }));
+      const unavailable = Effect.fail(IntercomRefused.make({ code: "session_unavailable" }));
       yield* serveIntercom({ socket, token }).pipe(
         Effect.provideService(IntercomInbound, {
           describe: unavailable,

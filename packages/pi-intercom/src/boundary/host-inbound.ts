@@ -15,7 +15,7 @@ import {
 } from "../transport/protocol.ts";
 import type { IntercomInboundContract } from "../transport/server.ts";
 
-const unavailable = () => new IntercomRefused({ code: "session_unavailable" });
+const unavailable = () => IntercomRefused.make({ code: "session_unavailable" });
 
 const sessionState = (ctx: ExtensionContext): SessionState => (ctx.isIdle() ? "idle" : "busy");
 
@@ -60,7 +60,7 @@ export const hostIntercomInbound = (
           )
         : Effect.logDebug("Refused a message from another session.").pipe(
             Effect.annotateLogs({ refusal: outcome.failure }),
-            Effect.andThen(Effect.fail(new IntercomRefused({ code: outcome.failure }))),
+            Effect.andThen(Effect.fail(IntercomRefused.make({ code: outcome.failure }))),
           );
     });
 

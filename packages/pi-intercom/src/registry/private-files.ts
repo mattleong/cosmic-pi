@@ -18,7 +18,7 @@ export {
   removeOwnEntry,
 } from "pi-cosmic-core";
 
-const unsafe = () => Effect.fail(new PrivateFileError({ reason: "unsafe" }));
+const unsafe = () => Effect.fail(PrivateFileError.make({ reason: "unsafe" }));
 
 /** Creates `path` and any missing parents; directories it creates are 0700. */
 export const ensureDirectoryPath = (path: string): Effect.Effect<void, PrivateFileError> =>

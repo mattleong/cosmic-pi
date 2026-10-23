@@ -84,7 +84,7 @@ export class IntercomRegistryError extends Schema.TaggedError<
 type RegistryOperation = IntercomRegistryError["operation"];
 
 const failAs = (operation: RegistryOperation) =>
-  Effect.mapError(() => new IntercomRegistryError({ operation }));
+  Effect.mapError(() => IntercomRegistryError.make({ operation }));
 
 /**
  * `unsafe`: a link, another user's file, a file others may read, or an oversized one;
@@ -564,11 +564,11 @@ export class IntercomRegistry extends Context.Service<IntercomRegistry>()(
         }
         const namespace = yield* fallbackNamespace;
         if (namespace === undefined)
-          return yield* new IntercomRegistryError({ operation: "reserve" });
+          return yield* IntercomRegistryError.make({ operation: "reserve" });
         const directory = paths.join(namespace, instance);
         const socket = paths.join(directory, FALLBACK_SOCKET_NAME);
         if (utf8ByteLength(socket) > MAX_SOCKET_PATH_BYTES)
-          return yield* new IntercomRegistryError({ operation: "reserve" });
+          return yield* IntercomRegistryError.make({ operation: "reserve" });
         yield* ensurePrivateDirectory(namespace).pipe(failAs("reserve"));
         yield* Effect.acquireRelease(
           createPrivateDirectory(directory).pipe(failAs("reserve")),
