@@ -1,6 +1,5 @@
-import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import { decodeUnknownOrUndefined, querySessionCapability } from "pi-cosmic-core";
+import { decodeUnknownOrUndefined, ForeignCallable, querySessionCapability } from "pi-cosmic-core";
 import type { ActivityEvents } from "./protocol.ts";
 import { ActivityError } from "./service.ts";
 
@@ -10,16 +9,11 @@ export interface ActivityViewCapability {
   readonly open: (section: ActivitySection, signal?: AbortSignal) => Promise<boolean>;
 }
 
-const isViewOpener = <Value>(
-  value: Value,
-): value is Value & ((section: ActivitySection, signal?: AbortSignal) => void) =>
-  Predicate.isFunction(value);
-
 const ViewCapability = Schema.Struct({
   version: Schema.Literal(1),
   sessionId: Schema.String,
   hostToken: Schema.ObjectKeyword,
-  open: Schema.declare(isViewOpener),
+  open: ForeignCallable<[section: ActivitySection, signal?: AbortSignal]>(),
 });
 export const isActivitySection = (section: string): section is ActivitySection =>
   section === "subagents" || section === "tasks";
@@ -44,7 +38,7 @@ export function discoverActivityView(
           Promise.resolve().then(() => {
             if (!isActivitySection(section)) throw new ActivityError({ reason: "invalid" });
             if (signal?.aborted) throw new ActivityError({ reason: "stale" });
-            return Promise.resolve(open(section, signal)).then((output) => {
+            return Promise.resolve<unknown>(open(section, signal)).then((output) => {
               const result = decodeOpened(output);
               if (result === undefined) throw new ActivityError({ reason: "failed" });
               return result;

@@ -1,10 +1,14 @@
 import type { ThemeColor } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { flow } from "effect/Function";
-import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import type * as Types from "effect/Types";
-import { decodeUnknownOrUndefined, sanitizeTerminalLine } from "pi-cosmic-core";
+import {
+  decodeUnknownOrUndefined,
+  ForeignCallable,
+  invokeBestEffort,
+  sanitizeTerminalLine,
+} from "pi-cosmic-core";
 
 export const COSMIC_UI_PROTOCOL_VERSION = 2 as const;
 export const COSMIC_UI_HOST_QUERY = "cosmic-ui:v2:host:query";
@@ -81,12 +85,9 @@ const NonEmpty = Schema.String.check(Schema.isNonEmpty());
 // withdraw the whole contribution.
 const optionalOrDefault = <S extends Schema.Top>(schema: S) =>
   Schema.optional(schema.pipe(Schema.catchDecoding(() => Effect.succeedNone)));
-const isStateResponder = <Value>(
-  value: Value,
-): value is Value & ((state: CosmicUiHostState) => void) => Predicate.isFunction(value);
 const HostQueryData = Schema.Struct({
   version: Version,
-  respond: Schema.declare(isStateResponder),
+  respond: ForeignCallable<[state: CosmicUiHostState]>(),
 });
 const HostStateData = Schema.Struct({
   version: Version,
@@ -157,7 +158,7 @@ const hostQuery = (query: typeof HostQueryData.Type | undefined): CosmicUiHostQu
   return Object.freeze({
     version: query.version,
     respond: (state: CosmicUiHostState) =>
-      respond.call(query, Object.freeze(detachHostState(state))),
+      invokeBestEffort(() => respond.call(query, Object.freeze(detachHostState(state)))),
   });
 };
 

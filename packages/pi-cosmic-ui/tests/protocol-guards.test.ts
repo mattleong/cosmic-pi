@@ -28,6 +28,27 @@ describe("Cosmic UI protocol guards", () => {
       }
     },
   );
+  it("answers a host query with a detached state and contains a hostile responder", () => {
+    const received: Array<{ readonly hidden: readonly string[] }> = [];
+    const hidden = ["usage"];
+    const query = normalizeCosmicUiHostQuery({
+      version: COSMIC_UI_PROTOCOL_VERSION,
+      respond: (state: { readonly hidden: readonly string[] }) => {
+        received.push(state);
+      },
+    });
+    query?.respond({ active: true, ready: true, hidden });
+    hidden.push("late");
+    expect(received).toEqual([{ active: true, ready: true, hidden: ["usage"] }]);
+    for (const respond of [hostile("hostile responder"), () => Promise.reject(new Error("late"))])
+      expect(() =>
+        normalizeCosmicUiHostQuery({ version: COSMIC_UI_PROTOCOL_VERSION, respond })?.respond({
+          active: true,
+          ready: true,
+          hidden: [],
+        }),
+      ).not.toThrow();
+  });
   it("keeps a contribution whose optional text, styling, or placement hints are invalid", () => {
     const event = normalizeCosmicFooterUpsertEvent({
       version: COSMIC_UI_PROTOCOL_VERSION,

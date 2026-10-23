@@ -1,5 +1,7 @@
 import { type Component, type Focusable } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
+import * as Schema from "effect/Schema";
+import { ForeignCallable, invokeBestEffort } from "pi-cosmic-core";
 import {
   decodeFullScreenPrintable,
   FullScreenKeymap,
@@ -48,8 +50,7 @@ const SETTINGS_ACTION_INPUT = {
   readonly [input?: string, id?: FullScreenSelectionKeybindingId]
 >;
 
-const isTextCallback = <Value>(value: Value): value is Value & ((text: string) => void) =>
-  Predicate.isFunction(value);
+const isTextCallback = Schema.is(ForeignCallable<[text: string]>());
 
 const settingsSearchInput = (child: Component) => {
   if (!("searchInput" in child)) return undefined;
@@ -62,8 +63,10 @@ const settingsSubmenu = (child: Component) =>
 
 const clearSettingsFilter = (child: Component): void => {
   const input = settingsSearchInput(child);
-  if (isTextCallback(input?.setValue)) input.setValue("");
-  if ("applyFilter" in child && isTextCallback(child.applyFilter)) child.applyFilter("");
+  const setValue = input?.setValue;
+  if (isTextCallback(setValue)) invokeBestEffort(() => setValue.call(input, ""));
+  const applyFilter = "applyFilter" in child ? child.applyFilter : undefined;
+  if (isTextCallback(applyFilter)) invokeBestEffort(() => applyFilter.call(child, ""));
 };
 
 export class VimSettingsAdapter implements Component, Focusable {

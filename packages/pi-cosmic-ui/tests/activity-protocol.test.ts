@@ -71,7 +71,7 @@ describe("activity producer protocol", () => {
       });
       const invoke = host.capability()!.invoke!;
       const signal = yield* Effect.abortSignal;
-      yield* Effect.promise(() => invoke("flow", "stop", "1", signal));
+      yield* Effect.promise(() => Promise.resolve<unknown>(invoke("flow", "stop", "1", signal)));
       expect(checks[0]!()).toBe(true);
       const announce = (available: boolean) =>
         host.events.emit(ACTIVITY_HOST, {
@@ -86,7 +86,9 @@ describe("activity producer protocol", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const scoped = yield* Effect.abortSignal;
-          yield* Effect.promise(() => host.capability()!.invoke!("flow", "stop", "1", scoped));
+          yield* Effect.promise(() =>
+            Promise.resolve<unknown>(host.capability()!.invoke!("flow", "stop", "1", scoped)),
+          );
           expect(checks[1]!()).toBe(true);
         }),
       );

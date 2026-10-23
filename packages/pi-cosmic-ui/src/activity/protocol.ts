@@ -1,7 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import { sanitizeDiagnosticContent } from "pi-cosmic-core";
+import { ForeignCallable, sanitizeDiagnosticContent } from "pi-cosmic-core";
 import { detachActivityItem } from "./detach.ts";
 import { ACTIVITY_LIMITS } from "./limits.ts";
 export { ACTIVITY_LIMITS } from "./limits.ts";
@@ -92,8 +91,6 @@ export interface ActivityProviderRegistration {
   dispose(): void;
   isAvailable(): boolean;
 }
-const callback = <F>() =>
-  Schema.optional(Schema.declare<F>((value): value is F => Predicate.isFunction(value)));
 export const ActivityEnvelopeSchema = Schema.Struct({
   version: Schema.Literal(1),
   sessionId: Schema.String,
@@ -103,11 +100,20 @@ export const ActivityEnvelopeSchema = Schema.Struct({
   hostToken: Schema.ObjectKeyword,
   items: Schema.optional(Schema.Unknown),
   starting: Schema.optional(Schema.Unknown),
-  invoke: callback<ActivityProviderOptions["invoke"]>(),
-  getDetail: callback<NonNullable<ActivityProviderOptions["getDetail"]>>(),
-  acknowledge: callback<(available: boolean) => void>(),
+  invoke: Schema.optional(ForeignCallable<Parameters<ActivityProviderOptions["invoke"]>>()),
+  getDetail:
+    Schema.optional(
+      ForeignCallable<Parameters<NonNullable<ActivityProviderOptions["getDetail"]>>>(),
+    ),
+  acknowledge: Schema.optional(ForeignCallable<[available: boolean]>()),
 });
 export type ActivityEnvelope = typeof ActivityEnvelopeSchema.Type;
+// Providers publish their typed callbacks; hosts admit them only as checked foreign callables.
+type PublishedActivityEnvelope = Omit<ActivityEnvelope, "invoke" | "getDetail" | "acknowledge"> & {
+  readonly invoke?: ActivityProviderOptions["invoke"];
+  readonly getDetail?: ActivityProviderOptions["getDetail"];
+  readonly acknowledge?: (available: boolean) => void;
+};
 const ActivityHostSchema = Schema.Struct({
   version: Schema.Literal(1),
   sessionId: Id,
@@ -171,7 +177,7 @@ export function registerActivityProvider(
               usable(signal) ? getDetail(itemId, revision, signal) : unavailable(),
           }),
         }),
-      } satisfies ActivityEnvelope);
+      } satisfies PublishedActivityEnvelope);
     } catch {
       acknowledge(false);
     }

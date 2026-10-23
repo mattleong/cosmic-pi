@@ -16,7 +16,6 @@ import {
   activityKey,
   type ActivityEnvelope,
   type ActivityItem,
-  type ActivityProviderOptions,
 } from "./protocol.ts";
 import { retainActivity, type ActivityRow } from "./model.ts";
 import { detachActivityItem } from "./detach.ts";
@@ -32,9 +31,9 @@ export class ActivityError extends Schema.TaggedError<
 interface Provider {
   readonly token: object;
   readonly generation: number;
-  readonly invoke: ActivityProviderOptions["invoke"];
-  readonly getDetail?: ActivityProviderOptions["getDetail"];
-  readonly acknowledge: (available: boolean) => void;
+  readonly invoke: NonNullable<ActivityEnvelope["invoke"]>;
+  readonly getDetail?: ActivityEnvelope["getDetail"];
+  readonly acknowledge: NonNullable<ActivityEnvelope["acknowledge"]>;
   readonly items: readonly ActivityRow[];
   readonly starting: number;
 }
@@ -267,7 +266,9 @@ export class ActivityService extends Context.Service<ActivityService, ActivitySe
         try: (signal) => {
           if (!checkedRow(request).actions?.some((action) => action.id === request.actionId))
             throw stale();
-          return provider.invoke(row.id, request.actionId, request.revision, signal);
+          return Promise.resolve<unknown>(
+            provider.invoke(row.id, request.actionId, request.revision, signal),
+          );
         },
         catch: asActivityError,
       });
@@ -279,7 +280,7 @@ export class ActivityService extends Context.Service<ActivityService, ActivitySe
       const text = yield* Effect.tryPromise({
         try: (signal) => {
           checkedRow(request);
-          return getDetail(row.id, request.revision, signal);
+          return Promise.resolve<unknown>(getDetail(row.id, request.revision, signal));
         },
         catch: asActivityError,
       });

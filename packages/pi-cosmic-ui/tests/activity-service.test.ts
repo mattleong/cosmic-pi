@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import { deferredPromise, yieldUntil } from "pi-cosmic-core/testing";
 import {
@@ -12,6 +13,7 @@ import {
 } from "../src/activity/service.ts";
 import {
   ACTIVITY_LIMITS,
+  ActivityEnvelopeSchema,
   activityKey,
   type ActivityEnvelope,
   type ActivityItem,
@@ -25,21 +27,27 @@ const item = (revision = "1"): ActivityItem => ({
   revision,
   actions: [{ id: "stop", label: "Stop" }],
 });
+const throwingCallback = () => {
+  throw new Error("private producer error");
+};
+// Hosts admit provider envelopes through the protocol schema.
+const envelope = Schema.decodeUnknownSync(ActivityEnvelopeSchema);
 const registration = (
   token: ActivityEnvelope["token"],
   invoke = () => Promise.resolve(),
   items: readonly ActivityItem[] = [item()],
-): ActivityEnvelope => ({
-  version: 1,
-  sessionId: "session",
-  providerId: "tasks",
-  token,
-  hostToken: {},
-  operation: "register",
-  items,
-  invoke,
-  acknowledge: () => undefined,
-});
+): ActivityEnvelope =>
+  envelope({
+    version: 1,
+    sessionId: "session",
+    providerId: "tasks",
+    token,
+    hostToken: {},
+    operation: "register",
+    items,
+    invoke,
+    acknowledge: () => undefined,
+  });
 const action = (row: ActivityRow): ActivityActionRequest => ({
   key: row.key,
   generation: row.generation,
@@ -112,17 +120,19 @@ describe("activity service", () => {
         expect(rows().some((row) => row.providerId === "additional")).toBe(false);
         let replacementAvailable = false;
         let invoked = false;
-        yield* service.receive({
-          ...original,
-          token: {},
-          acknowledge: (available) => {
-            replacementAvailable = available;
-          },
-          invoke: () => {
-            invoked = true;
-            return Promise.resolve();
-          },
-        });
+        yield* service.receive(
+          envelope({
+            ...original,
+            token: {},
+            acknowledge: (available: boolean) => {
+              replacementAvailable = available;
+            },
+            invoke: () => {
+              invoked = true;
+              return Promise.resolve();
+            },
+          }),
+        );
         expect(replacementAvailable).toBe(true);
         expect(rows()).toHaveLength(32);
         expect(yield* service.invoke(originalAction).pipe(Effect.flip)).toMatchObject({
@@ -221,13 +231,15 @@ describe("activity service", () => {
       const { service, rows } = yield* recordingService();
       const token = {};
       let calls = 0;
-      yield* service.receive({
-        ...registration(token),
-        getDetail: () => {
-          calls++;
-          return Promise.resolve(`token=private-value\n${"x".repeat(20000)}`);
-        },
-      });
+      yield* service.receive(
+        envelope({
+          ...registration(token),
+          getDetail: () => {
+            calls++;
+            return Promise.resolve(`token=private-value\n${"x".repeat(20000)}`);
+          },
+        }),
+      );
       expect(calls).toBe(0);
       const detail = yield* service.detail(action(rows()[0]!));
       expect(detail.length).toBeLessThanOrEqual(16384);
@@ -235,13 +247,15 @@ describe("activity service", () => {
       expect(calls).toBe(1);
       const pending = deferredPromise<string>();
       let started = false;
-      yield* service.receive({
-        ...registration({}),
-        getDetail: () => {
-          started = true;
-          return pending.promise;
-        },
-      });
+      yield* service.receive(
+        envelope({
+          ...registration({}),
+          getDetail: () => {
+            started = true;
+            return pending.promise;
+          },
+        }),
+      );
       const fiber = yield* service.detail(action(rows()[0]!)).pipe(Effect.exit, Effect.forkScoped);
       yield* yieldUntil(() => started);
       yield* service.receive(registration({}));
@@ -274,18 +288,40 @@ describe("activity service", () => {
       const { service, rows } = yield* recordingService();
       let signal: AbortSignal | undefined;
       const pending = deferredPromise();
-      yield* service.receive({
-        ...registration({}),
-        invoke: (_item, _action, _revision, value) => {
-          signal = value;
-          return pending.promise;
-        },
-      });
+      yield* service.receive(
+        envelope({
+          ...registration({}),
+          invoke: (_item: string, _action: string, _revision: string, value: AbortSignal) => {
+            signal = value;
+            return pending.promise;
+          },
+        }),
+      );
       const fiber = yield* service.invoke(action(rows()[0]!)).pipe(Effect.forkScoped);
       yield* yieldUntil(() => signal !== undefined);
       yield* Fiber.interrupt(fiber);
       expect(signal?.aborted).toBe(true);
       pending.resolve(undefined);
+    }),
+  );
+  it.effect("fails typed when a producer callback throws or returns a non-string detail", () =>
+    Effect.gen(function* () {
+      const { service, rows } = yield* recordingService();
+      yield* service.receive(envelope({ ...registration({}), getDetail: () => 42 }));
+      expect(yield* Effect.flip(service.detail(action(rows()[0]!)))).toMatchObject({
+        reason: "invalid",
+      });
+      yield* service.receive(
+        envelope({ ...registration({}, throwingCallback), getDetail: throwingCallback }),
+      );
+      expect(yield* Effect.flip(service.detail(action(rows()[0]!)))).toMatchObject({
+        reason: "failed",
+      });
+      expect(yield* Effect.flip(service.invoke(action(rows()[0]!)))).toMatchObject({
+        reason: "failed",
+      });
+      yield* service.receive(envelope({ ...registration({}), getDetail: () => "Ready" }));
+      expect(yield* service.detail(action(rows()[0]!))).toBe("Ready");
     }),
   );
   it.effect("cannot revive a revoked token and contains rejected producer actions", () =>
