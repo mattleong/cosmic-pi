@@ -33,6 +33,7 @@ afterEach(() => {
 type Model = NonNullable<ExtensionContext["model"]>;
 
 const PreferenceFromJson = Schema.fromJsonString(DirectoryModelPreferenceSchema);
+const encodeJsonDocument = Schema.encodeEffect(Schema.fromJsonString(Schema.Json));
 
 type ThinkingLevel = ThinkingLevelSelectEvent["level"];
 
@@ -505,6 +506,35 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
     }),
   );
 
+  it.effect("restores a saved model whose thinking level is invalid and warns once", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const h = yield* harness();
+      const target = yield* h.seedRememberedPreference();
+      yield* fs.writeFileString(
+        target,
+        yield* encodeJsonDocument({
+          version: 1,
+          cwd: yield* fs.realPath(h.cwd),
+          provider: h.remembered.provider,
+          model: h.remembered.id,
+          thinkingLevel: "High",
+        }),
+      );
+
+      yield* h.start();
+      expect(h.setModel).toHaveBeenCalledWith(h.remembered);
+      expect(h.setThinkingLevel).not.toHaveBeenCalled();
+      expect(h.thinking()).toBe("low");
+      expect(h.notify.mock.calls).toEqual([[expect.any(String), "warning"]]);
+      expect(yield* h.readPreference()).toMatchObject({
+        provider: h.remembered.provider,
+        model: h.remembered.id,
+        thinkingLevel: "low",
+      });
+    }),
+  );
+
   it.effect("ignores model and thinking events before startup and after shutdown", () =>
     Effect.gen(function* () {
       const h = yield* harness();
@@ -541,6 +571,22 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       expect(malformed.setModel).not.toHaveBeenCalled();
       expect(yield* fs.readFileString(malformedTarget)).toBe("{ not json");
       yield* malformed.shutdown();
+
+      const incomplete = yield* harness();
+      const incompleteTarget = yield* incomplete.seedRememberedPreference();
+      const withoutModel = yield* encodeJsonDocument({
+        version: 1,
+        cwd: yield* fs.realPath(incomplete.cwd),
+        provider: incomplete.remembered.provider,
+        thinkingLevel: "high",
+      });
+      yield* fs.writeFileString(incompleteTarget, withoutModel);
+      yield* incomplete.start();
+      expect(incomplete.setModel).not.toHaveBeenCalled();
+      expect(incomplete.thinking()).toBe("low");
+      expect(incomplete.notify.mock.calls).toEqual([[expect.any(String), "warning"]]);
+      expect(yield* fs.readFileString(incompleteTarget)).toBe(withoutModel);
+      yield* incomplete.shutdown();
 
       const foreign = yield* harness();
       const foreignTarget = yield* writePreference(

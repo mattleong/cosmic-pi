@@ -1,11 +1,14 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { AgentDirectory, JsonDocumentStore } from "pi-cosmic-core";
+import { AgentDirectory, JsonDocumentStore, nodeFsPromises } from "pi-cosmic-core";
 import { preferenceFilename } from "./path-key.ts";
-import { DirectoryModelPreferenceSchema, type DirectoryModelPreference } from "./schema.ts";
+import {
+  decodeSavedPreference,
+  DirectoryModelPreferenceSchema,
+  type DirectoryModelPreference,
+} from "./schema.ts";
 
 const STORE_DIRECTORY = "pi-directory-models";
 
@@ -26,16 +29,19 @@ export class DirectoryModelStore extends Context.Service<DirectoryModelStore>()(
   "pi-directory-models/config/store/DirectoryModelStore",
   {
     make: Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       const paths = yield* Path.Path;
       const documents = yield* JsonDocumentStore;
       const agentDirectory = yield* AgentDirectory;
 
       const identify = Effect.fn("DirectoryModelStore.identify")(function* (cwd: string) {
         const lexical = paths.resolve(cwd);
-        const canonicalCwd = yield* fs
-          .realPath(lexical)
-          .pipe(Effect.mapError(storeError("unreadable")));
+        // Node's JavaScript realpath, which Effect's FileSystem uses, keeps the requested letter
+        // case on case-insensitive volumes; the native resolver returns the stored case, so
+        // case-only aliases share one preference.
+        const canonicalCwd = yield* Effect.tryPromise({
+          try: () => nodeFsPromises.realpath(lexical),
+          catch: storeError("unreadable"),
+        });
         const filename = preferenceFilename(canonicalCwd, paths.basename(canonicalCwd));
         return {
           canonicalCwd,
@@ -52,9 +58,9 @@ export class DirectoryModelStore extends Context.Service<DirectoryModelStore>()(
             ),
           );
         if (raw === undefined) return undefined;
-        const preference = yield* Schema.decodeUnknownEffect(DirectoryModelPreferenceSchema)(
-          raw,
-        ).pipe(Effect.mapError(storeError("invalid")));
+        const preference = yield* decodeSavedPreference(raw).pipe(
+          Effect.mapError(storeError("invalid")),
+        );
         if (preference.cwd !== identity.canonicalCwd) return yield* storeError("foreign")();
         return preference;
       });

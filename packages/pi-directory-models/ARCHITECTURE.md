@@ -30,8 +30,11 @@ waits for its settlement before another runtime can restore a model. Events rais
 cannot overwrite the saved preference. Admitted changes capture the live selection under the
 service semaphore, preventing delayed events from writing stale event payloads.
 
-Only successful directory identity lookups are cached; failures remain retryable. Saved documents
-include their canonical cwd and are rejected if it differs from the requested directory.
+Only successful directory identity lookups are cached; failures remain retryable. Directory
+identity uses the native realpath so symlink and letter-case aliases resolve to one canonical cwd.
+Saved documents include that cwd and are rejected if it differs from the requested directory. The
+version, cwd, provider, and model are required; an invalid thinking level is reported and leaves
+Pi's current level while the saved model still applies.
 Unreadable, invalid, and foreign documents are not overwritten, and each reason has its own
 warning. Read, restore, and write failures become bounded warnings rather than breaking the
 session. Shutdown disposes the runtime, and inactive events do not write.

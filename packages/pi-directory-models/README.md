@@ -39,7 +39,7 @@ Preferences are private global data, one file per directory:
 }
 ```
 
-You can edit these by hand; valid changes apply to the next fresh session. `cwd` is the exact canonical path, and the hash tells apart directories with the same name.
+You can edit these by hand; valid changes apply to the next fresh session. An invalid `thinkingLevel` still restores the saved model, keeps Pi's current thinking level, and shows a warning. `cwd` is the exact canonical path, and the hash tells apart directories with the same name.
 
 ## How it works
 

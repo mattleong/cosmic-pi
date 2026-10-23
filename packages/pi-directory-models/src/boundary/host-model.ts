@@ -5,7 +5,7 @@ import * as Schema from "effect/Schema";
 import { decodeUnknownOrUndefined, invokeHostCallback } from "pi-cosmic-core";
 import {
   directoryModelPreference,
-  type DirectoryModelPreference,
+  type SavedDirectoryModelPreference,
   ThinkingLevelSchema,
   type ThinkingLevel,
 } from "../config/schema.ts";
@@ -70,7 +70,7 @@ export const preferenceFromSelectedModel = Effect.fn("DirectoryModelHost.fromSel
 export const applyHostPreference = Effect.fn("DirectoryModelHost.apply")(function* (
   pi: ExtensionAPI,
   host: DirectoryModelHost,
-  preference: DirectoryModelPreference,
+  preference: SavedDirectoryModelPreference,
 ) {
   const current = yield* Effect.try({
     try: host.currentModel,
@@ -94,9 +94,16 @@ export const applyHostPreference = Effect.fn("DirectoryModelHost.apply")(functio
     if (!applied)
       return yield* hostError("auth", "The model saved for this directory isn't signed in")();
   }
-  yield* Effect.try({
-    try: () => pi.setThinkingLevel(preference.thinkingLevel),
-    catch: hostError("thinking", "Couldn't restore the thinking level saved for this directory"),
-  });
-  return { ...preference, thinkingLevel: yield* readThinkingLevel(pi) };
+  const { thinkingLevel } = preference;
+  if (thinkingLevel !== undefined)
+    yield* Effect.try({
+      try: () => pi.setThinkingLevel(thinkingLevel),
+      catch: hostError("thinking", "Couldn't restore the thinking level saved for this directory"),
+    });
+  return directoryModelPreference(
+    preference.cwd,
+    preference.provider,
+    preference.model,
+    yield* readThinkingLevel(pi),
+  );
 });

@@ -41,6 +41,8 @@ const readWarning = (reason: DirectoryModelStoreError["reason"]) =>
       () => "Couldn't read the saved model for this directory, so Pi kept its current model",
     ),
   );
+const THINKING_LEVEL_WARNING =
+  "The thinking level saved for this directory is invalid, so Pi kept its current thinking level";
 const IDENTIFY_WARNING = "Couldn't identify this directory to remember its model";
 export const WRITE_WARNING = "Couldn't save the model for this directory";
 
@@ -116,6 +118,8 @@ export class DirectoryModelPreferenceService extends Context.Service<DirectoryMo
               if (current) yield* write(identified, current);
               return;
             }
+            if (loadedPreference.invalidThinkingLevel)
+              yield* warnOnce("read:thinkingLevel", THINKING_LEVEL_WARNING);
             const restored = yield* applyHostPreference(pi, input.models, loadedPreference).pipe(
               Effect.catch((error) =>
                 Effect.as(warnOnce(`restore:${error.operation}`, error.message), undefined),
