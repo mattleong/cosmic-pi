@@ -1,9 +1,10 @@
 export const DIFF_ADD_MARKER = "\u0000PI_DIFF_ADD\u0000";
 export const DIFF_REMOVE_MARKER = "\u0000PI_DIFF_REMOVE\u0000";
 
-export type ParsedDiffLine = { kind: "+" | "-" | " "; lineNumber: string; content: string };
-export type AddedDiffLine = ParsedDiffLine & { kind: "+" };
-export type RemovedDiffLine = ParsedDiffLine & { kind: "-" };
+type DiffLine<Kind extends "+" | "-" | " "> = { kind: Kind; lineNumber: string; content: string };
+export type AddedDiffLine = DiffLine<"+">;
+export type RemovedDiffLine = DiffLine<"-">;
+export type ParsedDiffLine = AddedDiffLine | RemovedDiffLine | DiffLine<" ">;
 
 export function diffLineNumberWidth(lines: Array<ParsedDiffLine | null>): number {
   return lines.reduce((width, line) => Math.max(width, line?.lineNumber.trim().length ?? 0), 0);
@@ -20,14 +21,6 @@ export function parseDiffLine(line: string): ParsedDiffLine | null {
   if (kind !== "+" && kind !== "-" && kind !== " ") return null;
   const [, lineNumber = "", content = line.slice(1)] = /^.(\s*\d+)\s(.*)$/su.exec(line) ?? [];
   return { kind, lineNumber, content };
-}
-
-export function isAddedDiffLine(line: ParsedDiffLine | null): line is AddedDiffLine {
-  return line?.kind === "+";
-}
-
-export function isRemovedDiffLine(line: ParsedDiffLine | null): line is RemovedDiffLine {
-  return line?.kind === "-";
 }
 
 export function* diffLineRuns(

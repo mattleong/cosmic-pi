@@ -1,4 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import * as Predicate from "effect/Predicate";
 import { renderExpansionAffordance } from "pi-cosmic-ui/tool";
 import { forEachPreviewTextLine } from "./line-counts";
 import { countLabel } from "pi-cosmic-core";
@@ -72,7 +73,7 @@ export function trimSingleTrailingNewline(text: string): string {
 }
 
 export function metadata(theme: Theme, parts: Array<string | undefined>): string {
-  const present = parts.filter((part): part is string => Boolean(part));
+  const present = parts.filter(Predicate.isTruthy);
   return present.length ? theme.fg("dim", ` · ${present.join(" · ")}`) : "";
 }
 

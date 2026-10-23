@@ -1,10 +1,10 @@
 import type { SourceInfo, ToolInfo } from "@earendil-works/pi-coding-agent";
+import * as Schema from "effect/Schema";
 import type { PreviewHostTools } from "../boundary/host-tool-renderers";
 import { CORE_CODE_PREVIEW_TOOLS, isCodePreviewToolName, type CodePreviewToolName } from "./names";
 import { isNativeMcpName } from "./native-mcp-identity";
 
-export const isCorePreviewName = (name: string): name is (typeof CORE_CODE_PREVIEW_TOOLS)[number] =>
-  CORE_CODE_PREVIEW_TOOLS.some((tool) => tool === name);
+export const isCorePreviewName = Schema.is(Schema.Literals(CORE_CODE_PREVIEW_TOOLS));
 
 export const isPreviewName = (name: string): boolean =>
   isCodePreviewToolName(name) || isNativeMcpName(name);

@@ -7,8 +7,6 @@ import { matchChangedLines, type ChangedLinePair } from "./line-matching";
 import type { DiffWordEmphasis } from "../../config/schema";
 import {
   changedDiffBlocks,
-  isAddedDiffLine,
-  isRemovedDiffLine,
   type AddedDiffLine,
   type ParsedDiffLine,
   type RemovedDiffLine,
@@ -35,8 +33,8 @@ export function analyzeChangedLineBlock(
   const removed: Array<IndexedChangedLine<RemovedDiffLine>> = [];
   const added: Array<IndexedChangedLine<AddedDiffLine>> = [];
   for (const [index, line] of block.entries()) {
-    if (isRemovedDiffLine(line)) removed.push({ index, line });
-    else if (isAddedDiffLine(line)) added.push({ index, line });
+    if (line?.kind === "-") removed.push({ index, line });
+    else if (line?.kind === "+") added.push({ index, line });
   }
   const removedByIndex = new Map(removed.map((line) => [line.index, line]));
   const addedByIndex = new Map(added.map((line) => [line.index, line]));

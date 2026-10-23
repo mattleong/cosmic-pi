@@ -1,3 +1,5 @@
+import * as Schema from "effect/Schema";
+
 export const CORE_CODE_PREVIEW_TOOLS = [
   "bash",
   "read",
@@ -18,9 +20,7 @@ export type CodePreviewToolName = (typeof ALL_CODE_PREVIEW_TOOLS)[number];
 
 const CODE_PREVIEW_TOOL_TOGGLE_ID_PREFIX = "tool:";
 
-export function isCodePreviewToolName(value: string): value is CodePreviewToolName {
-  return ALL_CODE_PREVIEW_TOOLS.some((tool) => tool === value);
-}
+export const isCodePreviewToolName = Schema.is(Schema.Literals(ALL_CODE_PREVIEW_TOOLS));
 
 export function toolToggleId(tool: CodePreviewToolName): string {
   return `${CODE_PREVIEW_TOOL_TOGGLE_ID_PREFIX}${tool}`;

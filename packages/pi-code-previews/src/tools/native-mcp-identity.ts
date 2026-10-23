@@ -1,5 +1,7 @@
 import { sha256Text } from "pi-cosmic-core";
 import type { ToolInfo } from "@earendil-works/pi-coding-agent";
+import * as Schema from "effect/Schema";
+import * as Struct from "effect/Struct";
 
 const NATIVE_MCP_RESOURCE_ACTIONS = {
   read_mcp_resource: "read resource",
@@ -8,8 +10,9 @@ const NATIVE_MCP_RESOURCE_ACTIONS = {
 } as const;
 type NativeMcpResourceTool = keyof typeof NATIVE_MCP_RESOURCE_ACTIONS;
 
-const isNativeMcpResourceTool = (name: string): name is NativeMcpResourceTool =>
-  Object.hasOwn(NATIVE_MCP_RESOURCE_ACTIONS, name);
+const isNativeMcpResourceTool = Schema.is(
+  Schema.Literals(Struct.keys(NATIVE_MCP_RESOURCE_ACTIONS)),
+);
 
 export function nativeMcpResourceAction(name: string): string | undefined {
   return isNativeMcpResourceTool(name) ? NATIVE_MCP_RESOURCE_ACTIONS[name] : undefined;

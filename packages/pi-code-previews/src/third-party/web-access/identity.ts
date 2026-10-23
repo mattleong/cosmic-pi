@@ -1,4 +1,6 @@
 import type { ToolInfo } from "@earendil-works/pi-coding-agent";
+import * as Schema from "effect/Schema";
+import * as Struct from "effect/Struct";
 
 export const WEB_ACCESS_LABELS = {
   web_enable: "web tools",
@@ -9,13 +11,11 @@ export const WEB_ACCESS_LABELS = {
 } as const;
 export type WebAccessTool = keyof typeof WEB_ACCESS_LABELS;
 
-export function isWebAccessTool(name: string): name is WebAccessTool {
-  return Object.hasOwn(WEB_ACCESS_LABELS, name);
-}
-
 export const WEB_ACCESS_TOOLS: readonly WebAccessTool[] = Object.freeze(
-  Object.keys(WEB_ACCESS_LABELS).filter(isWebAccessTool),
+  Struct.keys(WEB_ACCESS_LABELS),
 );
+
+export const isWebAccessTool = Schema.is(Schema.Literals(WEB_ACCESS_TOOLS));
 
 export function admitsWebAccessSource(tool: ToolInfo): boolean {
   const { sourceInfo } = tool;
