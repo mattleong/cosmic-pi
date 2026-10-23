@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import {
   agentMessageDeliveryText,
   agentMessageRecipientState,
@@ -23,28 +25,32 @@ export const sessionLabel = (session: SessionView): string => {
   return name ? `session ${JSON.stringify(name)} (${id})` : `session ${id}`;
 };
 
-const sentence = (text: string): string => `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
-
 const listedLine = (session: ListedSession): string => {
   const name = session.name === undefined ? "" : sanitizeTerminalLine(session.name);
-  return [
-    `- ${sanitizeTerminalLine(session.sessionId)}`,
-    name && ` ${JSON.stringify(name)}`,
-    ` in ${sanitizeTerminalLine(session.cwd)}: ${session.state}`,
-    session.duplicate ? " (duplicate id; can't be addressed)" : "",
-  ].join("");
+  return Arr.join(
+    [
+      `- ${sanitizeTerminalLine(session.sessionId)}`,
+      name && ` ${JSON.stringify(name)}`,
+      ` in ${sanitizeTerminalLine(session.cwd)}: ${session.state}`,
+      session.duplicate ? " (duplicate id; can't be addressed)" : "",
+    ],
+    "",
+  );
 };
 
 export const listText = (result: SessionListContract): string => {
   if (result.sessions.length === 0)
     return "No other live Pi sessions of this user are registered on this machine.";
   const total = result.sessions.length + result.omitted;
-  return [
-    `${countLabel(total, "other live session")}:`,
-    ...result.sessions.map(listedLine),
-    ...(result.omitted > 0 ? [`- and ${result.omitted} more`] : []),
-    "Message one with session_send using its sessionId. An unavailable session refused to answer and may be reloading or shutting down; an unresponsive one didn't answer in time and may be busy or stuck; an unreachable one may have exited.",
-  ].join("\n");
+  return Arr.join(
+    [
+      `${countLabel(total, "other live session")}:`,
+      ...Arr.map(result.sessions, listedLine),
+      ...(result.omitted > 0 ? [`- and ${result.omitted} more`] : []),
+      "Message one with session_send using its sessionId. An unavailable session refused to answer and may be reloading or shutting down; an unresponsive one didn't answer in time and may be busy or stuck; an unreachable one may have exited.",
+    ],
+    "\n",
+  );
 };
 
 const UNCERTAIN_TEXT: Record<
@@ -62,7 +68,7 @@ export const sendText = (result: SessionSendDetails): string =>
     : `The message to ${sessionLabel(result.session)} may or may not have been delivered: ${UNCERTAIN_TEXT[result.reason]}. Don't resend it. Use session_read later to see whether the session responded.`;
 
 export const readText = (result: SessionReadContract): string => {
-  const label = sentence(sessionLabel(result.session));
+  const label = Str.capitalize(sessionLabel(result.session));
   if (result.text === undefined) return `${label} is ${result.state} and has no reply yet.`;
   const cut = result.truncated ? ` (cut to the first ${formatBytes(MAX_READ_BYTES)})` : "";
   return `${label} is ${result.state}. Its latest assistant message${cut}:\n\n${result.text}`;
@@ -86,5 +92,5 @@ const REFUSAL_TEXT: Record<ToolRefusalCode, (to: string, id: string) => string> 
 export const refusalText = (refusal: SessionRefusal): string => {
   const id = sanitizeTerminalLine(refusal.to);
   const label = refusal.session ? sessionLabel(refusal.session) : `session ${id}`;
-  return sentence(REFUSAL_TEXT[refusal.code](label, id));
+  return Str.capitalize(REFUSAL_TEXT[refusal.code](label, id));
 };

@@ -8,6 +8,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import {
   expandedArguments,
   expandedSection,
@@ -62,7 +64,7 @@ const TITLES = {
 } satisfies Record<SessionToolName, string>;
 
 const resultText = (result: AgentToolResult<unknown>): string =>
-  stripTerminalControls(getTextContent(result.content)).replace(/\n+$/u, "");
+  Fn.pipe(stripTerminalControls(getTextContent(result.content)), Str.replace(/\n+$/u, ""));
 
 const refusedResult = (
   tool: SessionRefusal["tool"],

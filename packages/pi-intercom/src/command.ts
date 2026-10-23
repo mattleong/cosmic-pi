@@ -5,6 +5,9 @@ import {
   registerExtensionCommand,
   sanitizeTerminalLine,
 } from "pi-cosmic-core";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import type { ListedSession, SessionListContract } from "./tools/contract.ts";
 import { sessionSubject } from "./tools/summary.ts";
 
@@ -28,19 +31,25 @@ const STATE_LABELS: Record<ListedSession["state"], string> = {
 };
 
 const listedLine = (session: ListedSession): string =>
-  [
-    `- ${sessionSubject(session)} in ${sanitizeTerminalLine(session.cwd)}: ${STATE_LABELS[session.state]}`,
-    session.duplicate ? " (shares its id with another session)" : "",
-  ].join("");
+  Arr.join(
+    [
+      `- ${sessionSubject(session)} in ${sanitizeTerminalLine(session.cwd)}: ${STATE_LABELS[session.state]}`,
+      session.duplicate ? " (shares its id with another session)" : "",
+    ],
+    "",
+  );
 
 const listReport = (result: SessionListContract): string => {
   const total = result.sessions.length + result.omitted;
   if (total === 0) return "No other live Pi sessions";
-  return [
-    `${countLabel(total, "other live session")}:`,
-    ...result.sessions.map(listedLine),
-    ...(result.omitted > 0 ? [`- and ${result.omitted} more`] : []),
-  ].join("\n");
+  return Arr.join(
+    [
+      `${countLabel(total, "other live session")}:`,
+      ...Arr.map(result.sessions, listedLine),
+      ...(result.omitted > 0 ? [`- and ${result.omitted} more`] : []),
+    ],
+    "\n",
+  );
 };
 
 const receivingReport = (receiving: boolean): string =>
@@ -75,12 +84,14 @@ export function registerIntercomCommand(pi: ExtensionAPI, host: IntercomCommandH
         arguments: "[on|off]",
         description: "Show or set whether other sessions can message this one",
         complete: (prefix) =>
-          RECEIVE_CHOICES.flatMap((choice) =>
-            choice.startsWith(prefix.trim()) ? [{ value: choice, label: choice }] : [],
+          Arr.flatMap(RECEIVE_CHOICES, (choice) =>
+            Fn.pipe(choice, Str.startsWith(Str.trim(prefix)))
+              ? [{ value: choice, label: choice }]
+              : [],
           ),
         handler: (args, ctx) => {
           if (!host.isActive()) return notify(ctx, UNAVAILABLE, "warning");
-          const choice = args.trim();
+          const choice = Str.trim(args);
           if (choice === "") return notify(ctx, receivingReport(host.receiving()), "info");
           if (choice !== "on" && choice !== "off")
             return notify(ctx, "Usage: /intercom receive [on|off]", "warning");

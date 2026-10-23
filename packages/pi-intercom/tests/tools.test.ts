@@ -1,13 +1,17 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { expect, layer } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import type * as Layer from "effect/Layer";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
+import * as Order from "effect/Order";
 import * as Path from "effect/Path";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import * as TestClock from "effect/testing/TestClock";
 import { issueMessageStyleProblems } from "pi-code-previews/testing";
 import {
@@ -108,7 +112,7 @@ const droppingRelay = (socket: string, target: string) =>
           upstream.destroy();
         };
         client.on("data", (data) => {
-          if (data.toString().includes('"tag":"Deliver"')) drop();
+          if (Fn.pipe(data.toString(), Str.includes('"tag":"Deliver"'))) drop();
           else upstream.write(data);
         });
         upstream.on("data", (data) => client.write(data));
@@ -181,7 +185,7 @@ layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
       if (details.tool !== SESSION_TOOL.list) throw new Error("Expected a listing.");
       // Only sessions that answered can be addressed, so only they count as duplicates.
       expect(
-        details.sessions.map(({ sessionId, name, state, duplicate }) => ({
+        Arr.map(details.sessions, ({ sessionId, name, state, duplicate }) => ({
           sessionId,
           name,
           state,
@@ -258,7 +262,7 @@ layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
       const sent = yield* pastDeadline(sendToSession("stuck", "Hello."), 4);
 
       expect(
-        Result.getOrThrow(listed).sessions.map(({ sessionId, state, duplicate }) => ({
+        Arr.map(Result.getOrThrow(listed).sessions, ({ sessionId, state, duplicate }) => ({
           sessionId,
           state,
           duplicate,
@@ -304,11 +308,11 @@ layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
         );
 
       const listed = yield* fromA(listSessions());
-      expect(listed.sessions.map(({ sessionId, state }) => ({ sessionId, state }))).toEqual([
+      expect(Arr.map(listed.sessions, ({ sessionId, state }) => ({ sessionId, state }))).toEqual([
         { sessionId: "session-b", state: "idle" },
         { sessionId: "silent", state: "unreachable" },
       ]);
-      expect(asked.toSorted((left, right) => left - right)).toEqual([silentPid, deadPid]);
+      expect(Arr.sort(asked, Order.Number)).toEqual([silentPid, deadPid]);
 
       asked.length = 0;
       expect(yield* fromA(sendToSession("session-b", "Hello."))).toMatchObject({
@@ -426,10 +430,13 @@ layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
 
       if (listed.tool !== SESSION_TOOL.list) throw new Error("Expected a listing.");
       expect(
-        listed.sessions
-          .filter(({ sessionId }) => sessionId === "reloading")
-          .map(({ state }) => state)
-          .toSorted(),
+        Arr.sort(
+          Arr.map(
+            Arr.filter(listed.sessions, ({ sessionId }) => sessionId === "reloading"),
+            ({ state }) => state,
+          ),
+          Order.String,
+        ),
       ).toEqual(["unavailable", ...Array.from({ length: 6 }, () => "unreachable")]);
       expect(sent).toMatchObject({ outcome: "refused", code: "session_unavailable" });
       expect(read).toMatchObject({ outcome: "refused", code: "session_unavailable" });
@@ -443,7 +450,7 @@ layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
       const socket = paths.join(a.shared.base, "drop.sock");
       const recipient = yield* onlyRecord(
         Effect.map(b.records, (records) =>
-          records.filter(({ sessionId }) => sessionId === "session-b"),
+          Arr.filter(records, ({ sessionId }) => sessionId === "session-b"),
         ),
       );
       yield* droppingRelay(socket, recipient.socket);
@@ -484,8 +491,11 @@ layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
       const { a, b } = yield* twoSessions;
       const prepare = (name: string, args: Readonly<Record<string, string>>) =>
         a.tool(name).prepareArguments?.(args);
-      const overlong = { to: "session-b", message: "x".repeat(MAX_MESSAGE_CHARS + 1) };
-      const longest = { to: "session-b", message: "y".repeat(MAX_MESSAGE_CHARS) };
+      const overlong = {
+        to: "session-b",
+        message: Fn.pipe("x", Str.repeat(MAX_MESSAGE_CHARS + 1)),
+      };
+      const longest = { to: "session-b", message: Fn.pipe("y", Str.repeat(MAX_MESSAGE_CHARS)) };
 
       // Preparation leaves the length to the tool, whose refusal tells the model to shorten it.
       expect(prepare(SESSION_TOOL.send, overlong)).toEqual(overlong);
@@ -545,8 +555,8 @@ layer(nodeFilePlatformLayer)("intercom session tool issues", (it) => {
       ];
       const session = { sessionId: "session-b", name: "web work", cwd: "/work/web" };
       const issues = [
-        ...codes.flatMap((code) =>
-          [SESSION_TOOL.send, SESSION_TOOL.read].map((tool) =>
+        ...Arr.flatMap(codes, (code) =>
+          Arr.map([SESSION_TOOL.send, SESSION_TOOL.read], (tool) =>
             refusalIssue({
               contract: "pi-intercom/session",
               version: 1,
@@ -567,7 +577,7 @@ layer(nodeFilePlatformLayer)("intercom session tool issues", (it) => {
           reason: "timeout",
         }),
       ];
-      expect(issues.flatMap(({ message }) => issueMessageStyleProblems(message))).toEqual([]);
+      expect(Arr.flatMap(issues, ({ message }) => issueMessageStyleProblems(message))).toEqual([]);
     }),
   );
 });

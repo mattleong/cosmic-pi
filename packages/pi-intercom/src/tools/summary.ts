@@ -1,5 +1,7 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import type { CompactIssue, CompactSummary, CompactSummaryProvider } from "pi-code-previews";
 import { clipText, countLabel, sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core";
 import {
@@ -65,10 +67,10 @@ const listSummary = (
 ): CompactSummary => {
   const total = details.sessions.length + details.omitted;
   const counted = (state: "unavailable" | "unresponsive" | "unreachable") => {
-    const count = details.sessions.filter((session) => session.state === state).length;
+    const count = Arr.filter(details.sessions, (session) => session.state === state).length;
     return count > 0 ? [`${count} ${state}`] : [];
   };
-  const duplicates = details.sessions.filter(({ duplicate }) => duplicate).length;
+  const duplicates = Arr.filter(details.sessions, ({ duplicate }) => duplicate).length;
   return {
     action: "Listed",
     subject: countLabel(total, "session"),
@@ -126,18 +128,22 @@ const MAX_COLLAPSED_LINES = 6;
 /** The user-facing body of a collapsed preview row; empty when the issues say it all. */
 export const collapsedResultText = (details: SessionToolDetails): string => {
   if (details.tool === SESSION_TOOL.list)
-    return details.sessions
-      .slice(0, MAX_COLLAPSED_LINES)
-      .map(
+    return Arr.join(
+      Arr.map(
+        details.sessions.slice(0, MAX_COLLAPSED_LINES),
         (session) =>
           `${sessionSubject(session)} · ${sanitizeTerminalLine(session.cwd)} · ${session.state}`,
-      )
-      .join("\n");
+      ),
+      "\n",
+    );
   if ("outcome" in details && details.outcome !== "delivered") return "";
   if (details.tool === SESSION_TOOL.read)
     return details.text === undefined
       ? "No reply yet"
-      : stripTerminalControls(details.text).split("\n").slice(0, MAX_COLLAPSED_LINES).join("\n");
+      : Arr.join(
+          Str.split(stripTerminalControls(details.text), "\n").slice(0, MAX_COLLAPSED_LINES),
+          "\n",
+        );
   return `Delivered to ${sessionSubject(details.session)}; ${DISPOSITION_SENTENCES[details.disposition]}`;
 };
 

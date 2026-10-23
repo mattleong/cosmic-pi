@@ -1,7 +1,11 @@
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
+import * as Order from "effect/Order";
 import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import { safeTextPrefix, synchronousRandomHex } from "pi-cosmic-core";
 import type { SessionRecord } from "../registry/schema.ts";
 import { IntercomRegistry, ownerIsDead } from "../registry/store.ts";
@@ -55,7 +59,7 @@ const peerRecords = Effect.gen(function* () {
   const registry = yield* IntercomRegistry;
   const self = yield* IntercomSession.use((session) => session.record);
   const { records } = yield* registry.list();
-  return records.filter((record) => record.instance !== self.instance);
+  return Arr.filter(records, (record) => record.instance !== self.instance);
 });
 
 /** Only a listener that proved it holds the record's token can answer or refuse. */
@@ -92,9 +96,9 @@ const evidenceRank = ({ result }: Described): number => {
 };
 
 /** Most informative first, then by instance, so the outcome doesn't depend on listing order. */
-const byEvidence = (left: Described, right: Described): number =>
-  evidenceRank(left) - evidenceRank(right) ||
-  left.target.instance.localeCompare(right.target.instance);
+const byEvidence: Order.Order<Described> = (left, right) =>
+  Order.Number(evidenceRank(left), evidenceRank(right)) ||
+  Fn.pipe(left.target.instance, Str.localeCompare(right.target.instance));
 
 /** The caller couldn't reach the recipient, or the recipient refused before handling anything. */
 const refusedBy = (record: SessionRecord) => (error: IntercomClientError | IntercomRefused) =>
@@ -111,14 +115,14 @@ const refusedBy = (record: SessionRecord) => (error: IntercomClientError | Inter
  * reached, whatever order the registry listed them in.
  */
 const resolvePeer = Effect.fn("IntercomTools.resolvePeer")(function* (to: string) {
-  const matches = (yield* peerRecords).filter((record) => record.sessionId === to);
+  const matches = Arr.filter(yield* peerRecords, (record) => record.sessionId === to);
   if (matches.length <= 1) {
     const [only] = matches;
     if (only === undefined) return yield* SessionToolRefusal.make({ code: "session_not_found" });
     return only;
   }
   const live = yield* describeLive(matches);
-  const answering = live.filter(({ result }) => Result.isSuccess(result));
+  const answering = Arr.filter(live, ({ result }) => Result.isSuccess(result));
   const [first] = answering;
   if (first !== undefined && answering.length > 1)
     return yield* SessionToolRefusal.make({
@@ -126,7 +130,7 @@ const resolvePeer = Effect.fn("IntercomTools.resolvePeer")(function* (to: string
       session: viewOf(first.target),
     });
   if (first !== undefined) return first.target;
-  const [silent] = live.toSorted(byEvidence);
+  const [silent] = Arr.sort(live, byEvidence);
   if (silent === undefined) return yield* SessionToolRefusal.make({ code: "session_not_found" });
   if (Result.isFailure(silent.result))
     return yield* refusedBy(silent.target)(silent.result.failure);
@@ -150,8 +154,8 @@ const silentState = (error: IntercomClientError | IntercomRefused): ListedSessio
 };
 
 const byName = (left: ListedSession, right: ListedSession): number =>
-  (left.name ?? "").localeCompare(right.name ?? "") ||
-  left.sessionId.localeCompare(right.sessionId);
+  Fn.pipe(left.name ?? "", Str.localeCompare(right.name ?? "")) ||
+  Fn.pipe(left.sessionId, Str.localeCompare(right.sessionId));
 
 /**
  * Every other live session, described live; one that refuses is unavailable, one that doesn't

@@ -1,4 +1,5 @@
 import { expect, layer } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -6,11 +7,13 @@ import type * as Duration from "effect/Duration";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
+import * as Fn from "effect/Function";
 import * as Logger from "effect/Logger";
 import * as Path from "effect/Path";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as Str from "effect/String";
 import * as Tracer from "effect/Tracer";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as TestClock from "effect/testing/TestClock";
@@ -60,8 +63,8 @@ import {
   type RawPeer,
 } from "./support/raw-peer.ts";
 
-const TOKEN = "a".repeat(64);
-const OTHER_TOKEN = "b".repeat(64);
+const TOKEN = Fn.pipe("a", Str.repeat(64));
+const OTHER_TOKEN = Fn.pipe("b", Str.repeat(64));
 
 const message: InboundMessage = {
   from: { sessionId: "sender-session", name: "sender", cwd: "/sender/project" },
@@ -152,7 +155,7 @@ const limits = (overrides: Partial<ConnectionLimits>): ConnectionLimits => ({
 const handshake = (peer: RawPeer, token = TOKEN) =>
   Effect.gen(function* () {
     const key = yield* handshakeKey(token);
-    const clientNonce = "c".repeat(64);
+    const clientNonce = Fn.pipe("c", Str.repeat(64));
     peer.request(0, "Hello", { nonce: clientNonce });
     const hello = decodeHelloAnswer(yield* peer.answer(0));
     const serverNonce = Option.isSome(hello) ? hello.value.exit.value.nonce : "";
@@ -191,7 +194,7 @@ const gatheringClock = (base: Clock.Clock, arrivals: number): Clock.Clock => {
 };
 
 /** Text JSON escapes to six bytes a code unit, the most it spends on one. */
-const escaped = (length: number) => "\u0001".repeat(length);
+const escaped = (length: number) => Fn.pipe("\u0001", Str.repeat(length));
 
 /** A listener at `socket` that takes connections and never answers them. */
 const hangingListener = (socket: string) =>
@@ -408,7 +411,7 @@ layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom transport"
       const first = yield* rawPeer(socket).pipe(Scope.provide(held));
       yield* rawPeer(socket).pipe(Scope.provide(held));
       // The listener has accepted both once the first one's handshake opens.
-      first.request(0, "Hello", { nonce: "c".repeat(64) });
+      first.request(0, "Hello", { nonce: Fn.pipe("c", Str.repeat(64)) });
       yield* first.answer(0);
 
       const extra = yield* rawPeer(socket);
@@ -439,7 +442,7 @@ layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom transport"
       const served = yield* Effect.forEach(
         peers,
         (peer) => {
-          peer.request(0, "Hello", { nonce: "c".repeat(64) });
+          peer.request(0, "Hello", { nonce: Fn.pipe("c", Str.repeat(64)) });
           return Effect.raceFirst(
             peer.answer(0).pipe(Effect.as(true)),
             peer.closed.pipe(Effect.as(false)),
@@ -448,7 +451,7 @@ layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom transport"
         { concurrency: "unbounded" },
       );
 
-      expect(served.filter(Boolean)).toHaveLength(2);
+      expect(Arr.filter(served, Boolean)).toHaveLength(2);
     }),
   );
 
@@ -485,9 +488,10 @@ layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom transport"
       const socket = yield* socketPath;
       yield* startServer(socket, fakeInbound());
 
-      const closed = yield* closedAfterWriting(socket, "x".repeat(MAX_FRAME_BYTES + 1)).pipe(
-        Effect.timeoutOrElse({ duration: "5 seconds", orElse: () => Effect.succeed(false) }),
-      );
+      const closed = yield* closedAfterWriting(
+        socket,
+        Fn.pipe("x", Str.repeat(MAX_FRAME_BYTES + 1)),
+      ).pipe(Effect.timeoutOrElse({ duration: "5 seconds", orElse: () => Effect.succeed(false) }));
 
       expect(closed).toBe(true);
       expect((yield* describeSession({ socket, token: TOKEN })).state).toBe("idle");
@@ -590,9 +594,11 @@ layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom transport"
 
       const results = yield* describeSessions(targets, "200 millis");
 
-      expect(results.map(({ target }) => target.label)).toEqual(targets.map(({ label }) => label));
+      expect(Arr.map(results, ({ target }) => target.label)).toEqual(
+        Arr.map(targets, ({ label }) => label),
+      );
       expect(
-        results.map(({ result }) =>
+        Arr.map(results, ({ result }) =>
           Result.isSuccess(result) ? result.success.state : result.failure,
         ),
       ).toMatchObject([
@@ -647,7 +653,7 @@ layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom transport"
 
       const telemetry = yield* Schema.encodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))({
         logs,
-        spans: spans.map((span) => ({
+        spans: Arr.map(spans, (span) => ({
           name: span.name,
           attributes: [...span.attributes],
           events: span.events,
@@ -712,7 +718,7 @@ layer(nodeFilePlatformLayer)("intercom connection deadlines and handshake state"
       const slow = yield* rawPeer(socket);
       const prompt = yield* rawPeer(socket);
       // Each answer shows its connection is served, so its deadline is running.
-      slow.request(0, "Hello", { nonce: "c".repeat(64) });
+      slow.request(0, "Hello", { nonce: Fn.pipe("c", Str.repeat(64)) });
       yield* slow.answer(0);
       const answer = decodeExitAnswer(yield* handshake(prompt));
       expect(Option.map(answer, ({ exit }) => exit._tag)).toEqual(Option.some("Success"));

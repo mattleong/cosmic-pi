@@ -1,6 +1,9 @@
 import { expect, layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
 import * as Result from "effect/Result";
+import * as Str from "effect/String";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { extensionContextFixture, recordingExtensionHost } from "pi-cosmic-core/testing";
 import { afterEach, vi } from "vitest";
@@ -37,7 +40,7 @@ layer(nodeFilePlatformLayer)("intercom application", (it) => {
       });
       expect(record?.instance).toMatch(/^[0-9a-f]{32}$/);
       expect(record?.token).toMatch(/^[0-9a-f]{64}$/);
-      expect(record?.socket.startsWith(h.agentDirectory)).toBe(true);
+      expect(record && Fn.pipe(record.socket, Str.startsWith(h.agentDirectory))).toBe(true);
 
       yield* h.shutdown();
       expect(yield* h.records).toEqual([]);
@@ -93,9 +96,18 @@ layer(nodeFilePlatformLayer)("intercom application", (it) => {
       const h = yield* harness({ longAgentDirectory: true });
       yield* h.start();
       const [record] = yield* h.records;
-      const directory = record?.socket.slice(0, record.socket.lastIndexOf("/")) ?? "";
+      const directory =
+        record === undefined
+          ? ""
+          : Fn.pipe(
+              record.socket,
+              Str.slice(
+                0,
+                Option.getOrElse(Fn.pipe(record.socket, Str.lastIndexOf("/")), () => -1),
+              ),
+            );
 
-      expect(directory.startsWith(`${h.fallbackRoot}/pi-intercom-`)).toBe(true);
+      expect(Fn.pipe(directory, Str.startsWith(`${h.fallbackRoot}/pi-intercom-`))).toBe(true);
       expect(Buffer.byteLength(record?.socket ?? "")).toBeLessThanOrEqual(100);
       expect(yield* h.fs.exists(directory)).toBe(true);
       if (record) expect((yield* describeSession(record)).sessionId).toBe("session-1");

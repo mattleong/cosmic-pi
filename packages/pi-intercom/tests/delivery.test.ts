@@ -1,7 +1,10 @@
 import type { ExtensionAPI, InputEvent } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import * as Result from "effect/Result";
+import * as Str from "effect/String";
 import { extensionContextFixture, recordingExtensionHost } from "pi-cosmic-core/testing";
 import { vi } from "vitest";
 import { frameMessage, INTERCOM_MESSAGE_TYPE, registerIntercomDelivery } from "../src/delivery.ts";
@@ -31,9 +34,9 @@ const harness = () => {
   });
   const ctx = extensionContextFixture({});
   const delivered = () =>
-    sendMessage.mock.calls.filter(([sent]) => sent.customType === INTERCOM_MESSAGE_TYPE);
+    Arr.filter(sendMessage.mock.calls, ([sent]) => sent.customType === INTERCOM_MESSAGE_TYPE);
   const wakes = () =>
-    sendMessage.mock.calls.filter(([sent]) => sent.customType !== INTERCOM_MESSAGE_TYPE);
+    Arr.filter(sendMessage.mock.calls, ([sent]) => sent.customType !== INTERCOM_MESSAGE_TYPE);
   return {
     delivery,
     ctx,
@@ -68,7 +71,7 @@ describe("intercom delivery", () => {
         details: { from: inbound.from, messageId: inbound.messageId },
       });
       // The frame names the sending session and how to reply to it.
-      expect(frameMessage(inbound).split("\n")[0]).toContain(
+      expect(Str.split(frameMessage(inbound), "\n")[0]).toContain(
         '"api work" (peer-session, /work/api)',
       );
       expect(frameMessage(inbound)).toContain('session_send to "peer-session"');
@@ -138,12 +141,12 @@ describe("intercom delivery", () => {
     Effect.sync(() => {
       const test = harness();
       const idle = Array.from({ length: 50 }, () => disposition(test.deliver(message("chatty"))));
-      expect(idle.every((outcome) => outcome === "woken")).toBe(true);
+      expect(Arr.every(idle, (outcome) => outcome === "woken")).toBe(true);
       test.setIdle(false);
       const busy = Array.from({ length: 50 }, (_, index) =>
-        disposition(test.deliver(message(`sender-${index}`, "x".repeat(16_000)))),
+        disposition(test.deliver(message(`sender-${index}`, Fn.pipe("x", Str.repeat(16_000))))),
       );
-      expect(busy.every((outcome) => outcome === "queued")).toBe(true);
+      expect(Arr.every(busy, (outcome) => outcome === "queued")).toBe(true);
       expect(test.delivered()).toHaveLength(100);
     }),
   );
@@ -176,7 +179,9 @@ describe("intercom delivery", () => {
         );
       }
       expect(test.wakes()).toHaveLength(5);
-      expect(test.delivered().every(([, options]) => options?.triggerTurn === false)).toBe(true);
+      expect(Arr.every(test.delivered(), ([, options]) => options?.triggerTurn === false)).toBe(
+        true,
+      );
     }),
   );
 });

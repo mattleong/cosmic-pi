@@ -1,6 +1,8 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { describe, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import {
   applyPresentationSettings,
   captureRegistrations,
@@ -188,7 +190,9 @@ describe.skipIf(!directory)("presentation gallery", () => {
             registerSessionTools(pi, { run: () => Promise.reject(new Error("not executed")) }),
           );
           for (const scenario of scenarios) {
-            const tool = tools.find(({ name }) => name === scenario.tool);
+            const tool = Option.getOrUndefined(
+              Arr.findFirst(tools, ({ name }) => name === scenario.tool),
+            );
             if (!tool) continue;
             lines.push(
               ...galleryFrames(tool, {

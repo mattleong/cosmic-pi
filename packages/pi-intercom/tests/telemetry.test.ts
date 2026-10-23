@@ -1,4 +1,5 @@
 import { expect, layer } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import type * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
@@ -66,7 +67,7 @@ layer(nodeFilePlatformLayer)("intercom telemetry", (it) => {
       expect(b.sendMessage).toHaveBeenCalledOnce();
       const telemetry = yield* Schema.encodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))({
         logs,
-        spans: spans.map((span) => ({
+        spans: Arr.map(spans, (span) => ({
           name: span.name,
           attributes: [...span.attributes],
           events: span.events,

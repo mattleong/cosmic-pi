@@ -1,8 +1,11 @@
+import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import type * as Scope from "effect/Scope";
 import { connect, createServer, type Socket } from "node:net";
 import type { InboundMessage } from "../../src/transport/protocol.ts";
@@ -36,7 +39,10 @@ const decodeRequest = Schema.decodeOption(Schema.fromJsonString(WireRequest));
 /** What a fooled client would believe each request achieved. */
 const forgedValue = (tag: string) =>
   Match.value(tag).pipe(
-    Match.when("Hello", () => ({ nonce: "1".repeat(64), proof: "2".repeat(64) })),
+    Match.when("Hello", () => ({
+      nonce: Fn.pipe("1", Str.repeat(64)),
+      proof: Fn.pipe("2", Str.repeat(64)),
+    })),
     Match.when("Deliver", () => ({ disposition: "woken" })),
     Match.when("Describe", () => ({ sessionId: "forged", cwd: "/forged", state: "idle" })),
     Match.orElse(() => null),
@@ -70,12 +76,12 @@ export const rawPeer = (socket: string): Effect.Effect<RawPeer, never, Scope.Sco
         const opened = connect(socket, () => resume(Effect.succeed(opened)));
         opened.on("data", (data) => {
           buffer += data.toString();
-          let newline = buffer.indexOf("\n");
-          while (newline !== -1) {
-            const line = decodeLine(buffer.slice(0, newline));
+          let newline = Fn.pipe(buffer, Str.indexOf("\n"));
+          while (Option.isSome(newline)) {
+            const line = decodeLine(Fn.pipe(buffer, Str.slice(0, newline.value)));
             if (Option.isSome(line)) lines.push(line.value);
-            buffer = buffer.slice(newline + 1);
-            newline = buffer.indexOf("\n");
+            buffer = Fn.pipe(buffer, Str.slice(newline.value + 1));
+            newline = Fn.pipe(buffer, Str.indexOf("\n"));
           }
           for (const wake of waiting) wake();
         });
@@ -87,13 +93,13 @@ export const rawPeer = (socket: string): Effect.Effect<RawPeer, never, Scope.Sco
     const answer = (id: number): Effect.Effect<unknown> =>
       Effect.callback<unknown>((resume) => {
         const check = () => {
-          const found = lines.find((line) => {
+          const found = Arr.findFirst(lines, (line) => {
             const exit = decodeExitAnswer(line);
             return Option.isSome(exit) && String(exit.value.requestId) === String(id);
           });
-          if (found === undefined) return;
+          if (Option.isNone(found)) return;
           waiting.delete(check);
-          resume(Effect.succeed(found));
+          resume(Effect.succeed(found.value));
         };
         waiting.add(check);
         check();
@@ -130,12 +136,12 @@ export const rogueListener = (
       peer.on("data", (data) => {
         received += data.toString();
         buffer += data.toString();
-        let newline = buffer.indexOf("\n");
-        while (newline !== -1) {
-          const request = decodeRequest(buffer.slice(0, newline));
+        let newline = Fn.pipe(buffer, Str.indexOf("\n"));
+        while (Option.isSome(newline)) {
+          const request = decodeRequest(Fn.pipe(buffer, Str.slice(0, newline.value)));
           if (Option.isSome(request)) peer.write(forged(request.value.id, request.value.tag));
-          buffer = buffer.slice(newline + 1);
-          newline = buffer.indexOf("\n");
+          buffer = Fn.pipe(buffer, Str.slice(newline.value + 1));
+          newline = Fn.pipe(buffer, Str.indexOf("\n"));
         }
       });
     });

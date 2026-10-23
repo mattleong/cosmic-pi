@@ -1,5 +1,6 @@
 import { createServer, type Socket } from "node:net";
 import { expect, layer } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -7,10 +8,14 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
+import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Order from "effect/Order";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as Str from "effect/String";
 import {
   AgentDirectory,
   currentProcessIdentity,
@@ -40,7 +45,8 @@ import {
   type IntercomInboundContract,
 } from "../src/transport/server.ts";
 
-const hex = (seed: string, bytes: number) => seed.repeat(bytes * 2).slice(0, bytes * 2);
+const hex = (seed: string, bytes: number) =>
+  Fn.pipe(seed, Str.repeat(bytes * 2), Str.slice(0, bytes * 2));
 
 /** A PID that belonged to a process which has since exited. */
 const exitedPid = runBoundedProcessNode({
@@ -67,7 +73,7 @@ const registryHarness = (options: { readonly longAgentDirectory?: boolean } = {}
     const paths = yield* Path.Path;
     const base = yield* shortTemporaryDirectory("intercom-test-");
     const agentDirectory = options.longAgentDirectory
-      ? paths.join(base, "a".repeat(80))
+      ? paths.join(base, Fn.pipe("a", Str.repeat(80)))
       : paths.join(base, "agent");
     const fallbackRoot = paths.join(base, "tmp");
     yield* fs.makeDirectory(fallbackRoot, { recursive: true });
@@ -297,13 +303,18 @@ layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom registry",
       );
       yield* h.fs.chmod(target, 0o600);
       yield* h.fs.symlink(target, h.recordPath(linked.instance));
-      yield* h.writeRaw(hex("5", 16), " ".repeat(64 * 1024));
+      yield* h.writeRaw(hex("5", 16), Fn.pipe(" ", Str.repeat(64 * 1024)));
       yield* h.fs.writeFileString(h.paths.join(h.sessions, "notes.txt"), "ignored");
 
       const listing = yield* h.registry.list();
 
       expect(listing.records).toEqual([valid]);
-      expect(listing.skipped.map(({ file, reason }) => `${file} ${reason}`).toSorted()).toEqual([
+      expect(
+        Arr.sort(
+          Arr.map(listing.skipped, ({ file, reason }) => `${file} ${reason}`),
+          Order.String,
+        ),
+      ).toEqual([
         `${hex("1", 16)}.json unsafe`,
         `${hex("2", 16)}.json unreadable`,
         `${hex("3", 16)}.json unsafe`,
@@ -346,9 +357,12 @@ layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom registry",
       const swept = yield* h.registry.sweep();
 
       expect(swept.records).toBe(2);
-      expect((yield* h.registry.list()).records.map(({ instance }) => instance).toSorted()).toEqual(
-        [live.instance, unknownStart.instance].toSorted(),
-      );
+      expect(
+        Arr.sort(
+          Arr.map((yield* h.registry.list()).records, ({ instance }) => instance),
+          Order.String,
+        ),
+      ).toEqual(Arr.sort([live.instance, unknownStart.instance], Order.String));
       expect(yield* h.fs.exists(exited.socket)).toBe(false);
       expect(yield* h.fs.exists(live.socket)).toBe(true);
       expect(yield* h.fs.exists(abandoned)).toBe(false);
@@ -396,11 +410,14 @@ layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom registry",
 
       expect(swept.records).toBe(2);
       const remaining = yield* h.fs.readDirectory(h.sessions);
-      expect(remaining.toSorted()).toEqual(
-        [
-          ...[liveOwner, oldLiveOwner, fresh, unsafe].map((instance) => `${instance}.json`),
-          liveTombstoneName,
-        ].toSorted(),
+      expect(Arr.sort(remaining, Order.String)).toEqual(
+        Arr.sort(
+          [
+            ...Arr.map([liveOwner, oldLiveOwner, fresh, unsafe], (instance) => `${instance}.json`),
+            liveTombstoneName,
+          ],
+          Order.String,
+        ),
       );
     }),
   );
@@ -450,9 +467,12 @@ layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom registry",
         .pipe(Effect.provideService(OwnerLiveness, () => Effect.succeed("dead")));
 
       expect(swept).toEqual({ records: 1, socketDirectories: 0 });
-      expect((yield* h.registry.list()).records.map(({ instance }) => instance).toSorted()).toEqual(
-        [answering.instance, refusing.instance].toSorted(),
-      );
+      expect(
+        Arr.sort(
+          Arr.map((yield* h.registry.list()).records, ({ instance }) => instance),
+          Order.String,
+        ),
+      ).toEqual(Arr.sort([answering.instance, refusing.instance], Order.String));
       expect(yield* h.fs.exists(ownerPath)).toBe(true);
     }),
   );
@@ -461,7 +481,7 @@ layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom registry",
     Effect.gen(function* () {
       const h = yield* registryHarness();
       yield* h.fs.makeDirectory(h.sockets, { recursive: true });
-      const records = ["1", "2", "3"].map((seed) => h.record(seed));
+      const records = Arr.map(["1", "2", "3"], (seed) => h.record(seed));
       const peers = new Set<Socket>();
       const connected = yield* Deferred.make<void>();
       for (const record of records) {
@@ -562,10 +582,14 @@ layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom registry",
       expect(yield* h.fs.readDirectory(target)).toEqual(["owner.json"]);
       expect(yield* h.fs.exists(unrelated)).toBe(true);
       const remaining = yield* h.fs.readDirectory(h.namespace);
-      const claimed = remaining.find((name) => name.startsWith(`${h.paths.basename(cluttered)}.`));
+      const claimed = Option.getOrUndefined(
+        Arr.findFirst(remaining, (name) =>
+          Fn.pipe(name, Str.startsWith(`${h.paths.basename(cluttered)}.`)),
+        ),
+      );
       expect(claimed).toBeDefined();
       expect(
-        (yield* h.fs.readDirectory(h.paths.join(h.namespace, claimed ?? ""))).toSorted(),
+        Arr.sort(yield* h.fs.readDirectory(h.paths.join(h.namespace, claimed ?? "")), Order.String),
       ).toEqual(["intercom.sock", "notes.txt", "owner.json"]);
     }),
   );

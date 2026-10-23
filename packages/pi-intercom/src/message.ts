@@ -1,8 +1,10 @@
 import type { ExtensionAPI, MessageRenderer } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
+import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import { captureCodePreviewPresentationPolicy, renderCompactRow } from "pi-code-previews";
 import { clipText, sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core";
 import { sessionSubject } from "./tools/summary.ts";
@@ -25,17 +27,23 @@ const isTextPart = Schema.is(TextPart);
 const contentText = (content: string | ReadonlyArray<unknown> | undefined): string =>
   Predicate.isString(content)
     ? content
-    : (content ?? [])
-        .filter(isTextPart)
-        .map((part) => part.text)
-        .join("\n");
+    : Arr.join(
+        Arr.map(Arr.filter(content ?? [], isTextPart), (part) => part.text),
+        "\n",
+      );
 
 /**
  * The first line of what the sender wrote: the frame's opening line names the sender and the
  * message starts on the next one.
  */
 const firstMessageLine = (text: string): string =>
-  clipText(text.split("\n").slice(1).map(sanitizeTerminalLine).find(Boolean) ?? "", MAX_LINE_CHARS);
+  clipText(
+    Option.getOrElse(
+      Arr.findFirst(Arr.map(Str.split(text, "\n").slice(1), sanitizeTerminalLine), Str.isNonEmpty),
+      () => "",
+    ),
+    MAX_LINE_CHARS,
+  );
 
 /**
  * Shows a message from another session: the sender and the message's first line collapsed, the

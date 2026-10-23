@@ -5,12 +5,15 @@ import type {
   SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import { expect } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import { extensionContextFixture, recordingExtensionHost } from "pi-cosmic-core/testing";
 import { vi } from "vitest";
 import { registerIntercomApplication } from "../../src/application.ts";
@@ -70,7 +73,7 @@ export const sharedAgentDirectory = (options: { readonly long?: boolean } = {}) 
     const paths = yield* Path.Path;
     // Short enough for a socket path under the agent directory unless asked otherwise.
     const base = yield* fs.makeTempDirectoryScoped({ directory: "/tmp", prefix: "intercom-app-" });
-    const agentDirectory = paths.join(base, options.long ? "a".repeat(80) : "agent");
+    const agentDirectory = paths.join(base, options.long ? Fn.pipe("a", Str.repeat(80)) : "agent");
     const fallbackRoot = paths.join(base, "tmp");
     yield* fs.makeDirectory(fallbackRoot, { recursive: true });
     return { base, agentDirectory, fallbackRoot } satisfies SharedAgentDirectory;
@@ -129,7 +132,7 @@ export const harness = (options: HarnessOptions = {}) =>
         .readDirectory(sessions)
         .pipe(Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed([])));
       return yield* Effect.forEach(
-        files.filter((file) => file.endsWith(".json")),
+        Arr.filter(files, (file) => Fn.pipe(file, Str.endsWith(".json"))),
         (file) =>
           Effect.flatMap(fs.readFileString(paths.join(sessions, file)), (source) =>
             Schema.decodeEffect(SessionRecordFromJson)(source),
