@@ -8,7 +8,6 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
-import * as Predicate from "effect/Predicate";
 import {
   expandedArguments,
   expandedSection,
@@ -18,7 +17,7 @@ import {
 } from "pi-code-previews";
 import { stripTerminalControls, toPiToolOutputSchema } from "pi-cosmic-core";
 import { renderToolHeader, toolRunningLine } from "pi-cosmic-ui/tool";
-import type { IntercomRegistry } from "../registry/store.ts";
+import type { IntercomRegistry, IntercomRegistryError } from "../registry/store.ts";
 import type { IntercomSession } from "../session/service.ts";
 import { MAX_MESSAGE_CHARS } from "../transport/protocol.ts";
 import {
@@ -82,20 +81,21 @@ const refusedResult = (
 };
 
 /** Runs a send or read; a refusal becomes an error result that explains it to the model. */
-const settle = <A extends SessionToolDetails, E>(
+const settle = <A extends SessionToolDetails>(
   runner: SessionToolRunner,
   signal: AbortSignal | undefined,
-  effect: Effect.Effect<A, SessionToolRefusal | E, IntercomSession | IntercomRegistry>,
+  effect: Effect.Effect<
+    A,
+    SessionToolRefusal | IntercomRegistryError,
+    IntercomSession | IntercomRegistry
+  >,
   present: (details: A) => AgentToolResult<SessionToolDetails>,
   refuse: (refusal: SessionToolRefusal) => AgentToolResult<SessionToolDetails>,
 ): Promise<AgentToolResult<SessionToolDetails>> =>
   runner.run(
     effect.pipe(
       Effect.map(present),
-      Effect.catchIf(
-        (error): error is SessionToolRefusal => Predicate.isTagged(error, "SessionToolRefusal"),
-        (refusal) => Effect.succeed(refuse(refusal)),
-      ),
+      Effect.catchTag("SessionToolRefusal", (refusal) => Effect.succeed(refuse(refusal))),
     ),
     signal,
   );
