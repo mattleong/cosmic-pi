@@ -1,5 +1,7 @@
+import * as Arr from "effect/Array";
 import { flow } from "effect/Function";
 import * as Predicate from "effect/Predicate";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { countLabel, decodeUnknownOrUndefined, stripTerminalControls } from "pi-cosmic-core";
 import { MAX_RETAINED_REQUESTS } from "../questionnaire/async-model.ts";
@@ -103,8 +105,10 @@ export const titlesByKey = flow(
   decodeCallQuestions,
   (decoded): ReadonlyMap<string, string> =>
     new Map(
-      (decoded?.questions ?? []).flatMap((question) =>
-        question.key === undefined ? [] : [[question.key, question.title] as const],
+      Arr.filterMap(decoded?.questions ?? [], (question) =>
+        question.key === undefined
+          ? Result.failVoid
+          : Result.succeed([question.key, question.title] as const),
       ),
     ),
 );
@@ -131,12 +135,10 @@ const replayContent = decodeUnknownOrUndefined(
 );
 
 const partsText = (decoded: ReadonlyArray<unknown> | undefined): string =>
-  (decoded ?? [])
-    .flatMap((part) => {
-      const text = textPart(part);
-      return text ? [stripTerminalControls(text.text)] : [];
-    })
-    .join("\n");
+  Arr.filterMap(decoded ?? [], (part) => {
+    const text = textPart(part);
+    return text ? Result.succeed(stripTerminalControls(text.text)) : Result.failVoid;
+  }).join("\n");
 
 export const fallbackText = flow(parts, partsText);
 
@@ -196,9 +198,9 @@ export const stateWords = (state: QuestionnaireState): readonly string[] => [
 
 export function stateCounts(states: readonly QuestionnaireState[]): readonly string[] {
   if (states.length === 0) return ["none retained", "none"];
-  const counted = STATE_ORDER.flatMap((state) => {
+  const counted = Arr.filterMap(STATE_ORDER, (state) => {
     const count = states.filter((entry) => entry === state).length;
-    return count === 0 ? [] : [[count, STATE_WORDS[state]] as const];
+    return count === 0 ? Result.failVoid : Result.succeed([count, STATE_WORDS[state]] as const);
   });
   const wording = (short: 0 | 1) =>
     counted.map(([count, words]) => `${count} ${words[short]}`).join(", ");

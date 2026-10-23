@@ -103,103 +103,103 @@ export const acquireAsyncQuestionnaires = Effect.fn("AskUserService.acquireAsync
       return next ? { ...entry, snapshot: { ...entry.snapshot, ...next } } : entry;
     });
 
-  const deliver = (id: string): Effect.Effect<void> =>
-    Effect.gen(function* () {
-      if (!delivery || (yield* Ref.get(closed))) return;
-      const claimed = yield* Ref.modify(state, (entries) => {
-        const entry = entries.find((item) => item.snapshot.requestId === id);
-        if (
-          !entry ||
-          entry.waiter ||
-          entry.snapshot.status === "pending" ||
-          entry.snapshot.delivery !== "pending"
-        )
-          return [undefined, entries] as const;
-        const next: Entry = {
-          ...entry,
-          snapshot: { ...entry.snapshot, delivery: "sending" },
-          deliveryAttempts: entry.deliveryAttempts + 1,
-        };
-        return [next, entries.map((item) => (item === entry ? next : item))] as const;
-      });
-      if (!claimed) return;
-      const result = yield* Effect.exit(delivery(claimed.snapshot));
-      yield* patch(id, () => ({ delivery: Exit.isSuccess(result) ? "sent" : "failed" }));
-      if (Exit.isFailure(result) && claimed.deliveryAttempts < 3 && !(yield* Ref.get(closed))) {
-        yield* Effect.forkIn(
-          Effect.sleep("1 second").pipe(
-            Effect.andThen(
-              patch(id, (entry) =>
-                entry.snapshot.delivery === "failed" && !entry.waiter
-                  ? { delivery: "pending" }
-                  : undefined,
-              ),
-            ),
-            Effect.andThen(deliver(id)),
-          ),
-          scope,
-        );
-      }
+  const deliver = Effect.fn("AskUserService.deliverAsync")(function* (
+    id: string,
+  ): Effect.fn.Return<void> {
+    if (!delivery || (yield* Ref.get(closed))) return;
+    const claimed = yield* Ref.modify(state, (entries) => {
+      const entry = entries.find((item) => item.snapshot.requestId === id);
+      if (
+        !entry ||
+        entry.waiter ||
+        entry.snapshot.status === "pending" ||
+        entry.snapshot.delivery !== "pending"
+      )
+        return [undefined, entries] as const;
+      const next: Entry = {
+        ...entry,
+        snapshot: { ...entry.snapshot, delivery: "sending" },
+        deliveryAttempts: entry.deliveryAttempts + 1,
+      };
+      return [next, entries.map((item) => (item === entry ? next : item))] as const;
     });
+    if (!claimed) return;
+    const result = yield* Effect.exit(delivery(claimed.snapshot));
+    yield* patch(id, () => ({ delivery: Exit.isSuccess(result) ? "sent" : "failed" }));
+    if (Exit.isFailure(result) && claimed.deliveryAttempts < 3 && !(yield* Ref.get(closed))) {
+      yield* Effect.forkIn(
+        Effect.sleep("1 second").pipe(
+          Effect.andThen(
+            patch(id, (entry) =>
+              entry.snapshot.delivery === "failed" && !entry.waiter
+                ? { delivery: "pending" }
+                : undefined,
+            ),
+          ),
+          Effect.andThen(deliver(id)),
+        ),
+        scope,
+      );
+    }
+  });
 
-  const present = (
+  const present = Effect.fn("AskUserService.presentAsync")(function* (
     entry: Entry,
     request: AskUserRequest,
     ticket: QuestionnaireTicket,
-  ): Effect.Effect<void> =>
-    Effect.gen(function* () {
-      const id = entry.snapshot.requestId;
-      const show = Effect.gen(function* () {
-        yield* patch(id, () => ({ presentation: "opening" }));
-        yield* activity.presenting(id);
-        const visibility = yield* Queue.unbounded<"open" | "hidden">();
-        yield* Effect.forkChild(
-          Queue.take(visibility).pipe(
-            Effect.flatMap((presentation) =>
-              patch(id, (current) =>
-                current.snapshot.status === "pending" ? { presentation } : undefined,
-              ),
+  ): Effect.fn.Return<void> {
+    const id = entry.snapshot.requestId;
+    const show = Effect.gen(function* () {
+      yield* patch(id, () => ({ presentation: "opening" }));
+      yield* activity.presenting(id);
+      const visibility = yield* Queue.unbounded<"open" | "hidden">();
+      yield* Effect.forkChild(
+        Queue.take(visibility).pipe(
+          Effect.flatMap((presentation) =>
+            patch(id, (current) =>
+              current.snapshot.status === "pending" ? { presentation } : undefined,
             ),
-            Effect.forever,
           ),
-        );
-        return yield* host(request, { opened: entry.opened, visibility }, !ticket.immediate);
-      });
-      const result = yield* Effect.exit(
-        Effect.raceFirst(
-          ticket.run(show),
-          Deferred.await(entry.cancel).pipe(
-            Effect.as({ outcome: "cancelled", answers: [] } as const),
-          ),
-        ).pipe(Effect.ensuring(ticket.close)),
-      );
-      const outcome = Exit.isSuccess(result) ? result.value : undefined;
-      yield* patch(id, () =>
-        outcome
-          ? { status: outcome.outcome, presentation: "settled", delivery: "pending", outcome }
-          : { status: "failed", presentation: "settled", delivery: "none" },
-      );
-      yield* activity.settled(id, outcome?.outcome ?? "failed");
-      const failure = Exit.isFailure(result) ? Cause.findErrorOption(result.cause) : Option.none();
-      yield* Deferred.fail(
-        entry.opened,
-        Option.getOrElse(
-          failure,
-          () =>
-            new AskUserHostError({
-              operation: "open",
-              message: "The questionnaire closed before its overlay opened.",
-            }),
+          Effect.forever,
         ),
       );
-      // Queue closure can release this presenter before the shutdown finalizer reaches its entry;
-      // its waiters still observe the same closed error.
-      const closedError = Option.getOrUndefined(failure);
-      yield* Predicate.isTagged(closedError, "AskUserRuntimeClosedError")
-        ? Deferred.fail(entry.completed, closedError)
-        : Deferred.succeed(entry.completed, undefined);
-      yield* deliver(id);
+      return yield* host(request, { opened: entry.opened, visibility }, !ticket.immediate);
     });
+    const result = yield* Effect.exit(
+      Effect.raceFirst(
+        ticket.run(show),
+        Deferred.await(entry.cancel).pipe(
+          Effect.as({ outcome: "cancelled", answers: [] } as const),
+        ),
+      ).pipe(Effect.ensuring(ticket.close)),
+    );
+    const outcome = Exit.isSuccess(result) ? result.value : undefined;
+    yield* patch(id, () =>
+      outcome
+        ? { status: outcome.outcome, presentation: "settled", delivery: "pending", outcome }
+        : { status: "failed", presentation: "settled", delivery: "none" },
+    );
+    yield* activity.settled(id, outcome?.outcome ?? "failed");
+    const failure = Exit.isFailure(result) ? Cause.findErrorOption(result.cause) : Option.none();
+    yield* Deferred.fail(
+      entry.opened,
+      Option.getOrElse(
+        failure,
+        () =>
+          new AskUserHostError({
+            operation: "open",
+            message: "The questionnaire closed before its overlay opened.",
+          }),
+      ),
+    );
+    // Queue closure can release this presenter before the shutdown finalizer reaches its entry;
+    // its waiters still observe the same closed error.
+    const closedError = Option.getOrUndefined(failure);
+    yield* Predicate.isTagged(closedError, "AskUserRuntimeClosedError")
+      ? Deferred.fail(entry.completed, closedError)
+      : Deferred.succeed(entry.completed, undefined);
+    yield* deliver(id);
+  });
 
   const start = Effect.fn("AskUserService.startAsync")(function* (request: AskUserAsyncRequest) {
     const normalized = normalizeAskUserRequest(request);

@@ -4,6 +4,9 @@ import type {
   CompactSummary,
   CompactSummaryProvider,
 } from "pi-code-previews";
+import * as Arr from "effect/Array";
+import * as Predicate from "effect/Predicate";
+import * as Result from "effect/Result";
 import { countLabel, stripTerminalControls } from "pi-cosmic-core";
 import {
   callTitles,
@@ -171,14 +174,14 @@ function rowsSummary(args: QuestionnaireArgs, rows: readonly ClassifiedRow[]): C
   const issues = [
     questionnaireFailed(states.filter((state) => state === "failed").length, list),
     deliveryFailed(
-      rows.flatMap((row) =>
+      Arr.filterMap(rows, (row) =>
         row.delivery === "failed" && (row.state === "answered" || row.state === "cancelled")
-          ? [row.state]
-          : [],
+          ? Result.succeed(row.state)
+          : Result.failVoid,
       ),
     ),
     answersPending(states, list),
-  ].filter((issue): issue is CompactIssue => issue !== undefined);
+  ].filter(Predicate.isNotUndefined);
   const outcome: CompactOutcome = states.includes("failed")
     ? "error"
     : states.length > 0 && states.every((state) => state === "cancelled")

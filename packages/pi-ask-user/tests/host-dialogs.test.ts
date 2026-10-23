@@ -4,6 +4,7 @@ import { deferredPromise, extensionContextFixture } from "pi-cosmic-core/testing
 import { eventually, makeTuiHost } from "./support/host.ts";
 import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { describe, expect, it, vi } from "vitest";
 import { issueMessageStyleProblems } from "pi-code-previews/testing";
 import { failureMessage } from "pi-cosmic-core";
@@ -12,6 +13,8 @@ import { AskUserHostError } from "../src/questionnaire/errors.ts";
 import { createAskUserDialogBridge, type AskUserDialogBridge } from "../src/boundary/host-ui.ts";
 import type { AskUserAnswer } from "../src/questionnaire/model.ts";
 import type { AskUserRequest } from "../src/questionnaire/schema.ts";
+
+const isHostError = Schema.is(AskUserHostError);
 
 const request = {
   questions: [
@@ -140,7 +143,7 @@ describe("RPC questionnaire boundary", () => {
     rpc({ select: vi.fn(() => Promise.reject(new Error("secret host failure"))) }).then(
       () => expect.unreachable(),
       (cause: unknown) => {
-        if (!(cause instanceof AskUserHostError)) throw cause;
+        if (!isHostError(cause)) throw cause;
         expect(cause.operation).toBe("open");
         expect(cause.message).not.toContain("secret");
         expect(issueMessageStyleProblems(failureMessage(cause.message, ""))).toEqual([]);

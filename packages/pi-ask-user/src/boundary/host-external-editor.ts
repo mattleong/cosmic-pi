@@ -21,7 +21,10 @@ const inheritedTerminalOptions = {
   forceKillAfter: 1_000,
 } satisfies ChildProcess.CommandOptions;
 
-class ExternalEditorError extends Schema.TaggedError<ExternalEditorError>()("ExternalEditorError", {
+class ExternalEditorError extends Schema.TaggedError<
+  ExternalEditorError,
+  { readonly brand: unique symbol }
+>()("ExternalEditorError", {
   message: Schema.String,
 }) {}
 

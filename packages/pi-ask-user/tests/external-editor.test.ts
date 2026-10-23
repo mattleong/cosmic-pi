@@ -11,7 +11,7 @@ import { tuiFixture } from "pi-cosmic-core/testing";
 import * as Predicate from "effect/Predicate";
 
 const decodeHangingEditorState = Schema.decodeUnknownSync(
-  Schema.fromJsonString(Schema.Struct({ pid: Schema.Number, target: Schema.String })),
+  Schema.fromJsonString(Schema.Struct({ pid: Schema.Int, target: Schema.String })),
 );
 
 const editorScript = (source: string, name = "editor.mjs") =>

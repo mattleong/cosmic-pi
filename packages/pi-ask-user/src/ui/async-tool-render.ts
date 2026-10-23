@@ -8,6 +8,8 @@ import type {
 import type { Component } from "@earendil-works/pi-tui";
 import { Text } from "@earendil-works/pi-tui";
 import { planCompactPresentation, renderCompactIssues, renderCompactRow } from "pi-code-previews";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { countLabel, decodeUnknownOrUndefined } from "pi-cosmic-core";
 import { composeToolComponent, renderToolHeader, toolRunningLine } from "pi-cosmic-ui/tool";
@@ -109,10 +111,7 @@ export function renderAsyncResult(
   const result = envelope(input);
   const decoded = decodeExpandedAsyncRows(result?.details);
   const rows = decoded ?? [];
-  const states = rows.flatMap((row) => {
-    const state = questionnaireState(row);
-    return state ? [state] : [];
-  });
+  const states = Arr.getSomes(rows.map((row) => Option.fromNullishOr(questionnaireState(row))));
   const list = rows.length !== 1 || isStatusList(context.args);
   if (options.expanded) {
     const content = renderAsyncContent(input, options, theme, context);

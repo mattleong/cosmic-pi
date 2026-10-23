@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Result from "effect/Result";
 import type {
   AskUserAnswer,
   AskUserAnswerDraft,
@@ -119,13 +122,9 @@ export function finalizeAskUserAnswer(
   if (question.mode === "text") throw new Error("Text questions cannot have choice answers.");
 
   const choicesByValue = new Map(question.choices.map((choice) => [choice.value, choice]));
-  const seen = new Set<string>();
-  const selected = draft.values.flatMap((value) => {
-    if (seen.has(value)) return [];
-    seen.add(value);
-    const choice = choicesByValue.get(value);
-    return choice ? [choice] : [];
-  });
+  const selected = Arr.getSomes(
+    Arr.dedupe(draft.values).map((value) => Option.fromNullishOr(choicesByValue.get(value))),
+  );
   const answer: AskUserAnswer = {
     key: question.key,
     kind: "choices",
@@ -137,11 +136,13 @@ export function finalizeAskUserAnswer(
 
 export function submitQuestionnaire(state: QuestionnaireState): AskUserOutcome | undefined {
   if (!isQuestionnaireComplete(state)) return undefined;
-  const answers = state.drafts.flatMap((draft, index) => {
+  const answers = Arr.filterMap(state.drafts, (draft, index) => {
     const answer = draft.answer;
     const question = state.request.questions[index];
-    if (!answer || !question) return [];
-    return [finalizeAskUserAnswer(question, draft.note ? { ...answer, note: draft.note } : answer)];
+    if (!answer || !question) return Result.failVoid;
+    return Result.succeed(
+      finalizeAskUserAnswer(question, draft.note ? { ...answer, note: draft.note } : answer),
+    );
   });
   return { outcome: "submitted", answers };
 }

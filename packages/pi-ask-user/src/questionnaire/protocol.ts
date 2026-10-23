@@ -17,7 +17,7 @@ export type QuestionnaireEvents = Pick<ExtensionAPI["events"], "on" | "emit">;
 const text = (max: number) => Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(max));
 export const QuestionnaireOwnerSchema = Schema.Struct({
   runId: text(256),
-  assignmentEpoch: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
+  assignmentEpoch: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   requestId: text(256),
 });
 export type QuestionnaireOwner = typeof QuestionnaireOwnerSchema.Type;
@@ -164,7 +164,7 @@ const captureOutcome = (root: typeof RawOutcome.Type): AskUserOutcome | undefine
   for (const item of answers) {
     const answer = decodeRawAnswer(item);
     if (!answer) return undefined;
-    if (answer.kind === "text" && Schema.is(Schema.String)(answer.text)) {
+    if (answer.kind === "text" && Predicate.isString(answer.text)) {
       const checked = validateQuestionnaireInput(answer.text, "text");
       if (checked.error !== undefined) return undefined;
       captured.push(Object.assign({}, answer, { text: checked.value }));
