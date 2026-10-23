@@ -284,7 +284,7 @@ export class TaskManagerComponent implements Component {
       active ? `f ${this.follow ? "Unfollow" : "Follow"}` : undefined,
       active ? "x Stop" : undefined,
       tasks.some((task) => !isActiveTaskState(task.state)) ? "c Clear finished" : undefined,
-    ].filter((item): item is string => item !== undefined);
+    ].filter(Predicate.isNotUndefined);
   }
 
   private helpText(

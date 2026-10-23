@@ -4,6 +4,7 @@ import {
   truncateHead,
   truncateLine,
 } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
@@ -81,9 +82,6 @@ const FIELD_ACTIONS = {
 
 const UNKNOWN_ACTION = "Unknown background task action.";
 
-const isBackgroundTaskAction = (action: string): action is BackgroundTaskAction =>
-  BACKGROUND_TASK_ACTIONS.some((known) => known === action);
-
 const fieldList = (fields: ReadonlyArray<string>): string =>
   fields.length < 3
     ? fields.join(" or ")
@@ -104,7 +102,7 @@ const validateFields = (
   input: BackgroundTaskToolInput,
 ): Effect.Effect<void, InvalidBackgroundCommandError> => {
   const { action } = input;
-  if (!isBackgroundTaskAction(action)) return invalidCommand(UNKNOWN_ACTION);
+  if (!Arr.contains(BACKGROUND_TASK_ACTIONS, action)) return invalidCommand(UNKNOWN_ACTION);
   const rejected = Record.keys(FIELD_ACTIONS).filter(
     (field) =>
       !isPlaceholder(input[field]) && !FIELD_ACTIONS[field].some((accepted) => accepted === action),

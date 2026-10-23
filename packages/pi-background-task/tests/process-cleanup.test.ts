@@ -43,9 +43,9 @@ describe("real process cleanup", () => {
       // loaded CI runners.
       const host = yield* spawnIpcChild(hostScript, [], { timeout: "40 seconds" });
       yield* host.wait("ready");
-      const announced = host.messages.find(
-        (message): message is string => Predicate.isString(message) && message.startsWith("group:"),
-      );
+      const announced = host.messages
+        .filter(Predicate.isString)
+        .find((message) => message.startsWith("group:"));
       const pid = Number(announced?.slice("group:".length));
       expect(Number.isSafeInteger(pid) && pid > 0).toBe(true);
       yield* killGroupsAfterward([pid]);
