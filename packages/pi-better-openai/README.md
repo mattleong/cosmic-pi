@@ -32,13 +32,13 @@ All commands live under `/openai`. Type `/openai ` to autocomplete them.
 | `/openai image <prompt>` | Generate an image                            |
 | `/openai settings`       | Open settings; `help` and `status` also work |
 
-Agents call `openai_image` with a `prompt` and optional parameters:
+Agents call `openai_image` with a `prompt` and optional parameters. Null or blank optional values, including blank `images` entries, count as absent:
 
 - `action`: `auto`, `generate`, or `edit`.
 - `images`: up to five project-local PNG, JPEG, WebP, or GIF files to edit or reference.
 - `imageModel`: `gpt-image-2.5-sunburst` (default) or the faster `gpt-image-2.5-flare`.
 - `model`: the Codex model that drives the request, not the image model.
-- `outputFormat`: `png`, `jpeg`, or `webp`.
+- `outputFormat`: `png`, `jpeg`, or `webp`. If Codex returns another of these formats, the image is kept in that format, and the result notes the difference.
 - `save`: `project` (`.pi/generated-images/`), `global` (the agent directory), `custom` (with `saveDir` or `PI_IMAGE_SAVE_DIR`), or `none`.
 
 ### Native codemode
@@ -46,7 +46,7 @@ Agents call `openai_image` with a `prompt` and optional parameters:
 `await tools.openai_image(...)` returns a structured version-1 result, not text to parse:
 
 - Envelope: `contract: "pi-better-openai/image"`, `version: 1`, `tool: "openai_image"`.
-- Metadata: `id`, `status`, verbatim `prompt`, `model`, `action`, `outputFormat`, and optional `revisedPrompt`, `savedPath`, `imageModel`.
+- Metadata: `id`, `status`, verbatim `prompt`, `model`, `action`, the returned `outputFormat`, and optional `revisedPrompt`, `savedPath`, `imageModel`, `note`.
 - Required `image: { type: "image", data, mimeType }`, with the existing base64 bytes. There is no root-level `data`.
 
 Show the image with `image(result.image)`; print only selected metadata. Never send the full result or base64 to `text()`, `console`, `return`, or `store()`. Keep the user's prompt verbatim.

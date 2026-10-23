@@ -19,6 +19,7 @@ const ImageToolResultSchema = Schema.Struct({
   imageModel: Schema.optional(Schema.String),
   action: Schema.Literals(IMAGE_ACTIONS),
   outputFormat: ImageOutputFormatSchema,
+  note: Schema.optional(Schema.String),
   image: Schema.Struct({
     type: Schema.Literal("image"),
     data: Schema.String,
@@ -49,6 +50,7 @@ const structuredImageResult = (result: CodexImageResult): Schema.Json | undefine
     ...(result.imageModel !== undefined && { imageModel: result.imageModel }),
     action: result.action,
     outputFormat: result.outputFormat,
+    ...(result.note !== undefined && { note: result.note }),
     image: { type: "image", data: result.data, mimeType: result.mimeType },
   });
   return Exit.isSuccess(encoded) ? encoded.value : undefined;

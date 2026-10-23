@@ -1,9 +1,15 @@
+import { flow } from "effect/Function";
+import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import type { JsonObject, JsonValue } from "pi-cosmic-core";
+import { toolArgumentPreparer } from "pi-cosmic-core/tool-arguments";
+import type { Static } from "typebox";
+import { Check } from "typebox/value";
 import {
   IMAGE_OUTPUT_FORMATS,
   IMAGE_SAVE_MODES,
   ImageOutputFormatSchema,
-  ImageSaveModeSchema,
   type ImageOutputFormat,
 } from "../config/schema.ts";
 
@@ -19,7 +25,7 @@ export type ImageAction = (typeof IMAGE_ACTIONS)[number];
 const PROMPT_MAX_LENGTH = 32_768;
 const PATH_MAX_LENGTH = 4_096;
 const MODEL_MAX_LENGTH = 256;
-// Nonblank text is checked by ToolParamsSchema: providers such as llama.cpp reject `pattern`.
+// Nonblank text is checked by argument preparation: providers such as llama.cpp reject `pattern`.
 const boundedJsonString = (maximum: number) => ({
   type: "string" as const,
   minLength: 1,
@@ -57,21 +63,34 @@ export const TOOL_PARAMS = {
   required: ["prompt"],
   additionalProperties: false,
 } as const;
-const boundedString = (maximum: number) =>
-  Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(maximum), Schema.isPattern(/\S/));
-export const ToolParamsSchema = Schema.Struct({
-  prompt: boundedString(PROMPT_MAX_LENGTH),
-  action: Schema.optional(Schema.Literals(IMAGE_ACTIONS)),
-  images: Schema.optional(
-    Schema.Array(boundedString(PATH_MAX_LENGTH)).check(Schema.isMaxLength(MAX_IMAGE_INPUTS)),
+export type ToolParams = Static<typeof TOOL_PARAMS>;
+
+const decodeArgumentsObject = Schema.decodeUnknownOption(
+  Schema.Record(Schema.String, Schema.MutableJson),
+);
+const isBlankEntry = (entry: JsonValue) =>
+  entry === null || (Predicate.isString(entry) && entry.trim().length === 0);
+
+// Blank entries in `images` name no file, so they are dropped like blank optional fields.
+const withoutBlankImages = ({ images, ...rest }: JsonObject): JsonObject => {
+  if (!Array.isArray(images)) return images === undefined ? rest : { ...rest, images };
+  const named = images.filter((entry) => !isBlankEntry(entry));
+  return named.length > 0 ? { ...rest, images: named } : rest;
+};
+
+/**
+ * Pi `prepareArguments` hook for openai_image: drops null and blank optional fields and blank
+ * image paths, then validates with errors that name the offending field.
+ */
+export const prepareImageArguments = flow(
+  decodeArgumentsObject,
+  Option.map(withoutBlankImages),
+  // Anything but a JSON object is left for the preparer to reject.
+  Option.getOrUndefined,
+  toolArgumentPreparer("openai_image", TOOL_PARAMS, (value): value is ToolParams =>
+    Check(TOOL_PARAMS, value),
   ),
-  model: Schema.optional(boundedString(MODEL_MAX_LENGTH)),
-  imageModel: Schema.optional(ImageModelSchema),
-  outputFormat: Schema.optional(ImageOutputFormatSchema),
-  save: Schema.optional(ImageSaveModeSchema),
-  saveDir: Schema.optional(boundedString(PATH_MAX_LENGTH)),
-});
-export type ToolParams = typeof ToolParamsSchema.Type;
+);
 export type ImageInput = {
   readonly data: string;
   readonly mimeType: string;
@@ -88,6 +107,8 @@ export type CodexImageResult = {
   imageModel?: string;
   action: ImageAction;
   outputFormat: ImageOutputFormat;
+  /** Why the result differs from the request, such as a different returned format. */
+  note?: string;
 };
 export const CodexImageDetailsSchema = Schema.Struct({
   id: Schema.String,
@@ -100,6 +121,7 @@ export const CodexImageDetailsSchema = Schema.Struct({
   imageModel: Schema.optional(Schema.String),
   action: Schema.Literals(IMAGE_ACTIONS),
   outputFormat: ImageOutputFormatSchema,
+  note: Schema.optional(Schema.String),
 });
 export type CodexImageDetails = typeof CodexImageDetailsSchema.Type;
 

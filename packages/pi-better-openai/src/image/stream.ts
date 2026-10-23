@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Match from "effect/Match";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Random from "effect/Random";
 import * as Schema from "effect/Schema";
@@ -11,6 +12,65 @@ import { fail, type ExtractedImageResult, type OpenAIImageError } from "./types.
 
 const MAX_IMAGE_RESPONSE_BYTES = 100 * 1024 * 1024;
 const MAX_SSE_EVENT_CHARS = 80 * 1024 * 1024;
+const MAX_ERROR_BODY_BYTES = 16 * 1024;
+
+const ProviderMessageSchema = Schema.Union([
+  Schema.String,
+  Schema.Struct({ message: Schema.String }),
+]);
+const decodeErrorBody = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Union([
+      Schema.Struct({ error: ProviderMessageSchema }),
+      Schema.Struct({ detail: ProviderMessageSchema }),
+      Schema.Struct({ message: Schema.String }),
+    ]),
+  ),
+);
+const messageText = (message: typeof ProviderMessageSchema.Type) =>
+  Predicate.isString(message) ? message : message.message;
+const errorBodyReason = (text: string) =>
+  Option.getOrUndefined(
+    Option.map(decodeErrorBody(text), (body) => {
+      if ("error" in body) return messageText(body.error);
+      return "detail" in body ? messageText(body.detail) : body.message;
+    }),
+  )?.trim();
+
+const leadingBytes = (body: Stream.Stream<Uint8Array, StreamingHttpError>, limit: number) => {
+  let remaining = limit;
+  return body.pipe(
+    Stream.takeWhile(() => remaining > 0),
+    Stream.map((chunk) => {
+      const slice = chunk.subarray(0, remaining);
+      remaining -= slice.byteLength;
+      return slice;
+    }),
+  );
+};
+
+/**
+ * Failure for a non-2xx reply. Only a bounded prefix of the body is read, and only the provider's
+ * JSON error message is reported, sanitized like mid-stream provider errors.
+ */
+export const httpFailure = Effect.fn("OpenAIImage.httpFailure")(function* (
+  status: number,
+  body: Stream.Stream<Uint8Array, StreamingHttpError>,
+) {
+  const text = yield* leadingBytes(body, MAX_ERROR_BODY_BYTES).pipe(
+    Stream.decodeText,
+    Stream.mkString,
+    Effect.timeout("1 second"),
+    Effect.orElseSucceed(() => ""),
+  );
+  const reason = errorBodyReason(text);
+  return yield* fail(
+    "request",
+    reason
+      ? `Codex image request failed (${status}): ${sanitizeDiagnosticError(reason)}`
+      : `Codex image request failed (${status}).`,
+  );
+});
 
 export const parseImageSse = Effect.fn("OpenAIImage.parseSse")(function* (
   body: Stream.Stream<Uint8Array, StreamingHttpError>,

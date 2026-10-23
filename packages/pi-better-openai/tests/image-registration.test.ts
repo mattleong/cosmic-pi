@@ -81,6 +81,28 @@ describe("image tool parameters", () => {
   it("declares only provider-portable schema keywords", () => {
     expect(toolSchemaPortabilityProblems(fixture().tool().parameters)).toEqual([]);
   });
+
+  it("treats null and blank optional arguments as absent and names invalid fields", () => {
+    const prepare = fixture().tool().prepareArguments;
+    expect(
+      prepare?.({
+        prompt: "draw a comet",
+        model: "",
+        saveDir: null,
+        save: " ",
+        images: [null, " ", "comet.png"],
+      }),
+    ).toEqual({ prompt: "draw a comet", images: ["comet.png"] });
+    expect(prepare?.({ prompt: "draw a comet", images: ["", "  "] })).toEqual({
+      prompt: "draw a comet",
+    });
+    expect(() => prepare?.({ prompt: "draw a comet", images: ["x".repeat(5_000)] })).toThrow(
+      /images\[0\]/u,
+    );
+    expect(() => prepare?.({ prompt: "draw a comet", outputFormat: "gif" })).toThrow(
+      /outputFormat/u,
+    );
+  });
 });
 
 describe("image command delivery authority", () => {

@@ -41,3 +41,18 @@ describe("image compact summary", () => {
     expect(call.result?.content[1]).toBe(image);
   });
 });
+
+describe("image result notes", () => {
+  it("keeps a completed image successful while surfacing its note", () => {
+    const call = input();
+    const note = "Codex returned webp instead of the requested png";
+    const summary = imageCompactSummary({
+      ...call,
+      result: { content: [image], details: { ...record("completed"), note } },
+    });
+    expect(summary?.outcome).toBe("success");
+    expect(summary?.issues).toEqual([expect.objectContaining({ severity: "info" })]);
+    expect(summary?.issues?.[0]?.message).toContain("webp");
+    expect(styleProblems(summary)).toEqual([]);
+  });
+});

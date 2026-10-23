@@ -71,6 +71,9 @@ export function imageRecordSummary(
     action: record.action,
     subject: imagePromptSubject(options.prompt ?? record.prompt),
     ...(fileName !== "" && { metadata: [fileName] }),
+    ...(record.note !== undefined && {
+      issues: [{ severity: "info", code: "image-note", message: record.note }],
+    }),
   };
   if (record.status === "completed")
     return options.hasImage

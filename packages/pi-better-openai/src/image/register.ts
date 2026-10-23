@@ -30,7 +30,7 @@ import { imageResultText } from "./result-text.ts";
 import { OpenAIImageService } from "./service.ts";
 import { sessionNotStarted } from "../usage/controller.ts";
 import { IMAGE_OUTPUT_SCHEMA, imageDetails, imageToolResult } from "./tool-result.ts";
-import { TOOL_PARAMS, type ToolParams } from "./types.ts";
+import { prepareImageArguments, TOOL_PARAMS, type ToolParams } from "./types.ts";
 
 export const OPENAI_IMAGE_TOOL = "openai_image";
 const OPENAI_IMAGE_MESSAGE = "openai-image";
@@ -160,6 +160,7 @@ export function registerOpenAIImage(
       "Use save:project and pass the returned savedPath in images for a later edit; edit inputs must remain workspace-contained. save:none skips Better OpenAI file saving, not Pi history.",
     ],
     parameters: TOOL_PARAMS,
+    prepareArguments: prepareImageArguments,
     outputSchema: IMAGE_OUTPUT_SCHEMA,
     renderCall: (args, theme, context) => renderImageCall(args, theme, context),
     renderResult: (result, options, theme, context) =>

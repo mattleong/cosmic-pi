@@ -9,7 +9,7 @@ import * as Random from "effect/Random";
 import * as Scope from "effect/Scope";
 import { isStrictlyInsidePathWith } from "pi-cosmic-core";
 import type { SharpAdapterContract } from "../boundary/sharp.ts";
-import type { ImageOutputFormat } from "../config/schema.ts";
+import { IMAGE_OUTPUT_FORMATS, type ImageOutputFormat } from "../config/schema.ts";
 import { fail, failWith, type ExtractedImageResult } from "./types.ts";
 
 const MAX_GENERATED_IMAGE_BYTES = 60 * 1024 * 1024;
@@ -63,18 +63,23 @@ export const imageOutput = (dependencies: {
             : fail("response", "Codex returned unreadable image data."),
         ),
       );
-    const expected = imageOutputMetadata(outputFormat);
     const actual = metadata.format === "jpg" ? "jpeg" : metadata.format;
-    if (actual !== expected.sharpFormat)
+    const actualFormat = IMAGE_OUTPUT_FORMATS.find((format) => format === actual);
+    if (actualFormat === undefined)
       return yield* fail(
         "response",
-        `Codex returned ${actual ?? "unknown"} image data when ${expected.sharpFormat} was requested.`,
+        `Codex returned ${actual ?? "unknown"} image data when ${outputFormat} was requested.`,
       );
+    // A valid image in another supported format is kept as returned rather than discarded.
     return {
       ...parsed,
       data: Buffer.from(bytes).toString("base64"),
-      mimeType: expected.mimeType,
+      mimeType: imageOutputMetadata(actualFormat).mimeType,
       bytes,
+      outputFormat: actualFormat,
+      ...(actualFormat !== outputFormat && {
+        note: `Codex returned ${actualFormat} instead of the requested ${outputFormat}`,
+      }),
     };
   });
   const persistImage = Effect.fn("OpenAIImage.persistImage")(function* (

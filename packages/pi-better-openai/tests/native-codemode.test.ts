@@ -10,7 +10,7 @@ import { imageResultText } from "../src/image/result-text.ts";
 import { OpenAIImageService } from "../src/image/service.ts";
 import {
   fail,
-  ToolParamsSchema,
+  prepareImageArguments,
   type CodexImageResult,
   type OpenAIImageError,
   type ToolParams,
@@ -56,7 +56,7 @@ const nativeImageSession = (
         name: "openai-image-workflow-test",
         factory: (cwd) => (pi) => {
           const service = OpenAIImageService.of({
-            generate: (params) => generate(Schema.decodeSync(ToolParamsSchema)(params), cwd),
+            generate: (params) => generate(prepareImageArguments(params), cwd),
           });
           registerOpenAIImage(
             pi,

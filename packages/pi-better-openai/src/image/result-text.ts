@@ -9,5 +9,6 @@ export const imageResultText = (result: CodexImageDetails): string => {
   if (result.imageModel) parts.push(`Image model: ${result.imageModel}.`);
   if (result.revisedPrompt) parts.push(`Revised prompt: ${result.revisedPrompt}`);
   if (result.savedPath) parts.push(`Saved: ${result.savedPath}`);
+  if (result.note) parts.push(`Note: ${result.note}.`);
   return parts.join("\n");
 };

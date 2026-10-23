@@ -7,25 +7,21 @@ import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Predicate from "effect/Predicate";
 import * as Redacted from "effect/Redacted";
-import {
-  AgentDirectory,
-  decodeUnknownOrUndefined,
-  SafeFile,
-  StreamingHttpClient,
-} from "pi-cosmic-core";
+import { AgentDirectory, SafeFile, StreamingHttpClient } from "pi-cosmic-core";
 import { getCodexCredentials } from "../auth/codex-auth.ts";
 import { SharpAdapter } from "../boundary/sharp.ts";
 import { DEFAULT_IMAGE_CONFIG, type ImageSaveMode, type ResolvedConfig } from "../config/schema.ts";
 import { imageInputReader } from "./input.ts";
 import { imageOutputMetadata, imageOutput } from "./output.ts";
 import { buildImageRequest, ImageRequestSchema } from "./protocol.ts";
-import { parseImageSse } from "./stream.ts";
+import { httpFailure, parseImageSse } from "./stream.ts";
 import {
   DEFAULT_IMAGE_MODEL,
-  ToolParamsSchema,
   fail,
   failWith,
+  prepareImageArguments,
   type CodexImageResult,
   type ToolParams,
 } from "./types.ts";
@@ -87,9 +83,13 @@ const resolveSaveTarget = (
   return directory === undefined ? undefined : { directory, root: undefined };
 };
 
-const decodeToolParams = decodeUnknownOrUndefined(ToolParamsSchema, {
-  onExcessProperty: "error",
-});
+// Direct callers get the tool's own argument preparation: blanks are absent and errors name the field.
+const prepareToolParams = (params: ToolParams) =>
+  Effect.try({
+    try: () => prepareImageArguments(params),
+    catch: (error) =>
+      fail("params", Predicate.isError(error) ? error.message : "Invalid OpenAI image parameters."),
+  });
 
 const requestOptions = (params: ToolParams, cfg: ResolvedConfig) => ({
   imageModel: params.imageModel ?? DEFAULT_IMAGE_MODEL,
@@ -131,8 +131,7 @@ export class OpenAIImageService extends Context.Service<OpenAIImageService>()(
           ctx: ExtensionContext,
           cfg: ResolvedConfig | undefined,
         ) {
-          const params = decodeToolParams(rawParams);
-          if (!params) return yield* fail("params", "Invalid OpenAI image parameters.");
+          const params = yield* prepareToolParams(rawParams);
           if (!cfg) return yield* fail("config", "Better OpenAI session has not started.");
           if (!cfg.image.enabled)
             return yield* fail("config", "OpenAI image generation is disabled in config.");
@@ -189,10 +188,8 @@ export class OpenAIImageService extends Context.Service<OpenAIImageService>()(
               Effect.mapError(failWith("request", "Codex image request failed.")),
               Effect.withSpan("pi-better-openai.image.request"),
             );
-          if (response.status < 200 || response.status >= 300) {
-            yield* response.discardRawBody.pipe(Effect.timeout("1 second"), Effect.ignore);
-            return yield* fail("request", `Codex image request failed (${response.status}).`);
-          }
+          if (response.status < 200 || response.status >= 300)
+            return yield* httpFailure(response.status, response.rawBody);
           const parsed = yield* parseImageSse(response.rawBody, output.mimeType).pipe(
             Effect.withSpan("pi-better-openai.image.stream"),
           );
@@ -204,7 +201,7 @@ export class OpenAIImageService extends Context.Service<OpenAIImageService>()(
                 saveTarget.directory,
                 saveTarget.root,
                 validated.bytes,
-                outputFormat,
+                validated.outputFormat,
                 validated.id,
               ).pipe(Effect.withSpan("pi-better-openai.image.write"))
             : undefined;
@@ -216,7 +213,6 @@ export class OpenAIImageService extends Context.Service<OpenAIImageService>()(
             model,
             imageModel,
             action,
-            outputFormat,
           };
           return result;
         });
