@@ -23,7 +23,7 @@ export const piRetryPolicy = (pi: Pick<ExtensionAPI, "getSettings">) =>
   );
 
 const compactionUnavailable = () =>
-  new NativeCompactionError({ message: "Unable to compact the restored Pi conversation." });
+  NativeCompactionError.make({ message: "Unable to compact the restored Pi conversation." });
 
 export const compactWithPi = Effect.fn("BetterOpenAI.compactWithPi")(function* (
   ctx: ExtensionContext,

@@ -1,4 +1,4 @@
-import { flow } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
@@ -81,7 +81,7 @@ const withoutBlankImages = ({ images, ...rest }: JsonObject): JsonObject => {
  * Pi `prepareArguments` hook for openai_image: drops null and blank optional fields and blank
  * image paths, then validates with errors that name the offending field.
  */
-export const prepareImageArguments = flow(
+export const prepareImageArguments = Fn.flow(
   decodeArgumentsObject,
   Option.map(withoutBlankImages),
   // Anything but a JSON object is left for the preparer to reject.
@@ -150,6 +150,6 @@ export class OpenAIImageError extends Schema.TaggedError<
   message: Schema.String,
 }) {}
 export const fail = (operation: OpenAIImageOperation, message: string) =>
-  new OpenAIImageError({ operation, message });
+  OpenAIImageError.make({ operation, message });
 export const failWith = (operation: OpenAIImageOperation, message: string) => () =>
   fail(operation, message);

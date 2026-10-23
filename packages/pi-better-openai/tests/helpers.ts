@@ -1,7 +1,7 @@
 import type { Api, AssistantMessage, AuthResult, Model } from "@earendil-works/pi-ai";
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import { flow } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { extensionContextFixture } from "pi-cosmic-core/testing";
@@ -108,7 +108,7 @@ export const appendAssistant = (
   timestamp = 10,
 ) => manager.appendMessage(assistantMessage([{ type: "text", text }], { stopReason, timestamp }));
 
-export const serializedSnapshot = flow(
+export const serializedSnapshot = Fn.flow(
   Schema.encodeOption(Schema.fromJsonString(Schema.Unknown)),
   Option.getOrElse(() => ""),
 );

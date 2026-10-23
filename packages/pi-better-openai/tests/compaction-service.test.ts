@@ -581,7 +581,7 @@ describe("OpenAICompactionService", () => {
       const client: OpenAICompactionClientContract["compact"] = () =>
         failEndpoint
           ? Effect.fail(
-              new OpenAICompactionBoundaryError({ operation: "request", message: "unavailable" }),
+              OpenAICompactionBoundaryError.make({ operation: "request", message: "unavailable" }),
             )
           : Effect.succeed({
               output: [{ type: "compaction", encrypted_content: "checkpoint" }],

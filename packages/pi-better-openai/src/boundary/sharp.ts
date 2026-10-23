@@ -34,9 +34,9 @@ const metadataSchema = Schema.fromJsonString(
 );
 const decodeMetadata = Schema.decodeUnknownEffect(metadataSchema, { onExcessProperty: "error" });
 const decodeError = () =>
-  new SharpError({ operation: "decode", message: "Image data is not readable." });
+  SharpError.make({ operation: "decode", message: "Image data is not readable." });
 const unavailableError = () =>
-  new SharpError({
+  SharpError.make({
     operation: "unavailable",
     message:
       "Image decoding is disabled until Pi restarts: a previous decoder did not confirm exit.",

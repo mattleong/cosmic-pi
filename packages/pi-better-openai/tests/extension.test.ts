@@ -34,7 +34,7 @@ const gateConfigCommits = Effect.gen(function* () {
         exists: (path) =>
           failLoads
             ? Effect.fail(
-                new JsonDocumentError({ operation: "exists", path, message: "unavailable" }),
+                JsonDocumentError.make({ operation: "exists", path, message: "unavailable" }),
               )
             : documents.exists(path),
         modifyObject: (path, update) =>

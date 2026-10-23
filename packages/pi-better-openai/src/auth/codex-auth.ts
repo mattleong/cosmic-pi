@@ -54,7 +54,7 @@ export const getCodexCredentials = Effect.fn("CodexAuth.getCredentials")(functio
     try: () =>
       ctx.modelRegistry.getProviderAuth("openai-codex").then((result) => result?.auth.apiKey),
     catch: () =>
-      new CodexAuthError({
+      CodexAuthError.make({
         operation: "registry",
         message: "Unable to read openai-codex credentials.",
       }),
@@ -62,7 +62,7 @@ export const getCodexCredentials = Effect.fn("CodexAuth.getCredentials")(functio
   if (!apiKey) return undefined;
   const credentials = parseRegistryCredentials(apiKey.trim());
   if (credentials) return credentials;
-  return yield* new CodexAuthError({
+  return yield* CodexAuthError.make({
     operation: "registry-decode",
     message: "OpenAI registry credentials are malformed.",
   });

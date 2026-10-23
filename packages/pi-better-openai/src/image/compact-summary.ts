@@ -1,5 +1,5 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
-import { flow } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
@@ -27,7 +27,7 @@ const ImageRecordSchema = Schema.Struct({
   id: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
 });
 
-export const imageRecord = flow(
+export const imageRecord = Fn.flow(
   Schema.decodeUnknownOption(ImageRecordSchema),
   Option.getOrUndefined,
 );

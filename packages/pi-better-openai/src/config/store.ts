@@ -3,7 +3,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
-import * as Number from "effect/Number";
+import * as Num from "effect/Number";
 import type * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -98,7 +98,7 @@ function resolveConfigFiles(
     desiredActive: project?.desiredActive ?? global?.desiredActive ?? DEFAULT_CONFIG.desiredActive,
     usage: {
       ...usage,
-      refreshIntervalMs: Number.clamp(usage.refreshIntervalMs, {
+      refreshIntervalMs: Num.clamp(usage.refreshIntervalMs, {
         minimum: 15_000,
         maximum: 10 * 60_000,
       }),
@@ -106,7 +106,7 @@ function resolveConfigFiles(
     compaction: { ...DEFAULT_COMPACTION_CONFIG, ...global?.compaction, ...project?.compaction },
     image: {
       ...image,
-      timeoutMs: Number.clamp(image.timeoutMs, { minimum: 30_000, maximum: 5 * 60_000 }),
+      timeoutMs: Num.clamp(image.timeoutMs, { minimum: 30_000, maximum: 5 * 60_000 }),
     },
   };
 }

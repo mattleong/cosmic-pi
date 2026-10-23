@@ -236,7 +236,7 @@ export const requestCodexUsageWithCredentials = Effect.fn("CodexUsage.requestWit
       .pipe(
         Effect.mapError((error) => {
           const malformed = error.operation === "decode";
-          return new CodexUsageError({
+          return CodexUsageError.make({
             operation: malformed ? "decode" : "request",
             message: malformed
               ? "OpenAI returned an unreadable usage response"
@@ -245,7 +245,7 @@ export const requestCodexUsageWithCredentials = Effect.fn("CodexUsage.requestWit
         }),
       );
     if (Predicate.isTagged(response, "Rejected"))
-      return yield* new CodexUsageError({
+      return yield* CodexUsageError.make({
         operation: "request",
         message: `Usage request failed with status ${response.status}`,
       });

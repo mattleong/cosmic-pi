@@ -49,7 +49,7 @@ export class OpenAICompactionBoundaryError extends Schema.TaggedError<
 }) {}
 
 const boundaryError = (operation: OpenAICompactionBoundaryError["operation"], message: string) =>
-  new OpenAICompactionBoundaryError({ operation, message });
+  OpenAICompactionBoundaryError.make({ operation, message });
 const HTTP_FAILURES = {
   encode: "OpenAI compaction request was invalid.",
   request: "OpenAI compaction request failed.",
@@ -144,7 +144,7 @@ export class OpenAICompactionClient extends Context.Service<
               }),
             );
           if (Predicate.isTagged(response, "Rejected"))
-            return yield* new OpenAICompactionBoundaryError({
+            return yield* OpenAICompactionBoundaryError.make({
               operation: "response",
               message: `OpenAI compaction failed (${response.status}).`,
               status: response.status,

@@ -89,7 +89,7 @@ export class OpenAICompactionError extends Schema.TaggedError<
 }) {}
 
 const compactionError = (operation: OpenAICompactionError["operation"], message: string) =>
-  new OpenAICompactionError({ operation, message });
+  OpenAICompactionError.make({ operation, message });
 
 interface OpenAICompactionServiceOptions {
   readonly context: MutableRef.MutableRef<ExtensionContext>;

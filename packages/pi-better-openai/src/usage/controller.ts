@@ -374,7 +374,7 @@ export class OpenAIBoundaryError extends Schema.TaggedError<
   message: Schema.String,
 }) {}
 export const sessionNotStarted = (operation: OpenAIBoundaryError["operation"] = "runtime") =>
-  new OpenAIBoundaryError({ operation, message: "Better OpenAI session has not started." });
+  OpenAIBoundaryError.make({ operation, message: "Better OpenAI session has not started." });
 const timedDiagnosticResult = <A, E extends { readonly message?: string | undefined }, R>(
   effect: Effect.Effect<A, E, R>,
   timeoutMessage: string,
