@@ -43,7 +43,7 @@ export const listText = (result: SessionListContract): string => {
     `${countLabel(total, "other live session")}:`,
     ...result.sessions.map(listedLine),
     ...(result.omitted > 0 ? [`- and ${result.omitted} more`] : []),
-    "Message one with session_send using its sessionId. An unresponsive session didn't answer in time and may be exiting.",
+    "Message one with session_send using its sessionId. An unavailable session refused to answer and may be reloading or shutting down; an unresponsive one didn't answer in time and may be busy or stuck; an unreachable one may have exited.",
   ].join("\n");
 };
 
@@ -74,11 +74,13 @@ const REFUSAL_TEXT: Record<ToolRefusalCode, (to: string, id: string) => string> 
   session_ambiguous: (_to, id) =>
     `More than one live session has id ${JSON.stringify(id)}, so it can't be addressed. Ask the user to close the duplicate.`,
   session_unreachable: (to) => `Couldn't reach ${to}; it may have exited. Nothing was delivered.`,
+  session_unresponsive: (to) =>
+    `${to} didn't answer in time; it may be busy or stuck. Nothing was delivered; try again later.`,
   session_unavailable: (to) => `${to} is shutting down or being replaced. Nothing was delivered.`,
   session_receive_disabled: (to) =>
     `${to} has turned off messages from other sessions. Nothing was delivered.`,
   session_message_too_long: () =>
-    `The message is longer than ${MAX_MESSAGE_CHARS} characters. Shorten it and send again.`,
+    `The message is longer than ${MAX_MESSAGE_CHARS.toLocaleString("en-US")} characters. Shorten it and send again.`,
 };
 
 export const refusalText = (refusal: SessionRefusal): string => {

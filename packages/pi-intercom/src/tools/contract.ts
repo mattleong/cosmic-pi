@@ -48,11 +48,13 @@ export type SessionView = typeof SessionViewSchema.Type;
 
 export const ListedSessionSchema = Schema.Struct({
   ...SessionViewSchema.fields,
-  state: Schema.Literals(["idle", "busy", "unresponsive"]).annotate({
-    description: "unresponsive: the session didn't answer in time; it may be exiting or stuck.",
+  state: Schema.Literals(["idle", "busy", "unavailable", "unresponsive", "unreachable"]).annotate({
+    description:
+      "unavailable: the session proved it holds its token but refused to describe itself; it may be reloading or shutting down. unresponsive: the session took the connection but didn't answer in time; it may be busy or stuck. unreachable: nothing that holds its token answered at its socket; it may have exited or be shutting down.",
   }),
   duplicate: Schema.Boolean.annotate({
-    description: "Another live session has the same sessionId, so neither can be addressed.",
+    description:
+      "Another session that answered has the same sessionId, so neither can be addressed.",
   }),
 });
 export type ListedSession = typeof ListedSessionSchema.Type;
@@ -103,6 +105,7 @@ export const ToolRefusalCodeSchema = Schema.Literals([
   "session_not_found",
   "session_ambiguous",
   "session_unreachable",
+  "session_unresponsive",
   "session_message_too_long",
 ]);
 export type ToolRefusalCode = typeof ToolRefusalCodeSchema.Type;

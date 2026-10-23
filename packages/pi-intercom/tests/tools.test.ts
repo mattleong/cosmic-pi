@@ -1,18 +1,21 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { expect, layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import type * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import * as TestClock from "effect/testing/TestClock";
 import { issueMessageStyleProblems } from "pi-code-previews/testing";
 import {
   currentProcessIdentity,
   nodeFilePlatformLayer,
   synchronousRandomHex,
 } from "pi-cosmic-core";
-import { connect, createServer } from "node:net";
+import { connect, createServer, type Socket } from "node:net";
 import { afterEach, vi } from "vitest";
 import { INTERCOM_MESSAGE_TYPE } from "../src/delivery.ts";
 import type { intercomLayer } from "../src/layer.ts";
@@ -24,6 +27,9 @@ import {
   type ToolRefusalCode,
 } from "../src/tools/contract.ts";
 import { OwnerLiveness } from "../src/registry/store.ts";
+import { DESCRIBE_DEADLINE } from "../src/transport/client.ts";
+import { IntercomRefused, MAX_MESSAGE_CHARS } from "../src/transport/protocol.ts";
+import { IntercomInbound, serveIntercom } from "../src/transport/server.ts";
 import {
   listSessions,
   readSession,
@@ -116,22 +122,64 @@ const droppingRelay = (socket: string, target: string) =>
     (server) => Effect.callback<void>((resume) => void server.close(() => resume(Effect.void))),
   );
 
+/** A listener at `socket` that takes connections and never answers them. */
+const hangingListener = (socket: string) =>
+  Effect.gen(function* () {
+    const peers = new Set<Socket>();
+    const waiters = new Set<{ readonly total: number; readonly wake: () => void }>();
+    yield* Effect.acquireRelease(
+      Effect.callback<ReturnType<typeof createServer>>((resume) => {
+        const server = createServer((peer) => {
+          peer.on("error", () => undefined);
+          peers.add(peer);
+          for (const waiter of waiters)
+            if (peers.size >= waiter.total) {
+              waiters.delete(waiter);
+              waiter.wake();
+            }
+        });
+        server.listen(socket, () => resume(Effect.succeed(server)));
+      }),
+      (server) =>
+        Effect.callback<void>((resume) => {
+          server.close(() => resume(Effect.void));
+          for (const peer of peers) peer.destroy();
+        }),
+    );
+    return {
+      /** Waits until `total` connections have arrived in all. */
+      arrived: (total: number) =>
+        Effect.callback<void>((resume) => {
+          if (peers.size >= total) return resume(Effect.void);
+          const waiter = { total, wake: () => resume(Effect.void) };
+          waiters.add(waiter);
+          return Effect.sync(() => void waiters.delete(waiter));
+        }),
+    };
+  });
+
 const unnamedSession = (sessionId: string) => ({ sessionId, name: undefined, cwd: "/project" });
 
 layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
   it.effect("lists other live sessions, marking silent ones and duplicate ids", () =>
     Effect.gen(function* () {
-      const { a } = yield* twoSessions;
+      const { shared, a } = yield* twoSessions;
       yield* writeForeignRecord(a, "silent");
       yield* writeForeignRecord(a, "twin");
       yield* writeForeignRecord(a, "twin");
       yield* writeForeignRecord(a, "dead", { pid: 99_999_999 });
+
+      const twin = yield* harness({ shared, sessionId: "live-twin", sessionName: "twin one" });
+      yield* twin.start();
+      const other = yield* harness({ shared, sessionId: "live-twin", sessionName: "twin two" });
+      yield* other.start();
 
       const result = yield* a.callTool(SESSION_TOOL.list, {});
       const details = detailsOf(result);
 
       expect(result.structuredContent).toEqual(details);
       if (details.tool !== SESSION_TOOL.list) throw new Error("Expected a listing.");
+      // Only sessions that answered can be addressed, so only they count as duplicates.
       expect(
         details.sessions.map(({ sessionId, name, state, duplicate }) => ({
           sessionId,
@@ -140,11 +188,89 @@ layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
           duplicate,
         })),
       ).toEqual([
-        { sessionId: "silent", name: undefined, state: "unresponsive", duplicate: false },
-        { sessionId: "twin", name: undefined, state: "unresponsive", duplicate: true },
-        { sessionId: "twin", name: undefined, state: "unresponsive", duplicate: true },
+        { sessionId: "silent", name: undefined, state: "unreachable", duplicate: false },
+        { sessionId: "twin", name: undefined, state: "unreachable", duplicate: false },
+        { sessionId: "twin", name: undefined, state: "unreachable", duplicate: false },
+        { sessionId: "live-twin", name: "twin one", state: "idle", duplicate: true },
+        { sessionId: "live-twin", name: "twin two", state: "idle", duplicate: true },
         { sessionId: "session-b", name: "web work", state: "idle", duplicate: false },
       ]);
+    }),
+  );
+
+  it.effect("addresses the one session that answers among records sharing its id", () =>
+    Effect.gen(function* () {
+      const { shared, a, b } = yield* twoSessions;
+      // A suspended Pi with the same session id left a record nothing answers for.
+      yield* writeForeignRecord(a, "session-b");
+      b.setBranch([assistantEntry("The web tests pass.")]);
+
+      const delivered = yield* a.callTool(SESSION_TOOL.send, { to: "session-b", message: "Hi." });
+      const read = yield* a.callTool(SESSION_TOOL.read, { to: "session-b" });
+
+      expect(detailsOf(delivered)).toMatchObject({ outcome: "delivered", disposition: "woken" });
+      expect(b.sendMessage).toHaveBeenCalledTimes(1);
+      expect(detailsOf(read)).toMatchObject({ text: "The web tests pass." });
+
+      // A second session that answers under the same id makes it ambiguous.
+      const twin = yield* harness({ shared, sessionId: "session-b", sessionName: "web twin" });
+      yield* twin.start();
+      const refused = yield* a.callTool(SESSION_TOOL.send, { to: "session-b", message: "Hi." });
+      expect(detailsOf(refused)).toMatchObject({ outcome: "refused", code: "session_ambiguous" });
+      expect(b.sendMessage).toHaveBeenCalledTimes(1);
+      expect(twin.sendMessage).not.toHaveBeenCalled();
+    }),
+  );
+
+  it.effect("tells sessions that don't answer in time from ones nothing answers for", () =>
+    Effect.gen(function* () {
+      const paths = yield* Path.Path;
+      const shared = yield* sharedAgentDirectory();
+      yield* Effect.sync(() => vi.stubEnv("PI_CODING_AGENT_DIR", shared.agentDirectory));
+      const a = yield* sessionRuntime(unnamedSession("session-a"), "From a.", shared.fallbackRoot);
+      const registry = {
+        base: shared.base,
+        sessions: paths.join(shared.agentDirectory, "intercom", "sessions"),
+      };
+      const socket = paths.join(shared.base, "stuck.sock");
+      const stuck = yield* hangingListener(socket);
+      yield* writeForeignRecord(registry, "stuck", { socket });
+      yield* writeForeignRecord(registry, "stuck", { socket });
+      yield* writeForeignRecord(registry, "gone");
+      // Each call's deadline runs on the test clock, moved once every describe has connected.
+      const pastDeadline = <X, E>(
+        effect: Effect.Effect<X, E, Layer.Success<ReturnType<typeof intercomLayer>>>,
+        connections: number,
+      ) =>
+        Effect.gen(function* () {
+          const fiber = yield* effect.pipe(
+            Effect.provideService(OwnerLiveness, () => Effect.succeed("alive")),
+            Effect.provide(a.context),
+            Effect.result,
+            Effect.forkChild,
+          );
+          yield* stuck.arrived(connections);
+          yield* TestClock.adjust(DESCRIBE_DEADLINE);
+          return yield* Fiber.join(fiber);
+        });
+
+      const listed = yield* pastDeadline(listSessions(), 2);
+      const sent = yield* pastDeadline(sendToSession("stuck", "Hello."), 4);
+
+      expect(
+        Result.getOrThrow(listed).sessions.map(({ sessionId, state, duplicate }) => ({
+          sessionId,
+          state,
+          duplicate,
+        })),
+      ).toEqual([
+        { sessionId: "gone", state: "unreachable", duplicate: false },
+        { sessionId: "stuck", state: "unresponsive", duplicate: false },
+        { sessionId: "stuck", state: "unresponsive", duplicate: false },
+      ]);
+      expect(Result.isFailure(sent) && sent.failure).toMatchObject({
+        code: "session_unresponsive",
+      });
     }),
   );
 
@@ -180,7 +306,7 @@ layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
       const listed = yield* fromA(listSessions());
       expect(listed.sessions.map(({ sessionId, state }) => ({ sessionId, state }))).toEqual([
         { sessionId: "session-b", state: "idle" },
-        { sessionId: "silent", state: "unresponsive" },
+        { sessionId: "silent", state: "unreachable" },
       ]);
       expect(asked.toSorted((left, right) => left - right)).toEqual([silentPid, deadPid]);
 
@@ -260,7 +386,8 @@ layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
 
       expect(yield* refusal(SESSION_TOOL.send, "session-a")).toBe("session_not_found");
       expect(yield* refusal(SESSION_TOOL.send, "nobody")).toBe("session_not_found");
-      expect(yield* refusal(SESSION_TOOL.read, "twin")).toBe("session_ambiguous");
+      // Twins that both stay silent can't be addressed either.
+      expect(yield* refusal(SESSION_TOOL.read, "twin")).toBe("session_unreachable");
       expect(yield* refusal(SESSION_TOOL.send, "silent")).toBe("session_unreachable");
       expect(yield* refusal(SESSION_TOOL.read, "silent")).toBe("session_unreachable");
 
@@ -269,6 +396,43 @@ layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
       yield* b.command("receive on");
       const delivered = yield* a.callTool(SESSION_TOOL.send, { to: "session-b", message: "Hi." });
       expect(detailsOf(delivered)).toMatchObject({ outcome: "delivered" });
+    }),
+  );
+
+  it.effect("tells a session that refuses from one nothing answers for", () =>
+    Effect.gen(function* () {
+      const { a } = yield* twoSessions;
+      const paths = yield* Path.Path;
+      const socket = paths.join(a.shared.base, "reloading.sock");
+      const token = synchronousRandomHex(32);
+      const unavailable = Effect.fail(new IntercomRefused({ code: "session_unavailable" }));
+      yield* serveIntercom({ socket, token }).pipe(
+        Effect.provideService(IntercomInbound, {
+          describe: unavailable,
+          deliver: () => unavailable,
+          readLast: unavailable,
+        }),
+      );
+      // Silent twins on both sides of the refusing record, whatever order the listing takes.
+      for (let index = 0; index < 3; index += 1) yield* writeForeignRecord(a, "reloading");
+      yield* writeForeignRecord(a, "reloading", { socket, token });
+      for (let index = 0; index < 3; index += 1) yield* writeForeignRecord(a, "reloading");
+
+      const listed = detailsOf(yield* a.callTool(SESSION_TOOL.list, {}));
+      const sent = detailsOf(
+        yield* a.callTool(SESSION_TOOL.send, { to: "reloading", message: "Hi." }),
+      );
+      const read = detailsOf(yield* a.callTool(SESSION_TOOL.read, { to: "reloading" }));
+
+      if (listed.tool !== SESSION_TOOL.list) throw new Error("Expected a listing.");
+      expect(
+        listed.sessions
+          .filter(({ sessionId }) => sessionId === "reloading")
+          .map(({ state }) => state)
+          .toSorted(),
+      ).toEqual(["unavailable", ...Array.from({ length: 6 }, () => "unreachable")]);
+      expect(sent).toMatchObject({ outcome: "refused", code: "session_unavailable" });
+      expect(read).toMatchObject({ outcome: "refused", code: "session_unavailable" });
     }),
   );
 
@@ -315,6 +479,30 @@ layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
     }),
   );
 
+  it.effect("prepares arguments leniently and refuses an overlong message without cutting it", () =>
+    Effect.gen(function* () {
+      const { a, b } = yield* twoSessions;
+      const prepare = (name: string, args: Readonly<Record<string, string>>) =>
+        a.tool(name).prepareArguments?.(args);
+      const overlong = { to: "session-b", message: "x".repeat(MAX_MESSAGE_CHARS + 1) };
+      const longest = { to: "session-b", message: "y".repeat(MAX_MESSAGE_CHARS) };
+
+      // Preparation leaves the length to the tool, whose refusal tells the model to shorten it.
+      expect(prepare(SESSION_TOOL.send, overlong)).toEqual(overlong);
+      const refused = yield* a.callTool(SESSION_TOOL.send, overlong);
+      expect(detailsOf(refused)).toMatchObject({ code: "session_message_too_long" });
+      expect(b.sendMessage).not.toHaveBeenCalled();
+      const delivered = yield* a.callTool(SESSION_TOOL.send, longest);
+      expect(detailsOf(delivered)).toMatchObject({ outcome: "delivered" });
+      expect(b.sendMessage.mock.calls[0]?.[0].content).toContain(longest.message);
+
+      expect(() => prepare(SESSION_TOOL.send, { sessionId: "session-b", message: "Hi." })).toThrow(
+        /"sessionId" \(use "to"\)/,
+      );
+      expect(() => prepare(SESSION_TOOL.read, { to: " " })).toThrow(/invalid_arguments/);
+    }),
+  );
+
   it.effect("keeps session_send out of codemode scripts", () =>
     Effect.gen(function* () {
       const { a } = yield* twoSessions;
@@ -352,6 +540,7 @@ layer(nodeFilePlatformLayer)("intercom session tool issues", (it) => {
         "session_not_found",
         "session_ambiguous",
         "session_unreachable",
+        "session_unresponsive",
         "session_message_too_long",
       ];
       const session = { sessionId: "session-b", name: "web work", cwd: "/work/web" };

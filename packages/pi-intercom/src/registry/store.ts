@@ -25,15 +25,18 @@ import {
   listEntries,
   ensureDirectoryPath,
   ownDirectory,
+  ownFile,
   readPrivateFile,
   removeEmptyDirectory,
   removeOwnEntry,
   renameEntry,
-  sameDirectory,
+  sameEntry,
   writePrivateFile,
+  type EntryIdentity,
   type PrivateFileError,
 } from "./private-files.ts";
 import {
+  RecordOwnerFromJson,
   SessionRecordFromJson,
   SocketOwnerFromJson,
   socketOwner,
@@ -58,8 +61,11 @@ const MAX_LISTED_RECORDS = 1024;
 const MAX_SWEPT_ENTRIES = 256;
 /** A sweep stops examining owners after this long; the next sweep continues. */
 const MAX_SWEEP_MILLIS = 2_000;
-/** A fallback socket directory without an owner record is reclaimed once unchanged this long. */
-const UNOWNED_DIRECTORY_RETENTION_MILLIS = 24 * 60 * 60 * 1000;
+/**
+ * A fallback socket directory without an owner record, or a record that doesn't decode, is
+ * reclaimed once unchanged this long.
+ */
+const ABANDONED_RETENTION_MILLIS = 24 * 60 * 60 * 1000;
 const LIST_CONCURRENCY = 16;
 const RECORD_FILE = /^([0-9a-f]{32})\.json$/;
 const RECORD_TOMBSTONE = /^\.([0-9a-f]{32})\.json\.[0-9a-f]{16}\.tombstone$/;
@@ -96,7 +102,7 @@ export interface RecordListing {
 }
 
 export interface SweepResult {
-  /** Records of dead owners removed. */
+  /** Records removed: those of dead owners, and undecodable ones shown to be abandoned. */
   readonly records: number;
   /** Fallback socket directories of dead owners removed. */
   readonly socketDirectories: number;
@@ -141,6 +147,7 @@ export const ownerIsDead = (owner: ProcessIdentity) =>
   });
 
 const decodeRecord = Schema.decodeOption(SessionRecordFromJson);
+const decodeRecordOwner = Schema.decodeOption(RecordOwnerFromJson);
 const decodeOwner = Schema.decodeOption(SocketOwnerFromJson);
 
 const sweepDeadline = Effect.map(Clock.currentTimeMillis, (now) => now + MAX_SWEEP_MILLIS);
@@ -296,13 +303,95 @@ export class IntercomRegistry extends Context.Service<IntercomRegistry>()(
           return true;
         });
 
-        /** A record tombstone is removed only when it still names a dead owner. */
+        /** An undecodable record file as judged abandoned: which file, holding what. */
+        interface AbandonedRecord {
+          readonly identity: EntryIdentity;
+          readonly source: string;
+        }
+
+        /**
+         * Whether a record file that doesn't decode is abandoned. When it still names an owner,
+         * only that owner's death decides, since a live owner writes its record only at start and
+         * on a name change; otherwise, nothing changed it for the retention period. Unsafe or
+         * unreadable files prove nothing, and a file that decodes again was replaced by its owner
+         * and isn't judged here.
+         */
+        const abandonedRecord = Effect.fnUntraced(function* (path: string, instance: string) {
+          const identity = yield* Effect.option(ownFile(path));
+          if (Option.isNone(identity)) return Option.none<AbandonedRecord>();
+          const source = yield* Effect.option(readPrivateFile(path, MAX_RECORD_BYTES));
+          if (Option.isNone(source)) return Option.none<AbandonedRecord>();
+          const record = decodeRecord(source.value);
+          if (Option.isSome(record) && record.value.instance === instance)
+            return Option.none<AbandonedRecord>();
+          const judged = Option.some({ identity: identity.value, source: source.value });
+          const owner = decodeRecordOwner(source.value);
+          const abandoned = Option.isSome(owner)
+            ? yield* ownerIsDead(owner.value)
+            : (yield* Clock.currentTimeMillis) - identity.value.modifiedMillis >
+              ABANDONED_RETENTION_MILLIS;
+          return abandoned ? judged : Option.none<AbandonedRecord>();
+        });
+
+        /** Whether the file at `path` is still the one judged, unchanged. */
+        const stillJudged = (path: string, judged: AbandonedRecord) =>
+          Effect.all([ownFile(path), readPrivateFile(path, MAX_RECORD_BYTES)]).pipe(
+            Effect.map(
+              ([identity, source]) =>
+                sameEntry(identity, judged.identity) &&
+                identity.modifiedMillis === judged.identity.modifiedMillis &&
+                source === judged.source,
+            ),
+            Effect.orElseSucceed(() => false),
+          );
+
+        /**
+         * Retires an abandoned record file that doesn't decode the way `retireRecord` retires a
+         * dead owner's: the claimed file must be the one judged, unchanged, or it goes back.
+         */
+        const retireAbandonedRecord = Effect.fnUntraced(function* (file: string) {
+          const instance = RECORD_FILE.exec(file)?.[1];
+          if (instance === undefined) return false;
+          const path = paths.join(sessions, file);
+          const judged = yield* abandonedRecord(path, instance);
+          if (Option.isNone(judged)) return false;
+          const tombstone = paths.join(
+            sessions,
+            `.${instance}.json.${yield* temporarySuffix()}${TOMBSTONE_SUFFIX}`,
+          );
+          const claimed = yield* renameEntry(path, tombstone).pipe(
+            Effect.as(true),
+            Effect.orElseSucceed(() => false),
+          );
+          if (!claimed) return false;
+          if (!(yield* stillJudged(tombstone, judged.value))) {
+            yield* linkEntry(tombstone, path).pipe(
+              Effect.andThen(removeOwnEntry(tombstone)),
+              Effect.ignore,
+            );
+            return false;
+          }
+          yield* Effect.ignore(removeOwnEntry(tombstone));
+          return true;
+        });
+
+        /**
+         * A record tombstone is removed only when it still names a dead owner, or when it holds an
+         * undecodable record that is abandoned.
+         */
         const removeRecordTombstone = Effect.fnUntraced(function* (file: string) {
+          const instance = RECORD_TOMBSTONE.exec(file)?.[1];
+          if (instance === undefined) return;
           const path = paths.join(sessions, file);
           const read = yield* readRecordAt(path).pipe(Effect.option, Effect.map(Option.flatten));
-          if (Option.isNone(read) || !(yield* ownerIsDead(read.value))) return;
-          yield* removeSharedSocket(read.value);
-          yield* Effect.ignore(removeOwnEntry(path));
+          if (Option.isSome(read) && read.value.instance === instance) {
+            if (!(yield* ownerIsDead(read.value))) return;
+            yield* removeSharedSocket(read.value);
+            yield* Effect.ignore(removeOwnEntry(path));
+            return;
+          }
+          if (Option.isSome(yield* abandonedRecord(path, instance)))
+            yield* Effect.ignore(removeOwnEntry(path));
         });
 
         /** Removes only the entries a socket directory may hold, then the emptied directory. */
@@ -355,9 +444,7 @@ export class IntercomRegistry extends Context.Service<IntercomRegistry>()(
             Owner: ({ owner }) =>
               answered.has(instance) ? Effect.succeed(false) : ownerIsDead(owner),
             Unowned: () =>
-              Effect.succeed(
-                now - identity.value.modifiedMillis > UNOWNED_DIRECTORY_RETENTION_MILLIS,
-              ),
+              Effect.succeed(now - identity.value.modifiedMillis > ABANDONED_RETENTION_MILLIS),
             Unproven: () => Effect.succeed(false),
           });
           return reclaim ? Option.some(identity.value) : Option.none();
@@ -385,7 +472,7 @@ export class IntercomRegistry extends Context.Service<IntercomRegistry>()(
           if (!claimed) return false;
           // The claimed directory must be the one judged, and still be reclaimable.
           const moved = yield* reclaimable(tombstone, instance, answered);
-          if (Option.isNone(moved) || !sameDirectory(moved.value, judged.value)) return false;
+          if (Option.isNone(moved) || !sameEntry(moved.value, judged.value)) return false;
           return yield* clearSocketDirectory(tombstone).pipe(Effect.orElseSucceed(() => false));
         });
 
@@ -425,12 +512,13 @@ export class IntercomRegistry extends Context.Service<IntercomRegistry>()(
          * Removes records and fallback socket directories whose owner is positively dead: its PID
          * is gone, or now belongs to a process that started at another time. Each record's
          * session is described first, and only an owner whose session didn't answer is asked
-         * about. Owners whose liveness is unknown are kept. Each sweep examines a bounded number
-         * of entries for a bounded time.
+         * about. Owners whose liveness is unknown are kept. A record file that doesn't decode is
+         * removed once the owner it still names is dead or, naming none, it is unchanged for a day. Each
+         * sweep examines a bounded number of entries for a bounded time.
          */
         const sweep = Effect.fn("IntercomRegistry.sweep")(function* () {
           const until = yield* sweepDeadline;
-          const { records } = yield* list();
+          const { records, skipped } = yield* list();
           const outcomes = yield* Effect.forEach(
             records,
             (record) =>
@@ -443,7 +531,13 @@ export class IntercomRegistry extends Context.Service<IntercomRegistry>()(
           const answered = new Set(
             outcomes.flatMap(({ instance, outcome }) => (outcome === "answered" ? [instance] : [])),
           );
-          const retired = outcomes.filter(({ outcome }) => outcome === "retired").length;
+          let retired = outcomes.filter(({ outcome }) => outcome === "retired").length;
+          for (const { file } of skipped
+            .filter(({ reason }) => reason === "invalid")
+            .slice(0, MAX_SWEPT_ENTRIES)) {
+            if (yield* pastDeadline(until)) break;
+            if (yield* retireAbandonedRecord(file)) retired += 1;
+          }
           const files = yield* listEntries(sessions).pipe(Effect.orElseSucceed(() => []));
           for (const file of files
             .filter((name) => RECORD_TOMBSTONE.test(name))

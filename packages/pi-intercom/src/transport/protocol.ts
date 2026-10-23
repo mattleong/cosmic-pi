@@ -4,12 +4,14 @@ import * as RpcGroup from "effect/rpc/RpcGroup";
 import { NONCE_BYTES, PROOF_BYTES } from "./handshake.ts";
 
 /** Longest message text a session accepts, in UTF-16 code units. */
-export const MAX_MESSAGE_CHARS = 16_384;
+export const MAX_MESSAGE_CHARS = 32_768;
 /** Longest assistant text `ReadLast` returns, in UTF-8 bytes. */
 export const MAX_READ_BYTES = 32 * 1024;
 /**
- * Bounds every NDJSON frame in either direction. It covers the largest message or read text even
- * when JSON escaping inflates each character to six bytes; anything longer closes the peer.
+ * Bounds every NDJSON frame in either direction; anything longer closes the peer. JSON escapes a
+ * UTF-16 code unit to at most six bytes, so the largest `Deliver` takes 32,768 × 6 bytes of text
+ * plus 6 × (1,024 + 1,024 + 4,096 + 128) bytes of sender and id, 234,240 bytes in all, and the
+ * largest read text no more; the rest is room for the RPC envelope.
  */
 export const MAX_FRAME_BYTES = 256 * 1024;
 

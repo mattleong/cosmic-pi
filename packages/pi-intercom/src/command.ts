@@ -22,7 +22,9 @@ export interface IntercomCommandHost {
 const STATE_LABELS: Record<ListedSession["state"], string> = {
   idle: "idle",
   busy: "busy",
+  unavailable: "unavailable",
   unresponsive: "not answering",
+  unreachable: "unreachable",
 };
 
 const listedLine = (session: ListedSession): string =>

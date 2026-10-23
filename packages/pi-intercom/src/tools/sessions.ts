@@ -16,6 +16,7 @@ import {
   MAX_CWD_CHARS,
   MAX_IDENTITY_CHARS,
   MAX_MESSAGE_CHARS,
+  type Description,
   type IntercomRefused,
 } from "../transport/protocol.ts";
 import {
@@ -29,6 +30,7 @@ import {
   type SessionReadContract,
   type SessionSendDetails,
   type SessionView,
+  type ToolRefusalCode,
 } from "./contract.ts";
 
 const MESSAGE_ID_BYTES = 16;
@@ -56,35 +58,79 @@ const peerRecords = Effect.gen(function* () {
   return records.filter((record) => record.instance !== self.instance);
 });
 
+/** Only a listener that proved it holds the record's token can answer or refuse. */
+const answered = (result: Result.Result<unknown, IntercomClientError | IntercomRefused>) =>
+  Result.isSuccess(result) || Predicate.isTagged(result.failure, "IntercomRefused");
+
 /** Describes each record, dropping one that didn't answer when its owner is dead. */
 const describeLive = (records: ReadonlyArray<SessionRecord>) =>
   Effect.gen(function* () {
     const described = yield* describeSessions(records);
     return yield* Effect.filter(described, ({ target, result }) =>
-      Result.isSuccess(result)
-        ? Effect.succeed(true)
-        : Effect.map(ownerIsDead(target), (dead) => !dead),
+      answered(result) ? Effect.succeed(true) : Effect.map(ownerIsDead(target), (dead) => !dead),
     );
   });
 
-/** A lone match is checked by the call itself; duplicates are described to drop dead owners. */
-const resolvePeer = Effect.fn("IntercomTools.resolvePeer")(function* (to: string) {
-  const matches = (yield* peerRecords).filter((record) => record.sessionId === to);
-  const live =
-    matches.length > 1 ? (yield* describeLive(matches)).map(({ target }) => target) : matches;
-  const [only] = live;
-  if (only === undefined) return yield* new SessionToolRefusal({ code: "session_not_found" });
-  if (live.length > 1)
-    return yield* new SessionToolRefusal({ code: "session_ambiguous", session: viewOf(only) });
-  return only;
-});
+const clientRefusalCode = (error: IntercomClientError): ToolRefusalCode =>
+  error.reason === "timeout" || error.reason === "unresponsive"
+    ? "session_unresponsive"
+    : "session_unreachable";
+
+interface Described {
+  readonly target: SessionRecord;
+  readonly result: Result.Result<Description, IntercomClientError | IntercomRefused>;
+}
+
+/**
+ * How much a failed `Describe` shows about its session: a refusal proves the token, and taking the
+ * connection proves more than nothing answering.
+ */
+const evidenceRank = ({ result }: Described): number => {
+  if (Result.isSuccess(result) || Predicate.isTagged(result.failure, "IntercomRefused")) return 0;
+  return clientRefusalCode(result.failure) === "session_unresponsive" ? 1 : 2;
+};
+
+/** Most informative first, then by instance, so the outcome doesn't depend on listing order. */
+const byEvidence = (left: Described, right: Described): number =>
+  evidenceRank(left) - evidenceRank(right) ||
+  left.target.instance.localeCompare(right.target.instance);
 
 /** The caller couldn't reach the recipient, or the recipient refused before handling anything. */
 const refusedBy = (record: SessionRecord) => (error: IntercomClientError | IntercomRefused) =>
   new SessionToolRefusal({
-    code: Predicate.isTagged(error, "IntercomRefused") ? error.code : "session_unreachable",
+    code: Predicate.isTagged(error, "IntercomRefused") ? error.code : clientRefusalCode(error),
     session: viewOf(record),
   });
+
+/**
+ * A lone match is checked by the call itself. Among duplicates, the one session that answered
+ * `Describe` is addressed: answering proves it holds its record's token, while a silent record,
+ * such as a suspended Pi's, can't take the call anyway. Several answering sessions are ambiguous;
+ * with none, the most informative failure among owners not known to be dead names why it can't be
+ * reached, whatever order the registry listed them in.
+ */
+const resolvePeer = Effect.fn("IntercomTools.resolvePeer")(function* (to: string) {
+  const matches = (yield* peerRecords).filter((record) => record.sessionId === to);
+  if (matches.length <= 1) {
+    const [only] = matches;
+    if (only === undefined) return yield* new SessionToolRefusal({ code: "session_not_found" });
+    return only;
+  }
+  const live = yield* describeLive(matches);
+  const answering = live.filter(({ result }) => Result.isSuccess(result));
+  const [first] = answering;
+  if (first !== undefined && answering.length > 1)
+    return yield* new SessionToolRefusal({
+      code: "session_ambiguous",
+      session: viewOf(first.target),
+    });
+  if (first !== undefined) return first.target;
+  const [silent] = live.toSorted(byEvidence);
+  if (silent === undefined) return yield* new SessionToolRefusal({ code: "session_not_found" });
+  if (Result.isFailure(silent.result))
+    return yield* refusedBy(silent.target)(silent.result.failure);
+  return silent.target;
+});
 
 /** A recipient that never answered isn't a session anymore when its owner is dead. */
 const unanswered = (record: SessionRecord, error: IntercomClientError | IntercomRefused) =>
@@ -94,26 +140,40 @@ const unanswered = (record: SessionRecord, error: IntercomClientError | Intercom
     return yield* refusedBy(record)(error);
   });
 
+/** A refusal comes from the session itself, which proved it holds its token. */
+const silentState = (error: IntercomClientError | IntercomRefused): ListedSession["state"] => {
+  if (Predicate.isTagged(error, "IntercomRefused")) return "unavailable";
+  return clientRefusalCode(error) === "session_unresponsive" ? "unresponsive" : "unreachable";
+};
+
 const byName = (left: ListedSession, right: ListedSession): number =>
   (left.name ?? "").localeCompare(right.name ?? "") ||
   left.sessionId.localeCompare(right.sessionId);
 
-/** Every other live session, described live; one that doesn't answer in time is unresponsive. */
+/**
+ * Every other live session, described live; one that refuses is unavailable, one that doesn't
+ * answer in time is unresponsive, and one nothing answers for is unreachable. Only sessions that answered count as duplicates, since
+ * only they can be addressed.
+ */
 export const listSessions = Effect.fn("IntercomTools.list")(function* () {
   const described = yield* describeLive(yield* peerRecords);
   const counts = new Map<string, number>();
-  for (const { target } of described)
-    counts.set(target.sessionId, (counts.get(target.sessionId) ?? 0) + 1);
+  for (const { target, result } of described)
+    if (Result.isSuccess(result))
+      counts.set(target.sessionId, (counts.get(target.sessionId) ?? 0) + 1);
   const sessions: Array<ListedSession> = [];
   for (const { target, result } of described) {
-    const duplicate = (counts.get(target.sessionId) ?? 0) > 1;
     if (Result.isFailure(result)) {
-      sessions.push(Object.assign(viewOf(target), { state: "unresponsive" as const, duplicate }));
+      sessions.push(
+        Object.assign(viewOf(target), { state: silentState(result.failure), duplicate: false }),
+      );
       continue;
     }
     const { name, cwd, state } = result.success;
     const view = viewOf({ sessionId: target.sessionId, cwd, ...(name !== undefined && { name }) });
-    sessions.push(Object.assign(view, { state, duplicate }));
+    sessions.push(
+      Object.assign(view, { state, duplicate: (counts.get(target.sessionId) ?? 0) > 1 }),
+    );
   }
   sessions.sort(byName);
   return {

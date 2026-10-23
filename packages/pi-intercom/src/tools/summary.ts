@@ -24,7 +24,8 @@ export const sessionSubject = (session: Pick<SessionView, "sessionId" | "name">)
 const REFUSAL_MESSAGES: Record<ToolRefusalCode, string> = {
   session_not_found: "No live session has this id",
   session_ambiguous: "Several live sessions share this id",
-  session_unreachable: "The session isn't answering",
+  session_unreachable: "The session couldn't be reached",
+  session_unresponsive: "The session didn't answer in time",
   session_unavailable: "The session is shutting down",
   session_receive_disabled: "The session has turned off incoming messages",
   session_message_too_long: "The message is too long",
@@ -63,12 +64,15 @@ const listSummary = (
   details: Extract<SessionToolDetails, { readonly tool: "session_list" }>,
 ): CompactSummary => {
   const total = details.sessions.length + details.omitted;
-  const unresponsive = details.sessions.filter(({ state }) => state === "unresponsive").length;
+  const counted = (state: "unavailable" | "unresponsive" | "unreachable") => {
+    const count = details.sessions.filter((session) => session.state === state).length;
+    return count > 0 ? [`${count} ${state}`] : [];
+  };
   const duplicates = details.sessions.filter(({ duplicate }) => duplicate).length;
   return {
     action: "Listed",
     subject: countLabel(total, "session"),
-    counters: unresponsive > 0 ? [`${unresponsive} unresponsive`] : [],
+    counters: [...counted("unavailable"), ...counted("unresponsive"), ...counted("unreachable")],
     metadata: duplicates > 0 ? [countLabel(duplicates, "duplicate id")] : [],
     outcome: "success",
   };

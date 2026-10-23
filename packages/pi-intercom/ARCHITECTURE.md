@@ -67,7 +67,12 @@ time. Unknown liveness, including a record without a comparable start identity, 
 tombstone, so one concurrent sweeper retires it; the tombstone is read back and removed only when
 it is still the record judged dead, together with its socket in the shared socket directory.
 Otherwise it goes back unless its owner already wrote a new one. A tombstone left behind is
-removed only when it decodes to a dead owner. Each sweep examines a bounded number of records and
+removed only when it decodes to a dead owner or holds an abandoned undecodable record. A record
+file that doesn't decode is retired the same way, by a claim checked to have moved the same
+unchanged file. When the file still names a `pid` and `started`, only positive evidence that
+this owner is dead retires it, since a live owner rewrites its record only at start and on a name
+change; one naming no owner is retired once nothing changed it for a day. A tombstone that doesn't
+decode follows the same rule. One that is unsafe or unreadable is never touched. Each sweep examines a bounded number of records and
 directories for at most two seconds; the next sweep continues.
 
 ## Socket paths
@@ -119,8 +124,9 @@ handshake order, over a bound, or malformed closes its connection.
 
 A listen never takes over a bound path. Each client call opens its own connection under a
 deadline and fails with a typed reason: unreachable (no listener, or the connection failed before
-the request went out), unauthorized, disconnected (the connection ended before the answer),
-timeout, or protocol. Only unreachable and unauthorized prove the recipient handled nothing;
+the request went out), unresponsive (the deadline passed before the request went out),
+unauthorized, disconnected (the connection ended before the answer), timeout, or protocol. Only
+unreachable, unresponsive, and unauthorized prove the recipient handled nothing;
 after any other failure a `Deliver` may have been delivered. Host reads run only while the runtime
 still holds the session slot, in the same synchronous callback; a retired runtime answers
 `session_unavailable`. Telemetry stays free of message text, tokens, paths, and identities: RPC
@@ -149,12 +155,20 @@ The tools register only for main agents of reachable sessions; subagent children
 package. That keeps cross-session messaging a main-agent capability by design, not a security
 boundary: any process of the same OS user, a subagent's shell included, can read the records and
 complete the handshake. A peer is a registry record of another runtime whose owner isn't known to be dead,
-addressed by session id; a duplicated id is refused as `session_ambiguous`, an unknown one as
-`session_not_found`. Listing describes every record under the short `Describe` deadline and marks
-silent ones unresponsive. Owner liveness can spawn `ps`, so it is checked only for a record that
+addressed by session id; an unknown one is refused as `session_not_found`. Among records sharing
+an id, the one session that answers `Describe`, proving it holds its token, is addressed, so a
+suspended Pi's leftover record doesn't hide its live twin; several answering sessions are refused
+as `session_ambiguous`; with none, the most informative failure, a refusal before a timeout before
+silence, is reported regardless of listing order. Listing describes every record under the
+1.5-second `Describe` deadline, marks one that refused unavailable, one that held the connection
+past the deadline unresponsive, and one nothing answered for unreachable, and counts duplicates
+only among answering sessions. Owner liveness can spawn `ps`, so it is checked only for a record that
 didn't answer, and a silent record whose owner is dead is skipped. A send that times out or loses its connection reports an uncertain
 outcome and tells the model not to resend. `session_send` is model-only; list and read return
-`pi-intercom/session` structured results to codemode scripts. Refusals are error results with a
+`pi-intercom/session` structured results to codemode scripts. Arguments go through core's
+`toolArgumentPreparer`; the message length cap is stated in the tool description rather than the
+schema, so an overlong message reaches the tool and is refused as `session_message_too_long`,
+never cut. Refusals are error results with a
 compact issue; the agent's procedure stays in the expanded detail. Replay is anchored to
 `/intercom`, whose `receive on|off` flips the per-session receive switch.
 

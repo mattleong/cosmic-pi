@@ -358,6 +358,53 @@ layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom registry",
     }),
   );
 
+  it.effect("removes undecodable records only on evidence they are abandoned", () =>
+    Effect.gen(function* () {
+      const h = yield* registryHarness();
+      const own = currentProcessIdentity();
+      const ownerOf = (pid: number) =>
+        JSON.stringify({ version: 0, pid, started: own.started, cwd: "/project" });
+      const deadOwner = hex("1", 16);
+      const liveOwner = hex("2", 16);
+      const fresh = hex("3", 16);
+      const stale = hex("4", 16);
+      const unsafe = hex("5", 16);
+      const oldLiveOwner = hex("7", 16);
+      yield* h.writeRaw(deadOwner, ownerOf(yield* exitedPid));
+      yield* h.writeRaw(liveOwner, ownerOf(own.pid));
+      // A long-running owner writes its record only at start, so age alone proves nothing.
+      yield* h.writeRaw(oldLiveOwner, ownerOf(own.pid));
+      yield* ancient(h.fs, h.recordPath(oldLiveOwner));
+      yield* h.writeRaw(fresh, "{ not json");
+      yield* h.writeRaw(stale, "{ not json");
+      yield* ancient(h.fs, h.recordPath(stale));
+      yield* h.writeRaw(unsafe, "{ not json");
+      yield* h.fs.chmod(h.recordPath(unsafe), 0o644);
+      yield* ancient(h.fs, h.recordPath(unsafe));
+      // A sweeper that claimed an abandoned record and died before removing it left this.
+      const tombstone = h.paths.join(h.sessions, `.${hex("6", 16)}.json.${hex("0", 8)}.tombstone`);
+      yield* h.fs.writeFileString(tombstone, "{ not json");
+      yield* h.fs.chmod(tombstone, 0o600);
+      yield* ancient(h.fs, tombstone);
+      const liveTombstoneName = `.${hex("8", 16)}.json.${hex("0", 8)}.tombstone`;
+      const liveTombstone = h.paths.join(h.sessions, liveTombstoneName);
+      yield* h.fs.writeFileString(liveTombstone, ownerOf(own.pid));
+      yield* h.fs.chmod(liveTombstone, 0o600);
+      yield* ancient(h.fs, liveTombstone);
+
+      const swept = yield* h.registry.sweep();
+
+      expect(swept.records).toBe(2);
+      const remaining = yield* h.fs.readDirectory(h.sessions);
+      expect(remaining.toSorted()).toEqual(
+        [
+          ...[liveOwner, oldLiveOwner, fresh, unsafe].map((instance) => `${instance}.json`),
+          liveTombstoneName,
+        ].toSorted(),
+      );
+    }),
+  );
+
   it.effect("keeps a session that answers without asking whether its owner runs", () =>
     Effect.gen(function* () {
       const h = yield* registryHarness();

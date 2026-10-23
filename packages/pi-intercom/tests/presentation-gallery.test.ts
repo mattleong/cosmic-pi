@@ -43,9 +43,21 @@ const listing: SessionListContract = {
     { ...api, state: "busy", duplicate: false },
     { ...web, state: "idle", duplicate: false },
     {
+      sessionId: "019a2f6e-reloading",
+      cwd: "/Users/example/reloading",
+      state: "unavailable",
+      duplicate: false,
+    },
+    {
       sessionId: "019a2f6e-old",
       cwd: "/Users/example/old",
       state: "unresponsive",
+      duplicate: false,
+    },
+    {
+      sessionId: "019a2f6e-gone",
+      cwd: "/Users/example/gone",
+      state: "unreachable",
       duplicate: false,
     },
   ],
@@ -121,6 +133,18 @@ const scenarios = [
     tool: SESSION_TOOL.send,
     args: { to: web.sessionId, message },
     result: refused(SESSION_TOOL.send, "session_receive_disabled", web.sessionId),
+  },
+  {
+    title: "read a session that didn't answer in time",
+    tool: SESSION_TOOL.read,
+    args: { to: web.sessionId },
+    result: refused(SESSION_TOOL.read, "session_unresponsive", web.sessionId),
+  },
+  {
+    title: "read a session that is reloading",
+    tool: SESSION_TOOL.read,
+    args: { to: web.sessionId },
+    result: refused(SESSION_TOOL.read, "session_unavailable", web.sessionId),
   },
   {
     title: "unknown session",

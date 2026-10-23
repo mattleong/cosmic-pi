@@ -24,14 +24,18 @@ import {
   type LastMessage,
 } from "./protocol.ts";
 
-/** A live session answers `Describe` quickly; a silent one is listed as unresponsive. */
-export const DESCRIBE_DEADLINE: Duration.Input = "400 millis";
+/**
+ * Covers connecting, both handshake proofs, and the answer. A live session answers well within it
+ * even while its event loop is busy with a turn; one that doesn't is listed as unresponsive.
+ */
+export const DESCRIBE_DEADLINE: Duration.Input = "1500 millis";
 export const DELIVER_DEADLINE: Duration.Input = "3 seconds";
 export const READ_DEADLINE: Duration.Input = "2 seconds";
 export const DESCRIBE_CONCURRENCY = 64;
 
 const IntercomClientFailureSchema = Schema.Literals([
   "unreachable",
+  "unresponsive",
   "disconnected",
   "unauthorized",
   "timeout",
@@ -41,10 +45,12 @@ export type IntercomClientFailure = typeof IntercomClientFailureSchema.Type;
 
 /**
  * The call got no usable answer: nothing listens at the socket or the connection failed before
- * the request went out, the listener couldn't prove it holds the record's token or refused the
+ * the request went out (`unreachable`), the deadline passed before the request went out
+ * (`unresponsive`), the listener couldn't prove it holds the record's token or refused the
  * caller's proof, or, after the request went out, the connection ended, the deadline passed, or
- * the peer broke the protocol. Only `unreachable` and `unauthorized` prove the recipient never
- * handled the request; after any other failure a `Deliver` may still have been delivered.
+ * the peer broke the protocol. Only `unreachable`, `unresponsive`, and `unauthorized` prove the
+ * recipient never handled the request; after any other failure a `Deliver` may still have been
+ * delivered.
  */
 export class IntercomClientError extends Schema.TaggedError<IntercomClientError>()(
   "IntercomClientError",
@@ -146,12 +152,13 @@ const call = <A>(
       // A peer that answers with frames the client can't decode surfaces as a defect.
       Effect.catchDefect(() => Effect.fail(failWith("protocol"))),
       Effect.timeoutOrElse({ duration: deadline, orElse: () => Effect.fail(failWith("timeout")) }),
-      // Until the request goes out, the recipient has handled nothing.
+      // Until the request goes out, the recipient has handled nothing; a listener that held the
+      // connection past the deadline is still told apart from one that failed it.
       Effect.mapError((error) =>
         !requested &&
         Predicate.isTagged(error, "IntercomClientError") &&
         UNCERTAIN.has(error.reason)
-          ? failWith("unreachable")
+          ? failWith(error.reason === "timeout" ? "unresponsive" : "unreachable")
           : error,
       ),
     );

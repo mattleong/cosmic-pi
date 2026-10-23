@@ -24,24 +24,36 @@ const unsafe = () => Effect.fail(new PrivateFileError({ reason: "unsafe" }));
 export const ensureDirectoryPath = (path: string): Effect.Effect<void, PrivateFileError> =>
   Effect.asVoid(attempt(() => fs.mkdir(path, { recursive: true, mode: 0o700 })));
 
-/** Identifies one directory, so a claim by rename can be checked to have moved that directory. */
-export interface DirectoryIdentity {
+/** Identifies one entry, so a claim by rename can be checked to have moved that entry. */
+export interface EntryIdentity {
   readonly device: number;
   readonly inode: number;
   readonly modifiedMillis: number;
 }
 
-/** The identity of a real directory of this user at `path`, without following a link. */
-export const ownDirectory = (path: string): Effect.Effect<DirectoryIdentity, PrivateFileError> =>
+type EntryKind = (info: { isDirectory(): boolean; isFile(): boolean }) => boolean;
+
+const ownEntry = (
+  path: string,
+  isKind: EntryKind,
+): Effect.Effect<EntryIdentity, PrivateFileError> =>
   attempt(() => fs.lstat(path)).pipe(
     Effect.flatMap((info) =>
-      info.isDirectory() && isOwnedByCurrentUser(info)
+      isKind(info) && isOwnedByCurrentUser(info)
         ? Effect.succeed({ device: info.dev, inode: info.ino, modifiedMillis: info.mtimeMs })
         : unsafe(),
     ),
   );
 
-export const sameDirectory = (left: DirectoryIdentity, right: DirectoryIdentity): boolean =>
+/** The identity of a real directory of this user at `path`, without following a link. */
+export const ownDirectory = (path: string): Effect.Effect<EntryIdentity, PrivateFileError> =>
+  ownEntry(path, (info) => info.isDirectory());
+
+/** The identity of a regular file of this user at `path`, without following a link. */
+export const ownFile = (path: string): Effect.Effect<EntryIdentity, PrivateFileError> =>
+  ownEntry(path, (info) => info.isFile());
+
+export const sameEntry = (left: EntryIdentity, right: EntryIdentity): boolean =>
   left.device === right.device && left.inode === right.inode;
 
 /**

@@ -33,7 +33,11 @@ import {
 } from "../src/transport/client.ts";
 import {
   IntercomRefused,
+  MAX_CWD_CHARS,
   MAX_FRAME_BYTES,
+  MAX_IDENTITY_CHARS,
+  MAX_MESSAGE_CHARS,
+  MAX_READ_BYTES,
   type InboundMessage,
 } from "../src/transport/protocol.ts";
 import {
@@ -185,6 +189,30 @@ const gatheringClock = (base: Clock.Clock, arrivals: number): Clock.Clock => {
     sleep: (duration) => base.sleep(duration),
   };
 };
+
+/** Text JSON escapes to six bytes a code unit, the most it spends on one. */
+const escaped = (length: number) => "\u0001".repeat(length);
+
+/** A listener at `socket` that takes connections and never answers them. */
+const hangingListener = (socket: string) =>
+  Effect.acquireRelease(
+    Effect.callback<{
+      readonly server: ReturnType<typeof createServer>;
+      readonly peers: Set<Socket>;
+    }>((resume) => {
+      const peers = new Set<Socket>();
+      const server = createServer((peer) => {
+        peer.on("error", () => undefined);
+        peers.add(peer);
+      });
+      server.listen(socket, () => resume(Effect.succeed({ server, peers })));
+    }),
+    ({ server, peers }) =>
+      Effect.callback<void>((resume) => {
+        server.close(() => resume(Effect.void));
+        for (const peer of peers) peer.destroy();
+      }),
+  );
 
 /** Forwards connections at `socket` to `target`, recording what clients send. */
 const recordingRelay = (socket: string, target: string) =>
@@ -504,6 +532,45 @@ layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom transport"
       expect(
         yield* failureOf(describeSession({ socket, token: TOKEN }, "100 millis")),
       ).toMatchObject({ reason: "timeout" });
+    }),
+  );
+
+  it.effect("tells a listener that holds the connection past the deadline from a refused one", () =>
+    Effect.gen(function* () {
+      const socket = yield* socketPath;
+      yield* hangingListener(socket);
+
+      // The handshake never finished, so nothing was sent and a `Deliver` is certainly undone.
+      expect(
+        yield* failureOf(deliverMessage({ socket, token: TOKEN }, message, "100 millis")),
+      ).toMatchObject({ reason: "unresponsive" });
+      expect(
+        yield* failureOf(describeSession({ socket: `${socket}.missing`, token: TOKEN })),
+      ).toMatchObject({ reason: "unreachable" });
+    }),
+  );
+
+  it.effect("carries the largest message and read text even when every character is escaped", () =>
+    Effect.gen(function* () {
+      const socket = yield* socketPath;
+      const largest: InboundMessage = {
+        from: {
+          sessionId: escaped(MAX_IDENTITY_CHARS),
+          name: escaped(MAX_IDENTITY_CHARS),
+          cwd: escaped(MAX_CWD_CHARS),
+        },
+        messageId: escaped(128),
+        text: escaped(MAX_MESSAGE_CHARS),
+      };
+      const longest = escaped(MAX_READ_BYTES);
+      const inbound = fakeInbound({
+        readLast: Effect.succeed({ text: longest, truncated: false, state: "idle" }),
+      });
+      yield* startServer(socket, inbound);
+
+      expect(yield* deliverMessage({ socket, token: TOKEN }, largest)).toBe("woken");
+      expect(inbound.delivered).toEqual([largest]);
+      expect((yield* readLastMessage({ socket, token: TOKEN })).text).toBe(longest);
     }),
   );
 

@@ -32,6 +32,11 @@ export type SessionRecord = typeof SessionRecordSchema.Type;
 
 export const SessionRecordFromJson = Schema.fromJsonString(SessionRecordSchema);
 
+/** The owner a record names, read from a record that doesn't decode as a whole. */
+export const RecordOwnerFromJson = Schema.fromJsonString(
+  Schema.Struct({ pid: ProcessId, started: Schema.optionalKey(Schema.String) }),
+);
+
 /** Names the runtime that created a fallback socket directory, so a sweep can tell it is dead. */
 export const SocketOwnerSchema = Schema.Struct({
   version: Schema.Literal(RECORD_VERSION),

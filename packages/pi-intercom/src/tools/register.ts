@@ -20,6 +20,7 @@ import { stripTerminalControls, toPiToolOutputSchema } from "pi-cosmic-core";
 import { renderToolHeader, toolRunningLine } from "pi-cosmic-ui/tool";
 import type { IntercomRegistry } from "../registry/store.ts";
 import type { IntercomSession } from "../session/service.ts";
+import { MAX_MESSAGE_CHARS } from "../transport/protocol.ts";
 import {
   contractEnvelope,
   SESSION_TOOL,
@@ -30,7 +31,14 @@ import {
   type SessionToolDetails,
   type SessionToolName,
 } from "./contract.ts";
-import { SessionListParameters, SessionReadParameters, SessionSendParameters } from "./schema.ts";
+import {
+  prepareSessionListArguments,
+  prepareSessionReadArguments,
+  prepareSessionSendArguments,
+  SessionListParameters,
+  SessionReadParameters,
+  SessionSendParameters,
+} from "./schema.ts";
 import { listSessions, readSession, sendToSession, type SessionToolRefusal } from "./sessions.ts";
 import { collapsedResultText, sessionToolCompactSummary, sessionToolDetails } from "./summary.ts";
 import { listText, readText, refusalText, sendText } from "./text.ts";
@@ -149,10 +157,11 @@ export function registerSessionTools(
         name: SESSION_TOOL.list,
         label: "Session List",
         description:
-          "List the other live Pi sessions of this user on this machine, in any directory: sessionId, name, working directory, and whether each is idle, busy, or unresponsive. Address one with session_send or session_read by its sessionId; duplicate ids can't be addressed.",
+          "List the other live Pi sessions of this user on this machine, in any directory: sessionId, name, working directory, and whether each is idle, busy, unavailable, unresponsive, or unreachable. Address one with session_send or session_read by its sessionId; duplicate ids can't be addressed.",
         promptSnippet: "List the user's other live Pi sessions on this machine",
         promptGuidelines: GUIDELINES,
         parameters: SessionListParameters,
+        prepareArguments: prepareSessionListArguments,
         outputSchema: toPiToolOutputSchema(SessionListContractSchema),
         execute: (_id, _args, signal) =>
           runner.run(
@@ -178,11 +187,11 @@ export function registerSessionTools(
       defineTool({
         name: SESSION_TOOL.send,
         label: "Session Send",
-        description:
-          "Send a message of at most 16,384 characters to the main agent of another live Pi session, by sessionId from session_list. An idle session starts a turn to read it, a busy one reads it after its current turn, and one holding messages reads it after its user's next prompt. Nothing is stored for later: an unreachable session gets nothing. A timeout or lost connection is uncertain: the message may have arrived, so don't resend.",
+        description: `Send a message of at most ${MAX_MESSAGE_CHARS.toLocaleString("en-US")} characters to the main agent of another live Pi session, by sessionId from session_list. An idle session starts a turn to read it, a busy one reads it after its current turn, and one holding messages reads it after its user's next prompt. Nothing is stored for later: an unreachable session gets nothing. A timeout or lost connection is uncertain: the message may have arrived, so don't resend.`,
         promptSnippet: "Message the main agent of another live Pi session",
         promptGuidelines: GUIDELINES,
         parameters: SessionSendParameters,
+        prepareArguments: prepareSessionSendArguments,
         exposure: "model-only",
         execute: (_id, args, signal) =>
           settle(
@@ -208,6 +217,7 @@ export function registerSessionTools(
         promptSnippet: "Read another live Pi session's latest reply",
         promptGuidelines: GUIDELINES,
         parameters: SessionReadParameters,
+        prepareArguments: prepareSessionReadArguments,
         outputSchema: toPiToolOutputSchema(SessionReadContractSchema),
         execute: (_id, args, signal) =>
           settle(

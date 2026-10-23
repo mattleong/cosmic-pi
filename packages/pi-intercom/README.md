@@ -14,11 +14,11 @@ pi install "$PWD/packages/pi-intercom"
 
 Interactive (`tui`) and RPC sessions register automatically; print and JSON runs and subagent child processes never do. A registered session's main agent gets three tools; subagents get none.
 
-| Tool           | Does                                                                                             |
-| -------------- | ------------------------------------------------------------------------------------------------ |
-| `session_list` | Lists your other live sessions: session id, name, working directory, idle, busy, or unresponsive |
-| `session_send` | Sends a message of up to 16,384 characters to another session's main agent, by session id        |
-| `session_read` | Reads another session's latest assistant message (up to 32 KB) and whether it is busy            |
+| Tool           | Does                                                                                                                       |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `session_list` | Lists your other live sessions: session id, name, working directory, idle, busy, unavailable, unresponsive, or unreachable |
+| `session_send` | Sends a message of up to 32,768 characters to another session's main agent, by session id                                  |
+| `session_read` | Reads another session's latest assistant message (up to 32 KB) and whether it is busy                                      |
 
 A message is delivered at once or not at all; nothing is stored for later. An idle recipient starts a turn to read it, and a busy one reads it when its current turn ends. The recipient holds incoming messages without acting on them while a dialog is open, and after you interrupt it with Esc until your next prompt. Nothing limits how many messages a session receives; press Esc to stop a loop, or turn receiving off with `/intercom receive off`. When a send times out or its connection drops, the message may still have arrived, and the agent is told not to resend it.
 
@@ -57,6 +57,6 @@ Each registered session runtime keeps one private record while it runs:
 }
 ```
 
-The directories are 0700 and records and sockets 0600; a registry directory or record that is a link, belongs to another user, or is readable by others is refused. The token lets a caller and the session prove to each other that they read the same record, without the token itself crossing the socket, so treat records as secrets. A record is rewritten when you rename the session and removed when the session ends. Records left by crashed sessions are removed when another session starts. When the socket path under the agent directory would be too long for a Unix socket, the socket lives in a directory named for the instance inside `/tmp/pi-intercom-<uid>`, a private 0700 directory for your user.
+The directories are 0700 and records and sockets 0600; a registry directory or record that is a link, belongs to another user, or is readable by others is refused. The token lets a caller and the session prove to each other that they read the same record, without the token itself crossing the socket, so treat records as secrets. A record is rewritten when you rename the session and removed when the session ends. Records left by crashed sessions are removed when another session starts, and so are record files that no longer decode, once their owner is gone or they are a day old. When the socket path under the agent directory would be too long for a Unix socket, the socket lives in a directory named for the instance inside `/tmp/pi-intercom-<uid>`, a private 0700 directory for your user.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for ownership and lifecycle.
