@@ -279,28 +279,29 @@ const logsRequest = (input: BackgroundTaskToolInput) =>
     }),
   );
 
-const waitRequest = (input: BackgroundTaskToolInput) =>
-  Effect.gen(function* () {
-    const until = input.until;
-    if (until === undefined) {
-      return yield* new InvalidBackgroundCommandError({
-        message: "The wait action requires until.",
-      });
-    }
-    // An exit wait does not use contains or afterCursor, so it ignores their placeholders.
-    const exitPlaceholder = (value: string | number | undefined) =>
-      until === "exit" && isPlaceholder(value);
-    const request: WaitForBackgroundTask = {
-      id: yield* required(input.id, "id", input.action),
-      until,
-      ...(input.contains !== undefined &&
-        !exitPlaceholder(input.contains) && { contains: input.contains }),
-      ...(input.afterCursor !== undefined &&
-        !exitPlaceholder(input.afterCursor) && { afterCursor: input.afterCursor }),
-      ...(input.waitSeconds !== undefined && { waitSeconds: input.waitSeconds }),
-    };
-    return request;
-  });
+const waitRequest = Effect.fn("BackgroundTaskCommand.waitRequest")(function* (
+  input: BackgroundTaskToolInput,
+) {
+  const until = input.until;
+  if (until === undefined) {
+    return yield* new InvalidBackgroundCommandError({
+      message: "The wait action requires until.",
+    });
+  }
+  // An exit wait does not use contains or afterCursor, so it ignores their placeholders.
+  const exitPlaceholder = (value: string | number | undefined) =>
+    until === "exit" && isPlaceholder(value);
+  const request: WaitForBackgroundTask = {
+    id: yield* required(input.id, "id", input.action),
+    until,
+    ...(input.contains !== undefined &&
+      !exitPlaceholder(input.contains) && { contains: input.contains }),
+    ...(input.afterCursor !== undefined &&
+      !exitPlaceholder(input.afterCursor) && { afterCursor: input.afterCursor }),
+    ...(input.waitSeconds !== undefined && { waitSeconds: input.waitSeconds }),
+  };
+  return request;
+});
 
 export const executeBackgroundTaskCommand = Effect.fn("BackgroundTaskCommand.execute")(function* (
   input: BackgroundTaskToolInput,

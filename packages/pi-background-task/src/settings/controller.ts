@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import * as Schema from "effect/Schema";
 import {
   failureMessage,
   notifyAtHostBoundary,
@@ -15,6 +16,8 @@ import { BackgroundTaskNotFoundError } from "../task/errors.ts";
 import { TaskManagerComponent } from "../ui/manager.ts";
 import { taskSettingsSubcommand, type TaskSettingsActions } from "./task-settings.ts";
 
+const isTaskNotFound = Schema.is(BackgroundTaskNotFoundError);
+
 export interface TaskManagerActions {
   readonly isAvailable: () => boolean;
   readonly openActivity?: (signal?: AbortSignal) => Promise<boolean>;
@@ -29,12 +32,11 @@ function notifyActionFailure(
   action: "stop the task" | "clear finished tasks",
   cause: unknown,
 ): void {
-  const reason =
-    cause instanceof BackgroundTaskNotFoundError
-      ? "it no longer exists"
-      : cause instanceof Error
-        ? failureMessage(sanitizeTerminalLine(cause.message), "")
-        : "";
+  const reason = isTaskNotFound(cause)
+    ? "it no longer exists"
+    : cause instanceof Error
+      ? failureMessage(sanitizeTerminalLine(cause.message), "")
+      : "";
   notifyAtHostBoundary(ctx, `Couldn't ${action}${reason ? `: ${reason}` : ""}`, "error");
 }
 

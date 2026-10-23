@@ -19,10 +19,14 @@ import {
   type BackgroundTaskSettingValue,
 } from "./schema.ts";
 
-export class BackgroundTaskConfigError extends Schema.TaggedError<BackgroundTaskConfigError>()(
-  "BackgroundTaskConfigError",
-  { operation: Schema.String, path: Schema.String, message: Schema.String },
-) {}
+export class BackgroundTaskConfigError extends Schema.TaggedError<
+  BackgroundTaskConfigError,
+  { readonly brand: unique symbol }
+>()("BackgroundTaskConfigError", {
+  operation: Schema.String,
+  path: Schema.String,
+  message: Schema.String,
+}) {}
 
 // Fields decode independently: a wrong-typed value falls back alone, keeping the rest of the file.
 const decodeConfigFields = decodeTolerantFields(BackgroundTaskConfigSchema.fields, {

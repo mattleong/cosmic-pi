@@ -10,8 +10,8 @@ const invalidCommand = (message: string) => new InvalidBackgroundCommandError({ 
 const validTimeout = (timeoutSeconds: number | undefined) =>
   timeoutSeconds === undefined || (Number.isFinite(timeoutSeconds) && timeoutSeconds > 0);
 
-export const normalizeStartRequest = (request: StartBackgroundTask, path: Path.Path) =>
-  Effect.gen(function* () {
+export const normalizeStartRequest = Effect.fn("BackgroundTaskAdmission.normalizeStartRequest")(
+  function* (request: StartBackgroundTask, path: Path.Path) {
     // Whitespace can be shell syntax, such as an escaped trailing space, so the command runs as
     // submitted; trimming only detects a blank one.
     const command = request.command;
@@ -43,7 +43,8 @@ export const normalizeStartRequest = (request: StartBackgroundTask, path: Path.P
       ...(request.timeoutSeconds !== undefined && { timeoutSeconds: request.timeoutSeconds }),
     };
     return prepared;
-  });
+  },
+);
 
 const validCursor = (cursor: number | undefined) =>
   cursor === undefined || (Number.isInteger(cursor) && cursor >= 0);
@@ -54,8 +55,8 @@ const validContains = (contains: string | undefined) =>
   contains.length <= BACKGROUND_TASK_FIELD_BOUNDS.maxContainsChars &&
   !contains.includes("\0");
 
-export const validateWaitRequest = (request: WaitForBackgroundTask, waitSeconds: number) =>
-  Effect.gen(function* () {
+export const validateWaitRequest = Effect.fn("BackgroundTaskAdmission.validateWaitRequest")(
+  function* (request: WaitForBackgroundTask, waitSeconds: number) {
     if (!Number.isFinite(waitSeconds) || waitSeconds < 0)
       return yield* invalidCommand(
         "Background task wait must be a non-negative finite number of seconds.",
@@ -74,4 +75,5 @@ export const validateWaitRequest = (request: WaitForBackgroundTask, waitSeconds:
         `Output waits require a non-empty contains value of at most ${BACKGROUND_TASK_FIELD_BOUNDS.maxContainsChars} characters with no NUL byte.`,
       );
     return undefined;
-  });
+  },
+);

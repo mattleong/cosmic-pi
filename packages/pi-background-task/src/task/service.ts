@@ -489,18 +489,17 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
       }),
     );
 
-  const pollUntil = <A>(
+  const pollUntil = Effect.fn("BackgroundTaskService.pollUntil")(function* <A>(
     deadline: number,
     inspect: () => { readonly value: A; readonly change: Effect.Effect<unknown> | undefined },
-  ) =>
-    Effect.gen(function* () {
-      while (true) {
-        const { value, change } = yield* withLock(Effect.sync(inspect));
-        const remainingMillis = deadline - (yield* monotonicMillis);
-        if (!change || remainingMillis <= 0) return value;
-        yield* change.pipe(Effect.timeoutOption(Duration.millis(remainingMillis)));
-      }
-    });
+  ) {
+    while (true) {
+      const { value, change } = yield* withLock(Effect.sync(inspect));
+      const remainingMillis = deadline - (yield* monotonicMillis);
+      if (!change || remainingMillis <= 0) return value;
+      yield* change.pipe(Effect.timeoutOption(Duration.millis(remainingMillis)));
+    }
+  });
 
   const logs = Effect.fn("BackgroundTaskService.logs")(function* (request: ReadBackgroundLogs) {
     const record = yield* admitRecord(request.id);

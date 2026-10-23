@@ -66,14 +66,14 @@ export interface LocalProcessHandle {
   readonly terminate: (mode: "graceful" | "force") => Effect.Effect<void, LocalProcessError>;
 }
 
-export class LocalProcessError extends Schema.TaggedError<LocalProcessError>()(
-  "LocalProcessError",
-  {
-    operation: Schema.String,
-    reason: Schema.Literals(["cwd", "spawn", "terminate"]),
-    message: Schema.String,
-  },
-) {}
+export class LocalProcessError extends Schema.TaggedError<
+  LocalProcessError,
+  { readonly brand: unique symbol }
+>()("LocalProcessError", {
+  operation: Schema.String,
+  reason: Schema.Literals(["cwd", "spawn", "terminate"]),
+  message: Schema.String,
+}) {}
 
 export interface LocalProcessContract {
   readonly spawn: (
@@ -123,62 +123,59 @@ interface GroupLeader {
   readonly kill: () => void;
 }
 
-const makePosixGroupTermination = (
+const makePosixGroupTermination = Effect.fn("LocalProcess.makePosixGroupTermination")(function* (
   pid: number,
   leader: GroupLeader,
   exitGuard: ProcessGroupExitGuard,
-) =>
-  Effect.gen(function* () {
-    const forceRequested = yield* Deferred.make<void>();
-    let gracefulStop = false;
-    // Once the group is confirmed gone or swept after leader exit, its ID may be reused, so it is
-    // never signalled again.
-    let groupSettled = false;
-    const markSettled = Effect.suspend(() => {
-      groupSettled = true;
-      return exitGuard.release;
-    });
-    const sweepExitedGroup = Effect.suspend(() => {
-      if (groupSettled) return Effect.void;
-      signalProcessGroup(pid, "SIGKILL");
-      return markSettled;
-    });
-    const forceLeader = Effect.suspend(() => {
-      if (leader.exited()) return sweepExitedGroup;
-      if (signalProcessGroup(pid, "SIGKILL") !== "present") leader.kill();
-      return leader.awaitExit.pipe(
-        Effect.timeoutOrElse({
-          duration: "2 seconds",
-          orElse: () => Effect.fail(processError("terminate")),
-        }),
-        Effect.andThen(
-          Effect.suspend(() =>
-            signalProcessGroup(pid, 0) === "absent" ? markSettled : Effect.void,
-          ),
-        ),
-      );
-    });
-    // The group ID stays reserved while the leader runs, so it is the only signal target.
-    const signalGracefully = Effect.suspend(() => {
-      gracefulStop = true;
-      if (groupSettled) return Effect.void;
-      return signalProcessGroup(pid, "SIGTERM") === "absent" ? markSettled : Effect.void;
-    });
-    return {
-      terminate: (mode) =>
-        mode === "force"
-          ? Deferred.succeed(forceRequested, undefined).pipe(Effect.andThen(forceLeader))
-          : signalGracefully,
-      settleExit: Effect.suspend(() =>
-        gracefulStop
-          ? Effect.raceFirst(
-              awaitProcessGroupExit(pid),
-              Deferred.await(forceRequested).pipe(Effect.as(false)),
-            )
-          : Effect.succeed(false),
-      ).pipe(Effect.flatMap((gone) => (gone ? markSettled : sweepExitedGroup))),
-    } satisfies ProcessTreeTermination;
+) {
+  const forceRequested = yield* Deferred.make<void>();
+  let gracefulStop = false;
+  // Once the group is confirmed gone or swept after leader exit, its ID may be reused, so it is
+  // never signalled again.
+  let groupSettled = false;
+  const markSettled = Effect.suspend(() => {
+    groupSettled = true;
+    return exitGuard.release;
   });
+  const sweepExitedGroup = Effect.suspend(() => {
+    if (groupSettled) return Effect.void;
+    signalProcessGroup(pid, "SIGKILL");
+    return markSettled;
+  });
+  const forceLeader = Effect.suspend(() => {
+    if (leader.exited()) return sweepExitedGroup;
+    if (signalProcessGroup(pid, "SIGKILL") !== "present") leader.kill();
+    return leader.awaitExit.pipe(
+      Effect.timeoutOrElse({
+        duration: "2 seconds",
+        orElse: () => Effect.fail(processError("terminate")),
+      }),
+      Effect.andThen(
+        Effect.suspend(() => (signalProcessGroup(pid, 0) === "absent" ? markSettled : Effect.void)),
+      ),
+    );
+  });
+  // The group ID stays reserved while the leader runs, so it is the only signal target.
+  const signalGracefully = Effect.suspend(() => {
+    gracefulStop = true;
+    if (groupSettled) return Effect.void;
+    return signalProcessGroup(pid, "SIGTERM") === "absent" ? markSettled : Effect.void;
+  });
+  return {
+    terminate: (mode) =>
+      mode === "force"
+        ? Deferred.succeed(forceRequested, undefined).pipe(Effect.andThen(forceLeader))
+        : signalGracefully,
+    settleExit: Effect.suspend(() =>
+      gracefulStop
+        ? Effect.raceFirst(
+            awaitProcessGroupExit(pid),
+            Deferred.await(forceRequested).pipe(Effect.as(false)),
+          )
+        : Effect.succeed(false),
+    ).pipe(Effect.flatMap((gone) => (gone ? markSettled : sweepExitedGroup))),
+  } satisfies ProcessTreeTermination;
+});
 
 const verifyCwd = (fs: FileSystem.FileSystem, cwd: string) =>
   fs.stat(cwd).pipe(
@@ -339,7 +336,7 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (request: Loc
   observe("stdout", child.stdout);
   observe("stderr", child.stderr);
   const exitFiber = yield* Deferred.await(leaderExit).pipe(
-    Effect.flatMap((exit) => tree.settleExit.pipe(Effect.as(exit))),
+    Effect.tap(tree.settleExit),
     Effect.forkScoped({ startImmediately: true }),
   );
 

@@ -83,16 +83,15 @@ export function registerBackgroundTaskApplication(
         }),
         { agentDirectory: getAgentDir, packageName: "pi-background-task" },
       ),
-    startup: (input) =>
-      Effect.gen(function* () {
-        yield* bestEffortHostBootstrap("pi-background-task.preview-settings", (signal) =>
-          boundaries.loadSettings(input.cwd, input.projectTrusted, signal),
-        );
-        return {
-          config: yield* BackgroundTaskConfigStore,
-          scheduler: yield* CodePreviewSchedulerService,
-        };
-      }),
+    startup: Effect.fn("BackgroundTaskApplication.startup")(function* (input) {
+      yield* bestEffortHostBootstrap("pi-background-task.preview-settings", (signal) =>
+        boundaries.loadSettings(input.cwd, input.projectTrusted, signal),
+      );
+      return {
+        config: yield* BackgroundTaskConfigStore,
+        scheduler: yield* CodePreviewSchedulerService,
+      };
+    }),
     onActivated: ({ ctx, publishesReplay }, token, prepared) => {
       registerBackgroundTaskTool(
         pi,

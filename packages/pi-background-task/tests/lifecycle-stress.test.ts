@@ -1,4 +1,4 @@
-import { describe, expect, it } from "@effect/vitest";
+import { assert, describe, expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -6,6 +6,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Predicate from "effect/Predicate";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -17,7 +18,7 @@ import {
 } from "../src/boundary/local-process.ts";
 import { normalizeConfig } from "../src/config/options.ts";
 import { BackgroundTaskConfigStore } from "../src/config/store.ts";
-import { BackgroundRuntimeClosedError, BackgroundTerminationError } from "../src/task/errors.ts";
+import { BackgroundRuntimeClosedError } from "../src/task/errors.ts";
 import { BackgroundTaskService } from "../src/task/service.ts";
 
 const LIFETIMES = 6;
@@ -200,10 +201,8 @@ describe("background task lifecycle stress", () => {
           expect(yield* Deferred.isDone(batchSettled)).toBe(false);
           yield* fixtures[15]!.complete();
           const failure = yield* Fiber.join(stopping);
-          expect(failure).toBeInstanceOf(BackgroundTerminationError);
-          if (failure instanceof BackgroundTerminationError) {
-            expect(new Set(failure.id.split(", "))).toEqual(new Set([tasks[0]!.id, tasks[16]!.id]));
-          }
+          assert(Predicate.isTagged(failure, "BackgroundTerminationError"));
+          expect(new Set(failure.id.split(", "))).toEqual(new Set([tasks[0]!.id, tasks[16]!.id]));
           expect((yield* service.list("active")).map((task) => task.id).toSorted()).toEqual(
             [tasks[0]!.id, tasks[16]!.id].toSorted(),
           );

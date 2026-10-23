@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -81,7 +82,7 @@ describe("real process cleanup", () => {
           cwd: ".",
         }),
       );
-      const pids = tasks.flatMap((task) => (task.pid === undefined ? [] : [task.pid]));
+      const pids = Arr.flatMapNullishOr(tasks, (task) => task.pid);
       expect(pids).toHaveLength(tasks.length);
       yield* killGroupsAfterward(pids);
       for (const task of tasks) {

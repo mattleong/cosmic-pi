@@ -1,5 +1,6 @@
 import type { SettingItem } from "@earendil-works/pi-tui";
 import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 import {
   failureMessage,
   isProjectTrusted,
@@ -44,6 +45,7 @@ const SCOPES = [
 type TaskSettingsScope = (typeof SCOPES)[number]["name"];
 
 const INHERIT = "inherit";
+const isConfigError = Schema.is(BackgroundTaskConfigError);
 const sessionValue = (config: BackgroundTaskConfig, id: BackgroundTaskSettingId) =>
   sanitizeTerminalLine(String(config[id] ?? ""));
 const UNTRUSTED = "Trust this project before changing its background task settings";
@@ -178,7 +180,7 @@ function createTaskSettingsSubcommand(
         actions.read({ cwd: ctx.cwd, scope }).then(
           (own) => ({ scope, own }),
           (cause: unknown) => {
-            if (!(cause instanceof BackgroundTaskConfigError)) throw cause;
+            if (!isConfigError(cause)) throw cause;
             return {
               scope,
               problem: `${sanitizeTerminalLine(cause.path)} can't be read or isn't a JSON object`,
