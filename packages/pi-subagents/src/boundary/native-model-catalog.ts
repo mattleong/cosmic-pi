@@ -167,12 +167,12 @@ export interface NativeModelCatalogLayerOptions {
 const catalogError = (runtime: LocalCliRuntime, code: string, message: string) =>
   new NativeModelCatalogError({ runtime, code, message });
 
-const supportedEffortSet: ReadonlySet<string> = new Set(
-  SUBAGENT_EFFORTS.filter((effort) => effort !== "off"),
+const isSupportedEffort = Schema.is(
+  Schema.Literals(SUBAGENT_EFFORTS.filter((effort) => effort !== "off")),
 );
 
 const normalizeEfforts = (values: ReadonlyArray<string>): ReadonlyArray<SubagentEffort> =>
-  values.filter((value): value is SubagentEffort => supportedEffortSet.has(value));
+  values.filter(isSupportedEffort);
 
 const normalizeDescription = (value: string): string => value.replace(/[\t\n\r]/gu, " ").trim();
 

@@ -15,7 +15,7 @@ import { attachBoundedLineParser } from "./bounded-line-parser.ts";
 import { decodeUnknownJsonOption } from "./wire-shared.ts";
 import { MAX_SUPERVISOR_CHANNEL_LINE_BYTES } from "../supervisor/protocol.ts";
 import {
-  boundedString,
+  boundedTextSchema,
   validRpcId,
   rpcKey,
   toolDefinitions,
@@ -51,8 +51,10 @@ const SERVER_VERSION = "3.0.0";
 const MAX_QUEUED_INPUT_BYTES = 2 * MAX_SUPERVISOR_CHANNEL_LINE_BYTES;
 const MAX_CONCURRENT_CALLS = 16;
 
+const isDiagnosticText = Schema.is(boundedTextSchema(512));
+
 const fixedDiagnostic = (message: string): void => {
-  const text = boundedString(message, 512) ? message : "Private supervisor helper failed.";
+  const text = isDiagnosticText(message) ? message : "Private supervisor helper failed.";
   process.stderr.write(`${text}\n`);
 };
 

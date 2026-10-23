@@ -1,5 +1,6 @@
 import { hasObjectRuntimeType, invokeHostCallback } from "pi-cosmic-core";
 import * as Effect from "effect/Effect";
+import * as Predicate from "effect/Predicate";
 import {
   completionBlock,
   inlineCompletionReport,
@@ -170,7 +171,7 @@ export function notificationRouter(dependencies: RunNotificationRoutingDependenc
       { concurrency: 4 },
     ).pipe(
       Effect.map((keys) => ({
-        deliveredCompletionKeys: keys.filter((key): key is string => key !== undefined),
+        deliveredCompletionKeys: keys.filter(Predicate.isNotUndefined),
       })),
     );
   };

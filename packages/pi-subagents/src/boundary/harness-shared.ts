@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
@@ -47,14 +48,11 @@ export const safeAgentDirectory = Effect.fn("HarnessShared.safeAgentDirectory")(
   return canonical;
 });
 
-const isJsonArray = (value: Schema.Json): value is ReadonlyArray<Schema.Json> =>
-  Array.isArray(value);
-
 const boundedJsonValue = (value: Schema.Json, depth = 0): boolean => {
   if (depth > 16) return false;
   if (value === null || Predicate.isString(value) || Predicate.isBoolean(value)) return true;
   if (Predicate.isNumber(value)) return Number.isFinite(value);
-  if (isJsonArray(value))
+  if (Arr.isArray<Schema.Json>(value))
     return value.length <= 1_024 && value.every((entry) => boundedJsonValue(entry, depth + 1));
   if (!hasObjectRuntimeType(value)) return false;
   const entries = Object.entries(value);

@@ -45,8 +45,7 @@ export const SupervisorChannelIdSchema = Schema.String.check(
 ).pipe(Schema.brand("SupervisorChannelId"));
 export type SupervisorChannelId = typeof SupervisorChannelIdSchema.Type;
 
-export const isSupervisorRunId = (value: string): value is SupervisorRunId =>
-  RUN_ID_PATTERN.test(value);
+export const isSupervisorRunId = Schema.is(SupervisorRunIdSchema);
 
 export const SupervisorAuthTokenSchema = Schema.String.check(
   Schema.isMinLength(SUPERVISOR_AUTH_TOKEN_CHARS),

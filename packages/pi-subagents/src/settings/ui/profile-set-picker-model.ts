@@ -1,3 +1,4 @@
+import * as Predicate from "effect/Predicate";
 import {
   PROFILE_IDS,
   type ProfileId,
@@ -80,7 +81,7 @@ const scopeEntries = (
             ? `${countLabel(invalidProfileCount, "invalid profile")}, fix before use`
             : "invalid structure, delete and create a new set"
           : countLabel(profileCount, "saved profile"),
-      ].filter((value): value is string => value !== undefined);
+      ].filter(Predicate.isNotUndefined);
       return {
         kind: "set",
         key: `${scope}:${name}`,

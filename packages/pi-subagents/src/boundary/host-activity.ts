@@ -21,7 +21,8 @@ import {
   subagentActivityItems,
 } from "../ui/run-activity.ts";
 
-type SubagentActivityInput = "resume" | "message" | "reply" | "rename";
+const SubagentActivityInputSchema = Schema.Literals(["resume", "message", "reply", "rename"]);
+type SubagentActivityInput = typeof SubagentActivityInputSchema.Type;
 
 /** An admitted Activity action with the text it needs: only resume runs without any. */
 export type SubagentActivityRequest =
@@ -97,8 +98,7 @@ const sameAssignment = (before: SubagentRunView, after: SubagentRunView): boolea
   before.state === after.state &&
   before.question?.requestId === after.question?.requestId;
 
-const isInputAction = (action: string): action is SubagentActivityInput =>
-  action === "resume" || action === "message" || action === "reply" || action === "rename";
+const isInputAction = Schema.is(SubagentActivityInputSchema);
 
 // A resume's text is the run's next assignment; a rename is cut to the display-name bound.
 const INPUT_LIMITS = {

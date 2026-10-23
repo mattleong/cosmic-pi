@@ -12,6 +12,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
+import * as Predicate from "effect/Predicate";
 import type { ClaudeLeadingTagDiagnostic } from "../backend/local-claude-correlation.ts";
 import type { ClaudeProtocolEvent } from "../backend/local-claude-protocol.ts";
 import { safeAgentDirectory } from "./harness-shared.ts";
@@ -157,7 +158,7 @@ const ownedLedgerDirectories = Effect.fn("LocalClaudeDebug.ownedLedgers")(functi
     { concurrency: 16 },
   );
   return owned
-    .filter((entry): entry is OwnedLedgerDirectory => Boolean(entry))
+    .filter(Predicate.isNotUndefined)
     .toSorted((left, right) => left.modifiedAt - right.modifiedAt);
 });
 

@@ -543,8 +543,7 @@ describe("private supervisor channel", () => {
     function* () {
       const runId = "agent-supervisor-late-mkdir";
       const { agentDirectory, scope } = yield* stageAgentHome("pi-subagents-supervisor-mkdir-");
-      const isStateDirectory = (path: unknown): path is string =>
-        Predicate.isString(path) && nodePath.basename(path).startsWith(`${runId}-`);
+      const isStateDirectory = (path: string) => nodePath.basename(path).startsWith(`${runId}-`);
       const mkdirEntered = yield* Deferred.make<string>();
       const mkdirGate = deferredPromise();
       const lateRemoval = yield* Deferred.make<void>();
@@ -552,7 +551,8 @@ describe("private supervisor channel", () => {
       const createDirectory = nodeFsPromises.mkdir;
       const removeDirectory = nodeFsPromises.rmdir;
       const gatedMkdir = vi.spyOn(nodeFsPromises, "mkdir").mockImplementation((path, options) => {
-        if (!isStateDirectory(path)) return createDirectory(path, options);
+        if (!Predicate.isString(path) || !isStateDirectory(path))
+          return createDirectory(path, options);
         Deferred.doneUnsafe(mkdirEntered, Effect.succeed(path));
         return mkdirGate.promise.then(() =>
           createDirectory(path, options).then((created) => {
@@ -563,7 +563,8 @@ describe("private supervisor channel", () => {
       });
       const observedRmdir = vi.spyOn(nodeFsPromises, "rmdir").mockImplementation((path, options) =>
         removeDirectory(path, options).finally(() => {
-          if (isStateDirectory(path)) Deferred.doneUnsafe(lateRemoval, Effect.void);
+          if (Predicate.isString(path) && isStateDirectory(path))
+            Deferred.doneUnsafe(lateRemoval, Effect.void);
         }),
       );
       yield* Effect.addFinalizer(() =>

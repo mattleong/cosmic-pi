@@ -1,4 +1,5 @@
 import { flow } from "effect/Function";
+import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import { decodeUnknownOrUndefined, freezeSnapshot } from "pi-cosmic-core";
 import {
@@ -344,8 +345,7 @@ export const encodeSubagentContract = Schema.encodeSync(
   STRICT_PARSE_OPTIONS,
 );
 
-export const isSubagentContractTool = (tool: string): tool is SubagentContractTool =>
-  Object.hasOwn(CONTRACT_SCHEMAS, tool);
+export const isSubagentContractTool = Schema.is(Schema.Literals(Rec.keys(CONTRACT_SCHEMAS)));
 
 export const decodeSubagentContract = <Tool extends SubagentContractTool>(tool: Tool) => {
   const schema: (typeof CONTRACT_SCHEMAS)[Tool] = CONTRACT_SCHEMAS[tool];

@@ -15,7 +15,12 @@ import { isSafeNativeModelSelector } from "../profiles/model.ts";
 import type { SubagentParentContext } from "../run/model.ts";
 import { invalidRequest, type InvalidSubagentRequestError } from "../run/errors.ts";
 import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
-import { isAgentToolName, type AgentToolName, type SubagentToolName } from "../run/tool-policy.ts";
+import {
+  isAgentToolName,
+  SUBAGENT_TOOL_NAMES,
+  type AgentToolName,
+  type SubagentToolName,
+} from "../run/tool-policy.ts";
 import { SubagentContractSchema, encodeSubagentContract } from "./contract-schema.ts";
 import {
   AGENT_TOOL_SCHEMAS,
@@ -169,8 +174,7 @@ type ToolSchemas = {
 };
 const TOOL_SCHEMAS: ToolSchemas = SUBAGENT_TOOL_SCHEMAS;
 
-const isSubagentToolName = (tool: string): tool is SubagentToolName =>
-  Object.hasOwn(TOOL_SCHEMAS, tool);
+const isSubagentToolName = Schema.is(Schema.Literals(SUBAGENT_TOOL_NAMES));
 
 const decodeToolArguments = <N extends SubagentToolName>(
   tool: N,

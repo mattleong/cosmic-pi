@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
 import { absurd } from "effect/Function";
@@ -64,28 +65,22 @@ type McpToolResult = {
   readonly isError?: true;
 };
 
-export const boundedString = <ValueInput>(
-  value: ValueInput,
-  maximum: number,
-  nonEmpty = true,
-): value is ValueInput & string =>
-  Predicate.isString(value) && value.length <= maximum && (!nonEmpty || value.trim().length > 0);
+/** Nonblank text of at most `maximum` characters. */
+export const boundedTextSchema = (maximum: number) =>
+  Schema.String.check(Schema.isMaxLength(maximum), Schema.isPattern(/\S/u));
 
-const isRpcId = Schema.is(RpcIdSchema);
-export const validRpcId = <ValueInput>(value: ValueInput): value is ValueInput & RpcId =>
-  isRpcId(value);
+const isThreadId = Schema.is(boundedTextSchema(MAX_SUPERVISOR_MCP_THREAD_ID_CHARS));
+
+export const validRpcId = Schema.is(RpcIdSchema);
 
 export const rpcKey = (value: RpcId): string => `${runtimeTypeName(value)}:${String(value)}`;
-
-const isJsonArray = (value: Schema.Json): value is ReadonlyArray<Schema.Json> =>
-  Array.isArray(value);
 
 const boundedMetadata = (value: Schema.Json, depth = 0): boolean => {
   if (depth > MAX_METADATA_DEPTH) return false;
   if (value === null || Predicate.isBoolean(value)) return true;
   if (Predicate.isNumber(value)) return Number.isFinite(value);
   if (Predicate.isString(value)) return value.length <= MAX_METADATA_STRING_CHARS;
-  if (isJsonArray(value))
+  if (Arr.isArray<Schema.Json>(value))
     return (
       value.length <= MAX_METADATA_ENTRIES &&
       value.every((entry) => boundedMetadata(entry, depth + 1))
@@ -187,7 +182,7 @@ const decodeUnservedMessage = Schema.decodeUnknownResult(UnknownMessage, exactMe
 const callerThreadId = (meta: Schema.Json | undefined): string | undefined => {
   if (!isJsonObject(meta)) return undefined;
   const threadId = meta.threadId;
-  return boundedString(threadId, MAX_SUPERVISOR_MCP_THREAD_ID_CHARS) ? threadId : undefined;
+  return isThreadId(threadId) ? threadId : undefined;
 };
 
 export const decodeMcpMessage = (value: Schema.Json): DecodedMcpMessage | undefined => {

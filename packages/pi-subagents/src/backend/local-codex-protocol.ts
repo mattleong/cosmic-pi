@@ -192,8 +192,8 @@ const ErrorNotification = Schema.Struct({
 });
 
 const normalizedWarning = (summary: string, details?: string | null): string => {
-  const parts = [summary.trim(), details?.trim()]
-    .filter((part): part is string => Boolean(part))
+  const parts = [summary.trim(), details?.trim() ?? ""]
+    .filter((part) => part.length > 0)
     .filter((part, index, values) => index === 0 || part !== values[0]);
   return (parts.join("\n") || "Codex warning.").slice(0, MAX_WARNING_TEXT_CHARS);
 };

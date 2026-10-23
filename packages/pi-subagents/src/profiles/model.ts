@@ -1,5 +1,7 @@
 import { supportsFastModel } from "pi-better-openai/fast-models";
+import * as Arr from "effect/Array";
 import * as Equivalence from "effect/Equivalence";
+import * as Schema from "effect/Schema";
 import {
   SUBAGENT_EFFORTS,
   subagentRuntimeSupportsEffort,
@@ -32,8 +34,7 @@ export const mapProfileIds = <A>(f: (id: ProfileId) => A) => ({
   generalist: f("generalist"),
 });
 
-export const isProfileId = (value: string): value is ProfileId =>
-  PROFILE_IDS.some((profileId) => profileId === value);
+export const isProfileId = Schema.is(Schema.Literals(PROFILE_IDS));
 
 export const MAX_PROFILE_CANDIDATES = 32;
 export const MAX_PROFILE_MODEL_SELECTOR_CHARS = 256;
@@ -110,13 +111,9 @@ export const cloneProfileRoute = (route: ProfileRoute): ProfileRoute => ({
   candidates: cloneProfileCandidates(route.candidates),
 });
 
-export const isDeclaredCandidateList = (
-  route: Exclude<DeclaredProfileRoute, "disabled">,
-): route is ReadonlyArray<ProfileCandidate> => Array.isArray(route);
-
 export const normalizeDeclaredProfileRoute = (route: DeclaredProfileRoute): ProfileRoute => {
   if (route === "disabled") return { candidates: [] };
-  return { candidates: cloneProfileCandidates(isDeclaredCandidateList(route) ? route : [route]) };
+  return { candidates: cloneProfileCandidates(Arr.ensure(route)) };
 };
 
 export const isLocalPiProfileCandidate = (candidate: Pick<ProfileCandidate, "runtime">): boolean =>

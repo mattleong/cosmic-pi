@@ -6,17 +6,19 @@ import {
   SupervisorChannelConfigSchema,
   type SupervisorChannelConfig,
 } from "../supervisor/protocol.ts";
-import { boundedString } from "../supervisor/mcp-wire.ts";
+import { boundedTextSchema } from "../supervisor/mcp-wire.ts";
 import { nodeFsConstants as constants, nodeFsPromises, nodePath } from "pi-cosmic-core";
 
 const { lstat, open } = nodeFsPromises;
+
+const isConfigArgument = Schema.is(boundedTextSchema(4096));
 
 export const configArgument = (argv: ReadonlyArray<string>): string | undefined => {
   const argument = argv[3];
   if (
     argv.length !== 4 ||
     argv[2] !== "--config" ||
-    !boundedString(argument, 4096) ||
+    !isConfigArgument(argument) ||
     !nodePath.isAbsolute(argument) ||
     argument.includes("\0")
   )

@@ -51,8 +51,7 @@ export const forkPromptCacheRoute = (
 export const forkPromptCacheKey = (parentSessionId: string): string =>
   Array.from(parentSessionId).slice(0, MAX_PROMPT_CACHE_KEY_CHARS).join("");
 
-const isSystemMessage = (message: RequestMessage): message is SystemMessage =>
-  message.role === "system";
+const isSystemMessage = (message: RequestMessage) => message.role === "system";
 
 const withoutInheritedTools = (
   message: SystemMessage,

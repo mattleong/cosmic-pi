@@ -1,4 +1,4 @@
-import * as Predicate from "effect/Predicate";
+import * as Schema from "effect/Schema";
 
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -102,13 +102,13 @@ const sharesParentPromptCache = (
   return parentModel !== undefined && forkPromptCacheRoute(parentModel) !== undefined;
 };
 
-const transferableRuntimeApiKey = (value: string | undefined): value is string =>
-  Predicate.isString(value) &&
-  value.length > 0 &&
-  value.length <= 8_192 &&
-  !value.includes("\0") &&
-  !value.includes("\r") &&
-  !value.includes("\n");
+const isTransferableRuntimeApiKey = Schema.is(
+  Schema.String.check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(8_192),
+    Schema.isPattern(/^[^\0\r\n]*$/u),
+  ),
+);
 
 interface ResolvedModel {
   readonly model: string;
@@ -158,7 +158,7 @@ const resolvePiModel = Effect.fn("HostProfileResolution.resolvePiModel")(functio
         message: `Unable to resolve runtime authentication for ${modelId}.`,
       }),
   });
-  if (!auth.ok || !transferableRuntimeApiKey(auth.apiKey))
+  if (!auth.ok || !isTransferableRuntimeApiKey(auth.apiKey))
     return yield* new InvalidSubagentRequestError({
       code: "pi_auth_unavailable",
       message: `Transferable runtime authentication is unavailable for ${modelId}.`,

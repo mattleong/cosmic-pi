@@ -1,3 +1,4 @@
+import * as Predicate from "effect/Predicate";
 import { countLabel, formatCost } from "pi-cosmic-core";
 import type { SubagentProjection, SubagentRunView } from "./model.ts";
 import { isActiveRunState } from "./model.ts";
@@ -30,6 +31,6 @@ export const fleetStatus = (projection: SubagentProjection): string | undefined 
     paused ? `${paused} paused` : undefined,
     spent ? `${formatCost(spent)} this session` : undefined,
   ]
-    .filter((part): part is string => part !== undefined)
+    .filter(Predicate.isNotUndefined)
     .join(" · ");
 };

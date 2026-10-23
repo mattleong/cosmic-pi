@@ -1,3 +1,4 @@
+import * as Predicate from "effect/Predicate";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { sanitizeTerminalLine, synchronousNow } from "pi-cosmic-core";
@@ -58,7 +59,7 @@ const renderHierarchyRow = (
     run.currentTool ? theme.fg("accent", sanitizeTerminalLine(run.currentTool)) : undefined,
     timing ? theme.fg("muted", timing) : undefined,
   ]
-    .filter((value): value is string => value !== undefined)
+    .filter(Predicate.isNotUndefined)
     .join(theme.fg("dim", " · "));
   const combined = `${themedIdentity}${theme.fg("dim", " · ")}${metadata}`;
   if (visibleWidth(combined) <= width) return combined;

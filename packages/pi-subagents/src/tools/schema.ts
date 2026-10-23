@@ -1,5 +1,6 @@
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { JsonObject, JsonValue } from "pi-cosmic-core";
@@ -314,8 +315,8 @@ const WORKSPACE_ACTION_FIELDS = {
     readonly optional: ReadonlyArray<WorkspaceField>;
   }
 >;
-const WORKSPACE_FIELDS = Object.keys(WorkspaceParameters.properties).filter(
-  (field): field is WorkspaceField => field !== "action",
+const WORKSPACE_FIELDS = Rec.keys(WorkspaceParameters.properties).filter(
+  (field) => field !== "action",
 );
 
 // Models fill fields an action doesn't use with blank text, false, or zero; those say nothing.

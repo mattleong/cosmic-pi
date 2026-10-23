@@ -78,10 +78,7 @@ export const renderSubagentStartCall = (
   return container;
 };
 
-type SelectedStartEntry = Extract<SubagentStartEntry, { readonly routeStatus: "selected" }>;
-
-const selectedRoute = (entry: SubagentStartEntry): entry is SelectedStartEntry =>
-  entry.routeStatus === "selected";
+const selectedRoute = (entry: SubagentStartEntry) => entry.routeStatus === "selected";
 
 const routeLabel = (entry: SubagentStartEntry): string => {
   if (selectedRoute(entry)) return formatRunRoute(entry);

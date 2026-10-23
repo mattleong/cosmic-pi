@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import * as Predicate from "effect/Predicate";
 import { revisionSummary } from "../workspace/diffstat.ts";
 import type {
   WorkspacePreparation,
@@ -88,13 +89,12 @@ const staleRevision = () =>
   invalid("workspace_revision_stale", "The immutable workspace revision no longer matches.");
 
 const engineRevision = (service: WorkspaceServiceContract, { handle }: WorkspaceBinding) =>
-  service.revision({ workspaceId: handle.workspaceId, ownerId: handle.ownerId }).pipe(
-    Effect.mapError(mapWorkspaceError),
-    Effect.filterOrFail(
-      (revision): revision is WorkspaceRevision => revision !== undefined,
-      staleRevision,
-    ),
-  );
+  service
+    .revision({ workspaceId: handle.workspaceId, ownerId: handle.ownerId })
+    .pipe(
+      Effect.mapError(mapWorkspaceError),
+      Effect.filterOrFail(Predicate.isNotUndefined, staleRevision),
+    );
 
 /** A review of the current revision; a preparation of it stays integrable. */
 const reviewed = (knowledge: RevisionKnowledge, revisionId: string): RevisionKnowledge =>

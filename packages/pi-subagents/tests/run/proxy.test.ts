@@ -54,10 +54,9 @@ const offerProxyCancel = (control: FakeChildControl, requestId: string) => {
 };
 
 const responseFor = (control: FakeChildControl, requestId: string): ProxyResponse | undefined =>
-  control.ipc.find(
-    (message): message is ProxyResponse =>
-      message.type === "proxy_response" && message.requestId === requestId,
-  );
+  control.ipc
+    .filter((message) => message.type === "proxy_response")
+    .find((message) => message.requestId === requestId);
 
 const proxyLayer = (
   fake: ReturnType<typeof fakeChildLayer>,

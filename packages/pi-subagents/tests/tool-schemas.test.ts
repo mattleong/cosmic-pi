@@ -1,9 +1,4 @@
-import {
-  fauxAssistantMessage,
-  fauxToolCall,
-  validateToolArguments,
-  type ToolResultMessage,
-} from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall, validateToolArguments } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
@@ -138,14 +133,13 @@ describe("subagent argument preparation", () => {
       ]);
       yield* Effect.promise(() => session.prompt("start a scout"));
       expect(fake.getPendingResponseCount()).toBe(0);
-      const result = session.messages.find(
-        (message): message is ToolResultMessage => message.role === "toolResult",
-      );
+      const result = session.messages.find((message) => message.role === "toolResult");
       expect(result).toMatchObject({ toolName: "agent_start", isError: true });
       const shown = Arr.filterMap(result?.content ?? [], (part) =>
         part.type === "text" ? Result.succeed(part.text) : Result.failVoid,
       ).join("\n");
       expect(shown).toMatch(/\[invalid_arguments\][\s\S]*\bagents is required/u);
+      expect(shown).toContain("malformed or truncated");
       expect(shown).not.toContain("must not execute");
     }),
   );

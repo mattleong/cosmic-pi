@@ -160,8 +160,7 @@ describe("subagent child process boundary", () => {
         const agentDirectory = yield* temporaryDirectory("pi-subagents-child-late-mkdir-");
         const request = backendLaunch({ parentSessionId: "late-mkdir-session", runId: "late-run" });
         const sessionDirectory = nodePath.join(agentDirectory, "subagents", "late-mkdir-session");
-        const isRunDirectory = (path: unknown): path is string =>
-          Predicate.isString(path) && nodePath.dirname(path) === sessionDirectory;
+        const isRunDirectory = (path: string) => nodePath.dirname(path) === sessionDirectory;
         const mkdirEntered = yield* Deferred.make<string>();
         const mkdirGate = deferredPromise();
         const lateCleanup = yield* Deferred.make<void>();
@@ -169,7 +168,8 @@ describe("subagent child process boundary", () => {
         const createDirectory = nodeFsPromises.mkdir;
         const removeDirectory = nodeFsPromises.rmdir;
         const gatedMkdir = vi.spyOn(nodeFsPromises, "mkdir").mockImplementation((path, options) => {
-          if (!isRunDirectory(path)) return createDirectory(path, options);
+          if (!Predicate.isString(path) || !isRunDirectory(path))
+            return createDirectory(path, options);
           Deferred.doneUnsafe(mkdirEntered, Effect.succeed(path));
           return mkdirGate.promise.then(() => createDirectory(path, options));
         });
@@ -177,7 +177,8 @@ describe("subagent child process boundary", () => {
           .spyOn(nodeFsPromises, "rmdir")
           .mockImplementation((path, options) =>
             removeDirectory(path, options).finally(() => {
-              if (released && isRunDirectory(path)) Deferred.doneUnsafe(lateCleanup, Effect.void);
+              if (released && Predicate.isString(path) && isRunDirectory(path))
+                Deferred.doneUnsafe(lateCleanup, Effect.void);
             }),
           );
         yield* Effect.addFinalizer(() =>

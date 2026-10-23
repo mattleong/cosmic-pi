@@ -1,6 +1,7 @@
 import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
+import * as Predicate from "effect/Predicate";
 import {
   Container,
   Markdown,
@@ -307,7 +308,7 @@ function addTechnicalDetails(container: Container, run: SubagentRunView, theme: 
     run.pid ? `pid ${run.pid}` : undefined,
     `report generation ${run.reportGeneration}`,
   ]
-    .filter((value): value is string => value !== undefined)
+    .filter(Predicate.isNotUndefined)
     .join(" · ");
   container.addChild(new Text(theme.fg("dim", sanitizeTerminalLine(process)), 2, 0));
   const candidate =

@@ -1,6 +1,8 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { SettingItem } from "@earendil-works/pi-tui";
+import * as Rec from "effect/Record";
 import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 import { failureMessage, isProjectTrusted, type ExtensionSubcommand } from "pi-cosmic-core";
 import {
   settingsSubcommand,
@@ -77,9 +79,9 @@ const NESTING_FIELDS = {
   },
 } as const satisfies Record<NestingField, NestingFieldInfo>;
 
-const isNestingField = (id: string): id is NestingField => Object.hasOwn(NESTING_FIELDS, id);
+const NESTING_FIELD_IDS = Rec.keys(NESTING_FIELDS);
 
-const NESTING_FIELD_IDS = Object.keys(NESTING_FIELDS).filter(isNestingField);
+const isNestingField = Schema.is(Schema.Literals(NESTING_FIELD_IDS));
 
 const SCOPES = [
   { name: "session", description: "Change delegation and nesting limits for this session only" },

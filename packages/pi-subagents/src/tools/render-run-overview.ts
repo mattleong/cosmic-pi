@@ -1,3 +1,4 @@
+import * as Predicate from "effect/Predicate";
 import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import {
   Container,
@@ -68,9 +69,7 @@ export const expandedRunReportSections = (
   runs: ReadonlyArray<SubagentRunCard>,
 ): ReadonlyArray<RunReportSection> =>
   runs.flatMap((run) =>
-    [reportSection(run, "report"), reportSection(run, "failure")].filter(
-      (section): section is RunReportSection => section !== undefined,
-    ),
+    [reportSection(run, "report"), reportSection(run, "failure")].filter(Predicate.isNotUndefined),
   );
 
 const reportAffordance = (

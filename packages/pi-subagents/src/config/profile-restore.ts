@@ -1,10 +1,7 @@
 import type { JsonObject } from "pi-cosmic-core";
+import * as Arr from "effect/Array";
 import * as Predicate from "effect/Predicate";
-import {
-  isDeclaredCandidateList,
-  type DeclaredProfileRoute,
-  type ProfileCandidate,
-} from "../profiles/model.ts";
+import { type DeclaredProfileRoute, type ProfileCandidate } from "../profiles/model.ts";
 import { decodeDeclaredProfileRoute } from "./schema.ts";
 
 /** Undo writes the opening declaration back exactly, including its key order. */
@@ -36,7 +33,7 @@ export const candidateJson = (value: ProfileCandidate): JsonObject => ({
 
 export const routeJson = (route: DeclaredProfileRoute): JsonObject[string] => {
   if (route === "disabled") return route;
-  return isDeclaredCandidateList(route)
+  return Arr.isArray<DeclaredProfileRoute>(route)
     ? route.map((candidate) => candidateJson(candidate))
     : candidateJson(route);
 };

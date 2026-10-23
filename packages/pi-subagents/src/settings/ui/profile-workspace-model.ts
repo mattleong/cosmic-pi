@@ -1,5 +1,6 @@
 import { absurd } from "effect/Function";
 import * as Match from "effect/Match";
+import * as Predicate from "effect/Predicate";
 import { managerNoticeGlyph } from "pi-cosmic-ui/manager";
 import { PROFILE_DEFINITIONS } from "../../profiles/definitions.ts";
 import {
@@ -130,7 +131,7 @@ const advancedSummaryValues = (
       ? "forked context"
       : undefined,
     candidateFastModeApplied(candidate, parentModel) ? "fast mode" : undefined,
-  ].filter((value): value is string => value !== undefined);
+  ].filter(Predicate.isNotUndefined);
 
 const advancedCandidateRows = (
   candidate: ProfileCandidate,

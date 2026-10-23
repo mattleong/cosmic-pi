@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { hasControlCharacter } from "pi-cosmic-core";
 import type { CustomAgentTools } from "../profiles/agents.ts";
 import { type InvalidSubagentRequestError, invalidRequest } from "./errors.ts";
@@ -32,8 +33,6 @@ export const ROOT_TOOL_NAMES: ReadonlyArray<SubagentToolName | AgentToolName> = 
   ...AGENT_TOOL_NAMES,
 ]);
 
-const AGENT_TOOL_NAME_SET: ReadonlySet<string> = new Set(AGENT_TOOL_NAMES);
-
 /** A Pi child's own channel to its parent, registered by the child rather than inherited. */
 export const CONTACT_PARENT_TOOL_NAME = "agent_contact_parent";
 
@@ -45,8 +44,7 @@ const COORDINATION_TOOL_NAME_SET: ReadonlySet<string> = new Set([
 ]);
 const isCoordinationTool = (name: string): boolean => COORDINATION_TOOL_NAME_SET.has(name);
 
-export const isAgentToolName = (name: string): name is AgentToolName =>
-  AGENT_TOOL_NAME_SET.has(name);
+export const isAgentToolName = Schema.is(Schema.Literals(AGENT_TOOL_NAMES));
 
 /** Only the root starts worktree writers, so nested children have no workspaces to apply. */
 export const NESTED_SUBAGENT_TOOL_NAMES: ReadonlyArray<SubagentToolName> = Object.freeze(

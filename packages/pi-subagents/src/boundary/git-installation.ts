@@ -22,11 +22,8 @@ const PREFERRED_GIT = "/usr/bin/git";
 const unavailable = (message: string, detail?: string) =>
   new WorkspaceError({ operation: "git", message, ...(detail !== undefined && { detail }) });
 
-const usablePath = (value: string | undefined): value is string =>
-  value !== undefined &&
-  path.isAbsolute(value) &&
-  value.length <= 4096 &&
-  !hasControlCharacter(value);
+const usablePath = (value: string): boolean =>
+  path.isAbsolute(value) && value.length <= 4096 && !hasControlCharacter(value);
 
 const executableFile = (candidate: string) =>
   Effect.promise(() =>
@@ -47,7 +44,7 @@ const locateGit = Effect.fn("GitInstallation.locateGit")(function* (
     PREFERRED_GIT,
     ...(environment.PATH ?? "")
       .split(path.delimiter)
-      .filter((directory) => usablePath(directory))
+      .filter(usablePath)
       .map((directory) => path.join(directory, "git")),
   ];
   for (const candidate of new Set(searched)) if (yield* executableFile(candidate)) return candidate;

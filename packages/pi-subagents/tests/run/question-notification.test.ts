@@ -19,9 +19,7 @@ import {
 } from "./fixtures/service-harness.ts";
 
 const questions = (items: ReadonlyArray<SubagentNotification>) =>
-  items.filter(
-    (item): item is Extract<SubagentNotification, { type: "question" }> => item.type === "question",
-  );
+  items.filter((item) => item.type === "question");
 
 describe("question notification ownership", () => {
   // The notice is the one path that delivers the whole question; an await shows only its preview.
