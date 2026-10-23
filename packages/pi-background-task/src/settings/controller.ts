@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import * as Schema from "effect/Schema";
 import {
   failureMessage,
@@ -101,7 +102,10 @@ function openTaskManager(
       });
       const stopSpinnerTicker = startHostUiTicker(SPINNER_FRAME_MS, () => {
         if (
-          bridge.get().tasks.some((task) => task.state === "starting" || task.state === "running")
+          Arr.some(
+            bridge.get().tasks,
+            (task) => task.state === "starting" || task.state === "running",
+          )
         )
           tui.requestRender();
       });

@@ -1,3 +1,7 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import { describe, expect, it } from "vitest";
 import type { CompactIssue } from "pi-code-previews";
 import { issueMessageStyleProblems } from "pi-code-previews/testing";
@@ -58,11 +62,11 @@ const wait = (
 });
 type Summary = ReturnType<typeof project>;
 const find = (summary: Summary, code: string): CompactIssue | undefined =>
-  summary?.issues?.find((issue) => issue.code === code);
+  Option.getOrUndefined(Arr.findFirst(summary?.issues ?? [], (issue) => issue.code === code));
 
 describe("background task compact semantics", () => {
   it("bounds the call subject of a maximum-size command to the display limit", () => {
-    const command = "x".repeat(BACKGROUND_TASK_FIELD_BOUNDS.maxCommandBytes);
+    const command = Fn.pipe("x", Str.repeat(BACKGROUND_TASK_FIELD_BOUNDS.maxCommandBytes));
     const summary = project({}, "start", "running", false, { command });
     expect(summary?.subject?.length).toBeLessThanOrEqual(
       BACKGROUND_TASK_FIELD_BOUNDS.maxCommandDisplayChars,
@@ -108,11 +112,11 @@ describe("background task compact semantics", () => {
       { ...snapshot, state: "stopping", droppedLogBytes: 20 },
     ];
     const summaries = [
-      ...snapshots.map((value) => project({ action: "status", snapshot: value })),
+      ...Arr.map(snapshots, (value) => project({ action: "status", snapshot: value })),
       project(
         {
           action: "list",
-          tasks: snapshots.map((value, index) => ({ ...value, id: `task-${index}` })),
+          tasks: Arr.map(snapshots, (value, index) => ({ ...value, id: `task-${index}` })),
         },
         "list",
       ),
@@ -136,7 +140,7 @@ describe("background task compact semantics", () => {
         "wait",
       ),
     ];
-    const issues = summaries.flatMap((summary) => summary?.issues ?? []);
+    const issues = Arr.flatMap(summaries, (summary) => summary?.issues ?? []);
     expect(issues.length).toBeGreaterThan(snapshots.length);
     for (const { message } of issues)
       expect({
@@ -192,7 +196,8 @@ describe("background task row outcomes", () => {
   it("reports a stop of a finished task without repeating its failure", () => {
     const summary = project({ action: "stop", snapshot: failed, alreadyFinished: true }, "stop");
     expect(summary?.issues ?? []).toEqual([]);
-    expect(summary?.metadata?.join(" ")).toContain("failed");
+    const metadata = summary?.metadata;
+    expect(metadata && Arr.join(metadata, " ")).toContain("failed");
   });
 
   it("renders the failure cause stored in details", () => {
@@ -206,12 +211,14 @@ describe("background task row outcomes", () => {
       { ...failed, id: "task-1", name: "BuildError" },
       { ...failed, id: "task-2", name: "TypeError: lint" },
     ];
-    const messages = (project({ action: "list", tasks }, "list")?.issues ?? []).map(
+    const messages = Arr.map(
+      project({ action: "list", tasks }, "list")?.issues ?? [],
       (issue) => issue.message,
     );
     expect(messages).toHaveLength(2);
-    expect(messages[0]?.startsWith("BuildError")).toBe(true);
-    expect(messages[1]?.startsWith("TypeError: lint")).toBe(true);
+    const [first, second] = messages;
+    expect(first && Fn.pipe(first, Str.startsWith("BuildError"))).toBe(true);
+    expect(second && Fn.pipe(second, Str.startsWith("TypeError: lint"))).toBe(true);
   });
 
   it("explains a capped wait only in expanded detail", () => {

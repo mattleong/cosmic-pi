@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Order from "effect/Order";
 import type {
   BackgroundLogMetadataSchema,
   BackgroundTaskSnapshotSchema,
@@ -105,10 +107,13 @@ export const countTaskStates = (tasks: ReadonlyArray<Pick<BackgroundTaskSnapshot
 export function sortTasksByActivity<A extends Pick<BackgroundTaskSnapshot, "state" | "startedAt">>(
   tasks: ReadonlyArray<A>,
 ): ReadonlyArray<A> {
-  return tasks.toSorted((left, right) => {
-    const active = Number(isActiveTaskState(right.state)) - Number(isActiveTaskState(left.state));
-    return active !== 0 ? active : right.startedAt - left.startedAt;
-  });
+  return Arr.sort(
+    tasks,
+    Order.combine(
+      Order.mapInput(Order.Boolean, (task: A) => !isActiveTaskState(task.state)),
+      Order.mapInput(Order.flip(Order.Number), (task: A) => task.startedAt),
+    ),
+  );
 }
 
 export function footerStatus(projection: BackgroundTaskProjection): string | undefined {

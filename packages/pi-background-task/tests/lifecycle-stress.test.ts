@@ -1,14 +1,17 @@
 import { assert, describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Order from "effect/Order";
 import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as Str from "effect/String";
 import * as TestClock from "effect/testing/TestClock";
 import {
   LocalProcess,
@@ -123,7 +126,7 @@ const openService = (fixtures: ProcessFixture[]) =>
       }),
     );
     const fixturesByCommand = new Map(
-      fixtures.map((fixture, index) => [`fixture ${index}`, fixture]),
+      Arr.map(fixtures, (fixture, index) => [`fixture ${index}`, fixture]),
     );
     const dependencies = Layer.mergeAll(
       Layer.succeed(LocalProcess, {
@@ -202,10 +205,15 @@ describe("background task lifecycle stress", () => {
           yield* fixtures[15]!.complete();
           const failure = yield* Fiber.join(stopping);
           assert(Predicate.isTagged(failure, "BackgroundTerminationError"));
-          expect(new Set(failure.id.split(", "))).toEqual(new Set([tasks[0]!.id, tasks[16]!.id]));
-          expect((yield* service.list("active")).map((task) => task.id).toSorted()).toEqual(
-            [tasks[0]!.id, tasks[16]!.id].toSorted(),
+          expect(new Set(Str.split(failure.id, ", "))).toEqual(
+            new Set([tasks[0]!.id, tasks[16]!.id]),
           );
+          expect(
+            Arr.sort(
+              Arr.map(yield* service.list("active"), (task) => task.id),
+              Order.String,
+            ),
+          ).toEqual(Arr.sort([tasks[0]!.id, tasks[16]!.id], Order.String));
           fixtures[0]!.recover();
           fixtures[16]!.recover();
           yield* service.stopAll(true);

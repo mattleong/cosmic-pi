@@ -10,6 +10,7 @@ import {
   type NodeChildProcess,
   type ProcessGroupExitGuard,
 } from "pi-cosmic-core";
+import * as Arr from "effect/Array";
 import type * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
@@ -20,6 +21,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Predicate from "effect/Predicate";
 import * as Queue from "effect/Queue";
+import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -100,8 +102,9 @@ const processError = (reason: LocalProcessError["reason"], subject?: string) =>
   });
 
 export function makeBackgroundProcessEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const environment = Object.fromEntries(
-    Object.entries(source).filter(
+  const environment = Rec.fromEntries(
+    Arr.filter(
+      Rec.toEntries(source),
       ([key, value]) => value !== undefined && !BLOCKED_ENVIRONMENT_KEYS.has(key),
     ),
   );

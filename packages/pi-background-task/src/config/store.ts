@@ -1,7 +1,9 @@
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import type * as Path from "effect/Path";
 import {
@@ -95,7 +97,7 @@ export class BackgroundTaskSettingsFiles extends Context.Service<
                 value: undefined,
                 document:
                   value === undefined
-                    ? Object.fromEntries(Object.entries(document).filter(([key]) => key !== id))
+                    ? Rec.fromEntries(Arr.filter(Rec.toEntries(document), ([key]) => key !== id))
                     : { ...document, [id]: value },
               })),
             ),

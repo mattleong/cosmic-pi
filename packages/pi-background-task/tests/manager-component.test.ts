@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { describe, expect, it, vi } from "@effect/vitest";
 import { formatBytes } from "pi-cosmic-core";
 import { plainTheme } from "pi-cosmic-core/testing";
@@ -39,7 +40,7 @@ const makeManager = (initial: ReadonlyArray<BackgroundTaskView>) => {
     stop,
     clear,
     close,
-    render: () => component.render(120).join("\n"),
+    render: () => Arr.join(component.render(120), "\n"),
     setTasks: (next: ReadonlyArray<BackgroundTaskView>) => {
       tasks = next;
     },

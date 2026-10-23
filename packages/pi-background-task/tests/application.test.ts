@@ -7,9 +7,11 @@ import {
   type ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
@@ -87,7 +89,9 @@ const harness = (
         ctx: ExtensionToolContext,
         signal = new AbortController().signal,
       ) => {
-        const tool = host.registrations.findLast(({ name }) => name === "background_task");
+        const tool = Option.getOrUndefined(
+          Arr.findLast(host.registrations, ({ name }) => name === "background_task"),
+        );
         if (!tool) return Promise.reject(new Error("background_task was not registered"));
         return tool.execute("call", input, signal, undefined, ctx);
       },
@@ -211,7 +215,7 @@ describe("background-task Pi lifecycle", () => {
         yield* Effect.promise(() => Promise.all([firstStart, secondStart]));
 
         expect(firstSignal?.aborted).toBe(true);
-        expect(app.tools.map((tool) => tool.name)).toEqual(["background_task"]);
+        expect(Arr.map(app.tools, (tool) => tool.name)).toEqual(["background_task"]);
         yield* Effect.promise(() => app.emit("session_shutdown", secondContext));
       }),
   );
@@ -249,7 +253,7 @@ describe("background-task Pi lifecycle", () => {
 
         replacement.resolve();
         yield* Effect.promise(() => replacing);
-        expect(app.tools.map((registered) => registered.name)).toEqual([
+        expect(Arr.map(app.tools, (registered) => registered.name)).toEqual([
           "background_task",
           "background_task",
         ]);
@@ -310,14 +314,14 @@ describe("background-task Pi lifecycle", () => {
             if (readyDetails.action !== "wait") throw new Error("wait returned the wrong action");
             expect(readyDetails.wait.outcome).toBe("matched");
             const logs = yield* Effect.promise(() => execute({ action: "logs", id: taskId }));
-            const output = logs.content.map((part) => (part.type === "text" ? part.text : ""));
-            const match = /ready:(\d+):(\d+):end/.exec(output.join(""));
+            const output = Arr.map(logs.content, (part) => (part.type === "text" ? part.text : ""));
+            const match = /ready:(\d+):(\d+):end/.exec(Arr.join(output, ""));
             const nodePid = Number(match?.[1]);
             const descendantPid = Number(match?.[2]);
             const shellPid = readyDetails.wait.snapshot.pid;
             if (
               !shellPid ||
-              ![nodePid, descendantPid].every((pid) => Number.isSafeInteger(pid) && pid > 0)
+              !Arr.every([nodePid, descendantPid], (pid) => Number.isSafeInteger(pid) && pid > 0)
             )
               throw new Error("running task did not report valid process ids");
             const pids = yield* Effect.acquireRelease(
@@ -337,7 +341,7 @@ describe("background-task Pi lifecycle", () => {
 
             // Signalled processes can take a while to be reaped on loaded runners.
             for (let attempt = 0; attempt < 1_000; attempt += 1) {
-              if (pids.every((pid) => signalProcess(pid, 0) === "absent")) break;
+              if (Arr.every(pids, (pid) => signalProcess(pid, 0) === "absent")) break;
               yield* Effect.sleep("10 millis");
             }
             for (const pid of pids) expect(signalProcess(pid, 0)).toBe("absent");
@@ -401,7 +405,7 @@ describe("background-task settings in a session", () => {
         const app = yield* harness(() => Promise.resolve(), { settings });
         const setStatus = vi.fn<ExtensionUIContext["setStatus"]>();
         const ctx = settingsContext({ setStatus });
-        const shown = () => setStatus.mock.calls.filter(([, text]) => text !== undefined);
+        const shown = () => Arr.filter(setStatus.mock.calls, ([, text]) => text !== undefined);
         yield* Effect.gen(function* () {
           yield* Effect.promise(() => app.emit("session_start", ctx));
           const started = yield* Effect.exit(
@@ -491,7 +495,8 @@ describe("background-task settings in a session", () => {
         const custom = vi.spyOn(ui, "custom");
         const terminal = (signal?: AbortSignal) =>
           extensionContextFixture({ cwd: process.cwd(), mode: "tui", hasUI: true, signal, ui });
-        const warnings = () => notify.mock.calls.filter(([, level]) => level === "warning").length;
+        const warnings = () =>
+          Arr.filter(notify.mock.calls, ([, level]) => level === "warning").length;
         const ctx = terminal();
         const unavailableNotice = Effect.gen(function* () {
           const before = warnings();

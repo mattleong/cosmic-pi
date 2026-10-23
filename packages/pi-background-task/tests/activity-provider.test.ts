@@ -1,9 +1,12 @@
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fn from "effect/Function";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as Str from "effect/String";
 import { ACTIVITY_HOST, ACTIVITY_LIMITS, ActivitySnapshotSchema } from "pi-cosmic-ui/activity";
 import { fakeActivityHost } from "pi-cosmic-ui/activity/testing";
 import {
@@ -54,11 +57,11 @@ describe("background task activity provider", () => {
     });
     const published = Schema.decodeUnknownSync(ActivitySnapshotSchema)(transport.get()?.items);
     expect(published).toHaveLength(ACTIVITY_LIMITS.items);
-    const ids = new Set(published.map((item) => item.id));
+    const ids = new Set(Arr.map(published, (item) => item.id));
     for (const entry of running) expect(ids.has(entry.id)).toBe(true);
-    const dropped = finished.filter((entry) => !ids.has(entry.id));
-    expect(dropped.map((entry) => entry.id)).toEqual(
-      finished.slice(0, dropped.length).map((entry) => entry.id),
+    const dropped = Arr.filter(finished, (entry) => !ids.has(entry.id));
+    expect(Arr.map(dropped, (entry) => entry.id)).toEqual(
+      Arr.map(finished.slice(0, dropped.length), (entry) => entry.id),
     );
     dispose();
   });
@@ -91,9 +94,9 @@ describe("background task activity provider", () => {
     const normalizer = new TerminalTextNormalizer();
     const raw = [
       "\u001b]0;evil-title\u0007\u001b]8;;https://x.example/\u001b\\link\u001b]8;;\u001b\\\n",
-      `\u001b[31m${"r".repeat(11_991)}\u001b[0m\n`,
+      `\u001b[31m${Fn.pipe("r", Str.repeat(11_991))}\u001b[0m\n`,
     ];
-    const logs = raw.map((text, index) => ({
+    const logs = Arr.map(raw, (text, index) => ({
       cursor: index + 1,
       stream: "stdout" as const,
       text: normalizer.write(text),
@@ -103,7 +106,7 @@ describe("background task activity provider", () => {
     const detail = backgroundTaskActivityDetail({ tasks: [{ ...task, logs }] }, "task") ?? "";
     for (const remnant of ["evil-title", "]0;", "8;;", "x.example", "[31m", "[0m", "\u001b"])
       expect(detail).not.toContain(remnant);
-    expect(detail).toContain("r".repeat(100));
+    expect(detail).toContain(Fn.pipe("r", Str.repeat(100)));
   });
 
   it.effect(

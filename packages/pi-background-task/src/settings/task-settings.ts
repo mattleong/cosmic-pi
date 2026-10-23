@@ -1,4 +1,6 @@
 import type { SettingItem } from "@earendil-works/pi-tui";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import {
@@ -66,7 +68,8 @@ const unavailableScopeRow = (scope: TaskSettingsScope, problem: string): Setting
   currentValue: "unavailable",
 });
 
-const settingDescriptor = (id: string) => BACKGROUND_TASK_SETTINGS.find((entry) => entry.id === id);
+const settingDescriptor = (id: string) =>
+  Option.getOrUndefined(Arr.findFirst(BACKGROUND_TASK_SETTINGS, (entry) => entry.id === id));
 
 /** Writes a checked value, or removes the scope's own value for `inherit`; false when invalid. */
 const writeSetting = <Id extends BackgroundTaskSettingId>(
@@ -95,21 +98,25 @@ function createTaskSettingsSubcommand(
 
   const pickerItems = (config: BackgroundTaskConfig, files: ReadonlyArray<ScopeFile>) => {
     const settingRows = (scope: TaskSettingsScope, own: Partial<BackgroundTaskConfig>) =>
-      BACKGROUND_TASK_SETTINGS.filter((setting) => setting.values.length > 0).map((setting) => {
-        const stored = own[setting.id];
-        const currentValue = stored === undefined ? INHERIT : sanitizeTerminalLine(String(stored));
-        known.set(rowKey(scope, setting.id), currentValue);
-        const values = [...setting.values, INHERIT];
-        const effective = sessionValue(config, setting.id);
-        return {
-          id: rowKey(scope, setting.id),
-          label: `${scopeLabel(scope)} · ${setting.label}`,
-          description: `${setting.description} This session uses ${effective}; ${INHERIT} uses the ${scope === "project" ? "global value" : "default"}. Applies after /reload.`,
-          currentValue,
-          values: values.includes(currentValue) ? values : [currentValue, ...values],
-        };
-      });
-    return files.flatMap((file): SettingItem[] =>
+      Arr.map(
+        Arr.filter(BACKGROUND_TASK_SETTINGS, (setting) => setting.values.length > 0),
+        (setting) => {
+          const stored = own[setting.id];
+          const currentValue =
+            stored === undefined ? INHERIT : sanitizeTerminalLine(String(stored));
+          known.set(rowKey(scope, setting.id), currentValue);
+          const values = [...setting.values, INHERIT];
+          const effective = sessionValue(config, setting.id);
+          return {
+            id: rowKey(scope, setting.id),
+            label: `${scopeLabel(scope)} · ${setting.label}`,
+            description: `${setting.description} This session uses ${effective}; ${INHERIT} uses the ${scope === "project" ? "global value" : "default"}. Applies after /reload.`,
+            currentValue,
+            values: values.includes(currentValue) ? values : [currentValue, ...values],
+          };
+        },
+      );
+    return Arr.flatMap(files, (file): SettingItem[] =>
       "problem" in file
         ? [unavailableScopeRow(file.scope, file.problem)]
         : settingRows(file.scope, file.own),
@@ -122,7 +129,7 @@ function createTaskSettingsSubcommand(
     description: "Configure background tasks",
     title: "Background Tasks",
     isCurrent,
-    descriptors: BACKGROUND_TASK_SETTINGS.map((setting) => ({
+    descriptors: Arr.map(BACKGROUND_TASK_SETTINGS, (setting) => ({
       id: setting.id,
       description: setting.description,
       ...(setting.values.length > 0 && { values: [...setting.values, INHERIT] }),
@@ -141,12 +148,16 @@ function createTaskSettingsSubcommand(
     status: () => {
       const config = actions.config();
       if (!config) throw new Error("Background Tasks hasn't started");
-      return [
-        "Background Tasks settings (as this session started)",
-        ...BACKGROUND_TASK_SETTINGS.map(
-          (setting) => `  ${setting.id} = ${sessionValue(config, setting.id) || "default"}`,
-        ),
-      ].join("\n");
+      return Arr.join(
+        [
+          "Background Tasks settings (as this session started)",
+          ...Arr.map(
+            BACKGROUND_TASK_SETTINGS,
+            (setting) => `  ${setting.id} = ${sessionValue(config, setting.id) || "default"}`,
+          ),
+        ],
+        "\n",
+      );
     },
     apply: (ctx, id, value, _signal, requested) => {
       const setting = settingDescriptor(id);
@@ -187,7 +198,7 @@ function createTaskSettingsSubcommand(
             };
           },
         );
-      return Promise.all(scopes.map(readScope)).then(
+      return Promise.all(Arr.map(scopes, readScope)).then(
         (files) =>
           isCurrent() ? session.picker(pickerItems(config, files)) : OwnedSurfaceOutcome.Blocked(),
         () => OwnedSurfaceOutcome.Blocked(),

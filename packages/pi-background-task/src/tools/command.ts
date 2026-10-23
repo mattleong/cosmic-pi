@@ -6,9 +6,11 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
+import * as Str from "effect/String";
 import { sanitizeTerminalLine, countLabel, formatBytes, utf8ByteLength } from "pi-cosmic-core";
 import { BACKGROUND_TASK_FIELD_BOUNDS } from "../task/bounds.ts";
 import { InvalidBackgroundCommandError } from "../task/errors.ts";
@@ -55,12 +57,12 @@ const present = (
   field: string,
   action: BackgroundTaskAction,
 ): Effect.Effect<string, InvalidBackgroundCommandError> =>
-  value?.trim()
+  value && Str.trim(value)
     ? Effect.succeed(value)
     : InvalidBackgroundCommandError.make({ message: `The ${action} action requires ${field}.` });
 
 const required = (value: string | undefined, field: string, action: BackgroundTaskAction) =>
-  Effect.map(present(value, field, action), (text) => text.trim());
+  Effect.map(present(value, field, action), (text) => Str.trim(text));
 
 // The flat parameter schema stays provider-portable; each action accepts only its own fields.
 const FIELD_ACTIONS = {
@@ -84,8 +86,8 @@ const UNKNOWN_ACTION = "Unknown background task action.";
 
 const fieldList = (fields: ReadonlyArray<string>): string =>
   fields.length < 3
-    ? fields.join(" or ")
-    : `${fields.slice(0, -1).join(", ")}, or ${fields.at(-1) ?? ""}`;
+    ? Arr.join(fields, " or ")
+    : `${Arr.join(fields.slice(0, -1), ", ")}, or ${fields.at(-1) ?? ""}`;
 
 const invalidCommand = (message: string) =>
   Effect.fail(InvalidBackgroundCommandError.make({ message }));
@@ -96,16 +98,18 @@ const isPlaceholder = (value: BackgroundTaskToolInput[BackgroundTaskField]): boo
   value === undefined ||
   value === false ||
   value === 0 ||
-  (Predicate.isString(value) && value.trim() === "");
+  (Predicate.isString(value) && Str.trim(value) === "");
 
 const validateFields = (
   input: BackgroundTaskToolInput,
 ): Effect.Effect<void, InvalidBackgroundCommandError> => {
   const { action } = input;
   if (!Arr.contains(BACKGROUND_TASK_ACTIONS, action)) return invalidCommand(UNKNOWN_ACTION);
-  const rejected = Rec.keys(FIELD_ACTIONS).filter(
+  const rejected = Arr.filter(
+    Rec.keys(FIELD_ACTIONS),
     (field) =>
-      !isPlaceholder(input[field]) && !FIELD_ACTIONS[field].some((accepted) => accepted === action),
+      !isPlaceholder(input[field]) &&
+      !Arr.some(FIELD_ACTIONS[field], (accepted) => accepted === action),
   );
   if (rejected.length > 0)
     return invalidCommand(`The ${action} action does not accept ${fieldList(rejected)}.`);
@@ -179,7 +183,7 @@ const formatTaskList = (
     lines.push(line);
     used += separatorBytes + lineBytes;
   }
-  return lines.join("\n");
+  return Arr.join(lines, "\n");
 };
 
 const formatWait = (result: BackgroundTaskStatusWait, requestedSeconds?: number): string => {
@@ -211,7 +215,7 @@ const pageNotice = (truncation: LogPageOmission, cutCursor: number | undefined):
         ? `More output follows: ${formatBytes(truncation.omittedBytes)} retained after cursor ${truncation.resumeAfterCursor}. Continue with afterCursor=${truncation.resumeAfterCursor}.`
         : `Showing the newest output; ${formatBytes(truncation.omittedBytes)} of earlier retained output is not shown. Read it from afterCursor=${truncation.resumeAfterCursor}.`,
     );
-  return `[${parts.join(" ")}]\n`;
+  return `[${Arr.join(parts, " ")}]\n`;
 };
 
 const formatLogs = (slice: BackgroundLogSlice, direction: "forward" | "tail", maxBytes: number) => {
@@ -243,10 +247,7 @@ export const backgroundLogLines = (
 ): ReadonlyArray<string> => {
   const headerLines =
     1 + Number(details.logs.droppedBytes > 0) + Number(details.truncation !== undefined);
-  const lines = text
-    .replace(/\r?\n$/u, "")
-    .split(/\r?\n/u)
-    .slice(headerLines);
+  const lines = Fn.pipe(text, Str.replace(/\r?\n$/u, ""), Str.split(/\r?\n/u)).slice(headerLines);
   return lines.length === 1 && lines[0] === NO_NEW_OUTPUT ? [] : lines;
 };
 
@@ -311,7 +312,7 @@ export const executeBackgroundTaskCommand = Effect.fn("BackgroundTaskCommand.exe
   const path = yield* Path.Path;
   switch (input.action) {
     case "start": {
-      const name = input.name?.trim();
+      const name = input.name && Str.trim(input.name);
       const request: StartBackgroundTask = {
         command: yield* present(input.command, "command", input.action),
         cwd: path.resolve(sessionCwd, input.cwd ?? "."),
@@ -333,7 +334,7 @@ export const executeBackgroundTaskCommand = Effect.fn("BackgroundTaskCommand.exe
     case "list": {
       const filter = input.state ?? "all";
       const tasks = yield* service.list(filter);
-      const snapshots = tasks.map(detailsSnapshot);
+      const snapshots = Arr.map(tasks, detailsSnapshot);
       return reply(
         formatTaskList(snapshots, filter, maxTextBytes),
         { action: input.action, tasks: snapshots },
@@ -398,7 +399,7 @@ export const executeBackgroundTaskCommand = Effect.fn("BackgroundTaskCommand.exe
       const tasks = yield* service.stopAll(input.force);
       return reply(
         boundedText(`Stopped ${countLabel(tasks.length, "background task")}.`, maxTextBytes),
-        { action: input.action, tasks: tasks.map(detailsSnapshot) },
+        { action: input.action, tasks: Arr.map(tasks, detailsSnapshot) },
         tasksActionContract(input.action, tasks),
       );
     }

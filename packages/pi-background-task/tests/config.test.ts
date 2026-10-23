@@ -1,7 +1,10 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Str from "effect/String";
 import { AgentDirectory } from "pi-cosmic-core";
 import {
   makeInMemoryDocuments,
@@ -52,7 +55,11 @@ describe("background task config store", () => {
       expect(config.showFooterStatus).toBe(DEFAULT_BACKGROUND_TASK_CONFIG.showFooterStatus);
       expect(config.stopGraceMs).toBe(1_000);
       expect(memory.operations.length).toBeGreaterThan(0);
-      expect(memory.operations.filter((operation) => operation.includes(PROJECT_PATH))).toEqual([]);
+      expect(
+        Arr.filter(memory.operations, (operation) =>
+          Fn.pipe(operation, Str.includes(PROJECT_PATH)),
+        ),
+      ).toEqual([]);
       expect(memory.documents.get(PROJECT_PATH)).toEqual({
         enabled: false,
         showFooterStatus: false,

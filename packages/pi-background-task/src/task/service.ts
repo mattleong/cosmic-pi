@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -8,6 +9,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Rec from "effect/Record";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
@@ -186,7 +188,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
           const timestamp = yield* Clock.currentTimeMillis;
           // Lost output may have cut a sequence short; what follows starts fresh.
           if (droppedBytes > 0)
-            for (const terminal of Object.values(record.terminal)) terminal.reset();
+            for (const terminal of Rec.values(record.terminal)) terminal.reset();
           record.logs
             .addDropped(droppedBytes)
             .append(
@@ -469,7 +471,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
     withLock(
       Effect.sync(() =>
         sortTasksByActivity(
-          [...tasks.values()].flatMap(({ snapshot }) =>
+          Arr.flatMap([...tasks.values()], ({ snapshot }) =>
             filter === "all" || isActiveTaskState(snapshot.state) === (filter === "active")
               ? [snapshot]
               : [],
@@ -598,7 +600,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
     request: StopRequest,
   ) {
     const ids = yield* withLock(
-      Effect.sync(() => activeRecords(tasks).map((record) => record.snapshot.id)),
+      Effect.sync(() => Arr.map(activeRecords(tasks), (record) => record.snapshot.id)),
     );
     // Every task gets its graceful signal at once, so the batch shares one grace window.
     const [settled, failures] = yield* Effect.partition(
@@ -611,11 +613,17 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
     );
     if (failures.length > 0) {
       return yield* BackgroundTerminationError.make({
-        id: failures.map((failure) => failure.id).join(", "),
-        message: failures.map((failure) => `${failure.id}: ${failure.message}`).join(" · "),
+        id: Arr.join(
+          Arr.map(failures, (failure) => failure.id),
+          ", ",
+        ),
+        message: Arr.join(
+          Arr.map(failures, (failure) => `${failure.id}: ${failure.message}`),
+          " · ",
+        ),
       });
     }
-    return settled.flatMap((result) =>
+    return Arr.flatMap(settled, (result) =>
       result && !result.alreadyFinished ? [result.snapshot] : [],
     );
   });

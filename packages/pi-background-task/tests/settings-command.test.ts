@@ -5,7 +5,11 @@ import {
   TUI_KEYBINDINGS,
 } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import { deferredPromise, extensionContextFixture, macrotask } from "pi-cosmic-core/testing";
 import { fakeCustomSurfaceHost } from "pi-cosmic-ui/testing";
 import { issueMessageStyleProblems } from "pi-code-previews/testing";
@@ -69,7 +73,10 @@ const pickerHarness = (
   const open = () => Promise.resolve(command.handler("", ctx));
   const opened = open();
   const input = (data: string) => host.editor?.handleInput?.(data);
-  const screen = () => host.editor?.render(300).join("\n") ?? "";
+  const screen = () => {
+    const editor = host.editor;
+    return editor ? Arr.join(editor.render(300), "\n") : "";
+  };
   return {
     write,
     notify,
@@ -105,7 +112,10 @@ describe("/tasks settings", () => {
       yield* untrusted.run("project maxRunning 4");
       yield* untrusted.run("project maxRunning inherit");
       expect(untrusted.write).not.toHaveBeenCalled();
-      expect(untrusted.notify.mock.calls.map(([, level]) => level)).toEqual(["warning", "warning"]);
+      expect(Arr.map(untrusted.notify.mock.calls, ([, level]) => level)).toEqual([
+        "warning",
+        "warning",
+      ]);
     }),
   );
 
@@ -128,15 +138,15 @@ describe("/tasks settings", () => {
       for (const value of ["262144", "256k", "256KiB", "1MiB", "1.5m", "4mb"])
         yield* h.run(`logBufferBytesPerTask ${value}`);
       yield* h.run("project totalLogBufferBytes 8M");
-      expect(h.write.mock.calls.map(([, , value]) => value)).toEqual([
+      expect(Arr.map(h.write.mock.calls, ([, , value]) => value)).toEqual([
         262_144, 262_144, 262_144, 1_048_576, 1_572_864, 4_194_304, 8_388_608,
       ]);
-      expect(h.notify.mock.calls.filter(([, level]) => level === "error")).toEqual([]);
+      expect(Arr.filter(h.notify.mock.calls, ([, level]) => level === "error")).toEqual([]);
 
       for (const value of ["1.5", "0.1k", "10x", "8MiB", "-1k", "k"])
         yield* h.run(`logBufferBytesPerTask ${value}`);
       expect(h.write).toHaveBeenCalledTimes(7);
-      expect(h.notify.mock.calls.filter(([, level]) => level === "error")).toHaveLength(6);
+      expect(Arr.filter(h.notify.mock.calls, ([, level]) => level === "error")).toHaveLength(6);
     }),
   );
 
@@ -145,16 +155,17 @@ describe("/tasks settings", () => {
       const h = harness();
       yield* h.run("status");
       yield* h.run("help");
-      const reports = h.notify.mock.calls.map(([message, level]) => ({ message, level }));
-      expect(reports.map(({ level }) => level)).toEqual(["info", "info"]);
+      const reports = Arr.map(h.notify.mock.calls, ([message, level]) => ({ message, level }));
+      expect(Arr.map(reports, ({ level }) => level)).toEqual(["info", "info"]);
       for (const { message } of reports) {
         expect(message).not.toContain("\u001b");
-        const shellLines = message.split("\n").filter((line) => line.includes("/bin/"));
+        const lines = Str.split(message, "\n");
+        const shellLines = Arr.filter(lines, (line) => Fn.pipe(line, Str.includes("/bin/")));
         expect(shellLines).toHaveLength(1);
         expect(shellLines[0]).toContain("shellPath");
-        expect(message.split("\n").some((line) => line.trimStart().startsWith("spoof"))).toBe(
-          false,
-        );
+        expect(
+          Arr.some(lines, (line) => Fn.pipe(Str.trimStart(line), Str.startsWith("spoof"))),
+        ).toBe(false);
       }
       expect(h.write).not.toHaveBeenCalled();
     }),
@@ -164,7 +175,7 @@ describe("/tasks settings", () => {
     Effect.gen(function* () {
       const h = harness({ started: false });
       yield* h.run("status");
-      expect(h.notify.mock.calls.map(([, level]) => level)).toEqual(["warning"]);
+      expect(Arr.map(h.notify.mock.calls, ([, level]) => level)).toEqual(["warning"]);
       yield* h.run("help");
       expect(h.notify).toHaveBeenLastCalledWith(expect.not.stringContaining("/bin/"), "info");
     }),
@@ -172,7 +183,7 @@ describe("/tasks settings", () => {
 
   it.effect("opens the readable scopes and keeps a broken file's scope unavailable", () =>
     Effect.gen(function* () {
-      const rows = BACKGROUND_TASK_SETTINGS.filter((setting) => setting.values.length > 0);
+      const rows = Arr.filter(BACKGROUND_TASK_SETTINGS, (setting) => setting.values.length > 0);
       const path = "/project/.pi/extensions/pi-background-task.json";
       const h = pickerHarness(true, (location) =>
         location.scope === "project"
@@ -185,12 +196,11 @@ describe("/tasks settings", () => {
       expect(h.isOpen()).toBe(true);
       expect(h.notify).not.toHaveBeenCalled();
       for (const _ of rows) h.input("j");
-      const reason =
-        h
-          .screen()
-          .split("\n")
-          .find((line) => line.includes(path))
-          ?.trim() ?? "";
+      const reason = Fn.pipe(
+        Arr.findFirst(Str.split(h.screen(), "\n"), (line) => Fn.pipe(line, Str.includes(path))),
+        Option.map(Str.trim),
+        Option.getOrElse(() => ""),
+      );
       expect(issueMessageStyleProblems(reason, { maxLength: 200 })).toEqual([]);
       h.input("\r");
       yield* macrotask;
@@ -198,7 +208,7 @@ describe("/tasks settings", () => {
       h.input("j");
       h.input("\r");
       yield* macrotask;
-      expect(h.write.mock.calls.map(([location]) => location.scope)).toEqual(["global"]);
+      expect(Arr.map(h.write.mock.calls, ([location]) => location.scope)).toEqual(["global"]);
       h.close();
       yield* Effect.promise(() => h.opened);
     }),

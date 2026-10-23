@@ -1,8 +1,10 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import type * as Scope from "effect/Scope";
@@ -11,6 +13,7 @@ import * as Schedule from "effect/Schedule";
 import { vi } from "vitest";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Str from "effect/String";
 import { nodeFilePlatformLayer, signalProcess, utf8ByteLength } from "pi-cosmic-core";
 import { provideBuiltLayer } from "pi-cosmic-core/testing";
 import {
@@ -44,7 +47,12 @@ const firstOutput = (handle: LocalProcessHandle) =>
     Stream.take(1),
     Stream.runCollect,
     Effect.timeout(processTimeout),
-    Effect.map((events) => [...events].map((event) => event.text).join("")),
+    Effect.map((events) =>
+      Arr.join(
+        Arr.map([...events], (event) => event.text),
+        "",
+      ),
+    ),
   );
 
 const processAlive = (pid: number) => signalProcess(pid, 0) === "present";
@@ -98,7 +106,10 @@ describe("local process boundary", () => {
         );
         const result = yield* collectUntilExit(handle);
         expect(result.exit.exitCode).toBe(0);
-        const output = [...result.events].map((event) => `${event.stream}:${event.text}`).join("|");
+        const output = Arr.join(
+          Arr.map([...result.events], (event) => `${event.stream}:${event.text}`),
+          "|",
+        );
         expect(output).toContain("stdout:out");
         expect(output).toContain("stderr:err");
       }),
@@ -110,17 +121,20 @@ describe("local process boundary", () => {
       Effect.gen(function* () {
         // Two-byte characters make the UTF-8 size, which the shell argument limit counts, larger
         // than the character count.
-        const line = `${"é".repeat(63)}\n`;
+        const line = `${Fn.pipe("é", Str.repeat(63))}\n`;
         const lineBytes = utf8ByteLength(line);
         const lines = Math.floor((BACKGROUND_TASK_FIELD_BOUNDS.maxCommandBytes - 64) / lineBytes);
-        const command = `cat <<'EOF' | wc -c\n${line.repeat(lines)}EOF\n`;
+        const command = `cat <<'EOF' | wc -c\n${Fn.pipe(line, Str.repeat(lines))}EOF\n`;
         expect(utf8ByteLength(command)).toBeLessThanOrEqual(
           BACKGROUND_TASK_FIELD_BOUNDS.maxCommandBytes,
         );
         const result = yield* collectUntilExit(yield* spawnProcess(command));
         expect(result.exit.exitCode).toBe(0);
-        const output = [...result.events].map((event) => event.text).join("");
-        expect(Number(output.trim())).toBe(lines * lineBytes);
+        const output = Arr.join(
+          Arr.map([...result.events], (event) => event.text),
+          "",
+        );
+        expect(Number(Str.trim(output))).toBe(lines * lineBytes);
       }),
     ),
   );
@@ -154,9 +168,11 @@ describe("local process boundary", () => {
         );
         const result = yield* collectUntilExit(handle);
         expect(result.exit.exitCode).toBe(0);
-        const deliveredBytes = [...result.events]
-          .filter((event) => event.stream === "stdout")
-          .reduce((total, event) => total + Buffer.byteLength(event.text, "utf8"), 0);
+        const deliveredBytes = Arr.reduce(
+          Arr.filter([...result.events], (event) => event.stream === "stdout"),
+          0,
+          (total, event) => total + Buffer.byteLength(event.text, "utf8"),
+        );
         expect(deliveredBytes).toBeLessThanOrEqual(ingressBufferBytes);
         expect(handle.droppedOutputBytes() + deliveredBytes).toBe(producedBytes);
       }),
@@ -186,7 +202,14 @@ describe("local process boundary", () => {
           Stream.runCollect,
           Effect.timeout(processTimeout),
         );
-        const descendant = Number([...events][0]?.text.trim());
+        const descendant = Number(
+          Fn.pipe(
+            [...events][0]?.text,
+            Option.fromUndefinedOr,
+            Option.map(Str.trim),
+            Option.getOrUndefined,
+          ),
+        );
         expect(Number.isSafeInteger(descendant)).toBe(true);
         return { leader: handle.pid, descendant };
       }).pipe(Effect.scoped, provideBuiltLayer(LocalProcess.layer));
@@ -208,7 +231,12 @@ describe("local process boundary", () => {
           yield* handle.terminate("graceful");
           const result = yield* collectUntilExit(handle).pipe(Effect.timeout(processTimeout));
           expect(result.exit).toEqual({ exitCode: null, signal: "SIGTERM" });
-          expect([...result.events].map((event) => event.text).join("")).toContain("cleaned");
+          expect(
+            Arr.join(
+              Arr.map([...result.events], (event) => event.text),
+              "",
+            ),
+          ).toContain("cleaned");
         }),
       ),
   );
@@ -326,7 +354,7 @@ describe("local process boundary", () => {
           return handle.pid;
         }).pipe(Effect.scoped, provideBuiltLayer(LocalProcess.layer));
         expect(
-          kill.mock.calls.filter(([target]) => Math.abs(target) === pid),
+          Arr.filter(kill.mock.calls, ([target]) => Math.abs(target) === pid),
           command,
         ).toEqual([]);
       }

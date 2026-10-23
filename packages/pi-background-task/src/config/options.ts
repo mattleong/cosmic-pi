@@ -1,4 +1,6 @@
 import * as Match from "effect/Match";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
 import { BACKGROUND_TASK_FIELD_BOUNDS } from "../task/bounds.ts";
 import type {
   BackgroundTaskConfig,
@@ -46,7 +48,7 @@ export function normalizeConfig(value: Partial<BackgroundTaskConfig> = {}): Back
     maxWaitSeconds: bounded("maxWaitSeconds"),
     showFooterStatus: value.showFooterStatus ?? DEFAULT_BACKGROUND_TASK_CONFIG.showFooterStatus,
   };
-  const shellPath = value.shellPath?.trim();
+  const shellPath = value.shellPath && Str.trim(value.shellPath);
   return shellPath ? { ...normalizedConfig, shellPath } : normalizedConfig;
 }
 
@@ -84,7 +86,7 @@ const UNIT_BYTES = { k: 1024, m: 1024 ** 2 } as const;
 
 /** A byte count such as `262144`, `256k`, `256 KiB`, or `1.5MB`; units are binary. */
 export const parseByteSize = (value: string): number => {
-  const match = BYTE_SIZE.exec(value.trim().toLowerCase());
+  const match = BYTE_SIZE.exec(Str.toLowerCase(Str.trim(value)));
   if (!match) return Number.NaN;
   const [, amount = "", unit] = match;
   const bytes = Number(amount) * (unit === "k" || unit === "m" ? UNIT_BYTES[unit] : 1);
@@ -173,10 +175,10 @@ const SETTING_DESCRIPTORS = {
     description: "The shell tasks run in; empty uses the platform default.",
     values: [],
     openValues: true,
-    parse: (value) => value.trim(),
+    parse: (value) => Str.trim(value),
     invalid: "shellPath must be a path",
   },
 } satisfies { readonly [Id in BackgroundTaskSettingId]: BackgroundTaskSettingDescriptor<Id> };
 
 export const BACKGROUND_TASK_SETTINGS: readonly BackgroundTaskSetting[] =
-  Object.values(SETTING_DESCRIPTORS);
+  Rec.values(SETTING_DESCRIPTORS);

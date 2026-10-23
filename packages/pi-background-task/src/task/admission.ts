@@ -1,5 +1,7 @@
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import type * as Path from "effect/Path";
+import * as Str from "effect/String";
 import { formatBytes, utf8ByteLength } from "pi-cosmic-core";
 import { BACKGROUND_TASK_FIELD_BOUNDS } from "./bounds.ts";
 import { InvalidBackgroundCommandError, InvalidBackgroundCwdError } from "./errors.ts";
@@ -15,12 +17,12 @@ export const normalizeStartRequest = Effect.fn("BackgroundTaskAdmission.normaliz
     // Whitespace can be shell syntax, such as an escaped trailing space, so the command runs as
     // submitted; trimming only detects a blank one.
     const command = request.command;
-    if (!command.trim()) return yield* invalidCommand("Background command must not be empty.");
+    if (!Str.trim(command)) return yield* invalidCommand("Background command must not be empty.");
     if (utf8ByteLength(command) > BACKGROUND_TASK_FIELD_BOUNDS.maxCommandBytes)
       return yield* invalidCommand(
         `Background command must not exceed ${formatBytes(BACKGROUND_TASK_FIELD_BOUNDS.maxCommandBytes)} of UTF-8; write a longer script to a file and run that.`,
       );
-    const name = request.name?.trim();
+    const name = request.name && Str.trim(request.name);
     if ((name?.length ?? 0) > BACKGROUND_TASK_FIELD_BOUNDS.maxNameChars)
       return yield* invalidCommand(
         `Background task name must not exceed ${BACKGROUND_TASK_FIELD_BOUNDS.maxNameChars} characters.`,
@@ -53,7 +55,7 @@ const validContains = (contains: string | undefined) =>
   contains !== undefined &&
   contains !== "" &&
   contains.length <= BACKGROUND_TASK_FIELD_BOUNDS.maxContainsChars &&
-  !contains.includes("\0");
+  !Fn.pipe(contains, Str.includes("\0"));
 
 export const validateWaitRequest = Effect.fn("BackgroundTaskAdmission.validateWaitRequest")(
   function* (request: WaitForBackgroundTask, waitSeconds: number) {

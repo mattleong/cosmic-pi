@@ -3,9 +3,12 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
+import * as Str from "effect/String";
 import { vi } from "vitest";
 import { signalProcessGroup } from "pi-cosmic-core";
 import { spawnIpcChild, provideBuiltLayer } from "pi-cosmic-core/testing";
@@ -43,10 +46,12 @@ describe("real process cleanup", () => {
       // loaded CI runners.
       const host = yield* spawnIpcChild(hostScript, [], { timeout: "40 seconds" });
       yield* host.wait("ready");
-      const announced = host.messages
-        .filter(Predicate.isString)
-        .find((message) => message.startsWith("group:"));
-      const pid = Number(announced?.slice("group:".length));
+      const announced = Option.getOrUndefined(
+        Arr.findFirst(Arr.filter(host.messages, Predicate.isString), (message) =>
+          Fn.pipe(message, Str.startsWith("group:")),
+        ),
+      );
+      const pid = Number(announced && Fn.pipe(announced, Str.slice("group:".length)));
       expect(Number.isSafeInteger(pid) && pid > 0).toBe(true);
       yield* killGroupsAfterward([pid]);
       expect(signalProcessGroup(pid, 0)).toBe("present");
@@ -99,24 +104,27 @@ describe("real process cleanup", () => {
       const stopped = yield* service.stopAll();
       const elapsed = (yield* Clock.currentTimeMillis) - startedAt;
 
-      expect(stopped.map((task) => task.state)).toEqual(tasks.map(() => "stopped"));
+      expect(Arr.map(stopped, (task) => task.state)).toEqual(Arr.map(tasks, () => "stopped"));
       expect(elapsed).toBeGreaterThanOrEqual(graceMillis - 50);
       // Ordering rather than elapsed time: every task saw SIGTERM before the shared window
       // ended any of them. Stopping in batches signals later tasks only after earlier ones end.
       const termedAt = yield* Effect.forEach(tasks, (task) =>
-        service
-          .logs({ id: task.id, afterCursor: 0 })
-          .pipe(
-            Effect.map(
-              (logs) => logs.events.find((event) => event.text.includes("term"))?.timestamp,
+        service.logs({ id: task.id, afterCursor: 0 }).pipe(
+          Effect.map((logs) =>
+            Option.getOrUndefined(
+              Option.map(
+                Arr.findFirst(logs.events, (event) => Fn.pipe(event.text, Str.includes("term"))),
+                (event) => event.timestamp,
+              ),
             ),
           ),
+        ),
       );
-      const endedAt = stopped.map((task) => task.endedAt);
-      expect(termedAt.every(Predicate.isNumber)).toBe(true);
-      expect(endedAt.every(Predicate.isNumber)).toBe(true);
-      expect(Math.max(...termedAt.filter(Predicate.isNumber))).toBeLessThan(
-        Math.min(...endedAt.filter(Predicate.isNumber)),
+      const endedAt = Arr.map(stopped, (task) => task.endedAt);
+      expect(Arr.every(termedAt, Predicate.isNumber)).toBe(true);
+      expect(Arr.every(endedAt, Predicate.isNumber)).toBe(true);
+      expect(Math.max(...Arr.filter(termedAt, Predicate.isNumber))).toBeLessThan(
+        Math.min(...Arr.filter(endedAt, Predicate.isNumber)),
       );
       for (const pid of pids) expect(yield* groupGone(pid)).toBe(true);
     }).pipe(Effect.scoped, provideBuiltLayer(layer));

@@ -1,3 +1,5 @@
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import type { BackgroundLogSlice, BackgroundLogStream } from "./model.ts";
 import { plainTerminalText } from "./terminal-text.ts";
 
@@ -24,11 +26,12 @@ export class OutputMatcher {
     for (const event of slice.events) {
       if (event.droppedBefore) this.reset();
       const candidate = this.carry[event.stream] + plainTerminalText(event.text);
-      if (candidate.includes(contains)) {
+      if (Fn.pipe(candidate, Str.includes(contains))) {
         matchCursor = event.cursor;
         break;
       }
-      this.carry[event.stream] = contains.length > 1 ? candidate.slice(-(contains.length - 1)) : "";
+      this.carry[event.stream] =
+        contains.length > 1 ? Fn.pipe(candidate, Str.slice(-(contains.length - 1))) : "";
     }
     this.scannedCursor = Math.max(this.scannedCursor, slice.nextCursor);
     return matchCursor;

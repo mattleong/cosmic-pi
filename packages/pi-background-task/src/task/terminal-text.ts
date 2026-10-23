@@ -1,3 +1,8 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import { codeUnitAt } from "pi-cosmic-core";
+
 const ESCAPE = 0x1b;
 const BELL = 0x07;
 const CANCEL = 0x18;
@@ -29,7 +34,7 @@ const isSgrParameter = (code: number): boolean => code >= 0x30 && code <= 0x3b;
  * result is the plain text readers and output waits see, independent of neighboring events.
  */
 export const plainTerminalText = (text: string): string =>
-  text.includes("\u001b") ? text.replace(SGR_SEQUENCE, "") : text;
+  Fn.pipe(text, Str.includes("\u001b")) ? Fn.pipe(text, Str.replace(SGR_SEQUENCE, "")) : text;
 
 /**
  * Normalizes one output stream as it arrives. The result holds printable text, newlines, tabs,
@@ -47,7 +52,7 @@ export class TerminalTextNormalizer {
     const parts: string[] = [];
     let run = -1;
     for (let index = 0; index < text.length; index += 1) {
-      const code = text.charCodeAt(index);
+      const code = codeUnitAt(text, index);
       if (this.mode !== "text") {
         if (this.consume(code, parts)) index -= 1;
         continue;
@@ -56,12 +61,12 @@ export class TerminalTextNormalizer {
         if (run < 0) run = index;
         continue;
       }
-      if (run >= 0) parts.push(text.slice(run, index));
+      if (run >= 0) parts.push(Fn.pipe(text, Str.slice(run, index)));
       run = -1;
       this.introduce(code);
     }
-    if (run >= 0) parts.push(text.slice(run));
-    return parts.join("");
+    if (run >= 0) parts.push(Fn.pipe(text, Str.slice(run)));
+    return Arr.join(parts, "");
   }
 
   /** Discards an unfinished sequence, such as one interrupted by lost output. */

@@ -1,7 +1,10 @@
 import { setFlagsFromString } from "node:v8";
 import { createContext, runInContext } from "node:vm";
 import { it as effectIt } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import { describe, expect, it } from "vitest";
 import { BACKGROUND_LOG_BOUNDS } from "../src/task/bounds.ts";
 import { LogBuffer, readLogBuffer, splitLogText } from "../src/task/log-buffer.ts";
@@ -12,9 +15,13 @@ const OVERHEAD = BACKGROUND_LOG_BOUNDS.eventOverheadBytes;
 const budgetFor = (count: number, bytes: number) => count * (bytes + OVERHEAD);
 
 const tailText = (buffer: LogBuffer, tailLines: number) =>
-  readLogBuffer("task-1", buffer, "running", { tailLines })
-    .events.map((event) => event.text)
-    .join("");
+  Arr.join(
+    Arr.map(
+      readLogBuffer("task-1", buffer, "running", { tailLines }).events,
+      (event) => event.text,
+    ),
+    "",
+  );
 
 // One context, created once: a new context for each collection would add its own allocations
 // to the heap being measured. A missing gc throws rather than skipping.
@@ -30,7 +37,7 @@ describe("background log buffer", () => {
     const buffer = new LogBuffer();
     for (let index = 0; index < 64; index++) buffer.append("stdout", "🙂", index, budget);
     const events = buffer.events;
-    const original = events.map((event) => ({ ...event }));
+    const original = Arr.map(events, (event) => ({ ...event }));
     const slice = readLogBuffer("task-1", buffer, "running", { afterCursor: 0 });
     expect(buffer.events).toBe(events);
 
@@ -110,11 +117,11 @@ describe("background log buffer", () => {
     for (let index = 1; index <= 100; index++)
       buffer.append(
         index % 2 ? "stdout" : "stderr",
-        `e${String(index).padStart(3, "0")}\n`,
+        `e${Fn.pipe(String(index), Str.padStart(3, "0"))}\n`,
         0,
         budget,
       );
-    expect(buffer.events.map((event) => event.cursor)).toEqual(
+    expect(Arr.map(buffer.events, (event) => event.cursor)).toEqual(
       Array.from({ length: 40 }, (_, index) => index + 61),
     );
     const earliest = readLogBuffer("task-1", buffer, "running", { tailLines: 1 });
@@ -126,8 +133,11 @@ describe("background log buffer", () => {
     expect(fromEarliest.events).toHaveLength(40);
     for (const cursor of [0, 59, 60, 61, 80, 99, 100]) {
       const after = readLogBuffer("task-1", buffer, "running", { afterCursor: cursor });
-      expect(after.events.map((event) => event.cursor)).toEqual(
-        buffer.events.map((event) => event.cursor).filter((value) => value > cursor),
+      expect(Arr.map(after.events, (event) => event.cursor)).toEqual(
+        Arr.filter(
+          Arr.map(buffer.events, (event) => event.cursor),
+          (value) => value > cursor,
+        ),
       );
     }
     const drained = new LogBuffer().append("stdout", "x", 0, budget).dropOldest();
@@ -148,7 +158,7 @@ describe("background log buffer", () => {
 
     // A budget smaller than one event keeps what fits and counts the rest exactly once.
     for (const tiny of [OVERHEAD + 32, OVERHEAD - 1]) {
-      const small = new LogBuffer().append("stdout", "x".repeat(1_000), 0, tiny);
+      const small = new LogBuffer().append("stdout", Fn.pipe("x", Str.repeat(1_000)), 0, tiny);
       expect(small.chargedBytes).toBeLessThanOrEqual(Math.max(0, tiny));
       expect(small.bytes + small.droppedBytes).toBe(1_000);
     }
@@ -159,10 +169,11 @@ describe("background log buffer", () => {
       const budget = budgetFor(4, 1_000);
       const buffer = new LogBuffer();
       const watched = (() => {
-        buffer.append("stdout", "a".repeat(1_000), 0, budget);
+        buffer.append("stdout", Fn.pipe("a", Str.repeat(1_000)), 0, budget);
         return new WeakRef(buffer.oldestEvent!);
       })();
-      for (let index = 0; index < 4; index++) buffer.append("stdout", "b".repeat(1_000), 1, budget);
+      for (let index = 0; index < 4; index++)
+        buffer.append("stdout", Fn.pipe("b", Str.repeat(1_000)), 1, budget);
       expect(buffer.oldestEvent?.cursor).toBe(2);
       // A weak target stays alive until the current job ends.
       yield* Effect.sleep("1 millis");
@@ -178,7 +189,9 @@ describe("background log buffer", () => {
       const buffers = 32;
       const writeBytes = 512 * 1_024;
       const write = (index: number) =>
-        Buffer.alloc(writeBytes, `${String(index).padStart(6, "0")}\n`).toString("utf8");
+        Buffer.alloc(writeBytes, `${Fn.pipe(String(index), Str.padStart(6, "0"))}\n`).toString(
+          "utf8",
+        );
       yield* collectGarbage;
       const before = process.memoryUsage().heapUsed;
       const retained = Array.from({ length: buffers }, (_, index) =>
@@ -186,12 +199,15 @@ describe("background log buffer", () => {
       );
       yield* collectGarbage;
       const heapGrowth = process.memoryUsage().heapUsed - before;
-      const charged = retained.reduce((sum, buffer) => sum + buffer.chargedBytes, 0);
+      const charged = Arr.reduce(retained, 0, (sum, buffer) => sum + buffer.chargedBytes);
       for (const [index, buffer] of retained.entries()) {
         expect(buffer.events.length).toBeGreaterThan(0);
-        expect(buffer.events.map((event) => event.text).join("")).toBe(
-          write(index).slice(-buffer.bytes),
-        );
+        expect(
+          Arr.join(
+            Arr.map(buffer.events, (event) => event.text),
+            "",
+          ),
+        ).toBe(Fn.pipe(write(index), Str.slice(-buffer.bytes)));
         expect(buffer.bytes + buffer.droppedBytes).toBe(writeBytes);
       }
       // Holding each whole write would take buffers * writeBytes, over a hundred times the charge.
@@ -203,15 +219,21 @@ describe("background log buffer", () => {
   it("stores large writes as bounded events that never split a style sequence or character", () => {
     const red = "\u001b[31m";
     const reset = "\u001b[0m";
-    const line = `${red}error${reset} 🙂 ${"x".repeat(37)}\n`;
-    const text = line.repeat(400) + `${red}${"y".repeat(9_000)}${reset}`;
+    const line = `${red}error${reset} 🙂 ${Fn.pipe("x", Str.repeat(37))}\n`;
+    const text =
+      Fn.pipe(line, Str.repeat(400)) + `${red}${Fn.pipe("y", Str.repeat(9_000))}${reset}`;
     const buffer = new LogBuffer().append("stdout", text, 0, 1 << 20);
     const events = buffer.events;
     expect(events.length).toBeGreaterThan(1);
-    expect(events.map((event) => event.text).join("")).toBe(text);
+    expect(
+      Arr.join(
+        Arr.map(events, (event) => event.text),
+        "",
+      ),
+    ).toBe(text);
     for (const event of events) {
       expect(event.bytes).toBeLessThanOrEqual(BACKGROUND_LOG_BOUNDS.maxEventBytes);
-      expect(event.text.split("\n").length - 1).toBeLessThanOrEqual(
+      expect(Str.split(event.text, "\n").length - 1).toBeLessThanOrEqual(
         BACKGROUND_LOG_BOUNDS.maxEventLines,
       );
       expect(plainTerminalText(event.text)).not.toContain("\u001b");
@@ -224,8 +246,8 @@ describe("background log buffer", () => {
   it("marks the first event after lost output, however a write is stored", () => {
     const buffer = new LogBuffer().append("stdout", "before\n", 0, 1 << 20);
     buffer.addDropped(0).append("stdout", "same\n", 1, 1 << 20);
-    buffer.addDropped(12).append("stderr", "z".repeat(9_000), 2, 1 << 20);
-    expect(buffer.events.map((event) => event.droppedBefore === true)).toEqual([
+    buffer.addDropped(12).append("stderr", Fn.pipe("z", Str.repeat(9_000)), 2, 1 << 20);
+    expect(Arr.map(buffer.events, (event) => event.droppedBefore === true)).toEqual([
       false,
       false,
       true,

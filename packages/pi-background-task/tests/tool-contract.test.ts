@@ -1,8 +1,12 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import * as JsonSchema from "effect/JsonSchema";
+import * as Option from "effect/Option";
 import * as SchemaRepresentation from "effect/SchemaRepresentation";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import {
   applyPresentationSettings,
   captureRegistrations,
@@ -142,7 +146,7 @@ describe("background_task contract", () => {
           expect(serialized).not.toContain(leaked);
       }
       const list = (yield* execute({ action: "list" }, services)).contract;
-      expect(list.action === "list" && list.tasks.map((entry) => entry.id)).toEqual([
+      expect(list.action === "list" && Arr.map(list.tasks, (entry) => entry.id)).toEqual([
         "task-1",
         "task-2",
       ]);
@@ -176,7 +180,7 @@ describe("background_task contract", () => {
       );
       if (contract.action !== "list") throw new Error("list returned the wrong contract");
       encoded(contract);
-      expect(contract.tasks.map(({ id, finished }) => [id, finished])).toEqual([
+      expect(Arr.map(contract.tasks, ({ id, finished }) => [id, finished])).toEqual([
         ["running", false],
         ["stopping", false],
         ["exited", true],
@@ -194,11 +198,11 @@ describe("background_task contract", () => {
   it.effect("carries the domain failure cause and redacts and bounds every metadata string", () =>
     Effect.gen(function* () {
       const failed = task({
-        name: `${"n".repeat(250)} token=name-secret`,
+        name: `${Fn.pipe("n", Str.repeat(250))} token=name-secret`,
         state: "failed",
         endedAt: 2,
         exitCode: 1,
-        error: `\u001b[31mspawn\u001b[0m failed api_key=error-secret ${"e".repeat(5_000)}`,
+        error: `\u001b[31mspawn\u001b[0m failed api_key=error-secret ${Fn.pipe("e", Str.repeat(5_000))}`,
         failureCause: "FAIL auth password=cause-secret",
       });
       const result = yield* execute(
@@ -272,9 +276,9 @@ describe("registered background_task output", () => {
         expect(result.content).toHaveLength(1);
         const [part] = result.content;
         const text = part?.type === "text" ? part.text : "";
-        const newline = text.indexOf("\n");
-        expect(issueMessageStyleProblems(text.slice(0, newline))).toEqual([]);
-        expect(text.slice(newline + 1)).toBe(direct.text);
+        const newline = Option.getOrElse(Fn.pipe(text, Str.indexOf("\n")), () => -1);
+        expect(issueMessageStyleProblems(Fn.pipe(text, Str.slice(0, newline)))).toEqual([]);
+        expect(Fn.pipe(text, Str.slice(newline + 1))).toBe(direct.text);
         expect(direct.text).toContain("task-7");
       }),
   );

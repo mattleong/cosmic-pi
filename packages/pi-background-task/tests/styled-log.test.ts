@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { stripAnsi } from "pi-cosmic-core";
@@ -9,7 +12,7 @@ const gutter = { stdout: "│ ", stderr: "! " };
 const fresh = (events: ReadonlyArray<BackgroundLogEvent>, width: number) =>
   new StyledLogRows(gutter).rows("task", events, width);
 
-const words = (text: string) => text.split(/\s+/u).filter(Boolean);
+const words = (text: string) => Arr.filter(Str.split(text, /\s+/u), Str.isNonEmpty);
 
 const WRITES: ReadonlyArray<readonly [BackgroundLogStream, string]> = [
   ["stdout", "\u001b[32mstart of a long green line that keeps "],
@@ -33,15 +36,20 @@ describe("task manager log rows", () => {
     expect(view.rows("task", buffer.events, 33)).toBe(rows);
     // Rows fit the width and keep every word of the output, each under its stream's gutter.
     for (const row of rows) expect(visibleWidth(row)).toBeLessThanOrEqual(33);
-    const plainRows = rows.map(stripAnsi);
-    expect(plainRows.flatMap((row) => words(row.slice(2)))).toEqual(
-      words(WRITES.map(([, text]) => stripAnsi(text)).join(" ")),
+    const plainRows = Arr.map(rows, stripAnsi);
+    expect(Arr.flatMap(plainRows, (row) => words(Fn.pipe(row, Str.slice(2))))).toEqual(
+      words(
+        Arr.join(
+          Arr.map(WRITES, ([, text]) => stripAnsi(text)),
+          " ",
+        ),
+      ),
     );
     for (const [index, row] of plainRows.entries()) {
       const stderr = /warn|across|err$/u.test(row);
-      expect(row.startsWith(stderr ? gutter.stderr : gutter.stdout), row).toBe(true);
+      expect(Fn.pipe(row, Str.startsWith(stderr ? gutter.stderr : gutter.stdout)), row).toBe(true);
       // A style left open at a line break carries on to the next line.
-      if (row.includes("across")) expect(rows[index]).not.toBe(row);
+      if (Fn.pipe(row, Str.includes("across"))) expect(rows[index]).not.toBe(row);
     }
 
     buffer.dropOldest().dropOldest();

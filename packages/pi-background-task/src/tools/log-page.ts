@@ -1,4 +1,13 @@
-import { utf8ByteLength, utf8Prefix, utf8Suffix } from "pi-cosmic-core";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import {
+  indexOfFrom,
+  lastIndexOfFrom,
+  utf8ByteLength,
+  utf8Prefix,
+  utf8Suffix,
+} from "pi-cosmic-core";
 import type { BackgroundLogEvent, BackgroundLogSlice, BackgroundLogStream } from "../task/model.ts";
 import { plainTerminalText } from "../task/terminal-text.ts";
 
@@ -11,7 +20,11 @@ interface LineState {
 
 const newlineCount = (text: string): number => {
   let count = 0;
-  for (let index = text.indexOf("\n"); index >= 0; index = text.indexOf("\n", index + 1))
+  for (
+    let index = indexOfFrom(text, "\n", 0);
+    index >= 0;
+    index = indexOfFrom(text, "\n", index + 1)
+  )
     count += 1;
   return count;
 };
@@ -25,15 +38,15 @@ const renderEvent = (event: BackgroundLogEvent, state: LineState): string => {
   if (separator) state.lineStart = true;
   const prefix = separator ? "\n" : "";
   if (event.stream === "stdout") {
-    state.lineStart = text.endsWith("\n");
+    state.lineStart = Fn.pipe(text, Str.endsWith("\n"));
     return `${prefix}${text}`;
   }
   let rendered = prefix;
   for (let start = 0; start < text.length; ) {
-    const newline = text.indexOf("\n", start);
+    const newline = indexOfFrom(text, "\n", start);
     const end = newline < 0 ? text.length : newline + 1;
     if (state.lineStart) rendered += STDERR_LABEL;
-    rendered += text.slice(start, end);
+    rendered += Fn.pipe(text, Str.slice(start, end));
     state.lineStart = newline >= 0;
     start = end;
   }
@@ -46,7 +59,10 @@ const renderEvent = (event: BackgroundLogEvent, state: LineState): string => {
  */
 export const combinedLogOutput = (events: ReadonlyArray<BackgroundLogEvent>): string => {
   const state: LineState = { stream: undefined, lineStart: true };
-  return events.map((event) => renderEvent(event, state)).join("");
+  return Arr.join(
+    Arr.map(events, (event) => renderEvent(event, state)),
+    "",
+  );
 };
 
 // What one event can add to combined output, whatever precedes it.
@@ -61,19 +77,19 @@ const renderedCost = (event: BackgroundLogEvent) => {
 const firstLines = (text: string, lines: number): string => {
   let end = -1;
   for (let count = 0; count < lines; count += 1) {
-    end = text.indexOf("\n", end + 1);
+    end = indexOfFrom(text, "\n", end + 1);
     if (end < 0) return text;
   }
-  return text.slice(0, end + 1);
+  return Fn.pipe(text, Str.slice(0, end + 1));
 };
 
 const lastLines = (text: string, lines: number): string => {
-  let start = text.endsWith("\n") ? text.length - 1 : text.length;
+  let start = Fn.pipe(text, Str.endsWith("\n")) ? text.length - 1 : text.length;
   for (let count = 0; count < lines; count += 1) {
-    start = text.lastIndexOf("\n", start - 1);
+    start = lastIndexOfFrom(text, "\n", start - 1);
     if (start < 0) return text;
   }
-  return text.slice(start + 1);
+  return Fn.pipe(text, Str.slice(start + 1));
 };
 
 export interface LogPageBudget {
@@ -108,7 +124,7 @@ export function pageLogSlice(
   direction: "forward" | "tail",
   budget: LogPageBudget,
 ): LogPage {
-  const ordered = direction === "forward" ? slice.events : slice.events.toReversed();
+  const ordered = direction === "forward" ? slice.events : Arr.reverse(slice.events);
   let bytes = 0;
   let lines = 1;
   let count = 0;
@@ -137,11 +153,11 @@ export function pageLogSlice(
   return {
     output,
     nextCursor: direction === "forward" && clipped && last ? last.cursor : slice.nextCursor,
-    includedBytes: included.reduce((sum, event) => sum + event.bytes, 0),
+    includedBytes: Arr.reduce(included, 0, (sum, event) => sum + event.bytes),
     clipped,
     laterBytes:
       direction === "forward"
-        ? slice.events.slice(count).reduce((sum, event) => sum + event.bytes, 0)
+        ? Arr.reduce(slice.events.slice(count), 0, (sum, event) => sum + event.bytes)
         : 0,
     ...(single &&
       output !== whole && {

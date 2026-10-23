@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import * as Match from "effect/Match";
 import * as Predicate from "effect/Predicate";
 import { exitStatusMeaning } from "pi-code-previews";
@@ -75,7 +76,7 @@ function exitValue(task: BackgroundTaskView): string | undefined {
       ? [withMeaning(`signal ${task.signal}`, exitStatusMeaning(undefined, task.signal))]
       : []),
   ];
-  if (parts.length > 0) return sanitizeTerminalLine(parts.join(" · "));
+  if (parts.length > 0) return sanitizeTerminalLine(Arr.join(parts, " · "));
   return task.exitCode === null ? "unknown" : undefined;
 }
 
@@ -121,18 +122,19 @@ export class TaskManagerComponent implements Component {
     this.applySelection(
       this.shell.select(
         index,
-        tasks.map((task) => task.id),
+        Arr.map(tasks, (task) => task.id),
       ),
     );
   }
 
   private reconcileSelection(tasks: ReadonlyArray<BackgroundTaskView>): void {
-    this.applySelection(this.shell.reconcile(tasks.map((task) => task.id)));
+    this.applySelection(this.shell.reconcile(Arr.map(tasks, (task) => task.id)));
     const selected = tasks[this.shell.state.selected];
     if (
       this.pending?.action === "stop"
         ? this.pending.id !== selected?.id || !isActiveTaskState(selected.state)
-        : this.pending?.action === "clear" && !tasks.some((task) => !isActiveTaskState(task.state))
+        : this.pending?.action === "clear" &&
+          !Arr.some(tasks, (task) => !isActiveTaskState(task.state))
     )
       this.pending = undefined;
   }
@@ -203,7 +205,7 @@ export class TaskManagerComponent implements Component {
       this.shell.resetDetailScroll();
     } else if (key === "x" && active) {
       this.pending = { action: "stop", id: selected.id };
-    } else if (key === "c" && tasks.some((task) => !isActiveTaskState(task.state)))
+    } else if (key === "c" && Arr.some(tasks, (task) => !isActiveTaskState(task.state)))
       this.pending = { action: "clear" };
   }
 
@@ -271,7 +273,7 @@ export class TaskManagerComponent implements Component {
     selected: BackgroundTaskView | undefined,
   ): string {
     if (pending.action === "clear")
-      return `c Confirm clearing ${countLabel(tasks.filter((task) => !isActiveTaskState(task.state)).length, "finished task")}`;
+      return `c Confirm clearing ${countLabel(Arr.filter(tasks, (task) => !isActiveTaskState(task.state)).length, "finished task")}`;
     return `x Confirm stop ${selected?.id === pending.id ? taskDisplayName(selected) : "the selected task"}`;
   }
 
@@ -280,11 +282,14 @@ export class TaskManagerComponent implements Component {
     selected: BackgroundTaskView | undefined,
   ): string[] {
     const active = selected !== undefined && isActiveTaskState(selected.state);
-    return [
-      active ? `f ${this.follow ? "Unfollow" : "Follow"}` : undefined,
-      active ? "x Stop" : undefined,
-      tasks.some((task) => !isActiveTaskState(task.state)) ? "c Clear finished" : undefined,
-    ].filter(Predicate.isNotUndefined);
+    return Arr.filter(
+      [
+        active ? `f ${this.follow ? "Unfollow" : "Follow"}` : undefined,
+        active ? "x Stop" : undefined,
+        Arr.some(tasks, (task) => !isActiveTaskState(task.state)) ? "c Clear finished" : undefined,
+      ],
+      Predicate.isString,
+    );
   }
 
   private helpText(
@@ -306,7 +311,7 @@ export class TaskManagerComponent implements Component {
         [this.confirmationLabel(this.pending, tasks, selected), `${escape}/q Cancel`],
       ]);
     const actions = this.actionLabels(tasks, selected);
-    const joinedActions = actions.length > 0 ? actions.join(" · ") : undefined;
+    const joinedActions = actions.length > 0 ? Arr.join(actions, " · ") : undefined;
     if (this.alternateHelp)
       return renderResponsiveManagerFooter(contentWidth, [
         [
@@ -355,7 +360,7 @@ export class TaskManagerComponent implements Component {
     limit: number,
   ): ReadonlyArray<{ readonly task: BackgroundTaskView; readonly index: number }> {
     const { start, end } = this.shell.visibleWindow(tasks.length, limit);
-    return tasks.slice(start, end).map((task, offset) => ({ task, index: start + offset }));
+    return Arr.map(tasks.slice(start, end), (task, offset) => ({ task, index: start + offset }));
   }
 
   private makeLogRows(): StyledLogRows {
@@ -365,7 +370,7 @@ export class TaskManagerComponent implements Component {
   /** Detail rows wrapped to `width`; log rows come wrapped from a cache kept across renders. */
   private detailLines(task: BackgroundTaskView | undefined, width: number): string[] {
     const wrap = (lines: string[]) =>
-      lines.flatMap((line) => wrapTextWithAnsi(line, Math.max(1, width)));
+      Arr.flatMap(lines, (line) => wrapTextWithAnsi(line, Math.max(1, width)));
     if (!task) return wrap([this.options.theme.fg("dim", "No background tasks yet")]);
     const presentation = taskStatePresentation(task.state, spinnerFrameAt(this.options.getNow()));
     const lines = [
@@ -419,10 +424,10 @@ export class TaskManagerComponent implements Component {
   private detailWindow(lines: string[], height: number, width: number): string[] {
     const window = this.shell.detailWindow(lines, height, this.follow);
     if (!window.overflow) return [...window.visible];
-    return [
-      this.options.theme.fg("dim", detailWindowPositionLabel(window.overflow)),
-      ...window.visible,
-    ].map((line) => clipToWidth(line, width, ""));
+    return Arr.map(
+      [this.options.theme.fg("dim", detailWindowPositionLabel(window.overflow)), ...window.visible],
+      (line) => clipToWidth(line, width, ""),
+    );
   }
 
   private listPane(
@@ -432,7 +437,7 @@ export class TaskManagerComponent implements Component {
   ): string[] {
     return [
       listDetailHeading(this.options.theme, "Background tasks", this.shell.state.pane === "list"),
-      ...this.visibleTasks(tasks, limit).map(({ task, index }) =>
+      ...Arr.map(this.visibleTasks(tasks, limit), ({ task, index }) =>
         this.taskLine(task, index, width),
       ),
     ];
@@ -475,7 +480,7 @@ export class TaskManagerComponent implements Component {
       this.shell.state.details && selected
         ? this.detailWindow(this.detailLines(selected, inner), height, inner)
         : tasks.length
-          ? this.visibleTasks(tasks, height).map(({ task, index }) =>
+          ? Arr.map(this.visibleTasks(tasks, height), ({ task, index }) =>
               this.taskLine(task, index, inner),
             )
           : [this.options.theme.fg("dim", "No background tasks yet")];

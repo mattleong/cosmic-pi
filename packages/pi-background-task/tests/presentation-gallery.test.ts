@@ -1,4 +1,7 @@
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import {
   applyPresentationSettings,
   captureRegistrations,
@@ -135,18 +138,21 @@ const errorNamed = task({
   failureCause: "src/index.ts:4 Cannot find name 'foo'",
 });
 const byId = new Map(
-  [
-    failed,
-    killed,
-    running,
-    stopping,
-    timedOut,
-    exitUnknown,
-    spawnFailed,
-    finished,
-    noisy,
-    unnamed,
-  ].map((entry) => [entry.id, entry]),
+  Arr.map(
+    [
+      failed,
+      killed,
+      running,
+      stopping,
+      timedOut,
+      exitUnknown,
+      spawnFailed,
+      finished,
+      noisy,
+      unnamed,
+    ],
+    (entry) => [entry.id, entry],
+  ),
 );
 
 type Line = Pick<BackgroundLogEvent, "stream" | "text">;
@@ -192,7 +198,7 @@ const requestLog = Array.from({ length: 30 }, (_, index) =>
 );
 const bundleLog = [
   out("vite v6.3.5 building for production..."),
-  out(`!function(){${"var a=1;".repeat(8_000)}}();`),
+  out(`!function(){${Fn.pipe("var a=1;", Str.repeat(8_000))}}();`),
   out("✓ built in 3.21s"),
 ];
 const testLog = [

@@ -4,9 +4,12 @@ import {
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
+import * as Arr from "effect/Array";
 import type * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import type * as Path from "effect/Path";
+import * as Str from "effect/String";
 import {
   expandedArguments,
   expandedSection,
@@ -65,7 +68,10 @@ const headingSubtitle = (
     resultSubject === undefined || resultSubject === ""
       ? backgroundTaskCallSubject(args)
       : resultSubject;
-  return [backgroundTaskActionLabel(args.action), subject].filter(Boolean).join(" ");
+  return Arr.join(
+    Arr.filter([backgroundTaskActionLabel(args.action), subject], Str.isNonEmpty),
+    " ",
+  );
 };
 
 const resultText = (content: Parameters<typeof getTextContent>[0]): string =>
@@ -169,7 +175,7 @@ export function registerBackgroundTaskTool(
       expandedContent: {
         renderCall: (args, theme) => expandedArguments(theme, args),
         renderResult(result, _options, theme) {
-          const text = resultText(result.content).replace(/\n+$/u, "");
+          const text = Fn.pipe(resultText(result.content), Str.replace(/\n+$/u, ""));
           const snapshot = Option.getOrUndefined(
             Option.map(decodeBackgroundTaskDetails(result.details), resultSnapshot),
           );

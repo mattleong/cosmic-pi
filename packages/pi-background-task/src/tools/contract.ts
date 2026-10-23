@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { sanitizeDiagnosticError, sanitizeTerminalLine } from "pi-cosmic-core";
 import { BACKGROUND_TASK_FIELD_BOUNDS as BOUNDS } from "../task/bounds.ts";
 import {
@@ -76,7 +77,7 @@ export const tasksActionContract = (
 ): BackgroundTaskTasksActionContract => ({
   ...envelope,
   action,
-  tasks: tasks.map(projectTaskContract),
+  tasks: Arr.map(tasks, projectTaskContract),
 });
 
 /** Pages the slice independently of the text result, within the structured output bound. */

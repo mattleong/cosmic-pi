@@ -2,6 +2,7 @@ import { createEventBus, initTheme, type ExtensionContext } from "@earendil-work
 import { expect, layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Str from "effect/String";
 import type { CodePreviewSettings } from "pi-code-previews";
 import {
   applyPresentationSettings,
@@ -96,7 +97,7 @@ layer(nodeFilePlatformLayer)("background task history replay", (it) => {
       expect(drawToolRow(row)).not.toBe(cold);
       expect(toolRowFrames(row)).toEqual(toolRowFrames(h.row()));
       const expanded = drawToolRow(row, true);
-      for (const line of text.split("\n")) expect(expanded).toContain(line);
+      for (const line of Str.split(text, "\n")) expect(expanded).toContain(line);
       expect(expanded).toContain("task-1");
       yield* Effect.promise(() => h.emit("session_shutdown", context()));
     }),

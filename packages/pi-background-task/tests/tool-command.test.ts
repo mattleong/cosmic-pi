@@ -1,6 +1,9 @@
 import { DEFAULT_MAX_BYTES } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import { formatBytes } from "pi-cosmic-core";
 import { LogBuffer, readLogBuffer } from "../src/task/log-buffer.ts";
 import { MAX_CONTRACT_LOG_OUTPUT_BYTES } from "../src/tools/contract-schema.ts";
@@ -41,7 +44,7 @@ const bufferService = (buffer: LogBuffer): Partial<BackgroundTaskServiceContract
 const logBody = (text: string, details: Parameters<typeof backgroundLogLines>[1]) => {
   const headerLines =
     1 + Number(details.logs.droppedBytes > 0) + Number(details.truncation !== undefined);
-  return text.split("\n").slice(headerLines).join("\n");
+  return Arr.join(Str.split(text, "\n").slice(headerLines), "\n");
 };
 
 const summarize = (
@@ -55,10 +58,15 @@ describe("shared background task command", () => {
       const buffer = new LogBuffer();
       const lines = Array.from(
         { length: 3_000 },
-        (_, index) => `line ${index + 1} ${"x".repeat(30)}`,
+        (_, index) => `line ${index + 1} ${Fn.pipe("x", Str.repeat(30))}`,
       );
       for (let index = 0; index < lines.length; index += 500)
-        buffer.append("stdout", `${lines.slice(index, index + 500).join("\n")}\n`, index, 1 << 22);
+        buffer.append(
+          "stdout",
+          `${Arr.join(lines.slice(index, index + 500), "\n")}\n`,
+          index,
+          1 << 22,
+        );
       const service = bufferService(buffer);
       const pages: string[] = [];
       let cursor = 0;
@@ -70,7 +78,7 @@ describe("shared background task command", () => {
         expect(Buffer.byteLength(result.text)).toBeLessThanOrEqual(DEFAULT_MAX_BYTES);
         if (result.details.action !== "logs") throw new Error("logs returned other details");
         const next = result.details.logs.nextCursor;
-        expect(result.text.split("\n")[0]).toContain(`cursor=${next} `);
+        expect(Str.split(result.text, "\n")[0]).toContain(`cursor=${next} `);
         pages.push(logBody(result.text, result.details));
         if (next === buffer.latestCursor) {
           expect(result.details).not.toHaveProperty("truncation");
@@ -84,14 +92,14 @@ describe("shared background task command", () => {
         cursor = next;
       }
       expect(pages.length).toBeGreaterThan(1);
-      expect(pages.join("")).toBe(`${lines.join("\n")}\n`);
+      expect(Arr.join(pages, "")).toBe(`${Arr.join(lines, "\n")}\n`);
 
       const { contract } = yield* execute(
         { action: "logs", id: "task-1", afterCursor: 0 },
         service,
       );
       expect(contract).toMatchObject({
-        output: `${lines.join("\n")}\n`,
+        output: `${Arr.join(lines, "\n")}\n`,
         truncated: false,
         nextCursor: buffer.latestCursor,
       });
@@ -101,7 +109,7 @@ describe("shared background task command", () => {
   it.effect("pages structured output the same way within its own larger bound", () =>
     Effect.gen(function* () {
       const buffer = new LogBuffer();
-      const chunk = `${"z".repeat(3_999)}\n`;
+      const chunk = `${Fn.pipe("z", Str.repeat(3_999))}\n`;
       for (let index = 0; index < 400; index++) buffer.append("stdout", chunk, index, 1 << 22);
       const service = bufferService(buffer);
       const outputs: string[] = [];
@@ -120,7 +128,7 @@ describe("shared background task command", () => {
         cursor = contract.nextCursor;
       }
       expect(outputs).toHaveLength(2);
-      expect(outputs.join("")).toBe(chunk.repeat(400));
+      expect(Arr.join(outputs, "")).toBe(Fn.pipe(chunk, Str.repeat(400)));
     }),
   );
 
@@ -128,23 +136,23 @@ describe("shared background task command", () => {
     Effect.gen(function* () {
       const buffer = new LogBuffer();
       const lines = Array.from({ length: 300 }, (_, index) => `line ${index + 1}`);
-      buffer.append("stdout", `${lines.join("\n")}\n`, 0, 1 << 20);
+      buffer.append("stdout", `${Arr.join(lines, "\n")}\n`, 0, 1 << 20);
       const result = yield* execute({ action: "logs", id: "task-1" }, bufferService(buffer));
       if (result.details.action !== "logs") throw new Error("logs returned other details");
-      const [header, notice] = result.text.split("\n");
+      const [header, notice] = Str.split(result.text, "\n");
       expect(header).toBe(`[task-1 state=running cursor=${buffer.latestCursor} earliest=0]`);
-      const omitted = Buffer.byteLength(`${lines.slice(0, 100).join("\n")}\n`);
+      const omitted = Buffer.byteLength(`${Arr.join(lines.slice(0, 100), "\n")}\n`);
       expect(result.details.truncation).toEqual({
         omitted: "earlier",
         omittedBytes: omitted,
         resumeAfterCursor: 0,
       });
       expect(notice).toContain(formatBytes(omitted));
-      expect(logBody(result.text, result.details)).toBe(`${lines.slice(100).join("\n")}\n`);
+      expect(logBody(result.text, result.details)).toBe(`${Arr.join(lines.slice(100), "\n")}\n`);
       expect(backgroundLogLines(result.text, result.details)).toEqual(lines.slice(100));
       // The structured result leaves out the same earlier output, and says so.
       expect(result.contract).toMatchObject({
-        output: `${lines.slice(100).join("\n")}\n`,
+        output: `${Arr.join(lines.slice(100), "\n")}\n`,
         truncated: true,
       });
 
@@ -153,7 +161,10 @@ describe("shared background task command", () => {
         bufferService(buffer),
       );
       expect(all.details).not.toHaveProperty("truncation");
-      expect(all.contract).toMatchObject({ output: `${lines.join("\n")}\n`, truncated: false });
+      expect(all.contract).toMatchObject({
+        output: `${Arr.join(lines, "\n")}\n`,
+        truncated: false,
+      });
     }),
   );
 
@@ -161,7 +172,7 @@ describe("shared background task command", () => {
     Effect.gen(function* () {
       const buffer = new LogBuffer();
       for (let index = 0; index < 8; index++)
-        buffer.append("stdout", `${String(index).repeat(3_000)}\n`, index, 4 * 3_097);
+        buffer.append("stdout", `${Fn.pipe(String(index), Str.repeat(3_000))}\n`, index, 4 * 3_097);
       const result = yield* execute(
         { action: "logs", id: "task-1", afterCursor: 0 },
         bufferService(buffer),
@@ -173,14 +184,14 @@ describe("shared background task command", () => {
         truncation: { omitted: "later", omittedBytes: 2 * 3_001, resumeAfterCursor: 6 },
       });
       // Each loss has its own line: what was discarded, then what the next page holds.
-      const [header, loss, notice] = result.text.split("\n");
+      const [header, loss, notice] = Str.split(result.text, "\n");
       expect(header).toBe("[task-1 state=running cursor=6 earliest=4]");
       expect(loss).toContain(formatBytes(4 * 3_001));
       expect(loss).not.toContain(formatBytes(2 * 3_001));
       expect(notice).toContain(formatBytes(2 * 3_001));
       expect(notice).not.toContain(formatBytes(4 * 3_001));
       expect(logBody(result.text, result.details)).toBe(
-        `${"4".repeat(3_000)}\n${"5".repeat(3_000)}\n`,
+        `${Fn.pipe("4", Str.repeat(3_000))}\n${Fn.pipe("5", Str.repeat(3_000))}\n`,
       );
     }),
   );
@@ -203,7 +214,7 @@ describe("shared background task command", () => {
       expect(logBody(result.text, result.details)).toBe(expected);
       expect(result.contract).toMatchObject({ output: expected });
       expect(backgroundLogLines(result.text, result.details)).toEqual(
-        expected.slice(0, -1).split("\n"),
+        Str.split(Fn.pipe(expected, Str.slice(0, -1)), "\n"),
       );
     }),
   );
@@ -213,7 +224,7 @@ describe("shared background task command", () => {
       const event = {
         cursor: 1,
         stream: "stdout" as const,
-        text: "y".repeat(2_000),
+        text: Fn.pipe("y", Str.repeat(2_000)),
         timestamp: 1,
         bytes: 2_000,
       };
@@ -237,7 +248,7 @@ describe("shared background task command", () => {
       expect(result.details.truncation?.cutBytes).toBe(event.bytes - Buffer.byteLength(shown));
       // A tail read keeps the newest part of the event.
       expect(shown.length).toBeGreaterThan(0);
-      expect(event.text.endsWith(shown)).toBe(true);
+      expect(Fn.pipe(event.text, Str.endsWith(shown))).toBe(true);
     }),
   );
 
@@ -284,9 +295,13 @@ describe("shared background task command", () => {
         args: Partial<BackgroundTaskToolInput>,
         details: BackgroundTaskToolDetails,
       ) =>
-        (summarize(args, { details })?.issues ?? [])
-          .filter((issue) => issue.severity === "error")
-          .map((issue) => issue.message);
+        Arr.map(
+          Arr.filter(
+            summarize(args, { details })?.issues ?? [],
+            (issue) => issue.severity === "error",
+          ),
+          (issue) => issue.message,
+        );
       for (const input of [{ action: "status", id: "bg-2" }, { action: "list" }] as const) {
         const result = yield* execute(input, service);
         expect(result.text).toContain(cause);
@@ -315,7 +330,7 @@ describe("shared background task command", () => {
         state: "failed",
         endedAt: 2,
         exitCode: 1,
-        failureCause: `FAIL token=cause-secret \u001b[31m${"x".repeat(5_000)}`,
+        failureCause: `FAIL token=cause-secret \u001b[31m${Fn.pipe("x", Str.repeat(5_000))}`,
       });
       const result = yield* execute(
         { action: "status", id: "bg-2" },
@@ -528,7 +543,7 @@ describe("background task results", () => {
         task: { state: "exited" },
       });
       expect(real.contract).toMatchObject({ action: "stop", alreadyFinished: false });
-      expect(noop.text.split(" ")[0]).not.toBe(real.text.split(" ")[0]);
+      expect(Str.split(noop.text, " ")[0]).not.toBe(Str.split(real.text, " ")[0]);
       expect(summarize({ action: "stop", id: "task-1" }, noop)?.outcome).toBe("returned");
       expect(summarize({ action: "stop", id: "task-2" }, real)?.outcome).toBe("success");
     }),

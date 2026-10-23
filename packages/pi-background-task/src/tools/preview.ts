@@ -1,7 +1,10 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Str from "effect/String";
 import { exitStatusMeaning } from "pi-code-previews";
 import { countLabel, sanitizeTerminalLine } from "pi-cosmic-core";
 import { clipToWidth } from "pi-cosmic-ui/manager";
@@ -33,17 +36,22 @@ function exitStatus(task: BackgroundTaskSnapshot): string | undefined {
 function taskPreviewLine(task: BackgroundTaskSnapshot, theme: PreviewTheme): string {
   const state = taskStatePresentation(task.state, 0);
   const status = exitStatus(task);
-  return [
-    theme.fg("toolOutput", taskDisplayName(task)),
-    theme.fg(state.color, state.label),
-    ...(status ? [theme.fg(state.color, status)] : []),
-    ...(task.name?.trim() ? [theme.fg("dim", sanitizeTerminalLine(task.command))] : []),
-  ].join(theme.fg("dim", " · "));
+  return Arr.join(
+    [
+      theme.fg("toolOutput", taskDisplayName(task)),
+      theme.fg(state.color, state.label),
+      ...(status ? [theme.fg(state.color, status)] : []),
+      ...(task.name && Str.trim(task.name)
+        ? [theme.fg("dim", sanitizeTerminalLine(task.command))]
+        : []),
+    ],
+    theme.fg("dim", " · "),
+  );
 }
 
 export function taskProcessLine(task: BackgroundTaskSnapshot, theme: PreviewTheme): string {
   const pid = task.pid === undefined ? [] : [`pid ${task.pid}`];
-  return theme.fg("muted", [sanitizeTerminalLine(task.cwd), ...pid].join(" · "));
+  return theme.fg("muted", Arr.join([sanitizeTerminalLine(task.cwd), ...pid], " · "));
 }
 
 interface Row {
@@ -58,11 +66,11 @@ const hiddenMarker = (hidden: number, theme: PreviewTheme): Row => ({
 function boundedLines(lines: ReadonlyArray<string>, label: string, theme: PreviewTheme): Row[] {
   const shown = LOG_HEAD_LINES + LOG_TAIL_LINES;
   const text = (line: string): Row => ({ text: theme.fg("toolOutput", line) });
-  if (lines.length <= shown) return lines.map(text);
+  if (lines.length <= shown) return Arr.map(lines, text);
   return [
-    ...lines.slice(0, LOG_HEAD_LINES).map(text),
+    ...Arr.map(lines.slice(0, LOG_HEAD_LINES), text),
     hiddenMarker(lines.length - shown, theme),
-    ...lines.slice(-LOG_TAIL_LINES).map(text),
+    ...Arr.map(lines.slice(-LOG_TAIL_LINES), text),
     {
       text: renderExpansionAffordance(`Showing ${shown} of ${lines.length} ${label}`, false, theme),
     },
@@ -77,7 +85,7 @@ function taskRows(
 ): Row[] {
   if (tasks.length === 0) return [{ text: theme.fg("muted", empty) }];
   const shown = expanded ? tasks : tasks.slice(0, COLLAPSED_TASK_ROWS);
-  const rows: Row[] = shown.map((task) => ({ text: taskPreviewLine(task, theme) }));
+  const rows: Row[] = Arr.map(shown, (task) => ({ text: taskPreviewLine(task, theme) }));
   if (shown.length < tasks.length)
     rows.push({
       text: renderExpansionAffordance(
@@ -156,11 +164,14 @@ function detailRows(
 }
 
 function rawRows(text: string, theme: PreviewTheme): Row[] {
-  const raw = text.replace(/\n+$/u, "");
+  const raw = Fn.pipe(text, Str.replace(/\n+$/u, ""));
   if (!raw) return [];
   return [
     { text: theme.fg("muted", "Raw result") },
-    ...raw.split("\n").map((line) => ({ text: theme.fg("toolOutput", line), wrap: true })),
+    ...Arr.map(Str.split(raw, "\n"), (line) => ({
+      text: theme.fg("toolOutput", line),
+      wrap: true,
+    })),
   ];
 }
 
@@ -176,14 +187,16 @@ function previewRows(input: BackgroundTaskPreviewInput, theme: PreviewTheme): Ro
   const { text, args, expanded } = input;
   if (Option.isNone(input.details)) {
     if (expanded) return rawRows(text, theme);
-    return input.isError ? [] : boundedLines(text.replace(/\n+$/u, "").split("\n"), "lines", theme);
+    return input.isError
+      ? []
+      : boundedLines(Fn.pipe(text, Str.replace(/\n+$/u, ""), Str.split("\n")), "lines", theme);
   }
   const details = input.details.value;
   if (!expanded) return detailRows(details, text, args, false, theme);
   const body = details.action === "logs" ? [] : detailRows(details, text, args, true, theme);
   const snapshot = resultSnapshot(details);
   return [
-    ...body.map((row) => ({ text: row.text, wrap: true })),
+    ...Arr.map(body, (row) => ({ text: row.text, wrap: true })),
     ...(snapshot ? [{ text: taskProcessLine(snapshot, theme), wrap: true }] : []),
     ...rawRows(text, theme),
   ];
@@ -200,7 +213,7 @@ export function renderBackgroundTaskPreview(
       if (!Number.isFinite(width) || width < 1) return [];
       if (cached?.width === width) return cached.lines;
       rows ??= previewRows(input, theme);
-      const lines = rows.flatMap((row) =>
+      const lines = Arr.flatMap(rows, (row) =>
         row.wrap ? wrapTextWithAnsi(row.text, width) : [clipToWidth(row.text, width)],
       );
       cached = { width, lines };

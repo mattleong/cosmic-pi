@@ -1,4 +1,13 @@
-import { utf8ByteLength, utf8Suffix } from "pi-cosmic-core";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import {
+  codeUnitAt,
+  indexOfFrom,
+  lastIndexOfFrom,
+  utf8ByteLength,
+  utf8Suffix,
+} from "pi-cosmic-core";
 import { BACKGROUND_LOG_BOUNDS as LOG_BOUNDS } from "./bounds.ts";
 import type {
   BackgroundLogEvent,
@@ -33,8 +42,8 @@ const eventEnd = (text: string, start: number, maxBytes: number, maxLines: numbe
   let sequence = -1;
   let index = start;
   while (index < text.length) {
-    const code = text.charCodeAt(index);
-    const pair = isHighSurrogate(code) && isLowSurrogate(text.charCodeAt(index + 1));
+    const code = codeUnitAt(text, index);
+    const pair = isHighSurrogate(code) && isLowSurrogate(codeUnitAt(text, index + 1));
     const size = code < 0x80 ? 1 : code < 0x800 ? 2 : pair ? 4 : 3;
     if (bytes + size > maxBytes && index > start) break;
     bytes += size;
@@ -50,7 +59,7 @@ const eventEnd = (text: string, start: number, maxBytes: number, maxLines: numbe
   if (index >= text.length) return text.length;
   if (sequence > start) return sequence;
   if (sequence === start) {
-    const final = text.indexOf("m", sequence);
+    const final = indexOfFrom(text, "m", sequence);
     return final < 0 ? index : final + 1;
   }
   return lineBreak > start + (index - start) / 2 ? lineBreak : index;
@@ -65,7 +74,7 @@ export const splitLogText = (
   const pieces: string[] = [];
   for (let start = 0; start < text.length; ) {
     const end = eventEnd(text, start, maxBytes, maxLines);
-    pieces.push(text.slice(start, end));
+    pieces.push(Fn.pipe(text, Str.slice(start, end)));
     start = end;
   }
   return pieces;
@@ -76,10 +85,10 @@ const styledSuffix = (text: string, maxBytes: number): string => {
   const suffix = utf8Suffix(text, maxBytes);
   const start = text.length - suffix.length;
   if (start === 0) return suffix;
-  const escape = text.lastIndexOf("\u001b", start - 1);
+  const escape = lastIndexOfFrom(text, "\u001b", start - 1);
   if (escape < 0) return suffix;
-  const final = text.indexOf("m", escape);
-  return final >= start ? text.slice(final + 1) : suffix;
+  const final = indexOfFrom(text, "m", escape);
+  return final >= start ? Fn.pipe(text, Str.slice(final + 1)) : suffix;
 };
 
 export class LogBuffer {
@@ -127,7 +136,7 @@ export class LogBuffer {
   ): LogBuffer {
     if (!text) return this;
     const pieces = splitLogText(text);
-    const sizes = pieces.map(utf8ByteLength);
+    const sizes = Arr.map(pieces, utf8ByteLength);
     let first = pieces.length;
     let charged = 0;
     while (first > 0) {
@@ -206,13 +215,13 @@ export class LogBuffer {
   /** The events holding the last `lineLimit` logical lines, trimming the first at a line start. */
   tail(lineLimit: number): BackgroundLogEvent[] {
     if (lineLimit <= 0) return [];
-    let ignoredBreaks = this.store.at(-1)?.text.endsWith("\n") ? 1 : 0;
+    let ignoredBreaks = Fn.pipe(this.store.at(-1)?.text ?? "", Str.endsWith("\n")) ? 1 : 0;
     let linesLeft = lineLimit;
     for (let index = this.store.length - 1; index >= this.start; index -= 1) {
       const event = this.store[index];
       const text = event?.text ?? "";
       for (let end = text.length; end > 0; ) {
-        const newline = text.lastIndexOf("\n", end - 1);
+        const newline = lastIndexOfFrom(text, "\n", end - 1);
         if (newline < 0) break;
         end = newline;
         if (ignoredBreaks > 0) {
@@ -233,7 +242,7 @@ export class LogBuffer {
   ): BackgroundLogEvent[] {
     const rest = this.range(index + 1);
     if (offset >= event.text.length) return rest;
-    const text = event.text.slice(offset);
+    const text = Fn.pipe(event.text, Str.slice(offset));
     return [Object.freeze({ ...event, text, bytes: utf8ByteLength(text) }), ...rest];
   }
 

@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
 import { utf8ByteLength } from "pi-cosmic-core";
@@ -90,7 +91,7 @@ export const taskLogSlice = (
     task,
   }: { readonly from?: number; readonly droppedBytes?: number; readonly task?: LogTask } = {},
 ): BackgroundTaskLogs => {
-  const events = lines.map((line, index) => ({
+  const events = Arr.map(lines, (line, index) => ({
     ...line,
     cursor: from + index,
     timestamp: from + index,
@@ -103,7 +104,7 @@ export const taskLogSlice = (
       nextCursor: from + lines.length - 1,
       earliestAvailableCursor: from - 1,
       droppedBytes,
-      retainedBytes: events.reduce((sum, event) => sum + event.bytes, 0),
+      retainedBytes: Arr.reduce(events, 0, (sum, event) => sum + event.bytes),
       events,
     },
     task,

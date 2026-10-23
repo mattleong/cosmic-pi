@@ -1,5 +1,8 @@
+import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Order from "effect/Order";
+import * as Str from "effect/String";
 import { outputFailureLine } from "pi-code-previews";
 import type {
   LocalProcessError,
@@ -61,10 +64,17 @@ export const wakeTaskRecord = (record: TaskRecord) => {
 };
 
 const recentOutputLines = (record: TaskRecord): string[] =>
-  readLogBuffer(record.snapshot.id, record.logs, record.snapshot.state, { tailLines: 200 })
-    .events.map((event) => plainTerminalText(event.text))
-    .join("")
-    .split(/\r?\n/u);
+  Str.split(
+    Arr.join(
+      Arr.map(
+        readLogBuffer(record.snapshot.id, record.logs, record.snapshot.state, { tailLines: 200 })
+          .events,
+        (event) => plainTerminalText(event.text),
+      ),
+      "",
+    ),
+    /\r?\n/u,
+  );
 
 export const completedSnapshot = (
   record: TaskRecord,
@@ -87,13 +97,13 @@ export const completedSnapshot = (
 };
 
 export const activeRecords = (tasks: TaskRegistry): TaskRecord[] =>
-  [...tasks.values()].filter((record) => isActiveTaskState(record.snapshot.state));
+  Arr.filter([...tasks.values()], (record) => isActiveTaskState(record.snapshot.state));
 
 export const registryProjection = (tasks: TaskRegistry): BackgroundTaskProjection =>
   Object.freeze({
     tasks: Object.freeze(
       sortTasksByActivity(
-        [...tasks.values()].map((record) =>
+        Arr.map([...tasks.values()], (record) =>
           Object.freeze({
             ...record.snapshot,
             logs: record.logs.events,
@@ -115,7 +125,7 @@ const oldestLogOwner = (tasks: TaskRegistry): TaskRecord | undefined => {
 };
 
 export const enforceRetainedLogBudget = (tasks: TaskRegistry, budget: number) => {
-  let total = [...tasks.values()].reduce((sum, record) => sum + record.logs.chargedBytes, 0);
+  let total = Arr.reduce([...tasks.values()], 0, (sum, record) => sum + record.logs.chargedBytes);
   while (total > budget) {
     const selected = oldestLogOwner(tasks);
     if (!selected?.logs.oldestEvent) break;
@@ -128,9 +138,11 @@ export const enforceRetainedLogBudget = (tasks: TaskRegistry, budget: number) =>
 };
 
 export const trimRetention = (tasks: TaskRegistry, maxRetained: number) => {
-  const completed = [...tasks.values()]
-    .filter((record) => !isActiveTaskState(record.snapshot.state))
-    .toSorted((left, right) => (left.snapshot.endedAt ?? 0) - (right.snapshot.endedAt ?? 0));
+  const completed = Arr.sortWith(
+    Arr.filter([...tasks.values()], (record) => !isActiveTaskState(record.snapshot.state)),
+    (record: TaskRecord) => record.snapshot.endedAt ?? 0,
+    Order.Number,
+  );
   const evicted = completed.slice(0, Math.max(0, completed.length - maxRetained));
   for (const record of evicted) tasks.delete(record.snapshot.id);
 };

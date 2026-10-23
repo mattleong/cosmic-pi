@@ -1,10 +1,14 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { LocalProcess } from "../src/boundary/local-process.ts";
 import { normalizeConfig } from "../src/config/options.ts";
@@ -16,9 +20,13 @@ import { taskServiceDouble, taskStatus, taskWait } from "./support/task-service-
 const decodeOutput = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const literal = Schema.encodeSync(Schema.fromJsonString(Schema.String));
 const output = (text: string) => {
-  const line = text.split("\n").find((candidate) => candidate.startsWith("WORKFLOW_RESULT "));
+  const line = Option.getOrUndefined(
+    Arr.findFirst(Str.split(text, "\n"), (candidate) =>
+      Fn.pipe(candidate, Str.startsWith("WORKFLOW_RESULT ")),
+    ),
+  );
   expect(line, text).toBeDefined();
-  return decodeOutput(line!.slice("WORKFLOW_RESULT ".length));
+  return decodeOutput(Fn.pipe(line!, Str.slice("WORKFLOW_RESULT ".length)));
 };
 const print = (expression: string) => `text('WORKFLOW_RESULT ' + JSON.stringify(${expression}));`;
 const envelope = { contract: "pi-background-task/task", version: 1, tool: "background_task" };
@@ -86,8 +94,8 @@ describe("native scripted background task workflows", () => {
         `);
         expect(calls).toEqual([]);
         const outcomes = output(result.text);
-        expect(Array.isArray(outcomes) ? outcomes.length : 0).toBe(2);
-        for (const outcome of Array.isArray(outcomes) ? outcomes : [])
+        expect(Arr.isArray(outcomes) ? outcomes.length : 0).toBe(2);
+        for (const outcome of Arr.isArray(outcomes) ? outcomes : [])
           expect(outcome).toMatch(/does not accept id/u);
       }).pipe(Effect.provide(nodeFilePlatformLayer)),
     15_000,

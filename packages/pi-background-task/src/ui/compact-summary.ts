@@ -16,9 +16,11 @@ import {
   sanitizeTerminalLine,
   stripTerminalControls,
 } from "pi-cosmic-core";
+import * as Arr from "effect/Array";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Str from "effect/String";
 import { BACKGROUND_TASK_FIELD_BOUNDS } from "../task/bounds.ts";
 import {
   countTaskStates,
@@ -62,7 +64,7 @@ export function backgroundTaskCallSubject(args: Partial<BackgroundTaskToolInput>
       // Commands may be 64 KiB; clip before sanitizing because this runs on every render.
       return sanitizeTerminalLine(
         clipText(
-          textValue(args.name).trim() || textValue(args.command),
+          Str.trim(textValue(args.name)) || textValue(args.command),
           BACKGROUND_TASK_FIELD_BOUNDS.maxCommandDisplayChars,
         ),
       );
@@ -111,7 +113,13 @@ const logLossIssue = (id: string, bytes: number, detail?: string) =>
     "warning",
     `${id}:log-loss`,
     discardedOutputText(bytes),
-    ["Discarded output cannot be recovered.", detail].filter(Boolean).join(" "),
+    Arr.join(
+      Arr.filter(
+        ["Discarded output cannot be recovered.", detail],
+        (part): part is string => Predicate.isString(part) && Str.isNonEmpty(part),
+      ),
+      " ",
+    ),
   );
 const cleanupUnconfirmedIssue = (id: string) =>
   issue(
@@ -129,7 +137,7 @@ const runtimeTimeoutIssue = (id: string, ranMs: number | undefined, detail?: str
   );
 
 function taskErrorIssue(id: string, error: string): CompactIssue {
-  const { line, detail } = quoteText(stripTerminalControls(error).trim());
+  const { line, detail } = quoteText(Str.trim(stripTerminalControls(error)));
   return issue("error", `${id}:error`, line ?? "Reported an error", detail);
 }
 
@@ -261,11 +269,11 @@ function cursorIssues(value: Omit<BackgroundLogMetadata, "state">): CompactIssue
 }
 
 function taskLabels(tasks: ReadonlyArray<BackgroundTaskSnapshot>): string[] {
-  const names = tasks.map((task) => clipText(taskDisplayName(task), MAX_TASK_LABEL_CHARS));
-  return names.map((name, index) => {
-    const same = names.filter((other) => other === name).length;
+  const names = Arr.map(tasks, (task) => clipText(taskDisplayName(task), MAX_TASK_LABEL_CHARS));
+  return Arr.map(names, (name, index) => {
+    const same = Arr.filter(names, (other) => other === name).length;
     if (same === 1) return name;
-    return `${name} (${names.slice(0, index + 1).filter((other) => other === name).length})`;
+    return `${name} (${Arr.filter(names.slice(0, index + 1), (other) => other === name).length})`;
   });
 }
 
@@ -320,20 +328,27 @@ const AGGREGATE_PRECEDENCE: ReadonlyArray<CompactOutcome> = [
 
 function aggregateOutcome(outcomes: readonly CompactOutcome[]): CompactOutcome {
   if (outcomes.length === 0) return "returned";
-  return AGGREGATE_PRECEDENCE.find((outcome) => outcomes.includes(outcome)) ?? "success";
+  return Option.getOrElse(
+    Arr.findFirst(AGGREGATE_PRECEDENCE, (outcome) => outcomes.includes(outcome)),
+    () => "success",
+  );
 }
 
 function aggregateCounters(tasks: ReadonlyArray<BackgroundTaskSnapshot>): string[] {
-  const counts = BACKGROUND_TASK_STATES.flatMap((state) => {
-    const n = tasks.filter((task) => task.state === state).length;
+  const counts = Arr.flatMap(BACKGROUND_TASK_STATES, (state) => {
+    const n = Arr.filter(tasks, (task) => task.state === state).length;
     return n ? [`${n} ${taskStateLabel(state)}`] : [];
   });
   const total = countLabel(tasks.length, "task");
   const { active, failed } = countTaskStates(tasks);
-  const brief = [total, active && `${active} active`, failed && `${failed} failed`]
-    .filter(Boolean)
-    .join(", ");
-  return [...new Set([counts.join(", ") || total, brief, total])];
+  const brief = Arr.join(
+    Arr.filter(
+      [total, active ? `${active} active` : "", failed ? `${failed} failed` : ""],
+      Boolean,
+    ),
+    ", ",
+  );
+  return [...new Set([Arr.join(counts, ", ") || total, brief, total])];
 }
 
 function aggregateSummary(
@@ -341,20 +356,20 @@ function aggregateSummary(
   action: string,
   subject: string,
 ): CompactSummary {
-  const tasks = details.tasks.map(taskSummary);
+  const tasks = Arr.map(details.tasks, taskSummary);
   const labels = taskLabels(details.tasks);
   // Labels are already sanitized display names; tidying the composed text would strip a task
   // named like an error class, such as "BuildError".
-  const issues = tasks.flatMap((task, index) => {
+  const issues = Arr.flatMap(tasks, (task, index) => {
     const label = labels[index];
     if (label === undefined) return task.issues;
-    return task.issues.map((entry) => ({ ...entry, message: `${label}: ${entry.message}` }));
+    return Arr.map(task.issues, (entry) => ({ ...entry, message: `${label}: ${entry.message}` }));
   });
-  const outcomes = tasks.map((task) =>
+  const outcomes = Arr.map(tasks, (task) =>
     details.action === "stop_all" ? stopOutcome(task.outcome) : task.outcome,
   );
-  const ordered = SEVERITY_ORDER.flatMap((severity) =>
-    issues.filter((entry) => entry.severity === severity),
+  const ordered = Arr.flatMap(SEVERITY_ORDER, (severity) =>
+    Arr.filter(issues, (entry) => entry.severity === severity),
   );
   return {
     action,
@@ -386,7 +401,7 @@ function waitSummary(
   if (wait.id !== wait.snapshot.id) return undefined;
   const task = taskSummary(wait.snapshot);
   const issues = [
-    ...task.issues.filter((entry) => entry.code !== `${wait.id}:log-loss`),
+    ...Arr.filter(task.issues, (entry) => entry.code !== `${wait.id}:log-loss`),
     ...cursorIssues(wait),
   ];
   if (wait.outcome === "timeout")
@@ -453,7 +468,7 @@ function logsOutcome(
   if (state === "failed" || state === "timed_out") return "error";
   if (state === "stopped") return "cancelled";
   if (state === "stopping") return "uncertain";
-  if (issues.some((entry) => entry.severity === "warning")) return "warning";
+  if (Arr.some(issues, (entry) => entry.severity === "warning")) return "warning";
   return isActiveTaskState(state) ? "returned" : "success";
 }
 

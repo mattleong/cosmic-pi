@@ -1,3 +1,4 @@
+import * as Str from "effect/String";
 import {
   managerActivityColor,
   managerActivityGlyph,
@@ -8,7 +9,7 @@ import { sanitizeTerminalLine } from "pi-cosmic-core";
 import type { BackgroundTaskView } from "../task/model.ts";
 
 export const taskDisplayName = (task: Pick<BackgroundTaskView, "name" | "command">): string => {
-  const name = task.name?.trim();
+  const name = task.name && Str.trim(task.name);
   return sanitizeTerminalLine(name === undefined || name === "" ? task.command : name);
 };
 

@@ -5,6 +5,8 @@ import {
   type ActivityItem,
 } from "pi-cosmic-ui/activity";
 import { safeTextSuffix, sanitizeDiagnosticContent } from "pi-cosmic-core";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import {
   isActiveTaskState,
   sortTasksByActivity,
@@ -30,7 +32,7 @@ export function backgroundTaskActivityItems(
 ): readonly ActivityItem[] {
   const tasks = sortTasksByActivity(projection.tasks).slice(0, ACTIVITY_LIMITS.items);
   return Object.freeze(
-    tasks.map((task) => {
+    Arr.map(tasks, (task) => {
       const title = sanitizeDiagnosticContent(task.name ?? task.command, {
         maximumLength: ACTIVITY_LIMITS.title,
       });
@@ -75,31 +77,36 @@ export function backgroundTaskActivityDetail(
   projection: BackgroundTaskProjection,
   id: string,
 ): string | undefined {
-  const task = projection.tasks.find((candidate) => candidate.id === id);
+  const task = Option.getOrUndefined(
+    Arr.findFirst(projection.tasks, (candidate) => candidate.id === id),
+  );
   if (!task) return undefined;
   let remaining = 12_000;
   const chunks: string[] = [];
   // Plain text per event, so trimming never splits a color sequence into visible text.
-  for (const event of task.logs.toReversed()) {
+  for (const event of Arr.reverse(task.logs)) {
     if (remaining <= 0) break;
     const text = safeTextSuffix(plainTerminalText(event.text), remaining);
     chunks.push(text);
     remaining -= text.length;
   }
   const header = sanitizeDiagnosticContent(
-    [
-      `${task.name ?? task.id}: ${task.state}`,
-      task.command,
-      task.cwd,
-      `ID: ${task.id} · PID: ${task.pid ?? "none"}`,
-      `Exit: ${task.exitCode ?? "none"} · signal: ${task.signal ?? "none"}`,
-      `Started: ${task.startedAt} · ended: ${task.endedAt ?? "none"}`,
-      `Log cursor: ${task.logCursor} · dropped bytes: ${task.droppedLogBytes}`,
-      task.error ?? "",
-    ].join("\n"),
+    Arr.join(
+      [
+        `${task.name ?? task.id}: ${task.state}`,
+        task.command,
+        task.cwd,
+        `ID: ${task.id} · PID: ${task.pid ?? "none"}`,
+        `Exit: ${task.exitCode ?? "none"} · signal: ${task.signal ?? "none"}`,
+        `Started: ${task.startedAt} · ended: ${task.endedAt ?? "none"}`,
+        `Log cursor: ${task.logCursor} · dropped bytes: ${task.droppedLogBytes}`,
+        task.error ?? "",
+      ],
+      "\n",
+    ),
     { maximumLength: 4_000 },
   );
-  return sanitizeDiagnosticContent(`${header}\n\n${chunks.toReversed().join("")}`, {
+  return sanitizeDiagnosticContent(`${header}\n\n${Arr.join(Arr.reverse(chunks), "")}`, {
     maximumLength: ACTIVITY_LIMITS.detail,
   });
 }
