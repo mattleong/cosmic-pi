@@ -1,4 +1,5 @@
 import * as Clock from "effect/Clock";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import { invokeHostCallback } from "pi-cosmic-core";
 import {
@@ -15,11 +16,13 @@ import {
   mainListEntry,
   mainReadout,
   MAX_AGENT_TARGETS,
+  messageSizeError,
   planRunMessage,
   planUserMessage,
   runListEntry,
   runReadout,
   runSender,
+  startingTargetRefusal,
   unavailableMainReadout,
   validateMessageText,
 } from "./agent-messaging.ts";
@@ -31,6 +34,7 @@ import {
   runNotFound,
   type SubagentError,
   type SubagentNotFoundError,
+  type SubagentRuntimeClosedError,
 } from "./errors.ts";
 import { snapshotRun, type RunContext, type RunRecord } from "./internal.ts";
 import type { RunControlMessage } from "./control.ts";
@@ -62,7 +66,13 @@ interface AgentMessageDependencies extends Pick<
     agentMessage: AgentMessageResume,
   ) => Effect.Effect<SubagentRunView, SubagentError>;
   readonly allocateMessageId: () => string;
+  /** The published projection's revision; every run state change publishes a newer one. */
+  readonly revision: Effect.Effect<number>;
+  readonly waitForRevision: (after: number) => Effect.Effect<void, SubagentRuntimeClosedError>;
 }
+
+/** How long a message waits for its target to leave `starting` before it is refused. */
+const STARTING_TARGET_WAIT = Duration.seconds(5);
 
 // IDs are trimmed like the call headings that show them, so " main" still names main.
 const validateTargets = (
@@ -128,6 +138,9 @@ type ClaimedSend =
       /** The run as the user saw it; the message applies only while it is unchanged. */
       readonly expected?: SubagentControlExpectation | undefined;
     };
+
+/** A claim either admits the message or finds its target still starting. */
+type SendClaim = ClaimedSend | { readonly kind: "starting" };
 
 const deliverToMain = (
   claimed: Extract<ClaimedSend, { kind: "main" }>,
@@ -235,9 +248,22 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
         );
   };
 
-  const claimSend = (caller: AgentCaller, to: string) =>
+  // A run that is starting takes messages once it runs, so a send waits a few seconds for it
+  // instead of refusing at once. The revision is read before the state, so a change between them
+  // still wakes the wait. The wait holds nothing and ends when the sender is interrupted.
+  const waitWhileStarting = (id: string) =>
+    Effect.gen(function* () {
+      while (true) {
+        const observed = yield* dependencies.revision;
+        if (!(yield* withLock(Effect.sync(() => records.get(id)?.view.state === "starting"))))
+          return;
+        yield* dependencies.waitForRevision(observed);
+      }
+    }).pipe(Effect.timeoutOption(STARTING_TARGET_WAIT), Effect.asVoid);
+
+  const claimSend = (caller: AgentCaller, to: string, text: string) =>
     withLock(
-      Effect.gen(function* (): Effect.fn.Return<ClaimedSend, SubagentError> {
+      Effect.gen(function* (): Effect.fn.Return<SendClaim, SubagentError> {
         const sender = yield* resolveSenderLocked(caller);
         if (to === sender.id)
           return yield* agentMessageRefusal(
@@ -250,22 +276,34 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
               "agent_unavailable",
               "The main agent cannot receive agent messages in this session.",
             );
+          const tooLarge = messageSizeError("main", text);
+          if (tooLarge) return yield* tooLarge;
           return { kind: "main", sender, main };
         }
         const record = yield* requireTargetLocked(to);
         const plan = planRunMessage(records, record, sender.id);
         if (plan.kind === "refuse") return yield* agentMessageRefusal(plan.code, plan.message);
+        const tooLarge = messageSizeError(plan.kind, text);
+        if (tooLarge) return yield* tooLarge;
+        if (plan.kind === "starting") return plan;
         return { kind: plan.kind, sender, record };
       }),
     );
 
-  const claimUserSend = (to: string, expected: SubagentControlExpectation | undefined) =>
+  const claimUserSend = (
+    to: string,
+    expected: SubagentControlExpectation | undefined,
+    text: string,
+  ) =>
     withLock(
-      Effect.gen(function* (): Effect.fn.Return<ClaimedSend, SubagentError> {
+      Effect.gen(function* (): Effect.fn.Return<SendClaim, SubagentError> {
         const record = yield* requireTargetLocked(to);
         yield* requireControlExpectation(record, expected);
         const plan = planUserMessage(records, record);
         if (plan.kind === "refuse") return yield* agentMessageRefusal(plan.code, plan.message);
+        const tooLarge = messageSizeError(plan.kind, text);
+        if (tooLarge) return yield* tooLarge;
+        if (plan.kind === "starting") return plan;
         return { kind: plan.kind, sender: undefined, record, expected };
       }),
     );
@@ -370,18 +408,27 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
       return { messageId, to, ...delivered };
     });
 
-  // The claim admits the message under the run lock; once admitted, delivery commits in the
-  // session scope so a cancelled sender never abandons it halfway.
+  // The claim admits the message under the run lock, so a send that would be refused is refused
+  // before any wait; once admitted, delivery commits in the session scope so a cancelled sender
+  // never abandons it halfway.
   const deliver = (
     message: string,
     to: string,
-    claim: Effect.Effect<ClaimedSend, SubagentError>,
+    claim: (text: string) => Effect.Effect<SendClaim, SubagentError>,
   ): Effect.Effect<AgentSendResult, SubagentError> =>
     validateMessageText(message).pipe(
       Effect.flatMap((text) =>
-        runSessionOwned(ownerScope, claim, (claimed) =>
-          commitSend(claimed, to, text, dependencies.allocateMessageId()),
-        ),
+        Effect.gen(function* () {
+          let claimed = yield* claim(text);
+          if (claimed.kind === "starting") {
+            yield* waitWhileStarting(to);
+            claimed = yield* claim(text);
+          }
+          if (claimed.kind === "starting") return yield* startingTargetRefusal(to);
+          return yield* runSessionOwned(ownerScope, Effect.succeed(claimed), (admitted) =>
+            commitSend(admitted, to, text, dependencies.allocateMessageId()),
+          );
+        }),
       ),
     );
 
@@ -392,7 +439,7 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
   ): Effect.Effect<AgentSendResult, SubagentError> =>
     Effect.suspend(() => {
       const to = rawTo.trim();
-      return deliver(message, to, claimSend(caller, to));
+      return deliver(message, to, (text) => claimSend(caller, to, text));
     });
 
   /**
@@ -405,7 +452,7 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
     message: string,
     expected?: SubagentControlExpectation,
   ): Effect.Effect<AgentSendResult, SubagentError> =>
-    deliver(message, id, claimUserSend(id, expected));
+    deliver(message, id, (text) => claimUserSend(id, expected, text));
 
   return { list, read, send, sendFromUser };
 }

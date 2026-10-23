@@ -13,6 +13,7 @@ import {
 } from "../run/agent-messaging.ts";
 import {
   MAX_CONTACT_TEXT_CHARS,
+  MAX_LIFECYCLE_TARGET_RUNS,
   MAX_OUTCOME_FILE_PATH_CHARS,
   MAX_OUTCOME_PREVIEW_CHARS,
   MAX_PROTOCOL_ID_CHARS,
@@ -220,7 +221,7 @@ const LifecycleContractSchema = Schema.Struct({
         failure: FailureSchema,
       }),
     ]),
-  ).check(Schema.isMaxLength(MAX_TARGET_RUNS)),
+  ).check(Schema.isMaxLength(MAX_LIFECYCLE_TARGET_RUNS)),
 });
 
 const ModelsContractSchema = Schema.Struct({

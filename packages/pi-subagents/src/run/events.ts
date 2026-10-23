@@ -1,7 +1,7 @@
 import { absurd } from "effect/Function";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
-import { clipText, sanitizeDiagnosticContent } from "pi-cosmic-core";
+import { sanitizeDiagnosticContent, sanitizeDiagnosticError } from "pi-cosmic-core";
 import type { BackendEvent, BackendHandle } from "../backend/model.ts";
 import { type SubagentError, SubagentProcessError, SubagentProtocolError } from "./errors.ts";
 import {
@@ -19,12 +19,26 @@ import {
   finishToolSessionEvent,
   startToolSessionEvent,
 } from "./session-events.ts";
-import { addUsage, captureOutputText, MAX_ERROR_CHARS, sanitizeDiagnosticText } from "./state.ts";
+import {
+  addUsage,
+  captureOutputText,
+  clipWithMarker,
+  MAX_ERROR_CHARS,
+  sanitizeDiagnosticText,
+} from "./state.ts";
 import { recordRunWarning } from "./warnings.ts";
-import { MAX_CONTACT_TEXT_CHARS } from "./limits.ts";
+import { MAX_CONTACT_TEXT_CHARS, MAX_PARENT_MESSAGE_CHARS } from "./limits.ts";
 import { samePiModel } from "./model-catalog.ts";
 
 const ACTIVITY_PUBLISH_INTERVAL_MILLIS = 1_000;
+
+/** Every runtime's contact message is kept to the retained bound, saying how much was cut. */
+const retainedContactText = (message: string): string =>
+  clipWithMarker(
+    message,
+    MAX_CONTACT_TEXT_CHARS,
+    ` … [message cut to ${MAX_CONTACT_TEXT_CHARS.toLocaleString("en-US")} of ${message.length.toLocaleString("en-US")} characters]`,
+  );
 
 interface RunEventDependencies {
   readonly settlement: RunSettlement;
@@ -78,15 +92,13 @@ export function backendEventHandler(dependencies: RunEventDependencies) {
     envelope: Extract<BackendEvent, { readonly type: "supervisor_contact" }>,
   ) => {
     // A question keeps its line breaks: its notice and agent_read deliver it whole.
-    const message =
+    const message = retainedContactText(
       envelope.kind === "question"
-        ? clipText(
-            sanitizeDiagnosticContent(envelope.message, {
-              maximumLength: MAX_CONTACT_TEXT_CHARS + 2,
-            }).trim(),
-            MAX_CONTACT_TEXT_CHARS,
-          )
-        : sanitizeDiagnosticText(envelope.message, MAX_CONTACT_TEXT_CHARS);
+        ? sanitizeDiagnosticContent(envelope.message, {
+            maximumLength: MAX_PARENT_MESSAGE_CHARS,
+          }).trim()
+        : sanitizeDiagnosticError(envelope.message, { maximumLength: MAX_PARENT_MESSAGE_CHARS }),
+    );
     return mutateAt(record, envelope.assignmentEpoch, (current, now) => {
       if (envelope.kind !== "question" && current.state === "paused") return undefined;
       if (envelope.kind === "progress")

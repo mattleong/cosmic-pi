@@ -477,12 +477,17 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     currentSpendLimit,
   });
 
+  const projection = SubscriptionRef.get(projectionRef);
+  const revision = projection.pipe(Effect.map((current) => current.revision));
+
   const agentMessages = agentMessageOperations({
     ...runContext,
     main: options.agentMain,
     deliverToRun: controls.deliver,
     resume: (id, agentMessage) => resume.resume(id, undefined, undefined, agentMessage),
     allocateMessageId,
+    revision,
+    waitForRevision,
   });
 
   const starts = sessionStartOperations({
@@ -491,7 +496,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     workspaces,
     redactCompletionReport: observations.redactCompletionReport,
   });
-  const projection = SubscriptionRef.get(projectionRef);
 
   const service: SubagentServiceContract = {
     ...observations,
@@ -527,7 +531,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     awaitParentDrain: parentDrainAwaiter({
       records,
       withLock,
-      revision: projection.pipe(Effect.map(({ revision }) => revision)),
+      revision,
       waitForRevision,
       outboxChangedLocked: delivery.outboxChangedLocked,
     }),

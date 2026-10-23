@@ -59,6 +59,13 @@ export const MAX_RUN_BLOCK_CHARS =
   2 +
   ACTION_KINDS.length;
 
+/**
+ * A block without outcome lines, as lifecycle acknowledgements give, so a lifecycle result fits
+ * more targets than an await: identity and one line per action kind.
+ */
+export const MAX_ACKNOWLEDGEMENT_BLOCK_CHARS =
+  MAX_BLOCK_LINE_CHARS + ACTION_KINDS.length * MAX_BLOCK_LINE_CHARS + ACTION_KINDS.length;
+
 /** Blocks are joined by a blank line. */
 export const RUN_BLOCK_SEPARATOR = "\n\n";
 

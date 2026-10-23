@@ -37,7 +37,8 @@ import {
   type SupervisorChannelConfig,
   type SupervisorDeliveryId,
   SupervisorDeliveryIdSchema,
-  SupervisorMessageSchema,
+  SupervisorAgentMessageSchema,
+  SupervisorContactMessageSchema,
   SupervisorReportTextSchema,
   type SupervisorRpcFailure,
   type SupervisorRpcGroup,
@@ -89,7 +90,7 @@ const exactArguments = { onExcessProperty: "error", errors: "all" } as const;
 const decodeContactArguments = Schema.decodeUnknownResult(
   Schema.Struct({
     kind: Schema.Literals(SUPERVISOR_MCP_CONTACT_KINDS),
-    message: SupervisorMessageSchema,
+    message: SupervisorContactMessageSchema,
   } satisfies ArgumentFields<typeof SUPERVISOR_MCP_CONTACT_ARGUMENT_KEYS>),
   exactArguments,
 );
@@ -103,7 +104,7 @@ const decodeReportArguments = Schema.decodeUnknownResult(
 const decodeAgentSendArguments = Schema.decodeUnknownResult(
   Schema.Struct({
     to: SupervisorAgentIdSchema,
-    message: SupervisorMessageSchema,
+    message: SupervisorAgentMessageSchema,
   } satisfies ArgumentFields<typeof SUPERVISOR_MCP_AGENT_SEND_ARGUMENT_KEYS>),
   exactArguments,
 );

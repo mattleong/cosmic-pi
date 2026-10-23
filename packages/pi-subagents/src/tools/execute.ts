@@ -27,7 +27,7 @@ import {
   type SubagentControlExpectation,
   type SubagentRunView,
 } from "../run/model.ts";
-import { MAX_TARGET_RUNS } from "../run/limits.ts";
+import { MAX_LIFECYCLE_TARGET_RUNS, MAX_TARGET_RUNS } from "../run/limits.ts";
 import { SubagentService, type SubagentRunObservation } from "../run/service.ts";
 import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
 import { executeStartBatch, resolveRecordedLaunch } from "./execute-start.ts";
@@ -46,6 +46,8 @@ import { executeModelsAction } from "./execute-models.ts";
 import { executeWorkspaceAction } from "./execute-workspace.ts";
 import type { SubagentActionFailure } from "./model.ts";
 import {
+  awaitTimeoutSeconds,
+  awaitUntil,
   subagentToolAction,
   type SubagentLifecycleInput,
   type SubagentToolAction,
@@ -120,6 +122,7 @@ type AwaitToolInput = SubagentToolInput<typeof SUBAGENT_TOOL_NAME.await>;
 const requiredTargetIds = (
   action: SubagentToolAction,
   runIds: ReadonlyArray<string>,
+  maximum: number,
 ): Effect.Effect<ReadonlyArray<string>, InvalidSubagentRequestError> => {
   const ids = runIds.map((id) => id.trim());
   if (ids.length === 0)
@@ -129,12 +132,9 @@ const requiredTargetIds = (
   if (ids.some((id) => !id))
     return Effect.fail(invalidRequest("run_id_invalid", "Subagent target IDs must be non-empty."));
   const unique = [...new Set(ids)];
-  if (unique.length > MAX_TARGET_RUNS)
+  if (unique.length > maximum)
     return Effect.fail(
-      invalidRequest(
-        "too_many_run_ids",
-        `Subagent actions accept at most ${MAX_TARGET_RUNS} targets.`,
-      ),
+      invalidRequest("too_many_run_ids", `Subagent ${action} accepts at most ${maximum} targets.`),
     );
   return Effect.succeed(unique);
 };
@@ -210,7 +210,7 @@ export const executeSubagentActionEffect = Effect.fn("SubagentTools.execute")(fu
         awaitContextRuns: withQuestionRuns(state.contextRuns(), questions),
         contract: awaitContract({
           observations,
-          until: args.until,
+          until: awaitUntil(args),
           requestedRunIds: state.requestedIds,
           questionsElsewhere: questions.length > 0,
         }),
@@ -232,7 +232,7 @@ export const executeSubagentActionEffect = Effect.fn("SubagentTools.execute")(fu
           "scripted_lifecycle_not_supported",
           "Codemode scripts support lifecycle stop only. Hand interrupt decisions back to the parent agent.",
         );
-      const ids = yield* requiredTargetIds(action, args.runIds);
+      const ids = yield* requiredTargetIds(action, args.runIds, MAX_LIFECYCLE_TARGET_RUNS);
       yield* authorize(ids);
       const result = yield* forEachOutcome(ids, (id) =>
         args.action === "interrupt" ? service.interrupt(id, expected) : service.stop(id, expected),
@@ -265,12 +265,13 @@ export const executeSubagentActionEffect = Effect.fn("SubagentTools.execute")(fu
     }
     case SUBAGENT_TOOL_NAME.await: {
       const { args } = input;
-      const state = awaitExecution ?? awaitExecutionFor(args.runIds, args.until, onUpdate);
-      const ids = yield* requiredTargetIds(action, args.runIds);
+      const until = awaitUntil(args);
+      const state = awaitExecution ?? awaitExecutionFor(args.runIds, until, onUpdate);
+      const ids = yield* requiredTargetIds(action, args.runIds, MAX_TARGET_RUNS);
       yield* authorize(ids);
       return yield* service.withAwaitTerminalObservations(
         ids,
-        args.until,
+        until,
         state.update,
         (observations, questions) => completeObservations(state, args, observations, questions),
         callerRunId,
@@ -296,7 +297,7 @@ const executeRootAwait = (
   ctx: ExtensionContext,
   scripted: boolean,
 ): Promise<AgentToolResult<unknown>> => {
-  const state = awaitExecutionFor(input.args.runIds, input.args.until, onUpdate);
+  const state = awaitExecutionFor(input.args.runIds, awaitUntil(input.args), onUpdate);
   const ended = (ending: AwaitEnding) => {
     const result = state.cancelled(false, ending);
     invokeHostCallback(() => onUpdate?.(result), undefined);
@@ -312,7 +313,7 @@ const executeRootAwait = (
     state,
     scripted,
   );
-  const { timeoutSeconds } = input.args;
+  const timeoutSeconds = awaitTimeoutSeconds(input.args);
   const bounded =
     timeoutSeconds === undefined
       ? wait
@@ -351,8 +352,8 @@ const executeProxiedAwait = (
   signal: AbortSignal | undefined,
   onUpdate: AgentToolUpdateCallback<unknown> | undefined,
 ): Promise<AgentToolResult<unknown>> => {
-  const state = awaitExecutionFor(input.args.runIds, input.args.until, onUpdate);
-  const { timeoutSeconds } = input.args;
+  const state = awaitExecutionFor(input.args.runIds, awaitUntil(input.args), onUpdate);
+  const timeoutSeconds = awaitTimeoutSeconds(input.args);
   const timeout =
     timeoutSeconds === undefined ? undefined : AbortSignal.timeout(timeoutSeconds * 1000);
   const endings = [signal, timeout].filter(Predicate.isNotUndefined);

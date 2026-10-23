@@ -14,6 +14,7 @@ import { MAX_PROCESS_LINE_BYTES } from "../../src/boundary/process-transport.ts"
 import {
   MAX_COMPLETION_DELIVERY_BATCH,
   MAX_CONTACT_TEXT_CHARS,
+  MAX_LIFECYCLE_TARGET_RUNS,
   MAX_NOTIFICATION_CHARS,
   MAX_OUTCOME_FILE_PATH_CHARS,
   MAX_PARENT_MESSAGE_CHARS,
@@ -52,6 +53,7 @@ import {
 import type { SubagentStartFailure } from "../../src/tools/model.ts";
 import {
   formatRunBlock,
+  MAX_ACKNOWLEDGEMENT_BLOCK_CHARS,
   MAX_RESULT_HEADER_CHARS,
   MAX_RUN_BLOCK_CHARS,
   RUN_BLOCK_SEPARATOR,
@@ -74,9 +76,14 @@ describe("model-facing output budget", () => {
       `${MAX_RESULT_HEADER_CHARS} header + MAX_TARGET_RUNS (${MAX_TARGET_RUNS}) × MAX_RUN_BLOCK_CHARS (${MAX_RUN_BLOCK_CHARS}) = ${needed} exceeds MAX_TOOL_OUTPUT_CHARS (${MAX_TOOL_OUTPUT_CHARS}). Lower MAX_TARGET_RUNS, or shrink the line bounds in src/tools/run-block.ts.`,
     ).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_CHARS);
     expect(
+      MAX_RESULT_HEADER_CHARS +
+        MAX_LIFECYCLE_TARGET_RUNS * (MAX_ACKNOWLEDGEMENT_BLOCK_CHARS + RUN_BLOCK_SEPARATOR.length),
+      "Lifecycle acknowledgement blocks for MAX_LIFECYCLE_TARGET_RUNS targets must fit one result.",
+    ).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_CHARS);
+    expect(
       MAX_ACTION_FAILURE_LINE_CHARS,
       "A lifecycle failure line must fit the run block it replaces; lower MAX_ACTION_FAILURE_LINE_CHARS.",
-    ).toBeLessThanOrEqual(MAX_RUN_BLOCK_CHARS);
+    ).toBeLessThanOrEqual(MAX_ACKNOWLEDGEMENT_BLOCK_CHARS);
   });
 
   it("fits a full completion batch in one root notice and a run in a nested parent message", () => {
@@ -290,32 +297,35 @@ describe("worst-case model-facing output", () => {
     },
   );
 
-  effectTest("bounds a lifecycle result for MAX_TARGET_RUNS worst-case targets", function* () {
-    const runs = worstObservations(MAX_TARGET_RUNS).map(({ run }) => run);
-    const tool = captureSubagentTools(
-      subagentServiceDouble({
-        stop: (id) =>
-          id.endsWith("1")
-            ? Effect.fail(
-                new InvalidSubagentRequestError({
-                  code: "stop_failed",
-                  message: longText("stop failed", MAX_ERROR_CHARS),
-                }),
-              )
-            : Effect.succeed(runs.find((run) => run.id === id)!),
-      }),
-    ).get("agent_lifecycle")!;
+  effectTest(
+    "bounds a lifecycle result for MAX_LIFECYCLE_TARGET_RUNS worst-case targets",
+    function* () {
+      const runs = worstObservations(MAX_LIFECYCLE_TARGET_RUNS).map(({ run }) => run);
+      const tool = captureSubagentTools(
+        subagentServiceDouble({
+          stop: (id) =>
+            id.endsWith("1")
+              ? Effect.fail(
+                  new InvalidSubagentRequestError({
+                    code: "stop_failed",
+                    message: longText("stop failed", MAX_ERROR_CHARS),
+                  }),
+                )
+              : Effect.succeed(runs.find((run) => run.id === id)!),
+        }),
+      ).get("agent_lifecycle")!;
 
-    const result = yield* step(() =>
-      executeTool(tool, { action: "stop", runIds: runs.map((run) => run.id) }),
-    );
+      const result = yield* step(() =>
+        executeTool(tool, { action: "stop", runIds: runs.map((run) => run.id) }),
+      );
 
-    const text = resultText(result);
-    expect(text.length).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_CHARS);
-    for (const run of runs) expect(text).toContain(run.id);
-    const contract = decodeSubagentContract("agent_lifecycle")(result.structuredContent);
-    expect(JSON.stringify(contract).length).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_CHARS);
-  });
+      const text = resultText(result);
+      expect(text.length).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_CHARS);
+      for (const run of runs) expect(text).toContain(run.id);
+      const contract = decodeSubagentContract("agent_lifecycle")(result.structuredContent);
+      expect(JSON.stringify(contract).length).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_CHARS);
+    },
+  );
 
   effectTest("keeps a full await of large whole reports within the tool output", function* () {
     const runs = wholeReportRuns(MAX_TARGET_RUNS);

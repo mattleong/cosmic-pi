@@ -5,10 +5,14 @@ import { yieldUntil } from "pi-cosmic-core/testing";
 import type { SubagentProjection } from "../../src/run/model.ts";
 import { decodeSubagentContract } from "../../src/tools/contract-schema.ts";
 import { executeAgentActionEffect } from "../../src/tools/execute-agents.ts";
+import { MAX_CONTACT_TEXT_CHARS } from "../../src/run/limits.ts";
 import {
+  contactParentFrame,
   fakeNativeReportBackendLayer,
+  localServiceFixture,
   nativeReportRequest,
   nativeReportServiceFixture,
+  request,
   runView,
   withService,
 } from "./fixtures/service-harness.ts";
@@ -107,6 +111,39 @@ describe("run warnings", () => {
         .map((part) => (part.type === "text" ? part.text : ""))
         .join("");
       expect(text.split(warning)).toHaveLength(2);
+    });
+  });
+
+  it.effect("cuts an oversized warning from any runtime to its start, naming its size", () => {
+    const warning = `Start of the warning. ${"w".repeat(40_000)}`;
+    const cutOf = `of ${warning.length.toLocaleString("en-US")} characters`;
+    const pi = localServiceFixture();
+    const native = nativeReportServiceFixture();
+    const retained = (projections: ReadonlyArray<SubagentProjection>) => {
+      const kept = latest(projections)?.childWarning ?? "";
+      expect(kept.length).toBeLessThanOrEqual(MAX_CONTACT_TEXT_CHARS);
+      expect(kept.startsWith("Start of the warning.")).toBe(true);
+      expect(kept).toContain(cutOf);
+    };
+    return Effect.gen(function* () {
+      yield* withService(pi.layer, function* (service) {
+        yield* service.start(request({ name: "pi-warned" }));
+        pi.fake.controls[0]?.offerIpc(contactParentFrame("long", "warning", warning));
+        yield* yieldUntil(() => latest(pi.projections)?.childWarning !== undefined);
+        retained(pi.projections);
+      });
+      yield* withService(native.layer, function* (service) {
+        yield* service.start(nativeReportRequest({ name: "native-warned" }));
+        native.backend.controls[0]?.offer({
+          type: "supervisor_contact",
+          assignmentEpoch: 1,
+          requestId: "long",
+          kind: "warning",
+          message: warning,
+        });
+        yield* yieldUntil(() => latest(native.projections)?.childWarning !== undefined);
+        retained(native.projections);
+      });
     });
   });
 });

@@ -1184,12 +1184,12 @@ describe("private supervisor channel", () => {
       expect(excessTool).toMatchObject({ result: { isError: true } });
       const oversizedString = yield* toolCall(rpc, "oversized-tool", "agent_contact_parent", {
         kind: "progress",
-        message: "x".repeat(16 * 1024 + 1),
+        message: "x".repeat(64 * 1024 + 1),
       });
       expect(oversizedString).toMatchObject({
         result: {
           isError: true,
-          content: [{ type: "text", text: stringContaining("16,384") }],
+          content: [{ type: "text", text: stringContaining("65,536") }],
         },
       });
 
@@ -1335,7 +1335,7 @@ describe("private supervisor channel", () => {
     const tooMany = Array.from({ length: 13 }, (_, index) => `agent-r1-${index + 1}`);
 
     for (const [id, name, args, problem] of [
-      ["long", "agent_send", { to: "main", message: "x".repeat(16_385) }, "16,384"],
+      ["long", "agent_send", { to: "main", message: "x".repeat(131_073) }, "131,072"],
       ["blank", "agent_send", { to: "main", message: "  " }, "message"],
       ["bad-to", "agent_send", { to: "../main", message: "Hi." }, "agent ID"],
       ["many-read", "agent_read", { agentIds: tooMany }, "the limit is 12"],

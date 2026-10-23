@@ -14,12 +14,14 @@ import { type ProfileCandidate } from "../../src/profiles/model.ts";
 import { SubagentProfileService } from "../../src/profiles/service.ts";
 import { SubagentProcessError } from "../../src/run/errors.ts";
 import type { StartSubagentRequest } from "../../src/run/model.ts";
+import { MAX_NAME_CHARS } from "../../src/run/state.ts";
 import { SubagentService } from "../../src/run/service.ts";
 import { executeSubagentActionEffect } from "../../src/tools/execute.ts";
 import {
   decodeSubagentProxyResult,
   encodeSubagentProxyPayload,
 } from "../../src/tools/proxy-protocol.ts";
+import { decodeSubagentContract } from "../../src/tools/contract-schema.ts";
 import { SubagentStartDetailsSchema } from "../../src/tools/details-schema.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import {
@@ -111,23 +113,35 @@ describe("subagent tool", () => {
     expect(decodeSubagentProxyResult(encodeSubagentProxyPayload(proxied) ?? "")).toBeDefined();
   });
 
-  effectTest("threads isolation to writer launches and rejects it for readers", function* () {
+  effectTest("threads isolation to writers and refuses a worktree for readers", function* () {
     const requests: StartSubagentRequest[] = [];
     const result = yield* invokeOptionalTool(startTool(requests), {
       agents: [
         { task: "Implement token parsing", profile: "worker", isolation: "worktree" },
         { task: "Implement the docs", profile: "worker" },
         { task: "Map the auth flow", profile: "scout", isolation: "worktree" },
+        { task: "Map billing", profile: "scout", isolation: "shared-checkout" },
       ],
     });
+    // A read-only run still holds write-capable tools, so a requested worktree fails closed.
     expect(result?.details).toMatchObject({
       startFailures: [{ index: 2, code: "isolation_requires_writer" }],
     });
     expect(requests.map((request) => request.writerWorkspaceModeOverride)).toEqual([
       "worktree",
       undefined,
+      undefined,
     ]);
-    expect(requests.map((request) => request.writeIntent)).toEqual(["writer", "writer"]);
+    expect(requests.map((request) => request.writeIntent)).toEqual([
+      "writer",
+      "writer",
+      "read-only",
+    ]);
+    expect(requests.map((request) => request.selection?.warning)).toEqual([
+      undefined,
+      undefined,
+      expect.stringContaining("isolation"),
+    ]);
   });
 
   effectTest("rejects an invalid route before readiness or service start", function* () {
@@ -219,6 +233,48 @@ describe("subagent tool", () => {
 
     expect(sessionOwnedStarts).toBe(1);
     expect(result?.content[0]?.text).toContain("agent-1");
+  });
+
+  effectTest("launches entries with a blank name under their default names", function* () {
+    const requests: StartSubagentRequest[] = [];
+    const tool = startTool(requests)!;
+    const prepared = tool.prepareArguments?.({
+      agents: [
+        { task: "Map auth", name: "" },
+        { task: "Map billing", name: " \n " },
+      ],
+    });
+
+    const result = yield* invokeOptionalTool(tool, prepared);
+
+    // An unnamed request gets the service's default name.
+    expect(requests.map((request) => [request.task, request.name])).toEqual([
+      ["Map auth", undefined],
+      ["Map billing", undefined],
+    ]);
+    expect(result?.structuredContent).toMatchObject({
+      launches: [{ status: "started" }, { status: "started" }],
+    });
+  });
+
+  effectTest("cuts a long display name instead of rejecting the launch", function* () {
+    const requests: StartSubagentRequest[] = [];
+    const tool = startTool(requests)!;
+    const name = `${"long-name-".repeat(30)}end`;
+    const prepared = tool.prepareArguments?.({ agents: [{ task: "Map auth", name }] });
+
+    const result = yield* invokeOptionalTool(tool, prepared);
+
+    expect(requests).toHaveLength(1);
+    // The request carries the cut name, so a worktree's recorded launch keeps the bound too.
+    expect(requests[0]?.name?.length).toBeLessThanOrEqual(MAX_NAME_CHARS);
+    expect(requests[0]?.name?.startsWith("long-name-")).toBe(true);
+    const launch = decodeStartDetails(result?.details).startEntries?.[0];
+    expect(launch?.status).toBe("started");
+    expect(launch?.name.length).toBeLessThanOrEqual(MAX_NAME_CHARS);
+    const contract = decodeSubagentContract("agent_start")(result?.structuredContent);
+    expect(contract?.launches[0]).toMatchObject({ status: "started" });
+    expect(contract?.launches[0]?.name?.startsWith("long-name-")).toBe(true);
   });
 
   effectTest("rejects forged routing fields again at the host profile boundary", function* () {

@@ -7,7 +7,7 @@ import type { SubagentStartEntry } from "./details-schema.ts";
 import { boundToolOutput, formatActionFailures, formatStartResult } from "./format.ts";
 import { managementAcknowledgement } from "./format-acknowledgement.ts";
 import type { SubagentActionFailure, SubagentStartFailure } from "./model.ts";
-import { subagentToolAction, type SubagentToolInput } from "./schema.ts";
+import { awaitUntil, subagentToolAction, type SubagentToolInput } from "./schema.ts";
 
 export interface SubagentExecutionResult {
   readonly runs: ReadonlyArray<SubagentRunView>;
@@ -42,7 +42,7 @@ export const presentSubagentResult = (
             runs,
             contextRuns: awaitContextRuns,
             awaitedRunIds: requestedAwaitIds,
-            awaitUntil: input.args.until,
+            awaitUntil: awaitUntil(input.args),
             ...(attentionRequired === true && { attentionRequired: true as const }),
           })
         : compactToolDetails({

@@ -13,8 +13,10 @@ import {
 
 export const MAX_CUSTOM_AGENTS = 32;
 export const MAX_CUSTOM_AGENT_NAME_CHARS = 48;
+/** A longer description is cut to this bound, with a diagnostic, and the agent still applies. */
 export const MAX_CUSTOM_AGENT_DESCRIPTION_CHARS = 200;
-export const MAX_CUSTOM_AGENT_INSTRUCTIONS_BYTES = 16 * 1024;
+/** Instructions travel in the child's system prompt, so they are bounded like a task. */
+export const MAX_CUSTOM_AGENT_INSTRUCTIONS_BYTES = 128 * 1024;
 export const MAX_CUSTOM_AGENT_TOOL_NAMES = 256;
 export const MAX_CUSTOM_AGENT_TOOL_NAME_CHARS = 128;
 

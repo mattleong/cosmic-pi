@@ -7,6 +7,7 @@ import * as Schema from "effect/Schema";
 import * as Predicate from "effect/Predicate";
 import { Type, type Static } from "typebox";
 import { Check } from "typebox/value";
+import { toolArgumentPreparer } from "pi-cosmic-core/tool-arguments";
 import {
   CodePreviewSchedulerService,
   type CodePreviewSchedulerServiceContract,
@@ -50,7 +51,6 @@ import type { AgentToolInput, SubagentToolInput } from "../tools/schema.ts";
 import { registerAgentTools } from "../tools/agent.ts";
 import { scriptedAgentSendRefusal } from "../tools/execute-agents.ts";
 import { observeAwaitInterruption } from "../tools/execute-await.ts";
-import { toolArgumentPreparer } from "../tools/arguments.ts";
 import type { SubagentProxyRequest } from "../tools/proxy-protocol.ts";
 import { publishChildQuestionnaireRelay } from "./host-ask-user.ts";
 import {

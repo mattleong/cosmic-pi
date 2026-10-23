@@ -86,9 +86,8 @@ describe("custom agent configuration", () => {
       agent({ model: "opus" }),
       agent({ tools: { allow: ["read"], only: ["grep"] } }),
       agent({ description: "" }),
-      agent({ description: "d".repeat(201) }),
       agent({ instructions: "   " }),
-      agent({ instructions: "é".repeat(8_193) }),
+      agent({ instructions: "é".repeat(65_537) }),
       agent({ profile: "designer" }),
       agent({ effort: "default" }),
       agent({ tools: { deny: ["bad,name"] } }),
@@ -103,9 +102,20 @@ describe("custom agent configuration", () => {
     expect(lookupCustomAgent(config, "missing")).toEqual({ kind: "unknown" });
   });
 
-  it("accepts instructions up to 16 KiB of UTF-8", () => {
-    const config = resolve(document({ big: agent({ instructions: "é".repeat(8_192) }) }));
+  it("accepts instructions up to 128 KiB of UTF-8", () => {
+    const config = resolve(document({ big: agent({ instructions: "é".repeat(65_536) }) }));
     expect(names(config)).toEqual(["big"]);
+  });
+
+  it("cuts a description longer than 200 characters, with a diagnostic, and keeps the agent", () => {
+    const config = resolve(
+      document({ verbose: agent({ description: "d".repeat(201) }), good: agent() }),
+    );
+    expect(names(config)).toEqual(["verbose", "good"]);
+    expect(config.diagnostics).toEqual(["global.agents[0].description"]);
+    const description = config.agents[0]?.description ?? "";
+    expect(description.length).toBeLessThanOrEqual(200);
+    expect(description.startsWith("d".repeat(150))).toBe(true);
   });
 
   it("allows at most 32 agents per document", () => {

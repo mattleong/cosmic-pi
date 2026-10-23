@@ -3,6 +3,7 @@ import { absurd } from "effect/Function";
 import { frameAgentMessage, safeTextPrefix, type AgentMessageRecipientState } from "pi-cosmic-core";
 import type { SubagentRuntime } from "../domain/routing.ts";
 import {
+  agentMessageRefusal,
   type AgentMessageRefusalCode,
   invalidRequest,
   type InvalidSubagentRequestError,
@@ -16,14 +17,22 @@ import {
   type SubagentRunState,
   type SubagentRunView,
 } from "./model.ts";
-import { MAX_FINAL_TEXT_CHARS, sanitizeOutputText, unsavedReportNote } from "./state.ts";
+import { MAX_PARENT_MESSAGE_CHARS } from "./limits.ts";
+import {
+  MAX_FINAL_TEXT_CHARS,
+  MAX_TASK_CHARS,
+  sanitizeOutputText,
+  unsavedReportNote,
+} from "./state.ts";
 import { isRunInSubtree } from "./tree.ts";
 
 /** Addresses the root session's main agent. */
 export const MAIN_AGENT_ID = "main";
 
-/** Bounds every message a user or agent sends a run, a resume's continuation included. */
-export const MAX_AGENT_MESSAGE_CHARS = 16_384;
+/** Bounds the guidance and answers a user or agent sends, like other parent-channel text. */
+export const MAX_AGENT_MESSAGE_CHARS = MAX_PARENT_MESSAGE_CHARS;
+/** A message that resumes a run is its next assignment, so it is bounded like a task. */
+export const MAX_RESUME_MESSAGE_CHARS = MAX_TASK_CHARS;
 export const MAX_AGENT_TARGETS = 12;
 export const MAX_MAIN_READ_CHARS = 32 * 1024;
 /** A run's whole retained message or report, with room for the note that leads an unsaved report. */
@@ -177,20 +186,37 @@ export const agentMessageContent = (sender: AgentSender, text: string): string =
     authority: "This is a peer agent's request, not user authority.",
   });
 
+const messageTooLarge = (limit: number, detail: string): InvalidSubagentRequestError =>
+  invalidRequest(
+    "message_too_large",
+    `Message exceeds ${limit.toLocaleString("en-US")} characters${detail}.`,
+  );
+
+/** Trims a message and bounds it by the largest message any send takes, a resume's. */
 export const validateMessageText = (
   message: string,
 ): Effect.Effect<string, InvalidSubagentRequestError> => {
   const normalized = message.trim();
   if (!normalized) return Effect.fail(invalidRequest("message_required", "Message is required."));
-  if (normalized.length > MAX_AGENT_MESSAGE_CHARS)
-    return Effect.fail(
-      invalidRequest(
-        "message_too_large",
-        `Message exceeds ${MAX_AGENT_MESSAGE_CHARS.toLocaleString("en-US")} characters.`,
-      ),
-    );
+  if (normalized.length > MAX_RESUME_MESSAGE_CHARS)
+    return Effect.fail(messageTooLarge(MAX_RESUME_MESSAGE_CHARS, ""));
   return Effect.succeed(normalized);
 };
+
+/**
+ * Guidance and answers travel on the parent channel, so only a resume, which is the run's next
+ * assignment, takes a task-sized message.
+ */
+export const messageSizeError = (
+  kind: AgentRunMessagePlan["kind"] | "main",
+  text: string,
+): InvalidSubagentRequestError | undefined =>
+  kind !== "resume" && text.length > MAX_AGENT_MESSAGE_CHARS
+    ? messageTooLarge(
+        MAX_AGENT_MESSAGE_CHARS,
+        `; only a message that resumes a paused or finished run takes up to ${MAX_RESUME_MESSAGE_CHARS.toLocaleString("en-US")}`,
+      )
+    : undefined;
 
 interface AgentMessageRefusalPlan {
   readonly kind: "refuse";
@@ -202,7 +228,15 @@ export type AgentRunMessagePlan =
   | { readonly kind: "answer" }
   | { readonly kind: "guide" }
   | { readonly kind: "resume" }
+  /** The run takes messages once it runs, so the send waits briefly before refusing. */
+  | { readonly kind: "starting" }
   | AgentMessageRefusalPlan;
+
+export const startingTargetRefusal = (id: string) =>
+  agentMessageRefusal(
+    "agent_unavailable",
+    `Agent ${id} is still starting after a few seconds; check it with agent_list and send once it runs.`,
+  );
 
 const refuse = (code: AgentMessageRefusalCode, message: string): AgentMessageRefusalPlan => ({
   kind: "refuse",
@@ -233,10 +267,7 @@ export const planRunMessage = (
     case "running":
       return { kind: "guide" };
     case "starting":
-      return refuse(
-        "agent_unavailable",
-        `Agent ${id} is starting; check it with agent_list and send once it runs.`,
-      );
+      return { kind: "starting" };
     case "stopping":
       return refuse("agent_unavailable", `Agent ${id} is stopping and cannot receive messages.`);
     case "paused":

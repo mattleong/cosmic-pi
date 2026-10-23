@@ -39,9 +39,10 @@ describe("supervisor MCP arguments", () => {
   });
 
   it("names the limit a too-long argument exceeds, from the schema that rejected it", () => {
-    const message = problem("agent_send", { to: "main", message: "x".repeat(16_385) });
+    const message = problem("agent_send", { to: "main", message: "x".repeat(131_073) });
     expect(message).toContain("message");
-    expect(message).toContain("16,384");
+    expect(message).toContain("131,072");
+    expect(problem(CONTACT, { kind: "progress", message: "x".repeat(65_537) })).toContain("65,536");
     expect(problem("agent_send", { to: "a".repeat(81), message: "Hi." })).toContain("80");
     const ids = Array.from({ length: 13 }, (_, index) => `agent-${index + 1}`);
     expect(problem("agent_read", { agentIds: ids })).toContain("12");
@@ -65,6 +66,15 @@ describe("supervisor MCP arguments", () => {
       ["agent_read", { agentIds: ["main"], verbose: "yes" }, "verbose"],
     ] satisfies ReadonlyArray<readonly [string, Schema.Json, string]>)
       expect(problem(name, args)).toContain(field);
+  });
+
+  it("accepts contact messages as long as a Pi child's, which the root cuts for storage", () => {
+    expect(decoded(CONTACT, { kind: "warning", message: "x".repeat(65_536) })).toMatchObject({
+      kind: "warning",
+    });
+    expect(decoded("agent_send", { to: "agent-1", message: "x".repeat(131_072) })).toMatchObject({
+      kind: "agent_send",
+    });
   });
 
   it("decodes every accepted argument shape", () => {

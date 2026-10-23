@@ -282,6 +282,44 @@ it.effect("ends a wait at its timeout without stopping the child", () =>
   }),
 );
 
+it.effect("waits for every run by default and clamps an out-of-range timeout", () =>
+  Effect.gen(function* () {
+    const { tools, pi, runtime, service } = yield* managedTools;
+    const clock = yield* Clock.Clock;
+    registerSubagentTools(pi, {
+      environment: { cwd: "/project", projectTrusted: true },
+      run: (effect, signal) =>
+        runtime.run(effect.pipe(Effect.provideService(Clock.Clock, clock)), signal),
+    });
+    const child = yield* step(() => runtime.run(service.startSessionOwned(nativeReportRequest())));
+    for (const [timeoutSeconds, clamped] of [
+      [0.25, 1],
+      [86_400, 3_600],
+    ] as const) {
+      const progress = Deferred.makeUnsafe<void>();
+      let settled = false;
+      const pending = executeTool(
+        tools.get("agent_await")!,
+        { runIds: [child.id], timeoutSeconds },
+        { callID: `clamped-${clamped}`, update: () => Deferred.doneUnsafe(progress, Effect.void) },
+      ).finally(() => {
+        settled = true;
+      });
+      yield* Deferred.await(progress);
+      yield* TestClock.adjust(Duration.millis(clamped * 1_000 - 1));
+      yield* step(eventLoopTurn);
+      expect(settled).toBe(false);
+      yield* TestClock.adjust(Duration.millis(1));
+      const result = yield* step(() => pending);
+      expect(result.structuredContent).toMatchObject({
+        outcome: "timed_out",
+        until: "all_finished",
+      });
+      expect(result.details).toMatchObject({ timedOutSeconds: clamped });
+    }
+  }),
+);
+
 it.live("ends a wait for the user's next message without stopping the child", () =>
   Effect.gen(function* () {
     const { tools, pi, runtime, service } = yield* managedTools;

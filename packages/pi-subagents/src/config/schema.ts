@@ -1,7 +1,7 @@
 import { flow } from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import { decodeUnknownOrUndefined } from "pi-cosmic-core";
+import { clipText, decodeUnknownOrUndefined } from "pi-cosmic-core";
 import { SUBAGENT_EFFORTS } from "../domain/routing.ts";
 import {
   isCustomAgentName,
@@ -382,8 +382,6 @@ const decodeProfileSets = (
 };
 
 const utf8 = new TextEncoder();
-const nonblankText = (maxLength: number) =>
-  Schema.String.check(Schema.isBetweenLength(1, maxLength), Schema.isPattern(/\S/u));
 // Tool names reach the Pi child's comma-separated tool argument, as the root's own names do.
 const CustomAgentToolNamesSchema = Schema.Array(
   Schema.String.check(
@@ -391,14 +389,16 @@ const CustomAgentToolNamesSchema = Schema.Array(
     Schema.isPattern(/^[^\s,\p{Cc}](?:[^,\p{Cc}]*[^\s,\p{Cc}])?$/u),
   ),
 ).check(Schema.isMaxLength(MAX_CUSTOM_AGENT_TOOL_NAMES));
+// The description is display text, cut to its bound after decoding; instructions are not, since
+// cutting them would change what the agent does.
 const CustomAgentSchema = Schema.Struct({
-  description: nonblankText(MAX_CUSTOM_AGENT_DESCRIPTION_CHARS),
+  description: Schema.String.check(Schema.isPattern(/\S/u)),
   instructions: Schema.String.check(
     Schema.isPattern(/\S/u),
     Schema.makeFilter((instructions: string) =>
       utf8.encode(instructions).length <= MAX_CUSTOM_AGENT_INSTRUCTIONS_BYTES
         ? true
-        : "Agent instructions exceed 16 KiB.",
+        : "Agent instructions exceed 128 KiB.",
     ),
   ),
   profile: Schema.optionalKey(Schema.Literals(PROFILE_IDS)),
@@ -451,8 +451,13 @@ const decodeCustomAgents = (
     if (agent?.isolation !== undefined && agent.writeIntent === "read-only") {
       diagnostics.push(`${entryPath}.isolation`);
       invalidAgents.push(name);
-    } else if (agent) agents[name] = agent;
-    else {
+    } else if (agent) {
+      const cut = agent.description.length > MAX_CUSTOM_AGENT_DESCRIPTION_CHARS;
+      if (cut) diagnostics.push(`${entryPath}.description`);
+      agents[name] = cut
+        ? { ...agent, description: clipText(agent.description, MAX_CUSTOM_AGENT_DESCRIPTION_CHARS) }
+        : agent;
+    } else {
       diagnostics.push(entryPath);
       invalidAgents.push(name);
     }

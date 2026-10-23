@@ -1,7 +1,13 @@
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Schema from "effect/Schema";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { JsonObject, JsonValue } from "pi-cosmic-core";
+import {
+  replacementField,
+  toolArgumentPreparer,
+  type ToolFieldAliases,
+} from "pi-cosmic-core/tool-arguments";
 import { Type, type Static } from "typebox";
 import { Check } from "typebox/value";
 import { WRITER_WORKSPACE_MODES } from "../config/schema.ts";
@@ -18,6 +24,7 @@ import {
   firstDisallowedLaunchOverride,
 } from "../run/launch-validation.ts";
 import {
+  MAX_LIFECYCLE_TARGET_RUNS,
   MAX_PARENT_MESSAGE_CHARS,
   MAX_PROTOCOL_ID_CHARS,
   MAX_START_BATCH,
@@ -26,8 +33,8 @@ import {
 import { MAX_NAME_CHARS, MAX_TASK_CHARS } from "../run/state.ts";
 import {
   MAIN_AGENT_ID,
-  MAX_AGENT_MESSAGE_CHARS,
   MAX_AGENT_TARGETS,
+  MAX_RESUME_MESSAGE_CHARS,
 } from "../run/agent-messaging.ts";
 import {
   AGENT_TOOL_NAME,
@@ -35,7 +42,24 @@ import {
   type AgentToolName,
   type SubagentToolName,
 } from "../run/tool-policy.ts";
-import { decodeArgumentsObject, replacementField, toolArgumentPreparer } from "./arguments.ts";
+
+// Parents trained on other harnesses send these field names; name the replacement instead of
+// only rejecting the key.
+export const SUBAGENT_FIELD_ALIASES: ToolFieldAliases = {
+  prompt: "task",
+  description: "name",
+  subagent_type: "profile",
+  subagentType: "profile",
+  agent: "profile",
+  agent_type: "profile",
+  workspace: "isolation",
+  worktree: "isolation",
+  workspaceMode: "isolation",
+  writerWorkspaceMode: "isolation",
+};
+const decodeArgumentsObject = Schema.decodeUnknownOption(
+  Schema.Record(Schema.String, Schema.MutableJson),
+);
 
 const strictObjectOptions = { additionalProperties: false } as const;
 // Nonblank text is enforced by argument preparation: providers such as llama.cpp reject `pattern`.
@@ -44,6 +68,7 @@ const nonblankString = (maxLength: number, description?: string) =>
   Type.String({ ...(description !== undefined && { description }), ...nonblank(maxLength) });
 const RunIdParameter = Type.String(nonblank(MAX_PROTOCOL_ID_CHARS));
 export const AWAIT_UNTIL = ["all_finished", "any_finished"] as const;
+type AwaitUntil = (typeof AWAIT_UNTIL)[number];
 
 const PROFILE_PARAMETER_DESCRIPTION = [
   "Role and model route, chosen by the deliverable; omit for generalist.",
@@ -92,7 +117,13 @@ const StartSpecBaseFields = {
     MAX_TASK_CHARS,
     "Self-contained task: include relevant paths, constraints, evidence to inspect, and the required deliverable.",
   ),
-  name: Type.Optional(nonblankString(MAX_NAME_CHARS, "Optional nonblank display name.")),
+  // Display-only, so a long name is cut to its bound rather than rejected.
+  name: Type.Optional(
+    nonblankString(
+      MAX_TASK_CHARS,
+      `Optional display name; one longer than ${MAX_NAME_CHARS} characters is cut.`,
+    ),
+  ),
   profile: Type.Optional(StringEnum(PROFILE_IDS, { description: PROFILE_PARAMETER_DESCRIPTION })),
 } as const;
 
@@ -100,7 +131,7 @@ const StartSpecOptionFields = {
   isolation: Type.Optional(
     StringEnum(WRITER_WORKSPACE_MODES, {
       description:
-        "Writers only (profile worker, or an agent or route with writer intent): shared-checkout edits your checkout; worktree edits a private copy whose proposal you apply. Omit to use the session's workspace setting; set it only when the user asks for one. A read-only run rejects it.",
+        "Writers only (profile worker, or an agent or route with writer intent): shared-checkout edits your checkout; worktree edits a private copy whose proposal you apply. Omit to use the session's workspace setting; set it only when the user asks for one. A read-only run refuses worktree and ignores shared-checkout with a warning.",
     }),
   ),
   model: Type.Optional(ModelOverrideParameters),
@@ -125,11 +156,8 @@ const NestedStartSpecParameters = Type.Object(
   strictObjectOptions,
 );
 
-const RunIdsParameters = Type.Array(RunIdParameter, {
-  description: "Target run IDs.",
-  minItems: 1,
-  maxItems: MAX_TARGET_RUNS,
-});
+const runIdsParameters = (maxItems: number) =>
+  Type.Array(RunIdParameter, { description: "Target run IDs.", minItems: 1, maxItems });
 
 const MessageParameters = nonblankString(
   MAX_PARENT_MESSAGE_CHARS,
@@ -197,26 +225,38 @@ export const startToolParameters = (
   );
 };
 
-const MAX_AWAIT_TIMEOUT_SECONDS = 3_600;
+export const MAX_AWAIT_TIMEOUT_SECONDS = 3_600;
+export const DEFAULT_AWAIT_UNTIL: AwaitUntil = "all_finished";
 
 const AwaitParameters = Type.Object(
   {
-    runIds: RunIdsParameters,
-    until: StringEnum(AWAIT_UNTIL, {
-      description:
-        "Return when all selected runs are finished, or when any selected run is finished. Finished includes completed, failed, and stopped.",
-    }),
-    timeoutSeconds: Type.Optional(
-      Type.Integer({
-        minimum: 1,
-        maximum: MAX_AWAIT_TIMEOUT_SECONDS,
+    runIds: runIdsParameters(MAX_TARGET_RUNS),
+    until: Type.Optional(
+      StringEnum(AWAIT_UNTIL, {
         description:
-          "Stop waiting after this many seconds and return the latest observation. Subagents keep running.",
+          "Return when all selected runs are finished (the default), or when any selected run is finished. Finished includes completed, failed, and stopped.",
+      }),
+    ),
+    // Out-of-range waits are clamped by the tool rather than rejected before it runs.
+    timeoutSeconds: Type.Optional(
+      Type.Number({
+        description: `Stop waiting after this many whole seconds, from 1 to ${MAX_AWAIT_TIMEOUT_SECONDS.toLocaleString("en-US")} (other values are clamped), and return the latest observation. Subagents keep running.`,
       }),
     ),
   },
   strictObjectOptions,
 );
+
+type AwaitArgs = Static<typeof AwaitParameters>;
+
+export const awaitUntil = (args: Pick<AwaitArgs, "until">): AwaitUntil =>
+  args.until ?? DEFAULT_AWAIT_UNTIL;
+
+/** The wait's bound in whole seconds, clamped to 1 through `MAX_AWAIT_TIMEOUT_SECONDS`. */
+export const awaitTimeoutSeconds = (args: Pick<AwaitArgs, "timeoutSeconds">): number | undefined =>
+  args.timeoutSeconds === undefined || !Number.isFinite(args.timeoutSeconds)
+    ? undefined
+    : Math.min(MAX_AWAIT_TIMEOUT_SECONDS, Math.max(1, Math.floor(args.timeoutSeconds)));
 
 export const LIFECYCLE_ACTIONS = ["interrupt", "stop"] as const;
 
@@ -226,7 +266,7 @@ const LifecycleParameters = Type.Object(
       description:
         "interrupt pauses a running run whose backend supports it; stop works on any active run.",
     }),
-    runIds: RunIdsParameters,
+    runIds: runIdsParameters(MAX_LIFECYCLE_TARGET_RUNS),
   },
   strictObjectOptions,
 );
@@ -260,8 +300,9 @@ export const WorkspaceParameters = Type.Object(
 export type SubagentWorkspaceInput = Static<typeof WorkspaceParameters>;
 
 type WorkspaceField = Exclude<keyof SubagentWorkspaceInput, "action">;
+// list shows every workspace, so a workspaceId it was given is listed with the rest.
 const WORKSPACE_ACTION_FIELDS = {
-  list: { required: [], optional: [] },
+  list: { required: [], optional: ["workspaceId"] },
   review: { required: ["workspaceId"], optional: ["revisionId", "offset"] },
   prepare: { required: ["workspaceId", "revisionId"], optional: [] },
   apply: { required: ["workspaceId"], optional: ["revisionId"] },
@@ -278,13 +319,24 @@ const WORKSPACE_FIELDS = Object.keys(WorkspaceParameters.properties).filter(
   (field): field is WorkspaceField => field !== "action",
 );
 
+// Models fill fields an action doesn't use with blank text, false, or zero; those say nothing.
+const isPlaceholder = (value: SubagentWorkspaceInput[WorkspaceField]): boolean =>
+  value === undefined ||
+  value === false ||
+  value === 0 ||
+  (Predicate.isString(value) && value.trim().length === 0);
+
+/**
+ * Why a worktree call can't run: a required field is missing, or a field its action doesn't use
+ * holds a real value, which suggests the call meant another action.
+ */
 export const workspaceOperationError = (operation: SubagentWorkspaceInput): string | undefined => {
   const fields = WORKSPACE_ACTION_FIELDS[operation.action];
-  const missing = fields.required.find((field) => operation[field] === undefined);
+  const missing = fields.required.find((field) => isPlaceholder(operation[field]));
   if (missing) return `Worktree ${operation.action} requires ${missing}.`;
   const allowed = new Set<WorkspaceField>([...fields.required, ...fields.optional]);
   const unexpected = WORKSPACE_FIELDS.find(
-    (field) => operation[field] !== undefined && !allowed.has(field),
+    (field) => !allowed.has(field) && !isPlaceholder(operation[field]),
   );
   if (unexpected) return `Worktree ${operation.action} does not accept ${unexpected}.`;
   return undefined;
@@ -360,8 +412,10 @@ const AgentListParameters = Type.Object(
 const AgentSendParameters = Type.Object(
   {
     to: AgentIdParameter,
+    // Only a resume takes this bound; the service bounds guidance and answers by
+    // MAX_AGENT_MESSAGE_CHARS once it knows how the message reaches its target.
     message: nonblankString(
-      MAX_AGENT_MESSAGE_CHARS,
+      MAX_RESUME_MESSAGE_CHARS,
       "Self-contained message; the recipient sees who sent it.",
     ),
   },
@@ -396,8 +450,11 @@ export type AgentToolInput<N extends AgentToolName = AgentToolName> = {
 /** Pi `prepareArguments` hook for one agent tool: precise argument errors and nonblank text. */
 export const agentArgumentPreparer = <N extends AgentToolName>(name: N) => {
   const parameters: AgentToolParameters<N> = AGENT_TOOL_SCHEMAS[name];
-  return toolArgumentPreparer(name, parameters, (value): value is AgentToolArgs<N> =>
-    Check(parameters, value),
+  return toolArgumentPreparer(
+    name,
+    parameters,
+    (value): value is AgentToolArgs<N> => Check(parameters, value),
+    { aliases: SUBAGENT_FIELD_ALIASES },
   );
 };
 
@@ -412,7 +469,7 @@ const checkStartAgents = (agents: ReadonlyArray<JsonValue>): void =>
       throw new Error(
         disallowedLaunchOverrideMessage(disallowedField, `agent_start agents[${index}]`),
       );
-    // Pi drops optional nulls before validation, so only set selectors conflict.
+    // Null and blank optional selectors are dropped before inspection, so only set ones conflict.
     if (Predicate.isNotNullish(agent.agent) && Predicate.isNotNullish(agent.profile))
       throw new Error(
         `[agent_profile_conflict] agent_start agents[${index}] sets both agent and profile; an agent routes through its own profile, so set only one.`,
@@ -424,11 +481,12 @@ const inspectStartArguments = (args: JsonObject): void => {
   if (Array.isArray(agents)) return checkStartAgents(agents);
   const misplaced = Object.keys(args).filter(
     (key) =>
-      START_SPEC_FIELDS.includes(key) || replacementField(key, START_SPEC_FIELDS) !== undefined,
+      START_SPEC_FIELDS.includes(key) ||
+      replacementField(key, START_SPEC_FIELDS, SUBAGENT_FIELD_ALIASES) !== undefined,
   );
   if (misplaced.length === 0) return undefined;
   const renamed = misplaced.flatMap((key) => {
-    const replacement = replacementField(key, START_SPEC_FIELDS);
+    const replacement = replacementField(key, START_SPEC_FIELDS, SUBAGENT_FIELD_ALIASES);
     return replacement ? [`"${replacement}" for "${key}"`] : [];
   });
   throw new Error(
@@ -448,6 +506,9 @@ export const subagentArgumentPreparer = <N extends SubagentToolName>(
     name,
     parameters,
     (value): value is SubagentToolArgs<N> => Check(parameters, value),
-    name === SUBAGENT_TOOL_NAME.start ? inspectStartArguments : undefined,
+    {
+      aliases: SUBAGENT_FIELD_ALIASES,
+      ...(name === SUBAGENT_TOOL_NAME.start && { inspect: inspectStartArguments }),
+    },
   );
 };

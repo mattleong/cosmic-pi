@@ -144,7 +144,7 @@ describe("custom agent launches", () => {
   });
 
   effectTest(
-    "rejects isolation from an item or agent whose route resolves read-only",
+    "refuses a worktree for a read-only route and ignores a shared checkout, with a warning",
     function* () {
       const requests: StartSubagentRequest[] = [];
       const profiles = profileServiceFor({
@@ -154,6 +154,7 @@ describe("custom agent launches", () => {
         },
         agents: {
           isolated: agentDefinition({ isolation: "worktree" }),
+          shared: agentDefinition({ isolation: "shared-checkout" }),
           plain: agentDefinition(),
           "isolated-worker": agentDefinition({ profile: "worker", isolation: "worktree" }),
         },
@@ -162,6 +163,8 @@ describe("custom agent launches", () => {
         agents: [
           { task: "Review", agent: "isolated" },
           { task: "Review", agent: "plain", isolation: "worktree" },
+          { task: "Review", agent: "shared" },
+          { task: "Review", agent: "plain", isolation: "shared-checkout" },
           { task: "Implement", agent: "isolated-worker" },
         ],
       });
@@ -170,12 +173,18 @@ describe("custom agent launches", () => {
         { index: 0, code: "isolation_requires_writer" },
         { index: 1, code: "isolation_requires_writer" },
       ]);
-      expect(requests).toHaveLength(1);
-      expect(requests[0]).toMatchObject({
+      expect(requests).toHaveLength(3);
+      for (const request of requests.slice(0, 2)) {
+        expect(request.writeIntent).toBe("read-only");
+        expect(request).not.toHaveProperty("writerWorkspaceModeOverride");
+        expect(request.selection?.warning).toContain("isolation");
+      }
+      expect(requests[2]).toMatchObject({
         agent: "isolated-worker",
         writeIntent: "writer",
         writerWorkspaceModeOverride: "worktree",
       });
+      expect(requests[2]?.selection?.warning).toBeUndefined();
     },
   );
 

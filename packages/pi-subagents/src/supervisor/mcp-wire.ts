@@ -13,7 +13,8 @@ import {
   MAX_SUPERVISOR_MCP_AGENT_ID_CHARS,
   MAX_SUPERVISOR_MCP_AGENT_IDS,
   MAX_SUPERVISOR_MCP_DELIVERY_ID_CHARS,
-  MAX_SUPERVISOR_MCP_MESSAGE_CHARS,
+  MAX_SUPERVISOR_MCP_AGENT_MESSAGE_CHARS,
+  MAX_SUPERVISOR_MCP_CONTACT_CHARS,
   MAX_SUPERVISOR_MCP_REPORT_CHARS,
   MAX_SUPERVISOR_MCP_THREAD_ID_CHARS,
   SUPERVISOR_MCP_AGENT_IDS_ARGUMENT_KEY,
@@ -232,7 +233,7 @@ const contactInputSchema = {
     message: {
       type: "string",
       minLength: 1,
-      maxLength: MAX_SUPERVISOR_MCP_MESSAGE_CHARS,
+      maxLength: MAX_SUPERVISOR_MCP_CONTACT_CHARS,
     },
   },
   required: SUPERVISOR_MCP_CONTACT_ARGUMENT_KEYS,
@@ -313,7 +314,7 @@ export const toolDefinitions = [
         message: {
           type: "string",
           minLength: 1,
-          maxLength: MAX_SUPERVISOR_MCP_MESSAGE_CHARS,
+          maxLength: MAX_SUPERVISOR_MCP_AGENT_MESSAGE_CHARS,
         },
       },
       required: SUPERVISOR_MCP_AGENT_SEND_ARGUMENT_KEYS,

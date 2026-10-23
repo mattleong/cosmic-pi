@@ -32,6 +32,7 @@ import { renderSubagentStartCall } from "./render-start.ts";
 import { registerAgentTools, ROOT_SCRIPT_NAMESPACE } from "./agent.ts";
 import { executeAgentActionEffect } from "./execute-agents.ts";
 import {
+  awaitUntil,
   startToolParameters,
   subagentArgumentPreparer,
   subagentToolAction,
@@ -159,16 +160,17 @@ const TOOL_SPECS: SubagentToolSpecs = {
     renderCall: (args, theme, context) =>
       renderSubagentCall(
         context.isPartial
-          ? args.until === "all_finished"
+          ? awaitUntil(args) === "all_finished"
             ? "Waiting for subagents"
             : "Waiting for first subagent"
-          : args.until === "all_finished"
+          : awaitUntil(args) === "all_finished"
             ? "Waited for subagents"
             : "Waited for first subagent",
         "",
         theme,
       ),
-    lease: (presentation, args) => presentation.beginAwait(requestedRunIds(args) ?? [], args.until),
+    lease: (presentation, args) =>
+      presentation.beginAwait(requestedRunIds(args) ?? [], awaitUntil(args)),
   },
   [SUBAGENT_TOOL_NAME.lifecycle]: {
     label: "Manage Subagents",

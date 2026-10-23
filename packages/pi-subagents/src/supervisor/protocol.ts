@@ -8,7 +8,8 @@ import {
   MAX_SUPERVISOR_MCP_AGENT_ID_CHARS,
   MAX_SUPERVISOR_MCP_AGENT_IDS,
   MAX_SUPERVISOR_MCP_DELIVERY_ID_CHARS,
-  MAX_SUPERVISOR_MCP_MESSAGE_CHARS,
+  MAX_SUPERVISOR_MCP_AGENT_MESSAGE_CHARS,
+  MAX_SUPERVISOR_MCP_CONTACT_CHARS,
   MAX_SUPERVISOR_MCP_REPORT_CHARS,
   MAX_SUPERVISOR_MCP_THREAD_ID_CHARS,
   SUPERVISOR_MCP_AGENT_ID_PATTERN_SOURCE,
@@ -70,7 +71,8 @@ const nonblankText = (maximum: number) =>
     Schema.isMaxLength(maximum),
     Schema.isPattern(NONBLANK_PATTERN),
   );
-export const SupervisorMessageSchema = nonblankText(MAX_SUPERVISOR_MCP_MESSAGE_CHARS);
+export const SupervisorContactMessageSchema = nonblankText(MAX_SUPERVISOR_MCP_CONTACT_CHARS);
+export const SupervisorAgentMessageSchema = nonblankText(MAX_SUPERVISOR_MCP_AGENT_MESSAGE_CHARS);
 export const PARENT_REPLY_PREFIX = "Parent reply: ";
 
 const SupervisorReplySchema = Schema.String.check(
@@ -103,7 +105,7 @@ const AssignedPayload = {
 const MessagePayload = {
   ...AssignedPayload,
   requestId: SupervisorChannelIdSchema,
-  message: SupervisorMessageSchema,
+  message: SupervisorContactMessageSchema,
 };
 /** The native thread that made a main-agent-only call, when the runtime identifies it. */
 const MainAgentCallPayload = {
@@ -262,7 +264,7 @@ const SupervisorAgentSendRpc = Rpc.make("SupervisorAgentSend", {
   payload: {
     ...AssignedPayload,
     to: SupervisorAgentIdSchema,
-    message: SupervisorMessageSchema,
+    message: SupervisorAgentMessageSchema,
     ...MainAgentCallPayload,
   },
   success: Schema.Struct({

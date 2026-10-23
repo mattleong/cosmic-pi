@@ -18,6 +18,7 @@ import {
   isOutcomeUncertain,
 } from "../run/errors.ts";
 import { resolvePiModelSelector } from "../run/model-catalog.ts";
+import { sanitizeName } from "../run/state.ts";
 import type { WriterWorkspaceMode } from "../config/schema.ts";
 import type { SubagentEffort } from "../domain/routing.ts";
 import type { RuntimeApiKey, StartSubagentRequest, SubagentParentContext } from "../run/model.ts";
@@ -260,6 +261,32 @@ const routeSubject = (definition: ProfileDefinition, agent: CustomAgent | undefi
 const planSubject = (definition: ProfileDefinition, agent: CustomAgent | undefined): string =>
   agent ? `Agent ${agent.name} (profile ${definition.id})` : `Profile ${definition.id}`;
 
+const isolationFromAgent = (input: PlannedStartInput): boolean =>
+  input.rawInput.isolation === undefined && input.agent !== undefined;
+
+/**
+ * Isolation chooses a writer's workspace. A read-only run still has write-capable tools, so a
+ * requested worktree fails closed; a shared checkout asks for nothing stronger and is ignored.
+ */
+const readOnlyIsolation = (
+  input: PlannedStartInput,
+  isolation: WriterWorkspaceMode,
+): Effect.Effect<string, InvalidSubagentRequestError> =>
+  isolation === "worktree"
+    ? Effect.fail(
+        new InvalidSubagentRequestError({
+          code: "isolation_requires_writer",
+          message: isolationFromAgent(input)
+            ? `${planSubject(input.definition, input.agent)} sets worktree isolation but resolved read-only\n\nA read-only run can't be isolated in a worktree. Set the agent's writeIntent to writer, or remove its isolation.`
+            : `${planSubject(input.definition, input.agent)} resolved read-only, so it can't run in a worktree\n\nA read-only run can't be isolated in a worktree. Use profile worker or a writer agent, or omit isolation.`,
+        }),
+      )
+    : Effect.succeed(
+        isolationFromAgent(input)
+          ? `Ignored the agent's isolation: ${planSubject(input.definition, input.agent)} resolved read-only and shares the checkout.`
+          : `Ignored isolation: ${planSubject(input.definition, input.agent)} resolved read-only and shares the checkout.`,
+      );
+
 const modelOverrideUnavailable = (
   definition: ProfileDefinition,
   override: SubagentModelOverride,
@@ -359,12 +386,21 @@ const resolvePlannedStart = (
     const task = yield* validatedStartInput(input.rawInput);
     const { attempt, resolved, skipped } = yield* selectCandidate(input, registry, environment.cwd);
     const modelOverride = input.routeSource === "override" ? input.rawInput.model : undefined;
+    // An item's isolation wins over the agent's.
+    const requestedIsolation = input.rawInput.isolation ?? input.agent?.isolation;
+    const writer = attempt.writeIntent === "writer";
+    const isolation = writer ? requestedIsolation : undefined;
+    const isolationWarning =
+      !writer && requestedIsolation !== undefined
+        ? yield* readOnlyIsolation(input, requestedIsolation)
+        : undefined;
     const selection: SubagentSelectionProvenance = {
       source: attempt.source,
       routeSource: attempt.routeSource,
       candidateIndex: attempt.candidateIndex,
       reason: attempt.reason,
       skippedCandidates: skipped,
+      ...(isolationWarning && { warning: isolationWarning }),
     };
     const parentSessionFile = parent.sessionFile;
     const parentLeafId = parent.leafId;
@@ -384,17 +420,8 @@ const resolvePlannedStart = (
             input.agent?.tools,
           )
         : [];
-    const name = input.rawInput.name?.trim();
-    // An item's isolation wins over the agent's; either one requires a writer route.
-    const isolation = input.rawInput.isolation ?? input.agent?.isolation;
-    if (isolation !== undefined && attempt.writeIntent !== "writer")
-      return yield* new InvalidSubagentRequestError({
-        code: "isolation_requires_writer",
-        message:
-          input.rawInput.isolation === undefined && input.agent
-            ? `${planSubject(input.definition, input.agent)} sets isolation but resolved read-only, and isolation applies only to writers. Set the agent's writeIntent to writer, or remove its isolation.`
-            : `${planSubject(input.definition, input.agent)} resolved read-only, and isolation applies only to writers. Omit isolation, or use profile worker.`,
-      });
+    // Every copy of the name, including a worktree's recorded launch, keeps the display bound.
+    const name = sanitizeName(input.rawInput.name ?? "");
     const request: StartSubagentRequest = {
       ...(name && { name }),
       ...(isolation && { writerWorkspaceModeOverride: isolation }),

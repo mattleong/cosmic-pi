@@ -12,8 +12,8 @@ import {
 import type { SubagentError } from "../run/errors.ts";
 import type { SubagentServiceContract } from "../run/service.ts";
 import type { SubagentProjectionBridge } from "./host-ui.ts";
-import { MAX_NAME_CHARS } from "../run/state.ts";
-import { MAX_AGENT_MESSAGE_CHARS } from "../run/agent-messaging.ts";
+import { MAX_TASK_CHARS } from "../run/state.ts";
+import { MAX_AGENT_MESSAGE_CHARS, MAX_RESUME_MESSAGE_CHARS } from "../run/agent-messaging.ts";
 import {
   runActions,
   SUBAGENT_ACTIVITY_PROVIDER,
@@ -100,6 +100,14 @@ const sameAssignment = (before: SubagentRunView, after: SubagentRunView): boolea
 const isInputAction = (action: string): action is SubagentActivityInput =>
   action === "resume" || action === "message" || action === "reply" || action === "rename";
 
+// A resume's text is the run's next assignment; a rename is cut to the display-name bound.
+const INPUT_LIMITS = {
+  resume: MAX_RESUME_MESSAGE_CHARS,
+  message: MAX_AGENT_MESSAGE_CHARS,
+  reply: MAX_AGENT_MESSAGE_CHARS,
+  rename: MAX_TASK_CHARS,
+} as const satisfies Record<SubagentActivityInput, number>;
+
 const offers = (run: SubagentRunView, title: string, action: string): boolean =>
   runActions(run, title).some((candidate) => candidate.id === action);
 
@@ -154,8 +162,7 @@ export function registerSubagentActivity(options: {
         )
           throw new Error("Subagent changed while entering input");
         const value = input.trim();
-        if (value.length > (action === "rename" ? MAX_NAME_CHARS : MAX_AGENT_MESSAGE_CHARS))
-          throw new Error("Subagent input is invalid");
+        if (value.length > INPUT_LIMITS[action]) throw new Error("Subagent input is invalid");
         if (action === "resume")
           return options.act(item.id, { action, input: value || undefined }, signal, expected);
         if (!value) throw new Error("Subagent input is invalid");

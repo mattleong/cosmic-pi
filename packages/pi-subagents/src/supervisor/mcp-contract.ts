@@ -1,3 +1,5 @@
+import { MAX_PARENT_MESSAGE_CHARS } from "../run/limits.ts";
+import { MAX_TASK_CHARS } from "../run/state.ts";
 import { AGENT_TOOL_NAME, AGENT_TOOL_NAMES, CONTACT_PARENT_TOOL_NAME } from "../run/tool-policy.ts";
 
 export const SUPERVISOR_MCP_REGISTRATION = "pi_subagents_supervisor" as const;
@@ -25,7 +27,13 @@ export const SUPERVISOR_MCP_AGENT_SEND_ARGUMENT_KEYS = ["to", "message"] as cons
 export const SUPERVISOR_MCP_AGENT_IDS_ARGUMENT_KEY = "agentIds" as const;
 export const SUPERVISOR_MCP_VERBOSE_ARGUMENT_KEY = "verbose" as const;
 
-export const MAX_SUPERVISOR_MCP_MESSAGE_CHARS = 16_384;
+/** Matches a Pi child's contact tool; the root keeps a longer message's start with a marker. */
+export const MAX_SUPERVISOR_MCP_CONTACT_CHARS = MAX_PARENT_MESSAGE_CHARS;
+/**
+ * Matches the root's `agent_send`, whose resume takes a task-sized message; the root bounds
+ * guidance and answers to the parent-channel bound.
+ */
+export const MAX_SUPERVISOR_MCP_AGENT_MESSAGE_CHARS = MAX_TASK_CHARS;
 /**
  * A submitted report travels as JSON, which can spend six bytes on one character (`\u0001`), on two
  * bounded lines: the 3 MiB supervisor channel line, and the 4 MiB CLI stdout line, because Claude

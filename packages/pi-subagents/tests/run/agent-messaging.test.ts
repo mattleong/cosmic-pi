@@ -730,16 +730,114 @@ describe("the user's messages", () => {
     });
   });
 
-  it.effect("share the agent messages' size limit", () => {
+  it.effect("share the agent messages' guidance bound", () => {
     const { fake, layer } = localServiceFixture();
     return withService(layer, function* (service) {
       const run = yield* service.start(request({ name: "bounded-message" }));
       for (const send of [
-        service.send(run.id, "x".repeat(16_385)),
-        service.agentSend(MAIN, run.id, "x".repeat(16_385)),
+        service.send(run.id, "x".repeat(65_537)),
+        service.agentSend(MAIN, run.id, "x".repeat(65_537)),
       ])
         expect(yield* send.pipe(Effect.flip)).toMatchObject({ code: "message_too_large" });
       expect(fake.controls[0]?.sent("steer")).toBe(false);
+      expect((yield* service.send(run.id, "x".repeat(65_536))).disposition).toBe("guided");
+    });
+  });
+});
+
+describe("message bounds", () => {
+  it.effect("let a resume take a task-sized message, and bound guidance below it", () => {
+    const { fake, layer } = localServiceFixture();
+    return withService(layer, function* (service) {
+      const run = yield* service.start(request({ name: "resumable" }));
+      const assignment = "y".repeat(100_000);
+      expect(yield* service.agentSend(MAIN, run.id, assignment).pipe(Effect.flip)).toMatchObject({
+        code: "message_too_large",
+        message: stringContaining("resumes"),
+      });
+      expect(steerMessages(fake.controls[0])).toEqual([]);
+
+      expect((yield* service.interrupt(run.id)).state).toBe("paused");
+      expect((yield* service.agentSend(MAIN, run.id, assignment)).disposition).toBe("resumed");
+      expect(promptMessages(fake.controls[0]).at(-1)).toContain(assignment);
+
+      expect((yield* service.interrupt(run.id)).state).toBe("paused");
+      expect(
+        yield* service.agentSend(MAIN, run.id, "y".repeat(131_073)).pipe(Effect.flip),
+      ).toMatchObject({ code: "message_too_large" });
+    });
+  });
+});
+
+describe("messages to a starting run", () => {
+  it.effect("wait for it to start, then deliver", () => {
+    const initialStartGate = Deferred.makeUnsafe<void>();
+    const { backend, projections, layer } = nativeReportServiceFixture(
+      fakeNativeReportBackendLayer({ initialStartGate }),
+    );
+    return withService(layer, function* (service) {
+      yield* service
+        .startSessionOwned(nativeReportRequest({ name: "slow-start" }))
+        .pipe(Effect.forkScoped);
+      yield* yieldUntil(() => backend.controls[0]?.assignmentEpochs[0] === 1);
+      const id = projections.at(-1)?.runs[0]?.id ?? "";
+      expect(latest(projections, id)?.state).toBe("starting");
+
+      const sending = yield* service
+        .agentSend(MAIN, id, "Check the schema first.")
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      yield* TestClock.adjust("1 second");
+      expect(backend.controls[0]?.prompts.some((prompt) => prompt.startsWith("steer:"))).toBe(
+        false,
+      );
+      yield* Deferred.succeed(initialStartGate, undefined);
+
+      expect(yield* Fiber.join(sending)).toMatchObject({ disposition: "guided" });
+      expect(backend.controls[0]?.prompts.at(-1)).toContain("Check the schema first.");
+    });
+  });
+
+  it.effect("refuse a message that can't be delivered without waiting", () => {
+    const initialStartGate = Deferred.makeUnsafe<void>();
+    const { backend, projections, layer } = nativeReportServiceFixture(
+      fakeNativeReportBackendLayer({ initialStartGate }),
+    );
+    return withService(layer, function* (service) {
+      yield* service
+        .startSessionOwned(nativeReportRequest({ name: "slow-start" }))
+        .pipe(Effect.forkScoped);
+      yield* yieldUntil(() => backend.controls[0]?.assignmentEpochs[0] === 1);
+      const id = projections.at(-1)?.runs[0]?.id ?? "";
+
+      expect(
+        yield* service.agentSend(MAIN, id, "x".repeat(65_537)).pipe(Effect.flip),
+      ).toMatchObject({ code: "message_too_large" });
+      expect(latest(projections, id)?.state).toBe("starting");
+      yield* Deferred.succeed(initialStartGate, undefined);
+    });
+  });
+
+  it.effect("refuse once it is still starting after the wait", () => {
+    const initialStartGate = Deferred.makeUnsafe<void>();
+    const { backend, projections, layer } = nativeReportServiceFixture(
+      fakeNativeReportBackendLayer({ initialStartGate }),
+    );
+    return withService(layer, function* (service) {
+      yield* service
+        .startSessionOwned(nativeReportRequest({ name: "stuck-start" }))
+        .pipe(Effect.forkScoped);
+      yield* yieldUntil(() => backend.controls[0]?.assignmentEpochs[0] === 1);
+      const id = projections.at(-1)?.runs[0]?.id ?? "";
+
+      const sending = yield* service
+        .agentSend(MAIN, id, "Hello?")
+        .pipe(Effect.flip, Effect.forkScoped({ startImmediately: true }));
+      yield* TestClock.adjust("5 seconds");
+      expect(yield* Fiber.join(sending)).toMatchObject({
+        code: "agent_unavailable",
+        message: stringContaining("starting"),
+      });
+      yield* Deferred.succeed(initialStartGate, undefined);
     });
   });
 });

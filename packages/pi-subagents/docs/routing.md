@@ -74,8 +74,8 @@ A custom agent is a named role the user declares in a configuration document's r
 
 ### Declaration
 
-- Names match `^[a-z][a-z0-9-]{0,47}$` and can't be a profile ID. A document holds at most 32 agents.
-- `description` (1–200 characters) and `instructions` (up to 16 KiB of UTF-8) are required and nonblank.
+- Names match `^[a-z][a-z0-9-]{0,47}$` and can't be a profile ID. A document holds at most 32 agents. A name is the agent's identity across the Global and Project documents and in launches, so a name such as `code_reviewer` fails closed instead of being rewritten to one that could match, or be shadowed by, another entry.
+- `description` and `instructions` are required and nonblank. A description longer than 200 characters is cut to 200, with diagnostic `agents[i].description`, and the agent still applies. Instructions hold up to 128 KiB of UTF-8, like a task; longer ones fail the entry closed, since cutting them would change what the agent does.
 - `profile` selects the route and defaults to `generalist`. Optional `effort` (a concrete level, not `default`), `context`, and `writeIntent` override every candidate of that route; `isolation` is the agent's writer workspace mode, so an agent with `writeIntent: "read-only"` can't set it (the entry fails closed with diagnostic `agents[i].isolation`).
 - `tools: { allow?, deny? }` lists root tool names. `allow` keeps only those tools and `deny` removes tools, applied to the Pi child's inherited active-tool snapshot. The child's own `agent_*` tools, `agent_contact_parent` included, are always kept.
 - Unknown keys are rejected. Diagnostics identify entries by position, like profile sets.
@@ -92,7 +92,7 @@ A custom agent is a named role the user declares in a configuration document's r
 - The start item's `agent` choices and their descriptions are generated when the root registers its tools, and the field is absent when no agents are configured. Nested Pi children accept any agent name and the root resolves it.
 - Planning applies the agent's overrides to each candidate before the usual checks. A candidate the overrides don't fit, such as fork context or an unsupported explicit effort on Claude or Codex, is skipped with `agent_candidate_incompatible`.
 - Tool lists can only be enforced on a Pi child, so Claude and Codex candidates are skipped with `agent_tools_unsupported` whenever an agent sets `allow` or `deny`. There is no unfiltered fallback.
-- An item's `isolation` wins over the agent's; the agent's wins over the session default. Either one on a launch whose selected candidate is read-only fails with `isolation_requires_writer` before admission.
+- An item's `isolation` wins over the agent's; the agent's wins over the session default. When the selected candidate is read-only, a requested `worktree` from either one fails with `isolation_requires_writer` before admission: a read-only run keeps write-capable tools, so dropping the worktree would silently remove its protection. A requested `shared-checkout` asks for nothing stronger, so the launch ignores it and starts read-only, with a launch warning in its start entry and card.
 - A [model override](#per-launch-model-override) launched with an agent takes the agent's effort, context, and write intent defaults, and fails with `model_override_invalid` when the agent's tool lists need Pi.
 - The child's system prompt names the agent and carries its instructions in place of the profile guidance. Run cards, start entries, status, and the orchestration contract report `agent` alongside the routed `profile`.
 
@@ -156,15 +156,15 @@ A launch freezes its route, the declared candidates and the one it selected, so 
 - `task`, required;
 - `profile`, optional, defaulting to `generalist`;
 - `agent`, optional: a [custom agent](#custom-agents), never combined with `profile`;
-- `name`, optional;
-- `isolation`, optional and root only: `shared-checkout` or `worktree`, for writers only (profile `worker`, or an agent or route with writer intent). An item whose selected candidate is read-only fails with `isolation_requires_writer` before admission, as does an item whose [custom agent](#launch-planning) sets `isolation`;
+- `name`, optional display text; launch cuts one longer than 80 characters, and every copy, including a worktree's recorded launch, keeps the cut name;
+- `isolation`, optional and root only: `shared-checkout` or `worktree`, for writers only (profile `worker`, or an agent or route with writer intent). When the selected candidate is read-only, `worktree` fails closed with `isolation_requires_writer` and `shared-checkout` is ignored with a start-entry warning, for the item's value and a [custom agent](#launch-planning)'s alike;
 - `model`, optional and root only: a [per-launch model override](#per-launch-model-override). Nested children launch on profile routes, because only the root talks to the user who asks for a model.
 
 The schema is strict, and the service independently rejects other launch overrides, such as a top-level `effort`, `context`, or `writeIntent`, with `launch_override_not_allowed`. Model-facing schemas declare no `pattern` keyword, which some providers reject. Task-tool-shaped top-level fields fail with `[invalid_start_shape]` instead of being renamed.
 
 A root writer's workspace mode is, in order: the item's `isolation`, a custom agent's `isolation`, then the session's `writerWorkspaceMode` (default `shared-checkout`). Admission records the mode. Only the root starts worktree writers: nested start items take no `isolation`, a nested writer shares its caller's checkout or worker tree, and one whose custom agent sets `isolation: "worktree"` fails with `workspace_nested_writer_unsupported` ([Mode and admission](local-backends.md#mode-and-admission)). Launch and status projections include the mode, workspace identity, actual cwd, and source cwd.
 
-Start is always background and nonblocking. `agent_await` supports `all_finished` and `any_finished`. `agent_lifecycle` takes `interrupt` or `stop` and run IDs, never task or route overrides.
+Start is always background and nonblocking. `agent_await` supports `all_finished`, the default, and `any_finished`, for up to 12 runs. `agent_lifecycle` takes `interrupt` or `stop` and up to 32 run IDs, as many as one start launches, never task or route overrides.
 
 ### Model-facing guidance
 

@@ -20,10 +20,11 @@ import { toolDefinitions as supervisorToolDefinitions } from "../src/supervisor/
 import {
   startToolParameters,
   subagentArgumentPreparer,
+  SUBAGENT_FIELD_ALIASES,
   SUBAGENT_TOOL_SCHEMAS,
   workspaceOperationError,
 } from "../src/tools/schema.ts";
-import { replacementField } from "../src/tools/arguments.ts";
+import { replacementField } from "pi-cosmic-core/tool-arguments";
 import { registerSubagentTools } from "../src/tools/subagent.ts";
 
 const registeredTools = (nested: boolean) =>
@@ -73,6 +74,22 @@ describe("subagent argument preparation", () => {
         { type: "toolCall", id: "call", name: "agent_start", arguments: prepared },
       ),
     ).toEqual(prepared);
+  });
+
+  it("accepts a display name longer than the bound runs keep, which launch cuts", () => {
+    const name = "n".repeat(500);
+    expect(prepareStart({ agents: [{ task: "Map", name }] })).toEqual({
+      agents: [{ task: "Map", name }],
+    });
+  });
+
+  it("drops blank optional text and still rejects blank required text", () => {
+    expect(prepareStart({ agents: [{ task: "Map", name: "  ", profile: "", agent: "" }] })).toEqual(
+      { agents: [{ task: "Map" }] },
+    );
+    expect(() => prepareStart({ agents: [{ task: " ", name: "Map" }] })).toThrow(
+      /\[invalid_arguments\][\s\S]*agents\[0\]\.task/u,
+    );
   });
 
   it.live("leaves malformed tool-call JSON to Pi, which shows the model the parse error", () =>
@@ -146,7 +163,7 @@ describe("subagent argument preparation", () => {
   it("suggests isolation for workspace-style start keys", () => {
     const accepted = Object.keys(rootStartParameters.properties.agents.items.properties);
     for (const key of ["workspace", "worktree", "workspace_mode", "writerWorkspaceMode"])
-      expect(replacementField(key, accepted)).toBe("isolation");
+      expect(replacementField(key, accepted, SUBAGENT_FIELD_ALIASES)).toBe("isolation");
   });
 
   it("rejects isolation from a nested child, which can't start worktree writers", () => {
@@ -169,18 +186,48 @@ describe("workspace apply arguments", () => {
     }
   });
 
-  it("rejects a missing workspace and fields that belong to other actions", () => {
+  it("rejects a missing workspace and real values in fields that belong to other actions", () => {
     expect(() => prepareWorkspace({ action: "apply", workspaceId: "ws-1", force: true })).toThrow(
       /\[invalid_arguments\]/u,
     );
     for (const args of [
       { action: "apply" },
+      { action: "revise", workspaceId: "ws-1", message: " " },
       { action: "list", offset: 8 },
       { action: "apply", workspaceId: "ws-1", message: "Ship it." },
+      { action: "discard", workspaceId: "ws-1", revisionId: "rev-1" },
+      { action: "review", workspaceId: "ws-1", rebase: true },
     ] as const)
       expect(workspaceOperationError(args)).toEqual(expect.any(String));
   });
+
+  it("ignores blank, false, and zero placeholders in fields an action doesn't use", () => {
+    for (const args of [
+      { action: "list", workspaceId: "ws-1" },
+      { action: "list", rebase: false, offset: 0 },
+      { action: "review", workspaceId: "ws-1", rebase: false },
+      { action: "prepare", workspaceId: "ws-1", revisionId: "rev-1", offset: 0 },
+      { action: "apply", workspaceId: "ws-1", rebase: false, offset: 0, message: "" },
+      { action: "revise", workspaceId: "ws-1", message: "Fix the test.", offset: 0 },
+    ] as const)
+      expect(workspaceOperationError(args), args.action).toBeUndefined();
+  });
 });
+
+describe("await arguments", () => {
+  const prepareAwait = subagentArgumentPreparer("agent_await");
+
+  it("accepts a wait without until and leaves an out-of-range timeout to the tool", () => {
+    expect(prepareAwait({ runIds: ["agent-1"] })).toEqual({ runIds: ["agent-1"] });
+    for (const timeoutSeconds of [0, 2.5, 86_400])
+      expect(prepareAwait({ runIds: ["agent-1"], timeoutSeconds })).toEqual({
+        runIds: ["agent-1"],
+        timeoutSeconds,
+      });
+  });
+});
+
+const ids = (count: number) => Array.from({ length: count }, (_, index) => `agent-${index}`);
 
 describe("lifecycle arguments", () => {
   const prepareLifecycle = subagentArgumentPreparer("agent_lifecycle");
@@ -197,5 +244,15 @@ describe("lifecycle arguments", () => {
         action,
         runIds: ["agent-1"],
       });
+  });
+
+  it("takes as many targets as one start batch launches", () => {
+    expect(prepareLifecycle({ action: "stop", runIds: ids(32) })).toEqual({
+      action: "stop",
+      runIds: ids(32),
+    });
+    expect(() => prepareLifecycle({ action: "stop", runIds: ids(33) })).toThrow(
+      /\[invalid_arguments\][\s\S]*runIds/u,
+    );
   });
 });

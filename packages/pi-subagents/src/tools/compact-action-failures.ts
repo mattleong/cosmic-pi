@@ -28,10 +28,6 @@ const START_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
     "Ask the root to launch this writer in a worktree, or start a writer that shares your directory.",
   ],
   [
-    ["isolation_requires_writer"],
-    "Omit isolation for read-only work, or launch it on a writer route such as profile worker.",
-  ],
-  [
     ["session_spend_limit"],
     "This session's subagents reached its sessionSpendLimit; leave the work to the user or ask them to raise the limit.",
   ],

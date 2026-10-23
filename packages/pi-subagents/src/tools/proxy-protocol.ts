@@ -7,6 +7,7 @@ import {
   QuestionnaireRequestSchema,
   type AskUserRequest,
 } from "pi-ask-user/protocol";
+import { blankStringPath } from "pi-cosmic-core/tool-arguments";
 import { Check } from "typebox/value";
 import type { BackendProxyResult } from "../backend/model.ts";
 import { SUBAGENT_EFFORTS } from "../domain/routing.ts";
@@ -15,7 +16,6 @@ import type { SubagentParentContext } from "../run/model.ts";
 import { invalidRequest, type InvalidSubagentRequestError } from "../run/errors.ts";
 import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import { isAgentToolName, type AgentToolName, type SubagentToolName } from "../run/tool-policy.ts";
-import { blankStringPath } from "./arguments.ts";
 import { SubagentContractSchema, encodeSubagentContract } from "./contract-schema.ts";
 import {
   AGENT_TOOL_SCHEMAS,
