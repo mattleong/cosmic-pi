@@ -10,7 +10,10 @@ import {
   executeBackgroundTaskCommand,
   type BackgroundTaskToolDetails,
 } from "../src/tools/command.ts";
-import type { BackgroundTaskToolInput } from "../src/tools/schema.ts";
+import {
+  prepareBackgroundTaskArguments,
+  type BackgroundTaskToolInput,
+} from "../src/tools/schema.ts";
 import { projectBackgroundTaskCompactSummary } from "../src/ui/compact-summary.ts";
 import {
   provideTaskService,
@@ -330,10 +333,12 @@ describe("shared background task command", () => {
 
 const recordingService = () => {
   const calls: string[] = [];
+  const requests: unknown[] = [];
   const record =
     <A>(method: string, value: A) =>
-    () => {
+    (...args: ReadonlyArray<unknown>) => {
       calls.push(method);
+      requests.push(...args);
       return Effect.succeed(value);
     };
   const running = taskStatus({ id: "task-1", state: "running" });
@@ -361,7 +366,7 @@ const recordingService = () => {
       return 0;
     }),
   };
-  return { calls, service };
+  return { calls, requests, service };
 };
 
 describe("background task action parameters", () => {
@@ -412,6 +417,65 @@ describe("background task action parameters", () => {
       }
     }),
   );
+});
+
+describe("background task argument leniency", () => {
+  it.effect("ignores placeholders in fields the action does not use", () =>
+    Effect.gen(function* () {
+      // Each call reaches the service with only the arguments its action uses.
+      const lenient: ReadonlyArray<readonly [BackgroundTaskToolInput, ReadonlyArray<unknown>]> = [
+        [{ action: "stop_all", id: "", force: false, tailLines: 0 }, [false]],
+        [{ action: "clear", id: " ", force: false, waitSeconds: 0, command: "" }, []],
+        [
+          { action: "start", command: "pnpm dev", afterCursor: 0, waitSeconds: 0, force: false },
+          [{ command: "pnpm dev", cwd: "/" }],
+        ],
+        [
+          { action: "wait", id: "task-1", until: "exit", contains: "", afterCursor: 0, cwd: "" },
+          [{ id: "task-1", until: "exit" }],
+        ],
+        [
+          { action: "logs", id: "task-1", afterCursor: 3, tailLines: 0, timeoutSeconds: 0 },
+          [{ id: "task-1", afterCursor: 3 }],
+        ],
+      ];
+      for (const [input, expected] of lenient) {
+        const { calls, requests, service } = recordingService();
+        yield* execute(input, service);
+        expect(calls, input.action).toHaveLength(1);
+        expect(requests, input.action).toEqual(expected);
+      }
+    }),
+  );
+
+  it("drops null and blank optional arguments before validation", () => {
+    expect(
+      prepareBackgroundTaskArguments({
+        action: "stop_all",
+        id: null,
+        name: "  ",
+        cwd: "",
+        force: false,
+      }),
+    ).toEqual({ action: "stop_all", force: false });
+    expect(
+      prepareBackgroundTaskArguments({ action: "start", command: "make", contains: "" }),
+    ).toEqual({ action: "start", command: "make" });
+  });
+
+  it("keeps whitespace-only text to match in contains", () => {
+    for (const contains of [" ", "\n"])
+      expect(
+        prepareBackgroundTaskArguments({ action: "wait", id: "task-1", until: "output", contains }),
+      ).toEqual({ action: "wait", id: "task-1", until: "output", contains });
+  });
+
+  it("names the invalid field and its allowed values", () => {
+    expect(() => prepareBackgroundTaskArguments({ action: "launch", command: "make" })).toThrow(
+      /action[\s\S]*start/u,
+    );
+    expect(() => prepareBackgroundTaskArguments({ action: null })).toThrow(/action/u);
+  });
 });
 
 describe("background task results", () => {

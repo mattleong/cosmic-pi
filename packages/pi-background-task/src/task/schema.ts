@@ -28,7 +28,8 @@ export const BackgroundTaskStateSchema = Schema.Literals(BACKGROUND_TASK_STATES)
 export const BackgroundTaskSnapshotSchema = Schema.Struct({
   id: TaskId,
   name: Schema.optionalKey(MaxChars(BOUNDS.maxNameChars)),
-  command: MaxChars(BOUNDS.maxCommandChars),
+  // A display copy; the service runs the full command, which may be longer.
+  command: MaxChars(BOUNDS.maxCommandDisplayChars),
   cwd: MaxChars(BOUNDS.maxCwdChars),
   state: BackgroundTaskStateSchema,
   pid: Schema.optionalKey(Schema.Natural.check(Schema.isGreaterThan(0))),

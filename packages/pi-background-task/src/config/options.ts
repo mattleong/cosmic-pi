@@ -75,11 +75,28 @@ const onOff = <Id extends BooleanSettingId>(id: Id, label: string, description: 
   invalid: `${id} must be true or false`,
 });
 
+const WHOLE_NUMBER = /^(?:0|[1-9][0-9]*)$/u;
+const parseWholeNumber = (value: string): number =>
+  WHOLE_NUMBER.test(value) ? Number(value) : Number.NaN;
+
+const BYTE_SIZE = /^(\d+(?:\.\d+)?)\s*(?:([km])(?:i?b)?|b)?$/u;
+const UNIT_BYTES = { k: 1024, m: 1024 ** 2 } as const;
+
+/** A byte count such as `262144`, `256k`, `256 KiB`, or `1.5MB`; units are binary. */
+export const parseByteSize = (value: string): number => {
+  const match = BYTE_SIZE.exec(value.trim().toLowerCase());
+  if (!match) return Number.NaN;
+  const [, amount = "", unit] = match;
+  const bytes = Number(amount) * (unit === "k" || unit === "m" ? UNIT_BYTES[unit] : 1);
+  return Number.isInteger(bytes) ? bytes : Number.NaN;
+};
+
 const wholeNumber = <Id extends NumberSettingId>(
   id: Id,
   label: string,
   description: string,
   values: readonly string[],
+  { parseNumber = parseWholeNumber, expected = "a whole number" } = {},
 ) => {
   const { minimum, maximum } = NUMBER_BOUNDS[id];
   return {
@@ -89,13 +106,18 @@ const wholeNumber = <Id extends NumberSettingId>(
     values,
     openValues: true,
     parse: (value: string): number | undefined => {
-      const parsed = /^(?:0|[1-9][0-9]*)$/u.test(value) ? Number(value) : Number.NaN;
+      const parsed = parseNumber(value);
       return Number.isSafeInteger(parsed) && parsed >= minimum && parsed <= maximum
         ? parsed
         : undefined;
     },
-    invalid: `${id} must be a whole number from ${minimum} to ${maximum}`,
+    invalid: `${id} must be ${expected} from ${minimum} to ${maximum}`,
   };
+};
+
+const BYTE_SIZE_INPUT = {
+  parseNumber: parseByteSize,
+  expected: "a byte size such as 262144, 256KiB, or 1MiB,",
 };
 
 /** One descriptor per config field, with its parsed value typed by that field. */
@@ -123,12 +145,14 @@ const SETTING_DESCRIPTORS = {
     "Output kept per task (bytes)",
     "How much recent output each task keeps, counting a small overhead per stored chunk.",
     ["65536", "262144", "1048576"],
+    BYTE_SIZE_INPUT,
   ),
   totalLogBufferBytes: wholeNumber(
     "totalLogBufferBytes",
     "Output kept in total (bytes)",
     "How much output all tasks keep together; at least the per-task amount.",
     ["1048576", "2097152", "8388608"],
+    BYTE_SIZE_INPUT,
   ),
   stopGraceMs: wholeNumber(
     "stopGraceMs",
@@ -140,7 +164,7 @@ const SETTING_DESCRIPTORS = {
     "maxWaitSeconds",
     "Longest wait (seconds)",
     "The longest the agent may wait on a task at once.",
-    ["10", "30", "60", String(NUMBER_BOUNDS.maxWaitSeconds.maximum)],
+    ["10", "30", "60", "300"],
   ),
   showFooterStatus: onOff("showFooterStatus", "Footer status", "Show running tasks in the footer."),
   shellPath: {

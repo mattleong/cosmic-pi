@@ -52,7 +52,8 @@ If Pi exits without shutdown, core's host-exit guard kills every task group that
 ## Critical invariants
 
 - Metadata is normalized and bounded before IDs, monitors, or processes are allocated, including
-  calls that bypass the tool schema.
+  calls that bypass the tool schema. Only the monitor receives the full command; task snapshots,
+  results, and UI hold a clipped display copy.
 - Stop requests retain active capacity until exit is confirmed. A termination failure leaves a
   task `stopping`; `stopAll` stops every captured task concurrently before reporting aggregate
   failures. A stop or timeout that follows leader exit does not replace the command's outcome.

@@ -11,7 +11,7 @@ import * as Schedule from "effect/Schedule";
 import { vi } from "vitest";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import { nodeFilePlatformLayer, signalProcess } from "pi-cosmic-core";
+import { nodeFilePlatformLayer, signalProcess, utf8ByteLength } from "pi-cosmic-core";
 import { provideBuiltLayer } from "pi-cosmic-core/testing";
 import {
   LocalProcess,
@@ -20,6 +20,7 @@ import {
   type LocalProcessOutput,
   type LocalProcessRequest,
 } from "../src/boundary/local-process.ts";
+import { BACKGROUND_TASK_FIELD_BOUNDS } from "../src/task/bounds.ts";
 
 // Real processes start slowly on loaded runners. These bounds only end a hung test; no
 // assertion depends on how quickly a process starts or exits.
@@ -100,6 +101,26 @@ describe("local process boundary", () => {
         const output = [...result.events].map((event) => `${event.stream}:${event.text}`).join("|");
         expect(output).toContain("stdout:out");
         expect(output).toContain("stderr:err");
+      }),
+    ),
+  );
+
+  it.live("runs a heredoc command as long as task admission allows", () =>
+    withLocalProcess(
+      Effect.gen(function* () {
+        // Two-byte characters make the UTF-8 size, which the shell argument limit counts, larger
+        // than the character count.
+        const line = `${"é".repeat(63)}\n`;
+        const lineBytes = utf8ByteLength(line);
+        const lines = Math.floor((BACKGROUND_TASK_FIELD_BOUNDS.maxCommandBytes - 64) / lineBytes);
+        const command = `cat <<'EOF' | wc -c\n${line.repeat(lines)}EOF\n`;
+        expect(utf8ByteLength(command)).toBeLessThanOrEqual(
+          BACKGROUND_TASK_FIELD_BOUNDS.maxCommandBytes,
+        );
+        const result = yield* collectUntilExit(yield* spawnProcess(command));
+        expect(result.exit.exitCode).toBe(0);
+        const output = [...result.events].map((event) => event.text).join("");
+        expect(Number(output.trim())).toBe(lines * lineBytes);
       }),
     ),
   );

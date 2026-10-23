@@ -47,6 +47,7 @@ import { combinedLogOutput } from "../src/tools/log-page.ts";
 
 interface FakeProcessControl {
   readonly handle: LocalProcessHandle;
+  readonly command: string;
   readonly modes: Array<"graceful" | "force">;
   readonly awaitMode: (mode: "graceful" | "force") => Effect.Effect<void>;
   readonly offer: (stream: "stdout" | "stderr", text: string, droppedBytes?: number) => void;
@@ -69,7 +70,7 @@ function fakeProcessLayer(options: FakeProcessOptions = {}) {
   const controls: FakeProcessControl[] = [];
   const spawned = Deferred.makeUnsafe<void>();
   const layer = Layer.succeed(LocalProcess, {
-    spawn: () =>
+    spawn: (request) =>
       Effect.acquireRelease(
         Effect.gen(function* () {
           if (options.spawnGate) yield* Deferred.await(options.spawnGate);
@@ -135,6 +136,7 @@ function fakeProcessLayer(options: FakeProcessOptions = {}) {
           };
           controls.push({
             handle,
+            command: request.command,
             modes,
             awaitMode: (mode) => Deferred.await(modeRequested[mode]),
             offer: (stream, text, gapBytes = 0) =>
@@ -354,8 +356,9 @@ describe("BackgroundTaskService", () => {
     () => {
       const harness = serviceHarness();
       const cwdAtLimit = `/${"d".repeat(BACKGROUND_TASK_FIELD_BOUNDS.maxCwdChars - 1)}`;
-      // Commands keep their whitespace, which counts toward the bound; names are trimmed.
-      const commandAtLimit = ` ${"c".repeat(BACKGROUND_TASK_FIELD_BOUNDS.maxCommandChars - 2)} `;
+      // Commands keep their whitespace, which counts toward the UTF-8 bound; names are trimmed.
+      const commandAtLimit = ` ${"c".repeat(BACKGROUND_TASK_FIELD_BOUNDS.maxCommandBytes - 2)} `;
+      const wideOverLimit = "é".repeat(BACKGROUND_TASK_FIELD_BOUNDS.maxCommandBytes / 2 + 1);
       return harness.run(function* (service) {
         const started = yield* service.start({
           command: commandAtLimit,
@@ -364,13 +367,17 @@ describe("BackgroundTaskService", () => {
         });
         expect(started).toMatchObject({
           id: "task-1",
-          command: commandAtLimit,
           cwd: cwdAtLimit,
           name: "n".repeat(BACKGROUND_TASK_FIELD_BOUNDS.maxNameChars),
         });
-        expect(harness.controls).toHaveLength(1);
+        // The process runs the whole command; the snapshot keeps a bounded display copy.
+        expect(harness.controls.map((control) => control.command)).toEqual([commandAtLimit]);
+        expect(started.command.length).toBeLessThanOrEqual(
+          BACKGROUND_TASK_FIELD_BOUNDS.maxCommandDisplayChars,
+        );
+        expect(commandAtLimit.startsWith(started.command.slice(0, -1))).toBe(true);
 
-        for (const command of [`${commandAtLimit} `, " \n\t "])
+        for (const command of [`${commandAtLimit} `, wideOverLimit, " \n\t "])
           expect(yield* service.start({ command, cwd: "." }).pipe(Effect.flip)).toBeInstanceOf(
             InvalidBackgroundCommandError,
           );

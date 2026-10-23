@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CompactIssue } from "pi-code-previews";
 import { issueMessageStyleProblems } from "pi-code-previews/testing";
+import { BACKGROUND_TASK_FIELD_BOUNDS } from "../src/task/bounds.ts";
 import { projectBackgroundTaskCompactSummary } from "../src/ui/compact-summary.ts";
 import type { BackgroundTaskToolInput } from "../src/tools/schema.ts";
 
@@ -60,6 +61,14 @@ const find = (summary: Summary, code: string): CompactIssue | undefined =>
   summary?.issues?.find((issue) => issue.code === code);
 
 describe("background task compact semantics", () => {
+  it("bounds the call subject of a maximum-size command to the display limit", () => {
+    const command = "x".repeat(BACKGROUND_TASK_FIELD_BOUNDS.maxCommandBytes);
+    const summary = project({}, "start", "running", false, { command });
+    expect(summary?.subject?.length).toBeLessThanOrEqual(
+      BACKGROUND_TASK_FIELD_BOUNDS.maxCommandDisplayChars,
+    );
+  });
+
   it("declines missing, malformed and unrelated details rather than inventing success", () => {
     for (const details of [
       undefined,

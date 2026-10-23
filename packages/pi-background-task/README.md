@@ -45,7 +45,7 @@ Optional JSON in `~/.pi/agent/extensions/pi-background-task.json`, or `.pi/exten
 }
 ```
 
-Set `shellPath` to run tasks in a specific shell instead of the platform default.
+Set `shellPath` to run tasks in a specific shell instead of the platform default. `maxWaitSeconds` goes up to 3600. In `/tasks settings`, the two byte settings also accept sizes such as `512KiB` or `4m`.
 
 ## How it works
 

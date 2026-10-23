@@ -122,6 +122,24 @@ describe("/tasks settings", () => {
     }),
   );
 
+  it.effect("accepts byte sizes with binary unit suffixes in any case", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      for (const value of ["262144", "256k", "256KiB", "1MiB", "1.5m", "4mb"])
+        yield* h.run(`logBufferBytesPerTask ${value}`);
+      yield* h.run("project totalLogBufferBytes 8M");
+      expect(h.write.mock.calls.map(([, , value]) => value)).toEqual([
+        262_144, 262_144, 262_144, 1_048_576, 1_572_864, 4_194_304, 8_388_608,
+      ]);
+      expect(h.notify.mock.calls.filter(([, level]) => level === "error")).toEqual([]);
+
+      for (const value of ["1.5", "0.1k", "10x", "8MiB", "-1k", "k"])
+        yield* h.run(`logBufferBytesPerTask ${value}`);
+      expect(h.write).toHaveBeenCalledTimes(7);
+      expect(h.notify.mock.calls.filter(([, level]) => level === "error")).toHaveLength(6);
+    }),
+  );
+
   it.effect("status and help report the session's values on single sanitized lines", () =>
     Effect.gen(function* () {
       const h = harness();

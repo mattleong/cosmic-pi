@@ -6,6 +6,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
+import * as Predicate from "effect/Predicate";
 import * as Record from "effect/Record";
 import { sanitizeTerminalLine, countLabel, formatBytes, utf8ByteLength } from "pi-cosmic-core";
 import { BACKGROUND_TASK_FIELD_BOUNDS } from "../task/bounds.ts";
@@ -91,6 +92,14 @@ const fieldList = (fields: ReadonlyArray<string>): string =>
 const invalidCommand = (message: string) =>
   Effect.fail(new InvalidBackgroundCommandError({ message }));
 
+// Placeholders that models fill unused fields with; they carry no request, so an action that
+// does not use the field ignores them instead of rejecting the call.
+const isPlaceholder = (value: BackgroundTaskToolInput[BackgroundTaskField]): boolean =>
+  value === undefined ||
+  value === false ||
+  value === 0 ||
+  (Predicate.isString(value) && value.trim() === "");
+
 const validateFields = (
   input: BackgroundTaskToolInput,
 ): Effect.Effect<void, InvalidBackgroundCommandError> => {
@@ -98,11 +107,11 @@ const validateFields = (
   if (!isBackgroundTaskAction(action)) return invalidCommand(UNKNOWN_ACTION);
   const rejected = Record.keys(FIELD_ACTIONS).filter(
     (field) =>
-      input[field] !== undefined && !FIELD_ACTIONS[field].some((accepted) => accepted === action),
+      !isPlaceholder(input[field]) && !FIELD_ACTIONS[field].some((accepted) => accepted === action),
   );
   if (rejected.length > 0)
     return invalidCommand(`The ${action} action does not accept ${fieldList(rejected)}.`);
-  if (input.afterCursor !== undefined && input.tailLines !== undefined)
+  if (action === "logs" && input.afterCursor !== undefined && !isPlaceholder(input.tailLines))
     return invalidCommand("The logs action accepts afterCursor or tailLines, not both.");
   return Effect.void;
 };
@@ -264,7 +273,8 @@ const logsRequest = (input: BackgroundTaskToolInput) =>
     (id): ReadBackgroundLogs => ({
       id,
       ...(input.afterCursor !== undefined && { afterCursor: input.afterCursor }),
-      ...(input.tailLines !== undefined && { tailLines: input.tailLines }),
+      // Zero lines is a placeholder for the default window.
+      ...(input.tailLines !== undefined && input.tailLines > 0 && { tailLines: input.tailLines }),
       ...(input.waitSeconds !== undefined && { waitSeconds: input.waitSeconds }),
     }),
   );
@@ -277,11 +287,16 @@ const waitRequest = (input: BackgroundTaskToolInput) =>
         message: "The wait action requires until.",
       });
     }
+    // An exit wait does not use contains or afterCursor, so it ignores their placeholders.
+    const exitPlaceholder = (value: string | number | undefined) =>
+      until === "exit" && isPlaceholder(value);
     const request: WaitForBackgroundTask = {
       id: yield* required(input.id, "id", input.action),
       until,
-      ...(input.contains !== undefined && { contains: input.contains }),
-      ...(input.afterCursor !== undefined && { afterCursor: input.afterCursor }),
+      ...(input.contains !== undefined &&
+        !exitPlaceholder(input.contains) && { contains: input.contains }),
+      ...(input.afterCursor !== undefined &&
+        !exitPlaceholder(input.afterCursor) && { afterCursor: input.afterCursor }),
       ...(input.waitSeconds !== undefined && { waitSeconds: input.waitSeconds }),
     };
     return request;

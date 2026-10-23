@@ -1,11 +1,16 @@
 export const BACKGROUND_TASK_FIELD_BOUNDS = Object.freeze({
-  maxCommandChars: 2_048,
+  // The shell receives the command as one argument (`sh -c <command>`). Linux caps one argument
+  // at 128 KiB and every platform caps arguments plus environment together, so commands stay
+  // well below both.
+  maxCommandBytes: 64 * 1_024,
+  // Snapshots, results, and UI keep a clipped copy of the command for display only.
+  maxCommandDisplayChars: 2_048,
   maxCwdChars: 1_024,
   maxNameChars: 256,
   maxIdChars: 256,
   maxContainsChars: 256,
   maxTailLines: 2_000,
-  maxWaitSeconds: 120,
+  maxWaitSeconds: 3_600,
   maxSignalChars: 256,
   maxErrorChars: 2_048,
   maxSnapshots: 600,

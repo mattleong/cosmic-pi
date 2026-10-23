@@ -36,7 +36,11 @@ import {
 } from "./command.ts";
 import { BackgroundTaskContractSchema, encodeBackgroundTaskContract } from "./contract-schema.ts";
 import { renderBackgroundTaskPreview, taskProcessLine } from "./preview.ts";
-import { BackgroundTaskParameters, type BackgroundTaskToolInput } from "./schema.ts";
+import {
+  BackgroundTaskParameters,
+  prepareBackgroundTaskArguments,
+  type BackgroundTaskToolInput,
+} from "./schema.ts";
 
 export interface BackgroundTaskToolRunner {
   readonly scheduleAnimation?: CompactAnimationScheduler;
@@ -102,7 +106,7 @@ export function registerBackgroundTaskTool(
     name: "background_task",
     label: "Background Task",
     description:
-      "Start and manage session-scoped local background commands. Actions: start, list, status, logs, wait, stop, stop_all, clear. Each action accepts only its own parameters and rejects the rest. Output is bounded; each task's process group is terminated when the Pi session closes, but processes that start their own session or process group, such as daemons, are not tracked.",
+      "Start and manage session-scoped local background commands. Actions: start, list, status, logs, wait, stop, stop_all, clear. Each action accepts only its own parameters; empty, false, or zero placeholders in other fields are ignored, and other values there are rejected. Output is bounded; each task's process group is terminated when the Pi session closes, but processes that start their own session or process group, such as daemons, are not tracked.",
     promptSnippet: "Start and manage long-running local commands without blocking the current turn",
     promptGuidelines: [
       "Use background_task only when a server, watcher, long test suite, or other command can run independently; use bash when validation or the next step must finish before responding.",
@@ -113,6 +117,7 @@ export function registerBackgroundTaskTool(
       "Rejected or cancelled calls do not roll back admitted starts or stop signals. Hand uncertainty to the main agent for list/status recovery before replaying a command. Task IDs can be reused after reload or tree navigation; discard old workflow checkpoints.",
     ],
     parameters: BackgroundTaskParameters,
+    prepareArguments: prepareBackgroundTaskArguments,
     outputSchema: OUTPUT_SCHEMA,
     execute(_toolCallId, input, signal, _onUpdate, ctx) {
       return runner

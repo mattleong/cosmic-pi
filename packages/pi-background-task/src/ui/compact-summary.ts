@@ -19,6 +19,7 @@ import {
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import { BACKGROUND_TASK_FIELD_BOUNDS } from "../task/bounds.ts";
 import {
   countTaskStates,
   discardedOutputText,
@@ -58,7 +59,13 @@ function waitSubject(args: Partial<BackgroundTaskToolInput>): string {
 export function backgroundTaskCallSubject(args: Partial<BackgroundTaskToolInput>): string {
   switch (args.action) {
     case "start":
-      return sanitizeTerminalLine(textValue(args.name).trim() || textValue(args.command));
+      // Commands may be 64 KiB; clip before sanitizing because this runs on every render.
+      return sanitizeTerminalLine(
+        clipText(
+          textValue(args.name).trim() || textValue(args.command),
+          BACKGROUND_TASK_FIELD_BOUNDS.maxCommandDisplayChars,
+        ),
+      );
     case "wait":
       return waitSubject(args);
     case "list":

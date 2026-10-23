@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 import type * as Path from "effect/Path";
+import { formatBytes, utf8ByteLength } from "pi-cosmic-core";
 import { BACKGROUND_TASK_FIELD_BOUNDS } from "./bounds.ts";
 import { InvalidBackgroundCommandError, InvalidBackgroundCwdError } from "./errors.ts";
 import type { StartBackgroundTask, WaitForBackgroundTask } from "./model.ts";
@@ -15,9 +16,9 @@ export const normalizeStartRequest = (request: StartBackgroundTask, path: Path.P
     // submitted; trimming only detects a blank one.
     const command = request.command;
     if (!command.trim()) return yield* invalidCommand("Background command must not be empty.");
-    if (command.length > BACKGROUND_TASK_FIELD_BOUNDS.maxCommandChars)
+    if (utf8ByteLength(command) > BACKGROUND_TASK_FIELD_BOUNDS.maxCommandBytes)
       return yield* invalidCommand(
-        `Background command must not exceed ${BACKGROUND_TASK_FIELD_BOUNDS.maxCommandChars} characters.`,
+        `Background command must not exceed ${formatBytes(BACKGROUND_TASK_FIELD_BOUNDS.maxCommandBytes)} of UTF-8; write a longer script to a file and run that.`,
       );
     const name = request.name?.trim();
     if ((name?.length ?? 0) > BACKGROUND_TASK_FIELD_BOUNDS.maxNameChars)
@@ -26,7 +27,7 @@ export const normalizeStartRequest = (request: StartBackgroundTask, path: Path.P
       );
     if (!validTimeout(request.timeoutSeconds))
       return yield* invalidCommand(
-        "Background timeout must be a positive finite number of seconds.",
+        "Background timeout must be a positive finite number of seconds; omit it for no timeout.",
       );
     const cwd = path.resolve(request.cwd);
     if (cwd.length > BACKGROUND_TASK_FIELD_BOUNDS.maxCwdChars) {

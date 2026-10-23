@@ -82,10 +82,14 @@ const harness = (
     registerBackgroundTaskApplication(host.pi, { loadSettings });
     return {
       tools: host.registrations,
-      execute: (input: BackgroundTaskToolInput, ctx: ExtensionToolContext) => {
+      execute: (
+        input: BackgroundTaskToolInput,
+        ctx: ExtensionToolContext,
+        signal = new AbortController().signal,
+      ) => {
         const tool = host.registrations.findLast(({ name }) => name === "background_task");
         if (!tool) return Promise.reject(new Error("background_task was not registered"));
-        return tool.execute("call", input, new AbortController().signal, undefined, ctx);
+        return tool.execute("call", input, signal, undefined, ctx);
       },
       command: (args: string, ctx: ExtensionCommandContext) => {
         const tasks = host.commands.get("tasks");
@@ -416,6 +420,37 @@ describe("background-task settings in a session", () => {
         }).pipe(Effect.ensuring(Effect.promise(() => app.emit("session_shutdown", ctx))));
       }).pipe(Effect.scoped),
   );
+
+  it.live("an aborted wait ends before the hour maxWaitSeconds allows and leaves the task", () => {
+    const call = new AbortController();
+    return Effect.gen(function* () {
+      const app = yield* harness(() => Promise.resolve(), { settings: { maxWaitSeconds: 3_600 } });
+      const ctx = settingsContext({});
+      yield* Effect.gen(function* () {
+        yield* Effect.promise(() => app.emit("session_start", ctx));
+        const started = yield* Effect.promise(() =>
+          app.execute({ action: "start", command: "sleep 30" }, ctx),
+        );
+        const details = decodeDetails(started.details);
+        if (details.action !== "start") throw new Error("start returned the wrong action");
+        const { id } = details.snapshot;
+
+        const waiting = app.execute({ action: "wait", id, until: "exit" }, ctx, call.signal);
+        let settled = false;
+        void waiting.then(
+          () => (settled = true),
+          () => (settled = true),
+        );
+        yield* Effect.sleep("100 millis");
+        expect(settled).toBe(false);
+        call.abort();
+        const waited = yield* Effect.exit(Effect.tryPromise(() => waiting));
+        expect(Exit.isFailure(waited)).toBe(true);
+        const status = yield* Effect.promise(() => app.execute({ action: "status", id }, ctx));
+        expect(decodeDetails(status.details)).toMatchObject({ snapshot: { state: "running" } });
+      }).pipe(Effect.ensuring(Effect.promise(() => app.emit("session_shutdown", ctx))));
+    }).pipe(Effect.scoped);
+  });
 
   it.effect("/tasks settings writes the session's global file only while the runtime runs", () =>
     Effect.gen(function* () {

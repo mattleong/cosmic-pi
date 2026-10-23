@@ -1,5 +1,7 @@
 import { StringEnum } from "@earendil-works/pi-ai";
+import { toolArgumentPreparer } from "pi-cosmic-core/tool-arguments";
 import { Type, type Static } from "typebox";
+import { Check } from "typebox/value";
 import { BACKGROUND_TASK_FIELD_BOUNDS } from "../task/bounds.ts";
 import { BACKGROUND_TASK_ACTIONS } from "../task/schema.ts";
 
@@ -7,8 +9,8 @@ export const BackgroundTaskParameters = Type.Object({
   action: StringEnum(BACKGROUND_TASK_ACTIONS, { description: "Background task operation" }),
   command: Type.Optional(
     Type.String({
-      maxLength: BACKGROUND_TASK_FIELD_BOUNDS.maxCommandChars,
-      description: "Shell command for start",
+      maxLength: BACKGROUND_TASK_FIELD_BOUNDS.maxCommandBytes,
+      description: "Shell command for start, at most 64 KiB of UTF-8",
     }),
   ),
   cwd: Type.Optional(
@@ -25,8 +27,8 @@ export const BackgroundTaskParameters = Type.Object({
   ),
   timeoutSeconds: Type.Optional(
     Type.Number({
-      minimum: 0.001,
-      description: "Runtime limit for start; omitted means no timeout",
+      minimum: 0,
+      description: "Runtime limit in seconds for start; omitted means no timeout",
     }),
   ),
   id: Type.Optional(
@@ -60,8 +62,8 @@ export const BackgroundTaskParameters = Type.Object({
   ),
   tailLines: Type.Optional(
     Type.Integer({
-      minimum: 1,
-      description: `Newest lines for logs, capped at ${BACKGROUND_TASK_FIELD_BOUNDS.maxTailLines}; invalid with afterCursor`,
+      minimum: 0,
+      description: `Newest lines for logs, capped at ${BACKGROUND_TASK_FIELD_BOUNDS.maxTailLines}; 0 or omitted means 200; invalid with afterCursor`,
     }),
   ),
   waitSeconds: Type.Optional(
@@ -77,3 +79,14 @@ export const BackgroundTaskParameters = Type.Object({
 });
 
 export type BackgroundTaskToolInput = Static<typeof BackgroundTaskParameters>;
+
+/**
+ * Pi `prepareArguments` hook: drops null and blank optional fields and reports invalid ones.
+ * Whitespace is literal text to match in `contains`, so only its empty placeholder is dropped.
+ */
+export const prepareBackgroundTaskArguments = toolArgumentPreparer(
+  "background_task",
+  BackgroundTaskParameters,
+  (value): value is BackgroundTaskToolInput => Check(BackgroundTaskParameters, value),
+  { keepWhitespace: ["contains"] },
+);

@@ -11,7 +11,12 @@ import * as Path from "effect/Path";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import { invokeHostCallback, sanitizeDiagnosticError, utf8ByteLength } from "pi-cosmic-core";
+import {
+  clipText,
+  invokeHostCallback,
+  sanitizeDiagnosticError,
+  utf8ByteLength,
+} from "pi-cosmic-core";
 import {
   LocalProcess,
   type LocalProcessError,
@@ -427,9 +432,10 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
             const id = `task-${nextId}`;
             nextId += 1;
             const startedAt = yield* Clock.currentTimeMillis;
+            // The record keeps a display copy; the monitor runs the full prepared command.
             const created = taskRecord({
               id,
-              command,
+              command: clipText(command, BACKGROUND_TASK_FIELD_BOUNDS.maxCommandDisplayChars),
               cwd,
               state: "starting",
               startedAt,
