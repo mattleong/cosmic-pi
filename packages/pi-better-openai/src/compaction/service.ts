@@ -80,13 +80,13 @@ const compactionUsage = (model: Model<"openai-responses">, reported: OpenAICompa
   return usage;
 };
 
-export class OpenAICompactionError extends Schema.TaggedError<OpenAICompactionError>()(
-  "OpenAICompactionError",
-  {
-    operation: Schema.Literals(["context", "projection"]),
-    message: Schema.String,
-  },
-) {}
+export class OpenAICompactionError extends Schema.TaggedError<
+  OpenAICompactionError,
+  { readonly brand: unique symbol }
+>()("OpenAICompactionError", {
+  operation: Schema.Literals(["context", "projection"]),
+  message: Schema.String,
+}) {}
 
 const compactionError = (operation: OpenAICompactionError["operation"], message: string) =>
   new OpenAICompactionError({ operation, message });
@@ -105,193 +105,190 @@ interface OpenAICompactionServiceOptions {
 export class OpenAICompactionService extends Context.Service<OpenAICompactionService>()(
   "pi-better-openai/compaction/service/OpenAICompactionService",
   {
-    make: (options: OpenAICompactionServiceOptions) =>
-      Effect.gen(function* () {
-        const client = yield* OpenAICompactionClient;
-        const observedOmissions = yield* SynchronizedRef.make<readonly string[]>([]);
-        const readContext = Effect.fn("OpenAICompaction.readContext")((willRetry: boolean) =>
-          SynchronizedRef.modifyEffect(observedOmissions, (observed) =>
-            Effect.try({
-              try: () => {
-                const ctx = MutableRef.get(options.context);
-                const branch = ctx.sessionManager.getBranch();
-                const omittedEntryIds = retryOmissions(branch, observed, willRetry);
-                const restored = reconstructOpenAIContext(branch, omittedEntryIds);
-                const current = {
-                  omittedEntryIds,
-                  model: ctx.model,
-                  branch,
-                  restored,
-                  contextEntries:
-                    restored?.entries ??
-                    projectContextEntries(branch).filter(
-                      (entry) => !omittedEntryIds.includes(entry.id),
-                    ),
-                  systemPrompt: restored
-                    ? getCurrentSystemPrompt(restored.messages)
-                    : ctx.getSystemPrompt(),
-                  fastActive: isFastActive(ctx, MutableRef.get(options.fastProjection)),
-                };
-                return [current, omittedEntryIds] as const;
-              },
-              catch: () =>
-                compactionError("context", "Unable to read the current Pi session context."),
-            }),
-          ),
-        );
-        const compactOpenAI = Effect.fn("OpenAICompaction.compactOpenAI")(function* (
-          event: SessionBeforeCompactEvent,
-        ) {
-          const config = options.config();
-          if (!config?.compaction.enabled || !options.createCheckpoints) return undefined;
-          const current = yield* readContext(event.willRetry);
-          if (!isEligibleOpenAICompactionModel(current.model)) return undefined;
-          const anchor = current.branch.at(-1);
-          if (!anchor || anchor.type === "compaction") return undefined;
-          const firstKeptEntryId = anchor.id;
-          const model = current.model;
-          const projected = yield* Effect.try({
-            try: () => ({
-              input: projectOpenAIResponseInput(model, current.contextEntries),
-              covered: projectOpenAIResponseInput(model, current.restored?.coveredEntries ?? []),
-            }),
-            catch: () =>
-              compactionError("projection", "Unable to project the OpenAI compaction input."),
-          });
-          const rawInput = projected.input;
-          if (!rawInput)
-            return yield* compactionError(
-              "projection",
-              "Unable to project the OpenAI compaction input.",
-            );
-          const instructions = compactionInstructions(
-            current.systemPrompt,
-            event.customInstructions,
-          );
-          const result = yield* client.compact({
-            model,
-            input: checkpointedInput(
-              findActiveOpenAICompactionCheckpoint(current.branch, model),
-              current.restored,
-              rawInput,
-              projected.covered,
-            ),
-            ...(instructions && { instructions }),
-            ...(current.fastActive && { serviceTier: FAST_SERVICE_TIER }),
-          });
-          const usage = compactionUsage(model, result.usage);
-          const now = yield* Clock.currentTimeMillis;
-          const checkpoint: OpenAICompactionCheckpoint = {
-            version: 1,
-            provider: "openai",
-            api: "openai-responses",
-            model: model.id,
-            output: result.output,
-            omittedEntryIds: current.omittedEntryIds,
-            createdAt: now,
-          };
-          return {
-            summary: OPENAI_COMPACTION_SUMMARY,
-            firstKeptEntryId,
-            tokensBefore: Math.max(0, Math.floor(event.preparation.tokensBefore)),
-            usage,
-            details: { type: OPENAI_COMPACTION_DETAILS_TYPE, checkpoint },
-          } satisfies CompactionResult;
-        });
-        const readBranch = Effect.try({
-          try: () => MutableRef.get(options.context).sessionManager.getBranch(),
-          catch: () => compactionError("context", "Unable to read the current Pi session branch."),
-        });
-        const filterContext = Effect.fn("OpenAICompaction.filterContext")(function* (
-          messages: ContextWithSystemEvent["messages"],
-        ) {
-          const branch = yield* readBranch;
-          return yield* SynchronizedRef.modifyEffect(observedOmissions, (observed) =>
-            Effect.try({
-              try: () => {
-                const repaired = repairOpenAIContext(branch, messages, observed);
-                const omitted = repaired?.omittedEntryIds ?? retryOmissions(branch, observed);
-                return [repaired?.messages, omitted] as const;
-              },
-              catch: () =>
-                compactionError("context", "Unable to restore the complete Pi conversation."),
-            }),
-          );
-        });
-        const inject = Effect.fn("OpenAICompaction.inject")(function* <Payload>(payload: Payload) {
-          const config = options.config();
-          if (!config?.compaction.enabled) return undefined;
-          const current = yield* Effect.try({
+    make: Effect.fn("OpenAICompactionService.make")(function* (
+      options: OpenAICompactionServiceOptions,
+    ) {
+      const client = yield* OpenAICompactionClient;
+      const observedOmissions = yield* SynchronizedRef.make<readonly string[]>([]);
+      const readContext = Effect.fn("OpenAICompaction.readContext")((willRetry: boolean) =>
+        SynchronizedRef.modifyEffect(observedOmissions, (observed) =>
+          Effect.try({
             try: () => {
               const ctx = MutableRef.get(options.context);
-              return { model: ctx.model, branch: ctx.sessionManager.getBranch() };
+              const branch = ctx.sessionManager.getBranch();
+              const omittedEntryIds = retryOmissions(branch, observed, willRetry);
+              const restored = reconstructOpenAIContext(branch, omittedEntryIds);
+              const current = {
+                omittedEntryIds,
+                model: ctx.model,
+                branch,
+                restored,
+                contextEntries:
+                  restored?.entries ??
+                  projectContextEntries(branch).filter(
+                    (entry) => !omittedEntryIds.includes(entry.id),
+                  ),
+                systemPrompt: restored
+                  ? getCurrentSystemPrompt(restored.messages)
+                  : ctx.getSystemPrompt(),
+                fastActive: isFastActive(ctx, MutableRef.get(options.fastProjection)),
+              };
+              return [current, omittedEntryIds] as const;
             },
             catch: () =>
-              compactionError("context", "Unable to read the current Pi session branch."),
-          });
-          if (!isEligibleOpenAICompactionModel(current.model)) return undefined;
-          const active = findActiveOpenAICompactionCheckpoint(current.branch, current.model);
-          if (!active) return undefined;
-          const model = current.model;
-          const observed = yield* SynchronizedRef.get(observedOmissions);
-          return yield* Effect.try({
-            try: () => {
-              const restored = reconstructOpenAIContext(current.branch, observed);
-              if (restored?.coverageChanged) return undefined;
-              return restored
-                ? injectOpenAICompactionCheckpoint(payload, active, (projection) =>
-                    projectOpenAIResponseInput(model, restored.coveredEntries, projection),
-                  )
-                : undefined;
-            },
-            catch: () =>
-              compactionError("projection", "Unable to project the restored Pi conversation."),
-          });
+              compactionError("context", "Unable to read the current Pi session context."),
+          }),
+        ),
+      );
+      const compactOpenAI = Effect.fn("OpenAICompaction.compactOpenAI")(function* (
+        event: SessionBeforeCompactEvent,
+      ) {
+        const config = options.config();
+        if (!config?.compaction.enabled || !options.createCheckpoints) return undefined;
+        const current = yield* readContext(event.willRetry);
+        if (!isEligibleOpenAICompactionModel(current.model)) return undefined;
+        const anchor = current.branch.at(-1);
+        if (!anchor || anchor.type === "compaction") return undefined;
+        const firstKeptEntryId = anchor.id;
+        const model = current.model;
+        const projected = yield* Effect.try({
+          try: () => ({
+            input: projectOpenAIResponseInput(model, current.contextEntries),
+            covered: projectOpenAIResponseInput(model, current.restored?.coveredEntries ?? []),
+          }),
+          catch: () =>
+            compactionError("projection", "Unable to project the OpenAI compaction input."),
         });
-        const compact = Effect.fn("OpenAICompaction.compact")(function* (
-          event: SessionBeforeCompactEvent,
-        ) {
+        const rawInput = projected.input;
+        if (!rawInput)
+          return yield* compactionError(
+            "projection",
+            "Unable to project the OpenAI compaction input.",
+          );
+        const instructions = compactionInstructions(current.systemPrompt, event.customInstructions);
+        const result = yield* client.compact({
+          model,
+          input: checkpointedInput(
+            findActiveOpenAICompactionCheckpoint(current.branch, model),
+            current.restored,
+            rawInput,
+            projected.covered,
+          ),
+          ...(instructions && { instructions }),
+          ...(current.fastActive && { serviceTier: FAST_SERVICE_TIER }),
+        });
+        const usage = compactionUsage(model, result.usage);
+        const now = yield* Clock.currentTimeMillis;
+        const checkpoint: OpenAICompactionCheckpoint = {
+          version: 1,
+          provider: "openai",
+          api: "openai-responses",
+          model: model.id,
+          output: result.output,
+          omittedEntryIds: current.omittedEntryIds,
+          createdAt: now,
+        };
+        return {
+          summary: OPENAI_COMPACTION_SUMMARY,
+          firstKeptEntryId,
+          tokensBefore: Math.max(0, Math.floor(event.preparation.tokensBefore)),
+          usage,
+          details: { type: OPENAI_COMPACTION_DETAILS_TYPE, checkpoint },
+        } satisfies CompactionResult;
+      });
+      const readBranch = Effect.try({
+        try: () => MutableRef.get(options.context).sessionManager.getBranch(),
+        catch: () => compactionError("context", "Unable to read the current Pi session branch."),
+      });
+      const filterContext = Effect.fn("OpenAICompaction.filterContext")(function* (
+        messages: ContextWithSystemEvent["messages"],
+      ) {
+        const branch = yield* readBranch;
+        return yield* SynchronizedRef.modifyEffect(observedOmissions, (observed) =>
+          Effect.try({
+            try: () => {
+              const repaired = repairOpenAIContext(branch, messages, observed);
+              const omitted = repaired?.omittedEntryIds ?? retryOmissions(branch, observed);
+              return [repaired?.messages, omitted] as const;
+            },
+            catch: () =>
+              compactionError("context", "Unable to restore the complete Pi conversation."),
+          }),
+        );
+      });
+      const inject = Effect.fn("OpenAICompaction.inject")(function* <Payload>(payload: Payload) {
+        const config = options.config();
+        if (!config?.compaction.enabled) return undefined;
+        const current = yield* Effect.try({
+          try: () => {
+            const ctx = MutableRef.get(options.context);
+            return { model: ctx.model, branch: ctx.sessionManager.getBranch() };
+          },
+          catch: () => compactionError("context", "Unable to read the current Pi session branch."),
+        });
+        if (!isEligibleOpenAICompactionModel(current.model)) return undefined;
+        const active = findActiveOpenAICompactionCheckpoint(current.branch, current.model);
+        if (!active) return undefined;
+        const model = current.model;
+        const observed = yield* SynchronizedRef.get(observedOmissions);
+        return yield* Effect.try({
+          try: () => {
+            const restored = reconstructOpenAIContext(current.branch, observed);
+            if (restored?.coverageChanged) return undefined;
+            return restored
+              ? injectOpenAICompactionCheckpoint(payload, active, (projection) =>
+                  projectOpenAIResponseInput(model, restored.coveredEntries, projection),
+                )
+              : undefined;
+          },
+          catch: () =>
+            compactionError("projection", "Unable to project the restored Pi conversation."),
+        });
+      });
+      const compact = Effect.fn("OpenAICompaction.compact")(function* (
+        event: SessionBeforeCompactEvent,
+      ) {
+        if (event.signal?.aborted)
+          return yield* compactionError("context", "Compaction cancelled.");
+        const branch = yield* readBranch;
+        if (!latestOwnedCheckpoint(branch)) return yield* compactOpenAI(event);
+        const ctx = MutableRef.get(options.context);
+        const fallback = Effect.fn("OpenAICompaction.fallback")(function* () {
           if (event.signal?.aborted)
             return yield* compactionError("context", "Compaction cancelled.");
-          const branch = yield* readBranch;
-          if (!latestOwnedCheckpoint(branch)) return yield* compactOpenAI(event);
-          const ctx = MutableRef.get(options.context);
-          const fallback = Effect.fn("OpenAICompaction.fallback")(function* () {
-            if (event.signal?.aborted)
-              return yield* compactionError("context", "Compaction cancelled.");
-            const observed = yield* SynchronizedRef.get(observedOmissions);
-            const preparation = yield* Effect.try({
-              try: () =>
-                prepareOpenAIFallback(
-                  branch,
-                  event.preparation,
-                  retryOmissions(branch, observed, event.willRetry),
-                ),
-              catch: () =>
-                compactionError("context", "Unable to prepare the restored Pi conversation."),
-            });
-            if (!preparation)
-              return yield* compactionError("context", "No safe compaction boundary is available.");
-            return yield* compactWithPi(
-              MutableRef.get(options.context),
-              event,
-              preparation,
-              options.retryPolicy(),
-            );
+          const observed = yield* SynchronizedRef.get(observedOmissions);
+          const preparation = yield* Effect.try({
+            try: () =>
+              prepareOpenAIFallback(
+                branch,
+                event.preparation,
+                retryOmissions(branch, observed, event.willRetry),
+              ),
+            catch: () =>
+              compactionError("context", "Unable to prepare the restored Pi conversation."),
           });
-          if (
-            !isEligibleOpenAICompactionModel(ctx.model) ||
-            !findActiveOpenAICompactionCheckpoint(branch, ctx.model)
-          )
-            return yield* fallback();
-          const result = yield* compactOpenAI(event).pipe(Effect.catch(() => fallback()));
-          return result ?? (yield* fallback());
+          if (!preparation)
+            return yield* compactionError("context", "No safe compaction boundary is available.");
+          return yield* compactWithPi(
+            MutableRef.get(options.context),
+            event,
+            preparation,
+            options.retryPolicy(),
+          );
         });
-        const resetRetryOmissions = Effect.fn("OpenAICompaction.resetRetryOmissions")(() =>
-          SynchronizedRef.set(observedOmissions, []),
-        );
-        return { compact, filterContext, inject, resetRetryOmissions };
-      }),
+        if (
+          !isEligibleOpenAICompactionModel(ctx.model) ||
+          !findActiveOpenAICompactionCheckpoint(branch, ctx.model)
+        )
+          return yield* fallback();
+        const result = yield* compactOpenAI(event).pipe(Effect.catch(() => fallback()));
+        return result ?? (yield* fallback());
+      });
+      const resetRetryOmissions = Effect.fn("OpenAICompaction.resetRetryOmissions")(() =>
+        SynchronizedRef.set(observedOmissions, []),
+      );
+      return { compact, filterContext, inject, resetRetryOmissions };
+    }),
   },
 ) {
   static layer(options: OpenAICompactionServiceOptions) {

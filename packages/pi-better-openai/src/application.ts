@@ -213,19 +213,18 @@ export function betterOpenAIWithDependencies(
         }),
         { agentDirectory: getAgentDir, packageName: "pi-better-openai" },
       ),
-    startup: ({ ctx, cwd, projectTrusted }) =>
-      Effect.gen(function* () {
-        yield* bestEffortHostBootstrap("pi-better-openai.preview-settings", (signal) =>
-          loadPreviewSettings(cwd, projectTrusted, signal),
-        );
-        const fast = yield* FastModeService;
-        const configService = yield* OpenAIConfigService;
-        yield* fast.initialize(ctx, yield* configService.get, pi.getFlag(FAST_ID) === true);
-        return {
-          injectionIngress: fast.recordInjection,
-          scheduler: yield* CodePreviewSchedulerService,
-        };
-      }),
+    startup: Effect.fn("BetterOpenAI.startup")(function* ({ ctx, cwd, projectTrusted }) {
+      yield* bestEffortHostBootstrap("pi-better-openai.preview-settings", (signal) =>
+        loadPreviewSettings(cwd, projectTrusted, signal),
+      );
+      const fast = yield* FastModeService;
+      const configService = yield* OpenAIConfigService;
+      yield* fast.initialize(ctx, yield* configService.get, pi.getFlag(FAST_ID) === true);
+      return {
+        injectionIngress: fast.recordInjection,
+        scheduler: yield* CodePreviewSchedulerService,
+      };
+    }),
     onActivated: (
       { ctx, context, cwd, publicationOwner },
       token,

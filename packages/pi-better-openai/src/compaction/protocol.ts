@@ -6,10 +6,7 @@ export const OPENAI_COMPACTION_DETAILS_TYPE = "pi-better-openai.compaction.v1";
 export const OPENAI_COMPACTION_SUMMARY =
   "OpenAI created a native encrypted context checkpoint. The original Pi session history remains available for tree navigation.";
 
-export const NonNegativeIntSchema = Schema.Number.check(
-  Schema.isInt(),
-  Schema.isGreaterThanOrEqualTo(0),
-);
+export const NonNegativeIntSchema = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 export const JsonObjectSchema = Schema.Record(Schema.String, Schema.Json);
 const OpenAICompactionCheckpointSchema = Schema.Struct({
   version: Schema.Literal(1),

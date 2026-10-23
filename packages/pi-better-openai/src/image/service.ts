@@ -113,123 +113,122 @@ interface OpenAIImageServiceOptions {
 export class OpenAIImageService extends Context.Service<OpenAIImageService>()(
   "pi-better-openai/image/service/OpenAIImageService",
   {
-    make: (options: OpenAIImageServiceOptions) =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const http = yield* StreamingHttpClient;
-        const safeFile = yield* SafeFile;
-        const sharp = yield* SharpAdapter;
-        const agentDir = yield* AgentDirectory;
-        const customSaveDir = yield* Config.option(Config.String("PI_IMAGE_SAVE_DIR"));
-        const homeDirectory = yield* Config.option(Config.String("HOME"));
+    make: Effect.fn("OpenAIImageService.make")(function* (options: OpenAIImageServiceOptions) {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const http = yield* StreamingHttpClient;
+      const safeFile = yield* SafeFile;
+      const sharp = yield* SharpAdapter;
+      const agentDir = yield* AgentDirectory;
+      const customSaveDir = yield* Config.option(Config.String("PI_IMAGE_SAVE_DIR"));
+      const homeDirectory = yield* Config.option(Config.String("HOME"));
 
-        const readInputs = imageInputReader({ fs, path, safeFile, sharp });
-        const { validatedGeneratedImage, persistImage } = imageOutput({ fs, path, sharp });
-        const generate = Effect.fn("OpenAIImage.generate")(function* (
-          rawParams: ToolParams,
-          ctx: ExtensionContext,
-          cfg: ResolvedConfig | undefined,
-        ) {
-          const params = yield* prepareToolParams(rawParams);
-          if (!cfg) return yield* fail("config", "Better OpenAI session has not started.");
-          if (!cfg.image.enabled)
-            return yield* fail("config", "OpenAI image generation is disabled in config.");
-          const cwd = yield* Effect.try({
-            try: () => ctx.cwd,
-            catch: failWith("context", "Unable to read the Pi working directory."),
-          });
-          const model = yield* Effect.try({
-            try: () => resolveModel(params, ctx, cfg),
-            catch: failWith("context", "Unable to read the Pi model context."),
-          });
-          const { imageModel, action, outputFormat, save } = requestOptions(params, cfg);
-          const output = imageOutputMetadata(outputFormat);
-          const saveTarget = resolveSaveTarget(path, save, {
-            cwd,
-            agentDir,
-            custom: customDirectory(params, customSaveDir),
-            home: Option.getOrUndefined(homeDirectory),
-          });
-          if (save === "custom" && !saveTarget)
-            return yield* fail("save", "save=custom requires saveDir or PI_IMAGE_SAVE_DIR.");
-          const credentials = yield* getCodexCredentials(ctx);
-          if (!credentials)
-            return yield* fail(
-              "auth",
-              "Missing openai-codex OAuth credentials. Run /login openai-codex.",
-            );
-          const inputs = yield* readInputs(params.images, cwd);
-          const response = yield* http
-            .requestJsonRawBytes(
-              {
-                url: CODEX_RESPONSES_URL,
-                method: "POST",
-                headers: {
-                  authorization: `Bearer ${Redacted.value(credentials.accessToken)}`,
-                  "chatgpt-account-id": credentials.accountId,
-                  "OpenAI-Beta": "responses=experimental",
-                  accept: "text/event-stream",
-                  originator: "codex_cli_rs",
-                  "User-Agent": "codex_cli_rs/0.0.0 (pi-better-openai)",
-                },
-              },
-              ImageRequestSchema,
-              buildImageRequest({
-                prompt: params.prompt,
-                model,
-                imageModel,
-                action,
-                outputFormat,
-                images: inputs,
-              }),
-            )
-            .pipe(
-              Effect.mapError(failWith("request", "Codex image request failed.")),
-              Effect.withSpan("pi-better-openai.image.request"),
-            );
-          if (response.status < 200 || response.status >= 300)
-            return yield* httpFailure(response.status, response.rawBody);
-          const parsed = yield* parseImageSse(response.rawBody, output.mimeType).pipe(
-            Effect.withSpan("pi-better-openai.image.stream"),
-          );
-          const validated = yield* validatedGeneratedImage(parsed, outputFormat).pipe(
-            Effect.withSpan("pi-better-openai.image.convert"),
-          );
-          const savedPath = saveTarget
-            ? yield* persistImage(
-                saveTarget.directory,
-                saveTarget.root,
-                validated.bytes,
-                validated.outputFormat,
-                validated.id,
-              ).pipe(Effect.withSpan("pi-better-openai.image.write"))
-            : undefined;
-          const { bytes: _bytes, ...image } = validated;
-          const result: CodexImageResult = {
-            ...image,
-            prompt: params.prompt,
-            ...(savedPath !== undefined && { savedPath }),
-            model,
-            imageModel,
-            action,
-          };
-          return result;
+      const readInputs = imageInputReader({ fs, path, safeFile, sharp });
+      const { validatedGeneratedImage, persistImage } = imageOutput({ fs, path, sharp });
+      const generate = Effect.fn("OpenAIImage.generate")(function* (
+        rawParams: ToolParams,
+        ctx: ExtensionContext,
+        cfg: ResolvedConfig | undefined,
+      ) {
+        const params = yield* prepareToolParams(rawParams);
+        if (!cfg) return yield* fail("config", "Better OpenAI session has not started.");
+        if (!cfg.image.enabled)
+          return yield* fail("config", "OpenAI image generation is disabled in config.");
+        const cwd = yield* Effect.try({
+          try: () => ctx.cwd,
+          catch: failWith("context", "Unable to read the Pi working directory."),
         });
-        const safeGenerate = (params: ToolParams) =>
-          Effect.suspend(() => {
-            const ctx = MutableRef.get(options.context);
-            const cfg = options.config();
-            const timeoutMs = cfg?.image.timeoutMs ?? DEFAULT_IMAGE_CONFIG.timeoutMs;
-            return generate(params, ctx, cfg).pipe(
-              Effect.timeoutOrElse({
-                duration: timeoutMs,
-                orElse: () => Effect.fail(fail("timeout", "OpenAI image request timed out.")),
-              }),
-            );
-          });
-        return { generate: safeGenerate };
-      }),
+        const model = yield* Effect.try({
+          try: () => resolveModel(params, ctx, cfg),
+          catch: failWith("context", "Unable to read the Pi model context."),
+        });
+        const { imageModel, action, outputFormat, save } = requestOptions(params, cfg);
+        const output = imageOutputMetadata(outputFormat);
+        const saveTarget = resolveSaveTarget(path, save, {
+          cwd,
+          agentDir,
+          custom: customDirectory(params, customSaveDir),
+          home: Option.getOrUndefined(homeDirectory),
+        });
+        if (save === "custom" && !saveTarget)
+          return yield* fail("save", "save=custom requires saveDir or PI_IMAGE_SAVE_DIR.");
+        const credentials = yield* getCodexCredentials(ctx);
+        if (!credentials)
+          return yield* fail(
+            "auth",
+            "Missing openai-codex OAuth credentials. Run /login openai-codex.",
+          );
+        const inputs = yield* readInputs(params.images, cwd);
+        const response = yield* http
+          .requestJsonRawBytes(
+            {
+              url: CODEX_RESPONSES_URL,
+              method: "POST",
+              headers: {
+                authorization: `Bearer ${Redacted.value(credentials.accessToken)}`,
+                "chatgpt-account-id": credentials.accountId,
+                "OpenAI-Beta": "responses=experimental",
+                accept: "text/event-stream",
+                originator: "codex_cli_rs",
+                "User-Agent": "codex_cli_rs/0.0.0 (pi-better-openai)",
+              },
+            },
+            ImageRequestSchema,
+            buildImageRequest({
+              prompt: params.prompt,
+              model,
+              imageModel,
+              action,
+              outputFormat,
+              images: inputs,
+            }),
+          )
+          .pipe(
+            Effect.mapError(failWith("request", "Codex image request failed.")),
+            Effect.withSpan("pi-better-openai.image.request"),
+          );
+        if (response.status < 200 || response.status >= 300)
+          return yield* httpFailure(response.status, response.rawBody);
+        const parsed = yield* parseImageSse(response.rawBody, output.mimeType).pipe(
+          Effect.withSpan("pi-better-openai.image.stream"),
+        );
+        const validated = yield* validatedGeneratedImage(parsed, outputFormat).pipe(
+          Effect.withSpan("pi-better-openai.image.convert"),
+        );
+        const savedPath = saveTarget
+          ? yield* persistImage(
+              saveTarget.directory,
+              saveTarget.root,
+              validated.bytes,
+              validated.outputFormat,
+              validated.id,
+            ).pipe(Effect.withSpan("pi-better-openai.image.write"))
+          : undefined;
+        const { bytes: _bytes, ...image } = validated;
+        const result: CodexImageResult = {
+          ...image,
+          prompt: params.prompt,
+          ...(savedPath !== undefined && { savedPath }),
+          model,
+          imageModel,
+          action,
+        };
+        return result;
+      });
+      const safeGenerate = (params: ToolParams) =>
+        Effect.suspend(() => {
+          const ctx = MutableRef.get(options.context);
+          const cfg = options.config();
+          const timeoutMs = cfg?.image.timeoutMs ?? DEFAULT_IMAGE_CONFIG.timeoutMs;
+          return generate(params, ctx, cfg).pipe(
+            Effect.timeoutOrElse({
+              duration: timeoutMs,
+              orElse: () => Effect.fail(fail("timeout", "OpenAI image request timed out.")),
+            }),
+          );
+        });
+      return { generate: safeGenerate };
+    }),
   },
 ) {
   static layer(options: OpenAIImageServiceOptions) {

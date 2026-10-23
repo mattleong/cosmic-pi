@@ -7,8 +7,10 @@ import {
   type ContextWithSystemEvent,
   type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import * as Equal from "effect/Equal";
 import { flow } from "effect/Function";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { decodeOpenAICompactionDetails } from "./protocol.ts";
 
@@ -52,11 +54,11 @@ export function retryOmissions(
     );
     if (last && isRetryOmittable(last)) requested.add(last.id);
   }
-  return branch.flatMap((entry, index) =>
+  return Arr.filterMap(branch, (entry, index) =>
     isRetryOmittable(entry) &&
     (requested.has(entry.id) || (index <= checkpointIndex && persisted.has(entry.id)))
-      ? [entry.id]
-      : [],
+      ? Result.succeed(entry.id)
+      : Result.failVoid,
   );
 }
 

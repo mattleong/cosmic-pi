@@ -140,7 +140,7 @@ export const imageOutput = (dependencies: {
       `openai-image-${stamp}-${safeId}-${nonce}.${format.extension}`,
     );
     const temporary = `${destination}.${nonce}.tmp`;
-    let ownedIdentity: { readonly dev: number; readonly ino: number } | undefined;
+    let ownedIdentity: { readonly dev: bigint; readonly ino: bigint } | undefined;
     const isOwned = (info: FileSystem.File.Info) =>
       ownedIdentity !== undefined &&
       info.type === "File" &&

@@ -145,7 +145,10 @@ const OpenAIImageOperationSchema = Schema.Literals([
 ]);
 type OpenAIImageOperation = typeof OpenAIImageOperationSchema.Type;
 
-export class OpenAIImageError extends Schema.TaggedError<OpenAIImageError>()("OpenAIImageError", {
+export class OpenAIImageError extends Schema.TaggedError<
+  OpenAIImageError,
+  { readonly brand: unique symbol }
+>()("OpenAIImageError", {
   operation: OpenAIImageOperationSchema,
   message: Schema.String,
 }) {}

@@ -10,10 +10,10 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { invokeHostCallback } from "pi-cosmic-core";
 
-export class NativeCompactionError extends Schema.TaggedError<NativeCompactionError>()(
-  "NativeCompactionError",
-  { message: Schema.String },
-) {}
+export class NativeCompactionError extends Schema.TaggedError<
+  NativeCompactionError,
+  { readonly brand: unique symbol }
+>()("NativeCompactionError", { message: Schema.String }) {}
 
 /** The session's effective retry settings with Pi's defaults, as Pi passes them to its own compaction. */
 export const piRetryPolicy = (pi: Pick<ExtensionAPI, "getSettings">) =>

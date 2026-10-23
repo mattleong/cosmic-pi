@@ -39,14 +39,14 @@ const CompactedResponseSchema = Schema.Struct({
   }),
 });
 
-export class OpenAICompactionBoundaryError extends Schema.TaggedError<OpenAICompactionBoundaryError>()(
-  "OpenAICompactionBoundaryError",
-  {
-    operation: Schema.Literals(["auth", "encode", "request", "response", "decode"]),
-    message: Schema.String,
-    status: Schema.optional(Schema.Number),
-  },
-) {}
+export class OpenAICompactionBoundaryError extends Schema.TaggedError<
+  OpenAICompactionBoundaryError,
+  { readonly brand: unique symbol }
+>()("OpenAICompactionBoundaryError", {
+  operation: Schema.Literals(["auth", "encode", "request", "response", "decode"]),
+  message: Schema.String,
+  status: Schema.optional(Schema.Int),
+}) {}
 
 const boundaryError = (operation: OpenAICompactionBoundaryError["operation"], message: string) =>
   new OpenAICompactionBoundaryError({ operation, message });

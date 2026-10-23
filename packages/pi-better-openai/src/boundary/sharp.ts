@@ -11,10 +11,13 @@ import {
   type BoundedProcessResult,
 } from "pi-cosmic-core";
 
-export class SharpError extends Schema.TaggedError<SharpError>()("SharpError", {
-  operation: Schema.Literals(["decode", "unavailable"]),
-  message: Schema.String,
-}) {}
+export class SharpError extends Schema.TaggedError<SharpError, { readonly brand: unique symbol }>()(
+  "SharpError",
+  {
+    operation: Schema.Literals(["decode", "unavailable"]),
+    message: Schema.String,
+  },
+) {}
 
 export interface SharpMetadata {
   readonly format?: string;

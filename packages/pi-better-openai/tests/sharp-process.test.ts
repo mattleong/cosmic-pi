@@ -7,12 +7,9 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import { nodeFilePlatformLayer, runBoundedProcessNode } from "pi-cosmic-core";
+import { NodeChildProcess } from "pi-cosmic-core/testing";
 import sharp from "sharp";
 import { createSharpAdmission, makeSharpAdapter } from "../src/boundary/sharp.ts";
-
-const nativeProcess = process.getBuiltinModule("node:child_process");
-if (!nativeProcess) throw new Error("Node child_process builtin unavailable.");
-const NativeChildProcess = nativeProcess.ChildProcess;
 
 const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=",
@@ -175,8 +172,8 @@ it.live("failed native cancellation cannot admit another decoder while its child
           return nativeKill(target, signal);
         });
         const child = vi
-          .spyOn(NativeChildProcess.prototype, "kill")
-          .mockImplementation(function (this: InstanceType<typeof NativeChildProcess>) {
+          .spyOn(NodeChildProcess.prototype, "kill")
+          .mockImplementation(function (this: NodeChildProcess) {
             if (this.pid !== pid) otherChildKills.push(this.pid);
             return false;
           });

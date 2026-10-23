@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -19,9 +20,9 @@ export const USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 
 const MAX_RESET_SECONDS = 366 * 86_400;
 const UsageWindowSchema = Schema.Struct({
-  used_percent: Schema.optional(Schema.NullOr(Schema.Number)),
-  reset_after_seconds: Schema.optional(Schema.NullOr(Schema.Number)),
-  reset_at: Schema.optional(Schema.NullOr(Schema.Number)),
+  used_percent: Schema.optional(Schema.NullOr(Schema.Finite)),
+  reset_after_seconds: Schema.optional(Schema.NullOr(Schema.Finite)),
+  reset_at: Schema.optional(Schema.NullOr(Schema.Finite)),
 });
 const RateLimitBucketSchema = Schema.Struct({
   allowed: Schema.optional(Schema.Boolean),
@@ -35,7 +36,10 @@ const CodexUsageSchema = Schema.Struct({
 export type CodexUsageResponse = typeof CodexUsageSchema.Type;
 type UsageWindow = typeof UsageWindowSchema.Type;
 
-export class CodexUsageError extends Schema.TaggedError<CodexUsageError>()("CodexUsageError", {
+export class CodexUsageError extends Schema.TaggedError<
+  CodexUsageError,
+  { readonly brand: unique symbol }
+>()("CodexUsageError", {
   operation: Schema.Literals(["decode", "request"]),
   message: Schema.String,
 }) {}
@@ -171,14 +175,13 @@ function formatWindowedUsageLine(
   );
   const labels = visible.map((window) => `${window.label}: ${formatPercent(window.leftPercent)}`);
   const resets = options.showResetTimes
-    ? visible.flatMap((window) => {
-        const reset = formatShortReset(
+    ? Arr.flatMapNullishOr(visible, (window) =>
+        formatShortReset(
           window.label,
           remainingResetSeconds(window.resetInSeconds, capturedAt, now),
           now,
-        );
-        return reset === null ? [] : [reset];
-      })
+        ),
+      )
     : [];
   return `Usage: ${labels.length ? labels.join(" | ") : "--"}${resets.length ? ` | ${resets.join(" | ")}` : ""}`;
 }

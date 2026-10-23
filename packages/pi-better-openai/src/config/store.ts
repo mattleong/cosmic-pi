@@ -30,13 +30,16 @@ import {
   type ResolvedConfig,
 } from "./schema.ts";
 
-export class OpenAIConfigError extends Schema.TaggedError<OpenAIConfigError>()(
-  "OpenAIConfigError",
-  { operation: Schema.String, path: Schema.String, message: Schema.String },
-) {}
+export class OpenAIConfigError extends Schema.TaggedError<
+  OpenAIConfigError,
+  { readonly brand: unique symbol }
+>()("OpenAIConfigError", {
+  operation: Schema.String,
+  path: Schema.String,
+  message: Schema.String,
+}) {}
 
 const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
-const FiniteNumberSchema = Schema.Number.check(Schema.isFinite());
 
 const decodeRoot = decodeTolerantFields(
   {
@@ -50,7 +53,7 @@ const decodeRoot = decodeTolerantFields(
 );
 const decodeUsage = decodeTolerantFields(
   {
-    refreshIntervalMs: FiniteNumberSchema,
+    refreshIntervalMs: Schema.Finite,
     showOnlyOnSubscriptionModels: Schema.Boolean,
     showResetTimes: Schema.Boolean,
   },
@@ -63,7 +66,7 @@ const decodeImage = decodeTolerantFields(
     defaultModel: Schema.Trim.check(Schema.isNonEmpty()),
     defaultSave: ImageSaveModeSchema,
     outputFormat: ImageOutputFormatSchema,
-    timeoutMs: FiniteNumberSchema,
+    timeoutMs: Schema.Finite,
   },
   { path: "image" },
 );
@@ -183,22 +186,21 @@ export class OpenAIConfigService extends Context.Service<OpenAIConfigService>()(
             Effect.andThen(Effect.sync(() => publish(change.config))),
           ),
         );
-      const modify = (
+      const modify = Effect.fn("OpenAIConfigService.modify")(function* (
         current: ResolvedConfig,
         update: (document: JsonObject) => JsonObject,
         reason: "setting" | "fast",
         afterCommit: Effect.Effect<void> = Effect.void,
-      ) =>
-        Effect.gen(function* () {
-          const previous = yield* Ref.get(state);
-          const listeners = yield* Ref.get(consumers);
-          const config = yield* commitPreferredScope(store, current, update, (next) =>
-            install({ previous, config: freezeSnapshot(next), reason }, listeners).pipe(
-              Effect.andThen(afterCommit),
-            ),
-          );
-          return { change: { previous, config, reason }, listeners };
-        });
+      ) {
+        const previous = yield* Ref.get(state);
+        const listeners = yield* Ref.get(consumers);
+        const config = yield* commitPreferredScope(store, current, update, (next) =>
+          install({ previous, config: freezeSnapshot(next), reason }, listeners).pipe(
+            Effect.andThen(afterCommit),
+          ),
+        );
+        return { change: { previous, config, reason }, listeners };
+      });
 
       return {
         get: Ref.get(state),

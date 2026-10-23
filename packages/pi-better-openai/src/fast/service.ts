@@ -33,61 +33,60 @@ interface FastModeServiceOptions {
 export class FastModeService extends Context.Service<FastModeService>()(
   "pi-better-openai/fast/service/FastModeService",
   {
-    make: (options: FastModeServiceOptions) =>
-      Effect.gen(function* () {
-        const configStore = yield* OpenAIConfigService;
-        const initialState = initialFastSnapshot();
-        const state = yield* Ref.make(initialState);
-        const transitions = yield* Semaphore.make(1);
-        const publish = (snapshot: FastSnapshot) => {
-          if (options.canPublish?.() !== false) MutableRef.set(options.projection, snapshot);
-        };
-        yield* Effect.sync(() => publish(initialState));
-        const commit = (snapshot: FastSnapshot) =>
-          Effect.uninterruptible(
-            Effect.sync(() => publish(snapshot)).pipe(Effect.andThen(Ref.set(state, snapshot))),
-          );
-        const prepare = (update: (current: FastSnapshot) => FastSnapshot) =>
-          Ref.get(state).pipe(Effect.map((current) => freezeSnapshot(update(current))));
-        const commitInMemory = (update: (current: FastSnapshot) => FastSnapshot) =>
-          transitions.withPermit(prepare(update).pipe(Effect.flatMap(commit)));
-        const persistTransition = (update: (current: FastSnapshot) => FastSnapshot) =>
-          transitions.withPermit(
-            prepare(update).pipe(
-              Effect.flatMap((snapshot) =>
-                configStore.persistFast(snapshot.desiredActive, commit(snapshot)),
-              ),
+    make: Effect.fn("FastModeService.make")(function* (options: FastModeServiceOptions) {
+      const configStore = yield* OpenAIConfigService;
+      const initialState = initialFastSnapshot();
+      const state = yield* Ref.make(initialState);
+      const transitions = yield* Semaphore.make(1);
+      const publish = (snapshot: FastSnapshot) => {
+        if (options.canPublish?.() !== false) MutableRef.set(options.projection, snapshot);
+      };
+      yield* Effect.sync(() => publish(initialState));
+      const commit = (snapshot: FastSnapshot) =>
+        Effect.uninterruptible(
+          Effect.sync(() => publish(snapshot)).pipe(Effect.andThen(Ref.set(state, snapshot))),
+        );
+      const prepare = (update: (current: FastSnapshot) => FastSnapshot) =>
+        Ref.get(state).pipe(Effect.map((current) => freezeSnapshot(update(current))));
+      const commitInMemory = (update: (current: FastSnapshot) => FastSnapshot) =>
+        transitions.withPermit(prepare(update).pipe(Effect.flatMap(commit)));
+      const persistTransition = (update: (current: FastSnapshot) => FastSnapshot) =>
+        transitions.withPermit(
+          prepare(update).pipe(
+            Effect.flatMap((snapshot) =>
+              configStore.persistFast(snapshot.desiredActive, commit(snapshot)),
             ),
-          );
-        const ingress = yield* makeSynchronousIngress({
-          capacity: 16,
-          overflow: "coalesce-latest",
-          handle: (event: FastInjectionEvent) =>
-            commitInMemory((current) => ({
-              ...current,
-              lastInjectedModel: event.model,
-              lastInjectedTier: event.tier,
-            })),
-        }).pipe(Effect.orDie);
-        return {
-          recordInjection: (event: FastInjectionEvent): void => {
-            ingress.offer(event);
-          },
-          initialize: (
-            ctx: ExtensionContext,
-            config: Pick<ResolvedConfig, "persistState" | "desiredActive">,
-            flagActive: boolean,
-          ) => {
-            const persisted = config.persistState && config.desiredActive;
-            const update = desire(ctx, flagActive || persisted);
-            return flagActive && !persisted ? persistTransition(update) : commitInMemory(update);
-          },
-          setDesired: (ctx: ExtensionContext, desiredActive: boolean) =>
-            persistTransition(desire(ctx, desiredActive)),
-          modelChanged: (ctx: ExtensionContext) =>
-            commitInMemory((current) => desire(ctx, current.desiredActive)(current)),
-        };
-      }),
+          ),
+        );
+      const ingress = yield* makeSynchronousIngress({
+        capacity: 16,
+        overflow: "coalesce-latest",
+        handle: (event: FastInjectionEvent) =>
+          commitInMemory((current) => ({
+            ...current,
+            lastInjectedModel: event.model,
+            lastInjectedTier: event.tier,
+          })),
+      }).pipe(Effect.orDie);
+      return {
+        recordInjection: (event: FastInjectionEvent): void => {
+          ingress.offer(event);
+        },
+        initialize: (
+          ctx: ExtensionContext,
+          config: Pick<ResolvedConfig, "persistState" | "desiredActive">,
+          flagActive: boolean,
+        ) => {
+          const persisted = config.persistState && config.desiredActive;
+          const update = desire(ctx, flagActive || persisted);
+          return flagActive && !persisted ? persistTransition(update) : commitInMemory(update);
+        },
+        setDesired: (ctx: ExtensionContext, desiredActive: boolean) =>
+          persistTransition(desire(ctx, desiredActive)),
+        modelChanged: (ctx: ExtensionContext) =>
+          commitInMemory((current) => desire(ctx, current.desiredActive)(current)),
+      };
+    }),
   },
 ) {
   static layer(options: FastModeServiceOptions) {
