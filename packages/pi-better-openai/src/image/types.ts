@@ -5,7 +5,6 @@ import * as Schema from "effect/Schema";
 import type { JsonObject, JsonValue } from "pi-cosmic-core";
 import { toolArgumentPreparer } from "pi-cosmic-core/tool-arguments";
 import type { Static } from "typebox";
-import { Check } from "typebox/value";
 import {
   IMAGE_OUTPUT_FORMATS,
   IMAGE_SAVE_MODES,
@@ -87,9 +86,7 @@ export const prepareImageArguments = flow(
   Option.map(withoutBlankImages),
   // Anything but a JSON object is left for the preparer to reject.
   Option.getOrUndefined,
-  toolArgumentPreparer("openai_image", TOOL_PARAMS, (value): value is ToolParams =>
-    Check(TOOL_PARAMS, value),
-  ),
+  toolArgumentPreparer("openai_image", TOOL_PARAMS),
 );
 export type ImageInput = {
   readonly data: string;
