@@ -94,8 +94,7 @@ describe("structured questionnaire proxy boundary", () => {
         ),
       ).toBeInstanceOf(InvalidSubagentRequestError);
     }
-    return relay
-      .ask(textRequest, new AbortController().signal)
+    return Promise.resolve<unknown>(relay.ask(textRequest, new AbortController().signal))
       .then((answer) => {
         expect(answer).toEqual(outcome);
         return undefined;

@@ -46,27 +46,29 @@ export const askParentQuestionnaire = (
         try: (signal) => {
           if (signal.aborted) throw new Error("Questionnaire owner expired.");
           owned.admitted = true;
-          return owned.capability.ask(request, owner, signal).then((outcome) => {
-            if (
-              signal.aborted ||
-              queryQuestionnaireCapability(events, sessionId)?.generation !==
-                owned.capability.generation
-            )
-              throw new Error("Questionnaire owner expired.");
-            const decoded = decodeQuestionnaireOutcome(outcome);
-            if (!decoded) throw new Error("Invalid questionnaire result.");
-            return {
-              content: [{ type: "text" as const, text: encodeOutcome(decoded) }],
-              details: decoded,
-            };
-          });
+          return Promise.resolve<unknown>(owned.capability.ask(request, owner, signal)).then(
+            (outcome) => {
+              if (
+                signal.aborted ||
+                queryQuestionnaireCapability(events, sessionId)?.generation !==
+                  owned.capability.generation
+              )
+                throw new Error("Questionnaire owner expired.");
+              const decoded = decodeQuestionnaireOutcome(outcome);
+              if (!decoded) throw new Error("Invalid questionnaire result.");
+              return {
+                content: [{ type: "text" as const, text: encodeOutcome(decoded) }],
+                details: decoded,
+              };
+            },
+          );
         },
         catch: unavailable,
       }).pipe(Effect.map((result) => ({ result, generation: owned.capability.generation }))),
     (owned) =>
       owned.admitted
         ? Effect.tryPromise({
-            try: () => owned.capability.cancel(owner),
+            try: () => Promise.resolve<unknown>(owned.capability.cancel(owner)),
             catch: unavailable,
           })
         : Effect.void,

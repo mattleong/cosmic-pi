@@ -94,7 +94,8 @@ describe("subagent argument preparation", () => {
     );
   });
 
-  it.live("leaves malformed tool-call JSON to Pi, which shows the model the parse error", () =>
+  // Pi substitutes `{}` for malformed tool-call JSON before `prepareArguments` runs.
+  it.live("rejects malformed tool-call JSON by its missing required fields without executing", () =>
     Effect.gen(function* () {
       const directory = yield* temporaryDirectory("pi-tool-arguments-");
       const { fake, models } = yield* fauxModels("subagent-tool-arguments-test");
@@ -144,8 +145,8 @@ describe("subagent argument preparation", () => {
       const shown = Arr.filterMap(result?.content ?? [], (part) =>
         part.type === "text" ? Result.succeed(part.text) : Result.failVoid,
       ).join("\n");
-      expect(shown).toContain(parseError);
-      expect(shown).not.toContain("[invalid_arguments]");
+      expect(shown).toMatch(/\[invalid_arguments\][\s\S]*\bagents is required/u);
+      expect(shown).not.toContain("must not execute");
     }),
   );
 

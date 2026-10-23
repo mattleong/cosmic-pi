@@ -38,8 +38,11 @@ const promptedProvider = (runs: ReadonlyArray<SubagentRunView>, isCurrent = () =
   const item = subagentActivityItems(bridge.get(), bridge.getActivityPresentation()).find(
     (candidate) => candidate.id === "selected",
   )!;
+  // Discovered callbacks are foreign, so their results settle as untrusted values.
   const invoke = (action: string, signal: AbortSignal) =>
-    transport.capability()!.invoke!(item.id, action, item.revision, signal);
+    Promise.resolve<unknown>(
+      transport.capability()!.invoke!(item.id, action, item.revision, signal),
+    );
   return { transport, bridge, pending, admitted, act, dispose, invoke };
 };
 
@@ -112,7 +115,11 @@ describe("subagent activity provider", () => {
     yield* step(() => expect(invoke("stop", signal)).rejects.toBeInstanceOf(Error));
     expect(act).not.toHaveBeenCalled();
     const item = subagentActivityItems(bridge.get(), bridge.getActivityPresentation())[0]!;
-    yield* step(() => transport.capability()!.invoke!(item.id, "stop", item.revision, signal));
+    yield* step(() =>
+      Promise.resolve<unknown>(
+        transport.capability()!.invoke!(item.id, "stop", item.revision, signal),
+      ),
+    );
     expect(act).toHaveBeenCalledWith(
       "selected",
       { action: "stop" },
@@ -229,8 +236,11 @@ describe("subagent activity provider", () => {
       });
       const revision = subagentActivityItems(bridge.get(), bridge.getActivityPresentation())[0]!
         .revision;
-      const invoke = transport.capability()!.invoke!;
-      const getDetail = transport.capability()!.getDetail!;
+      const capability = transport.capability()!;
+      const invoke = (id: string, action: string, itemRevision: string, signal: AbortSignal) =>
+        Promise.resolve<unknown>(capability.invoke!(id, action, itemRevision, signal));
+      const getDetail = (id: string, itemRevision: string, signal: AbortSignal) =>
+        Promise.resolve<unknown>(capability.getDetail!(id, itemRevision, signal));
       const signal = new AbortController().signal;
       const refused = () =>
         step(() => expect(invoke("run", "stop", revision, signal)).rejects.toThrow());

@@ -559,6 +559,25 @@ describe("agent messaging", () => {
     });
   });
 
+  it.effect("fails a send whose guidance delivery failed without a pending confirmation", () => {
+    const failure = new SubagentProcessError({
+      operation: "steer",
+      code: PENDING_STEER_DELIVERY_CODE,
+      message: "Guidance delivery failed.",
+    });
+    const backend = fakeNativeReportBackendLayer({ steer: () => Effect.fail(failure) });
+    const { projections, layer } = nativeReportServiceFixture(backend);
+    return withService(layer, function* (service) {
+      const sender = yield* service.start(nativeReportRequest({ name: "sender" }));
+      const receiver = yield* service.start(nativeReportRequest({ name: "receiver" }));
+      const sent = yield* service
+        .agentSend(asRun(sender), receiver.id, "Check the schema.")
+        .pipe(Effect.flip);
+      expect(sent).toMatchObject({ operation: "steer", message: "Guidance delivery failed." });
+      expect(messageNotices(latest(projections, receiver.id))).toEqual([]);
+    });
+  });
+
   it.effect("trims agent IDs, as call headings show them", () => {
     const main = fakeAgentMain();
     const { layer } = localServiceFixture({ agentMain: main.capabilities });

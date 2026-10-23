@@ -9,7 +9,6 @@ import {
   type ToolFieldAliases,
 } from "pi-cosmic-core/tool-arguments";
 import { Type, type Static } from "typebox";
-import { Check } from "typebox/value";
 import { WRITER_WORKSPACE_MODES } from "../config/schema.ts";
 import { MAX_CUSTOM_AGENT_NAME_CHARS, type CustomAgent } from "../profiles/agents.ts";
 import { PROFILE_DEFINITIONS } from "../profiles/definitions.ts";
@@ -450,12 +449,7 @@ export type AgentToolInput<N extends AgentToolName = AgentToolName> = {
 /** Pi `prepareArguments` hook for one agent tool: precise argument errors and nonblank text. */
 export const agentArgumentPreparer = <N extends AgentToolName>(name: N) => {
   const parameters: AgentToolParameters<N> = AGENT_TOOL_SCHEMAS[name];
-  return toolArgumentPreparer(
-    name,
-    parameters,
-    (value): value is AgentToolArgs<N> => Check(parameters, value),
-    { aliases: SUBAGENT_FIELD_ALIASES },
-  );
+  return toolArgumentPreparer(name, parameters, { aliases: SUBAGENT_FIELD_ALIASES });
 };
 
 const START_SPEC_FIELDS = Object.keys(StartSpecFields);
@@ -502,13 +496,8 @@ export const subagentArgumentPreparer = <N extends SubagentToolName>(
   name: N,
   parameters: SubagentToolParameters<N> = SUBAGENT_TOOL_SCHEMAS[name].parameters,
 ) => {
-  return toolArgumentPreparer(
-    name,
-    parameters,
-    (value): value is SubagentToolArgs<N> => Check(parameters, value),
-    {
-      aliases: SUBAGENT_FIELD_ALIASES,
-      ...(name === SUBAGENT_TOOL_NAME.start && { inspect: inspectStartArguments }),
-    },
-  );
+  return toolArgumentPreparer(name, parameters, {
+    aliases: SUBAGENT_FIELD_ALIASES,
+    ...(name === SUBAGENT_TOOL_NAME.start && { inspect: inspectStartArguments }),
+  });
 };

@@ -5,8 +5,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Predicate from "effect/Predicate";
-import { Type, type Static } from "typebox";
-import { Check } from "typebox/value";
+import { Type } from "typebox";
 import { toolArgumentPreparer } from "pi-cosmic-core/tool-arguments";
 import {
   CodePreviewSchedulerService,
@@ -111,7 +110,6 @@ const ContactParentParameters = Type.Object(
 const prepareContactParentArguments = toolArgumentPreparer(
   CONTACT_PARENT_TOOL_NAME,
   ContactParentParameters,
-  (value): value is Static<typeof ContactParentParameters> => Check(ContactParentParameters, value),
 );
 
 export interface SubagentChildBridgeBoundaries {

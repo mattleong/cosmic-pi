@@ -166,7 +166,9 @@ describe("local Pi child bridge", () => {
     const harness = makeHarness();
     yield* step(() => harness.start("/old"));
     const relay = queryQuestionnaireRelay(harness.events, "/old")!;
-    const answer = rejection(relay.ask(pickQuestionnaire, new AbortController().signal));
+    const answer = rejection(
+      Promise.resolve<unknown>(relay.ask(pickQuestionnaire, new AbortController().signal)),
+    );
     const request = yield* harness.awaitContact("proxy_request");
     yield* step(() => harness.start("/new"));
     expect(contactOfType(harness.contacts, "proxy_cancel")?.requestId).toBe(request.requestId);

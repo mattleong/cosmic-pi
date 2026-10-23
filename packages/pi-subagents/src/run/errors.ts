@@ -137,7 +137,8 @@ export type SubagentError =
   | UnsupportedSubagentCapabilityError;
 
 /** Guidance that may already have arrived while its delivery is still being tracked. */
-export const isPendingSteerDelivery = (error: SubagentError): error is SubagentProcessError =>
+// A boolean, not a refinement: other process errors must stay in the remaining error channel.
+export const isPendingSteerDelivery = (error: SubagentError): boolean =>
   Predicate.isTagged(error, "SubagentProcessError") &&
   error.pendingDelivery === true &&
   error.code === PENDING_STEER_DELIVERY_CODE;
