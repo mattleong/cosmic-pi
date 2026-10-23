@@ -1,25 +1,23 @@
 import type { EventBus } from "@earendil-works/pi-coding-agent";
 import { flow } from "effect/Function";
-import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { invokeBestEffort } from "./host-session.ts";
 import { decodeUnknownOrUndefined } from "./schema/decode.ts";
+import { ForeignCallable } from "./schema/foreign-callable.ts";
 
 interface SessionCapabilityProtocolOptions<Version extends number> {
   readonly version: Version;
   readonly maxSessionIdChars?: number;
 }
 
-type CapabilityResponder = (candidate: Parameters<EventBus["emit"]>[1]) => void;
+type CapabilityCandidate = Parameters<EventBus["emit"]>[1];
+type CapabilityResponder = (candidate: CapabilityCandidate) => void;
 
 interface SessionCapabilityQuery<Version extends number> {
   readonly version: Version;
   readonly sessionId: string;
   readonly respond: CapabilityResponder;
 }
-
-const isResponder = <Value>(value: Value): value is Value & CapabilityResponder =>
-  Predicate.isFunction(value);
 
 export const makeSessionCapabilityProtocol = <const Version extends number>(
   options: SessionCapabilityProtocolOptions<Version>,
@@ -30,7 +28,7 @@ export const makeSessionCapabilityProtocol = <const Version extends number>(
       Schema.isMinLength(1),
       Schema.isMaxLength(options.maxSessionIdChars ?? Number.MAX_SAFE_INTEGER),
     ),
-    respond: Schema.declare(isResponder),
+    respond: ForeignCallable<[candidate: CapabilityCandidate]>(),
   });
 
   const normalizeQuery = flow(

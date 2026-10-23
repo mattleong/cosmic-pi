@@ -3,10 +3,10 @@ import { flow } from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import type { TSchema } from "typebox";
+import type { Static, TSchema } from "typebox";
 import type { TLocalizedValidationError } from "typebox/error";
 import { Compile } from "typebox/compile";
-import { Convert, Errors } from "typebox/value";
+import { Check, Convert, Errors } from "typebox/value";
 import { clipText } from "../display.ts";
 import { isJsonObject, type JsonObject, type JsonValue } from "../platform/json-document.ts";
 
@@ -414,13 +414,14 @@ export interface ToolArgumentPreparerOptions {
  * Builds a Pi `prepareArguments` hook that drops blank optional fields and nulls their schemas
  * reject, then validates and coerces arguments with Pi's own validation, but reports allowed
  * values, unknown fields, and blank strings precisely and echoes only bounded arguments.
- * Model-facing schemas omit `pattern`, so nonblank required text is enforced here. `isArgs` is the schema's own check, such as TypeBox `Check`.
- * Invalid empty arguments are left to Pi's own validation, which reports malformed tool-call JSON.
+ * Model-facing schemas omit `pattern`, so nonblank required text is enforced here. The result is
+ * checked against `parameters` with TypeBox, so it is the schema's `Static` type.
+ * Pi parses malformed tool-call JSON as `{}` before this hook runs, so such a call fails here with
+ * the schema's missing required fields rather than Pi's parse error.
  */
-export const toolArgumentPreparer = <Args>(
+export const toolArgumentPreparer = <const S extends TSchema>(
   toolName: string,
-  parameters: TSchema,
-  isArgs: (value: unknown) => value is Args,
+  parameters: S,
   { aliases = {}, inspect, keepWhitespace = [] }: ToolArgumentPreparerOptions = {},
 ) => {
   const context: IssueContext = {
@@ -440,17 +441,12 @@ export const toolArgumentPreparer = <Args>(
       }),
     ),
   );
-  const prepare = (received: JsonObject): Args => {
+  // The schema's own check, so the hook's result is exactly what Pi declares for `parameters`.
+  const isArgs = (value: unknown): value is Static<S> => Check(parameters, value);
+  const prepare = (received: JsonObject): JsonValue => {
     const args = omitBlankOptionals(received);
-    const validation = Option.flatten(validate(args));
-    // Pi parses malformed final tool-call JSON as `{}` and reports the parse error only from its
-    // own validation, which runs after this hook. An empty object that validation rejects goes back
-    // unchanged so Pi reports why; Pi never executes it, so it never reaches the tool as `Args`.
-    const isLeftToPiValidation = (value: JsonObject): value is JsonObject & Args =>
-      Object.keys(value).length === 0 && Option.isNone(validation);
-    if (isLeftToPiValidation(received)) return received;
     inspect?.(args);
-    const validated = Option.getOrThrowWith(validation, () => {
+    const validated = Option.getOrThrowWith(Option.flatten(validate(args)), () => {
       const issues = validationIssues(parameters, args, context);
       return invalidArgumentsError(
         toolName,
@@ -461,8 +457,6 @@ export const toolArgumentPreparer = <Args>(
     const blank = blankStringPath(validated, keepWhitespace);
     if (blank !== undefined)
       throw invalidArgumentsError(toolName, [`${blank} must contain non-whitespace text.`]);
-    if (!isArgs(validated))
-      throw invalidArgumentsError(toolName, ["arguments did not match the tool schema."], args);
     return validated;
   };
   return flow(
@@ -471,5 +465,9 @@ export const toolArgumentPreparer = <Args>(
       invalidArgumentsError(toolName, ["arguments must be a JSON object."]),
     ),
     prepare,
+    Option.liftPredicate(isArgs),
+    Option.getOrThrowWith(() =>
+      invalidArgumentsError(toolName, ["arguments did not match the tool schema."]),
+    ),
   );
 };

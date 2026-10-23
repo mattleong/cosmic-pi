@@ -1,9 +1,10 @@
 import * as Predicate from "effect/Predicate";
 
-const isCompleteInstance = <Base extends object>(
+// Covers string-named members only; symbol members and private state are not inspected.
+const overridesEveryMember = <Base extends object>(
   defaults: Base,
   overrides: Partial<Base>,
-): overrides is Base => {
+): boolean => {
   let owner: unknown = defaults;
   while (Predicate.isObjectKeyword(owner) && owner !== Object.prototype) {
     for (const name of Object.getOwnPropertyNames(owner))
@@ -17,7 +18,8 @@ export const overlay = <Base extends object>(defaults: Base, overrides: Partial<
   const prototype: unknown = Object.getPrototypeOf(overrides);
   if (prototype === Object.prototype || prototype === null)
     return Object.defineProperties(defaults, Object.getOwnPropertyDescriptors(overrides));
-  if (isCompleteInstance(defaults, overrides)) return overrides;
+  // Test-only: a class-instance double that names every member stands in for the host type.
+  if (overridesEveryMember(defaults, overrides)) return overrides as Base;
   throw new Error(
     "A class-instance override must provide every member; pass a plain object for a partial override.",
   );

@@ -33,9 +33,16 @@ where the field schema rejects null, as Pi does. It then runs Pi's own `validate
 the result is exactly what Pi then accepts, rejects blank required text, and turns failures into
 bounded `[invalid_arguments]` errors that name paths, allowed values, and replacements for unknown
 fields. A union's issues narrow to the branches selected by a property that every branch declares
-as an enum or const. Empty arguments that fail are returned unchanged so Pi reports the malformed
-tool-call JSON itself. The [tool-argument tests](tests/tool-arguments.test.ts) anchor this
-behavior.
+as an enum or const. The result is checked with TypeBox against the same schema, so the hook
+returns its `Static` type. Pi substitutes `{}` for malformed tool-call JSON before the hook runs, so
+such a call is reported by its missing required fields rather than Pi's parse error. The
+[tool-argument tests](tests/tool-arguments.test.ts) anchor this behavior.
+
+[`ForeignCallable`](src/schema/foreign-callable.ts) is the only sanctioned way to admit a function
+received from another package. Its schema checks callability alone: parameter types are a
+documented contract that cannot be verified at runtime, and the `void` result is untrusted. Callers
+invoke it through `Effect.try`/`Effect.tryPromise`, or `invokeBestEffort`/`invokeHostCallback` on a
+synchronous host path, and decode the returned value with Schema.
 
 The SDK test entry is separate because it imports Pi SDK and `pi-ai` values; ordinary fixtures need
 only the Pi coding-agent peer. The nominal keybindings fixture has a narrowly scoped type assertion

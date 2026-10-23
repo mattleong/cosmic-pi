@@ -46,6 +46,7 @@ export {
   tryPrivateFileOperation,
 } from "./src/platform/private-file.ts";
 export { decodeUnknownOrUndefined } from "./src/schema/decode.ts";
+export { ForeignCallable } from "./src/schema/foreign-callable.ts";
 export { toPiToolOutputSchema } from "./src/schema/tool-output.ts";
 export {
   isJsonObject,

@@ -8,7 +8,7 @@ Shared Effect v4 foundations for the Cosmic Pi extensions. It's a library, not a
 - **Platform services:** typed JSON documents, JSON and streaming HTTP, files, paths, the agent directory, and cross-process locks.
 - **Configuration helpers:** schema-first scoped config stores and tolerant decoding that keeps valid fields when others are invalid.
 - **Coordination:** single-flight refresh, subscription polling, and per-file serialization across independent runtimes and Pi processes.
-- **Host edges:** the shared `/<extension>` command registrar, settings argument parsing, session capture helpers, and Pi tool output schemas.
+- **Host edges:** the shared `/<extension>` command registrar, settings argument parsing, session capture helpers, Pi tool output schemas, and `ForeignCallable` for functions received from other extensions.
 - **Tool arguments:** `pi-cosmic-core/tool-arguments` builds Pi `prepareArguments` hooks that drop blank optional fields, and nulls their schemas reject as Pi does, then validate with Pi's own validation and report precise, bounded errors; `keepWhitespace` names fields whose whitespace-only text is meaningful, and a union reports only the branch selected by an enum or const property, such as `mode`, that every branch declares.
 - **Security:** secret-safe tagged errors, redaction, and terminal sanitization.
 - **Test kit:** `pi-cosmic-core/testing` with in-memory documents, fake HTTP layers, lifecycle probes, Pi host fixtures and a recording extension host, and a real-process IPC harness; `pi-cosmic-core/testing/sdk` runs real Pi SDK sessions with faux inference.
@@ -43,21 +43,32 @@ Tool-owning packages, which already provide `typebox` and `@earendil-works/pi-ai
 
 ```ts
 import { toolArgumentPreparer } from "pi-cosmic-core/tool-arguments";
-import { Check } from "typebox/value";
 
 pi.registerTool({
   name: "task_start",
   parameters: Parameters,
-  prepareArguments: toolArgumentPreparer(
-    "task_start",
-    Parameters,
-    (value) => Check(Parameters, value),
-    {
-      aliases: { prompt: "task" },
-    },
-  ),
+  // Returns `Static<typeof Parameters>`, checked against the same schema.
+  prepareArguments: toolArgumentPreparer("task_start", Parameters, {
+    aliases: { prompt: "task" },
+  }),
   // ...
 });
+```
+
+Functions received from another extension, such as a capability's callbacks, are admitted with `ForeignCallable` in an Effect Schema. It checks only that the value is callable; the parameter types are a documented contract that can't be verified at runtime, and the `void` result is untrusted. Invoke it through `Effect.try` or `Effect.tryPromise`, or `invokeBestEffort` on a synchronous host path, and decode what it returns:
+
+```ts
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+import { ForeignCallable } from "pi-cosmic-core";
+
+const Capability = Schema.Struct({ ask: ForeignCallable<[question: string]>() });
+
+const ask = (capability: typeof Capability.Type, question: string) =>
+  Effect.tryPromise({
+    try: () => Promise.resolve<unknown>(capability.ask(question)),
+    catch: () => new CapabilityError(),
+  }).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Answer)));
 ```
 
 Create the session runtime at `session_start` through the runtime slot, and keep resources, fibers, and state inside that runtime's Layers. Pure reducers, formatting, and synchronous rendering stay outside Effect, and no API hands a `Ref`, `Fiber`, `Scope`, or runtime to a renderer.

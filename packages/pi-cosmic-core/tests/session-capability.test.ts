@@ -1,4 +1,4 @@
-import { describe, expect, it } from "@effect/vitest";
+import { describe, expect, it, vi } from "@effect/vitest";
 import {
   makeSessionCapabilityProtocol,
   querySessionCapability,
@@ -40,6 +40,25 @@ describe("session capability queries", () => {
         respond: inertResponder,
       }),
     ).toBeDefined();
+  });
+
+  it("delivers candidates to the responder and contains its throws and rejections", () => {
+    const received: Array<string> = [];
+    const respondWith = (respond: (candidate: string) => Promise<never> | void) =>
+      protocol.normalizeQuery({ version: 1, sessionId: "session", respond })?.respond;
+    respondWith((candidate) => {
+      received.push(candidate);
+    })?.("capability");
+    expect(received).toEqual(["capability"]);
+    expect(() =>
+      respondWith(() => {
+        throw new Error("hostile responder");
+      })?.("capability"),
+    ).not.toThrow();
+    const rejected = Promise.reject(new Error("hostile responder"));
+    const observe = vi.spyOn(rejected, "then");
+    respondWith(() => rejected)?.("capability");
+    expect(observe).toHaveBeenCalledWith(expect.any(Function), expect.any(Function));
   });
 });
 

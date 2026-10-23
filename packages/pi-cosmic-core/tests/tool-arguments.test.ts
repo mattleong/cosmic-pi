@@ -1,6 +1,5 @@
 import { StringEnum, validateToolArguments } from "@earendil-works/pi-ai";
 import { Type, type Static } from "typebox";
-import { Check } from "typebox/value";
 import type * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
 import {
@@ -142,8 +141,7 @@ const StartParameters = Type.Object(
   { additionalProperties: false },
 );
 type StartArgs = Static<typeof StartParameters>;
-const isStartArgs = (value: unknown): value is StartArgs => Check(StartParameters, value);
-const prepare = toolArgumentPreparer("agent_start", StartParameters, isStartArgs, {
+const prepare = toolArgumentPreparer("agent_start", StartParameters, {
   aliases: { prompt: "task" },
 });
 
@@ -190,7 +188,7 @@ describe("toolArgumentPreparer", () => {
   });
 
   it("accepts whitespace-only text in the fields it keeps", () => {
-    const keeping = toolArgumentPreparer("agent_start", StartParameters, isStartArgs, {
+    const keeping = toolArgumentPreparer("agent_start", StartParameters, {
       keepWhitespace: ["agents.name"],
     });
     expect(keeping({ agents: [{ task: "Map", name: "\n" }] })).toEqual({
@@ -216,24 +214,20 @@ describe("toolArgumentPreparer", () => {
     expect(message.length).toBeLessThan(1_500);
   });
 
-  it("rejects non-object arguments and leaves invalid empty arguments to Pi", () => {
+  it("rejects non-object arguments, and empty arguments by their missing required fields", () => {
     expect(() => prepare([])).toThrow(/arguments must be a JSON object/u);
-    expect(prepare({})).toEqual({});
+    // Pi substitutes `{}` for malformed tool-call JSON before this hook runs.
+    expect(() => prepare({})).toThrow(/\[invalid_arguments\][\s\S]*\bagents is required/u);
   });
 
   it("runs the tool's inspection on arguments without blank optionals", () => {
     const inspected: Array<unknown> = [];
-    const inspecting = toolArgumentPreparer(
-      "agent_start",
-      StartParameters,
-      (value) => Check(StartParameters, value),
-      {
-        inspect: (args) => {
-          inspected.push(args);
-          if (args.limit === 0) throw new Error("[invalid_limit] limit must be positive.");
-        },
+    const inspecting = toolArgumentPreparer("agent_start", StartParameters, {
+      inspect: (args) => {
+        inspected.push(args);
+        if (args.limit === 0) throw new Error("[invalid_limit] limit must be positive.");
       },
-    );
+    });
     const prepared: StartArgs = inspecting({ agents: [{ task: "Map", name: "" }] });
     expect(prepared).toEqual({ agents: [{ task: "Map" }] });
     expect(inspected).toEqual([{ agents: [{ task: "Map" }] }]);
@@ -252,9 +246,7 @@ const ShapeParameters = Type.Object({
     ]),
   ),
 });
-const prepareShapes = toolArgumentPreparer("draw", ShapeParameters, (value) =>
-  Check(ShapeParameters, value),
-);
+const prepareShapes = toolArgumentPreparer("draw", ShapeParameters);
 const issues = (args: Record<string, Schema.Json>): ReadonlyArray<string> =>
   issuesOf(prepareShapes, args);
 
@@ -287,7 +279,7 @@ describe("toolArgumentPreparer with a union", () => {
         Type.Object({ kind: Type.Literal("b"), size: Type.Number() }),
       ]),
     });
-    const leveled = toolArgumentPreparer("level", Leveled, (value) => Check(Leveled, value));
+    const leveled = toolArgumentPreparer("level", Leveled);
     const reported = issuesOf(leveled, { entry: { kind: "a", level: "mid" } });
     expect(reported).toHaveLength(1);
     expect(reported[0]).toContain("entry.level");
@@ -302,7 +294,7 @@ describe("toolArgumentPreparer with a union", () => {
         Type.Object({ size: Type.Number() }),
       ]),
     });
-    const loose = toolArgumentPreparer("loose", Loose, (value) => Check(Loose, value));
+    const loose = toolArgumentPreparer("loose", Loose);
     const reported = issuesOf(loose, { entry: { level: "mid" } }).join("\n");
     expect(reported).toContain("entry.level");
     expect(reported).toContain("entry.size");
