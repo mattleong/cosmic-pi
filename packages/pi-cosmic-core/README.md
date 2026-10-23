@@ -9,6 +9,7 @@ Shared Effect v4 foundations for the Cosmic Pi extensions. It's a library, not a
 - **Configuration helpers:** schema-first scoped config stores and tolerant decoding that keeps valid fields when others are invalid.
 - **Coordination:** single-flight refresh, subscription polling, and per-file serialization across independent runtimes and Pi processes.
 - **Host edges:** the shared `/<extension>` command registrar, settings argument parsing, session capture helpers, and Pi tool output schemas.
+- **Tool arguments:** `pi-cosmic-core/tool-arguments` builds Pi `prepareArguments` hooks that drop blank optional fields, and nulls their schemas reject as Pi does, then validate with Pi's own validation and report precise, bounded errors; `keepWhitespace` names fields whose whitespace-only text is meaningful, and a union reports only the branch selected by an enum or const property, such as `mode`, that every branch declares.
 - **Security:** secret-safe tagged errors, redaction, and terminal sanitization.
 - **Test kit:** `pi-cosmic-core/testing` with in-memory documents, fake HTTP layers, lifecycle probes, Pi host fixtures and a recording extension host, and a real-process IPC harness; `pi-cosmic-core/testing/sdk` runs real Pi SDK sessions with faux inference.
 
@@ -36,6 +37,27 @@ import {
   registerExtensionCommand,
 } from "pi-cosmic-core";
 import { extensionApiFixture } from "pi-cosmic-core/testing";
+```
+
+Tool-owning packages, which already provide `typebox` and `@earendil-works/pi-ai`, prepare arguments through their own entrypoint:
+
+```ts
+import { toolArgumentPreparer } from "pi-cosmic-core/tool-arguments";
+import { Check } from "typebox/value";
+
+pi.registerTool({
+  name: "task_start",
+  parameters: Parameters,
+  prepareArguments: toolArgumentPreparer(
+    "task_start",
+    Parameters,
+    (value) => Check(Parameters, value),
+    {
+      aliases: { prompt: "task" },
+    },
+  ),
+  // ...
+});
 ```
 
 Create the session runtime at `session_start` through the runtime slot, and keep resources, fibers, and state inside that runtime's Layers. Pure reducers, formatting, and synchronous rendering stay outside Effect, and no API hands a `Ref`, `Fiber`, `Scope`, or runtime to a renderer.

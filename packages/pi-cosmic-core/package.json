@@ -38,6 +38,7 @@
     ".": "./index.ts",
     "./testing": "./testing.ts",
     "./testing/sdk": "./src/testing/sdk-session.ts",
+    "./tool-arguments": "./src/schema/tool-arguments.ts",
     "./package.json": "./package.json"
   },
   "publishConfig": {
@@ -68,14 +69,19 @@
     "@types/node": "catalog:",
     "oxfmt": "catalog:",
     "oxlint": "catalog:",
+    "typebox": "catalog:",
     "vitest": "catalog:"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": ">=1.4.0",
-    "@earendil-works/pi-coding-agent": ">=1.4.0"
+    "@earendil-works/pi-coding-agent": ">=1.4.0",
+    "typebox": "*"
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-ai": {
+      "optional": true
+    },
+    "typebox": {
       "optional": true
     }
   },

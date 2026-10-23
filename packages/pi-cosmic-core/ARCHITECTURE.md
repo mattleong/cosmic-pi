@@ -18,11 +18,24 @@ implementation; the ownership and lifecycle guarantees are what refactors must p
 | [Host commands](src/host-command.ts) and [capabilities](src/session-capability.ts) | Command routing and checked synchronous capability exchange                   | Command actions, protocol identity and admission policy        |
 | [Session wake](src/host-wake.ts)                                                   | When notices start, continue, or wait for a turn                              | Notice content, reminders, extra settle work                   |
 | [Agent messages](src/host-agent-messages.ts)                                       | Message frame, delivery through the wake, latest-reply reads, delivery text   | Sender labels, reply tools, notice types, refusals             |
+| [Tool arguments](src/schema/tool-arguments.ts)                                     | Pi `prepareArguments` hooks: blank optionals, Pi-equivalent coercion, errors  | Parameter schemas, field aliases, tool-specific shape checks   |
 | [Test kit](src/testing/)                                                           | Shared deterministic Layers, host fixtures, and scoped process/SDK harnesses  | Feature-specific fakes and behavioral assertions               |
 
-Consumers import the public [root](index.ts), [testing](testing.ts), or
-[`testing/sdk`](src/testing/sdk-session.ts) entrypoint. Core never imports extension packages.
-Shared helpers belong here when consumers need the same contract, not merely similar code.
+Consumers import the public [root](index.ts), [testing](testing.ts),
+[`testing/sdk`](src/testing/sdk-session.ts), or [`tool-arguments`](src/schema/tool-arguments.ts)
+entrypoint. Core never imports extension packages. Shared helpers belong here when consumers need
+the same contract, not merely similar code.
+
+`tool-arguments` is separate because it imports TypeBox and `pi-ai` values, both optional peers
+that only tool-owning consumers provide. Its preparer drops empty and whitespace-only optional
+fields, except whitespace in fields the tool names as literal text, and drops an optional null only
+where the field schema rejects null, as Pi does. It then runs Pi's own `validateToolArguments` so
+the result is exactly what Pi then accepts, rejects blank required text, and turns failures into
+bounded `[invalid_arguments]` errors that name paths, allowed values, and replacements for unknown
+fields. A union's issues narrow to the branches selected by a property that every branch declares
+as an enum or const. Empty arguments that fail are returned unchanged so Pi reports the malformed
+tool-call JSON itself. The [tool-argument tests](tests/tool-arguments.test.ts) anchor this
+behavior.
 
 The SDK test entry is separate because it imports Pi SDK and `pi-ai` values; ordinary fixtures need
 only the Pi coding-agent peer. The nominal keybindings fixture has a narrowly scoped type assertion

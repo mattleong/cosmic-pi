@@ -121,6 +121,7 @@ try {
           "@earendil-works/pi-coding-agent": piVersion,
           "@earendil-works/pi-tui": tuiVersion,
           jiti: "2.7.0",
+          typebox: catalogVersion("typebox"),
           effect: expectedEffectVersion,
           ...tarballDependencies,
         },
@@ -194,6 +195,7 @@ try {
     const load = (specifier) => jiti.import(specifier);
     const api = await load("pi-cosmic-core");
     const testing = await load("pi-cosmic-core/testing");
+    const toolArguments = await load("pi-cosmic-core/tool-arguments");
     for (const packageName of ["pi-ask-user","pi-better-openai","pi-cosmic-ui","pi-directory-models","pi-intercom","pi-background-task","pi-subagents"]) {
       const extension = await load(packageName);
       if (typeof extension.default !== "function") throw new Error("missing " + packageName + " extension export");
@@ -205,6 +207,9 @@ try {
     const previews = await load("pi-code-previews");
     if (!api.PiApi || !api.makePiRuntime || !api.JsonDocumentStore || !api.JsonHttpClient || !api.nodePlatformLayer) throw new Error("missing core exports");
     if (typeof testing.makeInMemoryDocuments !== "function" || typeof testing.makeCapturedTracer !== "function") throw new Error("missing core testing exports");
+    const { Type } = await import("typebox");
+    const prepareSmoke = toolArguments.toolArgumentPreparer("smoke", Type.Object({ task: Type.String(), name: Type.Optional(Type.String()) }), () => true);
+    if (JSON.stringify(prepareSmoke({ task: 1, name: " " })) !== '{"task":"1"}') throw new Error("packed core tool-argument preparation is unavailable");
     if (typeof previews.default !== "function" || typeof previews.loadCodePreviewSettings !== "function" || typeof previews.withCodePreviewShell !== "function" || typeof previews.withCodePreviewRenderers !== "function") throw new Error("missing code-preview public exports");
     const previewTesting = await load("pi-code-previews/testing");
     if (protocol.COSMIC_UI_PROTOCOL_VERSION !== 2) throw new Error("missing Cosmic UI v2 protocol exports");
