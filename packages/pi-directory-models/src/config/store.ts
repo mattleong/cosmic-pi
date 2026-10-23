@@ -17,10 +17,12 @@ export interface DirectoryIdentity {
   readonly preferencePath: string;
 }
 
-export class DirectoryModelStoreError extends Schema.TaggedError<DirectoryModelStoreError>()(
-  "DirectoryModelStoreError",
-  { reason: Schema.Literals(["unreadable", "invalid", "foreign", "unwritable"]) },
-) {}
+export class DirectoryModelStoreError extends Schema.TaggedError<
+  DirectoryModelStoreError,
+  { readonly brand: unique symbol }
+>()("DirectoryModelStoreError", {
+  reason: Schema.Literals(["unreadable", "invalid", "foreign", "unwritable"]),
+}) {}
 
 const storeError = (reason: DirectoryModelStoreError["reason"]) => () =>
   new DirectoryModelStoreError({ reason });

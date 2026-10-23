@@ -19,10 +19,10 @@ const decodeThinkingLevel = Schema.decodeUnknownOption(ThinkingLevelSchema);
 
 export type SelectedModel = typeof SelectedModelSchema.Type;
 
-export class DirectoryModelHostError extends Schema.TaggedError<DirectoryModelHostError>()(
-  "DirectoryModelHostError",
-  { operation: Schema.String, message: Schema.String },
-) {}
+export class DirectoryModelHostError extends Schema.TaggedError<
+  DirectoryModelHostError,
+  { readonly brand: unique symbol }
+>()("DirectoryModelHostError", { operation: Schema.String, message: Schema.String }) {}
 
 const hostError = (operation: string, message: string) => () =>
   new DirectoryModelHostError({ operation, message });
