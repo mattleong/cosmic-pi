@@ -129,40 +129,42 @@ describe("background task activity provider", () => {
           hostToken: transport.hostToken,
           available: true,
         });
-        const invoke = transport.capability()?.invoke;
-        const getDetail = transport.capability()?.getDetail;
+        // Discovered callbacks are foreign, so their results settle as untrusted values.
+        const capability = transport.capability()!;
+        const invoke = (id: string, action: string, itemRevision: string, abort: AbortSignal) =>
+          Promise.resolve<unknown>(capability.invoke!(id, action, itemRevision, abort));
+        const getDetail = (id: string, itemRevision: string, abort: AbortSignal) =>
+          Promise.resolve<unknown>(capability.getDetail!(id, itemRevision, abort));
         const signal = yield* Effect.abortSignal;
         const revision = backgroundTaskActivityItems(bridge.get())[0]!.revision;
         yield* Effect.promise(() =>
-          expect(getDetail?.("task", revision, signal)).resolves.toContain("private output"),
+          expect(getDetail("task", revision, signal)).resolves.toContain("private output"),
         );
         const cancellation = yield* Scope.make();
         const cancelled = yield* Effect.abortSignal.pipe(Scope.provide(cancellation));
-        const pending = invoke!("task", "stop", revision, cancelled);
+        const pending = invoke("task", "stop", revision, cancelled);
         yield* Scope.close(cancellation, Exit.void);
         yield* Effect.promise(() => expect(pending).rejects.toThrow());
         yield* Effect.promise(() =>
-          expect(getDetail?.("task", revision, cancelled)).rejects.toThrow(),
+          expect(getDetail("task", revision, cancelled)).rejects.toThrow(),
         );
-        yield* Effect.promise(() => invoke!("task", "stop", revision, signal));
+        yield* Effect.promise(() => invoke("task", "stop", revision, signal));
         expect(stop).toHaveBeenCalledWith("task", signal);
         bridge.publish({ tasks: [{ ...task, state: "exited" }] });
         yield* Effect.promise(() =>
-          expect(invoke?.("task", "stop", revision, signal)).rejects.toThrow(),
+          expect(invoke("task", "stop", revision, signal)).rejects.toThrow(),
         );
         bridge.publish({ tasks: [task] });
         current = false;
         yield* Effect.promise(() =>
-          expect(invoke?.("task", "stop", revision, signal)).rejects.toThrow(),
+          expect(invoke("task", "stop", revision, signal)).rejects.toThrow(),
         );
         current = true;
         dispose();
         yield* Effect.promise(() =>
-          expect(invoke?.("task", "stop", revision, signal)).rejects.toThrow(),
+          expect(invoke("task", "stop", revision, signal)).rejects.toThrow(),
         );
-        yield* Effect.promise(() =>
-          expect(getDetail?.("task", revision, signal)).rejects.toThrow(),
-        );
+        yield* Effect.promise(() => expect(getDetail("task", revision, signal)).rejects.toThrow());
         expect(stop).toHaveBeenCalledTimes(1);
         expect(transport.get()?.operation).toBe("revoke");
       }),

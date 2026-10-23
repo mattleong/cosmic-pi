@@ -1,7 +1,6 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import { toolArgumentPreparer } from "pi-cosmic-core/tool-arguments";
 import { Type, type Static } from "typebox";
-import { Check } from "typebox/value";
 import { BACKGROUND_TASK_FIELD_BOUNDS } from "../task/bounds.ts";
 import { BACKGROUND_TASK_ACTIONS } from "../task/schema.ts";
 
@@ -87,6 +86,5 @@ export type BackgroundTaskToolInput = Static<typeof BackgroundTaskParameters>;
 export const prepareBackgroundTaskArguments = toolArgumentPreparer(
   "background_task",
   BackgroundTaskParameters,
-  (value): value is BackgroundTaskToolInput => Check(BackgroundTaskParameters, value),
   { keepWhitespace: ["contains"] },
 );
