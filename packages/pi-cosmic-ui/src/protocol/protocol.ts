@@ -1,4 +1,5 @@
 import type { ThemeColor } from "@earendil-works/pi-coding-agent";
+import * as Effect from "effect/Effect";
 import { flow } from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
@@ -25,6 +26,8 @@ const COSMIC_FOOTER_COLOR_TOKENS = [
   "dim",
   "text",
   "thinkingText",
+  "scrollbarTrack",
+  "scrollbarThumb",
   "searchMatchText",
   "userMessageText",
   "customMessageText",
@@ -74,6 +77,10 @@ export interface CosmicUiHostQuery {
 
 const Version = Schema.Literal(COSMIC_UI_PROTOCOL_VERSION);
 const NonEmpty = Schema.String.check(Schema.isNonEmpty());
+// An invalid optional field falls back to its default so one bad optional hint does not
+// withdraw the whole contribution.
+const optionalOrDefault = <S extends Schema.Top>(schema: S) =>
+  Schema.optional(schema.pipe(Schema.catchDecoding(() => Effect.succeedNone)));
 const isStateResponder = <Value>(
   value: Value,
 ): value is Value & ((state: CosmicUiHostState) => void) => Predicate.isFunction(value);
@@ -90,19 +97,19 @@ const HostStateData = Schema.Struct({
 const placementFields = {
   id: NonEmpty,
   region: Region,
-  align: Schema.optional(Schema.Literals(["left", "right"])),
-  priority: Schema.optional(Schema.Finite),
-  order: Schema.optional(Schema.Finite),
+  align: optionalOrDefault(Schema.Literals(["left", "right"])),
+  priority: optionalOrDefault(Schema.Finite),
+  order: optionalOrDefault(Schema.Finite),
 };
 const TextContributionData = Schema.Struct({
   kind: Schema.Literal("text"),
   ...placementFields,
   text: Schema.String,
-  compactText: Schema.optional(Schema.String),
-  tone: Schema.optional(Tone),
-  label: Schema.optional(NonEmpty),
-  color: Schema.optional(Schema.Literals(COSMIC_FOOTER_COLOR_TOKENS)),
-  decorates: Schema.optional(NonEmpty),
+  compactText: optionalOrDefault(Schema.String),
+  tone: optionalOrDefault(Tone),
+  label: optionalOrDefault(NonEmpty),
+  color: optionalOrDefault(Schema.Literals(COSMIC_FOOTER_COLOR_TOKENS)),
+  decorates: optionalOrDefault(NonEmpty),
 });
 const StatusContributionData = Schema.Struct({
   kind: Schema.Literal("status"),
@@ -173,13 +180,14 @@ const footerUpsertEvent = (
   let contribution = event.contribution;
   if (contribution.kind === "text") {
     const { text, compactText, label, ...rest } = contribution;
-    const sanitizedLabel = label === undefined ? undefined : sanitizeTerminalLine(label);
-    if (sanitizedLabel === "") return undefined;
+    // A label only groups the text onto its own line, so one that cleans to nothing leaves the
+    // contribution unlabeled rather than withdrawing its text.
+    const sanitizedLabel = label === undefined ? "" : sanitizeTerminalLine(label);
     contribution = {
       ...rest,
       text: sanitizeTerminalLine(text),
       ...(compactText !== undefined && { compactText: sanitizeTerminalLine(compactText) }),
-      ...(sanitizedLabel !== undefined && { label: sanitizedLabel }),
+      ...(sanitizedLabel !== "" && { label: sanitizedLabel }),
     };
   }
   return Object.freeze({

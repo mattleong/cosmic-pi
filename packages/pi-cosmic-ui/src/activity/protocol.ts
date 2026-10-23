@@ -115,20 +115,14 @@ const ActivityHostSchema = Schema.Struct({
   available: Schema.Boolean,
 });
 
-const detachedSummaries = (items: readonly ActivityItem[]): readonly ActivityItem[] | undefined => {
-  if (
-    items.length > ACTIVITY_LIMITS.items ||
-    items.some((item) => (item.actions?.length ?? 0) > ACTIVITY_LIMITS.actions)
-  )
-    return undefined;
-  return items.map((item) =>
+const detachedSummaries = (items: readonly ActivityItem[]): readonly ActivityItem[] =>
+  items.slice(0, ACTIVITY_LIMITS.items).map((item) =>
     detachActivityItem(item, (detail) =>
       sanitizeDiagnosticContent(detail.slice(0, ACTIVITY_LIMITS.detail), {
         maximumLength: ACTIVITY_LIMITS.detail,
       }),
     ),
   );
-};
 
 const unavailable = () => Promise.reject(new Error("Activity provider unavailable."));
 

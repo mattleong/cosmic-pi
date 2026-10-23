@@ -1,8 +1,10 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import {
   ACTIVITY_HOST,
   ACTIVITY_LIMITS,
+  ActivitySnapshotSchema,
   registerActivityProvider,
   registerRevisionedActivityProvider,
   type ActivityItem,
@@ -22,8 +24,15 @@ const agent = (actions: number): ActivityItem => ({
 });
 
 describe("activity producer protocol", () => {
-  it("withholds snapshots beyond the action limit and cleans text before sending", () => {
-    let items: readonly ActivityItem[] = [agent(ACTIVITY_LIMITS.actions)];
+  it("publishes the bounded prefix of oversized snapshots and cleans text before sending", () => {
+    const item = (index: number, actions: number): ActivityItem => ({
+      ...agent(actions),
+      id: `flow-${index}`,
+    });
+    let items: readonly ActivityItem[] = Array.from(
+      { length: ACTIVITY_LIMITS.items + 3 },
+      (_, index) => item(index, index === 0 ? ACTIVITY_LIMITS.actions + 4 : 1),
+    );
     const host = fakeActivityHost();
     const registration = registerActivityProvider(host.events, {
       sessionId: "session",
@@ -32,10 +41,13 @@ describe("activity producer protocol", () => {
       invoke: () => Promise.resolve(),
     });
     registration.publish();
-    expect(host.get()?.items).toHaveLength(1);
-    items = [agent(ACTIVITY_LIMITS.actions + 1)];
-    registration.publish();
-    expect(host.get()?.items).toBeUndefined();
+    const published = Schema.decodeUnknownSync(ActivitySnapshotSchema)(host.get()?.items);
+    expect(published.map((entry) => entry.id)).toEqual(
+      items.slice(0, ACTIVITY_LIMITS.items).map((entry) => entry.id),
+    );
+    expect(published[0]?.actions?.map((action) => action.id)).toEqual(
+      items[0]?.actions?.slice(0, ACTIVITY_LIMITS.actions).map((action) => action.id),
+    );
     items = [{ ...agent(1), title: "Find\u001b[31m", summary: "Look\u0007 around" }];
     registration.publish();
     expect(host.get()?.items).toMatchObject([{ title: "Find", summary: "Look around" }]);
