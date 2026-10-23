@@ -10,7 +10,7 @@ Replacement revokes the previous session's publication authority before resettin
 
 ## Footer and configuration
 
-[CosmicUiService](src/protocol/service.ts) owns resolved configuration, usage totals and their reconciliation, repository probes, and their frozen projection. [config/store.ts](src/config/store.ts) is the persistence boundary; resolution is read-only and explicit updates create documents. Git and pull-request invalidation exclude in-flight publication together, so an old branch result cannot reappear after invalidation.
+[CosmicUiService](src/protocol/service.ts) owns resolved configuration, usage totals and their reconciliation, repository probes, and their frozen projection. [config/store.ts](src/config/store.ts) is the persistence boundary; resolution is read-only and explicit updates create documents. Git and pull-request invalidation exclude in-flight publication together, so an old branch result cannot reappear after invalidation. Pull-request polls back off while lookups find none; a forced lookup, including the one after each `bash` tool call, restores the base interval at once.
 
 The [footer registry](src/footer/registry.ts) is synchronous presentation state: a protocol event that changes a contribution publishes a detached snapshot before requesting rendering. It bounds reentrant work and isolates callback failures. This keeps contribution changes observable inside the originating `pi.events.emit` without introducing asynchronous service coordination. [Footer installation](src/footer/installation.ts) owns mounting and render authority; only its current instance can request a render. See [registry tests](tests/registry.test.ts) and [installation tests](tests/footer-installation.test.ts).
 
@@ -18,7 +18,7 @@ The [footer protocol](src/protocol/protocol.ts) separates active ownership from 
 
 ## Activity
 
-[ActivityService](src/activity/service.ts) owns provider registrations, accepted snapshots, retained summaries, and its scoped clock. The [protocol](src/activity/protocol.ts) binds capabilities to session, host activation, registration, and item revision. Invalid publication withdraws rows, starting counts, and replacement acknowledgement together; a valid publication can recover. Summaries and details are bounded, sanitized, and credential-redacted at their boundaries.
+[ActivityService](src/activity/service.ts) owns provider registrations, accepted snapshots, retained summaries, and its scoped clock. The [protocol](src/activity/protocol.ts) binds capabilities to session, host activation, registration, and item revision. Invalid publication withdraws rows, starting counts, and replacement acknowledgement together; a valid publication can recover. Content, not revision, decides whether a republish changes anything: one matching the accepted snapshot publishes nothing, and only changed items are cleaned again, so publications reuse unchanged rows rather than copying them. Summaries and details are bounded, sanitized, and credential-redacted at their boundaries.
 
 Producers own scheduling, retries, domain state, and action policy. Activity derives grouping and display from explicit parent relationships. [Retention](src/activity/model.ts) protects live work and its ancestors; source-removed history loses its actions. [Grouping](src/activity/grouped-tree.ts), [group summaries](src/activity/group-summary.ts), and [widget allocation](src/activity/widget-projection.ts) own the presentation algorithms rather than prescribing them here.
 

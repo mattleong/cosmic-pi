@@ -23,6 +23,10 @@ export interface CrossProcessLease {
   readonly release: () => void;
 }
 export interface CrossProcessLockContract {
+  /**
+   * Waits for the acquisition's fsyncs on the libuv thread pool and can't be interrupted, so a
+   * caller that must not lose the lease acquires it in an uninterruptible region.
+   */
   readonly tryAcquire: (
     namespace: string,
   ) => Effect.Effect<CrossProcessLease | undefined, CrossProcessLockError>;
@@ -55,9 +59,10 @@ const isSlotOccupied = code("EEXIST", "ENOTEMPTY");
 /**
  * The lock protocol is written once as steps that yield each open descriptor whose contents must
  * be durable before the protocol continues. Lease callbacks such as `release` are synchronous, so
- * their driver fsyncs inline; document locks wait for the same fsyncs on the libuv thread pool.
- * Everything between two yields, including each liveness check and the rename it guards, runs
- * synchronously, so no other owner can act between a check and its commit within this process.
+ * their driver fsyncs inline; acquisition and document-lock release wait for the same fsyncs on
+ * the libuv thread pool. Everything between two yields, including each liveness check and the
+ * rename it guards, runs synchronously, so no other owner can act between a check and its commit
+ * within this process.
  */
 type LockSteps<A> = Generator<number, A, void>;
 
@@ -323,20 +328,24 @@ function* acquireSteps(
     : undefined;
 }
 
-export const acquireNativeLock = (
-  namespace: string,
-  options: CrossProcessLockOptions,
-  retryAfterRetire = false,
-): CrossProcessLease | undefined => {
-  const lease = runSynchronously(acquireSteps(namespace, options, retryAfterRetire, ownerIsDead));
-  return lease === undefined
+const synchronousLease = (lease: LeaseSteps | undefined): CrossProcessLease | undefined =>
+  lease === undefined
     ? undefined
     : {
         mutationStarted: () => runSynchronously(lease.mutationStarted()),
         mutationSettled: () => runSynchronously(lease.mutationSettled()),
         release: () => runSynchronously(lease.release()),
       };
-};
+
+/** Acquires with every fsync inline, for callers that can't wait for the thread pool. */
+export const acquireNativeLock = (
+  namespace: string,
+  options: CrossProcessLockOptions,
+  retryAfterRetire = false,
+): CrossProcessLease | undefined =>
+  synchronousLease(
+    runSynchronously(acquireSteps(namespace, options, retryAfterRetire, ownerIsDead)),
+  );
 
 /** A held lock whose release waits for its fsyncs on the libuv thread pool. */
 export interface OffThreadLease {
@@ -344,8 +353,8 @@ export interface OffThreadLease {
 }
 
 /**
- * `acquireNativeLock` with retry after retiring a dead owner, waiting for its fsyncs on the libuv
- * thread pool instead of the event loop. Its lease has no native-mutation phases.
+ * `tryAcquire` with the caller's liveness check, whose lease also releases off the event loop. Its
+ * lease has no native-mutation phases.
  */
 export const acquireLockOffThread = (
   namespace: string,
@@ -383,6 +392,8 @@ export class CrossProcessLock extends Context.Service<CrossProcessLock, CrossPro
   static readonly layer = (options: CrossProcessLockOptions) =>
     Layer.succeed(this, {
       tryAcquire: (namespace) =>
-        Effect.try({ try: () => acquireNativeLock(namespace, options, true), catch: failure }),
+        runOffThread(() => acquireSteps(namespace, options, true, ownerIsDead)).pipe(
+          Effect.map(synchronousLease),
+        ),
     });
 }

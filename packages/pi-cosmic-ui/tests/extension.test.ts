@@ -124,6 +124,8 @@ const waitUntil = (predicate: () => boolean): Effect.Effect<void> =>
     ),
   );
 
+const advanceTimers = (millis: number) => Effect.promise(() => vi.advanceTimersByTimeAsync(millis));
+
 type FooterFactory = NonNullable<Parameters<ExtensionUIContext["setFooter"]>[0]>;
 type FooterData = Parameters<FooterFactory>[2];
 
@@ -583,6 +585,48 @@ describe("Cosmic UI extension", () => {
         yield* emit(h, "session_shutdown");
         yield* Effect.promise(() => vi.advanceTimersByTimeAsync(2_000));
         expect(h.exec).toHaveBeenCalledTimes(4);
+      } finally {
+        vi.useRealTimers();
+      }
+    }),
+  );
+
+  it.effect("a shell command looks up its pull request at once and resets the poll back-off", () =>
+    Effect.gen(function* () {
+      vi.useFakeTimers();
+      try {
+        const h = harness();
+        h.exec.mockImplementation((command) =>
+          command === "gh" ? Promise.resolve(execResult("", 1)) : execOk("## main\n"),
+        );
+        const lookups = () => Arr.filter(h.exec.mock.calls, ([command]) => command === "gh").length;
+        const toolEnd = (toolName: string) =>
+          emitEvent(h, {
+            type: "tool_execution_end",
+            toolCallId: toolName,
+            toolName,
+            result: undefined,
+            isError: false,
+          });
+        yield* emit(h, "session_start");
+        expect(lookups()).toBe(1);
+        // Polls that find none back off: lookups at 30 s and 90 s, then not until 210 s.
+        yield* advanceTimers(100_000);
+        expect(lookups()).toBe(3);
+
+        yield* toolEnd("edit");
+        yield* advanceTimers(0);
+        expect(lookups()).toBe(3);
+        yield* toolEnd("bash");
+        yield* advanceTimers(0);
+        expect(lookups()).toBe(4);
+
+        // Polls resume the base interval from that lookup, rather than waiting out the back-off.
+        yield* advanceTimers(40_000);
+        expect(lookups()).toBe(4);
+        yield* advanceTimers(20_000);
+        expect(lookups()).toBe(5);
+        yield* emit(h, "session_shutdown");
       } finally {
         vi.useRealTimers();
       }

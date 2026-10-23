@@ -6,10 +6,12 @@ import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Predicate from "effect/Predicate";
 import * as Option from "effect/Option";
+import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import {
   decodeUnknownOrUndefined,
+  freezeSnapshot,
   frozenProjection,
   invokeBestEffort,
   sanitizeTerminalLine,
@@ -40,6 +42,8 @@ interface Provider {
   readonly getDetail?: ActivityEnvelope["getDetail"];
   readonly acknowledge: NonNullable<ActivityEnvelope["acknowledge"]>;
   readonly items: readonly ActivityRow[];
+  /** The decoded items `items` were cleaned from, in the same order. */
+  readonly sources: readonly ActivityItem[];
   readonly starting: number;
 }
 interface State {
@@ -96,7 +100,7 @@ const consistentSnapshot = (items: readonly ActivityItem[]) =>
   uniqueIds(Arr.map(items, (item) => item.id)) &&
   Arr.every(items, (item) => uniqueIds(Arr.map(item.actions ?? [], (action) => action.id)));
 type Transition = readonly [readonly Acknowledgement[], State];
-type ProviderIdentity = Omit<Provider, "items" | "starting">;
+type ProviderIdentity = Omit<Provider, "items" | "sources" | "starting">;
 interface DecodedSnapshot {
   readonly items: readonly ActivityItem[];
   readonly starting: number;
@@ -123,11 +127,93 @@ const revokeProvider = (
 const decodeSnapshotItems = decodeUnknownOrUndefined(ActivitySnapshotSchema);
 const decodeStarting = decodeUnknownOrUndefined(ActivityStartingSchema);
 const decodeSnapshot = (event: ActivityEnvelope): DecodedSnapshot | undefined => {
-  const decoded = decodeSnapshotItems(event.items);
+  const items = decodeSnapshotItems(event.items);
   const starting = decodeStarting(event.starting === undefined ? 0 : event.starting);
-  if (decoded === undefined || starting === undefined) return undefined;
-  const items = Arr.map(decoded, (item) => detachActivityItem(item, cleanDetail));
+  if (items === undefined || starting === undefined) return undefined;
   return consistentSnapshot(items) ? { items, starting } : undefined;
+};
+type ActivityAction = NonNullable<ActivityItem["actions"]>[number];
+// Each `satisfies` fails to compile when the protocol gains a field, so comparison covers it.
+const ITEM_FIELDS = {
+  id: true,
+  kind: true,
+  title: true,
+  profile: true,
+  route: true,
+  awaited: true,
+  revision: true,
+  startedAt: true,
+  endedAt: true,
+  updatedAt: true,
+  summary: true,
+  detail: true,
+  status: true,
+  inputTarget: true,
+  blockedReason: true,
+  parent: false,
+  actions: false,
+} as const satisfies Record<keyof ActivityItem, boolean>;
+const ITEM_VALUE_FIELDS = Arr.filter(Rec.keys(ITEM_FIELDS), (key) => ITEM_FIELDS[key]);
+const ACTION_FIELDS = Rec.keys({
+  id: true,
+  label: true,
+  confirmation: true,
+  handoff: true,
+} as const satisfies Record<keyof ActivityAction, true>);
+const sameActions = (left: ActivityItem["actions"], right: ActivityItem["actions"]) =>
+  left === right ||
+  (left !== undefined &&
+    right !== undefined &&
+    left.length === right.length &&
+    Arr.every(left, (action, index) => {
+      const other = right[index];
+      return other !== undefined && Arr.every(ACTION_FIELDS, (key) => action[key] === other[key]);
+    }));
+/** Compares decoded items field by field; an absent field equals an explicit `undefined`. */
+const sameItem = (left: ActivityItem, right: ActivityItem) =>
+  Arr.every(ITEM_VALUE_FIELDS, (key) => left[key] === right[key]) &&
+  left.parent?.providerId === right.parent?.providerId &&
+  left.parent?.itemId === right.parent?.itemId &&
+  sameActions(left.actions, right.actions);
+// Item revisions are producer claims; content decides whether a republish changes anything.
+const sameSnapshot = (provider: Provider, snapshot: DecodedSnapshot) =>
+  provider.starting === snapshot.starting &&
+  provider.sources.length === snapshot.items.length &&
+  Arr.every(snapshot.items, (item, index) => {
+    const source = provider.sources[index];
+    return source !== undefined && sameItem(item, source);
+  });
+/**
+ * Cleans each item into a frozen row. An item equal to the one its provider last published keeps
+ * that row, so it is not sanitized again and publications can share it by reference.
+ */
+const cleanedRows = (
+  providerId: string,
+  generation: number,
+  items: readonly ActivityItem[],
+  previous: Provider | undefined,
+): readonly ActivityRow[] => {
+  const cleaned = new Map(
+    Arr.map(
+      Arr.zip(previous?.sources ?? [], previous?.items ?? []),
+      ([source, row]) => [source.id, { source, row }] as const,
+    ),
+  );
+  return Arr.map(items, (item) => {
+    const prior = cleaned.get(item.id);
+    if (prior && sameItem(item, prior.source))
+      return prior.row.generation === generation
+        ? prior.row
+        : freezeSnapshot({ ...prior.row, generation });
+    const detached = detachActivityItem(item, cleanDetail);
+    return freezeSnapshot({
+      ...detached,
+      actions: detached.actions ?? [],
+      key: activityKey(providerId, item.id),
+      providerId,
+      generation,
+    });
+  });
 };
 const registeredProvider = (old: State, event: ActivityEnvelope): ProviderIdentity | undefined => {
   const { invoke, acknowledge, getDetail } = event;
@@ -152,17 +238,18 @@ const publishSnapshot = (
   current: Provider | undefined,
   snapshot: DecodedSnapshot,
 ): Transition | undefined => {
+  // An identical republish keeps the accepted state, and with it the published snapshot.
+  if (current?.token === event.token && sameSnapshot(current, snapshot))
+    return [[[current, true]], old];
   const isNew = current?.token !== event.token;
   const identity = isNew ? registeredProvider(old, event) : current;
   if (!identity) return undefined;
-  const items: readonly ActivityRow[] = Arr.map(snapshot.items, (item) => ({
-    ...item,
-    actions: item.actions ?? [],
-    key: activityKey(event.providerId, item.id),
-    providerId: event.providerId,
-    generation: identity.generation,
-  }));
-  const provider: Provider = { ...identity, items, starting: snapshot.starting };
+  const provider: Provider = {
+    ...identity,
+    items: cleanedRows(event.providerId, identity.generation, snapshot.items, current),
+    sources: snapshot.items,
+    starting: snapshot.starting,
+  };
   const providers = new Map(old.providers).set(event.providerId, provider);
   const retired = new Set(old.retired);
   const acknowledgements: Acknowledgement[] = [];
@@ -179,10 +266,21 @@ const publishSnapshot = (
       serial: Math.max(old.serial, identity.generation),
       providers,
       retired,
-      rows: retainActivity(old.rows, live),
+      // Frozen rows let each publication reuse unchanged rows instead of copying them.
+      rows: Arr.map(retainActivity(old.rows, live), freezeSnapshot),
     },
   ];
 };
+const admit = Effect.fnUntraced(function* (old: State, event: ActivityEnvelope) {
+  const unchanged: Transition = [[], old];
+  if (old.closed || old.retired.has(event.token)) return unchanged;
+  const current = old.providers.get(event.providerId);
+  if (event.operation !== "register" && current?.token !== event.token) return unchanged;
+  if (event.operation === "revoke") return revokeProvider(old, event, current);
+  const snapshot = decodeSnapshot(event);
+  if (!snapshot) return yield* invalid();
+  return publishSnapshot(old, event, current, snapshot) ?? unchanged;
+});
 const startingWork = (item: ActivityItem) => item.kind === "agent" && item.status === "pending";
 const currentRow = (rows: readonly ActivityRow[], request: ActivityDetailRequest) =>
   Option.getOrUndefined(
@@ -222,6 +320,7 @@ export class ActivityService extends Context.Service<ActivityService, ActivitySe
           const providers = new Map(old.providers).set(event.providerId, {
             ...provider,
             items: [],
+            sources: [],
             starting: 0,
           });
           return Effect.succeed([
@@ -238,18 +337,11 @@ export class ActivityService extends Context.Service<ActivityService, ActivitySe
         );
     const receive = Effect.fn("ActivityService.receive")(
       function* (event: ActivityEnvelope) {
-        const notices = yield* state
-          .transition<readonly Acknowledgement[], ActivityError, never>((old) =>
+        const [notices, updated] = yield* state
+          .transition<readonly [readonly Acknowledgement[], boolean], ActivityError, never>((old) =>
             Effect.gen(function* () {
-              const unchanged: Transition = [[], old];
-              if (old.closed || old.retired.has(event.token)) return unchanged;
-              const current = old.providers.get(event.providerId);
-              if (event.operation !== "register" && current?.token !== event.token)
-                return unchanged;
-              if (event.operation === "revoke") return revokeProvider(old, event, current);
-              const snapshot = decodeSnapshot(event);
-              if (!snapshot) return yield* invalid();
-              return publishSnapshot(old, event, current, snapshot) ?? unchanged;
+              const [acknowledgements, next] = yield* admit(old, event);
+              return [[acknowledgements, next !== old], next] as const;
             }),
           )
           .pipe(Effect.mapError(asActivityError));
@@ -258,7 +350,7 @@ export class ActivityService extends Context.Service<ActivityService, ActivitySe
             continue;
           yield* bestEffort(() => provider.acknowledge(available));
         }
-        yield* changed;
+        if (updated) yield* changed;
       },
       (effect, event) =>
         effect.pipe(

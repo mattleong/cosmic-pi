@@ -125,7 +125,7 @@ The first member acquires and durably marks the cross-process lease before any m
 
 Writer leases use pi-cosmic-core's `CrossProcessLock` under `<agent-dir>/subagents/writer-leases-v3`, namespaced by the identity digest; neither slot name nor evidence exposes the path.
 
-- `acquire` makes one non-waiting `tryAcquire`. A live owner is a `live` conflict; a dead native-pending owner, corrupt evidence, or an unsafe root mode is `recovery-required`. Conflict messages never name the other session's run, session, or process.
+- `acquire` makes one non-waiting, uninterruptible `tryAcquire` whose fsyncs run off the event loop; marks, settles, and releases commit synchronously. A live owner is a `live` conflict; a dead native-pending owner, corrupt evidence, or an unsafe root mode is `recovery-required`. Conflict messages never name the other session's run, session, or process.
 - `markSpawnStarted` commits before any driver call, so parent death afterward requires manual recovery: detached process groups may survive. Recover only after verifying the backend and descendants are dead (`owner.json` names the owner's process), then remove the named lock directory.
 - Every mark, settle, or release sets the lease phase to `uncertain` until its commit returns, so any failure keeps the slot held and quarantines the pool until restart.
 - A pool created for a later respawn performs a fresh acquire and mark.

@@ -338,8 +338,14 @@ export function registerCosmicUiApplication(
     updateContext(ctx);
   });
   pi.on("tool_execution_end", (event, ctx) => {
-    if (updateContext(ctx) && ["bash", "edit", "write"].includes(event.toolName))
-      forkGitRefresh(ctx, true);
+    if (!updateContext(ctx)) return;
+    // Only a shell command can open a pull request, such as with `gh pr create`.
+    if (event.toolName === "bash")
+      forkFrom(
+        CosmicUiService.use((service) => service.refreshAll(true)),
+        ctx,
+      );
+    else if (event.toolName === "edit" || event.toolName === "write") forkGitRefresh(ctx, true);
   });
   pi.on("thinking_level_select", (_event, ctx) => renderUpdatedContext(ctx));
   pi.on("session_info_changed", (_event, ctx) => renderUpdatedContext(ctx));

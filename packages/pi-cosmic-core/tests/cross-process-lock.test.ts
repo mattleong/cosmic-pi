@@ -1,11 +1,16 @@
 import { fileURLToPath } from "node:url";
 import { expect, it } from "@effect/vitest";
 import { vi } from "vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
-import { acquireNativeLock, CrossProcessLock } from "../src/platform/cross-process-lock.ts";
+import {
+  acquireNativeLock,
+  CrossProcessLock,
+  crossProcessLockHolder,
+} from "../src/platform/cross-process-lock.ts";
 import {
   nodeFsPromises as fs,
   nodePath as path,
@@ -182,3 +187,121 @@ it.live("reclaims a lease whose live PID now belongs to a different process", ()
     expect(acquireNativeLock("fixture", { directory }, true)).toBeDefined();
   }).pipe(Effect.scoped),
 );
+
+interface Entry {
+  readonly name: string;
+  readonly mode: number;
+  readonly children?: ReadonlyArray<Entry>;
+}
+
+// Tokens differ between owners, so the layout names each `-<token>` suffix generically.
+const layout = (directory: string): ReadonlyArray<Entry> =>
+  Arr.map(Arr.sort(nodeLockFs.readdirSync(directory), Str.Order), (name) => {
+    const entry = path.join(directory, name);
+    const stat = nodeLockFs.lstatSync(entry);
+    return {
+      name: Fn.pipe(name, Str.replace(/-[a-f0-9]{64}$/u, "-<token>")),
+      mode: stat.mode & 0o777,
+      ...(stat.isDirectory() && { children: layout(entry) }),
+    };
+  });
+
+const ownerRecord = (directory: string) => {
+  const holder = crossProcessLockHolder("fixture", { directory });
+  expect(holder.ownerPid).toBe(process.pid);
+  return Fn.pipe(
+    nodeLockFs.readFileSync(path.join(holder.slot, "owner.json"), "utf8"),
+    Str.replace(/"token":"[a-f0-9]{64}"/u, '"token":"<token>"'),
+  );
+};
+
+it.live("acquires off the event loop with the same owner record and slots as inline", () =>
+  Effect.gen(function* () {
+    const offThreadRoot = yield* root;
+    const inlineRoot = yield* root;
+    const offThread = yield* tryAcquire(offThreadRoot);
+    const inline = acquireNativeLock("fixture", { directory: inlineRoot }, true);
+    expect(offThread).toBeDefined();
+    expect(inline).toBeDefined();
+    expect(layout(offThreadRoot)).toEqual(layout(inlineRoot));
+    expect(ownerRecord(offThreadRoot)).toEqual(ownerRecord(inlineRoot));
+    expect(yield* tryAcquire(inlineRoot)).toBeUndefined();
+    expect(acquireNativeLock("fixture", { directory: offThreadRoot }, true)).toBeUndefined();
+    offThread?.mutationStarted();
+    inline?.mutationStarted();
+    expect(ownerRecord(offThreadRoot)).toEqual(ownerRecord(inlineRoot));
+    offThread?.mutationSettled();
+    inline?.mutationSettled();
+    offThread?.release();
+    inline?.release();
+    expect(nodeLockFs.readdirSync(offThreadRoot)).toEqual([]);
+    expect(nodeLockFs.readdirSync(inlineRoot)).toEqual([]);
+  }).pipe(Effect.scoped),
+);
+
+const injectedFsyncFailure = () =>
+  Object.assign(new Error("Injected fsync failure"), { code: "EIO" });
+
+/** Fails the `failing`th fsync of either driver and records descriptors left open. */
+const faultyFilesystem = (failing: number) => {
+  const { openSync, closeSync, fsync, fsyncSync } = nodeLockFs;
+  const open = new Set<number>();
+  let flushes = 0;
+  const spies = [
+    vi.spyOn(nodeLockFs, "openSync").mockImplementation((file, flags, mode) => {
+      const fd = openSync(file, flags, mode);
+      open.add(fd);
+      return fd;
+    }),
+    vi.spyOn(nodeLockFs, "closeSync").mockImplementation((fd) => {
+      open.delete(fd);
+      closeSync(fd);
+    }),
+    vi.spyOn(nodeLockFs, "fsync").mockImplementation((fd, callback) => {
+      if (++flushes === failing) setImmediate(() => callback(injectedFsyncFailure()));
+      else fsync(fd, callback);
+    }),
+    vi.spyOn(nodeLockFs, "fsyncSync").mockImplementation((fd) => {
+      if (++flushes === failing) throw injectedFsyncFailure();
+      fsyncSync(fd);
+    }),
+  ];
+  return Effect.acquireRelease(Effect.succeed(open), () =>
+    Effect.sync(() => Arr.forEach(spies, (spy) => spy.mockRestore())),
+  );
+};
+
+// A fresh acquisition flushes the candidate's owner record, the candidate, then the lock root.
+for (const failing of [1, 2, 3])
+  it.live(`a failed fsync ${failing} of acquisition closes descriptors and holds no slot`, () =>
+    Effect.gen(function* () {
+      const offThreadRoot = yield* root;
+      const inlineRoot = yield* root;
+      const offThreadOpen = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const open = yield* faultyFilesystem(failing);
+          expect(yield* Effect.flip(tryAcquire(offThreadRoot))).toMatchObject({
+            reason: "unavailable",
+          });
+          return [...open];
+        }),
+      );
+      const inlineOpen = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const open = yield* faultyFilesystem(failing);
+          expect(() => acquireNativeLock("fixture", { directory: inlineRoot }, true)).toThrow(
+            "Injected fsync failure",
+          );
+          return [...open];
+        }),
+      );
+      expect(offThreadOpen).toEqual([]);
+      expect(inlineOpen).toEqual([]);
+      const failed = layout(offThreadRoot);
+      expect(failed).toEqual(layout(inlineRoot));
+      const next = yield* tryAcquire(offThreadRoot);
+      expect(next).toBeDefined();
+      next?.release();
+      expect(layout(offThreadRoot)).toEqual(failed);
+    }).pipe(Effect.scoped),
+  );

@@ -10,7 +10,12 @@ import {
   renderWithBorderSlot,
   shouldRenderBorderResultSeparately,
 } from "./bordered-tool-call";
-import { renderTimedResultFooter, updateToolCallTiming, withLastComponent } from "./tool-timing";
+import {
+  renderTimedResultFooter,
+  updateToolCallTiming,
+  withLastComponent,
+  type ToolTimingCadence,
+} from "./tool-timing";
 import type { ToolCallBackgroundMode, ToolCallCollapsedStyle } from "../config/schema";
 import { codePreviewSettings } from "../config/state";
 
@@ -45,9 +50,13 @@ export function createCodePreviewToolShell<TArgs, TDetails, TState extends objec
   const summary = compact.compactSummary;
   const frames = new PreviewFrames<TArgs, TDetails, TState>();
   const animateProgress = compact.animateProgress ?? false;
+  // Preview bodies draw time-based frames only when they declare animateProgress; otherwise only
+  // the elapsed label changes while running.
+  const cadence: ToolTimingCadence = animateProgress ? "frame" : "elapsed";
   const timing = {
     scheduleAnimation: compact.scheduleAnimation,
     animateWithoutTiming: animateProgress,
+    cadence,
     showShortTiming: compact.showShortTiming ?? false,
   };
   const shell: CodePreviewToolShell<TArgs, TDetails, TState> = {

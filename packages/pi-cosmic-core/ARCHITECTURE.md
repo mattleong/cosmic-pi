@@ -133,12 +133,15 @@ and unchanged size/modification metadata across the read.
 tightened to 0700, files are created exclusively and synced, replacement commits by an uninterruptible
 rename with nothing fallible after it, and a failed write removes only the file it created. Failures
 are a `PrivateFileError` with a bounded reason and no path or OS message. The cross-process lock
-shares its ownership and mode checks. Its lease callbacks are synchronous, so they fsync inline;
-document locks run the same protocol but wait for those fsyncs on the libuv thread pool.
+shares its ownership and mode checks. Acquisition, and a document lock's release, wait for their
+fsyncs on the libuv thread pool; lease callbacks are synchronous, so they fsync inline.
 
 [Cross-process locks](src/platform/cross-process-lock.ts) are an opt-in, same-host capability.
 Exclusion requires the same private root and actual shared-resource namespace. `tryAcquire` does
-not wait; callers own retries and the returned lease. `crossProcessLockHolder` names a slot and its
+not wait for another owner; callers own retries and the returned lease. It can't be interrupted, so
+callers that must not lose its lease acquire in an uninterruptible region. Other fibers run between
+its fsyncs; each liveness check and the commit it guards stay synchronous, so the protocol tolerates
+them as it does other processes. `crossProcessLockHolder` names a slot and its
 owner's process id for diagnostics without touching the lock. Recovery requires positive process-death
 evidence and a quiescent journal. Owners record their process start time when the OS reports it,
 read independently of the time zone and locale, so a live PID whose start time differs counts as

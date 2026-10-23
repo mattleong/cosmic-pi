@@ -208,6 +208,49 @@ describe("activity service", () => {
       expect(rows()[0]!.key).toBe(activityKey("tasks", "one"));
     }),
   );
+  it.effect(
+    "publishes a republished snapshot only when its content changed, whatever its revisions",
+    () =>
+      Effect.gen(function* () {
+        const published: Array<readonly ActivityRow[]> = [];
+        const service = yield* ActivityService.make({
+          publish: (rows) => void published.push(rows),
+        });
+        const token = {};
+        const other = { ...item(), id: "two", title: "Other" };
+        const publish = (items: readonly ActivityItem[], starting?: number) =>
+          service.receive({ ...registration(token), operation: "publish", items, starting });
+        yield* service.receive(registration(token, undefined, [item(), other]));
+        const accepted = published.length;
+        const [first] = published.at(-1) ?? [];
+
+        yield* publish([item(), { ...other, actions: [{ id: "stop", label: "Stop" }] }]);
+        expect(published).toHaveLength(accepted);
+
+        const renamed = { ...other, title: "Renamed" };
+        const halted = { ...renamed, actions: [{ id: "stop", label: "Halt" }] };
+        for (const changed of [renamed, halted]) {
+          yield* publish([item(), changed]);
+          expect(published.at(-1)?.[1]).toMatchObject({ title: "Renamed", revision: "1" });
+        }
+        expect(published.at(-1)?.[1]?.actions).toEqual(halted.actions);
+        yield* publish([item(), halted], 1);
+        expect(published).toHaveLength(accepted + 3);
+        // The unchanged row is shared rather than copied into each publication.
+        expect(published.at(-1)?.[0]).toBe(first);
+      }),
+  );
+  it.effect("restores availability for a valid republish matching its withdrawn snapshot", () =>
+    Effect.gen(function* () {
+      const { service, available, register } = yield* recordingService();
+      const event = register([]);
+      yield* service.receive(event);
+      yield* Effect.flip(service.receive({ ...event, operation: "publish", items: [{}] }));
+      expect(available()).toBe(false);
+      yield* service.receive({ ...event, operation: "publish", items: [] });
+      expect(available()).toBe(true);
+    }),
+  );
   it.effect("revokes rows and actions on disposal and closes host resources exactly once", () =>
     Effect.gen(function* () {
       const availability: boolean[] = [];

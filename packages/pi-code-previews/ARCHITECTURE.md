@@ -91,6 +91,13 @@ Ownership tokens prevent late cleanup from clearing newer caches or write eviden
 caches, frame state, and component state may be mutable; they are presentation state, not a second
 owner of execution or session resources.
 
+A running row's redraw timer uses its originating owner's scheduler and stops on settlement,
+retirement, or runtime disposal. Only rows that draw time-based frames redraw every spinner frame:
+compact rows, whose status glyph animates, and shells that declare `animateProgress`. Other preview
+rows redraw only when their whole-second elapsed label changes, starting when it first appears.
+A renderer that draws time-based frames must therefore set `animateProgress` unless it runs its
+own invalidation ticker.
+
 ## Evidence and failure behavior
 
 Unknown host values are decoded at their boundary before projection. Native dispatch/result evidence

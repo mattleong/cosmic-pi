@@ -146,19 +146,23 @@ export class CosmicUiService extends Context.Service<CosmicUiService>()(
           .git(cwd, () => state.getSnapshot().probeRevision === revision && currentCwd() === cwd)
           .pipe(Effect.orElseSucceed(() => undefined));
       });
-      /** Doubles after each lookup that finds no pull request, including a failed lookup. */
+      /**
+       * Time a poll waits after the last lookup. It doubles after each polled lookup that finds no
+       * pull request, including a failed one. Polls wake at the base interval, so a forced lookup,
+       * which restores it, takes effect without waiting out the back-off.
+       */
       let pullRequestPollDelay = PULL_REQUEST_REFRESH_INTERVAL_MS;
       const fetchPullRequest = Effect.fnUntraced(function* (request: RefreshRequest) {
         if (!isTui()) return undefined;
         const current = yield* state.getState;
         const now = yield* Clock.currentTimeMillis;
-        if (!request.force && now - current.pullRequestCheckedAt < PULL_REQUEST_REFRESH_INTERVAL_MS)
+        if (!request.force && now - current.pullRequestCheckedAt < pullRequestPollDelay)
           return undefined;
         const pullRequest = yield* probes
           .pullRequest(currentCwd())
           .pipe(Effect.orElseSucceed(() => undefined));
         pullRequestPollDelay =
-          pullRequest === undefined
+          pullRequest === undefined && !request.force
             ? Math.min(pullRequestPollDelay * 2, PULL_REQUEST_MAX_REFRESH_INTERVAL_MS)
             : PULL_REQUEST_REFRESH_INTERVAL_MS;
         return { checkedAt: now, pullRequest };
@@ -179,7 +183,7 @@ export class CosmicUiService extends Context.Service<CosmicUiService>()(
       });
       const pullRefresh = yield* createSubscriptionRefresh({
         currentKey,
-        interval: Effect.sync(() => pullRequestPollDelay),
+        interval: Effect.succeed(PULL_REQUEST_REFRESH_INTERVAL_MS),
         fetch: fetchPullRequest,
         commit: (value) => {
           if (value === undefined) return Effect.void;

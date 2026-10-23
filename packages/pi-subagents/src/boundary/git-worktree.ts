@@ -187,6 +187,7 @@ export const gitWorkspaceEngine = Effect.fn("GitWorkspaceEngine.make")(function*
       catch: () => workspaceFailure("lock", "The workspace owner lease couldn't be released."),
     }).pipe(Effect.ignore),
   );
+  // Uninterruptible so a lease acquired while an interrupt waits is recorded for the finalizer.
   const ownerPresence = Effect.gen(function* () {
     if (presence) return presence.token;
     const token = yield* newWorkspaceId;
@@ -201,7 +202,7 @@ export const gitWorkspaceEngine = Effect.fn("GitWorkspaceEngine.make")(function*
       return yield* workspaceFailure("lock", "The workspace owner lease is already held.");
     presence = { token, lease };
     return token;
-  });
+  }).pipe(Effect.uninterruptible);
   const directory = (record: WorkspaceRecord) => workspaceArtifact(registry, record);
   const worker = (record: WorkspaceRecord) => workspaceWorker(registry, record);
   const prepared = (record: WorkspaceRecord, preparationId: string) =>

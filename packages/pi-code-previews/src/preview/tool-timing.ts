@@ -23,8 +23,15 @@ interface TimingOwner {
   readonly state: unknown;
 }
 
+/**
+ * How often a running row's timer redraws it: every spinner frame for rows that draw time-based
+ * frames, or only when the elapsed label changes.
+ */
+export type ToolTimingCadence = "frame" | "elapsed";
+
 interface TimingHandles {
   cancel: (() => void) | undefined;
+  cadence: ToolTimingCadence | undefined;
   resultComponent: Component | undefined;
 }
 
@@ -44,6 +51,9 @@ type TimingField = keyof typeof TIMING_FIELDS;
 const timingHandles = new WeakMap<object, TimingHandles>();
 
 export const TIMING_VISIBLE_MS = 1_000;
+
+// formatElapsed floors running labels to whole seconds.
+const ELAPSED_LABEL_STEP_MS = 1_000;
 
 export type ToolCallTiming = {
   label: string;
@@ -68,6 +78,7 @@ export function renderTimedResultFooter<TContext extends ToolTimingRenderContext
 
 type ToolCallTimingOptions = {
   animate?: boolean;
+  cadence?: ToolTimingCadence;
   formatLabel?: boolean;
   showShortTiming?: boolean | undefined;
   animateWithoutTiming?: boolean;
@@ -94,7 +105,12 @@ export function updateToolCallTiming(
   if (started === undefined) return undefined;
   if (!context.isPartial) settleEndedAt(state);
   else if (options.animate !== false)
-    ensureToolCallAnimation(state, context.invalidate, options.scheduleAnimation);
+    ensureToolCallAnimation(
+      state,
+      context.invalidate,
+      options.cadence ?? "frame",
+      options.scheduleAnimation,
+    );
 
   if (options.formatLabel === false) return undefined;
   return formatTiming(state, started, context.isPartial, options.showShortTiming);
@@ -106,7 +122,7 @@ function updateUntimedAnimation(
   options: ToolCallTimingOptions,
 ): void {
   if (options.animateWithoutTiming && context.executionStarted && context.isPartial)
-    ensureToolCallAnimation(state, context.invalidate, options.scheduleAnimation);
+    ensureToolCallAnimation(state, context.invalidate, "frame", options.scheduleAnimation);
   else clearToolCallTimingInterval(state);
   if (!context.isPartial && startedAt(state) !== undefined) settleEndedAt(state);
 }
@@ -159,7 +175,7 @@ function timingState(context: { readonly state: unknown }): TimingState | undefi
   if (!Predicate.isObject(host)) return undefined;
   let handles = timingHandles.get(host);
   if (!handles) {
-    handles = { cancel: undefined, resultComponent: undefined };
+    handles = { cancel: undefined, cadence: undefined, resultComponent: undefined };
     timingHandles.set(host, handles);
   }
   return { owner: { state: host }, handles };
@@ -175,18 +191,59 @@ export function withLastComponent<TContext extends ToolTimingRenderContext>(
 function ensureToolCallAnimation(
   state: TimingState,
   invalidate: () => void,
+  cadence: ToolTimingCadence,
   scheduleAnimation?: CompactAnimationScheduler,
 ): void {
+  const { handles } = state;
+  if (handles.cancel && handles.cadence === cadence) return;
+  clearToolCallTimingInterval(state);
   const schedule = scheduleAnimation ?? captureCodePreviewSessionCapability()?.schedule;
   if (!schedule) return;
-  state.handles.cancel ??= schedule(SPINNER_FRAME_MS, () => {
+  if (cadence === "elapsed") {
+    const started = startedAt(state);
+    if (started !== undefined) scheduleElapsedRedraw(state, started, invalidate, schedule);
+    return;
+  }
+  handles.cancel = schedule(SPINNER_FRAME_MS, () => {
     const frame = readTiming(state.owner, "animationFrame") ?? 0;
     writeTiming(state.owner, "animationFrame", frame + 1);
     invalidate();
   });
+  if (handles.cancel) handles.cadence = cadence;
+}
+
+// A row without time-based frames changes only when its elapsed label does, which happens on whole
+// seconds of its own elapsed time. The scheduler repeats at a fixed interval, so each wake re-arms
+// against the clock: the first wakes when the label appears, and an early wake or an unchanged
+// label re-arms without redrawing.
+function scheduleElapsedRedraw(
+  state: TimingState,
+  started: number,
+  invalidate: () => void,
+  schedule: CompactAnimationScheduler,
+): void {
+  const elapsedMs = Math.max(0, synchronousNow() - started);
+  const shown = formatTiming(state, started, true, false)?.label;
+  const nextStep = (Math.floor(elapsedMs / ELAPSED_LABEL_STEP_MS) + 1) * ELAPSED_LABEL_STEP_MS;
+  const due = Math.max(TIMING_VISIBLE_MS, nextStep);
+  let active = true;
+  const stop = schedule(due - elapsedMs, () => {
+    if (!active) return;
+    clearToolCallTimingInterval(state);
+    // Re-arm before redrawing: a synchronous redraw must find this row's timer still in place.
+    scheduleElapsedRedraw(state, started, invalidate, schedule);
+    if (formatTiming(state, started, true, false)?.label !== shown) invalidate();
+  });
+  if (!stop) return;
+  state.handles.cancel = () => {
+    active = false;
+    stop();
+  };
+  state.handles.cadence = "elapsed";
 }
 
 function clearToolCallTimingInterval(state: TimingState): void {
+  state.handles.cadence = undefined;
   if (!state.handles.cancel) return;
   state.handles.cancel();
   state.handles.cancel = undefined;

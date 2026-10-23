@@ -49,6 +49,10 @@ interface CompletedCounts {
   readonly completed: number;
 }
 
+const retainedHistory = (row: ActivityRow) =>
+  row.retained === true && row.awaited === false && row.actions?.length === 0;
+
+// Unchanged rows keep their identity, so frozen rows stay shared across publications.
 const withRetainedRows = (
   previous: readonly ActivityRow[],
   current: readonly ActivityRow[],
@@ -56,7 +60,10 @@ const withRetainedRows = (
   const next = new Map(Arr.map(current, (row) => [row.key, row] as const));
   for (const row of previous)
     if (!next.has(row.key) && isFinished(row))
-      next.set(row.key, { ...row, retained: true, actions: [], awaited: false });
+      next.set(
+        row.key,
+        retainedHistory(row) ? row : { ...row, retained: true, actions: [], awaited: false },
+      );
   return next;
 };
 
@@ -181,7 +188,11 @@ export function retainActivity(
       omitted.get(row.key) ?? 0,
       old.get(row.key)?.omittedChildren ?? 0,
     );
-    return [Object.assign({}, row, omittedChildren > 0 ? { omittedChildren } : {})];
+    return [
+      omittedChildren > 0 && omittedChildren !== row.omittedChildren
+        ? { ...row, omittedChildren }
+        : row,
+    ];
   });
 }
 
