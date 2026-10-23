@@ -1,4 +1,7 @@
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { toolStatusLine } from "pi-cosmic-ui/tool";
 import { Input, type Component, type Focusable } from "@earendil-works/pi-tui";
@@ -164,7 +167,7 @@ export class SubagentFleetComponent implements Component, Focusable {
   }
 
   private reconcile(rows: ReadonlyArray<FleetTreeRow>): void {
-    this.applySelection(this.shell.reconcile(rows.map((row) => row.run.id)));
+    this.applySelection(this.shell.reconcile(Arr.map(rows, (row) => row.run.id)));
     const selected = rows[this.shell.state.selected]?.run;
     if (this.pending && (this.pending.id !== selected?.id || !canConfirm(this.pending, selected)))
       this.pending = undefined;
@@ -222,13 +225,15 @@ export class SubagentFleetComponent implements Component, Focusable {
   private submitPrompt(): void {
     const prompt = this.prompt;
     if (!prompt) return;
-    const message = prompt.input.getValue().trim();
+    const message = Str.trim(prompt.input.getValue());
     if (prompt.kind !== "resume" && !message) {
       prompt.feedback = prompt.kind === "rename" ? "Enter a new display name." : "Enter a message.";
       this.options.requestRender();
       return;
     }
-    const current = this.options.getProjection().runs.find((run) => run.id === prompt.runId);
+    const current = Option.getOrUndefined(
+      Arr.findFirst(this.options.getProjection().runs, (run) => run.id === prompt.runId),
+    );
     if (current && !sameFleetAssignment(prompt.run, current)) {
       prompt.feedback = "Nothing was sent: this assignment or question changed. Reopen the input.";
       this.options.requestRender();
@@ -419,7 +424,7 @@ export class SubagentFleetComponent implements Component, Focusable {
         this.applySelection(
           this.shell.select(
             result.state.selected,
-            rows.map((row) => row.run.id),
+            Arr.map(rows, (row) => row.run.id),
           ),
         );
     }
@@ -494,11 +499,14 @@ export class SubagentFleetComponent implements Component, Focusable {
     duplicates: ReadonlySet<string>,
   ): string[] {
     const { start, end } = this.shell.visibleWindow(rows.length, limit);
-    const visible = rows.slice(start, end).map((row, offset) => ({ row, index: start + offset }));
+    const visible = Arr.map(rows.slice(start, end), (row, offset) => ({
+      row,
+      index: start + offset,
+    }));
     const pane = this.shell.state.pane === "list";
     return [
       listDetailHeading(this.options.theme, fleetListHeading(rows, visible), pane),
-      ...visible.map(({ row, index }) => this.runLine(row, index, width, duplicates)),
+      ...Arr.map(visible, ({ row, index }) => this.runLine(row, index, width, duplicates)),
     ];
   }
 

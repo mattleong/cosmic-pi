@@ -7,6 +7,8 @@ import { temporaryDirectory } from "pi-cosmic-core/testing";
 import { createForkedSession } from "../src/boundary/child-process.ts";
 import { backendLaunch } from "./fixtures/backend-supervisor.ts";
 import { nodeFsPromises as fs } from "./support/node-builtins.ts";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
 
 const toJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
@@ -118,7 +120,7 @@ describe("forked Pi transcript", () => {
         parent.appendMessage(fauxAssistantMessage("retained answer"));
         const compactionId = parent.appendCompaction("retained summary", retainedId, 42);
         const leafId = parent.appendLabelChange(retainedId, "parent bookmark");
-        const entries = parent.getBranch().map((entry) => {
+        const entries = Arr.map(parent.getBranch(), (entry) => {
           if (entry.type !== "compaction") return entry;
           const { systemMessage: _systemMessage, ...compactionWithoutSystemMessage } = entry;
           return compactionWithoutSystemMessage;
@@ -139,25 +141,27 @@ describe("forked Pi transcript", () => {
         const fixtureEntries = [
           entries[0],
           hookEntry,
-          ...entries
-            .slice(1)
-            .map((entry, index) =>
-              index === 0 ? Object.assign({}, entry, { parentId: hookEntry.id }) : entry,
-            ),
+          ...Arr.map(entries.slice(1), (entry, index) =>
+            index === 0 ? Object.assign({}, entry, { parentId: hookEntry.id }) : entry,
+          ),
         ];
         const original = Buffer.from(
-          [
-            {
-              type: "session",
-              version,
-              id: parent.getSessionId(),
-              cwd: directory,
-              timestamp: "2026-01-01T00:00:00.000Z",
-            },
-            ...fixtureEntries,
-          ]
-            .map((entry) => toJson(entry))
-            .join("\n"),
+          Arr.join(
+            Arr.map(
+              [
+                {
+                  type: "session",
+                  version,
+                  id: parent.getSessionId(),
+                  cwd: directory,
+                  timestamp: "2026-01-01T00:00:00.000Z",
+                },
+                ...fixtureEntries,
+              ],
+              (entry) => toJson(entry),
+            ),
+            "\n",
+          ),
         );
         yield* Effect.promise(() => fs.writeFile(parent.getSessionFile()!, original));
         const childFile = yield* createForkedSession(forkRequest(directory, parent), directory);
@@ -174,7 +178,7 @@ describe("forked Pi transcript", () => {
         expect(child.getEntry(compactionId)).toMatchObject({ firstKeptEntryId: retainedId });
         expect(child.getEntry(compactionId)).not.toHaveProperty("systemMessage");
         const context = child.buildSessionContext().messages;
-        expect(context.map((message) => message.role)).toEqual([
+        expect(Arr.map(context, (message) => message.role)).toEqual([
           "compactionSummary",
           "user",
           "custom",
@@ -240,8 +244,10 @@ describe("forked Pi transcript", () => {
         const childFile = yield* createForkedSession(forkRequest(directory, parent), directory);
         const child = SessionManager.open(childFile);
         const entries = child.getBranch();
-        expect(entries.map(({ id, parentId, timestamp }) => ({ id, parentId, timestamp }))).toEqual(
-          parentEntries.map(({ id, parentId, timestamp }) => ({ id, parentId, timestamp })),
+        expect(
+          Arr.map(entries, ({ id, parentId, timestamp }) => ({ id, parentId, timestamp })),
+        ).toEqual(
+          Arr.map(parentEntries, ({ id, parentId, timestamp }) => ({ id, parentId, timestamp })),
         );
         expect(child.getEntry(systemId)).toMatchObject({
           type: "custom",
@@ -258,7 +264,7 @@ describe("forked Pi transcript", () => {
         });
         expect(child.getEntry(compactionId)).not.toHaveProperty("systemMessage");
         const context = child.buildSessionContext().messages;
-        expect(context.map((message) => message.role)).toEqual([
+        expect(Arr.map(context, (message) => message.role)).toEqual([
           "compactionSummary",
           "user",
           "assistant",
@@ -356,7 +362,7 @@ describe("forked Pi transcript sharing the parent's prompt cache", () => {
       );
     },
   } satisfies Record<string, (parent: SessionManager) => void>;
-  for (const [reason, build] of Object.entries(unshareable)) {
+  for (const [reason, build] of Rec.toEntries(unshareable)) {
     it.live(`isolates the fork when the parent branch has ${reason}`, () =>
       Effect.gen(function* () {
         const directory = yield* temporaryDirectory("pi-fork-unshareable-");
@@ -370,9 +376,9 @@ describe("forked Pi transcript sharing the parent's prompt cache", () => {
         );
         const child = SessionManager.open(childFile);
 
-        expect(child.buildSessionContext().messages.map((message) => message.role)).not.toContain(
-          "system",
-        );
+        expect(
+          Arr.map(child.buildSessionContext().messages, (message) => message.role),
+        ).not.toContain("system");
         expect(toJson(child.getBranch())).not.toMatch(
           /opaque parent secret|parent preamble|encrypted_content/,
         );

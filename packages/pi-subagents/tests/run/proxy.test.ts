@@ -28,6 +28,8 @@ import {
   withService,
 } from "./fixtures/service-harness.ts";
 import { stoppedWriter, workspaceFixture } from "./fixtures/workspace-engine.ts";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 
 type ProxyResponse = Extract<LocalPiParentControl, { readonly type: "proxy_response" }>;
 
@@ -54,9 +56,12 @@ const offerProxyCancel = (control: FakeChildControl, requestId: string) => {
 };
 
 const responseFor = (control: FakeChildControl, requestId: string): ProxyResponse | undefined =>
-  control.ipc
-    .filter((message) => message.type === "proxy_response")
-    .find((message) => message.requestId === requestId);
+  Option.getOrUndefined(
+    Arr.findFirst(
+      Arr.filter(control.ipc, (message) => message.type === "proxy_response"),
+      (message) => message.requestId === requestId,
+    ),
+  );
 
 const proxyLayer = (
   fake: ReturnType<typeof fakeChildLayer>,
@@ -122,7 +127,9 @@ describe("SubagentService parent proxy executions", () => {
           tool: SUBAGENT_TOOL_NAME.workspace,
           argumentsJson: JSON.stringify(args),
         });
-      yield* yieldUntil(() => attempts.every(({ requestId }) => responseFor(caller, requestId)));
+      yield* yieldUntil(() =>
+        Arr.every(attempts, ({ requestId }) => responseFor(caller, requestId) !== undefined),
+      );
       const refusalCode = (requestId: string, code: string) => {
         const response = responseFor(caller, requestId);
         expect(response?.ok).toBe(false);
@@ -204,10 +211,12 @@ describe("SubagentService parent proxy executions", () => {
         yield* waitForCompleted(service, child.id);
         yield* TestClock.adjust("100 millis");
         yield* yieldUntil(() =>
-          notifications.some(
+          Arr.some(
+            notifications,
             (notification) =>
               notification.type === "completed" &&
-              notification.runs.some(
+              Arr.some(
+                notification.runs,
                 (run) =>
                   run.id === child.id &&
                   run.finalText === "Descendant report survives caller cleanup.",
@@ -257,11 +266,13 @@ describe("SubagentService parent proxy executions", () => {
           expect(fake.controls[1]!.released()).toBe(0);
           expect(responseFor(caller, "launch-child")).toBeUndefined();
         }).pipe(Effect.ensuring(Deferred.succeed(promptGate, undefined)));
-        yield* yieldUntil(
-          () =>
-            projections
-              .at(-1)
-              ?.runs.some((run) => run.name === "owned-child" && run.state === "running") === true,
+        yield* yieldUntil(() =>
+          Option.exists(Arr.last(projections), (projection) =>
+            Arr.some(
+              projection.runs,
+              (run) => run.name === "owned-child" && run.state === "running",
+            ),
+          ),
         );
         expect(fake.controls[1]!.released()).toBe(0);
       });
@@ -309,7 +320,7 @@ describe("SubagentService parent proxy executions", () => {
         yield* yieldUntil(() => started.includes("req-1"));
         return child;
       });
-      expect(control.ipc.filter((message) => message.type === "proxy_response")).toEqual([]);
+      expect(Arr.filter(control.ipc, (message) => message.type === "proxy_response")).toEqual([]);
     }),
   );
 });

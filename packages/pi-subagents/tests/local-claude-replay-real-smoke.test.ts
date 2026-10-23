@@ -2,12 +2,14 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { synchronousRandomHex } from "pi-cosmic-core";
 import { provideBuiltLayer } from "pi-cosmic-core/testing";
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import { localClaudeBackendDriver } from "../src/backend/local-claude.ts";
 import type { BackendEvent } from "../src/backend/model.ts";
 import { SupervisorChannel } from "../src/boundary/supervisor-channel.ts";
 import { backendLaunch, takeBackendEvent } from "./fixtures/backend-supervisor.ts";
 import { localCliProcess } from "./support/local-cli-process.ts";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 
 const enabled = process.env.PI_SUBAGENTS_REAL_CLAUDE_REPLAY_SMOKE === "1";
 
@@ -23,12 +25,15 @@ describe.skipIf(!enabled)("installed local Claude replay smoke", () => {
       model,
       effort: "low",
       parentSessionId: `real-local-claude-${process.pid}`,
-      systemPrompt: [
-        "This is an explicit protocol reproduction. Do not edit files.",
-        "Use the native Agent tool to launch one short read-only background agent whose whole task is to read package.json and return the package name; tell it not to use any mcp__pi_subagents_supervisor tool.",
-        "Use SendMessage once for that agent, then wait for its completion notification.",
-        "Finally call mcp__pi_subagents_supervisor__agent_submit_report exactly once with a concise report.",
-      ].join(" "),
+      systemPrompt: Arr.join(
+        [
+          "This is an explicit protocol reproduction. Do not edit files.",
+          "Use the native Agent tool to launch one short read-only background agent whose whole task is to read package.json and return the package name; tell it not to use any mcp__pi_subagents_supervisor tool.",
+          "Use SendMessage once for that agent, then wait for its completion notification.",
+          "Finally call mcp__pi_subagents_supervisor__agent_submit_report exactly once with a concise report.",
+        ],
+        " ",
+      ),
     });
 
     return Effect.runPromise(
@@ -62,7 +67,8 @@ describe.skipIf(!enabled)("installed local Claude replay smoke", () => {
           if (event.type === "report") report = event;
         }
         expect(report.assignmentEpoch).toBe(1);
-        expect(report.text?.trim()).toBeTruthy();
+        assert(report.text !== undefined);
+        expect(Str.trim(report.text)).toBeTruthy();
         // Claude Code 2.1.299 removed TaskOutput; background results arrive as notifications.
         for (const tool of ["Agent", "SendMessage"])
           expect(observedNativeTools.has(tool), `Claude did not invoke ${tool}`).toBe(true);

@@ -21,9 +21,13 @@ import {
   runningAssignment,
   runRecordFixture,
 } from "./fixtures/run-context.ts";
+import * as Arr from "effect/Array";
 
 const findings = (lines: number) =>
-  Array.from({ length: lines }, (_, line) => `finding ${line}`).join("\n");
+  Arr.join(
+    Array.from({ length: lines }, (_, line) => `finding ${line}`),
+    "\n",
+  );
 
 const messageEnd = (text: string) => ({
   type: "message_end" as const,
@@ -131,7 +135,9 @@ describe("report capture", () => {
 
       const admitted = yield* settle(new Map());
       expect(admitted.view.state).toBe("completed");
-      expect(archived.map((entry) => entry.generation)).toEqual([admitted.completionGeneration]);
+      expect(Arr.map(archived, (entry) => entry.generation)).toEqual([
+        admitted.completionGeneration,
+      ]);
       expect(admitted.view.reportArchive).toBeDefined();
       expect(admitted.latestAssistantFullText).toBeUndefined();
 

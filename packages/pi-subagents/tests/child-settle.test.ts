@@ -14,6 +14,7 @@ import {
   PROXY_NOTIFICATION_MESSAGE_TYPE,
   registerChildSettle,
 } from "../src/boundary/host-child-settle.ts";
+import * as Arr from "effect/Array";
 
 interface ChildSessionSlot {
   session?: AgentSession;
@@ -49,7 +50,8 @@ const childSession = Effect.gen(function* () {
   });
   slot.session = session;
   const customMessages = (customType: string) =>
-    session.messages.filter(
+    Arr.filter(
+      session.messages,
       (message) => message.role === "custom" && message.customType === customType,
     );
   return {

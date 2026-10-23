@@ -1,5 +1,6 @@
 import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import * as Schema from "effect/Schema";
 import type { JsonObject } from "pi-cosmic-core";
 import { describe, expect, vi } from "vitest";
@@ -30,6 +31,10 @@ import {
   view,
   type CaptureOptions,
 } from "./fixtures/tool-harness.ts";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
+import * as Rec from "effect/Record";
 
 const decodeStartDetails = Schema.decodeUnknownSync(SubagentStartDetailsSchema);
 const decodeModelsDetails = Schema.decodeUnknownSync(SubagentModelsDetailsSchema);
@@ -72,7 +77,7 @@ const compactIssues = (
   })?.issues ?? [];
 
 const issueStyleProblems = (issues: ReturnType<typeof compactIssues>) =>
-  issues.flatMap((issue) => issueMessageStyleProblems(issue.message));
+  Arr.flatMap(issues, (issue) => issueMessageStyleProblems(issue.message));
 
 const agentProperty = (parameters: TSchema | undefined) =>
   decodeStartSchema(parameters).properties.agents.items.properties.agent;
@@ -132,7 +137,7 @@ describe("custom agent launches", () => {
       agents: [{ task: "Recheck the decision", agent: "forked" }],
     });
 
-    expect(preflight.mock.calls.map(([selection]) => selection.runtime)).toEqual(["pi"]);
+    expect(Arr.map(preflight.mock.calls, ([selection]) => selection.runtime)).toEqual(["pi"]);
     expect(requests[0]).toMatchObject({
       runtime: "pi",
       context: "fork",
@@ -208,7 +213,7 @@ describe("custom agent launches", () => {
       ],
     });
 
-    expect(preflight.mock.calls.map(([selection]) => selection.runtime)).toEqual(["pi"]);
+    expect(Arr.map(preflight.mock.calls, ([selection]) => selection.runtime)).toEqual(["pi"]);
     expect(requests).toHaveLength(1);
     expect(requests[0]).toMatchObject({
       runtime: "pi",
@@ -250,7 +255,8 @@ describe("custom agent launches", () => {
         },
       );
       const toolsFor = (agent: string) =>
-        requests.find((request) => request.agent === agent)?.activeTools;
+        Option.getOrUndefined(Arr.findFirst(requests, (request) => request.agent === agent))
+          ?.activeTools;
       expect(toolsFor("denied")).toEqual(["read", "grep"]);
       expect(toolsFor("allowed")).toEqual(["read"]);
       // The child launch always enables parent contact and agent coordination, and never
@@ -261,7 +267,7 @@ describe("custom agent launches", () => {
           expect.arrayContaining(["agent_contact_parent", ...AGENT_TOOL_NAMES]),
         );
         expect(policy.enabled).not.toContain("session_send");
-        expect(policy.excluded.split(",")).toContain("session_send");
+        expect(Str.split(policy.excluded, ",")).toContain("session_send");
       }
     },
   );
@@ -414,7 +420,7 @@ describe("custom agent discovery", () => {
       }),
     ]);
     const issues = compactIssues("agent_profiles", {}, details);
-    expect(issues.map((issue) => issue.code)).toEqual([
+    expect(Arr.map(issues, (issue) => issue.code)).toEqual([
       "agent:claude-only:unavailable",
       "agents:invalid",
     ]);
@@ -433,12 +439,12 @@ const discover = (profiles: ReturnType<typeof profileServiceFor>) =>
     {},
   );
 
-const longModel = (index: number) => `provider/${"m".repeat(230)}-${index}`;
+const longModel = (index: number) => `provider/${Fn.pipe("m", Str.repeat(230))}-${index}`;
 
 describe("route discovery bounds", () => {
   effectTest("lists every agent the global and project layers resolve", function* () {
     const layer = (scope: string) =>
-      Object.fromEntries(
+      Rec.fromEntries(
         Array.from({ length: 32 }, (_, index) => [`${scope}-${index}`, agentDefinition()]),
       );
     const profiles = profileServiceFor(
@@ -453,7 +459,7 @@ describe("route discovery bounds", () => {
   effectTest("keeps routes too large for bounded details as plain text", function* () {
     const route = Array.from({ length: 32 }, (_, index) => declaredCandidate(longModel(index)));
     const profiles = profileServiceFor({
-      profiles: Object.fromEntries(PROFILE_IDS.map((id) => [id, route])),
+      profiles: Rec.fromEntries(Arr.map(PROFILE_IDS, (id) => [id, route])),
     });
     const result = yield* discover(profiles);
     expect(result?.details).toBeUndefined();

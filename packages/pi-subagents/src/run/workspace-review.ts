@@ -1,5 +1,9 @@
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Str from "effect/String";
 import { revisionSummary } from "../workspace/diffstat.ts";
 import type {
   WorkspacePreparation,
@@ -73,8 +77,8 @@ const pageEnd = (text: string, offset: number) => {
   const end = Math.min(text.length, offset + REVIEW_PAGE_CHARS);
   if (
     end >= text.length ||
-    !isHighSurrogate(text.charCodeAt(end - 1)) ||
-    !isLowSurrogate(text.charCodeAt(end))
+    !Option.exists(Str.charCodeAt(text, end - 1), isHighSurrogate) ||
+    !Option.exists(Str.charCodeAt(text, end), isLowSurrogate)
   )
     return end;
   return end - 1;
@@ -265,7 +269,7 @@ export function workspaceReviewOperations(
     const artifact = yield* service
       .inspect({ workspaceId, ownerId })
       .pipe(Effect.mapError(mapWorkspaceError));
-    if ([...runsWithin(records, [artifact.handle.artifactRoot]).keys()].some(runHoldsCwd))
+    if (Arr.some([...runsWithin(records, [artifact.handle.artifactRoot]).keys()], runHoldsCwd))
       return yield* invalid(
         "workspace_process_unsettled",
         "A run still uses this workspace. Stop it and confirm cleanup before discard.",
@@ -312,7 +316,7 @@ export function workspaceReviewOperations(
             updateKnowledge(binding, (knowledge) => reviewed(knowledge, revision.revisionId));
             return {
               ...revision,
-              text: text.slice(offset, nextOffset),
+              text: Fn.pipe(text, Str.slice(offset, nextOffset)),
               offset,
               totalChars: text.length,
               ...(nextOffset < text.length && { nextOffset }),

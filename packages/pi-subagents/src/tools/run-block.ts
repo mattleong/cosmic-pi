@@ -1,7 +1,10 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
+import * as Order from "effect/Order";
 import * as Predicate from "effect/Predicate";
+import * as Rec from "effect/Record";
 import * as Result from "effect/Result";
+import * as Str from "effect/String";
 import {
   clipText,
   safeTextPrefix,
@@ -40,7 +43,7 @@ const PREVIEW_LABELS = {
 /** A label and the preview of a failure, question, or unsaved report. */
 const MAX_PREVIEW_LINE_CHARS =
   MAX_OUTCOME_PREVIEW_CHARS +
-  Math.max(...Object.values(PREVIEW_LABELS).map(({ length }) => length));
+  Math.max(...Arr.map(Rec.values(PREVIEW_LABELS), ({ length }) => length));
 /** A label, an archived path, and the file's size. */
 const MAX_FILE_LINE_CHARS = MAX_OUTCOME_FILE_PATH_CHARS + 112;
 
@@ -150,7 +153,7 @@ const outcomeLines = (id: string, outcome: RunBlockOutcome): OutcomeLines => {
   switch (outcome.kind) {
     case "report": {
       if (outcome.archive) return { rest: { kind: "file", text: reportFileText(outcome.archive) } };
-      const text = outcome.text?.trim();
+      const text = outcome.text === undefined ? undefined : Str.trim(outcome.text);
       if (!text) return { preview: "Completed without a final report." };
       const { line, cut } = preview(text);
       const kept = outcome.truncation ? ` (${reportTruncationText(outcome.truncation)})` : "";
@@ -187,30 +190,36 @@ const warningLine = (id: string, warning: string): string => {
   const pointer = ` … (cut; agent_read ${id} has the full warning)`;
   const whole = freeText(warning, Number.MAX_SAFE_INTEGER);
   const room = MAX_BLOCK_LINE_CHARS - "Warning: ".length;
-  return `Warning: ${whole.length <= room ? whole : `${safeTextPrefix(whole, room - pointer.length).trimEnd()}${pointer}`}`;
+  return `Warning: ${whole.length <= room ? whole : `${Str.trimEnd(safeTextPrefix(whole, room - pointer.length))}${pointer}`}`;
 };
 
 /** One run's block, within `MAX_RUN_BLOCK_CHARS` by construction. */
 export const formatRunBlock = ({ id, name, facts, outcome, actions }: RunBlock): string => {
-  const identity = [
-    `${sanitizeTerminalLine(id)} ${freeText(name, MAX_BLOCK_NAME_CHARS)}`,
-    ...facts.filter(Predicate.isNotUndefined),
-  ].join(" · ");
+  const identity = Arr.join(
+    [
+      `${sanitizeTerminalLine(id)} ${freeText(name, MAX_BLOCK_NAME_CHARS)}`,
+      ...Arr.filter(facts, Predicate.isNotUndefined),
+    ],
+    " · ",
+  );
   const lines = outcome ? outcomeLines(id, outcome) : {};
-  return [
-    clipLine(identity, MAX_BLOCK_LINE_CHARS),
-    ...(lines.preview === undefined ? [] : [clipLine(lines.preview, MAX_PREVIEW_LINE_CHARS)]),
-    ...(lines.rest === undefined
-      ? []
-      : [clipLine(lines.rest.text, OUTCOME_REST_BOUNDS[lines.rest.kind])]),
-    ...ACTION_KINDS.flatMap((kind) => {
-      const action = actions[kind];
-      if (!action) return [];
-      return [
-        clipLine(kind === "warning" ? warningLine(id, action) : action, MAX_BLOCK_LINE_CHARS),
-      ];
-    }),
-  ].join("\n");
+  return Arr.join(
+    [
+      clipLine(identity, MAX_BLOCK_LINE_CHARS),
+      ...(lines.preview === undefined ? [] : [clipLine(lines.preview, MAX_PREVIEW_LINE_CHARS)]),
+      ...(lines.rest === undefined
+        ? []
+        : [clipLine(lines.rest.text, OUTCOME_REST_BOUNDS[lines.rest.kind])]),
+      ...Arr.flatMap(ACTION_KINDS, (kind) => {
+        const action = actions[kind];
+        if (!action) return [];
+        return [
+          clipLine(kind === "warning" ? warningLine(id, action) : action, MAX_BLOCK_LINE_CHARS),
+        ];
+      }),
+    ],
+    "\n",
+  );
 };
 
 /** Blocks after a header, both bounded, so the result fits by construction. */
@@ -218,8 +227,15 @@ export const formatRunBlocks = (
   header: ReadonlyArray<string>,
   blocks: ReadonlyArray<RunBlock>,
 ): string => {
-  const heading = clipText(header.filter(Boolean).join("\n"), MAX_RESULT_HEADER_CHARS);
-  return [heading, ...blocks.map(formatRunBlock)].filter(Boolean).join(RUN_BLOCK_SEPARATOR);
+  const heading = clipText(
+    Fn.pipe(header, Arr.filter(Boolean), Arr.join("\n")),
+    MAX_RESULT_HEADER_CHARS,
+  );
+  return Fn.pipe(
+    [heading, ...Arr.map(blocks, formatRunBlock)],
+    Arr.filter(Boolean),
+    Arr.join(RUN_BLOCK_SEPARATOR),
+  );
 };
 
 /** A delivered report the run retained whole, which output may repeat after its blocks. */
@@ -237,7 +253,7 @@ export const wholeSavedReport = (report: {
   readonly finalTextTruncation?: SubagentReportTruncation | undefined;
   readonly reportArchive?: SubagentReportArchive | undefined;
 }): InlineReport | undefined => {
-  const text = report.finalText?.trim();
+  const text = report.finalText === undefined ? undefined : Str.trim(report.finalText);
   return text && report.reportArchive && !report.finalTextTruncation
     ? { id: report.id, name: report.name, text }
     : undefined;
@@ -260,15 +276,17 @@ export const withInlineReports = (
   );
   let room = maximum - blocks.length;
   const shown = new Set<string>();
-  for (const section of sections.toSorted((left, right) => left.length - right.length)) {
+  for (const section of Arr.sortWith(sections, (candidate) => candidate.length, Order.Number)) {
     const cost = RUN_BLOCK_SEPARATOR.length + section.length;
     if (cost > room) break;
     room -= cost;
     shown.add(section);
   }
-  return [blocks, ...sections.filter((section) => shown.has(section))]
-    .filter(Boolean)
-    .join(RUN_BLOCK_SEPARATOR);
+  return Fn.pipe(
+    [blocks, ...Arr.filter(sections, (section) => shown.has(section))],
+    Arr.filter(Boolean),
+    Arr.join(RUN_BLOCK_SEPARATOR),
+  );
 };
 
 // Action items from a run's projected view.

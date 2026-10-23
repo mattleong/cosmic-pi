@@ -1,7 +1,10 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { JsonObject, JsonValue } from "pi-cosmic-core";
 import {
@@ -70,10 +73,13 @@ const RunIdParameter = Type.String(nonblank(MAX_PROTOCOL_ID_CHARS));
 export const AWAIT_UNTIL = ["all_finished", "any_finished"] as const;
 type AwaitUntil = (typeof AWAIT_UNTIL)[number];
 
-const PROFILE_PARAMETER_DESCRIPTION = [
-  "Role and model route, chosen by the deliverable; omit for generalist.",
-  ...PROFILE_IDS.map((id) => `${id}: ${PROFILE_DEFINITIONS[id].description}`),
-].join(" ");
+const PROFILE_PARAMETER_DESCRIPTION = Arr.join(
+  [
+    "Role and model route, chosen by the deliverable; omit for generalist.",
+    ...Arr.map(PROFILE_IDS, (id) => `${id}: ${PROFILE_DEFINITIONS[id].description}`),
+  ],
+  " ",
+);
 
 const ModelOverrideParameters = Type.Object(
   {
@@ -107,10 +113,16 @@ const nestedAgentParameter = () =>
   });
 
 const agentParameterDescription = (agents: ReadonlyArray<CustomAgent>): string =>
-  [
-    "Custom agent the user configured, instead of profile; it sets its own instructions and routes through its profile.",
-    ...agents.map((agent) => `${agent.name}: ${agent.description} (profile ${agent.profile})`),
-  ].join(" ");
+  Arr.join(
+    [
+      "Custom agent the user configured, instead of profile; it sets its own instructions and routes through its profile.",
+      ...Arr.map(
+        agents,
+        (agent) => `${agent.name}: ${agent.description} (profile ${agent.profile})`,
+      ),
+    ],
+    " ",
+  );
 
 const StartSpecBaseFields = {
   task: nonblankString(
@@ -216,7 +228,7 @@ export const startToolParameters = (
       startSpecFields(
         Type.Unsafe<string>({
           type: "string",
-          enum: agents.map((agent) => agent.name),
+          enum: Arr.map(agents, (agent) => agent.name),
           description: agentParameterDescription(agents),
         }),
       ),
@@ -315,7 +327,8 @@ const WORKSPACE_ACTION_FIELDS = {
     readonly optional: ReadonlyArray<WorkspaceField>;
   }
 >;
-const WORKSPACE_FIELDS = Rec.keys(WorkspaceParameters.properties).filter(
+const WORKSPACE_FIELDS = Arr.filter(
+  Rec.keys(WorkspaceParameters.properties),
   (field) => field !== "action",
 );
 
@@ -324,7 +337,7 @@ const isPlaceholder = (value: SubagentWorkspaceInput[WorkspaceField]): boolean =
   value === undefined ||
   value === false ||
   value === 0 ||
-  (Predicate.isString(value) && value.trim().length === 0);
+  (Predicate.isString(value) && Str.trim(value).length === 0);
 
 /**
  * Why a worktree call can't run: a required field is missing, or a field its action doesn't use
@@ -332,11 +345,16 @@ const isPlaceholder = (value: SubagentWorkspaceInput[WorkspaceField]): boolean =
  */
 export const workspaceOperationError = (operation: SubagentWorkspaceInput): string | undefined => {
   const fields = WORKSPACE_ACTION_FIELDS[operation.action];
-  const missing = fields.required.find((field) => isPlaceholder(operation[field]));
+  const missing = Option.getOrUndefined(
+    Arr.findFirst(fields.required, (field) => isPlaceholder(operation[field])),
+  );
   if (missing) return `Worktree ${operation.action} requires ${missing}.`;
   const allowed = new Set<WorkspaceField>([...fields.required, ...fields.optional]);
-  const unexpected = WORKSPACE_FIELDS.find(
-    (field) => !allowed.has(field) && !isPlaceholder(operation[field]),
+  const unexpected = Option.getOrUndefined(
+    Arr.findFirst(
+      WORKSPACE_FIELDS,
+      (field) => !allowed.has(field) && !isPlaceholder(operation[field]),
+    ),
   );
   if (unexpected) return `Worktree ${operation.action} does not accept ${unexpected}.`;
   return undefined;
@@ -453,10 +471,10 @@ export const agentArgumentPreparer = <N extends AgentToolName>(name: N) => {
   return toolArgumentPreparer(name, parameters, { aliases: SUBAGENT_FIELD_ALIASES });
 };
 
-const START_SPEC_FIELDS = Object.keys(StartSpecFields);
+const START_SPEC_FIELDS: ReadonlyArray<string> = Rec.keys(StartSpecFields);
 
 const checkStartAgents = (agents: ReadonlyArray<JsonValue>): void =>
-  agents.forEach((candidate, index) => {
+  Arr.forEach(agents, (candidate, index) => {
     const agent = Option.getOrUndefined(decodeArgumentsObject(candidate));
     if (!agent) return;
     const disallowedField = firstDisallowedLaunchOverride(agent);
@@ -473,19 +491,24 @@ const checkStartAgents = (agents: ReadonlyArray<JsonValue>): void =>
 
 const inspectStartArguments = (args: JsonObject): void => {
   const agents = args.agents;
-  if (Array.isArray(agents)) return checkStartAgents(agents);
-  const misplaced = Object.keys(args).filter(
+  if (Arr.isArray(agents)) return checkStartAgents(agents);
+  const misplaced = Arr.filter(
+    Rec.keys<string, unknown>(args),
     (key) =>
       START_SPEC_FIELDS.includes(key) ||
       replacementField(key, START_SPEC_FIELDS, SUBAGENT_FIELD_ALIASES) !== undefined,
   );
   if (misplaced.length === 0) return undefined;
-  const renamed = misplaced.flatMap((key) => {
+  const renamed = Arr.flatMap(misplaced, (key) => {
     const replacement = replacementField(key, START_SPEC_FIELDS, SUBAGENT_FIELD_ALIASES);
     return replacement ? [`"${replacement}" for "${key}"`] : [];
   });
   throw new Error(
-    `[invalid_start_shape] agent_start requires { agents: [{ task: "..." }] }; move ${misplaced.map((key) => `"${key}"`).join(", ")} into an agents entry.${renamed.length > 0 ? ` Inside it, use ${renamed.join(", ")}.` : ""}`,
+    `[invalid_start_shape] agent_start requires { agents: [{ task: "..." }] }; move ${Fn.pipe(
+      misplaced,
+      Arr.map((key) => `"${key}"`),
+      Arr.join(", "),
+    )} into an agents entry.${renamed.length > 0 ? ` Inside it, use ${Arr.join(renamed, ", ")}.` : ""}`,
   );
 };
 

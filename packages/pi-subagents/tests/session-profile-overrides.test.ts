@@ -17,6 +17,8 @@ import {
   profileCandidate as candidate,
 } from "./fixtures/profiles.ts";
 import { stringContaining } from "./support/matchers.ts";
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
 
 const route = (model: string): ProfileRoute => ({ candidates: [candidate(model)] });
 
@@ -48,7 +50,7 @@ describe("session profile overrides", () => {
           publishSession: (snapshot) =>
             published.push({
               revision: snapshot.revision,
-              baselineProfiles: Object.keys(snapshot.baseline.profiles).length,
+              baselineProfiles: Rec.size(snapshot.baseline.profiles),
             }),
         });
         const initial = yield* service.capture;
@@ -384,11 +386,11 @@ describe("session profile overrides", () => {
         ],
         { concurrency: "unbounded" },
       );
-      expect(outcomes.filter(Exit.isSuccess)).toHaveLength(1);
-      expect(outcomes.filter(Exit.isFailure)).toHaveLength(1);
+      expect(Arr.filter(outcomes, Exit.isSuccess)).toHaveLength(1);
+      expect(Arr.filter(outcomes, Exit.isFailure)).toHaveLength(1);
       const snapshot = yield* service.capture;
       expect(snapshot.revision).toBe(1);
-      expect(Object.keys(snapshot.overrides)).toHaveLength(1);
+      expect(Rec.size<string, unknown>(snapshot.overrides)).toBe(1);
     }),
   );
 });

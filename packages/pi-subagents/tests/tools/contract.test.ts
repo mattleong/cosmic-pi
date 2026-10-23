@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import type { FailedStartRecovery, SubagentRunView } from "../../src/run/model.ts";
 import type { SubagentRunObservation } from "../../src/run/service.ts";
 import {
@@ -13,6 +13,9 @@ import {
   type SubagentContractTool,
 } from "../../src/tools/contract-schema.ts";
 import { view } from "../fixtures/run-view.ts";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 
 const decoded = <Tool extends SubagentContractTool, Contract extends SubagentContract<Tool>>(
   tool: Tool,
@@ -29,7 +32,7 @@ const observedTargets = (observations: ReadonlyArray<SubagentRunObservation>) =>
     awaitContract({
       observations,
       until: "all_finished",
-      requestedRunIds: observations.map((observation) => observation.run.id),
+      requestedRunIds: Arr.map(observations, (observation) => observation.run.id),
     }),
   ).targets;
 
@@ -45,7 +48,7 @@ const recovery = (runId: string, overrides: Partial<FailedStartRecovery> = {}) =
 
 describe("start contract", () => {
   it("keeps request order, full started IDs, and admitted-run recovery for a partial batch", () => {
-    const longId = `run-${"x".repeat(300)}`;
+    const longId = `run-${Fn.pipe("x", Str.repeat(300))}`;
     const contract = decoded(
       "agent_start",
       startContract(
@@ -81,7 +84,7 @@ describe("start contract", () => {
       ),
     );
     expect(contract.outcome).toBe("partial");
-    expect(contract.launches.map((launch) => [launch.index, launch.status])).toEqual([
+    expect(Arr.map(contract.launches, (launch) => [launch.index, launch.status])).toEqual([
       [0, "started"],
       [1, "failed"],
       [2, "failed"],
@@ -114,7 +117,10 @@ describe("report disposition", () => {
       text: "Done.",
       truncated: false,
     });
-    const long = finished("a", { finalText: "x".repeat(10_000), reportStatus: "available" });
+    const long = finished("a", {
+      finalText: Fn.pipe("x", Str.repeat(10_000)),
+      reportStatus: "available",
+    });
     expect(report({ run: long, completionReceipt: receipt("a") })).toMatchObject({
       status: "delivered",
       truncated: true,
@@ -138,12 +144,13 @@ describe("failures", () => {
         run: view({
           id: "a",
           state: "failed",
-          error: `FAILURE ${"x".repeat(8_000)}`,
+          error: `FAILURE ${Fn.pipe("x", Str.repeat(8_000))}`,
           errorArchive,
         }),
       },
     ]);
-    expect(target?.error?.startsWith("FAILURE")).toBe(true);
+    assert(target?.error !== undefined);
+    expect(Fn.pipe(target.error, Str.startsWith("FAILURE"))).toBe(true);
     expect(target?.error?.length).toBeLessThan(1_000);
     expect(target?.errorFile).toEqual(errorArchive);
   });
@@ -172,7 +179,7 @@ describe("await contract", () => {
       requestedRunIds: ["done", "old", "busy", "never-seen"],
       unobservedRunIds: ["never-seen"],
     });
-    expect(contract.targets.map((target) => target.report.status)).toEqual([
+    expect(Arr.map(contract.targets, (target) => target.report.status)).toEqual([
       "deferred",
       "already_delivered",
       "not_finished",
@@ -189,8 +196,8 @@ describe("cleanup evidence", () => {
       recovery: "manual",
       diagnostic: {
         phase: "writer-lease",
-        code: "x".repeat(100),
-        message: `token=lease-secret\n${"detail ".repeat(300)}`,
+        code: Fn.pipe("x", Str.repeat(100)),
+        message: `token=lease-secret\n${Fn.pipe("detail ", Str.repeat(300))}`,
       },
     },
   });
@@ -241,6 +248,7 @@ describe("privacy and strict decoding", () => {
       "\u001b",
     ])
       expect(serialized).not.toContain(secret);
-    expect(targets[0]?.warnings.map((warning) => warning.source)).toEqual(["child", "system"]);
+    assert(targets[0] !== undefined);
+    expect(Arr.map(targets[0].warnings, (warning) => warning.source)).toEqual(["child", "system"]);
   });
 });

@@ -1,3 +1,7 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Order from "effect/Order";
+import * as Str from "effect/String";
 import type {
   SubagentCompletionNotification,
   SubagentNotificationDelivery,
@@ -72,16 +76,20 @@ interface CompletionDeliverySelection {
   readonly notification: SubagentCompletionNotification;
 }
 
-const compareRecordIds = (left: RunRecord, right: RunRecord): number =>
-  left.view.id.localeCompare(right.view.id, undefined, { numeric: true });
+const compareRecordIds: Order.Order<RunRecord> = (left, right) =>
+  Fn.pipe(left.view.id, Str.localeCompare(right.view.id, undefined, { numeric: true }));
 
 export function collectCompletionDeliveryBatch(
   records: ReadonlyMap<string, RunRecord>,
 ): ReadonlyArray<CompletionDeliverySelection> {
   const selected: CompletionDeliverySelection[] = [];
-  for (const record of [...records.values()].toSorted(compareRecordIds)) {
-    const completions = [...record.completionGenerations.values()].toSorted(
-      (left, right) => left.generation - right.generation,
+  for (const record of Arr.sort([...records.values()], compareRecordIds)) {
+    const completions = Arr.sort(
+      [...record.completionGenerations.values()],
+      Order.mapInput(
+        Order.Number,
+        (completion: CompletionGenerationRecord) => completion.generation,
+      ),
     );
     for (const completion of completions) {
       if (!isCompletionEligible(record, completion.generation)) continue;
@@ -109,7 +117,7 @@ export function deliveredCompletionKeys(
 ): ReadonlySet<string> {
   return new Set(
     delivery?.deliveredCompletionKeys ??
-      runs.map((run) => completionNotificationKey(run.id, run.generation)),
+      Arr.map(runs, (run) => completionNotificationKey(run.id, run.generation)),
   );
 }
 

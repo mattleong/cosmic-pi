@@ -6,6 +6,9 @@ import * as Exit from "effect/Exit";
 import * as Latch from "effect/Latch";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import type { BackendAgentMessaging, BackendReport } from "../backend/model.ts";
 import {
   SupervisorChannelIdSchema,
@@ -119,7 +122,7 @@ export const supervisorChannelSession = Effect.fn("SupervisorChannel.session")(f
         "invalid_assignment_epoch",
         "Assignment epoch cannot advance in the current channel state.",
       );
-    const watchingPeers = [...peers.values()].filter((peer) => peer.watching);
+    const watchingPeers = Arr.filter([...peers.values()], (peer) => peer.watching);
     if (watchingPeers.length === 0)
       return yield* epochError(
         "supervisor_helper_unavailable",
@@ -190,7 +193,9 @@ export const supervisorChannelSession = Effect.fn("SupervisorChannel.session")(f
             "Report evidence epoch is invalid.",
           ),
         );
-      const accepted = [...reports.values()].find((entry) => entry.assignmentEpoch === epoch);
+      const accepted = Option.getOrUndefined(
+        Arr.findFirst(reports.values(), (entry) => entry.assignmentEpoch === epoch),
+      );
       return Effect.succeed(accepted);
     });
 
@@ -220,7 +225,7 @@ export const supervisorChannelSession = Effect.fn("SupervisorChannel.session")(f
     pending.replyStarted = true;
     Deferred.doneUnsafe(
       pending.response,
-      Effect.succeed({ questionId: pending.requestId, message: message.trim() }),
+      Effect.succeed({ questionId: pending.requestId, message: Str.trim(message) }),
     );
     const acknowledged = yield* Deferred.await(pending.acknowledgement).pipe(
       Effect.timeoutOption(REPLY_TIMEOUT),
@@ -243,11 +248,13 @@ export const supervisorChannelSession = Effect.fn("SupervisorChannel.session")(f
   });
 
   const cancelPending = (reason?: string): void => {
-    const trimmed = reason?.trim();
+    const trimmed = Str.trim(reason ?? "");
     failPendingQuestion(
       state,
       "question_cancelled",
-      trimmed ? trimmed.slice(0, 512) : "The pending supervisor question was cancelled.",
+      trimmed
+        ? Fn.pipe(trimmed, Str.slice(0, 512))
+        : "The pending supervisor question was cancelled.",
     );
   };
 

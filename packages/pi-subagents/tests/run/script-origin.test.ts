@@ -9,6 +9,7 @@ import {
   runViews,
   withService,
 } from "./fixtures/service-harness.ts";
+import * as Arr from "effect/Array";
 
 describe("immutable script-origin subtree policy", () => {
   it.effect("inherits through authenticated readers and ignores spoofed parent ancestry", () => {
@@ -36,7 +37,7 @@ describe("immutable script-origin subtree policy", () => {
         expect(denied).toMatchObject({ code: "scripted_subtree_writer_not_supported" });
         expect(getFailedStartRecovery(denied)).toBeUndefined();
       }
-      expect((yield* runViews(service)).map((run) => run.id)).toEqual([
+      expect(Arr.map(yield* runViews(service), (run) => run.id)).toEqual([
         scripted.id,
         unrelated.id,
         reader.id,

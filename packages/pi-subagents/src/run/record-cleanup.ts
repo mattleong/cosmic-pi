@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
 import * as Deferred from "effect/Deferred";
@@ -191,13 +192,14 @@ export function recordCleanup(
   const scopeFailure = (record: RunRecord, scope: Scope.Closeable, cause: Cause.Cause<unknown>) => {
     const process = record.process;
     const verifier = process?.cleanupVerifier;
-    const diagnostics = cause.reasons.map((reason) => verifier?.diagnostic(reason));
+    const diagnostics = Arr.map(cause.reasons, (reason) => verifier?.diagnostic(reason));
     const allAttested =
-      diagnostics.length > 0 && diagnostics.every((diagnostic) => diagnostic !== undefined);
+      diagnostics.length > 0 && Arr.every(diagnostics, (diagnostic) => diagnostic !== undefined);
     const recoverable =
       allAttested &&
       verifier?.canVerify() === true &&
-      diagnostics.every(
+      Arr.every(
+        diagnostics,
         (diagnostic) =>
           diagnostic?.phase === "process-exit" ||
           diagnostic?.phase === "process-group" ||
@@ -342,7 +344,7 @@ export function recordCleanup(
                 ? reason.error
                 : failureDiagnostic("backend-scope", observed.cause);
             const recoverable =
-              observed.cause.reasons.every(Cause.isFailReason) &&
+              Arr.every(observed.cause.reasons, Cause.isFailReason) &&
               diagnostic.phase !== "backend-scope" &&
               diagnostic.phase !== "descendant-snapshot";
             return yield* retainCleanupQuarantine(

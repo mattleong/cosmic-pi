@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import type { SubagentRunView } from "../run/model.ts";
 
 interface RunTreeNode {
@@ -46,7 +48,7 @@ const walkRunTree = <Node extends RunTreeNode>(
     const descendants = children.get(run.id) ?? [];
     visit({ run, isLastSibling, ancestorContinues, hasChildren: descendants.length > 0, hidden });
     const hideChildren = hidden || collapsedRunIds.has(run.id);
-    descendants.forEach((child, index) =>
+    Arr.forEach(descendants, (child, index) =>
       descend(
         child,
         index === descendants.length - 1,
@@ -55,7 +57,7 @@ const walkRunTree = <Node extends RunTreeNode>(
       ),
     );
   };
-  roots.forEach((run, index) => descend(run, index === roots.length - 1, [], false));
+  Arr.forEach(roots, (run, index) => descend(run, index === roots.length - 1, [], false));
 };
 
 export const projectRunCardTree = <Node extends RunTreeNode>(
@@ -114,6 +116,8 @@ export const projectFleetTree = <Node extends RunTreeNode = SubagentRunView>(
 };
 
 export const runTreeBranch = <Node extends RunTreeNode>(row: RunTreeRow<Node>): string =>
-  `${row.ancestorContinues.map((continued) => (continued ? "│   " : "    ")).join("")}${
-    row.isLastSibling ? "└── " : "├── "
-  }`;
+  `${Fn.pipe(
+    row.ancestorContinues,
+    Arr.map((continued) => (continued ? "│   " : "    ")),
+    Arr.join(""),
+  )}${row.isLastSibling ? "└── " : "├── "}`;

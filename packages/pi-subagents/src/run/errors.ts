@@ -1,5 +1,7 @@
+import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 
 export class InvalidSubagentRequestError extends Schema.TaggedError<
   InvalidSubagentRequestError,
@@ -98,10 +100,10 @@ export const subagentErrorCode = (error: SubagentError): string =>
   error._tag;
 
 export const isOutcomeUncertain = (error: { readonly code?: string | undefined }): boolean =>
-  error.code?.endsWith("_outcome_uncertain") === true;
+  error.code !== undefined && Fn.pipe(error.code, Str.endsWith("_outcome_uncertain"));
 
 export const isCleanupUnconfirmed = (error: { readonly code?: string | undefined }): boolean =>
-  error.code?.endsWith("_cleanup_unconfirmed") === true;
+  error.code !== undefined && Fn.pipe(error.code, Str.endsWith("_cleanup_unconfirmed"));
 
 /** The code of guidance whose native delivery is still being confirmed. */
 export const PENDING_STEER_DELIVERY_CODE = "steer_outcome_uncertain";

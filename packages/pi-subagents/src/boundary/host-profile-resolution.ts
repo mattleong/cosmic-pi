@@ -6,6 +6,10 @@ import { freezeSnapshot } from "pi-cosmic-core";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
 import { SubagentBackendRegistry } from "../backend/service.ts";
 import { customAgentToolSnapshot, piRootActiveToolSnapshot } from "../run/tool-policy.ts";
 import {
@@ -97,8 +101,15 @@ const sharesParentPromptCache = (
   model: string,
 ): boolean => {
   if (context !== "fork" || parent.model !== model) return false;
-  const separator = model.indexOf("/");
-  const parentModel = registry.find(model.slice(0, separator), model.slice(separator + 1));
+  const separator = Fn.pipe(
+    model,
+    Str.indexOf("/"),
+    Option.getOrElse(() => -1),
+  );
+  const parentModel = registry.find(
+    Fn.pipe(model, Str.slice(0, separator)),
+    Fn.pipe(model, Str.slice(separator + 1)),
+  );
   return parentModel !== undefined && forkPromptCacheRoute(parentModel) !== undefined;
 };
 
@@ -121,19 +132,20 @@ const resolvePiModel = Effect.fn("HostProfileResolution.resolvePiModel")(functio
   effortWasExplicit: boolean,
   registry: ModelRegistry,
 ): Effect.fn.Return<ResolvedModel, InvalidSubagentRequestError> {
-  const availableModels = registry
-    .getAvailable()
-    .map((model) => ({ provider: model.provider, id: model.id }));
+  const availableModels = Arr.map(registry.getAvailable(), (model) => ({
+    provider: model.provider,
+    id: model.id,
+  }));
   const resolution = resolvePiModelSelector(selector, availableModels);
   if (resolution.kind === "ambiguous")
     return yield* InvalidSubagentRequestError.make({
       code: "pi_model_ambiguous",
-      message: `Pi model "${selector}" matches multiple authenticated providers: ${resolution.candidates.join(", ")}. Configure one canonical provider/model value.`,
+      message: `Pi model "${selector}" matches multiple authenticated providers: ${Arr.join(resolution.candidates, ", ")}. Configure one canonical provider/model value.`,
     });
   if (resolution.kind === "unknown")
     return yield* InvalidSubagentRequestError.make({
       code: "pi_model_unknown",
-      message: `Profile route references unknown or unauthenticated Pi model "${selector}".${resolution.nearMatches.length > 0 ? ` Close authenticated matches: ${resolution.nearMatches.join(", ")}.` : ""} Update the profile route and reload.`,
+      message: `Profile route references unknown or unauthenticated Pi model "${selector}".${resolution.nearMatches.length > 0 ? ` Close authenticated matches: ${Arr.join(resolution.nearMatches, ", ")}.` : ""} Update the profile route and reload.`,
     });
   const modelId = `${resolution.provider}/${resolution.id}`;
   const model = registry.find(resolution.provider, resolution.id);
@@ -146,7 +158,7 @@ const resolvePiModel = Effect.fn("HostProfileResolution.resolvePiModel")(functio
   if (effortWasExplicit && !supportedEfforts.includes(effort))
     return yield* InvalidSubagentRequestError.make({
       code: "pi_effort_unsupported",
-      message: `Pi model ${modelId} does not support required effort ${effort}; supported efforts: ${supportedEfforts.join(", ") || "none"}.`,
+      message: `Pi model ${modelId} does not support required effort ${effort}; supported efforts: ${Arr.join(supportedEfforts, ", ") || "none"}.`,
     });
   const authSource = registry.getProviderAuthStatus(model.provider).source;
   if (authSource !== "runtime") return { model: modelId };
@@ -173,7 +185,7 @@ const profileEnvironment = (
   registry: ModelRegistry,
   parent: SubagentParentContext,
 ): ProfileResolutionEnvironment => ({
-  availablePiModels: registry.getAvailable().map((model) => ({
+  availablePiModels: Arr.map(registry.getAvailable(), (model) => ({
     provider: model.provider,
     id: model.id,
     supportedEfforts: getSupportedThinkingLevels(model),
@@ -294,7 +306,10 @@ const modelOverrideUnavailable = (
 ): InvalidSubagentRequestError =>
   InvalidSubagentRequestError.make({
     code: "model_override_unavailable",
-    message: `Model override ${modelOverrideLabel(override)} is unavailable\n\nAn override never falls back to the profile route.${skipped.map((skip) => ` [${skip.code}] ${skip.reason}`).join("")} Fix the override, or omit it to use ${routeSubject(definition, agent)}'s route.`,
+    message: `Model override ${modelOverrideLabel(override)} is unavailable\n\nAn override never falls back to the profile route.${Arr.join(
+      Arr.map(skipped, (skip) => ` [${skip.code}] ${skip.reason}`),
+      "",
+    )} Fix the override, or omit it to use ${routeSubject(definition, agent)}'s route.`,
   });
 
 /**
@@ -308,7 +323,7 @@ const validatedModelOverride = (
 ): Effect.Effect<ProfileCandidate, InvalidSubagentRequestError> => {
   const candidate = modelOverrideCandidate(override, definition, agent);
   const issues = [
-    ...profileCandidateValidationIssues(candidate).map((issue) => issue.code),
+    ...Arr.map(profileCandidateValidationIssues(candidate), (issue) => issue.code),
     ...(agent && hasCustomAgentToolPolicy(agent) && candidate.runtime !== "pi"
       ? ["agent_tools_unsupported"]
       : []),
@@ -317,7 +332,7 @@ const validatedModelOverride = (
   return Effect.fail(
     InvalidSubagentRequestError.make({
       code: "model_override_invalid",
-      message: `Model override ${modelOverrideLabel(override)} is invalid for ${routeSubject(definition, agent)}\n\nViolations: ${issues.join(", ")}. Use a native selector the runtime accepts. This launch uses ${candidate.context} context; forked context, the parent model, and agent tool lists need runtime pi.`,
+      message: `Model override ${modelOverrideLabel(override)} is invalid for ${routeSubject(definition, agent)}\n\nViolations: ${Arr.join(issues, ", ")}. Use a native selector the runtime accepts. This launch uses ${candidate.context} context; forked context, the parent model, and agent tool lists need runtime pi.`,
     }),
   );
 };
@@ -330,16 +345,25 @@ const exhaustedRoute = (
     return modelOverrideUnavailable(input.definition, input.rawInput.model, exhausted, input.agent);
   const allUnsupported =
     exhausted.length > 0 &&
-    exhausted.every((candidate) => candidate.code === "backend_not_implemented");
-  const skipCodes = exhausted
-    .map(
+    Arr.every(exhausted, (candidate) => candidate.code === "backend_not_implemented");
+  const skipCodes = Arr.join(
+    Arr.map(
+      exhausted,
       (candidate) =>
         `${candidate.candidateIndex === undefined ? "route" : `candidate ${candidate.candidateIndex + 1}`}[${candidate.code}]`,
-    )
-    .join(", ");
+    ),
+    ", ",
+  );
   return InvalidSubagentRequestError.make({
     code: allUnsupported ? "backend_not_implemented" : "profile_no_eligible_model",
-    message: `${planSubject(input.definition, input.agent)} has no eligible implemented backend after pre-start checks.${skipCodes ? ` Skipped: ${skipCodes}.` : ""}${exhausted.length > 0 ? ` ${exhausted.map((candidate) => candidate.reason).join(" ")}` : ""}`,
+    message: `${planSubject(input.definition, input.agent)} has no eligible implemented backend after pre-start checks.${skipCodes ? ` Skipped: ${skipCodes}.` : ""}${
+      exhausted.length > 0
+        ? ` ${Arr.join(
+            Arr.map(exhausted, (candidate) => candidate.reason),
+            " ",
+          )}`
+        : ""
+    }`,
   });
 };
 
@@ -363,7 +387,7 @@ const selectCandidate = Effect.fn("HostProfileResolution.selectCandidate")(funct
 const validatedStartInput = Effect.fn("HostProfileResolution.validatedStartInput")(function* (
   rawInput: SubagentProfileStartSpec,
 ) {
-  const task = rawInput.task.trim();
+  const task = Str.trim(rawInput.task);
   if (!task)
     return yield* InvalidSubagentRequestError.make({
       code: "task_required",
@@ -461,7 +485,7 @@ const launchedAgent = (
   rawInput: SubagentProfileStartSpec,
   profileSnapshot: SessionProfileSnapshot,
 ): Effect.Effect<CustomAgent | undefined, InvalidSubagentRequestError> => {
-  const name = rawInput.agent?.trim();
+  const name = Str.trim(rawInput.agent ?? "");
   if (!name) return Effect.undefined;
   if (rawInput.profile !== undefined)
     return Effect.fail(
@@ -473,7 +497,11 @@ const launchedAgent = (
   const config = profileSnapshot.effectiveConfig;
   const lookup = lookupCustomAgent(config, name);
   if (lookup.kind === "found") return Effect.succeed(lookup.agent);
-  const available = config.agents.map((agent) => agent.name).join(", ") || "none";
+  const available =
+    Arr.join(
+      Arr.map(config.agents, (agent) => agent.name),
+      ", ",
+    ) || "none";
   return Effect.fail(
     lookup.kind === "invalid"
       ? InvalidSubagentRequestError.make({
@@ -502,12 +530,12 @@ export const resolveProfileStart = Effect.fn("HostProfileResolution.resolveProfi
     const profiles = yield* SubagentProfileService;
     const profileSnapshot = capturedProfiles ?? (yield* profiles.capture);
     const agent = yield* launchedAgent(rawInput, profileSnapshot);
-    const selectedProfile = agent?.profile ?? ((rawInput.profile?.trim() ?? "") || "generalist");
+    const selectedProfile = agent?.profile ?? (Str.trim(rawInput.profile ?? "") || "generalist");
     const definition = profiles.definition(selectedProfile);
     if (!definition)
       return yield* InvalidSubagentRequestError.make({
         code: "profile_unknown",
-        message: `Unknown subagent profile "${selectedProfile}". Available profiles: ${PROFILE_IDS.join(", ")}.`,
+        message: `Unknown subagent profile "${selectedProfile}". Available profiles: ${Arr.join(PROFILE_IDS, ", ")}.`,
       });
     const parent = environment.parentContext ?? (yield* captureHostParentContext(pi, ctx));
     // Candidate probes can outlast the session, so later registry reads use this capture.

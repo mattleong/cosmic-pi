@@ -2,6 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Exit from "effect/Exit";
 import { temporaryDirectory } from "pi-cosmic-core/testing";
@@ -32,6 +33,8 @@ import {
   workspaceFixture as fixture,
 } from "./fixtures/workspace-engine.ts";
 import { stringContaining } from "../support/matchers.ts";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
 
 const record = (
   workspaceId: string,
@@ -51,7 +54,7 @@ const record = (
     writerCwd: {
       path: `/private/${workspaceId}`,
       filesystemIdentity: `dev:1;ino:/private/${workspaceId}`,
-      digest: "1".padStart(64, "0"),
+      digest: Fn.pipe("1", Str.padStart(64, "0")),
     },
   },
   status,
@@ -84,15 +87,17 @@ describe("writer workspace orchestration", () => {
     const f = fixture({
       writerLeases: leasesWith((base) => ({
         canonicalize: (cwd) =>
-          base
-            .canonicalize(cwd)
-            .pipe(
-              Effect.map((identity) =>
-                replaced
-                  ? { ...identity, filesystemIdentity: "dev:2;ino:3", digest: "f".repeat(64) }
-                  : identity,
-              ),
+          base.canonicalize(cwd).pipe(
+            Effect.map((identity) =>
+              replaced
+                ? {
+                    ...identity,
+                    filesystemIdentity: "dev:2;ino:3",
+                    digest: Fn.pipe("f", Str.repeat(64)),
+                  }
+                : identity,
             ),
+          ),
       })),
     });
     f.hooks.afterCreate = Effect.sync(() => {
@@ -117,7 +122,7 @@ describe("writer workspace orchestration", () => {
       });
       expect(yield* runViews(service)).toEqual([]);
       expect(f.children.controls).toHaveLength(0);
-      expect([...f.entries.values()].map((entry) => entry.status)).toEqual(["discarded"]);
+      expect(Arr.map([...f.entries.values()], (entry) => entry.status)).toEqual(["discarded"]);
     });
   });
 
@@ -131,7 +136,7 @@ describe("writer workspace orchestration", () => {
       expect(yield* runViews(service)).toEqual([]);
       expect(f.children.controls).toHaveLength(0);
       expect(f.hookRuns).toEqual([]);
-      expect([...f.entries.values()].map((entry) => entry.status)).toEqual(["discarded"]);
+      expect(Arr.map([...f.entries.values()], (entry) => entry.status)).toEqual(["discarded"]);
     });
   });
 
@@ -163,7 +168,7 @@ describe("writer workspace orchestration", () => {
       const wrapped = Layer.succeed(WriterLeaseService, {
         ...leases,
         canonicalize: (directory) =>
-          leases.canonicalize(directory.startsWith("/private/") ? worker : directory),
+          leases.canonicalize(Fn.pipe(directory, Str.startsWith("/private/")) ? worker : directory),
         acquire: (input) =>
           leases
             .acquire(input)
@@ -361,7 +366,7 @@ describe("writer workspace orchestration", () => {
     const f = fixture();
     // The review text leads with the revision's summary, which doesn't depend on its id.
     const summary = revisionSummary({ revisionId: "", changedPaths: ["file.ts"], diff: "" });
-    const diff = `${"x".repeat(15_999 - summary.length)}\u{1F600}${"y".repeat(10)}`;
+    const diff = `${Fn.pipe("x", Str.repeat(15_999 - summary.length))}\u{1F600}${Fn.pipe("y", Str.repeat(10))}`;
     f.hooks.revisionDiff = diff;
     return withService(f.layer, function* (service) {
       const id = (yield* stoppedWriter(service)).workspaceId!;

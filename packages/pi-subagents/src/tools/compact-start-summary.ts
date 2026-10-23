@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import { compactIssueSeverity } from "pi-code-previews";
 import type { CompactIssue, CompactPhase, CompactSummary } from "pi-code-previews";
 import { QUOTED_TEXT_LIMIT, quoted } from "./compact-run-issues.ts";
@@ -29,18 +32,21 @@ const launchFailureIssue = (
   message: uncertain
     ? `${label} may have started`
     : `${label} couldn't start: ${failureMessage(failure.message, "startup failed", QUOTED_TEXT_LIMIT)}`,
-  detail: [
-    `${failure.code ? `[${failure.code}] ` : ""}${failure.message}`,
-    ...(uncertain && !failure.admittedRun
-      ? [
-          "List runs with agent_list and inspect them with agent_read before retrying or launching a replacement.",
-        ]
-      : []),
-  ].join("\n"),
+  detail: Arr.join(
+    [
+      `${failure.code ? `[${failure.code}] ` : ""}${failure.message}`,
+      ...(uncertain && !failure.admittedRun
+        ? [
+            "List runs with agent_list and inspect them with agent_read before retrying or launching a replacement.",
+          ]
+        : []),
+    ],
+    "\n",
+  ),
 });
 
 const startedCounter = (started: number, total: number, subject: string): string =>
-  started === 1 && total === 1 && subject.trim() ? "started" : `${started}/${total} started`;
+  started === 1 && total === 1 && Str.trim(subject) ? "started" : `${started}/${total} started`;
 
 export function summarizeStart(
   details: SubagentStartDetails,
@@ -48,11 +54,11 @@ export function summarizeStart(
   summary: CompactSummary,
   issues: CompactIssue[],
 ): CompactSummary {
-  const started = details.startEntries.filter((entry) => entry.status === "started").length;
+  const started = Arr.filter(details.startEntries, (entry) => entry.status === "started").length;
   const total = details.startEntries.length;
   summary.counters = [startedCounter(started, total, summary.subject)];
   for (const entry of details.startEntries) {
-    const label = entry.name.slice(0, 60);
+    const label = Fn.pipe(entry.name, Str.slice(0, 60));
     if (entry.routeStatus === "selected" && entry.warning)
       issues.push({
         severity: "warning",
@@ -61,7 +67,7 @@ export function summarizeStart(
       });
   }
   for (const failure of details.startFailures ?? []) {
-    const label = (failure.name ?? `Launch ${failure.index + 1}`).slice(0, 60);
+    const label = Fn.pipe(failure.name ?? `Launch ${failure.index + 1}`, Str.slice(0, 60));
     const uncertain = isUncertainToolFailure(failure);
     issues.push(launchFailureIssue(failure, label, uncertain));
     const recovery = failure.admittedRun;
@@ -71,7 +77,10 @@ export function summarizeStart(
       severity: quarantined ? "warning" : "info",
       code: `run:${recovery.runId}:admitted-run`,
       message: `${label}: ${admittedRunMessage(recovery)}`,
-      detail: [formatFailedStartRecovery(recovery), failedStartRecoveryAction(recovery)].join("\n"),
+      detail: Arr.join(
+        [formatFailedStartRecovery(recovery), failedStartRecoveryAction(recovery)],
+        "\n",
+      ),
     });
   }
   if (compactIssueSeverity(issues) === "error") summary.outcome = "error";

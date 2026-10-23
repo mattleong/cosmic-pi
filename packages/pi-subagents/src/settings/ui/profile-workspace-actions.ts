@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { MAX_PROFILE_CANDIDATES, type ProfileId } from "../../profiles/model.ts";
 import {
   CANDIDATE_LIMIT_ERROR,
@@ -42,7 +43,7 @@ export const profileWorkspaceActionChoices = (input: {
     "move-down": count > 1 && input.candidateIndex < count - 1,
     remove: count > 0,
   } satisfies Record<CandidateMenuAction, boolean>;
-  return CANDIDATE_MENU_CHOICES.filter((choice) => available[choice.action]);
+  return Arr.filter(CANDIDATE_MENU_CHOICES, (choice) => available[choice.action]);
 };
 
 export const applyProfileWorkspaceDraftAction = (input: {

@@ -18,6 +18,8 @@ import {
 import { childToolPolicy, createForkedSession } from "../src/boundary/child-process.ts";
 import { registerForkPromptCacheHooks } from "../src/boundary/fork-prompt-cache.ts";
 import { backendLaunch } from "./fixtures/backend-supervisor.ts";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
 
 describe("installed Pi transcript reconstruction", () => {
   it.live(
@@ -88,34 +90,34 @@ describe("installed Pi transcript reconstruction", () => {
           sessionManager: SessionManager.open(forkFile),
           resourceLoader: loader,
           tools: [...childToolPolicy(["child_alpha", "child_beta"]).enabled],
-          excludeTools: childToolPolicy([]).excluded.split(","),
+          excludeTools: Str.split(childToolPolicy([]).excluded, ","),
         });
         fake.setResponses([
           (context) => {
             expect(getCurrentSystemPrompt(context.messages)).toContain("child-only instruction");
             expect(getCurrentSystemPrompt(context.messages)).not.toContain("parent-only");
-            expect(getCurrentTools(context.messages).map((tool) => tool.name)).toEqual([
+            expect(Arr.map(getCurrentTools(context.messages), (tool) => tool.name)).toEqual([
               "child_alpha",
               "child_beta",
             ]);
             return fauxAssistantMessage("both ready");
           },
           (context) => {
-            expect(getCurrentTools(context.messages).map((tool) => tool.name)).toEqual([
+            expect(Arr.map(getCurrentTools(context.messages), (tool) => tool.name)).toEqual([
               "child_alpha",
             ]);
             return fauxAssistantMessage(fauxToolCall("child_alpha", {}), { stopReason: "toolUse" });
           },
           fauxAssistantMessage("alpha done"),
           (context) => {
-            expect(getCurrentTools(context.messages).map((tool) => tool.name)).toEqual([
+            expect(Arr.map(getCurrentTools(context.messages), (tool) => tool.name)).toEqual([
               "child_beta",
             ]);
             return fauxAssistantMessage(fauxToolCall("child_beta", {}), { stopReason: "toolUse" });
           },
           fauxAssistantMessage("beta done"),
           (context) => {
-            expect(getCurrentTools(context.messages).map((tool) => tool.name)).toEqual([
+            expect(Arr.map(getCurrentTools(context.messages), (tool) => tool.name)).toEqual([
               "child_alpha",
             ]);
             return fauxAssistantMessage(fauxToolCall("child_alpha", {}), { stopReason: "toolUse" });
@@ -126,19 +128,19 @@ describe("installed Pi transcript reconstruction", () => {
         yield* Effect.promise(() => session.prompt("use alpha"));
         const alphaLeaf = session.sessionManager.getLeafId()!;
         yield* Effect.promise(() => session.prompt("switch to beta"));
-        expect(session.agent.state.tools.map((tool) => tool.name)).toEqual(["child_beta"]);
+        expect(Arr.map(session.agent.state.tools, (tool) => tool.name)).toEqual(["child_beta"]);
         expect(
           yield* Effect.promise(() => session.navigateTree(alphaLeaf, { summarize: false })),
         ).toMatchObject({
           cancelled: false,
         });
-        expect(session.agent.state.tools.map((tool) => tool.name)).toEqual(["child_alpha"]);
+        expect(Arr.map(session.agent.state.tools, (tool) => tool.name)).toEqual(["child_alpha"]);
         yield* Effect.promise(() => session.prompt("use restored alpha"));
         expect(executed).toEqual(["child_alpha", "child_beta", "child_alpha"]);
         expect(fake.getPendingResponseCount()).toBe(0);
         const restored = SessionManager.open(forkFile).buildSessionContext().messages;
         expect(getCurrentSystemPrompt(restored)).toContain("child-only instruction");
-        expect(getCurrentTools(restored).map((tool) => tool.name)).toEqual(["child_alpha"]);
+        expect(Arr.map(getCurrentTools(restored), (tool) => tool.name)).toEqual(["child_alpha"]);
       }),
     15_000,
   );
@@ -229,7 +231,7 @@ describe("installed Pi transcript reconstruction", () => {
             sessionManager: SessionManager.open(forkFile),
             resourceLoader: loader,
             tools: [...childToolPolicy(["child_alpha"]).enabled],
-            excludeTools: childToolPolicy([]).excluded.split(","),
+            excludeTools: Str.split(childToolPolicy([]).excluded, ","),
           });
           fake.setResponses([
             (context) => {
@@ -237,7 +239,9 @@ describe("installed Pi transcript reconstruction", () => {
               const prompt = getCurrentSystemPrompt(context.messages);
               expect(prompt).toContain("child-only instruction");
               expect(prompt).not.toContain("parent-only");
-              expect(getCurrentTools(context.messages).map((tool) => tool.name)).toEqual(declared);
+              expect(Arr.map(getCurrentTools(context.messages), (tool) => tool.name)).toEqual(
+                declared,
+              );
               return fauxAssistantMessage(fauxToolCall("parent_only", {}), {
                 stopReason: "toolUse",
               });
@@ -255,7 +259,7 @@ describe("installed Pi transcript reconstruction", () => {
           expect(executed).toEqual([]);
           expect(fake.getPendingResponseCount()).toBe(0);
           const persisted = SessionManager.open(forkFile).buildSessionContext().messages;
-          expect(getCurrentTools(persisted).map((tool) => tool.name)).toEqual(["child_alpha"]);
+          expect(Arr.map(getCurrentTools(persisted), (tool) => tool.name)).toEqual(["child_alpha"]);
         }),
       15_000,
     );

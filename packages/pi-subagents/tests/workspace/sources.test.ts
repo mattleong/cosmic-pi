@@ -18,6 +18,10 @@ import {
   workspaceTests,
   writeFile,
 } from "./fixtures/repository.ts";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Order from "effect/Order";
 
 // Every Git configuration these tests read comes from this isolated home, rewritten per test.
 const home = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "pi-git-home-")));
@@ -53,10 +57,10 @@ const integrate = (service: WorkspaceServiceContract, handle: WorkspaceHandle) =
 const worktrees = (root: string) =>
   git(root, ["worktree", "list", "--porcelain"]).pipe(
     Effect.map((output) =>
-      output
-        .split("\n")
-        .filter((line) => line.startsWith("worktree "))
-        .map((line) => line.slice("worktree ".length)),
+      Arr.map(
+        Arr.filter(Str.split(output, "\n"), (line) => Fn.pipe(line, Str.startsWith("worktree "))),
+        (line) => Fn.pipe(line, Str.slice("worktree ".length)),
+      ),
     ),
   );
 const piRefs = (root: string) => git(root, ["for-each-ref", "--format=%(refname)", "refs/pi"]);
@@ -111,7 +115,7 @@ describe("baselines", () => {
       expect(yield* exists(path.join(handle.cwd, left))).toBe(false);
     const baseline = (yield* service.inspect(workspaceTarget(handle))).baseline;
     const files = yield* git(root, ["ls-tree", "-r", "--name-only", baseline]);
-    expect(files.split("\n").filter(Boolean).toSorted()).toEqual([
+    expect(Arr.sort(Arr.filter(Str.split(files, "\n"), Boolean), Order.String)).toEqual([
       "..notes/plan.md",
       ".gitignore",
       "docs/guide.md",
@@ -166,7 +170,12 @@ describe("the user's repository", () => {
     yield* git(root, ["config", "splitIndex.maxPercentChange", "0"]);
     yield* git(root, ["update-index", "--split-index"]);
     const sharedIndexes = io(() => fs.readdir(path.join(root, ".git"))).pipe(
-      Effect.map((names) => names.filter((name) => name.startsWith("sharedindex.")).toSorted()),
+      Effect.map((names) =>
+        Arr.sort(
+          Arr.filter(names, (name) => Fn.pipe(name, Str.startsWith("sharedindex."))),
+          Order.String,
+        ),
+      ),
     );
     const before = yield* sharedIndexes;
     yield* writeFile(path.join(root, "src/new.ts"), "untracked\n");
@@ -184,7 +193,9 @@ describe("the user's repository", () => {
     yield* writeFile(path.join(discarded.cwd, "src/main.ts"), "discarded\n");
     const revision = yield* service.freeze(target);
     yield* service.prepare({ ...target, revisionId: revision.revisionId });
-    expect((yield* worktrees(root)).filter((tree) => tree.startsWith(agent))).toHaveLength(3);
+    expect(
+      Arr.filter(yield* worktrees(root), (tree) => Fn.pipe(tree, Str.startsWith(agent))),
+    ).toHaveLength(3);
     expect(yield* piRefs(root)).toContain(discarded.workspaceId);
     // Git's administrative entries stay locked while the trees exist.
     expect(yield* git(root, ["worktree", "list", "--porcelain"])).toContain(

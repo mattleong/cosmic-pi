@@ -1,4 +1,7 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
+import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { sanitizeTerminalLine, synchronousNow } from "pi-cosmic-core";
@@ -14,6 +17,7 @@ import { runStateColor, runStateGlyph, runStateLabel } from "../ui/run-state.ts"
 import { projectRunCardTree, runTreeBranch } from "../ui/run-tree-rows.ts";
 import type { SubagentRunCard } from "./details-schema.ts";
 import { clipToWidth } from "pi-cosmic-ui/manager";
+import { isTextFragment } from "./text-fragments.ts";
 
 export const runTiming = (run: {
   readonly endedAt?: number | undefined;
@@ -24,17 +28,17 @@ export const runTiming = (run: {
   const elapsed = formatSessionAge(run.endedAt ?? now, run.startedAt);
   const activeAge = run.endedAt === undefined ? formatSessionActivity(now, run.lastActivityAt) : "";
   const active = activeAge ? `active ${activeAge}` : "";
-  return [elapsed, active].filter(Boolean).join(" · ");
+  return Fn.pipe([elapsed, active], Arr.filter(Boolean), Arr.join(" · "));
 };
 
 const padVisible = (value: string, width: number): string =>
-  `${value}${" ".repeat(Math.max(0, width - visibleWidth(value)))}`;
+  `${value}${Fn.pipe(" ", Str.repeat(Math.max(0, width - visibleWidth(value))))}`;
 
 const renderRouteRail = (run: SubagentRunCard, width: number, theme: Theme): string[] => {
   const prefix = width > 5 ? "     " : "   ";
   const available = Math.max(1, width - visibleWidth(prefix));
   const routeLines = wrapTextWithAnsi(formatRunRouteLine(run, theme), available);
-  return routeLines.map((line) => clipToWidth(`${prefix}${line}`, width));
+  return Arr.map(routeLines, (line) => clipToWidth(`${prefix}${line}`, width));
 };
 
 interface RunRow {
@@ -52,15 +56,17 @@ const renderHierarchyRow = (
 ): string => {
   const themedIdentity = identity.themed;
   const timing = runTiming(run);
-  const metadata = [
-    formatRunRouteLine(run, theme),
-    run.writeIntent === "writer" ? theme.fg("warning", "writer") : undefined,
-    usage ? theme.fg("muted", usage) : undefined,
-    run.currentTool ? theme.fg("accent", sanitizeTerminalLine(run.currentTool)) : undefined,
-    timing ? theme.fg("muted", timing) : undefined,
-  ]
-    .filter(Predicate.isNotUndefined)
-    .join(theme.fg("dim", " · "));
+  const metadata = Fn.pipe(
+    [
+      formatRunRouteLine(run, theme),
+      run.writeIntent === "writer" ? theme.fg("warning", "writer") : undefined,
+      usage ? theme.fg("muted", usage) : undefined,
+      run.currentTool ? theme.fg("accent", sanitizeTerminalLine(run.currentTool)) : undefined,
+      timing ? theme.fg("muted", timing) : undefined,
+    ],
+    Arr.filter(Predicate.isNotUndefined),
+    Arr.join(theme.fg("dim", " · ")),
+  );
   const combined = `${themedIdentity}${theme.fg("dim", " · ")}${metadata}`;
   if (visibleWidth(combined) <= width) return combined;
   if (width < 12) return clipToWidth(themedIdentity, width);
@@ -95,9 +101,9 @@ export const renderResponsiveRunRows = (
 ): string[] => {
   const safeWidth = Math.max(1, width);
   const treeRows = options.hierarchy ? projectRunCardTree(runs) : undefined;
-  const displayRuns = treeRows?.map((row) => row.run) ?? runs;
+  const displayRuns = treeRows === undefined ? runs : Arr.map(treeRows, (row) => row.run);
   const sharedNames = duplicateRunNames(displayRuns);
-  const rows = displayRuns.map((run, index): RunRow => {
+  const rows = Arr.map(displayRuns, (run, index): RunRow => {
     const glyph = runStateGlyph(run.state, options.frame);
     const shownId = options.fullId
       ? run.id
@@ -121,26 +127,30 @@ export const renderResponsiveRunRows = (
             },
       intent: sanitizeTerminalLine(run.writeIntent),
       state: sanitizeTerminalLine(
-        [runStateLabel(run.state), run.currentTool, runTiming(run)].filter(Boolean).join(" · "),
+        Fn.pipe(
+          [runStateLabel(run.state), run.currentTool, runTiming(run)],
+          Arr.filter(isTextFragment),
+          Arr.join(" · "),
+        ),
       ),
       usage: aggregateUsage([run], "compact"),
     };
   });
-  if (treeRows) return rows.map((row) => renderHierarchyRow(row, safeWidth, theme));
-  const routes = displayRuns.map((run) => formatRunRouteLine(run));
-  const intentWidth = rows.reduce((max, row) => Math.max(max, visibleWidth(row.intent)), 0);
+  if (treeRows) return Arr.map(rows, (row) => renderHierarchyRow(row, safeWidth, theme));
+  const routes = Arr.map(displayRuns, (run) => formatRunRouteLine(run));
+  const intentWidth = Arr.reduce(rows, 0, (max, row) => Math.max(max, visibleWidth(row.intent)));
   const identityWidth = Math.min(
-    Math.max(16, ...rows.map((row) => visibleWidth(row.identity.plain))),
+    Math.max(16, ...Arr.map(rows, (row) => visibleWidth(row.identity.plain))),
     Math.max(16, Math.floor(safeWidth * 0.28)),
   );
   const stateWidth = Math.min(
-    Math.max(14, ...rows.map((row) => visibleWidth(row.state))),
+    Math.max(14, ...Arr.map(rows, (row) => visibleWidth(row.state))),
     Math.max(14, Math.floor(safeWidth * 0.28)),
   );
-  const hasUsage = rows.some((row) => Boolean(row.usage));
+  const hasUsage = Arr.some(rows, (row) => Boolean(row.usage));
   const usageWidth = hasUsage
     ? Math.min(
-        Math.max(...rows.map((row) => visibleWidth(row.usage))),
+        Math.max(...Arr.map(rows, (row) => visibleWidth(row.usage))),
         Math.max(8, Math.floor(safeWidth * 0.18)),
       )
     : 0;
@@ -149,9 +159,9 @@ export const renderResponsiveRunRows = (
   if (
     safeWidth >= 88 &&
     routeWidth >= 12 &&
-    routes.every((route) => visibleWidth(route) <= routeWidth)
+    Arr.every(routes, (route) => visibleWidth(route) <= routeWidth)
   )
-    return rows.map((row) => {
+    return Arr.map(rows, (row) => {
       const color = runStateColor(row.run.state);
       const identity = clipToWidth(row.identity.themed, identityWidth);
       const route = formatRunRouteLine(row.run, theme);
@@ -161,16 +171,18 @@ export const renderResponsiveRunRows = (
       const usageColumn = hasUsage ? ` · ${padVisible(usage, usageWidth)}` : "";
       return `${padVisible(identity, identityWidth)} · ${padVisible(route, routeWidth)} · ${padVisible(intent, intentWidth)}${usageColumn} · ${padVisible(state, stateWidth)}`;
     });
-  return rows.flatMap(({ run, identity, usage }) => {
+  return Arr.flatMap(rows, ({ run, identity, usage }) => {
     const color = runStateColor(run.state);
-    const compactStatus = [
-      runStateLabel(run.state),
-      run.currentTool ? sanitizeTerminalLine(run.currentTool) : undefined,
-      run.writeIntent === "writer" ? "writer" : undefined,
-      usage,
-    ]
-      .filter(Boolean)
-      .join(" · ");
+    const compactStatus = Fn.pipe(
+      [
+        runStateLabel(run.state),
+        run.currentTool ? sanitizeTerminalLine(run.currentTool) : undefined,
+        run.writeIntent === "writer" ? "writer" : undefined,
+        usage,
+      ],
+      Arr.filter(isTextFragment),
+      Arr.join(" · "),
+    );
     const compactMinimumIdentityWidth = Math.min(24, Math.max(8, Math.floor(safeWidth * 0.45)));
     const maximumStatusWidth = safeWidth - compactMinimumIdentityWidth - 3;
     const identityLine = (() => {

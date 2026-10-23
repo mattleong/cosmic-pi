@@ -1,40 +1,47 @@
 import { describe, expect, it } from "vitest";
 import { revisionReviewText } from "../../src/run/workspace-review.ts";
 import { diffStatTotals, patchDiffStat } from "../../src/workspace/diffstat.ts";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
 
-const patch = [
-  "diff --git a/src/main.ts b/src/main.ts",
-  "index 1111111..2222222 100644",
-  "--- a/src/main.ts",
-  "+++ b/src/main.ts",
-  "@@ -1,2 +1,3 @@",
-  " keep",
-  "-old",
-  "+new",
-  "+-- a line that starts like a header",
-  "diff --git a/src/new.ts b/src/new.ts",
-  "new file mode 100644",
-  "--- /dev/null",
-  "+++ b/src/new.ts",
-  "@@ -0,0 +1 @@",
-  "+added",
-  "diff --git a/old.txt b/old.txt",
-  "deleted file mode 100644",
-  "--- a/old.txt",
-  "+++ /dev/null",
-  "@@ -1 +0,0 @@",
-  "-gone",
-  "diff --git a/image.bin b/image.bin",
-  "index 3333333..4444444 100644",
-  "GIT binary patch",
-  "literal 4",
-  "LcmZQzWMT#Y01f~L",
-  "",
-  "diff --git a/run.sh b/run.sh",
-  "old mode 100644",
-  "new mode 100755",
-  "",
-].join("\n");
+const patch = Arr.join(
+  [
+    "diff --git a/src/main.ts b/src/main.ts",
+    "index 1111111..2222222 100644",
+    "--- a/src/main.ts",
+    "+++ b/src/main.ts",
+    "@@ -1,2 +1,3 @@",
+    " keep",
+    "-old",
+    "+new",
+    "+-- a line that starts like a header",
+    "diff --git a/src/new.ts b/src/new.ts",
+    "new file mode 100644",
+    "--- /dev/null",
+    "+++ b/src/new.ts",
+    "@@ -0,0 +1 @@",
+    "+added",
+    "diff --git a/old.txt b/old.txt",
+    "deleted file mode 100644",
+    "--- a/old.txt",
+    "+++ /dev/null",
+    "@@ -1 +0,0 @@",
+    "-gone",
+    "diff --git a/image.bin b/image.bin",
+    "index 3333333..4444444 100644",
+    "GIT binary patch",
+    "literal 4",
+    "LcmZQzWMT#Y01f~L",
+    "",
+    "diff --git a/run.sh b/run.sh",
+    "old mode 100644",
+    "new mode 100755",
+    "",
+  ],
+  "\n",
+);
 const changedPaths = ["src/main.ts", "src/new.ts", "old.txt", "image.bin", "run.sh"];
 
 describe("revision diffstat", () => {
@@ -68,10 +75,10 @@ describe("revision diffstat", () => {
       uncapturedPaths: [".env", "keys/deploy.pem"],
       diff: patch,
     });
-    const diffStart = text.indexOf("diff --git ");
-    expect(text.endsWith(patch)).toBe(true);
+    const diffStart = Option.getOrElse(Fn.pipe(text, Str.indexOf("diff --git ")), () => -1);
+    expect(Fn.pipe(text, Str.endsWith(patch))).toBe(true);
     for (const path of [...changedPaths, ".env", "keys/deploy.pem"]) {
-      const at = text.indexOf(path);
+      const at = Option.getOrElse(Fn.pipe(text, Str.indexOf(path)), () => -1);
       expect(at, path).toBeGreaterThanOrEqual(0);
       expect(at, path).toBeLessThan(diffStart);
     }

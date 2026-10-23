@@ -34,6 +34,9 @@ import {
   testBackendRegistry,
   view,
 } from "./fixtures/tool-harness.ts";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 
 type ToolResultHandler = ExtensionHandler<ToolResultEvent, ToolResultEventResult>;
 type Tool = ToolDefinition;
@@ -269,7 +272,7 @@ effectTest(
       ];
       const original = event({ ...response, content: patchedContent });
       const patched = yield* h.result(original);
-      expect(patched.isError).toBe(ids.some((id) => id !== "good"));
+      expect(patched.isError).toBe(Arr.some(ids, (id) => id !== "good"));
       expect(patched.details).toBe(response.details);
       expect(patched.content).toBe(patchedContent);
       expect(yield* h.result(original)).toEqual(original);
@@ -318,10 +321,10 @@ effectTest(
     expect((yield* h.result(event(response, "agent_lifecycle", "0"))).isError).toBe(false);
     expect((yield* h.result(event(response, "agent_lifecycle", "1"))).isError).toBe(true);
     expect((yield* h.result(event(response, "agent_lifecycle", "256"))).isError).toBe(true);
-    retain("x".repeat(1025));
-    expect((yield* h.result(event(response, "agent_lifecycle", "x".repeat(1025)))).isError).toBe(
-      false,
-    );
+    retain(Fn.pipe("x", Str.repeat(1025)));
+    expect(
+      (yield* h.result(event(response, "agent_lifecycle", Fn.pipe("x", Str.repeat(1025))))).isError,
+    ).toBe(false);
     retain();
     receipts.deactivate();
     retain();

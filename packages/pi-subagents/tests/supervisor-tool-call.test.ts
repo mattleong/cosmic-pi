@@ -4,6 +4,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
@@ -21,6 +22,7 @@ import {
 } from "../src/supervisor/protocol.ts";
 import { runSupervisorTool, type SupervisorToolClient } from "../src/supervisor/tool-call.ts";
 import { nodeFsPromises as fs } from "./support/node-builtins.ts";
+import * as Str from "effect/String";
 
 interface LoopbackPeer {
   readonly port: number;
@@ -79,7 +81,7 @@ const rawConfig = (port: number) =>
     runId: "agent-native-client",
     host: "127.0.0.1",
     port,
-    token: "a".repeat(64),
+    token: Fn.pipe("a", Str.repeat(64)),
   });
 
 const progress = (client: SupervisorToolClient) =>

@@ -1,5 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Predicate from "effect/Predicate";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import {
   clipText,
   invokeHostCallback,
@@ -73,7 +75,7 @@ export type SubagentNotifier = (
 const sanitizeNotificationContent = (
   value: string,
   maximumLength = Number.POSITIVE_INFINITY,
-): string => sanitizeDiagnosticContent(value, { maximumLength }).trim();
+): string => Str.trim(sanitizeDiagnosticContent(value, { maximumLength }));
 
 const clip = (value: string, maximumLength = MAX_NOTIFICATION_CHARS): string =>
   clipText(sanitizeNotificationContent(value, maximumLength + 2), maximumLength);
@@ -88,8 +90,8 @@ const workspaceAction = (run: SubagentCompletionNotification): string | undefine
 
 /** A finished run's block, the same bounded block an await shows. */
 export const completionBlock = (run: SubagentCompletionNotification): RunBlock => {
-  const warning = run.warning?.trim();
-  const error = run.error?.trim();
+  const warning = Str.trim(run.warning ?? "");
+  const error = Str.trim(run.error ?? "");
   return {
     id: run.id,
     name: run.name,
@@ -104,10 +106,7 @@ export const completionBlock = (run: SubagentCompletionNotification): RunBlock =
       run.outcome === "failed"
         ? {
             kind: "failure",
-            text:
-              error === undefined || error.length === 0
-                ? "Run failed without an error report."
-                : error,
+            text: error || "Run failed without an error report.",
             archive: run.errorArchive,
           }
         : {
@@ -134,22 +133,26 @@ export const inlineCompletionReport = (
  * whole reports that fit what remains follow.
  */
 const completionContent = (runs: ReadonlyArray<SubagentCompletionNotification>): string => {
-  const failed = runs.filter((run) => run.outcome === "failed").length;
+  const failed = Arr.filter(runs, (run) => run.outcome === "failed").length;
   const completed = runs.length - failed;
   const [single] = runs;
   const heading =
     runs.length === 1 && single !== undefined
       ? `Background subagent ${single.outcome}.`
-      : `${runs.length} background subagents finished · ${[
-          completed > 0 ? `${completed} completed` : undefined,
-          failed > 0 ? `${failed} failed` : undefined,
-        ]
-          .filter(Predicate.isNotUndefined)
-          .join(" · ")}.`;
+      : `${runs.length} background subagents finished · ${Arr.join(
+          Arr.filter(
+            [
+              completed > 0 ? `${completed} completed` : undefined,
+              failed > 0 ? `${failed} failed` : undefined,
+            ],
+            Predicate.isNotUndefined,
+          ),
+          " · ",
+        )}.`;
   return clip(
     withInlineReports(
-      formatRunBlocks([heading], runs.map(completionBlock)),
-      runs.map(inlineCompletionReport),
+      formatRunBlocks([heading], Arr.map(runs, completionBlock)),
+      Arr.map(runs, inlineCompletionReport),
       MAX_NOTIFICATION_CHARS,
     ),
   );
@@ -211,8 +214,8 @@ export function hostNotifier(
               version: 1,
               kind: "completed",
               total: runs.length,
-              failed: runs.filter((run) => run.outcome === "failed").length,
-              warnings: runs.filter((run) => Boolean(run.warning?.trim())).length,
+              failed: Arr.filter(runs, (run) => run.outcome === "failed").length,
+              warnings: Arr.filter(runs, (run) => Boolean(Str.trim(run.warning ?? ""))).length,
               ...(runs.length === 1 &&
                 runs[0] !== undefined && { name: displayName(runs[0].name) }),
             },
@@ -222,7 +225,9 @@ export function hostNotifier(
         return accepted;
       });
       return {
-        deliveredCompletionKeys: accepted ? runs.map((run) => `${run.id}:${run.generation}`) : [],
+        deliveredCompletionKeys: accepted
+          ? Arr.map(runs, (run) => `${run.id}:${run.generation}`)
+          : [],
       };
     }
     return {

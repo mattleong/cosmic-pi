@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import {
   getTextContent,
@@ -5,7 +6,9 @@ import {
   type CompactSummary,
   type CompactSummaryProvider,
 } from "pi-code-previews";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import {
   clipText,
   countLabel,
@@ -36,15 +39,22 @@ export const decodeAgentCall = decodeUnknownOrUndefined(AgentCallSchema);
 const displayName = (name: string): string => clipText(sanitizeTerminalLine(name), 60);
 
 const stateLabel = (state: string): string => {
-  const runState = SUBAGENT_RUN_STATES.find((known) => known === state);
+  const runState = Option.getOrUndefined(
+    Arr.findFirst(SUBAGENT_RUN_STATES, (known) => known === state),
+  );
   return runState === undefined ? state : runStateLabel(runState);
 };
 
 // Before a result names a run, only the main agent has a readable subject.
-const isMain = (id: string | undefined): boolean => id?.trim() === MAIN_AGENT_ID;
+const isMain = (id: string | undefined): boolean =>
+  id !== undefined && Str.trim(id) === MAIN_AGENT_ID;
 
 const requestedIds = (args: AgentCallEvidence): ReadonlyArray<string> =>
-  (args.agentIds ?? []).map((id) => id.trim()).filter(Boolean);
+  Fn.pipe(
+    args.agentIds ?? [],
+    Arr.map((id) => Str.trim(id)),
+    Arr.filter(Boolean),
+  );
 
 const missingIssue = (missingIds: ReadonlyArray<string>): CompactIssue[] =>
   missingIds.length === 0
@@ -57,27 +67,27 @@ const missingIssue = (missingIds: ReadonlyArray<string>): CompactIssue[] =>
             missingIds.length === 1
               ? "A requested agent isn't in this session"
               : `${missingIds.length} requested agents aren't in this session`,
-          detail: `Not found: ${missingIds.join(", ")}. Refresh agent IDs with agent_list.`,
+          detail: `Not found: ${Arr.join(missingIds, ", ")}. Refresh agent IDs with agent_list.`,
         },
       ];
 
 const settled = (summary: CompactSummary, issues: CompactIssue[]): CompactSummary => ({
   ...summary,
-  outcome: issues.some((issue) => issue.severity === "warning") ? "warning" : "success",
+  outcome: Arr.some(issues, (issue) => issue.severity === "warning") ? "warning" : "success",
   issues,
 });
 
 const summarizeList = (
   details: Extract<AgentToolDetails, { readonly action: "agent_list" }>,
 ): CompactSummary => {
-  const states = details.states.map(({ state, count }) =>
+  const states = Arr.map(details.states, ({ state, count }) =>
     details.agentCount === 1 ? stateLabel(state) : `${count} ${stateLabel(state)}`,
   );
   return settled(
     {
       subject: details.only ? displayName(details.only.name) : "",
       counters: details.only ? states : [countLabel(details.agentCount, "agent")],
-      metadata: details.only ? [] : [states.join(", ")].filter(Boolean),
+      metadata: details.only ? [] : Arr.filter([Arr.join(states, ", ")], Boolean),
     },
     missingIssue(details.missingIds),
   );
@@ -144,12 +154,13 @@ const summarizeRead = (
   const [only] = details.agents;
   const single = details.agents.length === 1 && only !== undefined;
   // A saved report's readout carries its file, not text.
-  const empty = details.agents.filter(
+  const empty = Arr.filter(
+    details.agents,
     (agent) => agent.textStatus === "none" && agent.source !== "report",
   ).length;
-  const truncated = details.agents.filter((agent) => agent.truncated).length;
+  const truncated = Arr.filter(details.agents, (agent) => agent.truncated).length;
   // Each run's status card raises its own attention; reading it still succeeded.
-  const statusIssues = details.agents.flatMap((agent) => agent.issues ?? []);
+  const statusIssues = Arr.flatMap(details.agents, (agent) => agent.issues ?? []);
   return settled(
     {
       subject: single ? displayName(only.name) : "",

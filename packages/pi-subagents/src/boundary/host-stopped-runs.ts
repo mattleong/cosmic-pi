@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   clipText,
@@ -21,27 +24,33 @@ const CAUSE: Record<RuntimeRetirement, string> = {
 };
 
 const runLine = (run: SubagentRunView): string =>
-  `- ${clipText(sanitizeTerminalLine(run.name), 60)} (${run.id}): ${run.state.replaceAll("_", " ")}`;
+  `- ${clipText(sanitizeTerminalLine(run.name), 60)} (${run.id}): ${Fn.pipe(run.state, Str.replaceAll("_", " "))}`;
 
 export const stoppedRunsContent = (
   runs: ReadonlyArray<SubagentRunView>,
   cause: RuntimeRetirement,
 ): string => {
   const omitted = runs.length - LISTED_RUNS;
-  return [
-    `${CAUSE[cause]} stopped ${countLabel(runs.length, "subagent")}:`,
+  return Arr.join(
     [
-      ...runs.slice(0, LISTED_RUNS).map(runLine),
-      ...(omitted > 0 ? [`- ${countLabel(omitted, "more subagent")}`] : []),
-    ].join("\n"),
-    "They will not report. Partial work they left in the checkout remains; inspect it before relying on it or starting replacements.",
-  ].join("\n\n");
+      `${CAUSE[cause]} stopped ${countLabel(runs.length, "subagent")}:`,
+      Arr.join(
+        [
+          ...Arr.map(runs.slice(0, LISTED_RUNS), runLine),
+          ...(omitted > 0 ? [`- ${countLabel(omitted, "more subagent")}`] : []),
+        ],
+        "\n",
+      ),
+      "They will not report. Partial work they left in the checkout remains; inspect it before relying on it or starting replacements.",
+    ],
+    "\n\n",
+  );
 };
 
 /** Active runs that replacing the runtime is about to stop. */
 export const runsStoppedByReplacement = (
   runs: ReadonlyArray<SubagentRunView>,
-): ReadonlyArray<SubagentRunView> => runs.filter((run) => isActiveRunState(run.state));
+): ReadonlyArray<SubagentRunView> => Arr.filter(runs, (run) => isActiveRunState(run.state));
 
 /**
  * Tells the model and the user which subagents a runtime replacement stops. The message is appended

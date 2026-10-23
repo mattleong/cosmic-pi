@@ -1,4 +1,8 @@
 import * as Effect from "effect/Effect";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
 import type { SafeFile } from "pi-cosmic-core";
 import { WorkspaceError } from "../workspace/model.ts";
 import type { WorkspaceRecord } from "../workspace/model.ts";
@@ -68,11 +72,18 @@ export const listedWorkspaceTrees = Effect.fn("GitWorktreeTrees.listedWorkspaceT
   const artifact = workspaceArtifact(registry, record);
   const output = yield* repositoryGit(record.repository, ["worktree", "list", "--porcelain"]);
   const trees: ListedTree[] = [];
-  for (const block of output.split("\n\n")) {
-    const lines = block.split("\n");
-    const tree = lines.find((line) => line.startsWith("worktree "))?.slice("worktree ".length);
-    if (tree?.startsWith(`${artifact}${path.sep}`))
-      trees.push({ path: tree, locked: lines.some((line) => /^locked(?: |$)/u.test(line)) });
+  for (const block of Str.split(output, "\n\n")) {
+    const lines = Str.split(block, "\n");
+    const tree = Fn.pipe(
+      Arr.findFirst(lines, (line) => Fn.pipe(line, Str.startsWith("worktree "))),
+      Option.map(Str.slice("worktree ".length)),
+      Option.filter(Str.startsWith(`${artifact}${path.sep}`)),
+    );
+    if (Option.isSome(tree))
+      trees.push({
+        path: tree.value,
+        locked: Arr.some(lines, (line) => /^locked(?: |$)/u.test(line)),
+      });
   }
   return trees;
 });
@@ -88,8 +99,11 @@ export const removeWorkspaceTree = Effect.fn("GitWorktreeTrees.removeWorkspaceTr
   tree: string,
   listed?: ReadonlyArray<ListedTree>,
 ) {
-  const entry = (listed ?? (yield* listedWorkspaceTrees(registry, record))).find(
-    (candidate) => candidate.path === tree,
+  const entry = Option.getOrUndefined(
+    Arr.findFirst(
+      listed ?? (yield* listedWorkspaceTrees(registry, record)),
+      (candidate) => candidate.path === tree,
+    ),
   );
   const present = yield* workspaceIOIfPresent("discard", () => fs.lstat(tree));
   if (entry?.locked) yield* repositoryGit(record.repository, ["worktree", "unlock", tree]);
@@ -131,6 +145,9 @@ export const withOutcome = (error: WorkspaceError, outcome: string) =>
     ...(error.code !== undefined && { code: error.code }),
     operation: error.operation,
     message: error.message,
-    detail: [error.detail, outcome].filter((line) => line !== undefined).join("\n"),
+    detail: Arr.join(
+      Arr.filter([error.detail, outcome], (line) => line !== undefined),
+      "\n",
+    ),
     ...(error.cleanupUnconfirmed && { cleanupUnconfirmed: true }),
   });

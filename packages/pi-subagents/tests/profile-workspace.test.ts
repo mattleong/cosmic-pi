@@ -16,6 +16,7 @@ import {
   type ProfileWorkspaceOptions,
   type ProfileWorkspaceSaveResult,
 } from "../src/settings/profile-workspace.ts";
+import * as Arr from "effect/Array";
 
 const baseOptions = (
   overrides: Partial<ProfileWorkspaceOptions> = {},
@@ -56,7 +57,7 @@ const liveCatalogEditor = () => {
   const loadModelPicker = vi.fn<ProfileWorkspaceOptions["loadModelPicker"]>(
     (profile, candidateIndex, candidate) =>
       Promise.resolve({
-        choices: ["live-older", "live-default"].map((selector) => ({
+        choices: Arr.map(["live-older", "live-default"], (selector) => ({
           provider: candidate.runtime,
           id: selector,
           selector,

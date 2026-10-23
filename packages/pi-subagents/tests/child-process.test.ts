@@ -3,6 +3,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as TestClock from "effect/testing/TestClock";
 import { deferredPromise, step, temporaryDirectory } from "pi-cosmic-core/testing";
@@ -23,6 +24,7 @@ import {
 import { sweepAbandonedPrivateState } from "../src/boundary/private-state.ts";
 import { backendLaunch } from "./fixtures/backend-supervisor.ts";
 import { nodeFsPromises, nodePath } from "./support/node-builtins.ts";
+import * as Str from "effect/String";
 
 const isMissing = (path: string) =>
   step(() =>
@@ -99,7 +101,7 @@ describe("subagent child process boundary", () => {
         ...NESTED_SUBAGENT_TOOL_NAMES,
         ...AGENT_TOOL_NAMES,
       ]);
-      expect(policy.excluded.split(",")).toEqual([
+      expect(Str.split(policy.excluded, ",")).toEqual([
         "herdr_agent_start",
         "herdr_agent_list",
         "herdr_agent_status",
@@ -113,8 +115,9 @@ describe("subagent child process boundary", () => {
         "session_send",
         "session_read",
       ]);
-      expect(policy.excluded.split(",")).not.toContain("agent_start");
-      for (const name of AGENT_TOOL_NAMES) expect(policy.excluded.split(",")).not.toContain(name);
+      expect(Str.split(policy.excluded, ",")).not.toContain("agent_start");
+      for (const name of AGENT_TOOL_NAMES)
+        expect(Str.split(policy.excluded, ",")).not.toContain(name);
     }),
   );
 
@@ -122,7 +125,8 @@ describe("subagent child process boundary", () => {
     Effect.gen(function* () {
       const aggregateOverflow = Array.from(
         { length: 256 },
-        (_, index) => `t${index.toString().padStart(3, "0")}_${"x".repeat(123)}`,
+        (_, index) =>
+          `t${Fn.pipe(index.toString(), Str.padStart(3, "0"))}_${Fn.pipe("x", Str.repeat(123))}`,
       );
       const cases: ReadonlyArray<ReadonlyArray<string>> = [
         ["safe,workflow_future"],
@@ -130,7 +134,7 @@ describe("subagent child process boundary", () => {
         ["trailing-space "],
         ["line\nbreak"],
         [""],
-        ["x".repeat(129)],
+        [Fn.pipe("x", Str.repeat(129))],
         Array.from({ length: 257 }, () => "read"),
         aggregateOverflow,
       ];

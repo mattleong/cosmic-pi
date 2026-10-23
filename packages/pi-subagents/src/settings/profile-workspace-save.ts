@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { sameProfileCandidate, MAX_PROFILE_CANDIDATES } from "../profiles/model.ts";
 import {
   CANDIDATE_LIMIT_REACHED,
@@ -145,7 +146,7 @@ export abstract class ProfileWorkspaceSave extends ProfileWorkspaceState {
       if (next) {
         this.pane = "fields";
         this.fieldIndex = 0;
-        this.persist(next, draft.candidates.length, update.notices.join(" "));
+        this.persist(next, draft.candidates.length, Arr.join(update.notices, " "));
       }
       return;
     }
@@ -155,6 +156,6 @@ export abstract class ProfileWorkspaceSave extends ProfileWorkspaceState {
       return;
     }
     const next = replaceRouteCandidate(this.draft(), this.candidateIndex, update.candidate);
-    this.persist(next, this.candidateIndex, update.notices.join(" "));
+    this.persist(next, this.candidateIndex, Arr.join(update.notices, " "));
   }
 }

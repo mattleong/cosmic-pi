@@ -25,6 +25,8 @@ import { DELEGATION_PROMPT_SECTION, NORMAL_START_GUIDELINE } from "../src/delega
 import { beforeAgentStartEvent, sessionContextFixture } from "./fixtures/pi-host.ts";
 import { effectTest, settle, step } from "./support/effect-test.ts";
 import { nodeFsPromises, nodePath } from "./support/node-builtins.ts";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 
 const STATUS_KEY = "pi-subagents.session";
 
@@ -113,7 +115,8 @@ const setup = function* (cosmicUi?: CosmicUiHostState, delegation?: DelegationMo
       registeredGuidelines: startGuidelines,
     };
   };
-  const status = () => setStatus.mock.calls.findLast(([key]) => key === STATUS_KEY)?.[1];
+  const status = () =>
+    Option.getOrUndefined(Arr.findLast(setStatus.mock.calls, ([key]) => key === STATUS_KEY))?.[1];
   return {
     host,
     ctx,
@@ -207,7 +210,7 @@ describe("delegation mode", () => {
       const saved = yield* fixture.saved();
       expect(saved.file.delegation).toBe("encouraged");
       expect(saved.file.nesting?.maxDepth).toBe(3);
-      expect(fixture.notify.mock.calls.filter(([, level]) => level !== "info")).toEqual([]);
+      expect(Arr.filter(fixture.notify.mock.calls, ([, level]) => level !== "info")).toEqual([]);
       fixture.surface.editor?.handleInput?.("\u001b");
       yield* Fiber.join(picker);
       yield* settle(() => fixture.host.emit("session_shutdown", fixture.ctx));
@@ -235,9 +238,9 @@ describe("delegation mode", () => {
     gate.release();
     yield* Fiber.join(saving);
     expect((yield* fixture.saved()).file.delegation).toBe("normal");
-    expect(fixture.notify.mock.calls.some(([, level]) => level === "error")).toBe(true);
+    expect(Arr.some(fixture.notify.mock.calls, ([, level]) => level === "error")).toBe(true);
     yield* fixture.settings("global delegation encouraged");
-    expect(fixture.notify.mock.calls.filter(([, level]) => level === "error")).toHaveLength(1);
+    expect(Arr.filter(fixture.notify.mock.calls, ([, level]) => level === "error")).toHaveLength(1);
     const saved = (yield* fixture.saved()).file;
     expect(saved.delegation).toBe("encouraged");
     expect(saved.writerWorkspaceMode).toBe("shared-checkout");

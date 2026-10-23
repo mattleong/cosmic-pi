@@ -1,6 +1,9 @@
 import type { JsonObject } from "pi-cosmic-core";
 import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Order from "effect/Order";
 import * as Predicate from "effect/Predicate";
+import * as Rec from "effect/Record";
 import { type DeclaredProfileRoute, type ProfileCandidate } from "../profiles/model.ts";
 import { decodeDeclaredProfileRoute } from "./schema.ts";
 
@@ -34,7 +37,7 @@ export const candidateJson = (value: ProfileCandidate): JsonObject => ({
 export const routeJson = (route: DeclaredProfileRoute): JsonObject[string] => {
   if (route === "disabled") return route;
   return Arr.isArray<DeclaredProfileRoute>(route)
-    ? route.map((candidate) => candidateJson(candidate))
+    ? Arr.map(route, (candidate) => candidateJson(candidate))
     : candidateJson(route);
 };
 
@@ -42,11 +45,18 @@ export const isRecord = (value: JsonObject[string] | undefined): value is JsonOb
   Predicate.isObject(value);
 
 export const stableJson = (value: JsonObject[string] | undefined): string => {
-  if (Array.isArray(value)) return `[${value.map((item) => stableJson(item)).join(",")}]`;
+  if (Arr.isArray(value))
+    return `[${Fn.pipe(
+      value,
+      Arr.map((item) => stableJson(item)),
+      Arr.join(","),
+    )}]`;
   if (isRecord(value))
-    return `{${Object.entries(value)
-      .toSorted(([left], [right]) => (left < right ? -1 : 1))
-      .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`)
-      .join(",")}}`;
+    return `{${Fn.pipe(
+      Rec.toEntries(value),
+      Arr.sortWith(([key]) => key, Order.String),
+      Arr.map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`),
+      Arr.join(","),
+    )}}`;
   return JSON.stringify(value);
 };

@@ -1,4 +1,8 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { matchesKey, type Component, type Focusable } from "@earendil-works/pi-tui";
 import {
@@ -199,16 +203,23 @@ export class ProfileSetPickerComponent implements Component, Focusable {
     const selected = this.selected()?.key;
     this.options = { ...this.options, inspection, projectTrusted };
     this.allEntries = profileSetPickerEntries(inspection, projectTrusted);
-    const index = this.entries().findIndex((entry) => entry.key === selected);
+    const index = Option.getOrElse(
+      Arr.findFirstIndex(this.entries(), (entry) => entry.key === selected),
+      () => -1,
+    );
     this.selectedIndex = index < 0 ? 0 : index;
     this.menu = undefined;
   }
 
   private entries(): ReadonlyArray<ProfileSetPickerEntry> {
-    const query = this.query.trim().toLocaleLowerCase();
+    const query = Fn.pipe(this.query, Str.trim, Str.toLocaleLowerCase());
     if (!query) return this.allEntries;
-    return this.allEntries.filter((entry) =>
-      `${entry.label} ${entry.description} ${entry.scope}`.toLocaleLowerCase().includes(query),
+    return Arr.filter(this.allEntries, (entry) =>
+      Fn.pipe(
+        `${entry.label} ${entry.description} ${entry.scope}`,
+        Str.toLocaleLowerCase(),
+        Str.includes(query),
+      ),
     );
   }
 
@@ -303,7 +314,7 @@ export class ProfileSetPickerComponent implements Component, Focusable {
     if (Predicate.isTagged(resolution, "Action")) {
       this.handleSearchAction(resolution.action, pageSteps(this.options.getHeight() - 8));
     } else if (data === "\u007f" || data === "\b") {
-      this.query = this.query.slice(0, -1);
+      this.query = Fn.pipe(this.query, Str.slice(0, -1));
       this.selectedIndex = 0;
       this.message = undefined;
     } else {

@@ -16,6 +16,7 @@ import {
   withService,
 } from "./run/fixtures/service-harness.ts";
 import { stringContaining } from "./support/matchers.ts";
+import * as Arr from "effect/Array";
 
 const charge = (cost: number): SubagentUsage => ({
   ...emptyUsage(),
@@ -65,7 +66,7 @@ describe("session subagent spend", () => {
           yield* yieldUntil(() => first.projections.at(-1)?.sessionUsage?.cost === 0.75, 200);
           expect(recorded).toHaveLength(1);
         });
-        expect(recorded.map((usage) => usage.cost)).toEqual([0.25, 0.5]);
+        expect(Arr.map(recorded, (usage) => usage.cost)).toEqual([0.25, 0.5]);
 
         const second = nativeReportServiceFixture(
           fakeNativeReportBackendLayer(),

@@ -1,3 +1,7 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
 import { freezeSnapshot } from "pi-cosmic-core";
 import {
   resolveCustomAgents,
@@ -132,8 +136,7 @@ const resolveNamedProfileLayer = (
   if (decoded.invalidProfileSets.includes(name))
     return { layer: invalidProfileLayer(invalidSource), status: "structurally-invalid" };
   const profileSets = decoded.file.profileSets;
-  const profileSet =
-    profileSets && Object.hasOwn(profileSets, name) ? profileSets[name] : undefined;
+  const profileSet = profileSets && Rec.has(profileSets, name) ? profileSets[name] : undefined;
   if (!profileSet) return { layer: invalidProfileLayer(invalidSource), status: "missing" };
   const invalidRoutes = decoded.invalidProfileSetRoutes[name] ?? [];
   const profiles = mapProfileIds((id): ProfileRoute => {
@@ -149,7 +152,7 @@ const resolveNamedProfileLayer = (
   });
   return {
     layer: { profiles, profileSources },
-    status: PROFILE_IDS.some((id) => profileSources[id].endsWith("-invalid"))
+    status: Arr.some(PROFILE_IDS, (id) => Fn.pipe(profileSources[id], Str.endsWith("-invalid")))
       ? "invalid-routes"
       : "resolved",
   };
@@ -180,8 +183,8 @@ export function resolveNamedProfileSet(
   return freezeSnapshot({
     origin: { scope: input.scope, name: input.name },
     status: resolved.status,
-    invalidProfiles: PROFILE_IDS.filter((id) =>
-      resolved.layer.profileSources[id].endsWith("-invalid"),
+    invalidProfiles: Arr.filter(PROFILE_IDS, (id) =>
+      Fn.pipe(resolved.layer.profileSources[id], Str.endsWith("-invalid")),
     ),
     profiles: resolved.layer.profiles,
     profileSources: resolved.layer.profileSources,
@@ -238,8 +241,11 @@ const worktreeHooks = (
     { scope: "project" as const, hooks: project?.file.hooks },
   ];
   const forEvent = (event: WorktreeHookEvent) =>
-    layers.flatMap(({ scope, hooks }) =>
-      (hooks?.[event] ?? []).map((hook): ConfiguredWorktreeHook => Object.assign({ scope }, hook)),
+    Arr.flatMap(layers, ({ scope, hooks }) =>
+      Arr.map(
+        hooks?.[event] ?? [],
+        (hook): ConfiguredWorktreeHook => Object.assign({ scope }, hook),
+      ),
     );
   return {
     WorktreeCreate: forEvent("WorktreeCreate"),

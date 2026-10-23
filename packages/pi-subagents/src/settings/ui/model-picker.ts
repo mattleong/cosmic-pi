@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
   boundedMiddle,
@@ -32,7 +33,7 @@ export function createPiModelOptions(input: {
   readonly parentModel?: ProjectedPiModel | undefined;
   readonly currentSelector: string;
 }): ProfileModelOption[] {
-  const models = input.models.flatMap((model) => {
+  const models = Arr.flatMap(input.models, (model) => {
     const selector = `${model.provider}/${model.id}`;
     return isSafeNativeModelSelector(selector)
       ? [{ ...model, selector, fastModeAvailable: supportsSubagentFastMode("pi", selector) }]
@@ -45,7 +46,7 @@ export function createPiModelOptions(input: {
       ...pseudoModel("parent"),
       label: `Current Pi model${canonical ? ` → ${boundedMiddle(sanitizeTerminalLine(canonical), 72)}` : ""}${input.currentSelector === "parent" ? " (current)" : ""}`,
       description: parent
-        ? `${parent.name ? `${boundedMiddle(sanitizeTerminalLine(parent.name), 48)} · ` : ""}${parent.reasoning ? "supports reasoning" : "no reasoning"} · reasoning levels: ${parent.supportedEfforts.join(", ") || "none"}`
+        ? `${parent.name ? `${boundedMiddle(sanitizeTerminalLine(parent.name), 48)} · ` : ""}${parent.reasoning ? "supports reasoning" : "no reasoning"} · reasoning levels: ${Arr.join(parent.supportedEfforts, ", ") || "none"}`
         : "Use the current Pi model when this run starts",
       searchText: `parent ${canonical ?? "active model"} ${parent?.name ?? ""}`,
       supportedEfforts: parent?.supportedEfforts,
@@ -59,18 +60,21 @@ const nativeModelStatus = (
   model: NativeRuntimeModel,
   currentSelector: string | undefined,
 ): string => {
-  const labels = [
-    model.isDefault ? "default" : undefined,
-    model.selector === currentSelector ? "current" : undefined,
-  ].filter((label) => label !== undefined);
-  return labels.length ? ` · ${labels.join(", ")}` : "";
+  const labels = Arr.filter(
+    [
+      model.isDefault ? "default" : undefined,
+      model.selector === currentSelector ? "current" : undefined,
+    ],
+    (label) => label !== undefined,
+  );
+  return labels.length ? ` · ${Arr.join(labels, ", ")}` : "";
 };
 
 export const createNativeModelOptions = (
   models: ReadonlyArray<NativeRuntimeModel>,
   currentSelector: string | undefined,
 ): ProfileModelOption[] =>
-  models.flatMap((model) => {
+  Arr.flatMap(models, (model) => {
     if (!isSafeNativeModelSelector(model.selector)) return [];
     const fastModeAvailable = model.supportedServiceTiers.includes(FAST_SERVICE_TIER);
     return [
@@ -79,7 +83,7 @@ export const createNativeModelOptions = (
         id: model.selector,
         selector: model.selector,
         label: `${boundedMiddle(sanitizeTerminalLine(model.selector), 72)}${nativeModelStatus(model, currentSelector)}`,
-        description: `${model.label && model.label !== model.selector ? `${boundedMiddle(sanitizeTerminalLine(model.label), 72)} · ` : ""}${model.description ? `${boundedMiddle(sanitizeTerminalLine(model.description), 96)} · ` : ""}reasoning levels: ${model.supportedEfforts.join(", ") || "default"}${fastModeAvailable ? " · fast mode available" : ""}`,
+        description: `${model.label && model.label !== model.selector ? `${boundedMiddle(sanitizeTerminalLine(model.label), 72)} · ` : ""}${model.description ? `${boundedMiddle(sanitizeTerminalLine(model.description), 96)} · ` : ""}reasoning levels: ${Arr.join(model.supportedEfforts, ", ") || "default"}${fastModeAvailable ? " · fast mode available" : ""}`,
         searchText: `${model.selector} ${model.label} ${model.description ?? ""}`,
         supportedEfforts: model.supportedEfforts,
         fastModeAvailable,
@@ -91,7 +95,7 @@ export const retainUnavailableCurrent = (
   current: string,
   options: ReadonlyArray<ProfileModelOption>,
 ): ReadonlyArray<ProfileModelOption> =>
-  options.some((option) => option.selector === current)
+  Arr.some(options, (option) => option.selector === current)
     ? options
     : [
         {
@@ -136,9 +140,11 @@ export const profileModelPickerPage = (options: ProfileModelPickerPageOptions) =
     allModels: options.choices,
     current: initialSelection,
     initialSearchMode: true,
-    initialScope: scopedChoices?.some((option) => option.selector === initialSelection)
-      ? "scoped"
-      : "all",
+    initialScope:
+      scopedChoices !== undefined &&
+      Arr.some(scopedChoices, (option) => option.selector === initialSelection)
+        ? "scoped"
+        : "all",
     notice: options.notice,
     select: options.select,
     cancel: options.cancel,

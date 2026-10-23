@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { SPINNER_FRAME_MS } from "pi-cosmic-ui/manager";
 import type { SubagentRunState } from "../run/model.ts";
 
@@ -12,10 +13,11 @@ export const subagentUiRefreshCadence = (
   runs: ReadonlyArray<{ readonly state: SubagentRunState }>,
   options: SubagentUiRefreshOptions = {},
 ): SubagentUiRefreshCadence | undefined => {
-  if (runs.some((run) => run.state === "starting" || run.state === "running"))
+  if (Arr.some(runs, (run) => run.state === "starting" || run.state === "running"))
     return SPINNER_FRAME_MS;
   if (
-    runs.some(
+    Arr.some(
+      runs,
       (run) =>
         run.state === "waiting_for_parent" ||
         run.state === "stopping" ||

@@ -2,6 +2,7 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import { freezeSnapshot } from "pi-cosmic-core";
 import { MAX_RESOLVED_CUSTOM_AGENTS } from "../profiles/agents.ts";
@@ -25,10 +26,10 @@ import {
   type SubagentStartDetails,
 } from "./details-schema.ts";
 
-const START_KEYS = new Set(Object.keys(SubagentStartDetailsSchema.fields));
-const AWAIT_KEYS = new Set(Object.keys(SubagentAwaitDetailsSchema.fields));
-const MODELS_KEYS = new Set(Object.keys(SubagentModelsDetailsSchema.fields));
-const RUN_ACTION_KEYS = new Set(Object.keys(RunActionDetailsSchema.fields));
+const START_KEYS = new Set(Rec.keys(SubagentStartDetailsSchema.fields));
+const AWAIT_KEYS = new Set(Rec.keys(SubagentAwaitDetailsSchema.fields));
+const MODELS_KEYS = new Set(Rec.keys(SubagentModelsDetailsSchema.fields));
+const RUN_ACTION_KEYS = new Set(Rec.keys(RunActionDetailsSchema.fields));
 const KNOWN_ROOT_KEYS = new Set([...START_KEYS, ...AWAIT_KEYS, ...MODELS_KEYS, ...RUN_ACTION_KEYS]);
 const RUN_ACTION_SET: ReadonlySet<string> = new Set(RUN_DETAILS_ACTIONS);
 
@@ -37,8 +38,7 @@ type DetailsFields = typeof DetailsFieldsSchema.Type;
 type FieldsVisitor = (entry: DetailsFields | undefined) => boolean;
 
 const rootKeysAllowed = (record: DetailsFields, allowed: ReadonlySet<string>): boolean => {
-  for (const key of KNOWN_ROOT_KEYS)
-    if (!allowed.has(key) && Object.hasOwn(record, key)) return false;
+  for (const key of KNOWN_ROOT_KEYS) if (!allowed.has(key) && Rec.has(record, key)) return false;
   return true;
 };
 
@@ -48,7 +48,7 @@ const preflightArray = (
   maximum: number,
   visit?: FieldsVisitor,
 ): boolean => {
-  if (!Object.hasOwn(record, key)) return true;
+  if (!Rec.has(record, key)) return true;
   const value = record[key];
   if (!Arr.isArray(value)) return true;
   const length = value.length;
@@ -65,7 +65,7 @@ const preflightArray = (
 const preflightCard: FieldsVisitor = (card) => {
   if (!card) return true;
   if (!preflightArray(card, "capabilities", MAX_CARD_CAPABILITIES)) return false;
-  if (!Object.hasOwn(card, "selection")) return true;
+  if (!Rec.has(card, "selection")) return true;
   const selection = card.selection;
   return (
     !Predicate.isObject(selection) || preflightArray(selection, "skippedCandidates", MAX_CARD_SKIPS)
@@ -175,8 +175,11 @@ const validReportOmission = (details: {
   details.reportsOnlyOmitted !== true ||
   (details.contentOmitted === true &&
     !details.actionFailures?.length &&
-    details.cards.some((card) => card.finalTextTruncated && card.finalText === undefined) &&
-    details.cards.every((card) => card.error === undefined && !card.errorTruncated));
+    Arr.some(
+      details.cards,
+      (card) => card.finalTextTruncated === true && card.finalText === undefined,
+    ) &&
+    Arr.every(details.cards, (card) => card.error === undefined && !card.errorTruncated));
 
 const validAwaitRelationships = (details: SubagentAwaitDetails): boolean => {
   if (!validReportOmission(details)) return false;
@@ -185,9 +188,10 @@ const validAwaitRelationships = (details: SubagentAwaitDetails): boolean => {
   const uniqueTargets = new Set(awaitedRunIds);
   if (uniqueTargets.size !== awaitedRunIds.length) return false;
   if (details.cards.length === 0) return true;
-  const cardIds = new Set(details.cards.map((card) => card.id));
-  if (!awaitedRunIds.every((id) => cardIds.has(id))) return false;
-  return details.cards.every(
+  const cardIds = new Set(Arr.map(details.cards, (card) => card.id));
+  if (!Arr.every(awaitedRunIds, (id) => cardIds.has(id))) return false;
+  return Arr.every(
+    details.cards,
     (card) =>
       uniqueTargets.has(card.id) || (card.finalText === undefined && card.error === undefined),
   );

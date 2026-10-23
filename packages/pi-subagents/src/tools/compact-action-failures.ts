@@ -1,3 +1,8 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
 import { argumentFailureIssue, type CompactIssue, type CompactSummary } from "pi-code-previews";
 import { failureMessage, quoteText } from "pi-cosmic-core";
 import type { AgentMessageRefusalCode } from "../run/errors.ts";
@@ -112,8 +117,8 @@ export const failureRecovery = (
   message: string,
   context: "start" | "action" = "action",
 ): string => {
-  const normalizedCode = code?.toLowerCase() ?? "";
-  const normalizedMessage = message.toLowerCase();
+  const normalizedCode = code === undefined ? "" : Str.toLowerCase(code);
+  const normalizedMessage = Str.toLowerCase(message);
   const [rules, fallback] = isUncertainToolFailure({ code: normalizedCode })
     ? [
         UNCERTAIN_FAILURE_RECOVERY_RULES,
@@ -131,14 +136,19 @@ export const failureRecovery = (
           "Review the failure detail and the run's current state with agent_read before retrying.",
         ];
   // An exact code wins over a rule whose broader code fragment it happens to contain.
-  const matched =
-    rules.find(([codes]) => codes.includes(normalizedCode)) ??
-    rules.find(
-      ([codes, , messages]) =>
-        codes.some((needle) => normalizedCode.includes(needle)) ||
-        messages?.some((needle) => normalizedMessage.includes(needle)),
-    );
-  return matched?.[1] ?? fallback;
+  return Fn.pipe(
+    Arr.findFirst(rules, ([codes]) => codes.includes(normalizedCode)),
+    Option.orElse(() =>
+      Arr.findFirst(
+        rules,
+        ([codes, , messages]) =>
+          Arr.some(codes, (needle) => Fn.pipe(normalizedCode, Str.includes(needle))) ||
+          (messages !== undefined &&
+            Arr.some(messages, (needle) => Fn.pipe(normalizedMessage, Str.includes(needle)))),
+      ),
+    ),
+    Option.match({ onNone: () => fallback, onSome: ([, recovery]) => recovery }),
+  );
 };
 
 type Phrase = (subject: string) => string;
@@ -186,7 +196,9 @@ const AGENT_TEXT = /\bagent_[a-z_]+\b|\b\w+\(\s*\{|\b\w+=["\w]|\bagent-[\w-]+/u;
 
 const readableFailure = (text: string, forbidden: readonly string[]): string | undefined => {
   const line = failureMessage(text, "");
-  return line && !AGENT_TEXT.test(line) && !forbidden.some((id) => id && line.includes(id))
+  return line &&
+    !AGENT_TEXT.test(line) &&
+    !Arr.some(forbidden, (id) => id !== "" && Fn.pipe(line, Str.includes(id)))
     ? line
     : undefined;
 };
@@ -211,8 +223,12 @@ function failedActionMessage(
   name: string | undefined,
   oneOfMany = false,
 ): string {
-  const code = failure.code?.toLowerCase() ?? "";
-  const phrase = FAILURE_PHRASES.find(([codes]) => codes.some((needle) => code.includes(needle)));
+  const code = failure.code === undefined ? "" : Str.toLowerCase(failure.code);
+  const phrase = Option.getOrUndefined(
+    Arr.findFirst(FAILURE_PHRASES, ([codes]) =>
+      Arr.some(codes, (needle) => Fn.pipe(code, Str.includes(needle))),
+    ),
+  );
   if (phrase) return phrase[1](name ?? (oneOfMany ? "A subagent" : "The subagent"));
   const readable = readableFailure(failure.message, [failure.id]);
   if (readable) return name ? `${name}: ${readable}` : readable;
@@ -257,7 +273,11 @@ export function actionFailureIssues(
   issues: CompactIssue[],
 ): void {
   for (const failure of failures) {
-    const name = cards.find((card) => card.id === failure.id)?.name.slice(0, 60);
+    const name = Fn.pipe(
+      Arr.findFirst(cards, (card) => card.id === failure.id),
+      Option.map((card) => Fn.pipe(card.name, Str.slice(0, 60))),
+      Option.getOrUndefined,
+    );
     const disposition = actionFailureDisposition(failure);
     if (disposition !== "failed") summary.outcome = "uncertain";
     const oneOfMany = failures.length + cards.length > 1;
@@ -284,7 +304,7 @@ export function rejectedCallIssue(action: string, text: string, target: string):
   const invalid = argumentFailureIssue(text);
   if (invalid) return invalid;
   const readable = readableFailure(text, []);
-  const detail = readable ? quoteText(text, { failure: true }).detail : text.trim() && text;
+  const detail = readable ? quoteText(text, { failure: true }).detail : Str.trim(text) && text;
   return {
     severity: "error",
     code: "call-rejected",
@@ -360,7 +380,7 @@ const AGENT_FAILURES = {
 } satisfies Record<AgentFailureCode, AgentFailurePresentation>;
 
 const AGENT_FAILURE_CODES: ReadonlyMap<string, AgentFailurePresentation> = new Map(
-  Object.entries(AGENT_FAILURES),
+  Rec.toEntries(AGENT_FAILURES),
 );
 
 const CODED_FAILURE = /^\[([a-z][a-z0-9_]*)\] /u;
@@ -370,12 +390,12 @@ const CODED_FAILURE = /^\[([a-z][a-z0-9_]*)\] /u;
  * `subject` names the agent the call addressed.
  */
 export function agentFailureIssues(text: string, action: string, subject: string): CompactIssue[] {
-  const code = CODED_FAILURE.exec(text.trimStart())?.[1];
+  const code = CODED_FAILURE.exec(Str.trimStart(text))?.[1];
   const known = code === undefined ? undefined : AGENT_FAILURE_CODES.get(code);
   // A message to a run can also fail delivery, with the same codes and recovery as other actions.
   if (!known && code !== undefined) {
     const uncertain = isUncertainToolFailure({ code });
-    const message = text.trimStart().replace(CODED_FAILURE, "");
+    const message = Fn.pipe(text, Str.trimStart, Str.replace(CODED_FAILURE, ""));
     return [
       {
         severity: uncertain ? "warning" : "error",
@@ -383,17 +403,17 @@ export function agentFailureIssues(text: string, action: string, subject: string
         message: uncertain
           ? unconfirmedMessage(action, undefined)
           : failedActionMessage(action, { id: "", code, message }, subject),
-        detail: `${text.trim()}\n${failureRecovery(code, message)}`,
+        detail: `${Str.trim(text)}\n${failureRecovery(code, message)}`,
       },
     ];
   }
-  if (!known) return [rejectedCallIssue(action, text, subject.toLowerCase())];
+  if (!known) return [rejectedCallIssue(action, text, Str.toLowerCase(subject))];
   return [
     {
       severity: "error",
       code: `agent:${code ?? "failed"}`,
       message: known.message(subject),
-      detail: `${text.trim()}\n${known.recovery}`,
+      detail: `${Str.trim(text)}\n${known.recovery}`,
     },
   ];
 }

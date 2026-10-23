@@ -2,12 +2,14 @@ import { it, expect } from "@effect/vitest";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import { nodeFsPromises as fs, nodePath as path } from "../support/node-builtins.ts";
+import * as Fn from "effect/Function";
 import * as Schema from "effect/Schema";
 import { SafeFile, nodeFilePlatformLayer } from "pi-cosmic-core";
 import * as Layer from "effect/Layer";
 import { readWorkspaceRecord, saveWorkspaceRecord } from "../../src/boundary/git-worktree-store.ts";
 import { WorkspaceRecordSchema, type WorkspaceRecord } from "../../src/workspace/model.ts";
 import { temporaryDirectory } from "./fixtures/repository.ts";
+import * as Str from "effect/String";
 
 it.live(
   "bounds encoded records at 64 MiB and preserves the readable record on escaping overflow",
@@ -40,7 +42,9 @@ it.live(
         yield* Schema.encodeEffect(Schema.fromJsonString(WorkspaceRecordSchema))(record),
       );
       const name =
-        "\\".repeat(Math.floor((cap - overhead - 2) / 2)) + "é" + "x".repeat((cap - overhead) % 2);
+        Fn.pipe("\\", Str.repeat(Math.floor((cap - overhead - 2) / 2))) +
+        "é" +
+        Fn.pipe("x", Str.repeat((cap - overhead) % 2));
       const named = (changed: string): WorkspaceRecord => ({
         ...record,
         revision: { revisionId: "revision", changedPaths: [changed] },
@@ -55,9 +59,10 @@ it.live(
       expect(
         (yield* saveWorkspaceRecord(root, named(name + "x")).pipe(Effect.flip)).operation,
       ).toBe("registry");
-      const failure = yield* saveWorkspaceRecord(root, named("\\".repeat(32 * 1024 * 1024))).pipe(
-        Effect.flip,
-      );
+      const failure = yield* saveWorkspaceRecord(
+        root,
+        named(Fn.pipe("\\", Str.repeat(32 * 1024 * 1024))),
+      ).pipe(Effect.flip);
       expect(failure.operation).toBe("registry");
       expect(
         (yield* readWorkspaceRecord(root, workspaceId)).revision?.changedPaths[0]?.length,

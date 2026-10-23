@@ -8,8 +8,11 @@ import {
   repoWriter,
   workspaceFixture as fixture,
 } from "./fixtures/workspace-engine.ts";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Rec from "effect/Record";
 
-const ORPHAN_DIGEST = "f".repeat(64);
+const ORPHAN_DIGEST = Fn.pipe("f", Str.repeat(64));
 
 // The worker tree an orphan saved keeps the digest its creating session saw.
 const orphanLeases = leasesWith((base) => ({
@@ -18,7 +21,9 @@ const orphanLeases = leasesWith((base) => ({
       .canonicalize(cwd)
       .pipe(
         Effect.map((identity) =>
-          cwd.startsWith("/private/orphan/") ? { ...identity, digest: ORPHAN_DIGEST } : identity,
+          Fn.pipe(cwd, Str.startsWith("/private/orphan/"))
+            ? { ...identity, digest: ORPHAN_DIGEST }
+            : identity,
         ),
       ),
 }));
@@ -60,7 +65,7 @@ describe("orphaned workspace takeover", () => {
     return withService(f.layer, function* (service) {
       const own = yield* service.start(repoWriter());
       const { orphans } = yield* service.workspaceList();
-      expect(Object.fromEntries(orphans ?? [])).toEqual({
+      expect(Rec.fromEntries(orphans ?? [])).toEqual({
         open: "adoptable",
         integrating: "discard-only",
       });
@@ -77,7 +82,7 @@ describe("orphaned workspace takeover", () => {
             .canonicalize(cwd)
             .pipe(
               Effect.map((identity) =>
-                cwd.startsWith("/private/orphan/")
+                Fn.pipe(cwd, Str.startsWith("/private/orphan/"))
                   ? { ...identity, digest: ORPHAN_DIGEST }
                   : identity,
               ),

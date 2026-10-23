@@ -1,7 +1,12 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { formatElapsed, sanitizeTerminalLine } from "pi-cosmic-core";
+import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
+import * as Num from "effect/Number";
+import * as Option from "effect/Option";
+import * as Order from "effect/Order";
+import * as Str from "effect/String";
 import { MAIN_AGENT_ID } from "../run/agent-messaging.ts";
 import { runStall, type RunStall } from "../run/stall.ts";
 import {
@@ -90,8 +95,11 @@ const latestMessagePreview = (
   run: SubagentRunView,
   runsById: ReadonlyMap<string, SubagentRunView>,
 ): RunMessagePreview | undefined => {
-  const event = run.sessionEvents.findLast(
-    (candidate) => candidate.type === "notice" && candidate.kind === "message",
+  const event = Option.getOrUndefined(
+    Arr.findLast(
+      run.sessionEvents,
+      (candidate) => candidate.type === "notice" && candidate.kind === "message",
+    ),
   );
   if (event?.type !== "notice" || event.kind !== "message") return undefined;
   const peer =
@@ -99,7 +107,7 @@ const latestMessagePreview = (
   return {
     direction: event.direction,
     peer: sanitizeTerminalLine(peer),
-    text: sanitizeTerminalLine(event.text.slice(0, MESSAGE_PREVIEW_CHARS)),
+    text: sanitizeTerminalLine(Fn.pipe(event.text, Str.slice(0, MESSAGE_PREVIEW_CHARS))),
     createdAt: event.createdAt,
   };
 };
@@ -134,9 +142,9 @@ export const projectSubagentActivityPanel = (
   projection: SubagentProjection,
   presentation: SubagentActivityPresentationSnapshot = EMPTY_ACTIVITY_PRESENTATION,
 ): SubagentActivityPanelProjection => {
-  const trackedRuns = projection.runs.filter((run) => PANEL_RUN_STATES.has(run.state));
-  const includedIds = new Set(trackedRuns.map((run) => run.id));
-  const runsById = new Map(projection.runs.map((run) => [run.id, run]));
+  const trackedRuns = Arr.filter(projection.runs, (run) => PANEL_RUN_STATES.has(run.state));
+  const includedIds = new Set(Arr.map(trackedRuns, (run) => run.id));
+  const runsById = new Map(Arr.map(projection.runs, (run) => [run.id, run]));
 
   for (const run of trackedRuns) {
     const visited = new Set<string>([run.id]);
@@ -150,19 +158,24 @@ export const projectSubagentActivityPanel = (
     }
   }
 
-  const includedRuns = projection.runs
-    .filter((run) => includedIds.has(run.id))
-    .toSorted(
-      (left, right) =>
-        left.startedAt - right.startedAt || RUN_ID_COLLATOR.compare(left.id, right.id),
-    );
-  const awaitedRunIds = new Set(presentation.awaits.flatMap((awaiting) => awaiting.runIds));
+  const includedRuns = Fn.pipe(
+    projection.runs,
+    Arr.filter((run) => includedIds.has(run.id)),
+    Arr.sortBy(
+      Order.mapInput(Order.Number, (run) => run.startedAt),
+      Order.mapInput(
+        (left: string, right: string) => Num.sign(RUN_ID_COLLATOR.compare(left, right)),
+        (run) => run.id,
+      ),
+    ),
+  );
+  const awaitedRunIds = new Set(Arr.flatMap(presentation.awaits, (awaiting) => awaiting.runIds));
   return {
     rows: projectFleetTree(includedRuns, "root").rows,
     trackedRuns,
-    trackedRunIds: new Set(trackedRuns.map((run) => run.id)),
+    trackedRunIds: new Set(Arr.map(trackedRuns, (run) => run.id)),
     awaitedRunIds,
-    awaitedRuns: projection.runs.filter((run) => awaitedRunIds.has(run.id)),
+    awaitedRuns: Arr.filter(projection.runs, (run) => awaitedRunIds.has(run.id)),
     messages: projectRunMessages(includedRuns, runsById),
     presentation,
   };
@@ -172,7 +185,7 @@ export const hasSubagentActivityPanelContent = (
   projection: SubagentProjection,
   presentation: SubagentActivityPresentationSnapshot = EMPTY_ACTIVITY_PRESENTATION,
 ): boolean =>
-  projection.runs.some((run) => PANEL_RUN_STATES.has(run.state)) ||
+  Arr.some(projection.runs, (run) => PANEL_RUN_STATES.has(run.state)) ||
   presentation.starts.length > 0 ||
   presentation.awaits.length > 0;
 
@@ -208,7 +221,11 @@ const HEADER_COMMAND: HeaderPart = { color: "dim", text: "/subagents" };
 
 const renderHeaderParts = (parts: ReadonlyArray<HeaderPart>, theme: Theme): string => {
   const separator = theme.fg("dim", " · ");
-  return parts.map((part) => theme.fg(part.color, part.text)).join(separator);
+  return Fn.pipe(
+    parts,
+    Arr.map((part) => theme.fg(part.color, part.text)),
+    Arr.join(separator),
+  );
 };
 
 const fitPanelHeader = (
@@ -216,15 +233,18 @@ const fitPanelHeader = (
   width: number,
   theme: Theme,
 ): string => {
-  const remaining = parts.filter((part) => part !== false);
+  const remaining = Arr.filter(parts, (part) => part !== false);
   for (;;) {
     const rendered = renderHeaderParts([HEADER_TITLE, ...remaining, HEADER_COMMAND], theme);
     if (visibleWidth(rendered) <= width) return rendered;
     if (remaining.length === 0)
       return clipToWidth(theme.fg(HEADER_COMMAND.color, HEADER_COMMAND.text), width, "");
-    const lowest = Math.max(...remaining.map((part) => part.priority));
+    const lowest = Math.max(...Arr.map(remaining, (part) => part.priority));
     remaining.splice(
-      remaining.findLastIndex((part) => part.priority === lowest),
+      Option.getOrElse(
+        Arr.findLastIndex(remaining, (part) => part.priority === lowest),
+        () => -1,
+      ),
       1,
     );
   }
@@ -237,25 +257,31 @@ const panelHeader = (
 ): string => {
   const { trackedRuns, presentation } = panel;
   const { awaits } = presentation;
-  const active = trackedRuns.filter(
+  const active = Arr.filter(
+    trackedRuns,
     (run) => run.state === "starting" || run.state === "running" || run.state === "stopping",
   ).length;
-  const waiting = trackedRuns.filter((run) => run.state === "waiting_for_parent").length;
-  const paused = trackedRuns.filter((run) => run.state === "paused").length;
+  const waiting = Arr.filter(trackedRuns, (run) => run.state === "waiting_for_parent").length;
+  const paused = Arr.filter(trackedRuns, (run) => run.state === "paused").length;
   const usage = aggregateUsage(trackedRuns, "compact");
   const finishedIds = new Set(
-    panel.awaitedRuns.filter((run) => isTerminalRunState(run.state)).map((run) => run.id),
+    Fn.pipe(
+      panel.awaitedRuns,
+      Arr.filter((run) => isTerminalRunState(run.state)),
+      Arr.map((run) => run.id),
+    ),
   );
-  const startCount = presentation.starts.reduce(
-    (total, starting) => total + starting.requestedCount,
+  const startCount = Arr.reduce(
+    presentation.starts,
     0,
+    (total, starting) => total + starting.requestedCount,
   );
   return fitPanelHeader(
     [
       awaits.length > 1 && { color: "accent", text: `${awaits.length} waits`, priority: 2 },
-      ...awaits.map((awaiting): OptionalHeaderPart => {
+      ...Arr.map(awaits, (awaiting): OptionalHeaderPart => {
         const runIds = [...new Set(awaiting.runIds)];
-        const finished = runIds.filter((runId) => finishedIds.has(runId)).length;
+        const finished = Arr.filter(runIds, (runId) => finishedIds.has(runId)).length;
         return {
           color: "accent",
           text:
@@ -379,8 +405,8 @@ const activityMetadataVariants = (
     { parts: [route, themedElapsed] },
     { parts: [route] },
   ];
-  return variants.flatMap((variant) => {
-    const parts = variant.parts.filter(Boolean);
+  return Arr.flatMap(variants, (variant) => {
+    const parts = Arr.filter(variant.parts, Boolean);
     return parts.length > 0 ? [{ ...variant, parts }] : [];
   });
 };
@@ -391,7 +417,7 @@ const fitActivityMetadata = (
   width: number,
   separator: string,
 ): string | undefined => {
-  const metadata = variant.parts.join(separator);
+  const metadata = Arr.join(variant.parts, separator);
   const prefix = `${identity}${separator}`;
   if (visibleWidth(prefix + metadata) <= width) return prefix + metadata;
   const available = width - visibleWidth(prefix);
@@ -452,10 +478,11 @@ export const renderProjectedSubagentActivityPanel = (
   const inset = safeWidth > 1 ? " " : "";
   const contentWidth = safeWidth - visibleWidth(inset);
   const tier = managerLayoutTier(safeWidth);
-  const duplicates = duplicateRunNames(panel.rows.map(({ run }) => run));
+  const duplicates = duplicateRunNames(Arr.map(panel.rows, ({ run }) => run));
   return [
     `${inset}${panelHeader(panel, contentWidth, theme)}`,
-    ...panel.rows.map(
+    ...Arr.map(
+      panel.rows,
       (row) =>
         `${inset}${renderActivityRow(row, panel, contentWidth, tier, theme, now, duplicates)}`,
     ),

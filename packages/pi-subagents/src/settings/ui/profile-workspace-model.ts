@@ -1,5 +1,7 @@
+import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Match from "effect/Match";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import { managerNoticeGlyph } from "pi-cosmic-ui/manager";
 import { PROFILE_DEFINITIONS } from "../../profiles/definitions.ts";
@@ -126,12 +128,15 @@ const advancedSummaryValues = (
   candidate: ProfileCandidate,
   parentModel: string | undefined,
 ): ReadonlyArray<string> =>
-  [
-    isLocalPiProfileCandidate(candidate) && candidate.context === "fork"
-      ? "forked context"
-      : undefined,
-    candidateFastModeApplied(candidate, parentModel) ? "fast mode" : undefined,
-  ].filter(Predicate.isNotUndefined);
+  Arr.filter(
+    [
+      isLocalPiProfileCandidate(candidate) && candidate.context === "fork"
+        ? "forked context"
+        : undefined,
+      candidateFastModeApplied(candidate, parentModel) ? "fast mode" : undefined,
+    ],
+    Predicate.isNotUndefined,
+  );
 
 const advancedCandidateRows = (
   candidate: ProfileCandidate,
@@ -189,7 +194,7 @@ export const candidateFieldRows = (
       value: advancedExpanded
         ? ""
         : advancedValues.length > 0
-          ? advancedValues.join(", ")
+          ? Arr.join(advancedValues, ", ")
           : "all standard",
       fixed: false,
     },
@@ -217,15 +222,16 @@ export const profileWorkspaceRows = (
   expanded: ReadonlySet<number>,
   canUndo = false,
 ): ReadonlyArray<ProfileWorkspaceRow> => [
-  ...draft.candidates.flatMap((candidate, candidateIndex) =>
-    candidateFieldRows(
-      candidate,
-      profile,
-      parentEffort,
-      parentModel,
-      expanded.has(candidateIndex),
-      candidateIndex,
-    ).map(
+  ...Arr.flatMap(draft.candidates, (candidate, candidateIndex) =>
+    Arr.map(
+      candidateFieldRows(
+        candidate,
+        profile,
+        parentEffort,
+        parentModel,
+        expanded.has(candidateIndex),
+        candidateIndex,
+      ),
       (row): ProfileWorkspaceRow => ({
         field: row.field,
         label: row.label,
@@ -266,7 +272,7 @@ export type SelectableCandidateField = Exclude<
 
 const RUN_WITH_PRODUCTS = { pi: "Pi", claude: "Claude Code", codex: "Codex" } as const;
 
-const RUN_WITH_CHOICES = (["pi", "claude", "codex"] as const).map((runtime) => ({
+const RUN_WITH_CHOICES = Arr.map(["pi", "claude", "codex"] as const, (runtime) => ({
   value: `local/${runtime}`,
   label: runWithLabel({ runtime }),
   description: `Run ${RUN_WITH_PRODUCTS[runtime]} locally on this computer`,
@@ -274,7 +280,9 @@ const RUN_WITH_CHOICES = (["pi", "claude", "codex"] as const).map((runtime) => (
 }));
 
 export const runWithChoice = (value: string): Pick<ProfileCandidate, "runtime"> | undefined => {
-  const choice = RUN_WITH_CHOICES.find((entry) => entry.value === value);
+  const choice = Option.getOrUndefined(
+    Arr.findFirst(RUN_WITH_CHOICES, (entry) => entry.value === value),
+  );
   return choice && { runtime: choice.runtime };
 };
 
@@ -293,7 +301,7 @@ export const candidateFieldChoices = (
         label: effectiveDefault ? `${effectiveDefault} (profile default)` : "Profile default",
         description: "Follow the profile's default reasoning level instead of pinning an override.",
       },
-      ...runtimeEfforts(candidate.runtime, options.supportedEfforts).map((effort) => ({
+      ...Arr.map(runtimeEfforts(candidate.runtime, options.supportedEfforts), (effort) => ({
         value: effort,
         label: effort,
         description: `Use the ${effort} reasoning level`,
@@ -347,8 +355,11 @@ const selectEffort = (
   options: CandidateFieldChangeOptions,
 ): CandidateUpdate => {
   if (value === "default") return { candidate: { ...candidate, effort: "default" }, notices: [] };
-  const effort = runtimeEfforts(candidate.runtime, options.supportedEfforts).find(
-    (entry) => entry === value,
+  const effort = Option.getOrUndefined(
+    Arr.findFirst(
+      runtimeEfforts(candidate.runtime, options.supportedEfforts),
+      (entry) => entry === value,
+    ),
   );
   return effort ? { candidate: { ...candidate, effort }, notices: [] } : invalidSelection("effort");
 };
@@ -359,7 +370,9 @@ export function selectCandidateField(
   value: string,
   options: CandidateFieldChangeOptions,
 ): CandidateUpdate {
-  if (!candidateFieldChoices(candidate, field, options).some((choice) => choice.value === value))
+  if (
+    !Arr.some(candidateFieldChoices(candidate, field, options), (choice) => choice.value === value)
+  )
     return invalidSelection(field);
   switch (field) {
     case "runWith": {

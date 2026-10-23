@@ -1,4 +1,6 @@
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import type { RunRecord } from "./internal.ts";
 import { hasSubagentCapability, isActiveRunState } from "./model.ts";
 import { countLabel, safeTextPrefix } from "pi-cosmic-core";
@@ -11,7 +13,7 @@ const ownershipSummary = (record: RunRecord): string =>
     : "read-only";
 
 const activePeerLines = (records: ReadonlyArray<RunRecord>, selfId?: string): string[] =>
-  records.flatMap((record) =>
+  Arr.flatMap(records, (record) =>
     record.view.id !== selfId && isActiveRunState(record.view.state)
       ? [
           `- ${record.launch.name} (${record.view.id}): ${ownershipSummary(record)}; ${record.view.state}; task: ${safeTextPrefix(record.view.task, 160)}`,
@@ -21,23 +23,28 @@ const activePeerLines = (records: ReadonlyArray<RunRecord>, selfId?: string): st
 
 export const peerNoticeText = (source: Iterable<RunRecord>, selfId: string): string => {
   const records = [...source];
-  const self = records.find((record) => record.view.id === selfId);
+  const self = Option.getOrUndefined(Arr.findFirst(records, (record) => record.view.id === selfId));
   const selfLine = self
     ? `Your current ownership summary: ${ownershipSummary(self)}.`
     : "Your current ownership record is unavailable; contact the parent before modifying files.";
-  const workspacePeers = self ? records.filter((record) => record.view.cwd === self.view.cwd) : [];
+  const workspacePeers = self
+    ? Arr.filter(records, (record) => record.view.cwd === self.view.cwd)
+    : [];
   const peers = activePeerLines(workspacePeers, selfId);
   if (peers.length === 0)
     return `${selfLine}\n\nYou are currently the only active subagent in this workspace.`;
-  return [
-    selfLine,
-    "",
-    `You share this working directory with ${countLabel(peers.length, "other active subagent")}:`,
-    "",
-    ...peers,
-    "",
-    "Shared-checkout writers coordinate by task scope: never edit files that belong to a peer's task. Before work that could overlap a running peer's task, agree on it with that peer through agent_send, and tell peers about changes they depend on. Ask the parent if you can't agree.",
-  ].join("\n");
+  return Arr.join(
+    [
+      selfLine,
+      "",
+      `You share this working directory with ${countLabel(peers.length, "other active subagent")}:`,
+      "",
+      ...peers,
+      "",
+      "Shared-checkout writers coordinate by task scope: never edit files that belong to a peer's task. Before work that could overlap a running peer's task, agree on it with that peer through agent_send, and tell peers about changes they depend on. Ask the parent if you can't agree.",
+    ],
+    "\n",
+  );
 };
 
 export const peerNotifier =
@@ -45,7 +52,7 @@ export const peerNotifier =
   (changedRunId: string): Effect.Effect<void> =>
     Effect.suspend(() =>
       Effect.forEach(
-        [...records.values()].flatMap((record) => {
+        Arr.flatMap([...records.values()], (record) => {
           const process = record.process;
           return process &&
             isActiveRunState(record.view.state) &&

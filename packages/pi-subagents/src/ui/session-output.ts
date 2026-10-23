@@ -1,7 +1,9 @@
 import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Result from "effect/Result";
 import * as Predicate from "effect/Predicate";
+import * as Str from "effect/String";
 import {
   Container,
   Markdown,
@@ -41,6 +43,7 @@ import {
   spinnerFrameAt,
   type ManagerActivityKind,
 } from "pi-cosmic-ui/manager";
+import { isTextFragment } from "../tools/text-fragments.ts";
 
 interface SessionOutputRenderOptions {
   readonly now?: number;
@@ -69,9 +72,12 @@ const hangingText = (prefix: string, text: string): Component =>
     const shownPrefix = clipToWidth(prefix, Math.max(0, contentWidth - 1), "");
     const prefixWidth = visibleWidth(shownPrefix);
     const rows = wrapTextWithAnsi(text, Math.max(1, contentWidth - prefixWidth));
-    const margin = " ".repeat(padding);
-    const continuation = " ".repeat(prefixWidth);
-    return rows.map((row, index) => `${margin}${index === 0 ? shownPrefix : continuation}${row}`);
+    const margin = Fn.pipe(" ", Str.repeat(padding));
+    const continuation = Fn.pipe(" ", Str.repeat(prefixWidth));
+    return Arr.map(
+      rows,
+      (row, index) => `${margin}${index === 0 ? shownPrefix : continuation}${row}`,
+    );
   });
 
 const addBlock = (container: Container, text: string): void => {
@@ -92,7 +98,8 @@ const activityItems = (
   let openGroup: ToolEvent[] | undefined;
   for (const event of events) {
     if (event.type === "assistant") {
-      if (event.text !== finalText?.trim()) items.push({ type: "assistant", event });
+      if (event.text !== (finalText === undefined ? undefined : Str.trim(finalText)))
+        items.push({ type: "assistant", event });
       openGroup = undefined;
       continue;
     }
@@ -126,10 +133,11 @@ function addToolGroup(
   const count = events.length > 1 ? ` ×${events.length}` : "";
   const target =
     events.length === 1 && first.target ? `  ${sanitizeTerminalLine(first.target)}` : "";
-  const elapsed = events.reduce(
+  const elapsed = Arr.reduce(
+    events,
+    0,
     (total, event) =>
       total + (event.endedAt === undefined ? 0 : Math.max(0, event.endedAt - event.startedAt)),
-    0,
   );
   const elapsedLabel = elapsed > 0 ? formatDuration(elapsed) : "";
   const body = `${theme.fg("toolTitle", sanitizeTerminalLine(first.toolName))}${theme.fg("muted", count)}${theme.fg("dim", target)}${elapsedLabel ? theme.fg("dim", `  ${elapsedLabel}`) : ""}`;
@@ -149,7 +157,7 @@ function addToolGroup(
     if (targets.length > 0) {
       const shown = targets.slice(0, 3);
       const remaining = targets.length - shown.length;
-      const summary = `${shown.join(" · ")}${remaining > 0 ? ` · +${remaining}` : ""}`;
+      const summary = `${Arr.join(shown, " · ")}${remaining > 0 ? ` · +${remaining}` : ""}`;
       container.addChild(hangingText("  ", theme.fg("dim", summary)));
     }
   }
@@ -191,10 +199,8 @@ const addSteeringDelivery = (container: Container, run: SubagentRunView, theme: 
   addStyledRow(container, style, steeringDeliveryEvidence[run.steeringDelivery].message, theme);
 };
 
-const liveLabel = (kind: ManagerActivityKind): string => {
-  const word = managerActivityLabel(kind);
-  return `${word.charAt(0).toUpperCase()}${word.slice(1)}…`;
-};
+const liveLabel = (kind: ManagerActivityKind): string =>
+  `${Str.capitalize(managerActivityLabel(kind))}…`;
 
 const EMPTY_ACTIVITY_LABELS = {
   starting: liveLabel("pending"),
@@ -215,7 +221,9 @@ const emptyActivityLabel = (run: SubagentRunView): string =>
 
 const addAssistantMessage = (container: Container, text: string, theme: Theme): void => {
   const shown =
-    text.length > MAX_LIVE_ASSISTANT_CHARS ? `${text.slice(0, MAX_LIVE_ASSISTANT_CHARS)}…` : text;
+    text.length > MAX_LIVE_ASSISTANT_CHARS
+      ? `${Fn.pipe(text, Str.slice(0, MAX_LIVE_ASSISTANT_CHARS))}…`
+      : text;
   container.addChild(markdownBlock(shown, theme));
 };
 
@@ -248,7 +256,7 @@ const addLiveActivity = (
   for (const [covered, style, text] of liveFields) {
     if (!covered && text !== undefined) addStyledRow(container, style, text, theme);
   }
-  if (items.length === 0 && liveFields.every(([, , text]) => text === undefined))
+  if (items.length === 0 && Arr.every(liveFields, ([, , text]) => text === undefined))
     container.addChild(new Text(theme.fg("dim", emptyActivityLabel(run)), 2, 0));
 };
 
@@ -274,7 +282,7 @@ const addAssistantConclusion = (container: Container, run: SubagentRunView, them
     run.usage.contextPercent === undefined
       ? undefined
       : `context ${Math.round(run.usage.contextPercent)}% full`;
-  const usageLine = [usage, context].filter(Boolean).join(" · ");
+  const usageLine = Fn.pipe([usage, context], Arr.filter(isTextFragment), Arr.join(" · "));
   if (usageLine)
     addBlock(
       container,
@@ -294,22 +302,24 @@ const addDetailLine = (
 
 function addTechnicalDetails(container: Container, run: SubagentRunView, theme: Theme): void {
   addBlock(container, theme.fg("muted", theme.bold("Technical details")));
-  const process = [
-    run.id,
-    run.profile ? `profile ${run.profile}` : undefined,
-    `local/${run.runtime}`,
-    run.parentRunId ? `parent ${run.parentRunId}` : undefined,
-    run.depth !== undefined
-      ? `depth ${run.depth} · children ${run.directChildCount ?? 0}/${run.descendantCount ?? 0}`
-      : undefined,
-    run.nativeActivity
-      ? `native ${run.nativeActivity.active} active/${run.nativeActivity.total} total`
-      : undefined,
-    run.pid ? `pid ${run.pid}` : undefined,
-    `report generation ${run.reportGeneration}`,
-  ]
-    .filter(Predicate.isNotUndefined)
-    .join(" · ");
+  const process = Fn.pipe(
+    [
+      run.id,
+      run.profile ? `profile ${run.profile}` : undefined,
+      `local/${run.runtime}`,
+      run.parentRunId ? `parent ${run.parentRunId}` : undefined,
+      run.depth !== undefined
+        ? `depth ${run.depth} · children ${run.directChildCount ?? 0}/${run.descendantCount ?? 0}`
+        : undefined,
+      run.nativeActivity
+        ? `native ${run.nativeActivity.active} active/${run.nativeActivity.total} total`
+        : undefined,
+      run.pid ? `pid ${run.pid}` : undefined,
+      `report generation ${run.reportGeneration}`,
+    ],
+    Arr.filter(Predicate.isNotUndefined),
+    Arr.join(" · "),
+  );
   container.addChild(new Text(theme.fg("dim", sanitizeTerminalLine(process)), 2, 0));
   const candidate =
     run.selection.candidateIndex === undefined
@@ -375,16 +385,19 @@ export function renderSubagentSessionOutput(
     managerTone.identity,
   );
   const profile = sanitizeTerminalLine(run.profile ?? "");
-  const subtitle = [
-    theme.fg(
-      "muted",
-      sanitizeTerminalLine(`${run.writeIntent}${run.openaiFastMode ? " · ⚡ fast" : ""}`),
-    ),
-    ...(profile ? [theme.fg(managerTone.identity, profile)] : []),
-    theme.fg(managerTone.value, sanitizeTerminalLine(run.context)),
-    theme.fg(managerTone.value, sanitizeTerminalLine(`${run.model}:${run.effort}`)),
-    theme.fg("muted", sanitizeTerminalLine(duration)),
-  ].join(" · ");
+  const subtitle = Arr.join(
+    [
+      theme.fg(
+        "muted",
+        sanitizeTerminalLine(`${run.writeIntent}${run.openaiFastMode ? " · ⚡ fast" : ""}`),
+      ),
+      ...(profile ? [theme.fg(managerTone.identity, profile)] : []),
+      theme.fg(managerTone.value, sanitizeTerminalLine(run.context)),
+      theme.fg(managerTone.value, sanitizeTerminalLine(`${run.model}:${run.effort}`)),
+      theme.fg("muted", sanitizeTerminalLine(duration)),
+    ],
+    " · ",
+  );
   container.addChild(
     new Text(
       `${heading}  ${theme.fg(runStateColor(run.state), `${runStateGlyph(run.state)} ${runStateLabel(run.state)}${age}`)}`,
@@ -397,7 +410,7 @@ export function renderSubagentSessionOutput(
   container.addChild(markdownBlock(run.task, theme));
   addBlock(container, theme.fg("muted", theme.bold("Activity")));
   addSteeringDelivery(container, run, theme);
-  const cleanup = cleanupRecoveryText(run).join("\n") || cleanupEvidenceText(run);
+  const cleanup = Arr.join(cleanupRecoveryText(run), "\n") || cleanupEvidenceText(run);
   if (cleanup)
     addBlock(
       container,

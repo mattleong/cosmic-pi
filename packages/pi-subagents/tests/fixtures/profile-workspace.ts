@@ -9,6 +9,7 @@ import {
 } from "../../src/settings/profile-workspace.ts";
 import { profileSettingsInspection } from "./profile-settings-inspection.ts";
 import { profileCandidate } from "./profiles.ts";
+import * as Arr from "effect/Array";
 
 export const settleTurn = (): Promise<void> =>
   Effect.runPromise(Effect.yieldNow.pipe(Effect.andThen(Effect.yieldNow)));
@@ -53,7 +54,7 @@ export const workspaceHarness = (
   const loadModelPicker = vi.fn<ProfileWorkspaceOptions["loadModelPicker"]>(
     (profile, candidateIndex, candidate) =>
       Promise.resolve({
-        choices: ["test/first", "test/second", "test/changed"].map((selector) => ({
+        choices: Arr.map(["test/first", "test/second", "test/changed"], (selector) => ({
           provider: "test",
           id: selector,
           selector,

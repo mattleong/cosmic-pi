@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { StartSubagentRequest } from "../src/run/model.ts";
 import { childSystemPrompt, taskPrompt } from "../src/run/tool-policy.ts";
 import { request } from "./run/fixtures/service-harness.ts";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 
 const workspace = (cwd: string) => ({
   workspaceId: `ws-${cwd}`,
@@ -23,7 +25,7 @@ const writer = (task: string, cwd: string) =>
   });
 
 const offersWorktrees = (overrides: Partial<StartSubagentRequest>) =>
-  childSystemPrompt(request(overrides)).includes("agent_worktree");
+  Fn.pipe(childSystemPrompt(request(overrides)), Str.includes("agent_worktree"));
 
 describe("child prompts", () => {
   it("keeps per-run paths out of the system prompt so sibling writers share it", () => {

@@ -6,6 +6,7 @@ import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
+import * as Arr from "effect/Array";
 import {
   confirmProcessGroupExit,
   guardProcessGroupAtHostExit,
@@ -481,7 +482,7 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
           return yield* attest(
             "descendant-groups",
             cleanupUnconfirmed(
-              `Detached descendant process groups ${remaining.join(", ")} were still running after the subagent exited.`,
+              `Detached descendant process groups ${Arr.join(Arr.map(remaining, String), ", ")} were still running after the subagent exited.`,
             ),
           );
         return undefined;

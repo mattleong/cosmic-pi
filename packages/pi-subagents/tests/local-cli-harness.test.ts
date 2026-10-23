@@ -3,6 +3,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -14,6 +15,8 @@ import {
 import { localCliProcess } from "./support/local-cli-process.ts";
 import { backendLaunch, supervisorMetadata } from "./fixtures/backend-supervisor.ts";
 import { nodeFsPromises as fs, nodePath } from "./support/node-builtins.ts";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
 
 const executable = fileURLToPath(new URL("./fixtures/local-cli-fixture.mjs", import.meta.url));
 const inheritedPath = (source: NodeJS.ProcessEnv): string | undefined => source.PATH;
@@ -68,7 +71,9 @@ const harnessEntries = (agentDirectory: string) =>
 /** Claude temp roots a test created in its own parent rather than `/tmp`. */
 const claudeTemporaryRoots = (parent: string) =>
   Effect.promise(() =>
-    fs.readdir(parent).then((names) => names.filter((name) => name.startsWith("pi-claude-"))),
+    fs
+      .readdir(parent)
+      .then((names) => Arr.filter(names, (name) => Fn.pipe(name, Str.startsWith("pi-claude-")))),
   );
 
 const exists = (path: string) =>

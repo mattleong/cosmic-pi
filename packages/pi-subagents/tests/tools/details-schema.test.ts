@@ -6,6 +6,10 @@ import { decodeCompactToolDetails } from "../../src/tools/details-decode.ts";
 import type { CompactSubagentToolDetails } from "../../src/tools/details-schema.ts";
 import { actionFailureDisposition, hasSubagentToolFailure } from "../../src/tools/outcome.ts";
 import { view } from "./fixtures/tool-harness.ts";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 
 describe("subagent detail evidence", () => {
   it("retains redacted cleanup evidence when fitted without inferring historical cleanup", () => {
@@ -23,7 +27,7 @@ describe("subagent detail evidence", () => {
         diagnostic: {
           phase: "process-group",
           code: "cleanup_unconfirmed",
-          message: `token=cleanup-secret\n${"diagnostic ".repeat(200)}`,
+          message: `token=cleanup-secret\n${Fn.pipe("diagnostic ", Str.repeat(200))}`,
         },
       },
       writerCleanupQuarantined: true,
@@ -31,13 +35,17 @@ describe("subagent detail evidence", () => {
     const oversized = Array.from({ length: 12 }, (_, index) => ({
       ...run,
       id: `agent-${index}`,
-      progress: "p".repeat(512),
+      progress: Fn.pipe("p", Str.repeat(512)),
       selection: {
         ...run.selection,
         skippedCandidates: Array.from({ length: 8 }, () => ({
-          candidate: { runtime: "pi" as const, model: "c".repeat(1_000), effort: "high" as const },
+          candidate: {
+            runtime: "pi" as const,
+            model: Fn.pipe("c", Str.repeat(1_000)),
+            effort: "high" as const,
+          },
           code: "unavailable",
-          reason: "r".repeat(1_000),
+          reason: Fn.pipe("r", Str.repeat(1_000)),
         })),
       },
     }));
@@ -75,18 +83,23 @@ describe("subagent detail evidence", () => {
 });
 
 const lifecycleTool = () =>
-  captureRegistrations((pi) =>
-    registerSubagentTools(pi, {
-      environment: { cwd: "/project", projectTrusted: false },
-      run: () => Promise.reject(new Error("render-only fixture")),
-      startUiTicker: () => () => undefined,
-      toolPresentation: {
-        beginStart: () => () => undefined,
-        beginAwait: () => () => undefined,
-        isLiveHierarchyAvailable: () => false,
-      },
-    }),
-  ).tools.find((tool) => tool.name === "agent_lifecycle")!;
+  Option.getOrUndefined(
+    Arr.findFirst(
+      captureRegistrations((pi) =>
+        registerSubagentTools(pi, {
+          environment: { cwd: "/project", projectTrusted: false },
+          run: () => Promise.reject(new Error("render-only fixture")),
+          startUiTicker: () => () => undefined,
+          toolPresentation: {
+            beginStart: () => () => undefined,
+            beginAwait: () => () => undefined,
+            isLiveHierarchyAvailable: () => false,
+          },
+        }),
+      ).tools,
+      (tool) => tool.name === "agent_lifecycle",
+    ),
+  )!;
 
 type RunDetails = Exclude<CompactSubagentToolDetails, { readonly action: "models" }>;
 /** Run details as session history stored them, under any action string. */
@@ -105,7 +118,7 @@ describe("saved run cards", () => {
       { content: [{ type: "text", text: "raw history sentinel" }], details },
       { expanded: true },
     );
-    return harness.render().join("\n");
+    return Arr.join(harness.render(), "\n");
   };
 
   it("falls back to the saved text when details no longer decode", () => {

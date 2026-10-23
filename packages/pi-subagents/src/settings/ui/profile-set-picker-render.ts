@@ -1,3 +1,7 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import {
@@ -96,10 +100,13 @@ const libraryRows = (
   const listHeight = Math.max(1, height - header.length);
   const selectedRow = Math.max(
     0,
-    logical.findIndex((row) => row.entryIndex === state.selectedIndex),
+    Option.getOrElse(
+      Arr.findFirstIndex(logical, (row) => row.entryIndex === state.selectedIndex),
+      () => -1,
+    ),
   );
   const start = listWindowStart(logical.length, selectedRow, listHeight);
-  return [...header, ...logical.slice(start, start + listHeight).map((row) => row.text)];
+  return [...header, ...Arr.map(logical.slice(start, start + listHeight), (row) => row.text)];
 };
 
 const previewRows = (
@@ -119,11 +126,11 @@ const previewRows = (
     listDetailHeading(theme, qualifiedProfileSetLabel(entry.ref), false, managerTone.saved),
   ];
   const budget = Math.max(1, Math.floor((height - 1) / entry.preview.length));
-  const profiles = entry.preview.map((profile) => ({
-    label: `${theme.fg(managerTone.identity, profile.id)}${profile.inherited ? theme.fg("muted", ` · inherited ${profile.source.replace("-invalid", "")}`) : ""}`,
+  const profiles = Arr.map(entry.preview, (profile) => ({
+    label: `${theme.fg(managerTone.identity, profile.id)}${profile.inherited ? theme.fg("muted", ` · inherited ${Fn.pipe(profile.source, Str.replace("-invalid", ""))}`) : ""}`,
     cells:
       profile.status === "configured"
-        ? profile.candidates.map((candidate, index) => [
+        ? Arr.map(profile.candidates, (candidate, index) => [
             theme.fg("muted", profileRouteOptionLabel(index)),
             `${theme.fg(managerTone.value, candidate.model)}${candidate.openaiFastMode ? theme.fg("warning", " ⚡") : ""}`,
             theme.fg(
@@ -142,7 +149,9 @@ const previewRows = (
           ],
   }));
   const table = managerTable(
-    profiles.flatMap((profile) => profile.cells.map((cells) => [profile.label, ...cells])),
+    Arr.flatMap(profiles, (profile) =>
+      Arr.map(profile.cells, (cells) => [profile.label, ...cells]),
+    ),
     [
       { minWidth: 10, priority: 5 },
       { minWidth: 7, priority: 2 },
@@ -153,15 +162,15 @@ const previewRows = (
     width,
   );
   const aligned =
-    table.widths.every((size) => size > 0) &&
-    profiles.every((profile) =>
-      profile.cells.every((cells) => visibleWidth(cells[1] ?? "") <= (table.widths[2] ?? 0)),
+    Arr.every(table.widths, (size) => size > 0) &&
+    Arr.every(profiles, (profile) =>
+      Arr.every(profile.cells, (cells) => visibleWidth(cells[1] ?? "") <= (table.widths[2] ?? 0)),
     );
   for (const profile of profiles) {
-    const lines = profile.cells.flatMap((cells, index) => {
+    const lines = Arr.flatMap(profile.cells, (cells, index) => {
       const label = index === 0 ? profile.label : "";
       if (!aligned) {
-        const detail = cells.filter(Boolean).join(" · ");
+        const detail = Fn.pipe(cells, Arr.filter(Boolean), Arr.join(" · "));
         return wrapTextWithAnsi(`${label ? `${label}: ` : "  "}${detail}`, width);
       }
       return [table.row([label, ...cells])];
@@ -189,7 +198,7 @@ export const renderProfileSetPicker = (
   const width = Math.max(0, Math.floor(options.width));
   const height = Math.max(0, Math.floor(options.height));
   if (width === 0 || height === 0) return [];
-  if (width < 4) return Array.from({ length: height }, () => " ".repeat(width));
+  if (width < 4) return Array.from({ length: height }, () => Fn.pipe(" ", Str.repeat(width)));
   const theme = options.theme;
   const frame = listDetailFrame(theme, "list");
   const inner = width - 2;

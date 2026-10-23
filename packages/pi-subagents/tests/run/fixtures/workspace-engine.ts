@@ -1,6 +1,7 @@
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Predicate from "effect/Predicate";
 import {
@@ -27,6 +28,8 @@ import {
   request,
   serviceLayer,
 } from "./service-harness.ts";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
 
 export const repoWriter = (overrides: Partial<StartSubagentRequest> = {}) =>
   request({ cwd: "/repo", writeIntent: "writer", ...overrides });
@@ -165,14 +168,14 @@ export function workspaceFixture({
     });
   // Like the real engine, a source inside private workspace storage is refused.
   const checkoutSource = (input: Parameters<WorkspaceServiceContract["create"]>[0]) =>
-    input.sourceCwd.startsWith("/private/")
+    Fn.pipe(input.sourceCwd, Str.startsWith("/private/"))
       ? refuse("create", "The session directory is inside private workspace storage.")
       : Effect.succeed({ sourceRoot: input.sourceCwd });
   // Like the real engine, a record another session created whose owner lease is free.
   const orphaned = (entry: WorkspaceRecord) =>
     hooks.orphanOwnerEnded === true &&
     !finished(entry) &&
-    !entry.handle.ownerId.startsWith("session-1/");
+    !Fn.pipe(entry.handle.ownerId, Str.startsWith("session-1/"));
   const sweepable = (entry: WorkspaceRecord, minimumAgeMillis: number, now: number) =>
     orphaned(entry) && isOpen(entry) && now - entry.lastChangedAt >= minimumAgeMillis;
   let ordinal = 0;
@@ -257,7 +260,7 @@ export function workspaceFixture({
         ),
       list: ({ ownerId }) =>
         Effect.sync(() =>
-          [...entries.values()].filter((entry) => entry.handle.ownerId === ownerId),
+          Arr.filter([...entries.values()], (entry) => entry.handle.ownerId === ownerId),
         ),
       listRecords: Effect.sync(() => ({ records: [...entries.values()], unavailable })),
       listAll: Effect.suspend(() =>
@@ -266,7 +269,7 @@ export function workspaceFixture({
           : Effect.succeed({
               records: [...entries.values()],
               unavailable,
-              endedOwners: [...entries.values()].flatMap((entry) =>
+              endedOwners: Arr.flatMap([...entries.values()], (entry) =>
                 orphaned(entry) ? [entry.handle.workspaceId] : [],
               ),
             }),
@@ -286,7 +289,7 @@ export function workspaceFixture({
               revisionId: `revision-${++revisions}`,
               changedPaths: [...hooks.changedPaths],
             };
-            const diff = hooks.revisionDiff ?? "a".repeat(20_000);
+            const diff = hooks.revisionDiff ?? Fn.pipe("a", Str.repeat(20_000));
             diffs.set(revision.revisionId, diff);
             entries.set(target.workspaceId, { ...entry, status: "frozen", revision });
             return Effect.succeed({ ...revision, diff });
@@ -366,7 +369,7 @@ export function workspaceFixture({
       sweepCandidates: ({ minimumAgeMillis }) =>
         Clock.currentTimeMillis.pipe(
           Effect.map((now) =>
-            [...entries.values()].filter((entry) => sweepable(entry, minimumAgeMillis, now)),
+            Arr.filter([...entries.values()], (entry) => sweepable(entry, minimumAgeMillis, now)),
           ),
         ),
       sweepOrphan: ({ workspaceId, minimumAgeMillis }) =>
@@ -429,7 +432,7 @@ export function workspaceFixture({
     Layer.provide(children.layer),
     Layer.provide(engineLayer),
   );
-  const statuses = () => [...entries.values()].map((entry) => entry.status);
+  const statuses = () => Arr.map([...entries.values()], (entry) => entry.status);
   return {
     entries,
     unavailable,

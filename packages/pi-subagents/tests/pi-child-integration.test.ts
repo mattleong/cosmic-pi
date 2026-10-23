@@ -1,8 +1,9 @@
 import { fileURLToPath } from "node:url";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it } from "@effect/vitest";
+import { assert, describe, expect, it } from "@effect/vitest";
 import { vi } from "vitest";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
@@ -26,6 +27,10 @@ import {
 } from "./run/fixtures/service-harness.ts";
 import { nodeFsPromises as fs, nodePath as path } from "./support/node-builtins.ts";
 import { processAlive } from "./support/process-liveness.ts";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
+import * as Order from "effect/Order";
 
 const fixture = (name: string) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
 const reexport = (target: string) => `export { default } from ${JSON.stringify(target)};\n`;
@@ -66,10 +71,7 @@ const readObservations = (agentDirectory: string) =>
     fs.readFile(path.join(agentDirectory, SCRIPTED_OBSERVATIONS_FILE), "utf8"),
   ).pipe(
     Effect.map((text) =>
-      text
-        .trim()
-        .split("\n")
-        .map((line) => decodeObservation(line)),
+      Arr.map(Str.split(Str.trim(text), "\n"), (line) => decodeObservation(line)),
     ),
   );
 
@@ -128,17 +130,22 @@ describe("installed Pi child through the local launch path", () => {
               text: SCRIPT.progressMessage,
             }),
           );
-          const assignment = (yield* readObservations(agentDirectory)).find((observation) =>
-            observation.prompt.includes(SCRIPT.progressTask),
+          const assignment = Option.getOrUndefined(
+            Arr.findFirst(yield* readObservations(agentDirectory), (observation) =>
+              Fn.pipe(observation.prompt, Str.includes(SCRIPT.progressTask)),
+            ),
           );
           expect(assignment?.systemPrompt).toContain(childSystemPrompt(first));
-          expect(assignment?.tools.toSorted()).toEqual(
-            childToolPolicy(activeTools).enabled.toSorted(),
+          assert(assignment !== undefined);
+          expect(Arr.sort(assignment.tools, Order.String)).toEqual(
+            Arr.sort(childToolPolicy(activeTools).enabled, Order.String),
           );
           expect(yield* exited(started.pid)).toBe(true);
 
           const sessionFile = completed?.sessionFile ?? "";
-          expect(sessionFile.startsWith(path.join(agentDirectory, "subagents"))).toBe(true);
+          expect(Fn.pipe(sessionFile, Str.startsWith(path.join(agentDirectory, "subagents")))).toBe(
+            true,
+          );
           expect(SessionManager.open(sessionFile).getSessionName()).toBe("scripted-child");
           yield* service.resume(started.id, SCRIPT.resumeTask);
           const [resumed] = yield* awaitRuns(service, [started.id]);
@@ -156,7 +163,7 @@ describe("installed Pi child through the local launch path", () => {
             yield* runView(service, parent.id),
             yield* runView(service, descendant.id),
           ];
-          expect(running.map((run) => run.state)).toEqual(["running", "running"]);
+          expect(Arr.map(running, (run) => run.state)).toEqual(["running", "running"]);
           yield* service.stop(parent.id);
           expect((yield* runView(service, parent.id)).state).toBe("stopped");
           expect((yield* runView(service, descendant.id)).state).toBe("stopped");

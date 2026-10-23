@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import type { SubagentError } from "./errors.ts";
@@ -25,7 +26,7 @@ const outcomeDiffStat = (
   files: ReadonlyArray<WorkspaceDiffStatFile>,
 ): SubagentWorkspaceDiffStat => ({
   ...diffStatTotals(files),
-  files: files.slice(0, MAX_OUTCOME_DIFFSTAT_FILES).map(outcomeFile),
+  files: Arr.map(files.slice(0, MAX_OUTCOME_DIFFSTAT_FILES), outcomeFile),
 });
 
 /**
@@ -59,7 +60,7 @@ export function workspaceSettleOperations(
       binding.state.knowledge.kind !== "unreviewed"
     )
       return undefined;
-    if ([...runsWithin(records, [binding.handle.artifactRoot]).keys()].some(runHoldsCwd))
+    if (Arr.some([...runsWithin(records, [binding.handle.artifactRoot]).keys()], runHoldsCwd))
       return undefined;
     return binding;
   };

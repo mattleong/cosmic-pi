@@ -1,8 +1,10 @@
 import { getTextContent, type CompactPhase, type CompactSummary } from "pi-code-previews";
+import * as Arr from "effect/Array";
 import * as Predicate from "effect/Predicate";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import { countLabel } from "pi-cosmic-core";
 import {
   type CompactSubagentToolDetails,
@@ -25,7 +27,15 @@ const decodeTargetIds = Schema.decodeUnknownOption(Schema.Array(Schema.String));
 
 const targetIds = Fn.flow(
   decodeTargetIds,
-  Option.map((decoded) => [...new Set(decoded.map((id) => id.trim()).filter(Boolean))]),
+  Option.map((decoded) => [
+    ...new Set(
+      Fn.pipe(
+        decoded,
+        Arr.map((id) => Str.trim(id)),
+        Arr.filter(Boolean),
+      ),
+    ),
+  ]),
   Option.getOrUndefined,
 );
 
@@ -33,7 +43,7 @@ export const requestedRunIds = (input: SummaryArguments): string[] | undefined =
   targetIds(input.runIds);
 
 function startSubject(input: SummaryArguments): string {
-  if (!Array.isArray(input.agents) || input.agents.length !== 1) return "";
+  if (!Arr.isArray(input.agents) || input.agents.length !== 1) return "";
   const agent: unknown = input.agents[0];
   if (!Predicate.isObject(agent)) return "";
   if ("name" in agent && Predicate.isString(agent.name)) return agent.name;
@@ -55,7 +65,7 @@ export function argumentSummary(
         : action === "workspace"
           ? "Proposed changes"
           : "";
-  const counters = Array.isArray(input.agents)
+  const counters = Arr.isArray(input.agents)
     ? [`${input.agents.length} requested`]
     : ids && ids.length > 1
       ? [countLabel(ids.length, "subagent")]
@@ -78,7 +88,7 @@ export function projectedSubject(
   const requested = targets ?? requestedRunIds(input);
   if (requested?.length === 1 && "cards" in details)
     return displayName(
-      details.cards.find((entry) => entry.id === requested[0]),
+      Option.getOrUndefined(Arr.findFirst(details.cards, (entry) => entry.id === requested[0])),
       requested,
     );
   return subject;
@@ -103,7 +113,7 @@ function rejectedTarget(input: SummaryArguments, action: string): string {
   if (action === "workspace") return "the proposed changes";
   if (action === "models") return "profile routes";
   const ids = requestedRunIds(input);
-  return (ids?.length ?? 0) > 1 || Array.isArray(input.agents) ? "the subagents" : "the subagent";
+  return (ids?.length ?? 0) > 1 || Arr.isArray(input.agents) ? "the subagents" : "the subagent";
 }
 
 export function rejectedCall(

@@ -1,5 +1,10 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
 import {
   clipText,
   runBoundedProcessNode,
@@ -43,25 +48,32 @@ const MESSAGE_LINE_CHARS = 400;
 const REDACTION_WINDOW_CHARS = 16_000;
 
 const hookEnvironment = (source: NodeJS.ProcessEnv) =>
-  Object.fromEntries(
-    Object.entries(source).filter(
+  Rec.fromEntries(
+    Arr.filter(
+      Rec.toEntries(source),
       ([key, value]) => value !== undefined && !isGitLocalEnvironmentKey(key),
     ),
   );
 
 const lastLine = (stdout: string, stderr: string) => {
-  const text = stderr.trim() || stdout.trim();
+  const text = Str.trim(stderr) || Str.trim(stdout);
   const recent = sanitizeDiagnosticContent(
-    stripTerminalControls(text.slice(-REDACTION_WINDOW_CHARS)),
+    stripTerminalControls(Fn.pipe(text, Str.slice(-REDACTION_WINDOW_CHARS))),
     { maximumLength: Number.POSITIVE_INFINITY },
   );
-  return (recent.split("\n").findLast((line) => line.trim()) ?? "")
-    .trim()
-    .slice(-MESSAGE_LINE_CHARS);
+  return Fn.pipe(
+    Str.trim(
+      Fn.pipe(
+        Arr.findLast(Str.split(recent, "\n"), (line) => Str.isNonEmpty(Str.trim(line))),
+        Option.getOrElse(() => ""),
+      ),
+    ),
+    Str.slice(-MESSAGE_LINE_CHARS),
+  );
 };
 
 export const describeWorktreeHook = (hook: { readonly command: ReadonlyArray<string> }) =>
-  clipText(hook.command.join(" "), 80);
+  clipText(Arr.join(hook.command, " "), 80);
 
 const stdinPayload = (input: WorktreeHookInput) =>
   new TextEncoder().encode(

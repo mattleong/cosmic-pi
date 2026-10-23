@@ -3,6 +3,7 @@ import type * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Fn from "effect/Function";
 import * as Queue from "effect/Queue";
 import * as Headers from "effect/http/Headers";
 import * as Rpc from "effect/rpc/Rpc";
@@ -16,6 +17,7 @@ import {
   SupervisorRunIdSchema,
   type SupervisorEvent,
 } from "../src/supervisor/protocol.ts";
+import * as Str from "effect/String";
 
 describe("supervisor authentication publication", () => {
   for (const revocation of ["shutdown", "disconnect"] as const) {
@@ -23,7 +25,7 @@ describe("supervisor authentication publication", () => {
       Effect.gen(function* () {
         const entered = yield* Deferred.make<void>();
         const completed = yield* Deferred.make<boolean>();
-        const token = SupervisorAuthTokenSchema.make("4a".repeat(32));
+        const token = SupervisorAuthTokenSchema.make(Fn.pipe("4a", Str.repeat(32)));
         const runId = SupervisorRunIdSchema.make("agent-authentication-test");
         const events = yield* Queue.bounded<SupervisorEvent, Cause.Done>(16);
         const session = yield* supervisorChannelSession({

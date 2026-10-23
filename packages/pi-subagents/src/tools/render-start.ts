@@ -1,5 +1,10 @@
+import * as Arr from "effect/Array";
+import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Match from "effect/Match";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
   Container,
@@ -9,7 +14,7 @@ import {
   type Component,
 } from "@earendil-works/pi-tui";
 import { escapeControlChars, expandedSection, previewIssuesSlot } from "pi-code-previews";
-import { sanitizeTerminalLine, synchronousNow, countLabel } from "pi-cosmic-core";
+import { countLabel, sanitizeTerminalLine, synchronousNow } from "pi-cosmic-core";
 import {
   managerStateGlyph,
   startingSpinnerFrame,
@@ -27,29 +32,52 @@ import {
   toolStatusLine,
 } from "pi-cosmic-ui/tool";
 import type { SubagentStartFailure } from "./model.ts";
-import type { SubagentStartSpec } from "./schema.ts";
 
-const requestedName = (agent: SubagentStartSpec, index: number): string =>
-  sanitizeTerminalLine((agent.name?.trim() ?? "") || `launch ${index + 1}`);
+// Raw call arguments reach the renderer before Pi validates them, and models send null for absent
+// fields; a malformed field or entry renders as absent instead of failing the row.
+const lenient = <S extends Schema.Top>(schema: S) =>
+  Schema.optional(schema.pipe(Schema.catchDecoding(() => Effect.succeedNone)));
+const RequestedStart = Schema.Struct({
+  name: lenient(Schema.String),
+  agent: lenient(Schema.String),
+  profile: lenient(Schema.String),
+  task: lenient(Schema.String),
+  isolation: lenient(Schema.String),
+  model: lenient(
+    Schema.Struct({
+      runtime: Schema.String,
+      model: Schema.String,
+      effort: lenient(Schema.String),
+    }),
+  ),
+}).pipe(Schema.catchDecoding(() => Effect.succeedSome({})));
+type RequestedStart = typeof RequestedStart.Type;
+const RequestedStarts = Schema.Array(RequestedStart);
+
+const requestedName = (agent: RequestedStart, index: number): string =>
+  sanitizeTerminalLine(Str.trim(agent.name ?? "") || `launch ${index + 1}`);
 
 // A custom agent names its own role; its profile is resolved at launch.
-const requestedProfile = (agent: SubagentStartSpec): string =>
+const requestedProfile = (agent: RequestedStart): string =>
   sanitizeTerminalLine(
-    (agent.agent?.trim() ?? "") || (agent.profile?.trim() ?? "") || "generalist",
+    Str.trim(agent.agent ?? "") || Str.trim(agent.profile ?? "") || "generalist",
   );
 
 export const renderSubagentStartCall = (
-  agents: ReadonlyArray<SubagentStartSpec>,
+  requested: unknown,
   theme: Theme,
   expanded: boolean,
   contentOnly = false,
   context?: { readonly state: object },
 ): Component => {
+  const agents = Option.getOrElse(Schema.decodeUnknownOption(RequestedStarts)(requested), () => []);
   const title =
     agents.length === 0 ? "Start subagents" : `Start ${countLabel(agents.length, "subagent")}`;
-  const subtitle = agents
-    .map((agent, index) => `${requestedName(agent, index)} [${requestedProfile(agent)}]`)
-    .join(", ");
+  const subtitle = Fn.pipe(
+    agents,
+    Arr.map((agent, index) => `${requestedName(agent, index)} [${requestedProfile(agent)}]`),
+    Arr.join(", "),
+  );
   const container = new Container();
   if (!contentOnly) {
     container.addChild(new Text(renderToolHeader({ title, subtitle }, theme), 0, 0));
@@ -68,7 +96,7 @@ export const renderSubagentStartCall = (
     const request = `${requestedName(agent, index)} · ${requestedProfile(agent)} · ${route}`;
     container.addChild(new Text(theme.fg("toolOutput", request), 0, 0));
     container.addChild(
-      new Text(theme.fg("dim", `  Task: ${escapeControlChars(agent.task)}`), 0, 0),
+      new Text(theme.fg("dim", `  Task: ${escapeControlChars(agent.task ?? "")}`), 0, 0),
     );
     if (agent.isolation !== undefined)
       container.addChild(
@@ -141,12 +169,13 @@ const receiptRow = (
   const lines = [`${theme.fg(color, glyph)} ${theme.fg("toolTitle", name)}`];
   const routeValue = `${theme.fg("muted", profile)} ${theme.fg("dim", "→")} ${theme.fg("toolOutput", route)}`;
   lines.push(
-    ...wrapTextWithAnsi(routeValue, Math.max(1, safeWidth - 5)).map(
+    ...Arr.map(
+      wrapTextWithAnsi(routeValue, Math.max(1, safeWidth - 5)),
       (line, index) => `${theme.fg("dim", index === 0 ? "  ╰─ " : "     ")}${line}`,
     ),
   );
   if (id) lines.push(`  ${theme.fg("muted", id)}`);
-  return lines.map((line) => clipToWidth(line, safeWidth));
+  return Arr.map(lines, (line) => clipToWidth(line, safeWidth));
 };
 
 const receiptCounters = (
@@ -155,25 +184,28 @@ const receiptCounters = (
   theme: Theme,
 ): string => {
   const total = entries.length;
-  const started = entries.filter((entry) => entry.status === "started").length;
-  const failed = entries.filter((entry) => entry.status === "failed").length;
+  const started = Arr.filter(entries, (entry) => entry.status === "started").length;
+  const failed = Arr.filter(entries, (entry) => entry.status === "failed").length;
   const pending = total - started - failed;
   if (partial)
     return toolStatusLine(
       theme,
       "running",
-      [
-        `Launching ${started + failed} of ${total}`,
-        `${started} started`,
-        ...(failed > 0 ? [`${failed} failed`] : []),
-        ...(pending > 0 ? [`${pending} pending`] : []),
-      ].join(" · "),
+      Arr.join(
+        [
+          `Launching ${started + failed} of ${total}`,
+          `${started} started`,
+          ...(failed > 0 ? [`${failed} failed`] : []),
+          ...(pending > 0 ? [`${pending} pending`] : []),
+        ],
+        " · ",
+      ),
       spinnerFrameAt(synchronousNow()),
     );
   if (total === 0) return theme.fg("muted", "No launch receipt");
   return theme.fg(
     "muted",
-    [`${started}/${total} started`, ...(failed > 0 ? [`${failed} failed`] : [])].join(" · "),
+    Arr.join([`${started}/${total} started`, ...(failed > 0 ? [`${failed} failed`] : [])], " · "),
   );
 };
 
@@ -186,20 +218,23 @@ const launchFailureSection = (
     theme,
     `${sanitizeTerminalLine(entry.name)} couldn't start`,
     new Text(
-      [
-        theme.fg("toolOutput", boundedLine(failure.message, 2_048)),
-        ...(failure.admittedRun
-          ? [theme.fg("dim", formatFailedStartRecovery(failure.admittedRun))]
-          : []),
-        theme.fg(
-          "dim",
-          `Next: ${
-            failure.admittedRun
-              ? failedStartRecoveryAction(failure.admittedRun)
-              : failureRecovery(failure.code, failure.message, "start")
-          }`,
-        ),
-      ].join("\n"),
+      Arr.join(
+        [
+          theme.fg("toolOutput", boundedLine(failure.message, 2_048)),
+          ...(failure.admittedRun
+            ? [theme.fg("dim", formatFailedStartRecovery(failure.admittedRun))]
+            : []),
+          theme.fg(
+            "dim",
+            `Next: ${
+              failure.admittedRun
+                ? failedStartRecoveryAction(failure.admittedRun)
+                : failureRecovery(failure.code, failure.message, "start")
+            }`,
+          ),
+        ],
+        "\n",
+      ),
       0,
       0,
     ),
@@ -220,11 +255,16 @@ export const renderStartReceiptComponent = (
   renderComponent((width) => {
     const safeWidth = Math.max(1, width);
     const entries = receipt.startEntries;
-    const started = entries.filter((entry) => entry.status === "started").length;
+    const started = Arr.filter(entries, (entry) => entry.status === "started").length;
     const sharedNames = duplicateRunNames(entries);
     const shown = expanded ? entries : entries.slice(0, COLLAPSED_ROWS);
-    const rows = shown.flatMap((entry) => {
-      const failure = receipt.startFailures?.find((candidate) => candidate.index === entry.index);
+    const rows = Arr.flatMap(shown, (entry) => {
+      const failure =
+        receipt.startFailures === undefined
+          ? undefined
+          : Option.getOrUndefined(
+              Arr.findFirst(receipt.startFailures, (candidate) => candidate.index === entry.index),
+            );
       const row = receiptRow(entry, safeWidth, theme, { expanded, sharedNames, failure });
       if (!expanded) return row;
       const fallback =

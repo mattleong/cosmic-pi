@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import * as Effect from "effect/Effect";
 import * as Config from "effect/Config";
 import * as Deferred from "effect/Deferred";
+import * as Fn from "effect/Function";
 import * as Schema from "effect/Schema";
 import * as Queue from "effect/Queue";
 import type * as Cause from "effect/Cause";
@@ -13,8 +14,11 @@ import type { ProcessExit } from "../src/boundary/process-transport.ts";
 import { SubagentProcessError } from "../src/run/errors.ts";
 import { backendLaunch } from "./fixtures/backend-supervisor.ts";
 import { describe, expect, it } from "@effect/vitest";
+import { indexOfFrom } from "pi-cosmic-core";
 import { temporaryDirectory } from "pi-cosmic-core/testing";
 import { nodePath as path, nodeSpawn } from "./support/node-builtins.ts";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const decodeJson = Schema.decodeEffect(Schema.fromJsonString(Schema.Json));
@@ -100,7 +104,7 @@ const rpcFixture = (extension: string, extraArgs: ReadonlyArray<string> = []) =>
     };
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
-      stderr = (stderr + chunk).slice(-8_192);
+      stderr = Fn.pipe(stderr + chunk, Str.slice(-8_192));
     });
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
@@ -111,9 +115,9 @@ const rpcFixture = (extension: string, extraArgs: ReadonlyArray<string> = []) =>
         return;
       }
       let newline: number;
-      while ((newline = buffer.indexOf("\n")) >= 0) {
-        const line = buffer.slice(0, newline);
-        buffer = buffer.slice(newline + 1);
+      while ((newline = indexOfFrom(buffer, "\n", 0)) >= 0) {
+        const line = Fn.pipe(buffer, Str.slice(0, newline));
+        buffer = Fn.pipe(buffer, Str.slice(newline + 1));
         try {
           const frame = runCallback(decodeJson(line));
           Queue.offerUnsafe(backendEvents, { type: "rpc_message", value: frame });
@@ -152,7 +156,8 @@ const rpcFixture = (extension: string, extraArgs: ReadonlyArray<string> = []) =>
           pending.delete(id);
         });
       });
-    const count = (type: string) => eventTypes.filter((eventType) => eventType === type).length;
+    const count = (type: string) =>
+      Arr.filter(eventTypes, (eventType) => eventType === type).length;
     const driver = localPiBackendDriver({
       reclaimRunState: () => Effect.void,
       spawn: () =>

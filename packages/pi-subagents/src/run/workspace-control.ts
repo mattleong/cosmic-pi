@@ -1,4 +1,7 @@
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import type { WriterWorkspaceMode } from "../config/schema.ts";
 import type { WorkspaceListing, WorkspaceRecord, WorkspaceSwept } from "../workspace/model.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
@@ -113,16 +116,18 @@ function workspaceControlOperations(
     listing: WorkspaceListing,
   ) {
     const entries = listing.records;
-    const owned = (record: WorkspaceRecord) => record.handle.ownerId.startsWith(`${ownerId}/`);
+    const owned = (record: WorkspaceRecord) =>
+      Fn.pipe(record.handle.ownerId, Str.startsWith(`${ownerId}/`));
     const source =
-      sourceCwd !== undefined && entries.some((record) => !owned(record))
+      sourceCwd !== undefined && Arr.some(entries, (record) => !owned(record))
         ? (yield* writerLeases.canonicalize(sourceCwd).pipe(Effect.mapError(mapWorkspaceError)))
             .path
         : undefined;
     return {
       unavailable: listing.unavailable,
       endedOwners: listing.endedOwners,
-      records: entries.filter(
+      records: Arr.filter(
+        entries,
         (record) =>
           owned(record) || (source !== undefined && isWithin(source, record.handle.sourceRoot)),
       ),
@@ -132,7 +137,8 @@ function workspaceControlOperations(
   const unresolvedWorkspaceCount = Effect.gen(function* () {
     if (!engine) return 0;
     const listing = yield* engine.listRecords.pipe(Effect.mapError(mapWorkspaceError));
-    return (yield* sourceRecords(listing)).records.filter(
+    return Arr.filter(
+      (yield* sourceRecords(listing)).records,
       (record) => record.status !== "integrated" && record.status !== "discarded",
     ).length;
   });
@@ -214,7 +220,7 @@ function workspaceControlOperations(
       Effect.sync(() => {
         const orphans = new Map(
           caller === SUBAGENT_ROOT_RUN_ID
-            ? listing.records.flatMap((record) => {
+            ? Arr.flatMap(listing.records, (record) => {
                 const { workspaceId } = record.handle;
                 const disposition = state.bindings.has(workspaceId)
                   ? undefined
@@ -225,7 +231,7 @@ function workspaceControlOperations(
         );
         return {
           ...listing,
-          records: listing.records.map(currentRecord),
+          records: Arr.map(listing.records, currentRecord),
           ...(orphans.size > 0 && { orphans }),
         };
       }),

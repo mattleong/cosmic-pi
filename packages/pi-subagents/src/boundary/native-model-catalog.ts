@@ -9,6 +9,9 @@ import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/process/ChildProcess";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import {
   confirmEffectProcessClose,
   confirmProcessGroupExit,
@@ -40,7 +43,7 @@ const CATALOG_REQUEST_ID = "pi-subagents-model-catalog";
 
 const hasNoTerminalControls = Schema.makeFilter((value: string) => !hasControlCharacter(value));
 const hasOnlySafeDescriptionControls = Schema.makeFilter(
-  (value: string) => !hasControlCharacter(value.replace(/[\t\n\r]/gu, "")),
+  (value: string) => !hasControlCharacter(Fn.pipe(value, Str.replace(/[\t\n\r]/gu, ""))),
 );
 const Selector = Schema.String.check(
   Schema.isMinLength(1),
@@ -168,13 +171,14 @@ const catalogError = (runtime: LocalCliRuntime, code: string, message: string) =
   NativeModelCatalogError.make({ runtime, code, message });
 
 const isSupportedEffort = Schema.is(
-  Schema.Literals(SUBAGENT_EFFORTS.filter((effort) => effort !== "off")),
+  Schema.Literals(Arr.filter(SUBAGENT_EFFORTS, (effort) => effort !== "off")),
 );
 
 const normalizeEfforts = (values: ReadonlyArray<string>): ReadonlyArray<SubagentEffort> =>
-  values.filter(isSupportedEffort);
+  Arr.filter(values, isSupportedEffort);
 
-const normalizeDescription = (value: string): string => value.replace(/[\t\n\r]/gu, " ").trim();
+const normalizeDescription = (value: string): string =>
+  Str.trim(Fn.pipe(value, Str.replace(/[\t\n\r]/gu, " ")));
 
 const claudeArgs = (probeSelector: string): ReadonlyArray<string> => [
   "--print",
@@ -265,7 +269,7 @@ const runCatalogProcess = (
         const reply = bounded(child.stdout, "output").pipe(
           Stream.decodeText,
           Stream.splitLines,
-          Stream.filter((line) => line.trim().length > 0),
+          Stream.filter((line) => Str.trim(line).length > 0),
           Stream.mapEffect((line) =>
             Effect.fromOption(decodeUnknownJsonOption(line), () =>
               catalogError(
@@ -338,13 +342,13 @@ const claudeRuntimeModel = (model: ClaudeAdvertisedModel): NativeRuntimeModel =>
 const withExplicitClaudeModels = (
   models: ReadonlyArray<ClaudeAdvertisedModel>,
 ): ReadonlyArray<NativeRuntimeModel> => {
-  const advertised = new Set(models.map((model) => model.value));
+  const advertised = new Set(Arr.map(models, (model) => model.value));
   const namers = new Map<string, ClaudeAdvertisedModel>();
   for (const model of models)
     if (model.value !== "default" && !namers.has(model.resolvedModel))
       namers.set(model.resolvedModel, model);
   const added = new Set<string>();
-  return models.flatMap((model) => {
+  return Arr.flatMap(models, (model) => {
     const target = model.resolvedModel;
     const namer = namers.get(target) ?? model;
     if (advertised.has(target) || added.has(target) || namer !== model)
@@ -362,7 +366,10 @@ const withExplicitClaudeModels = (
 };
 
 const jsonLines = (...frames: ReadonlyArray<Schema.Json>): string =>
-  `${frames.map((frame) => JSON.stringify(frame)).join("\n")}\n`;
+  `${Arr.join(
+    Arr.map(frames, (frame) => JSON.stringify(frame)),
+    "\n",
+  )}\n`;
 
 const CATALOG_PROTOCOLS = {
   claude: {
@@ -387,16 +394,17 @@ const CATALOG_PROTOCOLS = {
     decode: (frame: Schema.Json) =>
       decodeCodexCatalog(frame).pipe(
         Effect.map((response) =>
-          response.result.data.map(
+          Arr.map(
+            response.result.data,
             (model): NativeRuntimeModel => ({
               selector: model.model,
               label: model.displayName,
               description: normalizeDescription(model.description),
               supportedEfforts: normalizeEfforts(
-                model.supportedReasoningEfforts.map((effort) => effort.reasoningEffort),
+                Arr.map(model.supportedReasoningEfforts, (effort) => effort.reasoningEffort),
               ),
               supportedServiceTiers: [
-                ...new Set((model.serviceTiers ?? []).map((tier) => tier.id)),
+                ...new Set(Arr.map(model.serviceTiers ?? [], (tier) => tier.id)),
               ],
               isDefault: model.isDefault,
             }),
@@ -488,7 +496,9 @@ const loadNativeModelCatalog =
       if (runtime !== "claude" || key.probeSelector === "default") return defaults;
       const preferred = yield* load(key.probeSelector);
       return [
-        ...new Map([...defaults, ...preferred].map((model) => [model.selector, model])).values(),
+        ...new Map(
+          Arr.map([...defaults, ...preferred], (model) => [model.selector, model]),
+        ).values(),
       ];
     });
   };

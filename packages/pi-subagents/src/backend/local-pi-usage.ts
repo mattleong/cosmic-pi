@@ -1,5 +1,7 @@
 import { decodeUnknownOrUndefined } from "pi-cosmic-core";
 import * as Schema from "effect/Schema";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
 import type { SubagentUsage } from "../run/model.ts";
 
 const Count = Schema.Number.check(
@@ -47,10 +49,10 @@ export const localPiUsage = () => {
       totalTokens: next.totalTokens - previous.totalTokens,
       cost: cost - (previous.cost ?? 0),
     };
-    const components = Object.values(delta);
-    if (components.some((component) => component < 0)) return undefined;
+    const components = Rec.values(delta);
+    if (Arr.some(components, (component) => component < 0)) return undefined;
     previous = next;
-    return components.some((component) => component > 0)
+    return Arr.some(components, (component) => component > 0)
       ? { ...delta, ...(contextPercent !== undefined && { contextPercent }) }
       : undefined;
   };

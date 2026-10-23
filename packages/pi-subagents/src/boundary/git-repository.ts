@@ -1,5 +1,8 @@
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import { WorkspaceError } from "../workspace/model.ts";
 import { nodeFsPromises as fs, nodePath as path, sha256Text } from "pi-cosmic-core";
 import {
@@ -28,8 +31,9 @@ export interface SourceCheckout {
 const revParse = (cwd: string, args: ReadonlyArray<string>, count: number) =>
   git(cwd, ["rev-parse", "--path-format=absolute", ...args]).pipe(
     Effect.flatMap((output) => {
-      const lines = output.replace(/\n$/u, "").split("\n");
-      return lines.length === count && lines.every((line) => line !== "" && !/\p{Cc}/u.test(line))
+      const lines = Str.split(Fn.pipe(output, Str.replace(/\n$/u, "")), "\n");
+      return lines.length === count &&
+        Arr.every(lines, (line) => line !== "" && !/\p{Cc}/u.test(line))
         ? Effect.succeed(lines)
         : Effect.fail(workspaceFailure("source", "Git reported unusable repository paths."));
     }),
@@ -37,7 +41,7 @@ const revParse = (cwd: string, args: ReadonlyArray<string>, count: number) =>
 
 /** An absolute path Git keeps for the tree at `root`, such as its index or HEAD file. */
 export const gitPath = (root: string, name: string) =>
-  revParse(root, ["--git-path", name], 1).pipe(Effect.map(([file = ""]) => file));
+  revParse(root, ["--git-path", name], 1).pipe(Effect.map(([file]) => file));
 
 // Git reports these states only as a failed rev-parse; probe so the refusal names the cause.
 const unsupportedRepository = Effect.fn("GitRepository.unsupportedRepository")(function* (
@@ -53,7 +57,7 @@ const unsupportedRepository = Effect.fn("GitRepository.unsupportedRepository")(f
       rule: "isolated workspaces are linked worktrees of a Git checkout that Git accepts for the current user",
       remedy: `Start Pi inside a Git checkout you own, ${SHARED_CHECKOUT_REMEDY}.`,
     });
-  const [bare, insideGitDirectory] = probe.value.split("\n");
+  const [bare, insideGitDirectory] = Str.split(probe.value, "\n");
   if (bare === "true")
     return yield* workspaceRefusal("source", "Bare repositories can't be snapshotted.", {
       path: sourceCwd,
@@ -95,7 +99,7 @@ export const headCommit = (root: string) =>
 export const inspectSource = Effect.fn("GitRepository.inspectSource")(function* (cwd: string) {
   const resolved = yield* workspaceIO("source", () => fs.realpath(cwd));
   const sourceCwd = yield* checkDirectory(resolved);
-  const [sourceRoot = "", gitDirectory = "", repository = ""] = yield* revParse(
+  const [sourceRoot, gitDirectory = "", repository = ""] = yield* revParse(
     sourceCwd,
     ["--show-toplevel", "--absolute-git-dir", "--git-common-dir"],
     3,
@@ -111,7 +115,7 @@ export const inspectSource = Effect.fn("GitRepository.inspectSource")(function* 
   const subdirectory = path.relative(sourceRoot, sourceCwd);
   if (
     subdirectory === ".." ||
-    subdirectory.startsWith(`..${path.sep}`) ||
+    Fn.pipe(subdirectory, Str.startsWith(`..${path.sep}`)) ||
     path.isAbsolute(subdirectory)
   )
     return yield* workspaceRefusal(
@@ -132,7 +136,7 @@ export const inspectSource = Effect.fn("GitRepository.inspectSource")(function* 
     "--get",
     "core.sparseCheckout",
   ]);
-  if (sparse.trim() === "true")
+  if (Str.trim(sparse) === "true")
     return yield* workspaceRefusal("source", "Sparse checkouts can't be snapshotted.", {
       path: sourceRoot,
       rule: "isolated workspaces need every tracked file checked out (core.sparseCheckout is on)",
@@ -168,10 +172,10 @@ export const refuseHiddenLocalEdits = Effect.fn("GitRepository.refuseHiddenLocal
 ) {
   const selected = new Set(paths);
   // `ls-files -v` tags skip-worktree entries `S` and assume-unchanged ones in lowercase.
-  const hidden = (yield* gitFields(root, ["ls-files", "-v", "-z"])).flatMap((entry) => {
-    const tag = entry.slice(0, 1);
-    const name = entry.slice(2);
-    return (tag === "S" || tag !== tag.toUpperCase()) && selected.has(name) ? [name] : [];
+  const hidden = Arr.flatMap(yield* gitFields(root, ["ls-files", "-v", "-z"]), (entry) => {
+    const tag = Fn.pipe(entry, Str.slice(0, 1));
+    const name = Fn.pipe(entry, Str.slice(2));
+    return (tag === "S" || tag !== Str.toUpperCase(tag)) && selected.has(name) ? [name] : [];
   });
   if (hidden.length === 0) return undefined;
   return yield* WorkspaceError.make({
@@ -181,11 +185,14 @@ export const refuseHiddenLocalEdits = Effect.fn("GitRepository.refuseHiddenLocal
       hidden.length === 1
         ? "The parent index hides local edits to a file the proposal changes."
         : `The parent index hides local edits to ${hidden.length} files the proposal changes.`,
-    detail: [
-      `Hidden: ${listedPaths(hidden)}`,
-      "Rule: Git skips the files of skip-worktree and assume-unchanged entries (`git ls-files -v` tags them `S` or lowercase), so their local edits can't be checked and integration would overwrite them.",
-      "Nothing was changed.",
-      `Remedy: in ${root}, clear the bit with \`git update-index --no-skip-worktree -- <path>\` or \`git update-index --no-assume-unchanged -- <path>\`, then prepare again; or revise the workspace so the writer leaves these files unchanged.`,
-    ].join("\n"),
+    detail: Arr.join(
+      [
+        `Hidden: ${listedPaths(hidden)}`,
+        "Rule: Git skips the files of skip-worktree and assume-unchanged entries (`git ls-files -v` tags them `S` or lowercase), so their local edits can't be checked and integration would overwrite them.",
+        "Nothing was changed.",
+        `Remedy: in ${root}, clear the bit with \`git update-index --no-skip-worktree -- <path>\` or \`git update-index --no-assume-unchanged -- <path>\`, then prepare again; or revise the workspace so the writer leaves these files unchanged.`,
+      ],
+      "\n",
+    ),
   });
 });

@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { DelegationMode } from "../config/schema.ts";
 import {
@@ -28,7 +29,7 @@ export const registerDelegationPrompt = (
     const prompt = delegationPrompt(mode);
     const guidelines = options.toolGuidelines[SUBAGENT_TOOL_NAME.start];
     if (guidelines)
-      options.toolGuidelines[SUBAGENT_TOOL_NAME.start] = guidelines.map((guideline) =>
+      options.toolGuidelines[SUBAGENT_TOOL_NAME.start] = Arr.map(guidelines, (guideline) =>
         guideline === NORMAL_START_GUIDELINE ? prompt.startGuideline : guideline,
       );
     if (prompt.section) options.sections[DELEGATION_PROMPT_SECTION] = prompt.section;

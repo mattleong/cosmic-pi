@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 
@@ -18,7 +20,9 @@ export const decodeMessageEnvelope = Schema.decodeUnknownOption(Envelope, {
 export const messageContentText = (content: string | ReadonlyArray<unknown> | undefined): string =>
   Predicate.isString(content)
     ? content
-    : (content ?? [])
-        .filter(isTextPart)
-        .map((part) => part.text)
-        .join("\n");
+    : Fn.pipe(
+        content ?? [],
+        Arr.filter(isTextPart),
+        Arr.map((part) => part.text),
+        Arr.join("\n"),
+      );

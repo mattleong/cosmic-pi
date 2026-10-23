@@ -1,12 +1,14 @@
 import { EventEmitter } from "node:events";
+import * as Fn from "effect/Function";
 import * as Schema from "effect/Schema";
 import {
   attachBoundedLineParser,
   type OversizedLine,
 } from "../../src/boundary/bounded-line-parser.ts";
 import { MAX_PROCESS_LINE_BYTES } from "../../src/boundary/process-transport.ts";
+import * as Str from "effect/String";
 
-export const OVERSIZED_IMAGE_DATA = "A".repeat(6 * 1024 * 1024);
+export const OVERSIZED_IMAGE_DATA = Fn.pipe("A", Str.repeat(6 * 1024 * 1024));
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json));
 
@@ -23,7 +25,7 @@ export const oversizedLine = (event: Schema.Json): OversizedLine => {
   });
   const line = `${encodeJson(event)}\n`;
   for (let offset = 0; offset < line.length; offset += 1024 * 1024)
-    stream.emit("data", Buffer.from(line.slice(offset, offset + 1024 * 1024)));
+    stream.emit("data", Buffer.from(Fn.pipe(line, Str.slice(offset, offset + 1024 * 1024))));
   const [summary] = summaries;
   if (!summary) throw new Error("The fixture line fit within the transport limit.");
   return summary;

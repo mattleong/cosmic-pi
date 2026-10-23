@@ -3,6 +3,9 @@ import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
 import {
   createPrivateFile,
   ensurePrivateDirectory,
@@ -142,8 +145,9 @@ export const sanitizeLocalCliEnvironment = (
 ): NodeJS.ProcessEnv => {
   const codexApiKey = runtime === "codex" ? approvedCodexApiKey(source) : undefined;
   return {
-    ...Object.fromEntries(
-      Object.entries(source).filter(
+    ...Rec.fromEntries(
+      Arr.filter(
+        Rec.toEntries(source),
         ([key, value]) => value !== undefined && SAFE_ENV_KEYS.has(key),
       ),
     ),
@@ -161,10 +165,10 @@ export const claudeWriterCwdPolicy = (cwd: string | undefined): ClaudeWriterCwdP
 
 export const codexArgv = (): ReadonlyArray<string> => ["app-server", "--stdio", "--strict-config"];
 
-const CODEX_DISABLED_FEATURES =
-  "apps auth_elicitation browser_use computer_use fast_mode goals guardian_approval image_generation in_app_browser memories plugins remote_plugin skill_search standalone_web_search tool_suggest workspace_dependencies".split(
-    " ",
-  );
+const CODEX_DISABLED_FEATURES = Str.split(
+  "apps auth_elicitation browser_use computer_use fast_mode goals guardian_approval image_generation in_app_browser memories plugins remote_plugin skill_search standalone_web_search tool_suggest workspace_dependencies",
+  " ",
+);
 
 const CODEX_TEMPORARY_DIRECTORY = "tmp";
 
@@ -192,7 +196,8 @@ const codexBaseConfig = (
   "[agents]",
   "enabled = true",
   "[features]",
-  ...CODEX_DISABLED_FEATURES.map(
+  ...Arr.map(
+    CODEX_DISABLED_FEATURES,
     (feature) => `${feature} = ${feature === "fast_mode" && openaiFastMode}`,
   ),
   "multi_agent = true",
@@ -216,14 +221,17 @@ const codexConfig = (
   openaiFastMode: boolean,
   temporaryDirectory: string,
 ): string =>
-  [
-    ...codexBaseConfig(openaiFastMode, temporaryDirectory),
-    ...codexWorkspaceWriteConfig(temporaryDirectory),
-    supervisor.codexMcp.tomlFragment,
-    "",
-  ].join("\n");
+  Arr.join(
+    [
+      ...codexBaseConfig(openaiFastMode, temporaryDirectory),
+      ...codexWorkspaceWriteConfig(temporaryDirectory),
+      supervisor.codexMcp.tomlFragment,
+      "",
+    ],
+    "\n",
+  );
 
-const codexCatalogConfig = (): string => [...codexBaseConfig(), ""].join("\n");
+const codexCatalogConfig = (): string => Arr.join([...codexBaseConfig(), ""], "\n");
 
 const removeTemporaryDirectory = (
   directory: string | undefined,

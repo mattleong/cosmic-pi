@@ -1,6 +1,9 @@
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Order from "effect/Order";
 import { WorkspaceError, type WorkspaceRecord } from "../workspace/model.ts";
 import { nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core";
 import { nodeErrorCode } from "./harness-shared.ts";
@@ -24,7 +27,12 @@ import {
 const CHECKOUT_TIMEOUT_MILLIS = 10 * 60 * 1000;
 
 const nulTerminated = (lines: ReadonlyArray<string>) =>
-  new TextEncoder().encode(lines.map((line) => `${line}\0`).join(""));
+  new TextEncoder().encode(
+    Arr.join(
+      Arr.map(lines, (line) => `${line}\0`),
+      "",
+    ),
+  );
 
 /** Whether anything is at `name` in the checkout at `root`; a final symlink isn't followed. */
 const present = (root: string, name: string) =>
@@ -48,11 +56,14 @@ export const touchedParentDrift = (paths: ReadonlyArray<string>) =>
       paths.length === 1
         ? "A parent file the proposal changes no longer matches the tested one."
         : `${paths.length} parent files the proposal changes no longer match the tested ones.`,
-    detail: [
-      `Changed: ${listedPaths(paths)}`,
-      "Nothing was changed.",
-      "Remedy: prepare again so the proposal is tested against the current files, then integrate the new preparation. A parent file captures skip, such as an ignored or untracked credential file, never matches: move it aside, or revise the workspace so the writer leaves that path alone.",
-    ].join("\n"),
+    detail: Arr.join(
+      [
+        `Changed: ${listedPaths(paths)}`,
+        "Nothing was changed.",
+        "Remedy: prepare again so the proposal is tested against the current files, then integrate the new preparation. A parent file captures skip, such as an ignored or untracked credential file, never matches: move it aside, or revise the workspace so the writer leaves that path alone.",
+      ],
+      "\n",
+    ),
   });
 
 // Git's forced checkout replaces a symlink or file where it needs a directory, so every existing
@@ -96,7 +107,10 @@ const checkoutPaths = (root: string, scratch: string, tree: string, paths: Reado
         git(root, ["read-tree", tree], { environment }).pipe(
           Effect.andThen(
             Effect.forEach(
-              [paths.filter(isAttributesFile), paths.filter((name) => !isAttributesFile(name))],
+              [
+                Arr.filter(paths, isAttributesFile),
+                Arr.filter(paths, (name) => !isAttributesFile(name)),
+              ],
               (batch) =>
                 batch.length === 0
                   ? Effect.void
@@ -124,11 +138,12 @@ const removePaths = Effect.fn("GitWorktreeIntegration.removePaths")(function* (
   for (const name of paths)
     for (let parent = path.dirname(name); parent !== "."; parent = path.dirname(parent))
       directories.add(parent);
-  for (const directory of [...directories].toSorted(
-    (left, right) => right.split(path.sep).length - left.split(path.sep).length,
+  for (const directory of Arr.sort(
+    [...directories],
+    Order.flip(Order.mapInput(Order.Number, (name: string) => Str.split(name, path.sep).length)),
   )) {
     const full = path.join(sourceRoot, directory);
-    if (full === sourceCwd || sourceCwd.startsWith(`${full}${path.sep}`)) continue;
+    if (full === sourceCwd || Fn.pipe(sourceCwd, Str.startsWith(`${full}${path.sep}`))) continue;
     // A directory that isn't empty, or is no longer one, stays.
     yield* workspaceIO("integrate", () => fs.rmdir(full).catch(() => undefined));
   }
@@ -167,7 +182,7 @@ const differingFrom = (
         git(root, ["update-index", "-z", "--index-info"], {
           environment,
           stdin: nulTerminated(
-            entries.map((entry) => `${entry.mode} ${entry.object}\t${entry.path}`),
+            Arr.map(entries, (entry) => `${entry.mode} ${entry.object}\t${entry.path}`),
           ),
         }).pipe(
           Effect.andThen(gitFields(root, ["ls-files", "--modified", "-z"], { environment })),
@@ -184,11 +199,14 @@ const rollbackRefused = (record: WorkspaceRecord, paths: ReadonlyArray<string>) 
       paths.length === 1
         ? "A file the integration touched has changed since; rollback was refused."
         : `${paths.length} files the integration touched have changed since; rollback was refused.`,
-    detail: [
-      `Changed: ${listedPaths(paths)}`,
-      "Nothing was rolled back; the workspace stays mid-integration.",
-      `Remedy: put each named file back to its content from before the integration (\`git show ${prepared}^:<path>\`) or the proposal's (\`git show ${prepared}:<path>\`), then discard again.`,
-    ].join("\n"),
+    detail: Arr.join(
+      [
+        `Changed: ${listedPaths(paths)}`,
+        "Nothing was rolled back; the workspace stays mid-integration.",
+        `Remedy: put each named file back to its content from before the integration (\`git show ${prepared}^:<path>\`) or the proposal's (\`git show ${prepared}:<path>\`), then discard again.`,
+      ],
+      "\n",
+    ),
   });
 };
 
@@ -209,7 +227,7 @@ export const rollbackIntegration = Effect.fn("GitWorktreeIntegration.rollbackInt
     const unlikeParent = yield* differingFrom(
       root,
       scratch,
-      changes.flatMap((change) =>
+      Arr.flatMap(changes, (change) =>
         change.from === ABSENT_MODE
           ? []
           : [{ path: change.path, mode: change.from, object: change.fromObject }],
@@ -218,7 +236,7 @@ export const rollbackIntegration = Effect.fn("GitWorktreeIntegration.rollbackInt
     const unlikePrepared = yield* differingFrom(
       root,
       scratch,
-      changes.flatMap((change) =>
+      Arr.flatMap(changes, (change) =>
         change.to === ABSENT_MODE
           ? []
           : [{ path: change.path, mode: change.to, object: change.toObject }],
@@ -228,7 +246,7 @@ export const rollbackIntegration = Effect.fn("GitWorktreeIntegration.rollbackInt
     for (const change of changes) if (yield* present(root, change.path)) found.add(change.path);
     const holds = (name: string, mode: string, unlike: ReadonlySet<string>) =>
       mode === ABSENT_MODE ? !found.has(name) : !unlike.has(name);
-    const refused = changes.flatMap((change) =>
+    const refused = Arr.flatMap(changes, (change) =>
       found.has(change.path) &&
       !holds(change.path, change.from, unlikeParent) &&
       !holds(change.path, change.to, unlikePrepared)
@@ -238,7 +256,7 @@ export const rollbackIntegration = Effect.fn("GitWorktreeIntegration.rollbackInt
     if (refused.length > 0) return yield* rollbackRefused(record, refused);
     yield* removePaths(
       record,
-      changes.flatMap((change) =>
+      Arr.flatMap(changes, (change) =>
         change.from === ABSENT_MODE && found.has(change.path) ? [change.path] : [],
       ),
     );
@@ -246,7 +264,7 @@ export const rollbackIntegration = Effect.fn("GitWorktreeIntegration.rollbackInt
       root,
       scratch,
       parentTree,
-      changes.flatMap((change) =>
+      Arr.flatMap(changes, (change) =>
         change.from !== ABSENT_MODE && unlikeParent.has(change.path) ? [change.path] : [],
       ),
     );

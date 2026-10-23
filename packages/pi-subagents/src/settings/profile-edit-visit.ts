@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
 import { isJsonObject, type JsonObject } from "pi-cosmic-core";
 import { subagentConfigDecoder } from "../config/schema.ts";
 import { captureRestoreDeclaration, stableJson } from "../config/profile-restore.ts";
@@ -41,7 +43,7 @@ const rawRestore = (
 
 const candidatesKey = (draft: ProfileRouteDraft): string =>
   JSON.stringify(
-    draft.candidates.map((c) => [
+    Arr.map(draft.candidates, (c) => [
       c.runtime,
       c.model,
       c.effort,
@@ -64,7 +66,7 @@ const baselineKey = (inspection: ProfileSettingsInspection): string => {
     origin.scope,
     "name" in origin ? origin.name : undefined,
     "invalid" in origin ? origin.invalid : undefined,
-    PROFILE_IDS.map((profile) => [
+    Arr.map(PROFILE_IDS, (profile) => [
       baseline.profileSources[profile],
       candidatesKey({ kind: "explicit", candidates: baseline.profiles[profile].candidates }),
     ]),
@@ -72,8 +74,8 @@ const baselineKey = (inspection: ProfileSettingsInspection): string => {
 };
 const targets = (inspection: ProfileSettingsInspection): ProfileWorkspaceTarget[] => [
   { kind: "session" },
-  ...(["global", "project"] as const).flatMap((scope) =>
-    Object.keys(inspection[scope]?.file.profileSets ?? {}).map((name) => ({
+  ...Arr.flatMap(["global", "project"] as const, (scope) =>
+    Arr.map(Rec.keys(inspection[scope]?.file.profileSets ?? {}), (name) => ({
       kind: "profile-set" as const,
       set: { scope, name },
     })),
@@ -81,7 +83,7 @@ const targets = (inspection: ProfileSettingsInspection): ProfileWorkspaceTarget[
 ];
 const exists = (target: ProfileWorkspaceTarget, inspection: ProfileSettingsInspection): boolean =>
   target.kind === "session" ||
-  Object.hasOwn(inspection[target.set.scope]?.file.profileSets ?? {}, target.set.name);
+  Rec.has(inspection[target.set.scope]?.file.profileSets ?? {}, target.set.name);
 
 interface RouteState {
   readonly draft: ProfileRouteDraft;
@@ -139,7 +141,7 @@ export class ProfileEditVisit {
     this.checkpoints.set(
       key(target),
       new Map(
-        PROFILE_IDS.map((profile) => {
+        Arr.map(PROFILE_IDS, (profile) => {
           const current = state(target, profile, inspection);
           return [
             profile,
@@ -159,7 +161,7 @@ export class ProfileEditVisit {
 
   reconcile(inspection: ProfileSettingsInspection): void {
     if (this.baseline !== baselineKey(inspection)) this.resetSession(inspection);
-    const currentTargets = new Map(targets(inspection).map((target) => [key(target), target]));
+    const currentTargets = new Map(Arr.map(targets(inspection), (target) => [key(target), target]));
     for (const [id, profiles] of this.checkpoints) {
       const target = currentTargets.get(id);
       if (!target) {

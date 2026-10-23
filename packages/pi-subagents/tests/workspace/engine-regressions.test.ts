@@ -24,6 +24,9 @@ import {
   workspaceTests,
   writeFile,
 } from "./fixtures/repository.ts";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
 
 const test = workspaceTests([
   ["src/main.ts", "baseline\n"],
@@ -84,7 +87,7 @@ const interruptBlocked = (
       run(blockingHook(started, path.join(signals, "never"))),
     );
     yield* waitFor(started);
-    const pid = Number((yield* readText(started)).trim());
+    const pid = Number(Str.trim(yield* readText(started)));
     yield* Fiber.interrupt(running);
     const exit = yield* Fiber.await(running);
     expect(Exit.hasInterrupts(exit)).toBe(true);
@@ -240,7 +243,7 @@ test("removes the tree of a preparation that fails to apply", function* (service
   expect(conflict.detail).toContain('"src/main.ts"');
   const artifact = path.join(yield* registryOf(agent), handle.workspaceId);
   const names = yield* io(() => fs.readdir(artifact));
-  expect(names.filter((name) => name.startsWith("prepare-"))).toEqual([]);
+  expect(Arr.filter(names, (name) => Fn.pipe(name, Str.startsWith("prepare-")))).toEqual([]);
   expect((yield* service.inspect(workspaceTarget(handle))).status).toBe("frozen");
 });
 
@@ -255,9 +258,9 @@ test("removes what an interrupted create made before acquiring the workspace", f
   const spy = vi.spyOn(fs, "rename").mockImplementation((from, to) =>
     fs.readFile(from, "utf8").then((text) => {
       if (
-        String(to).endsWith("record.json") &&
-        text.includes('"status":"creating"') &&
-        !text.includes('"baseline":""')
+        Fn.pipe(String(to), Str.endsWith("record.json")) &&
+        Fn.pipe(text, Str.includes('"status":"creating"')) &&
+        !Fn.pipe(text, Str.includes('"baseline":""'))
       )
         pending.current?.();
       return rename(from, to);
@@ -272,7 +275,7 @@ test("removes what an interrupted create made before acquiring the workspace", f
   expect(yield* service.listAll).toEqual({ records: [], unavailable: [] });
   const registry = yield* registryOf(agent);
   const names = yield* io(() => fs.readdir(registry));
-  expect(names.filter((name) => /^[a-f0-9-]{36}$/u.test(name))).toEqual([]);
+  expect(Arr.filter(names, (name) => /^[a-f0-9-]{36}$/u.test(name))).toEqual([]);
   expect(yield* git(root, ["worktree", "list", "--porcelain"])).not.toContain(registry);
   expect(yield* git(root, ["for-each-ref", "refs/pi"])).toBe("");
 });

@@ -20,6 +20,10 @@ import { view } from "./tools/fixtures/tool-harness.ts";
 import { sessionContextFixture } from "./fixtures/pi-host.ts";
 import { effectTest, settle, step } from "./support/effect-test.ts";
 import { nodePath } from "./support/node-builtins.ts";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 
 const output: AgentToolResult<unknown> = {
   content: [{ type: "text", text: "COMPLETE_OUTPUT recovery /tmp/evidence.txt" }],
@@ -53,7 +57,8 @@ const cutReport: AgentToolResult<unknown> = {
     awaitUntil: "all_finished",
   }),
 };
-const archiveMentions = (text: string) => text.replace(/\s+/gu, "").split(ARCHIVE_PATH).length - 1;
+const archiveMentions = (text: string) =>
+  Str.split(Fn.pipe(text, Str.replace(/\s+/gu, "")), ARCHIVE_PATH).length - 1;
 const SAMPLES = [
   {
     name: "agent_start",
@@ -110,9 +115,11 @@ const replayApplication = (loadSettings: () => Promise<void> = () => Promise.res
   });
 
 const expectEvidence = (rendered: ReturnType<typeof frames>, sample: Sample) => {
-  for (const { text } of rendered.filter((frame) => frame.expanded))
+  for (const { text } of Arr.filter(rendered, (frame) => frame.expanded))
     for (const evidence of sample.evidence)
-      expect(text.replace(/\s+/gu, "")).toContain(evidence.replace(/\s+/gu, ""));
+      expect(Fn.pipe(text, Str.replace(/\s+/gu, ""))).toContain(
+        Fn.pipe(evidence, Str.replace(/\s+/gu, "")),
+      );
 };
 
 const compactSettings = Effect.acquireRelease(
@@ -136,15 +143,15 @@ describe("subagent tool history replay", () => {
         if (treeStyle) applyPresentationSettings({ toolCallCollapsedStyle: "preview" });
         return Promise.resolve();
       });
-      const drawn = SAMPLES.map((sample) => {
+      const drawn = Arr.map(SAMPLES, (sample) => {
         const row = app.coldRow(sample);
         return { sample, row, cold: frames(row, sample) };
       });
-      const lazy = SAMPLES.map((sample) => ({ sample, row: app.coldRow(sample) }));
-      const retired = SAMPLES.map((sample) => ({ sample, row: app.coldRow(sample) }));
+      const lazy = Arr.map(SAMPLES, (sample) => ({ sample, row: app.coldRow(sample) }));
+      const retired = Arr.map(SAMPLES, (sample) => ({ sample, row: app.coldRow(sample) }));
       yield* app.emit("session_start", { type: "session_start", reason: "startup" });
       expect(app.host.active()).toContain("agent_start");
-      const first = new Map(SAMPLES.map((sample) => [sample, app.registeredFrames(sample)]));
+      const first = new Map(Arr.map(SAMPLES, (sample) => [sample, app.registeredFrames(sample)]));
       for (const { sample, row, cold } of drawn) {
         const adopted = frames(row, sample);
         expect(adopted).toEqual(first.get(sample));
@@ -173,7 +180,9 @@ describe("subagent tool history replay", () => {
       for (const { sample, row } of drawn) expect(frames(row, sample)).toEqual(first.get(sample));
       for (const { sample, row } of retired) {
         const raw = frames(row, sample);
-        expect(raw).toEqual(drawn.find((entry) => entry.sample === sample)?.cold);
+        expect(raw).toEqual(
+          Option.getOrUndefined(Arr.findFirst(drawn, (entry) => entry.sample === sample))?.cold,
+        );
         expectEvidence(raw, sample);
       }
     },
@@ -191,7 +200,7 @@ describe("subagent tool history replay", () => {
       const pending = failure === "shutdown" || failure === "tree";
       const loadSettings = vi.fn(() => (pending ? preview.promise : Promise.resolve()));
       const app = yield* replayApplication(loadSettings);
-      const drawn = SAMPLES.map((sample) => {
+      const drawn = Arr.map(SAMPLES, (sample) => {
         const row = app.coldRow(sample);
         return { sample, row, cold: frames(row, sample) };
       });

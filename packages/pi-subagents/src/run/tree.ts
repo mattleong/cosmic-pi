@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Order from "effect/Order";
 import { snapshotRun, type RunRecord } from "./internal.ts";
 import { isTerminalRunState, SUBAGENT_ROOT_RUN_ID, type SubagentRunView } from "./model.ts";
 
@@ -40,19 +42,26 @@ export const isStopInProgress = (
 };
 
 export const leafFirst = (records: Iterable<RunRecord>): ReadonlyArray<RunRecord> =>
-  [...records].toSorted((left, right) => runDepth(right.view) - runDepth(left.view));
+  Arr.sort(
+    records,
+    Order.mapInput(Order.flip(Order.Number), (record: RunRecord) => runDepth(record.view)),
+  );
 
 export const descendantRunIds = (
   records: ReadonlyMap<string, RunRecord>,
   rootRunId: string,
 ): ReadonlyArray<string> =>
-  leafFirst(
-    [...records.values()].filter(
-      (record) =>
-        rootRunId === SUBAGENT_ROOT_RUN_ID ||
-        (record.view.id !== rootRunId && isRunInSubtree(records, rootRunId, record.view.id)),
+  Arr.map(
+    leafFirst(
+      Arr.filter(
+        [...records.values()],
+        (record) =>
+          rootRunId === SUBAGENT_ROOT_RUN_ID ||
+          (record.view.id !== rootRunId && isRunInSubtree(records, rootRunId, record.view.id)),
+      ),
     ),
-  ).map((record) => record.view.id);
+    (record) => record.view.id,
+  );
 
 export const projectRunTree = (
   records: ReadonlyMap<string, RunRecord>,
@@ -70,7 +79,8 @@ export const projectRunTree = (
       currentParent = parentIdOf(parent.view);
     }
   }
-  return [...records.values()].map(
+  return Arr.map(
+    [...records.values()],
     (record): SubagentRunView =>
       Object.freeze({
         ...snapshotRun(record),

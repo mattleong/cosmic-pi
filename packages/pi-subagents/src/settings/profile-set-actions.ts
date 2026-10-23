@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import type { FleetManagerActions } from "./controller.ts";
 import { PROFILE_IDS } from "../profiles/model.ts";
@@ -32,7 +33,7 @@ export interface ProfileSetActionHost {
   readonly notify: (message: string) => void;
 }
 const invalidSession = (inspection: ProfileSettingsInspection): boolean =>
-  PROFILE_IDS.some((profile) =>
+  Arr.some(PROFILE_IDS, (profile) =>
     ["global-invalid", "project-invalid"].includes(
       inspection.session.effectiveConfig.profileSources[profile],
     ),
@@ -114,10 +115,23 @@ const useSet = (
   if (resolved.status !== "resolved" || resolved.invalidProfiles.length > 0)
     throw new Error("Fix this invalid saved set before using it or making it default.");
   if (action.action === "use-current") {
-    const preview = PROFILE_IDS.map(
-      (profile) =>
-        `${profile}: ${resolved.profiles[profile].candidates.map((candidate) => `local/${candidate.runtime} ${candidate.model}${candidate.openaiFastMode ? " ⚡" : ""} · ${candidate.effort}`).join(" → ") || "disabled"}`,
-    ).join("\n");
+    const preview = Fn.pipe(
+      PROFILE_IDS,
+      Arr.map(
+        (profile) =>
+          `${profile}: ${
+            Fn.pipe(
+              resolved.profiles[profile].candidates,
+              Arr.map(
+                (candidate) =>
+                  `local/${candidate.runtime} ${candidate.model}${candidate.openaiFastMode ? " ⚡" : ""} · ${candidate.effort}`,
+              ),
+              Arr.join(" → "),
+            ) || "disabled"
+          }`,
+      ),
+      Arr.join("\n"),
+    );
     return host
       .confirm(
         `Use ${scope}/${action.target.name} in Current Session?`,

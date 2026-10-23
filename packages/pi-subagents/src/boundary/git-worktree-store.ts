@@ -4,6 +4,9 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import {
   crossProcessLockHolder,
   SafeFile,
@@ -47,7 +50,10 @@ export const initializeWorkspaceStore = Effect.fn("GitWorktreeStore.initializeWo
   function* (root: string) {
     const absolute = path.resolve(root);
     let current = path.parse(absolute).root;
-    for (const part of absolute.slice(current.length).split(path.sep).filter(Boolean)) {
+    for (const part of Arr.filter(
+      Str.split(Fn.pipe(absolute, Str.slice(current.length)), path.sep),
+      Boolean,
+    )) {
       const parent = current;
       current = path.join(current, part);
       const stat = yield* workspaceIOIfPresent("registry", () => fs.lstat(current));
@@ -186,11 +192,14 @@ const lockTimeout = (sourceRoot: string, directory: string) => {
   return WorkspaceError.make({
     operation: "lock",
     message: "Another Pi session is still changing workspaces for this checkout.",
-    detail: [
-      `Lock: ${holder.slot}`,
-      `Owner: ${holder.ownerPid === undefined ? "unknown process" : `process ${holder.ownerPid}`}`,
-      `Waited ${Duration.format(WORKSPACE_LOCK_WAIT)}. Try again once that operation finishes; a lock whose process has exited is reclaimed automatically.`,
-    ].join("\n"),
+    detail: Arr.join(
+      [
+        `Lock: ${holder.slot}`,
+        `Owner: ${holder.ownerPid === undefined ? "unknown process" : `process ${holder.ownerPid}`}`,
+        `Waited ${Duration.format(WORKSPACE_LOCK_WAIT)}. Try again once that operation finishes; a lock whose process has exited is reclaimed automatically.`,
+      ],
+      "\n",
+    ),
   });
 };
 

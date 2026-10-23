@@ -5,6 +5,9 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import {
   type BackendAgentMessaging,
   MAX_BACKEND_REPORT_EVIDENCE_CHARS,
@@ -44,9 +47,9 @@ import {
 } from "./supervisor-channel-state.ts";
 
 const MAX_REPORT_DELIVERIES = 128;
-const REPORT_EVIDENCE = `supervisor-effect-rpc-v${SUPERVISOR_CHANNEL_VERSION}`.slice(
-  0,
-  MAX_BACKEND_REPORT_EVIDENCE_CHARS,
+const REPORT_EVIDENCE = Fn.pipe(
+  `supervisor-effect-rpc-v${SUPERVISOR_CHANNEL_VERSION}`,
+  Str.slice(0, MAX_BACKEND_REPORT_EVIDENCE_CHARS),
 );
 
 const dispatchContact = (
@@ -79,18 +82,22 @@ const agentMessaging = (
 const agentRefusal = (error: SubagentError) =>
   SupervisorAgentRefusal.make({
     code: safeTextPrefix(subagentErrorCode(error), 128),
-    message: safeTextPrefix(error.message.trim() || "The agent request was refused.", 512),
+    message: safeTextPrefix(Str.trim(error.message) || "The agent request was refused.", 512),
   });
 
 const agentName = (name: string, id: string): string =>
-  safeTextPrefix(name.trim() || id, MAX_SUPERVISOR_AGENT_NAME_CHARS);
+  safeTextPrefix(Str.trim(name) || id, MAX_SUPERVISOR_AGENT_NAME_CHARS);
 const label = (value: string | undefined): string | undefined =>
-  value?.trim() ? safeTextPrefix(value, MAX_SUPERVISOR_AGENT_NAME_CHARS) : undefined;
+  value !== undefined && Str.trim(value)
+    ? safeTextPrefix(value, MAX_SUPERVISOR_AGENT_NAME_CHARS)
+    : undefined;
 const fact = (value: string | undefined): string | undefined =>
-  value?.trim() ? safeTextPrefix(value, MAX_SUPERVISOR_AGENT_FACT_CHARS) : undefined;
+  value !== undefined && Str.trim(value)
+    ? safeTextPrefix(value, MAX_SUPERVISOR_AGENT_FACT_CHARS)
+    : undefined;
 
 const wireAgentList = (result: AgentListResult): SupervisorAgentListResult => ({
-  agents: result.agents.map((entry) => {
+  agents: Arr.map(result.agents, (entry) => {
     const runtime = label(entry.runtime);
     const model = fact(entry.run && formatRunModel(entry.run));
     const profile = label(entry.profile);
@@ -120,7 +127,7 @@ const wireAgentRead = (
   agents: BackendAgentMessaging,
   verbose: boolean,
 ): SupervisorAgentReadResult => ({
-  agents: result.agents.map((entry) => {
+  agents: Arr.map(result.agents, (entry) => {
     // A saved report leads with its file pointer, which the reader opens with its file tools.
     const reportFile = entry.kind === "run" ? entry.reportFile : undefined;
     const body = entry.textStatus === "text" ? entry.text : undefined;

@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Order from "effect/Order";
 import * as Predicate from "effect/Predicate";
 import { countLabel, formatCost } from "pi-cosmic-core";
 import type { SubagentProjection, SubagentRunView } from "./model.ts";
@@ -8,29 +10,35 @@ export const emptyProjection = (): SubagentProjection => ({
   runs: [],
 });
 
+// Active runs first, then newest first.
+const runOrder: Order.Order<SubagentRunView> = Order.combine(
+  Order.mapInput(Order.flip(Order.Boolean), (run: SubagentRunView) => isActiveRunState(run.state)),
+  Order.mapInput(Order.flip(Order.Number), (run: SubagentRunView) => run.startedAt),
+);
+
 export const sortRuns = (runs: ReadonlyArray<SubagentRunView>): ReadonlyArray<SubagentRunView> =>
-  [...runs].toSorted((left, right) => {
-    const activeDifference =
-      Number(isActiveRunState(right.state)) - Number(isActiveRunState(left.state));
-    if (activeDifference !== 0) return activeDifference;
-    return right.startedAt - left.startedAt;
-  });
+  Arr.sort(runs, runOrder);
 
 export const fleetStatus = (projection: SubagentProjection): string | undefined => {
-  const owned = projection.runs.filter((run) => isActiveRunState(run.state)).length;
-  const working = projection.runs.filter(
+  const owned = Arr.filter(projection.runs, (run) => isActiveRunState(run.state)).length;
+  const working = Arr.filter(
+    projection.runs,
     (run) => run.state === "starting" || run.state === "running" || run.state === "stopping",
   ).length;
-  const waiting = projection.runs.filter((run) => run.state === "waiting_for_parent").length;
-  const paused = projection.runs.filter((run) => run.state === "paused").length;
+  const waiting = Arr.filter(projection.runs, (run) => run.state === "waiting_for_parent").length;
+  const paused = Arr.filter(projection.runs, (run) => run.state === "paused").length;
   if (owned === 0) return undefined;
   const spent = projection.sessionUsage?.cost;
-  return [
-    working ? `${countLabel(working, "subagent")} running` : undefined,
-    waiting ? `${waiting} waiting for reply` : undefined,
-    paused ? `${paused} paused` : undefined,
-    spent ? `${formatCost(spent)} this session` : undefined,
-  ]
-    .filter(Predicate.isNotUndefined)
-    .join(" · ");
+  return Arr.join(
+    Arr.filter(
+      [
+        working ? `${countLabel(working, "subagent")} running` : undefined,
+        waiting ? `${waiting} waiting for reply` : undefined,
+        paused ? `${paused} paused` : undefined,
+        spent ? `${formatCost(spent)} this session` : undefined,
+      ],
+      Predicate.isNotUndefined,
+    ),
+    " · ",
+  );
 };

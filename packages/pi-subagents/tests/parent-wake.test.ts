@@ -28,6 +28,8 @@ import {
   withService,
 } from "./run/fixtures/service-harness.ts";
 import { stringContaining } from "./support/matchers.ts";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 
 type ContextMessage = BoundaryContextPreview["contextMessages"][number];
 
@@ -86,9 +88,9 @@ const harness = (initial: SubagentProjection = projectionOf([])) => {
     const [handler] = host.handlers.get("agent_before_settle");
     return Promise.resolve(handler?.(event, context));
   };
-  const turns = () => sendMessage.mock.calls.map(([, options]) => options?.triggerTurn);
+  const turns = () => Arr.map(sendMessage.mock.calls, ([, options]) => options?.triggerTurn);
   const wakes = () =>
-    sendMessage.mock.calls.filter(([message]) => message.customType === WAKE_MESSAGE_TYPE);
+    Arr.filter(sendMessage.mock.calls, ([message]) => message.customType === WAKE_MESSAGE_TYPE);
   return {
     ...host,
     wake,
@@ -225,8 +227,12 @@ describe("parent wake policy", () => {
       const nestedQuestion = "Which path should the nested child take?";
       fake.controls[0]!.offerIpc(contactParentFrame("direct-question", "question", directQuestion));
       fake.controls[1]!.offerIpc(contactParentFrame("nested-question", "question", nestedQuestion));
-      yield* yieldUntil(
-        () => projections.at(-1)?.runs.filter((run) => run.question !== undefined).length === 2,
+      yield* yieldUntil(() =>
+        Option.exists(
+          Arr.last(projections),
+          (projection) =>
+            Arr.filter(projection.runs, (run) => run.question !== undefined).length === 2,
+        ),
       );
       const test = harness(yield* service.projection);
       const context = test.ctx();
@@ -288,7 +294,7 @@ describe("parent wake policy", () => {
         expect(result).toMatchObject({ continue: true });
         expect(JSON.stringify(result?.entries)).toContain(question);
         const rootNotifications = () =>
-          notifications.filter((item) => item.type === "question" && item.id === asking.id);
+          Arr.filter(notifications, (item) => item.type === "question" && item.id === asking.id);
         expect(rootNotifications()).toEqual([]);
         expect(test.sendMessage).not.toHaveBeenCalled();
         // A reminder is not a notifier acknowledgement. An already-reminded question must not

@@ -1,4 +1,5 @@
 import { isJsonObject, synchronousRandomUuid } from "pi-cosmic-core";
+import * as Arr from "effect/Array";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -169,13 +170,16 @@ const agentIdsArgument = (required: boolean): ArgumentGuidance => {
 const contract = (
   tool: string,
   argumentsInOrder: ReadonlyArray<ArgumentGuidance>,
-  objectWith = argumentsInOrder.map(({ key }) => key).join(" and "),
+  objectWith = Arr.join(
+    Arr.map(argumentsInOrder, ({ key }) => key),
+    " and ",
+  ),
 ): ArgumentContract => ({ tool, objectWith, arguments: argumentsInOrder });
 
 const CONTACT_ARGUMENTS = contract(CONTACT_PARENT_TOOL_NAME, [
   textArgument(
     SUPERVISOR_MCP_CONTACT_ARGUMENT_KEYS[0],
-    `${SUPERVISOR_MCP_CONTACT_ARGUMENT_KEYS[0]} must be one of ${SUPERVISOR_MCP_CONTACT_KINDS.join(", ")}.`,
+    `${SUPERVISOR_MCP_CONTACT_ARGUMENT_KEYS[0]} must be one of ${Arr.join(SUPERVISOR_MCP_CONTACT_KINDS, ", ")}.`,
   ),
   nonblankArgument(SUPERVISOR_MCP_CONTACT_ARGUMENT_KEYS[1]),
 ]);
@@ -222,7 +226,7 @@ const argumentIssues = (
   if (Predicate.isTagged(issue, "Pointer"))
     return argumentIssues(issue.issue, [...path, ...issue.path], filter);
   if (Predicate.isTagged(issue, "Composite"))
-    return issue.issues.flatMap((inner) => argumentIssues(inner, path, filter));
+    return Arr.flatMap(issue.issues, (inner) => argumentIssues(inner, path, filter));
   if (Predicate.isTagged(issue, "Filter")) return argumentIssues(issue.issue, path, issue.filter);
   if (Predicate.isTagged(issue, "Encoding")) return argumentIssues(issue.issue, path, filter);
   return [{ path, issue, filter }];
@@ -248,24 +252,26 @@ const argumentProblemFor = (
   value: Schema.Json | undefined,
   issues: ReadonlyArray<ArgumentIssue>,
 ): string => {
-  const own = issues.filter(({ path }) => path.length === 1);
+  const own = Arr.filter(issues, ({ path }) => path.length === 1);
   const has = (tag: SchemaIssue.Issue["_tag"]) =>
-    own.some(({ issue }) => Predicate.isTagged(issue, tag));
+    Arr.some(own, ({ issue }) => Predicate.isTagged(issue, tag));
   if (has("MissingKey")) return missing ?? `Missing ${key}.`;
   if (has("InvalidType")) return type;
-  const maximum = own
-    .map((issue) => decodeMaxLengthCheck(checkRepresentation(issue)))
-    .find(Option.isSome)?.value.payload.maxLength;
-  if (maximum !== undefined && Array.isArray(value))
+  const maximum = Fn.pipe(
+    Arr.findFirst(own, (issue) => decodeMaxLengthCheck(checkRepresentation(issue))),
+    Option.map((check) => check.payload.maxLength),
+    Option.getOrUndefined,
+  );
+  if (maximum !== undefined && Arr.isArray(value))
     return `${key} has ${count(value.length)} entries; the limit is ${count(maximum)}.`;
   if (maximum !== undefined && Predicate.isString(value))
     return `${key} is ${count(value.length)} characters; the limit is ${count(maximum)}. Shorten it and resubmit.`;
   if (
     empty !== undefined &&
-    own.some((issue) => Option.isSome(decodeMinLengthCheck(checkRepresentation(issue))))
+    Arr.some(own, (issue) => Option.isSome(decodeMinLengthCheck(checkRepresentation(issue))))
   )
     return empty;
-  if (entry !== undefined && issues.some(({ path }) => path.length > 1)) return entry;
+  if (entry !== undefined && Arr.some(issues, ({ path }) => path.length > 1)) return entry;
   return Predicate.isString(value) ? mismatch : type;
 };
 
@@ -279,14 +285,20 @@ const argumentProblem = (
 ): string => {
   if (!isJsonObject(args)) return `${tool} takes an object with ${objectWith}.`;
   const issues = argumentIssues(issue);
-  const unexpected = issues.find(({ issue: found }) => Predicate.isTagged(found, "UnexpectedKey"))
-    ?.path[0];
+  const unexpected = Fn.pipe(
+    Arr.findFirst(issues, ({ issue: found }) => Predicate.isTagged(found, "UnexpectedKey")),
+    Option.map(({ path }) => path[0]),
+    Option.getOrUndefined,
+  );
   if (unexpected !== undefined) {
     const name = String(unexpected);
-    return `Unexpected argument${ECHOABLE_KEY.test(name) ? ` ${name}` : ""}; ${tool} takes only ${accepted.map(({ key }) => key).join(" and ")}.`;
+    return `Unexpected argument${ECHOABLE_KEY.test(name) ? ` ${name}` : ""}; ${tool} takes only ${Arr.join(
+      Arr.map(accepted, ({ key }) => key),
+      " and ",
+    )}.`;
   }
   for (const guidance of accepted) {
-    const found = issues.filter(({ path }) => path[0] === guidance.key);
+    const found = Arr.filter(issues, ({ path }) => path[0] === guidance.key);
     if (found.length > 0) return argumentProblemFor(guidance, args[guidance.key], found);
   }
   return UNSUPPORTED_ARGUMENTS;
@@ -339,7 +351,7 @@ export const decodeSupervisorToolCall = (
       ({ delivery_id, report }) => ({ kind: "report" as const, deliveryId: delivery_id, report }),
     );
   if (name !== CONTACT_PARENT_TOOL_NAME)
-    return Result.fail(`Unknown tool; use one of ${SUPERVISOR_MCP_TOOL_NAMES.join(", ")}.`);
+    return Result.fail(`Unknown tool; use one of ${Arr.join(SUPERVISOR_MCP_TOOL_NAMES, ", ")}.`);
   return decodeArguments(CONTACT_ARGUMENTS, decodeContactArguments, args);
 };
 

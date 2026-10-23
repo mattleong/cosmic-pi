@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import type { DelegationMode } from "../config/schema.ts";
 
 /** Structured system-prompt section that carries non-default delegation guidance. */
@@ -35,15 +36,18 @@ const DELEGATION_PROMPTS = {
   orchestration: {
     startGuideline:
       "Answer directly when a quick search and a read or two will do, such as finding where something is defined or checking a value. Otherwise delegate by default: break each request into self-contained assignments and launch them with agent_start, in parallel where they are independent.",
-    section: [
-      "You are the orchestrator for this session. Delegate nearly all substantive work, including exploration, research, planning, implementation, and review, to subagents. Keep your own context for decomposition, coordination, verification, and conversation with the user.",
-      "- Answer quick questions yourself: if a search and a read or two will answer it, don't delegate.",
-      "- Read only enough to write precise, self-contained tasks; let subagents explore in depth.",
-      "- Use worker for implementation. Use a reviewer only for substantial or risky changes.",
-      "- When parallel slices may overlap, run them one after another instead.",
-      "- Act directly for trivial steps, such as a one-line fix, or when briefing would cost more than doing.",
-      "- Check results in proportion to their risk: spot-check the key claims of an investigation instead of redoing it, and read the diff and run the tests for a change.",
-    ].join("\n"),
+    section: Arr.join(
+      [
+        "You are the orchestrator for this session. Delegate nearly all substantive work, including exploration, research, planning, implementation, and review, to subagents. Keep your own context for decomposition, coordination, verification, and conversation with the user.",
+        "- Answer quick questions yourself: if a search and a read or two will answer it, don't delegate.",
+        "- Read only enough to write precise, self-contained tasks; let subagents explore in depth.",
+        "- Use worker for implementation. Use a reviewer only for substantial or risky changes.",
+        "- When parallel slices may overlap, run them one after another instead.",
+        "- Act directly for trivial steps, such as a one-line fix, or when briefing would cost more than doing.",
+        "- Check results in proportion to their risk: spot-check the key claims of an investigation instead of redoing it, and read the diff and run the tests for a change.",
+      ],
+      "\n",
+    ),
   },
 } as const satisfies Record<DelegationMode, DelegationPrompt>;
 

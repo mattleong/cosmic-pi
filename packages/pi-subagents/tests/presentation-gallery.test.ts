@@ -95,6 +95,10 @@ import {
   profileServiceFor,
   testBackendRegistry,
 } from "./tools/fixtures/tool-harness.ts";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
 
 type ToolScenario = GalleryScenario & { readonly tool: string };
 type GalleryResult = NonNullable<GalleryScenario["result"]>;
@@ -214,7 +218,8 @@ const apiWriter = view({
 });
 
 const fleet = new Map(
-  [authReview, docsSweep, apiAudit, schemaCheck, migrationReview, dbMigration, apiWriter].map(
+  Arr.map(
+    [authReview, docsSweep, apiAudit, schemaCheck, migrationReview, dbMigration, apiWriter],
     (run) => [run.id, run],
   ),
 );
@@ -499,7 +504,10 @@ const awaitScenarios = Effect.gen(function* () {
               run: {
                 ...authReview,
                 state: "completed" as const,
-                finalText: "Finding 1: session.ts:118 swallows a timeout.\n".repeat(600),
+                finalText: Fn.pipe(
+                  "Finding 1: session.ts:118 swallows a timeout.\n",
+                  Str.repeat(600),
+                ),
                 finalTextTruncation: {
                   retainedChars: 28_200,
                   originalChars: 152_310,
@@ -612,7 +620,7 @@ const read = (agents: ReadonlyArray<AgentReadout>, missingIds: ReadonlyArray<str
 const guidance = "Also check the refresh-token rotation path.";
 const sessionAgents: ReadonlyArray<AgentListEntry> = [
   { id: "main", name: "main", kind: "main", state: "busy", self: true },
-  ...[authReview, schemaCheck, docsSweep, apiAudit].map(listEntry),
+  ...Arr.map([authReview, schemaCheck, docsSweep, apiAudit], listEntry),
 ];
 const sent = (
   to: string,
@@ -639,7 +647,7 @@ const agentScenarios = Effect.all([
         Effect.succeed({
           agents: [
             { id: "main", name: "main", kind: "main", state: "busy", self: true },
-            ...[authReview, schemaCheck, dbMigration, migrationReview].map(listEntry),
+            ...Arr.map([authReview, schemaCheck, dbMigration, migrationReview], listEntry),
             listEntry({ ...worktreeProposal, workspaceOutcome: proposalOutcome }),
           ],
           missingIds: [],
@@ -880,15 +888,18 @@ const lifecycleScenarios = Effect.all([
   ),
 ]);
 
-const reviewedPatch = [
-  "diff --git a/db/0007.sql b/db/0007.sql",
-  "new file mode 100644",
-  "--- /dev/null",
-  "+++ b/db/0007.sql",
-  "@@ -0,0 +1,2 @@",
-  "+ALTER TABLE sessions ADD COLUMN rotated_at timestamptz;",
-  "+CREATE INDEX sessions_rotated_at ON sessions (rotated_at);",
-].join("\n");
+const reviewedPatch = Arr.join(
+  [
+    "diff --git a/db/0007.sql b/db/0007.sql",
+    "new file mode 100644",
+    "--- /dev/null",
+    "+++ b/db/0007.sql",
+    "@@ -0,0 +1,2 @@",
+    "+ALTER TABLE sessions ADD COLUMN rotated_at timestamptz;",
+    "+CREATE INDEX sessions_rotated_at ON sessions (rotated_at);",
+  ],
+  "\n",
+);
 const reviewPage = revisionReviewText({
   revisionId: "rev-1",
   changedPaths: ["db/0007.sql"],
@@ -1192,7 +1203,7 @@ const awaited = (
 ): ToolScenario => ({
   tool: "agent_await",
   title,
-  args: { runIds: runs.map((run) => run.id), until: "all_finished" },
+  args: { runIds: Arr.map(runs, (run) => run.id), until: "all_finished" },
   result: {
     content: [{ type: "text", text: "Agent-facing await report" }],
     details: awaitDetails({ runs, awaitUntil: "all_finished", ...extra }),
@@ -1229,12 +1240,15 @@ const receiptScenarios: ReadonlyArray<ToolScenario> = [
         {
           name: "refresh-fix",
           profile: "worker",
-          task: [
-            "Fix the session refresh timeout handling.",
-            "Preserve the caller's cancellation and keep late responses from updating a newer session.",
-            "Add a regression for a refresh response arriving after a session switch.",
-            "Keep changes to src/auth/session.ts and tests/auth/session.test.ts; report any other required changes to the parent.",
-          ].join("\n"),
+          task: Arr.join(
+            [
+              "Fix the session refresh timeout handling.",
+              "Preserve the caller's cancellation and keep late responses from updating a newer session.",
+              "Add a regression for a refresh response arriving after a session switch.",
+              "Keep changes to src/auth/session.ts and tests/auth/session.test.ts; report any other required changes to the parent.",
+            ],
+            "\n",
+          ),
         },
       ],
     },
@@ -1353,7 +1367,7 @@ const receiptScenarios: ReadonlyArray<ToolScenario> = [
       finalText: "No changes were needed; the timeout is already configured.",
     }),
   ]),
-  ...(["integrated", "discarded"] as const).map((status) =>
+  ...Arr.map(["integrated", "discarded"] as const, (status) =>
     awaited(`writer's proposal was ${status === "integrated" ? "applied" : "discarded"}`, [
       view({
         state: "completed",
@@ -1467,7 +1481,7 @@ const notified = (title: string, notification: SubagentNotification) => {
       },
     }),
   )(notification);
-  return messages.map((message): GalleryMessageScenario => ({ title, message }));
+  return Arr.map(messages, (message): GalleryMessageScenario => ({ title, message }));
 };
 
 const completion = (
@@ -1589,7 +1603,7 @@ const messageScenarios: ReadonlyArray<GalleryMessageScenario> = [
       details: { version: 1, kind: "stopped", total: 2 },
     },
   },
-  ...completedReports.map(({ message }) => ({
+  ...Arr.map(completedReports, ({ message }) => ({
     title: "forwarded to a nested worker",
     message: { ...message, customType: "pi-subagents-proxy-notification", details: undefined },
   })),
@@ -1600,25 +1614,35 @@ const messageScenarios: ReadonlyArray<GalleryMessageScenario> = [
       customType: "pi-subagents-peer-notice",
       display: true,
       timestamp: 0,
-      content: [
-        "Your current ownership summary: read-only.",
-        "",
-        "You share this working directory with 1 other active subagent:",
-        "",
-        "- db-migration (agent-6): shared-checkout writer; running; task: Implement the 0007 migration",
-        "",
-        "Shared-checkout writers coordinate by task scope: never edit files that belong to a peer's task. Before work that could overlap a running peer's task, agree on it with that peer through agent_send, and tell peers about changes they depend on. Ask the parent if you can't agree.",
-      ].join("\n"),
+      content: Arr.join(
+        [
+          "Your current ownership summary: read-only.",
+          "",
+          "You share this working directory with 1 other active subagent:",
+          "",
+          "- db-migration (agent-6): shared-checkout writer; running; task: Implement the 0007 migration",
+          "",
+          "Shared-checkout writers coordinate by task scope: never edit files that belong to a peer's task. Before work that could overlap a running peer's task, agree on it with that peer through agent_send, and tell peers about changes they depend on. Ask the parent if you can't agree.",
+        ],
+        "\n",
+      ),
     },
   },
 ];
 
 const activityRowLine = (item: ActivityItem): string => {
-  const head = [item.status, item.kind, item.title, item.profile, item.summary]
-    .filter(Boolean)
-    .join(" · ");
+  const head = Arr.join(
+    Arr.filter(
+      [item.status, item.kind, item.title, item.profile, item.summary],
+      (part): part is string => Boolean(part),
+    ),
+    " · ",
+  );
   const actions = item.actions?.length
-    ? `  [${item.actions.map((action) => action.label).join(", ")}]`
+    ? `  [${Arr.join(
+        Arr.map(item.actions, (action) => action.label),
+        ", ",
+      )}]`
     : "";
   return `${item.parent ? "  " : ""}${head}${actions}`;
 };
@@ -1713,7 +1737,7 @@ const activityScenarios: ReadonlyArray<ActivityScenario> = [
 ];
 
 const activityLines = (): ReadonlyArray<string> =>
-  activityScenarios.flatMap((activity) => {
+  Arr.flatMap(activityScenarios, (activity) => {
     const projection = { revision: 1, runs: activity.runs };
     const items = subagentActivityItems(projection);
     const gallery = {
@@ -1724,7 +1748,7 @@ const activityLines = (): ReadonlyArray<string> =>
       now,
     };
     return [`── activity · ${activity.title} · published rows`].concat(
-      items.map(activityRowLine),
+      Arr.map(items, activityRowLine),
       [""],
       activityGalleryFrames({ ...gallery, widths: [60, 80, 100], maxRows: [8] }),
       activityGalleryFrames({ ...gallery, widths: [80], maxRows: [3], open: activity.details }),
@@ -1763,7 +1787,7 @@ const stalledRuns: ReadonlyArray<SubagentRunView> = [
     state: "running",
     startedAt: minutesAgo(2),
     lastActivityAt: minutesAgo(0),
-    sessionEvents: ["t1", "t2", "t3"].map((toolCallId, index) => ({
+    sessionEvents: Arr.map(["t1", "t2", "t3"], (toolCallId, index) => ({
       type: "tool" as const,
       toolCallId,
       toolName: "edit",
@@ -1840,7 +1864,7 @@ const widgetFrames = (
 ): ReadonlyArray<string> => {
   const panel = projectSubagentActivityPanel({ revision: 1, runs });
   return [`── widget · ${title}`].concat(
-    [60, 100].flatMap((width) =>
+    Arr.flatMap([60, 100], (width) =>
       [`width ${width}`].concat(
         renderProjectedSubagentActivityPanel(panel, width, plainTheme, now),
         [""],
@@ -1883,10 +1907,15 @@ describe.skipIf(!directory)("presentation gallery", () => {
           const tools = [...registered.tools, contactParentTool()];
           for (const { tool, ...entry } of scenarios)
             lines.push(
-              ...galleryFrames(tools.find((definition) => definition.name === tool)!, {
-                ...entry,
-                title: `${style} · ${tool} · ${entry.title}`,
-              }),
+              ...galleryFrames(
+                Option.getOrUndefined(
+                  Arr.findFirst(tools, (definition) => definition.name === tool),
+                )!,
+                {
+                  ...entry,
+                  title: `${style} · ${tool} · ${entry.title}`,
+                },
+              ),
             );
           for (const entry of messageScenarios)
             lines.push(

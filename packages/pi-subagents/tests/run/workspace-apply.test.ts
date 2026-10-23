@@ -17,6 +17,8 @@ import {
   stoppedWriter,
   workspaceFixture,
 } from "./fixtures/workspace-engine.ts";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 
 type Fixture = ReturnType<typeof workspaceFixture>;
 
@@ -251,7 +253,12 @@ describe("one-step workspace apply", () => {
 });
 
 const outcomeOf = (service: SubagentServiceContract, id: string) =>
-  runViews(service).pipe(Effect.map((runs) => runs.find((run) => run.id === id)?.workspaceOutcome));
+  runViews(service).pipe(
+    Effect.map(
+      (runs) =>
+        Option.getOrUndefined(Arr.findFirst(runs, (run) => run.id === id))?.workspaceOutcome,
+    ),
+  );
 const settledOutcome = (service: SubagentServiceContract, id: string) =>
   Effect.gen(function* () {
     for (let turn = 0; turn < 200; turn++) {

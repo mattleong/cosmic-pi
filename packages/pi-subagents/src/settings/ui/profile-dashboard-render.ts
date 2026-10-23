@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { sliceByColumn } from "@earendil-works/pi-tui";
 import { managerTabs } from "pi-cosmic-ui/manager";
@@ -38,7 +39,7 @@ export function renderProfileDashboard(
     ? "Close and reopen to continue editing."
     : state.message || (state.busy ? "Saving…" : "");
   const child = state.framedChild
-    ? state.rows.map((line) => sliceByColumn(line, 1, inner))
+    ? Arr.map(state.rows, (line) => sliceByColumn(line, 1, inner))
     : state.rows;
   const footer = state.framedChild && child.length > 1 ? (child.at(-1) ?? "") : "";
   const body = state.framedChild && child.length > 1 ? child.slice(0, -1) : child;

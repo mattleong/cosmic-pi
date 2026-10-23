@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 interface BoundedLineInput {
   on(event: "data", listener: (value: Buffer | string) => void): void;
   once(event: "end" | "close", listener: () => void): void;
@@ -44,7 +47,7 @@ const withTail = (tail: Buffer, segment: Buffer): Buffer => {
 
 const lineText = (bytes: Buffer): string => {
   const text = bytes.toString("utf8");
-  return text.endsWith("\r") ? text.slice(0, -1) : text;
+  return Fn.pipe(text, Str.endsWith("\r")) ? Fn.pipe(text, Str.slice(0, -1)) : text;
 };
 
 export function attachBoundedLineParser(
@@ -91,7 +94,7 @@ export function attachBoundedLineParser(
     if (!options.onOversizedLine) return overflow();
     const parts = [...line, segment];
     const bytes = lineBytes + segment.length;
-    const suffix = parts.reduce<Buffer>(withTail, Buffer.alloc(0));
+    const suffix = Arr.reduce(parts, Buffer.alloc(0), withTail);
     skipped = {
       prefix: Buffer.concat(parts, Math.min(bytes, OVERSIZED_LINE_PREFIX_BYTES)),
       suffix,

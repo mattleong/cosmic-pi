@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { projectFleetTree, projectRunCardTree } from "../../src/ui/run-tree-rows.ts";
+import * as Arr from "effect/Array";
+import * as Order from "effect/Order";
 
 describe("tool run-card hierarchy", () => {
   it("keeps incomplete, duplicated, and cyclic bounded card sets visible exactly once", () => {
@@ -9,7 +11,12 @@ describe("tool run-card hierarchy", () => {
       { id: "cycle-b", parentRunId: "cycle-a" },
       { id: "orphan", parentRunId: "omitted-parent" },
     ]);
-    expect(rows.map((row) => row.run.id).toSorted()).toEqual(["cycle-a", "cycle-b", "orphan"]);
+    expect(
+      Arr.sort(
+        Arr.map(rows, (row) => row.run.id),
+        Order.String,
+      ),
+    ).toEqual(["cycle-a", "cycle-b", "orphan"]);
   });
 });
 
@@ -24,8 +31,8 @@ describe("fleet hierarchy", () => {
 
   it("drops runs outside the scoped subtree instead of promoting them to roots", () => {
     const tree = projectFleetTree(runs, "root");
-    expect(tree.runs.map((run) => run.id)).not.toContain("stray");
-    expect(tree.rows.map((row) => row.run.id)).toEqual([
+    expect(Arr.map(tree.runs, (run) => run.id)).not.toContain("stray");
+    expect(Arr.map(tree.rows, (row) => row.run.id)).toEqual([
       "parent",
       "child",
       "grandchild",
@@ -41,6 +48,6 @@ describe("fleet hierarchy", () => {
       ],
       "caller",
     );
-    expect(tree.rows.map((row) => row.run.id)).toEqual(["child"]);
+    expect(Arr.map(tree.rows, (row) => row.run.id)).toEqual(["child"]);
   });
 });

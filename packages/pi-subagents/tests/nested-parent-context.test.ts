@@ -37,6 +37,8 @@ import {
   request,
   runViews,
 } from "./run/fixtures/service-harness.ts";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 
 const rootModel = modelFixture({
   provider: "openai",
@@ -56,7 +58,9 @@ const models = [rootModel, childModel, changedChildModel];
 const modelRegistry = {
   getAvailable: () => models,
   find: (provider: string, id: string) =>
-    models.find((model) => model.provider === provider && model.id === id),
+    Option.getOrUndefined(
+      Arr.findFirst(models, (model) => model.provider === provider && model.id === id),
+    ),
   hasConfiguredAuth: () => true,
   getProviderAuthStatus: () => ({ configured: true, source: "stored" as const }),
 };
@@ -140,7 +144,7 @@ const profiles = profileLayerFor({
   profileSets: {
     nested: {
       profiles: {
-        oracle: [0, 1].map(() => ({
+        oracle: Arr.map([0, 1], () => ({
           runtime: "pi",
           model: "parent",
           effort: "default",
@@ -307,9 +311,11 @@ describe("authenticated immediate-parent context", () => {
         expect(inherited).toContain("CHILD-FINDINGS");
         expect(inherited).toContain("CHILD-VERIFICATION");
         expect(inherited).not.toContain("ROOT-ONLY-HISTORY");
-        expect((yield* runViews(service)).find((run) => run.id === oracle.runId)?.parentRunId).toBe(
-          parent.id,
-        );
+        expect(
+          Option.getOrUndefined(
+            Arr.findFirst(yield* runViews(service), (run) => run.id === oracle.runId),
+          )?.parentRunId,
+        ).toBe(parent.id);
 
         selectedModel = changedChildModel;
         effort = "minimal";

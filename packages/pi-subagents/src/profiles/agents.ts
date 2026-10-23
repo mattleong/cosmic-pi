@@ -1,3 +1,7 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
+import * as Rec from "effect/Record";
 import type { WriterWorkspaceMode } from "../config/schema.ts";
 import type {
   SubagentContextMode,
@@ -98,7 +102,7 @@ export const resolveCustomAgents = (
       invalidNames.clear();
       invalidContainers.push({ scope: layer.scope });
     }
-    for (const [name, definition] of Object.entries(layer.agents ?? {})) {
+    for (const [name, definition] of Rec.toEntries(layer.agents ?? {})) {
       invalidNames.delete(name);
       agents.set(name, {
         ...definition,
@@ -127,13 +131,19 @@ export const lookupCustomAgent = (
   resolved: ResolvedCustomAgents,
   name: string,
 ): CustomAgentLookup => {
-  const agent = resolved.agents.find((candidate) => candidate.name === name);
+  const agent = Option.getOrUndefined(
+    Arr.findFirst(resolved.agents, (candidate) => candidate.name === name),
+  );
   if (agent) return { kind: "found", agent };
   // An invalid entry, or an invalid `agents` object that may have declared it, fails it closed.
-  const invalid =
-    resolved.invalidAgents.find((entry) => entry.name === name) ??
-    resolved.invalidAgents.find((entry) => entry.name === undefined);
-  return invalid ? { kind: "invalid", scope: invalid.scope } : { kind: "unknown" };
+  return Fn.pipe(
+    Arr.findFirst(resolved.invalidAgents, (entry) => entry.name === name),
+    Option.orElse(() => Arr.findFirst(resolved.invalidAgents, (entry) => entry.name === undefined)),
+    Option.match({
+      onNone: () => ({ kind: "unknown" }),
+      onSome: (invalid) => ({ kind: "invalid", scope: invalid.scope }),
+    }),
+  );
 };
 
 export const hasCustomAgentToolPolicy = (agent: Pick<CustomAgent, "tools">): boolean =>
@@ -177,6 +187,10 @@ export const customAgentCandidate = (
   return {
     kind: "skipped",
     code: CUSTOM_AGENT_SKIP_CODES.candidateIncompatible,
-    reason: `Agent ${agent.name}'s overrides don't fit local/${candidate.runtime} ${candidate.model}: ${issues.map((issue) => issue.code).join(", ")}.`,
+    reason: `Agent ${agent.name}'s overrides don't fit local/${candidate.runtime} ${candidate.model}: ${Fn.pipe(
+      issues,
+      Arr.map((issue) => issue.code),
+      Arr.join(", "),
+    )}.`,
   };
 };

@@ -1,6 +1,8 @@
+import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import * as Str from "effect/String";
 import { sanitizeDiagnosticContent, sanitizeDiagnosticError } from "pi-cosmic-core";
 import type { BackendEvent, BackendHandle } from "../backend/model.ts";
 import { type SubagentError, SubagentProcessError, SubagentProtocolError } from "./errors.ts";
@@ -71,7 +73,7 @@ type DelegatedBackendEvent = Extract<
 type ViewBackendEvent = Exclude<HandledBackendEvent, DelegatedBackendEvent>;
 
 const isDelegatedEvent = (event: HandledBackendEvent): event is DelegatedBackendEvent =>
-  DELEGATED_EVENT_TYPES.some((type) => type === event.type);
+  Arr.some(DELEGATED_EVENT_TYPES, (type) => type === event.type);
 
 export function backendEventHandler(dependencies: RunEventDependencies) {
   const { settlement, queueQuestionLocked, onProxyEvent } = dependencies;
@@ -94,9 +96,11 @@ export function backendEventHandler(dependencies: RunEventDependencies) {
     // A question keeps its line breaks: its notice and agent_read deliver it whole.
     const message = retainedContactText(
       envelope.kind === "question"
-        ? sanitizeDiagnosticContent(envelope.message, {
-            maximumLength: MAX_PARENT_MESSAGE_CHARS,
-          }).trim()
+        ? Str.trim(
+            sanitizeDiagnosticContent(envelope.message, {
+              maximumLength: MAX_PARENT_MESSAGE_CHARS,
+            }),
+          )
         : sanitizeDiagnosticError(envelope.message, { maximumLength: MAX_PARENT_MESSAGE_CHARS }),
     );
     return mutateAt(record, envelope.assignmentEpoch, (current, now) => {
@@ -196,7 +200,7 @@ export function backendEventHandler(dependencies: RunEventDependencies) {
       SubagentProcessError.make({
         operation: "run",
         message: sanitizeDiagnosticText(
-          event.diagnostic.trim() ||
+          Str.trim(event.diagnostic) ||
             `Subagent process exited${event.exitCode === null ? "" : ` with code ${event.exitCode}`}.`,
           MAX_ERROR_CHARS,
         ),

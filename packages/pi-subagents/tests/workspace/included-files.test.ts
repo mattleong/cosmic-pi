@@ -13,6 +13,8 @@ import {
   workspaceTests,
   writeFile,
 } from "./fixtures/repository.ts";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
 
 const test = workspaceTests([
   [".gitignore", ".env\n*.local\n"],
@@ -29,9 +31,11 @@ const permissions = (...parts: ReadonlyArray<string>) =>
 /** Whether the repository holds a blob with exactly `content`. */
 const holdsBlob = (root: string, content: string) =>
   Effect.gen(function* () {
-    const id = (yield* git(root, ["hash-object", "--stdin"], {
-      stdin: new TextEncoder().encode(content),
-    })).trim();
+    const id = Str.trim(
+      yield* git(root, ["hash-object", "--stdin"], {
+        stdin: new TextEncoder().encode(content),
+      }),
+    );
     return gitSucceeded(yield* gitResult(root, ["cat-file", "-e", id]));
   });
 
@@ -190,7 +194,7 @@ describe(".worktreeinclude", () => {
     const error = yield* failureOf(service.create({ sourceCwd: root, ownerId: "parent" }));
     expect(error.operation).toBe("create");
     const left = yield* io(() => fs.readdir(path.join(agent, "subagent-worktrees")));
-    expect(left.filter((name) => /^[a-f0-9-]{36}$/u.test(name))).toEqual([]);
+    expect(Arr.filter(left, (name) => /^[a-f0-9-]{36}$/u.test(name))).toEqual([]);
   });
 
   test("refuses more bytes than the cap", function* (service, root) {
@@ -208,7 +212,13 @@ describe(".worktreeinclude", () => {
     expect(yield* exists(path.join(plain.cwd, ".env"))).toBe(false);
     expect((yield* service.inspect(workspaceTarget(plain))).includedPaths).toBeUndefined();
 
-    yield* includeFile(root, Array.from({ length: 65 }, (_, index) => `file-${index}`).join("\n"));
+    yield* includeFile(
+      root,
+      Arr.join(
+        Array.from({ length: 65 }, (_, index) => `file-${index}`),
+        "\n",
+      ),
+    );
     expect(
       (yield* failureOf(service.create({ sourceCwd: root, ownerId: "parent" }))).operation,
     ).toBe("create");

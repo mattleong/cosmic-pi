@@ -10,14 +10,16 @@ import {
   request,
   withService,
 } from "./fixtures/service-harness.ts";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 
 const summarize = (
   observations: ReadonlyArray<SubagentRunObservation>,
   questions: ReadonlyArray<SubagentRunView> = [],
 ) =>
   Effect.succeed({
-    targets: observations.map((observation) => observation.run.id),
-    questions: questions.map((run) => run.id),
+    targets: Arr.map(observations, (observation) => observation.run.id),
+    questions: Arr.map(questions, (run) => run.id),
   });
 
 const yieldTurns = Effect.gen(function* () {
@@ -40,7 +42,15 @@ describe("await and questions the caller is not awaiting", () => {
         targets: [awaited.id],
         questions: [asking.id],
       });
-      expect(projections.at(-1)?.runs.find((run) => run.id === awaited.id)?.state).toBe("running");
+      expect(
+        Arr.last(projections).pipe(
+          Option.flatMap((projection) =>
+            Arr.findFirst(projection.runs, (run) => run.id === awaited.id),
+          ),
+          Option.map((run) => run.state),
+          Option.getOrUndefined,
+        ),
+      ).toBe("running");
     });
   });
 

@@ -11,6 +11,9 @@ import {
   workspaceTests,
   writeFile,
 } from "./fixtures/repository.ts";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
 
 const test = workspaceTests([
   ["src/a.ts", "a\nb\nc\n"],
@@ -49,8 +52,8 @@ test("rebases onto current parent files, keeping conflict markers for the writer
   expect(record.status).toBe("active");
   expect(record.revision).toBeUndefined();
   expect(
-    (yield* io(() => fs.readdir(path.dirname(handle.cwd)))).filter((name) =>
-      name.startsWith("prepare-"),
+    Arr.filter(yield* io(() => fs.readdir(path.dirname(handle.cwd))), (name) =>
+      Fn.pipe(name, Str.startsWith("prepare-")),
     ),
   ).toEqual([]);
   // Hooks in the rebuilt tree are judged against it, not against the new baseline.
@@ -84,6 +87,8 @@ test("refuses a rebase the three-way merge can't run, leaving the worker and rec
   expect(record.revision?.revisionId).toBe(revision.revisionId);
   const workspaceDirectory = path.dirname(handle.cwd);
   expect(
-    (yield* io(() => fs.readdir(workspaceDirectory))).filter((name) => name.startsWith("prepare-")),
+    Arr.filter(yield* io(() => fs.readdir(workspaceDirectory)), (name) =>
+      Fn.pipe(name, Str.startsWith("prepare-")),
+    ),
   ).toEqual([]);
 });

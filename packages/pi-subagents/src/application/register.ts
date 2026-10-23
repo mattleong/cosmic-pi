@@ -4,7 +4,9 @@ import {
   type ExtensionContext,
   type SessionShutdownEvent,
 } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import {
   CodePreviewSchedulerService,
@@ -109,15 +111,20 @@ const deactivateSubagentTools = (
 ): ReadonlyArray<string> =>
   invokeHostCallback(() => {
     const active = pi.getActiveTools();
-    const removed = active.filter(
+    const removed = Arr.filter(
+      active,
       (name) => ROOT_TOOL_NAME_SET.has(name) && (only?.includes(name) ?? true),
     );
-    if (removed.length > 0) pi.setActiveTools(active.filter((name) => !removed.includes(name)));
+    if (removed.length > 0)
+      pi.setActiveTools(Arr.filter(active, (name) => !removed.includes(name)));
     return removed;
   }, []);
 
 const activeSubagentTools = (pi: ExtensionAPI): ReadonlyArray<string> =>
-  invokeHostCallback(() => pi.getActiveTools().filter((name) => ROOT_TOOL_NAME_SET.has(name)), []);
+  invokeHostCallback(
+    () => Arr.filter(pi.getActiveTools(), (name) => ROOT_TOOL_NAME_SET.has(name)),
+    [],
+  );
 
 function reactivateSubagentTools(pi: ExtensionAPI, names: ReadonlyArray<string>): void {
   if (names.length === 0) return;
@@ -253,7 +260,10 @@ export function registerSubagentApplication(
             if (!ownsActivation()) return;
             bridge.publish(projection);
             // Once per runtime, so a user who disables the tool afterwards keeps it disabled.
-            if (!worktreeSeen && projection.runs.some((run) => run.workspaceId !== undefined)) {
+            if (
+              !worktreeSeen &&
+              Arr.some(projection.runs, (run) => run.workspaceId !== undefined)
+            ) {
               worktreeSeen = true;
               activateWorktreeTool(pi);
             }
@@ -297,8 +307,11 @@ export function registerSubagentApplication(
               // The authenticated channel names the caller; agent payloads carry no identity.
               const agentInput = yield* Effect.fromResult(decodeAgentProxyRequest(request));
               if (agentInput) {
-                const callerCwd = (yield* service.visibleList(callerRunId)).find(
-                  (run) => run.id === callerRunId,
+                const callerCwd = Option.getOrUndefined(
+                  Arr.findFirst(
+                    yield* service.visibleList(callerRunId),
+                    (run) => run.id === callerRunId,
+                  ),
                 )?.cwd;
                 return yield* executeAgentActionEffect(
                   agentInput,
@@ -312,8 +325,11 @@ export function registerSubagentApplication(
                 ? yield* service.captureLaunchParent(callerRunId, decoded.parentContext)
                 : undefined;
               const input = yield* Effect.fromResult(decodeSubagentProxyRequest(decoded.request));
-              const caller = (yield* service.visibleList(callerRunId)).find(
-                (run) => run.id === callerRunId,
+              const caller = Option.getOrUndefined(
+                Arr.findFirst(
+                  yield* service.visibleList(callerRunId),
+                  (run) => run.id === callerRunId,
+                ),
               );
               if (!caller)
                 return yield* InvalidSubagentRequestError.make({
@@ -383,7 +399,8 @@ export function registerSubagentApplication(
           if (hasRegisteredTools)
             deactivateSubagentTools(
               pi,
-              activeSubagentTools(pi).filter(
+              Arr.filter(
+                activeSubagentTools(pi),
                 (name) => !keptActive.has(name) && !startupFailureTools.includes(name),
               ),
             );
@@ -412,7 +429,7 @@ export function registerSubagentApplication(
         reactivateSubagentTools(
           pi,
           activation.trigger === "start"
-            ? startupFailureTools.filter((name) => name !== SUBAGENT_TOOL_NAME.workspace)
+            ? Arr.filter(startupFailureTools, (name) => name !== SUBAGENT_TOOL_NAME.workspace)
             : startupFailureTools,
         );
         startupFailureTools = [];

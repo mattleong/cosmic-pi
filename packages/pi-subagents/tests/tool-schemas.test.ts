@@ -3,6 +3,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import * as Result from "effect/Result";
 import { captureRegistrations } from "pi-code-previews/testing";
 import { temporaryDirectory, toolSchemaPortabilityProblems } from "pi-cosmic-core/testing";
@@ -23,6 +24,9 @@ import {
 } from "../src/tools/schema.ts";
 import { replacementField } from "pi-cosmic-core/tool-arguments";
 import { registerSubagentTools } from "../src/tools/subagent.ts";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
+import * as Rec from "effect/Record";
 
 const registeredTools = (nested: boolean) =>
   captureRegistrations((pi) =>
@@ -74,7 +78,7 @@ describe("subagent argument preparation", () => {
   });
 
   it("accepts a display name longer than the bound runs keep, which launch cuts", () => {
-    const name = "n".repeat(500);
+    const name = Fn.pipe("n", Str.repeat(500));
     expect(prepareStart({ agents: [{ task: "Map", name }] })).toEqual({
       agents: [{ task: "Map", name }],
     });
@@ -133,11 +137,16 @@ describe("subagent argument preparation", () => {
       ]);
       yield* Effect.promise(() => session.prompt("start a scout"));
       expect(fake.getPendingResponseCount()).toBe(0);
-      const result = session.messages.find((message) => message.role === "toolResult");
+      const result = Option.getOrUndefined(
+        Arr.findFirst(session.messages, (message) => message.role === "toolResult"),
+      );
       expect(result).toMatchObject({ toolName: "agent_start", isError: true });
-      const shown = Arr.filterMap(result?.content ?? [], (part) =>
-        part.type === "text" ? Result.succeed(part.text) : Result.failVoid,
-      ).join("\n");
+      const shown = Arr.join(
+        Arr.filterMap(result?.content ?? [], (part) =>
+          part.type === "text" ? Result.succeed(part.text) : Result.failVoid,
+        ),
+        "\n",
+      );
       expect(shown).toMatch(/\[invalid_arguments\][\s\S]*\bagents is required/u);
       expect(shown).toContain("malformed or truncated");
       expect(shown).not.toContain("must not execute");
@@ -148,7 +157,7 @@ describe("subagent argument preparation", () => {
     const rejected = () => prepareRootStart({ agents: [{ task: "Edit", isolation: "sandbox" }] });
     expect(rejected).toThrow(/\[invalid_arguments\]/u);
     expect(rejected).toThrow(
-      new RegExp(`isolation[^\\n]*${WRITER_WORKSPACE_MODES.join(", ")}`, "u"),
+      new RegExp(`isolation[^\\n]*${Arr.join(WRITER_WORKSPACE_MODES, ", ")}`, "u"),
     );
   });
 
@@ -160,7 +169,9 @@ describe("subagent argument preparation", () => {
   });
 
   it("suggests isolation for workspace-style start keys", () => {
-    const accepted = Object.keys(rootStartParameters.properties.agents.items.properties);
+    const accepted = Rec.keys<string, unknown>(
+      rootStartParameters.properties.agents.items.properties,
+    );
     for (const key of ["workspace", "worktree", "workspace_mode", "writerWorkspaceMode"])
       expect(replacementField(key, accepted, SUBAGENT_FIELD_ALIASES)).toBe("isolation");
   });

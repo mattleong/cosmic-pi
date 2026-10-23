@@ -1,8 +1,10 @@
 import { VERSION, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import type { SafeFile } from "pi-cosmic-core";
 import {
   LOCAL_CLI_LABELS,
@@ -49,7 +51,7 @@ const MINIMUM_PI_VERSION = [1, 4, 0] as const;
 const PREFLIGHT_TIMEOUT = "20 seconds";
 
 const versionAtLeast = (version: string, minimum: ReadonlyArray<number>): boolean => {
-  const parts = version.split(/[.-]/u).map(Number);
+  const parts = Fn.pipe(version, Str.split(/[.-]/u), Arr.map(Number));
   for (const [index, required] of minimum.entries()) {
     const actual = parts[index] ?? 0;
     if (Number.isNaN(actual)) return false;
@@ -65,13 +67,10 @@ const check = (label: string, status: DoctorStatus, detail: string): DoctorCheck
 });
 
 const attemptKey = (attempt: ProfileCandidateAttempt): string =>
-  [
-    attempt.runtime,
-    attempt.model,
-    attempt.effectiveContext,
-    attempt.writeIntent,
-    attempt.effort,
-  ].join("|");
+  Arr.join(
+    [attempt.runtime, attempt.model, attempt.effectiveContext, attempt.writeIntent, attempt.effort],
+    "|",
+  );
 
 const routeLabel = (attempt: ProfileCandidateAttempt): string =>
   `local/${attempt.runtime} · ${attempt.model}`;
@@ -129,7 +128,7 @@ export const runSubagentDoctor = Effect.fn("SubagentDoctor.run")(function* (
       : check(
           "Pi",
           "failed",
-          `version ${VERSION}; subagents need ${MINIMUM_PI_VERSION.join(".")} or later`,
+          `version ${VERSION}; subagents need ${Arr.join(Arr.map(MINIMUM_PI_VERSION, String), ".")} or later`,
         ),
     nodeProblem ? check("Node", "failed", nodeProblem) : check("Node", "ok", process.execPath),
   ];
@@ -146,7 +145,7 @@ export const runSubagentDoctor = Effect.fn("SubagentDoctor.run")(function* (
       : check(
           "Configuration",
           "warning",
-          `profile set ${setName}; invalid fields (ignored, clamped, or failed closed): ${config.diagnostics.join(", ")}`,
+          `profile set ${setName}; invalid fields (ignored, clamped, or failed closed): ${Arr.join(config.diagnostics, ", ")}`,
         ),
     input.projectTrusted
       ? check("Project settings", "ok", "trusted; project configuration applies")
@@ -159,12 +158,12 @@ export const runSubagentDoctor = Effect.fn("SubagentDoctor.run")(function* (
 
   const environment = yield* hostProfileEnvironment(input.pi, input.ctx);
   const routes: ReadonlyArray<RouteCheck> = [
-    ...PROFILE_IDS.map((id) => ({
+    ...Arr.map(PROFILE_IDS, (id) => ({
       label: `Profile ${id}`,
       plan: profiles.resolve(snapshot, id, environment),
       prefix: "",
     })),
-    ...config.agents.map((agent) => ({
+    ...Arr.map(config.agents, (agent) => ({
       label: `Agent ${agent.name}`,
       plan: profiles.resolve(snapshot, agent.profile, environment, agent),
       prefix: `${agent.source} · profile ${agent.profile} · `,
@@ -190,7 +189,7 @@ export const runSubagentDoctor = Effect.fn("SubagentDoctor.run")(function* (
       { concurrency: ROUTE_PROBE_CONCURRENCY },
     ),
   );
-  checks.push(...routes.map((route) => routeOutcome(route, failures)));
+  checks.push(...Arr.map(routes, (route) => routeOutcome(route, failures)));
   for (const invalid of config.invalidAgents)
     checks.push(
       invalid.name === undefined
@@ -228,14 +227,18 @@ export const runSubagentDoctor = Effect.fn("SubagentDoctor.run")(function* (
         ? check(
             `${event} hooks`,
             "failed",
-            `invalid declarations (${invalid.join(", ")}); worktree setup fails until they are fixed`,
+            `invalid declarations (${Arr.join(invalid, ", ")}); worktree setup fails until they are fixed`,
           )
         : check(
             `${event} hooks`,
             "ok",
             hooks.length === 0
               ? "none"
-              : hooks.map((hook) => `${hook.scope}: ${describeWorktreeHook(hook)}`).join("; "),
+              : Fn.pipe(
+                  hooks,
+                  Arr.map((hook) => `${hook.scope}: ${describeWorktreeHook(hook)}`),
+                  Arr.join("; "),
+                ),
           ),
     );
   }
@@ -263,7 +266,10 @@ const worktreeIncludeCheck = (cwd: string): Effect.Effect<DoctorCheck, never, Sa
         check(
           ".worktreeinclude",
           "warning",
-          [error.message, ...(error.detail?.split("\n") ?? [])].join(" "),
+          Arr.join(
+            [error.message, ...(error.detail === undefined ? [] : Str.split(error.detail, "\n"))],
+            " ",
+          ),
         ),
       ),
     ),
@@ -277,12 +283,19 @@ const gitCheck: Effect.Effect<DoctorCheck> = gitInstallation.pipe(
       : check(
           "Git",
           "warning",
-          `${installation.version} at ${installation.executable}; isolated writers need ${MINIMUM_GIT_VERSION.join(".")} or later`,
+          `${installation.version} at ${installation.executable}; isolated writers need ${Arr.join(Arr.map(MINIMUM_GIT_VERSION, String), ".")} or later`,
         ),
   ),
   Effect.catch((error) =>
     Effect.succeed(
-      check("Git", "warning", [error.message, ...(error.detail?.split("\n") ?? [])].join(" ")),
+      check(
+        "Git",
+        "warning",
+        Arr.join(
+          [error.message, ...(error.detail === undefined ? [] : Str.split(error.detail, "\n"))],
+          " ",
+        ),
+      ),
     ),
   ),
 );
@@ -353,7 +366,10 @@ const cliVersionCheck = (
 const STATUS_GLYPHS = { ok: "✓", warning: "!", failed: "✗" } as const;
 
 export const formatDoctorReport = (checks: ReadonlyArray<DoctorCheck>): string =>
-  [
-    "Subagents doctor",
-    ...checks.map((item) => `${STATUS_GLYPHS[item.status]} ${item.label}: ${item.detail}`),
-  ].join("\n");
+  Arr.join(
+    [
+      "Subagents doctor",
+      ...Arr.map(checks, (item) => `${STATUS_GLYPHS[item.status]} ${item.label}: ${item.detail}`),
+    ],
+    "\n",
+  );

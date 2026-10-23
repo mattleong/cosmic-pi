@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import * as Match from "effect/Match";
 import * as Predicate from "effect/Predicate";
 import type { Theme } from "@earendil-works/pi-coding-agent";
@@ -371,7 +372,7 @@ export class ProfileWorkspaceComponent
         helpOpen: this.helpOpen,
         helpScroll: this.helpScroll,
         editedProfiles: new Set(
-          PROFILE_IDS.filter((id) =>
+          Arr.filter(PROFILE_IDS, (id) =>
             this.editVisit.isEdited(this.options.target, id, this.inspection),
           ),
         ),

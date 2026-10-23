@@ -31,6 +31,7 @@ import type { ProfileSettingsInspection } from "../src/settings/profile-route-ed
 import { mountingCustomUi } from "./fixtures/pi-host.ts";
 import { projectionOf, view } from "./fixtures/run-view.ts";
 import { effectTest, step } from "./support/effect-test.ts";
+import * as Arr from "effect/Array";
 
 type DisposableComponent = Component & { readonly dispose?: (() => void) | undefined };
 
@@ -129,9 +130,8 @@ const setup = (
 };
 
 const settleHostPromises = (): Promise<void> =>
-  Array.from({ length: 40 }).reduce<Promise<void>>(
-    (pending) => pending.then(() => undefined),
-    Promise.resolve(),
+  Arr.reduce<unknown, Promise<void>>(Array.from({ length: 40 }), Promise.resolve(), (pending) =>
+    pending.then(() => undefined),
   );
 const press = (fixture: ReturnType<typeof setup>, ...keys: string[]) => {
   for (const key of keys) {
@@ -291,7 +291,8 @@ describe("profile settings controller", () => {
       };
       yield* changeEffort();
       expect(patch).toHaveBeenCalledTimes(1);
-      const screen = fixture.overlays[0]?.render(120).join("\n") ?? "";
+      const overlay = fixture.overlays[0];
+      const screen = overlay === undefined ? "" : Arr.join(overlay.render(120), "\n");
       if (outcome === "conflict") {
         // A conflict refreshes to the latest Session and lets the user retry the edit.
         expect(inspect).toHaveBeenCalledTimes(1);

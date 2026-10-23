@@ -19,6 +19,8 @@ import {
   stoppedWriter,
   workspaceFixture,
 } from "./fixtures/workspace-engine.ts";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 
 type Fixture = ReturnType<typeof workspaceFixture>;
 
@@ -32,7 +34,12 @@ const completedWriter = (service: SubagentServiceContract, f: Fixture) =>
   });
 
 const outcomeOf = (service: SubagentServiceContract, id: string) =>
-  runViews(service).pipe(Effect.map((runs) => runs.find((run) => run.id === id)?.workspaceOutcome));
+  runViews(service).pipe(
+    Effect.map(
+      (runs) =>
+        Option.getOrUndefined(Arr.findFirst(runs, (run) => run.id === id))?.workspaceOutcome,
+    ),
+  );
 
 const settledOutcome = (service: SubagentServiceContract, id: string) =>
   Effect.gen(function* () {
@@ -90,7 +97,7 @@ describe("empty worktree proposal cleanup", () => {
     f.hooks.workerChanges = {
       changedPaths,
       uncapturedPaths: [],
-      diffStat: changedPaths.map((path, index) => ({
+      diffStat: Arr.map(changedPaths, (path, index) => ({
         path,
         change: "modified" as const,
         binary: index === 0,

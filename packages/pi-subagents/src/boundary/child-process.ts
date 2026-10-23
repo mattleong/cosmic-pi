@@ -24,6 +24,10 @@ import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
 import type * as Scope from "effect/Scope";
 import {
   AGENT_TOOL_NAMES,
@@ -90,7 +94,7 @@ export interface ChildProcessContract {
 
 export function safeSubagentDirectorySegment(value: string): string {
   if (/^[A-Za-z0-9_-]{1,128}$/.test(value)) return value;
-  return `id-${sha256Text(value).slice(0, 32)}`;
+  return `id-${Fn.pipe(sha256Text(value), Str.slice(0, 32))}`;
 }
 
 type RunDirectory = (request: {
@@ -151,8 +155,9 @@ export function childProcessEnvironment(
   request: ChildLaunchRequest,
 ): NodeJS.ProcessEnv {
   return {
-    ...Object.fromEntries(
-      Object.entries(source).filter(
+    ...Rec.fromEntries(
+      Arr.filter(
+        Rec.toEntries(source),
         ([key, value]) =>
           value !== undefined && !BLOCKED_ENV_KEYS.has(key) && !isGitLocalEnvironmentKey(key),
       ),
@@ -166,7 +171,17 @@ export function childProcessEnvironment(
       }),
     ...(request.runtimeApiKey && {
       [RUNTIME_API_KEY_ENV]: Redacted.value(request.runtimeApiKey),
-      [RUNTIME_API_PROVIDER_ENV]: request.model.slice(0, request.model.indexOf("/")),
+      [RUNTIME_API_PROVIDER_ENV]: Fn.pipe(
+        request.model,
+        Str.slice(
+          0,
+          Fn.pipe(
+            request.model,
+            Str.indexOf("/"),
+            Option.getOrElse(() => -1),
+          ),
+        ),
+      ),
     }),
   };
 }
@@ -265,18 +280,18 @@ export const createForkedSession = Effect.fn("ChildProcess.createForkedSession")
       parentSession: request.parentSessionFile,
     };
     const prompt: ForkPromptState =
-      request.sharesParentPromptCache && !branch.some(preventsPromptSharing)
+      request.sharesParentPromptCache && !Arr.some(branch, preventsPromptSharing)
         ? "shared"
         : "isolated";
     let parentId: string | null = null;
-    const entries = branch.map((entry) => {
+    const entries = Arr.map(branch, (entry) => {
       const cloned = cloneEntry(entry, parentId, prompt);
       parentId = cloned.id;
       return cloned;
     });
     const lines = yield* Effect.forEach([header, ...entries], (entry) => encodeJsonLine(entry));
     yield* fileStep("write forked session", () =>
-      fs.writeFile(sessionFile, lines.join("\n") + "\n", { encoding: "utf8", mode: 0o600 }),
+      fs.writeFile(sessionFile, Arr.join(lines, "\n") + "\n", { encoding: "utf8", mode: 0o600 }),
     );
     return sessionFile;
   },
@@ -333,7 +348,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
     request.effort,
     ...(request.openaiFastMode ? ["--pi-subagents-fast-mode"] : []),
     "--tools",
-    toolPolicy.enabled.join(","),
+    Arr.join(toolPolicy.enabled, ","),
     "--exclude-tools",
     toolPolicy.excluded,
     "--append-system-prompt",

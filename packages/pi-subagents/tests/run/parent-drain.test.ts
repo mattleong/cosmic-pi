@@ -13,6 +13,8 @@ import {
   runViews,
   withService,
 } from "./fixtures/service-harness.ts";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 
 describe("session-end completion flush", () => {
   it.effect("hands a pending report to the notifier without waiting for the retry clock", () => {
@@ -28,7 +30,7 @@ describe("session-end completion flush", () => {
       yield* completeLocalRun(service, fake.controls[0]!, run.id, "Done.");
       expect(delivered).toEqual([]);
       yield* service.deliverPendingCompletions;
-      expect(delivered.map((notification) => notification.type)).toEqual(["completed"]);
+      expect(Arr.map(delivered, (notification) => notification.type)).toEqual(["completed"]);
     });
   });
 });
@@ -47,19 +49,20 @@ describe("headless parent drain", () => {
       fake.controls[0]!.offerIpc(
         contactParentFrame("question-1", "question", "Which path should I take?"),
       );
-      yield* yieldUntil(
-        () =>
-          projections
-            .at(-1)
-            ?.runs.some((run) => run.id === asking.id && run.question !== undefined) === true,
+      yield* yieldUntil(() =>
+        Option.exists(Arr.last(projections), (projection) =>
+          Arr.some(projection.runs, (run) => run.id === asking.id && run.question !== undefined),
+        ),
       );
       yield* TestClock.adjust("1 second");
 
       expect(drain.pollUnsafe()).toBeDefined();
       yield* Fiber.join(drain);
-      expect((yield* runViews(service)).find((run) => run.id === sibling.id)?.state).toBe(
-        "running",
-      );
+      expect(
+        Option.getOrUndefined(
+          Arr.findFirst(yield* runViews(service), (run) => run.id === sibling.id),
+        )?.state,
+      ).toBe("running");
     });
   });
 
@@ -82,7 +85,9 @@ describe("headless parent drain", () => {
 
       yield* completeLocalRun(service, fake.controls[0]!, run.id, "Done.");
       yield* TestClock.adjust("2 seconds");
-      yield* yieldUntil(() => delivered.some((notification) => notification.type === "completed"));
+      yield* yieldUntil(() =>
+        Arr.some(delivered, (notification) => notification.type === "completed"),
+      );
       expect(drain.pollUnsafe()).toBeUndefined();
 
       // The acknowledgement publishes no revision, so only its signal can end the drain once the

@@ -23,6 +23,7 @@ import * as Scope from "effect/Scope";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as RpcServer from "effect/rpc/RpcServer";
 import * as Predicate from "effect/Predicate";
+import * as Arr from "effect/Array";
 import type { BackendAgentMessaging } from "../backend/model.ts";
 import {
   isSupervisorRunId,
@@ -145,14 +146,17 @@ const makeMetadata = (
       },
     },
     codexMcp: {
-      tomlFragment: [
-        `[mcp_servers.${SUPERVISOR_MCP_REGISTRATION}]`,
-        `command = ${tomlString(command)}`,
-        `args = [${args.map(tomlString).join(", ")}]`,
-        "required = true",
-        `enabled_tools = [${SUPERVISOR_MCP_TOOL_NAMES.map(tomlString).join(", ")}]`,
-        'default_tools_approval_mode = "approve"',
-      ].join("\n"),
+      tomlFragment: Arr.join(
+        [
+          `[mcp_servers.${SUPERVISOR_MCP_REGISTRATION}]`,
+          `command = ${tomlString(command)}`,
+          `args = [${Arr.join(Arr.map(args, tomlString), ", ")}]`,
+          "required = true",
+          `enabled_tools = [${Arr.join(Arr.map(SUPERVISOR_MCP_TOOL_NAMES, tomlString), ", ")}]`,
+          'default_tools_approval_mode = "approve"',
+        ],
+        "\n",
+      ),
     },
   };
 };

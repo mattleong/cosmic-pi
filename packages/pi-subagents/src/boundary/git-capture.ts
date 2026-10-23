@@ -1,4 +1,9 @@
 import * as Effect from "effect/Effect";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
+import * as Order from "effect/Order";
 import type { WorkspaceDiffStatFile } from "../workspace/diffstat.ts";
 import { credentialPrivatePath, credentialWorkspacePath } from "../workspace/policy.ts";
 import { nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core";
@@ -86,28 +91,50 @@ export const captureTree = (
         environment,
       });
       if (unmerged !== undefined)
-        return yield* unmergedRefusal(unmerged.slice(unmerged.indexOf("\t") + 1));
+        return yield* unmergedRefusal(
+          Fn.pipe(
+            unmerged,
+            Str.slice(
+              Fn.pipe(
+                unmerged,
+                Str.indexOf("\t"),
+                Option.getOrElse(() => -1),
+              ) + 1,
+            ),
+          ),
+        );
       const omitted = new Set(included);
       if (omitted.size > 0)
         yield* git(root, ["update-index", "--force-remove", "-z", "--stdin"], {
           environment,
-          stdin: new TextEncoder().encode(included.map((name) => `${name}\0`).join("")),
+          stdin: new TextEncoder().encode(
+            Arr.join(
+              Arr.map(included, (name) => `${name}\0`),
+              "",
+            ),
+          ),
         });
       yield* git(root, ["add", "--update"], { environment });
-      const untracked = (yield* gitFields(
-        root,
-        ["ls-files", "--others", "--exclude-standard", "-z"],
-        { environment },
-      )).filter((name) => !name.endsWith("/") && !omitted.has(name));
-      const droppedPaths = untracked.filter(leaveOut);
-      const added = untracked.filter((name) => !leaveOut(name));
+      const untracked = Arr.filter(
+        yield* gitFields(root, ["ls-files", "--others", "--exclude-standard", "-z"], {
+          environment,
+        }),
+        (name) => !Fn.pipe(name, Str.endsWith("/")) && !omitted.has(name),
+      );
+      const droppedPaths = Arr.filter(untracked, leaveOut);
+      const added = Arr.filter(untracked, (name) => !leaveOut(name));
       if (added.length > 0)
         yield* git(root, ["update-index", "--add", "-z", "--stdin"], {
           environment,
-          stdin: new TextEncoder().encode(added.map((name) => `${name}\0`).join("")),
+          stdin: new TextEncoder().encode(
+            Arr.join(
+              Arr.map(added, (name) => `${name}\0`),
+              "",
+            ),
+          ),
         });
       const tree = yield* git(root, ["write-tree"], { environment }).pipe(Effect.flatMap(oid));
-      return { tree, droppedPaths: droppedPaths.toSorted() } satisfies TreeCapture;
+      return { tree, droppedPaths: Arr.sort(droppedPaths, Order.String) } satisfies TreeCapture;
     }),
   );
 
@@ -122,7 +149,7 @@ export const commitTree = Effect.fn("GitCapture.commitTree")(function* (
   return yield* repositoryGit(repository, [
     "commit-tree",
     "--no-gpg-sign",
-    ...parents.flatMap((parent) => ["-p", parent]),
+    ...Arr.flatMap(parents, (parent) => ["-p", parent]),
     "-m",
     `${message} ${nonce}`,
     tree,
@@ -147,16 +174,25 @@ export const deleteWorkspaceRefs = Effect.fn("GitCapture.deleteWorkspaceRefs")(f
   repository: string,
   workspaceId: string,
 ) {
-  const refs = (yield* repositoryGit(repository, [
-    "for-each-ref",
-    "--format=%(refname)",
-    workspaceRefPrefix(workspaceId),
-  ]))
-    .split("\n")
-    .filter(Boolean);
+  const refs = Arr.filter(
+    Str.split(
+      yield* repositoryGit(repository, [
+        "for-each-ref",
+        "--format=%(refname)",
+        workspaceRefPrefix(workspaceId),
+      ]),
+      "\n",
+    ),
+    Boolean,
+  );
   if (refs.length === 0) return;
   yield* repositoryGit(repository, ["update-ref", "--stdin"], {
-    stdin: new TextEncoder().encode(refs.map((ref) => `delete ${ref}\n`).join("")),
+    stdin: new TextEncoder().encode(
+      Arr.join(
+        Arr.map(refs, (ref) => `delete ${ref}\n`),
+        "",
+      ),
+    ),
   });
 });
 
@@ -186,10 +222,14 @@ export const treeEntries = (repository: string, tree: string) =>
     Effect.map(
       (lines): TreeEntries =>
         new Map(
-          lines.map((line) => {
-            const tab = line.indexOf("\t");
-            const [mode = "", , id = ""] = line.slice(0, tab).split(" ");
-            return [line.slice(tab + 1), { mode, oid: id }] as const;
+          Arr.map(lines, (line) => {
+            const tab = Fn.pipe(
+              line,
+              Str.indexOf("\t"),
+              Option.getOrElse(() => -1),
+            );
+            const [mode, , id = ""] = Str.split(Fn.pipe(line, Str.slice(0, tab)), " ");
+            return [Fn.pipe(line, Str.slice(tab + 1)), { mode, oid: id }] as const;
           }),
         ),
     ),
@@ -211,9 +251,10 @@ export const changedEntries = (repository: string, from: string, to: string) =>
     Effect.map((fields) => {
       const entries: ChangedEntry[] = [];
       for (let index = 0; index + 1 < fields.length; index += 2) {
-        const [fromMode = "", toMode = "", fromObject = "", toObject = ""] = (fields[index] ?? "")
-          .slice(1)
-          .split(" ");
+        const [fromMode, toMode = "", fromObject = "", toObject = ""] = Str.split(
+          Fn.pipe(fields[index] ?? "", Str.slice(1)),
+          " ",
+        );
         entries.push({
           path: fields[index + 1] ?? "",
           from: fromMode,
@@ -229,7 +270,7 @@ export const changedEntries = (repository: string, from: string, to: string) =>
 /** Changed paths between two stored trees, in Git's order. */
 export const changedPaths = (repository: string, from: string, to: string) =>
   changedEntries(repository, from, to).pipe(
-    Effect.map((entries) => entries.map((entry) => entry.path)),
+    Effect.map((entries) => Arr.map(entries, (entry) => entry.path)),
   );
 
 export const ABSENT_MODE = "000000";
@@ -239,8 +280,8 @@ const numstatFile = (
   line: string,
   modes: ReadonlyMap<string, ChangedEntry>,
 ): WorkspaceDiffStatFile => {
-  const [added = "", deleted = "", ...rest] = line.split("\t");
-  const name = rest.join("\t");
+  const [added, deleted = "", ...rest] = Str.split(line, "\t");
+  const name = Arr.join(rest, "\t");
   const entry = modes.get(name);
   const before = entry?.from ?? ABSENT_MODE;
   const after = entry?.to ?? ABSENT_MODE;
@@ -264,7 +305,7 @@ export const diffStat = Effect.fn("GitCapture.diffStat")(function* (
   to: string,
 ) {
   const modes = new Map(
-    (yield* changedEntries(repository, from, to)).map((entry) => [entry.path, entry]),
+    Arr.map(yield* changedEntries(repository, from, to), (entry) => [entry.path, entry]),
   );
   const lines = yield* repositoryGitFields(repository, [
     "diff-tree",
@@ -277,5 +318,5 @@ export const diffStat = Effect.fn("GitCapture.diffStat")(function* (
     from,
     to,
   ]);
-  return lines.map((line) => numstatFile(line, modes));
+  return Arr.map(lines, (line) => numstatFile(line, modes));
 });

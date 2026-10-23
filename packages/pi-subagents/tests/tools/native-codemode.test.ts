@@ -2,6 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Fn from "effect/Function";
 import type * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
@@ -22,12 +23,19 @@ import { stringContaining } from "../support/matchers.ts";
 import { nativeCodemodeSession } from "../support/native-codemode-session.ts";
 import { signalAwaitEntry, subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import { startCapturingService, view } from "./fixtures/tool-harness.ts";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 
 const decodeOutput = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const output = (text: string) => {
-  const line = text.split("\n").find((entry) => entry.startsWith("WORKFLOW_RESULT "));
+  const line = Option.getOrUndefined(
+    Arr.findFirst(Str.split(text, "\n"), (entry) =>
+      Fn.pipe(entry, Str.startsWith("WORKFLOW_RESULT ")),
+    ),
+  );
   expect(line).toBeDefined();
-  return decodeOutput(line!.slice("WORKFLOW_RESULT ".length));
+  return decodeOutput(Fn.pipe(line!, Str.slice("WORKFLOW_RESULT ".length)));
 };
 const print = (expression: string) => `text('WORKFLOW_RESULT ' + JSON.stringify(${expression}));`;
 
@@ -64,7 +72,7 @@ describe("native scripted subagent workflows", () => {
               { index: 1, status: "started", runId: "agent-1", name: "entry-scout" },
             ],
           });
-          expect(requests.map((started) => started.writeIntent)).toEqual(["read-only"]);
+          expect(Arr.map(requests, (started) => started.writeIntent)).toEqual(["read-only"]);
           yield* h.call(
             "agent_start",
             {
@@ -160,7 +168,7 @@ describe("native scripted subagent workflows", () => {
           );
           expect(direct.isError).toBe(false);
           expect(
-            (yield* runViews(service)).filter((run) => run.writeIntent === "writer"),
+            Arr.filter(yield* runViews(service), (run) => run.writeIntent === "writer"),
           ).toHaveLength(1);
         });
       },
@@ -188,7 +196,7 @@ describe("native scripted subagent workflows", () => {
           const result = yield* Fiber.join(script);
           expect(result.isError).toBe(true);
           yield* yieldUntil(() =>
-            fixture.notifications.some((notification) => notification.type === "question"),
+            Arr.some(fixture.notifications, (notification) => notification.type === "question"),
           );
           const direct = yield* h.call(
             "agent_await",
@@ -227,7 +235,7 @@ describe("native scripted subagent workflows", () => {
           text: stringContaining("Recoverable workflow report"),
         });
         expect(
-          fixture.notifications.filter((notification) => notification.type === "completed"),
+          Arr.filter(fixture.notifications, (notification) => notification.type === "completed"),
         ).toEqual([]);
       });
     },
@@ -272,14 +280,14 @@ describe("native scripted subagent workflows", () => {
   nativeTest("declares every script result as one object", () =>
     Effect.gen(function* () {
       const h = yield* nativeCodemodeSession(subagentServiceDouble({}));
-      const schemas = h.session
-        .getAllTools()
-        .filter((tool) => tool.name.startsWith("agent_"))
-        .flatMap((tool) => {
-          const schema = h.session.getToolDefinition(tool.name)?.outputSchema;
-          return schema === undefined ? [] : [[tool.name, schema] as const];
-        });
-      expect(schemas.map(([name]) => name)).toContain("agent_await");
+      const agentTools = Arr.filter(h.session.getAllTools(), (tool) =>
+        Fn.pipe(tool.name, Str.startsWith("agent_")),
+      );
+      const schemas = Arr.flatMap(agentTools, (tool) => {
+        const schema = h.session.getToolDefinition(tool.name)?.outputSchema;
+        return schema === undefined ? [] : [[tool.name, schema] as const];
+      });
+      expect(Arr.map(schemas, ([name]) => name)).toContain("agent_await");
       for (const [name, schema] of schemas) expect(schema, name).toMatchObject({ type: "object" });
     }),
   );

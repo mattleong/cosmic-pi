@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import {
   defineTool,
   type ExtensionAPI,
@@ -138,13 +140,7 @@ const TOOL_SPECS: SubagentToolSpecs = {
       "Start background subagents, up to your direct-child limit. Returns run IDs immediately; each report is delivered to you as a saved file when its run finishes, and runs end after reporting. Give every agent a self-contained task with the relevant paths, constraints, and deliverable. The profile sets the role and model route (default generalist). Only the main session can start worktree writers. Subagents started from a codemode script, and their descendants, stay read-only.",
     promptSnippet: "Run bounded, independent tasks in background subagents",
     renderCall: (args, theme, context) =>
-      renderSubagentStartCall(
-        Array.isArray(args.agents) ? args.agents : [],
-        theme,
-        context.expanded,
-        false,
-        context,
-      ),
+      renderSubagentStartCall(args.agents, theme, context.expanded, false, context),
     lease: (presentation, args) => presentation.beginStart(args.agents.length),
   },
   [SUBAGENT_TOOL_NAME.await]: {
@@ -178,8 +174,7 @@ const TOOL_SPECS: SubagentToolSpecs = {
       "Interrupt or stop subagents you started, or their descendants. Each target's result is reported separately.",
     promptSnippet: "Interrupt or stop subagents",
     renderCall: (args, theme) => {
-      const verb = args.action ?? "manage";
-      const action = `${verb[0]?.toUpperCase() ?? ""}${verb.slice(1)}`;
+      const action = Str.capitalize(args.action ?? "manage");
       return renderSubagentCall(`${action} ${targetsLabel(args)}`, "", theme);
     },
   },
@@ -310,7 +305,7 @@ export function registerSubagentTools(
       ...(runtime.scheduleAnimation && { scheduleAnimation: runtime.scheduleAnimation }),
       expandedContent: {
         renderCall: (args, theme) =>
-          tool.name === SUBAGENT_TOOL_NAME.start && "agents" in args && Array.isArray(args.agents)
+          tool.name === SUBAGENT_TOOL_NAME.start && "agents" in args && Arr.isArray(args.agents)
             ? renderSubagentStartCall(args.agents, theme, true, true)
             : renderSubagentInputContent(decodeCallArguments(args), theme),
         renderResult: (result, options, theme, context) => {

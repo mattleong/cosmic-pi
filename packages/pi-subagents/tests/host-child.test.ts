@@ -21,6 +21,8 @@ import { view } from "./fixtures/run-view.ts";
 import { describeActivationLifecycle } from "./support/activation-lifecycle.ts";
 import { effectTest, eventLoopTurn, settle, step } from "./support/effect-test.ts";
 import { pickQuestionnaire } from "./support/questionnaire.ts";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 
 type CapturedTool = ToolDefinition;
 type CapturedToolInput = Parameters<CapturedTool["execute"]>[1];
@@ -97,12 +99,14 @@ const makeHarness = (options: HarnessOptions = {}) => {
   const start = (cwd?: string) => host.emit("session_start", childContext(cwd));
   const shutdown = () => host.emit("session_shutdown", childContext());
   const latestTool = (name: string): CapturedTool => {
-    const tool = tools.findLast((candidate) => candidate.name === name);
+    const tool = Option.getOrUndefined(Arr.findLast(tools, (candidate) => candidate.name === name));
     if (!tool) throw new Error(`Missing tool ${name}`);
     return tool;
   };
   const currentListener = (): ListenerRecord => {
-    const listener = listeners.findLast((candidate) => !candidate.detached);
+    const listener = Option.getOrUndefined(
+      Arr.findLast(listeners, (candidate) => !candidate.detached),
+    );
     if (!listener) throw new Error("Missing active IPC listener");
     return listener;
   };
@@ -146,8 +150,12 @@ function contactOfType<Type extends LocalPiContact["type"]>(
   contacts: ReadonlyArray<LocalPiContact>,
   type: Type,
 ): Extract<LocalPiContact, { readonly type: Type }> | undefined {
-  return contacts.findLast(
-    (contact): contact is Extract<LocalPiContact, { readonly type: Type }> => contact.type === type,
+  return Option.getOrUndefined(
+    Arr.findLast(
+      contacts,
+      (contact): contact is Extract<LocalPiContact, { readonly type: Type }> =>
+        contact.type === type,
+    ),
   );
 }
 
@@ -448,7 +456,9 @@ describe("local Pi child bridge", () => {
     yield* settle(harness.start);
     yield* step(() => vi.waitFor(() => expect(harness.listeners[0]?.detached).toBe(true)));
     expect(harness.activeTools()).toEqual(["read"]);
-    const partial = harness.tools.find((tool) => tool.name === SUBAGENT_TOOL_NAME.models);
+    const partial = Option.getOrUndefined(
+      Arr.findFirst(harness.tools, (tool) => tool.name === SUBAGENT_TOOL_NAME.models),
+    );
     expect(partial).toBeDefined();
     yield* step(() =>
       expect(execute(partial!, {}, undefined)).rejects.toThrow(
@@ -464,7 +474,7 @@ describe("nested tool surface", () => {
   effectTest("withholds agent_worktree from every child", function* () {
     const harness = makeHarness();
     yield* settle(harness.start);
-    const names = harness.tools.map((tool) => tool.name);
+    const names = Arr.map(harness.tools, (tool) => tool.name);
     // Proxies of the root's agent_* tools, plus the child's own parent contact.
     expect(new Set(names)).toEqual(
       new Set([

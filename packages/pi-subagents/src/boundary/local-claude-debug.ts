@@ -13,6 +13,10 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Predicate from "effect/Predicate";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Order from "effect/Order";
 import type { ClaudeLeadingTagDiagnostic } from "../backend/local-claude-correlation.ts";
 import type { ClaudeProtocolEvent } from "../backend/local-claude-protocol.ts";
 import { safeAgentDirectory } from "./harness-shared.ts";
@@ -139,8 +143,12 @@ interface OwnedLedgerDirectory {
 
 const ownedLedgerDirectories = Effect.fn("LocalClaudeDebug.ownedLedgers")(function* (root: string) {
   const entries = yield* diagnosticIo(() => fs.readdir(root, { withFileTypes: true }));
-  const candidates = entries.filter(
-    (entry) => entry.name.startsWith("claude-") && entry.isDirectory() && !entry.isSymbolicLink(),
+  const candidates = Arr.filter(
+    entries,
+    (entry) =>
+      Fn.pipe(entry.name, Str.startsWith("claude-")) &&
+      entry.isDirectory() &&
+      !entry.isSymbolicLink(),
   );
   if (candidates.length > 256) return yield* LocalClaudeDebugIoError.make({});
   const owned = yield* Effect.forEach(
@@ -157,9 +165,10 @@ const ownedLedgerDirectories = Effect.fn("LocalClaudeDebug.ownedLedgers")(functi
     },
     { concurrency: 16 },
   );
-  return owned
-    .filter(Predicate.isNotUndefined)
-    .toSorted((left, right) => left.modifiedAt - right.modifiedAt);
+  return Arr.sort(
+    Arr.filter(owned, Predicate.isNotUndefined),
+    Order.mapInput(Order.Number, (entry: { readonly modifiedAt: number }) => entry.modifiedAt),
+  );
 });
 
 const persistLedger = Effect.fn("LocalClaudeDebug.persist")(function* (
@@ -190,7 +199,7 @@ export const acquireLocalClaudeDebug = Effect.fn("LocalClaudeDebug.acquire")(fun
 }) {
   if (options.environment.PI_SUBAGENTS_CLAUDE_DEBUG !== "1") return undefined;
   const state: LedgerState = { lines: [], bytes: 0, dropped: 0 };
-  const runIdentity = sha256Text(options.runId).slice(0, 12);
+  const runIdentity = Fn.pipe(sha256Text(options.runId), Str.slice(0, 12));
   const record = (entry: LocalClaudeDebugEntry): Effect.Effect<void> =>
     Effect.sync(() => appendBounded(state, encodeEntry(entry))).pipe(Effect.ignoreCause);
   yield* Effect.addFinalizer(() =>
@@ -201,7 +210,7 @@ export const acquireLocalClaudeDebug = Effect.fn("LocalClaudeDebug.acquire")(fun
           : persistLedger(
               options.agentDirectory,
               runIdentity,
-              ledgerHeader(safeInteger(state.dropped)) + state.lines.join(""),
+              ledgerHeader(safeInteger(state.dropped)) + Arr.join(state.lines, ""),
             ).pipe(Effect.ignoreCause),
       ),
     ),

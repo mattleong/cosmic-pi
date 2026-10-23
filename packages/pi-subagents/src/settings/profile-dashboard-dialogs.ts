@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import * as Predicate from "effect/Predicate";
 import {
   Input,
@@ -130,14 +131,15 @@ export class ProfileDashboardDialog implements Component, Focusable {
     this.offset = Math.min(this.offset, this.maxOffset);
     if (bodyHeight > 0 && this.offset === this.maxOffset) this.reviewed = true;
     const hint = `${label("tui.select.confirm", "Enter")} Confirm · ${label("tui.select.cancel", "Esc")} Back${this.maxOffset ? " · ↑/↓ Scroll" : ""}`;
-    return [
-      this.options.theme.fg("accent", this.options.title),
-      ...body.slice(this.offset, this.offset + bodyHeight),
-      this.message,
-      hint,
-    ]
-      .slice(0, height)
-      .map((line) => clipToWidth(line, Math.max(0, width)));
+    return Arr.map(
+      [
+        this.options.theme.fg("accent", this.options.title),
+        ...body.slice(this.offset, this.offset + bodyHeight),
+        this.message,
+        hint,
+      ].slice(0, height),
+      (line) => clipToWidth(line, Math.max(0, width)),
+    );
   }
   invalidate(): void {
     this.input.invalidate();

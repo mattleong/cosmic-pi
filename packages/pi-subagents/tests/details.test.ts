@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
+import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import type { SubagentRunView } from "../src/run/model.ts";
 import { awaitDetails, compactToolDetails, startDetails } from "../src/tools/details.ts";
@@ -13,6 +14,10 @@ import {
   decodeStartAwaitCardDetails,
 } from "../src/tools/details-decode.ts";
 import { view } from "./fixtures/run-view.ts";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
+import * as Order from "effect/Order";
 
 const run = (index = 1, cost?: number): SubagentRunView =>
   view({
@@ -46,7 +51,7 @@ const run = (index = 1, cost?: number): SubagentRunView =>
     lastActivityAt: 2,
     question: { requestId: "private-question", message: "May I continue?" },
     sessionEvents: [{ type: "assistant", text: "private transcript", createdAt: 2 }],
-    finalText: `Report ${index}: ${"x".repeat(32_000)}`,
+    finalText: `Report ${index}: ${Fn.pipe("x", Str.repeat(32_000))}`,
     usage: {
       input: 1,
       output: 1,
@@ -83,19 +88,19 @@ const oversizedBatch = (
     ...base,
     ...overrides,
     id: `${base.id}-${index}`,
-    progress: "p".repeat(600),
-    currentTool: "t".repeat(300),
+    progress: Fn.pipe("p", Str.repeat(600)),
+    currentTool: Fn.pipe("t", Str.repeat(300)),
     selection: {
       ...base.selection,
       skippedCandidates: Array.from({ length: 8 }, (_skipped, skip) => ({
         candidateIndex: skip,
         candidate: {
           runtime: "pi",
-          model: `candidate-${skip}-${"c".repeat(1_000)}`,
+          model: `candidate-${skip}-${Fn.pipe("c", Str.repeat(1_000))}`,
           effort: "high",
         },
         code: "unavailable",
-        reason: "r".repeat(1_000),
+        reason: Fn.pipe("r", Str.repeat(1_000)),
       })),
     },
   }));
@@ -106,7 +111,8 @@ const replaceAt = <Item, Next>(
   items: ReadonlyArray<Item>,
   index: number,
   next: (item: Item) => Next,
-): Array<Item | Next> => items.map((item, position) => (position === index ? next(item) : item));
+): Array<Item | Next> =>
+  Arr.map(items, (item, position) => (position === index ? next(item) : item));
 
 type FrozenJson =
   | null
@@ -118,9 +124,9 @@ type FrozenJson =
 
 const isDeeplyFrozen = (value: FrozenJson | undefined): boolean =>
   Object.isFrozen(value) &&
-  (Array.isArray(value)
-    ? value.every((child: FrozenJson) => isDeeplyFrozen(child))
-    : !Predicate.isObject(value) || Object.values(value).every((child) => isDeeplyFrozen(child)));
+  (Arr.isArray<FrozenJson | undefined>(value)
+    ? Arr.every(value, (child: FrozenJson) => isDeeplyFrozen(child))
+    : !Predicate.isObject(value) || Arr.every(Rec.values(value), (child) => isDeeplyFrozen(child)));
 
 const awaitWire = () => clone(awaitDetails({ runs: [run()], awaitUntil: "all_finished" }));
 
@@ -302,7 +308,7 @@ describe("proposal diffstat evidence", () => {
       workspaceId: "ws-1",
       workspaceOutcome,
     };
-    const outcomes = [[writer], oversizedBatch(writer)].map((runs) => {
+    const outcomes = Arr.map([[writer], oversizedBatch(writer)], (runs) => {
       const decoded = decodeCompactToolDetails(compactToolDetails({ action: "stop", runs }));
       return decoded?.action === "models" ? undefined : decoded?.cards[0]?.workspaceOutcome;
     });
@@ -319,13 +325,17 @@ const runCards = (details: ReturnType<typeof compactToolDetails>) =>
   details.action === "models" ? [] : details.cards;
 
 const startRunIds = (items: ReadonlyArray<SubagentStartEntry>) =>
-  items.map((entry) => (entry.status === "started" ? entry.runId : undefined));
+  Arr.map(items, (entry) => (entry.status === "started" ? entry.runId : undefined));
 
 const issueMessages = (cards: ReadonlyArray<SubagentRunCard>) =>
   new Map(
-    compactRunIssues(cards)
-      .filter((issue) => !issue.code.endsWith(":selection-skipped"))
-      .map((issue) => [issue.code, issue.message]),
+    Arr.map(
+      Arr.filter(
+        compactRunIssues(cards),
+        (issue) => !Fn.pipe(issue.code, Str.endsWith(":selection-skipped")),
+      ),
+      (issue) => [issue.code, issue.message],
+    ),
   );
 
 describe("persisted subagent detail fitting", () => {
@@ -353,8 +363,16 @@ describe("persisted subagent detail fitting", () => {
         actionFailures: [{ id: "agent-missing", code: "not_found", message: "Run not found." }],
       });
       const cards = runCards(details);
-      expect(cards.map((card) => card.id).toSorted()).toEqual(
-        runs.map((item) => item.id).toSorted(),
+      expect(
+        Arr.sort(
+          Arr.map(cards, (card) => card.id),
+          Order.String,
+        ),
+      ).toEqual(
+        Arr.sort(
+          Arr.map(runs, (item) => item.id),
+          Order.String,
+        ),
       );
       for (const card of cards) {
         expect(card).toMatchObject({
@@ -375,29 +393,31 @@ describe("persisted subagent detail fitting", () => {
       const { runId, ...selected } = startedEntry(index, `launch-${index}`);
       const fields = {
         ...selected,
-        warning: `Route warning ${index}: ${"w".repeat(1_000)}`,
-        sourceCwd: `/source/${"s".repeat(200)}`,
+        warning: `Route warning ${index}: ${Fn.pipe("w", Str.repeat(1_000))}`,
+        sourceCwd: `/source/${Fn.pipe("s", Str.repeat(200))}`,
       };
       return index % 2 === 0 ? { ...fields, runId } : { ...fields, status: "failed" };
     });
-    const failures = entries
-      .filter((entry) => entry.status === "failed")
-      .map((entry) => ({
+    const failures = Arr.map(
+      Arr.filter(entries, (entry) => entry.status === "failed"),
+      (entry) => ({
         index: entry.index,
-        message: `Launch ${entry.index} failed: ${"m".repeat(500)}`,
+        message: `Launch ${entry.index} failed: ${Fn.pipe("m", Str.repeat(500))}`,
         code: "launch_failed",
         admittedRun: {
           runId: `agent-admitted-${entry.index}`,
           cleanupDisposition: "confirmed" as const,
           nextCandidate: { runtime: "pi" as const, model: "openai/next", effort: "high" as const },
         },
-      }));
+      }),
+    );
     const details = startDetails({ startEntries: entries, startFailures: failures });
     expect(JSON.stringify(details).length).toBeLessThanOrEqual(48_000);
     expect(decodeStartAwaitCardDetails(details)).toEqual(details);
     expect(startRunIds(details.startEntries)).toEqual(startRunIds(entries));
-    expect(details.startFailures?.map((failure) => failure.admittedRun)).toEqual(
-      failures.map((failure) => failure.admittedRun),
+    assert(details.startFailures !== undefined);
+    expect(Arr.map(details.startFailures, (failure) => failure.admittedRun)).toEqual(
+      Arr.map(failures, (failure) => failure.admittedRun),
     );
     for (const entry of details.startEntries)
       expect(entry.routeStatus === "selected" && entry.warning).toMatch(/^Route warning \d+: w/u);
@@ -408,12 +428,12 @@ describe("persisted subagent detail fitting", () => {
       view({
         id: "agent-heavy",
         state: "waiting_for_parent",
-        question: { requestId: "question", message: `Proceed? ${"q".repeat(2_000)}` },
-        warning: `Child warning: ${"w".repeat(500)}`,
+        question: { requestId: "question", message: `Proceed? ${Fn.pipe("q", Str.repeat(2_000))}` },
+        warning: `Child warning: ${Fn.pipe("w", Str.repeat(500))}`,
         warningSource: "child",
       }),
     );
-    const bounded = runs.flatMap((item) =>
+    const bounded = Arr.flatMap(runs, (item) =>
       runCards(compactToolDetails({ action: "stop", runs: [item] })),
     );
     const details = compactToolDetails({ action: "stop", runs });

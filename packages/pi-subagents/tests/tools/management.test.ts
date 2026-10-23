@@ -1,6 +1,7 @@
 import { initTheme, type AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import * as Result from "effect/Result";
 import * as Deferred from "effect/Deferred";
 import { yieldUntil } from "pi-cosmic-core/testing";
@@ -16,13 +17,19 @@ import {
   invokeOptionalTool,
   view,
 } from "./fixtures/tool-harness.ts";
+import * as Order from "effect/Order";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
 
 const resultText = (result: {
   readonly content: ReadonlyArray<AgentToolResult<unknown>["content"][number]>;
 }): string =>
-  Arr.filterMap(result.content, (part) =>
-    part.type === "text" ? Result.succeed(part.text) : Result.failVoid,
-  ).join("\n");
+  Arr.join(
+    Arr.filterMap(result.content, (part) =>
+      part.type === "text" ? Result.succeed(part.text) : Result.failVoid,
+    ),
+    "\n",
+  );
 
 describe("subagent tool", () => {
   beforeAll(() => initTheme("dark", false));
@@ -206,7 +213,7 @@ describe("subagent tool", () => {
     });
     const tools = captureSubagentTools(service);
     // Questions are answered through agent_send; no separate reply or status tool is registered.
-    expect([...tools.keys()].toSorted()).toEqual([
+    expect(Arr.sort([...tools.keys()], Order.String)).toEqual([
       "agent_await",
       "agent_lifecycle",
       "agent_list",
@@ -318,15 +325,15 @@ describe("subagent tool", () => {
           id: `agent-${index + 1}`,
           name: `review-${index + 1}`,
           state: "completed",
-          finalText: "x".repeat(32 * 1024),
+          finalText: Fn.pipe("x", Str.repeat(32 * 1024)),
         }),
       );
       const consumed: Array<{ readonly id: string; readonly generation: number }> = [];
       const service = subagentServiceDouble({
         withAwaitTerminalObservations: (ids, _until, _onUpdate, use) =>
           use(
-            ids.map((id) => ({
-              run: runs.find((run) => run.id === id)!,
+            Arr.map(ids, (id) => ({
+              run: Option.getOrUndefined(Arr.findFirst(runs, (run) => run.id === id))!,
               completionReceipt: { id, generation: 1, claimToken: `claim-${id}` },
             })),
           ),
@@ -339,19 +346,21 @@ describe("subagent tool", () => {
 
       yield* step(() =>
         expect(
-          executeTool(tool, { runIds: runs.map((run) => run.id), until: "all_finished" }),
+          executeTool(tool, { runIds: Arr.map(runs, (run) => run.id), until: "all_finished" }),
         ).rejects.toThrow("at most 12 targets"),
       );
 
       const result = yield* invokeOptionalTool(tool, {
-        runIds: runs.slice(0, 12).map((run) => run.id),
+        runIds: Arr.map(runs.slice(0, 12), (run) => run.id),
         until: "all_finished",
       });
       const text = result?.content[0]?.text ?? "";
       expect(text.length).toBeLessThanOrEqual(48_000);
       for (const run of runs.slice(0, 12)) expect(text).toContain(run.id);
       // Every run's block fits, so every claimed report is delivered and consumed.
-      expect(consumed.map((receipt) => receipt.id)).toEqual(runs.slice(0, 12).map((run) => run.id));
+      expect(Arr.map(consumed, (receipt) => receipt.id)).toEqual(
+        Arr.map(runs.slice(0, 12), (run) => run.id),
+      );
     },
   );
 });

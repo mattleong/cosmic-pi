@@ -1,4 +1,5 @@
 import type { AgentToolResult, AgentToolUpdateCallback } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -7,6 +8,7 @@ import * as Fiber from "effect/Fiber";
 import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
+import * as Str from "effect/String";
 import { MAX_TARGET_RUNS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import {
   isTerminalRunState,
@@ -28,7 +30,7 @@ import {
 } from "./run-block.ts";
 
 const attentionHeadline = (runs: ReadonlyArray<SubagentRunView>): string =>
-  runs.some(isParentActionRequiredRun)
+  Arr.some(runs, isParentActionRequiredRun)
     ? "Parent action required; other unfinished subagents continue independently."
     : "";
 
@@ -47,21 +49,21 @@ export const awaitResultText = (
   const blocks = formatRunBlocks(
     [
       summary,
-      attentionHeadline([...observations.map(({ run }) => run), ...questions]),
+      attentionHeadline([...Arr.map(observations, ({ run }) => run), ...questions]),
       unshown > 0
         ? `${unshown} more subagent${unshown === 1 ? " waits" : "s wait"} for your reply; each question arrives in its own notice, and agent_list shows them.`
         : "",
     ],
     [
-      ...observations.map(({ run, completionReceipt }) =>
+      ...Arr.map(observations, ({ run, completionReceipt }) =>
         runViewBlock(run, runViewOutcome(run, completionReceipt !== undefined)),
       ),
-      ...shownQuestions.map((run) => runViewBlock(run, runViewOutcome(run, false))),
+      ...Arr.map(shownQuestions, (run) => runViewBlock(run, runViewOutcome(run, false))),
     ],
   );
   return withInlineReports(
     blocks,
-    observations.map(({ run, completionReceipt }) =>
+    Arr.map(observations, ({ run, completionReceipt }) =>
       completionReceipt !== undefined && run.state === "completed"
         ? wholeSavedReport(run)
         : undefined,
@@ -127,8 +129,8 @@ export function awaitExecutionFor(
 ) {
   const requestedIds = [
     ...new Set(
-      ids.flatMap((id) => {
-        const trimmed = id.trim();
+      Arr.flatMap(ids, (id) => {
+        const trimmed = Str.trim(id);
         return trimmed ? [trimmed] : [];
       }),
     ),
@@ -139,9 +141,10 @@ export function awaitExecutionFor(
   let interrupted = false;
   const deliveryAttemptedIds = new Set<string>();
   const visibleContextRuns = (runs: ReadonlyArray<SubagentRunView>) =>
-    projectRunCardTree(contextRuns)
-      .map((row) => row.run)
-      .slice(0, Math.max(0, MAX_TARGET_RUNS - runs.length));
+    Arr.map(projectRunCardTree(contextRuns), (row) => row.run).slice(
+      0,
+      Math.max(0, MAX_TARGET_RUNS - runs.length),
+    );
   // Partial results show the awaited hierarchy; only the summary reaches the model.
   const progressText = (runs: ReadonlyArray<SubagentRunView>) =>
     formatAwaitProgress(runs, until, visibleContextRuns(runs));
@@ -153,9 +156,9 @@ export function awaitExecutionFor(
   ) => {
     latestRuns = runs;
     const scope = projection ?? runs;
-    const targetIds = new Set(runs.map((run) => run.id));
-    const byId = new Map(scope.map((run) => [run.id, run]));
-    contextRuns = scope.filter((run) => {
+    const targetIds = new Set(Arr.map(runs, (run) => run.id));
+    const byId = new Map(Arr.map(scope, (run) => [run.id, run]));
+    contextRuns = Arr.filter(scope, (run) => {
       if (targetIds.has(run.id)) return false;
       const visited = new Set<string>([run.id]);
       let parentRunId = run.parentRunId;
@@ -181,7 +184,7 @@ export function awaitExecutionFor(
     proxyCleanupUnconfirmed = false,
     ending: AwaitEnding = { kind: "cancelled" },
   ): AgentToolResult<unknown> => {
-    const unfinished = latestRuns.filter((run) => !isTerminalRunState(run.state)).length;
+    const unfinished = Arr.filter(latestRuns, (run) => !isTerminalRunState(run.state)).length;
     const timedOutSeconds = ending.kind === "timed_out" ? ending.seconds : undefined;
     const ended = Match.value(ending).pipe(
       Match.when({ kind: "timed_out" }, ({ seconds }) => `Await timed out after ${seconds}s`),
@@ -208,9 +211,9 @@ export function awaitExecutionFor(
         latestRuns.length > 0 ? progressSummary(latestRuns) : "",
         attentionHeadline(latestRuns),
         // Last, so a long ID list is what the header bound cuts.
-        `Requested runs: ${requestedIds.join(", ")}.`,
+        `Requested runs: ${Arr.join(requestedIds, ", ")}.`,
       ],
-      latestRuns.map((run) =>
+      Arr.map(latestRuns, (run) =>
         runViewBlock(
           run,
           run.state === "completed" && deliveryAttemptedIds.has(run.id)
@@ -240,7 +243,7 @@ export function awaitExecutionFor(
         timedOutSeconds,
         ...(ending.kind === "user_input" && { endedByUserInput: true as const }),
         ...(proxyCleanupUnconfirmed && { cancellationCleanup: "unconfirmed" as const }),
-        ...(latestRuns.some(isParentActionRequiredRun) && { attentionRequired: true }),
+        ...(Arr.some(latestRuns, isParentActionRequiredRun) && { attentionRequired: true }),
       }),
     };
   };

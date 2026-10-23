@@ -1,9 +1,11 @@
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import { JsonDocumentStore, configDocumentErrorFactory, type JsonObject } from "pi-cosmic-core";
 import {
@@ -237,9 +239,9 @@ const applyProfileRestore: ApplyPatch<SubagentProfileRestorePatch> = Effect.fnUn
       );
     const sets = { ...currentProfileSets(current) };
     const selected = sets[patch.profileSet];
-    if (!Object.hasOwn(sets, patch.profileSet) || !isRecord(selected))
+    if (!Rec.has(sets, patch.profileSet) || !isRecord(selected))
       return yield* mutationError(path, "The selected profile set does not exist.");
-    if (Object.hasOwn(selected, "profiles") && !isRecord(selected.profiles))
+    if (Rec.has<string, unknown>(selected, "profiles") && !isRecord(selected.profiles))
       return yield* mutationError(path, "The selected profiles container is invalid.");
     sets[patch.profileSet] = {
       ...selected,
@@ -255,7 +257,7 @@ const applyDefaultProfileSetPatch: ApplyPatch<SubagentDefaultProfileSetPatch> = 
     if (name === undefined) return withEntry(current, "defaultProfileSet", undefined);
     if (!isProfileSetName(name)) return yield* mutationError(path, "Invalid profile-set name.");
     const sets = currentProfileSets(current);
-    if (!Object.hasOwn(sets, name) || !isRecord(sets[name]))
+    if (!Rec.has<string, unknown>(sets, name) || !isRecord(sets[name]))
       return yield* mutationError(path, "The selected profile set does not exist.");
     const decoded = subagentConfigDecoder("update")(current);
     if (!decoded.file.profileSets?.[name])
@@ -277,8 +279,8 @@ const snapshotProfilesJson = (
     path,
     "The session snapshot contains an invalid profile route.",
   );
-  const keys = Object.keys(routes);
-  if (keys.length !== PROFILE_IDS.length || !keys.every(isProfileId))
+  const keys = Rec.keys(routes);
+  if (keys.length !== PROFILE_IDS.length || !Arr.every(keys, isProfileId))
     return Effect.fail(
       mutationError(path, "A session snapshot must contain exactly all seven profiles."),
     );
@@ -289,7 +291,7 @@ const snapshotProfilesJson = (
     profiles[profile] =
       route.candidates.length === 0
         ? "disabled"
-        : route.candidates.map((candidate) => candidateJson(candidate));
+        : Arr.map(route.candidates, (candidate) => candidateJson(candidate));
   }
   return Effect.succeed(profiles);
 };
@@ -301,10 +303,10 @@ const insertProfileSet = Effect.fnUntraced(function* (
   set: Effect.Effect<JsonObject, SubagentConfigStoreError>,
 ) {
   const sets = { ...currentProfileSets(current) };
-  if (Object.hasOwn(sets, name))
+  if (Rec.has(sets, name))
     return yield* mutationError(path, "A profile set with that name exists.");
   const value = yield* set;
-  if (Object.keys(sets).length >= MAX_PROFILE_SETS)
+  if (Rec.size(sets) >= MAX_PROFILE_SETS)
     return yield* mutationError(
       path,
       `A document may contain at most ${MAX_PROFILE_SETS} profile sets.`,
@@ -346,7 +348,7 @@ const applyRenameProfileSet: ApplyPatch<SubagentRenameProfileSetPatch> = Effect.
     if (!isRecord(source))
       return yield* mutationError(path, "The selected profile set does not exist.");
     if (patch.profileSet === patch.nextProfileSet) return current;
-    if (Object.hasOwn(sets, patch.nextProfileSet))
+    if (Rec.has(sets, patch.nextProfileSet))
       return yield* mutationError(path, "A profile set with that name exists.");
     delete sets[patch.profileSet];
     sets[patch.nextProfileSet] = source;
@@ -370,12 +372,12 @@ const applyDeleteProfileSet: ApplyPatch<SubagentDeleteProfileSetPatch> = Effect.
         "Choose another default profile set or inherit before deleting it.",
       );
     const sets = currentProfileSets(current);
-    if (!Object.hasOwn(sets, patch.profileSet)) return current;
+    if (!Rec.has<string, unknown>(sets, patch.profileSet)) return current;
     const remaining = withEntry(sets, patch.profileSet, undefined);
     return withEntry(
       current,
       "profileSets",
-      Object.keys(remaining).length === 0 ? undefined : remaining,
+      Rec.isEmptyReadonlyRecord(remaining) ? undefined : remaining,
     );
   },
 );
@@ -389,7 +391,7 @@ const applyNestingPatch: ApplyPatch<SubagentNestingPatch> = Effect.fnUntraced(
     return withEntry(
       current,
       "nesting",
-      nesting && Object.keys(nesting).length > 0 ? { ...nesting } : undefined,
+      nesting && Rec.size<string, unknown>(nesting) > 0 ? { ...nesting } : undefined,
     );
   },
 );
@@ -471,7 +473,7 @@ export const subagentConfigStoreLayer = Layer.effect(
           .modifyObject(target, (current) =>
             Effect.gen(function* () {
               const currentExists = yield* documents.exists(target);
-              const currentIsEmpty = Object.keys(current).length === 0;
+              const currentIsEmpty = Rec.isEmptyReadonlyRecord(current);
               if (
                 currentExists !== patch.expectedExists ||
                 (patch.expectedExists &&

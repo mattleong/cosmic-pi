@@ -1,6 +1,9 @@
 import { formatDoctorReport, type DoctorCheck } from "../application/doctor.ts";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
   notifyAtHostBoundary,
@@ -193,24 +196,30 @@ const profilesSubcommand = (
   description: "Edit Current Session profiles and saved sets",
   arguments: "[profile]",
   complete: (prefix) => {
-    const matches = PROFILE_IDS.filter((profile) => profile.startsWith(prefix.trim())).map(
-      (profile) => ({
+    const matches = Fn.pipe(
+      PROFILE_IDS,
+      Arr.filter((profile) => Fn.pipe(profile, Str.startsWith(Str.trim(prefix)))),
+      Arr.map((profile) => ({
         value: profile,
         label: profile,
         description: `Edit ${profile} in Current Session`,
-      }),
+      })),
     );
     return matches.length ? matches : null;
   },
   handler: (args, ctx) => {
-    const parts = args.trim().split(/\s+/u).filter(Boolean);
-    const profile = PROFILE_IDS.find((id) => id === parts[0]);
+    const parts = Fn.pipe(args, Str.trim, Str.split(/\s+/u), Arr.filter(Boolean));
+    const profile = Option.getOrUndefined(Arr.findFirst(PROFILE_IDS, (id) => id === parts[0]));
     if (parts.length === 0 || (parts.length === 1 && profile))
       return openProfileDashboard(pi, ctx, actions, {
         initialProfile: profile ?? PROFILE_IDS[0],
         initialFocus: profile ? "fields" : "profiles",
       });
-    notifyAtHostBoundary(ctx, `Usage: /subagents profiles [${PROFILE_IDS.join("|")}]`, "warning");
+    notifyAtHostBoundary(
+      ctx,
+      `Usage: /subagents profiles [${Arr.join(PROFILE_IDS, "|")}]`,
+      "warning",
+    );
     return Promise.resolve();
   },
 });
@@ -224,7 +233,7 @@ const doctorSubcommand = (actions: FleetManagerActions): ExtensionSubcommand => 
         notifyAtHostBoundary(
           ctx,
           formatDoctorReport(checks),
-          checks.some((item) => item.status !== "ok") ? "warning" : "info",
+          Arr.some(checks, (item) => item.status !== "ok") ? "warning" : "info",
         ),
       () =>
         notifyAtHostBoundary(

@@ -7,6 +7,8 @@ import {
   type LocalClaudeDebugEntry,
 } from "../src/boundary/local-claude-debug.ts";
 import { nodeFsPromises as fs, nodePath } from "./support/node-builtins.ts";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 
 const decodeJsonLine = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json));
 
@@ -55,10 +57,9 @@ const readLedger = (agentDirectory: string) =>
         fs.readFile(ledger, "utf8"),
       ]),
     );
-    const lines: unknown[] = content
-      .trim()
-      .split("\n")
-      .map((line) => decodeJsonLine(line));
+    const lines: unknown[] = Arr.map(Str.split(Str.trim(content), "\n"), (line) =>
+      decodeJsonLine(line),
+    );
     return { rootStat, directoryStat, ledgerStat, content, lines };
   });
 

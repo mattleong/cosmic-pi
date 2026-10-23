@@ -4,6 +4,7 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 
 const TOOL_PREVIEW_LINES = 7;
 const TOOL_PREVIEW_CHARS = 1_000;
@@ -20,20 +21,23 @@ type ToolOutputValue = typeof ToolOutput.Type;
 const contentText = (content: ContentValue): string =>
   Predicate.isString(content)
     ? content
-    : Arr.filterMap(content, (part) =>
-        isTextPart(part) ? Result.succeed(part.text) : Result.failVoid,
-      ).join("\n");
+    : Arr.join(
+        Arr.filterMap(content, (part) =>
+          isTextPart(part) ? Result.succeed(part.text) : Result.failVoid,
+        ),
+        "\n",
+      );
 
 const outputText = (output: ToolOutputValue): string =>
   isContent(output) ? contentText(output) : contentText(output.content);
 
 const previewText = (text: string): Option.Option<string> => {
-  const trimmed = text.trim();
+  const trimmed = Str.trim(text);
   if (!trimmed) return Option.none();
-  const lines = trimmed.split("\n");
-  const preview = lines.slice(0, TOOL_PREVIEW_LINES).join("\n");
+  const lines = Str.split(trimmed, "\n");
+  const preview = Arr.join(lines.slice(0, TOOL_PREVIEW_LINES), "\n");
   const clipped = preview.length > TOOL_PREVIEW_CHARS || lines.length > TOOL_PREVIEW_LINES;
-  return Option.some(clipped ? `${preview.slice(0, TOOL_PREVIEW_CHARS)}…` : preview);
+  return Option.some(clipped ? `${Fn.pipe(preview, Str.slice(0, TOOL_PREVIEW_CHARS))}…` : preview);
 };
 
 /** The first lines of a tool's output for the fleet view, bounded before the run sanitizes it. */

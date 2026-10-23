@@ -20,6 +20,7 @@ import {
   view,
   type CaptureOptions,
 } from "./fixtures/tool-harness.ts";
+import * as Arr from "effect/Array";
 
 const decodeStartDetails = Schema.decodeUnknownSync(SubagentStartDetailsSchema);
 
@@ -27,14 +28,15 @@ const startWith = (requests: StartSubagentRequest[], options: CaptureOptions = {
   captureSubagentTools(startCapturingService(requests), options).get("agent_start");
 
 const startIssueStyleProblems = (args: SubagentStartInput, details: SubagentStartDetails) =>
-  (
+  Arr.flatMap(
     createSubagentCompactSummary("agent_start")({
       phase: "settled",
       args,
       result: { content: [{ type: "text", text: "" }], details },
       context: renderContextFixture({ isError: true }),
-    })?.issues ?? []
-  ).flatMap((issue) => issueMessageStyleProblems(issue.message));
+    })?.issues ?? [],
+    (issue) => issueMessageStyleProblems(issue.message),
+  );
 
 const countingRegistry = () => {
   const preflight = vi.fn(testBackendRegistry.preflight);
@@ -119,7 +121,7 @@ describe("per-launch model override", () => {
       const result = yield* invokeOptionalTool(startWith(requests, { registry }), args);
 
       expect(requests).toEqual([]);
-      expect(preflight.mock.calls.map(([selection]) => selection.runtime)).toEqual(["claude"]);
+      expect(Arr.map(preflight.mock.calls, ([selection]) => selection.runtime)).toEqual(["claude"]);
       expect(result?.details).toMatchObject({
         startFailures: [
           { index: 0, code: "model_override_unavailable" },
@@ -142,14 +144,14 @@ describe("per-launch model override", () => {
     const requests: StartSubagentRequest[] = [];
     const { preflight, registry } = countingRegistry();
     const args: SubagentStartInput = {
-      agents: invalid.map((agent) => ({ task: "Review", ...agent })),
+      agents: Arr.map(invalid, (agent) => ({ task: "Review", ...agent })),
     };
     const result = yield* invokeOptionalTool(startWith(requests, { registry }), args);
 
     expect(requests).toEqual([]);
     expect(preflight).not.toHaveBeenCalled();
     expect(result?.details).toMatchObject({
-      startFailures: invalid.map((_, index) => ({ index, code: "model_override_invalid" })),
+      startFailures: Arr.map(invalid, (_, index) => ({ index, code: "model_override_invalid" })),
     });
     expect(startIssueStyleProblems(args, decodeStartDetails(result?.details))).toEqual([]);
   });

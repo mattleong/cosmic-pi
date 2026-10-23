@@ -1,4 +1,7 @@
 import * as Effect from "effect/Effect";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
 import {
   hasControlCharacter,
   runBoundedProcessNode,
@@ -42,21 +45,22 @@ const locateGit = Effect.fn("GitInstallation.locateGit")(function* (
 ) {
   const searched = [
     PREFERRED_GIT,
-    ...(environment.PATH ?? "")
-      .split(path.delimiter)
-      .filter(usablePath)
-      .map((directory) => path.join(directory, "git")),
+    ...Arr.map(
+      Arr.filter(Str.split(environment.PATH ?? "", path.delimiter), usablePath),
+      (directory) => path.join(directory, "git"),
+    ),
   ];
   for (const candidate of new Set(searched)) if (yield* executableFile(candidate)) return candidate;
   return yield* unavailable(
     "Git isn't installed, so isolated writer workspaces are unavailable.",
-    `Searched ${PREFERRED_GIT} and every absolute directory on PATH. Install Git ${MINIMUM_GIT_VERSION.join(".")} or later, or use the shared-checkout writer workspace.`,
+    `Searched ${PREFERRED_GIT} and every absolute directory on PATH. Install Git ${Arr.join(Arr.map(MINIMUM_GIT_VERSION, String), ".")} or later, or use the shared-checkout writer workspace.`,
   );
 });
 
 const userEnvironment = (environment: NodeJS.ProcessEnv) =>
-  Object.fromEntries(
-    Object.entries(environment).filter(
+  Rec.fromEntries(
+    Arr.filter(
+      Rec.toEntries(environment),
       ([key, value]) => value !== undefined && !isGitLocalEnvironmentKey(key),
     ),
   );
@@ -77,7 +81,7 @@ const runGit = (executable: string, args: ReadonlyArray<string>, environment: No
 const VERSION = /^git version (\d+)\.(\d+)(?:\.(\d+))?/u;
 
 export const gitVersionSupported = (version: string): boolean => {
-  const [major = 0, minor = 0] = version.split(".").map(Number);
+  const [major, minor = 0] = Arr.map(Str.split(version, "."), Number);
   const [requiredMajor, requiredMinor] = MINIMUM_GIT_VERSION;
   return major > requiredMajor || (major === requiredMajor && minor >= requiredMinor);
 };
@@ -96,7 +100,7 @@ const resolveGitInstallation = Effect.fn("GitInstallation.resolveGitInstallation
       "Git didn't report its version, so isolated writer workspaces are unavailable.",
       `Executable: ${executable}`,
     );
-  return { executable, version: match.slice(1).filter(Boolean).join(".") };
+  return { executable, version: Arr.join(Arr.filter(match.slice(1), Boolean), ".") };
 });
 
 let resolved: GitInstallation | undefined;
@@ -120,7 +124,7 @@ export const supportedGitInstallation = gitInstallation.pipe(
     (installation) =>
       unavailable(
         `Git ${installation.version} is too old for isolated writer workspaces.`,
-        `Executable: ${installation.executable}\nIsolated writers need Git ${MINIMUM_GIT_VERSION.join(".")} or later. Upgrade Git, or use the shared-checkout writer workspace.`,
+        `Executable: ${installation.executable}\nIsolated writers need Git ${Arr.join(Arr.map(MINIMUM_GIT_VERSION, String), ".")} or later. Upgrade Git, or use the shared-checkout writer workspace.`,
       ),
   ),
 );

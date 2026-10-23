@@ -13,6 +13,8 @@ import {
   backendSupervisor,
   supervisorMetadata,
 } from "./fixtures/backend-supervisor.ts";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
 
 const drivers = { claude: localClaudeBackendDriver, codex: localCodexBackendDriver } as const;
 
@@ -54,10 +56,10 @@ describe("local CLI startup failure", () => {
           stderr:
             "\u001b[31merror: unknown option '--forward-subagent-text'\u001b[0m token=secret-credential\n",
         });
-        const [summary, ...detail] = failure.message.split("\n");
+        const [summary, ...detail] = Str.split(failure.message, "\n");
         expect(summary).toContain("code 2");
         expect(summary).not.toContain("unknown option");
-        expect(detail.join("\n")).toContain("unknown option '--forward-subagent-text'");
+        expect(Arr.join(detail, "\n")).toContain("unknown option '--forward-subagent-text'");
         expect(failure.message).toContain("[REDACTED]");
         expect(failure.message).not.toContain("secret-credential");
         expect(failure.message).not.toContain("\u001b");

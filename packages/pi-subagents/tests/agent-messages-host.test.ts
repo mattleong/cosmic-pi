@@ -15,6 +15,7 @@ import { registerParentWake } from "../src/boundary/host-parent-wake.ts";
 import { MAIN_AGENT_ID, type AgentCaller } from "../src/run/agent-messaging.ts";
 import { projectionOf } from "./fixtures/run-view.ts";
 import { localServiceFixture, request, withService } from "./run/fixtures/service-harness.ts";
+import * as Arr from "effect/Array";
 
 const assistantEntry = (id: string, text: string): SessionEntry => ({
   type: "message",
@@ -59,7 +60,7 @@ const rootSession = () => {
   let current = true;
   const main = agentMainCapabilities(host.pi, { wake, session: () => (current ? ctx : undefined) });
   const messages = () =>
-    sendMessage.mock.calls.filter(([message]) => message.customType === AGENT_MESSAGE_TYPE);
+    Arr.filter(sendMessage.mock.calls, ([message]) => message.customType === AGENT_MESSAGE_TYPE);
   return {
     host,
     ctx,
@@ -200,7 +201,9 @@ describe("agent messages to the main agent", () => {
         { mainStates: ["busy", "busy"], continued: true },
         { mainStates: ["busy", "busy"], continued: true },
       ]);
-      expect(root.messages().every(([, options]) => options?.triggerTurn === false)).toBe(true);
+      expect(Arr.every(root.messages(), ([, options]) => options?.triggerTurn === false)).toBe(
+        true,
+      );
     });
   });
 

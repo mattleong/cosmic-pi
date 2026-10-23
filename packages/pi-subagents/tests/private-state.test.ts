@@ -8,6 +8,10 @@ import {
 } from "../src/boundary/private-state.ts";
 import { nodeFsPromises as fs, nodePath as path, nodeSpawn } from "./support/node-builtins.ts";
 import { temporaryDirectory } from "./workspace/fixtures/repository.ts";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
 
 const temporaryAgent = temporaryDirectory("private-state-");
 const SESSION = "019fd976-b551-752b-b00e-8c8098258305";
@@ -34,7 +38,7 @@ const entry = (
       .mkdir(directory, { recursive: true, mode: 0o700 })
       .then(() =>
         Promise.all(
-          Object.entries(files).map(([name, text]) =>
+          Arr.map(Rec.toEntries(files), ([name, text]) =>
             fs
               .mkdir(path.dirname(path.join(directory, name)), { recursive: true })
               .then(() => fs.writeFile(path.join(directory, name), text)),
@@ -164,8 +168,8 @@ describe("private state sweep", () => {
       for (const directory of kept) expect(yield* exists(directory)).toBe(true);
       expect(yield* exists(path.join(elsewhere, "file.txt"))).toBe(true);
       expect(
-        (yield* io(() => fs.readdir(parent))).filter((name) =>
-          name.startsWith(".swept-pi-claude-"),
+        Arr.filter(yield* io(() => fs.readdir(parent)), (name) =>
+          Fn.pipe(name, Str.startsWith(".swept-pi-claude-")),
         ),
       ).toEqual([]);
     }).pipe(Effect.scoped),
@@ -222,7 +226,7 @@ describe("private state sweep", () => {
       const root = path.join(agent, "subagents");
       const kept = [
         path.join(root, "reports", SESSION),
-        path.join(root, "writer-leases-v3", "a".repeat(64)),
+        path.join(root, "writer-leases-v3", Fn.pipe("a", Str.repeat(64))),
         path.join(root, "local-claude-debug-v1", "claude-0123-4567"),
         path.join(root, "workflow-runs", "wf-1"),
         path.join(root, SESSION, "notes"),

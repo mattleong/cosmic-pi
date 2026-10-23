@@ -28,6 +28,7 @@ import {
   temporaryDirectory,
   writeFile,
 } from "./fixtures/repository.ts";
+import * as Arr from "effect/Array";
 
 const encodeRecord = Schema.encodeEffect(Schema.fromJsonString(WorkspaceRecordSchema));
 
@@ -210,7 +211,7 @@ it.live(
 
       const { control, successor } = yield* laterSession(agent, source);
       const swept = yield* control.sweepOrphanedWorkspaces;
-      expect(swept.map((entry) => entry.workspaceId)).toEqual([old.workspaceId]);
+      expect(Arr.map(swept, (entry) => entry.workspaceId)).toEqual([old.workspaceId]);
       const oldSwept = swept[0];
       expect(oldSwept?.changedPathCount).toBe(1);
       expect(yield* readText(oldSwept?.patchPath ?? "")).toContain("+month-old work");
@@ -240,7 +241,7 @@ it.live(
 
       const { control, successor } = yield* laterSession(agent, source);
       const swept = yield* control.sweepOrphanedWorkspaces;
-      expect(swept.map((entry) => entry.workspaceId)).toEqual([own.workspaceId]);
+      expect(Arr.map(swept, (entry) => entry.workspaceId)).toEqual([own.workspaceId]);
       expect(yield* exists(foreign.cwd)).toBe(true);
       expect((yield* savedRecord(agent, foreign.workspaceId)).status).toBe("active");
       yield* successor.close;

@@ -1,4 +1,7 @@
+import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
 import { resolveNamedProfileSet } from "../config/options.ts";
 import type { SubagentConfigInspection, SubagentConfigScope } from "../config/store.ts";
 import { builtinProfileCandidate } from "../profiles/definitions.ts";
@@ -70,13 +73,13 @@ export const runtimeEfforts = (
 ): ReadonlyArray<SubagentEffort> => {
   const supportedByRuntime = subagentRuntimeEfforts(runtime);
   return supportedModelEfforts
-    ? supportedModelEfforts.filter((effort) => supportedByRuntime.includes(effort))
+    ? Arr.filter(supportedModelEfforts, (effort) => supportedByRuntime.includes(effort))
     : supportedByRuntime;
 };
 
 const profileSetAt = (inspection: ProfileSettingsInspection, set: PersistentProfileSetRef) => {
   const profileSets = inspection[set.scope]?.file.profileSets;
-  return profileSets && Object.hasOwn(profileSets, set.name) ? profileSets[set.name] : undefined;
+  return profileSets && Rec.has(profileSets, set.name) ? profileSets[set.name] : undefined;
 };
 
 const declaredAt = (
@@ -115,7 +118,9 @@ export function loadProfileRouteDraft(
         : { kind: "explicit", candidates: cloneCandidates(declared.candidates) };
     const { baseline } = inspection.session;
     return {
-      kind: baseline.profileSources[profile].endsWith("-invalid") ? "invalid" : "inherit",
+      kind: Fn.pipe(baseline.profileSources[profile], Str.endsWith("-invalid"))
+        ? "invalid"
+        : "inherit",
       candidates: cloneCandidates(baseline.profiles[profile].candidates),
     };
   }
@@ -157,7 +162,7 @@ export const replaceRouteCandidate = (
   candidate: ProfileCandidate,
 ): ProfileRouteDraft =>
   explicitDraft(
-    draft.candidates.map((current, candidateIndex) =>
+    Arr.map(draft.candidates, (current, candidateIndex) =>
       candidateIndex === index ? candidate : current,
     ),
   );
@@ -166,7 +171,7 @@ export const removeRouteCandidate = (
   draft: ProfileRouteDraft,
   index: number,
 ): ProfileRouteDraft => {
-  const candidates = draft.candidates.filter((_, candidateIndex) => candidateIndex !== index);
+  const candidates = Arr.filter(draft.candidates, (_, candidateIndex) => candidateIndex !== index);
   return candidates.length === 0 ? disableRouteDraft() : explicitDraft(candidates);
 };
 

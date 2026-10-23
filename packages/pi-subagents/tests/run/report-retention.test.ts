@@ -1,7 +1,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it } from "@effect/vitest";
+import { assert, describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import * as TestClock from "effect/testing/TestClock";
@@ -37,9 +38,14 @@ import {
   runView,
   withService,
 } from "./fixtures/service-harness.ts";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
 
 const findings = (lines: number) =>
-  Array.from({ length: lines }, (_, line) => `finding ${line}`).join("\n");
+  Arr.join(
+    Array.from({ length: lines }, (_, line) => `finding ${line}`),
+    "\n",
+  );
 
 const readFile = (file: string) => Effect.promise(() => fs.readFile(file, "utf8"));
 
@@ -80,7 +86,16 @@ describe("report retention", () => {
 
         const completed = yield* runView(service, run.id);
         expect(completed.finalText?.length).toBeLessThanOrEqual(MAX_FINAL_TEXT_CHARS);
-        expect(report.startsWith(completed.finalText?.slice(0, 1_000) ?? "missing")).toBe(true);
+        expect(
+          Fn.pipe(
+            report,
+            Str.startsWith(
+              completed.finalText === undefined
+                ? "missing"
+                : Fn.pipe(completed.finalText, Str.slice(0, 1_000)),
+            ),
+          ),
+        ).toBe(true);
         expect(completed.finalTextTruncation).toMatchObject({
           originalChars: report.length,
           originalLines: 12_000,
@@ -132,8 +147,8 @@ describe("report retention", () => {
         const readText = Arr.filterMap(read.content, (part) =>
           part.type === "text" ? Result.succeed(part.text) : Result.failVoid,
         );
-        expect(readText.join("\n")).toContain(reportFile?.path);
-        expect(readText.join("\n")).toContain("finding 0\n");
+        expect(Arr.join(readText, "\n")).toContain(reportFile?.path);
+        expect(Arr.join(readText, "\n")).toContain("finding 0\n");
 
         const observations = yield* awaitObservations(service, [run.id]);
         const text = awaitResultText("", observations, []);
@@ -178,9 +193,10 @@ describe("report retention", () => {
         ).pipe(Effect.provideService(SubagentService, service));
         const [readout] =
           decodeSubagentContract("agent_read")(read.structuredContent)?.agents ?? [];
-        expect(readout?.text?.startsWith(unsavedReportNote(completed.finalTextTruncation))).toBe(
-          true,
-        );
+        assert(readout?.text !== undefined);
+        expect(
+          Fn.pipe(readout.text, Str.startsWith(unsavedReportNote(completed.finalTextTruncation))),
+        ).toBe(true);
         expect(readout?.text).toContain("finding 0\nfinding 1\n");
         const observations = yield* awaitObservations(service, [run.id]);
         const [target] = awaitContract({
@@ -228,12 +244,17 @@ describe("report retention", () => {
         const parent = yield* service.start(request({ name: "parent" }));
         const child = yield* service.startSessionOwnedFrom(parent.id, request({ name: "child" }));
         fake.controls[1]!.settle(report);
-        yield* untilSettled(
-          () => projections.at(-1)?.runs.find((run) => run.id === child.id)?.state === "completed",
+        yield* untilSettled(() =>
+          Arr.last(projections).pipe(
+            Option.flatMap((projection) =>
+              Arr.findFirst(projection.runs, (run) => run.id === child.id),
+            ),
+            Option.exists((run) => run.state === "completed"),
+          ),
         );
         yield* TestClock.adjust("100 millis");
         const notices = () =>
-          (fake.controls[0]?.ipc ?? []).flatMap((message) =>
+          Arr.flatMap(fake.controls[0]?.ipc ?? [], (message) =>
             message.type === "proxy_notification" ? [message.message] : [],
           );
         yield* yieldUntil(() => notices().length > 0);
@@ -267,7 +288,7 @@ describe("report retention", () => {
               message: {
                 role: "assistant",
                 stopReason: "error",
-                errorMessage: `Provider unavailable.${long ? ` ${"detail ".repeat(100)}` : ""}`,
+                errorMessage: `Provider unavailable.${long ? ` ${Fn.pipe("detail ", Str.repeat(100))}` : ""}`,
                 content: [{ type: "text", text: "Partial work." }],
               },
             });
@@ -290,7 +311,7 @@ describe("report retention", () => {
             expect(failed.errorArchive?.path).toContain("failure");
             expect(yield* readFile(failed.errorArchive?.path ?? "missing")).toBe(failed.error);
             expect(notice).toContain(failed.errorArchive?.path ?? "missing");
-            expect(notice).not.toContain("detail ".repeat(100));
+            expect(notice).not.toContain(Fn.pipe("detail ", Str.repeat(100)));
           });
         }).pipe(Effect.scoped),
     );
@@ -332,7 +353,9 @@ describe("report retention", () => {
         expect(completed.finalTextTruncation?.originalChars).toBe(report.length);
         expect(completed.reportArchive?.complete).toBe(false);
         const saved = yield* readFile(completed.reportArchive?.path ?? "missing");
-        expect(saved.startsWith(report.slice(0, MAX_ARCHIVED_REPORT_CHARS))).toBe(true);
+        expect(
+          Fn.pipe(saved, Str.startsWith(Fn.pipe(report, Str.slice(0, MAX_ARCHIVED_REPORT_CHARS)))),
+        ).toBe(true);
         expect(saved).not.toContain("finding 109999");
         expect(saved.length).toBeLessThan(MAX_ARCHIVED_REPORT_CHARS + 1_000);
 

@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import type { SubagentRunView } from "../run/model.ts";
 import { formatRunBlocks, runViewBlock } from "./run-block.ts";
 import type { SubagentLifecycleInput } from "./schema.ts";
@@ -16,5 +17,5 @@ export const managementAcknowledgement = (
     ? ""
     : formatRunBlocks(
         [ACKNOWLEDGEMENT_HEADINGS[action]],
-        runs.map((run) => runViewBlock(run, undefined)),
+        Arr.map(runs, (run) => runViewBlock(run, undefined)),
       );

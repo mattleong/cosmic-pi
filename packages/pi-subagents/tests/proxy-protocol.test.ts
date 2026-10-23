@@ -1,3 +1,4 @@
+import * as Fn from "effect/Function";
 import * as Result from "effect/Result";
 import { describe, expect, it } from "vitest";
 import { InvalidSubagentRequestError } from "../src/run/errors.ts";
@@ -15,6 +16,7 @@ import { modelsContract } from "../src/tools/discovery-contract.ts";
 import { profileCandidate } from "./fixtures/profiles.ts";
 import { view } from "./fixtures/run-view.ts";
 import { rejection } from "./support/result.ts";
+import * as Str from "effect/String";
 
 const request = (count: number) => ({
   tool: "agent_start",
@@ -165,7 +167,7 @@ describe("nested Pi proxy protocol", () => {
     {
       label: "accepts the text bound",
       source: JSON.stringify({
-        content: [{ type: "text", text: "x".repeat(MAX_TOOL_OUTPUT_CHARS) }],
+        content: [{ type: "text", text: Fn.pipe("x", Str.repeat(MAX_TOOL_OUTPUT_CHARS)) }],
       }),
       accepted: true,
       expectedDetails: {},
@@ -173,7 +175,7 @@ describe("nested Pi proxy protocol", () => {
     {
       label: "rejects text beyond the bound",
       source: JSON.stringify({
-        content: [{ type: "text", text: "x".repeat(MAX_TOOL_OUTPUT_CHARS + 1) }],
+        content: [{ type: "text", text: Fn.pipe("x", Str.repeat(MAX_TOOL_OUTPUT_CHARS + 1)) }],
       }),
       accepted: false,
     },

@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import { agentMessageDeliveryText } from "pi-cosmic-core";
 import type {
@@ -25,57 +26,69 @@ const sendOutcome = (result: SupervisorAgentSendResult): string => {
 };
 
 const missing = (ids: ReadonlyArray<string>): ReadonlyArray<string> =>
-  ids.length === 0 ? [] : [`Not found: ${ids.join(", ")}.`];
+  ids.length === 0 ? [] : [`Not found: ${Arr.join(ids, ", ")}.`];
 
 /** One line per agent: ID, name, state, role, model, worktree, attention, and parent. */
 export const agentListText = (result: SupervisorAgentListResult): string =>
-  [
-    `${result.agents.length} ${result.agents.length === 1 ? "agent" : "agents"}:`,
-    ...result.agents.map((entry) => {
-      const role = entry.kind === "main" ? "main agent" : (entry.agent ?? entry.profile);
-      const details = [
-        entry.state,
-        ...(role === undefined ? [] : [role]),
-        ...(entry.model !== undefined
-          ? [entry.model]
-          : entry.runtime === undefined
-            ? []
-            : [`runtime ${entry.runtime}`]),
-        ...(entry.worktree === undefined ? [] : [entry.worktree]),
-        ...(entry.attention === undefined ? [] : [entry.attention]),
-        ...(entry.parentId === undefined ? [] : [`child of ${entry.parentId}`]),
-        ...(entry.self ? ["you"] : []),
-      ];
-      return `- ${entry.id} ${JSON.stringify(entry.name)}: ${details.join("; ")}`;
-    }),
-    ...missing(result.missingIds),
-  ].join("\n");
+  Arr.join(
+    [
+      `${result.agents.length} ${result.agents.length === 1 ? "agent" : "agents"}:`,
+      ...Arr.map(result.agents, (entry) => {
+        const role = entry.kind === "main" ? "main agent" : (entry.agent ?? entry.profile);
+        const details = [
+          entry.state,
+          ...(role === undefined ? [] : [role]),
+          ...(entry.model !== undefined
+            ? [entry.model]
+            : entry.runtime === undefined
+              ? []
+              : [`runtime ${entry.runtime}`]),
+          ...(entry.worktree === undefined ? [] : [entry.worktree]),
+          ...(entry.attention === undefined ? [] : [entry.attention]),
+          ...(entry.parentId === undefined ? [] : [`child of ${entry.parentId}`]),
+          ...(entry.self ? ["you"] : []),
+        ];
+        return `- ${entry.id} ${JSON.stringify(entry.name)}: ${Arr.join(details, "; ")}`;
+      }),
+      ...missing(result.missingIds),
+    ],
+    "\n",
+  );
 
 export const agentReadText = (result: SupervisorAgentReadResult): string =>
-  [
-    ...result.agents.map((entry) => {
-      const notes = [
-        entry.state,
-        ...(entry.source === undefined || entry.source === "assistant"
-          ? []
-          : [`from its ${entry.source}`]),
-        ...(entry.truncated ? ["truncated"] : []),
-      ];
-      return [
-        `## ${entry.id} ${JSON.stringify(entry.name)} (${notes.join("; ")})`,
-        ...(entry.card === undefined ? [] : [entry.card]),
-        entry.text ?? "No message yet.",
-      ].join("\n");
-    }),
-    ...missing(result.missingIds),
-  ].join("\n\n");
+  Arr.join(
+    [
+      ...Arr.map(result.agents, (entry) => {
+        const notes = [
+          entry.state,
+          ...(entry.source === undefined || entry.source === "assistant"
+            ? []
+            : [`from its ${entry.source}`]),
+          ...(entry.truncated ? ["truncated"] : []),
+        ];
+        return Arr.join(
+          [
+            `## ${entry.id} ${JSON.stringify(entry.name)} (${Arr.join(notes, "; ")})`,
+            ...(entry.card === undefined ? [] : [entry.card]),
+            entry.text ?? "No message yet.",
+          ],
+          "\n",
+        );
+      }),
+      ...missing(result.missingIds),
+    ],
+    "\n\n",
+  );
 
 export const agentSendText = (result: SupervisorAgentSendResult): string =>
-  [
-    `Message ${result.messageId} to ${result.to} ${JSON.stringify(result.name)}: ${result.disposition}${
-      result.mainState === undefined
-        ? `, ${sendOutcome(result)}.`
-        : `. ${agentMessageDeliveryText(result.mainState, "The main agent")}`
-    }`,
-    "Do not resend it; any reply arrives as a new message.",
-  ].join("\n");
+  Arr.join(
+    [
+      `Message ${result.messageId} to ${result.to} ${JSON.stringify(result.name)}: ${result.disposition}${
+        result.mainState === undefined
+          ? `, ${sendOutcome(result)}.`
+          : `. ${agentMessageDeliveryText(result.mainState, "The main agent")}`
+      }`,
+      "Do not resend it; any reply arrives as a new message.",
+    ],
+    "\n",
+  );

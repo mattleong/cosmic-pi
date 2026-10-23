@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { invokeHostCallback, notifyListeners, synchronousNow } from "pi-cosmic-core";
@@ -56,12 +57,12 @@ export const subagentActivityPresentation = (): SubagentActivityPresentationCont
   const publish = () => {
     snapshot = Object.freeze({
       starts: Object.freeze(
-        [...leases.values()].flatMap((lease) =>
+        Arr.flatMap([...leases.values()], (lease) =>
           lease.action === "start" ? [Object.freeze({ requestedCount: lease.requestedCount })] : [],
         ),
       ),
       awaits: Object.freeze(
-        [...leases.values()].flatMap((lease) =>
+        Arr.flatMap([...leases.values()], (lease) =>
           lease.action === "await"
             ? [Object.freeze({ runIds: Object.freeze([...lease.runIds]), until: lease.until })]
             : [],

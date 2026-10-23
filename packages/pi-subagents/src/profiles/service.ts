@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
@@ -166,7 +167,7 @@ export const subagentProfileServiceLayer = (options: SubagentProfileLayerOptions
         (yield* store.load(options.cwd, options.agentDirectory, options.projectTrusted));
       if (config.diagnostics.length > 0)
         yield* Effect.logWarning(
-          `Invalid Subagents configuration fields were ignored, clamped, or failed closed: ${config.diagnostics.join(", ")}.`,
+          `Invalid Subagents configuration fields were ignored, clamped, or failed closed: ${Arr.join(config.diagnostics, ", ")}.`,
         );
       return yield* subagentProfileService(config, options);
     }),

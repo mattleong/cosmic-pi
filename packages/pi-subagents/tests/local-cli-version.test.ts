@@ -5,6 +5,8 @@ import type { LocalCliProcessContract } from "../src/boundary/local-cli-process.
 import { localCliProcess } from "./support/local-cli-process.ts";
 import { step } from "./support/effect-test.ts";
 import { nodeFsPromises as fs, nodePath } from "./support/node-builtins.ts";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 
 // A signed-in Claude Code or Codex stand-in that logs each invocation beside its version text.
 const CLI_SCRIPT = `#!/bin/sh
@@ -41,7 +43,7 @@ const versionedCli = (versionOutput: string) =>
 
 const versionProbes = (home: string) =>
   step(() => fs.readFile(nodePath.join(home, "cli-fixture.log"), "utf8")).pipe(
-    Effect.map((log) => log.split("\n").filter((line) => line === "--version").length),
+    Effect.map((log) => Arr.filter(Str.split(log, "\n"), (line) => line === "--version").length),
   );
 
 const preflight = (processes: LocalCliProcessContract, runtime: "claude" | "codex") =>

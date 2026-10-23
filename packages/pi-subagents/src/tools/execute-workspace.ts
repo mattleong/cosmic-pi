@@ -1,7 +1,9 @@
+import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import { clipText, countLabel, sanitizeTerminalLine } from "pi-cosmic-core";
 import { Check } from "typebox/value";
 import { invalidRequest } from "../run/errors.ts";
@@ -38,13 +40,17 @@ const result = (
 const MAX_LISTED_PATHS = 8;
 
 const fileName = (name: string) =>
-  clipText(sanitizeTerminalLine(name.replace(/\/+$/u, "").split("/").pop() ?? ""), 40) || "A file";
+  clipText(
+    sanitizeTerminalLine(Fn.pipe(name, Str.replace(/\/+$/u, ""), Str.split("/")).pop() ?? ""),
+    40,
+  ) || "A file";
 
 const listedPaths = (paths: ReadonlyArray<string>) => {
-  const listed = paths
-    .slice(0, MAX_LISTED_PATHS)
-    .map((name) => JSON.stringify(clipText(name, 256)))
-    .join(", ");
+  const listed = Fn.pipe(
+    paths.slice(0, MAX_LISTED_PATHS),
+    Arr.map((name) => JSON.stringify(clipText(name, 256))),
+    Arr.join(", "),
+  );
   const more =
     paths.length > MAX_LISTED_PATHS ? ` and ${paths.length - MAX_LISTED_PATHS} more` : "";
   return `${listed}${more}`;
@@ -123,21 +129,27 @@ const executeWorkspaceList = Effect.fn("SubagentTools.workspaceList")(function* 
   callerRunId: string,
 ) {
   const listing = yield* service.workspaceList(callerRunId);
-  const entries = [
-    ...listing.records.map((record) => ({
-      workspaceId: record.handle.workspaceId,
-      ownerId: record.handle.ownerId,
-      status: record.status,
-      cwd: record.handle.cwd,
-      sourceCwd: record.handle.sourceCwd,
-      ...(record.revision && { revisionId: record.revision.revisionId }),
-      ...(record.preparation && { preparationId: record.preparation.preparationId }),
-      ...(listing.orphans?.has(record.handle.workspaceId) && {
-        orphan: listing.orphans.get(record.handle.workspaceId),
-      }),
-    })),
-    ...listing.unavailable,
-  ].toSorted((a, b) => a.workspaceId.localeCompare(b.workspaceId));
+  const entries = Fn.pipe(
+    [
+      ...Arr.map(listing.records, (record) => ({
+        workspaceId: record.handle.workspaceId,
+        ownerId: record.handle.ownerId,
+        status: record.status,
+        cwd: record.handle.cwd,
+        sourceCwd: record.handle.sourceCwd,
+        ...(record.revision && { revisionId: record.revision.revisionId }),
+        ...(record.preparation && { preparationId: record.preparation.preparationId }),
+        ...(listing.orphans?.has(record.handle.workspaceId) && {
+          orphan: listing.orphans.get(record.handle.workspaceId),
+        }),
+      })),
+      ...listing.unavailable,
+    ],
+    Arr.sortWith(
+      (entry) => entry.workspaceId,
+      (left: string, right: string) => Fn.pipe(left, Str.localeCompare(right)),
+    ),
+  );
   const lines: string[] = [];
   let chars = 0;
   for (const entry of entries) {
@@ -159,29 +171,33 @@ const executeWorkspaceList = Effect.fn("SubagentTools.workspaceList")(function* 
     lines.push(line);
   }
   const omitted = entries.length - lines.length;
-  const adoptableCount = [...(listing.orphans?.values() ?? [])].filter(
+  const adoptableCount = Arr.filter(
+    [...(listing.orphans?.values() ?? [])],
     (disposition) => disposition === "adoptable",
   ).length;
   return result(
-    [
-      ...lines,
-      ...(listing.unavailable.length > 0
-        ? [
-            "Incomplete worktree metadata: some recovery records are missing, invalid, or unreadable. Their ownership, source identity, and cleanup are unknown; manual recovery is required.",
-          ]
-        : []),
-      omitted === 0
-        ? "End of worktree list."
-        : `${countLabel(omitted, "more worktree")} didn't fit the output and ${omitted === 1 ? "was" : "were"} left out.`,
-      ...(listing.orphans !== undefined && listing.orphans.size > 0 ? [ORPHAN_GUIDANCE] : []),
-    ].join("\n"),
+    Arr.join(
+      [
+        ...lines,
+        ...(listing.unavailable.length > 0
+          ? [
+              "Incomplete worktree metadata: some recovery records are missing, invalid, or unreadable. Their ownership, source identity, and cleanup are unknown; manual recovery is required.",
+            ]
+          : []),
+        omitted === 0
+          ? "End of worktree list."
+          : `${countLabel(omitted, "more worktree")} didn't fit the output and ${omitted === 1 ? "was" : "were"} left out.`,
+        ...(listing.orphans !== undefined && listing.orphans.size > 0 ? [ORPHAN_GUIDANCE] : []),
+      ],
+      "\n",
+    ),
     {
       operation: "list",
       workspaceCount: entries.length,
       ...(adoptableCount > 0 && { adoptableCount }),
       unavailableCount: listing.unavailable.length,
       listedCount: lines.length,
-      displayContent: { offset: 0, length: lines.join("\n").length },
+      displayContent: { offset: 0, length: Arr.join(lines, "\n").length },
     },
   );
 });
@@ -203,15 +219,18 @@ const executeWorkspaceReview = Effect.fn("SubagentTools.workspaceReview")(functi
     },
     callerRunId,
   );
-  const prefix = [
-    `Worktree ${workspaceId}; immutable revision ${review.revisionId}.`,
-    `Review characters ${review.offset}..${review.offset + review.text.length} of ${review.totalChars}: a summary of changed files and line counts, then the diff.`,
-    review.nextOffset !== undefined
-      ? `More pages: review workspaceId=${workspaceId} offset=${review.nextOffset}.`
-      : "End of review. Apply it, or prepare it and test in the returned cwd first.",
-    "BEGIN IMMUTABLE REVIEW PAGE",
-  ].join("\n");
-  return result([prefix, review.text, "END IMMUTABLE REVIEW PAGE"].join("\n"), {
+  const prefix = Arr.join(
+    [
+      `Worktree ${workspaceId}; immutable revision ${review.revisionId}.`,
+      `Review characters ${review.offset}..${review.offset + review.text.length} of ${review.totalChars}: a summary of changed files and line counts, then the diff.`,
+      review.nextOffset !== undefined
+        ? `More pages: review workspaceId=${workspaceId} offset=${review.nextOffset}.`
+        : "End of review. Apply it, or prepare it and test in the returned cwd first.",
+      "BEGIN IMMUTABLE REVIEW PAGE",
+    ],
+    "\n",
+  );
+  return result(Arr.join([prefix, review.text, "END IMMUTABLE REVIEW PAGE"], "\n"), {
     ...receipt,
     revisionId: review.revisionId,
     offset: review.offset,
@@ -236,12 +255,15 @@ const executeWorkspacePrepare = Effect.fn("SubagentTools.workspacePrepare")(func
   const cwdLine = `Combined test cwd: ${preparation.cwd}`;
   const warnings = leftOutWarnings(preparation.leftOutPaths);
   return result(
-    [
-      prefix,
-      cwdLine,
-      `Run relevant tests in this cwd, which combines the proposal with your current edits; don't edit it. Then apply workspaceId=${operation.workspaceId ?? ""}, which integrates this preparation.`,
-      ...warnings.map((warning) => `Warning: ${warning.detail}`),
-    ].join("\n"),
+    Arr.join(
+      [
+        prefix,
+        cwdLine,
+        `Run relevant tests in this cwd, which combines the proposal with your current edits; don't edit it. Then apply workspaceId=${operation.workspaceId ?? ""}, which integrates this preparation.`,
+        ...Arr.map(warnings, (warning) => `Warning: ${warning.detail}`),
+      ],
+      "\n",
+    ),
     {
       ...receipt,
       revisionId: preparation.revisionId,
@@ -285,13 +307,19 @@ const executeWorkspaceApply = Effect.fn("SubagentTools.workspaceApply")(function
     ...(applied.preparedCwd.length <= 1_024 && { preparedCwd: applied.preparedCwd }),
   };
   const warnings = [...integrationWarnings(applied), ...leftOutWarnings(applied.leftOutPaths)];
-  const heading = [
-    `Applied ${ids} as uncommitted parent edits. The parent index was preserved. Do not stage or commit unless the user asks.`,
-    APPLY_TESTING_LINES[applied.testing],
-  ].join("\n");
+  const heading = Arr.join(
+    [
+      `Applied ${ids} as uncommitted parent edits. The parent index was preserved. Do not stage or commit unless the user asks.`,
+      APPLY_TESTING_LINES[applied.testing],
+    ],
+    "\n",
+  );
   const body = changed;
   return result(
-    [heading, body, ...warnings.map((warning) => `Warning: ${warning.detail}`)].join("\n"),
+    Arr.join(
+      [heading, body, ...Arr.map(warnings, (warning) => `Warning: ${warning.detail}`)],
+      "\n",
+    ),
     {
       ...metadata,
       ...(warnings.length > 0 && { warnings }),
@@ -345,10 +373,13 @@ export const executeWorkspaceAction = Effect.fn("SubagentTools.workspace")(funct
                 : `Rebased: the writer's tree was rebuilt from your current files, and its changes were reapplied with ${countLabel(conflicts.length, "conflicted file")} the successor was told to resolve first: ${listedPaths(conflicts)}.`,
             ];
       return result(
-        [
-          `Revision requested; successor runId=${run.id}. Await it, then apply or review its new revision; earlier review and preparation no longer apply.`,
-          ...rebased,
-        ].join("\n"),
+        Arr.join(
+          [
+            `Revision requested; successor runId=${run.id}. Await it, then apply or review its new revision; earlier review and preparation no longer apply.`,
+            ...rebased,
+          ],
+          "\n",
+        ),
         {
           ...receipt,
           successorRunId: run.id,

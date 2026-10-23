@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Match from "effect/Match";
 import { decodeFullScreenPrintable } from "pi-cosmic-ui/manager/keymap";
 import type { ListDetailPane } from "pi-cosmic-ui/manager/list-detail";
@@ -73,13 +75,21 @@ export const fleetActionLabels = (selected: SubagentRunView) => {
   const mode = runMessageMode(selected);
   const labels = [
     ...(mode ? [{ full: MESSAGES[mode].shortcut, compact: MESSAGES[mode].shortcut }] : []),
-    ...FLEET_ACTION_LABELS.filter(({ can }) => can(selected)),
+    ...Arr.filter(FLEET_ACTION_LABELS, ({ can }) => can(selected)),
   ];
   return labels.length === 0
     ? {}
     : {
-        actions: labels.map((label) => label.full).join(" · "),
-        compactActions: labels.map((label) => label.compact).join(" · "),
+        actions: Fn.pipe(
+          labels,
+          Arr.map((label) => label.full),
+          Arr.join(" · "),
+        ),
+        compactActions: Fn.pipe(
+          labels,
+          Arr.map((label) => label.compact),
+          Arr.join(" · "),
+        ),
       };
 };
 

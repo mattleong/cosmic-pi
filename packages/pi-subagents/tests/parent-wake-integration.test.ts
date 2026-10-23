@@ -16,6 +16,7 @@ import {
 import { hostNotifier, type SubagentNotifier } from "../src/boundary/host-notifier.ts";
 import { registerParentWake } from "../src/boundary/host-parent-wake.ts";
 import { projectionOf } from "./fixtures/run-view.ts";
+import * as Arr from "effect/Array";
 
 const REPORT = "Report: the parser handles nested quotes.";
 
@@ -67,7 +68,8 @@ const parentSession = Effect.gen(function* () {
       ],
     });
   const reportsInTranscript = () =>
-    parent.messages.filter(
+    Arr.filter(
+      parent.messages,
       (message) => message.role === "custom" && message.customType === "pi-subagents-completed",
     ).length;
   return { session: parent, fake, deliverReport, reportsInTranscript };

@@ -1,4 +1,5 @@
 import { hasObjectRuntimeType, invokeHostCallback } from "pi-cosmic-core";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import {
@@ -130,7 +131,8 @@ export function notificationRouter(dependencies: RunNotificationRoutingDependenc
   ): Effect.Effect<SubagentNotificationDelivery | undefined> => {
     if (
       notification.type === "completed" &&
-      notification.runs.every(
+      Arr.every(
+        notification.runs,
         (run) =>
           (records.get(run.id)?.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID) === SUBAGENT_ROOT_RUN_ID,
       )
@@ -171,7 +173,7 @@ export function notificationRouter(dependencies: RunNotificationRoutingDependenc
       { concurrency: 4 },
     ).pipe(
       Effect.map((keys) => ({
-        deliveredCompletionKeys: keys.filter(Predicate.isNotUndefined),
+        deliveredCompletionKeys: Arr.filter(keys, Predicate.isNotUndefined),
       })),
     );
   };

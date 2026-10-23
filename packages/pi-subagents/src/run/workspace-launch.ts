@@ -1,5 +1,8 @@
+import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import {
   DEFAULT_MAX_ACTIVE_RUNS,
   DEFAULT_SUBAGENT_NESTING_POLICY,
@@ -108,9 +111,10 @@ const rebasedSuccessor = (
   request: StartSubagentRequest,
   { conflictedPaths }: WorkspaceRebase,
 ): StartSubagentRequest => {
-  const listed = conflictedPaths
-    .slice(0, MAX_PROMPT_CONFLICTS)
-    .map((name) => `- ${JSON.stringify(name.slice(0, 256))}`);
+  const listed = Arr.map(
+    conflictedPaths.slice(0, MAX_PROMPT_CONFLICTS),
+    (name) => `- ${JSON.stringify(Fn.pipe(name, Str.slice(0, 256)))}`,
+  );
   const more =
     conflictedPaths.length > MAX_PROMPT_CONFLICTS
       ? [
@@ -120,12 +124,15 @@ const rebasedSuccessor = (
   const note =
     conflictedPaths.length === 0
       ? "Your workspace was rebuilt from the parent's current files, and your previous changes reapplied cleanly with a three-way merge. Check that they still fit the parent's changes."
-      : [
-          `Your workspace was rebuilt from the parent's current files, and your previous changes were reapplied with a three-way merge. These ${conflictedPaths.length === 1 ? "file has" : `${conflictedPaths.length} files have`} conflicts; resolve them before anything else:`,
-          ...listed,
-          ...more,
-          "In each text file, replace every block from <<<<<<< through >>>>>>> with content that keeps both the parent's change (ours) and yours (theirs), and leave no markers. A conflicted binary file holds the parent's version; redo your change to it.",
-        ].join("\n");
+      : Arr.join(
+          [
+            `Your workspace was rebuilt from the parent's current files, and your previous changes were reapplied with a three-way merge. These ${conflictedPaths.length === 1 ? "file has" : `${conflictedPaths.length} files have`} conflicts; resolve them before anything else:`,
+            ...listed,
+            ...more,
+            "In each text file, replace every block from <<<<<<< through >>>>>>> with content that keeps both the parent's change (ours) and yours (theirs), and leave no markers. A conflicted binary file holds the parent's version; redo your change to it.",
+          ],
+          "\n",
+        );
   return { ...request, task: `${request.task}\n\nParent rebase:\n${note}` };
 };
 
@@ -182,7 +189,8 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
   const heldLaunchSlots = (caller?: string, request?: StartSubagentRequest): number => {
     const binding = request?.workspace && state.bindings.get(request.workspace.workspaceId);
     const own = binding ? bindingSlot(binding) : undefined;
-    return [...state.launchSlots].filter(
+    return Arr.filter(
+      [...state.launchSlots],
       (slot) => slot !== own && (caller === undefined || slot.caller === caller),
     ).length;
   };
@@ -365,7 +373,7 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
             "The revision that requested this rebase no longer holds its workspace.",
           );
         // A rebase removes and rewrites the worker's files, like discard removes them.
-        if ([...runsWithin(records, [binding.handle.artifactRoot]).keys()].some(runHoldsCwd))
+        if (Arr.some([...runsWithin(records, [binding.handle.artifactRoot]).keys()], runHoldsCwd))
           return yield* invalid(
             "workspace_process_unsettled",
             "A run still uses this workspace's tree. Stop it and confirm cleanup before a rebase rebuilds the tree.",
@@ -464,7 +472,7 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
       return Effect.uninterruptibleMask((restore) => {
         let held: Succession | undefined;
         return Effect.gen(function* () {
-          if (!message.trim())
+          if (!Str.trim(message))
             return yield* invalid("message_required", "A revision request is required.");
           const reserved = yield* restore(
             operations.withPermits(1)(

@@ -27,6 +27,7 @@ import type { SubagentProjection } from "../src/run/model.ts";
 import { beforeAgentStartEvent } from "./fixtures/pi-host.ts";
 import { projectionOf, view } from "./fixtures/run-view.ts";
 import { localServiceFixture, request, withService } from "./run/fixtures/service-harness.ts";
+import * as Arr from "effect/Array";
 
 const reviewer = view({
   id: "agent-1",
@@ -150,7 +151,8 @@ describe("active subagents section in a real Pi transcript", () => {
         const reply: Parameters<typeof fake.setResponses>[0][number] = (context) => {
           requests.push({
             prompt: getCurrentSystemPrompt(context.messages),
-            systemMessages: context.messages.filter((message) => message.role === "system").length,
+            systemMessages: Arr.filter(context.messages, (message) => message.role === "system")
+              .length,
           });
           return fauxAssistantMessage("Noted.");
         };

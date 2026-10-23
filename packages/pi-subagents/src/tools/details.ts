@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Order from "effect/Order";
 import type { ProfileId } from "../profiles/model.ts";
 import type { SubagentRunView } from "../run/model.ts";
 import { MAX_START_BATCH, MAX_TARGET_RUNS } from "../run/limits.ts";
@@ -96,18 +99,21 @@ const semanticCandidate = <Stage, Candidate, Details>(
 const startDetailsCandidate = (input: StartDetailsInput, stage: FitStage): SubagentStartDetails => {
   const condense = stage === "condensed";
   const failures = input.startFailures
-    ? [...input.startFailures]
-        .toSorted((left, right) => left.index - right.index)
-        .slice(0, MAX_START_BATCH)
-        .map((failure) => {
+    ? Arr.map(
+        Arr.sortWith([...input.startFailures], (failure) => failure.index, Order.Number).slice(
+          0,
+          MAX_START_BATCH,
+        ),
+        (failure) => {
           const projected = projectFailure(failure);
           return condense ? condenseFailure(projected) : projected;
-        })
+        },
+      )
     : undefined;
   return {
     version: SUBAGENT_CARD_DETAILS_VERSION,
     action: "start",
-    startEntries: input.startEntries.slice(0, MAX_START_BATCH).map((entry) => {
+    startEntries: Arr.map(input.startEntries.slice(0, MAX_START_BATCH), (entry) => {
       const projected = projectStartEntry(entry);
       return condense ? condenseStartEntry(projected) : projected;
     }),
@@ -126,13 +132,13 @@ export const startDetails = (input: StartDetailsInput): SubagentStartDetails =>
   );
 
 const reportsWereOmitted = (runs: ReadonlyArray<SubagentRunView>): boolean =>
-  runs.some((run) => run.finalText !== undefined || run.error !== undefined);
+  Arr.some(runs, (run) => run.finalText !== undefined || run.error !== undefined);
 
 const projectedCards = (
   runs: ReadonlyArray<SubagentRunView>,
   stage: FitStage,
 ): ReadonlyArray<SubagentRunCard> =>
-  runs.slice(0, MAX_TARGET_RUNS).map((run) => {
+  Arr.map(runs.slice(0, MAX_TARGET_RUNS), (run) => {
     const card = projectSubagentRunCard(run);
     if (stage === "reports") return card;
     return stage === "report-free" ? omitReports(card) : condenseRunCard(card);
@@ -140,19 +146,21 @@ const projectedCards = (
 
 const awaitCandidate = (input: AwaitDetailsInput, stage: FitStage): SubagentAwaitDetails => {
   const source = input.runs.slice(0, MAX_TARGET_RUNS);
-  const requestedAwaitedRunIds = (input.awaitedRunIds ?? source.map((run) => run.id)).slice(
+  const requestedAwaitedRunIds = (input.awaitedRunIds ?? Arr.map(source, (run) => run.id)).slice(
     0,
     MAX_TARGET_RUNS,
   );
-  const targetIds = new Set(source.map((run) => run.id));
-  const contextCandidates = projectRunCardTree(input.contextRuns ?? [])
-    .map((row) => row.run)
-    .filter((run) => !targetIds.has(run.id));
+  const targetIds = new Set(Arr.map(source, (run) => run.id));
+  const contextCandidates = Fn.pipe(
+    projectRunCardTree(input.contextRuns ?? []),
+    Arr.map((row) => row.run),
+    Arr.filter((run) => !targetIds.has(run.id)),
+  );
   const contextSource = contextCandidates.slice(0, Math.max(0, MAX_TARGET_RUNS - source.length));
   const targetCards = projectedCards(source, stage);
   const contextCards = projectedCards(contextSource, stage === "reports" ? "report-free" : stage);
   const awaitedRunIds =
-    targetCards.length > 0 ? targetCards.map((card) => card.id) : requestedAwaitedRunIds;
+    targetCards.length > 0 ? Arr.map(targetCards, (card) => card.id) : requestedAwaitedRunIds;
   const reportsOmitted = stage === "report-free" && reportsWereOmitted(source);
   return {
     version: SUBAGENT_CARD_DETAILS_VERSION,
@@ -172,7 +180,7 @@ const awaitCandidate = (input: AwaitDetailsInput, stage: FitStage): SubagentAwai
     ...(contextCandidates.length > contextSource.length && { contextOmitted: true as const }),
     ...((reportsOmitted || stage === "condensed") && { contentOmitted: true as const }),
     ...(reportsOmitted &&
-      ![...source, ...contextSource].some((run) => run.error !== undefined) && {
+      !Arr.some([...source, ...contextSource], (run) => run.error !== undefined) && {
         reportsOnlyOmitted: true as const,
       }),
   };
@@ -204,7 +212,7 @@ const runDetailsCandidate = (
     ...(failures !== undefined && failures.length > 0 && { actionFailures: failures }),
     ...((reportsOmitted || stage === "condensed") && { contentOmitted: true as const }),
     ...(reportsOmitted &&
-      !input.runs.some((run) => run.error !== undefined) &&
+      !Arr.some(input.runs, (run) => run.error !== undefined) &&
       !input.actionFailures?.length && { reportsOnlyOmitted: true as const }),
   };
 };
@@ -216,9 +224,9 @@ const modelDetailsCandidate = (input: ModelDetailsInput, stage: FitStage): Model
   const base: ModelDetails = {
     version: SUBAGENT_CARD_DETAILS_VERSION,
     action: "models",
-    profiles: stage === "condensed" ? profiles.map(condenseProfileRoute) : profiles,
+    profiles: stage === "condensed" ? Arr.map(profiles, condenseProfileRoute) : profiles,
     ...(agents.length > 0 && {
-      agents: stage === "condensed" ? agents.map(condenseAgentRoute) : agents,
+      agents: stage === "condensed" ? Arr.map(agents, condenseAgentRoute) : agents,
     }),
     ...(invalidAgents.length > 0 && { invalidAgents }),
     fallbackProfile: input.fallbackProfile,

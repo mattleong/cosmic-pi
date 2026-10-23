@@ -1,5 +1,8 @@
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as FiberMap from "effect/FiberMap";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import type * as Scope from "effect/Scope";
 import type { AskUserRequest } from "pi-ask-user/protocol";
 import type { BackendEvent, BackendProxyRequest, BackendProxyResult } from "../backend/model.ts";
@@ -54,8 +57,8 @@ export function proxyExecutionHandler(dependencies: RunProxyExecutionDependencie
           "Nested Pi coordinator access is unavailable for this run.",
         );
       const runKeyPrefix = `${record.view.id}:`;
-      const concurrent = [...executions].filter(([candidateKey]) =>
-        candidateKey.startsWith(runKeyPrefix),
+      const concurrent = Arr.filter([...executions], ([candidateKey]) =>
+        Fn.pipe(candidateKey, Str.startsWith(runKeyPrefix)),
       ).length;
       if (concurrent >= 16)
         return reject("proxy_capacity", "Nested Pi has too many concurrent coordinator calls.");

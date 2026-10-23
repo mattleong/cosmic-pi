@@ -22,6 +22,9 @@ import { isRecord } from "../src/config/profile-restore.ts";
 import { BUILTIN_PROFILE_ROUTES } from "../src/profiles/definitions.ts";
 import { declaredCandidate, profileCandidate } from "./fixtures/profiles.ts";
 import { objectContaining, stringContaining } from "./support/matchers.ts";
+import * as Arr from "effect/Array";
+import * as Order from "effect/Order";
+import * as Rec from "effect/Record";
 
 const CWD = "/repo";
 const AGENT = "/agent";
@@ -80,7 +83,7 @@ const conflicts = <A>(
   );
 
 const writes = (memory: InMemoryDocuments) =>
-  memory.operations.filter((operation) => /^(modify|write):/u.test(operation));
+  Arr.filter(memory.operations, (operation) => /^(modify|write):/u.test(operation));
 
 describe("SubagentConfigStore activation", () => {
   it.effect(
@@ -185,16 +188,19 @@ describe("SubagentConfigStore activation", () => {
         WorktreeRemove: [],
         invalidWorktreeCreate: ["project.hooks"],
       });
-      expect(config.diagnostics.toSorted()).toEqual(
-        [
-          "project.<unknown>",
-          "project.nesting.<unknown>",
-          "project.nesting.maxDepth",
-          "project.writerWorkspaceMode",
-          "project.delegation",
-          "project.sessionSpendLimit",
-          "project.hooks",
-        ].toSorted(),
+      expect(Arr.sort(config.diagnostics, Order.String)).toEqual(
+        Arr.sort(
+          [
+            "project.<unknown>",
+            "project.nesting.<unknown>",
+            "project.nesting.maxDepth",
+            "project.writerWorkspaceMode",
+            "project.delegation",
+            "project.sessionSpendLimit",
+            "project.hooks",
+          ],
+          Order.String,
+        ),
       );
       expect(writes(memory)).toEqual([]);
     }),
@@ -413,7 +419,7 @@ describe("SubagentConfigStore custom agents", () => {
       const initial = v6({ scout: declaredCandidate("parent", { effort: "default" }) }, { agents });
       const { memory, store } = yield* setup({ [GLOBAL]: initial });
       const loaded = yield* store.inspect(CWD, AGENT, true);
-      expect(loaded.config.agents.map((agent) => agent.name)).toEqual(["auth-reviewer"]);
+      expect(Arr.map(loaded.config.agents, (agent) => agent.name)).toEqual(["auth-reviewer"]);
 
       yield* store.patchProfile(CWD, AGENT, {
         ...at("global", initial),
@@ -435,8 +441,10 @@ describe("SubagentConfigStore custom agents", () => {
       const saved = memory.documents.get(GLOBAL)?.agents;
       expect(saved).toStrictEqual(agents);
       expect(
-        isRecord(saved) && isRecord(saved["auth-reviewer"]) && Object.keys(saved["auth-reviewer"]),
-      ).toEqual(Object.keys(agents["auth-reviewer"]));
+        isRecord(saved) &&
+          isRecord(saved["auth-reviewer"]) &&
+          Rec.keys<string, unknown>(saved["auth-reviewer"]),
+      ).toEqual(Rec.keys<string, unknown>(agents["auth-reviewer"]));
     }),
   );
 });
@@ -503,9 +511,9 @@ describe("SubagentConfigStore profile sets", () => {
 type KeyOrder = string | number | boolean | null | ReadonlyArray<KeyOrder>;
 const keyOrder = (value: JsonObject[string] | undefined): KeyOrder => {
   if (value === undefined) return null;
-  if (Array.isArray(value)) return value.map(keyOrder);
+  if (Arr.isArray(value)) return Arr.map(value, keyOrder);
   return isRecord(value)
-    ? Object.entries(value).map(([key, item]) => [key, keyOrder(item)])
+    ? Arr.map(Rec.toEntries(value), ([key, item]) => [key, keyOrder(item)])
     : value;
 };
 

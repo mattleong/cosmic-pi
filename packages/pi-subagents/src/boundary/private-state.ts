@@ -2,6 +2,9 @@ import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import {
   currentProcessIdentity,
   nodeFsPromises as fs,
@@ -96,7 +99,7 @@ const newestModification = (directory: string): Effect.Effect<Option.Option<numb
     fs.lstat(directory).then((stat) =>
       fs.readdir(directory).then((names) =>
         Promise.all(
-          names.map((name) =>
+          Arr.map(names, (name) =>
             fs.lstat(nodePath.join(directory, name)).then(
               (entry) => entry.mtimeMs,
               () => 0,
@@ -180,7 +183,7 @@ interface SweepPolicy {
 
 const PRIVATE_ROOT_POLICY: SweepPolicy = {
   isCandidate: () => true,
-  isTombstone: (name) => name.startsWith(TOMBSTONE_PREFIX),
+  isTombstone: (name) => Fn.pipe(name, Str.startsWith(TOMBSTONE_PREFIX)),
 };
 
 /** Sweeps one directory's entries; returns how many it removed. */
@@ -249,12 +252,16 @@ export const sweepAbandonedPrivateState = Effect.fn("PrivateState.sweepAbandoned
       if (yield* isRealDirectory(owned)) yield* sweepEntries(context, owned, PRIVATE_ROOT_POLICY);
     }
     for (const entry of yield* directoryEntries(root)) {
-      if (!entry.isDirectory() || entry.name.startsWith(".") || NAMED_ROOTS.has(entry.name))
+      if (
+        !entry.isDirectory() ||
+        Fn.pipe(entry.name, Str.startsWith(".")) ||
+        NAMED_ROOTS.has(entry.name)
+      )
         continue;
       const session = nodePath.join(root, entry.name);
       yield* sweepEntries(context, session, {
         ...PRIVATE_ROOT_POLICY,
-        isCandidate: (name) => name.startsWith(RUN_DIRECTORY_PREFIX),
+        isCandidate: (name) => Fn.pipe(name, Str.startsWith(RUN_DIRECTORY_PREFIX)),
       });
       // Removes the session directory only once it is empty, including one an interrupted spawn's
       // late cleanup had to leave because it couldn't prove it created the directory.

@@ -14,6 +14,8 @@ import {
   workspaceTests,
   writeFile,
 } from "./fixtures/repository.ts";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 
 const test = workspaceTests([
   ["src/a.ts", "a\nb\nc\n"],
@@ -82,7 +84,7 @@ const failRecordSave = (artifact: string, saves: RecordSaves) => {
   };
 };
 
-const isRebuilt = (text: string) => text.includes('"rebasedTree"');
+const isRebuilt = (text: string) => Fn.pipe(text, Str.includes('"rebasedTree"'));
 
 // The worker has frozen changes, and the parent then changes a file the worker left alone.
 const rebaseScenario = (service: WorkspaceServiceContract, root: string) =>

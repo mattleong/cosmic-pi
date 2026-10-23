@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import { ACTIVITY_LIMITS, type ActivityItem } from "pi-cosmic-ui/activity";
 import { sanitizeDiagnosticContent } from "pi-cosmic-core";
 import { runCleanupAttention } from "../run/attention.ts";
@@ -103,7 +106,7 @@ const runSummary = (run: SubagentRunView): Pick<ActivityItem, "summary"> => {
       : cleanup === "pool-quarantined"
         ? "Writer admission is blocked by another run's cleanup"
         : reason
-          ? reason.split("\n", 1)[0]
+          ? Str.split(reason, "\n")[0]
           : (run.currentTool ?? run.progress);
   return summary
     ? { summary: sanitizeDiagnosticContent(summary, { maximumLength: ACTIVITY_LIMITS.text }) }
@@ -114,9 +117,9 @@ export function subagentActivityItems(
   projection: SubagentProjection,
   presentation: SubagentActivityPresentationSnapshot = EMPTY_ACTIVITY_PRESENTATION,
 ): readonly ActivityItem[] {
-  const awaited = new Set(presentation.awaits.flatMap((lease) => lease.runIds));
+  const awaited = new Set(Arr.flatMap(presentation.awaits, (lease) => lease.runIds));
   const rows = projectFleetTree(projection.runs, "root").rows;
-  const runs = rows.map(({ run }) => {
+  const runs = Arr.map(rows, ({ run }) => {
     const title = sanitizeDiagnosticContent(run.name, { maximumLength: ACTIVITY_LIMITS.title });
     return withActivityRevision(
       {
@@ -128,7 +131,7 @@ export function subagentActivityItems(
         startedAt: run.startedAt,
         updatedAt: run.lastActivityAt,
         ...runSummary(run),
-        actions: Object.freeze(runActions(run, title).map((action) => Object.freeze(action))),
+        actions: Object.freeze(Arr.map(runActions(run, title), (action) => Object.freeze(action))),
         route: sanitizeDiagnosticContent(formatRunRoute(run), {
           maximumLength: ACTIVITY_LIMITS.route,
         }),
@@ -152,6 +155,8 @@ export function subagentActivityDetail(
   projection: SubagentProjection,
   id: string,
 ): string | undefined {
-  const run = projectFleetTree(projection.runs, "root").rows.find((row) => row.run.id === id)?.run;
+  const run = Option.getOrUndefined(
+    Arr.findFirst(projectFleetTree(projection.runs, "root").rows, (row) => row.run.id === id),
+  )?.run;
   return run && runActivityDetail(run);
 }

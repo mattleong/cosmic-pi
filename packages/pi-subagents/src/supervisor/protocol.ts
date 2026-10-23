@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import type { BackendEvent } from "../backend/model.ts";
@@ -332,4 +333,4 @@ export type SupervisorEvent = Extract<
 >;
 
 export const validSupervisorReply = (value: string): boolean =>
-  value.trim().length > 0 && value.length <= MAX_PARENT_MESSAGE_CHARS;
+  Str.trim(value).length > 0 && value.length <= MAX_PARENT_MESSAGE_CHARS;

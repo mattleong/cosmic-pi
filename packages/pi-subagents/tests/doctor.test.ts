@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import { nodeFilePlatformLayer, SafeFile } from "pi-cosmic-core";
@@ -14,6 +15,9 @@ import { profileLayerFor } from "./run/fixtures/service-harness.ts";
 import { git } from "../src/boundary/git-worktree-process.ts";
 import { nodePath as path } from "./support/node-builtins.ts";
 import { temporaryDirectory, writeFile } from "./workspace/fixtures/repository.ts";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 
 const claude = (model: string) => ({
   runtime: "claude",
@@ -78,11 +82,11 @@ describe("subagents doctor", () => {
         activityViewAvailable: false,
         projectTrusted: true,
       }).pipe(Effect.provide(Layer.merge(profileLayerFor(config), registry(probed))));
-      const byLabel = new Map(checks.map((item) => [item.label, item]));
+      const byLabel = new Map(Arr.map(checks, (item) => [item.label, item]));
       expect(byLabel.get("Profile scout")?.status).toBe("ok");
       expect(byLabel.get("Profile reviewer")).toMatchObject({ status: "warning" });
       expect(byLabel.get("Profile reviewer")?.detail).toContain("claude_unauthenticated");
-      expect(probed.filter((model) => model === "haiku")).toHaveLength(1);
+      expect(Arr.filter(probed, (model) => model === "haiku")).toHaveLength(1);
       expect(byLabel.get("Private state")?.status).toBe("ok");
       expect(byLabel.get("Node")?.status).toBe("ok");
       expect(byLabel.get("Git")?.status).toBe("ok");
@@ -190,13 +194,20 @@ describe("subagents doctor", () => {
         activityViewAvailable: true,
         projectTrusted: true,
       }).pipe(Effect.provide(Layer.merge(profiles, registry([]))));
-      const create = checks.find((item) => item.label === "WorktreeCreate hooks")?.detail ?? "";
-      expect(create.indexOf("pnpm install")).toBeLessThan(create.indexOf("./copy-env"));
+      const create =
+        Option.getOrUndefined(
+          Arr.findFirst(checks, (item) => item.label === "WorktreeCreate hooks"),
+        )?.detail ?? "";
+      expect(Option.getOrElse(Fn.pipe(create, Str.indexOf("pnpm install")), () => -1)).toBeLessThan(
+        Option.getOrElse(Fn.pipe(create, Str.indexOf("./copy-env")), () => -1),
+      );
       expect(create).toContain("global");
       expect(create).toContain("project");
-      expect(checks.find((item) => item.label === "WorktreeRemove hooks")?.detail).toContain(
-        "./prune",
-      );
+      expect(
+        Option.getOrUndefined(
+          Arr.findFirst(checks, (item) => item.label === "WorktreeRemove hooks"),
+        )?.detail,
+      ).toContain("./prune");
     }).pipe(Effect.scoped),
   );
   it.effect("lists the checkout's .worktreeinclude patterns", () =>
@@ -212,7 +223,9 @@ describe("subagents doctor", () => {
         activityViewAvailable: true,
         projectTrusted: false,
       }).pipe(Effect.provide(Layer.merge(profileLayerFor(config), registry([]))));
-      const included = checks.find((item) => item.label === ".worktreeinclude");
+      const included = Option.getOrUndefined(
+        Arr.findFirst(checks, (item) => item.label === ".worktreeinclude"),
+      );
       expect(included?.status).toBe("ok");
       expect(included?.detail).toContain(".env");
       expect(included?.detail).toContain("config/*.local");
@@ -252,12 +265,12 @@ describe("subagents doctor", () => {
           ),
         ),
       );
-      const byLabel = new Map(checks.map((item) => [item.label, item]));
+      const byLabel = new Map(Arr.map(checks, (item) => [item.label, item]));
       expect(byLabel.get("Agent fast-review")?.status).toBe("ok");
       expect(byLabel.get("Agent strict-review")?.status).toBe("warning");
       expect(byLabel.get("Agent broken")?.status).toBe("failed");
       // Agents share routes with their profiles, which are probed once.
-      expect(probed.filter((model) => model === "haiku")).toHaveLength(1);
+      expect(Arr.filter(probed, (model) => model === "haiku")).toHaveLength(1);
     }).pipe(Effect.scoped),
   );
 });

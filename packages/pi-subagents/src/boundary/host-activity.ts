@@ -4,6 +4,9 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Schema from "effect/Schema";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
 import {
   captureSubagentControlExpectation,
   type SubagentControlExpectation,
@@ -45,7 +48,7 @@ export const promptSubagentActivityInput = (
       const title = sanitizeDiagnosticContent(run.name, { maximumLength: 160 });
       const question = action === "reply" ? run.question?.message : undefined;
       return ctx.ui.input(
-        `${action.charAt(0).toUpperCase()}${action.slice(1)}: ${title}`,
+        `${Str.capitalize(action)}: ${title}`,
         question
           ? sanitizeDiagnosticContent(question, { maximumLength: 2000 })
           : action === "resume"
@@ -109,7 +112,7 @@ const INPUT_LIMITS = {
 } as const satisfies Record<SubagentActivityInput, number>;
 
 const offers = (run: SubagentRunView, title: string, action: string): boolean =>
-  runActions(run, title).some((candidate) => candidate.id === action);
+  Arr.some(runActions(run, title), (candidate) => candidate.id === action);
 
 export function registerSubagentActivity(options: {
   readonly events: ActivityEvents;
@@ -136,12 +139,16 @@ export function registerSubagentActivity(options: {
     items: () =>
       subagentActivityItems(options.bridge.get(), options.bridge.getActivityPresentation()),
     starting: () =>
-      options.bridge
-        .getActivityPresentation()
-        .starts.reduce((total, lease) => total + lease.requestedCount, 0),
+      Arr.reduce(
+        options.bridge.getActivityPresentation().starts,
+        0,
+        (total, lease) => total + lease.requestedCount,
+      ),
     detail: (item) => subagentActivityDetail(options.bridge.get(), item.id) ?? item.title,
     act: (item, action, signal, invocationCurrent) => {
-      const before = options.bridge.get().runs.find((run) => run.id === item.id);
+      const before = Option.getOrUndefined(
+        Arr.findFirst(options.bridge.get().runs, (run) => run.id === item.id),
+      );
       if (!before) throw new Error("Subagent action is unavailable");
       const expected = captureSubagentControlExpectation(before);
       if (action === "stop" || action === "interrupt")
@@ -150,7 +157,9 @@ export function registerSubagentActivity(options: {
       if (!options.input) throw new Error("Subagent input isn't available");
       return options.input(before, action, signal).then((input) => {
         if (input === undefined) return undefined;
-        const after = options.bridge.get().runs.find((run) => run.id === item.id);
+        const after = Option.getOrUndefined(
+          Arr.findFirst(options.bridge.get().runs, (run) => run.id === item.id),
+        );
         if (
           disposed ||
           !invocationCurrent() ||
@@ -161,7 +170,7 @@ export function registerSubagentActivity(options: {
           !offers(after, item.title, action)
         )
           throw new Error("Subagent changed while entering input");
-        const value = input.trim();
+        const value = Str.trim(input);
         if (value.length > INPUT_LIMITS[action]) throw new Error("Subagent input is invalid");
         if (action === "resume")
           return options.act(item.id, { action, input: value || undefined }, signal, expected);

@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { listWindowStart } from "pi-cosmic-ui/manager/list-detail";
@@ -113,7 +116,7 @@ const profileTableLines = (
   theme: Theme,
   width: number,
 ): ReadonlyArray<string> => {
-  const rows = PROFILE_IDS.map((profile, index) => {
+  const rows = Arr.map(PROFILE_IDS, (profile, index) => {
     const selected = index === state.profileIndex;
     const draft = selected
       ? state.draft
@@ -137,7 +140,7 @@ const profileTableLines = (
     };
   });
   const table = managerTable(
-    rows.map((row) => [row.profile + " ●", row.model, row.effort, row.runtime, row.fallbacks]),
+    Arr.map(rows, (row) => [row.profile + " ●", row.model, row.effort, row.runtime, row.fallbacks]),
     [
       { minWidth: 12, priority: 5 },
       { minWidth: 8, priority: 3 },
@@ -147,7 +150,7 @@ const profileTableLines = (
     ],
     width - 2,
   );
-  return rows.map((row) => {
+  return Arr.map(rows, (row) => {
     const identity =
       row.selected && state.pane === "profiles"
         ? focusedField(theme, row.profile)
@@ -217,12 +220,16 @@ const editorLines = (
   const rows = editorRows(state, profile);
   const labelWidth = Math.max(
     0,
-    ...rows.filter((row) => row.value.length > 0).map((row) => visibleWidth(row.label)),
+    ...Fn.pipe(
+      rows,
+      Arr.filter((row) => row.value.length > 0),
+      Arr.map((row) => visibleWidth(row.label)),
+    ),
   );
   const lines: string[] = [];
   let selectedLine = 0;
   let previousSection: string | undefined;
-  rows.forEach((row, index) => {
+  Arr.forEach(rows, (row, index) => {
     const section = row.scope === "candidate" ? `candidate:${row.candidateIndex}` : row.scope;
     if (section !== previousSection) {
       if (previousSection !== undefined) lines.push("");
@@ -274,7 +281,7 @@ const fieldLine = (
 ): string => {
   const { selected, labelWidth, width } = layout;
   const value = row.value
-    ? `${" ".repeat(Math.max(0, labelWidth - visibleWidth(row.label)) + 2)}${selected && !row.fixed ? row.value : fieldValue(state, theme, row)}`
+    ? `${Fn.pipe(" ", Str.repeat(Math.max(0, labelWidth - visibleWidth(row.label)) + 2))}${selected && !row.fixed ? row.value : fieldValue(state, theme, row)}`
     : "";
   const text = clipToWidth(
     `${selected ? ">" : " "} ${row.label}${value}${row.scope === "candidate" && row.fixed ? " · fixed" : ""}`,
@@ -332,25 +339,28 @@ export const profileWorkspaceHelpLines = (
   width: number,
 ): ReadonlyArray<string> => {
   const keys = profileWorkspaceKeys(labels);
-  return [
-    "Profile editor help",
-    "",
-    "Navigation",
-    `${keys.up}/${keys.down} or k/j selects a profile or field`,
-    "Left / h focuses profiles. Right / l focuses fields.",
-    "Tab / Shift+Tab switches Current Session and Saved profiles.",
-    "[ / ] Previous / next candidate",
-    "",
-    "Editing",
-    `${keys.confirm} Open the selected field or Actions`,
-    "m Model · e Reasoning · r Run with",
-    "a Manage selected candidate · + Add fallback",
-    "/ Search profiles",
-    "",
-    "Changes save automatically to the named editing target.",
-    "Undo changes restores this visit's opening profile.",
-    `${keys.cancel} or ? closes help`,
-  ].flatMap((line) => wrapTextWithAnsi(line, Math.max(1, width)));
+  return Arr.flatMap(
+    [
+      "Profile editor help",
+      "",
+      "Navigation",
+      `${keys.up}/${keys.down} or k/j selects a profile or field`,
+      "Left / h focuses profiles. Right / l focuses fields.",
+      "Tab / Shift+Tab switches Current Session and Saved profiles.",
+      "[ / ] Previous / next candidate",
+      "",
+      "Editing",
+      `${keys.confirm} Open the selected field or Actions`,
+      "m Model · e Reasoning · r Run with",
+      "a Manage selected candidate · + Add fallback",
+      "/ Search profiles",
+      "",
+      "Changes save automatically to the named editing target.",
+      "Undo changes restores this visit's opening profile.",
+      `${keys.cancel} or ? closes help`,
+    ],
+    (line) => wrapTextWithAnsi(line, Math.max(1, width)),
+  );
 };
 const workspaceFooter = (
   state: ProfileWorkspaceRenderState,
@@ -384,7 +394,7 @@ export const renderProfileWorkspace = (
   const width = Math.max(0, Math.floor(options.width));
   const height = Math.max(0, Math.floor(options.height));
   if (!width || !height) return [];
-  if (width < 4) return Array.from({ length: height }, () => " ".repeat(width));
+  if (width < 4) return Array.from({ length: height }, () => Fn.pipe(" ", Str.repeat(width)));
   const inner = width - 2;
   const { theme } = options;
   const frame = listDetailFrame(theme, state.pane === "profiles" ? "list" : "detail");
@@ -418,7 +428,7 @@ export const renderProfileWorkspace = (
         const confirmation = state.pendingConfirmation;
         return framedFill(
           frame,
-          [context, confirmation.title, confirmation.detail].flatMap((line) =>
+          Arr.flatMap([context, confirmation.title, confirmation.detail], (line) =>
             wrapTextWithAnsi(theme.fg("warning", line), inner),
           ),
           bodyHeight,

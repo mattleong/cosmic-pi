@@ -1,10 +1,12 @@
 import { EventEmitter, once } from "node:events";
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import {
   attachBoundedLineParser,
   OVERSIZED_LINE_PREFIX_BYTES,
   type OversizedLine,
 } from "../src/boundary/bounded-line-parser.ts";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 
 const inputStream = () => {
   const events = new EventEmitter();
@@ -52,18 +54,19 @@ describe("bounded child line parser", () => {
 
   it("summarizes an oversized line by its ends and keeps parsing the lines after it", () => {
     const { stream, lines, oversized, overflow } = collect(4 * 1024, 64 * 1024);
-    const body = "x".repeat(10 * 1024);
+    const body = Fn.pipe("x", Str.repeat(10 * 1024));
     const line = `{"type":"agent_end","messages":["${body}"],"willRetry":true}`;
-    stream.write(`first\n${line.slice(0, 3_000)}`);
+    stream.write(`first\n${Fn.pipe(line, Str.slice(0, 3_000))}`);
     for (let offset = 3_000; offset < line.length; offset += 1_000)
-      stream.write(line.slice(offset, offset + 1_000));
+      stream.write(Fn.pipe(line, Str.slice(offset, offset + 1_000)));
     stream.write('\r\n{"type":"agent_settled"}\n');
 
     expect(lines).toEqual(["first", '{"type":"agent_settled"}']);
     expect(oversized).toHaveLength(1);
     expect(oversized[0]?.bytes).toBe(Buffer.byteLength(line) + 1);
-    expect(oversized[0]?.prefix).toBe(line.slice(0, OVERSIZED_LINE_PREFIX_BYTES));
-    expect(oversized[0]?.suffix.endsWith(',"willRetry":true}')).toBe(true);
+    expect(oversized[0]?.prefix).toBe(Fn.pipe(line, Str.slice(0, OVERSIZED_LINE_PREFIX_BYTES)));
+    assert(oversized[0] !== undefined);
+    expect(Fn.pipe(oversized[0].suffix, Str.endsWith(',"willRetry":true}'))).toBe(true);
     expect(overflow).not.toHaveBeenCalled();
   });
 
@@ -76,8 +79,8 @@ describe("bounded child line parser", () => {
       maxQueuedBytes: 32,
       onLine: (line) => {
         lines.push(line);
-        stream.emit("data", Buffer.from("x".repeat(20), "utf8"));
-        stream.emit("data", Buffer.from("y".repeat(20), "utf8"));
+        stream.emit("data", Buffer.from(Fn.pipe("x", Str.repeat(20)), "utf8"));
+        stream.emit("data", Buffer.from(Fn.pipe("y", Str.repeat(20)), "utf8"));
       },
       onOverflow: overflow,
     });

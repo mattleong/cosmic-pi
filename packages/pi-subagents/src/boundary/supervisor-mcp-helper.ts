@@ -10,6 +10,7 @@ import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Runtime from "effect/Runtime";
 import * as Schema from "effect/Schema";
+import * as Rec from "effect/Record";
 import { isJsonObject } from "pi-cosmic-core";
 import { attachBoundedLineParser } from "./bounded-line-parser.ts";
 import { decodeUnknownJsonOption } from "./wire-shared.ts";
@@ -32,7 +33,7 @@ import { configArgument, readConfig } from "./supervisor-mcp-config.ts";
 import { serializedWriter } from "./supervisor-mcp-writer.ts";
 
 const scrubEnvironment = (environment: NodeJS.ProcessEnv): void => {
-  for (const key of Object.keys(environment)) delete environment[key];
+  for (const key of Rec.keys<string, string | undefined>(environment)) delete environment[key];
 };
 scrubEnvironment(process.env);
 

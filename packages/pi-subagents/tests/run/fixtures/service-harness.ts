@@ -1,6 +1,7 @@
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -53,6 +54,8 @@ import {
 } from "../../../src/run/service.ts";
 import { type JsonObject } from "pi-cosmic-core";
 import { yieldUntil, provideBuiltLayer } from "pi-cosmic-core/testing";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 
 export const withService = <Eff extends Effect.Effect<unknown, unknown, unknown>, A, ROut, LE, LR>(
   layer: Layer.Layer<ROut, LE, LR>,
@@ -75,7 +78,7 @@ export const awaitObservations = (
   service.withAwaitTerminalObservations(ids, until, onUpdate, (observations) =>
     service
       .consumeCompletions(
-        observations.flatMap((observation) =>
+        Arr.flatMap(observations, (observation) =>
           observation.completionReceipt ? [observation.completionReceipt] : [],
         ),
       )
@@ -84,7 +87,7 @@ export const awaitObservations = (
 
 export const awaitRuns = (...args: Parameters<typeof awaitObservations>) =>
   awaitObservations(...args).pipe(
-    Effect.map((observations) => observations.map((observation) => observation.run)),
+    Effect.map((observations) => Arr.map(observations, (observation) => observation.run)),
   );
 
 /** Every run's projected view; reading never claims or consumes a report. */
@@ -95,7 +98,7 @@ export const runViews = (service: SubagentServiceContract) =>
 export const runView = (service: SubagentServiceContract, id: string) =>
   runViews(service).pipe(
     Effect.flatMap((runs) => {
-      const run = runs.find((candidate) => candidate.id === id);
+      const run = Option.getOrUndefined(Arr.findFirst(runs, (candidate) => candidate.id === id));
       return run ? Effect.succeed(run) : Effect.fail(runNotFound(id));
     }),
   );
@@ -103,7 +106,7 @@ export const runView = (service: SubagentServiceContract, id: string) =>
 export const waitForCompleted = (service: SubagentServiceContract, id: string) =>
   Effect.gen(function* () {
     for (let attempt = 0; attempt < 200; attempt++) {
-      if ((yield* runViews(service)).some((run) => run.id === id && run.state === "completed"))
+      if (Arr.some(yield* runViews(service), (run) => run.id === id && run.state === "completed"))
         return undefined;
       yield* Effect.yieldNow;
     }
@@ -124,7 +127,9 @@ export const completeLocalRun = (
 
 export const acknowledgeCompletions = (notification: SubagentNotification) =>
   notification.type === "completed"
-    ? { deliveredCompletionKeys: notification.runs.map((run) => `${run.id}:${run.generation}`) }
+    ? {
+        deliveredCompletionKeys: Arr.map(notification.runs, (run) => `${run.id}:${run.generation}`),
+      }
     : undefined;
 
 export const useProbe = () => {
@@ -257,10 +262,11 @@ const isIpcControl =
   (message: LocalPiParentControl): message is IpcControlOf<T> =>
     message.type === type;
 
-const takeFirst = <A>(entries: A[], matches: (entry: A) => boolean): A | undefined => {
-  const index = entries.findIndex(matches);
-  return index >= 0 ? entries.splice(index, 1)[0] : undefined;
-};
+const takeFirst = <A>(entries: A[], matches: (entry: A) => boolean): A | undefined =>
+  Option.match(Arr.findFirstIndex(entries, matches), {
+    onNone: () => undefined,
+    onSome: (index) => entries.splice(index, 1)[0],
+  });
 
 export function fakeChildLayer(
   beforeSpawn: Effect.Effect<void> = Effect.void,
@@ -331,7 +337,7 @@ export function fakeChildLayer(
           let releaseGate: Deferred.Deferred<void> | undefined;
           const forSpawn = <A extends { readonly spawnIndex: number }>(
             initial: ReadonlyArray<A> = [],
-          ) => initial.filter((entry) => entry.spawnIndex === spawnIndex);
+          ) => Arr.filter(initial, (entry) => entry.spawnIndex === spawnIndex);
           const failures: Array<{ readonly type: FakeCommandType; readonly error: string }> =
             forSpawn(options.initialFailures);
           const dropped: FakeCommandType[] = remainingInitialStateDrops > 0 ? ["get_state"] : [];
@@ -521,10 +527,11 @@ export function fakeChildLayer(
             ipc,
             terminations,
             released: () => releaseCount,
-            sent: (type) => commands.some((command) => commandType(command) === type),
-            sentIpc: (type, matches = () => true) => ipc.filter(isIpcControl(type)).some(matches),
+            sent: (type) => Arr.some(commands, (command) => commandType(command) === type),
+            sentIpc: (type, matches = () => true) =>
+              Arr.some(Arr.filter(ipc, isIpcControl(type)), matches),
             commandTypes: (...only) =>
-              commands.flatMap((command) => {
+              Arr.flatMap(commands, (command) => {
                 const type = commandType(command);
                 return only.length === 0 || only.includes(type) ? [type] : [];
               }),
@@ -611,7 +618,7 @@ export function fakeWriterLeaseLayer(
       const filesystemIdentity = options.filesystemIdentity?.(cwd, path) ?? `dev:1;ino:${path}`;
       let digest = identityDigests.get(filesystemIdentity);
       if (!digest) {
-        digest = (nextIdentity++).toString(16).padStart(64, "0");
+        digest = Fn.pipe((nextIdentity++).toString(16), Str.padStart(64, "0"));
         identityDigests.set(filesystemIdentity, digest);
       }
       return Effect.succeed({ path, filesystemIdentity, digest });

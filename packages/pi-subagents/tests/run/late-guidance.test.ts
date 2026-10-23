@@ -7,14 +7,15 @@ import { yieldUntil } from "pi-cosmic-core/testing";
 import type { SubagentNotification } from "../../src/boundary/host-notifier.ts";
 import { gatedReportArchive } from "./fixtures/run-context.ts";
 import { localServiceFixture, request, runView, withService } from "./fixtures/service-harness.ts";
+import * as Arr from "effect/Array";
 
 const yieldTurns = Effect.gen(function* () {
   for (let turn = 0; turn < 25; turn += 1) yield* Effect.yieldNow;
 });
 
 const reportOf = (notifications: ReadonlyArray<SubagentNotification>) =>
-  notifications.flatMap((notification) =>
-    notification.type === "completed" ? notification.runs.map((run) => run.finalText) : [],
+  Arr.flatMap(notifications, (notification) =>
+    notification.type === "completed" ? Arr.map(notification.runs, (run) => run.finalText) : [],
   );
 
 describe("guidance that reaches a finishing local Pi child", () => {
@@ -190,7 +191,7 @@ describe("guidance that reaches a finishing local Pi child", () => {
       expect(failure).toMatchObject({ code: "guidance_not_delivered" });
       const { state, sessionEvents } = yield* runView(service, run.id);
       expect(state).toBe("running");
-      expect(sessionEvents.some((event) => event.type === "notice")).toBe(false);
+      expect(Arr.some(sessionEvents, (event) => event.type === "notice")).toBe(false);
     });
   });
 });

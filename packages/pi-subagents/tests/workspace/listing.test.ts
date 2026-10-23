@@ -1,5 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { SafeFile, nodeFilePlatformLayer } from "pi-cosmic-core";
@@ -13,10 +14,12 @@ import {
   type WorkspaceRecord,
 } from "../../src/workspace/model.ts";
 import { commitRepository, io, readText, temporaryDirectory } from "./fixtures/repository.ts";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
 
 const encodeRecord = Schema.encodeEffect(Schema.fromJsonString(WorkspaceRecordSchema));
 const id = (ordinal: number) =>
-  `${ordinal.toString(16).padStart(8, "0")}-1111-1111-1111-111111111111`;
+  `${Fn.pipe(ordinal.toString(16), Str.padStart(8, "0"))}-1111-1111-1111-111111111111`;
 const record = (workspaceId: string): WorkspaceRecord => ({
   version: 2,
   repository: "/source/.git",
@@ -83,7 +86,7 @@ it.live(
         const before = yield* io(() => fs.readdir(registry));
         const listing = yield* listWorkspaceRecords(registry);
         const { lastChangedAt: _stamped, ...unstamped } = healthy;
-        expect(listing.records.map(({ lastChangedAt: _changed, ...saved }) => saved)).toEqual([
+        expect(Arr.map(listing.records, ({ lastChangedAt: _changed, ...saved }) => saved)).toEqual([
           unstamped,
         ]);
         expect(listing.unavailable).toEqual(

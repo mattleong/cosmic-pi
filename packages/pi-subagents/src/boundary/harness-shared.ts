@@ -2,6 +2,7 @@ import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Rec from "effect/Record";
 import type * as Schema from "effect/Schema";
 import {
   hasControlCharacter,
@@ -53,12 +54,12 @@ const boundedJsonValue = (value: Schema.Json, depth = 0): boolean => {
   if (value === null || Predicate.isString(value) || Predicate.isBoolean(value)) return true;
   if (Predicate.isNumber(value)) return Number.isFinite(value);
   if (Arr.isArray<Schema.Json>(value))
-    return value.length <= 1_024 && value.every((entry) => boundedJsonValue(entry, depth + 1));
+    return value.length <= 1_024 && Arr.every(value, (entry) => boundedJsonValue(entry, depth + 1));
   if (!hasObjectRuntimeType(value)) return false;
-  const entries = Object.entries(value);
+  const entries = Rec.toEntries(value);
   return (
     entries.length <= 1_024 &&
-    entries.every(([key, entry]) => key.length <= 1_024 && boundedJsonValue(entry, depth + 1))
+    Arr.every(entries, ([key, entry]) => key.length <= 1_024 && boundedJsonValue(entry, depth + 1))
   );
 };
 

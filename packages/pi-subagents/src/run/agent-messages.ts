@@ -1,6 +1,8 @@
+import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Str from "effect/String";
 import { invokeHostCallback } from "pi-cosmic-core";
 import {
   agentMessageContent,
@@ -78,7 +80,7 @@ const STARTING_TARGET_WAIT = Duration.seconds(5);
 const validateTargets = (
   ids: ReadonlyArray<string>,
 ): Effect.Effect<ReadonlyArray<string>, InvalidSubagentRequestError> => {
-  const unique = [...new Set(ids.map((id) => id.trim()))];
+  const unique = [...new Set(Arr.map(ids, (id) => Str.trim(id)))];
   return unique.length > MAX_AGENT_TARGETS
     ? Effect.fail(
         invalidRequest(
@@ -192,12 +194,14 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
     return yield* withLock(
       Effect.gen(function* () {
         const sender = yield* resolveSenderLocked(caller);
-        const runs = sortRuns(projectRunTree(records)).map((view) => runListEntry(view, sender.id));
+        const runs = Arr.map(sortRuns(projectRunTree(records)), (view) =>
+          runListEntry(view, sender.id),
+        );
         const everyone = [mainListEntry(mainState, sender.id), ...runs];
         if (selected === undefined) return { agents: everyone, missingIds: [] };
         return {
-          agents: everyone.filter((entry) => selected.includes(entry.id)),
-          missingIds: selected.filter((id) => !everyone.some((entry) => entry.id === id)),
+          agents: Arr.filter(everyone, (entry) => selected.includes(entry.id)),
+          missingIds: Arr.filter(selected, (id) => !Arr.some(everyone, (entry) => entry.id === id)),
         };
       }),
     );
@@ -215,7 +219,7 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
     return yield* withLock(
       Effect.gen(function* () {
         yield* resolveSenderLocked(caller);
-        const views = new Map(projectRunTree(records).map((view) => [view.id, view]));
+        const views = new Map(Arr.map(projectRunTree(records), (view) => [view.id, view] as const));
         const agents: Array<AgentReadResult["agents"][number]> = [];
         const missingIds: string[] = [];
         for (const id of selected) {
@@ -439,7 +443,7 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
     message: string,
   ): Effect.Effect<AgentSendResult, SubagentError> =>
     Effect.suspend(() => {
-      const to = rawTo.trim();
+      const to = Str.trim(rawTo);
       return deliver(message, to, (text) => claimSend(caller, to, text));
     });
 

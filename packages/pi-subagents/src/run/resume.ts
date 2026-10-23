@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Predicate from "effect/Predicate";
 import * as Scope from "effect/Scope";
+import * as Str from "effect/String";
 import {
   canonicalizeWriterCwd,
   processCapacityError,
@@ -433,7 +434,7 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
           });
           const prompt =
             agentMessage?.prompt ??
-            (message?.trim()
+            (message !== undefined && Str.trim(message)
               ? yield* validateMessageText(message)
               : "Continue the assigned task from the current session state.");
           return yield* runSessionOwned(

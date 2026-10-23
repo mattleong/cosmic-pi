@@ -1,5 +1,7 @@
 import type { MessageRenderer, Theme } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import * as Match from "effect/Match";
@@ -53,13 +55,15 @@ const completedRow = (
   const single = details.total === 1 && details.name;
   const subject = single
     ? `${details.name} ${details.failed ? "failed" : details.warnings ? "finished with a warning" : "finished"}`
-    : [
-        finished ? `${finished} finished` : "",
-        details.failed ? `${details.failed} failed` : "",
-        details.warnings ? `${details.warnings} with warnings` : "",
-      ]
-        .filter(Boolean)
-        .join(", ");
+    : Fn.pipe(
+        [
+          finished ? `${finished} finished` : "",
+          details.failed ? `${details.failed} failed` : "",
+          details.warnings ? `${details.warnings} with warnings` : "",
+        ],
+        Arr.filter(Boolean),
+        Arr.join(", "),
+      );
   return { summary: { subject, outcome } };
 };
 

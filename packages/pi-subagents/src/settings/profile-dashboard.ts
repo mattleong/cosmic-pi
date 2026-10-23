@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
@@ -50,7 +51,7 @@ export function openProfileDashboard(
       const isCurrent = () => !disposed && refreshOwner.isCurrent();
       const modelCatalog = new ProfileModelCatalog(
         ctx.modelRegistry,
-        (ctx.scopedModels ?? []).map(({ model }) => model),
+        Arr.map(ctx.scopedModels ?? [], ({ model }) => model),
       );
       let requestWorkspaceRender: (() => void) | undefined;
       const modelRefreshController = new AbortController();

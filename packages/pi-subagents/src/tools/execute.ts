@@ -10,6 +10,7 @@ import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
+import * as Str from "effect/String";
 import type { CompactAnimationScheduler } from "pi-code-previews";
 import { invokeHostCallback } from "pi-cosmic-core";
 import type { SubagentToolPresentation } from "../boundary/host-activity-widget.ts";
@@ -113,8 +114,8 @@ const withQuestionRuns = (
   contextRuns: ReadonlyArray<SubagentRunView>,
   questions: ReadonlyArray<SubagentRunView>,
 ): ReadonlyArray<SubagentRunView> => {
-  const shown = new Set(contextRuns.map((run) => run.id));
-  return [...contextRuns, ...questions.filter((run) => !shown.has(run.id))];
+  const shown = new Set(Arr.map(contextRuns, (run) => run.id));
+  return [...contextRuns, ...Arr.filter(questions, (run) => !shown.has(run.id))];
 };
 
 type AwaitToolInput = SubagentToolInput<typeof SUBAGENT_TOOL_NAME.await>;
@@ -124,12 +125,12 @@ const requiredTargetIds = (
   runIds: ReadonlyArray<string>,
   maximum: number,
 ): Effect.Effect<ReadonlyArray<string>, InvalidSubagentRequestError> => {
-  const ids = runIds.map((id) => id.trim());
+  const ids = Arr.map(runIds, (id) => Str.trim(id));
   if (ids.length === 0)
     return Effect.fail(
       invalidRequest("run_ids_required", `${action} requires at least one run ID.`),
     );
-  if (ids.some((id) => !id))
+  if (Arr.some(ids, (id) => !id))
     return Effect.fail(invalidRequest("run_id_invalid", "Subagent target IDs must be non-empty."));
   const unique = [...new Set(ids)];
   if (unique.length > maximum)
@@ -194,9 +195,9 @@ export const executeSubagentActionEffect = Effect.fn("SubagentTools.execute")(fu
     observations: ReadonlyArray<SubagentRunObservation>,
     questions: ReadonlyArray<SubagentRunView> = [],
   ) {
-    const runs = observations.map((observation) => observation.run);
+    const runs = Arr.map(observations, (observation) => observation.run);
     const attention = [...runs, ...questions];
-    const attentionRequired = attention.some(isParentActionRequiredRun);
+    const attentionRequired = Arr.some(attention, isParentActionRequiredRun);
     if (scripted && attentionRequired)
       return yield* invalidRequest(
         "scripted_parent_attention_required",
@@ -222,7 +223,7 @@ export const executeSubagentActionEffect = Effect.fn("SubagentTools.execute")(fu
         ? Result.succeed(observation.completionReceipt)
         : Result.failVoid,
     );
-    yield* Effect.sync(() => state.markDeliveryAttempt(receipts.map((receipt) => receipt.id)));
+    yield* Effect.sync(() => state.markDeliveryAttempt(Arr.map(receipts, (receipt) => receipt.id)));
     yield* service.consumeCompletions(receipts);
     return result;
   });
@@ -328,7 +329,7 @@ const executeRootAwait = (
           ),
         );
   const userInput = runtime.userInput?.();
-  const endings = [signal, userInput].filter(Predicate.isNotUndefined);
+  const endings = Arr.filter([signal, userInput], Predicate.isNotUndefined);
   return runtime
     .run(
       observeAwaitInterruption(bounded, state.markInterrupted),
@@ -358,7 +359,7 @@ const executeProxiedAwait = (
   const timeoutSeconds = awaitTimeoutSeconds(input.args);
   const timeout =
     timeoutSeconds === undefined ? undefined : AbortSignal.timeout(timeoutSeconds * 1000);
-  const endings = [signal, timeout].filter(Predicate.isNotUndefined);
+  const endings = Arr.filter([signal, timeout], Predicate.isNotUndefined);
   const waitSignal = endings.length > 1 ? AbortSignal.any(endings) : endings[0];
   return proxyCall(input, waitSignal, state.markInterrupted).catch((cause: unknown) => {
     if (!state.wasInterrupted()) throw cause;

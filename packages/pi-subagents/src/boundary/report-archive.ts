@@ -9,6 +9,9 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import * as Order from "effect/Order";
 import { safeSubagentDirectorySegment } from "./child-process.ts";
 import { nodeErrorCode } from "./harness-shared.ts";
 import { MAX_OUTCOME_FILE_PATH_CHARS } from "../run/limits.ts";
@@ -52,7 +55,7 @@ const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
 export const reportArchiveRoot = (agentDirectory: string): string =>
   path.join(agentDirectory, SUBAGENT_STATE_ROOT, REPORT_ARCHIVE_ROOT);
 
-const countLines = (text: string): number => text.split("\n").length;
+const countLines = (text: string): number => Str.split(text, "\n").length;
 
 // A report cut by the archive cap says so in its own file, not only in the notice that links it.
 const archivedContent = (entry: ReportArchiveEntry): string =>
@@ -166,10 +169,14 @@ const attempt = <A>(evaluate: () => PromiseLike<A>): Effect.Effect<Option.Option
 
 const sessionDirectories = (root: string): Effect.Effect<ReadonlyArray<string>> =>
   attempt(() => fs.readdir(root, { withFileTypes: true })).pipe(
-    Effect.map((entries) =>
-      Option.getOrElse(entries, () => []).flatMap((entry) =>
-        entry.isDirectory() ? [path.join(root, entry.name)] : [],
-      ),
+    Effect.map(
+      Option.match({
+        onNone: Arr.empty,
+        onSome: (entries) =>
+          Arr.flatMap(entries, (entry) =>
+            entry.isDirectory() ? [path.join(root, entry.name)] : [],
+          ),
+      }),
     ),
   );
 
@@ -194,7 +201,7 @@ const archivedFiles = (directory: string): Effect.Effect<ReadonlyArray<ArchivedF
         },
       ),
     ),
-    Effect.map((files) => files.flatMap(Option.toArray)),
+    Effect.map((files) => Arr.flatMap(files, Option.toArray)),
   );
 
 /**
@@ -207,12 +214,17 @@ export const pruneReportArchive = Effect.fn("ReportArchive.pruneReportArchive")(
   const now = yield* Clock.currentTimeMillis;
   const directories = yield* sessionDirectories(reportArchiveRoot(agentDirectory));
   const files = (yield* Effect.forEach(directories, archivedFiles)).flat();
-  const expired = files.filter((file) => now - file.modified > PRIVATE_STATE_RETENTION_MILLIS);
-  const kept = files
-    .filter((file) => now - file.modified <= PRIVATE_STATE_RETENTION_MILLIS)
-    .toSorted((left, right) => right.modified - left.modified);
+  const expired = Arr.filter(files, (file) => now - file.modified > PRIVATE_STATE_RETENTION_MILLIS);
+  const unexpired = Arr.filter(
+    files,
+    (file) => now - file.modified <= PRIVATE_STATE_RETENTION_MILLIS,
+  );
+  const kept = Arr.sort(
+    unexpired,
+    Order.flip(Order.mapInput(Order.Number, (file: ArchivedFile) => file.modified)),
+  );
   let total = 0;
-  const overflow = kept.filter((file) => (total += file.size) > MAX_ARCHIVE_BYTES);
+  const overflow = Arr.filter(kept, (file) => (total += file.size) > MAX_ARCHIVE_BYTES);
   yield* Effect.forEach(
     [...expired, ...overflow],
     (file) => attempt(() => fs.rm(file.file, { force: true })),

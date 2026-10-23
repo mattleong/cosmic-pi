@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import type { SearchableSelectPage } from "pi-cosmic-ui/manager/searchable-select";
 import { PROFILE_IDS, type ProfileCandidate } from "../profiles/model.ts";
 import type { SubagentEffort } from "../domain/routing.ts";
@@ -111,7 +113,9 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
       .loadModelPicker(this.profile(), candidateIndex, candidate, controller.signal)
       .then((picker) => {
         if (!this.finishCatalogLoad(controller)) return undefined;
-        const current = picker.choices.find((option) => option.selector === candidate.model);
+        const current = Option.getOrUndefined(
+          Arr.findFirst(picker.choices, (option) => option.selector === candidate.model),
+        );
         this.candidateIndex = candidateIndex;
         this.showFieldPicker(
           candidate,

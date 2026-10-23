@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import * as Str from "effect/String";
 import type { BackendLaunchRequest } from "../backend/model.ts";
 import { invalidRequest, type SubagentError } from "./errors.ts";
 import { isCleanupOwed, type RunContext, type RunRecord, type StoredRunView } from "./internal.ts";
@@ -27,7 +28,7 @@ interface LaunchIdentity {
 export const validateStartRequest = (
   request: StartSubagentRequest,
 ): Effect.Effect<void, SubagentError> => {
-  if (!request.task.trim())
+  if (!Str.trim(request.task))
     return Effect.fail(invalidRequest("task_required", "Subagent task is required."));
   if (request.task.length > MAX_TASK_CHARS)
     return Effect.fail(
@@ -47,7 +48,7 @@ export const initialRunView = (
   now: number,
 ): StoredRunView => ({
   id,
-  task: request.task.trim(),
+  task: Str.trim(request.task),
   ...(request.profile && { profile: request.profile }),
   ...(request.agent && { agent: request.agent }),
   ...(request.routeContinuation && {

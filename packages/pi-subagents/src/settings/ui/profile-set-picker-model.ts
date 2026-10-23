@@ -1,4 +1,9 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
 import {
   PROFILE_IDS,
   type ProfileId,
@@ -58,13 +63,13 @@ const scopeEntries = (
   const decoded = inspection[scope];
   if (!decoded) return [];
   const names = new Set([
-    ...Object.keys(decoded.file.profileSets ?? {}),
+    ...Rec.keys(decoded.file.profileSets ?? {}),
     ...decoded.invalidProfileSets,
     ...(decoded.file.defaultProfileSet ? [decoded.file.defaultProfileSet] : []),
   ]);
-  const sets = [...names]
-    .toSorted((left, right) => left.localeCompare(right))
-    .map((name): ProfileSetPickerEntry => {
+  const sets = Fn.pipe(
+    Arr.sort([...names], (left: string, right: string) => Fn.pipe(left, Str.localeCompare(right))),
+    Arr.map((name): ProfileSetPickerEntry => {
       const profileSet = decoded.file.profileSets?.[name];
       const resolved = resolvedSet(inspection, { scope, name });
       const structurallyInvalid =
@@ -72,16 +77,19 @@ const scopeEntries = (
       const invalid = resolved.status !== "resolved";
       const repairable = invalid && !structurallyInvalid;
       const invalidProfileCount = resolved.invalidProfiles.length;
-      const profileCount = profileSet ? Object.keys(profileSet.profiles).length : 0;
+      const profileCount = profileSet ? Rec.size<string, unknown>(profileSet.profiles) : 0;
       const scopeDefault = decoded.file.defaultProfileSet === name;
-      const status = [
-        scopeDefault ? "default for new sessions" : undefined,
-        invalid
-          ? repairable
-            ? `${countLabel(invalidProfileCount, "invalid profile")}, fix before use`
-            : "invalid structure, delete and create a new set"
-          : countLabel(profileCount, "saved profile"),
-      ].filter(Predicate.isNotUndefined);
+      const status = Arr.filter(
+        [
+          scopeDefault ? "default for new sessions" : undefined,
+          invalid
+            ? repairable
+              ? `${countLabel(invalidProfileCount, "invalid profile")}, fix before use`
+              : "invalid structure, delete and create a new set"
+            : countLabel(profileCount, "saved profile"),
+        ],
+        Predicate.isNotUndefined,
+      );
       return {
         kind: "set",
         key: `${scope}:${name}`,
@@ -90,7 +98,7 @@ const scopeEntries = (
         scopeDefault,
         invalid,
         repairable,
-        preview: PROFILE_IDS.map((id) => {
+        preview: Arr.map(PROFILE_IDS, (id) => {
           const source = resolved.profileSources[id];
           const candidates = resolved.profiles[id].candidates;
           return {
@@ -106,9 +114,10 @@ const scopeEntries = (
           };
         }),
         label: name,
-        description: status.join(" · "),
+        description: Arr.join(status, " · "),
       };
-    });
+    }),
+  );
   return decoded.invalidDefaultProfileSet && decoded.file.defaultProfileSet === undefined
     ? [
         {
@@ -157,14 +166,18 @@ export const profileSetPickerEntries = (
 };
 
 export const initialProfileSetPickerIndex = (entries: ReadonlyArray<ProfileSetPickerEntry>) => {
-  const defaultEntry = entries.findIndex(
-    (entry) => entry.kind !== "scope-note" && entry.scopeDefault,
+  const defaultEntry = Option.getOrElse(
+    Arr.findFirstIndex(entries, (entry) => entry.kind !== "scope-note" && entry.scopeDefault),
+    () => -1,
   );
   return defaultEntry >= 0
     ? defaultEntry
     : Math.max(
         0,
-        entries.findIndex((entry) => entry.kind !== "scope-note"),
+        Option.getOrElse(
+          Arr.findFirstIndex(entries, (entry) => entry.kind !== "scope-note"),
+          () => -1,
+        ),
       );
 };
 

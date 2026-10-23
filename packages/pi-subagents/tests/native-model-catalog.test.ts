@@ -13,6 +13,8 @@ import {
 import { effectTest, step } from "./support/effect-test.ts";
 import { nodeFsPromises as fs, nodePath } from "./support/node-builtins.ts";
 import { processAlive } from "./support/process-liveness.ts";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 
 const makeNativeModelCatalog = (options: NativeModelCatalogLayerOptions) =>
   Effect.provide(NativeModelCatalog, NativeModelCatalog.layer(options));
@@ -85,7 +87,7 @@ describe("Claude catalog preference", () => {
       '{"model":"--settings"}',
       '{"model":"model;command"}',
       JSON.stringify({ model: "bad\nselector" }),
-      JSON.stringify({ model: "oversized", padding: "x".repeat(64 * 1024) }),
+      JSON.stringify({ model: "oversized", padding: Fn.pipe("x", Str.repeat(64 * 1024)) }),
     ]) {
       yield* step(() => fs.writeFile(test.settings, settings));
       expect(yield* selectorAt(catalog, test.cwd, 2)).toBe("default");

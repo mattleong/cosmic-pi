@@ -1,5 +1,6 @@
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Arr from "effect/Array";
 
 type JsonPrefixScalar = string | boolean;
 
@@ -34,7 +35,10 @@ export const jsonPrefixScalars = (text: string): ReadonlyMap<string, JsonPrefixS
     return literal === undefined ? Option.none() : decodeJsonString(literal);
   };
   const path = () =>
-    containers.map((entry) => (entry.kind === "object" ? entry.key : `${entry.index}`)).join(".");
+    Arr.join(
+      Arr.map(containers, (entry) => (entry.kind === "object" ? entry.key : `${entry.index}`)),
+      ".",
+    );
   const open = (kind: Container["kind"]): Expectation => {
     position += 1;
     containers.push({ kind, key: "", index: 0 });

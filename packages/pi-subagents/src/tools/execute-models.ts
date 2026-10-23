@@ -3,7 +3,10 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
 import { hostProfileEnvironment } from "../boundary/host-profile-resolution.ts";
 import type { InvalidSubagentRequestError } from "../run/errors.ts";
 import type { SubagentParentContext } from "../run/model.ts";
@@ -30,23 +33,27 @@ import type { SubagentModelsInput } from "./schema.ts";
 
 const candidateLines = (candidates: ReadonlyArray<ProfileCandidateDiscovery>) =>
   candidates.length > 0
-    ? candidates.map(
+    ? Arr.map(
+        candidates,
         (candidate, index) =>
           `  ${index + 1}. ${profileCandidateLabel(candidate)} · ${candidate.status}\n     ${candidate.reason}`,
       )
     : ["  disabled · no candidates"];
 
 const agentOverrides = (agent: SubagentAgentView): string =>
-  [
-    `profile=${agent.profile}`,
-    `source=${agent.source}`,
-    ...(agent.effort ? [`effort=${agent.effort}`] : []),
-    ...(agent.context ? [`context=${agent.context}`] : []),
-    ...(agent.writeIntent ? [`intent=${agent.writeIntent}`] : []),
-    ...(agent.isolation ? [`isolation=${agent.isolation}`] : []),
-    ...(agent.tools?.allow ? [`tools allow=${agent.tools.allow.join(",") || "none"}`] : []),
-    ...(agent.tools?.deny ? [`tools deny=${agent.tools.deny.join(",") || "none"}`] : []),
-  ].join(" · ");
+  Arr.join(
+    [
+      `profile=${agent.profile}`,
+      `source=${agent.source}`,
+      ...(agent.effort ? [`effort=${agent.effort}`] : []),
+      ...(agent.context ? [`context=${agent.context}`] : []),
+      ...(agent.writeIntent ? [`intent=${agent.writeIntent}`] : []),
+      ...(agent.isolation ? [`isolation=${agent.isolation}`] : []),
+      ...(agent.tools?.allow ? [`tools allow=${Arr.join(agent.tools.allow, ",") || "none"}`] : []),
+      ...(agent.tools?.deny ? [`tools deny=${Arr.join(agent.tools.deny, ",") || "none"}`] : []),
+    ],
+    " · ",
+  );
 
 const formatAgentDiscovery = (
   agents: ReadonlyArray<SubagentAgentView>,
@@ -57,13 +64,14 @@ const formatAgentDiscovery = (
     : [
         "Custom agents · set agent instead of profile; each agent's overrides apply to its profile's candidates",
         "",
-        ...agents.flatMap((agent) => [
+        ...Arr.flatMap(agents, (agent) => [
           `${agent.name} — ${agent.description}`,
           `  ${agentOverrides(agent)}`,
           ...candidateLines(agent.candidates),
           "",
         ]),
-        ...invalidAgents.map(
+        ...Arr.map(
+          invalidAgents,
           (entry) =>
             `${entry.name ?? "all agents"} · invalid ${entry.scope} configuration · fails closed`,
         ),
@@ -75,20 +83,23 @@ const formatProfileDiscovery = (
   agents: ReadonlyArray<SubagentAgentView>,
   invalidAgents: ReadonlyArray<SubagentInvalidAgentView>,
 ): string =>
-  [
-    "Profile routes · static preflight",
-    `Profile omitted → ${fallbackProfile}`,
-    "Each candidate lists runtime/model, effort, context, write intent, and fast mode.",
-    "Static eligibility only · executable, authentication, integration, and private-harness checks run at launch.",
-    "",
-    ...profiles.flatMap((profile) => [
-      `${profile.id}${profile.isDefault ? " · when omitted" : ""} — ${profile.description}`,
-      `  source=${profile.source} · defaults: context=${profile.defaultContext} · intent=${profile.defaultWriteIntent} · effort=${profile.defaultEffort ?? "inherit"}`,
-      ...candidateLines(profile.candidates),
+  Arr.join(
+    [
+      "Profile routes · static preflight",
+      `Profile omitted → ${fallbackProfile}`,
+      "Each candidate lists runtime/model, effort, context, write intent, and fast mode.",
+      "Static eligibility only · executable, authentication, integration, and private-harness checks run at launch.",
       "",
-    ]),
-    ...formatAgentDiscovery(agents, invalidAgents),
-  ].join("\n");
+      ...Arr.flatMap(profiles, (profile) => [
+        `${profile.id}${profile.isDefault ? " · when omitted" : ""} — ${profile.description}`,
+        `  source=${profile.source} · defaults: context=${profile.defaultContext} · intent=${profile.defaultWriteIntent} · effort=${profile.defaultEffort ?? "inherit"}`,
+        ...candidateLines(profile.candidates),
+        "",
+      ]),
+      ...formatAgentDiscovery(agents, invalidAgents),
+    ],
+    "\n",
+  );
 
 /** Projects each declared candidate with its static planning outcome. */
 const candidateDiscovery = (
@@ -96,9 +107,13 @@ const candidateDiscovery = (
   resolution: ProfileResolution,
 ): ReadonlyArray<ProfileCandidateDiscovery> => {
   const attempts = resolution.kind === "resolved" ? resolution.attempts : [];
-  return candidates.map((candidate, index) => {
-    const attempt = attempts.find((value) => value.candidateIndex === index);
-    const omitted = resolution.skippedCandidates.find((value) => value.candidateIndex === index);
+  return Arr.map(candidates, (candidate, index) => {
+    const attempt = Option.getOrUndefined(
+      Arr.findFirst(attempts, (value) => value.candidateIndex === index),
+    );
+    const omitted = Option.getOrUndefined(
+      Arr.findFirst(resolution.skippedCandidates, (value) => value.candidateIndex === index),
+    );
     return Object.assign({}, candidate, {
       status: attempt ? ("eligible" as const) : ("skipped" as const),
       reason: attempt
@@ -113,7 +128,7 @@ const agentCandidates = (
   candidates: ReadonlyArray<ProfileCandidate>,
   agent: CustomAgent,
 ): ReadonlyArray<ProfileCandidate> =>
-  candidates.map((candidate) => {
+  Arr.map(candidates, (candidate) => {
     const applied = customAgentCandidate(candidate, agent);
     return applied.kind === "eligible" ? applied.candidate : candidate;
   });
@@ -155,7 +170,7 @@ export const executeModelsAction = Effect.fn("SubagentTools.models")(function* (
   const { fallbackProfile } = snapshot.effectiveConfig;
   const ids: ReadonlyArray<ProfileId> = input.profile ? [input.profile] : PROFILE_IDS;
   const environment = yield* hostProfileEnvironment(pi, ctx, parentContext);
-  const profiles: ReadonlyArray<SubagentProfileView> = ids.flatMap((id) => {
+  const profiles: ReadonlyArray<SubagentProfileView> = Arr.flatMap(ids, (id) => {
     const definition = profileService.definition(id);
     if (!definition) return [];
     const route = snapshot.effectiveConfig.profiles[definition.id];
@@ -176,9 +191,10 @@ export const executeModelsAction = Effect.fn("SubagentTools.models")(function* (
       } satisfies SubagentProfileView,
     ];
   });
-  const agents: ReadonlyArray<SubagentAgentView> = snapshot.effectiveConfig.agents
-    .filter((agent) => ids.includes(agent.profile))
-    .map((agent) =>
+  const agents: ReadonlyArray<SubagentAgentView> = Fn.pipe(
+    snapshot.effectiveConfig.agents,
+    Arr.filter((agent) => ids.includes(agent.profile)),
+    Arr.map((agent) =>
       agentView(
         agent,
         candidateDiscovery(
@@ -186,7 +202,8 @@ export const executeModelsAction = Effect.fn("SubagentTools.models")(function* (
           profileService.resolve(snapshot, agent.profile, environment, agent),
         ),
       ),
-    );
+    ),
+  );
   const { invalidAgents } = snapshot.effectiveConfig;
   return {
     content: [

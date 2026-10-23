@@ -7,6 +7,9 @@ import {
   renderSubagentMessage,
 } from "../src/application/messages.ts";
 import { hostNotifier } from "../src/boundary/host-notifier.ts";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 
 let restore = () => {};
 afterEach(() => restore());
@@ -58,13 +61,16 @@ test.each(["compact"] as const)(
           { expanded, outputPad: 0 },
           plainTheme,
         );
-        const text = component!.render(180).join("\n");
-        expect(text.includes("PRIVATE_RUN_ID")).toBe(expanded);
+        const text = Arr.join(component!.render(180), "\n");
+        expect(Fn.pipe(text, Str.includes("PRIVATE_RUN_ID"))).toBe(expanded);
         expect(
-          text.includes(
-            message.customType === "pi-subagents-completed"
-              ? "PRIVATE_STACK_TRACE"
-              : "AGENT_QUESTION",
+          Fn.pipe(
+            text,
+            Str.includes(
+              message.customType === "pi-subagents-completed"
+                ? "PRIVATE_STACK_TRACE"
+                : "AGENT_QUESTION",
+            ),
           ),
         ).toBe(expanded);
         if (!expanded) expect(text).not.toMatch(/agent_send|agent_lifecycle|agent_worktree/);
@@ -75,7 +81,7 @@ test.each(["compact"] as const)(
         { expanded: true, outputPad: 0 },
         plainTheme,
       );
-      expect(history!.render(180).join("\n")).toContain("PRIVATE_RUN_ID");
+      expect(Arr.join(history!.render(180), "\n")).toContain("PRIVATE_RUN_ID");
     }
   },
 );

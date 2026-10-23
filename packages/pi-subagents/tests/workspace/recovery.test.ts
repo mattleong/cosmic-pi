@@ -6,6 +6,7 @@ import { workspaceControlContext } from "../../src/run/workspace-binding.ts";
 import { workspaceOrphanOperations } from "../../src/run/workspace-orphan.ts";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
 import { CrossProcessLock } from "pi-cosmic-core";
@@ -29,6 +30,8 @@ import {
   workspaceTests,
   writeFile,
 } from "./fixtures/repository.ts";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 
 for (const replaced of [false, true]) {
   it.live(
@@ -192,9 +195,9 @@ it.live(
       yield* successor.service.discardOrphan(target);
       expect(yield* exists(handle.cwd)).toBe(false);
       expect(yield* exists(preparation.cwd)).toBe(false);
-      expect((yield* successor.service.listAll).records.map((record) => record.status)).toEqual([
-        "discarded",
-      ]);
+      expect(
+        Arr.map((yield* successor.service.listAll).records, (record) => record.status),
+      ).toEqual(["discarded"]);
       yield* successor.close;
     }),
   60_000,
@@ -214,7 +217,10 @@ it.live(
       // As if the session crashed after adding the worker, before the record said active.
       const recordFile = path.join(registryOf(agent), handle.workspaceId, "record.json");
       const saved = yield* io(() => fs.readFile(recordFile, "utf8"));
-      yield* writeFile(recordFile, saved.replace('"status":"active"', '"status":"creating"'));
+      yield* writeFile(
+        recordFile,
+        Fn.pipe(saved, Str.replace('"status":"active"', '"status":"creating"')),
+      );
       const worktrees = git(source, ["worktree", "list", "--porcelain"]);
       const refs = git(source, ["for-each-ref", "--format=%(refname)", "refs/pi"]);
 
@@ -278,10 +284,12 @@ test("collects week-old finished records but keeps unintegrated work", function*
   const registry = path.join(agent, "subagent-worktrees");
   const remaining = yield* Effect.gen(function* () {
     const restarted = yield* WorkspaceService;
-    return (yield* restarted.listAll).records.map((record) => record.handle.workspaceId);
+    return Arr.map((yield* restarted.listAll).records, (record) => record.handle.workspaceId);
   }).pipe(Effect.provide(WorkspaceService.layer({ agentDirectory: agent })));
   expect(remaining).not.toContain(expired.workspaceId);
   for (const handle of [recent, kept, active]) expect(remaining).toContain(handle.workspaceId);
   expect(yield* exists(path.join(registry, expired.workspaceId))).toBe(false);
-  expect((yield* io(() => fs.readdir(registry))).some((name) => name.startsWith("."))).toBe(false);
+  expect(
+    Arr.some(yield* io(() => fs.readdir(registry)), (name) => Fn.pipe(name, Str.startsWith("."))),
+  ).toBe(false);
 });

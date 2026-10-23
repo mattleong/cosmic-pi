@@ -1,3 +1,7 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
 import type { ClaudeProtocolEvent } from "./local-claude-protocol.ts";
 
 export const SENT_UUID_LIMIT = 64;
@@ -38,10 +42,10 @@ export const isInternalReplayOrigin = (
 ): boolean => originSubkind === undefined && INTERNAL_REPLAY_ORIGINS.has(originKind ?? "");
 
 const hasTaskNotificationEnvelope = (text: string): boolean => {
-  const trimmed = text.trimStart();
+  const trimmed = Str.trimStart(text);
   return (
-    trimmed.startsWith("<task-notification>") &&
-    trimmed.includes("</task-notification>", "<task-notification>".length)
+    Fn.pipe(trimmed, Str.startsWith("<task-notification>")) &&
+    Fn.pipe(trimmed, Str.includes("</task-notification>", "<task-notification>".length))
   );
 };
 
@@ -142,10 +146,13 @@ export type ClaudeLeadingTagDiagnostic =
   | (typeof DIAGNOSTIC_LEADING_TAGS)[number];
 
 export const claudeLeadingTagDiagnostic = (text: string): ClaudeLeadingTagDiagnostic => {
-  const tag = /^\s*<([a-z][a-z0-9-]{0,63})(?:\s|>)/u.exec(text.slice(0, 256))?.[1];
+  const tag = /^\s*<([a-z][a-z0-9-]{0,63})(?:\s|>)/u.exec(Fn.pipe(text, Str.slice(0, 256)))?.[1];
   return tag === undefined
     ? "none"
-    : (DIAGNOSTIC_LEADING_TAGS.find((known) => known === tag) ?? "other");
+    : Option.getOrElse(
+        Arr.findFirst(DIAGNOSTIC_LEADING_TAGS, (known) => known === tag),
+        () => "other" as const,
+      );
 };
 
 type ClaudeOutboundAgeDiagnostic = "none" | "under-1s" | "1-10s" | "11-60s" | "over-60s";
@@ -173,28 +180,31 @@ export const uncorrelatedClaudeUserMessage = (
   nativeSessionId: string | undefined,
   context: ClaudeUserDiagnosticContext,
 ): string =>
-  [
-    "Claude replayed an uncorrelated stream-input message.",
-    `[sequence=${Math.max(0, Math.trunc(context.sequence))}`,
-    `uuid=${event.uuid === undefined ? "absent" : "present"}`,
-    `session=${claudeSessionDiagnostic(event.sessionId, nativeSessionId)}`,
-    `replay=${event.isReplay}`,
-    `synthetic=${event.isSynthetic}`,
-    `meta=${event.isMeta}`,
-    `compact=${event.isCompactSummary}`,
-    `origin=${diagnosticOrigin(event.originKind, DIAGNOSTIC_ORIGINS)}`,
-    `subkind=${diagnosticOrigin(event.originSubkind, DIAGNOSTIC_ORIGIN_SUBKINDS)}`,
-    `parent-tool=${event.parentToolUseId === undefined ? "absent" : "present"}`,
-    `tool-results=${event.toolResults.length === 0 ? "none" : "present"}`,
-    `content=${context.contentMatch}`,
-    `shape=${event.contentKind}`,
-    `length=${claudeTextLengthDiagnostic(event.textLength)}`,
-    `tag=${claudeLeadingTagDiagnostic(event.text)}`,
-    `since-outbound=${context.sinceOutbound}`,
-    `pending=${context.pending}`,
-    `report=${context.report}`,
-    `trace=${context.traceEnabled ? "enabled" : "disabled"}]`,
-  ].join("; ");
+  Arr.join(
+    [
+      "Claude replayed an uncorrelated stream-input message.",
+      `[sequence=${Math.max(0, Math.trunc(context.sequence))}`,
+      `uuid=${event.uuid === undefined ? "absent" : "present"}`,
+      `session=${claudeSessionDiagnostic(event.sessionId, nativeSessionId)}`,
+      `replay=${event.isReplay}`,
+      `synthetic=${event.isSynthetic}`,
+      `meta=${event.isMeta}`,
+      `compact=${event.isCompactSummary}`,
+      `origin=${diagnosticOrigin(event.originKind, DIAGNOSTIC_ORIGINS)}`,
+      `subkind=${diagnosticOrigin(event.originSubkind, DIAGNOSTIC_ORIGIN_SUBKINDS)}`,
+      `parent-tool=${event.parentToolUseId === undefined ? "absent" : "present"}`,
+      `tool-results=${event.toolResults.length === 0 ? "none" : "present"}`,
+      `content=${context.contentMatch}`,
+      `shape=${event.contentKind}`,
+      `length=${claudeTextLengthDiagnostic(event.textLength)}`,
+      `tag=${claudeLeadingTagDiagnostic(event.text)}`,
+      `since-outbound=${context.sinceOutbound}`,
+      `pending=${context.pending}`,
+      `report=${context.report}`,
+      `trace=${context.traceEnabled ? "enabled" : "disabled"}]`,
+    ],
+    "; ",
+  );
 
 export interface ResultExpectation {
   readonly uuid: string;
@@ -222,7 +232,10 @@ export const claudeResultCorrelation = () => {
     resultExpectations.set(owned.uuid, owned);
     resultOrder.push(owned);
     while (resultOrder.length > SENT_UUID_LIMIT) {
-      const synthetic = resultOrder.findIndex((candidate) => candidate.kind === "synthetic");
+      const synthetic = Option.getOrElse(
+        Arr.findFirstIndex(resultOrder, (candidate) => candidate.kind === "synthetic"),
+        () => -1,
+      );
       const [evicted] = resultOrder.splice(Math.max(0, synthetic), 1);
       if (evicted) resultExpectations.delete(evicted.uuid);
     }
@@ -241,9 +254,12 @@ export const claudeResultCorrelation = () => {
       if (index >= 0) resultOrder.splice(index, 1);
       return expectation;
     }
-    const index = isInternalReplayOrigin(originKind, originSubkind)
-      ? resultOrder.findIndex((candidate) => candidate.kind === "synthetic")
-      : resultOrder.findIndex((candidate) => candidate.kind !== "synthetic");
+    const index = Option.getOrElse(
+      isInternalReplayOrigin(originKind, originSubkind)
+        ? Arr.findFirstIndex(resultOrder, (candidate) => candidate.kind === "synthetic")
+        : Arr.findFirstIndex(resultOrder, (candidate) => candidate.kind !== "synthetic"),
+      () => -1,
+    );
     if (index < 0) return undefined;
     const [expectation] = resultOrder.splice(index, 1);
     if (expectation) resultExpectations.delete(expectation.uuid);
@@ -268,7 +284,8 @@ export const claudeResultCorrelation = () => {
     register,
     take,
     hasOutstandingAssignment: (epoch: number) =>
-      resultOrder.some(
+      Arr.some(
+        resultOrder,
         (expectation) => expectation.kind === "assignment" && expectation.epoch === epoch,
       ),
     clear,

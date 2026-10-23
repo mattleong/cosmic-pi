@@ -1,4 +1,4 @@
-import { expect } from "vitest";
+import { assert, expect } from "vitest";
 import { nodeFsPromises as fs, nodePath as path } from "../support/node-builtins.ts";
 import { git } from "../../src/boundary/git-worktree-process.ts";
 import {
@@ -9,6 +9,8 @@ import {
   workspaceTests,
   writeFile,
 } from "./fixtures/repository.ts";
+import * as Arr from "effect/Array";
+import * as Order from "effect/Order";
 
 const test = workspaceTests([
   ["src/main.ts", "baseline\n"],
@@ -30,7 +32,7 @@ test("reports edited and new source files without freezing a revision", function
   yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
   yield* writeFile(path.join(handle.cwd, "src/added.ts"), "added\n");
   const changes = yield* service.inspectWorkerChanges(workspaceTarget(handle));
-  expect(changes.changedPaths.toSorted()).toEqual(["src/added.ts", "src/main.ts"]);
+  expect(Arr.sort(changes.changedPaths, Order.String)).toEqual(["src/added.ts", "src/main.ts"]);
   expect(changes.uncapturedPaths).toEqual([]);
   expect(changes.diffStat).toEqual([
     { path: "src/added.ts", change: "added", binary: false, addedLines: 1, deletedLines: 0 },
@@ -41,7 +43,9 @@ test("reports edited and new source files without freezing a revision", function
   expect(record.revision).toBeUndefined();
   // Inspection leaves the workspace free to freeze the same changes.
   const revision = yield* service.freeze(workspaceTarget(handle));
-  expect(revision.changedPaths.toSorted()).toEqual(changes.changedPaths.toSorted());
+  expect(Arr.sort(revision.changedPaths, Order.String)).toEqual(
+    Arr.sort(changes.changedPaths, Order.String),
+  );
 });
 
 const CREDENTIAL_FILES = [
@@ -61,12 +65,17 @@ test("leaves writer-created credential files out, keeping credential-named sourc
     yield* writeFile(path.join(handle.cwd, name), `${name}\n`);
   }
   const changes = yield* service.inspectWorkerChanges(workspaceTarget(handle));
-  expect(changes.changedPaths.toSorted()).toEqual(CREDENTIAL_NAMED_SOURCES);
-  expect(changes.uncapturedPaths.toSorted()).toEqual(CREDENTIAL_FILES.toSorted());
+  expect(Arr.sort(changes.changedPaths, Order.String)).toEqual(CREDENTIAL_NAMED_SOURCES);
+  expect(Arr.sort(changes.uncapturedPaths, Order.String)).toEqual(
+    Arr.sort(CREDENTIAL_FILES, Order.String),
+  );
   // They never block: the revision prepares and integrates without them.
   const revision = yield* service.freeze(workspaceTarget(handle));
-  expect(revision.changedPaths.toSorted()).toEqual(CREDENTIAL_NAMED_SOURCES);
-  expect(revision.uncapturedPaths?.toSorted()).toEqual(CREDENTIAL_FILES.toSorted());
+  expect(Arr.sort(revision.changedPaths, Order.String)).toEqual(CREDENTIAL_NAMED_SOURCES);
+  assert(revision.uncapturedPaths !== undefined);
+  expect(Arr.sort(revision.uncapturedPaths, Order.String)).toEqual(
+    Arr.sort(CREDENTIAL_FILES, Order.String),
+  );
   const prepared = yield* service.prepare({
     ...workspaceTarget(handle),
     revisionId: revision.revisionId,

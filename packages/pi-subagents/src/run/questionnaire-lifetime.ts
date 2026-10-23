@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import type { QuestionnaireOwner } from "pi-ask-user/protocol";
@@ -24,7 +25,7 @@ export const questionnaireLifetimes = (isClosed: () => boolean) => {
   >();
   const invalidate = Effect.suspend(() =>
     Effect.forEach(
-      [...entries.values()].filter((entry) => !entry.current()),
+      Arr.filter([...entries.values()], (entry) => !entry.current()),
       (entry) => Deferred.succeed(entry.revoked, undefined),
       { discard: true },
     ),
@@ -32,7 +33,7 @@ export const questionnaireLifetimes = (isClosed: () => boolean) => {
   const drain = (record: RunRecord) =>
     Effect.suspend(() =>
       Effect.forEach(
-        [...entries.values()].filter((entry) => entry.record === record),
+        Arr.filter([...entries.values()], (entry) => entry.record === record),
         (entry) =>
           Deferred.succeed(entry.revoked, undefined).pipe(
             Effect.andThen(Deferred.await(entry.settled)),

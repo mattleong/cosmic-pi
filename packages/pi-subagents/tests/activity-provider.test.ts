@@ -1,4 +1,4 @@
-import { describe, expect, it } from "@effect/vitest";
+import { assert, describe, expect, it } from "@effect/vitest";
 import { effectTest, step } from "./support/effect-test.ts";
 import { vi } from "vitest";
 import { ACTIVITY_HOST } from "pi-cosmic-ui/activity";
@@ -14,6 +14,10 @@ import { subagentServiceDouble } from "./tools/fixtures/subagent-service-double.
 import { subagentActivityDetail, subagentActivityItems } from "../src/ui/run-activity.ts";
 import { subagentProjectionBridge } from "../src/boundary/host-ui.ts";
 import { view } from "./fixtures/run-view.ts";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 
 const question = { requestId: "q", message: "Question" };
 
@@ -35,8 +39,11 @@ const promptedProvider = (runs: ReadonlyArray<SubagentRunView>, isCurrent = () =
     },
     act,
   });
-  const item = subagentActivityItems(bridge.get(), bridge.getActivityPresentation()).find(
-    (candidate) => candidate.id === "selected",
+  const item = Option.getOrUndefined(
+    Arr.findFirst(
+      subagentActivityItems(bridge.get(), bridge.getActivityPresentation()),
+      (candidate) => candidate.id === "selected",
+    ),
   )!;
   // Discovered callbacks are foreign, so their results settle as untrusted values.
   const invoke = (action: string, signal: AbortSignal) =>
@@ -68,7 +75,8 @@ describe("subagent activity provider", () => {
       const { bridge, transport, act, dispose, invoke } = promptedProvider([run]);
       const item = subagentActivityItems(bridge.get())[0]!;
       expect(item.status).toBe("blocked");
-      expect(item.actions?.map((action) => action.id)).toContain("stop");
+      assert(item.actions !== undefined);
+      expect(Arr.map(item.actions, (action) => action.id)).toContain("stop");
       const detail = subagentActivityDetail(bridge.get(), run.id)!;
       expect(detail).toContain("Cleanup detail sentinel");
       expect(detail).toContain("Accepted work report sentinel");
@@ -85,9 +93,9 @@ describe("subagent activity provider", () => {
         cleanup: { disposition: "quarantined" as const, recovery: "manual" as const },
       };
       bridge.publish({ revision: 2, runs: [manual] });
-      expect(
-        subagentActivityItems(bridge.get())[0]!.actions?.map((action) => action.id),
-      ).not.toContain("stop");
+      const manualActions = subagentActivityItems(bridge.get())[0]!.actions;
+      assert(manualActions !== undefined);
+      expect(Arr.map(manualActions, (action) => action.id)).not.toContain("stop");
       yield* step(() =>
         expect(
           transport.capability()!.invoke!(run.id, "stop", item.revision, signal),
@@ -101,7 +109,8 @@ describe("subagent activity provider", () => {
       bridge.publish({ revision: 3, runs: [confirmed] });
       const done = subagentActivityItems(bridge.get())[0]!;
       expect(done.status).toBe("done");
-      expect(done.actions?.map((action) => action.id)).not.toContain("stop");
+      assert(done.actions !== undefined);
+      expect(Arr.map(done.actions, (action) => action.id)).not.toContain("stop");
       dispose();
     },
   );
@@ -154,7 +163,7 @@ describe("subagent activity provider", () => {
       if (changed === "session") current = false;
       else if (changed === "cancel") controller.abort();
       else if (changed === "dispose") dispose();
-      else if (changed.startsWith("host-")) {
+      else if (Fn.pipe(changed, Str.startsWith("host-"))) {
         transport.events.emit(ACTIVITY_HOST, {
           version: 1,
           sessionId: "session",
@@ -180,7 +189,8 @@ describe("subagent activity provider", () => {
                 question: { requestId: "q-new", message: "Another question" },
               }),
               ...(changed === "policy" && {
-                capabilities: selected.capabilities.filter(
+                capabilities: Arr.filter(
+                  selected.capabilities,
                   (capability) => capability !== "parent-contact",
                 ),
               }),

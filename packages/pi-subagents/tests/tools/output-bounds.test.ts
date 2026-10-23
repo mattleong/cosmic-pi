@@ -6,7 +6,7 @@ import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { extensionApiFixture } from "pi-cosmic-core/testing";
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import {
   completionBlock,
   hostNotifier,
@@ -66,6 +66,8 @@ import { runRecordFixture } from "../run/fixtures/run-context.ts";
 import { effectTest, step } from "../support/effect-test.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import { captureSubagentTools, executeTool, view } from "./fixtures/tool-harness.ts";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
 
 const blocksNeeded = (count: number): number =>
   MAX_RESULT_HEADER_CHARS + count * (MAX_RUN_BLOCK_CHARS + RUN_BLOCK_SEPARATOR.length);
@@ -112,12 +114,18 @@ describe("model-facing output budget", () => {
 // Worst-case inputs: every field at its retained bound.
 
 const longText = (tag: string, length: number): string =>
-  `${tag} ${Array.from({ length }, (_, index) => `w${index % 10}`).join(" ")}`.slice(0, length);
+  Fn.pipe(
+    `${tag} ${Arr.join(
+      Array.from({ length }, (_, index) => `w${index % 10}`),
+      " ",
+    )}`,
+    Str.slice(0, length),
+  );
 
 /** A real archive path is at most MAX_OUTCOME_FILE_PATH_CHARS; the archive saves nothing longer. */
 const maxPath = (index: number, kind = "report"): string => {
-  const file = `/agent-r1-${index}-${kind}-1-${"u".repeat(36)}.md`;
-  return `/${"d".repeat(MAX_OUTCOME_FILE_PATH_CHARS - file.length - 1)}${file}`;
+  const file = `/agent-r1-${index}-${kind}-1-${Fn.pipe("u", Str.repeat(36))}.md`;
+  return `/${Fn.pipe("d", Str.repeat(MAX_OUTCOME_FILE_PATH_CHARS - file.length - 1))}${file}`;
 };
 
 const archive = (path: string): SubagentReportArchive => ({
@@ -129,7 +137,7 @@ const archive = (path: string): SubagentReportArchive => ({
 
 const worstCandidate: SubagentNextCandidate = {
   runtime: "pi",
-  model: "m".repeat(MAX_PROFILE_MODEL_SELECTOR_CHARS),
+  model: Fn.pipe("m", Str.repeat(MAX_PROFILE_MODEL_SELECTOR_CHARS)),
   effort: "xhigh",
 };
 
@@ -139,14 +147,14 @@ const worstRun = (index: number): SubagentRunView => {
     id,
     name: longText(`worker-${index}`, MAX_NAME_CHARS),
     profile: "reviewer" as const,
-    agent: "a".repeat(64),
+    agent: Fn.pipe("a", Str.repeat(64)),
     warning: longText(`WARNING-${index}`, MAX_CONTACT_TEXT_CHARS),
     parentRunId: "root",
     nextCandidate: worstCandidate,
     steeringDelivery: "unresolved" as const,
     writeIntent: "writer" as const,
     writerWorkspaceMode: "worktree" as const,
-    workspaceId: "w".repeat(36),
+    workspaceId: Fn.pipe("w", Str.repeat(36)),
     workspaceOutcome: {
       status: "proposal" as const,
       changedFileCount: 999_999,
@@ -155,7 +163,7 @@ const worstRun = (index: number): SubagentRunView => {
         addedLines: 9_999_999,
         deletedLines: 9_999_999,
         files: Array.from({ length: 50 }, (_, file) => ({
-          path: `src/${"p".repeat(200)}-${file}.ts`,
+          path: `src/${Fn.pipe("p", Str.repeat(200))}-${file}.ts`,
           addedLines: 1,
           deletedLines: 1,
         })),
@@ -218,7 +226,11 @@ const worstObservations = (count: number): ReadonlyArray<SubagentRunObservation>
 
 const resultText = (result: {
   readonly content: ReadonlyArray<{ readonly type: string; readonly text?: string }>;
-}): string => result.content.map((part) => part.text ?? "").join("\n");
+}): string =>
+  Arr.join(
+    Arr.map(result.content, (part) => part.text ?? ""),
+    "\n",
+  );
 
 /** Whole retained reports from 2 KiB up to the retained cap, each saved to its file. */
 const wholeReportRuns = (count: number): ReadonlyArray<SubagentRunView> =>
@@ -263,23 +275,26 @@ describe("worst-case model-facing output", () => {
             use(observations, questions),
           consumeCompletions: (receipts) =>
             Effect.sync(() => {
-              consumed.push(...receipts.map((receipt) => receipt.id));
+              consumed.push(...Arr.map(receipts, (receipt) => receipt.id));
             }),
         }),
       ).get("agent_await")!;
 
       const result = yield* step(() =>
         executeTool(tool, {
-          runIds: observations.map(({ run }) => run.id),
+          runIds: Arr.map(observations, ({ run }) => run.id),
           until: "all_finished",
         }),
       );
 
       const text = resultText(result);
       expect(text.length).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_CHARS);
-      const blocks = text.split(RUN_BLOCK_SEPARATOR);
+      const blocks = Str.split(text, RUN_BLOCK_SEPARATOR);
       for (const { run } of observations) {
-        const block = blocks.find((candidate) => candidate.startsWith(`${run.id} `)) ?? "";
+        const block = Option.getOrElse(
+          Arr.findFirst(blocks, (candidate) => Fn.pipe(candidate, Str.startsWith(`${run.id} `))),
+          () => "",
+        );
         if (run.reportArchive) expect(block).toContain(run.reportArchive.path);
         if (run.errorArchive) expect(block).toContain(run.errorArchive.path);
         // An outcome cut without a file points to agent_read for the rest.
@@ -293,34 +308,41 @@ describe("worst-case model-facing output", () => {
       );
       const contract = decodeSubagentContract("agent_await")(result.structuredContent);
       expect(JSON.stringify(contract).length).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_CHARS);
+      assert(contract !== undefined);
       expect(
-        contract?.targets
-          .filter((target) => target.state === "completed")
-          .map((target) => target.report.status),
-      ).toEqual(observations.filter(({ run }) => run.state === "completed").map(() => "delivered"));
+        Arr.map(
+          Arr.filter(contract.targets, (target) => target.state === "completed"),
+          (target) => target.report.status,
+        ),
+      ).toEqual(
+        Arr.map(
+          Arr.filter(observations, ({ run }) => run.state === "completed"),
+          () => "delivered",
+        ),
+      );
     },
   );
 
   effectTest(
     "bounds a lifecycle result for MAX_LIFECYCLE_TARGET_RUNS worst-case targets",
     function* () {
-      const runs = worstObservations(MAX_LIFECYCLE_TARGET_RUNS).map(({ run }) => run);
+      const runs = Arr.map(worstObservations(MAX_LIFECYCLE_TARGET_RUNS), ({ run }) => run);
       const tool = captureSubagentTools(
         subagentServiceDouble({
           stop: (id) =>
-            id.endsWith("1")
+            Fn.pipe(id, Str.endsWith("1"))
               ? Effect.fail(
                   InvalidSubagentRequestError.make({
                     code: "stop_failed",
                     message: longText("stop failed", MAX_ERROR_CHARS),
                   }),
                 )
-              : Effect.succeed(runs.find((run) => run.id === id)!),
+              : Effect.succeed(Option.getOrUndefined(Arr.findFirst(runs, (run) => run.id === id))!),
         }),
       ).get("agent_lifecycle")!;
 
       const result = yield* step(() =>
-        executeTool(tool, { action: "stop", runIds: runs.map((run) => run.id) }),
+        executeTool(tool, { action: "stop", runIds: Arr.map(runs, (run) => run.id) }),
       );
 
       const text = resultText(result);
@@ -337,7 +359,7 @@ describe("worst-case model-facing output", () => {
       subagentServiceDouble({
         withAwaitTerminalObservations: (_ids, _until, _onUpdate, use) =>
           use(
-            runs.map((run) => ({
+            Arr.map(runs, (run) => ({
               run,
               completionReceipt: { id: run.id, generation: 1, claimToken: `claim-${run.id}` },
             })),
@@ -348,16 +370,18 @@ describe("worst-case model-facing output", () => {
 
     const text = resultText(
       yield* step(() =>
-        executeTool(tool, { runIds: runs.map((run) => run.id), until: "all_finished" }),
+        executeTool(tool, { runIds: Arr.map(runs, (run) => run.id), until: "all_finished" }),
       ),
     );
 
     expect(text.length).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_CHARS);
     for (const run of runs) expect(text).toContain(run.reportArchive?.path);
-    const inlined = runs.filter((run) => text.includes(run.finalText ?? "missing"));
+    const inlined = Arr.filter(runs, (run) =>
+      Fn.pipe(text, Str.includes(run.finalText ?? "missing")),
+    );
     // The smallest report fits whole after the blocks; the largest can't.
-    expect(inlined.map((run) => run.id)).toContain(runs.at(-1)?.id);
-    expect(inlined.map((run) => run.id)).not.toContain(runs[0]?.id);
+    expect(Arr.map(inlined, (run) => run.id)).toContain(runs.at(-1)?.id);
+    expect(Arr.map(inlined, (run) => run.id)).not.toContain(runs[0]?.id);
   });
 
   it("keeps a full batch of large whole reports within one notice", () => {
@@ -365,7 +389,7 @@ describe("worst-case model-facing output", () => {
     const runs = wholeReportRuns(MAX_COMPLETION_DELIVERY_BATCH);
     hostNotifier(extensionApiFixture({ sendMessage }))({
       type: "completed",
-      runs: runs.map((run) => ({
+      runs: Arr.map(runs, (run) => ({
         id: run.id,
         name: run.name,
         generation: 1,
@@ -490,8 +514,8 @@ describe("worst-case model-facing output", () => {
 /** Text at `length` characters whose end is a marker that only the whole text contains. */
 const withTail = (tag: string, length: number): string => {
   const marker = `${tag}-END`;
-  const body = `${longText(tag, length - marker.length - 1).trimEnd()} `;
-  return `${body.padEnd(length - marker.length, "x")}${marker}`;
+  const body = `${Str.trimEnd(longText(tag, length - marker.length - 1))} `;
+  return `${Fn.pipe(body, Str.padEnd(length - marker.length, "x"))}${marker}`;
 };
 
 /** A run with every read card field at its retained bound, in the given state. */
@@ -503,7 +527,7 @@ const worstReadRun = (
     ...base,
     // The reader is main, the run's parent, so the card adds its next steps.
     parentRunId: undefined,
-    cwd: `/${"c".repeat(4_000)}`,
+    cwd: `/${Fn.pipe("c", Str.repeat(4_000))}`,
     currentTool: longText("tool", 4_000),
     progress: longText("PROGRESS", MAX_CONTACT_TEXT_CHARS),
     childWarning: withTail("CHILD-WARNING", MAX_CONTACT_TEXT_CHARS),
@@ -565,7 +589,7 @@ describe("multi-run agent_read", () => {
     ).get("agent_read")!;
 
     const text = resultText(
-      yield* step(() => executeTool(tool, { agentIds: runs.map((run) => run.id) })),
+      yield* step(() => executeTool(tool, { agentIds: Arr.map(runs, (run) => run.id) })),
     );
 
     expect(text.length).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_CHARS);
@@ -580,9 +604,14 @@ describe("multi-run agent_read", () => {
 /** A question at its retained bound in `count` lines, the last ending with its marker. */
 const questionOfLines = (count: number): string => {
   const width = Math.floor((MAX_CONTACT_TEXT_CHARS + 1) / count) - 1;
-  return Array.from({ length: count }, (_, index) =>
-    index === count - 1 ? "QUESTION-END".padStart(width, "q") : "q".repeat(width),
-  ).join("\n");
+  return Arr.join(
+    Array.from({ length: count }, (_, index) =>
+      index === count - 1
+        ? Fn.pipe("QUESTION-END", Str.padStart(width, "q"))
+        : Fn.pipe("q", Str.repeat(width)),
+    ),
+    "\n",
+  );
 };
 
 describe("worst-case single-run agent_read", () => {
@@ -607,21 +636,25 @@ describe("worst-case single-run agent_read", () => {
 
           const text = resultText(result);
           expect(text.length).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_CHARS);
-          const recovery = [
-            run.question?.message,
-            // A saved report's retained copy follows its file, whole.
-            run.finalText,
-            run.reportArchive?.path,
-            run.error,
-            run.childWarning,
-            run.systemWarning,
-          ].filter(Predicate.isNotUndefined);
+          const recovery = Arr.filter(
+            [
+              run.question?.message,
+              // A saved report's retained copy follows its file, whole.
+              run.finalText,
+              run.reportArchive?.path,
+              run.error,
+              run.childWarning,
+              run.systemWarning,
+            ],
+            Predicate.isNotUndefined,
+          );
           for (const whole of recovery) expect(text).toContain(whole);
 
           const [read] =
             decodeSubagentContract("agent_read")(result.structuredContent)?.agents ?? [];
           const status = read?.kind === "run" ? read.status : undefined;
-          expect(status?.warnings.map((warning) => warning.message)).toEqual([
+          assert(status !== undefined);
+          expect(Arr.map(status.warnings, (warning) => warning.message)).toEqual([
             run.childWarning,
             run.systemWarning,
           ]);
@@ -668,13 +701,15 @@ describe("worst-case single-run agent_read", () => {
           [text, "    "],
           [notice, "  "],
         ] as const) {
-          const lines = shown.split("\n").filter((line) => line.trimStart().startsWith("q"));
-          expect(lines.every((line) => line.startsWith(indent))).toBe(true);
+          const lines = Arr.filter(Str.split(shown, "\n"), (line) =>
+            Fn.pipe(Str.trimStart(line), Str.startsWith("q")),
+          );
+          expect(Arr.every(lines, (line) => Fn.pipe(line, Str.startsWith(indent)))).toBe(true);
           expect(shown).toContain("QUESTION-END");
         }
         // A child's wire card keeps the whole question too.
         const card = agentReadCard(run, { caller: { kind: "main" } });
-        expect(card.indexOf("QUESTION-END")).toBeLessThan(
+        expect(Option.getOrElse(Fn.pipe(card, Str.indexOf("QUESTION-END")), () => -1)).toBeLessThan(
           MAX_SUPERVISOR_AGENT_CARD_CHARS - "QUESTION-END\n… [status card truncated]".length,
         );
       },
@@ -683,7 +718,7 @@ describe("worst-case single-run agent_read", () => {
 
 /** Text at `length` UTF-16 units that JSON escapes at up to six bytes each. */
 const worstJsonText = (length: number): string =>
-  `"\\\n${"\uD800".repeat(length)}`.slice(0, length);
+  Fn.pipe(`"\\\n${Fn.pipe("\uD800", Str.repeat(length))}`, Str.slice(0, length));
 
 const jsonBytes = (value: SupervisorAgentReadResult | string): number =>
   Buffer.byteLength(JSON.stringify(value), "utf8");
@@ -692,9 +727,9 @@ describe("worst-case supervisor agent_read", () => {
   it("fits MAX_TARGET_RUNS reads in one channel line, MCP line, and CLI stdout line", () => {
     const result: SupervisorAgentReadResult = {
       agents: Array.from({ length: MAX_TARGET_RUNS }, (_, index) => ({
-        id: `agent-r1-${index}-${"x".repeat(MAX_SUPERVISOR_MCP_AGENT_ID_CHARS)}`.slice(
-          0,
-          MAX_SUPERVISOR_MCP_AGENT_ID_CHARS,
+        id: Fn.pipe(
+          `agent-r1-${index}-${Fn.pipe("x", Str.repeat(MAX_SUPERVISOR_MCP_AGENT_ID_CHARS))}`,
+          Str.slice(0, MAX_SUPERVISOR_MCP_AGENT_ID_CHARS),
         ),
         name: worstJsonText(MAX_SUPERVISOR_AGENT_NAME_CHARS),
         state: "waiting_for_parent",

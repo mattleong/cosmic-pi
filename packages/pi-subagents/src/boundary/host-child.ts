@@ -5,6 +5,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Predicate from "effect/Predicate";
+import * as Arr from "effect/Array";
 import { Type } from "typebox";
 import { toolArgumentPreparer } from "pi-cosmic-core/tool-arguments";
 import {
@@ -169,7 +170,10 @@ export function registerSubagentChildBridge(
 
   const removeProxyNames = (): void =>
     invokeHostCallback(() => {
-      const kept = pi.getActiveTools().filter((name) => !CHILD_PRIVATE_TOOL_NAME_SET.has(name));
+      const kept = Arr.filter(
+        pi.getActiveTools(),
+        (name) => !CHILD_PRIVATE_TOOL_NAME_SET.has(name),
+      );
       pi.setActiveTools(kept);
     }, undefined);
 

@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type { SubagentRunView } from "../run/model.ts";
 import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
@@ -61,7 +63,11 @@ export const presentSubagentResult = (
         ? managementAcknowledgement(input.args.action, runs)
         : "";
     if (actionFailures.length > 0)
-      return [acknowledgement, formatActionFailures(actionFailures)].filter(Boolean).join("\n\n");
+      return Fn.pipe(
+        [acknowledgement, formatActionFailures(actionFailures)],
+        Arr.filter(Boolean),
+        Arr.join("\n\n"),
+      );
     return acknowledgement || "No subagent runs.";
   };
   return {

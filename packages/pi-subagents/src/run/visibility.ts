@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import { runNotFound, type SubagentNotFoundError } from "./errors.ts";
 import type { RunContext } from "./internal.ts";
@@ -11,7 +12,9 @@ export function visibilityOperations(dependencies: Pick<RunContext, "records" | 
     withLock(
       Effect.sync(() =>
         sortRuns(
-          projectRunTree(records).filter((run) => isRunInSubtree(records, callerRunId, run.id)),
+          Arr.filter(projectRunTree(records), (run) =>
+            isRunInSubtree(records, callerRunId, run.id),
+          ),
         ),
       ),
     );

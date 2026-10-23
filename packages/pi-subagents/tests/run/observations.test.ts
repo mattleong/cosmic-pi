@@ -19,6 +19,8 @@ import {
   withService,
 } from "./fixtures/service-harness.ts";
 import { InvalidSubagentRequestError, SubagentRuntimeClosedError } from "../../src/run/errors.ts";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 
 type CompletionPolicy = (
   attempt: number,
@@ -35,7 +37,7 @@ const completionRetryFixture = (policy: CompletionPolicy) => {
       attempts += 1;
       return policy(
         attempts,
-        notification.runs.map((run) => `${run.id}:${run.generation}`),
+        Arr.map(notification.runs, (run) => `${run.id}:${run.generation}`),
       );
     },
   });
@@ -214,10 +216,14 @@ describe("SubagentService", () => {
       fake.controls[1]?.settle();
 
       const completed = yield* Fiber.join(waiting);
-      expect(completed.map((run) => run.state)).toEqual(["completed", "completed"]);
+      expect(Arr.map(completed, (run) => run.state)).toEqual(["completed", "completed"]);
       yield* TestClock.adjust("100 millis");
       expect(notifications).toEqual([]);
-      expect(updates.at(-1)?.every((run) => run.state === "completed")).toBe(true);
+      expect(
+        Option.exists(Arr.last(updates), (runs) =>
+          Arr.every(runs, (run) => run.state === "completed"),
+        ),
+      ).toBe(true);
     });
   });
 
@@ -276,7 +282,7 @@ describe("SubagentService", () => {
     const { fake, projections, layer } = localServiceFixture({
       notify: (notification) => {
         if (notification.type !== "completed") return undefined;
-        batches.push(notification.runs.map(({ id, generation }) => ({ id, generation })));
+        batches.push(Arr.map(notification.runs, ({ id, generation }) => ({ id, generation })));
         const first = notification.runs[0];
         return { deliveredCompletionKeys: first ? [`${first.id}:${first.generation}`] : [] };
       },
@@ -287,7 +293,9 @@ describe("SubagentService", () => {
       fake.controls[0]?.settle();
       fake.controls[1]?.settle();
       yield* yieldUntil(() =>
-        Boolean(projections.at(-1)?.runs.every((run) => run.state === "completed")),
+        Option.exists(Arr.last(projections), (projection) =>
+          Arr.every(projection.runs, (run) => run.state === "completed"),
+        ),
       );
       yield* TestClock.adjust("100 millis");
       yield* yieldUntil(() => batches.length === 1);
@@ -327,7 +335,7 @@ describe("SubagentService", () => {
       yield* Effect.yieldNow;
       expect((yield* runView(service, run.id)).state).toBe("completed");
       expect(
-        notifications.filter((notification) => notification.type === "completed"),
+        Arr.filter(notifications, (notification) => notification.type === "completed"),
       ).toHaveLength(1);
     });
   });

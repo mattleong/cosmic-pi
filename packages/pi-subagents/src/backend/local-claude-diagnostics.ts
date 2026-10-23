@@ -1,5 +1,7 @@
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import { processError, type SubagentProcessError } from "../run/errors.ts";
 import { SUPERVISOR_MCP_REGISTRATION } from "../supervisor/mcp-contract.ts";
 import { CLAUDE_NATIVE_AGENT_TOOLS } from "./claude-policy.ts";
@@ -32,7 +34,7 @@ const toolCategory = (name: string): ClaudeInputFailureSnapshot["activeToolCateg
   if (name === "Bash") return "shell";
   if (["Edit", "Write", "Read", "NotebookEdit", "Glob", "Grep"].includes(name)) return "file";
   if (CLAUDE_NATIVE_AGENT_TOOLS.includes(name)) return "native-agent";
-  if (name.startsWith(`mcp__${SUPERVISOR_MCP_REGISTRATION}__`)) return "supervisor";
+  if (Fn.pipe(name, Str.startsWith(`mcp__${SUPERVISOR_MCP_REGISTRATION}__`))) return "supervisor";
   return "other";
 };
 

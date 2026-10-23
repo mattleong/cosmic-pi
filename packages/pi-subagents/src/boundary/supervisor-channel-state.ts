@@ -4,6 +4,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Latch from "effect/Latch";
 import * as Queue from "effect/Queue";
+import * as Arr from "effect/Array";
 import type { BackendAgentMessaging, BackendReport } from "../backend/model.ts";
 import { NATIVE_SUB_AGENT_REFUSAL } from "../supervisor/mcp-contract.ts";
 import type {
@@ -108,7 +109,7 @@ export const supervisorChannelState = (
   }));
 
 export const hasReadyPeer = (state: SupervisorChannelState): boolean =>
-  [...state.peers.values()].some((peer) => peer.watching);
+  Arr.some([...state.peers.values()], (peer) => peer.watching);
 
 export const synchronizeReadiness = (state: SupervisorChannelState): void => {
   if (hasReadyPeer(state)) Latch.openUnsafe(state.readiness);
@@ -168,7 +169,8 @@ export const removePeer = (state: SupervisorChannelState, clientId: number): voi
     affected.add(acknowledgement.firstAcknowledgement);
   }
   for (const firstAcknowledgement of affected) {
-    const hasLive = [...epochAcknowledgements.values()].some(
+    const hasLive = Arr.some(
+      [...epochAcknowledgements.values()],
       (entry) => entry.firstAcknowledgement === firstAcknowledgement,
     );
     if (!hasLive)

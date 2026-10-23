@@ -4,12 +4,13 @@ import {
   profileReloadHandoff as handoff,
 } from "../src/application/profile-reload-handoff.ts";
 import { completeBaseline, profileCandidate as candidate } from "./fixtures/profiles.ts";
+import * as Rec from "effect/Record";
 
 const reloadSlot = Symbol.for("@cosmic-pi/pi-subagents/profile-reload-handoff/v1");
 
 afterEach(() => handoff.clear());
 
-const slotPresent = () => Object.hasOwn(globalThis, reloadSlot);
+const slotPresent = () => Rec.has<string | symbol, unknown>(globalThis, reloadSlot);
 const slotDescriptor = () => Object.getOwnPropertyDescriptor(globalThis, reloadSlot);
 const writeSlot = (descriptor: PropertyDescriptor) =>
   Object.defineProperty(globalThis, reloadSlot, {

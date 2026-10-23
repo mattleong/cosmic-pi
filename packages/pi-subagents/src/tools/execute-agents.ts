@@ -1,7 +1,11 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
+import * as Order from "effect/Order";
 import * as Predicate from "effect/Predicate";
+import * as Str from "effect/String";
 import type { CompactIssue } from "pi-code-previews";
 import {
   agentMessageDeliveryText,
@@ -62,6 +66,7 @@ import {
 } from "./format.ts";
 import { pendingDeliveryEvidence } from "./outcome.ts";
 import type { AgentToolInput } from "./schema.ts";
+import { isTextFragment } from "./text-fragments.ts";
 
 const agentName = (entry: { readonly name: string }): string => projectName(entry.name) || "agent";
 
@@ -73,7 +78,7 @@ const agentLabel = (entry: { readonly id: string; readonly name: string }): stri
 const missingText = (missingIds: ReadonlyArray<string>): string =>
   missingIds.length === 0
     ? ""
-    : `Not in this session: ${missingIds.map(sanitizeTerminalLine).join(", ")}. Call agent_list without agentIds for current agent IDs.`;
+    : `Not in this session: ${Fn.pipe(missingIds, Arr.map(sanitizeTerminalLine), Arr.join(", "))}. Call agent_list without agentIds for current agent IDs.`;
 
 // A worktree writer's proposal, once its assignment finished, names how to apply it.
 export const agentWorktreeFact = (run: SubagentRunView | undefined): string | undefined =>
@@ -95,32 +100,38 @@ const listLine = (entry: AgentListEntry): string => {
     return `- ${MAIN_AGENT_ID}: ${entry.state}${entry.self ? " (you)" : ""}`;
   const role = entry.agent ?? entry.profile;
   const model = entry.run ? formatRunModel(entry.run) : entry.runtime && `local/${entry.runtime}`;
-  const facts = [
-    entry.state,
-    [role, model].filter(Boolean).join(" on "),
-    entry.run?.writeIntent === "writer" && entry.run.workspaceId === undefined && "writer",
-    agentWorktreeFact(entry.run),
-    agentAttentionFact(entry.run),
-    entry.parentId && `child of ${sanitizeTerminalLine(entry.parentId)}`,
-    entry.self && "you",
-  ].filter(Boolean);
+  const facts = Arr.filter(
+    [
+      entry.state,
+      Fn.pipe([role, model], Arr.filter(isTextFragment), Arr.join(" on ")),
+      entry.run?.writeIntent === "writer" && entry.run.workspaceId === undefined && "writer",
+      agentWorktreeFact(entry.run),
+      agentAttentionFact(entry.run),
+      entry.parentId && `child of ${sanitizeTerminalLine(entry.parentId)}`,
+      entry.self && "you",
+    ],
+    isTextFragment,
+  );
   const task = entry.task
-    ? `\n${"  ".repeat(entry.depth ?? 1)}Task: ${sanitizeTerminalLine(entry.task)}`
+    ? `\n${Fn.pipe("  ", Str.repeat(entry.depth ?? 1))}Task: ${sanitizeTerminalLine(entry.task)}`
     : "";
-  return `${"  ".repeat(Math.max(0, (entry.depth ?? 1) - 1))}- ${agentLabel(entry)}: ${facts.join(", ")}${task}`;
+  return `${Fn.pipe("  ", Str.repeat(Math.max(0, (entry.depth ?? 1) - 1)))}- ${agentLabel(entry)}: ${Arr.join(facts, ", ")}${task}`;
 };
 
 const listText = (result: AgentListResult): string =>
-  [
-    result.agents.length === 0
-      ? "No matching agents."
-      : `Agents in this session (${result.agents.length}):\n${result.agents.map(listLine).join("\n")}`,
-    missingText(result.missingIds),
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+  Fn.pipe(
+    [
+      result.agents.length === 0
+        ? "No matching agents."
+        : `Agents in this session (${result.agents.length}):\n${Fn.pipe(result.agents, Arr.map(listLine), Arr.join("\n"))}`,
+      missingText(result.missingIds),
+    ],
+    Arr.filter(Boolean),
+    Arr.join("\n\n"),
+  );
 
-const knownProfile = (profile: string | undefined) => PROFILE_IDS.find((id) => id === profile);
+const knownProfile = (profile: string | undefined) =>
+  Option.getOrUndefined(Arr.findFirst(PROFILE_IDS, (id) => id === profile));
 
 const WORKTREE_STATUS = {
   proposal: "proposal",
@@ -131,7 +142,7 @@ const WORKTREE_STATUS = {
 
 const listContract = (result: AgentListResult): AgentListContract => ({
   ...envelope(AGENT_TOOL_NAME.list),
-  agents: result.agents.map((entry) => {
+  agents: Arr.map(result.agents, (entry) => {
     const profile = knownProfile(entry.profile);
     const task = metadata(entry.task, MAX_CONTRACT_TASK_CHARS);
     const { run } = entry;
@@ -173,7 +184,7 @@ const listDetails = (result: AgentListResult): AgentToolDetails => {
     version: AGENT_DETAILS_VERSION,
     action: AGENT_TOOL_NAME.list,
     agentCount: result.agents.length,
-    states: [...counts].map(([state, count]) => ({ state, count })),
+    states: Arr.map([...counts], ([state, count]) => ({ state, count })),
     ...(result.agents.length === 1 && only && { only: { id: only.id, name: agentName(only) } }),
     missingIds: [...result.missingIds],
   };
@@ -184,7 +195,7 @@ const guidedText = (result: AgentSendResult, label: string): string => {
     return agentMessageDeliveryText(result.mainState, "The main agent");
   const sent = result.confirmed
     ? `Delivered your message to ${label} as guidance for its current work.`
-    : `Sent your message to ${label} as guidance; ${pendingDeliveryEvidence.message.toLowerCase()}. ${pendingDeliveryEvidence.detail}`;
+    : `Sent your message to ${label} as guidance; ${Str.toLowerCase(pendingDeliveryEvidence.message)}. ${pendingDeliveryEvidence.detail}`;
   return result.parked
     ? `${sent} It is waiting on an answer to its own question, which only its ancestors can give, so it sees your message once one of them answers.`
     : sent;
@@ -216,7 +227,7 @@ const sendDetails = (result: AgentSendResult): AgentToolDetails => ({
 
 const readText = (text: string | undefined): string | undefined => {
   const cleaned = text === undefined ? "" : stripTerminalControls(text);
-  return cleaned.trim() ? cleaned : undefined;
+  return Str.trim(cleaned) ? cleaned : undefined;
 };
 
 const READ_SOURCES = {
@@ -288,35 +299,48 @@ const runReadSection = (
  * has left, smallest first; one run's always fits.
  */
 const readBody = (result: AgentReadResult, options: AgentReadOptions): string => {
-  const sections: ReadonlyArray<ReadSection> = [
-    ...result.agents.map((readout) =>
-      readout.kind === "main"
-        ? { text: mainReadSection(readout) }
-        : runReadSection(readout, options),
-    ),
-    { text: missingText(result.missingIds) },
-  ].filter((section) => section.text);
-  let room = MAX_TOOL_OUTPUT_CHARS - sections.map((section) => section.text).join("\n\n").length;
+  const sections: ReadonlyArray<ReadSection> = Arr.filter(
+    [
+      ...Arr.map(result.agents, (readout) =>
+        readout.kind === "main"
+          ? { text: mainReadSection(readout) }
+          : runReadSection(readout, options),
+      ),
+      { text: missingText(result.missingIds) },
+    ],
+    (section) => Str.isNonEmpty(section.text),
+  );
+  let room =
+    MAX_TOOL_OUTPUT_CHARS -
+    Fn.pipe(
+      sections,
+      Arr.map((section) => section.text),
+      Arr.join("\n\n"),
+    ).length;
   const shown = new Map<ReadSection, string>();
-  for (const section of sections.toSorted(
-    (left, right) => (left.retained?.length ?? 0) - (right.retained?.length ?? 0),
+  for (const section of Arr.sortWith(
+    sections,
+    (candidate) => candidate.retained?.length ?? 0,
+    Order.Number,
   )) {
     if (section.retained === undefined) continue;
     if (section.retained.length + 1 > room) break;
     room -= section.retained.length + 1;
     shown.set(section, section.retained);
   }
-  return sections
-    .map((section) => {
+  return Fn.pipe(
+    sections,
+    Arr.map((section) => {
       const retained = shown.get(section);
       return retained === undefined ? section.text : `${section.text}\n${retained}`;
-    })
-    .join("\n\n");
+    }),
+    Arr.join("\n\n"),
+  );
 };
 
 const readContract = (result: AgentReadResult): AgentReadContract => ({
   ...envelope(AGENT_TOOL_NAME.read),
-  agents: result.agents.map((readout) => {
+  agents: Arr.map(result.agents, (readout) => {
     const text = readText(readout.text);
     const reportFile = readout.kind === "run" ? projectReportFile(readout.reportFile) : undefined;
     const fields = {
@@ -355,13 +379,13 @@ const boundedReadIssue = ({ severity, code, message, detail }: CompactIssue): Co
 
 const readIssues = (run: SubagentRunView): ReadonlyArray<CompactIssue> => {
   const { finalText: _finalText, ...card } = projectSubagentRunCard(run);
-  return compactRunIssues([card]).slice(0, MAX_AGENT_READ_ISSUES).map(boundedReadIssue);
+  return Arr.map(compactRunIssues([card]).slice(0, MAX_AGENT_READ_ISSUES), boundedReadIssue);
 };
 
 const readDetails = (result: AgentReadResult): AgentToolDetails => ({
   version: AGENT_DETAILS_VERSION,
   action: AGENT_TOOL_NAME.read,
-  agents: result.agents.map((readout) => {
+  agents: Arr.map(result.agents, (readout) => {
     const hasText = readText(readout.text) !== undefined;
     const hasReportFile = readout.kind === "run" && readout.reportFile !== undefined;
     const issues = readout.kind === "run" ? readIssues(readout.run) : [];
@@ -381,7 +405,7 @@ const readDetails = (result: AgentReadResult): AgentToolDetails => ({
 });
 
 const codedRefusal = (error: InvalidSubagentRequestError): InvalidSubagentRequestError =>
-  error.code !== undefined && !error.message.startsWith(`[${error.code}]`)
+  error.code !== undefined && !Fn.pipe(error.message, Str.startsWith(`[${error.code}]`))
     ? invalidRequest(error.code, `[${error.code}] ${error.message}`)
     : error;
 
@@ -391,7 +415,7 @@ const codedFailure = (error: SubagentError): SubagentError => {
   if (
     Predicate.isTagged(error, "SubagentProcessError") &&
     error.code !== undefined &&
-    !error.message.startsWith(`[${error.code}]`)
+    !Fn.pipe(error.message, Str.startsWith(`[${error.code}]`))
   )
     return SubagentProcessError.make({
       operation: error.operation,

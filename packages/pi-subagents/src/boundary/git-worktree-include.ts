@@ -1,5 +1,9 @@
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Order from "effect/Order";
 import { clipText, SafeFile, nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core";
 import {
   checkDirectory,
@@ -45,9 +49,9 @@ const unreadableInclude = (file: string, rule: string) =>
  * skipped, and unescaped trailing spaces dropped, as in a `.gitignore`.
  */
 const parseWorktreeInclude = (text: string): ReadonlyArray<string> =>
-  text.split("\n").flatMap((raw) => {
-    const line = raw.replace(/\r$/u, "").replace(/(?<!\\) +$/u, "");
-    return line === "" || line.startsWith("#") ? [] : [line];
+  Arr.flatMap(Str.split(text, "\n"), (raw) => {
+    const line = Fn.pipe(raw, Str.replace(/\r$/u, ""), Str.replace(/(?<!\\) +$/u, ""));
+    return line === "" || Fn.pipe(line, Str.startsWith("#")) ? [] : [line];
   });
 
 /**
@@ -69,7 +73,8 @@ export const readWorktreeInclude = Effect.fn("GitWorktreeInclude.readWorktreeInc
   const patterns = parseWorktreeInclude(new TextDecoder().decode(read.bytes));
   if (
     patterns.length > MAX_WORKTREE_INCLUDE_PATTERNS ||
-    patterns.some(
+    Arr.some(
+      patterns,
       (pattern) => pattern.length > MAX_WORKTREE_INCLUDE_PATTERN_CHARS || /\p{Cc}/u.test(pattern),
     )
   )
@@ -78,7 +83,7 @@ export const readWorktreeInclude = Effect.fn("GitWorktreeInclude.readWorktreeInc
 });
 
 export const describeWorktreeInclude = (patterns: ReadonlyArray<string>) =>
-  clipText(patterns.join(", "), 400);
+  clipText(Arr.join(patterns, ", "), 400);
 
 /**
  * The `.worktreeinclude` patterns of the checkout holding `cwd`, or undefined outside a Git
@@ -88,7 +93,7 @@ export const checkoutWorktreeInclude = (cwd: string) =>
   git(cwd, ["rev-parse", "--show-toplevel"]).pipe(
     Effect.option,
     Effect.flatMap((root) =>
-      Option.isNone(root) ? Effect.undefined : readWorktreeInclude(root.value.trim()),
+      Option.isNone(root) ? Effect.undefined : readWorktreeInclude(Str.trim(root.value)),
     ),
   );
 
@@ -117,13 +122,13 @@ export const matchIncludedFiles = Effect.fn("GitWorktreeInclude.matchIncludedFil
     "-z",
     "--others",
     "--ignored",
-    ...patterns.map((pattern) => `--exclude=${pattern}`),
+    ...Arr.map(patterns, (pattern) => `--exclude=${pattern}`),
   ]);
   const carried = yield* treeEntries(repository, baseline);
   const matched: string[] = [];
   let bytes = 0;
   for (const name of listed) {
-    if (name.endsWith("/") || carried.has(name)) continue;
+    if (Fn.pipe(name, Str.endsWith("/")) || carried.has(name)) continue;
     const size = yield* includedFileSize(root, name);
     if (size === undefined) continue;
     matched.push(name);
@@ -131,7 +136,7 @@ export const matchIncludedFiles = Effect.fn("GitWorktreeInclude.matchIncludedFil
   }
   if (matched.length > MAX_INCLUDED_FILES || bytes > MAX_INCLUDED_BYTES)
     return yield* tooMuchIncluded("create", matched.length, bytes);
-  return matched.toSorted();
+  return Arr.sort(matched, Order.String);
 });
 
 /** The subset of `paths` the stored tree `tree` holds. */
@@ -146,7 +151,7 @@ const heldPaths = (repository: string, tree: string, paths: ReadonlyArray<string
         "--full-tree",
         tree,
         "--",
-        ...paths.map((name) => `:(literal)${name}`),
+        ...Arr.map(paths, (name) => `:(literal)${name}`),
       ]).pipe(Effect.map((names) => new Set(names)));
 
 /**
@@ -160,7 +165,7 @@ export const includedLeftOut = Effect.fn("GitWorktreeInclude.includedLeftOut")(f
 ) {
   if (includedPaths === undefined || includedPaths.length === 0) return [];
   const held = yield* heldPaths(repository, tree, includedPaths);
-  return includedPaths.filter((name) => !held.has(name));
+  return Arr.filter(includedPaths, (name) => !held.has(name));
 });
 
 /**

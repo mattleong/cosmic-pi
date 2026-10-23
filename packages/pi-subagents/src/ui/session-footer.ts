@@ -1,3 +1,4 @@
+import * as Rec from "effect/Record";
 import type { CosmicFooterTextContribution } from "pi-cosmic-ui/protocol";
 import type { ResolvedProfileSetSelection } from "../config/options.ts";
 import type { SessionProfileSnapshot } from "../profiles/session-overrides.ts";
@@ -13,7 +14,7 @@ export const sessionFooterContribution = (
 ): CosmicFooterTextContribution => {
   const origin = snapshot.baseline.origin;
   const mode = snapshot.effectiveConfig.delegation;
-  const edited = Object.keys(snapshot.overrides).length > 0 ? "*" : "";
+  const edited = Rec.size<string, unknown>(snapshot.overrides) > 0 ? "*" : "";
   const delegation = mode === "normal" ? "" : ` · ${mode}`;
   return {
     kind: "text",

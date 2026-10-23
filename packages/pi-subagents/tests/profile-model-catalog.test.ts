@@ -3,6 +3,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import type { Api, Model } from "@earendil-works/pi-ai";
+import { codeUnitAt } from "pi-cosmic-core";
 import { deferredPromise, modelFixture } from "pi-cosmic-core/testing";
 import { createModelPickerChoices } from "pi-cosmic-ui/manager/model-picker";
 import type { ProfileCandidate } from "../src/profiles/model.ts";
@@ -15,6 +16,8 @@ import {
   type ProfileModelRegistryRefreshResult,
 } from "../src/settings/profile-model-catalog.ts";
 import { profileCandidate } from "./fixtures/profiles.ts";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 
 const piModel = (provider: string, id: string, name = id) =>
   modelFixture({
@@ -50,7 +53,7 @@ const loadPicker = (
 
 const hasTerminalControls = (value: string): boolean => {
   for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
+    const code = codeUnitAt(value, index);
     if (code < 32 || (code >= 127 && code <= 159)) return true;
   }
   return false;
@@ -115,7 +118,7 @@ describe("profile model catalog", () => {
       expect(updated).toMatchObject({
         piModels: [{ provider: "openai", id: "gpt-new" }],
       });
-      expect(updated.piModels.some((model) => model.id === "gpt-old")).toBe(false);
+      expect(Arr.some(updated.piModels, (model) => model.id === "gpt-old")).toBe(false);
 
       registryError = "registry refresh failed";
       refresh = deferredPromise<ProfileModelRegistryRefreshResult>();
@@ -155,26 +158,33 @@ describe("profile model catalog", () => {
           parentSelector: "openai/gpt-old",
         }),
       );
-      const renamed = pi.find((choice) => choice.value === "openai/gpt-old");
+      const renamed = Option.getOrUndefined(
+        Arr.findFirst(pi, (choice) => choice.value === "openai/gpt-old"),
+      );
       expect(renamed?.payload.selector).toBe("openai/gpt-old");
       expect(renamed?.item.description).toContain("renamed");
-      expect(pi.some((choice) => choice.payload.selector === "parent")).toBe(true);
+      expect(Arr.some(pi, (choice) => choice.payload.selector === "parent")).toBe(true);
 
-      const native = displayed(
-        yield* loadPicker(catalog, profileCandidate("claude-safe", { runtime: "claude" }), {
-          listNativeModels: () =>
-            Promise.resolve([
-              {
-                selector: "claude-safe",
-                label: "Claude\u001b[2J\nSafe",
-                description: "Native\u0007 description",
-                supportedEfforts: ["high"],
-                supportedServiceTiers: [],
-                isDefault: true,
-              },
-            ]),
-        }),
-      ).find((choice) => choice.value === "claude-safe");
+      const native = Option.getOrUndefined(
+        Arr.findFirst(
+          displayed(
+            yield* loadPicker(catalog, profileCandidate("claude-safe", { runtime: "claude" }), {
+              listNativeModels: () =>
+                Promise.resolve([
+                  {
+                    selector: "claude-safe",
+                    label: "Claude\u001b[2J\nSafe",
+                    description: "Native\u0007 description",
+                    supportedEfforts: ["high"],
+                    supportedServiceTiers: [],
+                    isDefault: true,
+                  },
+                ]),
+            }),
+          ),
+          (choice) => choice.value === "claude-safe",
+        ),
+      );
       expect(native?.payload.selector).toBe("claude-safe");
       expect(native?.item.description).toContain("Safe");
     }),

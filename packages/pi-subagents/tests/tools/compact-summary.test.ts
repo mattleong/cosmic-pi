@@ -1,7 +1,8 @@
 import { compactIssueSeverity, type CompactIssue } from "pi-code-previews";
 import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
+import * as Fn from "effect/Function";
 import type * as Schema from "effect/Schema";
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import { agentFailureIssues, failureRecovery } from "../../src/tools/compact-action-failures.ts";
 import { createSubagentCompactSummary } from "../../src/tools/compact-summary.ts";
 import { SUBAGENT_TOOL_NAME } from "../../src/run/tool-policy.ts";
@@ -14,6 +15,8 @@ import type {
   WorkspaceToolDetails,
 } from "../../src/tools/details-schema.ts";
 import { view } from "./fixtures/tool-harness.ts";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 
 type SummarizedDetails =
   | CompactSubagentToolDetails
@@ -45,9 +48,15 @@ function summarize(
 }
 
 const issueDetails = (issues: readonly CompactIssue[] | undefined) =>
-  (issues ?? []).map((issue) => issue.detail ?? "").join("\n");
+  Arr.join(
+    Arr.map(issues ?? [], (issue) => issue.detail ?? ""),
+    "\n",
+  );
 const messages = (issues: readonly CompactIssue[] | undefined) =>
-  (issues ?? []).map((issue) => issue.message).join("\n");
+  Arr.join(
+    Arr.map(issues ?? [], (issue) => issue.message),
+    "\n",
+  );
 it("treats cleanup quarantine as warning rather than failed work or successful stop", () => {
   const run = view({
     state: "completed",
@@ -69,9 +78,10 @@ it("treats cleanup quarantine as warning rather than failed work or successful s
       action,
     });
     expect(summary?.outcome).toBe("warning");
-    expect(summary?.issues?.some((issue) => issue.severity === "error")).toBe(false);
+    assert(summary?.issues !== undefined);
+    expect(Arr.some(summary.issues, (issue) => issue.severity === "error")).toBe(false);
     expect(
-      (summary?.issues ?? []).flatMap((issue) => issueMessageStyleProblems(issue.message)),
+      Arr.flatMap(summary?.issues ?? [], (issue) => issueMessageStyleProblems(issue.message)),
     ).toEqual([]);
     expect(messages(summary?.issues)).not.toContain("Diagnostic evidence sentinel");
     expect(issueDetails(summary?.issues)).toContain("Diagnostic evidence sentinel");
@@ -86,8 +96,9 @@ it("treats cleanup quarantine as warning rather than failed work or successful s
     { runIds: [run.id] },
   );
   expect(awaited?.outcome).toBe("warning");
-  expect(awaited?.issues?.some((issue) => issue.code === "parent-action")).toBe(false);
-  expect(awaited?.issues?.filter((issue) => issue.severity === "warning")).toHaveLength(1);
+  assert(awaited?.issues !== undefined);
+  expect(Arr.some(awaited.issues, (issue) => issue.code === "parent-action")).toBe(false);
+  expect(Arr.filter(awaited.issues, (issue) => issue.severity === "warning")).toHaveLength(1);
   const context = summarize(
     "await",
     awaitReceipt([view({ id: "target", state: "completed" }), { ...run, finalText: undefined }], {
@@ -98,7 +109,8 @@ it("treats cleanup quarantine as warning rather than failed work or successful s
     { runIds: ["target"] },
   );
   expect(issueDetails(context?.issues)).toContain("Diagnostic evidence sentinel");
-  expect(context?.issues?.some((issue) => issue.code === "parent-action")).toBe(false);
+  assert(context?.issues !== undefined);
+  expect(Arr.some(context.issues, (issue) => issue.code === "parent-action")).toBe(false);
   const confirmed = summarize(
     "lifecycle",
     compactToolDetails({
@@ -135,7 +147,7 @@ const selected = {
 };
 
 const stoppedOf = (...runs: ReadonlyArray<Partial<SubagentRunView>>) =>
-  compactToolDetails({ action: "stop", runs: runs.map((run) => view(run)) });
+  compactToolDetails({ action: "stop", runs: Arr.map(runs, (run) => view(run)) });
 
 const awaitReceipt = (
   runs: ReadonlyArray<SubagentRunView>,
@@ -178,7 +190,8 @@ describe("worktree writer workspace outcomes", () => {
     }
     for (const summary of [proposal, stopSummary(worktreeWriter({ status: "integrated" }))]) {
       expect(summary?.outcome).toBe("success");
-      expect(summary?.issues?.every((issue) => issue.severity === "info")).toBe(true);
+      assert(summary?.issues !== undefined);
+      expect(Arr.every(summary.issues, (issue) => issue.severity === "info")).toBe(true);
     }
   });
 });
@@ -240,7 +253,7 @@ describe("subagent compact semantic policy", () => {
       );
       expect(summary?.issues?.length).toBeGreaterThan(0);
       for (const issue of summary?.issues ?? []) {
-        const advice = (issue.detail ?? "").replace(/Do not resend, retry[^.;]*/g, "");
+        const advice = Fn.pipe(issue.detail ?? "", Str.replace(/Do not resend, retry[^.;]*/g, ""));
         expect(advice).not.toMatch(/\b(resend|retry)\b/i);
       }
     }
@@ -275,7 +288,8 @@ describe("subagent compact semantic policy", () => {
           ],
         },
       },
-      ...(["pending", "confirmed", "not-sent", "report-unconfirmed", "unresolved"] as const).map(
+      ...Arr.map(
+        ["pending", "confirmed", "not-sent", "report-unconfirmed", "unresolved"] as const,
         (steeringDelivery) => ({ steeringDelivery }),
       ),
       {
@@ -284,7 +298,7 @@ describe("subagent compact semantic policy", () => {
         writeIntent: "writer",
         writerWorkspaceMode: "worktree",
       },
-      ...(
+      ...Arr.map(
         [
           { status: "auto-discarded" },
           { status: "integrated" },
@@ -300,17 +314,18 @@ describe("subagent compact semantic policy", () => {
               files: [{ path: "src/a.ts", addedLines: 9, deletedLines: 3 }],
             },
           },
-        ] as const
-      ).map((workspaceOutcome) => ({
-        state: "completed" as const,
-        finalText: "Done",
-        writeIntent: "writer" as const,
-        writerWorkspaceMode: "worktree" as const,
-        workspaceId: "ws-7f3a",
-        workspaceOutcome,
-      })),
+        ] as const,
+        (workspaceOutcome) => ({
+          state: "completed" as const,
+          finalText: "Done",
+          writeIntent: "writer" as const,
+          writerWorkspaceMode: "worktree" as const,
+          workspaceId: "ws-7f3a",
+          workspaceOutcome,
+        }),
+      ),
     ];
-    const issues = runs.flatMap((overrides) => {
+    const issues = Arr.flatMap(runs, (overrides) => {
       const run = view({ id, ...overrides });
       return [
         ...(summarize("lifecycle", stoppedOf(run), "settled", { action: "stop", runIds: [run.id] })

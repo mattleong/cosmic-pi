@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import {
   safeTextPrefix,
   sanitizeDiagnosticContent,
@@ -72,9 +75,9 @@ import type {
 const CONDENSED_TEXT_CHARS = 256;
 
 const clean = (value: string, maximum: number): string =>
-  safeTextPrefix(stripTerminalControls(value).replaceAll("\u0000", ""), maximum);
+  safeTextPrefix(Fn.pipe(stripTerminalControls(value), Str.replaceAll("\u0000", "")), maximum);
 const requiredText = (value: string, maximum: number, fallback: string): string =>
-  clean(value, maximum).trim() || fallback;
+  Str.trim(clean(value, maximum)) || fallback;
 const optionalText = (value: string | undefined, maximum: number): string | undefined => {
   if (value === undefined) return undefined;
   const projected = clean(value, maximum);
@@ -104,19 +107,22 @@ const projectSelection = (
       MAX_CARD_PROVENANCE_CHARS,
       "Route selection detail unavailable.",
     ),
-    skippedCandidates: selection.skippedCandidates.slice(0, MAX_CARD_SKIPS).map((candidate) => ({
-      candidate: {
-        runtime: candidate.candidate.runtime,
-        model: requiredText(
-          candidate.candidate.model,
-          Math.min(MAX_CARD_PROVENANCE_CHARS, MAX_CARD_MODEL_CHARS),
-          "unknown-model",
-        ),
-        effort: candidate.candidate.effort,
-      },
-      code: requiredText(candidate.code, MAX_FAILURE_CODE_CHARS, "unavailable"),
-      reason: requiredText(candidate.reason, MAX_CARD_PROVENANCE_CHARS, "Unavailable."),
-    })),
+    skippedCandidates: Arr.map(
+      selection.skippedCandidates.slice(0, MAX_CARD_SKIPS),
+      (candidate) => ({
+        candidate: {
+          runtime: candidate.candidate.runtime,
+          model: requiredText(
+            candidate.candidate.model,
+            Math.min(MAX_CARD_PROVENANCE_CHARS, MAX_CARD_MODEL_CHARS),
+            "unknown-model",
+          ),
+          effort: candidate.candidate.effort,
+        },
+        code: requiredText(candidate.code, MAX_FAILURE_CODE_CHARS, "unavailable"),
+        reason: requiredText(candidate.reason, MAX_CARD_PROVENANCE_CHARS, "Unavailable."),
+      }),
+    ),
     ...(selection.candidateIndex !== undefined && {
       candidateIndex: nonNegativeInteger(selection.candidateIndex),
     }),
@@ -180,7 +186,7 @@ const projectWorkspaceOutcome = (
       diffStat: {
         addedLines: nonNegativeInteger(stat.addedLines),
         deletedLines: nonNegativeInteger(stat.deletedLines),
-        files: stat.files.slice(0, MAX_OUTCOME_DIFFSTAT_FILES).map(projectDiffStatFile),
+        files: Arr.map(stat.files.slice(0, MAX_OUTCOME_DIFFSTAT_FILES), projectDiffStatFile),
       },
     }),
   };
@@ -195,9 +201,11 @@ export const projectRunCleanup = (
   const code =
     diagnostic?.code === undefined
       ? undefined
-      : sanitizeDiagnosticContent(diagnostic.code, {
-          maximumLength: MAX_CLEANUP_DIAGNOSTIC_CODE_CHARS,
-        }).trim();
+      : Str.trim(
+          sanitizeDiagnosticContent(diagnostic.code, {
+            maximumLength: MAX_CLEANUP_DIAGNOSTIC_CODE_CHARS,
+          }),
+        );
   return {
     disposition: cleanup.disposition,
     ...(cleanup.recovery !== undefined && { recovery: cleanup.recovery }),
@@ -206,9 +214,11 @@ export const projectRunCleanup = (
         phase: diagnostic.phase,
         ...(code && { code }),
         message:
-          sanitizeDiagnosticContent(diagnostic.message, {
-            maximumLength: MAX_CLEANUP_DIAGNOSTIC_MESSAGE_CHARS,
-          }).trim() || "Cleanup verification detail unavailable.",
+          Str.trim(
+            sanitizeDiagnosticContent(diagnostic.message, {
+              maximumLength: MAX_CLEANUP_DIAGNOSTIC_MESSAGE_CHARS,
+            }),
+          ) || "Cleanup verification detail unavailable.",
       },
     }),
   };
@@ -483,7 +493,7 @@ export const condenseStartEntry = (entry: SubagentStartEntry): SubagentStartEntr
     : entry;
 
 const projectCandidateCards = (candidates: ReadonlyArray<ProfileCandidateDiscovery>) =>
-  candidates.slice(0, MAX_PROFILE_CANDIDATES).map((candidate) => ({
+  Arr.map(candidates.slice(0, MAX_PROFILE_CANDIDATES), (candidate) => ({
     runtime: candidate.runtime,
     model: requiredText(candidate.model, MAX_PROFILE_MODEL_SELECTOR_CHARS, "omitted-model"),
     effort: candidate.effort,
@@ -526,12 +536,12 @@ const projectAgentRouteCard = (agent: SubagentAgentView): SubagentAgentRouteCard
 export const projectSubagentAgentRoutes = (
   agents: ReadonlyArray<SubagentAgentView>,
 ): ReadonlyArray<SubagentAgentRouteCard> =>
-  agents.slice(0, MAX_RESOLVED_CUSTOM_AGENTS).map(projectAgentRouteCard);
+  Arr.map(agents.slice(0, MAX_RESOLVED_CUSTOM_AGENTS), projectAgentRouteCard);
 
 export const projectInvalidAgents = (
   invalid: ReadonlyArray<SubagentInvalidAgentView>,
 ): ReadonlyArray<InvalidAgentCard> =>
-  invalid.slice(0, MAX_INVALID_AGENT_ENTRIES).map((entry) => {
+  Arr.map(invalid.slice(0, MAX_INVALID_AGENT_ENTRIES), (entry) => {
     const name = optionalText(entry.name, MAX_CUSTOM_AGENT_NAME_CHARS);
     return name === undefined ? { scope: entry.scope } : { scope: entry.scope, name };
   });
@@ -539,7 +549,7 @@ export const projectInvalidAgents = (
 export const condenseAgentRoute = (agent: SubagentAgentRouteCard): SubagentAgentRouteCard => ({
   ...agent,
   description: condensed(agent.description),
-  candidates: agent.candidates.map((candidate) => ({
+  candidates: Arr.map(agent.candidates, (candidate) => ({
     ...candidate,
     reason: condensed(candidate.reason),
   })),
@@ -548,14 +558,14 @@ export const condenseAgentRoute = (agent: SubagentAgentRouteCard): SubagentAgent
 export const projectSubagentProfileRoutes = (
   profiles: ReadonlyArray<SubagentProfileView>,
 ): ReadonlyArray<SubagentProfileRouteCard> =>
-  profiles.slice(0, PROFILE_IDS.length).map(projectProfileRouteCard);
+  Arr.map(profiles.slice(0, PROFILE_IDS.length), projectProfileRouteCard);
 
 export const condenseProfileRoute = (
   profile: SubagentProfileRouteCard,
 ): SubagentProfileRouteCard => ({
   ...profile,
   description: condensed(profile.description),
-  candidates: profile.candidates.map((candidate) => ({
+  candidates: Arr.map(profile.candidates, (candidate) => ({
     ...candidate,
     reason: condensed(candidate.reason),
   })),
@@ -574,5 +584,5 @@ export const projectActionFailures = (
   failures: ReadonlyArray<CompactToolActionFailure> | undefined,
 ): ReadonlyArray<CompactToolActionFailure> | undefined => {
   if (!failures || failures.length === 0) return undefined;
-  return failures.slice(0, MAX_TARGET_RUNS).map(projectActionFailure);
+  return Arr.map(failures.slice(0, MAX_TARGET_RUNS), projectActionFailure);
 };

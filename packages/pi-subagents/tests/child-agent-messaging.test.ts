@@ -6,7 +6,7 @@ import {
   type ExtensionContext,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it } from "@effect/vitest";
+import { assert, describe, expect, it } from "@effect/vitest";
 import type * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -32,6 +32,7 @@ import { encodeSubagentProxyInput, withSubagentProxyParent } from "../src/tools/
 import type { AgentToolInput } from "../src/tools/schema.ts";
 import { fakeWriterLeaseLayer, profileLayerFor, request } from "./run/fixtures/service-harness.ts";
 import { step } from "./support/effect-test.ts";
+import * as Arr from "effect/Array";
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
@@ -250,7 +251,8 @@ describe("Pi child agent messaging through the root coordinator", () => {
         const listed = yield* child.call({ tool: "agent_list", args: {} });
         const agents = decodeSubagentContract("agent_list")(listed.structuredContent)?.agents;
         expect(agents).toHaveLength(3);
-        expect(agents?.map(({ id, self }) => ({ id, self }))).toEqual(
+        assert(agents !== undefined);
+        expect(Arr.map(agents, ({ id, self }) => ({ id, self }))).toEqual(
           expect.arrayContaining([
             { id: "main", self: false },
             { id: caller.id, self: true },
@@ -264,8 +266,8 @@ describe("Pi child agent messaging through the root coordinator", () => {
         });
         expect(guided.details).toMatchObject({ to: sibling.id, disposition: "guided" });
         // The root writes the sender label from the authenticated channel.
-        expect(siblingControl.steered.join("\n")).toContain(caller.id);
-        expect(siblingControl.steered.join("\n")).toContain("Which table holds sessions?");
+        expect(Arr.join(siblingControl.steered, "\n")).toContain(caller.id);
+        expect(Arr.join(siblingControl.steered, "\n")).toContain("Which table holds sessions?");
 
         const woken = yield* child.call({
           tool: "agent_send",

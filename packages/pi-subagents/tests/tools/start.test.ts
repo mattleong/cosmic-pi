@@ -1,9 +1,10 @@
 import { initTheme, type AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import * as Schema from "effect/Schema";
 import * as Match from "effect/Match";
-import { beforeAll, describe, expect, vi } from "vitest";
+import { assert, beforeAll, describe, expect, vi } from "vitest";
 import { effectTest, step } from "../support/effect-test.ts";
 import {
   resolveProfileStart,
@@ -38,6 +39,8 @@ import {
   view,
 } from "./fixtures/tool-harness.ts";
 import { extensionApiFixture } from "pi-cosmic-core/testing";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 
 const route = (overrides: Partial<ProfileCandidate> = {}): ProfileCandidate => ({
   runtime: "pi",
@@ -127,17 +130,17 @@ describe("subagent tool", () => {
     expect(result?.details).toMatchObject({
       startFailures: [{ index: 2, code: "isolation_requires_writer" }],
     });
-    expect(requests.map((request) => request.writerWorkspaceModeOverride)).toEqual([
+    expect(Arr.map(requests, (request) => request.writerWorkspaceModeOverride)).toEqual([
       "worktree",
       undefined,
       undefined,
     ]);
-    expect(requests.map((request) => request.writeIntent)).toEqual([
+    expect(Arr.map(requests, (request) => request.writeIntent)).toEqual([
       "writer",
       "writer",
       "read-only",
     ]);
-    expect(requests.map((request) => request.selection?.warning)).toEqual([
+    expect(Arr.map(requests, (request) => request.selection?.warning)).toEqual([
       undefined,
       undefined,
       expect.stringContaining("isolation"),
@@ -248,7 +251,7 @@ describe("subagent tool", () => {
     const result = yield* invokeOptionalTool(tool, prepared);
 
     // An unnamed request gets the service's default name.
-    expect(requests.map((request) => [request.task, request.name])).toEqual([
+    expect(Arr.map(requests, (request) => [request.task, request.name])).toEqual([
       ["Map auth", undefined],
       ["Map billing", undefined],
     ]);
@@ -260,7 +263,7 @@ describe("subagent tool", () => {
   effectTest("cuts a long display name instead of rejecting the launch", function* () {
     const requests: StartSubagentRequest[] = [];
     const tool = startTool(requests)!;
-    const name = `${"long-name-".repeat(30)}end`;
+    const name = `${Fn.pipe("long-name-", Str.repeat(30))}end`;
     const prepared = tool.prepareArguments?.({ agents: [{ task: "Map auth", name }] });
 
     const result = yield* invokeOptionalTool(tool, prepared);
@@ -268,13 +271,15 @@ describe("subagent tool", () => {
     expect(requests).toHaveLength(1);
     // The request carries the cut name, so a worktree's recorded launch keeps the bound too.
     expect(requests[0]?.name?.length).toBeLessThanOrEqual(MAX_NAME_CHARS);
-    expect(requests[0]?.name?.startsWith("long-name-")).toBe(true);
+    assert(requests[0]?.name !== undefined);
+    expect(Fn.pipe(requests[0].name, Str.startsWith("long-name-"))).toBe(true);
     const launch = decodeStartDetails(result?.details).startEntries?.[0];
     expect(launch?.status).toBe("started");
     expect(launch?.name.length).toBeLessThanOrEqual(MAX_NAME_CHARS);
     const contract = decodeSubagentContract("agent_start")(result?.structuredContent);
     expect(contract?.launches[0]).toMatchObject({ status: "started" });
-    expect(contract?.launches[0]?.name?.startsWith("long-name-")).toBe(true);
+    assert(contract?.launches[0]?.name !== undefined);
+    expect(Fn.pipe(contract.launches[0].name, Str.startsWith("long-name-"))).toBe(true);
   });
 
   effectTest("rejects forged routing fields again at the host profile boundary", function* () {
@@ -328,12 +333,15 @@ describe("subagent tool", () => {
         ),
     });
     const tool = captureSubagentTools(service).get("agent_start")!;
-    const agents = ["launch-1", "launch-2", "launch-3"].map((name) => ({ task: "Review", name }));
+    const agents = Arr.map(["launch-1", "launch-2", "launch-3"], (name) => ({
+      task: "Review",
+      name,
+    }));
 
     const execution = executeTool(tool, { agents }, { update: recordUpdate });
     yield* step(() =>
       vi.waitFor(() => {
-        if (!updates.some((update) => update.text.includes("Processed 1 of 3")))
+        if (!Arr.some(updates, (update) => Fn.pipe(update.text, Str.includes("Processed 1 of 3"))))
           throw new Error("Waiting for the first partial receipt.");
       }),
     );
@@ -348,7 +356,7 @@ describe("subagent tool", () => {
 
     const receipt = (update: (typeof updates)[number]) => decodeStartDetails(update.details);
     for (const update of updates)
-      expect(receipt(update).startEntries.map((entry) => entry.index)).toEqual([0, 1, 2]);
+      expect(Arr.map(receipt(update).startEntries, (entry) => entry.index)).toEqual([0, 1, 2]);
     const partialReceipt = receipt(partial);
     expect(partialReceipt.startEntries[0]).toMatchObject({ status: "pending" });
     expect(partialReceipt.startEntries[1]).toMatchObject({
@@ -358,10 +366,11 @@ describe("subagent tool", () => {
     expect(partialReceipt.startEntries[2]).toMatchObject({ status: "pending" });
 
     const final = receipt(updates.at(-1)!);
-    expect(final.startEntries.map((entry) => ("runId" in entry ? entry.runId : undefined))).toEqual(
-      ["agent-slow", undefined, "agent-fast"],
-    );
-    expect(final.startFailures?.map((failure) => failure.index)).toEqual([1]);
+    expect(
+      Arr.map(final.startEntries, (entry) => ("runId" in entry ? entry.runId : undefined)),
+    ).toEqual(["agent-slow", undefined, "agent-fast"]);
+    assert(final.startFailures !== undefined);
+    expect(Arr.map(final.startFailures, (failure) => failure.index)).toEqual([1]);
     expect(result.content[0]?.text).toContain("agent-slow");
     expect(result.content[0]?.text).toContain("agent-fast");
   });

@@ -1,3 +1,7 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import {
   countLabel,
   freezeSnapshot,
@@ -9,6 +13,7 @@ import {
   utf8ByteLength,
   utf8Prefix,
   clipText,
+  indexOfFrom,
 } from "pi-cosmic-core";
 import type {
   SubagentReportArchive,
@@ -43,10 +48,13 @@ export const clipUtf8Text = (value: string, maximumBytes: number): string => {
 export const sanitizeName = (value: string): string => {
   let sanitized = "";
   for (const character of value) {
-    const code = character.charCodeAt(0);
-    sanitized += code < 32 || (code >= 127 && code <= 159) ? " " : character;
+    const control = Option.exists(
+      Str.charCodeAt(character, 0),
+      (code) => code < 32 || (code >= 127 && code <= 159),
+    );
+    sanitized += control ? " " : character;
   }
-  return safeTextPrefix(sanitized.replace(/\s+/g, " ").trim(), MAX_NAME_CHARS);
+  return safeTextPrefix(Fn.pipe(sanitized, Str.replace(/\s+/g, " "), Str.trim), MAX_NAME_CHARS);
 };
 
 const frozenViewSnapshots = new WeakMap<SubagentRunView, SubagentRunView>();
@@ -70,7 +78,7 @@ export const sanitizeStreamDiagnostic = (value: string, limit: number): string =
   const marker = " … ";
   const budget = Math.max(0, limit - marker.length);
   const head = Math.ceil(budget / 2);
-  return `${safeTextPrefix(sanitized, head).trimEnd()}${marker}${safeTextSuffix(sanitized, budget - head).trimStart()}`;
+  return `${Str.trimEnd(safeTextPrefix(sanitized, head))}${marker}${Str.trimStart(safeTextSuffix(sanitized, budget - head))}`;
 };
 
 export const sanitizeOutputText = (value: string, limit: number): string =>
@@ -98,7 +106,11 @@ export interface CapturedOutputText {
 
 const lineCount = (value: string): number => {
   let lines = 1;
-  for (let index = value.indexOf("\n"); index !== -1; index = value.indexOf("\n", index + 1))
+  for (
+    let index = indexOfFrom(value, "\n", 0);
+    index !== -1;
+    index = indexOfFrom(value, "\n", index + 1)
+  )
     lines += 1;
   return lines;
 };
@@ -108,7 +120,7 @@ const lineCount = (value: string): number => {
  * they hold carries more than the archive cap.
  */
 export const boundOutputText = (value: string): BoundedOutputText => {
-  const text = stripTerminalControls(value).trim();
+  const text = Str.trim(stripTerminalControls(value));
   if (text.length <= MAX_ARCHIVED_REPORT_CHARS) return { text };
   return {
     text: safeTextPrefix(text, MAX_ARCHIVED_REPORT_CHARS),
@@ -164,7 +176,8 @@ export const unsavedReportNote = (truncation: SubagentReportTruncation | undefin
   `[No report file was saved, so the report is inline${truncation ? `; ${reportTruncationText(truncation)}` : ""}.]`;
 
 const isValidUsage = (usage: SubagentUsage): boolean =>
-  [usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.totalTokens].every(
+  Arr.every(
+    [usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.totalTokens],
     (value) => Number.isSafeInteger(value) && value >= 0,
   ) &&
   (usage.cost === undefined || (Number.isFinite(usage.cost) && usage.cost >= 0));

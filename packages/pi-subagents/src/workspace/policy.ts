@@ -1,10 +1,17 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 const CREDENTIAL_NAME =
   /^(?:\.env(?:\..*)?|\.npmrc|\.pypirc|\.netrc|\.git-credentials|\.ssh|\.aws|\.azure|\.gnupg|\.kube|credentials?(?:\..*)?|secrets?(?:\..*)?|id_(?:rsa|dsa|ecdsa|ed25519)(?:\.pub)?)$/iu;
 const CREDENTIAL_EXTENSION = /\.(?:pem|key|p12|pfx|jks|keystore)$/iu;
 
 /** Credential-shaped names; they exclude only files Git does not track. */
 export const credentialWorkspacePath = (path: string): boolean =>
-  path.split("/").some((part) => CREDENTIAL_NAME.test(part) || CREDENTIAL_EXTENSION.test(part));
+  Fn.pipe(
+    path,
+    Str.split("/"),
+    Arr.some((part) => CREDENTIAL_NAME.test(part) || CREDENTIAL_EXTENSION.test(part)),
+  );
 
 // Programming-language sources, which credential-shaped names such as `credentials.ts` can be.
 // Data formats such as JSON, YAML, and text are not, because credential files use them.

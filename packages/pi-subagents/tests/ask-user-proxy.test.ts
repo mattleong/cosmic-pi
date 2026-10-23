@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import * as Result from "effect/Result";
 import { deferredPromise } from "pi-cosmic-core/testing";
 import { describe, expect, it } from "vitest";
@@ -24,6 +25,7 @@ import {
   pickQuestionnaire as request,
 } from "./support/questionnaire.ts";
 import { rejection } from "./support/result.ts";
+import * as Str from "effect/String";
 
 const owner = (requestId: string): QuestionnaireOwner => ({
   runId: "run",
@@ -117,7 +119,7 @@ describe("structured questionnaire proxy boundary", () => {
     for (const argumentsJson of [
       JSON.stringify({ ...request, owner: { runId: "forged" } }),
       "{",
-      " ".repeat(131073),
+      Fn.pipe(" ", Str.repeat(131073)),
       JSON.stringify({ questions: [...questions, questions[0]] }),
     ])
       expect(rejection(decodeQuestionnaireProxyRequest({ ...wire, argumentsJson }))).toBeInstanceOf(

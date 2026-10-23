@@ -1,6 +1,8 @@
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import {
   MAX_SUPERVISOR_CONFIG_BYTES,
   SupervisorChannelConfigSchema,
@@ -20,7 +22,7 @@ export const configArgument = (argv: ReadonlyArray<string>): string | undefined 
     argv[2] !== "--config" ||
     !isConfigArgument(argument) ||
     !nodePath.isAbsolute(argument) ||
-    argument.includes("\0")
+    Fn.pipe(argument, Str.includes("\0"))
   )
     return undefined;
   return nodePath.resolve(argument);

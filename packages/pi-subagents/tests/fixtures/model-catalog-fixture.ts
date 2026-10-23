@@ -4,6 +4,7 @@ import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Rec from "effect/Record";
 
 const decodeSettings = Schema.decodeUnknownSync(
   Schema.fromJsonString(Schema.Struct({ disableAllHooks: Schema.optionalKey(Schema.Json) })),
@@ -24,7 +25,7 @@ if (
   value("--permission-mode") !== "dontAsk" ||
   !args.includes("--strict-mcp-config") ||
   decodeSettings(value("--settings")).disableAllHooks !== true ||
-  Object.keys(decodeMcpConfig(value("--mcp-config")).mcpServers).length !== 0 ||
+  !Rec.isEmptyRecord(decodeMcpConfig(value("--mcp-config")).mcpServers) ||
   configured("CLAUDE_CONFIG_DIR") ||
   configured("ANTHROPIC_API_KEY")
 )

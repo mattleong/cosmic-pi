@@ -1,6 +1,8 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import { freezeSnapshot, sanitizeTerminalLine } from "pi-cosmic-core";
 import type { LocalCliRuntime } from "../boundary/local-cli-process.ts";
 import type { NativeRuntimeModel } from "../boundary/native-model-catalog.ts";
@@ -54,7 +56,7 @@ const freezeCatalogSnapshot = (
   freezeSnapshot({ piModels: models, scopedPiModels: scopedModels });
 
 const projectPiModel = (model: Model<Api>): ProjectedPiModel => {
-  const efforts = getSupportedThinkingLevels(model).flatMap((effort) => {
+  const efforts = Arr.flatMap(getSupportedThinkingLevels(model), (effort) => {
     const decoded = decodeSubagentEffort(effort);
     return decoded ? [decoded] : [];
   });
@@ -72,11 +74,11 @@ const projectRegistry = (
   scopedSelectors: ReadonlySet<string>,
 ): ProfileModelCatalogSnapshot | undefined => {
   try {
-    const models = registry.getAvailable().map(projectPiModel);
+    const models = Arr.map(registry.getAvailable(), projectPiModel);
     const scopedModels =
       scopedSelectors.size === 0
         ? models
-        : models.filter((model) => scopedSelectors.has(`${model.provider}/${model.id}`));
+        : Arr.filter(models, (model) => scopedSelectors.has(`${model.provider}/${model.id}`));
     return freezeCatalogSnapshot(models, scopedModels);
   } catch {
     return undefined;
@@ -90,7 +92,9 @@ export class ProfileModelCatalog {
 
   constructor(registry: ProfileModelRegistry, scopedModels: ReadonlyArray<Model<Api>> = []) {
     this.registry = registry;
-    this.scopedSelectors = new Set(scopedModels.map((model) => `${model.provider}/${model.id}`));
+    this.scopedSelectors = new Set(
+      Arr.map(scopedModels, (model) => `${model.provider}/${model.id}`),
+    );
     this.snapshot = projectRegistry(registry, this.scopedSelectors) ?? freezeCatalogSnapshot([]);
   }
 
@@ -177,7 +181,7 @@ const loadNativeModels = (
     .then(() => input.listNativeModels(runtime, input.signal))
     .then(
       (advertised) => {
-        const models = advertised.filter((model) => isSafeNativeModelSelector(model.selector));
+        const models = Arr.filter(advertised, (model) => isSafeNativeModelSelector(model.selector));
         return {
           models,
           warning:
@@ -207,7 +211,7 @@ const loadNativeModels = (
         choices: createNativeModelOptions([...catalog.values()], current),
         current: input.candidate.model,
         defaultSelector:
-          models.find((model) => model.isDefault)?.selector ??
+          Option.getOrUndefined(Arr.findFirst(models, (model) => model.isDefault))?.selector ??
           models[0]?.selector ??
           input.candidate.model,
         context: pickerContext(input),
@@ -226,7 +230,9 @@ const piModelOptions = (
 ) =>
   createPiModelOptions({
     models,
-    parentModel: piCatalog.piModels.find((model) => canonicalPiSelector(model) === parentSelector),
+    parentModel: Option.getOrUndefined(
+      Arr.findFirst(piCatalog.piModels, (model) => canonicalPiSelector(model) === parentSelector),
+    ),
     currentSelector: candidate.model,
   });
 
@@ -234,8 +240,9 @@ export const supportedPiEfforts = (
   input: PiModelOptionsInput,
 ): ReadonlyArray<SubagentEffort> | undefined =>
   input.candidate.runtime === "pi"
-    ? piModelOptions(input).find((option) => option.selector === input.candidate.model)
-        ?.supportedEfforts
+    ? Option.getOrUndefined(
+        Arr.findFirst(piModelOptions(input), (option) => option.selector === input.candidate.model),
+      )?.supportedEfforts
     : undefined;
 
 export function loadCandidateModelPicker(
@@ -247,22 +254,28 @@ export function loadCandidateModelPicker(
   const optionsFor = (models: ReadonlyArray<ProjectedPiModel>) =>
     retainUnavailableCurrent(candidate.model, piModelOptions(input, models));
   const choices = optionsFor(snapshot.piModels);
-  const unsafeModels = snapshot.piModels.filter(
+  const unsafeModels = Arr.filter(
+    snapshot.piModels,
     (model) => !isSafeNativeModelSelector(canonicalPiSelector(model)),
   ).length;
-  const warnings = [
-    choices[0]?.available === false
-      ? "The configured model is not available right now. Keep it unchanged or choose another model."
-      : undefined,
-    unsafeModels > 0
-      ? `${unsafeModels} model${unsafeModels === 1 ? " was" : "s were"} left out because the model name could not be used safely.`
-      : undefined,
-  ].filter((warning) => warning !== undefined);
+  const warnings = Arr.filter(
+    [
+      choices[0]?.available === false
+        ? "The configured model is not available right now. Keep it unchanged or choose another model."
+        : undefined,
+      unsafeModels > 0
+        ? `${unsafeModels} model${unsafeModels === 1 ? " was" : "s were"} left out because the model name could not be used safely.`
+        : undefined,
+    ],
+    (warning) => warning !== undefined,
+  );
   const base = {
     choices,
     scopedChoices: optionsFor(snapshot.scopedPiModels),
     current: candidate.model,
     context: pickerContext(input),
   };
-  return Promise.resolve(warnings.length > 0 ? { ...base, warning: warnings.join(" ") } : base);
+  return Promise.resolve(
+    warnings.length > 0 ? { ...base, warning: Arr.join(warnings, " ") } : base,
+  );
 }

@@ -10,6 +10,7 @@ import { registerSubagentApplication } from "../src/application/register.ts";
 import { sessionContextFixture } from "./fixtures/pi-host.ts";
 import { effectTest, settle } from "./support/effect-test.ts";
 import { nodePath } from "./support/node-builtins.ts";
+import * as Arr from "effect/Array";
 
 const piToolLoadout = (pending: ReadonlyArray<string>) => {
   let active: ReadonlyArray<string> = ["read"];
@@ -26,8 +27,8 @@ const piToolLoadout = (pending: ReadonlyArray<string>) => {
       }),
       getActiveTools: vi.fn(() => [...active]),
       setActiveTools: vi.fn((names: ReadonlyArray<string>) => {
-        if (active.some((name) => !names.includes(name))) restoring.clear();
-        active = names.filter((name) => registered.has(name));
+        if (Arr.some(active, (name) => !names.includes(name))) restoring.clear();
+        active = Arr.filter(names, (name) => registered.has(name));
       }),
     },
   };

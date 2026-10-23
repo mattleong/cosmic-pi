@@ -3,6 +3,9 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
 import type { OversizedLine } from "../boundary/bounded-line-parser.ts";
 import { jsonPrefixScalars } from "../boundary/json-prefix.ts";
 import { omittedOutputPreview } from "./driver-shared.ts";
@@ -170,7 +173,7 @@ const RpcEventSchema = Schema.Union([
   ExtensionUiRequestSchema,
 ]);
 const RPC_EVENT_TYPES: ReadonlySet<string> = new Set(
-  RpcEventSchema.members.map((member) => member.fields.type.literal),
+  Arr.map(RpcEventSchema.members, (member) => member.fields.type.literal),
 );
 export type RpcResponse = typeof RpcResponseSchema.Type;
 export type RpcChildEnvelope =
@@ -203,7 +206,7 @@ const TOOL_END_ERROR_SUFFIX = /"isError":(true|false)(?:,"durationMs":[\d.eE+-]+
  * the leading fields identify and leaves every other oversized event a protocol error.
  */
 export const oversizedRpcEnvelope = (line: OversizedLine): RpcChildEnvelope | undefined => {
-  const fields = decodeOversizedRpcFields(Object.fromEntries(jsonPrefixScalars(line.prefix)));
+  const fields = decodeOversizedRpcFields(Rec.fromEntries(jsonPrefixScalars(line.prefix)));
   if (Option.isNone(fields)) return undefined;
   const { type, toolCallId, toolName, "message.role": role } = fields.value;
   switch (type) {
@@ -292,10 +295,12 @@ export const assistantModel = (message: typeof AssistantMessageSchema.Type): str
 };
 
 export const assistantText = (message: typeof AssistantMessageSchema.Type): string =>
-  message.content
-    .flatMap((part) => decodeTextPart(part)?.text ?? [])
-    .join("\n")
-    .trim();
+  Str.trim(
+    Arr.join(
+      Arr.flatMap(message.content, (part) => Arr.fromNullishOr(decodeTextPart(part)?.text)),
+      "\n",
+    ),
+  );
 
 type CorrelatedRpcCommand =
   | { readonly type: "get_state"; readonly id?: string | undefined }

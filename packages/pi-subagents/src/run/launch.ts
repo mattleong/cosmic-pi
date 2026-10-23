@@ -4,10 +4,12 @@ import {
   type SessionUsageLedger,
 } from "./session-usage.ts";
 import type { SessionSpendLimit } from "../config/options.ts";
+import * as Arr from "effect/Array";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Order from "effect/Order";
 import * as Scope from "effect/Scope";
 import type { SubagentBackendRegistryContract } from "../backend/service.ts";
 import {
@@ -342,24 +344,25 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
             Effect.gen(function* () {
               if (isClosed()) return yield* runtimeClosedError();
               const parent = yield* checkAdmissionLocked();
-              const history = [...records.values()].filter((record) =>
+              const history = Arr.filter([...records.values()], (record) =>
                 isTerminalRunState(record.view.state),
               );
               const candidate =
                 history.length < MAX_RETAINED_RUNS
                   ? undefined
-                  : history
-                      .filter(
+                  : Arr.sort(
+                      Arr.filter(
+                        history,
                         (record) =>
                           evictionEligible(record) &&
                           record.evictionClaim === undefined &&
                           record.runStateReclaimState !== "running",
-                      )
-                      .toSorted(
-                        (left, right) =>
-                          (left.view.endedAt ?? left.view.startedAt) -
-                          (right.view.endedAt ?? right.view.startedAt),
-                      )[0];
+                      ),
+                      Order.mapInput(
+                        Order.Number,
+                        (record: RunRecord) => record.view.endedAt ?? record.view.startedAt,
+                      ),
+                    )[0];
               if (candidate && candidate.runStateReclaimState !== "reclaimed") {
                 candidate.evictionClaim = { parentRunId };
                 workspaces.bind(request);

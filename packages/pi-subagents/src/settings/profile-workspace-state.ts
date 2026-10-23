@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { FullScreenKeymap } from "pi-cosmic-ui/manager/keymap";
 import type { SearchableSelectPage } from "pi-cosmic-ui/manager/searchable-select";
 import {
@@ -151,7 +153,12 @@ export abstract class ProfileWorkspaceState {
     const next = loadProfileRouteDraft(inspection, this.options.target, this.profile());
     this.remapSelection(previous, next);
     const moved = selected
-      ? next.candidates.findIndex((candidate) => sameProfileCandidate(candidate, selected))
+      ? Option.getOrElse(
+          Arr.findFirstIndex(next.candidates, (candidate) =>
+            sameProfileCandidate(candidate, selected),
+          ),
+          () => -1,
+        )
       : -1;
     if (moved >= 0) this.candidateIndex = moved;
     this.editVisit.reconcile(inspection);
@@ -230,17 +237,24 @@ export abstract class ProfileWorkspaceState {
   protected selectField(field: ProfileWorkspaceField): void {
     if (["context", "openaiFastMode"].includes(field)) this.advancedExpanded = true;
     const rows = this.rows();
-    const index = rows.findIndex(
-      (row) =>
-        row.field === field &&
-        (row.scope !== "candidate" || row.candidateIndex === this.candidateIndex),
+    const index = Option.getOrElse(
+      Arr.findFirstIndex(
+        rows,
+        (row) =>
+          row.field === field &&
+          (row.scope !== "candidate" || row.candidateIndex === this.candidateIndex),
+      ),
+      () => -1,
     );
     this.fieldIndex =
       index >= 0
         ? index
         : Math.max(
             0,
-            rows.findIndex((row) => row.candidateIndex === this.candidateIndex),
+            Option.getOrElse(
+              Arr.findFirstIndex(rows, (row) => row.candidateIndex === this.candidateIndex),
+              () => -1,
+            ),
           );
   }
   protected selectCandidate(index: number): void {
@@ -283,9 +297,13 @@ export abstract class ProfileWorkspaceState {
     const fields = new Map<number, ProfileWorkspaceField>();
     const expanded = new Set<number>();
     const used = new Set<number>();
-    after.candidates.forEach((candidate, index) => {
-      let previous = before.candidates.findIndex(
-        (entry, i) => !used.has(i) && sameProfileCandidate(entry, candidate),
+    Arr.forEach(after.candidates, (candidate, index) => {
+      let previous = Option.getOrElse(
+        Arr.findFirstIndex(
+          before.candidates,
+          (entry, i) => !used.has(i) && sameProfileCandidate(entry, candidate),
+        ),
+        () => -1,
       );
       if (previous < 0 && before.candidates.length === after.candidates.length && !used.has(index))
         previous = index;

@@ -1,7 +1,9 @@
+import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import type { SubagentSessionEvent } from "./model.ts";
 import { MAX_PROTOCOL_ID_CHARS } from "./limits.ts";
 import { sanitizeDiagnosticText, sanitizeOutputText } from "./state.ts";
@@ -22,7 +24,7 @@ const decodeToolArguments = Fn.flow(
 
 const stringField = (value: ToolArguments | undefined, key: string): string | undefined => {
   const field = value?.[key];
-  return Predicate.isString(field) && field.trim() ? field.trim() : undefined;
+  return Predicate.isString(field) && Str.trim(field) ? Str.trim(field) : undefined;
 };
 
 const eventBytes = new WeakMap<SubagentSessionEvent, number>();
@@ -45,7 +47,7 @@ const toolTarget = (toolName: string, input: ToolArguments | undefined): string 
     stringField(input, "name") ??
     stringField(input, "message") ??
     stringField(input, "command");
-  switch (toolName.toLowerCase()) {
+  switch (Str.toLowerCase(toolName)) {
     case "bash":
       return stringField(input, "command");
     case "read":
@@ -55,13 +57,25 @@ const toolTarget = (toolName: string, input: ToolArguments | undefined): string 
       return path;
     case "grep": {
       const pattern = stringField(input, "pattern");
-      return [pattern ? `/${pattern}/` : undefined, path].filter(Boolean).join(" · ");
+      return Arr.join(
+        Arr.filter([pattern ? `/${pattern}/` : undefined, path], Predicate.isNotUndefined),
+        " · ",
+      );
     }
     case "find":
     case "glob":
-      return [stringField(input, "pattern"), path].filter(Boolean).join(" · ");
+      return Arr.join(
+        Arr.filter([stringField(input, "pattern"), path], Predicate.isNotUndefined),
+        " · ",
+      );
     case "agent_contact_parent":
-      return [stringField(input, "kind"), stringField(input, "message")].filter(Boolean).join(": ");
+      return Arr.join(
+        Arr.filter(
+          [stringField(input, "kind"), stringField(input, "message")],
+          Predicate.isNotUndefined,
+        ),
+        ": ",
+      );
     default:
       return fallbackTarget();
   }
@@ -97,7 +111,7 @@ export function appendAssistantSessionEvent(
   text: string,
   createdAt: number,
 ): ReadonlyArray<SubagentSessionEvent> {
-  const sanitized = sanitizeOutputText(text, MAX_ASSISTANT_TEXT_CHARS).trim();
+  const sanitized = Str.trim(sanitizeOutputText(text, MAX_ASSISTANT_TEXT_CHARS));
   return sanitized
     ? appendSessionEvent(current, { type: "assistant", text: sanitized, createdAt })
     : current;
@@ -168,11 +182,13 @@ export function finishToolSessionEvent(
 ): ReadonlyArray<SubagentSessionEvent> {
   const toolCallId = sanitizeDiagnosticText(input.toolCallId, MAX_PROTOCOL_ID_CHARS);
   const outputPreview =
-    input.outputPreview && sanitizeOutputText(input.outputPreview, MAX_TOOL_PREVIEW_CHARS).trim();
-  const index = current.findLastIndex(
+    input.outputPreview &&
+    Str.trim(sanitizeOutputText(input.outputPreview, MAX_TOOL_PREVIEW_CHARS));
+  const index = Arr.findLastIndex(
+    current,
     (event) => event.type === "tool" && event.toolCallId === toolCallId,
   );
-  if (index < 0)
+  if (Option.isNone(index))
     return appendSessionEvent(current, {
       type: "tool",
       toolCallId,
@@ -183,8 +199,8 @@ export function finishToolSessionEvent(
       ...(outputPreview && { outputPreview }),
     });
   return fitSessionEvents(
-    current.map((event, eventIndex) =>
-      eventIndex === index && event.type === "tool"
+    Arr.map(current, (event, eventIndex) =>
+      eventIndex === index.value && event.type === "tool"
         ? {
             ...event,
             state: input.isError ? "failed" : "completed",
@@ -201,8 +217,8 @@ export function finishToolSessionEvent(
 export const closeOpenToolSessionEvents = (
   current: ReadonlyArray<SubagentSessionEvent>,
 ): ReadonlyArray<SubagentSessionEvent> =>
-  current.some((event) => event.type === "tool" && event.state === "running")
-    ? current.map((event) =>
+  Arr.some(current, (event) => event.type === "tool" && event.state === "running")
+    ? Arr.map(current, (event) =>
         event.type === "tool" && event.state === "running"
           ? { ...event, state: "failed" as const, endedAt: event.startedAt }
           : event,

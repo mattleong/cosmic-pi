@@ -1,6 +1,9 @@
 import { FAST_SERVICE_TIER } from "pi-better-openai/fast-models";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import type { BackendEvent } from "./model.ts";
 
 const MAX_ID_CHARS = 256;
@@ -192,10 +195,12 @@ const ErrorNotification = Schema.Struct({
 });
 
 const normalizedWarning = (summary: string, details?: string | null): string => {
-  const parts = [summary.trim(), details?.trim() ?? ""]
-    .filter((part) => part.length > 0)
-    .filter((part, index, values) => index === 0 || part !== values[0]);
-  return (parts.join("\n") || "Codex warning.").slice(0, MAX_WARNING_TEXT_CHARS);
+  const present = Arr.filter(
+    [Str.trim(summary), Str.trim(details ?? "")],
+    (part) => part.length > 0,
+  );
+  const parts = Arr.filter(present, (part, index) => index === 0 || part !== present[0]);
+  return Fn.pipe(Arr.join(parts, "\n") || "Codex warning.", Str.slice(0, MAX_WARNING_TEXT_CHARS));
 };
 
 type NativeItemEnvelopeValue = typeof NativeItemEnvelope.Type;
@@ -469,7 +474,7 @@ const OUTCOME_CODES = new Map<CodexRequest["method"], string>([
   ["turn/interrupt", "interrupt_outcome_uncertain"],
 ]);
 export const outcomeCode = (method: CodexRequest["method"]): string =>
-  OUTCOME_CODES.get(method) ?? `${method.replaceAll("/", "_")}_outcome_uncertain`;
+  OUTCOME_CODES.get(method) ?? `${Fn.pipe(method, Str.replaceAll("/", "_"))}_outcome_uncertain`;
 
 const EXECUTABLE_ITEM_TOOL_NAMES = new Map<string, string>([
   ["commandExecution", "Bash"],

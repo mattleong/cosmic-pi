@@ -15,6 +15,9 @@ import {
   workspaceTests,
   writeFile,
 } from "./fixtures/repository.ts";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
 
 // Hooks are fixed when the engine starts, so they log to one directory for the whole file.
 // Logs name workspaces by their unique IDs, so another run's leftovers can't match.
@@ -54,9 +57,9 @@ const removals = (workspaceId: string) =>
   readText(log).pipe(
     Effect.orElseSucceed(() => ""),
     Effect.flatMap((text) =>
-      Effect.forEach(text.split("\n").filter(Boolean), (line) => decodeLoggedInput(line)),
+      Effect.forEach(Arr.filter(Str.split(text, "\n"), Boolean), (line) => decodeLoggedInput(line)),
     ),
-    Effect.map((inputs) => inputs.filter((input) => input.workspaceId === workspaceId)),
+    Effect.map((inputs) => Arr.filter(inputs, (input) => input.workspaceId === workspaceId)),
     Effect.orDie,
   );
 
@@ -104,7 +107,7 @@ describe("WorktreeRemove hooks", () => {
       revisionId: revision.revisionId,
       preparationId: prepared.preparationId,
     });
-    expect((yield* removals(handle.workspaceId)).map((input) => input.kind)).toEqual([
+    expect(Arr.map(yield* removals(handle.workspaceId), (input) => input.kind)).toEqual([
       "prepare",
       "worker",
     ]);
@@ -128,10 +131,13 @@ describe("WorktreeRemove hooks", () => {
     yield* io(() => fs.mkdir(path.join(handle.cwd, "scratch")));
     yield* writeFile(path.join(handle.cwd, "scratch/fail-remove"), "");
     yield* service.discard(workspaceTarget(handle));
-    expect((yield* removals(handle.workspaceId)).map((input) => input.kind)).toEqual(["worker"]);
+    expect(Arr.map(yield* removals(handle.workspaceId), (input) => input.kind)).toEqual(["worker"]);
     expect(yield* exists(handle.cwd)).toBe(false);
-    const record = (yield* service.listAll).records.find(
-      (entry) => entry.handle.workspaceId === handle.workspaceId,
+    const record = Option.getOrUndefined(
+      Arr.findFirst(
+        (yield* service.listAll).records,
+        (entry) => entry.handle.workspaceId === handle.workspaceId,
+      ),
     );
     expect(record?.status).toBe("discarded");
   });
@@ -157,7 +163,9 @@ describe("WorktreeRemove hooks", () => {
       }),
     );
     expect(failure.cleanupUnconfirmed).not.toBe(true);
-    expect((yield* removals(handle.workspaceId)).map((input) => input.kind)).toEqual(["prepare"]);
+    expect(Arr.map(yield* removals(handle.workspaceId), (input) => input.kind)).toEqual([
+      "prepare",
+    ]);
     expect(yield* exists(prepared.cwd)).toBe(false);
     const record = yield* service.inspect(workspaceTarget(handle));
     expect(record.status).toBe("frozen");
@@ -202,7 +210,7 @@ describe("WorktreeRemove hooks that fail or hang", () => {
   hung("are killed at their timeout, and the tree is removed anyway", function* (service, root) {
     const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
     yield* service.discard(workspaceTarget(handle));
-    const pid = Number((yield* readText(hungPid)).trim());
+    const pid = Number(Str.trim(yield* readText(hungPid)));
     expect(processAlive(pid)).toBe(false);
     expect(yield* exists(handle.cwd)).toBe(false);
     expect((yield* service.inspect(workspaceTarget(handle))).status).toBe("discarded");

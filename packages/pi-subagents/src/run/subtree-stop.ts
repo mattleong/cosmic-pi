@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import type { SubagentError } from "./errors.ts";
 import { snapshotRun, type RunContext, type RunRecord } from "./internal.ts";
@@ -26,7 +27,8 @@ export const subtreeStopper =
         Effect.gen(function* () {
           const root = yield* requireRecord(id);
           yield* requireControlExpectation(root, expected);
-          const ordered = [...descendantRunIds(records, id), root.view.id].flatMap(
+          const ordered = Arr.flatMap(
+            [...descendantRunIds(records, id), root.view.id],
             (targetId): ReadonlyArray<RunRecord> => {
               const target = records.get(targetId);
               return target ? [target] : [];

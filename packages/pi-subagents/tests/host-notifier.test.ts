@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -7,6 +8,8 @@ import {
 } from "../src/boundary/host-notifier.ts";
 import { extensionApiFixture } from "pi-cosmic-core/testing";
 import { MAX_COMPLETION_DELIVERY_BATCH, MAX_NOTIFICATION_CHARS } from "../src/run/limits.ts";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
 
 type SendMessage = ExtensionAPI["sendMessage"];
 
@@ -45,7 +48,7 @@ describe("subagent host notifier", () => {
 
   it("sends a full batch as one bounded notice that names every run", () => {
     const { sendMessage, notify, content } = notifier();
-    const finalText = "x".repeat(32 * 1024);
+    const finalText = Fn.pipe("x", Str.repeat(32 * 1024));
     const runs = Array.from({ length: MAX_COMPLETION_DELIVERY_BATCH }, (_, index) =>
       completion(`agent-${index}`, `reader-${index}`, { finalText }),
     );
@@ -55,7 +58,7 @@ describe("subagent host notifier", () => {
     expect(sendMessage).toHaveBeenCalledOnce();
     expect(content().length).toBeLessThanOrEqual(MAX_NOTIFICATION_CHARS);
     for (const run of runs) expect(content()).toContain(`${run.id} ${run.name}`);
-    expect(delivery?.deliveredCompletionKeys).toEqual(runs.map((run) => `${run.id}:1`));
+    expect(delivery?.deliveredCompletionKeys).toEqual(Arr.map(runs, (run) => `${run.id}:1`));
   });
 
   it("acknowledges nothing when the send throws, so the batch is retried whole", () => {
@@ -119,13 +122,10 @@ describe("subagent host notifier", () => {
         completion("agent-4", "settling-writer", { workspaceId: "ws-4" }),
       ],
     });
-    const sections = content().split("\n\n").slice(1);
-    expect(sections.map((section) => section.includes("agent_worktree"))).toEqual([
-      true,
-      false,
-      false,
-      true,
-    ]);
+    const sections = Str.split(content(), "\n\n").slice(1);
+    expect(
+      Arr.map(sections, (section) => Fn.pipe(section, Str.includes("agent_worktree"))),
+    ).toEqual([true, false, false, true]);
     expect(sections[3]).toContain("ws-4");
     const quiet = notifier();
     quiet.notify({
@@ -146,7 +146,7 @@ describe("subagent host notifier", () => {
       type: "completed",
       runs: [
         completion("agent-1", "writer", {
-          finalText: "x".repeat(40 * 1024),
+          finalText: Fn.pipe("x", Str.repeat(40 * 1024)),
           workspaceId: "ws-1",
           workspaceOutcome: proposal,
         }),

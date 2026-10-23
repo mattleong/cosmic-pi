@@ -1,5 +1,6 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Arr from "effect/Array";
 import { InvalidSubagentRequestError } from "../run/errors.ts";
 import type { SubagentContextMode, SubagentRuntime } from "../domain/routing.ts";
 import type { BackendDriver, BackendPreflightRequest } from "./model.ts";
@@ -23,7 +24,7 @@ export const backendRegistryFor = (
   drivers: ReadonlyArray<BackendDriver>,
 ): SubagentBackendRegistryContract => {
   const byRuntime = new Map<SubagentRuntime, BackendDriver>(
-    drivers.map((driver) => [driver.runtime, driver]),
+    Arr.map(drivers, (driver) => [driver.runtime, driver]),
   );
   const resolve: SubagentBackendRegistryContract["resolve"] = (selection) => {
     const driver = byRuntime.get(selection.runtime);

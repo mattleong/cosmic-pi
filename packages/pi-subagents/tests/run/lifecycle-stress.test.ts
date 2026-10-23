@@ -22,6 +22,8 @@ import {
   withService,
 } from "./fixtures/service-harness.ts";
 import { SubagentRuntimeClosedError } from "../../src/run/errors.ts";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 
 const cycles = 4;
 
@@ -56,7 +58,7 @@ describe("SubagentService lifecycle stress", () => {
           if (cancelled) {
             expect(Exit.isFailure(result), `interruption checkpoint ${interruptAt}`).toBe(true);
             expect(projections.at(-1)?.runs[0]?.state).toBe("stopped");
-            expect(fake.controls.every((control) => control.released() === 1)).toBe(true);
+            expect(Arr.every(fake.controls, (control) => control.released() === 1)).toBe(true);
             expect(leases.release).toBe(1);
             const spawnedBeforeStop = fake.controls.length;
             yield* service.stop(projections.at(-1)!.runs[0]!.id);
@@ -74,7 +76,7 @@ describe("SubagentService lifecycle stress", () => {
           yield* yieldUntil(() => disposed);
           yield* Fiber.join(shutdown);
           expect(leases.release).toBe(leases.acquire);
-          expect(fake.controls.every((control) => control.released() === 1)).toBe(true);
+          expect(Arr.every(fake.controls, (control) => control.released() === 1)).toBe(true);
         }
         return undefined;
       }),
@@ -108,9 +110,13 @@ describe("SubagentService lifecycle stress", () => {
             ).pipe(Effect.forkScoped);
             yield* yieldUntil(() => cancelledUpdates > 0);
             const stoppingParent = yield* service.stop(parent.id).pipe(Effect.forkScoped);
-            yield* yieldUntil(
-              () =>
-                projections.at(-1)?.runs.find((run) => run.id === leaf.id)?.state === "stopping",
+            yield* yieldUntil(() =>
+              Arr.last(projections).pipe(
+                Option.flatMap((projection) =>
+                  Arr.findFirst(projection.runs, (run) => run.id === leaf.id),
+                ),
+                Option.exists((run) => run.state === "stopping"),
+              ),
             );
             const stoppingChild = yield* service
               .stop(child.id)
@@ -142,9 +148,13 @@ describe("SubagentService lifecycle stress", () => {
             leafControl.offer({ type: "agent_settled" });
             yield* Deferred.succeed(release, undefined);
             expect((yield* Fiber.join(stoppingChild)).state).toBe("stopped");
-            yield* yieldUntil(
-              () =>
-                projections.at(-1)?.runs.find((run) => run.id === parent.id)?.state === "stopped",
+            yield* yieldUntil(() =>
+              Arr.last(projections).pipe(
+                Option.flatMap((projection) =>
+                  Arr.findFirst(projection.runs, (run) => run.id === parent.id),
+                ),
+                Option.exists((run) => run.state === "stopped"),
+              ),
             );
             for (const id of [parent.id, child.id, leaf.id]) {
               expect(yield* runView(service, id)).toMatchObject({
@@ -154,7 +164,7 @@ describe("SubagentService lifecycle stress", () => {
               expect((yield* service.stop(id)).state).toBe("stopped");
             }
             expect(
-              [parentControl, childControl, leafControl].map((control) => control.released()),
+              Arr.map([parentControl, childControl, leafControl], (control) => control.released()),
             ).toEqual([1, 1, 1]);
             expect(yield* runView(service, sibling.id)).toMatchObject({
               state: "running",
@@ -163,7 +173,7 @@ describe("SubagentService lifecycle stress", () => {
             expect(resumedControl.released()).toBe(0);
             expect(cancelledUpdates).toBe(updatesAtCancellation);
             yield* service.stop(sibling.id);
-            expect(fake.controls.slice(offset).map((control) => control.released())).toEqual([
+            expect(Arr.map(fake.controls.slice(offset), (control) => control.released())).toEqual([
               1, 1, 1, 1, 1,
             ]);
             return undefined;
@@ -191,9 +201,13 @@ describe("SubagentService lifecycle stress", () => {
             const sibling = yield* service.start(request());
             fake.controls[2]!.gateRelease(release);
             const stopping = yield* service.stop(parent.id).pipe(Effect.forkScoped);
-            yield* yieldUntil(
-              () =>
-                projections.at(-1)?.runs.find((run) => run.id === leaf.id)?.state === "stopping",
+            yield* yieldUntil(() =>
+              Arr.last(projections).pipe(
+                Option.flatMap((projection) =>
+                  Arr.findFirst(projection.runs, (run) => run.id === leaf.id),
+                ),
+                Option.exists((run) => run.state === "stopping"),
+              ),
             );
             yield* Fiber.interrupt(stopping);
             let updates = 0;
@@ -210,7 +224,7 @@ describe("SubagentService lifecycle stress", () => {
             );
             yield* TestClock.adjust("30 seconds");
             expect(shutdown.pollUnsafe()).toBeUndefined();
-            expect(fake.controls.slice(0, 3).map((control) => control.released())).toEqual([
+            expect(Arr.map(fake.controls.slice(0, 3), (control) => control.released())).toEqual([
               0, 0, 0,
             ]);
             fake.controls[2]!.offer({ type: "agent_start" });
@@ -219,7 +233,7 @@ describe("SubagentService lifecycle stress", () => {
             yield* Fiber.join(shutdown);
             expect(yield* Fiber.join(waiting)).toBeInstanceOf(SubagentRuntimeClosedError);
             yield* Scope.close(owner, Exit.void);
-            expect(fake.controls.map((control) => control.released())).toEqual([1, 1, 1, 1]);
+            expect(Arr.map(fake.controls, (control) => control.released())).toEqual([1, 1, 1, 1]);
             expect(new Set(fake.reclaimedRunIds)).toEqual(
               new Set([parent.id, child.id, leaf.id, sibling.id]),
             );
@@ -239,7 +253,7 @@ describe("SubagentService lifecycle stress", () => {
             expect(projections).toHaveLength(publicationsAtShutdown);
             expect(updates).toBe(updatesAtShutdown);
             expect(notifications).toEqual([]);
-            expect(fake.controls.map((control) => control.released())).toEqual([1, 1, 1, 1]);
+            expect(Arr.map(fake.controls, (control) => control.released())).toEqual([1, 1, 1, 1]);
           }).pipe(Effect.ensuring(Deferred.succeed(release, undefined)));
         }
       }).pipe(Effect.scoped),

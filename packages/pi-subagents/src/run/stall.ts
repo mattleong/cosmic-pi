@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import type { SubagentRunView } from "./model.ts";
 
 const STALL_IDLE_MILLIS = 2 * 60 * 1000;
@@ -17,13 +19,13 @@ type StallRun = Pick<SubagentRunView, "state" | "lastActivityAt" | "sessionEvent
  */
 export const runStall = (run: StallRun, now: number): RunStall | undefined => {
   if (run.state !== "running") return undefined;
-  const tools = run.sessionEvents.filter((event) => event.type === "tool");
+  const tools = Arr.filter(run.sessionEvents, (event) => event.type === "tool");
   // The oldest open tool, so a newer parallel call can't hide one that is stuck.
-  const open = tools.find((event) => event.state === "running");
+  const open = Option.getOrUndefined(Arr.findFirst(tools, (event) => event.state === "running"));
   if (open && now - open.startedAt >= STALL_TOOL_OPEN_MILLIS)
     return { kind: "tool-open", toolName: open.toolName, sinceMillis: now - open.startedAt };
   let failed = 0;
-  for (const event of tools.toReversed()) {
+  for (const event of Arr.reverse(tools)) {
     if (event.state === "running") continue;
     if (event.state !== "failed") break;
     failed += 1;

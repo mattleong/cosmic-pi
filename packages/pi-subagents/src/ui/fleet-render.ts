@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { countLabel, formatRelativeAge, sanitizeTerminalLine } from "pi-cosmic-core";
@@ -27,11 +30,12 @@ export const fleetTitle = (
   visibleRows: number,
   width: number,
 ): string => {
-  const working = runs.filter(
+  const working = Arr.filter(
+    runs,
     (run) => run.state === "starting" || run.state === "running" || run.state === "stopping",
   ).length;
-  const waiting = runs.filter((run) => run.state === "waiting_for_parent").length;
-  const paused = runs.filter((run) => run.state === "paused").length;
+  const waiting = Arr.filter(runs, (run) => run.state === "waiting_for_parent").length;
+  const paused = Arr.filter(runs, (run) => run.state === "paused").length;
   const hidden = runs.length - visibleRows;
   const titleRaw = ` /subagents · ${countLabel(runs.length, "run")}${hidden ? ` · ${visibleRows} visible` : ""}${working ? ` · ${working} running` : ""}${waiting ? ` · ${waiting} waiting` : ""}${paused ? ` · ${paused} paused` : ""} `;
   return clipToWidth(titleRaw, Math.max(0, width - 2), "");
@@ -119,11 +123,12 @@ const fleetKeyLabel = (
   id: FullScreenSelectionKeybindingId,
   fallback: string,
 ): string => {
-  const withoutTreeArrows = configuredKeyLabels(keybindingLabel, FLEET_SHORTCUTS)
-    .key(id, fallback)
-    .split("/")
-    .filter((label) => label !== "←" && label !== "→")
-    .join("/");
+  const withoutTreeArrows = Fn.pipe(
+    configuredKeyLabels(keybindingLabel, FLEET_SHORTCUTS).key(id, fallback),
+    Str.split("/"),
+    Arr.filter((label) => label !== "←" && label !== "→"),
+    Arr.join("/"),
+  );
   return withoutTreeArrows || fallback;
 };
 

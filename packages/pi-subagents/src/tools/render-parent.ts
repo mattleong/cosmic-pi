@@ -1,9 +1,11 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { TUnknown } from "typebox";
 import { Text } from "@earendil-works/pi-tui";
+import * as Arr from "effect/Array";
 import * as Predicate from "effect/Predicate";
 import * as Fn from "effect/Function";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import {
   escapeControlChars,
   getTextContent,
@@ -23,6 +25,7 @@ import { MAX_PARENT_MESSAGE_CHARS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.t
 import { rejectedCallIssue } from "./compact-action-failures.ts";
 import { QUOTED_TEXT_LIMIT } from "./compact-run-issues.ts";
 import { errorSection, previewCall, rejectionAwareCall, textResultBody } from "./render-preview.ts";
+import { isTextFragment } from "./text-fragments.ts";
 
 export const CONTACT_PARENT_LABEL = "Contact Parent";
 
@@ -53,7 +56,7 @@ const decodeReceipt = decodeUnknownOrUndefined(ReceiptSchema, { onExcessProperty
 const parentReplyText = Fn.flow(decodeReply, (reply) => reply?.content[0]?.text);
 
 const contactRequest = Fn.flow(decodeUnknownOrUndefined(ContactSchema), (request) =>
-  request?.message.trim() ? request : undefined,
+  request !== undefined && Str.trim(request.message) ? request : undefined,
 );
 
 const warningIssue = (message: string): CompactIssue => {
@@ -135,7 +138,7 @@ export const contactParentRenderers = {
   renderCall: rejectionAwareCall(CONTACT_PARENT_LABEL, (args, theme, context) => {
     const request = contactRequest(args);
     const message = request && request.kind !== "warning" ? request.message : undefined;
-    const subject = [request?.kind, message].filter(Boolean).join(": ");
+    const subject = Fn.pipe([request?.kind, message], Arr.filter(isTextFragment), Arr.join(": "));
     const whole =
       context.expanded && message && !fitsHeading(message)
         ? new Text(theme.fg("toolOutput", escapeControlChars(message)), 0, 0)

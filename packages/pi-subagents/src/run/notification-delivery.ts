@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import * as Data from "effect/Data";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -71,7 +72,7 @@ export const notificationDelivery = Effect.fn("RunNotificationDelivery.acquire")
         completionRetryDelayMillis = COMPLETION_RETRY_INITIAL_MILLIS;
         return false;
       }
-      const runs = selected.map((item) => item.notification);
+      const runs = Arr.map(selected, (item) => item.notification);
       const delivery = yield* notify({ type: "completed", runs });
       return yield* withLock(
         Effect.sync(() => {
@@ -119,12 +120,15 @@ export const notificationDelivery = Effect.fn("RunNotificationDelivery.acquire")
     withLock(
       Effect.sync(() => {
         Latch.closeUnsafe(actionWake);
-        const notifications = [...pendingActionNotifications.values()].filter((notification) => {
-          if (actionRelevant(notification)) return true;
-          if (pendingActionNotifications.get(notification.id) === notification)
-            pendingActionNotifications.delete(notification.id);
-          return false;
-        });
+        const notifications = Arr.filter(
+          [...pendingActionNotifications.values()],
+          (notification) => {
+            if (actionRelevant(notification)) return true;
+            if (pendingActionNotifications.get(notification.id) === notification)
+              pendingActionNotifications.delete(notification.id);
+            return false;
+          },
+        );
         if (notifications.length === 0) actionRetryDelayMillis = COMPLETION_RETRY_INITIAL_MILLIS;
         return notifications;
       }),
@@ -147,7 +151,9 @@ export const notificationDelivery = Effect.fn("RunNotificationDelivery.acquire")
                 withLock(
                   Effect.sync<ActionDeliveryState>(() => {
                     let acknowledged = 0;
-                    const attempted = new Set(deliveries.map(({ notification }) => notification));
+                    const attempted = new Set(
+                      Arr.map(deliveries, ({ notification }) => notification),
+                    );
                     for (const { notification, accepted } of deliveries) {
                       if (!accepted) continue;
                       if (pendingActionNotifications.get(notification.id) === notification)
@@ -159,7 +165,8 @@ export const notificationDelivery = Effect.fn("RunNotificationDelivery.acquire")
                       pendingActionNotifications.size === 0 || acknowledged > 0,
                     );
                     if (pendingActionNotifications.size === 0) return ActionDeliveryState.Idle();
-                    const immediate = [...pendingActionNotifications.values()].some(
+                    const immediate = Arr.some(
+                      [...pendingActionNotifications.values()],
                       (notification) =>
                         !attempted.has(notification) && actionRelevant(notification),
                     );

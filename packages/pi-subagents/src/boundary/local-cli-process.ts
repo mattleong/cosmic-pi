@@ -4,6 +4,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Arr from "effect/Array";
 import type * as Scope from "effect/Scope";
 import {
   invalidRequest as preflightError,
@@ -95,7 +96,7 @@ const validateLocalPreflightRequest = Effect.fn("LocalCliProcess.validateLocalPr
     if (!supportedEfforts.includes(request.effort))
       return yield* preflightError(
         `${request.runtime}_effort_unsupported`,
-        `${request.runtime} does not support required effort ${request.effort}; supported efforts: ${supportedEfforts.join(", ")}.`,
+        `${request.runtime} does not support required effort ${request.effort}; supported efforts: ${Arr.join(supportedEfforts, ", ")}.`,
       );
     if (
       request.runtime === "claude" &&

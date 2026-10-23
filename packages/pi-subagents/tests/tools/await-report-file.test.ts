@@ -4,11 +4,12 @@ import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import * as Result from "effect/Result";
 import * as Layer from "effect/Layer";
 import { makePiManagedRuntime } from "pi-cosmic-core";
 import { recordingExtensionHost } from "pi-cosmic-core/testing";
-import { describe, expect } from "vitest";
+import { assert, describe, expect } from "vitest";
 import { sessionReportArchive } from "../../src/boundary/report-archive.ts";
 import type { SubagentRunView } from "../../src/run/model.ts";
 import { MAX_TOOL_OUTPUT_CHARS } from "../../src/run/limits.ts";
@@ -28,15 +29,20 @@ import { effectTest, step } from "../support/effect-test.ts";
 import { temporaryDirectory } from "../workspace/fixtures/repository.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import { captureSubagentTools, executeTool, view } from "./fixtures/tool-harness.ts";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
 
 const resultText = (result: {
   readonly content: ReadonlyArray<AgentToolResult<unknown>["content"][number]>;
 }): string =>
-  Arr.filterMap(result.content, (part) =>
-    part.type === "text" ? Result.succeed(part.text) : Result.failVoid,
-  ).join("\n");
+  Arr.join(
+    Arr.filterMap(result.content, (part) =>
+      part.type === "text" ? Result.succeed(part.text) : Result.failVoid,
+    ),
+    "\n",
+  );
 
-const ARCHIVE_PATH = `/home/user/.pi/agent/subagents/reports/session-1/agent-1-1-${"a".repeat(36)}.md`;
+const ARCHIVE_PATH = `/home/user/.pi/agent/subagents/reports/session-1/agent-1-1-${Fn.pipe("a", Str.repeat(36))}.md`;
 const REPORT_FILE = { path: ARCHIVE_PATH, chars: 500_000, lines: 40_000, complete: true };
 
 /** A run that saved a report longer than it retains, so its copy is cut. */
@@ -106,7 +112,7 @@ describe("await report delivery", () => {
     const [target] = contract?.targets ?? [];
     expect(target?.report).toEqual({ status: "delivered", ...REPORT_FILE });
     expect(JSON.stringify(contract)).not.toContain("RETAINED REPORT BODY");
-    expect(consumed.map((receipt) => receipt.id)).toEqual([run.id]);
+    expect(Arr.map(consumed, (receipt) => receipt.id)).toEqual([run.id]);
   });
 
   effectTest("inlines a short saved report after the blocks and keeps its file line", function* () {
@@ -126,7 +132,9 @@ describe("await report delivery", () => {
     expect(text).toContain(SHORT_FILE.path);
     expect(text).toContain(SHORT_REPORT);
     // The inline copy follows the block, which still names the file.
-    expect(text.indexOf(SHORT_FILE.path)).toBeLessThan(text.indexOf(SHORT_REPORT));
+    expect(Option.getOrElse(Fn.pipe(text, Str.indexOf(SHORT_FILE.path)), () => -1)).toBeLessThan(
+      Option.getOrElse(Fn.pipe(text, Str.indexOf(SHORT_REPORT)), () => -1),
+    );
   });
 
   effectTest("inlines no report the result only shows as delivered earlier", function* () {
@@ -186,7 +194,8 @@ describe("await report delivery", () => {
 });
 
 /** Text tagged so a test can tell a whole outcome from a partial one. */
-const tagged = (tag: string): string => `${tag}:${"x".repeat(MAX_ERROR_CHARS - tag.length - 2)}.`;
+const tagged = (tag: string): string =>
+  `${tag}:${Fn.pipe("x", Str.repeat(MAX_ERROR_CHARS - tag.length - 2))}.`;
 
 const receipt = (id: string) => ({ id, generation: 1, claimToken: `claim-${id}` });
 
@@ -198,13 +207,13 @@ const awaitObservations = (observations: ReadonlyArray<SubagentRunObservation>) 
         withAwaitTerminalObservations: (_ids, _until, _onUpdate, use) => use(observations),
         consumeCompletions: (receipts) =>
           Effect.sync(() => {
-            consumed.push(...receipts.map((item) => item.id));
+            consumed.push(...Arr.map(receipts, (item) => item.id));
           }),
       }),
     ).get("agent_await")!;
     const response = yield* step(() =>
       executeTool(tool, {
-        runIds: observations.map(({ run }) => run.id),
+        runIds: Arr.map(observations, ({ run }) => run.id),
         until: "all_finished",
       }),
     );
@@ -255,18 +264,22 @@ describe("await outcomes", () => {
     ]);
 
     expect(text.length).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_CHARS);
-    for (const { run } of failures) expect(text).toContain(run.error?.slice(0, 12) ?? "missing");
+    for (const { run } of failures)
+      expect(text).toContain(
+        run.error === undefined ? "missing" : Fn.pipe(run.error, Str.slice(0, 12)),
+      );
     for (const { run } of reports) expect(text).toContain(run.reportArchive?.path);
     // A question shows its preview; its own notice delivers the whole question.
     expect(text).toContain("QUESTION:");
     expect(text).not.toContain(question.run.question?.message);
     expect(text).toContain("agent_read");
-    expect(consumed).toEqual([...failures, ...reports].map(({ run }) => run.id));
+    expect(consumed).toEqual(Arr.map([...failures, ...reports], ({ run }) => run.id));
+    assert(contract !== undefined);
     expect(
-      contract?.targets
-        .slice(failures.length, -1)
-        .map(({ report }) => ("path" in report ? report.path : report.status)),
-    ).toEqual(reports.map(({ run }) => run.reportArchive?.path));
+      Arr.map(contract.targets.slice(failures.length, -1), ({ report }) =>
+        "path" in report ? report.path : report.status,
+      ),
+    ).toEqual(Arr.map(reports, ({ run }) => run.reportArchive?.path));
   });
 });
 
@@ -293,7 +306,7 @@ it.live("delivers every report file of a full await even when warnings fill the 
         runtime.run(service.startSessionOwned(nativeReportRequest({ name: `worker-${index}` }))),
       ),
     );
-    const runIds = runs.map((run) => run.id);
+    const runIds = Arr.map(runs, (run) => run.id);
     const tool = tools.get("agent_await")!;
     const claimed = Deferred.makeUnsafe<void>();
     const pending = executeTool(
@@ -303,14 +316,17 @@ it.live("delivers every report file of a full await even when warnings fill the 
     );
     yield* Deferred.await(claimed);
     // Twelve 6,000-character warnings exceed the result on their own, so cards must be clipped.
-    const warning = Array.from({ length: 2_000 }, (_, word) => `w${word % 10}`).join(" ");
-    fixture.backend.controls.forEach((control, index) => {
+    const warning = Arr.join(
+      Array.from({ length: 2_000 }, (_, word) => `w${word % 10}`),
+      " ",
+    );
+    Arr.forEach(fixture.backend.controls, (control, index) => {
       control.offer({
         type: "supervisor_contact",
         assignmentEpoch: 1,
         requestId: `warning-${index}`,
         kind: "warning",
-        message: warning.slice(0, 6_000),
+        message: Fn.pipe(warning, Str.slice(0, 6_000)),
       });
       control.report(runIds[index]!, 1, `delivery-${index}`, `Report ${index}.`);
     });
@@ -329,11 +345,12 @@ it.live("delivers every report file of a full await even when warnings fill the 
       executeTool(tool, { runIds, until: "all_finished" }, { callID: "repeat-await" }),
     );
     const repeatedContract = decodeSubagentContract("agent_await")(repeated.structuredContent);
-    expect(repeatedContract?.targets.map((target) => target.report)).toEqual(
-      runIds.map(() => ({ status: "already_delivered" })),
+    assert(repeatedContract !== undefined);
+    expect(Arr.map(repeatedContract.targets, (target) => target.report)).toEqual(
+      Arr.map(runIds, () => ({ status: "already_delivered" })),
     );
     // The await consumed every report, so none reaches the parent again as a notice.
     yield* Effect.sleep(Duration.millis(200));
-    expect(fixture.notifications.filter((item) => item.type === "completed")).toHaveLength(0);
+    expect(Arr.filter(fixture.notifications, (item) => item.type === "completed")).toHaveLength(0);
   }).pipe(Effect.scoped),
 );

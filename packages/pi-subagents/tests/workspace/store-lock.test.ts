@@ -20,6 +20,8 @@ import {
   workspaceTests,
   writeFile,
 } from "./fixtures/repository.ts";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 
 const lockFor = (directory: string) =>
   CrossProcessLock.use((lock) => Effect.succeed(lock)).pipe(
@@ -113,7 +115,7 @@ test("reclaims a lock left by a process that exited and ignores the old global l
   yield* io(() => fs.mkdir(slot, { mode: 0o700 }));
   const owner = {
     version: 1,
-    token: "a".repeat(64),
+    token: Fn.pipe("a", Str.repeat(64)),
     pid: yield* exitedProcessId,
     phase: "quiescent",
   };
@@ -121,7 +123,7 @@ test("reclaims a lock left by a process that exited and ignores the old global l
     fs.writeFile(path.join(slot, "owner.json"), JSON.stringify(owner), { mode: 0o600 }),
   );
   const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  expect(handle.cwd.startsWith(registry)).toBe(true);
+  expect(Fn.pipe(handle.cwd, Str.startsWith(registry))).toBe(true);
 });
 
 it.live(
@@ -139,7 +141,9 @@ it.live(
       yield* Effect.gen(function* () {
         const service = yield* WorkspaceService;
         const handle = yield* service.create({ sourceCwd: source, ownerId: "parent" });
-        expect(handle.cwd.startsWith(path.join(real, "subagent-worktrees"))).toBe(true);
+        expect(Fn.pipe(handle.cwd, Str.startsWith(path.join(real, "subagent-worktrees")))).toBe(
+          true,
+        );
         expect(yield* service.list({ ownerId: "parent" })).toHaveLength(1);
       }).pipe(Effect.provide(WorkspaceService.layer({ agentDirectory: linked })));
 

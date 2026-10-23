@@ -1,4 +1,9 @@
 import * as Effect from "effect/Effect";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
+import * as Order from "effect/Order";
 import { OPEN_WORKSPACE_STATUSES, WorkspaceError } from "../workspace/model.ts";
 import type { WorkspaceRebase, WorkspaceRecord } from "../workspace/model.ts";
 import { nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core";
@@ -40,25 +45,43 @@ import type { BeforeTreeRemoval } from "./git-worktree-hooks.ts";
 /** Paths `git apply --3way` left unmerged in the tree's index. */
 const unmergedPaths = (root: string) =>
   gitFields(root, ["ls-files", "-u", "-z"]).pipe(
-    Effect.map((lines) => [...new Set(lines.map((line) => line.slice(line.indexOf("\t") + 1)))]),
+    Effect.map((lines) => [
+      ...new Set(
+        Arr.map(lines, (line) =>
+          Fn.pipe(
+            line,
+            Str.slice(
+              Fn.pipe(
+                line,
+                Str.indexOf("\t"),
+                Option.getOrElse(() => -1),
+              ) + 1,
+            ),
+          ),
+        ),
+      ),
+    ]),
   );
 
 const rebaseRefusal = (result: GitResult, changedPaths: ReadonlyArray<string>) => {
   const stderr = gitStderrLines(result.stderr);
-  const paths = changedPaths.filter((name) =>
-    stderr.some((line) => line.startsWith(`error: ${name}: `)),
+  const paths = Arr.filter(changedPaths, (name) =>
+    Arr.some(stderr, (line) => Fn.pipe(line, Str.startsWith(`error: ${name}: `))),
   );
   return WorkspaceError.make({
     operation: "rebase",
     code: "workspace_rebase_refused",
     message: "The previous changes can't be reapplied to the parent's current files.",
-    detail: [
-      ...(paths.length > 0 ? [`Unmergeable: ${listedPaths(paths)}`] : []),
-      ...(stderr.length > 0 ? [`Git reported:\n${stderr.join("\n")}`] : []),
-      "Rule: a rebase reapplies every change with a three-way merge, which can't resolve a file the parent deleted, added, or turned binary, or overwrite an untracked or ignored worker file",
-      "Nothing was changed; the workspace keeps its worker tree and revision.",
-      "Remedy: revise without rebase, or apply the proposal and start a new writer from the current checkout.",
-    ].join("\n"),
+    detail: Arr.join(
+      [
+        ...(paths.length > 0 ? [`Unmergeable: ${listedPaths(paths)}`] : []),
+        ...(stderr.length > 0 ? [`Git reported:\n${Arr.join(stderr, "\n")}`] : []),
+        "Rule: a rebase reapplies every change with a three-way merge, which can't resolve a file the parent deleted, added, or turned binary, or overwrite an untracked or ignored worker file",
+        "Nothing was changed; the workspace keeps its worker tree and revision.",
+        "Remedy: revise without rebase, or apply the proposal and start a new writer from the current checkout.",
+      ],
+      "\n",
+    ),
   });
 };
 
@@ -81,7 +104,12 @@ const unstageIncluded = (root: string, included: ReadonlyArray<string>) =>
   included.length === 0
     ? Effect.void
     : git(root, ["update-index", "--force-remove", "-z", "--stdin"], {
-        stdin: new TextEncoder().encode(included.map((name) => `${name}\0`).join("")),
+        stdin: new TextEncoder().encode(
+          Arr.join(
+            Arr.map(included, (name) => `${name}\0`),
+            "",
+          ),
+        ),
       }).pipe(Effect.asVoid);
 
 /**
@@ -109,7 +137,7 @@ const rebuildWorker = Effect.fn("GitWorktreeRebase.rebuildWorker")(function* (
   if (result.code === null || result.cleanupUnconfirmed || result.timedOut)
     return yield* gitFailure(args, result);
   const conflicted = yield* unmergedPaths(root);
-  if (conflicted.length > 0) return conflicted.toSorted();
+  if (conflicted.length > 0) return Arr.sort(conflicted, Order.String);
   yield* git(root, ["read-tree", "-m", "-u", parent, captured]);
   return yield* rebaseRefusal(result, changedPaths);
 });

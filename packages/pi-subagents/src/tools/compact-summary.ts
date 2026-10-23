@@ -1,5 +1,8 @@
 import { compactIssueSeverity } from "pi-code-previews";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
+import * as Str from "effect/String";
 import { countLabel } from "pi-cosmic-core";
 import { hasUnresolvedSteeringDelivery } from "../run/model.ts";
 import { runCleanupAttention } from "../run/attention.ts";
@@ -43,7 +46,16 @@ function cardCounters(cards: readonly SubagentRunCard[], singleTarget = false): 
     const label = runStateLabel(card.state);
     counts.set(label, (counts.get(label) ?? 0) + 1);
   }
-  return [[...counts].map(([label, count]) => `${count} ${label}`).join(", ")].filter(Boolean);
+  return Arr.filter(
+    [
+      Fn.pipe(
+        [...counts],
+        Arr.map(([label, count]) => `${count} ${label}`),
+        Arr.join(", "),
+      ),
+    ],
+    Boolean,
+  );
 }
 
 const TOOL_ACTIONS: Readonly<Record<SubagentToolName, string>> = {
@@ -97,16 +109,20 @@ function summarizeReceipt(
 
 function awaitCounter(cards: readonly SubagentRunCard[], total: number, subject: string): string {
   const [only] = cards;
-  if (cards.length === 1 && total === 1 && subject.trim() && only) return runStateLabel(only.state);
+  if (cards.length === 1 && total === 1 && Str.trim(subject) && only)
+    return runStateLabel(only.state);
   const count = (states: readonly SubagentRunCard["state"][]) =>
-    cards.filter((card) => states.includes(card.state)).length;
+    Arr.filter(cards, (card) => states.includes(card.state)).length;
   const failed = count(["failed"]);
   const stopped = count(["stopped"]);
-  return [
-    `${count(["completed"])}/${total} finished`,
-    ...(failed ? [`${failed} failed`] : []),
-    ...(stopped ? [`${stopped} stopped`] : []),
-  ].join(", ");
+  return Arr.join(
+    [
+      `${count(["completed"])}/${total} finished`,
+      ...(failed ? [`${failed} failed`] : []),
+      ...(stopped ? [`${stopped} stopped`] : []),
+    ],
+    ", ",
+  );
 }
 
 function awaitIssues(
@@ -172,7 +188,8 @@ function awaitIssues(
   if (
     details.attentionRequired &&
     asking.length === 0 &&
-    !cards.some(
+    !Arr.some(
+      cards,
       (card) =>
         card.question !== undefined ||
         runCleanupAttention(card) !== undefined ||
@@ -198,7 +215,7 @@ function runIssues(
 ): void {
   if (details.runCount > details.cards.length) {
     summary.counters = [
-      `${details.cards.length}/${details.runCount} shown, ${cardCounters(cards).join(", ")}`,
+      `${details.cards.length}/${details.runCount} shown, ${Arr.join(cardCounters(cards), ", ")}`,
     ];
     if (summary.outcome === "success") summary.outcome = "uncertain";
     issues.push({
@@ -225,7 +242,7 @@ function summarizeModels(
     const invalid = profile.source === "global-invalid" || profile.source === "project-invalid";
     const options = invalid
       ? 0
-      : profile.candidates.filter((candidate) => candidate.status === "eligible").length;
+      : Arr.filter(profile.candidates, (candidate) => candidate.status === "eligible").length;
     eligibleOptions += options;
 
     if (invalid || (profile.candidates.length > 0 && options === 0)) {
@@ -240,7 +257,7 @@ function summarizeModels(
   }
   const agents = details.agents ?? [];
   for (const agent of agents)
-    if (agent.candidates.every((candidate) => candidate.status !== "eligible"))
+    if (Arr.every(agent.candidates, (candidate) => candidate.status !== "eligible"))
       issues.push({
         severity: "warning",
         code: `agent:${agent.name}:unavailable`,
@@ -261,7 +278,7 @@ function summarizeModels(
   if (disabled) counters.push(countLabel(disabled, "disabled profile"));
   if (unavailable) counters.push(countLabel(unavailable, "unavailable profile"));
   if (agents.length > 0) counters.push(countLabel(agents.length, "agent"));
-  summary.counters = [counters.join(", ")];
+  summary.counters = [Arr.join(counters, ", ")];
   if (summary.outcome === "success" && compactIssueSeverity(issues) === "warning")
     summary.outcome = "warning";
   return summary;
@@ -277,7 +294,7 @@ function isSingleRequestedRun(
 }
 
 function labelChangesToReview(summary: CompactSummary, cards: readonly SubagentRunCard[]): void {
-  const reviewable = cards.filter(hasChangesToReview).length;
+  const reviewable = Arr.filter(cards, hasChangesToReview).length;
   if (reviewable === 0) return;
   const label =
     reviewable === 1 && cards.length === 1 ? "ready to apply" : `${reviewable} ready to apply`;
@@ -290,10 +307,11 @@ function cardOutcome(
   action: string,
   cards: readonly SubagentRunCard[],
 ): NonNullable<CompactSummary["outcome"]> {
-  if (cards.some((card) => card.state === "stopping" || hasUnresolvedSteeringDelivery(card)))
+  if (Arr.some(cards, (card) => card.state === "stopping" || hasUnresolvedSteeringDelivery(card)))
     return "uncertain";
   if (
-    cards.some(
+    Arr.some(
+      cards,
       (card) =>
         runCleanupAttention(card) !== undefined ||
         card.question !== undefined ||
@@ -302,7 +320,7 @@ function cardOutcome(
     )
   )
     return "warning";
-  return action !== "stop" && cards.some((card) => card.state === "stopped")
+  return action !== "stop" && Arr.some(cards, (card) => card.state === "stopped")
     ? "cancelled"
     : "success";
 }
@@ -337,11 +355,14 @@ function summarizeDetails(
   if (details.action === "start") return summarizeStart(details, phase, summary, issues);
   omissionIssue(details, summary, issues);
   if (details.action === "models") return summarizeModels(details, summary, issues);
-  const cards = targets ? details.cards.filter((card) => targets.includes(card.id)) : details.cards;
+  const cards = targets
+    ? Arr.filter(details.cards, (card) => targets.includes(card.id))
+    : details.cards;
   // An await also returns for parent attention from a run it did not target.
   const asking =
     details.action === "await" && targets
-      ? details.cards.filter(
+      ? Arr.filter(
+          details.cards,
           (card) =>
             !targets.includes(card.id) &&
             (card.question !== undefined || runCleanupAttention(card) !== undefined),

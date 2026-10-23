@@ -9,6 +9,7 @@ import type { Component } from "@earendil-works/pi-tui";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -38,6 +39,9 @@ import { nodePath } from "./support/node-builtins.ts";
 import { pickQuestionnaire } from "./support/questionnaire.ts";
 import { subagentServiceDouble } from "./tools/fixtures/subagent-service-double.ts";
 import { fallbackProfileService, testBackendRegistry } from "./tools/fixtures/tool-harness.ts";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
 
 type RegisteredToolSummary = {
   readonly name: string;
@@ -279,7 +283,7 @@ describe("subagent Pi registration", () => {
         emit("session_shutdown", ctx, { type: "session_shutdown", reason: "reload" }),
       );
       expect(order).toEqual(["flush", "pi-subagents-completed", "pi-subagents-stopped"]);
-      expect(sendMessage.mock.calls.map(([, options]) => options?.triggerTurn)).toEqual([
+      expect(Arr.map(sendMessage.mock.calls, ([, options]) => options?.triggerTurn)).toEqual([
         false,
         false,
       ]);
@@ -527,9 +531,9 @@ describe("subagent Pi registration", () => {
       const disabledName = tools.declared[0]!;
       const expectedActive = () => [
         "read",
-        ...new Set(tools.declared.filter((name) => name !== disabledName)),
+        ...new Set(Arr.filter(tools.declared, (name) => name !== disabledName)),
       ];
-      tools.setActive(tools.active().filter((name) => name !== disabledName));
+      tools.setActive(Arr.filter(tools.active(), (name) => name !== disabledName));
 
       const replacing = Promise.resolve(emit("session_tree", signalledContext()));
       yield* step(() => Promise.resolve());
@@ -609,7 +613,7 @@ describe("subagent Pi registration", () => {
         expect(tools.active()).toEqual(["read"]);
         expect(slotHoldsEnvelope()).toBe(true);
       }
-      expect(notify.mock.calls.some(([, level]) => level === "warning")).toBe(true);
+      expect(Arr.some(notify.mock.calls, ([, level]) => level === "warning")).toBe(true);
 
       yield* settle(() =>
         emit("session_shutdown", ctx, { type: "session_shutdown", reason: "reload" }),
@@ -623,7 +627,7 @@ describe("subagent Pi registration", () => {
       ctx = contextFor("application-compatible-new-session");
       yield* settle(() => emit("session_start", ctx, { type: "session_start", reason: "new" }));
       expect(tools.active()).toContain("agent_start");
-      expect(Object.hasOwn(globalThis, reloadSlot)).toBe(false);
+      expect(Rec.has<string | symbol, unknown>(globalThis, reloadSlot)).toBe(false);
     },
   );
 
@@ -661,7 +665,7 @@ describe("subagent Pi registration", () => {
         return Effect.promise(() => tool.execute("models", {}, undefined, undefined, context)).pipe(
           Effect.map((result) =>
             Option.exists(decodeModelsDetails(result.details), (details) =>
-              details.profiles.some((profile) => profile.source === "session"),
+              Arr.some(details.profiles, (profile) => profile.source === "session"),
             ),
           ),
         );
@@ -775,8 +779,8 @@ describe("orphaned workspace sweep notice", () => {
       yield* settle(() => emit("session_start", ctx));
       yield* settle(() => Promise.resolve());
       expect(sweeps).toBe(1);
-      const notices = notify.mock.calls.filter(([text]) =>
-        String(text).includes("swept-workspace"),
+      const notices = Arr.filter(notify.mock.calls, ([text]) =>
+        Fn.pipe(String(text), Str.includes("swept-workspace")),
       );
       expect(notices).toHaveLength(1);
       expect(String(notices[0]?.[0])).toContain(swept[0]?.patchPath);

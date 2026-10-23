@@ -2,6 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Fn from "effect/Function";
 import * as Logger from "effect/Logger";
 import * as References from "effect/References";
 import { yieldUntil } from "pi-cosmic-core/testing";
@@ -15,6 +16,9 @@ import {
   request,
   withService,
 } from "./fixtures/service-harness.ts";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
 
 const originalFailure: SubagentCleanupDiagnostic = {
   phase: "process-group",
@@ -22,7 +26,10 @@ const originalFailure: SubagentCleanupDiagnostic = {
   message: "The original process group could not be observed absent (EPERM).",
 };
 const latest = (projections: ReadonlyArray<SubagentProjection>, id: string) =>
-  projections.at(-1)?.runs.find((run) => run.id === id);
+  Arr.last(projections).pipe(
+    Option.flatMap((projection) => Arr.findFirst(projection.runs, (run) => run.id === id)),
+    Option.getOrUndefined,
+  );
 const child = (fake: ReturnType<typeof fakeChildLayer>, index = 0) => {
   const control = fake.controls[index];
   if (!control) throw new Error("Expected acquired fake child.");
@@ -83,7 +90,8 @@ describe("explicit cleanup verification", () => {
           control.settle();
         }
         yield* yieldUntil(() =>
-          [first, second].every(
+          Arr.every(
+            [first, second],
             (run) => latest(projections, run.id)?.cleanup?.disposition === "quarantined",
           ),
         );
@@ -105,7 +113,7 @@ describe("explicit cleanup verification", () => {
         yield* service.stop(admitted.id);
         yield* service.stop(active.id);
         expect(counts.release).toBe(1);
-        expect(fake.controls.slice(0, 2).map((control) => control.released())).toEqual([1, 1]);
+        expect(Arr.map(fake.controls.slice(0, 2), (control) => control.released())).toEqual([1, 1]);
       });
     },
   );
@@ -151,8 +159,8 @@ describe("explicit cleanup verification", () => {
       const run = yield* service.start(request());
       child(fake, 0).cleanup.fail({
         phase: "process-group",
-        code: `Bearer private-token ${"c".repeat(120)}`,
-        message: `Authorization: Bearer private-token\napi_key=private-key\n${"detail ".repeat(300)}`,
+        code: `Bearer private-token ${Fn.pipe("c", Str.repeat(120))}`,
+        message: `Authorization: Bearer private-token\napi_key=private-key\n${Fn.pipe("detail ", Str.repeat(300))}`,
       });
       const failed = yield* service.stop(run.id);
       const diagnostic = failed.cleanup?.diagnostic;
@@ -161,7 +169,9 @@ describe("explicit cleanup verification", () => {
       expect(JSON.stringify(diagnostic)).not.toContain("private-token");
       expect(JSON.stringify(diagnostic)).not.toContain("private-key");
       expect(failed.cleanup?.diagnostic?.phase).toBe("process-group");
-      const cleanupLog = logs.find((entry) => entry.annotations.cleanupPhase === "process-group");
+      const cleanupLog = Option.getOrUndefined(
+        Arr.findFirst(logs, (entry) => entry.annotations.cleanupPhase === "process-group"),
+      );
       expect(cleanupLog?.annotations.cleanupReason).toBe(diagnostic?.message);
       expect(JSON.stringify(logs)).not.toContain("private-token");
       expect(JSON.stringify(logs)).not.toContain("private-key");

@@ -1,6 +1,10 @@
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Order from "effect/Order";
 import type { SafeFile } from "pi-cosmic-core";
 import {
   isOriginalWorker,
@@ -79,16 +83,17 @@ export const removeWorkspaceTrees = Effect.fn("GitWorktreeRecovery.removeWorkspa
       const names = yield* workspaceIO("discard", () => fs.readdir(directory));
       const trees = [
         ...new Set([
-          ...listed.map((tree) => tree.path),
-          ...names.filter(editableTreeName).map((name) => path.join(directory, name)),
+          ...Arr.map(listed, (tree) => tree.path),
+          ...Arr.map(Arr.filter(names, editableTreeName), (name) => path.join(directory, name)),
         ]),
       ];
       return { listed, trees };
     });
     const { listed, trees } = yield* remaining;
     // Keep the worker available for identity checks until every preparation is gone.
-    for (const tree of trees.toSorted(
-      (left, right) => Number(left === worker) - Number(right === worker),
+    for (const tree of Arr.sort(
+      trees,
+      Order.mapInput(Order.Number, (candidate: string) => Number(candidate === worker)),
     )) {
       // Service, source-lock, and owner-lease checks can all wait. Revalidate at removal,
       // not merely before entering the engine, while the original writer lease is held.
@@ -127,7 +132,7 @@ export const listWorkspaceRecords = Effect.fn("GitWorktreeRecovery.listWorkspace
     const before = yield* inspectRegistry(registry);
     if (!before) return { records, unavailable };
     const names = yield* workspaceIO("registry", () => fs.readdir(registry));
-    for (const workspaceId of names.filter(validWorkspaceId).toSorted()) {
+    for (const workspaceId of Arr.sort(Arr.filter(names, validWorkspaceId), Order.String)) {
       const record = yield* readWorkspaceRecord(registry, workspaceId).pipe(
         Effect.catchTag("WorkspaceError", () => Effect.void),
       );
@@ -181,7 +186,7 @@ const collectRecord = Effect.fn("GitWorktreeRecovery.collectRecord")(function* (
   const saved = yield* workspaceIO("collect", () => fs.stat(path.join(directory, "record.json")));
   if (now - saved.mtimeMs < Duration.toMillis(WORKSPACE_RECORD_RETENTION)) return false;
   const names = yield* workspaceIO("collect", () => fs.readdir(directory));
-  if (names.some(editableTreeName)) return false;
+  if (Arr.some(names, editableTreeName)) return false;
   // Discard already deleted them; a repository that is gone has none left to delete.
   yield* deleteWorkspaceRefs(record.repository, workspaceId).pipe(Effect.ignore);
   yield* removeCollected(registry, workspaceId);
@@ -228,7 +233,7 @@ const abandonCreate = Effect.fn("GitWorktreeRecovery.abandonCreate")(function* (
 
 const hasEditableTree = (registry: string, workspaceId: string) =>
   workspaceIOIfPresent("collect", () => fs.readdir(workspaceDirectory(registry, workspaceId))).pipe(
-    Effect.map((names) => (names ?? []).some(editableTreeName)),
+    Effect.map((names) => Arr.some(names ?? [], editableTreeName)),
   );
 
 // Integration keeps trees a run still uses. Once its session has provably ended, so no run can
@@ -306,7 +311,7 @@ export const collectWorkspaceRecords = Effect.fn("GitWorktreeRecovery.collectWor
     }
     const names = yield* workspaceIOIfPresent("collect", () => fs.readdir(registry));
     for (const name of names ?? [])
-      if (name.startsWith(COLLECTED_PREFIX))
+      if (Fn.pipe(name, Str.startsWith(COLLECTED_PREFIX)))
         yield* workspaceIO("collect", () =>
           fs.rm(path.join(registry, name), { recursive: true, force: true }),
         );

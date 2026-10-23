@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { FAST_SERVICE_TIER, supportsFastModel } from "pi-better-openai/fast-models";
 import { hasObjectRuntimeType, invokeHostCallback } from "pi-cosmic-core";
@@ -52,7 +53,7 @@ export const registerChildPiFastModeHook = (pi: ExtensionAPI, isEnabled: () => b
       !supportsFastModel(ctx.model.provider, ctx.model.id) ||
       !event.payload ||
       !hasObjectRuntimeType(event.payload) ||
-      Array.isArray(event.payload)
+      Arr.isArray(event.payload)
     )
       return undefined;
     return { ...event.payload, service_tier: FAST_SERVICE_TIER };

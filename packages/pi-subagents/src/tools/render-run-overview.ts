@@ -1,4 +1,7 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
+import * as Str from "effect/String";
 import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import {
   Container,
@@ -27,6 +30,7 @@ import type { SubagentRunCard } from "./details-schema.ts";
 import { attentionRecoveryText, cleanupEvidenceText } from "./format.ts";
 import { DESCENDANTS_OMITTED } from "./render-await.ts";
 import { renderResponsiveRunRows, type RunHierarchy } from "./render-run-rows.ts";
+import { isTextFragment } from "./text-fragments.ts";
 
 interface RunReportSection {
   readonly name: string;
@@ -68,8 +72,11 @@ const reportSection = (
 export const expandedRunReportSections = (
   runs: ReadonlyArray<SubagentRunCard>,
 ): ReadonlyArray<RunReportSection> =>
-  runs.flatMap((run) =>
-    [reportSection(run, "report"), reportSection(run, "failure")].filter(Predicate.isNotUndefined),
+  Arr.flatMap(runs, (run) =>
+    Arr.filter(
+      [reportSection(run, "report"), reportSection(run, "failure")],
+      Predicate.isNotUndefined,
+    ),
   );
 
 const reportAffordance = (
@@ -77,7 +84,7 @@ const reportAffordance = (
   expanded: boolean,
   theme: Theme,
 ): string => {
-  const reportCount = sections.filter((section) => section.kind === "report").length;
+  const reportCount = Arr.filter(sections, (section) => section.kind === "report").length;
   const failureCount = sections.length - reportCount;
   const label =
     failureCount === 0
@@ -92,17 +99,20 @@ const GENERIC_SELECTION_REASON = /^Profile (?:model|route) selection\.?$/u;
 
 const runSelectionSummary = (run: SubagentRunCard): string => {
   const { source, candidateIndex, reason } = run.selection;
-  const parts = [
-    run.agent ? `${run.agent} agent` : undefined,
-    run.profile ? `${run.profile} profile` : undefined,
-    source === "profile-parent-candidate"
-      ? "parent's model"
-      : candidateIndex === undefined
-        ? undefined
-        : `option ${candidateIndex + 1}`,
-    GENERIC_SELECTION_REASON.test(reason) ? undefined : reason,
-  ].filter(Boolean);
-  return sanitizeTerminalLine(parts.join(" · "));
+  const parts = Arr.filter(
+    [
+      run.agent ? `${run.agent} agent` : undefined,
+      run.profile ? `${run.profile} profile` : undefined,
+      source === "profile-parent-candidate"
+        ? "parent's model"
+        : candidateIndex === undefined
+          ? undefined
+          : `option ${candidateIndex + 1}`,
+      GENERIC_SELECTION_REASON.test(reason) ? undefined : reason,
+    ],
+    isTextFragment,
+  );
+  return sanitizeTerminalLine(Arr.join(parts, " · "));
 };
 
 const CAPABILITY_LABELS = new Map<string, string>([
@@ -112,13 +122,14 @@ const CAPABILITY_LABELS = new Map<string, string>([
 ]);
 
 const runControls = (run: SubagentRunCard): string => {
-  const labels = run.capabilities.map(
+  const labels = Arr.map(
+    run.capabilities,
     (capability) => CAPABILITY_LABELS.get(capability) ?? capability,
   );
   const last = labels.pop();
   return last === undefined
     ? "no live controls"
-    : `can ${labels.length ? `${labels.join(", ")} and ${last}` : last}`;
+    : `can ${labels.length ? `${Arr.join(labels, ", ")} and ${last}` : last}`;
 };
 
 const runWriterSummary = (run: SubagentRunCard): string | undefined => {
@@ -154,16 +165,18 @@ const runStateDiagnostics = (run: SubagentRunCard, width: number, theme: Theme):
       ? wrapTextWithAnsi(theme.fg("accent", sanitizeTerminalLine(run.progress)), width)
       : []),
     ...(writer ? dimLines(writer, width, theme) : []),
-    ...cleanupEvidenceText(run)
-      .split("\n")
-      .filter(Boolean)
-      .flatMap((line) => dimLines(line, width, theme)),
+    ...Fn.pipe(
+      cleanupEvidenceText(run),
+      Str.split("\n"),
+      Arr.filter(Boolean),
+      Arr.flatMap((line) => dimLines(line, width, theme)),
+    ),
     ...(run.warning ? dimLines(`Warning: ${run.warning}`, width, theme) : []),
   ];
 };
 
 const runRouteDiagnostics = (run: SubagentRunCard, width: number, theme: Theme): string[] => [
-  ...run.selection.skippedCandidates.flatMap((candidate) =>
+  ...Arr.flatMap(run.selection.skippedCandidates, (candidate) =>
     dimLines(
       `Skipped ${skippedCandidateLabel(candidate.candidate)} [${candidate.code}] · ${candidate.reason}`,
       width,
@@ -185,7 +198,7 @@ const reportStatusLines = (
   width: number,
   theme: Theme,
 ): string[] =>
-  runs.flatMap((run) =>
+  Arr.flatMap(runs, (run) =>
     run.state !== "completed" || run.finalText || run.error
       ? []
       : [
@@ -234,7 +247,7 @@ const expandedRowDiagnostics = (
   options: RunOverviewOptions,
 ): string[] => {
   const routine = options.contentOnly === true || options.hierarchy?.awaitedRunIds === undefined;
-  return runs.flatMap((run) => [
+  return Arr.flatMap(runs, (run) => [
     ...(routine
       ? routineRunDiagnostics(run, width, theme)
       : exceptionalRunDiagnostics(run, width, theme)),
@@ -272,7 +285,7 @@ const overviewOutcomeLines = (
   const hierarchy = options.hierarchy;
   const showOutcomeDetails = options.showOutcomeDetails !== false;
   const outcomeRuns = hierarchy?.awaitedRunIds
-    ? runs.filter((run) => hierarchy.awaitedRunIds?.has(run.id))
+    ? Arr.filter(runs, (run) => hierarchy.awaitedRunIds?.has(run.id) === true)
     : runs;
   return [
     ...(showOutcomeDetails && options.showReportOutcomes !== false

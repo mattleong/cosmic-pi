@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import { frameAgentMessage, safeTextPrefix, type AgentMessageRecipientState } from "pi-cosmic-core";
 import type { SubagentRuntime } from "../domain/routing.ts";
 import {
@@ -196,7 +197,7 @@ const messageTooLarge = (limit: number, detail: string): InvalidSubagentRequestE
 export const validateMessageText = (
   message: string,
 ): Effect.Effect<string, InvalidSubagentRequestError> => {
-  const normalized = message.trim();
+  const normalized = Str.trim(message);
   if (!normalized) return Effect.fail(invalidRequest("message_required", "Message is required."));
   if (normalized.length > MAX_RESUME_MESSAGE_CHARS)
     return Effect.fail(messageTooLarge(MAX_RESUME_MESSAGE_CHARS, ""));
@@ -333,7 +334,7 @@ export const mainListEntry = (
 });
 
 const boundedText = (text: string | undefined, limit: number): AgentReadText => {
-  const trimmed = text?.trim();
+  const trimmed = text === undefined ? undefined : Str.trim(text);
   if (!trimmed) return { textStatus: "none", truncated: false };
   return {
     textStatus: "text",
@@ -390,7 +391,7 @@ export const runReadout = (record: RunRecord, projected: SubagentRunView): Agent
     };
   }
   // A completed report without a file is read inline, led by the note its notice carries.
-  if (view.state === "completed" && view.finalText?.trim()) {
+  if (view.state === "completed" && view.finalText !== undefined && Str.trim(view.finalText)) {
     const report = boundedText(
       `${unsavedReportNote(view.finalTextTruncation)}\n\n${view.finalText}`,
       MAX_RUN_READ_CHARS,

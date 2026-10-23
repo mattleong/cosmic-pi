@@ -28,6 +28,8 @@ import {
   type ConfigDocumentValue,
 } from "./fixtures/profile-settings-inspection.ts";
 import { profileCandidate } from "./fixtures/profiles.ts";
+import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
 
 describe("Pi catalog selector classification", () => {
   const catalog = [
@@ -146,7 +148,7 @@ describe("subagent v6 profile configuration and resolution", () => {
 
   it("bounds and redacts named profile sets and fails invalid defaults closed", () => {
     const secretName = "bad/secret-name";
-    const names = Object.fromEntries(
+    const names = Rec.fromEntries(
       Array.from({ length: 33 }, (_, index) => [`set-${index}`, { profiles: {} }]),
     );
     const tooMany = decodeSubagentConfig({
@@ -166,7 +168,7 @@ describe("subagent v6 profile configuration and resolution", () => {
       },
     });
     expect(redacted.invalidDefaultProfileSet).toBe(true);
-    expect(redacted.diagnostics.join(" ")).not.toContain(secretName);
+    expect(Arr.join(redacted.diagnostics, " ")).not.toContain(secretName);
     expect(redacted.diagnostics).toEqual(
       expect.arrayContaining([
         "config.profileSets[0].name",

@@ -13,6 +13,8 @@ import {
   withService,
 } from "./fixtures/service-harness.ts";
 import { SubagentProcessError } from "../../src/run/errors.ts";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 
 const expectDiagnostic = (message: string | undefined) => {
   expect(message).toContain("Failed to load extension: missing entrypoint");
@@ -91,7 +93,7 @@ describe("local Pi startup deadline", () => {
         yield* yieldUntil(() => fake.controls[0]?.sent("get_state") === true);
         const child = fake.controls[0]!;
         child.exit(1, {
-          stderr: `\u001b[31mFailed to load extension: missing entrypoint\u001b[0m token=secret-credential\n${"x".repeat(MAX_ERROR_CHARS * 2)}`,
+          stderr: `\u001b[31mFailed to load extension: missing entrypoint\u001b[0m token=secret-credential\n${Fn.pipe("x", Str.repeat(MAX_ERROR_CHARS * 2))}`,
         });
         const failure = yield* Fiber.join(starting);
         expect(failure._tag).toBe("SubagentProcessError");

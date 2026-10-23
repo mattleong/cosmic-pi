@@ -22,6 +22,10 @@ import {
   contactParentExpandedContent,
   contactParentRenderers,
 } from "../../src/tools/render-parent.ts";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 
 beforeEach(() =>
   applyPresentationSettings({ toolCallCollapsedStyle: "compact", toolCallTiming: false }),
@@ -47,9 +51,12 @@ it.each(["compact", "preview"] as const)(
   (style) => {
     const tool = withPresentationSettings(
       { toolCallCollapsedStyle: style },
-      () => registered().find((entry) => entry.name === "agent_start")!,
+      () =>
+        Option.getOrUndefined(
+          Arr.findFirst(registered(), (entry) => entry.name === "agent_start"),
+        )!,
     );
-    const task = `${"Task context. ".repeat(60)}\nTASK_TAIL\n\u009dCONTROL_ADJACENT_EVIDENCE`;
+    const task = `${Fn.pipe("Task context. ", Str.repeat(60))}\nTASK_TAIL\n\u009dCONTROL_ADJACENT_EVIDENCE`;
     const input = {
       agents: [{ name: "Worker", profile: "worker", task, isolation: "worktree" }],
     };
@@ -57,14 +64,33 @@ it.each(["compact", "preview"] as const)(
     const harness = createToolPresentationHarness(tool, { width: 120 });
     for (const expanded of [false, true, false, true]) {
       harness.call(input, { expanded });
-      const text = harness.render().join("\n");
+      const text = Arr.join(harness.render(), "\n");
       for (const evidence of ["TASK_TAIL", "CONTROL_ADJACENT_EVIDENCE"])
-        expect(text.includes(evidence)).toBe(expanded);
+        expect(Fn.pipe(text, Str.includes(evidence))).toBe(expanded);
       expect(text).not.toContain("\u009d");
     }
     expect(input).toEqual(original);
   },
 );
+
+it("renders a launch whose optional fields arrive as null", () => {
+  const tool = withPresentationSettings(
+    { toolCallCollapsedStyle: "preview" },
+    () =>
+      Option.getOrUndefined(Arr.findFirst(registered(), (entry) => entry.name === "agent_start"))!,
+  );
+  const harness = createToolPresentationHarness(tool, { width: 120 });
+  for (const expanded of [false, true]) {
+    harness.call(
+      { agents: [{ name: null, agent: null, profile: null, task: "NULL_FIELDS_TASK" }] },
+      { expanded },
+    );
+    const text = Arr.join(harness.render(), "\n");
+    expect(text).toContain("launch 1");
+    if (expanded) expect(text).toContain("NULL_FIELDS_TASK");
+    else expect(text).not.toContain("NULL_FIELDS_TASK");
+  }
+});
 
 it("retains malformed and historical evidence through expansion for every root registration", () => {
   for (const tool of registered()) {
@@ -80,7 +106,7 @@ it("retains malformed and historical evidence through expansion for every root r
       );
       for (const width of [32, 100]) {
         const rows = harness.render(width);
-        if (expanded) expect(rows.join("\n")).toContain("historical evidence sentinel");
+        if (expanded) expect(Arr.join(rows, "\n")).toContain("historical evidence sentinel");
       }
     }
   }
@@ -95,19 +121,20 @@ it.each(["compact", "preview"] as const)(
       const rejection = piArgumentRejection(tool, '{"agents":[{"task":"Map the auth flow');
       const issue = argumentFailureIssue(rejection);
       expect(issueMessageStyleProblems(issue?.message ?? "")).toEqual([]);
-      const [collapsed, expanded] = createToolPresentationHarness(tool, { width: 200 })
-        .cycle(
+      const [collapsed, expanded] = Arr.map(
+        createToolPresentationHarness(tool, { width: 200 }).cycle(
           {},
           { content: [{ type: "text", text: rejection }], details: {} },
           {
             states: [false, true],
             overrides: () => ({ isError: true, isPartial: false }),
           },
-        )
-        .map((frame) => stripAnsi(frame.text));
+        ),
+        (frame) => stripAnsi(frame.text),
+      );
       expect(collapsed, tool.name).toContain(issue?.message);
-      expect(collapsed, tool.name).not.toContain(rejection.split("\n")[0]);
-      for (const line of rejection.split("\n").filter(Boolean))
+      expect(collapsed, tool.name).not.toContain(Str.split(rejection, "\n")[0]);
+      for (const line of Arr.filter(Str.split(rejection, "\n"), Boolean))
         expect(expanded, tool.name).toContain(line);
     }
   },
@@ -129,16 +156,15 @@ const contactParent = () =>
 it("names only the tool for a call Pi rejected as malformed JSON, not for one that ran", () => {
   applyPresentationSettings({ toolCallCollapsedStyle: "preview" });
   for (const tool of [...registered(), contactParent()]) {
-    const callRows = (overrides: { expanded: boolean; isError: boolean; durationMs?: number }) =>
-      stripAnsi(
-        createToolPresentationHarness(tool, { width: 120 })
-          .call(
-            {},
-            { isPartial: false, executionStarted: true, durationMs: undefined, ...overrides },
-          )
-          ?.render(120)
-          .join("\n") ?? "",
-      ).trim();
+    const callRows = (overrides: { expanded: boolean; isError: boolean; durationMs?: number }) => {
+      const component = createToolPresentationHarness(tool, { width: 120 }).call(
+        {},
+        { isPartial: false, executionStarted: true, durationMs: undefined, ...overrides },
+      );
+      return Str.trim(
+        stripAnsi(component === undefined ? "" : Arr.join(component.render(120), "\n")),
+      );
+    };
     for (const expanded of [false, true]) {
       // Pi parses malformed tool-call JSON as `{}` and records a duration only for calls that ran,
       // so defaults that `{}` implies describe only an executed call.
@@ -151,7 +177,9 @@ it("names only the tool for a call Pi rejected as malformed JSON, not for one th
 });
 
 it("preserves host-flagged uncertainty, exact input and full output through compact expansion", () => {
-  const tool = registered().find((entry) => entry.name === "agent_lifecycle")!;
+  const tool = Option.getOrUndefined(
+    Arr.findFirst(registered(), (entry) => entry.name === "agent_lifecycle"),
+  )!;
   const details = compactToolDetails({
     action: "interrupt",
     runs: [],
@@ -178,12 +206,12 @@ it("preserves host-flagged uncertainty, exact input and full output through comp
   )) {
     expect(text).toMatch(/confirm/i);
     expect(text).not.toMatch(/\bfail(?:ed|ure)?\b|\bsent\b/i);
-    expect(text.includes("interrupt_outcome_uncertain")).toBe(expanded);
-    expect(text.includes("Do not resend")).toBe(expanded);
-    expect(text.includes("exact-unique-target-input")).toBe(expanded);
-    expect(text.includes("full output beyond bounded projection; middleware evidence")).toBe(
-      expanded,
-    );
+    expect(Fn.pipe(text, Str.includes("interrupt_outcome_uncertain"))).toBe(expanded);
+    expect(Fn.pipe(text, Str.includes("Do not resend"))).toBe(expanded);
+    expect(Fn.pipe(text, Str.includes("exact-unique-target-input"))).toBe(expanded);
+    expect(
+      Fn.pipe(text, Str.includes("full output beyond bounded projection; middleware evidence")),
+    ).toBe(expanded);
   }
   expect(result).toEqual(original);
 });
@@ -228,11 +256,11 @@ it("shows every call argument once a management call is expanded", () => {
   ] as const;
   for (const [name, args, evidence] of cases) {
     const harness = createToolPresentationHarness(
-      registered().find((entry) => entry.name === name)!,
+      Option.getOrUndefined(Arr.findFirst(registered(), (entry) => entry.name === name))!,
       { width: 160 },
     );
     harness.call(args, { expanded: true });
-    const text = harness.render().join("\n");
+    const text = Arr.join(harness.render(), "\n");
     for (const value of evidence) expect(text, `${name} ${value}`).toContain(value);
   }
 });

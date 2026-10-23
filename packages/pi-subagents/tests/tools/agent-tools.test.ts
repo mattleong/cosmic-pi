@@ -26,6 +26,10 @@ import { nativeCodemodeSession } from "../support/native-codemode-session.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import { captureSubagentTools, executeTool, view } from "./fixtures/tool-harness.ts";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 
 beforeEach(() =>
   applyPresentationSettings({ toolCallCollapsedStyle: "compact", toolCallTiming: false }),
@@ -49,7 +53,7 @@ const READ: AgentReadResult = {
       name: MAIN_AGENT_ID,
       state: "busy",
       textStatus: "text",
-      text: `Main is planning.\n${"context ".repeat(40)}\nMAIN_TAIL_SENTINEL`,
+      text: `Main is planning.\n${Fn.pipe("context ", Str.repeat(40))}\nMAIN_TAIL_SENTINEL`,
       truncated: false,
     },
     {
@@ -110,7 +114,10 @@ const agentService = () =>
               }),
             },
           ],
-          missingIds: ids?.filter((id) => id !== MAIN_AGENT_ID && id !== scout.id) ?? [],
+          missingIds:
+            ids === undefined
+              ? []
+              : Arr.filter(ids, (id) => id !== MAIN_AGENT_ID && id !== scout.id),
         };
       }),
     agentSend: (caller, to) => {
@@ -151,15 +158,21 @@ const registered = () =>
     }),
   ).tools;
 
-const registeredTool = (name: string) => registered().find((tool) => tool.name === name)!;
+const registeredTool = (name: string) =>
+  Option.getOrUndefined(Arr.findFirst(registered(), (tool) => tool.name === name))!;
 
 const namespaceOf = (nested: boolean) =>
-  captureRegistrations((pi) =>
-    registerAgentTools(pi, {
-      execute: () => Promise.reject(new Error("render-only fixture")),
-      nested,
-    }),
-  ).tools.find((tool) => tool.name === "agent_list")?.namespace;
+  Option.getOrUndefined(
+    Arr.findFirst(
+      captureRegistrations((pi) =>
+        registerAgentTools(pi, {
+          execute: () => Promise.reject(new Error("render-only fixture")),
+          nested,
+        }),
+      ).tools,
+      (tool) => tool.name === "agent_list",
+    ),
+  )?.namespace;
 
 describe("agent tools", () => {
   it.effect("lists, messages, and reads agents as the main agent with structured results", () =>
@@ -258,10 +271,12 @@ describe("agent tools", () => {
           { content: [{ type: "text", text }], details: {} },
           { expanded, isError: true },
         );
-        const rendered = harness.render(100).join("\n");
+        const rendered = Arr.join(harness.render(100), "\n");
         expect(rendered).toContain(issue?.message);
         // The refusal's procedure belongs to expansion.
-        expect(rendered.includes("Check the agent's state with agent_list")).toBe(expanded);
+        expect(Fn.pipe(rendered, Str.includes("Check the agent's state with agent_list"))).toBe(
+          expanded,
+        );
       }
     }),
   );
@@ -322,15 +337,15 @@ describe("agent tools", () => {
       });
       expect(summary?.outcome).toBe("warning");
       const issues = summary?.issues ?? [];
-      expect(issues.map((issue) => issue.message)).toEqual(
+      expect(Arr.map(issues, (issue) => issue.message)).toEqual(
         expect.arrayContaining([
           stringContaining("May I continue?"),
           stringContaining("Credentials were exposed"),
           stringContaining("Tests failed"),
         ]),
       );
-      expect(issues.filter((issue) => issue.severity === "error")).toEqual([]);
-      expect(issues.flatMap((issue) => issueMessageStyleProblems(issue.message))).toEqual([]);
+      expect(Arr.filter(issues, (issue) => issue.severity === "error")).toEqual([]);
+      expect(Arr.flatMap(issues, (issue) => issueMessageStyleProblems(issue.message))).toEqual([]);
     }),
   );
 
@@ -345,7 +360,7 @@ describe("agent tools", () => {
       },
       { expanded: true },
     );
-    const rendered = harness.render(100).join("\n");
+    const rendered = Arr.join(harness.render(100), "\n");
     for (const id of agentIds) expect(rendered).toContain(id);
 
     const send = createToolPresentationHarness(registeredTool("agent_send"));
@@ -357,8 +372,11 @@ describe("agent tools", () => {
       },
       { expanded: true, isError: true },
     );
-    const failed = send.render(100).join("\n");
-    expect([failed.includes("agent-r1-9"), failed.includes("Ship it.")]).toEqual([true, true]);
+    const failed = Arr.join(send.render(100), "\n");
+    expect([
+      Fn.pipe(failed, Str.includes("agent-r1-9")),
+      Fn.pipe(failed, Str.includes("Ship it.")),
+    ]).toEqual([true, true]);
   });
 
   it("describes a subagent's script namespace apart from the root's", () => {
@@ -367,16 +385,20 @@ describe("agent tools", () => {
     expect(nested?.name).toBe(root?.name);
     expect(nested?.description).not.toBe(root?.description);
     expect(root?.description).toBe(
-      registered().find((tool) => tool.name === "agent_start")?.namespace?.description,
+      Option.getOrUndefined(Arr.findFirst(registered(), (tool) => tool.name === "agent_start"))
+        ?.namespace?.description,
     );
   });
 
   it("keeps the main agent's full read text for expansion", () => {
     const harness = createToolPresentationHarness(registeredTool("agent_read"));
-    const text = [
-      `the main agent (busy), latest assistant message:\n${READ.agents[0]?.text ?? ""}`,
-      `agent-1 "api-scout" (completed, report 1), report (truncated):\nFound the schema in src/api.ts.`,
-    ].join("\n\n");
+    const text = Arr.join(
+      [
+        `the main agent (busy), latest assistant message:\n${READ.agents[0]?.text ?? ""}`,
+        `agent-1 "api-scout" (completed, report 1), report (truncated):\nFound the schema in src/api.ts.`,
+      ],
+      "\n\n",
+    );
     const details = {
       version: 1,
       action: "agent_read",
@@ -396,8 +418,8 @@ describe("agent tools", () => {
     for (const expanded of [false, true, false]) {
       harness.call({ agentIds: ["main", "agent-1"] }, { expanded });
       harness.result({ content: [{ type: "text", text }], details }, { expanded });
-      const rendered = harness.render(100).join("\n");
-      expect(rendered.includes("MAIN_TAIL_SENTINEL")).toBe(expanded);
+      const rendered = Arr.join(harness.render(100), "\n");
+      expect(Fn.pipe(rendered, Str.includes("MAIN_TAIL_SENTINEL"))).toBe(expanded);
     }
   });
 

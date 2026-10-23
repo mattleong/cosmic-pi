@@ -6,7 +6,9 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Order from "effect/Order";
 import * as Result from "effect/Result";
+import * as Str from "effect/String";
 import {
   captureHostParentContext,
   resolveProfileStart,
@@ -78,7 +80,9 @@ const startSpecs = Effect.fn("SubagentTools.startSpecs")(function* (
 });
 
 const entryName = (spec: SubagentStartSpec, index: number): string =>
-  sanitizeTerminalLine((spec.name?.trim() ?? "") || `launch ${index + 1}`);
+  sanitizeTerminalLine(
+    (spec.name === undefined ? "" : Str.trim(spec.name)) || `launch ${index + 1}`,
+  );
 
 const routeFields = (
   source: Pick<
@@ -106,12 +110,14 @@ const startEntriesFor = (
   specs: ReadonlyArray<SubagentStartSpec>,
   outcomes: ReadonlyMap<number, SubagentStartOutcome>,
 ): ReadonlyArray<SubagentStartEntry> =>
-  specs.map((spec, index): SubagentStartEntry => {
-    const agent = spec.agent?.trim();
+  Arr.map(specs, (spec, index): SubagentStartEntry => {
+    const agent = spec.agent === undefined ? undefined : Str.trim(spec.agent);
     const base = {
       index,
       name: entryName(spec, index),
-      profile: sanitizeTerminalLine((spec.profile?.trim() ?? "") || "generalist"),
+      profile: sanitizeTerminalLine(
+        (spec.profile === undefined ? "" : Str.trim(spec.profile)) || "generalist",
+      ),
       ...(agent && { agent: sanitizeTerminalLine(agent) }),
     } as const;
     const outcome = outcomes.get(index);
@@ -148,7 +154,7 @@ const failureFor = (
   error: SubagentError,
   resolvedRoute?: SubagentStartResolvedRoute,
 ): SubagentStartOutcome => {
-  const name = spec.name?.trim();
+  const name = spec.name === undefined ? undefined : Str.trim(spec.name);
   const admittedRun = getFailedStartRecovery(error);
   return {
     index,
@@ -164,7 +170,7 @@ const failureFor = (
 };
 
 const settleStartOutcomes = (outcomes: Iterable<SubagentStartOutcome>) => {
-  const ordered = [...outcomes].toSorted((left, right) => left.index - right.index);
+  const ordered = Arr.sortWith([...outcomes], (outcome) => outcome.index, Order.Number);
   const [launched, failures] = Arr.partition(ordered, (outcome) =>
     "run" in outcome ? Result.succeed(outcome.run) : Result.fail(outcome.failure),
   );
@@ -202,10 +208,10 @@ export const executeStartBatch = Effect.fn("SubagentTools.start")(function* (
     Effect.sync(() => {
       partialOutcomes.set(outcome.index, outcome);
       const { ordered, launched, failures } = settleStartOutcomes(partialOutcomes.values());
-      const pendingEntries = specs.flatMap((spec, index) =>
+      const pendingEntries = Arr.flatMap(specs, (spec, index) =>
         partialOutcomes.has(index) ? [] : [`#${index + 1} ${entryName(spec, index)}`],
       );
-      const summary = `Processed ${ordered.length} of ${specs.length} launches · ${launched.length} started · ${failures.length} failed${pendingEntries.length > 0 ? ` · ${pendingEntries.length} pending (${pendingEntries.join(", ")})` : ""}.`;
+      const summary = `Processed ${ordered.length} of ${specs.length} launches · ${launched.length} started · ${failures.length} failed${pendingEntries.length > 0 ? ` · ${pendingEntries.length} pending (${Arr.join(pendingEntries, ", ")})` : ""}.`;
       invokeBestEffort(() =>
         input.onUpdate?.({
           content: [{ type: "text", text: summary }],

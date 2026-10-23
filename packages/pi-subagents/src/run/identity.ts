@@ -1,7 +1,12 @@
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import { synchronousRandomHex } from "pi-cosmic-core";
 
 // 48 random bits as 10 fixed-width base-36 digits, so a counter appended after it stays unambiguous.
-const PROCESS_PREFIX = Number.parseInt(synchronousRandomHex(6), 16).toString(36).padStart(10, "0");
+const PROCESS_PREFIX = Fn.pipe(
+  Number.parseInt(synchronousRandomHex(6), 16).toString(36),
+  Str.padStart(10, "0"),
+);
 let nextRuntimeOrdinal = 1;
 
 /**

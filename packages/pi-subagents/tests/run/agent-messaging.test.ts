@@ -1,4 +1,4 @@
-import { describe, expect, it } from "@effect/vitest";
+import { assert, describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -33,33 +33,40 @@ import {
   runView,
   withService,
 } from "./fixtures/service-harness.ts";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 
 const MAIN: AgentCaller = { kind: "main" };
 const asRun = (run: SubagentRunView): AgentCaller => ({ kind: "run", runId: run.id });
 const nesting = { maxDirectChildren: 12, maxDepth: 3 };
 
 const steerMessages = (control: FakeChildControl | undefined): ReadonlyArray<string> =>
-  (control?.commands ?? []).flatMap((command) =>
+  Arr.flatMap(control?.commands ?? [], (command) =>
     command.type === "prompt" && command.streamingBehavior === "steer" ? [command.message] : [],
   );
 
 const promptMessages = (control: FakeChildControl | undefined): ReadonlyArray<string> =>
-  (control?.commands ?? []).flatMap((command) =>
+  Arr.flatMap(control?.commands ?? [], (command) =>
     command.type === "prompt" && command.streamingBehavior === undefined ? [command.message] : [],
   );
 
 const latest = (projections: ReadonlyArray<SubagentProjection>, id: string) =>
-  projections.at(-1)?.runs.find((run) => run.id === id);
+  Arr.last(projections).pipe(
+    Option.flatMap((projection) => Arr.findFirst(projection.runs, (run) => run.id === id)),
+    Option.getOrUndefined,
+  );
 
 const messageNotices = (run: SubagentRunView | undefined) =>
-  (run?.sessionEvents ?? []).flatMap((event) =>
+  Arr.flatMap(run?.sessionEvents ?? [], (event) =>
     event.type === "notice" && event.kind === "message"
       ? [{ direction: event.direction, peer: event.peer, text: event.text }]
       : [],
   );
 
 const parentNotices = (run: SubagentRunView | undefined) =>
-  (run?.sessionEvents ?? []).flatMap((event) =>
+  Arr.flatMap(run?.sessionEvents ?? [], (event) =>
     event.type === "notice" && event.kind === "parent" ? [event.text] : [],
   );
 
@@ -113,10 +120,12 @@ describe("agent messaging", () => {
       expect(steerMessages(fake.controls[1])).toHaveLength(1);
 
       const listing = yield* service.agentList(asRun(child));
-      expect(listing.agents.map((agent) => agent.id)).toEqual(
+      expect(Arr.map(listing.agents, (agent) => agent.id)).toEqual(
         expect.arrayContaining([MAIN_AGENT_ID, alpha.id, beta.id, child.id]),
       );
-      expect(listing.agents.find((agent) => agent.self)?.id).toBe(child.id);
+      expect(Option.getOrUndefined(Arr.findFirst(listing.agents, (agent) => agent.self))?.id).toBe(
+        child.id,
+      );
     });
   });
 
@@ -174,8 +183,10 @@ describe("agent messaging", () => {
       const childControl = fake.controls[1]!;
       yield* askQuestion(childControl, projections, child.id, "question-routed");
       yield* TestClock.adjust("200 millis");
-      yield* yieldUntil(() => notifications.some((notice) => notice.type === "question"));
-      expect(notifications.find((notice) => notice.type === "question")).toMatchObject({
+      yield* yieldUntil(() => Arr.some(notifications, (notice) => notice.type === "question"));
+      expect(
+        Option.getOrUndefined(Arr.findFirst(notifications, (notice) => notice.type === "question")),
+      ).toMatchObject({
         id: child.id,
       });
 
@@ -262,7 +273,11 @@ describe("agent messaging", () => {
       const first = yield* service.start(nativeReportRequest({ name: "first" }));
       const second = yield* service.start(nativeReportRequest({ name: "second" }));
       const messaging = backend.agentMessaging[0]!;
-      expect((yield* messaging.list()).agents.find((agent) => agent.self)?.id).toBe(first.id);
+      expect(
+        Option.getOrUndefined(
+          Arr.findFirst((yield* messaging.list()).agents, (agent) => agent.self),
+        )?.id,
+      ).toBe(first.id);
       expect((yield* messaging.send(second.id, "Compare notes.")).disposition).toBe("guided");
       expect(backend.controls[1]?.prompts.at(-1)).toContain(first.id);
       expect(yield* messaging.send(first.id, "Me?").pipe(Effect.flip)).toMatchObject({
@@ -329,7 +344,7 @@ describe("agent messaging", () => {
         const send = (text: string) => service.agentSend(asRun(run), MAIN_AGENT_ID, text);
         for (const text of ["one", "two", "three", "four", "five"])
           expect(yield* send(text)).toMatchObject({ disposition: "guided", mainState: "idle" });
-        expect(main.delivered.every((delivery) => delivery.startTurn)).toBe(true);
+        expect(Arr.every(main.delivered, (delivery) => delivery.startTurn)).toBe(true);
         expect(main.delivered[0]?.frame).toMatchObject({ from: run.id, to: MAIN_AGENT_ID });
         expect(main.delivered[0]?.frame.content).toContain("one");
 
@@ -442,11 +457,10 @@ describe("agent messaging", () => {
       const live = yield* service.start(request({ name: "live" }));
       const done = yield* service.start(request({ name: "done" }));
       fake.controls[0]!.offer(assistantMessageEndFrame("Halfway there."));
-      yield* yieldUntil(
-        () =>
-          latest(projections, live.id)?.sessionEvents.some(
-            (event) => event.type === "assistant",
-          ) === true,
+      yield* yieldUntil(() =>
+        Option.exists(Option.fromUndefinedOr(latest(projections, live.id)), (run) =>
+          Arr.some(run.sessionEvents, (event) => event.type === "assistant"),
+        ),
       );
       yield* completeLocalRun(service, fake.controls[1]!, done.id, "Done report.");
 
@@ -588,7 +602,7 @@ describe("agent messaging", () => {
       );
       expect(main.delivered).toHaveLength(1);
       const read = yield* service.agentRead(MAIN, [` ${run.id}`, `${MAIN_AGENT_ID} `]);
-      expect(read.agents.map((agent) => agent.id)).toEqual([run.id, MAIN_AGENT_ID]);
+      expect(Arr.map(read.agents, (agent) => agent.id)).toEqual([run.id, MAIN_AGENT_ID]);
       expect(read.missingIds).toEqual([]);
     });
   });
@@ -713,8 +727,9 @@ describe("the user's messages", () => {
 
       yield* Deferred.succeed(replyGate, undefined);
       expect(yield* Fiber.join(replying)).toMatchObject({ disposition: "answered" });
+      assert(fake.controls[0] !== undefined);
       expect(
-        fake.controls[0]?.ipc.filter((message) => message.type === "parent_reply"),
+        Arr.filter(fake.controls[0].ipc, (message) => message.type === "parent_reply"),
       ).toHaveLength(1);
     });
   });
@@ -738,8 +753,9 @@ describe("the user's messages", () => {
         disposition: "answered",
         run: { state: "running" },
       });
+      assert(fake.controls[0] !== undefined);
       expect(
-        fake.controls[0]?.ipc.flatMap((message) =>
+        Arr.flatMap(fake.controls[0].ipc, (message) =>
           message.type === "parent_reply" ? [[message.requestId, message.message]] : [],
         ),
       ).toEqual([
@@ -754,12 +770,14 @@ describe("the user's messages", () => {
     return withService(layer, function* (service) {
       const run = yield* service.start(request({ name: "bounded-message" }));
       for (const send of [
-        service.send(run.id, "x".repeat(65_537)),
-        service.agentSend(MAIN, run.id, "x".repeat(65_537)),
+        service.send(run.id, Fn.pipe("x", Str.repeat(65_537))),
+        service.agentSend(MAIN, run.id, Fn.pipe("x", Str.repeat(65_537))),
       ])
         expect(yield* send.pipe(Effect.flip)).toMatchObject({ code: "message_too_large" });
       expect(fake.controls[0]?.sent("steer")).toBe(false);
-      expect((yield* service.send(run.id, "x".repeat(65_536))).disposition).toBe("guided");
+      expect((yield* service.send(run.id, Fn.pipe("x", Str.repeat(65_536)))).disposition).toBe(
+        "guided",
+      );
     });
   });
 });
@@ -769,7 +787,7 @@ describe("message bounds", () => {
     const { fake, layer } = localServiceFixture();
     return withService(layer, function* (service) {
       const run = yield* service.start(request({ name: "resumable" }));
-      const assignment = "y".repeat(100_000);
+      const assignment = Fn.pipe("y", Str.repeat(100_000));
       expect(yield* service.agentSend(MAIN, run.id, assignment).pipe(Effect.flip)).toMatchObject({
         code: "message_too_large",
         message: stringContaining("resumes"),
@@ -782,7 +800,7 @@ describe("message bounds", () => {
 
       expect((yield* service.interrupt(run.id)).state).toBe("paused");
       expect(
-        yield* service.agentSend(MAIN, run.id, "y".repeat(131_073)).pipe(Effect.flip),
+        yield* service.agentSend(MAIN, run.id, Fn.pipe("y", Str.repeat(131_073))).pipe(Effect.flip),
       ).toMatchObject({ code: "message_too_large" });
     });
   });
@@ -806,9 +824,12 @@ describe("messages to a starting run", () => {
         .agentSend(MAIN, id, "Check the schema first.")
         .pipe(Effect.forkScoped({ startImmediately: true }));
       yield* TestClock.adjust("1 second");
-      expect(backend.controls[0]?.prompts.some((prompt) => prompt.startsWith("steer:"))).toBe(
-        false,
-      );
+      assert(backend.controls[0] !== undefined);
+      expect(
+        Arr.some(backend.controls[0].prompts, (prompt) =>
+          Fn.pipe(prompt, Str.startsWith("steer:")),
+        ),
+      ).toBe(false);
       yield* Deferred.succeed(initialStartGate, undefined);
 
       expect(yield* Fiber.join(sending)).toMatchObject({ disposition: "guided" });
@@ -829,7 +850,7 @@ describe("messages to a starting run", () => {
       const id = projections.at(-1)?.runs[0]?.id ?? "";
 
       expect(
-        yield* service.agentSend(MAIN, id, "x".repeat(65_537)).pipe(Effect.flip),
+        yield* service.agentSend(MAIN, id, Fn.pipe("x", Str.repeat(65_537))).pipe(Effect.flip),
       ).toMatchObject({ code: "message_too_large" });
       expect(latest(projections, id)?.state).toBe("starting");
       yield* Deferred.succeed(initialStartGate, undefined);

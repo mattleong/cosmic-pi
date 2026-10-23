@@ -6,6 +6,8 @@ import * as Predicate from "effect/Predicate";
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
 import type { OversizedLine } from "../boundary/bounded-line-parser.ts";
 import { jsonPrefixScalars } from "../boundary/json-prefix.ts";
 import { omittedOutputPreview } from "./driver-shared.ts";
@@ -291,7 +293,10 @@ const decodeToolUsePart = decodeUnknownOrUndefined(ToolUsePart);
 const textFromContent = (content: string | ReadonlyArray<unknown>): string =>
   Predicate.isString(content)
     ? content
-    : content.flatMap((part) => decodeTextPart(part)?.text ?? []).join("\n");
+    : Arr.join(
+        Arr.flatMap(content, (part) => Arr.fromNullishOr(decodeTextPart(part)?.text)),
+        "\n",
+      );
 
 const usageFromNative = (usage: typeof Usage.Type | undefined): SubagentUsage => {
   const input = usage?.input_tokens ?? 0;
@@ -308,20 +313,21 @@ const usageFromNative = (usage: typeof Usage.Type | undefined): SubagentUsage =>
 };
 
 const cumulativeUsageFromNative = (modelUsage: typeof ModelUsage.Type): UsageComponents =>
-  Object.values(modelUsage).reduce<UsageComponents>(
+  Arr.reduce(
+    Rec.values(modelUsage),
+    { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     (total, model) => ({
       input: total.input + (model.inputTokens ?? 0),
       output: total.output + (model.outputTokens ?? 0),
       cacheRead: total.cacheRead + (model.cacheReadInputTokens ?? 0),
       cacheWrite: total.cacheWrite + (model.cacheCreationInputTokens ?? 0),
     }),
-    { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   );
 
 const userProtocolEvent = (event: typeof User.Type): ClaudeProtocolEvent => {
   const toolResults = Predicate.isString(event.message.content)
     ? []
-    : event.message.content.flatMap((part) => {
+    : Arr.flatMap(event.message.content, (part) => {
         const result = decodeToolResultPart(part);
         return result
           ? [
@@ -353,11 +359,11 @@ const userProtocolEvent = (event: typeof User.Type): ClaudeProtocolEvent => {
 };
 
 const assistantProtocolEvent = (event: typeof Assistant.Type): ClaudeProtocolEvent => {
-  const tools = event.message.content.flatMap((part) => {
+  const tools = Arr.flatMap(event.message.content, (part) => {
     const tool = decodeToolUsePart(part);
     return tool ? [{ id: tool.id, name: tool.name, input: tool.input }] : [];
   });
-  const text = textFromContent(event.message.content).trim();
+  const text = Str.trim(textFromContent(event.message.content));
   return {
     type: "assistant",
     ...(event.parent_tool_use_id && { parentToolUseId: event.parent_tool_use_id }),
@@ -370,12 +376,17 @@ const assistantProtocolEvent = (event: typeof Assistant.Type): ClaudeProtocolEve
 
 const resultProtocolEvent = (event: typeof ResultEvent.Type): ClaudeProtocolEvent => {
   const diagnostic =
-    (event.result?.trim() ?? "") ||
-    event.errors
-      ?.map((error) => error.trim())
-      .filter(Boolean)
-      .join("\n");
-  const finalText = event.is_error === true ? "" : (event.result?.trim() ?? "");
+    Str.trim(event.result ?? "") ||
+    (event.errors === undefined
+      ? undefined
+      : Arr.join(
+          Arr.filter(
+            Arr.map(event.errors, (error) => Str.trim(error)),
+            Boolean,
+          ),
+          "\n",
+        ));
+  const finalText = event.is_error === true ? "" : Str.trim(event.result ?? "");
   return {
     type: "result",
     isError: event.is_error === true,
@@ -508,7 +519,7 @@ const decodeOversizedClaudeFields = Schema.decodeUnknownOption(OversizedClaudeFi
 export const oversizedClaudeProtocolEvent = (
   line: OversizedLine,
 ): ClaudeProtocolEvent | undefined => {
-  const fields = decodeOversizedClaudeFields(Object.fromEntries(jsonPrefixScalars(line.prefix)));
+  const fields = decodeOversizedClaudeFields(Rec.fromEntries(jsonPrefixScalars(line.prefix)));
   if (Option.isNone(fields)) return undefined;
   const { type, "message.content.0.type": partType } = fields.value;
   const toolUseId = fields.value["message.content.0.tool_use_id"];

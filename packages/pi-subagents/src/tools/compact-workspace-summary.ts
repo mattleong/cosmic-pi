@@ -1,5 +1,6 @@
 import { compactIssueSeverity } from "pi-code-previews";
 import type { CompactIssue, CompactSummary } from "pi-code-previews";
+import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -41,11 +42,14 @@ export function workspaceReceiptLine(details: WorkspaceToolDetails): string | un
           : countLabel(details.listedCount, "workspace");
       const unreadable = details.unavailableCount ?? 0;
       const adoptable = details.adoptableCount ?? 0;
-      return [
-        listed,
-        ...(unreadable > 0 ? [`${unreadable} unreadable`] : []),
-        ...(adoptable > 0 ? [`${adoptable} adoptable`] : []),
-      ].join(", ");
+      return Arr.join(
+        [
+          listed,
+          ...(unreadable > 0 ? [`${unreadable} unreadable`] : []),
+          ...(adoptable > 0 ? [`${adoptable} adoptable`] : []),
+        ],
+        ", ",
+      );
     }
     case "review":
       return reviewPosition(details);
@@ -136,7 +140,7 @@ function hasOperationReceipt(details: WorkspaceToolDetails): details is Workspac
 }
 
 const asWarnings = (details: WorkspaceToolDetails): CompactIssue[] =>
-  (details.warnings ?? []).map((warning) => ({
+  Arr.map(details.warnings ?? [], (warning) => ({
     severity: "warning",
     code: warning.code,
     message: warning.message,

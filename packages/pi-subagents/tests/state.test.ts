@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { SubagentUsage } from "../src/run/model.ts";
 import { addUsage, clipUtf8Text, sanitizeDiagnosticText } from "../src/run/state.ts";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 
 const usage = (overrides: Partial<SubagentUsage> = {}): SubagentUsage => ({
   input: 1,
@@ -15,7 +17,7 @@ const usage = (overrides: Partial<SubagentUsage> = {}): SubagentUsage => ({
 describe("subagent usage state", () => {
   it("clips text without producing unpaired UTF-16 surrogates", () => {
     const value = `ab😀cd`;
-    const byteClipped = clipUtf8Text(`${"x".repeat(10)}😀tail`, 14);
+    const byteClipped = clipUtf8Text(`${Fn.pipe("x", Str.repeat(10))}😀tail`, 14);
     expect(Buffer.byteLength(byteClipped, "utf8")).toBeLessThanOrEqual(14);
     expect(byteClipped).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
     expect(sanitizeDiagnosticText(value, 3)).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);

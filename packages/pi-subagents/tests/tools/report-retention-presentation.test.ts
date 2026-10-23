@@ -15,6 +15,10 @@ import { decodeStartAwaitCardDetails } from "../../src/tools/details-decode.ts";
 import { awaitDetails } from "../../src/tools/details.ts";
 import { registerSubagentTools } from "../../src/tools/subagent.ts";
 import { view } from "./fixtures/tool-harness.ts";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 
 const ARCHIVE_PATH = "/agent/subagents/reports/session-1/agent-1-1-archive.md";
 
@@ -24,7 +28,7 @@ const cutRun = (complete: boolean | undefined): SubagentRunView =>
     name: "reader",
     state: "completed",
     reportGeneration: 1,
-    finalText: `${"finding\n".repeat(MAX_FINAL_TEXT_CHARS / 8 - 1)}end`,
+    finalText: `${Fn.pipe("finding\n", Str.repeat(MAX_FINAL_TEXT_CHARS / 8 - 1))}end`,
     finalTextTruncation: {
       retainedChars: MAX_FINAL_TEXT_CHARS,
       originalChars: MAX_FINAL_TEXT_CHARS * 3,
@@ -52,18 +56,23 @@ const summarize = (run: SubagentRunView) =>
   });
 
 const awaitTool = () =>
-  captureRegistrations((pi) =>
-    registerSubagentTools(pi, {
-      environment: { cwd: "/project", projectTrusted: false },
-      run: () => Promise.reject(new Error("render-only fixture")),
-      startUiTicker: () => () => undefined,
-      toolPresentation: {
-        beginStart: () => () => undefined,
-        beginAwait: () => () => undefined,
-        isLiveHierarchyAvailable: () => false,
-      },
-    }),
-  ).tools.find((tool) => tool.name === SUBAGENT_TOOL_NAME.await)!;
+  Option.getOrUndefined(
+    Arr.findFirst(
+      captureRegistrations((pi) =>
+        registerSubagentTools(pi, {
+          environment: { cwd: "/project", projectTrusted: false },
+          run: () => Promise.reject(new Error("render-only fixture")),
+          startUiTicker: () => () => undefined,
+          toolPresentation: {
+            beginStart: () => () => undefined,
+            beginAwait: () => () => undefined,
+            isLiveHierarchyAvailable: () => false,
+          },
+        }),
+      ).tools,
+      (tool) => tool.name === SUBAGENT_TOOL_NAME.await,
+    ),
+  )!;
 
 const restoreSettings: Array<() => void> = [];
 
@@ -84,14 +93,20 @@ describe("cut report presentation", () => {
   it("points the compact issue at the saved file, and at agent_read only without one", () => {
     for (const complete of [true, false, undefined]) {
       const issues = summarize(cutRun(complete))?.issues ?? [];
-      expect(issues.flatMap((issue) => issueMessageStyleProblems(issue.message))).toEqual([]);
-      const details = issues.map((issue) => issue.detail ?? "").join("\n");
-      const messages = issues.map((issue) => issue.message).join("\n");
+      expect(Arr.flatMap(issues, (issue) => issueMessageStyleProblems(issue.message))).toEqual([]);
+      const details = Arr.join(
+        Arr.map(issues, (issue) => issue.detail ?? ""),
+        "\n",
+      );
+      const messages = Arr.join(
+        Arr.map(issues, (issue) => issue.message),
+        "\n",
+      );
       expect(messages).not.toContain(ARCHIVE_PATH);
-      expect(details.includes(ARCHIVE_PATH)).toBe(complete !== undefined);
-      expect(details.includes("agent_read")).toBe(complete === undefined);
+      expect(Fn.pipe(details, Str.includes(ARCHIVE_PATH))).toBe(complete !== undefined);
+      expect(Fn.pipe(details, Str.includes("agent_read"))).toBe(complete === undefined);
       // A whole saved copy is a usable recovery path, not a warning.
-      expect(issues.some((issue) => issue.severity === "warning")).toBe(complete !== true);
+      expect(Arr.some(issues, (issue) => issue.severity === "warning")).toBe(complete !== true);
     }
   });
 
@@ -107,10 +122,11 @@ describe("cut report presentation", () => {
       const frames = harness.cycle({ runIds: ["agent-1"], until: "all_finished" }, result, {
         states: [false, true, false, true],
       });
-      expect(frames.some(({ expanded }) => expanded)).toBe(true);
+      expect(Arr.some(frames, ({ expanded }) => expanded)).toBe(true);
       for (const { expanded, text } of frames) {
         // Both the issue detail and the report section name the file beside the retained report.
-        const mentions = text.replace(/\s+/gu, "").split(ARCHIVE_PATH).length - 1;
+        const mentions =
+          Str.split(Fn.pipe(text, Str.replace(/\s+/gu, "")), ARCHIVE_PATH).length - 1;
         if (expanded) {
           expect(mentions).toBeGreaterThanOrEqual(2);
           expect(text).toContain("finding");
@@ -135,11 +151,14 @@ describe("cut report presentation", () => {
       { content: [{ type: "text" as const, text: "await output" }], details: detailsFor(run) },
       { states: [false, true] },
     );
-    const expanded = frames.filter((frame) => frame.expanded).map((frame) => frame.text);
+    const expanded = Arr.map(
+      Arr.filter(frames, (frame) => frame.expanded),
+      (frame) => frame.text,
+    );
     expect(expanded.length).toBeGreaterThan(0);
     for (const text of expanded) {
       expect(text).toContain("Whole retained report.");
-      expect(text.replace(/\s+/gu, "")).toContain(ARCHIVE_PATH);
+      expect(Fn.pipe(text, Str.replace(/\s+/gu, ""))).toContain(ARCHIVE_PATH);
     }
   });
 });

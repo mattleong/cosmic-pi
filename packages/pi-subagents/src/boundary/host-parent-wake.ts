@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import type {
   AgentBeforeSettleEventResult,
   CustomMessageEntryDraft,
@@ -46,7 +47,8 @@ type PendingQuestion = SubagentRunView & {
 };
 
 const pendingQuestions = (projection: SubagentProjection): ReadonlyArray<PendingQuestion> =>
-  projection.runs.filter(
+  Arr.filter(
+    projection.runs,
     (run): run is PendingQuestion =>
       (run.parentRunId ?? SUBAGENT_ROOT_RUN_ID) === SUBAGENT_ROOT_RUN_ID &&
       run.question !== undefined &&
@@ -58,13 +60,16 @@ const questionKey = (run: PendingQuestion): string => `${run.id}:${run.question.
 const label = (run: SubagentRunView): string => clipText(sanitizeTerminalLine(run.name), 60);
 
 const reminderText = (runs: ReadonlyArray<PendingQuestion>): string =>
-  [
-    runs.length === 1
-      ? "A subagent is still waiting for your reply:"
-      : `${runs.length} subagents are still waiting for your replies:`,
-    ...runs.map((run) => `- ${run.name} (${run.id}): ${run.question.message}`),
-    "Answer with agent_send within the authority the user has already given you, or ask the user. Don't approve anything on the user's behalf.",
-  ].join("\n\n");
+  Arr.join(
+    [
+      runs.length === 1
+        ? "A subagent is still waiting for your reply:"
+        : `${runs.length} subagents are still waiting for your replies:`,
+      ...Arr.map(runs, (run) => `- ${run.name} (${run.id}): ${run.question.message}`),
+      "Answer with agent_send within the authority the user has already given you, or ask the user. Don't approve anything on the user's behalf.",
+    ],
+    "\n\n",
+  );
 
 const questionReminder = (
   runs: ReadonlyArray<PendingQuestion>,
@@ -116,7 +121,9 @@ export function registerParentWake(pi: ExtensionAPI, host: ParentWakeHost): Sess
     later: host.later,
     holdDuringDialogs: true,
     onInterrupt: (ctx) => {
-      const active = host.projection().runs.filter((run) => isActiveRunState(run.state)).length;
+      const active = Arr.filter(host.projection().runs, (run) =>
+        isActiveRunState(run.state),
+      ).length;
       if (active > 0 && hasUi(ctx))
         notifyAtHostBoundary(
           ctx,
@@ -126,14 +133,14 @@ export function registerParentWake(pi: ExtensionAPI, host: ParentWakeHost): Sess
     },
     beforeSettle: (event, ctx, settle) => {
       const questions = pendingQuestions(host.projection());
-      const live = new Set(questions.map(questionKey));
+      const live = new Set(Arr.map(questions, questionKey));
       for (const key of reminded) if (!live.has(key)) reminded.delete(key);
       for (const key of escalated) if (!live.has(key)) escalated.delete(key);
-      const fresh = questions.filter((run) => !reminded.has(questionKey(run)));
+      const fresh = Arr.filter(questions, (run) => !reminded.has(questionKey(run)));
       for (const run of fresh) reminded.add(questionKey(run));
       const reminder = questionReminder(fresh);
       if (fresh.length === 0) {
-        const ignored = questions.filter((run) => !escalated.has(questionKey(run)));
+        const ignored = Arr.filter(questions, (run) => !escalated.has(questionKey(run)));
         if (ignored.length > 0 && hasUi(ctx)) {
           for (const run of ignored) escalated.add(questionKey(run));
           notifyAtHostBoundary(
@@ -147,7 +154,7 @@ export function registerParentWake(pi: ExtensionAPI, host: ParentWakeHost): Sess
       }
       const result = settleResult(event.entries, reminder, settle.landed || fresh.length > 0);
       if (result || !isHeadless(ctx)) return result;
-      if (!host.projection().runs.some((run) => isActiveRunState(run.state))) return undefined;
+      if (!Arr.some(host.projection().runs, (run) => isActiveRunState(run.state))) return undefined;
       // Notices delivered while draining are appended at this boundary, after the last reply.
       return host.drain()?.then(() => {
         const arrived = settle.takeOwed();
@@ -155,7 +162,10 @@ export function registerParentWake(pi: ExtensionAPI, host: ParentWakeHost): Sess
         // Continue with the same one-per-question reminder instead of exiting without showing it.
         const arrivedQuestions = settle.held()
           ? []
-          : pendingQuestions(host.projection()).filter((run) => !reminded.has(questionKey(run)));
+          : Arr.filter(
+              pendingQuestions(host.projection()),
+              (run) => !reminded.has(questionKey(run)),
+            );
         for (const run of arrivedQuestions) reminded.add(questionKey(run));
         return settleResult(
           event.entries,

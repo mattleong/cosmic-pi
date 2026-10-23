@@ -1,5 +1,7 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { SettingItem } from "@earendil-works/pi-tui";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Rec from "effect/Record";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
@@ -137,11 +139,11 @@ const withNestingField = (
   field: NestingField,
   limit: number | undefined,
 ): SubagentNestingOverrides | undefined => {
-  const fields = NESTING_FIELD_IDS.flatMap((id) => {
+  const fields = Arr.flatMap(NESTING_FIELD_IDS, (id) => {
     const value = id === field ? limit : own?.[id];
     return value === undefined ? [] : [[id, value] as const];
   });
-  return fields.length === 0 ? undefined : Object.fromEntries(fields);
+  return fields.length === 0 ? undefined : Rec.fromEntries(fields);
 };
 
 const parseLimit = (field: NestingField, value: string): number | undefined => {
@@ -258,7 +260,7 @@ function subagentSettingsCommand(
         .inspectWriterWorkspace()
         .then((snapshot): SettingsResult | Promise<SettingsResult> => {
           if (!isWriterWorkspaceMode(value))
-            return failed(`${WORKSPACE} must be ${WRITER_WORKSPACE_MODES.join(" or ")}`);
+            return failed(`${WORKSPACE} must be ${Arr.join(WRITER_WORKSPACE_MODES, " or ")}`);
           if (snapshot.mode === value || !stillCurrent()) return succeeded;
           return actions
             .setWriterWorkspaceMode(value)
@@ -298,7 +300,7 @@ function subagentSettingsCommand(
   ): Promise<SettingsResult> => {
     if (value !== INHERIT && !isDelegationMode(value))
       return Promise.resolve(
-        failed(`${DELEGATION} must be ${DELEGATION_MODES.join(", ")}, or ${INHERIT}`),
+        failed(`${DELEGATION} must be ${Arr.join(DELEGATION_MODES, ", ")}, or ${INHERIT}`),
       );
     return saveToScope(
       ctx,
@@ -318,24 +320,31 @@ function subagentSettingsCommand(
         const nestingLine = (scope: ProfileSettingsScope) => {
           const own = scopeNesting(inspection, scope);
           return own
-            ? `  ${scope}: ${NESTING_FIELD_IDS.map((id) => `${id} = ${ownNestingValue(own, id)}`).join(", ")}`
+            ? `  ${scope}: ${Fn.pipe(
+                NESTING_FIELD_IDS,
+                Arr.map((id) => `${id} = ${ownNestingValue(own, id)}`),
+                Arr.join(", "),
+              )}`
             : `  ${scope}: ${INHERIT}`;
         };
         const delegationLine = (scope: ProfileSettingsScope) =>
           `  ${scope}: ${scopeDelegation(inspection, scope) ?? INHERIT}`;
         const effective = inspection.session.effectiveConfig;
         const unresolved = unresolvedSummary(workspace);
-        return [
-          "Subagents settings",
-          `  ${WORKSPACE} = ${workspace.mode} (default)${unresolved ? `; ${unresolved}` : ""}`,
-          `  ${DELEGATION} = ${effective.delegation} (in effect)`,
-          `  maxDirectChildren = ${effective.nesting.maxDirectChildren}, maxDepth = ${effective.nesting.maxDepth}, maxActiveRuns = ${effective.nesting.maxActiveRuns ?? DEFAULT_MAX_ACTIVE_RUNS} (in effect)`,
-          `  hooks = WorktreeCreate ${effective.hooks.WorktreeCreate.length}, WorktreeRemove ${effective.hooks.WorktreeRemove.length} (applies after /reload)`,
-          "Delegation by scope:",
-          ...scopes.map(delegationLine),
-          "Nesting limits by scope:",
-          ...scopes.map(nestingLine),
-        ].join("\n");
+        return Arr.join(
+          [
+            "Subagents settings",
+            `  ${WORKSPACE} = ${workspace.mode} (default)${unresolved ? `; ${unresolved}` : ""}`,
+            `  ${DELEGATION} = ${effective.delegation} (in effect)`,
+            `  maxDirectChildren = ${effective.nesting.maxDirectChildren}, maxDepth = ${effective.nesting.maxDepth}, maxActiveRuns = ${effective.nesting.maxActiveRuns ?? DEFAULT_MAX_ACTIVE_RUNS} (in effect)`,
+            `  hooks = WorktreeCreate ${effective.hooks.WorktreeCreate.length}, WorktreeRemove ${effective.hooks.WorktreeRemove.length} (applies after /reload)`,
+            "Delegation by scope:",
+            ...Arr.map(scopes, delegationLine),
+            "Nesting limits by scope:",
+            ...Arr.map(scopes, nestingLine),
+          ],
+          "\n",
+        );
       },
     );
   };
@@ -359,8 +368,8 @@ function subagentSettingsCommand(
             currentValue: workspace.mode,
             values: [...WRITER_WORKSPACE_MODES],
           },
-          ...scopes.flatMap((scope) =>
-            SCOPED_SETTING_IDS.map((id) => scopedSettingItem(inspection, scope, id)),
+          ...Arr.flatMap(scopes, (scope) =>
+            Arr.map(SCOPED_SETTING_IDS, (id) => scopedSettingItem(inspection, scope, id)),
           ),
         ];
         for (const item of items) committed.set(item.id, item.currentValue);
@@ -400,7 +409,7 @@ function subagentSettingsCommand(
         values: [...DELEGATION_MODES, INHERIT],
         currentValue: () => "",
       },
-      ...NESTING_FIELD_IDS.map((field) => ({
+      ...Arr.map(NESTING_FIELD_IDS, (field) => ({
         id: field,
         description: NESTING_FIELDS[field].description,
         values: [...NESTING_FIELDS[field].presets, INHERIT],

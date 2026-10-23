@@ -1,7 +1,9 @@
 import type { MessageRenderer, Theme } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
+import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import { renderCompactRow } from "pi-code-previews";
 import {
   clipText,
@@ -26,8 +28,8 @@ const decodeDetails = Schema.decodeUnknownOption(Details, { onExcessProperty: "i
 const FRAME_HEADER = /^Message from .*:$/u;
 
 const messageLine = (text: string): string => {
-  const lines = text.split("\n");
-  const body = FRAME_HEADER.test(lines[0] ?? "") ? lines.slice(1, -1).join("\n") : text;
+  const lines = Str.split(text, "\n");
+  const body = FRAME_HEADER.test(lines[0] ?? "") ? Arr.join(lines.slice(1, -1), "\n") : text;
   return firstLineMessage(body, "");
 };
 

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "@effect/vitest";
+import { assert, describe, expect, it } from "@effect/vitest";
 import type * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Match from "effect/Match";
@@ -24,6 +24,9 @@ import {
   supervisorMetadata,
   takeBackendEvent,
 } from "./fixtures/backend-supervisor.ts";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 
 const wireJson = Schema.decodeUnknownSync(Schema.Json);
 const SESSION = "claude-ownership-session";
@@ -78,7 +81,7 @@ const claudeBackend = (inventory: ReadonlyArray<string> = SUPERVISOR_MCP_TOOL_NA
                 {
                   name: SUPERVISOR_MCP_REGISTRATION,
                   status: "connected",
-                  tools: inventory.map((name) => ({ name })),
+                  tools: Arr.map(inventory, (name) => ({ name })),
                 },
               ],
             })),
@@ -125,7 +128,7 @@ const claudeBackend = (inventory: ReadonlyArray<string> = SUPERVISOR_MCP_TOOL_NA
               cwd: launch.cwd,
               session_id: SESSION,
               model: launch.model,
-              tools: SUPERVISOR_MCP_TOOL_NAMES.map(supervisorTool),
+              tools: Arr.map(SUPERVISOR_MCP_TOOL_NAMES, supervisorTool),
               mcp_servers: [{ name: SUPERVISOR_MCP_REGISTRATION, status: "connected" }],
             });
             return child;
@@ -166,10 +169,13 @@ const startedClaude = Effect.gen(function* () {
   const answerTo = (requestId: string) =>
     Effect.gen(function* () {
       yield* yieldUntil(() =>
-        sent.some((frame) => isHookAnswer(frame) && frame.response.request_id === requestId),
+        Arr.some(sent, (frame) => isHookAnswer(frame) && frame.response.request_id === requestId),
       );
-      const answer = sent.find(
-        (frame) => isHookAnswer(frame) && frame.response.request_id === requestId,
+      const answer = Option.getOrUndefined(
+        Arr.findFirst(
+          sent,
+          (frame) => isHookAnswer(frame) && frame.response.request_id === requestId,
+        ),
       );
       return isHookAnswer(answer) ? answer.response.response : yield* Effect.die("No answer.");
     });
@@ -183,9 +189,10 @@ describe("native sub-agent report ownership", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const { sent, hookCallback, answerTo } = yield* startedClaude;
-          const registration = sent.find(isHookRegistration);
-          const matchers = registration?.request.hooks.PreToolUse.flatMap((entry) =>
-            entry.matcher.split("|"),
+          const registration = Option.getOrUndefined(Arr.findFirst(sent, isHookRegistration));
+          assert(registration !== undefined);
+          const matchers = Arr.flatMap(registration.request.hooks.PreToolUse, (entry) =>
+            Str.split(entry.matcher, "|"),
           );
           expect(matchers).toEqual(
             expect.arrayContaining([
@@ -215,7 +222,7 @@ describe("native sub-agent report ownership", () => {
 
   it.effect("Claude starts only when the supervisor server lists exactly its tool set", () =>
     Effect.gen(function* () {
-      const fewer = SUPERVISOR_MCP_TOOL_NAMES.filter((name) => name !== "agent_read");
+      const fewer = Arr.filter(SUPERVISOR_MCP_TOOL_NAMES, (name) => name !== "agent_read");
       for (const inventory of [fewer, [...SUPERVISOR_MCP_TOOL_NAMES, "agent_spawn"]]) {
         const { backend } = yield* claudeBackend(inventory);
         expect(yield* backend.controls.initialize.pipe(Effect.flip)).toMatchObject({

@@ -5,6 +5,8 @@ import {
   type NodeChildProcess,
 } from "pi-cosmic-core";
 import * as Effect from "effect/Effect";
+import * as Str from "effect/String";
+import * as Fn from "effect/Function";
 import { processCauseError, processError, type SubagentProcessError } from "../run/errors.ts";
 
 const hasExited = (child: NodeChildProcess) => child.exitCode !== null || child.signalCode !== null;
@@ -44,8 +46,8 @@ export const descendantGroupsFromTable = (
 ): ReadonlyArray<number> | undefined => {
   const children = new Map<number, ProcessRow[]>();
   const pending: number[] = [];
-  for (const line of table.split("\n")) {
-    if (line.trim() === "") continue;
+  for (const line of Str.split(table, "\n")) {
+    if (Str.trim(line) === "") continue;
     const match = PROCESS_ROW.exec(line);
     if (!match) return undefined;
     const pid = Number(match[1]);
@@ -60,7 +62,7 @@ export const descendantGroupsFromTable = (
       group < 0
     )
       return undefined;
-    if (match[4]?.startsWith("Z")) continue;
+    if (Fn.pipe(match[4] ?? "", Str.startsWith("Z"))) continue;
     if (group === groupId) pending.push(pid);
     const siblings = children.get(parent);
     if (siblings) siblings.push({ pid, group });

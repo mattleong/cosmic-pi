@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import { type CompactIssue } from "pi-code-previews";
 import { skippedCandidateLabel } from "../profiles/model.ts";
 import { runAttention, runCleanupAttention } from "../run/attention.ts";
@@ -6,6 +9,7 @@ import type { SubagentRunCard } from "./details-schema.ts";
 import { steeringDeliveryEvidence } from "./outcome.ts";
 import { cleanupRecoveryText, proposalDiffStatLines, proposalGuidance } from "./format.ts";
 import { countLabel, failureMessage, firstLineMessage, quoteText } from "pi-cosmic-core";
+import { isTextFragment } from "./text-fragments.ts";
 
 type AddIssue = (
   severity: CompactIssue["severity"],
@@ -27,10 +31,8 @@ const staticSkipCodes = new Set([
   "fork_context_unavailable",
 ]);
 
-const continued = (text: string) => `${text.charAt(0).toLowerCase()}${text.slice(1)}`;
-
 const cardLabel = (card: Pick<SubagentRunCard, "id" | "name">) =>
-  (card.name === card.id ? "Subagent" : card.name).slice(0, 60);
+  Fn.pipe(card.name === card.id ? "Subagent" : card.name, Str.slice(0, 60));
 
 export const hasChangesToReview = (card: SubagentRunCard): boolean =>
   (card.workspaceOutcome === undefined || card.workspaceOutcome.status === "proposal") &&
@@ -49,12 +51,14 @@ interface RunIssueOptions {
 }
 
 const skippedOptionsDetail = (card: SubagentRunCard): string =>
-  card.selection.skippedCandidates
-    .map(
+  Fn.pipe(
+    card.selection.skippedCandidates,
+    Arr.map(
       (entry) =>
         `${skippedCandidateLabel(entry.candidate)}: ${failureMessage(entry.reason, "skipped", QUOTED_TEXT_LIMIT)}`,
-    )
-    .join("\n");
+    ),
+    Arr.join("\n"),
+  );
 
 function selectionIssues(
   card: SubagentRunCard,
@@ -65,7 +69,7 @@ function selectionIssues(
   const skipped = card.selection.skippedCandidates;
   if (!skipped.length) return;
   const detail = skippedOptionsDetail(card);
-  if (skipped.every((entry) => entry.code === "previous_run_failed")) {
+  if (Arr.every(skipped, (entry) => entry.code === "previous_run_failed")) {
     add("info", "selection-skipped", `${label} moved on to its next profile option`, detail);
     return;
   }
@@ -106,7 +110,7 @@ export function compactRunIssues(
       add(
         card.steeringDelivery === "confirmed" ? "info" : "warning",
         "steering-delivery",
-        `${label}: ${continued(evidence.message)}`,
+        `${label}: ${Str.uncapitalize(evidence.message)}`,
         `steeringDelivery=${card.steeringDelivery}. ${evidence.detail}`,
       );
     }
@@ -115,7 +119,7 @@ export function compactRunIssues(
       options.quietHistory === true &&
       card.state === "completed" &&
       issues.length === issueStart &&
-      card.selection.skippedCandidates.every((entry) => staticSkipCodes.has(entry.code));
+      Arr.every(card.selection.skippedCandidates, (entry) => staticSkipCodes.has(entry.code));
     selectionIssues(card, label, add, quiet);
   }
   return issues;
@@ -189,7 +193,7 @@ function cleanupIssues(card: SubagentRunCard, label: string, add: AddIssue): voi
     "warning",
     `cleanup-${attention}`,
     `${label}: ${messages[attention]}`,
-    cleanupRecoveryText(card).join("\n"),
+    Arr.join(cleanupRecoveryText(card), "\n"),
   );
 }
 
@@ -202,7 +206,7 @@ function evidenceIssues(card: SubagentRunCard, label: string, add: AddIssue): vo
       "error",
       "error",
       line ? `${label}: ${line}` : `${label} reported an error`,
-      [detail, retryGuidance].filter(Boolean).join("\n"),
+      Fn.pipe([detail, retryGuidance], Arr.filter(isTextFragment), Arr.join("\n")),
     );
   } else if (card.state === "failed")
     add(
@@ -250,17 +254,20 @@ function workspaceOutcomeIssue(card: SubagentRunCard, label: string, add: AddIss
     outcome
       ? `${label}: ready to apply (${countLabel(outcome.changedFileCount, "file")})`
       : `${label}: ready to apply`,
-    [
-      ...(outcome ? proposalDiffStatLines(outcome) : []),
-      card.workspaceId
-        ? proposalGuidance(card.workspaceId, outcome)
-        : "Apply it with agent_worktree apply and its workspaceId from agent_list.",
-      ...(outcome?.uncapturedFileCount
-        ? [
-            "Credential files the writer created, such as .env, are not part of the proposal and stay in the worker tree.",
-          ]
-        : []),
-    ].join("\n"),
+    Arr.join(
+      [
+        ...(outcome ? proposalDiffStatLines(outcome) : []),
+        card.workspaceId
+          ? proposalGuidance(card.workspaceId, outcome)
+          : "Apply it with agent_worktree apply and its workspaceId from agent_list.",
+        ...(outcome?.uncapturedFileCount
+          ? [
+              "Credential files the writer created, such as .env, are not part of the proposal and stay in the worker tree.",
+            ]
+          : []),
+      ],
+      "\n",
+    ),
   );
 }
 
@@ -269,9 +276,11 @@ function reportEvidenceIssues(card: SubagentRunCard, label: string, add: AddIssu
   const reportCut = card.finalTextTruncated === true && card.finalText !== undefined;
   const archive = card.reportArchive;
   const savedDetail = (saved: NonNullable<SubagentRunCard["reportArchive"]>): string =>
-    [card.reportTruncation && reportTruncationText(card.reportTruncation), reportFileText(saved)]
-      .filter(Boolean)
-      .join(". ");
+    Fn.pipe(
+      [card.reportTruncation && reportTruncationText(card.reportTruncation), reportFileText(saved)],
+      Arr.filter(isTextFragment),
+      Arr.join(". "),
+    );
   // A whole saved report is a usable recovery path, so the cut is routine information.
   if (reportCut && archive?.complete === true)
     add("info", "report-saved", `${label}: full report saved to a file`, savedDetail(archive));

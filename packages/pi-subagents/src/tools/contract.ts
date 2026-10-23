@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import { isCustomAgentName } from "../profiles/agents.ts";
 import {
   safeTextPrefix,
@@ -60,7 +63,7 @@ export const projectName = (value: string): string =>
   sanitizeName(metadata(value, MAX_NAME_CHARS) ?? "");
 
 const knownProfile = (profile: string | undefined): ProfileId | undefined =>
-  PROFILE_IDS.find((id) => id === profile);
+  Option.getOrUndefined(Arr.findFirst(PROFILE_IDS, (id) => id === profile));
 
 const knownAgent = (agent: string | undefined): { readonly agent?: string } =>
   agent !== undefined && isCustomAgentName(agent) ? { agent } : {};
@@ -83,24 +86,27 @@ export const projectAttention = (
 ): ContractAttention | undefined => {
   const attention = runAttention(run);
   if (attention?.kind !== "question") return attention;
-  const message = sanitizeDiagnosticContent(stripTerminalControls(attention.message), {
-    maximumLength: questionChars,
-  }).trim();
+  const message = Str.trim(
+    sanitizeDiagnosticContent(stripTerminalControls(attention.message), {
+      maximumLength: questionChars,
+    }),
+  );
   return message ? { kind: "question", message } : { kind: "question-unavailable" };
 };
 
 /** The retained child and system warnings. */
 const projectWarnings = (run: SubagentRunView, chars: number): ContractRunTarget["warnings"] => {
   const warnings = distinctRunWarnings(run);
-  return (
+  return Arr.flatMap(
     [
       ["child", warnings.child],
       ["system", warnings.system],
-    ] as const
-  ).flatMap(([source, warning]) => {
-    const message = metadata(warning, chars);
-    return message === undefined ? [] : [{ source, message }];
-  });
+    ] as const,
+    ([source, warning]) => {
+      const message = metadata(warning, chars);
+      return message === undefined ? [] : [{ source, message }];
+    },
+  );
 };
 
 const WITHHELD_REPORT_STATUS = {
@@ -126,7 +132,7 @@ const observedReport = ({ run, completionReceipt }: SubagentRunObservation): Con
   if (!isTerminalRunState(run.state)) return { status: "not_finished" };
   if (completionReceipt === undefined) return withheldReport(run);
   const text = stripTerminalControls(run.finalText ?? "");
-  if (!text.trim()) return { status: "missing" };
+  if (!Str.trim(text)) return { status: "missing" };
   const file = projectReportFile(run.reportArchive);
   return file
     ? { status: "delivered", ...file }
@@ -251,9 +257,9 @@ export const startContract = (
   specs: ReadonlyArray<SubagentStartSpec>,
   outcomes: ReadonlyArray<SubagentStartOutcome>,
 ): SubagentStartContract => {
-  const byIndex = new Map(outcomes.map((outcome) => [outcome.index, outcome]));
-  const launches = specs.map((spec, index) => projectLaunch(spec, index, byIndex.get(index)));
-  const started = launches.filter((launch) => launch.status === "started").length;
+  const byIndex = new Map(Arr.map(outcomes, (outcome) => [outcome.index, outcome]));
+  const launches = Arr.map(specs, (spec, index) => projectLaunch(spec, index, byIndex.get(index)));
+  const started = Arr.filter(launches, (launch) => launch.status === "started").length;
   return {
     ...envelope(SUBAGENT_TOOL_NAME.start),
     outcome: batchOutcome(started, launches.length, "started"),
@@ -270,11 +276,12 @@ interface AwaitContractInput {
 }
 
 export const awaitContract = (input: AwaitContractInput): SubagentAwaitContract => {
-  const targets = input.observations.map(observedTarget);
+  const targets = Arr.map(input.observations, observedTarget);
   return {
     ...envelope(SUBAGENT_TOOL_NAME.await),
     outcome:
-      input.questionsElsewhere === true || targets.some((target) => target.parentActionRequired)
+      input.questionsElsewhere === true ||
+      Arr.some(targets, (target) => target.parentActionRequired)
         ? "attention"
         : "finished",
     until: input.until,
@@ -295,17 +302,17 @@ interface CancelledAwaitContractInput {
 export const cancelledAwaitContract = (
   input: CancelledAwaitContractInput,
 ): SubagentAwaitContract => {
-  const observed = new Set(input.runs.map((run) => run.id));
+  const observed = new Set(Arr.map(input.runs, (run) => run.id));
   return {
     ...envelope(SUBAGENT_TOOL_NAME.await),
     outcome: input.ending ?? "cancelled",
     until: input.until,
     requestedRunIds: [...input.requestedRunIds],
-    targets: input.runs.map((run) => ({
+    targets: Arr.map(input.runs, (run) => ({
       ...targetFields(run),
       report: input.deliveryAttemptedIds?.has(run.id) ? { status: "unknown" } : withheldReport(run),
     })),
-    unobservedRunIds: input.requestedRunIds.filter((id) => !observed.has(id)),
+    unobservedRunIds: Arr.filter(input.requestedRunIds, (id) => !observed.has(id)),
     cleanup: input.cleanup,
   };
 };
@@ -318,7 +325,8 @@ export const lifecycleContract = (
   action: ContractLifecycleAction,
   outcomes: ReadonlyArray<LifecycleContractOutcome>,
 ): SubagentLifecycleContract => {
-  const results = outcomes.map(
+  const results = Arr.map(
+    outcomes,
     (outcome): ContractLifecycleResult =>
       "run" in outcome
         ? {
@@ -332,7 +340,7 @@ export const lifecycleContract = (
             failure: projectFailure(outcome.failure),
           },
   );
-  const succeeded = results.filter((result) => result.status === "succeeded").length;
+  const succeeded = Arr.filter(results, (result) => result.status === "succeeded").length;
   return {
     ...envelope(SUBAGENT_TOOL_NAME.lifecycle),
     action,

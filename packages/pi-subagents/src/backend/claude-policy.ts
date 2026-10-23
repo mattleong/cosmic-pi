@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import type { SubagentEffort, SubagentWriteIntent } from "../domain/routing.ts";
 import {
   NATIVE_SUB_AGENT_REFUSAL,
@@ -27,7 +28,7 @@ const CLAUDE_INSPECTION_TOOLS: ReadonlyArray<string> = [
   "Read",
   "WebFetch",
   "WebSearch",
-  ...SUPERVISOR_MCP_TOOL_NAMES.map((name) => `mcp__${SUPERVISOR_MCP_REGISTRATION}__${name}`),
+  ...Arr.map(SUPERVISOR_MCP_TOOL_NAMES, (name) => `mcp__${SUPERVISOR_MCP_REGISTRATION}__${name}`),
 ];
 export const CLAUDE_NATIVE_AGENT_TOOLS: ReadonlyArray<string> = [
   "Agent",
@@ -45,9 +46,13 @@ const CLAUDE_MAIN_AGENT_HOOK_ID = "pi-subagents-main-agent-tools";
 export const CLAUDE_HOOK_REGISTRATIONS = {
   PreToolUse: [
     {
-      matcher: SUPERVISOR_MCP_MAIN_AGENT_TOOL_NAMES.map(
-        (name) => `mcp__${SUPERVISOR_MCP_REGISTRATION}__${name}`,
-      ).join("|"),
+      matcher: Arr.join(
+        Arr.map(
+          SUPERVISOR_MCP_MAIN_AGENT_TOOL_NAMES,
+          (name) => `mcp__${SUPERVISOR_MCP_REGISTRATION}__${name}`,
+        ),
+        "|",
+      ),
       hookCallbackIds: [CLAUDE_MAIN_AGENT_HOOK_ID],
     },
   ],
@@ -159,16 +164,19 @@ export const claudeArgv = (
   "--permission-mode",
   "dontAsk",
   "--tools",
-  [
-    "Bash",
-    ...(launch.writeIntent === "writer" ? ["Edit"] : []),
-    ...CLAUDE_INSPECTION_TOOLS,
-    ...CLAUDE_NATIVE_AGENT_TOOLS,
-  ].join(","),
+  Arr.join(
+    [
+      "Bash",
+      ...(launch.writeIntent === "writer" ? ["Edit"] : []),
+      ...CLAUDE_INSPECTION_TOOLS,
+      ...CLAUDE_NATIVE_AGENT_TOOLS,
+    ],
+    ",",
+  ),
   "--allowedTools",
-  claudeAllowedTools(launch.writeIntent, writerPolicy).join(","),
+  Arr.join(claudeAllowedTools(launch.writeIntent, writerPolicy), ","),
   "--disallowedTools",
-  CLAUDE_DENIED_TOOLS.join(","),
+  Arr.join(CLAUDE_DENIED_TOOLS, ","),
   "--append-system-prompt-file",
   harness.promptPath,
 ];

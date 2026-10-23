@@ -1,6 +1,7 @@
 import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Arr from "effect/Array";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { clipText, invokeHostCallback, sanitizeTerminalLine } from "pi-cosmic-core";
 import type { SubagentProjection, SubagentRunView } from "../run/model.ts";
@@ -57,15 +58,17 @@ const runsSection = (
   heading: string,
   line: (run: SubagentRunView) => string,
 ): string | undefined => {
-  const active = projection.runs.filter(
+  const active = Arr.filter(
+    projection.runs,
     (run) =>
       (run.parentRunId ?? SUBAGENT_ROOT_RUN_ID) === SUBAGENT_ROOT_RUN_ID &&
       isActiveRunState(run.state),
   );
   if (active.length === 0) return undefined;
-  const listed = active.slice(0, MAX_LISTED_RUNS).map(line);
+  const listed = Arr.map(active.slice(0, MAX_LISTED_RUNS), line);
   const more = active.length - listed.length;
-  return [heading, ...listed, ...(more > 0 ? [`- and ${more} more; see agent_list`] : [])].join(
+  return Arr.join(
+    [heading, ...listed, ...(more > 0 ? [`- and ${more} more; see agent_list`] : [])],
     "\n",
   );
 };
@@ -111,9 +114,9 @@ export const registerActiveRunsPrompt = (
     current: SubagentProjection,
   ): string | undefined => {
     const key = invokeHostCallback(() => {
-      const compaction = ctx.sessionManager
-        .getBranch()
-        .findLast((entry) => entry.type === "compaction");
+      const compaction = Option.getOrUndefined(
+        Arr.findLast(ctx.sessionManager.getBranch(), (entry) => entry.type === "compaction"),
+      );
       return compaction && `${ctx.sessionManager.getSessionId()}:${compaction.id}`;
     }, undefined);
     if (key === undefined) return undefined;

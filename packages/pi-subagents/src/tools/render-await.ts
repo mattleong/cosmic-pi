@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Order from "effect/Order";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type Component } from "@earendil-works/pi-tui";
 import {
@@ -15,6 +18,7 @@ import { projectRunCardTree, runTreeBranch } from "../ui/run-tree-rows.ts";
 import type { SubagentRunCard, SubagentStartAwaitCardDetails } from "./details-schema.ts";
 import { composeToolComponent as renderComponent } from "pi-cosmic-ui/tool";
 import { renderResponsiveRunRows, runTiming, type RunHierarchy } from "./render-run-rows.ts";
+import { isTextFragment } from "./text-fragments.ts";
 
 interface AwaitProgressRun {
   readonly id: string;
@@ -40,9 +44,11 @@ const firstFinishedRun = (
   until: SubagentAwaitUntil,
 ): AwaitProgressRun | undefined =>
   until === "any_finished"
-    ? runs
-        .filter((run) => isTerminalRunState(run.state))
-        .toSorted((left, right) => (left.endedAt ?? Infinity) - (right.endedAt ?? Infinity))[0]
+    ? Fn.pipe(
+        runs,
+        Arr.filter((run) => isTerminalRunState(run.state)),
+        Arr.sortWith((run) => run.endedAt ?? Infinity, Order.Number),
+      )[0]
     : undefined;
 
 const ACTIVE_STATES = ["starting", "running", "waiting_for_parent", "paused", "stopping"] as const;
@@ -51,8 +57,8 @@ const stateCounts = (
   runs: ReadonlyArray<AwaitProgressRun>,
   states: ReadonlyArray<AwaitProgressRun["state"]>,
 ): string[] =>
-  states.flatMap((state) => {
-    const count = runs.filter((run) => run.state === state).length;
+  Arr.flatMap(states, (state) => {
+    const count = Arr.filter(runs, (run) => run.state === state).length;
     return count > 0 ? [`${count} ${runStateLabel(state)}`] : [];
   });
 
@@ -62,28 +68,31 @@ export const formatAwaitCounters = (
   until: SubagentAwaitUntil,
   settled = false,
 ): string => {
-  const targets = cards.filter((card) => awaitedRunIds.has(card.id));
+  const targets = Arr.filter(cards, (card) => awaitedRunIds.has(card.id));
   const first = settled ? firstFinishedRun(targets, until) : undefined;
-  const done = targets.filter((run) => run.state === "completed");
+  const done = Arr.filter(targets, (run) => run.state === "completed");
   const usage = aggregateUsage(cards, "compact");
   const descendantCount = cards.length - targets.length;
-  return [
-    ...(first ? [firstFinishedSummary(first)] : []),
-    `${done.length}/${awaitedRunIds.size} finished`,
-    ...stateCounts(targets, [...ACTIVE_STATES, "failed", "stopped"]),
-    ...(usage ? [usage] : []),
-    ...(descendantCount > 0 ? [countLabel(descendantCount, "descendant")] : []),
-  ].join(" · ");
+  return Arr.join(
+    [
+      ...(first ? [firstFinishedSummary(first)] : []),
+      `${done.length}/${awaitedRunIds.size} finished`,
+      ...stateCounts(targets, [...ACTIVE_STATES, "failed", "stopped"]),
+      ...(usage ? [usage] : []),
+      ...(descendantCount > 0 ? [countLabel(descendantCount, "descendant")] : []),
+    ],
+    " · ",
+  );
 };
 
 const progressRuns = (
   runs: ReadonlyArray<AwaitProgressRun>,
   contextRuns: ReadonlyArray<AwaitProgressRun>,
 ) => {
-  const awaitedIds = new Set(runs.map((run) => run.id));
+  const awaitedIds = new Set(Arr.map(runs, (run) => run.id));
   return {
     awaitedIds,
-    allRuns: [...runs, ...contextRuns.filter((run) => !awaitedIds.has(run.id))],
+    allRuns: [...runs, ...Arr.filter(contextRuns, (run) => !awaitedIds.has(run.id))],
   };
 };
 
@@ -95,18 +104,21 @@ export const formatAwaitSummary = (
 ): string => {
   const { awaitedIds, allRuns } = progressRuns(runs, contextRuns);
   const usage = aggregateUsage(allRuns, "compact");
-  const finished = runs.filter((run) => isTerminalRunState(run.state)).length;
+  const finished = Arr.filter(runs, (run) => isTerminalRunState(run.state)).length;
   const first = firstFinishedRun(runs, until);
   const descendantCount = allRuns.length - runs.length;
-  return [
-    until === "all_finished" ? "Waiting for subagents" : "Waiting for first subagent",
-    ...(awaitedIds.size > 0 ? [`${finished}/${awaitedIds.size}`] : []),
-    ...(first ? [firstFinishedSummary(first)] : []),
-    ...stateCounts(runs, [...ACTIVE_STATES, "failed"]),
-    ...(usage ? [usage] : []),
-    `◎${countLabel(awaitedIds.size, "target")}`,
-    ...(descendantCount > 0 ? [countLabel(descendantCount, "descendant")] : []),
-  ].join(" · ");
+  return Arr.join(
+    [
+      until === "all_finished" ? "Waiting for subagents" : "Waiting for first subagent",
+      ...(awaitedIds.size > 0 ? [`${finished}/${awaitedIds.size}`] : []),
+      ...(first ? [firstFinishedSummary(first)] : []),
+      ...stateCounts(runs, [...ACTIVE_STATES, "failed"]),
+      ...(usage ? [usage] : []),
+      `◎${countLabel(awaitedIds.size, "target")}`,
+      ...(descendantCount > 0 ? [countLabel(descendantCount, "descendant")] : []),
+    ],
+    " · ",
+  );
 };
 
 /** The summary, then one row per run of the awaited hierarchy. */
@@ -116,15 +128,22 @@ export const formatAwaitProgress = (
   contextRuns: ReadonlyArray<AwaitProgressRun> = [],
 ): string => {
   const { awaitedIds, allRuns } = progressRuns(runs, contextRuns);
-  return [
-    formatAwaitSummary(runs, until, contextRuns),
-    ...projectRunCardTree(allRuns).map((row) => {
-      const status = sanitizeTerminalLine(
-        [row.run.currentTool, runTiming(row.run)].filter(Boolean).join(" · "),
-      );
-      return `${runTreeBranch(row)}${awaitedIds.has(row.run.id) ? "◎ " : ""}${runStateGlyph(row.run.state)} ${sanitizeTerminalLine(row.run.name)} (${sanitizeTerminalLine(row.run.id)})${status ? ` · ${status}` : ""}`;
-    }),
-  ].join("\n");
+  return Arr.join(
+    [
+      formatAwaitSummary(runs, until, contextRuns),
+      ...Arr.map(projectRunCardTree(allRuns), (row) => {
+        const status = sanitizeTerminalLine(
+          Fn.pipe(
+            [row.run.currentTool, runTiming(row.run)],
+            Arr.filter(isTextFragment),
+            Arr.join(" · "),
+          ),
+        );
+        return `${runTreeBranch(row)}${awaitedIds.has(row.run.id) ? "◎ " : ""}${runStateGlyph(row.run.state)} ${sanitizeTerminalLine(row.run.name)} (${sanitizeTerminalLine(row.run.id)})${status ? ` · ${status}` : ""}`;
+      }),
+    ],
+    "\n",
+  );
 };
 
 interface SubagentToolRendererState extends Record<string, unknown> {
@@ -151,7 +170,7 @@ export const syncAwaitProgressTicker = (
     (details?.action === "start" ||
       (details?.action === "await" &&
         details.cancelled !== true &&
-        details.cards.some((run) => run.state === "starting" || run.state === "running")));
+        Arr.some(details.cards, (run) => run.state === "starting" || run.state === "running")));
   if (shouldAnimate) {
     context.state.piSubagentsAwaitInvalidate = context.invalidate;
     if (!context.state.piSubagentsAwaitTicker) {

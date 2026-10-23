@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as Core from "pi-cosmic-core";
 import { hostNotifier } from "../src/boundary/host-notifier.ts";
@@ -17,6 +18,8 @@ import { MAX_FINAL_TEXT_CHARS } from "../src/run/state.ts";
 import { MAX_RUN_BLOCK_CHARS } from "../src/tools/run-block.ts";
 import { temporaryDirectory } from "./workspace/fixtures/repository.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 
 const temporaryAgent = temporaryDirectory("report-archive-");
 
@@ -40,7 +43,10 @@ describe("subagent report archive", () => {
       const archive = sessionReportArchive(agent, "session-1");
       const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>();
       const notify = hostNotifier(extensionApiFixture({ sendMessage }));
-      const report = Array.from({ length: 2_000 }, (_, line) => `finding ${line}`).join("\n");
+      const report = Arr.join(
+        Array.from({ length: 2_000 }, (_, line) => `finding ${line}`),
+        "\n",
+      );
       const reportArchive = yield* archive.save({ id: "agent-1", generation: 2, text: report });
 
       notify({
@@ -52,7 +58,7 @@ describe("subagent report archive", () => {
             generation: 2,
             outcome: "completed",
             // The run retains only the start of a report this long.
-            finalText: report.slice(0, MAX_FINAL_TEXT_CHARS),
+            finalText: Fn.pipe(report, Str.slice(0, MAX_FINAL_TEXT_CHARS)),
             finalTextTruncation: {
               retainedChars: MAX_FINAL_TEXT_CHARS,
               originalChars: report.length,
@@ -89,7 +95,10 @@ describe("subagent report archive", () => {
       expect(spaced.reason).toBe("path_unrepresentable");
       expect(yield* exists(reportArchiveRoot(agent))).toBe(false);
       // Each run's model-facing block has room for a path of bounded length only.
-      const deep = path.join(yield* temporaryAgent, "d".repeat(MAX_OUTCOME_FILE_PATH_CHARS));
+      const deep = path.join(
+        yield* temporaryAgent,
+        Fn.pipe("d", Str.repeat(MAX_OUTCOME_FILE_PATH_CHARS)),
+      );
       const long = yield* sessionReportArchive(deep, "session-1")
         .save({ id: "agent-1", generation: 1, text: "report" })
         .pipe(Effect.flip);
@@ -99,8 +108,8 @@ describe("subagent report archive", () => {
 
   it("previews a report without a file, keeping its actions and pointing to agent_read", () => {
     const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>();
-    const report = "r".repeat(MAX_FINAL_TEXT_CHARS);
-    const warning = "Check the migration before merging.".repeat(200);
+    const report = Fn.pipe("r", Str.repeat(MAX_FINAL_TEXT_CHARS));
+    const warning = Fn.pipe("Check the migration before merging.", Str.repeat(200));
     hostNotifier(extensionApiFixture({ sendMessage }))({
       type: "completed",
       runs: [
@@ -123,8 +132,8 @@ describe("subagent report archive", () => {
     const text = sentText(sendMessage);
     expect(text.length).toBeLessThanOrEqual(MAX_RUN_BLOCK_CHARS + 200);
     expect(text).toContain("Check the migration before merging.");
-    expect(text).toContain("r".repeat(100));
-    expect(text).not.toContain("r".repeat(1_000));
+    expect(text).toContain(Fn.pipe("r", Str.repeat(100)));
+    expect(text).not.toContain(Fn.pipe("r", Str.repeat(1_000)));
     expect(text).toContain("agent_read");
   });
 
@@ -132,7 +141,7 @@ describe("subagent report archive", () => {
     Effect.gen(function* () {
       const agent = yield* temporaryAgent;
       const archive = sessionReportArchive(agent, "session-1");
-      const failure = `Build failed.\n${"detail ".repeat(500)}`;
+      const failure = `Build failed.\n${Fn.pipe("detail ", Str.repeat(500))}`;
       const saved = yield* archive.save({
         id: "agent-1",
         generation: 1,
@@ -238,7 +247,7 @@ describe("subagent report archive", () => {
       expect(yield* Effect.promise(() => fs.readFile(whole.path, "utf8"))).toBe("whole");
       expect(bounded.complete).toBe(false);
       const saved = yield* Effect.promise(() => fs.readFile(bounded.path, "utf8"));
-      expect(saved.startsWith("start")).toBe(true);
+      expect(Fn.pipe(saved, Str.startsWith("start"))).toBe(true);
       // The file itself says it was cut, beyond the text it keeps.
       expect(saved.length).toBeGreaterThan("start".length);
     }).pipe(Effect.scoped),

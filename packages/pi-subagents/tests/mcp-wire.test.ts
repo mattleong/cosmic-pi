@@ -1,6 +1,9 @@
+import * as Fn from "effect/Function";
 import type * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
 import { decodeMcpMessage, validRpcId } from "../src/supervisor/mcp-wire.ts";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
 
 const request = (method: string, fields: Record<string, Schema.Json> = {}): Schema.Json => ({
   jsonrpc: "2.0",
@@ -57,12 +60,12 @@ describe("MCP message decoding", () => {
     ["another JSON-RPC version", { jsonrpc: "1.0", method: "ping", id: 1 }],
     ["a missing method", { jsonrpc: "2.0", id: 1 }],
     ["an empty method", request("", { id: 1 })],
-    ["an overlong method", request("m".repeat(129), { id: 1 })],
+    ["an overlong method", request(Fn.pipe("m", Str.repeat(129)), { id: 1 })],
     ["an extra envelope field", request("ping", { id: 1, extra: true })],
     ["a fractional id", request("ping", { id: 1.5 })],
     ["a null id", request("ping", { id: null })],
     ["an empty id", request("ping", { id: "" })],
-    ["an overlong id", request("ping", { id: "i".repeat(257) })],
+    ["an overlong id", request("ping", { id: Fn.pipe("i", Str.repeat(257)) })],
     ["an unserved method with an invalid id", request("resources/list", { id: 1.5 })],
     ["a request without an id", request("ping")],
     ["a notification with an id", request("notifications/initialized", { id: 1 })],
@@ -75,24 +78,26 @@ describe("MCP message decoding", () => {
     ],
     [
       "an overlong protocol version",
-      request("initialize", { id: 1, params: { protocolVersion: "v".repeat(65) } }),
+      request("initialize", { id: 1, params: { protocolVersion: Fn.pipe("v", Str.repeat(65)) } }),
     ],
     ["a cancellation without its request", request("notifications/cancelled", { params: {} })],
     [
       "an overlong cancellation reason",
-      request("notifications/cancelled", { params: { requestId: 1, reason: "r".repeat(513) } }),
+      request("notifications/cancelled", {
+        params: { requestId: 1, reason: Fn.pipe("r", Str.repeat(513)) },
+      }),
     ],
     [
       "a tool call without arguments",
       request("tools/call", { id: 1, params: { name: "agent_list" } }),
     ],
     ["a blank tool name", toolCall({ name: " " })],
-    ["an overlong tool name", toolCall({ name: "t".repeat(129) })],
+    ["an overlong tool name", toolCall({ name: Fn.pipe("t", Str.repeat(129)) })],
     ["an extra tool-call field", toolCall({ extra: 1 })],
     ["metadata nested too deep", toolCall({ _meta: nested(7) })],
-    ["an overlong metadata string", toolCall({ _meta: "m".repeat(4097) })],
+    ["an overlong metadata string", toolCall({ _meta: Fn.pipe("m", Str.repeat(4097)) })],
     ["metadata with too many entries", toolCall({ _meta: Array.from({ length: 65 }, () => 1) })],
-    ["an overlong metadata key", toolCall({ _meta: { ["k".repeat(129)]: 1 } })],
+    ["an overlong metadata key", toolCall({ _meta: { [Fn.pipe("k", Str.repeat(129))]: 1 } })],
   ])("rejects %s", (_case, value) => {
     expect(decodeMcpMessage(value)).toBeUndefined();
   });
@@ -101,7 +106,7 @@ describe("MCP message decoding", () => {
     expect(decodeMcpMessage(toolCall({ _meta: { threadId: "thread-1" } }))).toMatchObject({
       nativeThreadId: "thread-1",
     });
-    for (const threadId of [" ", "t".repeat(257), 3])
+    for (const threadId of [" ", Fn.pipe("t", Str.repeat(257)), 3])
       expect(decodeMcpMessage(toolCall({ _meta: { threadId } }))).not.toHaveProperty(
         "nativeThreadId",
       );
@@ -111,7 +116,9 @@ describe("MCP message decoding", () => {
   });
 
   it("accepts only bounded string and safe integer request ids", () => {
-    expect([1, -3, "a", "i".repeat(256)].every(validRpcId)).toBe(true);
-    expect([1.5, 2 ** 60, "", "i".repeat(257), null, true].some(validRpcId)).toBe(false);
+    expect(Arr.every([1, -3, "a", Fn.pipe("i", Str.repeat(256))], validRpcId)).toBe(true);
+    expect(
+      Arr.some([1.5, 2 ** 60, "", Fn.pipe("i", Str.repeat(257)), null, true], validRpcId),
+    ).toBe(false);
   });
 });

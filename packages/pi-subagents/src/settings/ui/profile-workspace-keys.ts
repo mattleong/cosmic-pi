@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { matchesKey } from "@earendil-works/pi-tui";
 import { configuredKeyLabels } from "pi-cosmic-ui/manager/key-labels";
 import { FULL_SCREEN_NAVIGATION_SHORTCUTS } from "pi-cosmic-ui/manager/keymap";
@@ -15,7 +16,7 @@ export const PROFILE_WORKSPACE_SHORTCUTS: ReadonlySet<string> = new Set([
   "]",
 ]);
 export const isWorkspaceNavigationKey = (data: string): boolean =>
-  (["up", "down", "left", "right", "tab", "shift+tab"] as const).some((key) =>
+  Arr.some(["up", "down", "left", "right", "tab", "shift+tab"] as const, (key) =>
     matchesKey(data, key),
   );
 

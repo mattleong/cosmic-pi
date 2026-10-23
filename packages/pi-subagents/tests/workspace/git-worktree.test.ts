@@ -17,6 +17,10 @@ import {
   workspaceTests,
   writeFile,
 } from "./fixtures/repository.ts";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Order from "effect/Order";
 
 const { git } = gitProcess;
 
@@ -40,7 +44,10 @@ test("reports and owns a create interrupted while it commits the active record",
   const pendingInterrupt: PendingInterrupt = {};
   const spy = vi.spyOn(fs, "rename").mockImplementation((from, to) =>
     fs.readFile(from, "utf8").then((text) => {
-      if (String(to).endsWith("record.json") && text.includes('"status":"active"'))
+      if (
+        Fn.pipe(String(to), Str.endsWith("record.json")) &&
+        Fn.pipe(text, Str.includes('"status":"active"'))
+      )
         pendingInterrupt.current?.();
       return rename(from, to);
     }),
@@ -192,12 +199,12 @@ const stopCheckoutBeforeLast = () => {
   return vi.spyOn(gitProcess, "git").mockImplementation((cwd, args, options) => {
     if (args[0] !== "checkout-index" || options?.stdin === undefined)
       return original(cwd, args, options);
-    const paths = new TextDecoder().decode(options.stdin).split("\0").filter(Boolean);
+    const paths = Arr.filter(Str.split(new TextDecoder().decode(options.stdin), "\0"), Boolean);
     const written = new TextEncoder().encode(
-      paths
-        .slice(0, -1)
-        .map((name) => `${name}\0`)
-        .join(""),
+      Arr.join(
+        Arr.map(paths.slice(0, -1), (name) => `${name}\0`),
+        "",
+      ),
     );
     return original(cwd, args, { ...options, stdin: written }).pipe(
       Effect.andThen(Effect.fail(gitProcess.workspaceFailure("git", "injected"))),
@@ -332,7 +339,7 @@ test("carries every new worker file, whatever its name or extension", function* 
   }
   yield* writeFile(path.join(handle.cwd, "ignored.ts"), "output\n");
   const { revision, prepared, integration } = yield* prepareIntegration(service, handle);
-  expect(revision.changedPaths.toSorted()).toEqual(created.toSorted());
+  expect(Arr.sort(revision.changedPaths, Order.String)).toEqual(Arr.sort(created, Order.String));
   expect(revision.uncapturedPaths).toBeUndefined();
   const integrated = yield* service.integrate(integration);
   for (const name of created) expect(yield* readText(root, name)).toBe(`${name}\n`);

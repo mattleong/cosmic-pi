@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import type { WorktreeCreateSetup } from "../config/schema.ts";
 import type { WorkspaceHandle } from "../workspace/model.ts";
@@ -22,7 +23,7 @@ export const runWorktreeCreateHooks = Effect.fn("SubagentWorkspace.runWorktreeCr
     if ("invalid" in setup)
       return yield* invalid(
         "workspace_hook_failed",
-        `WorktreeCreate hooks are invalid in the subagents configuration (${setup.invalid.join(", ")}); fix them and run /reload.`,
+        `WorktreeCreate hooks are invalid in the subagents configuration (${Arr.join(setup.invalid, ", ")}); fix them and run /reload.`,
       );
     const hooks = setup;
     if (hooks.length === 0) return undefined;
@@ -43,7 +44,7 @@ export const runWorktreeCreateHooks = Effect.fn("SubagentWorkspace.runWorktreeCr
       );
     const changed = yield* service.hookChanges(target).pipe(Effect.mapError(mapWorkspaceError));
     if (changed.length === 0) return undefined;
-    const listed = changed.slice(0, MAX_LISTED_CHANGES).join(", ");
+    const listed = Arr.join(changed.slice(0, MAX_LISTED_CHANGES), ", ");
     const more =
       changed.length > MAX_LISTED_CHANGES
         ? `, and ${changed.length - MAX_LISTED_CHANGES} more`

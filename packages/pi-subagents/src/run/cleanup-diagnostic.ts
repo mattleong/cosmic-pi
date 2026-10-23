@@ -1,6 +1,9 @@
+import * as Arr from "effect/Array";
 import * as Cause from "effect/Cause";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import type { SubagentCleanupDiagnostic } from "./model.ts";
 import { sanitizeDiagnosticText } from "./state.ts";
 import { sanitizeDiagnosticContent } from "pi-cosmic-core";
@@ -25,11 +28,13 @@ export const boundedCleanupDiagnostic = (
   const code =
     diagnostic.code === undefined
       ? undefined
-      : sanitizeDiagnosticContent(diagnostic.code, { maximumLength: 80 })
-          .replace(/\s+/g, " ")
-          .trim();
+      : Fn.pipe(
+          sanitizeDiagnosticContent(diagnostic.code, { maximumLength: 80 }),
+          Str.replace(/\s+/g, " "),
+          Str.trim,
+        );
   const message =
-    sanitizeDiagnosticText(diagnostic.message, 1024).trim() ||
+    Str.trim(sanitizeDiagnosticText(diagnostic.message, 1024)) ||
     "Cleanup did not provide confirmation.";
   return { phase: diagnostic.phase, ...(code && { code }), message };
 };
@@ -38,13 +43,15 @@ export const cleanupFailureDiagnostic = (
   phase: SubagentCleanupDiagnostic["phase"],
   cause: Cause.Cause<unknown>,
 ): SubagentCleanupDiagnostic => {
-  const failures = cause.reasons.map(failureDetails);
+  const failures = Arr.map(cause.reasons, failureDetails);
   const first = failures[0];
   return boundedCleanupDiagnostic({
     phase,
     ...(first?.code && { code: first.code }),
     message:
-      failures.map((failure) => failure.message).join("; ") ||
-      "Cleanup did not provide confirmation.",
+      Arr.join(
+        Arr.map(failures, (failure) => failure.message),
+        "; ",
+      ) || "Cleanup did not provide confirmation.",
   });
 };

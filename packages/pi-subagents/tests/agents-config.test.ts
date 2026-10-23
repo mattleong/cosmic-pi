@@ -5,6 +5,10 @@ import {
   resolveTestConfig as resolve,
   type ConfigDocumentValue,
 } from "./fixtures/profile-settings-inspection.ts";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Rec from "effect/Record";
 
 const agent = (fields: Readonly<Record<string, ConfigDocumentValue>> = {}) => ({
   description: "Reviews auth changes.",
@@ -14,7 +18,7 @@ const agent = (fields: Readonly<Record<string, ConfigDocumentValue>> = {}) => ({
 
 const document = (agents: ConfigDocumentValue) => ({ version: 6, agents });
 
-const names = (config: ReturnType<typeof resolve>) => config.agents.map((entry) => entry.name);
+const names = (config: ReturnType<typeof resolve>) => Arr.map(config.agents, (entry) => entry.name);
 
 describe("custom agent configuration", () => {
   it("decodes agents with their routed profile and overrides", () => {
@@ -55,7 +59,7 @@ describe("custom agent configuration", () => {
         Upper: agent(),
         "1st": agent(),
         "-dash": agent(),
-        [`a${"b".repeat(48)}`]: agent(),
+        [`a${Fn.pipe("b", Str.repeat(48))}`]: agent(),
         worker: agent(),
         fine: agent(),
       }),
@@ -67,7 +71,7 @@ describe("custom agent configuration", () => {
       "global.agents[3].name",
       "global.agents[4].name",
     ]);
-    expect(Object.keys(decoded.file.agents ?? {})).toEqual(["fine"]);
+    expect(Rec.keys(decoded.file.agents ?? {})).toEqual(["fine"]);
   });
 
   it("fails a read-only agent that sets isolation closed by name", () => {
@@ -87,40 +91,42 @@ describe("custom agent configuration", () => {
       agent({ tools: { allow: ["read"], only: ["grep"] } }),
       agent({ description: "" }),
       agent({ instructions: "   " }),
-      agent({ instructions: "é".repeat(65_537) }),
+      agent({ instructions: Fn.pipe("é", Str.repeat(65_537)) }),
       agent({ profile: "designer" }),
       agent({ effort: "default" }),
       agent({ tools: { deny: ["bad,name"] } }),
       { description: "Missing instructions." },
     ];
-    const entries = Object.fromEntries(invalid.map((entry, index) => [`bad-${index}`, entry]));
+    const entries = Rec.fromEntries(Arr.map(invalid, (entry, index) => [`bad-${index}`, entry]));
     const config = resolve(document({ ...entries, good: agent() }));
-    expect(config.diagnostics).toEqual(invalid.map((_, index) => `global.agents[${index}]`));
+    expect(config.diagnostics).toEqual(Arr.map(invalid, (_, index) => `global.agents[${index}]`));
     expect(names(config)).toEqual(["good"]);
-    for (const name of Object.keys(entries))
+    for (const name of Rec.keys(entries))
       expect(lookupCustomAgent(config, name)).toEqual({ kind: "invalid", scope: "global" });
     expect(lookupCustomAgent(config, "missing")).toEqual({ kind: "unknown" });
   });
 
   it("accepts instructions up to 128 KiB of UTF-8", () => {
-    const config = resolve(document({ big: agent({ instructions: "é".repeat(65_536) }) }));
+    const config = resolve(
+      document({ big: agent({ instructions: Fn.pipe("é", Str.repeat(65_536)) }) }),
+    );
     expect(names(config)).toEqual(["big"]);
   });
 
   it("cuts a description longer than 200 characters, with a diagnostic, and keeps the agent", () => {
     const config = resolve(
-      document({ verbose: agent({ description: "d".repeat(201) }), good: agent() }),
+      document({ verbose: agent({ description: Fn.pipe("d", Str.repeat(201)) }), good: agent() }),
     );
     expect(names(config)).toEqual(["verbose", "good"]);
     expect(config.diagnostics).toEqual(["global.agents[0].description"]);
     const description = config.agents[0]?.description ?? "";
     expect(description.length).toBeLessThanOrEqual(200);
-    expect(description.startsWith("d".repeat(150))).toBe(true);
+    expect(Fn.pipe(description, Str.startsWith(Fn.pipe("d", Str.repeat(150))))).toBe(true);
   });
 
   it("allows at most 32 agents per document", () => {
     const many = (count: number) =>
-      Object.fromEntries(Array.from({ length: count }, (_, index) => [`agent-${index}`, agent()]));
+      Rec.fromEntries(Array.from({ length: count }, (_, index) => [`agent-${index}`, agent()]));
     expect(names(resolve(document(many(32))))).toHaveLength(32);
     const tooMany = resolve(document(many(33)));
     expect(tooMany.diagnostics).toEqual(["global.agents[32+]"]);

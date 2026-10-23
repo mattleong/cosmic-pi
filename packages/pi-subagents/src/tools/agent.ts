@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import {
   defineTool,
   type AgentToolResult,
@@ -59,7 +62,7 @@ const SEND_GUIDELINES = [
 ];
 
 const quoted = (message: string | undefined): string =>
-  message?.trim() ? `“${message.trim()}”` : "";
+  message !== undefined && Str.trim(message) ? `“${Str.trim(message)}”` : "";
 
 const idsLabel = (ids: ReadonlyArray<string> | undefined): string => {
   const [only] = ids ?? [];
@@ -102,7 +105,7 @@ const TOOL_SPECS: AgentToolSpecs = {
     promptSnippet: "Message any agent in this session, including main",
     promptGuidelines: SEND_GUIDELINES,
     title: (args) => [
-      args.to?.trim() ? `Message ${args.to.trim()}` : "Message agent",
+      args.to !== undefined && Str.trim(args.to) ? `Message ${Str.trim(args.to)}` : "Message agent",
       quoted(args.message),
     ],
   },
@@ -146,7 +149,13 @@ const expandedArguments = (call: AgentCallEvidence): ReadonlyArray<string> => [
   ...(call.to === undefined ? [] : [`to: ${escapeControlChars(call.to)}`]),
   ...(call.agentIds === undefined
     ? []
-    : [`agentIds: ${call.agentIds.map((id) => escapeControlChars(id)).join(", ")}`]),
+    : [
+        `agentIds: ${Fn.pipe(
+          call.agentIds,
+          Arr.map((id) => escapeControlChars(id)),
+          Arr.join(", "),
+        )}`,
+      ]),
   ...(call.message === undefined ? [] : [escapeControlChars(call.message)]),
 ];
 
@@ -208,7 +217,11 @@ export function registerAgentTools(
         // The heading summarizes the call, so expansion keeps every argument.
         renderCall: (args, theme) => {
           const lines = expandedArguments(decodeAgentCall(args) ?? {});
-          return new Text(lines.length === 0 ? "" : theme.fg("toolOutput", lines.join("\n")), 0, 0);
+          return new Text(
+            lines.length === 0 ? "" : theme.fg("toolOutput", Arr.join(lines, "\n")),
+            0,
+            0,
+          );
         },
         renderResult: (result, _options, theme, context) => {
           const text = escapeControlChars(getTextContent(result.content));

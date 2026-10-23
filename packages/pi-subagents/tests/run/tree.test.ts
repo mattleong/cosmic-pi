@@ -1,4 +1,4 @@
-import { describe, expect, it } from "@effect/vitest";
+import { assert, describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -17,6 +17,8 @@ import {
 } from "./fixtures/service-harness.ts";
 import { InvalidSubagentRequestError, SubagentNotFoundError } from "../../src/run/errors.ts";
 import { objectContaining } from "../support/matchers.ts";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 
 const policy = (maxDirectChildren: number, maxDepth: number) => ({
   maxDirectChildren,
@@ -50,8 +52,8 @@ describe("root-owned subagent run tree", () => {
             .pipe(Effect.exit),
         { concurrency: 2 },
       );
-      expect(outcomes.filter(Exit.isSuccess)).toHaveLength(1);
-      expect(outcomes.filter(Exit.isFailure)).toHaveLength(1);
+      expect(Arr.filter(outcomes, Exit.isSuccess)).toHaveLength(1);
+      expect(Arr.filter(outcomes, Exit.isFailure)).toHaveLength(1);
 
       const sibling = yield* service.startSessionOwnedFrom(
         parentB.id,
@@ -126,10 +128,11 @@ describe("root-owned subagent run tree", () => {
       yield* TestClock.adjust("100 millis");
       yield* yieldUntil(
         () =>
-          notifications.some(
+          Arr.some(
+            notifications,
             (notification) =>
               notification.type === "completed" &&
-              notification.runs.some((run) => run.id === fallback.id),
+              Arr.some(notification.runs, (run) => run.id === fallback.id),
           ),
         200,
       );
@@ -146,7 +149,7 @@ describe("root-owned subagent run tree", () => {
         request({ name: "uncertain-child" }),
       );
       const notices = () =>
-        (fake.controls[0]?.ipc ?? []).flatMap((message) =>
+        Arr.flatMap(fake.controls[0]?.ipc ?? [], (message) =>
           message.type === "proxy_notification" ? [message] : [],
         );
       fake.controls[0]?.loseNextNotificationAck();
@@ -161,7 +164,10 @@ describe("root-owned subagent run tree", () => {
       yield* TestClock.adjust("30 seconds");
       yield* yieldUntil(() => notices().length === 2);
       yield* TestClock.adjust("30 seconds");
-      expect(notices().map((notice) => notice.key)).toEqual([`${child.id}:1`, `${child.id}:1`]);
+      expect(Arr.map(notices(), (notice) => notice.key)).toEqual([
+        `${child.id}:1`,
+        `${child.id}:1`,
+      ]);
       expect(notices()[0]?.requestId).not.toBe(notices()[1]?.requestId);
       expect(notifications).toEqual([]);
     });
@@ -179,13 +185,14 @@ describe("root-owned subagent run tree", () => {
       fake.controls[1]?.settle("Child report.");
       yield* waitForCompleted(service, child.id);
       yield* TestClock.adjust("100 millis");
-      yield* yieldUntil(() => notifications.some((notice) => notice.type === "completed"));
+      yield* yieldUntil(() => Arr.some(notifications, (notice) => notice.type === "completed"));
       expect(notifications).toEqual([
         objectContaining({ type: "completed", runs: [objectContaining({ id: child.id })] }),
       ]);
       yield* TestClock.adjust("30 seconds");
+      assert(fake.controls[0] !== undefined);
       expect(
-        fake.controls[0]?.ipc.filter((message) => message.type === "proxy_notification"),
+        Arr.filter(fake.controls[0].ipc, (message) => message.type === "proxy_notification"),
       ).toHaveLength(1);
     });
   });
@@ -203,18 +210,25 @@ describe("root-owned subagent run tree", () => {
       const gate = yield* Deferred.make<void>();
       fake.controls[2]?.gateRelease(gate);
       const waiter = yield* service.stop(parent.id).pipe(Effect.forkScoped);
-      yield* yieldUntil(
-        () => projections.at(-1)?.runs.find((run) => run.id === leaf.id)?.state === "stopping",
+      yield* yieldUntil(() =>
+        Arr.last(projections).pipe(
+          Option.flatMap((projection) =>
+            Arr.findFirst(projection.runs, (run) => run.id === leaf.id),
+          ),
+          Option.exists((run) => run.state === "stopping"),
+        ),
       );
       yield* Fiber.interrupt(waiter);
       expect(releaseOrder).toEqual([]);
       yield* Deferred.succeed(gate, undefined);
-      yield* yieldUntil(
-        () => projections.at(-1)?.runs.every((run) => run.state === "stopped") === true,
+      yield* yieldUntil(() =>
+        Option.exists(Arr.last(projections), (projection) =>
+          Arr.every(projection.runs, (run) => run.state === "stopped"),
+        ),
       );
       yield* service.stop(parent.id);
       expect(releaseOrder).toEqual([2, 1, 0]);
-      expect(fake.controls.map((control) => control.released())).toEqual([1, 1, 1]);
+      expect(Arr.map(fake.controls, (control) => control.released())).toEqual([1, 1, 1]);
     });
   });
 });

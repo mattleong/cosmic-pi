@@ -13,6 +13,8 @@ import {
   withService,
 } from "./fixtures/service-harness.ts";
 import { InvalidSubagentRequestError } from "../../src/run/errors.ts";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 
 describe("SubagentService", () => {
   it.effect("renames any running run's display name in the root alone", () => {
@@ -83,7 +85,7 @@ describe("SubagentService", () => {
         yield* service.start(request({ name: "reader-two", task: "Review tests" }));
         expect(
           fake.controls[0]?.sentIpc("peer_notice", (notice) =>
-            notice.message.includes("reader-two"),
+            Fn.pipe(notice.message, Str.includes("reader-two")),
           ),
         ).toBe(true);
       });

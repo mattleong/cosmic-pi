@@ -1,4 +1,6 @@
+import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import { expandedSection } from "pi-code-previews";
@@ -40,8 +42,11 @@ const PROFILE_SOURCE_LABELS = {
 } as const satisfies Record<SubagentProfileRouteCard["source"], string>;
 
 const profileRouteSummary = (profile: SubagentProfileRouteCard, theme: Theme): string => {
-  const eligible = profile.candidates.filter((candidate) => candidate.status === "eligible").length;
-  const invalid = profile.source.endsWith("-invalid");
+  const eligible = Arr.filter(
+    profile.candidates,
+    (candidate) => candidate.status === "eligible",
+  ).length;
+  const invalid = Fn.pipe(profile.source, Str.endsWith("-invalid"));
   const color = invalid || eligible === 0 ? "warning" : "success";
   const firstCandidate = profile.candidates[0];
   const first = firstCandidate ? formattedCandidateRoute(firstCandidate) : undefined;
@@ -65,7 +70,7 @@ const profileRouteLines = (
       "dim",
       `  Defaults · ${profile.defaultContext} · ${profile.defaultWriteIntent} · ${profile.defaultEffort ?? "inherit effort"}`,
     ),
-    ...profile.candidates.flatMap((candidate, index) => [
+    ...Arr.flatMap(profile.candidates, (candidate, index) => [
       theme.fg(
         candidate.status === "eligible" ? "success" : "warning",
         `  ${candidate.status === "eligible" ? "✓" : "–"} ${index + 1}. ${formattedCandidateRoute(candidate)}`,
@@ -105,7 +110,7 @@ export const renderProfileRoutesComponent = (
         "Launch checks pending · executable, authentication, native integration, and private harness are checked at launch.",
       ),
     );
-    return lines.flatMap((line) =>
+    return Arr.flatMap(lines, (line) =>
       expanded ? wrapTextWithAnsi(line, safeWidth) : [clipToWidth(line, safeWidth)],
     );
   });
@@ -127,10 +132,13 @@ const primaryCount = (details: RunToolDetails, count: number): string => {
 
 const countersText = (details: RunToolDetails, count: number, failures: ActionFailureCounts) => {
   const exceptional = failureCounts(failures);
-  return [
-    ...(count > 0 || exceptional.length === 0 ? [primaryCount(details, count)] : []),
-    ...exceptional,
-  ].join(" · ");
+  return Arr.join(
+    [
+      ...(count > 0 || exceptional.length === 0 ? [primaryCount(details, count)] : []),
+      ...exceptional,
+    ],
+    " · ",
+  );
 };
 
 const failedTargetLines = (
@@ -138,7 +146,7 @@ const failedTargetLines = (
   width: number,
   theme: Theme,
 ): string[] =>
-  failures.flatMap((failure) => {
+  Arr.flatMap(failures, (failure) => {
     const code = failure.code ? ` [${sanitizeTerminalLine(failure.code)}]` : "";
     return [
       ...wrapTextWithAnsi(
@@ -156,8 +164,9 @@ const failedTargetLines = (
   });
 
 const failureSections = (details: RunToolDetails, theme: Theme): ReadonlyArray<Component> =>
-  ACTION_FAILURE_SECTIONS.flatMap(([disposition, title]) => {
-    const failures = (details.actionFailures ?? []).filter(
+  Arr.flatMap(ACTION_FAILURE_SECTIONS, ([disposition, title]) => {
+    const failures = Arr.filter(
+      details.actionFailures ?? [],
       (failure) => actionFailureDisposition(failure) === disposition,
     );
     return failures.length === 0
@@ -191,6 +200,6 @@ export const renderCompactResultComponent = (
           reportSections: [],
           counters,
         });
-    return [runs, ...failures].flatMap((component) => component.render(safeWidth));
+    return Arr.flatMap([runs, ...failures], (component) => component.render(safeWidth));
   });
 };

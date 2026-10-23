@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Effect from "effect/Effect";
 import type { CanonicalWriterCwd, WriterLeaseContract } from "../boundary/writer-lease.ts";
@@ -36,7 +37,8 @@ export const processCapacityError = (
   excluded?: RunRecord,
   held = 0,
 ): SubagentCapacityError | undefined => {
-  const occupied = [...records.values()].filter(
+  const occupied = Arr.filter(
+    [...records.values()],
     (record) => record !== excluded && holdsChildSlot(record, parentRunId),
   ).length;
   if (occupied + held < limit) return undefined;
@@ -54,7 +56,8 @@ export const treeCapacityError = (
   excluded?: RunRecord,
   held = 0,
 ): SubagentCapacityError | undefined => {
-  const occupied = [...records.values()].filter(
+  const occupied = Arr.filter(
+    [...records.values()],
     (record) => record !== excluded && ownsProcessSlot(record),
   ).length;
   if (occupied + held < limit) return undefined;

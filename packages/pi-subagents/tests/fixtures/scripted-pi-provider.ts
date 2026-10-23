@@ -10,9 +10,12 @@ import {
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { nodeFsPromises as fs, nodePath as path } from "../support/node-builtins.ts";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 
 const SCRIPTED_PROVIDER = "pi-subagents-scripted";
 export const SCRIPTED_MODEL = `${SCRIPTED_PROVIDER}/child`;
@@ -37,23 +40,28 @@ const encodeObservation = Schema.encodeEffect(Schema.fromJsonString(ScriptedObse
 const messageText = (message: Message): string => {
   if (message.role === "assistant") return "";
   if (Predicate.isString(message.content)) return message.content;
-  return message.content.map((part) => (part.type === "text" ? part.text : "")).join("");
+  return Arr.join(
+    Arr.map(message.content, (part) => (part.type === "text" ? part.text : "")),
+    "",
+  );
 };
 
 const reply = (messages: ReadonlyArray<Message>): Effect.Effect<AssistantMessage> => {
   const last = messages.at(-1);
   if (last?.role === "toolResult") return Effect.succeed(fauxAssistantMessage(SCRIPT.report));
   const prompt = last ? messageText(last) : "";
-  if (prompt.includes(SCRIPT.holdTask)) return Effect.never;
-  if (prompt.includes(SCRIPT.resumeTask))
+  if (Fn.pipe(prompt, Str.includes(SCRIPT.holdTask))) return Effect.never;
+  if (Fn.pipe(prompt, Str.includes(SCRIPT.resumeTask)))
     return Effect.succeed(
       fauxAssistantMessage(
-        messages.some((message) => messageText(message).includes(SCRIPT.progressTask))
+        Arr.some(messages, (message) =>
+          Fn.pipe(messageText(message), Str.includes(SCRIPT.progressTask)),
+        )
           ? SCRIPT.resumedWithHistory
           : SCRIPT.resumedWithoutHistory,
       ),
     );
-  if (prompt.includes(SCRIPT.progressTask))
+  if (Fn.pipe(prompt, Str.includes(SCRIPT.progressTask)))
     return Effect.succeed(
       fauxAssistantMessage(
         fauxToolCall("agent_contact_parent", { kind: "progress", message: SCRIPT.progressMessage }),
@@ -67,7 +75,7 @@ const observe = (file: string, messages: ReadonlyArray<Message>) =>
   encodeObservation({
     prompt: messageText(messages.at(-1) ?? { role: "user", content: "", timestamp: 0 }),
     systemPrompt: getCurrentSystemPrompt([...messages]),
-    tools: getCurrentTools([...messages]).map((tool) => tool.name),
+    tools: Arr.map(getCurrentTools([...messages]), (tool) => tool.name),
   }).pipe(
     Effect.flatMap((line) => Effect.promise(() => fs.appendFile(file, `${line}\n`))),
     Effect.orDie,

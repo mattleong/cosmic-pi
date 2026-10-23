@@ -10,6 +10,7 @@ import { git, workspaceIO } from "../../../src/boundary/git-worktree-process.ts"
 import { nodeFsPromises as fs, nodePath as path } from "../../support/node-builtins.ts";
 import type { WorkspaceHandle } from "../../../src/workspace/model.ts";
 import { WorkspaceService, type WorkspaceServiceContract } from "../../../src/workspace/service.ts";
+import * as Arr from "effect/Array";
 
 // Workspaces run Git with the user's system and global configuration. Tests use none, unless a
 // test file points these at a configuration of its own.
@@ -37,7 +38,7 @@ export const commitRepository = (root: string, files: RepositoryFiles) =>
       yield* io(() => fs.mkdir(path.dirname(path.join(root, file)), { recursive: true }));
       yield* io(() => fs.writeFile(path.join(root, file), content));
     }
-    yield* git(root, ["add", "--", ...files.map(([file]) => file)]);
+    yield* git(root, ["add", "--", ...Arr.map(files, ([file]) => file)]);
     yield* git(root, ["commit", "-m", "fixture"]);
   });
 

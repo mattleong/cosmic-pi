@@ -1,6 +1,9 @@
+import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
+import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import { clipText, decodeUnknownOrUndefined } from "pi-cosmic-core";
 import { SUBAGENT_EFFORTS } from "../domain/routing.ts";
 import {
@@ -91,7 +94,7 @@ const PROFILE_SET_NAME_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._ -]{0,62}[A-Za-z0-9
 export const isProfileSetName = (value: string): boolean => PROFILE_SET_NAME_PATTERN.test(value);
 
 export const normalizeProfileSetName = (value: string): string | undefined => {
-  const normalized = value.trim();
+  const normalized = Str.trim(value);
   return isProfileSetName(normalized) ? normalized : undefined;
 };
 
@@ -256,12 +259,12 @@ const routeFromList = (
     );
     return undefined;
   }
-  const candidates = list.map((input, index) => {
+  const candidates = Arr.map(list, (input, index) => {
     const candidate = decodeDeclaredProfileCandidate(input);
     if (!candidate) diagnostics.push(`${path}[${index}]`);
     return candidate;
   });
-  return candidates.every(Predicate.isNotUndefined) ? candidates : undefined;
+  return Arr.every(candidates, Predicate.isNotUndefined) ? candidates : undefined;
 };
 
 const decodeDeclaredRoute = (
@@ -281,7 +284,7 @@ export const decodeDeclaredProfileRoute = (value: FieldValue): DeclaredProfileRo
   decodeDeclaredRoute(value, "route", []);
 
 const hasOnlyKeys = (record: UnknownRecord, allowed: ReadonlySet<string>): boolean =>
-  Object.keys(record).every((key) => allowed.has(key));
+  Arr.every(Rec.keys(record), (key) => allowed.has(key));
 
 interface DecodedProfiles {
   readonly profiles: Partial<Record<ProfileId, DeclaredProfileRoute>>;
@@ -298,7 +301,7 @@ const profilesFromRecord = (
   const profiles: Partial<Record<ProfileId, DeclaredProfileRoute>> = {};
   const invalidRoutes: ProfileId[] = [];
   for (const id of PROFILE_IDS) {
-    if (!Object.hasOwn(record, id)) continue;
+    if (!Rec.has(record, id)) continue;
     const route = decodeDeclaredRoute(record[id], `${path}.${id}`, diagnostics);
     if (route === undefined) invalidRoutes.push(id);
     else profiles[id] = route;
@@ -354,7 +357,7 @@ const decodeProfileSets = (
   readonly sets: Record<string, SubagentProfileSet>;
 } => {
   const record = decodeUnknownRecord(value);
-  const names = record && Object.keys(record);
+  const names = record && Rec.keys(record);
   if (!record || !names || names.length > MAX_PROFILE_SETS) {
     diagnostics.push(
       names && names.length > MAX_PROFILE_SETS ? `${path}[${MAX_PROFILE_SETS}+]` : path,
@@ -365,7 +368,7 @@ const decodeProfileSets = (
   const invalidProfileSetRoutes: Record<string, ReadonlyArray<ProfileId>> = {};
   const invalidProfileSets: string[] = [];
   // Set names may be private, so diagnostics identify sets by position.
-  names.forEach((name, index) => {
+  Arr.forEach(names, (name, index) => {
     const setPath = `${path}[${index}]`;
     if (!isProfileSetName(name)) {
       diagnostics.push(`${setPath}.name`);
@@ -431,7 +434,7 @@ const decodeCustomAgents = (
   diagnostics: string[],
 ): DecodedCustomAgents => {
   const record = decodeUnknownRecord(value);
-  const names = record && Object.keys(record);
+  const names = record && Rec.keys(record);
   if (!record || !names || names.length > MAX_CUSTOM_AGENTS) {
     diagnostics.push(
       names && names.length > MAX_CUSTOM_AGENTS ? `${path}[${MAX_CUSTOM_AGENTS}+]` : path,
@@ -441,7 +444,7 @@ const decodeCustomAgents = (
   const agents = nullPrototypeRecord<CustomAgentDefinition>();
   const invalidAgents: string[] = [];
   // Like set names, agent names are identified by position in diagnostics.
-  names.forEach((name, index) => {
+  Arr.forEach(names, (name, index) => {
     const entryPath = `${path}[${index}]`;
     if (!isCustomAgentName(name)) {
       diagnostics.push(`${entryPath}.name`);
@@ -487,7 +490,7 @@ const decodeRootField = <S extends Schema.ConstraintDecoder<unknown>>(
   diagnostics: string[],
   schema: S,
 ): S["Type"] | undefined => {
-  if (!Object.hasOwn(root, key)) return undefined;
+  if (!Rec.has(root, key)) return undefined;
   const decoded = decodeUnknownOrUndefined(schema)(root[key]);
   if (decoded === undefined) diagnostics.push(`${scope}.${key}`);
   return decoded;
@@ -515,14 +518,14 @@ const decodeDocumentNesting = (
   if (!hasOnlyKeys(record, NESTING_KEYS)) diagnostics.push(`${path}.<unknown>`);
   const nesting: { -readonly [Field in NestingField]?: number } = {};
   for (const field of NESTING_FIELDS) {
-    if (!Object.hasOwn(record, field)) continue;
+    if (!Rec.has(record, field)) continue;
     const { minimum, maximum } = NESTING_BOUNDS[field];
     const fieldPath = `${path}.${field}`;
     const limit = flooredInBounds(record[field], minimum, maximum, fieldPath, diagnostics);
     if (limit === undefined) diagnostics.push(fieldPath);
     nesting[field] = limit ?? minimum;
   }
-  return Object.keys(nesting).length > 0 ? Object.freeze(nesting) : undefined;
+  return Rec.size<string, unknown>(nesting) > 0 ? Object.freeze(nesting) : undefined;
 };
 
 const decodeSessionSpendLimit = (
@@ -541,7 +544,7 @@ const decodeSessionSpendLimit = (
 };
 
 const decodeDefaultProfileSet = (root: UnknownRecord, scope: string, diagnostics: string[]) => {
-  const present = Object.hasOwn(root, "defaultProfileSet");
+  const present = Rec.has(root, "defaultProfileSet");
   const value = root.defaultProfileSet;
   const defaultProfileSet =
     present && Predicate.isString(value) && isProfileSetName(value) ? value : undefined;
@@ -563,8 +566,7 @@ const decodeWorktreeHook = (
   const record = decodeUnknownRecord(value);
   const command = record && decodeHookCommand(record.command);
   if (!record || !command || !hasOnlyKeys(record, HOOK_KEYS)) return undefined;
-  if (!Object.hasOwn(record, "timeout"))
-    return Object.freeze({ command: Object.freeze([...command]) });
+  if (!Rec.has(record, "timeout")) return Object.freeze({ command: Object.freeze([...command]) });
   const timeout = flooredInBounds(
     record.timeout,
     1,
@@ -595,7 +597,7 @@ const decodeWorktreeHookList = (
     return { hooks: [], invalid: [invalid] };
   }
   const invalid: string[] = [];
-  const hooks = list.flatMap((entry, index) => {
+  const hooks = Arr.flatMap(list, (entry, index) => {
     const entryPath = `${path}[${index}]`;
     const hook = decodeWorktreeHook(entry, entryPath, diagnostics);
     if (hook) return [hook];
@@ -630,13 +632,13 @@ const decodeWorktreeHooks = (
   const hooks: { -readonly [Event in WorktreeHookEvent]?: ReadonlyArray<WorktreeHook> } = {};
   let invalidCreate: ReadonlyArray<string> = [];
   for (const event of WORKTREE_HOOK_EVENTS) {
-    if (!Object.hasOwn(record, event)) continue;
+    if (!Rec.has(record, event)) continue;
     const list = decodeWorktreeHookList(record[event], `${path}.${event}`, diagnostics);
     if (event === "WorktreeCreate") invalidCreate = list.invalid;
     if (list.hooks.length > 0) hooks[event] = list.hooks;
   }
   return {
-    ...(Object.keys(hooks).length > 0 && { hooks: Object.freeze(hooks) }),
+    ...(Rec.size<string, unknown>(hooks) > 0 && { hooks: Object.freeze(hooks) }),
     invalidCreate,
   };
 };
@@ -647,7 +649,7 @@ const decodeWriterWorkspaceMode = (
   scope: string,
   diagnostics: string[],
 ): WriterWorkspaceMode | undefined => {
-  if (!Object.hasOwn(root, "writerWorkspaceMode")) return undefined;
+  if (!Rec.has(root, "writerWorkspaceMode")) return undefined;
   const mode = root.writerWorkspaceMode;
   if (isWriterWorkspaceMode(mode)) return mode;
   diagnostics.push(`${scope}.writerWorkspaceMode`);
@@ -661,20 +663,20 @@ const decodeCurrentBody = (
 ): DecodedBody => {
   const writerWorkspaceMode = decodeWriterWorkspaceMode(root, scope, diagnostics);
   const delegation = decodeRootField(root, "delegation", scope, diagnostics, DelegationModeSchema);
-  const hooks = Object.hasOwn(root, "hooks")
+  const hooks = Rec.has(root, "hooks")
     ? decodeWorktreeHooks(root.hooks, `${scope}.hooks`, diagnostics)
     : undefined;
-  const spendLimitDeclared = Object.hasOwn(root, "sessionSpendLimit");
+  const spendLimitDeclared = Rec.has(root, "sessionSpendLimit");
   const sessionSpendLimit = spendLimitDeclared
     ? decodeSessionSpendLimit(root.sessionSpendLimit, `${scope}.sessionSpendLimit`, diagnostics)
     : undefined;
-  const nesting = Object.hasOwn(root, "nesting")
+  const nesting = Rec.has(root, "nesting")
     ? decodeDocumentNesting(root.nesting, `${scope}.nesting`, diagnostics)
     : undefined;
-  const decoded = Object.hasOwn(root, "profileSets")
+  const decoded = Rec.has(root, "profileSets")
     ? decodeProfileSets(root.profileSets, `${scope}.profileSets`, diagnostics)
     : undefined;
-  const agents = Object.hasOwn(root, "agents")
+  const agents = Rec.has(root, "agents")
     ? decodeCustomAgents(root.agents, `${scope}.agents`, diagnostics)
     : undefined;
   const { defaultProfileSet, invalidDefaultProfileSet } = decodeDefaultProfileSet(
@@ -684,14 +686,14 @@ const decodeCurrentBody = (
   );
   return {
     file: {
-      ...(decoded && Object.keys(decoded.sets).length > 0 && { profileSets: decoded.sets }),
+      ...(decoded && Rec.size(decoded.sets) > 0 && { profileSets: decoded.sets }),
       ...(defaultProfileSet !== undefined && { defaultProfileSet }),
       ...(nesting !== undefined && { nesting }),
       ...(writerWorkspaceMode !== undefined && { writerWorkspaceMode }),
       ...(delegation !== undefined && { delegation }),
       ...(hooks?.hooks !== undefined && { hooks: hooks.hooks }),
       ...(sessionSpendLimit !== undefined && { sessionSpendLimit }),
-      ...(agents && Object.keys(agents.agents).length > 0 && { agents: agents.agents }),
+      ...(agents && Rec.size(agents.agents) > 0 && { agents: agents.agents }),
     },
     invalidProfileSetRoutes: decoded?.invalidProfileSetRoutes ?? {},
     invalidProfileSets: decoded?.invalidProfileSets ?? [],
@@ -705,9 +707,7 @@ const decodeCurrentBody = (
 
 const declaresMissingDefault = (file: SubagentConfigFile): boolean => {
   const defaultName = file.defaultProfileSet;
-  return (
-    defaultName !== undefined && !(file.profileSets && Object.hasOwn(file.profileSets, defaultName))
-  );
+  return defaultName !== undefined && !(file.profileSets && Rec.has(file.profileSets, defaultName));
 };
 
 const decodeConfigRoot = (

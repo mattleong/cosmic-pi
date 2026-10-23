@@ -1,5 +1,7 @@
+import * as Arr from "effect/Array";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import {
   isOriginalWorker,
   OPEN_WORKSPACE_STATUSES,
@@ -133,7 +135,9 @@ export function workspaceOrphanOperations(
       Effect.mapError(mapWorkspaceError),
       Effect.flatMap(visibleRecords),
     );
-    const record = listing.records.find((entry) => entry.handle.workspaceId === workspaceId);
+    const record = Option.getOrUndefined(
+      Arr.findFirst(listing.records, (entry) => entry.handle.workspaceId === workspaceId),
+    );
     if (!record) return yield* invalid("workspace_owner_unavailable", ORPHAN_UNAVAILABLE);
     return record;
   });

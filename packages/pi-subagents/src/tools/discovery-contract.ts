@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { MAX_CUSTOM_AGENT_DESCRIPTION_CHARS } from "../profiles/agents.ts";
 import { MAX_PROFILE_MODEL_SELECTOR_CHARS, type ProfileId } from "../profiles/model.ts";
 import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
@@ -12,7 +13,7 @@ import type {
 } from "./model.ts";
 
 const contractCandidates = (candidates: ReadonlyArray<ProfileCandidateDiscovery>) =>
-  candidates.map((candidate) => ({
+  Arr.map(candidates, (candidate) => ({
     runtime: candidate.runtime,
     model: metadata(candidate.model, MAX_PROFILE_MODEL_SELECTOR_CHARS) ?? "[redacted]",
     effort: candidate.effort,
@@ -31,7 +32,7 @@ export const modelsContract = (
 ): SubagentModelsContract => ({
   ...envelope(SUBAGENT_TOOL_NAME.models),
   fallbackProfile,
-  profiles: profiles.map((profile) => ({
+  profiles: Arr.map(profiles, (profile) => ({
     id: profile.id,
     description: metadata(profile.description, MAX_DISCOVERY_TEXT_CHARS) ?? profile.id,
     source: profile.source,
@@ -42,7 +43,7 @@ export const modelsContract = (
     candidates: contractCandidates(profile.candidates),
   })),
   ...(agents.length > 0 && {
-    agents: agents.map((agent) => ({
+    agents: Arr.map(agents, (agent) => ({
       name: agent.name,
       description:
         metadata(agent.description, MAX_CUSTOM_AGENT_DESCRIPTION_CHARS) ?? "Custom agent.",
@@ -62,7 +63,7 @@ export const modelsContract = (
     })),
   }),
   ...(invalidAgents.length > 0 && {
-    invalidAgents: invalidAgents.map((entry) => ({
+    invalidAgents: Arr.map(invalidAgents, (entry) => ({
       scope: entry.scope,
       ...(entry.name !== undefined && { name: entry.name }),
     })),

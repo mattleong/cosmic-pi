@@ -1,13 +1,17 @@
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "@effect/vitest";
+import { assert, describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as Scope from "effect/Scope";
 import { vi } from "vitest";
 import { signalProcessGroup } from "pi-cosmic-core";
 import { spawnIpcChild, temporaryDirectory } from "pi-cosmic-core/testing";
 import { acquireLocalCliTransport } from "../src/boundary/local-cli-transport.ts";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 
 vi.setConfig({ testTimeout: 30_000 });
 
@@ -58,10 +62,13 @@ describe("host exit cleanup", () => {
       // loaded CI runners.
       const host = yield* spawnIpcChild(hostScript, [agentDirectory], { timeout: "25 seconds" });
       yield* host.wait("ready");
-      const announced = host.messages
-        .filter(Predicate.isString)
-        .find((message) => message.startsWith("group:"));
-      const pid = Number(announced?.slice("group:".length));
+      const announced = Option.getOrUndefined(
+        Arr.findFirst(Arr.filter(host.messages, Predicate.isString), (message) =>
+          Fn.pipe(message, Str.startsWith("group:")),
+        ),
+      );
+      assert(announced !== undefined);
+      const pid = Number(Fn.pipe(announced, Str.slice("group:".length)));
       expect(Number.isSafeInteger(pid) && pid > 0).toBe(true);
       yield* killGroupAfterward(pid);
       expect(signalProcessGroup(pid, 0)).toBe("present");

@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import type {
   AgentBeforeSettleEventResult,
   BoundaryContextPreview,
@@ -24,7 +26,7 @@ const endsWithEmptyReport = (context: BoundaryContextPreview): boolean => {
   return (
     last?.role === "assistant" &&
     last.stopReason === "stop" &&
-    last.content.every((part) => part.type !== "text" || part.text.trim() === "")
+    Arr.every(last.content, (part) => part.type !== "text" || Str.trim(part.text) === "")
   );
 };
 

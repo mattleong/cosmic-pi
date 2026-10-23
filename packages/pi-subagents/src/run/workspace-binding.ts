@@ -1,6 +1,9 @@
+import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import * as Semaphore from "effect/Semaphore";
+import * as Str from "effect/String";
 import type { WorktreeCreateSetup, WriterWorkspaceMode } from "../config/schema.ts";
 import type { WorkspaceHandle, WorkspaceLaunch } from "../workspace/model.ts";
 import type { WorkspaceServiceContract } from "../workspace/service.ts";
@@ -193,7 +196,7 @@ export const mapWorkspaceError = (error: {
   );
 
 export const isWithin = (cwd: string, root: string) =>
-  cwd === root || cwd.startsWith(`${root.replace(/\/$/, "")}/`);
+  cwd === root || Fn.pipe(cwd, Str.startsWith(`${Fn.pipe(root, Str.replace(/\/$/, ""))}/`));
 
 export const runHoldsCwd = (record: RunRecord) =>
   isActiveRunState(record.view.state) || record.process !== undefined || isCleanupOwed(record);
@@ -204,9 +207,10 @@ export const runsWithin = (
   except?: RunRecord,
 ): ReadonlyMap<RunRecord, StoredRunView> =>
   new Map(
-    [...records.values()].flatMap(
+    Arr.flatMap(
+      [...records.values()],
       (record): ReadonlyArray<readonly [RunRecord, StoredRunView]> =>
-        record !== except && trees.some((tree) => isWithin(record.view.cwd, tree))
+        record !== except && Arr.some(trees, (tree) => isWithin(record.view.cwd, tree))
           ? [[record, record.view]]
           : [],
     ),
@@ -308,9 +312,10 @@ export const workspaceControlContext = Effect.fn("SubagentWorkspace.controlConte
       );
     // A shared-checkout writer its writer started may still be editing the worker tree; readers
     // there are fine, because integration keeps the trees they use.
-    const sharedWriter = [
-      ...runsWithin(records, [binding.handle.artifactRoot], binding.record).keys(),
-    ].some((record) => record.view.writeIntent === "writer" && runHoldsCwd(record));
+    const sharedWriter = Arr.some(
+      [...runsWithin(records, [binding.handle.artifactRoot], binding.record).keys()],
+      (record) => record.view.writeIntent === "writer" && runHoldsCwd(record),
+    );
     if (sharedWriter)
       return yield* invalid(
         "workspace_process_unsettled",

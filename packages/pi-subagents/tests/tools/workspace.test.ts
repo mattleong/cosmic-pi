@@ -1,7 +1,7 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
 import * as Effect from "effect/Effect";
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import { effectTest } from "../support/effect-test.ts";
 import { InvalidSubagentRequestError } from "../../src/run/errors.ts";
 import { SubagentService } from "../../src/run/service.ts";
@@ -13,6 +13,9 @@ import {
   subagentServiceDouble,
   type SubagentServiceDoubleInput,
 } from "./fixtures/subagent-service-double.ts";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 
 const run = (
   operation: Parameters<typeof executeWorkspaceAction>[0],
@@ -35,7 +38,10 @@ const summarize = (
   });
 
 const resultText = (result: AgentToolResult<WorkspaceToolDetails>) =>
-  result.content.map((part) => (part.type === "text" ? part.text : "")).join("\n");
+  Arr.join(
+    Arr.map(result.content, (part) => (part.type === "text" ? part.text : "")),
+    "\n",
+  );
 
 const expectStyledIssues = (summary: ReturnType<typeof summarize>) => {
   expect(summary?.issues?.length).toBeGreaterThan(0);
@@ -109,7 +115,8 @@ describe("workspace apply", () => {
     });
     const summary = summarize(args, result);
     expect(summary?.outcome).toBe("success");
-    expect(summary?.issues?.map((issue) => issue.code)).not.toContain("applied-untested");
+    assert(summary?.issues !== undefined);
+    expect(Arr.map(summary.issues, (issue) => issue.code)).not.toContain("applied-untested");
     expectStyledIssues(summary);
   });
 
@@ -132,8 +139,12 @@ describe("workspace apply", () => {
       for (const name of leftOut) expect(resultText(result)).toContain(name);
       const summary = summarize(args, result);
       expect(summary?.outcome).toBe("warning");
+      assert(summary?.issues !== undefined);
       expect(
-        summary?.issues?.filter((issue) => issue.severity === "warning").map((issue) => issue.code),
+        Arr.map(
+          Arr.filter(summary.issues, (issue) => issue.severity === "warning"),
+          (issue) => issue.code,
+        ),
       ).toEqual(["credential-files-left-out"]);
       expectStyledIssues(summary);
     }
@@ -178,7 +189,8 @@ describe("workspace apply", () => {
     }).pipe(Effect.orDie);
     const summary = summarize(args, result);
     expect(summary?.outcome).toBe("warning");
-    expect(summary?.issues?.filter((issue) => issue.severity === "warning")).toHaveLength(3);
+    assert(summary?.issues !== undefined);
+    expect(Arr.filter(summary.issues, (issue) => issue.severity === "warning")).toHaveLength(3);
     expectStyledIssues(summary);
   });
 });
@@ -200,7 +212,8 @@ describe("workspace refusals", () => {
       context: renderContextFixture({ isError: true }),
     });
     expect(summary?.outcome).toBe("error");
-    expect(summary?.issues?.filter((issue) => issue.severity === "error")).toHaveLength(1);
+    assert(summary?.issues !== undefined);
+    expect(Arr.filter(summary.issues, (issue) => issue.severity === "error")).toHaveLength(1);
     expectStyledIssues(summary);
   });
 });
@@ -238,7 +251,10 @@ describe("workspace list", () => {
     expect(result.details).toMatchObject({ workspaceCount: 2, unavailableCount: 1 });
     const summary = summarize(args, result);
     expect(summary?.outcome).toBe("warning");
-    expect(summary?.issues?.map((issue) => issue.code)).toContain("workspace-records-unavailable");
+    assert(summary?.issues !== undefined);
+    expect(Arr.map(summary.issues, (issue) => issue.code)).toContain(
+      "workspace-records-unavailable",
+    );
     expectStyledIssues(summary);
   });
 
@@ -261,7 +277,8 @@ describe("workspace list", () => {
     expect(text).toContain('"orphan":"discard-only"');
     expect(result.details).toMatchObject({ adoptableCount: 1 });
     const summary = summarize(args, result);
-    expect(summary?.issues?.map((issue) => issue.code)).toContain("orphans-adoptable");
+    assert(summary?.issues !== undefined);
+    expect(Arr.map(summary.issues, (issue) => issue.code)).toContain("orphans-adoptable");
     expectStyledIssues(summary);
   });
 });
@@ -270,7 +287,7 @@ describe("workspace tool", () => {
   effectTest(
     "returns complete immutable pages without persisting patches in details",
     function* () {
-      const diff = "diff --git a/file b/file\n" + "content\n".repeat(3_000);
+      const diff = "diff --git a/file b/file\n" + Fn.pipe("content\n", Str.repeat(3_000));
       const service = {
         workspaceReview: (
           workspaceId: string,
@@ -285,7 +302,7 @@ describe("workspace tool", () => {
           return Effect.succeed({
             revisionId: "immutable",
             changedPaths: ["file"],
-            text: diff.slice(offset, next),
+            text: Fn.pipe(diff, Str.slice(offset, next)),
             offset,
             totalChars: diff.length,
             ...(next < diff.length && { nextOffset: next }),
@@ -309,13 +326,14 @@ describe("workspace tool", () => {
         service,
       ).pipe(Effect.orDie);
       for (const [page, expected] of [
-        [first, diff.slice(0, 16_000)],
-        [second, diff.slice(16_000)],
+        [first, Fn.pipe(diff, Str.slice(0, 16_000))],
+        [second, Fn.pipe(diff, Str.slice(16_000))],
       ] as const) {
         const content = page.content[0];
         const span = page.details.displayContent!;
         expect(
-          content?.type === "text" && content.text.slice(span.offset, span.offset + span.length),
+          content?.type === "text" &&
+            Fn.pipe(content.text, Str.slice(span.offset, span.offset + span.length)),
         ).toBe(expected);
       }
       expect(JSON.stringify(first.details)).not.toContain("content");

@@ -1,7 +1,10 @@
 import { supportsFastModel } from "pi-better-openai/fast-models";
 import * as Arr from "effect/Array";
 import * as Equivalence from "effect/Equivalence";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import {
   SUBAGENT_EFFORTS,
   subagentRuntimeSupportsEffort,
@@ -52,9 +55,12 @@ export const isSafeNativeModelSelector = (selector: string): boolean =>
 const splitPiModelSelector = (
   selector: string,
 ): { readonly provider: string; readonly model: string } | undefined => {
-  const slash = selector.indexOf("/");
+  const slash = Option.getOrElse(Fn.pipe(selector, Str.indexOf("/")), () => -1);
   if (slash <= 0 || slash >= selector.length - 1) return undefined;
-  return { provider: selector.slice(0, slash), model: selector.slice(slash + 1) };
+  return {
+    provider: Fn.pipe(selector, Str.slice(0, slash)),
+    model: Fn.pipe(selector, Str.slice(slash + 1)),
+  };
 };
 
 export const isNativeProfileModelSelector = (runtime: string, selector: string): boolean => {
@@ -66,9 +72,11 @@ export const isNativeProfileModelSelector = (runtime: string, selector: string):
     split !== undefined &&
     /^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$/.test(split.provider) &&
     /^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/.test(split.model) &&
-    split.model
-      .split("/")
-      .every((segment) => segment !== "." && segment !== ".." && segment.length > 0)
+    Fn.pipe(
+      split.model,
+      Str.split("/"),
+      Arr.every((segment) => segment !== "." && segment !== ".." && segment.length > 0),
+    )
   );
 };
 
@@ -105,7 +113,7 @@ export const normalizeProfileCandidate = ({
 
 export const cloneProfileCandidates = (
   candidates: ReadonlyArray<ProfileCandidate>,
-): ReadonlyArray<ProfileCandidate> => candidates.map(normalizeProfileCandidate);
+): ReadonlyArray<ProfileCandidate> => Arr.map(candidates, normalizeProfileCandidate);
 
 export const cloneProfileRoute = (route: ProfileRoute): ProfileRoute => ({
   candidates: cloneProfileCandidates(route.candidates),
@@ -170,7 +178,7 @@ const PROFILE_CANDIDATE_KEYS = ["runtime", "model", "effort", "context", "writeI
 
 export const sameProfileCandidate = Equivalence.make<ProfileCandidate>(
   (left, right) =>
-    PROFILE_CANDIDATE_KEYS.every((key) => left[key] === right[key]) &&
+    Arr.every(PROFILE_CANDIDATE_KEYS, (key) => left[key] === right[key]) &&
     (left.openaiFastMode ?? false) === (right.openaiFastMode ?? false),
 );
 export const sameProfileRoute = Equivalence.mapInput(

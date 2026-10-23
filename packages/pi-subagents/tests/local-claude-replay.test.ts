@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import * as Fiber from "effect/Fiber";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
@@ -40,6 +41,8 @@ import {
 } from "./fixtures/backend-supervisor.ts";
 import { objectContaining, stringContaining } from "./support/matchers.ts";
 import { OVERSIZED_IMAGE_DATA, oversizedLine } from "./support/oversized-line.ts";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
 
 const wireJson = Schema.decodeUnknownSync(Schema.Json);
 type ReplayScenario =
@@ -134,7 +137,7 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
     const exited = Deferred.makeUnsafe<{ exitCode: number; stderr: string }>();
     let terminations = 0;
     const sentTexts: string[] = [];
-    let acceptedReport = scenario.startsWith("accepted-report-")
+    let acceptedReport = Fn.pipe(scenario, Str.startsWith("accepted-report-"))
       ? {
           runId: `agent-${scenario}`,
           assignmentEpoch: 12,
@@ -179,7 +182,7 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
                 {
                   name: SUPERVISOR_MCP_REGISTRATION,
                   status: "connected",
-                  tools: SUPERVISOR_MCP_TOOL_NAMES.map((name) => ({ name })),
+                  tools: Arr.map(SUPERVISOR_MCP_TOOL_NAMES, (name) => ({ name })),
                 },
               ],
             },
@@ -391,7 +394,8 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
             cwd: request.cwd,
             session_id: "claude-replay-session",
             model: request.model,
-            tools: SUPERVISOR_MCP_TOOL_NAMES.map(
+            tools: Arr.map(
+              SUPERVISOR_MCP_TOOL_NAMES,
               (tool) => `mcp__${SUPERVISOR_MCP_REGISTRATION}__${tool}`,
             ),
             mcp_servers: [{ name: SUPERVISOR_MCP_REGISTRATION, status: "connected" }],
@@ -880,7 +884,7 @@ describe("local Claude replay classification", () => {
         yield* close;
         yield* TestClock.adjust("1200 millis");
         const received = yield* Stream.runCollect(Stream.fromQueue(backend.events));
-        expect(received.filter((event) => event.type === "report")).toMatchObject([
+        expect(Arr.filter(received, (event) => event.type === "report")).toMatchObject([
           { assignmentEpoch: 12, text: "Accepted report text" },
         ]);
       }),

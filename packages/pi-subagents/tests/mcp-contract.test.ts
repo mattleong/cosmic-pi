@@ -1,3 +1,4 @@
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
@@ -8,6 +9,7 @@ import {
   SupervisorReportTextSchema,
 } from "../src/supervisor/protocol.ts";
 import { decodeSupervisorToolCall } from "../src/supervisor/tool-call.ts";
+import * as Str from "effect/String";
 
 const CONTACT = "agent_contact_parent";
 const REPORT = "agent_submit_report";
@@ -39,11 +41,18 @@ describe("supervisor MCP arguments", () => {
   });
 
   it("names the limit a too-long argument exceeds, from the schema that rejected it", () => {
-    const message = problem("agent_send", { to: "main", message: "x".repeat(131_073) });
+    const message = problem("agent_send", {
+      to: "main",
+      message: Fn.pipe("x", Str.repeat(131_073)),
+    });
     expect(message).toContain("message");
     expect(message).toContain("131,072");
-    expect(problem(CONTACT, { kind: "progress", message: "x".repeat(65_537) })).toContain("65,536");
-    expect(problem("agent_send", { to: "a".repeat(81), message: "Hi." })).toContain("80");
+    expect(
+      problem(CONTACT, { kind: "progress", message: Fn.pipe("x", Str.repeat(65_537)) }),
+    ).toContain("65,536");
+    expect(problem("agent_send", { to: Fn.pipe("a", Str.repeat(81)), message: "Hi." })).toContain(
+      "80",
+    );
     const ids = Array.from({ length: 13 }, (_, index) => `agent-${index + 1}`);
     expect(problem("agent_read", { agentIds: ids })).toContain("12");
     expect(problem("agent_list", { agentIds: ids })).toContain("12");
@@ -69,10 +78,14 @@ describe("supervisor MCP arguments", () => {
   });
 
   it("accepts contact messages as long as a Pi child's, which the root cuts for storage", () => {
-    expect(decoded(CONTACT, { kind: "warning", message: "x".repeat(65_536) })).toMatchObject({
+    expect(
+      decoded(CONTACT, { kind: "warning", message: Fn.pipe("x", Str.repeat(65_536)) }),
+    ).toMatchObject({
       kind: "warning",
     });
-    expect(decoded("agent_send", { to: "agent-1", message: "x".repeat(131_072) })).toMatchObject({
+    expect(
+      decoded("agent_send", { to: "agent-1", message: Fn.pipe("x", Str.repeat(131_072)) }),
+    ).toMatchObject({
       kind: "agent_send",
     });
   });
@@ -106,7 +119,7 @@ describe("supervisor MCP arguments", () => {
   });
 
   it("accepts a report at the cap, even behind a long blank line, and refuses a longer one", () => {
-    const atCap = `${" ".repeat(MAX_SUPERVISOR_MCP_REPORT_CHARS - 1)}x`;
+    const atCap = `${Fn.pipe(" ", Str.repeat(MAX_SUPERVISOR_MCP_REPORT_CHARS - 1))}x`;
     expect(Result.isSuccess(decodeSupervisorToolCall(REPORT, report("delivery-1", atCap)))).toBe(
       true,
     );
@@ -119,15 +132,17 @@ describe("supervisor MCP arguments", () => {
       Result.isSuccess(decodeSupervisorToolCall(REPORT, report("delivery-1", text))) &&
       Option.isSome(Schema.decodeOption(SupervisorReportTextSchema)(text));
     const started = performance.now();
-    expect(decodes(" ".repeat(MAX_SUPERVISOR_MCP_REPORT_CHARS))).toBe(false);
-    expect(decodes(`${" ".repeat(MAX_SUPERVISOR_MCP_REPORT_CHARS - 2)}\nx`)).toBe(true);
+    expect(decodes(Fn.pipe(" ", Str.repeat(MAX_SUPERVISOR_MCP_REPORT_CHARS)))).toBe(false);
+    expect(decodes(`${Fn.pipe(" ", Str.repeat(MAX_SUPERVISOR_MCP_REPORT_CHARS - 2))}\nx`)).toBe(
+      true,
+    );
     // A pattern that rescans the line from every start takes minutes here.
     expect(performance.now() - started).toBeLessThan(2_000);
   });
 
   it("fits a report at the cap in one supervisor channel line under worst-case escaping", () => {
     // Six bytes per character, with generous room for the request envelope and its IDs.
-    const encoded = JSON.stringify("\u0001".repeat(MAX_SUPERVISOR_MCP_REPORT_CHARS));
+    const encoded = JSON.stringify(Fn.pipe("\u0001", Str.repeat(MAX_SUPERVISOR_MCP_REPORT_CHARS)));
     expect(new TextEncoder().encode(encoded).length + 64 * 1024).toBeLessThan(
       MAX_SUPERVISOR_CHANNEL_LINE_BYTES,
     );

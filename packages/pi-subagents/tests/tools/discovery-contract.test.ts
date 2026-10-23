@@ -7,6 +7,7 @@ import { view } from "../fixtures/run-view.ts";
 import { effectTest, step } from "../support/effect-test.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import { captureSubagentTools, executeTool } from "./fixtures/tool-harness.ts";
+import * as Arr from "effect/Array";
 
 const privateRun = view({
   id: "parent",
@@ -62,7 +63,7 @@ describe("discovery contracts", () => {
             Effect.succeed({
               agents: [
                 mainListEntry("idle", MAIN_AGENT_ID),
-                ...input.map((run) => runListEntry(run, MAIN_AGENT_ID)),
+                ...Arr.map(input, (run) => runListEntry(run, MAIN_AGENT_ID)),
               ],
               missingIds: [],
             }),
@@ -71,10 +72,10 @@ describe("discovery contracts", () => {
       );
       const result = yield* step(() => executeTool(tools.get("agent_list")!, {}));
       const contract = decodeList(result.structuredContent)!;
-      expect(contract.agents.map((agent) => agent.id)).toEqual([
+      expect(Arr.map(contract.agents, (agent) => agent.id)).toEqual([
         MAIN_AGENT_ID,
         "parent",
-        ...children.map((run) => run.id),
+        ...Arr.map(children, (run) => run.id),
       ]);
       expect(contract.agents[1]).toMatchObject({ parentId: MAIN_AGENT_ID, depth: 1 });
       expect(contract.agents[2]).toMatchObject({ parentId: "parent", depth: 2 });

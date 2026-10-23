@@ -1,4 +1,8 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Match from "effect/Match";
+import * as Option from "effect/Option";
+import * as Rec from "effect/Record";
 import { resolvePiModelSelector, type PiCatalogModel } from "../run/model-catalog.ts";
 import {
   clampSubagentEffort,
@@ -119,7 +123,8 @@ const resolveCandidate = (
   const softEffort = (modelEfforts: ReadonlyArray<SubagentEffort> | undefined) =>
     clampSubagentEffort(
       profileDefaultEffort ?? environment.parentEffort ?? environment.parentModel?.effort ?? "high",
-      subagentRuntimeEfforts(candidate.runtime).filter(
+      Arr.filter(
+        subagentRuntimeEfforts(candidate.runtime),
         (effort) => modelEfforts === undefined || modelEfforts.includes(effort),
       ),
     );
@@ -145,16 +150,19 @@ const resolveCandidate = (
       return skipCandidate(
         resolved.kind === "ambiguous" ? skips.ambiguousCode : skips.unresolvedCode,
         resolved.kind === "ambiguous"
-          ? `${skips.subject} is ambiguous: ${resolved.candidates.join(", ")}.`
+          ? `${skips.subject} is ambiguous: ${Arr.join(resolved.candidates, ", ")}.`
           : `${skips.subject} ${skips.unresolvedPredicate}${
               resolved.nearMatches.length > 0
-                ? `; close matches: ${resolved.nearMatches.join(", ")}`
+                ? `; close matches: ${Arr.join(resolved.nearMatches, ", ")}`
                 : ""
             }.`,
       );
     const resolvedModel = `${resolved.provider}/${resolved.id}`;
-    const catalogModel = environment.availablePiModels.find(
-      (model) => model.provider === resolved.provider && model.id === resolved.id,
+    const catalogModel = Option.getOrUndefined(
+      Arr.findFirst(
+        environment.availablePiModels,
+        (model) => model.provider === resolved.provider && model.id === resolved.id,
+      ),
     );
     const supportedEfforts = catalogModel?.supportedEfforts;
     const inherited = environment.parentContextTokens;
@@ -171,7 +179,7 @@ const resolveCandidate = (
     if (hardEffort !== undefined && supportedEfforts && !supportedEfforts.includes(hardEffort))
       return skipCandidate(
         "pi_effort_unsupported",
-        `Pi model ${resolvedModel} does not support required effort ${hardEffort}; supported efforts: ${supportedEfforts.join(", ") || "none"}.`,
+        `Pi model ${resolvedModel} does not support required effort ${hardEffort}; supported efforts: ${Arr.join(supportedEfforts, ", ") || "none"}.`,
       );
     if (candidate.openaiFastMode && !supportsSubagentFastMode("pi", resolvedModel))
       return skipCandidate(
@@ -238,7 +246,7 @@ const resolveKnownProfileRoute = (
   const attempts: ProfileCandidateAttempt[] = [];
   const skippedCandidates: SkippedProfileCandidate[] = [];
   let pendingSkipped: SkippedProfileCandidate[] = [];
-  route.candidates.forEach((candidate, candidateIndex) => {
+  Arr.forEach(route.candidates, (candidate, candidateIndex) => {
     const result = resolveRouteCandidate(
       candidate,
       candidateIndex,
@@ -260,7 +268,11 @@ const resolveKnownProfileRoute = (
       pendingSkipped.push(result.skipped);
     }
   });
-  const skippedReasons = skippedCandidates.map((candidate) => ` ${candidate.reason}`).join("");
+  const skippedReasons = Fn.pipe(
+    skippedCandidates,
+    Arr.map((candidate) => ` ${candidate.reason}`),
+    Arr.join(""),
+  );
   if (attempts.length > 0)
     return {
       kind: "resolved",
@@ -270,7 +282,7 @@ const resolveKnownProfileRoute = (
     };
   const forkUnavailable =
     skippedCandidates.length > 0 &&
-    skippedCandidates.every((candidate) => candidate.code === "fork_context_unavailable");
+    Arr.every(skippedCandidates, (candidate) => candidate.code === "fork_context_unavailable");
   return {
     kind: "failed",
     code: forkUnavailable ? "fork_context_unavailable" : "profile_no_eligible_model",
@@ -291,7 +303,7 @@ export function resolveProfilePlan(
     return {
       kind: "failed",
       code: "profile_unknown",
-      message: `Unknown subagent profile "${profile}". Available profiles: ${Object.keys(config.profiles).join(", ")}.`,
+      message: `Unknown subagent profile "${profile}". Available profiles: ${Arr.join(Rec.keys(config.profiles), ", ")}.`,
       skippedCandidates: [],
     };
   const route = config.profiles[profile];

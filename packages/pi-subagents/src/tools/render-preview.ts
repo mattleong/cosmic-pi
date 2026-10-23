@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import type { Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import type { TSchema } from "typebox";
@@ -51,14 +53,17 @@ export const textResultBody = (
 ): Component => {
   if (!text) return new Container();
   if (state.isError) return state.expanded ? errorSection(theme, text) : new Container();
-  const lines = text.split("\n");
+  const lines = Str.split(text, "\n");
   if (state.expanded || lines.length <= collapsedLines + 1)
     return new Text(theme.fg("toolOutput", text), 0, 0);
   return new Text(
-    [
-      theme.fg("toolOutput", lines.slice(0, collapsedLines).join("\n")),
-      renderExpansionAffordance(`${lines.length - collapsedLines} more lines`, false, theme),
-    ].join("\n"),
+    Arr.join(
+      [
+        theme.fg("toolOutput", Arr.join(lines.slice(0, collapsedLines), "\n")),
+        renderExpansionAffordance(`${lines.length - collapsedLines} more lines`, false, theme),
+      ],
+      "\n",
+    ),
     0,
     0,
   );

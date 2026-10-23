@@ -22,6 +22,10 @@ import {
   SubagentCapacityError,
   SubagentProcessError,
 } from "../../src/run/errors.ts";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
 
 const completeHistory = (
   service: SubagentServiceContract,
@@ -83,10 +87,13 @@ describe("SubagentService", () => {
         Array.from({ length: 12 }, () => service.start(request({ name: undefined }))),
         { concurrency: "unbounded" },
       );
-      expect(new Set(runs.map((run) => run.id)).size).toBe(12);
-      expect(new Set(runs.map((run) => run.name)).size).toBe(12);
+      expect(new Set(Arr.map(runs, (run) => run.id)).size).toBe(12);
+      expect(new Set(Arr.map(runs, (run) => run.name)).size).toBe(12);
       for (const run of runs) {
-        const ordinal = run.id.slice(run.id.lastIndexOf("-") + 1);
+        const ordinal = Fn.pipe(
+          run.id,
+          Str.slice(Option.getOrElse(Fn.pipe(run.id, Str.lastIndexOf("-")), () => -1) + 1),
+        );
         expect(run.name).toBe(`subagent-${ordinal}`);
       }
     });
@@ -114,12 +121,11 @@ describe("SubagentService", () => {
         fake.controls[0]?.gateRelease(cleanupGate);
         fake.controls[0]?.settle();
         yield* yieldUntil(() =>
-          Boolean(
-            projections
-              .at(-1)
-              ?.runs.some(
-                (candidate) => candidate.id === runs[0]?.id && candidate.state === "completed",
-              ),
+          Option.exists(Arr.last(projections), (projection) =>
+            Arr.some(
+              projection.runs,
+              (candidate) => candidate.id === runs[0]?.id && candidate.state === "completed",
+            ),
           ),
         );
         const blockedDuringCleanup = yield* service
@@ -158,12 +164,14 @@ describe("SubagentService", () => {
       const secondId = afterFailure[1]?.id ?? "";
       const thirdId = afterFailure[2]?.id ?? "";
       expect(afterFailure).toHaveLength(50);
-      expect(afterFailure.find((run) => run.id === firstId)?.cleanup).toMatchObject({
+      expect(
+        Option.getOrUndefined(Arr.findFirst(afterFailure, (run) => run.id === firstId))?.cleanup,
+      ).toMatchObject({
         disposition: "quarantined",
         recovery: "manual",
         diagnostic: { phase: "backend-scope", code: "fixture_reclaim_failed" },
       });
-      expect(afterFailure.some((run) => run.name === "blocked")).toBe(false);
+      expect(Arr.some(afterFailure, (run) => run.name === "blocked")).toBe(false);
       expect(fake.reclaimedRunIds).toEqual([firstId]);
       const retried = yield* service.start(request({ name: "blocked-retry" })).pipe(Effect.flip);
       expect(retried).toMatchObject({ code: "fixture_reclaim_failed" });
@@ -173,9 +181,9 @@ describe("SubagentService", () => {
       expect(recovered.state).toBe("running");
       const retained = yield* runViews(service);
       expect(retained).toHaveLength(50);
-      expect(retained.some((run) => run.id === firstId)).toBe(true);
-      expect(retained.some((run) => run.id === secondId)).toBe(true);
-      expect(retained.some((run) => run.id === thirdId)).toBe(false);
+      expect(Arr.some(retained, (run) => run.id === firstId)).toBe(true);
+      expect(Arr.some(retained, (run) => run.id === secondId)).toBe(true);
+      expect(Arr.some(retained, (run) => run.id === thirdId)).toBe(false);
     });
   });
 

@@ -1,5 +1,9 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
+import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import { escapeControlChars, expandedSection, getTextContent } from "pi-code-previews";
@@ -34,6 +38,7 @@ import {
   runOverviewComponent,
 } from "./render-run-overview.ts";
 import { renderStartReceiptComponent } from "./render-start.ts";
+import { isTextFragment } from "./text-fragments.ts";
 
 type ToolTextContent = ReadonlyArray<{ readonly type: string; readonly text?: string }>;
 
@@ -57,17 +62,18 @@ export const renderSubagentInputContent = (
   theme: Theme,
 ): Component => {
   if (!args) return new Text("", 0, 0);
-  const lines = Object.entries(args).map(
+  const lines = Arr.map(
+    Rec.toEntries(args),
     ([key, value]) => `${key}: ${Predicate.isString(value) ? value : JSON.stringify(value)}`,
   );
-  return new Text(theme.fg("toolOutput", escapeControlChars(lines.join("\n"))), 0, 0);
+  return new Text(theme.fg("toolOutput", escapeControlChars(Arr.join(lines, "\n"))), 0, 0);
 };
 
 const awaitScope = (details: SubagentAwaitDetails) => {
-  const awaitedRunIds = new Set(details.awaitedRunIds ?? details.cards.map((card) => card.id));
+  const awaitedRunIds = new Set(details.awaitedRunIds ?? Arr.map(details.cards, (card) => card.id));
   return {
     hierarchy: { awaitedRunIds, contextOmitted: details.contextOmitted },
-    targets: details.cards.filter((card) => awaitedRunIds.has(card.id)),
+    targets: Arr.filter(details.cards, (card) => awaitedRunIds.has(card.id)),
   };
 };
 
@@ -155,14 +161,16 @@ const workspaceDisplayText = (
     span.length > raw.length - span.offset
   )
     return undefined;
-  return [
-    receipt.workspaceId,
-    receipt.revisionId,
-    receipt.preparationId,
-    raw.slice(span.offset, span.offset + span.length),
-  ]
-    .filter(Boolean)
-    .join("\n");
+  return Fn.pipe(
+    [
+      receipt.workspaceId,
+      receipt.revisionId,
+      receipt.preparationId,
+      Fn.pipe(raw, Str.slice(span.offset, span.offset + span.length)),
+    ],
+    Arr.filter(isTextFragment),
+    Arr.join("\n"),
+  );
 };
 
 const renderWorkspaceContent = (
@@ -216,7 +224,8 @@ const renderExpandedRunCards = (
   theme: Theme,
 ): Component => {
   const scope = projection.action === "await" ? awaitScope(projection) : undefined;
-  const sections = expandedRunReportSections(scope?.targets ?? projection.cards).filter(
+  const sections = Arr.filter(
+    expandedRunReportSections(scope?.targets ?? projection.cards),
     (section) => section.kind === "report",
   );
   const container = new Container();

@@ -22,6 +22,10 @@ import {
   stoppedWriter,
   workspaceFixture,
 } from "./fixtures/workspace-engine.ts";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 
 type Fixture = ReturnType<typeof workspaceFixture>;
 
@@ -53,7 +57,9 @@ const listed = (service: SubagentServiceContract, workspaceId: string) =>
     .workspaceList()
     .pipe(
       Effect.map((listing) =>
-        listing.records.find((entry) => entry.handle.workspaceId === workspaceId),
+        Option.getOrUndefined(
+          Arr.findFirst(listing.records, (entry) => entry.handle.workspaceId === workspaceId),
+        ),
       ),
     );
 
@@ -233,15 +239,17 @@ describe("writer workspace lifecycle", () => {
     const f = workspaceFixture({
       writerLeases: leasesWith((base) => ({
         canonicalize: (cwd) =>
-          base
-            .canonicalize(cwd)
-            .pipe(
-              Effect.map((identity) =>
-                replaced && cwd.startsWith("/private/")
-                  ? { ...identity, filesystemIdentity: "dev:2;ino:3", digest: "f".repeat(64) }
-                  : identity,
-              ),
+          base.canonicalize(cwd).pipe(
+            Effect.map((identity) =>
+              replaced && Fn.pipe(cwd, Str.startsWith("/private/"))
+                ? {
+                    ...identity,
+                    filesystemIdentity: "dev:2;ino:3",
+                    digest: Fn.pipe("f", Str.repeat(64)),
+                  }
+                : identity,
             ),
+          ),
       })),
     });
     return withService(f.layer, function* (service) {

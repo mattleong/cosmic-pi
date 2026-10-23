@@ -1,9 +1,13 @@
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { formatElapsed, formatRelativeAge, sanitizeTerminalLine } from "pi-cosmic-core";
 
 const MAX_SESSION_DISPLAY_AGE = 7 * 24 * 60 * 60 * 1_000;
 
-export const shortRunId = (id: string): string => (id.length <= 14 ? id : `…${id.slice(-13)}`);
+export const shortRunId = (id: string): string =>
+  id.length <= 14 ? id : `…${Fn.pipe(id, Str.slice(-13))}`;
 
 export const duplicateRunNames = (
   runs: Iterable<{ readonly name: string }>,
@@ -43,9 +47,11 @@ export const projectRunRoutePresentation = (run: RunRoutePresentationInput) => {
   const profile = sanitizeTerminalLine(run.profile ?? "generalist");
   const hostRuntime = `local/${sanitizeTerminalLine(run.runtime ?? "pi")}`;
   const providerModel = sanitizeTerminalLine(run.model);
-  const providerSeparator = providerModel.indexOf("/");
+  const providerSeparator = Option.getOrElse(Fn.pipe(providerModel, Str.indexOf("/")), () => -1);
   const modelName =
-    providerSeparator < 0 ? providerModel : providerModel.slice(providerSeparator + 1);
+    providerSeparator < 0
+      ? providerModel
+      : Fn.pipe(providerModel, Str.slice(providerSeparator + 1));
   const effort = sanitizeTerminalLine(run.effort);
   const fast = run.openaiFastMode ? " ⚡" : "";
   const override = run.modelOverride ? " · override" : "";

@@ -1,4 +1,5 @@
 import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import type { BackendAssistantTerminal } from "../backend/model.ts";
 import {
   isInactiveRunRecord,
@@ -58,10 +59,12 @@ const PARTIAL_OUTPUT_CHARS = 2_000;
 
 // The failed attempt's own text, so the parent can judge the failure before retrying.
 export const partialOutput = (finalText: string | undefined): string => {
-  const text = finalText?.trim();
+  const text = finalText === undefined ? undefined : Str.trim(finalText);
   if (!text) return "";
   const shown =
-    text.length > PARTIAL_OUTPUT_CHARS ? `${text.slice(0, PARTIAL_OUTPUT_CHARS)}…` : text;
+    text.length > PARTIAL_OUTPUT_CHARS
+      ? `${Fn.pipe(text, Str.slice(0, PARTIAL_OUTPUT_CHARS))}…`
+      : text;
   return ` Partial output before the failure: ${shown}`;
 };
 

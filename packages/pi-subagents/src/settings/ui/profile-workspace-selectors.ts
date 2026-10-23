@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { PROFILE_DEFINITIONS } from "../../profiles/definitions.ts";
 import { PROFILE_IDS, type ProfileCandidate, type ProfileId } from "../../profiles/model.ts";
@@ -93,14 +96,19 @@ const currentFieldValue = (
 export const candidateFieldSelector = (
   options: CandidateFieldSelectorOptions,
 ): SearchableSelectPage<string> => {
-  const row = candidateFieldRows(
-    options.candidate,
-    options.profile,
-    options.parentEffort,
-    options.parentModel,
-    true,
-  ).find((entry) => entry.field === options.field);
-  const label = row?.label.trim() ?? options.field;
+  const row = Option.getOrUndefined(
+    Arr.findFirst(
+      candidateFieldRows(
+        options.candidate,
+        options.profile,
+        options.parentEffort,
+        options.parentModel,
+        true,
+      ),
+      (entry) => entry.field === options.field,
+    ),
+  );
+  const label = row === undefined ? options.field : Str.trim(row.label);
   const current = currentFieldValue(options.candidate, options.field);
   const changeOptions = {
     supportedEfforts: options.supportedEfforts,
@@ -111,10 +119,11 @@ export const candidateFieldSelector = (
   return new SearchableSelectPage<string>({
     ...selectHost(options),
     breadcrumb: `${shortTargetLabel(options.target)} · ${options.profile} · ${profileRouteOptionLabel(options.candidateIndex)} · ${label}`,
-    title: `Choose ${label.toLowerCase()}`,
+    title: `Choose ${Str.toLowerCase(label)}`,
     subtitle: `${targetLabel(options.target)} · current: ${row?.value ?? current}`,
-    choices: candidateFieldChoices(options.candidate, options.field, changeOptions).map((choice) =>
-      selectChoice(choice.value, choice.label, choice.description, choice.value),
+    choices: Arr.map(
+      candidateFieldChoices(options.candidate, options.field, changeOptions),
+      (choice) => selectChoice(choice.value, choice.label, choice.description, choice.value),
     ),
     current,
     notice: options.notice,
@@ -146,13 +155,15 @@ export const routeActionsSelector = (
     breadcrumb: `${shortTargetLabel(options.target)} · ${options.profile} · ${profileRouteOptionLabel(options.candidateIndex)} · Actions`,
     title: `Manage ${profileRouteOptionLabel(options.candidateIndex)} · ${options.profile}`,
     subtitle: targetLabel(options.target),
-    choices: choices.map((choice) =>
+    choices: Arr.map(choices, (choice) =>
       selectChoice(choice.action, choice.label, choice.description, choice.action),
     ),
     current: "",
     emptyText: "No actions are available",
     select: (value: string) => {
-      const choice = choices.find((entry) => entry.action === value);
+      const choice = Option.getOrUndefined(
+        Arr.findFirst(choices, (entry) => entry.action === value),
+      );
       if (choice) options.select(choice.action);
     },
     cancel: options.cancel,
@@ -176,7 +187,7 @@ export const profileSearchSelector = (
     breadcrumb: targetLabel(options.target),
     title: "Search profiles",
     subtitle: targetLabel(options.target),
-    choices: PROFILE_IDS.map((profile) => {
+    choices: Arr.map(PROFILE_IDS, (profile) => {
       const summary = targetProfilePrimarySummary(options.inspection, options.target, profile);
       return selectChoice(
         profile,
@@ -192,7 +203,7 @@ export const profileSearchSelector = (
     cancelBehavior: "close",
     emptyText: "No matching profiles",
     select: (value: string) => {
-      const profile = PROFILE_IDS.find((entry) => entry === value);
+      const profile = Option.getOrUndefined(Arr.findFirst(PROFILE_IDS, (entry) => entry === value));
       if (profile) options.select(profile);
     },
     cancel: options.cancel,

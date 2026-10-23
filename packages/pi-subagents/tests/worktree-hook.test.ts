@@ -5,6 +5,8 @@ import * as os from "node:os";
 import { nodeFsPromises as fs, nodePath as path } from "./support/node-builtins.ts";
 import { runWorktreeHook, type WorktreeHookInput } from "../src/boundary/worktree-hook.ts";
 import { capturedWarnings, unconfirmedShellCleanup } from "./support/unconfirmed-hook-cleanup.ts";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
 
 const environment = { PATH: "/usr/bin:/bin", GIT_DIR: "/parent/.git" };
 const input = (worktreePath: string): WorktreeHookInput => ({
@@ -34,7 +36,7 @@ describe("worktree hook", () => {
       );
       expect(received).toEqual(input(tree));
       const cwd = yield* Effect.promise(() => fs.readFile(path.join(tree, "cwd.txt"), "utf8"));
-      expect(cwd.trim()).toBe(yield* Effect.promise(() => fs.realpath(tree)));
+      expect(Str.trim(cwd)).toBe(yield* Effect.promise(() => fs.realpath(tree)));
       yield* Effect.promise(() => fs.rm(tree, { recursive: true, force: true }));
     }),
   );
@@ -69,7 +71,7 @@ describe("worktree hook", () => {
           run("exit 0").pipe(Effect.exit),
           run("exit 3").pipe(Effect.exit),
         ]).pipe(Effect.provide(layer), Effect.ensuring(Effect.sync(() => spy.mockRestore())));
-        expect(outcomes.map((exit) => exit._tag)).toEqual(["Success", "Failure"]);
+        expect(Arr.map(outcomes, (exit) => exit._tag)).toEqual(["Success", "Failure"]);
         expect(workspaceIds).toEqual(["workspace-1", "workspace-1"]);
       }),
   );

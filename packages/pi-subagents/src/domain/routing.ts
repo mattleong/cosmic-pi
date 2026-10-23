@@ -1,5 +1,8 @@
+import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core";
 
 export type SubagentContextMode = "fresh" | "fork";
@@ -41,10 +44,12 @@ export const clampSubagentEffort = (
 ): SubagentEffort => {
   if (supported.includes(effort)) return effort;
   const index = SUBAGENT_EFFORTS.indexOf(effort);
-  return (
-    SUBAGENT_EFFORTS.slice(index + 1).find((candidate) => supported.includes(candidate)) ??
-    SUBAGENT_EFFORTS.slice(0, index).findLast((candidate) => supported.includes(candidate)) ??
-    effort
+  return Fn.pipe(
+    Arr.findFirst(SUBAGENT_EFFORTS.slice(index + 1), (candidate) => supported.includes(candidate)),
+    Option.orElse(() =>
+      Arr.findLast(SUBAGENT_EFFORTS.slice(0, index), (candidate) => supported.includes(candidate)),
+    ),
+    Option.getOrElse(() => effort),
   );
 };
 
@@ -52,7 +57,9 @@ export const decodeSubagentEffort = Fn.flow(
   decodeUnknownOrUndefined(Schema.String),
   (text): SubagentEffort | undefined => {
     if (text === undefined) return undefined;
-    const normalized = text.trim().toLowerCase();
-    return SUBAGENT_EFFORTS.find((effort) => effort === normalized);
+    const normalized = Fn.pipe(text, Str.trim, Str.toLowerCase);
+    return Option.getOrUndefined(
+      Arr.findFirst(SUBAGENT_EFFORTS, (effort) => effort === normalized),
+    );
   },
 );

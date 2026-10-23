@@ -4,11 +4,14 @@ import type {
   Theme,
 } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import { subagentProjectionBridge } from "../src/boundary/host-ui.ts";
 import { extensionContextFixture, plainTheme, tuiFixture } from "pi-cosmic-core/testing";
 import { RECENT_MESSAGE_WINDOW_MS } from "../src/ui/activity-panel.ts";
 import { projectionOf, view } from "./fixtures/run-view.ts";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 
 type WidgetFactory = (tui: TUI, theme: Theme) => Component & { dispose?(): void };
 
@@ -38,7 +41,7 @@ const quietBridge = () =>
 const captureFactory = () => {
   let factory: WidgetFactory | undefined;
   const setWidget = vi.fn((_key: string, content: WidgetFactory | string[] | undefined) => {
-    if (content !== undefined && !Array.isArray(content)) factory = content;
+    if (content !== undefined && !Arr.isArray(content)) factory = content;
   });
   return { getFactory: () => factory, setWidget };
 };
@@ -71,7 +74,7 @@ describe("subagent activity widget host", () => {
     expect(stopTicker).toHaveBeenCalledOnce();
     expect(bridge.bindToolPresentation().isLiveHierarchyAvailable()).toBe(false);
     expect(component?.render(100)).toEqual([]);
-    expect(setWidget.mock.calls.some(([, content]) => content === undefined)).toBe(true);
+    expect(Arr.some(setWidget.mock.calls, ([, content]) => content === undefined)).toBe(true);
     expect(setStatus.mock.calls.at(-1)?.[1]).toBeUndefined();
   });
   it("restores fallback ownership when the host disposes the widget", () => {
@@ -120,7 +123,7 @@ describe("subagent activity widget host", () => {
 
     currentRelease();
     expect(component?.render(100)).not.toEqual(current);
-    expect(first.setWidget.mock.calls.some(([, content]) => content === undefined)).toBe(true);
+    expect(Arr.some(first.setWidget.mock.calls, ([, content]) => content === undefined)).toBe(true);
     bridge.clear();
   });
 
@@ -157,7 +160,9 @@ describe("subagent activity widget host", () => {
     );
     bridge.setContext(context(setWidget));
     const component = getFactory()?.(tui(), plainTheme);
-    const shows = () => component?.render(120).some((line) => line.includes("ping from talker"));
+    assert(component !== undefined);
+    const shows = () =>
+      Arr.some(component.render(120), (line) => Fn.pipe(line, Str.includes("ping from talker")));
 
     expect(shows()).toBe(true);
     now += RECENT_MESSAGE_WINDOW_MS + 1_000;

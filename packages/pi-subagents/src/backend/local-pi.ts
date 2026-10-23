@@ -5,6 +5,7 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as Predicate from "effect/Predicate";
+import * as Str from "effect/String";
 import {
   type ChildProcessHandle,
   type ChildProcessContract,
@@ -84,7 +85,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
 
   const awaitExit = child.awaitExit.pipe(
     Effect.map((exit) => {
-      const stderr = exit.stderr.trim();
+      const stderr = Str.trim(exit.stderr);
       const exited = `Subagent process exited${exit.exitCode === null ? "" : ` with code ${exit.exitCode}`}${exit.signal ? ` (${exit.signal})` : ""}.`;
       const missingModel = MODEL_NOT_FOUND.exec(stderr)?.[0];
       if (!missingModel)

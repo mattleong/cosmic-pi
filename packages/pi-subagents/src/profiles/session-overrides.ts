@@ -1,6 +1,8 @@
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
+import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import { decodeUnknownOrUndefined, freezeSnapshot } from "pi-cosmic-core";
 import type { ResolvedProfileSetSelection, ResolvedSubagentConfig } from "../config/options.ts";
@@ -159,7 +161,7 @@ const isDetachedBaselineProvenanceValid = (baseline: SessionProfileBaseline): bo
     origin.scope !== "builtin" && origin.invalid === true
       ? [origin.scope === "global" ? "global-invalid" : "project-invalid"]
       : DETACHED_BASELINE_SOURCES[origin.scope];
-  return PROFILE_IDS.every((profile) => {
+  return Arr.every(PROFILE_IDS, (profile) => {
     const source = baseline.profileSources[profile];
     const route = baseline.profiles[profile];
     if (!allowed.includes(source)) return false;
@@ -329,9 +331,10 @@ export const replaceSessionProfileSnapshot = (
     if (!baseline)
       return "The replacement profile baseline has invalid routes or provenance and was not applied.";
     const unchanged =
-      Object.keys(snapshot.overrides).length === 0 &&
+      Rec.isEmptyReadonlyRecord<string, unknown>(snapshot.overrides) &&
       sameOrigin(snapshot.baseline.origin, baseline.origin) &&
-      PROFILE_IDS.every(
+      Arr.every(
+        PROFILE_IDS,
         (profile) =>
           snapshot.baseline.profileSources[profile] === baseline.profileSources[profile] &&
           sameProfileRoute(snapshot.baseline.profiles[profile], baseline.profiles[profile]),
@@ -347,7 +350,7 @@ export const patchSessionNestingSnapshot = (
     const decoded =
       patch.nesting === undefined ? undefined : decodeSubagentNestingOverrides(patch.nesting);
     // An override without fields inherits the whole policy.
-    const nesting = decoded && Object.keys(decoded).length > 0 ? decoded : undefined;
+    const nesting = decoded && Rec.size<string, unknown>(decoded) > 0 ? decoded : undefined;
     if (patch.nesting !== undefined && !decoded)
       return "The nesting policy is invalid and was not applied.";
     return snapshot.nesting?.maxDirectChildren === nesting?.maxDirectChildren &&

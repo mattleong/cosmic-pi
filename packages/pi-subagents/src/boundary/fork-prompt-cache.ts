@@ -1,6 +1,7 @@
 import { getCurrentTools, type Api, type Model, type SystemMessage } from "@earendil-works/pi-ai";
 import type { ContextWithSystemEvent, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Schema from "effect/Schema";
+import * as Arr from "effect/Array";
 import { invokeHostCallback } from "pi-cosmic-core";
 
 export const FORK_PROMPT_CACHE_KEY_ENV = "PI_SUBAGENT_PROMPT_CACHE_KEY";
@@ -49,7 +50,7 @@ export const forkPromptCacheRoute = (
 };
 
 export const forkPromptCacheKey = (parentSessionId: string): string =>
-  Array.from(parentSessionId).slice(0, MAX_PROMPT_CACHE_KEY_CHARS).join("");
+  Arr.join(Array.from(parentSessionId).slice(0, MAX_PROMPT_CACHE_KEY_CHARS), "");
 
 const isSystemMessage = (message: RequestMessage) => message.role === "system";
 
@@ -58,8 +59,8 @@ const withoutInheritedTools = (
   inherited: ReadonlySet<string>,
 ): SystemMessage => {
   const { toolsAdded, toolsRemoved, ...rest } = message;
-  const added = toolsAdded?.filter((tool) => !inherited.has(tool.name)) ?? [];
-  const removed = toolsRemoved?.filter((tool) => !inherited.has(tool.name)) ?? [];
+  const added = Arr.filter(toolsAdded ?? [], (tool) => !inherited.has(tool.name));
+  const removed = Arr.filter(toolsRemoved ?? [], (tool) => !inherited.has(tool.name));
   if (added.length === (toolsAdded?.length ?? 0) && removed.length === (toolsRemoved?.length ?? 0))
     return message;
   return {
@@ -83,12 +84,18 @@ const keepInheritedToolDeclarations = (
   const head = messages[0];
   if (!head || !isSystemMessage(head) || head.timestamp >= forkedAt) return undefined;
   const inherited = new Set(
-    getCurrentTools(
-      messages.filter(isSystemMessage).filter((message) => message.timestamp < forkedAt),
-    ).map((tool) => tool.name),
+    Arr.map(
+      getCurrentTools(
+        Arr.filter(
+          Arr.filter(messages, isSystemMessage),
+          (message) => message.timestamp < forkedAt,
+        ),
+      ),
+      (tool) => tool.name,
+    ),
   );
   let changed = false;
-  const projected = messages.map((message) => {
+  const projected = Arr.map(messages, (message) => {
     if (!isSystemMessage(message) || message.timestamp < forkedAt) return message;
     const kept = withoutInheritedTools(message, inherited);
     if (kept !== message) changed = true;

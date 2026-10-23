@@ -31,6 +31,7 @@ import type { JsonValue } from "pi-cosmic-core";
 import { extensionApiFixture, extensionContextFixture, modelFixture } from "pi-cosmic-core/testing";
 import { view } from "../../fixtures/run-view.ts";
 import { maybe } from "../../support/effect-test.ts";
+import * as Arr from "effect/Array";
 
 export { view };
 
@@ -123,7 +124,7 @@ export type CaptureOptions = {
 
 const textResult = <Details>(result: AgentToolResult<Details>): CapturedToolResult => ({
   ...result,
-  content: result.content.filter((part) => part.type === "text"),
+  content: Arr.filter(result.content, (part) => part.type === "text"),
 });
 
 const capturedTool = (tool: RegisteredTool): CapturedTool => ({

@@ -1,10 +1,11 @@
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
-import { hasObjectRuntimeType, runtimeTypeName } from "pi-cosmic-core";
+import { hasObjectRuntimeType, indexOfFrom, runtimeTypeName } from "pi-cosmic-core";
 import { connect } from "node:net";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Queue from "effect/Queue";
@@ -44,6 +45,8 @@ import {
   SupervisorRpcGroup,
 } from "../src/supervisor/protocol.ts";
 import { anything, stringContaining } from "./support/matchers.ts";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
 
 type JsonRpcValue = Schema.Json;
 interface JsonRpcObject {
@@ -148,10 +151,10 @@ class RpcClient {
     this.child = child;
     child.stdout.on("data", (chunk: Buffer) => {
       this.#buffer += chunk.toString("utf8");
-      let newline = this.#buffer.indexOf("\n");
+      let newline = indexOfFrom(this.#buffer, "\n", 0);
       while (newline >= 0) {
-        const line = this.#buffer.slice(0, newline);
-        this.#buffer = this.#buffer.slice(newline + 1);
+        const line = Fn.pipe(this.#buffer, Str.slice(0, newline));
+        this.#buffer = Fn.pipe(this.#buffer, Str.slice(newline + 1));
         const value = decodeJsonLine(line);
         this.messages.push(value);
         if (
@@ -170,7 +173,7 @@ class RpcClient {
           this.#waiters.delete(waiter);
           waiter.resolve(value);
         }
-        newline = this.#buffer.indexOf("\n");
+        newline = indexOfFrom(this.#buffer, "\n", 0);
       }
     });
   }
@@ -202,7 +205,7 @@ class RpcClient {
   next(predicate: (value: JsonRpcValue) => boolean) {
     return bounded(
       Effect.callback<JsonRpcValue>((resume) => {
-        const existing = this.messages.find(predicate);
+        const existing = Option.getOrUndefined(Arr.findFirst(this.messages, predicate));
         if (existing) {
           resume(Effect.succeed(existing));
           return Effect.void;
@@ -369,7 +372,7 @@ const SAVED_REPORT_AGENT = "agent-r1-8";
 const SAVED_REPORT_PATH = "/agent/subagents/reports/session-1/agent-r1-8-1-file.md";
 const ASKING_AGENT = "agent-r1-7";
 // A whole retained question, then warnings long enough to push the card past its bound.
-const ASKING_QUESTION = `${"Which schema? ".repeat(1_160)}QUESTION-END`;
+const ASKING_QUESTION = `${Fn.pipe("Which schema? ", Str.repeat(1_160))}QUESTION-END`;
 const askingRun = (selfId: string) =>
   view({
     id: ASKING_AGENT,
@@ -377,8 +380,8 @@ const askingRun = (selfId: string) =>
     state: "waiting_for_parent",
     parentRunId: selfId,
     question: { requestId: "q-1", message: ASKING_QUESTION },
-    childWarning: `${"child ".repeat(2_700)}CHILD-END`,
-    systemWarning: `${"system ".repeat(1_160)}SYSTEM-END`,
+    childWarning: `${Fn.pipe("child ", Str.repeat(2_700))}CHILD-END`,
+    systemWarning: `${Fn.pipe("system ", Str.repeat(1_160))}SYSTEM-END`,
   });
 
 // Stands in for the root's operations, already bound to the channel's run as the caller.
@@ -404,7 +407,8 @@ const recordingAgents = (selfId: string) => {
               self: true,
             },
           ],
-          missingIds: ids?.filter((id) => id !== "main" && id !== selfId) ?? [],
+          missingIds:
+            ids === undefined ? [] : Arr.filter(ids, (id) => id !== "main" && id !== selfId),
         };
       }),
     send: (to, message) =>
@@ -429,7 +433,7 @@ const recordingAgents = (selfId: string) => {
       Effect.sync(() => {
         calls.push({ kind: "read", ids });
         return {
-          agents: ids.map((id) =>
+          agents: Arr.map(ids, (id) =>
             id === ASKING_AGENT
               ? {
                   kind: "run" as const,
@@ -480,7 +484,7 @@ const recordingAgents = (selfId: string) => {
 const toolText = (value: JsonRpcValue) =>
   Predicate.isObject(value) &&
   Predicate.isObject(value.result) &&
-  Array.isArray(value.result.content) &&
+  Arr.isArray(value.result.content) &&
   Predicate.isObject(value.result.content[0]) &&
   Predicate.isString(value.result.content[0].text)
     ? { text: value.result.content[0].text, isError: value.result.isError === true }
@@ -543,7 +547,8 @@ describe("private supervisor channel", () => {
     function* () {
       const runId = "agent-supervisor-late-mkdir";
       const { agentDirectory, scope } = yield* stageAgentHome("pi-subagents-supervisor-mkdir-");
-      const isStateDirectory = (path: string) => nodePath.basename(path).startsWith(`${runId}-`);
+      const isStateDirectory = (path: string) =>
+        Fn.pipe(nodePath.basename(path), Str.startsWith(`${runId}-`));
       const mkdirEntered = yield* Deferred.make<string>();
       const mkdirGate = deferredPromise();
       const lateRemoval = yield* Deferred.make<void>();
@@ -1024,7 +1029,7 @@ describe("private supervisor channel", () => {
 
       const forged = yield* connectDirectRpc(handle, {
         ...config,
-        token: SupervisorAuthTokenSchema.make("0".repeat(64)),
+        token: SupervisorAuthTokenSchema.make(Fn.pipe("0", Str.repeat(64))),
       });
       const refusedOpen = yield* forged.client
         .SupervisorOpenSession(forged.auth)
@@ -1042,7 +1047,9 @@ describe("private supervisor channel", () => {
         ),
         { concurrency: "unbounded" },
       );
-      expect(manyResponses.every((value) => value && hasObjectRuntimeType(value))).toBe(true);
+      expect(
+        Arr.every(manyResponses, (value) => Boolean(value) && hasObjectRuntimeType(value)),
+      ).toBe(true);
       for (let index = 0; index < 12; index += 1) yield* takeEvent(handle);
 
       yield* Scope.close(scope, Exit.void);
@@ -1118,7 +1125,8 @@ describe("private supervisor channel", () => {
       // cancellation could have written.
       expect(yield* rpc.ping("ping-after-reply-race")).toMatchObject({ result: {} });
       expect(
-        rpc.messages.filter(
+        Arr.filter(
+          rpc.messages,
           (message) =>
             message !== null &&
             hasObjectRuntimeType(message) &&
@@ -1185,7 +1193,7 @@ describe("private supervisor channel", () => {
       expect(excessTool).toMatchObject({ result: { isError: true } });
       const oversizedString = yield* toolCall(rpc, "oversized-tool", "agent_contact_parent", {
         kind: "progress",
-        message: "x".repeat(64 * 1024 + 1),
+        message: Fn.pipe("x", Str.repeat(64 * 1024 + 1)),
       });
       expect(oversizedString).toMatchObject({
         result: {
@@ -1318,7 +1326,7 @@ describe("private supervisor channel", () => {
       expect(
         yield* fromThread("sub-read", "agent_read", { agentIds: ["main"] }, "sub-thread"),
       ).toMatchObject({ isError: false });
-      expect(fixture.calls.map((call) => call.kind)).toEqual(["list", "read"]);
+      expect(Arr.map(fixture.calls, (call) => call.kind)).toEqual(["list", "read"]);
 
       expect(yield* fromThread("main-send", "agent_send", message, "main-thread")).toMatchObject({
         isError: false,
@@ -1336,7 +1344,7 @@ describe("private supervisor channel", () => {
     const tooMany = Array.from({ length: 13 }, (_, index) => `agent-r1-${index + 1}`);
 
     for (const [id, name, args, problem] of [
-      ["long", "agent_send", { to: "main", message: "x".repeat(131_073) }, "131,072"],
+      ["long", "agent_send", { to: "main", message: Fn.pipe("x", Str.repeat(131_073)) }, "131,072"],
       ["blank", "agent_send", { to: "main", message: "  " }, "message"],
       ["bad-to", "agent_send", { to: "../main", message: "Hi." }, "agent ID"],
       ["many-read", "agent_read", { agentIds: tooMany }, "the limit is 12"],

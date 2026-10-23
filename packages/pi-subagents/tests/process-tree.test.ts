@@ -14,6 +14,9 @@ import {
 } from "../src/boundary/process-tree.ts";
 import { nodeSpawn as spawn } from "./support/node-builtins.ts";
 import { processAlive, waitForDead } from "./support/process-liveness.ts";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
 
 describe("subagent process-tree boundary", () => {
   it.live("kills descendants in the detached process group after its leader exits", () =>
@@ -35,7 +38,7 @@ process.stdout.write(String(child.pid) + "\\n");`,
         output += chunk;
       });
       yield* Effect.promise(() => once(leader, "close"));
-      const grandchildPid = Number(output.trim());
+      const grandchildPid = Number(Str.trim(output));
       expect(Number.isSafeInteger(grandchildPid)).toBe(true);
       yield* Effect.addFinalizer(() => Effect.sync(() => signalProcess(grandchildPid, "SIGKILL")));
       expect(processAlive(grandchildPid)).toBe(true);
@@ -46,17 +49,20 @@ process.stdout.write(String(child.pid) + "\\n");`,
   );
 
   it("finds process groups that owned members started, however deeply nested", () => {
-    const table = [
-      "    2     0     0 S", // Linux kernel processes need not belong to a user process group.
-      "  100     1   100 Ss",
-      "  101   100   100 S",
-      "  200   100   200 Ss",
-      "  201   200   200 S",
-      "  300   201   300 Ss",
-      "  400   101   400 Z",
-      "  500     1   500 S",
-      "  600   500   600 S",
-    ].join("\n");
+    const table = Arr.join(
+      [
+        "    2     0     0 S", // Linux kernel processes need not belong to a user process group.
+        "  100     1   100 Ss",
+        "  101   100   100 S",
+        "  200   100   200 Ss",
+        "  201   200   200 S",
+        "  300   201   300 Ss",
+        "  400   101   400 Z",
+        "  500     1   500 S",
+        "  600   500   600 S",
+      ],
+      "\n",
+    );
     expect(new Set(descendantGroupsFromTable(table, 100))).toEqual(new Set([200, 300]));
   });
 
@@ -106,13 +112,13 @@ setInterval(() => {}, 1000);`,
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {
           signalProcessGroup(leader.pid, "SIGKILL");
-          const commandPid = Number(output.trim());
+          const commandPid = Number(Str.trim(output));
           if (commandPid > 0) signalProcessGroup(commandPid, "SIGKILL");
         }),
       );
-      for (let attempt = 0; attempt < 200 && !output.includes("\n"); attempt++)
+      for (let attempt = 0; attempt < 200 && !Fn.pipe(output, Str.includes("\n")); attempt++)
         yield* Effect.sleep("10 millis");
-      const commandPid = Number(output.trim());
+      const commandPid = Number(Str.trim(output));
       expect(Number.isSafeInteger(commandPid) && commandPid > 0).toBe(true);
       expect(yield* detachedDescendantGroups(leader.pid ?? 0)).toEqual([commandPid]);
 

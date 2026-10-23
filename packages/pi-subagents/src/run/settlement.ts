@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Str from "effect/String";
 import {
   MAX_BACKEND_REPORT_EVIDENCE_CHARS,
   MAX_BACKEND_REPORT_ID_CHARS,
@@ -624,11 +625,12 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
         rawReport.assignmentEpoch <= 0 ||
         !Number.isSafeInteger(rawReport.sequence) ||
         rawReport.sequence <= 0 ||
-        !rawReport.deliveryId.trim() ||
+        !Str.trim(rawReport.deliveryId) ||
         rawReport.deliveryId.length > MAX_BACKEND_REPORT_ID_CHARS ||
         (rawReport.evidence !== undefined &&
           rawReport.evidence.length > MAX_BACKEND_REPORT_EVIDENCE_CHARS) ||
-        !rawReport.text?.trim() ||
+        rawReport.text === undefined ||
+        !Str.trim(rawReport.text) ||
         rawReport.text.length > MAX_BACKEND_REPORT_TEXT_CHARS
       )
         return yield* processError(
@@ -636,7 +638,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
           "backend_report_invalid",
           `Subagent ${record.view.id} emitted an invalid bounded report event.`,
         );
-      const text = sanitizeOutputText(rawReport.text, MAX_BACKEND_REPORT_TEXT_CHARS).trim();
+      const text = Str.trim(sanitizeOutputText(rawReport.text, MAX_BACKEND_REPORT_TEXT_CHARS));
       if (!text)
         return yield* processError(
           "accept report from",
@@ -645,7 +647,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
         );
       return yield* acceptValidatedBackendReport(record, {
         ...rawReport,
-        deliveryId: rawReport.deliveryId.trim(),
+        deliveryId: Str.trim(rawReport.deliveryId),
         text,
       });
     },

@@ -1,7 +1,10 @@
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
-import type { WriterLease } from "../boundary/writer-lease.ts";
+import * as Str from "effect/String";
+import type { CanonicalWriterCwd, WriterLease } from "../boundary/writer-lease.ts";
 import type { WorkspaceHandle } from "../workspace/model.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
 import { isCleanupOwed } from "./internal.ts";
@@ -47,8 +50,11 @@ export function integrationTarget(context: WorkspaceControlContext) {
       // Worktree launches need no check: the engine's source lock orders their snapshots.
       const overlapsTarget = (cwd: string) =>
         isWithin(cwd, sourceRoot) || isWithin(sourceRoot, cwd);
-      return [...state.sharedReservations].some((reservation) => overlapsTarget(reservation.cwd)) ||
-        [...records.values()].some(
+      return Arr.some([...state.sharedReservations], (reservation) =>
+        overlapsTarget(reservation.cwd),
+      ) ||
+        Arr.some(
+          [...records.values()],
           (record) =>
             record.view.writeIntent === "writer" &&
             record.view.writerWorkspaceMode !== "worktree" &&
@@ -81,8 +87,10 @@ export function integrationTarget(context: WorkspaceControlContext) {
     const roots = yield* Effect.forEach([handle.sourceRoot, handle.sourceCwd], (cwd) =>
       leases.canonicalize(cwd).pipe(Effect.mapError(mapWorkspaceError)),
     );
-    const sources = [...new Map(roots.map((cwd) => [cwd.digest, cwd])).values()].toSorted(
-      (left, right) => left.digest.localeCompare(right.digest),
+    const sources = Arr.sort(
+      [...new Map(Arr.map(roots, (cwd) => [cwd.digest, cwd] as const)).values()],
+      (left: CanonicalWriterCwd, right: CanonicalWriterCwd) =>
+        Fn.pipe(left.digest, Str.localeCompare(right.digest)),
     );
     return yield* Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
@@ -112,7 +120,7 @@ export function integrationTarget(context: WorkspaceControlContext) {
           Effect.ensuring(
             Effect.gen(function* () {
               yield* beforeRelease;
-              for (const lease of owned.toReversed())
+              for (const lease of Arr.reverse(owned))
                 yield* leases.release(lease).pipe(
                   Effect.catch(() =>
                     Effect.sync(() => {
@@ -182,7 +190,8 @@ export function workspaceIntegrationOperations(
       leftOutPaths: artifact.revision.uncapturedPaths ?? [],
       preparedCwd: artifact.preparation.cwd,
     };
-    const retainTrees = [...runsWithin(records, [artifact.handle.artifactRoot]).keys()].some(
+    const retainTrees = Arr.some(
+      [...runsWithin(records, [artifact.handle.artifactRoot]).keys()],
       runHoldsCwd,
     );
     let applying = false;

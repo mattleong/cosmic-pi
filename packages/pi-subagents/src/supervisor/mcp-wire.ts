@@ -4,8 +4,10 @@ import * as Exit from "effect/Exit";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Rec from "effect/Record";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import { isJsonObject, runtimeTypeName } from "pi-cosmic-core";
 import { AGENT_TOOL_NAME, CONTACT_PARENT_TOOL_NAME } from "../run/tool-policy.ts";
 import type { SupervisorRpcFailure } from "./protocol.ts";
@@ -83,12 +85,13 @@ const boundedMetadata = (value: Schema.Json, depth = 0): boolean => {
   if (Arr.isArray<Schema.Json>(value))
     return (
       value.length <= MAX_METADATA_ENTRIES &&
-      value.every((entry) => boundedMetadata(entry, depth + 1))
+      Arr.every(value, (entry) => boundedMetadata(entry, depth + 1))
     );
-  const entries = Object.entries(value);
+  const entries = Rec.toEntries(value);
   return (
     entries.length <= MAX_METADATA_ENTRIES &&
-    entries.every(
+    Arr.every(
+      entries,
       ([key, entry]) => key.length <= MAX_METADATA_KEY_CHARS && boundedMetadata(entry, depth + 1),
     )
   );
@@ -97,7 +100,7 @@ const boundedMetadata = (value: Schema.Json, depth = 0): boolean => {
 const boundedText = (maximum: number) =>
   Schema.String.check(
     Schema.isMaxLength(maximum),
-    Schema.makeFilter((text: string) => text.trim().length > 0),
+    Schema.makeFilter((text: string) => Str.trim(text).length > 0),
   );
 /** Request metadata the runtime may attach anywhere, bounded in depth, breadth, and size. */
 const MetadataSchema = Schema.Json.check(Schema.makeFilter((value) => boundedMetadata(value)));

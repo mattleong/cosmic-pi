@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import type { ExtensionAPI, MessageRenderer } from "@earendil-works/pi-coding-agent";
 import { captureCodePreviewPresentationPolicy } from "pi-code-previews";
 import { countLabel, sanitizeTerminalLine } from "pi-cosmic-core";
@@ -39,15 +40,17 @@ const MAX_LISTED_SWEPT = 10;
 
 /** The user-only notice naming the orphaned workspaces the startup sweep discarded. */
 export function orphanSweepNotice(swept: ReadonlyArray<WorkspaceSwept>): string {
-  const listed = swept
-    .slice(0, MAX_LISTED_SWEPT)
-    .map(
-      (entry) =>
-        `- ${entry.workspaceId} (${countLabel(entry.changedPathCount, "changed file")}): ${sanitizeTerminalLine(entry.patchPath)}`,
-    );
-  return [
-    `Discarded ${countLabel(swept.length, "orphaned subagent workspace")} unchanged for 30 days. Each patch is kept for 7 days; apply one with git apply in its checkout.`,
-    ...listed,
-    ...(swept.length > MAX_LISTED_SWEPT ? [`- and ${swept.length - MAX_LISTED_SWEPT} more`] : []),
-  ].join("\n");
+  const listed = Arr.map(
+    swept.slice(0, MAX_LISTED_SWEPT),
+    (entry) =>
+      `- ${entry.workspaceId} (${countLabel(entry.changedPathCount, "changed file")}): ${sanitizeTerminalLine(entry.patchPath)}`,
+  );
+  return Arr.join(
+    [
+      `Discarded ${countLabel(swept.length, "orphaned subagent workspace")} unchanged for 30 days. Each patch is kept for 7 days; apply one with git apply in its checkout.`,
+      ...listed,
+      ...(swept.length > MAX_LISTED_SWEPT ? [`- and ${swept.length - MAX_LISTED_SWEPT} more`] : []),
+    ],
+    "\n",
+  );
 }

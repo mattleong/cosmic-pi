@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { clipText, sanitizeTerminalLine } from "pi-cosmic-core";
 import type { SubagentRuntime } from "../domain/routing.ts";
 
@@ -32,8 +34,8 @@ const MAX_SHOWN_OUTPUT_CHARS = 80;
 const parseCliVersion = (output: string): string | undefined => /\d+\.\d+\.\d+/u.exec(output)?.[0];
 
 const compareVersions = (left: string, right: string): number => {
-  const leftParts = left.split(".").map(Number);
-  const rightParts = right.split(".").map(Number);
+  const leftParts = Arr.map(Str.split(left, "."), Number);
+  const rightParts = Arr.map(Str.split(right, "."), Number);
   for (const [index, part] of leftParts.entries()) {
     const difference = part - (rightParts[index] ?? 0);
     if (difference !== 0) return difference;

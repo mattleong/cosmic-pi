@@ -21,6 +21,7 @@ import {
   runViews,
   withService,
 } from "./fixtures/service-harness.ts";
+import * as Arr from "effect/Array";
 
 const leaseFixture = (
   leases: Parameters<typeof fakeWriterLeaseLayer>[0],
@@ -304,8 +305,8 @@ describe("SubagentService", () => {
         yield* service.start(writer("shared-tests", { task: "Implement auth tests" })),
         yield* service.start(writer("shared-docs", { task: "Document auth" })),
       ];
-      expect(runs.map((run) => run.state)).toEqual(["running", "running", "running"]);
-      expect(new Set(runs.map((run) => run.cwd)).size).toBe(1);
+      expect(Arr.map(runs, (run) => run.state)).toEqual(["running", "running", "running"]);
+      expect(new Set(Arr.map(runs, (run) => run.cwd)).size).toBe(1);
     });
   });
 

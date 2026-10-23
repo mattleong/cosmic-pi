@@ -25,6 +25,10 @@ import {
   withService,
 } from "./fixtures/service-harness.ts";
 import { anyString } from "../support/matchers.ts";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 
 describe("local Pi terminal evidence", () => {
   for (const stopReason of ["error", "stop", undefined] as const) {
@@ -98,7 +102,7 @@ const rawPrimary = () =>
   processError(
     "steer",
     "steer_outcome_uncertain",
-    `Primary acknowledgement failure token=secret-credential \u001b[31m${"x".repeat(9000)}`,
+    `Primary acknowledgement failure token=secret-credential \u001b[31m${Fn.pipe("x", Str.repeat(9000))}`,
   );
 
 const expectSanitized = (text: string | undefined) => {
@@ -179,12 +183,14 @@ describe("SubagentService", () => {
         });
         backend.controls[0]?.offer(nativeReportFrame(id!, 1, 1, "report-during-start", report));
         yield* yieldUntil(() =>
-          Boolean(
-            projections
-              .at(-1)
-              ?.runs[0]?.sessionEvents.some(
+          Arr.last(projections).pipe(
+            Option.flatMap((projection) => Arr.head(projection.runs)),
+            Option.exists((run) =>
+              Arr.some(
+                run.sessionEvents,
                 (event) => event.type === "assistant" && event.text === report,
               ),
+            ),
           ),
         );
         yield* Effect.yieldNow;

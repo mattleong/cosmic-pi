@@ -1,4 +1,5 @@
 import type { NodeChildProcess } from "./support/node-builtins.ts";
+import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Context from "effect/Context";
 import { describe, expect, it } from "@effect/vitest";
@@ -25,6 +26,9 @@ import { backendLaunch } from "./fixtures/backend-supervisor.ts";
 import { scriptedChildProcess } from "./fixtures/scripted-child-process.ts";
 import { stringMatching } from "./support/matchers.ts";
 import { processAlive } from "./support/process-liveness.ts";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 
 const boundary = {
   spawn: vi.fn<ProcessTransportRuntime["spawn"]>(),
@@ -55,7 +59,7 @@ const fixture = () => {
 
 // Three unacknowledged 3 MiB lines exceed the 8 MiB process backlog budget.
 const overflowBacklog = (f: ReturnType<typeof fixture>) => {
-  const line = Buffer.from(`"${"x".repeat(3 * 1024 * 1024)}"\n`);
+  const line = Buffer.from(`"${Fn.pipe("x", Str.repeat(3 * 1024 * 1024))}"\n`);
   for (let i = 0; i < 3; i++) f.stdout.emit("data", line);
 };
 
@@ -164,7 +168,7 @@ describe("shared process transport", () => {
     Effect.gen(function* () {
       const f = fixture();
       const { handle, release } = yield* openNative(f);
-      const line = `"${"x".repeat(3 * 1024 * 1024)}"\n`;
+      const line = `"${Fn.pipe("x", Str.repeat(3 * 1024 * 1024))}"\n`;
       f.stdout.emit("data", Buffer.from(line));
       const first = yield* Queue.take(handle.events);
       f.stdout.emit("data", Buffer.from(line));
@@ -186,7 +190,7 @@ describe("shared process transport", () => {
     Effect.gen(function* () {
       const f = fixture();
       const { handle, release } = yield* openNative(f);
-      f.stdout.emit("data", Buffer.from('{"type":"x"}\n'.repeat(5_000)));
+      f.stdout.emit("data", Buffer.from(Fn.pipe('{"type":"x"}\n', Str.repeat(5_000))));
       expect(boundary.terminate).not.toHaveBeenCalled();
       overflowBacklog(f);
       yield* yieldUntil(() => boundary.terminate.mock.calls.length > 0);
@@ -205,10 +209,13 @@ describe("shared process transport", () => {
       overflowBacklog(f);
       yield* yieldUntil(() => boundary.terminate.mock.calls.length > 0);
       yield* TestClock.adjust("1 second");
-      expect(boundary.terminate.mock.calls.map((call) => call[1])).toEqual(["graceful"]);
+      expect(Arr.map(boundary.terminate.mock.calls, (call) => call[1])).toEqual(["graceful"]);
       yield* TestClock.adjust("1 second");
       yield* yieldUntil(() => boundary.terminate.mock.calls.length === 2);
-      expect(boundary.terminate.mock.calls.map((call) => call[1])).toEqual(["graceful", "force"]);
+      expect(Arr.map(boundary.terminate.mock.calls, (call) => call[1])).toEqual([
+        "graceful",
+        "force",
+      ]);
       yield* release;
     }),
   );
@@ -344,7 +351,10 @@ describe("shared process transport", () => {
       yield* Fiber.join(interrupted);
       expect(f.stdin.destroyed).toBe(true);
       yield* Scope.close(scope, Exit.void);
-      expect(boundary.terminate.mock.calls.map((call) => call[1])).toEqual(["graceful", "force"]);
+      expect(Arr.map(boundary.terminate.mock.calls, (call) => call[1])).toEqual([
+        "graceful",
+        "force",
+      ]);
     }),
   );
 
@@ -359,7 +369,10 @@ describe("shared process transport", () => {
       expect(Cause.squash(cause)).toMatchObject({ code: "cleanup_unconfirmed" });
       expect(f.stdin.destroyed).toBe(true);
       yield* Scope.close(scope, Exit.void);
-      expect(boundary.terminate.mock.calls.map((call) => call[1])).toEqual(["graceful", "force"]);
+      expect(Arr.map(boundary.terminate.mock.calls, (call) => call[1])).toEqual([
+        "graceful",
+        "force",
+      ]);
     }),
   );
 
@@ -378,10 +391,15 @@ describe("shared process transport", () => {
         if (!verifier) return yield* Effect.die("Missing cleanup verifier");
         expect(verifier.canVerify()).toBe(true);
         expect(
-          cause.reasons.map(verifier.diagnostic).find((diagnostic) => diagnostic !== undefined),
+          Option.getOrUndefined(
+            Arr.findFirst(
+              Arr.map(cause.reasons, verifier.diagnostic),
+              (diagnostic) => diagnostic !== undefined,
+            ),
+          ),
         ).toMatchObject({ phase: "process-group" });
         expect(
-          Cause.die(new Error("unrelated finalizer")).reasons.map(verifier.diagnostic),
+          Arr.map(Cause.die(new Error("unrelated finalizer")).reasons, verifier.diagnostic),
         ).toEqual([undefined]);
         const signals = boundary.terminate.mock.calls.length;
         const snapshots = boundary.detachedGroups.mock.calls.length;
@@ -420,9 +438,12 @@ describe("shared process transport", () => {
         expect(f.child.exitCode).toBe(0);
         expect(boundary.terminate).toHaveBeenCalled();
         expect(verifier.canVerify()).toBe(false);
-        const diagnostic = cause.reasons
-          .map(verifier.diagnostic)
-          .find((evidence) => evidence !== undefined);
+        const diagnostic = Option.getOrUndefined(
+          Arr.findFirst(
+            Arr.map(cause.reasons, verifier.diagnostic),
+            (evidence) => evidence !== undefined,
+          ),
+        );
         expect(diagnostic).toMatchObject({
           phase: "descendant-snapshot",
           code: "snapshot_incomplete",
@@ -467,7 +488,12 @@ process.stderr.write(String(command.pid));`;
         const verifier = handle.cleanupVerifier;
         if (!verifier) return yield* Effect.die("Missing cleanup verifier");
         expect(
-          cause.reasons.map(verifier.diagnostic).find((diagnostic) => diagnostic !== undefined),
+          Option.getOrUndefined(
+            Arr.findFirst(
+              Arr.map(cause.reasons, verifier.diagnostic),
+              (diagnostic) => diagnostic !== undefined,
+            ),
+          ),
         ).toMatchObject({ phase: "descendant-snapshot" });
         expect(verifier.canVerify()).toBe(false);
         expect(processAlive(commandPid)).toBe(true);
@@ -495,7 +521,7 @@ describe("Pi transport policy", () => {
       const backend = yield* Fiber.join(pending);
       const delta = '{"type":"message_update","assistantMessageEvent":{"type":"text_delta"}}\n';
       for (let chunk = 0; chunk < 30; chunk++) {
-        f.stdout.emit("data", Buffer.from(delta.repeat(100)));
+        f.stdout.emit("data", Buffer.from(Fn.pipe(delta, Str.repeat(100))));
         yield* Effect.yieldNow;
       }
       f.stdout.emit(
@@ -535,7 +561,7 @@ describe("Pi transport policy", () => {
         type: "proxy_request",
         requestId: "bounded",
         tool: "agent_start",
-        argumentsJson: "x".repeat(2 * 1024 * 1024),
+        argumentsJson: Fn.pipe("x", Str.repeat(2 * 1024 * 1024)),
       };
       f.child.emit("message", contact);
       const first = yield* Queue.take(handle.events);
@@ -586,11 +612,17 @@ describe("Pi transport policy", () => {
         expect((yield* handle.send({ type: "get_state" }).pipe(Effect.flip)).code).toBe(
           "transport_not_sent",
         );
-        yield* handle.send({ type: "prompt", message: "x".repeat(MAX_PROCESS_LINE_BYTES) });
+        yield* handle.send({
+          type: "prompt",
+          message: Fn.pipe("x", Str.repeat(MAX_PROCESS_LINE_BYTES)),
+        });
         expect(f.writes[0]?.length).toBeGreaterThan(MAX_PROCESS_LINE_BYTES);
-        const aggregate = `{"type":"agent_end","messages":[{"role":"toolResult","content":"${"x".repeat(6 * 1024 * 1024)}"}],"willRetry":false}\n`;
+        const aggregate = `{"type":"agent_end","messages":[{"role":"toolResult","content":"${Fn.pipe("x", Str.repeat(6 * 1024 * 1024))}"}],"willRetry":false}\n`;
         for (let offset = 0; offset < aggregate.length; offset += 64 * 1024)
-          f.stdout.emit("data", Buffer.from(aggregate.slice(offset, offset + 64 * 1024)));
+          f.stdout.emit(
+            "data",
+            Buffer.from(Fn.pipe(aggregate, Str.slice(offset, offset + 64 * 1024))),
+          );
         f.stdout.emit("data", Buffer.from('{"type":"agent_settled"}\n'));
         const skipped = yield* Queue.take(handle.events);
         expect(skipped).toMatchObject({

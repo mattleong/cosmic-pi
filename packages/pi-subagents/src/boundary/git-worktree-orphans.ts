@@ -1,6 +1,7 @@
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Arr from "effect/Array";
 import type { CrossProcessLockContract, SafeFile } from "pi-cosmic-core";
 import { OPEN_WORKSPACE_STATUSES } from "../workspace/model.ts";
 import type {
@@ -164,7 +165,8 @@ export const orphanWorkspaceOperations = (engine: OrphanEngine) => {
   }) {
     const now = yield* Clock.currentTimeMillis;
     const { records } = yield* listWorkspaceRecords(registry);
-    return records.filter(
+    return Arr.filter(
+      records,
       (record) =>
         !owned.has(record.handle.workspaceId) &&
         OPEN_WORKSPACE_STATUSES.has(record.status) &&

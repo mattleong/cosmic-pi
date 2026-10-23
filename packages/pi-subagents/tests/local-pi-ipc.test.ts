@@ -13,6 +13,8 @@ import {
   localPiParentIpcChannel,
   type LocalPiIpcPort,
 } from "../src/boundary/local-pi-ipc.ts";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 
 type IpcMessage = Parameters<NodeChildProcess["send"]>[0];
 const childFixture = fileURLToPath(new URL("./fixtures/local-pi-ipc-child.ts", import.meta.url));
@@ -166,14 +168,14 @@ describe("Local Pi IPC boundary", () => {
         Effect.gen(function* () {
           const taken: LocalPiContact[] = [];
           for (let index = 0; index < 4; index += 1) {
-            if (predicates.every((predicate) => taken.some(predicate))) break;
+            if (Arr.every(predicates, (predicate) => Arr.some(taken, predicate))) break;
             taken.push(yield* Queue.take(contacts).pipe(Effect.timeout("5 seconds")));
           }
           return taken;
         });
 
       const initial = yield* takeUntil(hasMessage("child-ready"), isQuestion);
-      const question = initial.find(isQuestion);
+      const question = Option.getOrUndefined(Arr.findFirst(initial, isQuestion));
       if (question?.type !== "contact_request")
         return yield* Effect.die(new Error("The real IPC child did not ask its question."));
 
@@ -193,8 +195,8 @@ describe("Local Pi IPC boundary", () => {
       const isPeer = hasMessage("peer:peer-live");
       const isReply = hasMessage(`reply:${question.requestId}:reply-live`);
       const responses = yield* takeUntil(isPeer, isReply);
-      expect(responses.some(isPeer)).toBe(true);
-      expect(responses.some(isReply)).toBe(true);
+      expect(Arr.some(responses, isPeer)).toBe(true);
+      expect(Arr.some(responses, isReply)).toBe(true);
       yield* exited;
       expect(child.exitCode).toBe(0);
       expect(protocolErrors).toEqual([]);

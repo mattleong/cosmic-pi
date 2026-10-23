@@ -1,5 +1,8 @@
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
+import * as Str from "effect/String";
 import { invokeHostCallback } from "pi-cosmic-core";
 import { claimCompletion, completionClaimOwner, releaseCompletionClaim } from "./completion.ts";
 import { invalidRequest, type SubagentError, type SubagentRuntimeClosedError } from "./errors.ts";
@@ -31,7 +34,7 @@ interface RunCompletionObservationDependencies extends Pick<RunContext, "records
 }
 
 const reportStatusOf = (finalText: string | undefined, unresolved: boolean, available: boolean) =>
-  !finalText?.trim()
+  finalText === undefined || !Str.trim(finalText)
     ? ("missing" as const)
     : !unresolved
       ? ("delivered" as const)
@@ -48,7 +51,7 @@ const redactCompletionReport = (view: SubagentRunView): SubagentRunView => {
   } = view;
   return snapshotView({
     ...withoutReport,
-    sessionEvents: withoutReport.sessionEvents.map((event) =>
+    sessionEvents: Arr.map(withoutReport.sessionEvents, (event) =>
       event.type === "assistant"
         ? Object.assign({}, event, { text: "[report redacted: owned or already delivered]" })
         : event,
@@ -70,7 +73,9 @@ export function completionObservationOperations(
   } = dependencies;
 
   const withTreeMetadata = (view: SubagentRunView): SubagentRunView => {
-    const projected = currentProjection().runs.find((candidate) => candidate.id === view.id);
+    const projected = Option.getOrUndefined(
+      Arr.findFirst(currentProjection().runs, (candidate) => candidate.id === view.id),
+    );
     return snapshotView({
       ...view,
       directChildCount: projected?.directChildCount ?? 0,
@@ -135,33 +140,36 @@ export function completionObservationOperations(
       withLock(
         Effect.acquireRelease(
           Effect.gen(function* () {
-            const selected = ids.flatMap((id) => {
+            const selected = Arr.flatMap(ids, (id) => {
               const record = records.get(id);
               return record ? [record] : [];
             });
-            const missingIds = ids.filter((id) => !records.has(id));
+            const missingIds = Arr.filter(ids, (id) => !records.has(id));
             if (missingIds.length > 0)
               return yield* invalidRequest(
                 "subagent_runs_not_found",
-                `Subagent runs not found: ${missingIds.join(", ")}. Call agent_list for current run IDs.`,
+                `Subagent runs not found: ${Arr.join(missingIds, ", ")}. Call agent_list for current run IDs.`,
               );
             const claimToken = allocateClaimToken();
-            const desired = selected.flatMap((record) => {
+            const desired = Arr.flatMap(selected, (record) => {
               const finished = isTerminalRunState(record.view.state);
               const generation = record.completionGeneration + (finished ? 0 : 1);
               return !finished || record.completionGenerations.has(generation)
                 ? [{ record, generation }]
                 : [];
             });
-            const conflict = desired.find(
-              ({ record, generation }) => completionClaimOwner(record, generation) !== undefined,
+            const conflict = Option.getOrUndefined(
+              Arr.findFirst(
+                desired,
+                ({ record, generation }) => completionClaimOwner(record, generation) !== undefined,
+              ),
             );
             if (conflict)
               return yield* invalidRequest(
                 "completion_claim_conflict",
                 `Completion report ${conflict.record.view.id} generation ${conflict.generation} is already owned by another operation; wait for that operation to finish or cancel before retrying.`,
               );
-            const claimed = desired.filter(({ record, generation }) =>
+            const claimed = Arr.filter(desired, ({ record, generation }) =>
               claimCompletion(record, generation, claimToken),
             );
             if (claimed.length > 0) delivery.signalOutboxChangedLocked();
@@ -193,7 +201,7 @@ export function completionObservationOperations(
     callerRunId: string | undefined,
   ): ReadonlyArray<SubagentRunView> => {
     const targets = new Set(claim.selected);
-    return [...records.values()].flatMap((record) =>
+    return Arr.flatMap([...records.values()], (record) =>
       !targets.has(record) &&
       record.view.state === "waiting_for_parent" &&
       record.view.question !== undefined &&
@@ -224,13 +232,14 @@ export function completionObservationOperations(
     const waitLoop = (): Effect.Effect<TerminalObservations, SubagentRuntimeClosedError> =>
       withLock(
         Effect.sync(() => {
-          const observations = claim.selected.map((record) =>
+          const observations = Arr.map(claim.selected, (record) =>
             observeRecord(record, claim.claimToken),
           );
-          const runs = observations.map((observation) => observation.run);
-          const terminalCount = runs.filter((run) => isTerminalRunState(run.state)).length;
+          const runs = Arr.map(observations, (observation) => observation.run);
+          const terminalCount = Arr.filter(runs, (run) => isTerminalRunState(run.state)).length;
           const questions = questionsForCallerLocked(claim, callerRunId);
-          const parentActionRequired = runs.some(isParentActionRequiredRun) || questions.length > 0;
+          const parentActionRequired =
+            Arr.some(runs, isParentActionRequiredRun) || questions.length > 0;
           const done =
             parentActionRequired ||
             (until === "any_finished" ? terminalCount > 0 : terminalCount === runs.length);

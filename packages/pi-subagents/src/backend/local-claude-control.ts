@@ -1,5 +1,7 @@
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import type { LocalCliWireEvent } from "../boundary/local-cli-transport.ts";
 import { processError, type SubagentError } from "../run/errors.ts";
 import {
@@ -28,10 +30,10 @@ export type ClaudeInitProtocolEvent = Extract<ClaudeProtocolEvent, { readonly ty
 export const hasSupervisorToolInventory = (
   tools: ReadonlyArray<{ readonly name: string }>,
 ): boolean => {
-  const inventory = new Set(tools.map((tool) => tool.name));
+  const inventory = new Set(Arr.map(tools, (tool) => tool.name));
   return (
     inventory.size === SUPERVISOR_MCP_TOOL_NAMES.length &&
-    SUPERVISOR_MCP_TOOL_NAMES.every((tool) => inventory.has(tool))
+    Arr.every(SUPERVISOR_MCP_TOOL_NAMES, (tool) => inventory.has(tool))
   );
 };
 
@@ -172,8 +174,9 @@ export const localClaudeControl = (
       }),
     );
     const resolvedModel =
-      advertised.models.find((model) => model.value === request.model)?.resolvedModel ??
-      request.model;
+      Option.getOrUndefined(
+        Arr.findFirst(advertised.models, (model) => model.value === request.model),
+      )?.resolvedModel ?? request.model;
     const nativeFailure = nativeInitializationFailure(native, request, resolvedModel);
     if (nativeFailure) return yield* nativeFailure;
     return yield* awaitSupervisorMcp(native);
@@ -196,8 +199,11 @@ export const localClaudeControl = (
           ),
         ),
       );
-      const server = status.mcpServers.find(
-        (candidate) => candidate.name === SUPERVISOR_MCP_REGISTRATION,
+      const server = Option.getOrUndefined(
+        Arr.findFirst(
+          status.mcpServers,
+          (candidate) => candidate.name === SUPERVISOR_MCP_REGISTRATION,
+        ),
       );
       if (server?.status === "connected") {
         if (!hasSupervisorToolInventory(server.tools ?? []))

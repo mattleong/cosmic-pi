@@ -4,6 +4,7 @@ import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -18,6 +19,9 @@ import { SupervisorChannel } from "../src/boundary/supervisor-channel.ts";
 import { InvalidSubagentRequestError, SubagentProcessError } from "../src/run/errors.ts";
 import { backendLaunch } from "./fixtures/backend-supervisor.ts";
 import { localCliProcess } from "./support/local-cli-process.ts";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import * as Rec from "effect/Record";
 
 const enabled = process.env.PI_SUBAGENTS_REAL_CLAUDE_STEERING_SMOKE === "1";
 type Scenario = "tool" | "generation" | "native-agent";
@@ -28,12 +32,15 @@ const tasks = {
   tool: `Invoke Bash exactly once with command ${JSON.stringify(delayCommand)}, timeout 35000, and run_in_background false. Wait for it to finish, then submit your supervisor report.`,
   generation:
     "Without using tools first, write 120 numbered short factual sentences about integers. Do not abbreviate or summarize the list. Then submit your supervisor report.",
-  "native-agent": [
-    "Use the native Agent tool exactly once with run_in_background true to launch one read-only agent.",
-    `Its entire task is one foreground Bash invocation with command ${JSON.stringify(delayCommand)}, timeout 35000, then a short final response.`,
-    "Do not invoke Bash yourself. Wait for its completion notification.",
-    "Then submit your supervisor report. If Agent/background execution or result collection is unavailable, report that limitation promptly; do not substitute tools, poll, or retry.",
-  ].join(" "),
+  "native-agent": Arr.join(
+    [
+      "Use the native Agent tool exactly once with run_in_background true to launch one read-only agent.",
+      `Its entire task is one foreground Bash invocation with command ${JSON.stringify(delayCommand)}, timeout 35000, then a short final response.`,
+      "Do not invoke Bash yourself. Wait for its completion notification.",
+      "Then submit your supervisor report. If Agent/background execution or result collection is unavailable, report that limitation promptly; do not substitute tools, poll, or retry.",
+    ],
+    " ",
+  ),
 } satisfies Record<Scenario, string>;
 
 const isOwnedError = Schema.is(Schema.Union([SubagentProcessError, InvalidSubagentRequestError]));
@@ -52,7 +59,7 @@ const failureCode = (cause: Cause.Cause<unknown>): string => {
 const delayCommands = new Set([
   delayCommand,
   "perl -e 'select(undef, undef, undef, 25)'",
-  ...["sh", "/bin/sh", "bash", "/bin/bash"].flatMap((shell) => [
+  ...Arr.flatMap(["sh", "/bin/sh", "bash", "/bin/bash"], (shell) => [
     `${shell} -c '${delayCommand}'`,
     `${shell} -c "${delayCommand}"`,
   ]),
@@ -66,7 +73,7 @@ const decodeBashArgs = Schema.decodeUnknownOption(
 const classifyBash = (event: Extract<BackendEvent, { readonly type: "tool_started" }>) => {
   const decoded = decodeBashArgs(event.args);
   return {
-    delayCommand: Option.isSome(decoded) && delayCommands.has(decoded.value.command.trim()),
+    delayCommand: Option.isSome(decoded) && delayCommands.has(Str.trim(decoded.value.command)),
     background: Option.isSome(decoded) && decoded.value.run_in_background === true,
   };
 };
@@ -80,7 +87,7 @@ const TOOL_CATEGORIES = {
   mcp__pi_subagents_supervisor__agent_submit_report: "supervisorReport",
 } as const;
 type ToolCategory = (typeof TOOL_CATEGORIES)[keyof typeof TOOL_CATEGORIES] | "other";
-const categoryByTool: ReadonlyMap<string, ToolCategory> = new Map(Object.entries(TOOL_CATEGORIES));
+const categoryByTool: ReadonlyMap<string, ToolCategory> = new Map(Rec.toEntries(TOOL_CATEGORIES));
 const toolCategory = (name: string): ToolCategory => categoryByTool.get(name) ?? "other";
 
 interface ProbeObservation {
@@ -277,11 +284,14 @@ describe.skipIf(!enabled)("installed local Claude steering smoke", () => {
         name: "real-local-claude-steering",
         model,
         effort: "low",
-        systemPrompt: [
-          "This is a bounded read-only timing probe. Do not edit files, change configuration, access the network, or retry tools.",
-          "Follow the single requested scenario. Parent guidance may arrive while you work; do not wait for it before beginning.",
-          "After the bounded work (or an unavailable-tool limitation), call mcp__pi_subagents_supervisor__agent_submit_report exactly once with a short report.",
-        ].join(" "),
+        systemPrompt: Arr.join(
+          [
+            "This is a bounded read-only timing probe. Do not edit files, change configuration, access the network, or retry tools.",
+            "Follow the single requested scenario. Parent guidance may arrive while you work; do not wait for it before beginning.",
+            "After the bounded work (or an unavailable-tool limitation), call mcp__pi_subagents_supervisor__agent_submit_report exactly once with a short report.",
+          ],
+          " ",
+        ),
       });
       yield* driver.preflight(launch);
       const backend = yield* driver.spawn(launch);
@@ -333,8 +343,9 @@ describe.skipIf(!enabled)("installed local Claude steering smoke", () => {
           observation.reportAtMs = atMs;
           observation.reportEpochValid =
             event.assignmentEpoch === 1 && event.runId === launch.runId;
-          observation.reportNonempty = Boolean(event.text?.trim());
-          observation.reportMentionsGuidance = event.text?.includes(guidanceMarker) ?? false;
+          observation.reportNonempty = event.text !== undefined && Boolean(Str.trim(event.text));
+          observation.reportMentionsGuidance =
+            event.text !== undefined && Fn.pipe(event.text, Str.includes(guidanceMarker));
           terminal = true;
           yield* Deferred.succeed(activity, false);
           yield* Deferred.succeed(finished, undefined);

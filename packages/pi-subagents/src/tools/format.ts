@@ -1,5 +1,7 @@
+import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
+import * as Str from "effect/String";
 import { runAttention, runCleanupAttention, type AttentionRun } from "../run/attention.ts";
 import {
   sanitizeTerminalLine,
@@ -38,6 +40,7 @@ import {
   unconfirmedActionRecovery,
   type ActionFailureDisposition,
 } from "./outcome.ts";
+import { isTextFragment } from "./text-fragments.ts";
 
 export const boundToolOutput = (text: string): string =>
   clipWithMarker(
@@ -67,7 +70,8 @@ export const proposalDiffStatLines = (outcome: ProposalDiffStat): ReadonlyArray<
   if (!stat || stat.files.length === 0) return [];
   const unlisted = outcome.changedFileCount - stat.files.length;
   return [
-    ...stat.files.map(
+    ...Arr.map(
+      stat.files,
       (file) =>
         `${file.binary ? "binary" : `+${file.addedLines} −${file.deletedLines}`} ${sanitizeTerminalLine(file.path)}`,
     ),
@@ -124,25 +128,29 @@ export const cleanupEvidenceText = (
   run: Pick<AttentionRun, "cleanup" | "writerCleanupQuarantined">,
 ): string => {
   const cleanup = run.cleanup?.disposition === "quarantined" ? run.cleanup : undefined;
-  return [
-    cleanup === undefined ? undefined : "Cleanup: quarantined",
-    cleanup?.diagnostic === undefined
-      ? undefined
-      : [
-          cleanup.diagnostic.phase,
-          cleanup.diagnostic.code === undefined
-            ? undefined
-            : sanitizeDiagnosticContent(cleanup.diagnostic.code, { maximumLength: 80 }),
-          sanitizeDiagnosticContent(cleanup.diagnostic.message, { maximumLength: 1_024 }),
-        ]
-          .filter(Boolean)
-          .join(" · "),
-    run.writerCleanupQuarantined === true
-      ? "Writer pool is quarantined by unconfirmed cleanup"
-      : undefined,
-  ]
-    .filter(Boolean)
-    .join("\n");
+  return Fn.pipe(
+    [
+      cleanup === undefined ? undefined : "Cleanup: quarantined",
+      cleanup?.diagnostic === undefined
+        ? undefined
+        : Fn.pipe(
+            [
+              cleanup.diagnostic.phase,
+              cleanup.diagnostic.code === undefined
+                ? undefined
+                : sanitizeDiagnosticContent(cleanup.diagnostic.code, { maximumLength: 80 }),
+              sanitizeDiagnosticContent(cleanup.diagnostic.message, { maximumLength: 1_024 }),
+            ],
+            Arr.filter(isTextFragment),
+            Arr.join(" · "),
+          ),
+      run.writerCleanupQuarantined === true
+        ? "Writer pool is quarantined by unconfirmed cleanup"
+        : undefined,
+    ],
+    Arr.filter(isTextFragment),
+    Arr.join("\n"),
+  );
 };
 
 export const cleanupRecoveryText = (run: AttentionRun): ReadonlyArray<string> => {
@@ -165,35 +173,39 @@ export const cleanupRecoveryText = (run: AttentionRun): ReadonlyArray<string> =>
 };
 
 export const attentionRecoveryText = (runs: ReadonlyArray<AttentionRun>): string => {
-  const attention = runs.filter(
+  const attention = Arr.filter(
+    runs,
     (run) => isParentActionRequiredRun(run) || runCleanupAttention(run) !== undefined,
   );
   if (attention.length === 0) return "";
-  return [
-    attention.some(isParentActionRequiredRun)
-      ? "Parent action required; other unfinished subagents continue independently."
-      : "Cleanup needs recovery; other unfinished subagents continue independently.",
-    ...attention.flatMap((run) => {
-      const state = runAttention(run);
-      const cleanup = cleanupRecoveryText(run);
-      const claim = ((): ReadonlyArray<string> => {
-        switch (state?.kind) {
-          case "paused":
-            return runCleanupAttention(run) === undefined ? ordinaryPauseRecovery(run) : [];
-          case "question":
-            return [
-              `Question from ${sanitizeTerminalLine(run.name)}: ${boundedLine(state.message, 512)}`,
-              `Answer with agent_send({ to: ${JSON.stringify(run.id)}, message: "..." }), then call agent_await again.`,
-            ];
-          case "question-unavailable":
-          case undefined:
-            return [];
-        }
-        return Fn.absurd(state);
-      })();
-      return claim.concat(cleanup);
-    }),
-  ].join("\n");
+  return Arr.join(
+    [
+      Arr.some(attention, isParentActionRequiredRun)
+        ? "Parent action required; other unfinished subagents continue independently."
+        : "Cleanup needs recovery; other unfinished subagents continue independently.",
+      ...Arr.flatMap(attention, (run) => {
+        const state = runAttention(run);
+        const cleanup = cleanupRecoveryText(run);
+        const claim = ((): ReadonlyArray<string> => {
+          switch (state?.kind) {
+            case "paused":
+              return runCleanupAttention(run) === undefined ? ordinaryPauseRecovery(run) : [];
+            case "question":
+              return [
+                `Question from ${sanitizeTerminalLine(run.name)}: ${boundedLine(state.message, 512)}`,
+                `Answer with agent_send({ to: ${JSON.stringify(run.id)}, message: "..." }), then call agent_await again.`,
+              ];
+            case "question-unavailable":
+            case undefined:
+              return [];
+          }
+          return Fn.absurd(state);
+        })();
+        return claim.concat(cleanup);
+      }),
+    ],
+    "\n",
+  );
 };
 
 /** Bounds each status card field other than its recovery text. */
@@ -205,7 +217,7 @@ const MAX_CARD_FIELD_CHARS = 512;
 const MAX_CARD_DETAIL_CHARS = 4_096;
 
 const statusField = (label: string, value: string, maximum = MAX_CARD_FIELD_CHARS): string =>
-  `  ${label.padEnd(10)} ${clipText(sanitizeTerminalLine(value), maximum)}`;
+  `  ${Fn.pipe(label, Str.padEnd(10))} ${clipText(sanitizeTerminalLine(value), maximum)}`;
 
 const optionalStatusField = (
   label: string,
@@ -226,7 +238,7 @@ export interface RunFormatOptions {
 /** `local/pi · provider/model:effort` as `pi/provider/model:effort`. */
 export const formatRunModel = (run: SubagentRunView): string => {
   const { hostRuntime, model } = projectRunRoutePresentation(run);
-  return `${hostRuntime.replace(/^local\//u, "")}/${model}`;
+  return `${Fn.pipe(hostRuntime, Str.replace(/^local\//u, ""))}/${model}`;
 };
 
 export const runProfileLabel = (run: Pick<SubagentRunView, "agent" | "profile">): string =>
@@ -243,28 +255,32 @@ const runWorkspaceLabel = (run: SubagentRunView): string | undefined =>
 
 /** One line per run: `id name · profile · runtime/model:effort [· worktree <wsId>]`. */
 export const formatStartedRun = (run: SubagentRunView): string =>
-  [
-    `${sanitizeTerminalLine(run.id)} ${sanitizeTerminalLine(run.name)}`,
-    runProfileLabel(run),
-    formatRunModel(run),
-    runWorkspaceLabel(run),
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  Fn.pipe(
+    [
+      `${sanitizeTerminalLine(run.id)} ${sanitizeTerminalLine(run.name)}`,
+      runProfileLabel(run),
+      formatRunModel(run),
+      runWorkspaceLabel(run),
+    ],
+    Arr.filter(isTextFragment),
+    Arr.join(" · "),
+  );
 
 const formatRunHeader = (run: SubagentRunView): string =>
-  [
-    `${sanitizeTerminalLine(run.id)} ${sanitizeTerminalLine(run.name)}`,
-    runStateLabel(run.state),
-    runProfileLabel(run),
-    formatRunModel(run),
-    runWorkspaceLabel(run),
-    run.depth && run.depth > 1 ? `depth ${run.depth}` : undefined,
-    run.descendantCount ? countLabel(run.descendantCount, "descendant") : undefined,
-    run.steeringDelivery ? `steeringDelivery=${run.steeringDelivery}` : undefined,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  Fn.pipe(
+    [
+      `${sanitizeTerminalLine(run.id)} ${sanitizeTerminalLine(run.name)}`,
+      runStateLabel(run.state),
+      runProfileLabel(run),
+      formatRunModel(run),
+      runWorkspaceLabel(run),
+      run.depth && run.depth > 1 ? `depth ${run.depth}` : undefined,
+      run.descendantCount ? countLabel(run.descendantCount, "descendant") : undefined,
+      run.steeringDelivery ? `steeringDelivery=${run.steeringDelivery}` : undefined,
+    ],
+    Arr.filter(isTextFragment),
+    Arr.join(" · "),
+  );
 
 /** A route candidate as `runtime/model:effort`, without a default effort. */
 const candidateLabel = ({ runtime, model, effort }: Exclude<SubagentNextCandidate, "none">) =>
@@ -306,7 +322,7 @@ const compactStatusFields = (
 ): ReadonlyArray<string | undefined> => [
   // The proposal's files follow its Workspace action line.
   ...(run.workspaceId && run.workspaceOutcome?.status === "proposal"
-    ? proposalDiffStatLines(run.workspaceOutcome).map((line) => `    ${line}`)
+    ? Arr.map(proposalDiffStatLines(run.workspaceOutcome), (line) => `    ${line}`)
     : []),
   // A worktree writer's cwd is its private copy of the parent's.
   options.verbose || (run.sourceCwd ?? run.cwd) === options.parentCwd
@@ -341,7 +357,7 @@ const verboseStatusFields = (run: SubagentRunView): ReadonlyArray<string | undef
         )
       : undefined,
     statusField("Reason", run.selection.reason),
-    ...run.selection.skippedCandidates.map((candidate) =>
+    ...Arr.map(run.selection.skippedCandidates, (candidate) =>
       statusField(
         "Skipped",
         `${candidate.candidateIndex === undefined ? "route" : `candidate ${candidate.candidateIndex + 1}`} [${candidate.code}]: ${candidate.reason}`,
@@ -354,7 +370,7 @@ const verboseStatusFields = (run: SubagentRunView): ReadonlyArray<string | undef
     optionalStatusField("Source cwd", run.sourceCwd),
     statusField(
       "Capabilities",
-      `${run.capabilities.join(", ") || "none"}; stop/await always available`,
+      `${Arr.join(run.capabilities, ", ") || "none"}; stop/await always available`,
     ),
     run.pid ? statusField("Process", `pid ${run.pid}`) : undefined,
     optionalStatusField("Elapsed", formatSessionAge(run.endedAt ?? now, run.startedAt)),
@@ -377,10 +393,14 @@ const MAX_QUESTION_INDENT_CHARS = 2_048;
  * the instructions that follow it.
  */
 export const indentQuestionLines = (question: string, indent: string): string => {
-  const lines = question.split(/[\n\u2028\u2029]/u);
+  const lines = Str.split(question, /[\n\u2028\u2029]/u);
   if (lines.length * indent.length > MAX_QUESTION_INDENT_CHARS)
-    return `${indent}${lines.join(" ")}`;
-  return lines.map((line) => (line ? `${indent}${line}` : line)).join("\n");
+    return `${indent}${Arr.join(lines, " ")}`;
+  return Fn.pipe(
+    lines,
+    Arr.map((line) => (line ? `${indent}${line}` : line)),
+    Arr.join("\n"),
+  );
 };
 
 /**
@@ -393,28 +413,32 @@ export const indentQuestionLines = (question: string, indent: string): string =>
  * the question, and a new assignment clears the failure.
  */
 export const formatRunCard = (run: SubagentRunView, options: RunFormatOptions = {}): string => {
-  const details = [
-    options.readerIsParent ? attentionRecoveryText([run]) || undefined : undefined,
-    ...actionFields(run),
-    ...compactStatusFields(run, options),
-    ...(options.verbose ? verboseStatusFields(run) : []),
-  ]
-    .filter(Predicate.isNotUndefined)
-    .join("\n");
-  const question = run.question && sanitizeTerminalText(run.question.message).trim();
+  const details = Fn.pipe(
+    [
+      options.readerIsParent ? attentionRecoveryText([run]) || undefined : undefined,
+      ...actionFields(run),
+      ...compactStatusFields(run, options),
+      ...(options.verbose ? verboseStatusFields(run) : []),
+    ],
+    Arr.filter(Predicate.isNotUndefined),
+    Arr.join("\n"),
+  );
+  const question = run.question && Str.trim(sanitizeTerminalText(run.question.message));
   const warnings = distinctRunWarnings(run);
-  return [
-    clipText(formatRunHeader(run), MAX_CARD_FIELD_CHARS),
-    question
-      ? `  Needs reply:\n${indentQuestionLines(clipText(question, MAX_CONTACT_TEXT_CHARS), "    ")}`
-      : undefined,
-    optionalStatusField("Failure", run.error, MAX_ERROR_CHARS),
-    optionalStatusField("Warning", warnings.child, MAX_CONTACT_TEXT_CHARS),
-    optionalStatusField("System warning", warnings.system, MAX_ERROR_CHARS),
-    details && clipWithMarker(details, MAX_CARD_DETAIL_CHARS, "\n  … [more fields omitted]"),
-  ]
-    .filter(Boolean)
-    .join("\n");
+  return Fn.pipe(
+    [
+      clipText(formatRunHeader(run), MAX_CARD_FIELD_CHARS),
+      question
+        ? `  Needs reply:\n${indentQuestionLines(clipText(question, MAX_CONTACT_TEXT_CHARS), "    ")}`
+        : undefined,
+      optionalStatusField("Failure", run.error, MAX_ERROR_CHARS),
+      optionalStatusField("Warning", warnings.child, MAX_CONTACT_TEXT_CHARS),
+      optionalStatusField("System warning", warnings.system, MAX_ERROR_CHARS),
+      details && clipWithMarker(details, MAX_CARD_DETAIL_CHARS, "\n  … [more fields omitted]"),
+    ],
+    Arr.filter(isTextFragment),
+    Arr.join("\n"),
+  );
 };
 
 type FailedStartRecovery = NonNullable<SubagentStartFailure["admittedRun"]>;
@@ -448,38 +472,46 @@ const formatStartFailure = (failure: SubagentStartFailure): string => {
   const code = failure.code ? ` [${sanitizeTerminalLine(failure.code)}]` : "";
   const recovery = failure.admittedRun;
   const noEligibleRoute = NO_ELIGIBLE_ROUTE_CODES.includes(failure.code ?? "");
-  return [
-    startLine(
-      `  #${failure.index + 1}${target}${code}: ${sanitizeTerminalLine(failure.message)}`,
-      MAX_START_FAILURE_LINE_CHARS,
-    ),
-    recovery ? startLine(`    ${formatFailedStartRecovery(recovery)}`) : undefined,
-    recovery ? startLine(`    Next: ${failedStartRecoveryAction(recovery)}`) : undefined,
-    !recovery && noEligibleRoute ? startLine(`    Next: ${noEligibleRouteRecovery}`) : undefined,
-  ]
-    .filter(Predicate.isNotUndefined)
-    .join("\n");
+  return Fn.pipe(
+    [
+      startLine(
+        `  #${failure.index + 1}${target}${code}: ${sanitizeTerminalLine(failure.message)}`,
+        MAX_START_FAILURE_LINE_CHARS,
+      ),
+      recovery ? startLine(`    ${formatFailedStartRecovery(recovery)}`) : undefined,
+      recovery ? startLine(`    Next: ${failedStartRecoveryAction(recovery)}`) : undefined,
+      !recovery && noEligibleRoute ? startLine(`    Next: ${noEligibleRouteRecovery}`) : undefined,
+    ],
+    Arr.filter(Predicate.isNotUndefined),
+    Arr.join("\n"),
+  );
 };
 
 const formatStartedEntry = (run: SubagentRunView): string =>
-  [
-    startLine(formatStartedRun(run)),
-    ...(run.selection.warning
-      ? [startLine(`  Warning: ${sanitizeTerminalLine(run.selection.warning)}`)]
-      : []),
-  ].join("\n");
+  Arr.join(
+    [
+      startLine(formatStartedRun(run)),
+      ...(run.selection.warning
+        ? [startLine(`  Warning: ${sanitizeTerminalLine(run.selection.warning)}`)]
+        : []),
+    ],
+    "\n",
+  );
 
 /** One bounded entry per launch, so every launch of a full batch is listed. */
 export const formatStartResult = (
   runs: ReadonlyArray<SubagentRunView>,
   failures: ReadonlyArray<SubagentStartFailure>,
 ): string =>
-  [
-    ...runs.map(formatStartedEntry),
-    ...(failures.length === 0
-      ? []
-      : [`Failed starts (${failures.length})`, ...failures.map(formatStartFailure)]),
-  ].join("\n");
+  Arr.join(
+    [
+      ...Arr.map(runs, formatStartedEntry),
+      ...(failures.length === 0
+        ? []
+        : [`Failed starts (${failures.length})`, ...Arr.map(failures, formatStartFailure)]),
+    ],
+    "\n",
+  );
 
 /** A lifecycle target's failure: its ID, code, and message on one line. */
 export const MAX_ACTION_FAILURE_LINE_CHARS = 400;
@@ -498,14 +530,24 @@ export const ACTION_FAILURE_SECTIONS = [
 ] as const satisfies ReadonlyArray<readonly [ActionFailureDisposition, string, string | undefined]>;
 
 export const formatActionFailures = (failures: ReadonlyArray<SubagentActionFailure>): string =>
-  ACTION_FAILURE_SECTIONS.flatMap(([disposition, title, guidance]) => {
-    const entries = failures.filter((failure) => actionFailureDisposition(failure) === disposition);
-    if (entries.length === 0) return [];
-    return [
-      [
-        `${title} (${entries.length})`,
-        ...entries.map(actionFailureLine),
-        ...(guidance ? [`  ${guidance}`] : []),
-      ].join("\n"),
-    ];
-  }).join("\n\n");
+  Fn.pipe(
+    ACTION_FAILURE_SECTIONS,
+    Arr.flatMap(([disposition, title, guidance]) => {
+      const entries = Arr.filter(
+        failures,
+        (failure) => actionFailureDisposition(failure) === disposition,
+      );
+      if (entries.length === 0) return [];
+      return [
+        Arr.join(
+          [
+            `${title} (${entries.length})`,
+            ...Arr.map(entries, actionFailureLine),
+            ...(guidance ? [`  ${guidance}`] : []),
+          ],
+          "\n",
+        ),
+      ];
+    }),
+    Arr.join("\n\n"),
+  );

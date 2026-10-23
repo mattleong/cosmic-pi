@@ -16,6 +16,10 @@ import {
   runView,
   withService,
 } from "./fixtures/service-harness.ts";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 
 const latest = (projections: ReadonlyArray<SubagentProjection>) => projections.at(-1)?.runs[0];
 
@@ -82,8 +86,10 @@ describe("run warnings", () => {
       control.report(run.id, 1, "report-2", "Done.");
       yield* yieldUntil(() => latest(projections)?.state === "completed");
       yield* TestClock.adjust("100 millis");
-      yield* yieldUntil(() => notifications.some((notice) => notice.type === "completed"));
-      const completed = notifications.find((notice) => notice.type === "completed");
+      yield* yieldUntil(() => Arr.some(notifications, (notice) => notice.type === "completed"));
+      const completed = Option.getOrUndefined(
+        Arr.findFirst(notifications, (notice) => notice.type === "completed"),
+      );
       const folded = completed?.type === "completed" ? completed.runs[0]?.warning : undefined;
       expect(folded).toContain("Tests are flaky.");
       expect(folded).toContain("Guidance is unconfirmed.");
@@ -107,22 +113,25 @@ describe("run warnings", () => {
       yield* yieldUntil(() => latest(projections)?.systemWarning === warning);
 
       expect(yield* readWarnings(run.id)).toEqual([{ source: "system", message: warning }]);
-      const text = (yield* readRun(run.id)).content
-        .map((part) => (part.type === "text" ? part.text : ""))
-        .join("");
-      expect(text.split(warning)).toHaveLength(2);
+      const text = Arr.join(
+        Arr.map((yield* readRun(run.id)).content, (part) =>
+          part.type === "text" ? part.text : "",
+        ),
+        "",
+      );
+      expect(Str.split(text, warning)).toHaveLength(2);
     });
   });
 
   it.effect("cuts an oversized warning from any runtime to its start, naming its size", () => {
-    const warning = `Start of the warning. ${"w".repeat(40_000)}`;
+    const warning = `Start of the warning. ${Fn.pipe("w", Str.repeat(40_000))}`;
     const cutOf = `of ${warning.length.toLocaleString("en-US")} characters`;
     const pi = localServiceFixture();
     const native = nativeReportServiceFixture();
     const retained = (projections: ReadonlyArray<SubagentProjection>) => {
       const kept = latest(projections)?.childWarning ?? "";
       expect(kept.length).toBeLessThanOrEqual(MAX_CONTACT_TEXT_CHARS);
-      expect(kept.startsWith("Start of the warning.")).toBe(true);
+      expect(Fn.pipe(kept, Str.startsWith("Start of the warning."))).toBe(true);
       expect(kept).toContain(cutOf);
     };
     return Effect.gen(function* () {

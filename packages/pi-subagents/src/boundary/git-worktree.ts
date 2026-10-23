@@ -1,6 +1,9 @@
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import {
   CrossProcessLock,
   type CrossProcessLease,
@@ -127,7 +130,7 @@ interface CreateWorkspaceInput {
 }
 
 const withinTree = (tree: string, target: string) =>
-  target === tree || target.startsWith(`${tree}${path.sep}`);
+  target === tree || Fn.pipe(target, Str.startsWith(`${tree}${path.sep}`));
 
 const settled = (target: WorkspaceSettledTarget) =>
   target.processCleanupConfirmed
@@ -222,7 +225,7 @@ export const gitWorkspaceEngine = Effect.fn("GitWorkspaceEngine.make")(function*
     const relative = subdirectory(record);
     if (
       relative === ".." ||
-      relative.startsWith(`..${path.sep}`) ||
+      Fn.pipe(relative, Str.startsWith(`..${path.sep}`)) ||
       path.isAbsolute(relative) ||
       record.handle.artifactRoot !== directory(record) ||
       record.handle.cwd !== path.join(worker(record), relative)
@@ -269,7 +272,10 @@ export const gitWorkspaceEngine = Effect.fn("GitWorkspaceEngine.make")(function*
     input: CreateWorkspaceInput,
     source: SourceCheckout,
   ) {
-    if (registry === source.sourceRoot || registry.startsWith(`${source.sourceRoot}${path.sep}`))
+    if (
+      registry === source.sourceRoot ||
+      Fn.pipe(registry, Str.startsWith(`${source.sourceRoot}${path.sep}`))
+    )
       return yield* workspaceFailure(
         "create",
         "Private workspaces must be outside the source checkout.",
@@ -421,12 +427,12 @@ export const gitWorkspaceEngine = Effect.fn("GitWorkspaceEngine.make")(function*
     const revisionId = yield* commitTree(repository, snapshot.tree, [record.baseline], "revision");
     yield* setWorkspaceRef(repository, workspaceId, "revision", revisionId);
     const changes = yield* changedEntries(repository, record.baseline, revisionId);
-    if (changes.some((change) => isSubmodule(change.from) || isSubmodule(change.to)))
+    if (Arr.some(changes, (change) => isSubmodule(change.from) || isSubmodule(change.to)))
       return yield* workspaceFailure(
         "freeze",
         "Adding, removing or changing submodules is unsupported. Existing submodules must remain unchanged.",
       );
-    const changedPaths = changes.map((change) => change.path);
+    const changedPaths = Arr.map(changes, (change) => change.path);
     // The patch is kept beside the record, never inside it.
     const diff = yield* commitRevisionPatch(registry, record, revisionId, "freeze");
     const frozen = {
@@ -513,7 +519,7 @@ export const gitWorkspaceEngine = Effect.fn("GitWorkspaceEngine.make")(function*
     const parent = yield* captureSource(record);
     const parentCommit = yield* commitTree(repository, parent.tree, [head], "parent");
     const parentEntries = yield* treeEntries(repository, parentCommit);
-    if (selected.some((name) => isSubmodule(parentEntries.get(name)?.mode ?? "")))
+    if (Arr.some(selected, (name) => isSubmodule(parentEntries.get(name)?.mode ?? "")))
       return yield* workspaceFailure(
         "prepare",
         "A changed path is now a source submodule; integration refused.",
@@ -609,9 +615,9 @@ export const gitWorkspaceEngine = Effect.fn("GitWorkspaceEngine.make")(function*
     const drifted =
       before.tree === parentTree ? [] : yield* changedBetween(repository, parentTree, before.tree);
     const touched = new Set(selected);
-    const touchedDrift = drifted.filter((name) => touched.has(name));
+    const touchedDrift = Arr.filter(drifted, (name) => touched.has(name));
     if (touchedDrift.length > 0) return yield* touchedParentDrift(touchedDrift);
-    const untouchedDriftPaths = drifted.filter((name) => !touched.has(name));
+    const untouchedDriftPaths = Arr.filter(drifted, (name) => !touched.has(name));
     // Only what the tested tree changes in the parent's files is written, through a scratch
     // index, so untouched parent edits and the parent's index stay as they are.
     const changes = yield* changedEntries(repository, parentTree, preparedTree);
@@ -863,7 +869,7 @@ export const gitWorkspaceEngine = Effect.fn("GitWorkspaceEngine.make")(function*
   const list = (input: { readonly ownerId: string }) =>
     listWorkspaceRecords(registry).pipe(
       Effect.map(({ records }) =>
-        records.filter((record) => record.handle.ownerId === input.ownerId),
+        Arr.filter(records, (record) => record.handle.ownerId === input.ownerId),
       ),
     );
   return {
