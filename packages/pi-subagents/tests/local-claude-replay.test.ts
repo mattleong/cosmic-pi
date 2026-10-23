@@ -8,7 +8,7 @@ import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
-import type { Scope } from "effect/Scope";
+import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { localClaudeBackendDriver } from "../src/backend/local-claude.ts";
@@ -610,7 +610,7 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
 const withStartedBackend = <A, E>(
   scenario: ReplayScenario,
   epoch: number,
-  use: (backend: BackendHandle, harness: ReplayHarness) => Effect.Effect<A, E, Scope>,
+  use: (backend: BackendHandle, harness: ReplayHarness) => Effect.Effect<A, E, Scope.Scope>,
 ): Effect.Effect<A, E | SubagentError> =>
   Effect.scoped(
     Effect.acquireUseRelease(
@@ -634,7 +634,7 @@ const take = (backend: BackendHandle) => takeBackendEvent(backend, { acknowledge
 const withRunningBackend = <A, E>(
   scenario: ReplayScenario,
   epoch: number,
-  use: (backend: BackendHandle, harness: ReplayHarness) => Effect.Effect<A, E, Scope>,
+  use: (backend: BackendHandle, harness: ReplayHarness) => Effect.Effect<A, E, Scope.Scope>,
 ) =>
   withStartedBackend(scenario, epoch, (backend, harness) =>
     Effect.gen(function* () {

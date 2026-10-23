@@ -1,4 +1,4 @@
-import { absurd } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Effect from "effect/Effect";
 import type { CanonicalWriterCwd, WriterLeaseContract } from "../boundary/writer-lease.ts";
 import { invalidRequest, SubagentCapacityError, SubagentWriterConflictError } from "./errors.ts";
@@ -40,7 +40,7 @@ export const processCapacityError = (
     (record) => record !== excluded && holdsChildSlot(record, parentRunId),
   ).length;
   if (occupied + held < limit) return undefined;
-  return new SubagentCapacityError({
+  return SubagentCapacityError.make({
     limit,
     code: "direct_child_capacity",
     message: `Direct-child capacity reached for ${parentRunId} (${limit}). Stop an active run among this parent's direct children first.`,
@@ -58,7 +58,7 @@ export const treeCapacityError = (
     (record) => record !== excluded && ownsProcessSlot(record),
   ).length;
   if (occupied + held < limit) return undefined;
-  return new SubagentCapacityError({
+  return SubagentCapacityError.make({
     limit,
     code: "tree_capacity",
     message: `Active subagent limit reached (${limit}). Wait for a run to finish or stop one first; nesting.maxActiveRuns sets the limit.`,
@@ -76,7 +76,7 @@ export const writerConflictError = (
   if (pool && unavailable) {
     const activeId = pool.members.keys().next().value;
     const active = activeId ? records.get(activeId) : undefined;
-    return new SubagentWriterConflictError({
+    return SubagentWriterConflictError.make({
       activeId: active?.view.id ?? "shared-writer-pool",
       activeName: active?.launch.name ?? "shared writer pool",
       ...unavailable,
@@ -87,7 +87,7 @@ export const writerConflictError = (
     if (record === excluded) continue;
     const conflict = writerConflict(record, canonicalCwd);
     if (conflict === undefined) continue;
-    return new SubagentWriterConflictError({
+    return SubagentWriterConflictError.make({
       activeId: record.view.id,
       activeName: record.launch.name,
       ...conflict,
@@ -120,7 +120,7 @@ const writerPoolUnavailableConflict = (pool: WriterPoolView): WriterConflict | u
     case "preparing":
       return undefined;
   }
-  return absurd(pool.state);
+  return Fn.absurd(pool.state);
 };
 
 interface WriterConflict {

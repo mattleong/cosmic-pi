@@ -1,7 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
-import { absurd } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
@@ -218,7 +218,7 @@ export const decodeMcpMessage = (value: Schema.Json): DecodedMcpMessage | undefi
       };
     }
   }
-  return absurd<DecodedMcpMessage>(message);
+  return Fn.absurd<DecodedMcpMessage>(message);
 };
 
 const contactInputSchema = {

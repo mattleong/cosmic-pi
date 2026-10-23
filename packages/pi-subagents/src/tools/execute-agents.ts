@@ -1,6 +1,6 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import { absurd } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import type { CompactIssue } from "pi-code-previews";
 import {
@@ -200,7 +200,7 @@ const sendText = (result: AgentSendResult): string => {
     case "resumed":
       return `Resumed ${label} with your message as its next assignment. Its report goes to its own parent.`;
   }
-  return absurd(result.disposition);
+  return Fn.absurd(result.disposition);
 };
 
 const sendDetails = (result: AgentSendResult): AgentToolDetails => ({
@@ -393,7 +393,7 @@ const codedFailure = (error: SubagentError): SubagentError => {
     error.code !== undefined &&
     !error.message.startsWith(`[${error.code}]`)
   )
-    return new SubagentProcessError({
+    return SubagentProcessError.make({
       operation: error.operation,
       code: error.code,
       message: `[${error.code}] ${error.message}`,
@@ -450,5 +450,5 @@ export const executeAgentActionEffect = Effect.fn("SubagentTools.agents")(functi
       } satisfies AgentToolResult<unknown>;
     }
   }
-  return absurd<never>(input);
+  return Fn.absurd<never>(input);
 }, Effect.mapError(codedFailure));

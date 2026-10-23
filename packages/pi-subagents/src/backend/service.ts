@@ -29,14 +29,14 @@ export const backendRegistryFor = (
     const driver = byRuntime.get(selection.runtime);
     if (!driver)
       return Effect.fail(
-        new InvalidSubagentRequestError({
+        InvalidSubagentRequestError.make({
           code: "backend_not_implemented",
           message: `local/${selection.runtime} is configured but has no registered pi-subagents driver.`,
         }),
       );
     if (!driver.supportsContext(selection.context))
       return Effect.fail(
-        new InvalidSubagentRequestError({
+        InvalidSubagentRequestError.make({
           code: "context_unsupported",
           message: `local/${selection.runtime} does not support ${selection.context} context.`,
         }),

@@ -48,7 +48,7 @@ export const parentCorrelations = <A>() => {
     },
     rejectAll: (message: string): void => {
       for (const waiter of waiters.values())
-        Deferred.doneUnsafe(waiter, Effect.fail(new ParentContactError({ message })));
+        Deferred.doneUnsafe(waiter, Effect.fail(ParentContactError.make({ message })));
       waiters.clear();
     },
   };

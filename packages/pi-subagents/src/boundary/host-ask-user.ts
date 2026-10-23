@@ -21,7 +21,7 @@ const encodeOutcome = Schema.encodeSync(Schema.fromJsonString(QuestionnaireOutco
 const encodeRequest = Schema.encodeSync(Schema.fromJsonString(QuestionnaireRequestSchema));
 
 const unavailable = () =>
-  new InvalidSubagentRequestError({
+  InvalidSubagentRequestError.make({
     code: "questionnaire_unavailable",
     message: "The parent questionnaire is unavailable or its owning assignment ended.",
   });

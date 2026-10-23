@@ -77,7 +77,7 @@ const agentMessaging = (
     : rpcFailure("agent_messaging_unavailable", "Agent messaging is unavailable for this run.");
 
 const agentRefusal = (error: SubagentError) =>
-  new SupervisorAgentRefusal({
+  SupervisorAgentRefusal.make({
     code: safeTextPrefix(subagentErrorCode(error), 128),
     message: safeTextPrefix(error.message.trim() || "The agent request was refused.", 512),
   });

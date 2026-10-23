@@ -106,7 +106,7 @@ const rpcFixture = (extension: string, extraArgs: ReadonlyArray<string> = []) =>
     child.stdout.on("data", (chunk: string) => {
       buffer += chunk;
       if (buffer.length > 1_048_576) {
-        fail(new RpcFixtureError({ message: "RPC fixture output exceeded limit" }));
+        fail(RpcFixtureError.make({ message: "RPC fixture output exceeded limit" }));
         child.kill("SIGKILL");
         return;
       }
@@ -128,14 +128,14 @@ const rpcFixture = (extension: string, extraArgs: ReadonlyArray<string> = []) =>
           pending.delete(value.id);
           waiter.resolve(value);
         } catch (error) {
-          fail(new RpcFixtureError({ message: `Invalid RPC fixture output: ${String(error)}` }));
+          fail(RpcFixtureError.make({ message: `Invalid RPC fixture output: ${String(error)}` }));
         }
       }
     });
     child.once("close", () =>
-      fail(new RpcFixtureError({ message: `RPC fixture exited: ${stderr}` })),
+      fail(RpcFixtureError.make({ message: `RPC fixture exited: ${stderr}` })),
     );
-    child.on("error", (error) => fail(new RpcFixtureError({ message: error.message })));
+    child.on("error", (error) => fail(RpcFixtureError.make({ message: error.message })));
     const request = (command: RpcCommand) =>
       Effect.callback<RpcResponse, RpcFixtureError>((resume) => {
         const resolve = (value: RpcResponse) => resume(Effect.succeed(value));
@@ -145,7 +145,7 @@ const rpcFixture = (extension: string, extraArgs: ReadonlyArray<string> = []) =>
         child.stdin.write(`${encodeJson({ id, ...command })}\n`, (error) => {
           if (error) {
             pending.delete(id);
-            reject(new RpcFixtureError({ message: error.message }));
+            reject(RpcFixtureError.make({ message: error.message }));
           }
         });
         return Effect.sync(() => {
@@ -167,7 +167,7 @@ const rpcFixture = (extension: string, extraArgs: ReadonlyArray<string> = []) =>
                 resume(
                   error
                     ? Effect.fail(
-                        new SubagentProcessError({
+                        SubagentProcessError.make({
                           operation: "send fixture command to",
                           message: "RPC fixture command could not be sent.",
                         }),

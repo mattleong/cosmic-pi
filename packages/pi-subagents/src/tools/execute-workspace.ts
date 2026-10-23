@@ -1,4 +1,4 @@
-import { absurd } from "effect/Function";
+import * as Fn from "effect/Function";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -357,5 +357,5 @@ export const executeWorkspaceAction = Effect.fn("SubagentTools.workspace")(funct
       );
     }
   }
-  return absurd<never>(operation.action);
+  return Fn.absurd<never>(operation.action);
 });

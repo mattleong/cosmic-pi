@@ -1,4 +1,4 @@
-import { flow } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
@@ -15,7 +15,7 @@ const MAX_TOOL_PREVIEW_CHARS = 1_200;
 
 const ToolArgumentsSchema = Schema.Record(Schema.String, Schema.Unknown);
 type ToolArguments = typeof ToolArgumentsSchema.Type;
-const decodeToolArguments = flow(
+const decodeToolArguments = Fn.flow(
   Schema.decodeUnknownOption(ToolArgumentsSchema),
   Option.getOrUndefined,
 );

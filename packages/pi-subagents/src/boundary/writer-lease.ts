@@ -101,7 +101,7 @@ export const canonicalizeWriterDirectory: WriterLeaseContract["canonicalize"] = 
         }),
       ),
     catch: () =>
-      new WriterCwdCanonicalizationError({
+      WriterCwdCanonicalizationError.make({
         message:
           "Writer cwd could not be resolved to a stable existing local-directory identity; no writer backend was started.",
       }),
@@ -122,7 +122,7 @@ const makeWriterLease = (
   const owners = new WeakMap<WriterLease, Ownership>();
 
   const denied = (reason: string) =>
-    new WriterLeaseAcquireError({ message: `${reason}; writer startup was denied.` });
+    WriterLeaseAcquireError.make({ message: `${reason}; writer startup was denied.` });
 
   const prepare = ensurePrivateDirectory(packageRoot).pipe(
     Effect.mapError(() => denied("Unable to prepare private writer-lease state")),
@@ -159,7 +159,7 @@ const makeWriterLease = (
     return yield* lock.tryAcquire(cwd.digest).pipe(
       Effect.mapError((error) =>
         error.reason === "recovery-required"
-          ? new WriterLeaseConflictError({
+          ? WriterLeaseConflictError.make({
               reason: "recovery-required",
               message: recoveryMessage(error.slot),
             })
@@ -168,7 +168,7 @@ const makeWriterLease = (
       Effect.flatMap((handle) => {
         if (!handle)
           return Effect.fail(
-            new WriterLeaseConflictError({
+            WriterLeaseConflictError.make({
               reason: "live",
               message: "Another live writer already owns this filesystem directory identity.",
             }),
@@ -194,7 +194,7 @@ const makeWriterLease = (
         ["reserved"],
         "spawn-started",
         () =>
-          new WriterLeaseMarkError({
+          WriterLeaseMarkError.make({
             message:
               "Writer-lease spawn-started evidence could not be committed durably; no backend spawn is permitted and ownership remains fail-closed.",
           }),
@@ -206,7 +206,7 @@ const makeWriterLease = (
         ["reserved", "spawn-started"],
         "released",
         () =>
-          new WriterLeaseReleaseError({
+          WriterLeaseReleaseError.make({
             message:
               "Writer-lease release could not be confirmed; the lease remains held and fail-closed.",
           }),

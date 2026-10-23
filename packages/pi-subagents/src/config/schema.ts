@@ -1,4 +1,4 @@
-import { flow } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { clipText, decodeUnknownOrUndefined } from "pi-cosmic-core";
@@ -192,7 +192,7 @@ const nullPrototypeRecord = <Value>() => {
 };
 
 /** Strictly decodes an edit; documents degrade per field instead (decodeDocumentNesting). */
-export const decodeSubagentNestingOverrides = flow(
+export const decodeSubagentNestingOverrides = Fn.flow(
   decodeUnknownOrUndefined(SubagentNestingOverridesSchema, EXACT_FIELDS),
   (nesting): SubagentNestingOverrides | undefined => nesting && Object.freeze({ ...nesting }),
 );
@@ -234,12 +234,12 @@ export const ProfileRouteSchema = Schema.Struct({
   ),
 });
 
-const decodeDeclaredProfileCandidate = flow(
+const decodeDeclaredProfileCandidate = Fn.flow(
   decodeUnknownOrUndefined(ProfileCandidateSchema, EXACT_FIELDS),
   (candidate): ProfileCandidate | undefined => candidate,
 );
 
-export const decodeProfileRoute = flow(
+export const decodeProfileRoute = Fn.flow(
   decodeUnknownOrUndefined(ProfileRouteSchema, EXACT_FIELDS),
   (route): ProfileRoute | undefined =>
     route && { candidates: cloneProfileCandidates(route.candidates) },
@@ -414,7 +414,7 @@ const CustomAgentSchema = Schema.Struct({
     }),
   ),
 });
-const decodeCustomAgentDefinition = flow(
+const decodeCustomAgentDefinition = Fn.flow(
   decodeUnknownOrUndefined(CustomAgentSchema, EXACT_FIELDS),
   (agent): CustomAgentDefinition | undefined => agent,
 );
@@ -749,6 +749,6 @@ const decodeConfigRoot = (
 };
 
 export const subagentConfigDecoder = (scope: string) =>
-  flow(decodeUnknownRecord, (root) => decodeConfigRoot(root, scope));
+  Fn.flow(decodeUnknownRecord, (root) => decodeConfigRoot(root, scope));
 
 export const decodeSubagentConfig = subagentConfigDecoder("config");

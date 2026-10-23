@@ -100,7 +100,7 @@ const finished = (entry: WorkspaceRecord) =>
 
 const ownerRunning = () =>
   Effect.fail(
-    new WorkspaceError({
+    WorkspaceError.make({
       operation: "authorization",
       message: "The session that created this workspace is still running.",
     }),
@@ -110,7 +110,7 @@ const isOpen = (entry: WorkspaceRecord) =>
   entry.status === "active" || entry.status === "frozen" || entry.status === "prepared";
 
 const refuse = (operation: string, message: string) =>
-  Effect.fail(new WorkspaceError({ operation, message }));
+  Effect.fail(WorkspaceError.make({ operation, message }));
 
 export function workspaceFixture({
   sourceCwd = "/repo",
@@ -160,7 +160,7 @@ export function workspaceFixture({
     Effect.gen(function* () {
       const entry = entries.get(target.workspaceId);
       if (!entry || entry.handle.ownerId !== target.ownerId)
-        return yield* new WorkspaceError({ operation: "inspect", message: "Unknown owner" });
+        return yield* WorkspaceError.make({ operation: "inspect", message: "Unknown owner" });
       return entry;
     });
   // Like the real engine, a source inside private workspace storage is refused.
@@ -200,8 +200,8 @@ export function workspaceFixture({
               writerCwd: yield* leases
                 .canonicalize(`/private/${workspaceId}/worker`)
                 .pipe(
-                  Effect.mapError(
-                    (error) => new WorkspaceError({ operation: "create", message: error.message }),
+                  Effect.mapError((error) =>
+                    WorkspaceError.make({ operation: "create", message: error.message }),
                   ),
                 ),
             };
@@ -277,7 +277,7 @@ export function workspaceFixture({
           Effect.flatMap((entry) => {
             if (entry.status !== "active")
               return Effect.fail(
-                new WorkspaceError({
+                WorkspaceError.make({
                   operation: "freeze",
                   message: "Only active workspaces may be frozen; revise explicitly first.",
                 }),
@@ -393,7 +393,7 @@ export function workspaceFixture({
           Effect.flatMap((entry) =>
             hooks.failDiscard
               ? Effect.fail(
-                  new WorkspaceError({ operation: "discard", message: "Fixture failure" }),
+                  WorkspaceError.make({ operation: "discard", message: "Fixture failure" }),
                 )
               : Effect.sync(() => {
                   if (entry.status === "integrating") rollbacks.push(target.workspaceId);

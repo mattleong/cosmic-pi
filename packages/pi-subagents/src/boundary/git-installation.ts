@@ -20,7 +20,7 @@ interface GitInstallation {
 const PREFERRED_GIT = "/usr/bin/git";
 
 const unavailable = (message: string, detail?: string) =>
-  new WorkspaceError({ operation: "git", message, ...(detail !== undefined && { detail }) });
+  WorkspaceError.make({ operation: "git", message, ...(detail !== undefined && { detail }) });
 
 const usablePath = (value: string): boolean =>
   path.isAbsolute(value) && value.length <= 4096 && !hasControlCharacter(value);

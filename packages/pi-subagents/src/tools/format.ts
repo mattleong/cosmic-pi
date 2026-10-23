@@ -1,4 +1,4 @@
-import { absurd } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import { runAttention, runCleanupAttention, type AttentionRun } from "../run/attention.ts";
 import {
@@ -189,7 +189,7 @@ export const attentionRecoveryText = (runs: ReadonlyArray<AttentionRun>): string
           case undefined:
             return [];
         }
-        return absurd(state);
+        return Fn.absurd(state);
       })();
       return claim.concat(cleanup);
     }),

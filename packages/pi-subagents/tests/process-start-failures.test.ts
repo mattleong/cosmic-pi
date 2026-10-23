@@ -6,8 +6,8 @@ import { gitRunFailure } from "../src/boundary/git-worktree-process.ts";
 import { probeFailureResult, runProbeEffect } from "../src/boundary/local-cli-harness.ts";
 import { nodePath } from "./support/node-builtins.ts";
 
-const spawnFailure = new BoundedProcessError({ operation: "spawn", message: "Unable to start." });
-const streamFailure = new BoundedProcessError({ operation: "stream", message: "Unable to read." });
+const spawnFailure = BoundedProcessError.make({ operation: "spawn", message: "Unable to start." });
+const streamFailure = BoundedProcessError.make({ operation: "stream", message: "Unable to read." });
 
 describe("process start failures", () => {
   it.effect("treats a probe that never started as cleaned up", () =>

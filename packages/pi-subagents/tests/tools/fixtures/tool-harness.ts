@@ -104,7 +104,7 @@ const fixtureBackend = (selection: { readonly runtime: string }) =>
   selection.runtime === "pi"
     ? Effect.succeed(testBackendDriver)
     : Effect.fail(
-        new InvalidSubagentRequestError({
+        InvalidSubagentRequestError.make({
           code: "backend_not_implemented",
           message: `local/${selection.runtime} is unavailable in this fixture.`,
         }),

@@ -1,5 +1,5 @@
 import * as Effect from "effect/Effect";
-import { absurd } from "effect/Function";
+import * as Fn from "effect/Function";
 import { frameAgentMessage, safeTextPrefix, type AgentMessageRecipientState } from "pi-cosmic-core";
 import type { SubagentRuntime } from "../domain/routing.ts";
 import {
@@ -286,7 +286,7 @@ export const planRunMessage = (
             `Agent ${id} is ${state}, and only its ancestors and main can resume it; message its parent ${parentIdOf(record.view)} if the work needs it.`,
           );
   }
-  return absurd(state);
+  return Fn.absurd(state);
 };
 
 /**

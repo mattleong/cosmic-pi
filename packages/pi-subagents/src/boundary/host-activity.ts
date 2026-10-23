@@ -2,7 +2,7 @@ import { registerRevisionedActivityProvider, type ActivityEvents } from "pi-cosm
 import { sanitizeDiagnosticContent } from "pi-cosmic-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import { absurd } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Schema from "effect/Schema";
 import {
   captureSubagentControlExpectation,
@@ -56,7 +56,7 @@ export const promptSubagentActivityInput = (
         { signal },
       );
     },
-    catch: () => new SubagentActivityInputError({ message: "Subagent input isn't available" }),
+    catch: () => SubagentActivityInputError.make({ message: "Subagent input isn't available" }),
   });
 
 /**
@@ -86,7 +86,7 @@ export const runSubagentActivityAction = (
           Effect.flatMap((sent) => (sent.confirmed ? Effect.void : Effect.sync(onPendingGuidance))),
         );
   }
-  return absurd(request);
+  return Fn.absurd(request);
 };
 
 const sameAssignment = (before: SubagentRunView, after: SubagentRunView): boolean =>

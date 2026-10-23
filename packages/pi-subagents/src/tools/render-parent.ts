@@ -2,7 +2,7 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { TUnknown } from "typebox";
 import { Text } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
-import { flow } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Schema from "effect/Schema";
 import {
   escapeControlChars,
@@ -50,9 +50,9 @@ const ReplySchema = singleTextResult(
 const decodeReply = decodeUnknownOrUndefined(ReplySchema, { onExcessProperty: "error" });
 const decodeReceipt = decodeUnknownOrUndefined(ReceiptSchema, { onExcessProperty: "error" });
 
-const parentReplyText = flow(decodeReply, (reply) => reply?.content[0]?.text);
+const parentReplyText = Fn.flow(decodeReply, (reply) => reply?.content[0]?.text);
 
-const contactRequest = flow(decodeUnknownOrUndefined(ContactSchema), (request) =>
+const contactRequest = Fn.flow(decodeUnknownOrUndefined(ContactSchema), (request) =>
   request?.message.trim() ? request : undefined,
 );
 

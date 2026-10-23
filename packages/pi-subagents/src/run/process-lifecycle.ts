@@ -28,7 +28,7 @@ export function processControlOperations(withLock: WithRunLock) {
           record.view.state === "stopping" ||
           isTerminalRunState(record.view.state)
         )
-          return yield* new SubagentProcessError({
+          return yield* SubagentProcessError.make({
             operation: "control",
             message: `Subagent ${record.view.id} has no active backend handle.`,
           });

@@ -1,4 +1,4 @@
-import { absurd } from "effect/Function";
+import * as Fn from "effect/Function";
 import { resolveNamedProfileSet } from "../config/options.ts";
 import type { SubagentConfigInspection, SubagentConfigScope } from "../config/store.ts";
 import { builtinProfileCandidate } from "../profiles/definitions.ts";
@@ -232,7 +232,7 @@ const candidateIssueMessage = (
     case "effort_unsupported":
       return `${runtimeLabel(candidate.runtime)} does not support the ${candidate.effort} reasoning level.`;
   }
-  return absurd(code);
+  return Fn.absurd(code);
 };
 
 const candidateValidationError = (candidate: ProfileCandidate): string | undefined => {

@@ -1,6 +1,6 @@
 import { toolOutputPreview } from "./tool-output-preview.ts";
 import * as Effect from "effect/Effect";
-import { absurd } from "effect/Function";
+import * as Fn from "effect/Function";
 import type * as Schema from "effect/Schema";
 import type { ChildProcessHandle } from "../boundary/child-process.ts";
 import { SubagentProcessError, type SubagentError } from "../run/errors.ts";
@@ -85,7 +85,7 @@ export const normalizeRpcEvent = (
     case "response":
       return Effect.undefined;
   }
-  return absurd(envelope);
+  return Fn.absurd(envelope);
 };
 
 export const parentContactAckOutcome = (
@@ -94,7 +94,7 @@ export const parentContactAckOutcome = (
   contact.type === "turn_input_barrier_ack" || contact.ok
     ? Effect.void
     : Effect.fail(
-        new SubagentProcessError(
+        SubagentProcessError.make(
           contact.type === "parent_reply_ack"
             ? {
                 operation: "deliver parent reply to",
@@ -148,5 +148,5 @@ export const normalizeParentContact = (
     case "proxy_cancel":
       return { type: "proxy_cancel", requestId: contact.requestId };
   }
-  return absurd(contact);
+  return Fn.absurd(contact);
 };

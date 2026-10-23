@@ -169,7 +169,7 @@ export const sourceLockNamespace = (sourceRoot: string) => `workspace-source:${s
 export const ownerLockNamespace = (token: string) => `workspace-owner:${token}`;
 
 const lockFailure = (error: CrossProcessLockError, directory: string) =>
-  new WorkspaceError({
+  WorkspaceError.make({
     operation: "lock",
     message:
       error.reason === "recovery-required"
@@ -183,7 +183,7 @@ const lockFailure = (error: CrossProcessLockError, directory: string) =>
 
 const lockTimeout = (sourceRoot: string, directory: string) => {
   const holder = crossProcessLockHolder(sourceLockNamespace(sourceRoot), { directory });
-  return new WorkspaceError({
+  return WorkspaceError.make({
     operation: "lock",
     message: "Another Pi session is still changing workspaces for this checkout.",
     detail: [

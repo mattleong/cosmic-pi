@@ -93,7 +93,7 @@ const decodeProxyFailure = Schema.decodeUnknownOption(
 
 const proxyFailure = (source: string): ParentContactError => {
   const decoded = decodeProxyFailure(source);
-  return new ParentContactError({
+  return ParentContactError.make({
     message: Option.isSome(decoded)
       ? clipToolReply(decoded.value.message)
       : "The root subagent coordinator rejected the call.",

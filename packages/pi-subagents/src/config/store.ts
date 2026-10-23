@@ -1,7 +1,7 @@
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import { flow } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
@@ -153,7 +153,7 @@ export class SubagentConfigStore extends Context.Service<
 const storeError = configDocumentErrorFactory(SubagentConfigStoreError, "Subagents");
 
 const configError = (operation: string, path: string, message: string) =>
-  new SubagentConfigStoreError({ operation, path, message });
+  SubagentConfigStoreError.make({ operation, path, message });
 
 const unsupportedVersionError = (path: string) =>
   configError(
@@ -165,7 +165,7 @@ const unsupportedVersionError = (path: string) =>
 const mutationError = (path: string, message: string) => configError("update", path, message);
 
 const conflictError = (path: string) =>
-  new SubagentConfigConflictError({
+  SubagentConfigConflictError.make({
     path,
     message: "Subagents settings changed on disk; reopen /subagents profiles and try again.",
   });
@@ -494,7 +494,7 @@ export const subagentConfigStoreLayer = Layer.effect(
 
     const patchVoid = <Patch extends SubagentConfigPatchBase>(
       apply: ApplyPatch<Patch>,
-    ): ConfigPatch<Patch> => flow(patchWithReceipt(apply), (receipt) => Effect.asVoid(receipt));
+    ): ConfigPatch<Patch> => Fn.flow(patchWithReceipt(apply), (receipt) => Effect.asVoid(receipt));
 
     return SubagentConfigStore.of({
       load: (cwd, agentDirectory, projectTrusted) =>

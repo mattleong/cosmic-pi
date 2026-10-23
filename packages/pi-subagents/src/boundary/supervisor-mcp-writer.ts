@@ -25,7 +25,7 @@ export const serializedWriter = Effect.fn("SupervisorMcpHelper.serializedWriter"
   const writeLine = (line: string) =>
     Effect.callback<void, McpWriteFailure>((resume) => {
       stream.write(line, "utf8", (error?: Error | null) =>
-        resume(error ? Effect.fail(new McpWriteFailure({ reason: "stream" })) : Effect.void),
+        resume(error ? Effect.fail(McpWriteFailure.make({ reason: "stream" })) : Effect.void),
       );
     });
   yield* Effect.forever(
@@ -39,24 +39,24 @@ export const serializedWriter = Effect.fn("SupervisorMcpHelper.serializedWriter"
     ),
   ).pipe(Effect.forkScoped({ startImmediately: true }));
   const write = (value: Schema.Json): Effect.Effect<void, McpWriteFailure> => {
-    if (closed) return Effect.fail(new McpWriteFailure({ reason: "closed" }));
+    if (closed) return Effect.fail(McpWriteFailure.make({ reason: "closed" }));
     if (acknowledgements.size >= MAX_PENDING_WRITES)
-      return Effect.fail(new McpWriteFailure({ reason: "capacity" }));
+      return Effect.fail(McpWriteFailure.make({ reason: "capacity" }));
     const line = `${JSON.stringify(value)}\n`;
     if (Buffer.byteLength(line, "utf8") > MAX_SUPERVISOR_CHANNEL_LINE_BYTES)
-      return Effect.fail(new McpWriteFailure({ reason: "size" }));
+      return Effect.fail(McpWriteFailure.make({ reason: "size" }));
     const ack = Deferred.makeUnsafe<void, McpWriteFailure>();
     acknowledgements.add(ack);
     if (!Queue.offerUnsafe(frames, { line, ack })) {
       acknowledgements.delete(ack);
-      return Effect.fail(new McpWriteFailure({ reason: "capacity" }));
+      return Effect.fail(McpWriteFailure.make({ reason: "capacity" }));
     }
     return Deferred.await(ack);
   };
   const close = () => {
     if (closed) return;
     closed = true;
-    const failure = new McpWriteFailure({ reason: "closed" });
+    const failure = McpWriteFailure.make({ reason: "closed" });
     for (const acknowledgement of acknowledgements)
       Deferred.doneUnsafe(acknowledgement, Effect.fail(failure));
     acknowledgements.clear();

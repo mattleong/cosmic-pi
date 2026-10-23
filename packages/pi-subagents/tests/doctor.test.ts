@@ -55,7 +55,7 @@ const registry = (probed: string[]) =>
           probed.push(request.model);
           return request.model === "opus"
             ? Effect.fail(
-                new InvalidSubagentRequestError({
+                InvalidSubagentRequestError.make({
                   code: "claude_unauthenticated",
                   message: "Claude Code is not signed in.",
                 }),

@@ -38,9 +38,9 @@ const fakeLock = (outcomes: Array<LockOutcome> = []) => {
         calls.push("tryAcquire");
         const outcome = outcomes.shift();
         if (outcome === "recovery-required")
-          return Effect.fail(new CrossProcessLockError({ reason: outcome, slot: RECOVERY_SLOT }));
+          return Effect.fail(CrossProcessLockError.make({ reason: outcome, slot: RECOVERY_SLOT }));
         if (outcome !== undefined && outcome !== "live")
-          return Effect.fail(new CrossProcessLockError({ reason: outcome }));
+          return Effect.fail(CrossProcessLockError.make({ reason: outcome }));
         const admitted = outcome === undefined && !held;
         held ||= admitted;
         return Effect.succeed(admitted ? handle : undefined);

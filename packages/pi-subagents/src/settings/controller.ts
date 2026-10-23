@@ -1,6 +1,6 @@
 import { formatDoctorReport, type DoctorCheck } from "../application/doctor.ts";
 import * as Effect from "effect/Effect";
-import { constVoid } from "effect/Function";
+import * as Fn from "effect/Function";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
   notifyAtHostBoundary,
@@ -120,8 +120,8 @@ function openFleetManager(
   }
   const owner = actions.captureModelRefresh();
   const isCurrent = () => owner.isCurrent() && !ctx.signal?.aborted;
-  let closeSurface: () => void = constVoid;
-  let dispose: () => void = constVoid;
+  let closeSurface: () => void = Fn.constVoid;
+  let dispose: () => void = Fn.constVoid;
   const surface = openOwnedSurface(ctx, {
     closedValue: undefined,
     placement: "screen",
@@ -133,7 +133,7 @@ function openFleetManager(
       dispose();
     },
     create: ({ tui, theme, keybindings, getHeight, finish }) => {
-      let unsubscribe: () => void = constVoid;
+      let unsubscribe: () => void = Fn.constVoid;
       const manager = new SubagentFleetComponent({
         theme,
         getProjection: bridge.get,
@@ -180,7 +180,7 @@ function openFleetManager(
   // as well; the refresh and projection checks above also close it. Both settle the command quietly.
   return owner
     .run(surface, ctx.signal ?? new AbortController().signal)
-    .then(constVoid, (cause: unknown) => {
+    .then(Fn.constVoid, (cause: unknown) => {
       if (isCurrent()) throw cause;
     });
 }

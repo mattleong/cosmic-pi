@@ -1,4 +1,4 @@
-import { absurd } from "effect/Function";
+import * as Fn from "effect/Function";
 import { agentMessageDeliveryText } from "pi-cosmic-core";
 import type {
   SupervisorAgentListResult,
@@ -21,7 +21,7 @@ const sendOutcome = (result: SupervisorAgentSendResult): string => {
         : guided;
     }
   }
-  return absurd(result.disposition);
+  return Fn.absurd(result.disposition);
 };
 
 const missing = (ids: ReadonlyArray<string>): ReadonlyArray<string> =>

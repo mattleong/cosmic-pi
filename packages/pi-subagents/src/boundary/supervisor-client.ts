@@ -64,7 +64,7 @@ export const openSupervisorClient = Effect.fn("SupervisorClient.open")(function*
         Stream.runForEach((update) =>
           Effect.gen(function* () {
             if (update.assignmentEpoch <= assignmentEpoch)
-              return yield* new SupervisorToolFailure({
+              return yield* SupervisorToolFailure.make({
                 code: "non_monotonic_assignment_epoch",
                 message: "Supervisor assignment epoch did not advance.",
               });

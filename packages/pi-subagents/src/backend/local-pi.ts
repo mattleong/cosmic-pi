@@ -100,7 +100,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
       return {
         ...toBackendExit(exit),
         diagnostic,
-        failure: new SubagentProcessError({
+        failure: SubagentProcessError.make({
           operation: "run",
           code: "pi_model_not_found",
           message: diagnostic,
@@ -261,14 +261,14 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
     Effect.tap((exit) =>
       Effect.sync(() => {
         transportFailure =
-          exit.failure ?? new SubagentProcessError({ operation: "run", message: exit.diagnostic });
+          exit.failure ?? SubagentProcessError.make({ operation: "run", message: exit.diagnostic });
         cancelPending(transportFailure);
       }),
     ),
     Effect.ignoreCause,
     Effect.ensuring(
       Effect.gen(function* () {
-        transportFailure ??= new SubagentProcessError({
+        transportFailure ??= SubagentProcessError.make({
           operation: "run",
           message: "Subagent backend transport closed.",
         });
@@ -400,7 +400,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
             requestId,
           }),
           () =>
-            new SubagentProcessError({
+            SubagentProcessError.make({
               operation: "await turn-input barrier acknowledgment from",
               code: "turn_input_barrier_unconfirmed",
               message:
@@ -423,7 +423,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
             message,
           }),
           () =>
-            new SubagentProcessError({
+            SubagentProcessError.make({
               operation: "await parent reply acknowledgment from",
               code: "reply_outcome_uncertain",
               message:
@@ -446,7 +446,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
             message,
           }),
           () =>
-            new SubagentProcessError({
+            SubagentProcessError.make({
               operation: "await descendant notification acknowledgment from",
               code: "transport_outcome_uncertain",
               message:
@@ -480,7 +480,7 @@ export const localPiBackendDriver = (
     isSafeNativeModelSelector(request.model)
       ? nodeExecutableCheck
       : Effect.fail(
-          new InvalidSubagentRequestError({
+          InvalidSubagentRequestError.make({
             code: "pi_model_unsupported",
             message: "Pi model selector is empty, excessive, or unsafe.",
           }),

@@ -1,4 +1,4 @@
-import { flow } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import { decodeUnknownOrUndefined, freezeSnapshot } from "pi-cosmic-core";
@@ -349,7 +349,7 @@ export const isSubagentContractTool = Schema.is(Schema.Literals(Rec.keys(CONTRAC
 
 export const decodeSubagentContract = <Tool extends SubagentContractTool>(tool: Tool) => {
   const schema: (typeof CONTRACT_SCHEMAS)[Tool] = CONTRACT_SCHEMAS[tool];
-  return flow(
+  return Fn.flow(
     decodeUnknownOrUndefined(schema, STRICT_PARSE_OPTIONS),
     (decoded): SubagentContract<Tool> | undefined =>
       decoded === undefined ? undefined : freezeSnapshot(decoded),

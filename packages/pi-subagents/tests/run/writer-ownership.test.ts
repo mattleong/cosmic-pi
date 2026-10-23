@@ -45,14 +45,14 @@ describe("SubagentService", () => {
           Effect.gen(function* () {
             yield* Effect.addFinalizer(() =>
               Effect.fail(
-                new SubagentProcessError({
+                SubagentProcessError.make({
                   operation: "finalize local native launch",
                   code: "process_cleanup_unconfirmed",
                   message: "Fixture applied start and failed rollback cleanup.",
                 }),
               ).pipe(Effect.orDie),
             );
-            return yield* new SubagentProcessError({
+            return yield* SubagentProcessError.make({
               operation: "launch local native agent",
               code: "transport_outcome_uncertain",
               message: "Fixture local native start may have applied.",

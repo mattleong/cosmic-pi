@@ -95,7 +95,7 @@ interface RunLaunchDependencies extends Pick<
 }
 
 const runtimeClosedError = () =>
-  new SubagentRuntimeClosedError({
+  SubagentRuntimeClosedError.make({
     message: "The subagent session runtime is closed.",
   });
 
@@ -162,7 +162,7 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
         `The configured sessionSpendLimit is invalid (${refusal.diagnostic}); no new runs start until it is fixed.`,
       );
     if (refusal)
-      return yield* new SubagentCapacityError({
+      return yield* SubagentCapacityError.make({
         limit: refusal.dollars,
         code: "session_spend_limit",
         message: `This session's subagents have spent $${refusal.spent.toFixed(2)} of its $${refusal.dollars.toFixed(2)} limit (sessionSpendLimit); no new runs start.`,
@@ -381,7 +381,7 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
                 candidate.runStateReclaimState === "reclaimed" &&
                 evictionEligible(candidate);
               if (!stillOwned)
-                return yield* new SubagentHistoryCapacityError({
+                return yield* SubagentHistoryCapacityError.make({
                   limit: MAX_RETAINED_RUNS,
                   code: "history_outbox_capacity",
                   message:

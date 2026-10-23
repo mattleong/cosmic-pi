@@ -1,5 +1,5 @@
 import * as Arr from "effect/Array";
-import { flow } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
@@ -198,9 +198,9 @@ const safeDecoder = <S extends Schema.ConstraintDecoder<unknown>>(
   validate: (decoded: S["Type"]) => boolean,
 ) => {
   const decodeTarget = Schema.decodeUnknownOption(schema, DETAILS_PARSE_OPTIONS);
-  return flow(
+  return Fn.flow(
     Option.liftThrowable(
-      flow(
+      Fn.flow(
         decodePreflighted,
         Option.flatMap(decodeTarget),
         Option.filter(validate),

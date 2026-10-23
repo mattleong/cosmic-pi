@@ -33,7 +33,7 @@ class HelperConfigError extends Schema.TaggedError<
   code: Schema.String,
 }) {}
 
-const helperConfigError = (code: string) => new HelperConfigError({ code });
+const helperConfigError = (code: string) => HelperConfigError.make({ code });
 const decodeConfigJsonOption = Schema.decodeUnknownOption(
   Schema.fromJsonString(SupervisorChannelConfigSchema),
   { onExcessProperty: "error" },

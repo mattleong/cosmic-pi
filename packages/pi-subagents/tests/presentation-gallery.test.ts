@@ -222,7 +222,7 @@ const lookup = (id: string): Effect.Effect<SubagentRunView, SubagentNotFoundErro
   const run = fleet.get(id);
   return run
     ? Effect.succeed(run)
-    : Effect.fail(new SubagentNotFoundError({ id, message: `Subagent run not found: ${id}` }));
+    : Effect.fail(SubagentNotFoundError.make({ id, message: `Subagent run not found: ${id}` }));
 };
 const updated = (id: string, overrides: Partial<SubagentRunView>) =>
   lookup(id).pipe(Effect.map((run) => ({ ...run, ...overrides })));
@@ -400,7 +400,7 @@ const startScenarios = Effect.gen(function* () {
           service: {
             startSessionOwned: () =>
               Effect.fail(
-                new SubagentProcessError({
+                SubagentProcessError.make({
                   operation: "start",
                   code: uncertain ? "prompt_outcome_uncertain" : "prompt_not_delivered",
                   message: uncertain
@@ -694,7 +694,7 @@ const agentScenarios = Effect.all([
     {
       agentSend: (_caller, to) =>
         Effect.fail(
-          new InvalidSubagentRequestError({
+          InvalidSubagentRequestError.make({
             code: "reply_in_flight",
             message: `Subagent ${to} already has a parent reply in flight; inspect it with agent_read before sending again.`,
           }),
@@ -707,7 +707,7 @@ const agentScenarios = Effect.all([
     {
       agentSend: (_caller, to) =>
         Effect.fail(
-          new SubagentProcessError({
+          SubagentProcessError.make({
             operation: "reply",
             code: "reply_outcome_uncertain",
             message: `The reply to subagent ${to} may already have applied. Inspect it with agent_read before retrying. (Transport closed before acknowledgement.)`,
@@ -869,7 +869,7 @@ const lifecycleScenarios = Effect.all([
       service: {
         interrupt: (id) =>
           Effect.fail(
-            new UnsupportedSubagentCapabilityError({
+            UnsupportedSubagentCapabilityError.make({
               backend: "local/codex",
               capability: "interrupt",
               message: `local/codex subagents do not support interruption. Stop with agent_lifecycle({ action: "stop", runIds: ["${id}"] }) or wait with agent_await.`,
@@ -1011,7 +1011,7 @@ const orphanedWorkspaces: SubagentServiceDoubleInput = {
 const staleWorkspace: SubagentServiceDoubleInput = {
   workspacePrepare: () =>
     Effect.fail(
-      new InvalidSubagentRequestError({
+      InvalidSubagentRequestError.make({
         code: "workspace_revision_stale",
         message: "The immutable workspace revision no longer matches.",
       }),
@@ -1065,7 +1065,7 @@ const workspaceScenarios = Effect.all([
       service: {
         workspaceApply: () =>
           Effect.fail(
-            new InvalidSubagentRequestError({
+            InvalidSubagentRequestError.make({
               code: "workspace_hook_failed",
               message:
                 "WorktreeCreate hook `pnpm install --offline --frozen-lockfile` exited with code 1: ERR_PNPM_NO_OFFLINE_TARBALL",
@@ -1126,7 +1126,7 @@ const workspaceScenarios = Effect.all([
       service: {
         workspaceRevise: () =>
           Effect.fail(
-            new InvalidSubagentRequestError({
+            InvalidSubagentRequestError.make({
               code: "workspace_rebase_refused",
               message:
                 "The previous changes can't be reapplied to the parent's current files.\nUnmergeable: \"src/db/legacy.ts\"\nNothing was changed; the workspace keeps its worker tree and revision.\nRemedy: revise without rebase, or apply the proposal and start a new writer from the current checkout.",
@@ -1147,7 +1147,7 @@ const workspaceScenarios = Effect.all([
       service: {
         workspaceDiscard: () =>
           Effect.fail(
-            new InvalidSubagentRequestError({
+            InvalidSubagentRequestError.make({
               code: "workspace_process_unsettled",
               message:
                 "A run still uses this workspace. Stop it and confirm cleanup before discard.",
@@ -1166,7 +1166,7 @@ const workspaceScenarios = Effect.all([
       service: {
         workspacePrepare: () =>
           Effect.fail(
-            new InvalidSubagentRequestError({
+            InvalidSubagentRequestError.make({
               code: "workspace_hook_failed",
               message:
                 "WorktreeCreate hook `pnpm install --offline --frozen-lockfile` timed out after 600s: Progress: resolved 412, reused 398",

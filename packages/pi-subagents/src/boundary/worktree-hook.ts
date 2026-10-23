@@ -90,7 +90,7 @@ export const runWorktreeHook = (
   const [executable, ...args] = hook.command;
   const label = `${input.event} hook \`${describeWorktreeHook(hook)}\``;
   if (executable === undefined)
-    return Effect.fail(new WorktreeHookError({ message: `${input.event} hook has no command.` }));
+    return Effect.fail(WorktreeHookError.make({ message: `${input.event} hook has no command.` }));
   const timeoutSeconds = hook.timeout ?? DEFAULT_WORKTREE_HOOK_TIMEOUT_SECONDS[input.event];
   const cleanupWarning = Effect.logWarning(
     `${label}'s process group couldn't be confirmed stopped.`,
@@ -119,14 +119,14 @@ export const runWorktreeHook = (
       // unconfirmed.
       if (error.operation === "spawn")
         return Effect.fail(
-          new WorktreeHookError({
+          WorktreeHookError.make({
             message: `${label} couldn't start; check that the command exists on PATH.`,
           }),
         );
       return cleanupWarning.pipe(
         Effect.andThen(
           Effect.fail(
-            new WorktreeHookError({ message: `${label} couldn't be read to completion.` }),
+            WorktreeHookError.make({ message: `${label} couldn't be read to completion.` }),
           ),
         ),
       );
@@ -143,7 +143,7 @@ export const runWorktreeHook = (
       return warned.pipe(
         Effect.andThen(
           Effect.fail(
-            new WorktreeHookError({ message: `${label} ${reason}${line ? `: ${line}` : "."}` }),
+            WorktreeHookError.make({ message: `${label} ${reason}${line ? `: ${line}` : "."}` }),
           ),
         ),
       );

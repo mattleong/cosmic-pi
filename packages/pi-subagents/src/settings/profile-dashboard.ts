@@ -1,5 +1,5 @@
 import * as Effect from "effect/Effect";
-import { constVoid } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { invokeHostCallback, isProjectTrusted, notifyAtHostBoundary } from "pi-cosmic-core";
@@ -161,7 +161,7 @@ export function openProfileDashboard(
         modelRefreshController.abort();
       };
       let dashboard: ProfileDashboardComponent | undefined;
-      let closeSurface: () => void = constVoid;
+      let closeSurface: () => void = Fn.constVoid;
       return openOwnedSurfacePromise<undefined>(ctx, {
         placement: "screen",
         closedValue: undefined,

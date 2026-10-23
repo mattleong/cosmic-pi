@@ -5,7 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FiberMap from "effect/FiberMap";
 import * as FiberSet from "effect/FiberSet";
-import { constVoid } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Runtime from "effect/Runtime";
@@ -46,7 +46,7 @@ class HelperStartupFailure extends Schema.TaggedError<
   override readonly [Runtime.errorReported] = false;
 }
 
-const startupFailure = (diagnostic: string) => new HelperStartupFailure({ diagnostic });
+const startupFailure = (diagnostic: string) => HelperStartupFailure.make({ diagnostic });
 const SERVER_VERSION = "3.0.0";
 const MAX_QUEUED_INPUT_BYTES = 2 * MAX_SUPERVISOR_CHANNEL_LINE_BYTES;
 const MAX_CONCURRENT_CALLS = 16;
@@ -191,7 +191,7 @@ const main = Effect.gen(function* () {
   };
 
   let inputClosed = false;
-  let detachStdin: () => void = constVoid;
+  let detachStdin: () => void = Fn.constVoid;
   const closeInput = (): void => {
     if (inputClosed) return;
     inputClosed = true;

@@ -12,7 +12,7 @@ import { isGitLocalEnvironmentKey } from "./git-local-environment.ts";
 import { nodeErrorCode } from "./harness-shared.ts";
 
 export const workspaceFailure = (operation: string, message: string) =>
-  new WorkspaceError({ operation, message });
+  WorkspaceError.make({ operation, message });
 
 interface WorkspaceRefusalReason {
   /** Relative to the tree being captured, when one file caused the refusal. */
@@ -27,7 +27,7 @@ export const workspaceRefusal = (
   message: string,
   reason: WorkspaceRefusalReason,
 ) =>
-  new WorkspaceError({
+  WorkspaceError.make({
     operation,
     message,
     detail: [
@@ -118,12 +118,12 @@ const gitEnvironment = (options: GitOptions | undefined) => ({
  */
 export const gitRunFailure = (error: BoundedProcessError) =>
   error.operation === "spawn"
-    ? new WorkspaceError({
+    ? WorkspaceError.make({
         operation: "git",
         message: "Git couldn't be started.",
         cleanupUnconfirmed: false,
       })
-    : new WorkspaceError({
+    : WorkspaceError.make({
         operation: "git",
         message: "Git couldn't be run; no automatic retry is safe.",
         cleanupUnconfirmed: true,
@@ -166,7 +166,7 @@ export const gitFailure = (args: ReadonlyArray<string>, result: GitResult) => {
       : result.overflowed
         ? `Git produced more output than a workspace allows (${command}).`
         : `Git failed (${command}).`;
-  return new WorkspaceError({
+  return WorkspaceError.make({
     operation: "git",
     message,
     ...(stderr.length > 0 && { detail: `Git reported:\n${stderr.join("\n")}` }),
@@ -203,7 +203,7 @@ const applyConflictPaths = (stderr: string, changedPaths: ReadonlyArray<string>)
 export const applyConflict = (result: GitResult, changedPaths: ReadonlyArray<string>) => {
   const paths = applyConflictPaths(result.stderr, changedPaths);
   const stderr = gitStderrLines(result.stderr);
-  return new WorkspaceError({
+  return WorkspaceError.make({
     operation: "prepare",
     code: "workspace_conflict",
     message:

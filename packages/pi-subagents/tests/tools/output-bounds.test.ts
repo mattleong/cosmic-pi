@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
-import { absurd } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
@@ -310,7 +310,7 @@ describe("worst-case model-facing output", () => {
           stop: (id) =>
             id.endsWith("1")
               ? Effect.fail(
-                  new InvalidSubagentRequestError({
+                  InvalidSubagentRequestError.make({
                     code: "stop_failed",
                     message: longText("stop failed", MAX_ERROR_CHARS),
                   }),
@@ -549,7 +549,7 @@ const worstReadRun = (
         error: withTail("FAILURE", MAX_ERROR_CHARS),
       });
   }
-  return absurd(state);
+  return Fn.absurd(state);
 };
 
 describe("multi-run agent_read", () => {

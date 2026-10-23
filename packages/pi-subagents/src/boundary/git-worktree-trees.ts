@@ -127,7 +127,7 @@ export const removePreparation = (
 
 // Failure messages don't say what happened to a partial workspace or rebuilt tree; callers add it.
 export const withOutcome = (error: WorkspaceError, outcome: string) =>
-  new WorkspaceError({
+  WorkspaceError.make({
     ...(error.code !== undefined && { code: error.code }),
     operation: error.operation,
     message: error.message,

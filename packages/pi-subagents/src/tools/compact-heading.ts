@@ -1,6 +1,6 @@
 import { getTextContent, type CompactPhase, type CompactSummary } from "pi-code-previews";
 import * as Predicate from "effect/Predicate";
-import { flow } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { countLabel } from "pi-cosmic-core";
@@ -23,7 +23,7 @@ export interface SummaryArguments {
 
 const decodeTargetIds = Schema.decodeUnknownOption(Schema.Array(Schema.String));
 
-const targetIds = flow(
+const targetIds = Fn.flow(
   decodeTargetIds,
   Option.map((decoded) => [...new Set(decoded.map((id) => id.trim()).filter(Boolean))]),
   Option.getOrUndefined,

@@ -1,4 +1,4 @@
-import { absurd } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import { sanitizeDiagnosticContent, sanitizeDiagnosticError } from "pi-cosmic-core";
@@ -193,7 +193,7 @@ export function backendEventHandler(dependencies: RunEventDependencies) {
     const processFailure =
       record.backendFailure ??
       event.failure ??
-      new SubagentProcessError({
+      SubagentProcessError.make({
         operation: "run",
         message: sanitizeDiagnosticText(
           event.diagnostic.trim() ||
@@ -238,13 +238,13 @@ export function backendEventHandler(dependencies: RunEventDependencies) {
       case "supervisor_contact":
         return handleContact(record, event);
       case "protocol_error": {
-        const error = new SubagentProtocolError({ message: event.message });
+        const error = SubagentProtocolError.make({ message: event.message });
         return settlement.failRun(record, error.message, error);
       }
       case "exit":
         return handleExit(record, event);
     }
-    return absurd(event);
+    return Fn.absurd(event);
   };
 
   const handleViewEvent = (
@@ -344,7 +344,7 @@ export function backendEventHandler(dependencies: RunEventDependencies) {
         }));
       }
     }
-    return absurd(event);
+    return Fn.absurd(event);
   };
 
   const handleEvent = (

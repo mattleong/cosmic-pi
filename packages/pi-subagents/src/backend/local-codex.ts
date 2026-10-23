@@ -2,7 +2,7 @@ import { toolOutputPreview } from "./tool-output-preview.ts";
 import { FAST_SERVICE_TIER } from "pi-better-openai/fast-models";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import { absurd } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -322,7 +322,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
           case "turn_completed":
             return onTurnCompleted(event, raw);
         }
-        return absurd(event);
+        return Fn.absurd(event);
       }),
       Effect.catch(() =>
         offer(

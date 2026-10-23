@@ -72,7 +72,7 @@ describe("writer workspace lifecycle", () => {
     const f = workspaceFixture();
     return withService(f.layer, function* (service) {
       yield* service.start(repoWriter());
-      f.hooks.ownerProbeFailure = new WorkspaceError({
+      f.hooks.ownerProbeFailure = WorkspaceError.make({
         operation: "lock",
         message: "Owner leases are unreadable.",
       });
@@ -186,7 +186,7 @@ describe("writer workspace lifecycle", () => {
       writerLeases: leasesWith((base) => ({
         release: (lease) =>
           lease.canonicalCwd === "/repo"
-            ? Effect.fail(new WriterLeaseReleaseError({ message: "Release unconfirmed." }))
+            ? Effect.fail(WriterLeaseReleaseError.make({ message: "Release unconfirmed." }))
             : base.release(lease),
       })),
     });
@@ -281,7 +281,7 @@ describe("writer workspace lifecycle", () => {
     return withService(f.layer, function* (service) {
       const id = (yield* stoppedWriter(service)).workspaceId!;
       const first = yield* service.workspaceReview(id);
-      f.hooks.createHookFailure = new WorkspaceError({
+      f.hooks.createHookFailure = WorkspaceError.make({
         operation: "hook",
         message: "Hook failed.",
       });

@@ -85,7 +85,7 @@ describe("orphaned workspace takeover", () => {
         acquire: (input) =>
           heldElsewhere && input.cwd.path === "/repo"
             ? Effect.fail(
-                new WriterLeaseConflictError({
+                WriterLeaseConflictError.make({
                   reason: "live",
                   message: "Another live writer already owns this filesystem directory identity.",
                 }),

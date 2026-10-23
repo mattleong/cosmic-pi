@@ -174,7 +174,7 @@ describe("empty worktree proposal cleanup", () => {
 
   it.effect("keeps the workspace when inspection fails", () => {
     const f = workspaceFixture();
-    f.hooks.workerChanges = new WorkspaceError({ operation: "inspect", message: "Unreadable." });
+    f.hooks.workerChanges = WorkspaceError.make({ operation: "inspect", message: "Unreadable." });
     const counter = countInspections(f);
     return withService(f.layer, function* (service) {
       const writer = yield* completedWriter(service, f);

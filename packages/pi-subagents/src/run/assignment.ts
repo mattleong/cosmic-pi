@@ -122,13 +122,13 @@ export function assignmentOperations(dependencies: RunAssignmentDependencies) {
         if (!isOutcomeUncertain(error)) return Effect.fail(error);
         const reported =
           operation === "resume"
-            ? new SubagentProcessError({
+            ? SubagentProcessError.make({
                 operation,
                 code: "resume_outcome_uncertain",
                 message: `The resume prompt may already have applied. Inspect the run with agent_read before retrying. (${error.message})`,
               })
             : record.view.writeIntent === "writer"
-              ? new SubagentProcessError({
+              ? SubagentProcessError.make({
                   operation,
                   code: "start_outcome_uncertain",
                   message: `The writer task may have been accepted, but startup could not confirm the outcome. Inspect the workspace and the run with agent_read before starting another writer. (${error.message})`,

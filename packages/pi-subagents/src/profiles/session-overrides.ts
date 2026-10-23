@@ -1,5 +1,5 @@
 import * as Effect from "effect/Effect";
-import { flow } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { decodeUnknownOrUndefined, freezeSnapshot } from "pi-cosmic-core";
@@ -197,7 +197,7 @@ const decodeSeedInput = decodeUnknownOrUndefined(SessionProfileOverrideSeedInput
   onExcessProperty: "error",
 });
 
-export const decodeSessionProfileOverrideSeed = flow(
+export const decodeSessionProfileOverrideSeed = Fn.flow(
   decodeSeedInput,
   (decoded): SessionProfileOverrideSeed | undefined => {
     const baseline = decoded?.baseline;
@@ -250,7 +250,7 @@ export const conflict = (
   message: string,
 ): Effect.Effect<never, SessionProfileConflictError> =>
   Effect.fail(
-    new SessionProfileConflictError({
+    SessionProfileConflictError.make({
       expectedRevision,
       actualRevision: snapshot.revision,
       message,
@@ -272,11 +272,11 @@ const editSnapshot = (
     return conflict(snapshot, expectedRevision, staleMessage);
   const changes = edit();
   if (Predicate.isString(changes))
-    return Effect.fail(new SessionProfileInvalidError({ message: changes }));
+    return Effect.fail(SessionProfileInvalidError.make({ message: changes }));
   if (changes === undefined) return Effect.succeed(snapshot);
   if (snapshot.revision >= MAX_SESSION_PROFILE_REVISION)
     return Effect.fail(
-      new SessionProfileInvalidError({
+      SessionProfileInvalidError.make({
         message: `Session profile revision reached the exact-integer limit ${MAX_SESSION_PROFILE_REVISION}; restart the Pi session before making another change.`,
       }),
     );

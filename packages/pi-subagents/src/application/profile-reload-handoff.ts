@@ -77,7 +77,7 @@ const readEnvelope = (
     const seed = decodeSessionProfileOverrideSeed(decoded.seed);
     if (seed?.baseline) return { sessionKey: decoded.sessionKey, seed };
     if (decoded.sessionKey === sessionKey)
-      throw new IncompatibleProfileReloadHandoffError({
+      throw IncompatibleProfileReloadHandoffError.make({
         message:
           "Subagents cannot restore this session's profile settings. Start a fresh Pi session to recover.",
       });

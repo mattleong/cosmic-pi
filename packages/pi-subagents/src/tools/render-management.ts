@@ -1,4 +1,4 @@
-import { absurd } from "effect/Function";
+import * as Fn from "effect/Function";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import { expandedSection } from "pi-code-previews";
@@ -122,7 +122,7 @@ const primaryCount = (details: RunToolDetails, count: number): string => {
     case "stop":
       return `${count} updated`;
   }
-  return absurd(details.action);
+  return Fn.absurd(details.action);
 };
 
 const countersText = (details: RunToolDetails, count: number, failures: ActionFailureCounts) => {

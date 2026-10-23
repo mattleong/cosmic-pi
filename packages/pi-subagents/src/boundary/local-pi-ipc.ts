@@ -132,12 +132,12 @@ const localPiChildIpcChannel = (port: LocalPiIpcPort<LocalPiContact>): LocalPiCh
       port,
       contact,
       () =>
-        new ParentContactError({
+        ParentContactError.make({
           code: "transport_not_sent",
           message: "The parent subagent supervisor is unavailable.",
         }),
       () =>
-        new ParentContactError({
+        ParentContactError.make({
           code: "transport_outcome_uncertain",
           message: "Unable to confirm delivery to the parent subagent supervisor.",
         }),

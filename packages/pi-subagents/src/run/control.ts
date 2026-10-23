@@ -143,7 +143,7 @@ export function controlOperations(dependencies: RunControlDependencies) {
       );
     const process = record.process;
     if (!process)
-      return yield* new SubagentProcessError({
+      return yield* SubagentProcessError.make({
         operation: "reply to",
         message: `Subagent ${id} has no active process.`,
       });
@@ -459,7 +459,10 @@ export function controlOperations(dependencies: RunControlDependencies) {
             currentTool: undefined,
           };
           selected.process?.cancelPending(
-            new SubagentProcessError({ operation: "stop", message: `Subagent ${id} was stopped.` }),
+            SubagentProcessError.make({
+              operation: "stop",
+              message: `Subagent ${id} was stopped.`,
+            }),
           );
           yield* publish;
           return { record: selected, cleanupRequired: true as const };

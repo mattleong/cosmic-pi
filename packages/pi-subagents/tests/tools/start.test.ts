@@ -180,7 +180,7 @@ describe("subagent tool", () => {
       const failStart = () => {
         starts += 1;
         return Effect.fail(
-          new SubagentProcessError({
+          SubagentProcessError.make({
             operation: "spawn",
             code: "post_selection_start_failed",
             message: "Selected candidate failed after start ownership began.",
@@ -321,7 +321,7 @@ describe("subagent tool", () => {
           ),
           Match.when("launch-2", () =>
             Effect.fail(
-              new SubagentProcessError({ operation: "start", message: "simulated failure" }),
+              SubagentProcessError.make({ operation: "start", message: "simulated failure" }),
             ),
           ),
           Match.orElse(() => Effect.sync(() => view({ id: "agent-fast", name: "launch-3" }))),

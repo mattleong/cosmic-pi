@@ -281,7 +281,7 @@ export function registerSubagentApplication(
                     questionnaireOwner,
                   )
                 : Effect.fail(
-                    new InvalidSubagentRequestError({
+                    InvalidSubagentRequestError.make({
                       code: "proxy_caller_disconnected",
                       message: "The subagent session was replaced.",
                     }),
@@ -290,7 +290,7 @@ export function registerSubagentApplication(
           proxyHandler: Effect.fn("SubagentsExtension.proxyHandler")(
             function* (service, callerRunId, request) {
               if (!ownsActivation() || currentActivation !== activation)
-                return yield* new InvalidSubagentRequestError({
+                return yield* InvalidSubagentRequestError.make({
                   code: "proxy_caller_disconnected",
                   message: "The subagent session was replaced.",
                 });
@@ -316,7 +316,7 @@ export function registerSubagentApplication(
                 (run) => run.id === callerRunId,
               );
               if (!caller)
-                return yield* new InvalidSubagentRequestError({
+                return yield* InvalidSubagentRequestError.make({
                   code: "parent_run_not_found",
                   message: "The authenticated caller is no longer registered.",
                 });

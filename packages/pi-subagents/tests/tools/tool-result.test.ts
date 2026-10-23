@@ -252,7 +252,7 @@ effectTest(
           id === "good"
             ? Effect.succeed(view({ id, state: "stopped" }))
             : Effect.fail(
-                new InvalidSubagentRequestError(
+                InvalidSubagentRequestError.make(
                   failure(id === "uncertain" ? "stop_cleanup_unconfirmed" : "not_running", id),
                 ),
               ),

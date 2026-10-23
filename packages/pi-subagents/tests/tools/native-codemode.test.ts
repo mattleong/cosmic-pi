@@ -83,7 +83,7 @@ describe("native scripted subagent workflows", () => {
           const service = subagentServiceDouble({
             stop: (id) =>
               id === "missing"
-                ? Effect.fail(new SubagentNotFoundError({ id, message: "Run not found" }))
+                ? Effect.fail(SubagentNotFoundError.make({ id, message: "Run not found" }))
                 : Effect.succeed(view({ id, state: "stopped" })),
             interrupt: (id) => Effect.succeed(view({ id, state: "paused" })),
           });

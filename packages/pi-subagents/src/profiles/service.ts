@@ -1,6 +1,6 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import { identity } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Semaphore from "effect/Semaphore";
 import { frozenProjection, type ProjectionError } from "pi-cosmic-core";
@@ -100,7 +100,7 @@ const subagentProfileService = Effect.fn("SubagentProfileService.make")(function
   // and /tree restore from never disagrees with this service.
   const projection = yield* frozenProjection<SessionProfileSnapshot, SessionProfileSnapshot>(
     sessionProfileSnapshot(config, options.initialSessionOverrides),
-    identity,
+    Fn.identity,
     (snapshot) => options.publishSession?.(snapshot),
   );
   // Serializes edits with saved-set writes, which read the snapshot without republishing it, so

@@ -279,7 +279,7 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
         }),
       );
       if (view.state !== "running" && !isTerminalRunState(view.state))
-        return yield* new SubagentProcessError({
+        return yield* SubagentProcessError.make({
           operation: "resume",
           message: view.error ?? `Subagent ${id} stopped before resume completed.`,
         });

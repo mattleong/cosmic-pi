@@ -764,8 +764,8 @@ export const gitWorkspaceEngine = Effect.fn("GitWorkspaceEngine.make")(function*
             kind: worktreeKind(root),
             runId: target.runId,
           }).pipe(
-            Effect.mapError(
-              (error) => new WorkspaceError({ operation: "hook", message: error.message }),
+            Effect.mapError((error) =>
+              WorkspaceError.make({ operation: "hook", message: error.message }),
             ),
           ),
         { discard: true },

@@ -1,4 +1,4 @@
-import { absurd } from "effect/Function";
+import * as Fn from "effect/Function";
 import type { BackendAssistantTerminal } from "../backend/model.ts";
 import {
   isInactiveRunRecord,
@@ -31,7 +31,7 @@ const terminalFailureMessage = (terminal?: BackendAssistantTerminal): string => 
     case undefined:
       return "Assignment settled without a successful nonempty final report.";
   }
-  return absurd(stopReason);
+  return Fn.absurd(stopReason);
 };
 
 export const settledAssignmentLocked = (

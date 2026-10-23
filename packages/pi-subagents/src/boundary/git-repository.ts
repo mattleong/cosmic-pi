@@ -174,7 +174,7 @@ export const refuseHiddenLocalEdits = Effect.fn("GitRepository.refuseHiddenLocal
     return (tag === "S" || tag !== tag.toUpperCase()) && selected.has(name) ? [name] : [];
   });
   if (hidden.length === 0) return undefined;
-  return yield* new WorkspaceError({
+  return yield* WorkspaceError.make({
     operation,
     code: "workspace_local_override",
     message:

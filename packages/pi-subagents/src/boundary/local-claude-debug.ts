@@ -124,13 +124,13 @@ const diagnosticIo = <A>(
 ): Effect.Effect<A, LocalClaudeDebugIoError> =>
   Effect.tryPromise({
     try: operation,
-    catch: () => new LocalClaudeDebugIoError({}),
+    catch: () => LocalClaudeDebugIoError.make({}),
   });
 
 const diagnosticStep = <A>(
   effect: Effect.Effect<A, PrivateFileError>,
 ): Effect.Effect<A, LocalClaudeDebugIoError> =>
-  effect.pipe(Effect.mapError(() => new LocalClaudeDebugIoError({})));
+  effect.pipe(Effect.mapError(() => LocalClaudeDebugIoError.make({})));
 
 interface OwnedLedgerDirectory {
   readonly directory: string;
@@ -142,7 +142,7 @@ const ownedLedgerDirectories = Effect.fn("LocalClaudeDebug.ownedLedgers")(functi
   const candidates = entries.filter(
     (entry) => entry.name.startsWith("claude-") && entry.isDirectory() && !entry.isSymbolicLink(),
   );
-  if (candidates.length > 256) return yield* new LocalClaudeDebugIoError({});
+  if (candidates.length > 256) return yield* LocalClaudeDebugIoError.make({});
   const owned = yield* Effect.forEach(
     candidates,
     (entry) => {

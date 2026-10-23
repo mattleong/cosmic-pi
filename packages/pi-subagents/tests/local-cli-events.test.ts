@@ -4,10 +4,9 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Exit from "effect/Exit";
-import * as EffectScope from "effect/Scope";
+import * as Scope from "effect/Scope";
 import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
-import type { Scope } from "effect/Scope";
 
 import {
   capturedTelemetrySnapshot,
@@ -70,7 +69,7 @@ const piChild = (
   ...overrides,
 });
 
-const spawnPi = (child: Effect.Effect<ChildProcessHandle, never, Scope>) =>
+const spawnPi = (child: Effect.Effect<ChildProcessHandle, never, Scope.Scope>) =>
   localPiBackendDriver({ spawn: () => child, reclaimRunState: () => Effect.void }).spawn(
     backendLaunch(),
   );
@@ -158,7 +157,7 @@ it.effect(
   "Pi retains delayed process usage across assignments and cancels blocked reads on shutdown",
   () =>
     Effect.gen(function* () {
-      const scope = yield* EffectScope.make();
+      const scope = yield* Scope.make();
       const childEvents = yield* Queue.unbounded<ChildWireEvent, Cause.Done>();
       const requested = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
@@ -184,7 +183,7 @@ it.effect(
           return undefined;
         });
       const backend = yield* spawnPi(Effect.succeed(piChild(childEvents, { send }))).pipe(
-        Effect.provideService(EffectScope.Scope, scope),
+        Effect.provideService(Scope.Scope, scope),
       );
       yield* backend.controls.initialize;
       yield* backend.controls.start("first", 1);
@@ -213,14 +212,14 @@ it.effect(
       block = true;
       yield* Queue.offer(childEvents, { type: "rpc_message", value: { type: "entry_appended" } });
       yield* Deferred.await(blocked);
-      yield* EffectScope.close(scope, Exit.void);
+      yield* Scope.close(scope, Exit.void);
     }),
 );
 
 for (const failure of ["malformed", "rejected", "timeout"] as const)
   it.effect(`Pi refuses work without a valid startup usage baseline: ${failure}`, () =>
     Effect.gen(function* () {
-      const scope = yield* EffectScope.make();
+      const scope = yield* Scope.make();
       const events = yield* Queue.unbounded<ChildWireEvent, Cause.Done>();
       const requested = yield* Deferred.make<void>();
       const commands: string[] = [];
@@ -241,7 +240,7 @@ for (const failure of ["malformed", "rejected", "timeout"] as const)
             released = true;
           }),
         ),
-      ).pipe(Effect.provideService(EffectScope.Scope, scope));
+      ).pipe(Effect.provideService(Scope.Scope, scope));
       const initializing = yield* backend.controls.initialize.pipe(Effect.forkChild);
       yield* Deferred.await(requested);
       if (failure === "timeout") yield* TestClock.adjust("10 seconds");
@@ -250,7 +249,7 @@ for (const failure of ["malformed", "rejected", "timeout"] as const)
         "Failure",
       );
       expect(commands).not.toContain("prompt");
-      yield* EffectScope.close(scope, Exit.void);
+      yield* Scope.close(scope, Exit.void);
       expect(released).toBe(true);
     }),
   );
@@ -268,12 +267,12 @@ const rawId = (raw: LocalCliWireEvent): string =>
 
 it.effect("Pi keeps RPC and IPC byte owners until normalized consumption or scope release", () =>
   Effect.gen(function* () {
-    const scope = yield* EffectScope.make();
+    const scope = yield* Scope.make();
     const childEvents = yield* Queue.bounded<ChildWireEvent, Cause.Done>(16);
     const acknowledged: ChildWireEvent[] = [];
     const backend = yield* spawnPi(
       Effect.succeed(piChild(childEvents, { acknowledge: (raw) => void acknowledged.push(raw) })),
-    ).pipe(Effect.provideService(EffectScope.Scope, scope));
+    ).pipe(Effect.provideService(Scope.Scope, scope));
     const rpc: ChildWireEvent = { type: "rpc_message", value: { type: "agent_start" } };
     yield* Queue.offer(childEvents, rpc);
     const started = yield* Queue.take(backend.events);
@@ -297,7 +296,7 @@ it.effect("Pi keeps RPC and IPC byte owners until normalized consumption or scop
     const normalized = yield* Queue.take(backend.events);
     expect(normalized.type).toBe("supervisor_contact");
     expect(acknowledged).toEqual([rpc]);
-    yield* EffectScope.close(scope, Exit.void);
+    yield* Scope.close(scope, Exit.void);
     expect(acknowledged).toEqual([rpc, contact]);
     backend.acknowledge(normalized);
     expect(acknowledged).toEqual([rpc, contact]);

@@ -67,7 +67,7 @@ const archiveIO = <A>(
 ): Effect.Effect<A, ReportArchiveError> =>
   Effect.tryPromise({
     try: evaluate,
-    catch: () => new ReportArchiveError({ reason, message }),
+    catch: () => ReportArchiveError.make({ reason, message }),
   });
 
 // Run ids and file suffixes are collision-resistant, not guaranteed unique. Exclusive creation
@@ -79,11 +79,11 @@ const writeExclusive = (file: string, content: string) =>
       try: () => fs.open(file, "wx", 0o600),
       catch: (cause) =>
         nodeErrorCode(cause) === "EEXIST"
-          ? new ReportArchiveError({
+          ? ReportArchiveError.make({
               reason: "file_exists",
               message: "A report file with this identity already exists.",
             })
-          : new ReportArchiveError({
+          : ReportArchiveError.make({
               reason: "write_failed",
               message: "The report file couldn't be created.",
             }),
@@ -129,7 +129,7 @@ export const sessionReportArchive = (agentDirectory: string, sessionKey: string)
       // Every surface names the file by its path verbatim within a fixed per-run budget, so a path
       // they can't carry saves nothing and the parent gets a preview and agent_read instead.
       if (file.length > MAX_OUTCOME_FILE_PATH_CHARS || sanitizeTerminalLine(file) !== file)
-        return yield* new ReportArchiveError({
+        return yield* ReportArchiveError.make({
           reason: "path_unrepresentable",
           message: "The report file path can't be shown verbatim.",
         });

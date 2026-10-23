@@ -306,7 +306,7 @@ describe("SubagentConfigStore activation", () => {
         JsonDocumentStore.of({
           ...makeInMemoryDocuments().service,
           readObject: (path) =>
-            Effect.fail(new JsonDocumentError({ operation: "read", path, message: "Bad JSON." })),
+            Effect.fail(JsonDocumentError.make({ operation: "read", path, message: "Bad JSON." })),
         }),
       );
       yield* rejects(

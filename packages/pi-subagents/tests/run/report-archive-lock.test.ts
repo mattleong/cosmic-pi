@@ -274,7 +274,7 @@ describe("report files saved during settlement", () => {
         const { record, settle } = yield* fixture({
           save: () =>
             Effect.fail(
-              new ReportArchiveError({ reason: "write_failed", message: "/private/report/path" }),
+              ReportArchiveError.make({ reason: "write_failed", message: "/private/report/path" }),
             ),
           discard: (file) => Effect.sync(() => void discarded.push(file.path)),
         });

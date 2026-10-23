@@ -18,7 +18,7 @@ export const closeRunsLeafFirst = (dependencies: RunShutdownDependencies): Effec
         Effect.sync(() => {
           record.stoppedByParent = true;
           record.process?.cancelPending(
-            new SubagentRuntimeClosedError({ message: "Parent session shut down." }),
+            SubagentRuntimeClosedError.make({ message: "Parent session shut down." }),
           );
           if (record.closingScope !== record.scope) beginCleanup(record);
         }),

@@ -56,10 +56,10 @@ export const processError = (
   operation: string,
   code: string,
   message: string,
-): SubagentProcessError => new SubagentProcessError({ operation, code, message });
+): SubagentProcessError => SubagentProcessError.make({ operation, code, message });
 
 export const invalidRequest = (code: string, message: string): InvalidSubagentRequestError =>
-  new InvalidSubagentRequestError({ code, message });
+  InvalidSubagentRequestError.make({ code, message });
 
 /** Refusals of `agent_*` messaging; each is an `InvalidSubagentRequestError` code. */
 export const AGENT_MESSAGE_REFUSAL_CODES = [
@@ -78,7 +78,7 @@ export const agentMessageRefusal = (
 ): InvalidSubagentRequestError => invalidRequest(code, message);
 
 export const runNotFound = (id: string): SubagentNotFoundError =>
-  new SubagentNotFoundError({ id, message: `Subagent run not found: ${id}` });
+  SubagentNotFoundError.make({ id, message: `Subagent run not found: ${id}` });
 
 export const processCauseError = (
   operation: string,
@@ -86,7 +86,7 @@ export const processCauseError = (
   code?: string,
   fallbackMessage = `Unable to ${operation} subagent process.`,
 ): SubagentProcessError =>
-  new SubagentProcessError({
+  SubagentProcessError.make({
     operation,
     message:
       cause instanceof Error ? cause.message : Predicate.isString(cause) ? cause : fallbackMessage,

@@ -175,7 +175,7 @@ const cleanupFixture = () => {
   const control: FakeCleanupControl = {
     fail: (nextDiagnostic, nextRecoverable = true, nextMixed = false) => {
       diagnostic = nextDiagnostic;
-      failure = new SubagentProcessError({ operation: "fixture cleanup", ...nextDiagnostic });
+      failure = SubagentProcessError.make({ operation: "fixture cleanup", ...nextDiagnostic });
       recoverable = nextRecoverable;
       confirmed = false;
       mixed = nextMixed;
@@ -309,7 +309,7 @@ export function fakeChildLayer(
         reclaimedRunIds.push(runId);
         if (options.reclaimGate) yield* Deferred.await(options.reclaimGate);
         if (options.failReclaim)
-          return yield* new SubagentProcessError({
+          return yield* SubagentProcessError.make({
             operation: "reclaim run state",
             code: "fixture_reclaim_failed",
             message: "Fixture run-state reclamation failed.",
@@ -436,7 +436,7 @@ export function fakeChildLayer(
             Queue.endUnsafe(events);
             Deferred.doneUnsafe(
               exited,
-              Effect.fail(new SubagentProcessError({ operation: "await exit from", message })),
+              Effect.fail(SubagentProcessError.make({ operation: "await exit from", message })),
             );
           };
           const handle: ChildProcessHandle = {
@@ -454,7 +454,7 @@ export function fakeChildLayer(
                 if (gate) yield* Deferred.await(gate);
                 const transportFailure = takeFirst(transportFailures, forCommand);
                 if (transportFailure)
-                  return yield* new SubagentProcessError({
+                  return yield* SubagentProcessError.make({
                     operation: "send RPC command to",
                     code: transportFailure.code,
                     message: "Fixture transport outcome.",
@@ -499,7 +499,7 @@ export function fakeChildLayer(
                 ipc.push(message);
                 const ipcFailure = ipcFailures.shift();
                 if (ipcFailure)
-                  return yield* new SubagentProcessError({
+                  return yield* SubagentProcessError.make({
                     operation: "send IPC message to",
                     code: ipcFailure,
                     message: "Fixture IPC outcome.",
@@ -620,7 +620,7 @@ export function fakeWriterLeaseLayer(
       if (remainingAcquireFailures > 0) {
         remainingAcquireFailures -= 1;
         return Effect.fail(
-          new WriterLeaseConflictError({
+          WriterLeaseConflictError.make({
             reason: "live",
             message: "Fixture cross-process writer conflict.",
           }),
@@ -647,7 +647,7 @@ export function fakeWriterLeaseLayer(
         counts.mark += 1;
         options.onMark?.(lease);
         if (options.failMark)
-          return yield* new WriterLeaseMarkError({
+          return yield* WriterLeaseMarkError.make({
             message: "Fixture spawn-started mark failed ambiguously.",
           });
         return lease;
@@ -657,7 +657,7 @@ export function fakeWriterLeaseLayer(
       options.onRelease?.(lease);
       return options.failRelease
         ? Effect.fail(
-            new WriterLeaseReleaseError({
+            WriterLeaseReleaseError.make({
               message: "Fixture writer-lease release could not be confirmed.",
             }),
           )

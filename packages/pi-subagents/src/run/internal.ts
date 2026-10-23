@@ -1,6 +1,6 @@
 import { closeOpenToolSessionEvents } from "./session-events.ts";
 import type { SessionUsageLedger } from "./session-usage.ts";
-import { absurd } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
@@ -289,7 +289,7 @@ const unsupportedCapabilityMessage = (
     case "resume":
       return `${backend} subagents do not support ${capability}. Inspect supported operations with agent_read({ agentIds: ["${id}"] }).`;
   }
-  return absurd(capability);
+  return Fn.absurd(capability);
 };
 
 export const requireCapability = (
@@ -299,7 +299,7 @@ export const requireCapability = (
   if (hasSubagentCapability(record.view, capability)) return Effect.void;
   const backend = `local/${record.view.runtime}`;
   return Effect.fail(
-    new UnsupportedSubagentCapabilityError({
+    UnsupportedSubagentCapabilityError.make({
       backend,
       capability,
       message: unsupportedCapabilityMessage(backend, capability, record.view.id),

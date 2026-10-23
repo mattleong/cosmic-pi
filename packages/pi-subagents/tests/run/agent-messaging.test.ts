@@ -535,7 +535,7 @@ describe("agent messaging", () => {
     const backend = fakeNativeReportBackendLayer({
       steer: () =>
         Effect.fail(
-          new SubagentProcessError({
+          SubagentProcessError.make({
             operation: "steer",
             code: PENDING_STEER_DELIVERY_CODE,
             pendingDelivery: true,
@@ -560,7 +560,7 @@ describe("agent messaging", () => {
   });
 
   it.effect("fails a send whose guidance delivery failed without a pending confirmation", () => {
-    const failure = new SubagentProcessError({
+    const failure = SubagentProcessError.make({
       operation: "steer",
       code: PENDING_STEER_DELIVERY_CODE,
       message: "Guidance delivery failed.",

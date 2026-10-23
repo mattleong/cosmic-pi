@@ -27,7 +27,7 @@ const lateEvents: ReadonlyArray<BackendEvent> = [
   { type: "exit", exitCode: 0, diagnostic: "Process exited after reporting." },
   {
     type: "backend_failure",
-    error: new SubagentProcessError({ operation: "run", message: "Transport closed." }),
+    error: SubagentProcessError.make({ operation: "run", message: "Transport closed." }),
   },
 ];
 
@@ -302,7 +302,7 @@ describe("report ownership before assignment activation", () => {
         // The exit or failure cancels the start request; the accepted report still answers it.
         yield* Deferred.fail(
           startGate,
-          new SubagentProcessError({ operation: "start", message: "Transport closed." }),
+          SubagentProcessError.make({ operation: "start", message: "Transport closed." }),
         );
         expect(yield* Fiber.join(confirming)).toMatchObject({ state: "completed" });
         expectReportWon(record);
@@ -314,7 +314,7 @@ describe("report ownership before assignment activation", () => {
   it.effect("answers a failed start with the buffered report it already accepted", () =>
     Effect.gen(function* () {
       const { record, settlement, assignments } = yield* issuingFixture(() =>
-        Effect.fail(new SubagentProcessError({ operation: "start", message: "Prompt refused." })),
+        Effect.fail(SubagentProcessError.make({ operation: "start", message: "Prompt refused." })),
       );
       const issued = yield* assignments.submitPrompt(
         record,

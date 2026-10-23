@@ -58,7 +58,7 @@ describe("rebasing revise", () => {
       const writer = yield* stoppedWriter(service);
       const id = writer.workspaceId!;
       const tested = yield* reviewAndPrepare(service, id);
-      f.hooks.rebase = new WorkspaceError({
+      f.hooks.rebase = WorkspaceError.make({
         operation: "rebase",
         code: "workspace_rebase_refused",
         message: "The previous changes can't be reapplied to the parent's current files.",

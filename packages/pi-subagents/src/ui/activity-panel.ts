@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { formatElapsed, sanitizeTerminalLine } from "pi-cosmic-core";
-import { absurd } from "effect/Function";
+import * as Fn from "effect/Function";
 import { MAIN_AGENT_ID } from "../run/agent-messaging.ts";
 import { runStall, type RunStall } from "../run/stall.ts";
 import {
@@ -335,7 +335,7 @@ const stallLabel = (stall: RunStall): string => {
     case "failing-tools":
       return `${stall.count} failed tools in a row`;
   }
-  return absurd(stall);
+  return Fn.absurd(stall);
 };
 
 interface ActivityMetadataVariant {

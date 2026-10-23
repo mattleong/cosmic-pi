@@ -1,4 +1,4 @@
-import { absurd } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Match from "effect/Match";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
@@ -94,7 +94,7 @@ const receiptPresentation = (entry: SubagentStartEntry) => {
     case "failed":
       return { glyph: managerStateGlyph("failed"), color: "error" } as const;
   }
-  return absurd<never>(entry);
+  return Fn.absurd<never>(entry);
 };
 
 interface ReceiptRowOptions {

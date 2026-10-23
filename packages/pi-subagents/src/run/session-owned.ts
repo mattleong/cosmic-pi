@@ -21,7 +21,7 @@ export const commitSessionOwned = <A, E, R>(
 ) =>
   Effect.suspend<A, E | SubagentRuntimeClosedError, R>(() =>
     isScopeClosed(ownerScope)
-      ? Effect.fail(new SubagentRuntimeClosedError({ message: "Parent session shut down." }))
+      ? Effect.fail(SubagentRuntimeClosedError.make({ message: "Parent session shut down." }))
       : Effect.forkIn(commit, ownerScope, { startImmediately: true }).pipe(
           Effect.tap(() => Effect.sync(() => onOwned?.())),
           Effect.flatMap((fiber) => restore(Fiber.join(fiber))),

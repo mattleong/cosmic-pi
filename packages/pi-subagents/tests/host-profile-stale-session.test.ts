@@ -83,7 +83,7 @@ describe("profile start on a retired session", () => {
           if (probes > 1) return Effect.succeed(testBackendDriver);
           session.retire();
           return Effect.fail(
-            new InvalidSubagentRequestError({ code: "probe_failed", message: "Probe failed." }),
+            InvalidSubagentRequestError.make({ code: "probe_failed", message: "Probe failed." }),
           );
         },
       };

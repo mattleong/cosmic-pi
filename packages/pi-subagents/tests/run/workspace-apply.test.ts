@@ -115,7 +115,7 @@ describe("one-step workspace apply", () => {
     const f = hooked();
     return withService(f.layer, function* (service) {
       const id = (yield* stoppedWriter(service)).workspaceId!;
-      f.hooks.createHookFailure = new WorkspaceError({
+      f.hooks.createHookFailure = WorkspaceError.make({
         operation: "hook",
         message: "Hook failed.",
       });

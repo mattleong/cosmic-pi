@@ -242,7 +242,7 @@ export const localClaudeInputDelivery = (
                       orElse: () =>
                         Effect.fail(
                           closedError() ??
-                            new SubagentProcessError({
+                            SubagentProcessError.make({
                               operation: "steer",
                               code: "steer_outcome_uncertain",
                               pendingDelivery: true,

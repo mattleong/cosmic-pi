@@ -24,7 +24,7 @@ export const nodeErrorCode = (cause: unknown): string | undefined =>
     ? cause.code
     : undefined;
 
-const unsafeEntry = () => new PrivateFileError({ reason: "unsafe" });
+const unsafeEntry = () => PrivateFileError.make({ reason: "unsafe" });
 
 const isRealDirectory = (path: string): Effect.Effect<boolean, PrivateFileError> =>
   tryPrivateFileOperation(() => fs.lstat(path)).pipe(

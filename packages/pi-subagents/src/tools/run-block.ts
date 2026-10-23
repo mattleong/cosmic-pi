@@ -1,5 +1,5 @@
 import * as Arr from "effect/Array";
-import { absurd } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import {
@@ -180,7 +180,7 @@ const outcomeLines = (id: string, outcome: RunBlockOutcome): OutcomeLines => {
     case "note":
       return { preview: outcome.text };
   }
-  return absurd(outcome);
+  return Fn.absurd(outcome);
 };
 
 const warningLine = (id: string, warning: string): string => {
@@ -300,7 +300,7 @@ const attentionAction = (run: SubagentRunView): string | undefined => {
     case undefined:
       return undefined;
   }
-  return absurd(attention);
+  return Fn.absurd(attention);
 };
 
 /** A failed run's next frozen route candidate, which a new run may take as its model. */

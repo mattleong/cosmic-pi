@@ -105,13 +105,13 @@ class LocalCliHarnessError extends Schema.TaggedError<
 }) {}
 
 const harnessPrepareFailed = () =>
-  new LocalCliHarnessError({
+  LocalCliHarnessError.make({
     reason: "prepare_failed",
     message: "Unable to prepare the private local CLI harness.",
   });
 
 const harnessCleanupFailed = () =>
-  new LocalCliHarnessError({
+  LocalCliHarnessError.make({
     reason: "cleanup_unconfirmed",
     message: "Private local CLI harness cleanup could not be confirmed.",
   });

@@ -1,4 +1,4 @@
-import { absurd } from "effect/Function";
+import * as Fn from "effect/Function";
 import type { FleetManagerActions } from "./controller.ts";
 import { PROFILE_IDS } from "../profiles/model.ts";
 import {
@@ -219,7 +219,7 @@ const actionScope = (action: PersistentAction): Scope => {
     case "delete":
       return action.target.scope;
   }
-  return absurd(action);
+  return Fn.absurd(action);
 };
 
 const runPersistentAction = (run: ActionRun, action: PersistentAction): Promise<void> => {
@@ -244,7 +244,7 @@ const runPersistentAction = (run: ActionRun, action: PersistentAction): Promise<
     case "delete":
       return deleteSet(scoped, action);
   }
-  return absurd(action);
+  return Fn.absurd(action);
 };
 
 export function runProfileSetAction(

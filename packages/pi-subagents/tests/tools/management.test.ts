@@ -137,7 +137,7 @@ describe("subagent tool", () => {
       `does not hide an await ${defect ? "defect" : "failure"} when the signal aborts during cleanup`,
       function* () {
         const controller = new AbortController();
-        const error = new InvalidSubagentRequestError({
+        const error = InvalidSubagentRequestError.make({
           code: "test_failure",
           message: "Actual failure",
         });
@@ -165,7 +165,7 @@ describe("subagent tool", () => {
         interrupt: (id) =>
           id === "agent-2"
             ? Effect.fail(
-                new InvalidSubagentRequestError({
+                InvalidSubagentRequestError.make({
                   code: "already_paused",
                   message: "agent-2 is already paused",
                 }),

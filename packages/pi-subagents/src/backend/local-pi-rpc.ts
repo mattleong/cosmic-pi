@@ -27,7 +27,7 @@ const rpcOutcomeCode = (command: RpcCommand): string =>
 
 const mapTransportUncertainty = (command: RpcCommand, error: SubagentError): SubagentError =>
   Predicate.isTagged(error, "SubagentProcessError") && error.code === "transport_outcome_uncertain"
-    ? new SubagentProcessError({
+    ? SubagentProcessError.make({
         operation: `execute ${command.type} in`,
         code: rpcOutcomeCode(command),
         message:
@@ -77,7 +77,7 @@ export const localPiRpc = (child: Pick<ChildProcessHandle, "send" | "sendContact
           .send({ ...command, id })
           .pipe(Effect.mapError((error) => mapTransportUncertainty(command, error))),
       timeoutError: () =>
-        new SubagentProcessError({
+        SubagentProcessError.make({
           operation: "await RPC response from",
           code: rpcOutcomeCode(command),
           message:
@@ -90,7 +90,7 @@ export const localPiRpc = (child: Pick<ChildProcessHandle, "send" | "sendContact
       Effect.filterOrFail(
         (response) => response.success,
         (response) =>
-          new SubagentProcessError({
+          SubagentProcessError.make({
             operation: `execute ${command.type} in`,
             message: sanitizeDiagnosticText(
               command.type === "clear_queue"

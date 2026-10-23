@@ -1,4 +1,4 @@
-import { absurd } from "effect/Function";
+import * as Fn from "effect/Function";
 import {
   getTextContent,
   type CompactIssue,
@@ -102,7 +102,7 @@ const sendCounter = (details: SendDetails): string => {
       if (!details.confirmed) return "awaiting delivery confirmation";
       return details.parked ? "waiting behind its question" : "delivered as guidance";
   }
-  return absurd(details.disposition);
+  return Fn.absurd(details.disposition);
 };
 
 const sendIssues = (details: SendDetails): CompactIssue[] => [

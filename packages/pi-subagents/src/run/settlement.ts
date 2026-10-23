@@ -1,4 +1,4 @@
-import { absurd } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -457,7 +457,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
         )
           return false;
         const failure =
-          pendingError ?? new SubagentProcessError({ operation: "run", message: diagnostic });
+          pendingError ?? SubagentProcessError.make({ operation: "run", message: diagnostic });
         beginCleanup(record);
         record.backendFailure ??= failure;
         if (
@@ -606,7 +606,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
       case "running":
         return Effect.succeed(replay.view);
     }
-    return absurd(replay);
+    return Fn.absurd(replay);
   };
 
   const acceptBackendReport = Effect.fn("SubagentSettlement.acceptBackendReport")(

@@ -41,7 +41,7 @@ const present = (root: string, name: string) =>
 
 /** Parent files the proposal changes moved on since they were tested; nothing was changed. */
 export const touchedParentDrift = (paths: ReadonlyArray<string>) =>
-  new WorkspaceError({
+  WorkspaceError.make({
     operation: "integrate",
     code: "workspace_parent_changed",
     message:
@@ -177,7 +177,7 @@ const differingFrom = (
 
 const rollbackRefused = (record: WorkspaceRecord, paths: ReadonlyArray<string>) => {
   const prepared = workspaceRef(record.handle.workspaceId, "prepared");
-  return new WorkspaceError({
+  return WorkspaceError.make({
     operation: "discard",
     code: "workspace_rollback_refused",
     message:

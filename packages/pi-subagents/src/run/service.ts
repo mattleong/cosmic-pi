@@ -309,7 +309,8 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     ).pipe(
       Effect.catchCauseIf(
         (cause) => closed && Cause.hasInterruptsOnly(cause),
-        () => Effect.fail(new SubagentRuntimeClosedError({ message: "Parent session shut down." })),
+        () =>
+          Effect.fail(SubagentRuntimeClosedError.make({ message: "Parent session shut down." })),
       ),
     );
   const requireRecord = (id: string): Effect.Effect<RunRecord, SubagentNotFoundError> =>

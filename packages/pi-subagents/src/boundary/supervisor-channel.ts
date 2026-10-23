@@ -177,7 +177,7 @@ class SupervisorPrivateStateError extends Schema.TaggedError<
 }) {}
 
 const privateStateError = (operation: string, cause: unknown) =>
-  new SupervisorPrivateStateError({
+  SupervisorPrivateStateError.make({
     operation,
     code: nodeErrorCode(cause) ?? "UNKNOWN",
   });
@@ -196,7 +196,7 @@ const privateStateStep = <Value>(
   effect: Effect.Effect<Value, PrivateFileError>,
 ): Effect.Effect<Value, SupervisorPrivateStateError> =>
   effect.pipe(
-    Effect.mapError((error) => new SupervisorPrivateStateError({ operation, code: error.reason })),
+    Effect.mapError((error) => SupervisorPrivateStateError.make({ operation, code: error.reason })),
   );
 
 const prepareStateDirectory = Effect.fn("SupervisorChannel.prepareStateDirectory")(function* (
@@ -230,7 +230,7 @@ const prepareStateDirectory = Effect.fn("SupervisorChannel.prepareStateDirectory
     fs.lstat(stateDirectory),
   );
   if (!stateStat.isDirectory() || stateStat.isSymbolicLink())
-    return yield* new SupervisorPrivateStateError({
+    return yield* SupervisorPrivateStateError.make({
       operation: "prepare-state-directory",
       code: "UNSAFE_ENTRY",
     });
@@ -244,7 +244,7 @@ const writePrivateConfig = (
 ): Effect.Effect<void, PrivateFileError> => {
   const source = `${JSON.stringify(value)}\n`;
   if (Buffer.byteLength(source, "utf8") > MAX_SUPERVISOR_CONFIG_BYTES)
-    return Effect.fail(new PrivateFileError({ reason: "unsafe" }));
+    return Effect.fail(PrivateFileError.make({ reason: "unsafe" }));
   return createPrivateFile(path, source);
 };
 
@@ -263,7 +263,7 @@ const removePrivateState = Effect.fn("SupervisorChannel.removePrivateState")(fun
   );
   if (Option.isSome(configStat)) {
     if (!configStat.value.isFile() || configStat.value.isSymbolicLink())
-      return yield* new SupervisorPrivateStateError({
+      return yield* SupervisorPrivateStateError.make({
         operation: "validate-channel-config",
         code: "UNSAFE_ENTRY",
       });
@@ -274,7 +274,7 @@ const removePrivateState = Effect.fn("SupervisorChannel.removePrivateState")(fun
     fs.readdir(stateDirectory),
   );
   if (entries.length !== 0)
-    return yield* new SupervisorPrivateStateError({
+    return yield* SupervisorPrivateStateError.make({
       operation: "validate-channel-state",
       code: "UNEXPECTED_ENTRIES",
     });

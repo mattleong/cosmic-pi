@@ -404,7 +404,7 @@ describe("shared process transport", () => {
         const f = fixture();
         boundary.detachedGroups.mockReturnValue(
           Effect.fail(
-            new SubagentProcessError({
+            SubagentProcessError.make({
               operation: "snapshot descendants",
               code: "snapshot_incomplete",
               message: "ps failed: Authorization: Bearer secret-value",

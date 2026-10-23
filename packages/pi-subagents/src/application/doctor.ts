@@ -1,7 +1,7 @@
 import { VERSION, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import { absurd } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import type { SafeFile } from "pi-cosmic-core";
 import {
@@ -336,7 +336,7 @@ const versionCheck = (runtime: LocalCliRuntime, version: LocalCliVersion): Docto
     case "unavailable":
       return check(label, "warning", "not found, or it didn't report a version");
   }
-  return absurd(version);
+  return Fn.absurd(version);
 };
 
 // The version a launch's preflight checks, cached for the session by the CLI boundary.

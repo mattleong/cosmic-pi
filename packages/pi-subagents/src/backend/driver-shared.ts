@@ -16,7 +16,7 @@ import {
 } from "../run/errors.ts";
 
 export const protocolError = (message: string): SubagentProtocolError =>
-  new SubagentProtocolError({ message });
+  SubagentProtocolError.make({ message });
 
 /** Stands in for tool output whose transport line exceeded the limit. */
 export const omittedOutputPreview = (bytes: number): string =>

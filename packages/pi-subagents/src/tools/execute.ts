@@ -7,7 +7,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
-import { absurd } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import type { CompactAnimationScheduler } from "pi-code-previews";
@@ -282,7 +282,7 @@ export const executeSubagentActionEffect = Effect.fn("SubagentTools.execute")(fu
     case SUBAGENT_TOOL_NAME.lifecycle:
       return yield* executeLifecycle(input.args);
   }
-  return absurd<never>(input);
+  return Fn.absurd<never>(input);
 });
 
 /**

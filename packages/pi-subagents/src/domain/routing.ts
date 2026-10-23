@@ -1,4 +1,4 @@
-import { flow } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Schema from "effect/Schema";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core";
 
@@ -48,7 +48,7 @@ export const clampSubagentEffort = (
   );
 };
 
-export const decodeSubagentEffort = flow(
+export const decodeSubagentEffort = Fn.flow(
   decodeUnknownOrUndefined(Schema.String),
   (text): SubagentEffort | undefined => {
     if (text === undefined) return undefined;

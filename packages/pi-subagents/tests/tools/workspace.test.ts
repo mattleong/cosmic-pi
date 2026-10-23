@@ -326,7 +326,7 @@ describe("workspace tool", () => {
   effectTest(
     "passes the authenticated caller and the revision pin to the coordinator",
     function* () {
-      const denial = new InvalidSubagentRequestError({
+      const denial = InvalidSubagentRequestError.make({
         code: "workspace_owner_unavailable",
         message: "Direct parent required.",
       });

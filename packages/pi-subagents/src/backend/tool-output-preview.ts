@@ -1,5 +1,5 @@
 import * as Arr from "effect/Array";
-import { flow } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
@@ -37,7 +37,7 @@ const previewText = (text: string): Option.Option<string> => {
 };
 
 /** The first lines of a tool's output for the fleet view, bounded before the run sanitizes it. */
-export const toolOutputPreview = flow(
+export const toolOutputPreview = Fn.flow(
   Schema.decodeUnknownOption(ToolOutput),
   Option.map(outputText),
   Option.flatMap(previewText),

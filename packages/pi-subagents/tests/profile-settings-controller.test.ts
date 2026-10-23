@@ -254,7 +254,7 @@ describe("profile settings controller", () => {
   effectTest("rejects a stale Session replacement without retrying", function* () {
     const fixture = setup();
     vi.mocked(fixture.managerActions.replaceSessionProfiles).mockRejectedValueOnce(
-      new SessionProfileConflictError({
+      SessionProfileConflictError.make({
         expectedRevision: 0,
         actualRevision: 1,
         message: "conflict",
@@ -276,12 +276,12 @@ describe("profile settings controller", () => {
       const reason = "Sentinel rejection reason.";
       patch.mockRejectedValueOnce(
         outcome === "conflict"
-          ? new SessionProfileConflictError({
+          ? SessionProfileConflictError.make({
               expectedRevision: 0,
               actualRevision: 1,
               message: reason,
             })
-          : new SessionProfileInvalidError({ message: reason }),
+          : SessionProfileInvalidError.make({ message: reason }),
       );
       const changeEffort = function* () {
         press(fixture, "e");
@@ -365,12 +365,12 @@ describe("profile settings controller", () => {
       else inspect.mockResolvedValue(updated);
       vi.mocked(fixture.managerActions.patchProfile).mockRejectedValueOnce(
         outcome === "other-error"
-          ? new SubagentConfigStoreError({
+          ? SubagentConfigStoreError.make({
               operation: "update",
               path: "/repo/.pi/subagents.json",
               message: "permission denied",
             })
-          : new SubagentConfigConflictError({
+          : SubagentConfigConflictError.make({
               path: "/repo/.pi/subagents.json",
               message: "changed on disk",
             }),

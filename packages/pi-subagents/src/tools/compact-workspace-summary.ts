@@ -1,6 +1,6 @@
 import { compactIssueSeverity } from "pi-code-previews";
 import type { CompactIssue, CompactSummary } from "pi-code-previews";
-import { flow, absurd } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { countLabel } from "pi-cosmic-core";
@@ -58,7 +58,7 @@ export function workspaceReceiptLine(details: WorkspaceToolDetails): string | un
     case "discard":
       return "discarded";
   }
-  return absurd(details.operation);
+  return Fn.absurd(details.operation);
 }
 
 function validListCounts(details: WorkspaceToolDetails): boolean {
@@ -201,7 +201,7 @@ function testingStep(details: WorkspaceApplyReceipt): CompactIssue {
         "Run relevant tests in the parent checkout before relying on this change.",
       );
   }
-  return absurd(details.testing);
+  return Fn.absurd(details.testing);
 }
 
 function applyIssues(details: WorkspaceApplyReceipt): CompactIssue[] {
@@ -255,12 +255,12 @@ function operationIssues(details: WorkspaceOperationReceipt): CompactIssue[] {
     case "discard":
       return [];
   }
-  return absurd(details);
+  return Fn.absurd(details);
 }
 
 const decodeWorkspaceToolDetailsOption = Schema.decodeUnknownOption(WorkspaceToolDetailsSchema);
 
-export const decodeWorkspaceToolDetails = flow(
+export const decodeWorkspaceToolDetails = Fn.flow(
   Option.liftThrowable(decodeWorkspaceToolDetailsOption),
   Option.flatten,
   Option.getOrUndefined,

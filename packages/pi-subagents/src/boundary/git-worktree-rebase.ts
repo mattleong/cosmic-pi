@@ -48,7 +48,7 @@ const rebaseRefusal = (result: GitResult, changedPaths: ReadonlyArray<string>) =
   const paths = changedPaths.filter((name) =>
     stderr.some((line) => line.startsWith(`error: ${name}: `)),
   );
-  return new WorkspaceError({
+  return WorkspaceError.make({
     operation: "rebase",
     code: "workspace_rebase_refused",
     message: "The previous changes can't be reapplied to the parent's current files.",

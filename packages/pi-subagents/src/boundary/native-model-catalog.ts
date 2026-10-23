@@ -165,7 +165,7 @@ export interface NativeModelCatalogLayerOptions {
 }
 
 const catalogError = (runtime: LocalCliRuntime, code: string, message: string) =>
-  new NativeModelCatalogError({ runtime, code, message });
+  NativeModelCatalogError.make({ runtime, code, message });
 
 const isSupportedEffort = Schema.is(
   Schema.Literals(SUBAGENT_EFFORTS.filter((effort) => effort !== "off")),

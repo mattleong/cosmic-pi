@@ -65,7 +65,7 @@ export function proxyExecutionHandler(dependencies: RunProxyExecutionDependencie
           "Nested Pi reused an active coordinator request identity.",
         );
       const unavailable = Effect.fail(
-        new InvalidSubagentRequestError({
+        InvalidSubagentRequestError.make({
           code: "proxy_caller_disconnected",
           message: "Nested Pi coordinator access is unavailable for this run.",
         }),

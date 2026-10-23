@@ -39,7 +39,7 @@ export const makeRunContext = (overrides: Partial<RunContext> = {}) =>
         return record
           ? Effect.succeed(record)
           : Effect.fail(
-              new SubagentNotFoundError({ id, message: `Subagent run not found: ${id}` }),
+              SubagentNotFoundError.make({ id, message: `Subagent run not found: ${id}` }),
             );
       },
       sendPeerNotices: () => Effect.void,

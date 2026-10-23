@@ -19,7 +19,7 @@ describe("runSessionOwned", () => {
     Effect.gen(function* () {
       const ownerScope = yield* Scope.make();
       let commits = 0;
-      const failure = yield* runSessionOwned(ownerScope, Effect.fail(new ClaimRejected()), () =>
+      const failure = yield* runSessionOwned(ownerScope, Effect.fail(ClaimRejected.make()), () =>
         Effect.sync(() => void commits++),
       ).pipe(Effect.flip);
       expect(failure).toBeInstanceOf(ClaimRejected);

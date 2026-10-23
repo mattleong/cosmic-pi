@@ -148,7 +148,7 @@ export const localCliBackendDriver =
   (processes: LocalCliProcessContract, supervisors: SupervisorChannelContract): BackendDriver => {
     const unsupported = (capability: string) =>
       Effect.fail(
-        new UnsupportedSubagentCapabilityError({
+        UnsupportedSubagentCapabilityError.make({
           backend: `local/${runtime}`,
           capability,
           message: unsupportedMessage(capability),

@@ -1,4 +1,4 @@
-import { absurd } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -14,7 +14,7 @@ import {
 import type { RunContext, RunRecord } from "./internal.ts";
 
 const mapWriterLeaseConflict = ({ message }: WriterLeaseConflictError) =>
-  new SubagentWriterConflictError({
+  SubagentWriterConflictError.make({
     activeId: "unknown-cross-process-writer",
     activeName: "cross-process writer",
     message,
@@ -30,7 +30,7 @@ export function writerSpawnPreparation({
     if (!canonicalCwd) return Effect.void;
     if (!pool)
       return Effect.fail(
-        new SubagentProcessError({
+        SubagentProcessError.make({
           operation: "prepare writer lease",
           code: "writer_pool_state_missing",
           message: `Subagent ${record.view.id} has no writer-pool preparation state.`,
@@ -68,7 +68,7 @@ export function writerSpawnPreparation({
               case "quarantined":
                 return Effect.fail(cancelled());
             }
-            return absurd(pool.state);
+            return Fn.absurd(pool.state);
           }),
         );
         if (role === "wait") {
@@ -86,7 +86,7 @@ export function writerSpawnPreparation({
                 WriterLeaseConflictError: (error) => Effect.fail(mapWriterLeaseConflict(error)),
                 WriterLeaseAcquireError: (error) =>
                   Effect.fail(
-                    new SubagentProcessError({
+                    SubagentProcessError.make({
                       operation: "acquire writer lease",
                       code: "writer_lease_acquire_failed",
                       message: error.message,
@@ -108,13 +108,12 @@ export function writerSpawnPreparation({
           );
           if (!attached) return yield* cancelled();
           const marked = yield* writerLeases.markSpawnStarted(lease).pipe(
-            Effect.mapError(
-              (error) =>
-                new SubagentProcessError({
-                  operation: "mark writer spawn started",
-                  code: "writer_lease_mark_failed",
-                  message: error.message,
-                }),
+            Effect.mapError((error) =>
+              SubagentProcessError.make({
+                operation: "mark writer spawn started",
+                code: "writer_lease_mark_failed",
+                message: error.message,
+              }),
             ),
           );
           yield* withLock(

@@ -107,7 +107,7 @@ describe("writer workspace orchestration", () => {
   });
   it.effect("never launches a writer whose WorktreeCreate hook failed", () => {
     const f = fixture({ worktreeCreate: [{ command: ["setup"] }] });
-    f.hooks.createHookFailure = new WorkspaceError({
+    f.hooks.createHookFailure = WorkspaceError.make({
       operation: "hook",
       message: "WorktreeCreate hook `setup` timed out after 600s.",
     });
@@ -322,7 +322,7 @@ describe("writer workspace orchestration", () => {
           acquire: (input) =>
             heldElsewhere.has(input.cwd.path)
               ? Effect.fail(
-                  new WriterLeaseConflictError({
+                  WriterLeaseConflictError.make({
                     reason: "live",
                     message: "Another live writer already owns this filesystem directory identity.",
                   }),
@@ -411,7 +411,7 @@ describe("writer workspace orchestration", () => {
       writerLeases: leasesWith((base) => ({
         release: (lease) =>
           lease.canonicalCwd === "/repo"
-            ? Effect.fail(new WriterLeaseReleaseError({ message: "Release unconfirmed." }))
+            ? Effect.fail(WriterLeaseReleaseError.make({ message: "Release unconfirmed." }))
             : base.release(lease),
       })),
     });

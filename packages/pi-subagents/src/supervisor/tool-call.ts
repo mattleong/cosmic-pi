@@ -3,7 +3,7 @@ import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import type * as Exit from "effect/Exit";
-import { absurd } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
@@ -324,7 +324,7 @@ const decodeAgentToolCall = (
         ({ to, message }) => ({ kind: "agent_send" as const, to, message }),
       );
   }
-  return absurd<Result.Result<SupervisorToolCall, string>>(name);
+  return Fn.absurd<Result.Result<SupervisorToolCall, string>>(name);
 };
 
 /** Decodes a tool call, or explains which argument to fix. */
@@ -344,7 +344,7 @@ export const decodeSupervisorToolCall = (
 };
 
 const uncertain = () =>
-  new SupervisorToolFailure({
+  SupervisorToolFailure.make({
     code: "delivery_outcome_uncertain",
     message: "Supervisor RPC delivery did not settle within its bound.",
   });
@@ -401,7 +401,7 @@ const callContext = (
     const assignmentEpoch = client.assignmentEpoch();
     if (Deferred.isDoneUnsafe(client.closed) || assignmentEpoch < 1)
       return Effect.fail(
-        new SupervisorToolFailure({
+        SupervisorToolFailure.make({
           code: "channel_unavailable",
           message: "Private supervisor channel is unavailable or has no active assignment.",
         }),
@@ -525,7 +525,7 @@ const answerSupervisorTool = Effect.fn("SupervisorToolCall.answerSupervisorTool"
           }),
         );
   }
-  return absurd<SupervisorToolResult>(call);
+  return Fn.absurd<SupervisorToolResult>(call);
 });
 
 // The call's request, then the commit that turns its response into the result.
