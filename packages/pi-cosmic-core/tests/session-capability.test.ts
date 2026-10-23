@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "@effect/vitest";
+import { describe, expect, it } from "@effect/vitest";
 import {
   makeSessionCapabilityProtocol,
   querySessionCapability,
@@ -55,10 +55,10 @@ describe("session capability queries", () => {
         throw new Error("hostile responder");
       })?.("capability"),
     ).not.toThrow();
-    const rejected = Promise.reject(new Error("hostile responder"));
-    const observe = vi.spyOn(rejected, "then");
-    respondWith(() => rejected)?.("capability");
-    expect(observe).toHaveBeenCalledWith(expect.any(Function), expect.any(Function));
+    // Vitest fails the run if the rejection escapes unhandled.
+    expect(() =>
+      respondWith(() => Promise.reject(new Error("hostile responder")))?.("capability"),
+    ).not.toThrow();
   });
 });
 

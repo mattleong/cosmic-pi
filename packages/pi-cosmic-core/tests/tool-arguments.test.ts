@@ -220,6 +220,12 @@ describe("toolArgumentPreparer", () => {
     expect(() => prepare({})).toThrow(/\[invalid_arguments\][\s\S]*\bagents is required/u);
   });
 
+  it("suggests resending malformed tool-call JSON only when no arguments arrived", () => {
+    expect(() => prepare({})).toThrow(/malformed or truncated/u);
+    expect(() => prepare({ limit: 1 })).not.toThrow(/malformed or truncated/u);
+    expect(() => prepare({ limit: 1 })).toThrow(/\[invalid_arguments\]/u);
+  });
+
   it("runs the tool's inspection on arguments without blank optionals", () => {
     const inspected: Array<unknown> = [];
     const inspecting = toolArgumentPreparer("agent_start", StartParameters, {

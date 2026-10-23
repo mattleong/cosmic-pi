@@ -19,8 +19,7 @@ const send = (target: number, signal: NodeJS.Signals | 0): ProcessSignalResult =
     );
   }
 };
-const signalable = (pid: number | undefined): pid is number =>
-  pid !== undefined && Number.isSafeInteger(pid) && pid > 0;
+const signalable = Schema.is(Schema.Int.check(Schema.isGreaterThan(0)));
 
 export const signalProcessGroup = (pid: number | undefined, signal: NodeJS.Signals | 0) =>
   signalable(pid) ? send(-pid, signal) : "failed";

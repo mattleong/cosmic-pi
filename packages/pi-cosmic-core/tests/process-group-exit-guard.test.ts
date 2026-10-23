@@ -27,9 +27,9 @@ const hostExit = (mode: "guarded" | "released") =>
   Effect.gen(function* () {
     const host = yield* spawnIpcChild(childScript, [mode], { timeout: "10 seconds" });
     yield* host.wait("ready");
-    const announced = host.messages.find(
-      (message): message is string => Predicate.isString(message) && message.startsWith("group:"),
-    );
+    const announced = host.messages
+      .filter(Predicate.isString)
+      .find((message) => message.startsWith("group:"));
     const pid = Number(announced?.slice("group:".length));
     expect(Number.isSafeInteger(pid) && pid > 0).toBe(true);
     yield* Effect.addFinalizer(() => Effect.sync(() => signalProcessGroup(pid, "SIGKILL")));

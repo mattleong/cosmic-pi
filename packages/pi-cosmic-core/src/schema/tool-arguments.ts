@@ -24,7 +24,7 @@ const decodeJson = Schema.decodeUnknownOption(Schema.MutableJson);
 const isJsonArray = (value: Schema.Json | undefined): value is Schema.JsonArray =>
   Array.isArray(value);
 const isJsonRecord = (value: Schema.Json | undefined): value is Schema.JsonObject =>
-  Predicate.isObject(value) && !Array.isArray(value);
+  Predicate.isObject(value);
 
 /**
  * Dotted property paths, such as `contains` or `agents.name`, whose whitespace-only text is
@@ -382,10 +382,14 @@ const clippedStrings = (value: Schema.Json): Schema.Json => {
     : value;
 };
 
+const EMPTY_ARGUMENTS_HINT =
+  "No arguments were received; if you sent arguments, the tool-call JSON was malformed or truncated. Resend it as valid JSON.";
+
 const invalidArgumentsError = (
   toolName: string,
   issues: ReadonlyArray<string>,
   args?: JsonObject,
+  hints: ReadonlyArray<string> = [],
 ): Error => {
   const listed = issues.slice(0, MAX_REPORTED_ISSUES).map((issue) => `- ${issue}`);
   const more = issues.length - listed.length;
@@ -397,6 +401,7 @@ const invalidArgumentsError = (
       ...(args
         ? [`Received: ${clipText(JSON.stringify(clippedStrings(args)), MAX_ECHO_CHARS)}`]
         : []),
+      ...hints,
     ].join("\n"),
   );
 };
@@ -417,7 +422,7 @@ export interface ToolArgumentPreparerOptions {
  * Model-facing schemas omit `pattern`, so nonblank required text is enforced here. The result is
  * checked against `parameters` with TypeBox, so it is the schema's `Static` type.
  * Pi parses malformed tool-call JSON as `{}` before this hook runs, so such a call fails here with
- * the schema's missing required fields rather than Pi's parse error.
+ * the schema's missing required fields rather than Pi's parse error, plus a hint to resend it.
  */
 export const toolArgumentPreparer = <const S extends TSchema>(
   toolName: string,
@@ -446,12 +451,15 @@ export const toolArgumentPreparer = <const S extends TSchema>(
   const prepare = (received: JsonObject): JsonValue => {
     const args = omitBlankOptionals(received);
     inspect?.(args);
+    // Pi substitutes `{}` for malformed tool-call JSON, so an empty call may have lost its arguments.
+    const hints = Object.keys(received).length === 0 ? [EMPTY_ARGUMENTS_HINT] : [];
     const validated = Option.getOrThrowWith(Option.flatten(validate(args)), () => {
       const issues = validationIssues(parameters, args, context);
       return invalidArgumentsError(
         toolName,
         issues.length > 0 ? issues : ["arguments did not match the tool schema."],
         args,
+        hints,
       );
     });
     const blank = blankStringPath(validated, keepWhitespace);
