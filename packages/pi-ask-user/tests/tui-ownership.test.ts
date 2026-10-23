@@ -113,7 +113,7 @@ it.effect("a failed close rejects yet ends the host prompt so the next questionn
       expect(error).toBeInstanceOf(AskUserHostError);
       expect(String(error)).not.toContain("secret");
       expect(error).toEqual(
-        new AskUserHostError({
+        AskUserHostError.make({
           operation: "render",
           message: "Couldn't show the questionnaire.",
         }),

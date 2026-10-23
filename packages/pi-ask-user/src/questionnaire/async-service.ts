@@ -39,13 +39,13 @@ interface Entry {
 }
 
 export const asyncBusy = () =>
-  new AskUserAsyncError({
+  AskUserAsyncError.make({
     reason: "busy",
     message:
       "A questionnaire is already active. Use ask_user_async_control for the pending request.",
   });
 const notFound = () =>
-  new AskUserAsyncError({
+  AskUserAsyncError.make({
     reason: "not-found",
     message:
       "That questionnaire is no longer available. Use status without a requestId to list retained requests; it may have expired or belonged to an earlier session or branch.",
@@ -72,7 +72,7 @@ export const acquireAsyncQuestionnaires = Effect.fn("AskUserService.acquireAsync
     admission.withPermit(
       Effect.gen(function* () {
         yield* Ref.set(closed, true);
-        const error = new AskUserRuntimeClosedError({
+        const error = AskUserRuntimeClosedError.make({
           message: "The questionnaire session closed before this questionnaire finished.",
         });
         for (const entry of yield* Ref.get(state)) {
@@ -183,13 +183,11 @@ export const acquireAsyncQuestionnaires = Effect.fn("AskUserService.acquireAsync
     const failure = Exit.isFailure(result) ? Cause.findErrorOption(result.cause) : Option.none();
     yield* Deferred.fail(
       entry.opened,
-      Option.getOrElse(
-        failure,
-        () =>
-          new AskUserHostError({
-            operation: "open",
-            message: "The questionnaire closed before its overlay opened.",
-          }),
+      Option.getOrElse(failure, () =>
+        AskUserHostError.make({
+          operation: "open",
+          message: "The questionnaire closed before its overlay opened.",
+        }),
       ),
     );
     // Queue closure can release this presenter before the shutdown finalizer reaches its entry;
@@ -210,7 +208,7 @@ export const acquireAsyncQuestionnaires = Effect.fn("AskUserService.acquireAsync
         (text) => !text.trim() || text.length > MAX_WORK_DESCRIPTION_LENGTH,
       )
     ) {
-      return yield* new AskUserValidationError({
+      return yield* AskUserValidationError.make({
         message: "Work descriptions must be nonblank and at most 500 characters.",
       });
     }
@@ -348,7 +346,7 @@ export const acquireAsyncQuestionnaires = Effect.fn("AskUserService.acquireAsync
       };
     }
     if (!input.requestId)
-      return yield* new AskUserAsyncError({
+      return yield* AskUserAsyncError.make({
         reason: "invalid-control",
         message: "await and cancel require a requestId.",
       });

@@ -44,7 +44,7 @@ export const acquireQuestionnaireQueue = Effect.gen(function* () {
           ] as const),
     );
     if (!admitted)
-      return yield* new AskUserAsyncError({
+      return yield* AskUserAsyncError.make({
         reason: "busy",
         message:
           "The session questionnaire queue is full. Await or cancel an existing request before asking again.",
@@ -78,7 +78,7 @@ export const acquireQuestionnaireQueue = Effect.gen(function* () {
             (closed): Effect.Effect<A, E | AskUserRuntimeClosedError> =>
               closed
                 ? Effect.fail(
-                    new AskUserRuntimeClosedError({
+                    AskUserRuntimeClosedError.make({
                       message: "The questionnaire session closed before this questionnaire opened.",
                     }),
                   )

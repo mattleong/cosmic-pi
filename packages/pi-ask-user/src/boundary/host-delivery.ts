@@ -46,7 +46,7 @@ export const acceptsAsyncMessage = (
 };
 
 const unconfirmedDelivery = () =>
-  new AskUserHostError({
+  AskUserHostError.make({
     operation: "deliver",
     message:
       "Answer delivery was not confirmed. Retrieve the retained result with ask_user_async_control.",

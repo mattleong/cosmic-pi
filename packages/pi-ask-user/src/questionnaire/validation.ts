@@ -27,7 +27,7 @@ export function validateQuestionnaireInput(
 const RESERVED_LABELS = new Set(["write a custom answer"]);
 
 const fail = (position: string, problem: string): AskUserValidationError =>
-  new AskUserValidationError({ message: `${position} ${problem}` });
+  AskUserValidationError.make({ message: `${position} ${problem}` });
 
 interface QuestionnaireInput {
   readonly questions: ReadonlyArray<

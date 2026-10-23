@@ -11,7 +11,7 @@ import {
 const hasRelayMarker = (environment: Readonly<NodeJS.ProcessEnv>): boolean =>
   environment.PI_SUBAGENT_CHILD === "1" && (environment.PI_SUBAGENT_RUN_ID?.trim() ?? "") !== "";
 export const requiresQuestionnaireRelay = (): boolean => hasRelayMarker(process.env);
-const relayFailure = (message: string) => new AskUserHostError({ operation: "relay", message });
+const relayFailure = (message: string) => AskUserHostError.make({ operation: "relay", message });
 
 export const askAtQuestionnaireBoundary = (
   events: QuestionnaireEvents,

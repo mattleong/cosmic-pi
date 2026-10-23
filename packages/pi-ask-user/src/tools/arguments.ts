@@ -1,4 +1,4 @@
-import { flow } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
@@ -48,7 +48,7 @@ export const questionnaireArgumentPreparer = <Parameters extends TSchema>(
   name: string,
   parameters: Parameters,
 ) =>
-  flow(
+  Fn.flow(
     decodeArgumentsObject,
     Option.map(withSelectedQuestionShapes),
     // The shared preparer rejects non-object arguments without echoing them.

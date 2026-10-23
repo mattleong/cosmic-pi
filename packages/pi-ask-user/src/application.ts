@@ -94,7 +94,7 @@ export function askUserWithDependencies(
           input.active
             ? slot.run(effect, signal)
             : Promise.reject(
-                new AskUserRuntimeClosedError({ message: "Questionnaire session was replaced." }),
+                AskUserRuntimeClosedError.make({ message: "Questionnaire session was replaced." }),
               ),
       });
       return makePiManagedRuntime(
@@ -127,7 +127,7 @@ export function askUserWithDependencies(
       ) =>
         slot.isCurrent(token)
           ? slot.run(effect, signal)
-          : Promise.reject(new AskUserRuntimeClosedError({ message }));
+          : Promise.reject(AskUserRuntimeClosedError.make({ message }));
       const { ctx } = input;
       input.active = true;
       currentGeneration = input.generation;

@@ -25,7 +25,7 @@ import { titleLabel } from "../ui/layout.ts";
 import type { AskUserDialogBridge } from "./host-ui.ts";
 
 const hostError = (operation: string) =>
-  new AskUserHostError({ operation, message: `Couldn't ${operation} the questionnaire.` });
+  AskUserHostError.make({ operation, message: `Couldn't ${operation} the questionnaire.` });
 
 const notifyBestEffort = (
   ui: ExtensionUIContext,

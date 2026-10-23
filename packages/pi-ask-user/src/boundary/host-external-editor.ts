@@ -64,7 +64,7 @@ const editorSession = (tui: TUI, configuredCommand: string | undefined, value: s
       );
       const status = yield* child.exitCode;
       if (status !== 0)
-        return yield* new ExternalEditorError({
+        return yield* ExternalEditorError.make({
           message: `External editor exited with status ${status}.`,
         });
       return stripTerminalControls(yield* fs.readFileString(file)).replace(/\n$/u, "");
@@ -86,7 +86,7 @@ export function editWithExternalEditor(
       return Effect.fail(
         Result.isSuccess(error) && Predicate.isTagged(error.success, "ExternalEditorError")
           ? error.success
-          : new ExternalEditorError({ message: "External editor execution failed." }),
+          : ExternalEditorError.make({ message: "External editor execution failed." }),
       );
     }),
   );

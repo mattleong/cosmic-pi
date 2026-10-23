@@ -41,7 +41,7 @@ const UNAVAILABLE =
   "The root questionnaire capability is unavailable or its owner is already active.";
 const INVALID_OWNER = "Invalid questionnaire owner.";
 const decodeOwner = decodeUnknownOrUndefined(QuestionnaireOwnerSchema);
-const invalid = (message: string) => Promise.reject(new AskUserValidationError({ message }));
+const invalid = (message: string) => Promise.reject(AskUserValidationError.make({ message }));
 const ownerKey = (owner: QuestionnaireOwner) =>
   JSON.stringify([owner.runId, owner.assignmentEpoch, owner.requestId]);
 
@@ -51,7 +51,7 @@ export function registerQuestionnaireCapability(
   let live = true;
   const calls = new Map<string, { readonly abort: () => void; readonly settled: Promise<void> }>();
   const current = () => invokeHostCallback(() => live && options.isCurrent(), false);
-  const unavailable = () => new AskUserRuntimeClosedError({ message: UNAVAILABLE });
+  const unavailable = () => AskUserRuntimeClosedError.make({ message: UNAVAILABLE });
   const capability = Object.freeze({
     version: 1,
     sessionId: options.sessionId,

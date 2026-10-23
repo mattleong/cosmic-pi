@@ -91,11 +91,10 @@ export const askUserTuiHost =
         );
         return queued ? retrying : open;
       }),
-      Effect.mapError(
-        () =>
-          new AskUserHostError({
-            operation: "render",
-            message: "Couldn't show the questionnaire.",
-          }),
+      Effect.mapError(() =>
+        AskUserHostError.make({
+          operation: "render",
+          message: "Couldn't show the questionnaire.",
+        }),
       ),
     );

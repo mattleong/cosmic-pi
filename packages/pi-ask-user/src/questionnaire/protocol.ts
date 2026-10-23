@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { flow } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Schema from "effect/Schema";
 import * as Predicate from "effect/Predicate";
 import { decodeUnknownOrUndefined, ForeignCallable, querySessionCapability } from "pi-cosmic-core";
@@ -180,10 +180,10 @@ const captureOutcome = (root: typeof RawOutcome.Type): AskUserOutcome | undefine
   return decodeOutcome({ outcome: root.outcome, answers: captured });
 };
 
-export const decodeQuestionnaireRequest = flow(decodeUnknownOrUndefined(RawRequest), (root) =>
+export const decodeQuestionnaireRequest = Fn.flow(decodeUnknownOrUndefined(RawRequest), (root) =>
   root === undefined ? undefined : captureRequest(root),
 );
-export const decodeQuestionnaireOutcome = flow(decodeUnknownOrUndefined(RawOutcome), (root) =>
+export const decodeQuestionnaireOutcome = Fn.flow(decodeUnknownOrUndefined(RawOutcome), (root) =>
   root === undefined ? undefined : captureOutcome(root),
 );
 

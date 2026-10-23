@@ -61,7 +61,7 @@ const immediateHost: AskUserHost = (_request, presence) =>
 
 const failingDelivery = (attempts: Ref.Ref<number>) => () =>
   Ref.update(attempts, (n) => n + 1).pipe(
-    Effect.andThen(Effect.fail(new AskUserHostError({ operation: "deliver", message: "Failed" }))),
+    Effect.andThen(Effect.fail(AskUserHostError.make({ operation: "deliver", message: "Failed" }))),
   );
 
 const fixture = Effect.gen(function* () {
@@ -316,7 +316,7 @@ it.effect("scope shutdown closes the presenter and cannot emit an answer afterwa
 it.effect("failed openings report the host failure and recover a full registry", () =>
   Effect.gen(function* () {
     const recovered = yield* Ref.make(false);
-    const unavailable = new AskUserHostError({ operation: "open", message: "Unavailable" });
+    const unavailable = AskUserHostError.make({ operation: "open", message: "Unavailable" });
     const host: AskUserHost = (_request, presence) =>
       Effect.gen(function* () {
         if (!(yield* Ref.get(recovered))) return yield* unavailable;
@@ -517,7 +517,7 @@ const stepTimes = (paused: PausedScheduler, count: number) => {
 
 const settleAnswer = (f: Fixture, prior: AcknowledgementPrior) =>
   prior === "none"
-    ? Deferred.fail(f.answer, new AskUserHostError({ operation: "open", message: "Unavailable" }))
+    ? Deferred.fail(f.answer, AskUserHostError.make({ operation: "open", message: "Unavailable" }))
     : Deferred.succeed(f.answer, outcome);
 
 const priorDelivery = (f: Fixture, prior: AcknowledgementPrior) =>
@@ -526,7 +526,7 @@ const priorDelivery = (f: Fixture, prior: AcknowledgementPrior) =>
       (attempts) => (snapshot: AsyncQuestionnaireSnapshot) =>
         Effect.gen(function* () {
           if (prior === "failed" && (yield* Ref.updateAndGet(attempts, (n) => n + 1)) === 1)
-            return yield* new AskUserHostError({ operation: "deliver", message: "Failed" });
+            return yield* AskUserHostError.make({ operation: "deliver", message: "Failed" });
           yield* f.delivery(snapshot);
           return undefined;
         }),
@@ -656,7 +656,7 @@ it.effect("cancellation after final failed-opening acknowledgement retains it", 
     for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
     yield* Deferred.fail(
       f.answer,
-      new AskUserHostError({ operation: "open", message: "Unavailable" }),
+      AskUserHostError.make({ operation: "open", message: "Unavailable" }),
     );
     yield* Deferred.succeed(f.mount, undefined);
     let observedCommit = false;

@@ -1,5 +1,5 @@
 import * as Arr from "effect/Array";
-import { flow } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
@@ -65,7 +65,7 @@ const asyncRows = <S extends Schema.ConstraintDecoder<unknown>>(snapshot: S) => 
     requests: Schema.Array(snapshot).check(Schema.isMaxLength(MAX_RETAINED_REQUESTS)),
   });
   const isList = Schema.is(list);
-  return flow(
+  return Fn.flow(
     decodeUnknownOrUndefined(Schema.Union([snapshot, list])),
     (decoded): readonly S["Type"][] | undefined => {
       if (decoded === undefined) return undefined;
@@ -83,7 +83,7 @@ export const decodeAsyncControl = decodeUnknownOrUndefined(
   }),
 );
 
-export const isStatusList = flow(
+export const isStatusList = Fn.flow(
   decodeAsyncControl,
   (control) => control?.action === "status" && control.requestId === undefined,
 );
@@ -96,12 +96,12 @@ export const decodeCallQuestions = decodeUnknownOrUndefined(
   }),
 );
 
-export const callTitles = flow(decodeCallQuestions, (decoded): string | undefined => {
+export const callTitles = Fn.flow(decodeCallQuestions, (decoded): string | undefined => {
   const titles = decoded?.questions.map((question) => titleLabel(question.title)).join(", ");
   return titles === "" ? undefined : titles;
 });
 
-export const titlesByKey = flow(
+export const titlesByKey = Fn.flow(
   decodeCallQuestions,
   (decoded): ReadonlyMap<string, string> =>
     new Map(
@@ -140,9 +140,9 @@ const partsText = (decoded: ReadonlyArray<unknown> | undefined): string =>
     return text ? Result.succeed(stripTerminalControls(text.text)) : Result.failVoid;
   }).join("\n");
 
-export const fallbackText = flow(parts, partsText);
+export const fallbackText = Fn.flow(parts, partsText);
 
-export const contentText = flow(replayContent, (decoded) =>
+export const contentText = Fn.flow(replayContent, (decoded) =>
   Predicate.isString(decoded) ? stripTerminalControls(decoded) : partsText(decoded),
 );
 
