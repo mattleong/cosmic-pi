@@ -1,3 +1,6 @@
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
 import { sanitizeDiagnosticContent, firstLineMessage } from "pi-cosmic-core";
 
 const CAUSE_WORD = /\b(?:error|errors|fail|failed|failure|failures|fatal|panic|panicked)\b/iu;
@@ -11,18 +14,24 @@ const SEVERITY_CODE = /^(?:error|fatal)(?:\[[\w-]+\]| TS\d+)?:\s*/iu;
 
 const shortenCause = (line: string): string => {
   const location = LOCATION.exec(line);
-  const rest = (location ? line.slice(location[0].length) : line).replace(SEVERITY_CODE, "");
+  const rest = Fn.pipe(
+    location ? Fn.pipe(line, Str.slice(location[0].length)) : line,
+    Str.replace(SEVERITY_CODE, ""),
+  );
   if (!location) return rest;
   const [, path, parenLine, colonLine] = location;
   const lineNumber = parenLine ?? colonLine;
   if (path === undefined || lineNumber === undefined) return rest;
-  const file = path.slice(path.lastIndexOf("/") + 1);
+  const file = Option.match(Fn.pipe(path, Str.lastIndexOf("/")), {
+    onNone: () => path,
+    onSome: (slash) => Fn.pipe(path, Str.slice(slash + 1)),
+  });
   return `${file}:${lineNumber} ${rest}`;
 };
 
 export function outputFailureLine(output: readonly string[]): string | undefined {
   for (const raw of output) {
-    const line = raw.trim();
+    const line = Str.trim(raw);
     if (!line || WRAPPER.test(line) || NO_CAUSE.test(line)) continue;
     if (!CAUSE_WORD.test(line) && !CAUSE_CLASS.test(line)) continue;
     const cause = firstLineMessage(

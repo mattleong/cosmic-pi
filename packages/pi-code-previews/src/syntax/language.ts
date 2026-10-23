@@ -1,6 +1,10 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
 import { getLanguageFromPath } from "@earendil-works/pi-coding-agent";
 import { bundledLanguages } from "shiki";
-import { nodePath } from "pi-cosmic-core";
+import { nodePath, indexOfFrom } from "pi-cosmic-core";
 import { codePreviewPerformanceConfig } from "../config/state";
 
 const EXACT_BASENAMES = new Map<string, string>([
@@ -30,7 +34,7 @@ const LANGUAGE_ALIASES = new Map<string, string>([
 ]);
 
 export function normalizePreviewLanguageAlias(language: string): string {
-  const normalized = language.toLowerCase();
+  const normalized = Str.toLowerCase(language);
   return LANGUAGE_ALIASES.get(normalized) ?? normalized;
 }
 
@@ -58,7 +62,7 @@ export function resolvePreviewLanguage({
   content?: string | undefined;
 }): string | undefined {
   return firstSupported(
-    path && JSX_LANGUAGES.get(nodePath.extname(path).toLowerCase()),
+    path && JSX_LANGUAGES.get(Str.toLowerCase(nodePath.extname(path))),
     path && getLanguageFromPath(path),
     languageFromPath(path),
     languageFromShebang(content),
@@ -68,37 +72,46 @@ export function resolvePreviewLanguage({
 
 function languageFromPath(path: string | undefined): string | undefined {
   if (!path) return undefined;
-  const name = nodePath.basename(path).toLowerCase();
-  if (name.startsWith(".env") || name.endsWith(".env")) return "dotenv";
-  if (name === "dockerfile" || name.startsWith("dockerfile.")) return "dockerfile";
+  const name = Str.toLowerCase(nodePath.basename(path));
+  if (Fn.pipe(name, Str.startsWith(".env")) || Fn.pipe(name, Str.endsWith(".env"))) return "dotenv";
+  if (name === "dockerfile" || Fn.pipe(name, Str.startsWith("dockerfile."))) return "dockerfile";
   return EXACT_BASENAMES.get(name);
 }
 
 function languageFromShebang(content: string | undefined): string | undefined {
-  const firstLine = content?.split("\n", 1)[0]?.trim();
-  if (!firstLine?.startsWith("#!")) return undefined;
-  const parts = firstLine
-    .replace(/^#!\s*/, "")
-    .split(/\s+/)
-    .filter(Boolean);
-  const envIndex = parts.findIndex((part) => nodePath.basename(part) === "env");
-  const command =
-    envIndex >= 0 ? parts.slice(envIndex + 1).find((part) => !part.startsWith("-")) : parts[0];
+  if (content === undefined) return undefined;
+  const newline = indexOfFrom(content, "\n", 0);
+  const firstLine = Str.trim(newline < 0 ? content : Fn.pipe(content, Str.slice(0, newline)));
+  if (!Fn.pipe(firstLine, Str.startsWith("#!"))) return undefined;
+  const parts = Arr.filter(
+    Str.split(Fn.pipe(firstLine, Str.replace(/^#!\s*/, "")), /\s+/),
+    Str.isNonEmpty,
+  );
+  const envIndex = Arr.findFirstIndex(parts, (part) => nodePath.basename(part) === "env");
+  const command = Option.isSome(envIndex)
+    ? Option.getOrUndefined(
+        Arr.findFirst(
+          parts.slice(envIndex.value + 1),
+          (part) => !Fn.pipe(part, Str.startsWith("-")),
+        ),
+      )
+    : parts[0];
   if (!command) return undefined;
   return SHEBANG_ALIASES.get(
-    nodePath
-      .basename(command)
-      .toLowerCase()
-      .replace(/\d+(\.\d+)?$/, ""),
+    Fn.pipe(nodePath.basename(command), Str.toLowerCase, Str.replace(/\d+(\.\d+)?$/, "")),
   );
 }
 
 function languageFromContent(content: string | undefined): string | undefined {
   if (!content || content.length > codePreviewPerformanceConfig.contentLanguageDetectionChars)
     return undefined;
-  const trimmed = content.trim();
+  const trimmed = Str.trim(content);
   if (!trimmed) return undefined;
-  if ((trimmed.startsWith("{") || trimmed.startsWith("[")) && isJson(trimmed)) return "json";
+  if (
+    (Fn.pipe(trimmed, Str.startsWith("{")) || Fn.pipe(trimmed, Str.startsWith("["))) &&
+    isJson(trimmed)
+  )
+    return "json";
   if (/^<(!doctype\s+html|html)(\s|>)/i.test(trimmed)) return "html";
   if (/^<\?xml\s/i.test(trimmed)) return "xml";
   return undefined;

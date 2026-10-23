@@ -5,6 +5,9 @@ import { compactStatus, type CompactSummary } from "../../src/tools/compact-summ
 import { nativeMcpIdentity } from "../../src/tools/native-mcp-identity";
 import { nativeMcpSummary } from "../../src/tools/native-mcp-summary";
 import { scriptResult, settledSummary } from "../support/native-codemode";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 
 const header =
   "Warning: truncated output (original token count: 9000)\nTotal output lines: 900\n\n";
@@ -33,14 +36,17 @@ function mcp(text: string, fullOutputPath?: string) {
 }
 
 const clipping = (summary: CompactSummary | undefined) =>
-  (summary?.issues ?? [])
-    .filter((issue) => /-output-(truncated|save-failed)$/.test(issue.code))
-    .map((issue) => ({
-      kind: issue.code.replace(/^(native|mcp)-/, ""),
+  Arr.map(
+    Arr.filter(summary?.issues ?? [], (issue) =>
+      /-output-(truncated|save-failed)$/.test(issue.code),
+    ),
+    (issue) => ({
+      kind: Fn.pipe(issue.code, Str.replace(/^(native|mcp)-/, "")),
       severity: issue.severity,
       message: issue.message,
       detail: issue.detail ?? "",
-    }));
+    }),
+  );
 
 test("codemode and MCP read Pi's truncation envelope the same way", () => {
   const lost = [
@@ -63,7 +69,7 @@ test("codemode and MCP read Pi's truncation envelope the same way", () => {
     { text: `${header}HEAD…TAIL${unsaved}`, path: undefined, expected: lost },
     { text: `${header}HEAD…TAIL`, path: undefined, expected: [["output-truncated", "warning"]] },
   ]) {
-    const lostOutput = expected.some(([, severity]) => severity === "warning");
+    const lostOutput = Arr.some(expected, ([, severity]) => severity === "warning");
     for (const [summary, delivered] of [
       [codemode(text, path), "success"],
       [mcp(text, path), "returned"],
@@ -71,14 +77,16 @@ test("codemode and MCP read Pi's truncation envelope the same way", () => {
       assert.equal(compactStatus("settled", summary!), lostOutput ? "warning" : delivered);
       const projected = clipping(summary);
       assert.deepEqual(
-        projected.map(({ kind, severity }) => [kind, severity]),
+        Arr.map(projected, ({ kind, severity }) => [kind, severity]),
         expected,
         text,
       );
       for (const issue of projected) {
         assert.deepEqual(issueMessageStyleProblems(issue.message), []);
-        if (issue.kind === "output-save-failed") assert.ok(issue.detail.includes("ENOSPC"));
-        if (issue.severity === "info") assert.ok(issue.detail.includes("/tmp/full.txt"));
+        if (issue.kind === "output-save-failed")
+          assert.ok(Fn.pipe(issue.detail, Str.includes("ENOSPC")));
+        if (issue.severity === "info")
+          assert.ok(Fn.pipe(issue.detail, Str.includes("/tmp/full.txt")));
       }
     }
   }

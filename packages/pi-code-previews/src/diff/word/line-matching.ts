@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Order from "effect/Order";
 import { requiredAt, type WordChangeConfidence } from "./types";
 import type { AddedDiffLine, RemovedDiffLine } from "../parse";
 import { prefixAlignedPairs } from "./alignment";
@@ -40,13 +42,14 @@ export function matchChangedLines(
     removed.length * added.length > MAX_CHANGED_LINE_PAIR_CELLS
       ? matchChangedLinesSparse(similarity)
       : matchChangedLinesDense(similarity);
-  return pairs
-    .toSorted((a, b) => a.removedPosition - b.removedPosition)
-    .map(({ removedPosition, addedPosition, confidence }) => ({
+  return Arr.map(
+    Arr.sortWith(pairs, (pair) => pair.removedPosition, Order.Number),
+    ({ removedPosition, addedPosition, confidence }) => ({
       removedIndex: requiredAt(removed, removedPosition, "changed line").index,
       addedIndex: requiredAt(added, addedPosition, "changed line").index,
       confidence,
-    }));
+    }),
+  );
 }
 
 const MAX_CHANGED_LINE_PAIR_CELLS = 1024;
@@ -54,8 +57,8 @@ const MAX_CHANGED_LINE_PAIR_CELLS = 1024;
 function matchChangedLinesDense(similarity: ChangedLineSimilarity): ChangedLinePositionMatch[] {
   const removedLength = similarity.removed.length;
   const addedLength = similarity.added.length;
-  const scores = similarity.removed.map((_removedLine, removedPosition) =>
-    similarity.added.map((_addedLine, addedPosition) =>
+  const scores = Arr.map(similarity.removed, (_removedLine, removedPosition) =>
+    Arr.map(similarity.added, (_addedLine, addedPosition) =>
       lineSimilarity(
         similarity,
         removedPosition,
@@ -101,19 +104,19 @@ function addCrossingPairs(
   pairs: ChangedLinePositionMatch[],
   competingScoreAt: CompetingChangedLineScoreAt,
 ): ChangedLinePositionMatch[] {
-  const usedRemoved = new Set(pairs.map((pair) => pair.removedPosition));
-  const usedAdded = new Set(pairs.map((pair) => pair.addedPosition));
-  const cells = scores.flatMap((row, removedPosition) =>
-    row.map((score, addedPosition) => ({ removedPosition, addedPosition, score })),
+  const usedRemoved = new Set(Arr.map(pairs, (pair) => pair.removedPosition));
+  const usedAdded = new Set(Arr.map(pairs, (pair) => pair.addedPosition));
+  const cells = Arr.flatMap(scores, (row, removedPosition) =>
+    Arr.map(row, (score, addedPosition) => ({ removedPosition, addedPosition, score })),
   );
-  const candidates = cells
-    .filter(
-      (cell) =>
-        !usedRemoved.has(cell.removedPosition) &&
-        !usedAdded.has(cell.addedPosition) &&
-        cell.score >= MIN_CHANGED_LINE_PAIR_SCORE,
-    )
-    .toSorted((a, b) => b.score - a.score);
+  const eligible = Arr.filter(
+    cells,
+    (cell) =>
+      !usedRemoved.has(cell.removedPosition) &&
+      !usedAdded.has(cell.addedPosition) &&
+      cell.score >= MIN_CHANGED_LINE_PAIR_SCORE,
+  );
+  const candidates = Arr.sortWith(eligible, (cell) => cell.score, Order.flip(Order.Number));
   const reciprocalCompetingScore = competingCandidateValues(cells, (cell) => cell.score);
 
   const out = [...pairs];

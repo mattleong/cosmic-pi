@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import { codePreviewPerformanceConfig } from "../config/state";
 import type { HostObject } from "../shared/untrusted-value";
 import { formatBytes } from "pi-cosmic-core";
@@ -89,7 +90,7 @@ export function hasWriteDiffSizeEvidence(before: HostObject | undefined): boolea
   if (Option.isNone(decoded)) return false;
   const { reason, sizeExceeded, byteLength, maxBytes } = decoded.value;
   return (
-    reason.trim().length > 0 &&
+    Str.trim(reason).length > 0 &&
     sizeExceeded === true &&
     byteLength !== undefined &&
     byteLength > maxBytes
@@ -123,8 +124,8 @@ export function shouldSkipWriteDiffComplexity(
   after: string,
   maxCells = currentMaxChangedLineCells(),
 ): boolean {
-  const beforeLines = before.split("\n");
-  const afterLines = after.split("\n");
+  const beforeLines = Str.split(before, "\n");
+  const afterLines = Str.split(after, "\n");
   const sharedLimit = Math.min(beforeLines.length, afterLines.length);
   let prefix = 0;
   while (prefix < sharedLimit && beforeLines[prefix] === afterLines[prefix]) prefix++;

@@ -5,6 +5,10 @@ import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { CODE_PREVIEW_SETTING_KEYS, type CodePreviewSettings } from "../../src/config/schema";
 import { codePreviewSettings } from "../../src/config/state";
 import { normalizeSettingsWithDiagnostics, updateSetting } from "../../src/config/values";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Rec from "effect/Record";
 
 const settingsFrom = (
   data: JsonObject,
@@ -36,14 +40,14 @@ test("settings recover valid siblings and expose bounded path-only diagnostics",
     { path: "settings.toolCallCollapsedStyle", issue: "invalid" },
     { path: "settings.tools[1]", issue: "invalid" },
   ]);
-  assert.equal(JSON.stringify(normalized.diagnostics).includes("private"), false);
+  assert.equal(Fn.pipe(JSON.stringify(normalized.diagnostics), Str.includes("private")), false);
 
   const bounded = normalizeSettingsWithDiagnostics(
-    Object.fromEntries(CODE_PREVIEW_SETTING_KEYS.map((key) => [key, "private-value"])),
+    Rec.fromEntries(Arr.map(CODE_PREVIEW_SETTING_KEYS, (key) => [key, "private-value"] as const)),
     fallback,
   );
   assert.equal(bounded.diagnostics.length, 16);
-  assert.equal(JSON.stringify(bounded.diagnostics).includes("private-value"), false);
+  assert.equal(Fn.pipe(JSON.stringify(bounded.diagnostics), Str.includes("private-value")), false);
 });
 
 test("tool selections keep known names instead of falling back to every tool", () => {

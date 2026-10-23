@@ -1,5 +1,6 @@
 import type { ToolRenderers } from "@earendil-works/pi-coding-agent";
 import * as Fn from "effect/Function";
+import * as Arr from "effect/Array";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import { invokeHostCallback } from "pi-cosmic-core";
 import { renderToolHeader } from "pi-cosmic-ui/tool";
@@ -59,7 +60,7 @@ export function createWebAccessRenderers(
     if (
       prior &&
       prior.length === input.length &&
-      prior.every((value, index) => value === input[index])
+      Arr.every(prior, (value, index) => value === input[index])
     )
       return fallback;
     const markFailed = () => failures.set(state, { ...failures.get(state), [slot]: input });

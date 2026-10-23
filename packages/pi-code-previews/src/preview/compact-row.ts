@@ -1,3 +1,6 @@
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
   managerActivityColor,
@@ -16,7 +19,7 @@ import { layoutCompactHeader } from "./compact-header";
 import { TIMING_VISIBLE_MS } from "./tool-timing";
 
 export function compactSingleLine(value: string): string {
-  return escapeControlChars(value).replace(/\s+/gu, " ").trim();
+  return Fn.pipe(value, escapeControlChars, Str.replace(/\s+/gu, " "), Str.trim);
 }
 
 export type CompactRowInput = {
@@ -91,9 +94,10 @@ export function layoutCompactRow(input: CompactRowInput, theme: Theme, width: nu
   const timing = duration ? theme.fg("dim", duration) : undefined;
   const muted = (values: readonly string[] | undefined) =>
     values
-      ?.map(compactSingleLine)
-      .filter(Boolean)
-      .map((text) => theme.fg("muted", text)) ?? [];
+      ? Arr.map(Arr.filter(Arr.map(values, compactSingleLine), Str.isNonEmpty), (text) =>
+          theme.fg("muted", text),
+        )
+      : [];
   const { row, counter } = layoutCompactHeader(
     compactRowPrefix(input, theme),
     compactRowSubject(input),
@@ -107,5 +111,10 @@ export function layoutCompactRow(input: CompactRowInput, theme: Theme, width: nu
 }
 
 export function compactPlainText(text: string): string {
-  return escapeControlChars(text.replaceAll("\r\n", "\n")).replaceAll("\t", "  ");
+  return Fn.pipe(
+    text,
+    Str.replaceAll("\r\n", "\n"),
+    escapeControlChars,
+    Str.replaceAll("\t", "  "),
+  );
 }

@@ -4,6 +4,7 @@ import { it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import {
@@ -33,6 +34,8 @@ import {
   type CodePreviewSettingsServiceContract,
 } from "../../src/config/store";
 import { issueMessageStyleProblems } from "../../testing";
+import * as Str from "effect/String";
+import * as Rec from "effect/Record";
 
 const isJsonDocumentError = Schema.is(JsonDocumentError);
 
@@ -105,8 +108,8 @@ it.effect("logs a sanitized warning and continues after a malformed settings doc
         assert.equal(loaded.readCollapsedLines, defaultCodePreviewSettings.readCollapsedLines);
         const telemetry = capturedTelemetrySnapshot(captured);
         assert.match(telemetry, /Failed to load settings for code previews/);
-        assert.equal(telemetry.includes("secret/settings"), false);
-        assert.equal(telemetry.includes("secret malformed"), false);
+        assert.equal(Fn.pipe(telemetry, Str.includes("secret/settings")), false);
+        assert.equal(Fn.pipe(telemetry, Str.includes("secret malformed")), false);
       }),
     ),
   );
@@ -292,7 +295,7 @@ it.effect("save persists the flat document and publishes the committed settings"
   return usingSettings(fake.service, (service) =>
     Effect.gen(function* () {
       const loaded = yield* loadSettings(service);
-      assert.equal(Object.hasOwn(loaded, "owner"), false);
+      assert.equal(Rec.has<string, unknown>(loaded, "owner"), false);
       yield* saveSettings(service, { ...loaded, readCollapsedLines: 42 });
       assert.deepEqual(fake.documents.get("/agent/code-previews.json"), {
         owner: "keep",

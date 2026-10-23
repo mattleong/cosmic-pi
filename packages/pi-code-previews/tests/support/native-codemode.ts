@@ -7,10 +7,12 @@ import type { NativeCodemodeCall } from "../../src/tools/native-codemode-evidenc
 import { createNativeCodemodeRenderers } from "../../src/tools/native-codemode-render";
 import { nativeCodemodeCallSubject } from "../../src/tools/native-codemode-subject";
 import { nativeCodemodeSummary } from "../../src/tools/native-codemode-summary";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 
 export const nativeReceipt = (args: Schema.JsonObject): string => {
   const json = JSON.stringify(args);
-  return json.length > 200 ? `${json.slice(0, 197)}...` : json;
+  return json.length > 200 ? `${Fn.pipe(json, Str.slice(0, 197))}...` : json;
 };
 
 export const codemodeSubject = (name: string, args?: Schema.JsonObject) =>

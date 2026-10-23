@@ -24,6 +24,9 @@ import type {
 import type { ToolRenderContext } from "../../src/tools/renderers/shared/types";
 import { plainTheme, textResult as result } from "../support/render";
 import { SPINNER_FRAME_MS } from "pi-cosmic-ui/manager";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 
 type Definition = ReturnType<typeof createReadToolDefinition>;
 type Result = Awaited<ReturnType<Definition["execute"]>>;
@@ -35,7 +38,10 @@ interface State {
 type Context = ToolRenderContext<State, ReadToolInput>;
 type Provider = CompactSummaryProvider<ReadToolInput, Result["details"], State>;
 const textOf = (value: Result | undefined) =>
-  value?.content.map((part) => (part.type === "text" ? part.text : "")).join("\n") ?? "";
+  Arr.join(
+    Arr.map(value?.content ?? [], (part) => (part.type === "text" ? part.text : "")),
+    "\n",
+  );
 const summarize: Provider = ({ args, phase, result: value }) => {
   const summary: CompactSummary = {
     subject: args.path ?? "",
@@ -149,8 +155,8 @@ test("one stable compact call carries pending, executing, streaming and final me
   assert.equal(h.call(), shell);
   h.update({ isPartial: false }, result("final-count"));
   assert.equal(h.rows().length, 1);
-  assert.match(h.rows().join(""), /final-count/u);
-  assert.doesNotMatch(h.rows().join(""), /stream-one/u);
+  assert.match(Arr.join(h.rows(), ""), /final-count/u);
+  assert.doesNotMatch(Arr.join(h.rows(), ""), /stream-one/u);
   assert.equal(bodyWork, 0, "compact summaries must avoid hidden diff/output computation");
 });
 
@@ -172,13 +178,16 @@ test("call-before-final does not promote retained streaming output to a final su
 test("replayed finals settle without execution or argument-completion flags and without timing", () => {
   const h = harness(summarize, "off", { timing: true });
   h.update({ isPartial: false }, result("recorded-final"));
-  assert.match(h.rows().join(""), /recorded-final/u);
+  assert.match(Arr.join(h.rows(), ""), /recorded-final/u);
   assert.equal(h.state.codePreviewTimingStartedAt, undefined);
   assert.equal(h.state.codePreviewTimingEndedAt, undefined);
 });
 
 test("missing outcomes, malformed summaries, declines and throwing providers keep original bodies on expansion", () => {
-  const body = Array.from({ length: 100 }, (_, index) => `recovery-step-${index}`).join("\n");
+  const body = Arr.join(
+    Array.from({ length: 100 }, (_, index) => `recovery-step-${index}`),
+    "\n",
+  );
   const malformed: CompactSummary = { subject: "subject", outcome: "warning" };
   Reflect.set(malformed, "issues", [{ severity: "fatal", code: "bad", message: "MALFORMED" }]);
   for (const mode of ["on", "off", "border"] as const) {
@@ -194,13 +203,13 @@ test("missing outcomes, malformed summaries, declines and throwing providers kee
         const h = harness(provider, mode);
         const rows = h.update({ isPartial: false, isError }, result(body));
         assert.equal(rows.length, isError ? 2 : 1);
-        const collapsed = rows.join("\n");
+        const collapsed = Arr.join(rows, "\n");
         assert.doesNotMatch(collapsed, /CALL file.ts|MALFORMED|recovery-step-[1-9]/u);
-        assert.equal(collapsed.includes("recovery-step-0"), isError);
-        const expanded = h.update({ expanded: true }).join("\n");
+        assert.equal(Fn.pipe(collapsed, Str.includes("recovery-step-0")), isError);
+        const expanded = Arr.join(h.update({ expanded: true }), "\n");
         assert.match(expanded, /CALL file.ts/u);
         assert.doesNotMatch(expanded, /MALFORMED/u);
-        for (const step of body.split("\n")) assert.ok(expanded.includes(step));
+        for (const step of Str.split(body, "\n")) assert.ok(Fn.pipe(expanded, Str.includes(step)));
       }
     }
   }
@@ -224,8 +233,8 @@ test("timing starts only on observed execution, freezes on final and remains ind
   assert.equal(second.state.codePreviewTimingEndedAt, undefined);
   second.update({ isPartial: false }, result("second-final"));
   assert.equal(scheduled.size, 0);
-  assert.match(first.rows().join(""), /updated metadata/u);
-  assert.match(second.rows().join(""), /second-final/u);
+  assert.match(Arr.join(first.rows(), ""), /updated metadata/u);
+  assert.match(Arr.join(second.rows(), ""), /second-final/u);
 });
 
 it.effect(
@@ -245,20 +254,20 @@ it.effect(
             yield* Effect.addFinalizer(() => Effect.sync(clearCodePreviewSessionCapability));
             const h = harness(summarize, "off", { timing });
             h.call({ invalidate: () => ticks++ });
-            const pending = h.rows().join("");
+            const pending = Arr.join(h.rows(), "");
             yield* TestClock.adjust(2 * SPINNER_FRAME_MS);
             assert.equal(tickCount(), 0);
-            assert.equal(h.rows().join(""), pending);
+            assert.equal(Arr.join(h.rows(), ""), pending);
             h.call({ executionStarted: true });
-            const firstFrame = h.rows().join("");
+            const firstFrame = Arr.join(h.rows(), "");
             h.update({}, result(""));
             h.update({}, result(""));
             yield* TestClock.adjust(2 * SPINNER_FRAME_MS);
             assert.equal(tickCount(), 2, "repeated slot updates must share one animation timer");
-            assert.notEqual(h.rows().join(""), firstFrame);
+            assert.notEqual(Arr.join(h.rows(), ""), firstFrame);
             if (!timing) {
               assert.equal(h.state.codePreviewTimingStartedAt, undefined);
-              assert.doesNotMatch(h.rows().join(""), /\d+(?:ms|s)\b/u);
+              assert.doesNotMatch(Arr.join(h.rows(), ""), /\d+(?:ms|s)\b/u);
               h.update({ expanded: true });
               yield* TestClock.adjust(2 * SPINNER_FRAME_MS);
               assert.equal(tickCount(), 2);
@@ -268,10 +277,10 @@ it.effect(
             }
             h.update({ isPartial: false }, result("final"));
             const settledTicks = tickCount();
-            const settled = h.rows().join("");
+            const settled = Arr.join(h.rows(), "");
             yield* TestClock.adjust(500);
             assert.equal(tickCount(), settledTicks);
-            assert.equal(h.rows().join(""), settled);
+            assert.equal(Arr.join(h.rows(), ""), settled);
             const activeAtShutdown = harness(summarize, "off", { timing });
             activeAtShutdown.call({ executionStarted: true, invalidate: () => ticks++ });
             yield* TestClock.adjust(SPINNER_FRAME_MS);

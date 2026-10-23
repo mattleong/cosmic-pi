@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Semaphore from "effect/Semaphore";
+import * as Arr from "effect/Array";
 import type { CodePreviewSettings } from "./schema";
 
 type SettingKey = keyof CodePreviewSettings;
@@ -57,7 +58,7 @@ export function withSettingsCoordinator<A, E, R>(
           return true;
         },
         isSuperseded: (keys) =>
-          keys.some((key) => (latestKeyEdits.get(key) ?? 0) > admission.sequence),
+          Arr.some(keys, (key) => (latestKeyEdits.get(key) ?? 0) > admission.sequence),
         publishEdit: (keys, baseline, publish) => {
           if (isCurrent()) {
             publish(baseline);

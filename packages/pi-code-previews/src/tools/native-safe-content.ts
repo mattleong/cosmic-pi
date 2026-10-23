@@ -1,6 +1,8 @@
 import { Text, type Component } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
 import type * as Schema from "effect/Schema";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import {
   decodeUnknownOrUndefined,
   invokeHostCallback,
@@ -39,9 +41,9 @@ export function visibleDiagnosticLine(text: string, maximumLength: number): stri
 }
 
 export function plainRows(raw: string, maxRows: number): Component {
-  const lines = escapeControlChars(raw).split("\n").slice(0, maxRows);
+  const lines = Str.split(escapeControlChars(raw), "\n").slice(0, maxRows);
   return {
-    render: (width) => lines.map((line) => clipToWidth(line, width)),
+    render: (width) => Arr.map(lines, (line) => clipToWidth(line, width)),
     invalidate() {},
   };
 }

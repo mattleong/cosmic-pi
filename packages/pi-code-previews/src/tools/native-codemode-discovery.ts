@@ -9,6 +9,7 @@ import {
 } from "acorn";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import * as Arr from "effect/Array";
 import { invokeHostCallback } from "pi-cosmic-core";
 import { isNativeMcpName } from "./native-mcp-identity";
 import type { HostContainer } from "../shared/untrusted-value";
@@ -104,9 +105,9 @@ function bindings(pattern: Pattern | Expression): readonly string[] {
     case "Identifier":
       return [pattern.name];
     case "ArrayPattern":
-      return pattern.elements.flatMap((entry) => (entry ? bindings(entry) : []));
+      return Arr.flatMap(pattern.elements, (entry) => (entry ? bindings(entry) : []));
     case "ObjectPattern":
-      return pattern.properties.flatMap((entry) =>
+      return Arr.flatMap(pattern.properties, (entry) =>
         bindings(entry.type === "RestElement" ? entry.argument : entry.value),
       );
     case "AssignmentPattern":
@@ -292,7 +293,7 @@ function discoveryHelper(call: CallExpression, shadowed: ReadonlySet<string>): s
     !helpers.has(call.callee.name) ||
     shadowed.has(call.callee.name) ||
     call.optional ||
-    call.arguments.some((arg) => arg.type === "SpreadElement")
+    Arr.some(call.arguments, (arg) => arg.type === "SpreadElement")
   )
     return undefined;
   return call.callee.name;

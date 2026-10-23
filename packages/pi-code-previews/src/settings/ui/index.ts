@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { getSettingsListTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import { type SettingItem } from "@earendil-works/pi-tui";
 import {
@@ -128,7 +129,7 @@ export function createSettingsCategoryItems(
     createSettingsGroupItemFromDefinition(definition, getCurrent, onSettingChange, theme);
   const { tools } = getCurrent();
   return [
-    ...SETTINGS_CATEGORY_GROUPS.slice(0, 2).map(groupItem),
+    ...Arr.map(SETTINGS_CATEGORY_GROUPS.slice(0, 2), groupItem),
     {
       id: "tools",
       label: "Enabled tools",
@@ -150,7 +151,7 @@ export function createSettingsCategoryItems(
         );
       },
     },
-    ...SETTINGS_CATEGORY_GROUPS.slice(2).map(groupItem),
+    ...Arr.map(SETTINGS_CATEGORY_GROUPS.slice(2), groupItem),
   ];
 }
 
@@ -171,9 +172,11 @@ function createSettingsGroupItemFromDefinition(
         title: definition.label,
         description: definition.description,
         items: () =>
-          definition.groups?.map((group) =>
-            createSettingsGroupItemFromDefinition(group, getCurrent, onSettingChange, theme),
-          ) ?? (definition.ids ?? []).map((id) => createSettingItem(getCurrent(), id, theme)),
+          definition.groups
+            ? Arr.map(definition.groups, (group) =>
+                createSettingsGroupItemFromDefinition(group, getCurrent, onSettingChange, theme),
+              )
+            : Arr.map(definition.ids ?? [], (id) => createSettingItem(getCurrent(), id, theme)),
         onChange: onSettingChange,
         done,
         summary: () => definition.summarize(getCurrent()),

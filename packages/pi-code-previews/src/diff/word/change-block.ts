@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import {
   changedLineTokens,
   normalizedChangedContent,
@@ -36,8 +37,8 @@ export function analyzeChangedLineBlock(
     if (line?.kind === "-") removed.push({ index, line });
     else if (line?.kind === "+") added.push({ index, line });
   }
-  const removedByIndex = new Map(removed.map((line) => [line.index, line]));
-  const addedByIndex = new Map(added.map((line) => [line.index, line]));
+  const removedByIndex = new Map(Arr.map(removed, (line) => [line.index, line]));
+  const addedByIndex = new Map(Arr.map(added, (line) => [line.index, line]));
   const pairs = matchChangedLines(removed, added);
   const ranges: ChangedLineRangePair[] = [];
 

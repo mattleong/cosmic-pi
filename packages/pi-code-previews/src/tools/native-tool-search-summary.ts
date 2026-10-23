@@ -1,4 +1,8 @@
 import * as Schema from "effect/Schema";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
 import {
   countLabel,
   decodeUnknownOrUndefined,
@@ -23,7 +27,7 @@ export function nativeToolSearchReceipt(
   details: HostContainer | undefined,
 ): typeof Receipt.Type | undefined {
   const source = ownData(details, "loaded", HostContainerSchema);
-  if (!invokeHostCallback(() => Array.isArray(source), false)) return undefined;
+  if (!invokeHostCallback(() => Arr.isArray(source), false)) return undefined;
   const length = ownData(source, "length", Length);
   if (length === undefined) return undefined;
   const loaded = Array.from({ length }, (_, index) =>
@@ -34,7 +38,7 @@ export function nativeToolSearchReceipt(
 
 export function nativeToolSearchSubject(args: HostContainer | undefined): string {
   const query = ownData(args, "query", Schema.String);
-  return query === undefined ? "" : visibleDiagnosticLine(query.slice(0, 512), 160);
+  return query === undefined ? "" : visibleDiagnosticLine(Fn.pipe(query, Str.slice(0, 512)), 160);
 }
 
 export const nativeToolSearchSummary: CompactSummaryProvider = ({
@@ -50,8 +54,10 @@ export const nativeToolSearchSummary: CompactSummaryProvider = ({
   if (phase !== "settled") return heading;
   if (!result) return undefined;
   if (context.isError) {
-    const first = result.content.find((part) => part.type === "text");
-    const text = first?.type === "text" ? first.text.slice(0, 8192) : "";
+    const first = Option.getOrUndefined(
+      Arr.findFirst(result.content, (part) => part.type === "text"),
+    );
+    const text = first?.type === "text" ? Fn.pipe(first.text, Str.slice(0, 8192)) : "";
     const fallback = "Tool search failed";
     return {
       ...heading,

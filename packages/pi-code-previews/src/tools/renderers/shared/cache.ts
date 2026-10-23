@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import {
@@ -32,7 +33,7 @@ export function cachedPreview(
   const cached = entries.get(slot);
   if (
     cached?.dependencies.length === dependencies.length &&
-    dependencies.every((value, index) => Object.is(value, cached.dependencies[index]))
+    Arr.every(dependencies, (value, index) => Object.is(value, cached.dependencies[index]))
   )
     return cached.component;
   if (cached?.component instanceof DeferredPreview) cached.component.cancel();

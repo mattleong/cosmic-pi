@@ -1,12 +1,16 @@
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import { indexOfFrom } from "pi-cosmic-core";
+
 export function forEachRawTextLine(text: string, callback: (line: string) => false | void): void {
   let start = 0;
   while (start <= text.length) {
-    const newline = text.indexOf("\n", start);
+    const newline = indexOfFrom(text, "\n", start);
     if (newline < 0) {
-      callback(text.slice(start));
+      callback(Fn.pipe(text, Str.slice(start)));
       break;
     }
-    if (callback(text.slice(start, newline)) === false) break;
+    if (callback(Fn.pipe(text, Str.slice(start, newline))) === false) break;
     start = newline + 1;
   }
 }

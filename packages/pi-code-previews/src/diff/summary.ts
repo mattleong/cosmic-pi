@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { forEachRawTextLine } from "../shared/text-lines";
 import { countLabel } from "pi-cosmic-core";
@@ -21,7 +24,7 @@ export function describeDiffContract(summary: DiffSummary): string {
   if (summary.replacements > 0) parts.push(countLabel(summary.replacements, "replacement"));
   if (summary.insertions > 0) parts.push(countLabel(summary.insertions, "insertion"));
   if (summary.deletions > 0) parts.push(countLabel(summary.deletions, "deletion"));
-  return parts.length ? parts.join(", ") : "changes";
+  return parts.length ? Arr.join(parts, ", ") : "changes";
 }
 
 export function summarizeDiff(diff: string): DiffSummary {
@@ -49,8 +52,8 @@ export function summarizeDiff(diff: string): DiffSummary {
 
   forEachRawTextLine(diff, (line) => {
     summary.totalLines++;
-    const isAddition = line.startsWith("+") && !line.startsWith("+++");
-    const isRemoval = line.startsWith("-") && !line.startsWith("---");
+    const isAddition = Fn.pipe(line, Str.startsWith("+")) && !Fn.pipe(line, Str.startsWith("+++"));
+    const isRemoval = Fn.pipe(line, Str.startsWith("-")) && !Fn.pipe(line, Str.startsWith("---"));
 
     if (isAddition) {
       summary.additions++;

@@ -19,6 +19,10 @@ import { withCodePreviewShell } from "../../src/tools/cooperative-tools";
 import { nativeToolSearchSummary } from "../../src/tools/native-tool-search-summary";
 import { nativeCall, scriptResult, settledSummary } from "../support/native-codemode";
 import { builtinRenderers, stripAnsi } from "../support/render";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
 
 // Pi generates the rejections, so a change to its wording fails these tests rather than leaving
 // them to pass on stale text.
@@ -75,12 +79,17 @@ const renderedLs = (
   result: AgentToolResult<unknown>,
   durationMs: number | undefined,
 ) =>
-  createToolPresentationHarness(builtinRenderers("ls", true)!, { width: 200 })
-    .cycle(args, result, {
-      states: [false, true],
-      overrides: () => ({ isError: true, isPartial: false, durationMs }),
-    })
-    .map((frame) => stripAnsi(frame.text));
+  Arr.map(
+    createToolPresentationHarness(builtinRenderers("ls", true)!, { width: 200 }).cycle(
+      args,
+      result,
+      {
+        states: [false, true],
+        overrides: () => ({ isError: true, isPartial: false, durationMs }),
+      },
+    ),
+    (frame) => stripAnsi(frame.text),
+  );
 
 function expectArgumentIssue(issue: CompactIssue | undefined, value: string) {
   expect(issue).toMatchObject({ severity: "error", code: "invalid-arguments" });
@@ -89,7 +98,7 @@ function expectArgumentIssue(issue: CompactIssue | undefined, value: string) {
     message,
     problems: [],
   });
-  expect(value.startsWith(message)).toBe(false);
+  expect(Fn.pipe(value, Str.startsWith(message))).toBe(false);
   expect(issue?.detail).toBeTruthy();
 }
 
@@ -139,8 +148,11 @@ describe("Pi argument rejections", () => {
         { type: "text", text: "done" },
       ),
     );
-    const child = nested?.children?.entries[0]?.issues?.find(
-      ({ severity }) => severity === "error",
+    const child = Option.getOrUndefined(
+      Arr.findFirst(
+        nested?.children?.entries[0]?.issues ?? [],
+        ({ severity }) => severity === "error",
+      ),
     );
     expect(child?.message).toBe(rejected("read", mismatched("read"))?.issues?.[0]?.message);
   });
@@ -169,7 +181,11 @@ describe("Pi argument rejections", () => {
         renderCall: () => new Text("owned call", 0, 0),
         renderResult: (result, { expanded }) =>
           new Text(
-            expanded ? (result.content.find((part) => part.type === "text")?.text ?? "") : "",
+            expanded
+              ? (Option.getOrUndefined(
+                  Arr.findFirst(result.content, (part) => part.type === "text"),
+                )?.text ?? "")
+              : "",
             0,
             0,
           ),
@@ -179,21 +195,23 @@ describe("Pi argument rejections", () => {
     for (const style of ["compact", "preview"] as const) {
       applyPresentationSettings({ toolCallCollapsedStyle: style });
       const subjects = [
-        ...builtins.map((tool) => [tool, builtinRenderers(tool, true)!] as const),
+        ...Arr.map(builtins, (tool) => [tool, builtinRenderers(tool, true)!] as const),
         ["owned", fallback] as const,
       ];
       for (const [name, renderers] of subjects) {
         const value = malformed(name);
         const tool = createToolPresentationHarness(renderers, { width: 200 });
-        const [collapsed, expanded] = tool
-          .cycle({}, text(value), {
+        const [collapsed, expanded] = Arr.map(
+          tool.cycle({}, text(value), {
             states: [false, true],
             overrides: () => ({ isError: true }),
-          })
-          .map((frame) => stripAnsi(frame.text));
+          }),
+          (frame) => stripAnsi(frame.text),
+        );
         expect(collapsed).not.toContain(`Invalid arguments for tool "${name}"`);
         expect(collapsed).not.toContain(MALFORMED_JSON);
-        for (const line of value.split("\n").filter(Boolean)) expect(expanded).toContain(line);
+        for (const line of Arr.filter(Str.split(value, "\n"), Str.isNonEmpty))
+          expect(expanded).toContain(line);
       }
     }
   });

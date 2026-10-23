@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import * as Num from "effect/Number";
+import type * as Ordering from "effect/Ordering";
 import {
   bagLineSimilarity,
   hasUniqueSharedSimilarityFeature,
@@ -23,6 +26,8 @@ type SparseChangedLinePairCandidate = {
   hasUniqueFeature: boolean;
   competingEvidence: number;
 };
+
+type ScoredSparseCandidate = SparseChangedLinePairCandidate & { score: number };
 
 const MAX_POSITIONAL_FALLBACK_AMBIGUITY_CELLS = 10_000;
 const MAX_SPARSE_FEATURE_DOCUMENTS = 6;
@@ -50,8 +55,8 @@ export function matchChangedLinesSparse(
   const competingScoreAt = competingChangedLineScores(removedLength, addedLength, scoreAt);
 
   const pairs = sparseChangedLineAnchors(similarity, scoreAt);
-  const usedRemoved = new Set(pairs.map((pair) => pair.removedPosition));
-  const usedAdded = new Set(pairs.map((pair) => pair.addedPosition));
+  const usedRemoved = new Set(Arr.map(pairs, (pair) => pair.removedPosition));
+  const usedAdded = new Set(Arr.map(pairs, (pair) => pair.addedPosition));
 
   for (let index = 0; index < Math.min(removedLength, addedLength); index++) {
     if (usedRemoved.has(index) || usedAdded.has(index)) continue;
@@ -76,13 +81,15 @@ function sparseChangedLineAnchors(
   similarity: ChangedLineSimilarity,
   scoreAt: ChangedLineScoreAt,
 ): ChangedLinePositionMatch[] {
-  const scoredCandidates = sparseChangedLinePairCandidates(similarity)
-    .map((candidate) =>
+  const scoredCandidates = Arr.sort(
+    Arr.map(sparseChangedLinePairCandidates(similarity), (candidate) =>
       Object.assign(candidate, {
         score: scoreAt(candidate.removedPosition, candidate.addedPosition),
       }),
-    )
-    .toSorted((a, b) => b.score - a.score || compareSparseCandidates(a, b));
+    ),
+    (a: ScoredSparseCandidate, b: ScoredSparseCandidate) =>
+      Num.sign(b.score - a.score) || compareSparseCandidates(a, b),
+  );
   const candidateCompetingScore = competingCandidateValues(
     scoredCandidates,
     (candidate) => candidate.score,
@@ -179,7 +186,8 @@ function sparseChangedLinePairCandidates(
   for (const candidate of candidateList) candidate.competingEvidence = competingEvidence(candidate);
   const selectedByRemoved = topSparseCandidates(candidateList, (c) => c.removedPosition);
   const selectedByAdded = topSparseCandidates(candidateList, (c) => c.addedPosition);
-  return candidateList.filter(
+  return Arr.filter(
+    candidateList,
     (candidate) => selectedByRemoved.has(candidate) && selectedByAdded.has(candidate),
   );
 }
@@ -188,7 +196,7 @@ function similarityFeaturePositions(
   lines: ChangedLineSimilarity["removed"],
 ): Map<string, number[]> {
   const positions = new Map<string, number[]>();
-  lines.forEach(({ features }, position) => {
+  Arr.forEach(lines, ({ features }, position) => {
     for (const feature of new Set(features)) appendAt(positions, feature, position);
   });
   return positions;
@@ -201,8 +209,8 @@ function topSparseCandidates(
   const byPosition = new Map<number, SparseChangedLinePairCandidate[]>();
   for (const candidate of candidates) appendAt(byPosition, position(candidate), candidate);
   return new Set(
-    [...byPosition.values()].flatMap((atPosition) =>
-      atPosition.toSorted(compareSparseCandidates).slice(0, MAX_SPARSE_CANDIDATES_PER_LINE),
+    Arr.flatMap([...byPosition.values()], (atPosition) =>
+      Arr.sort(atPosition, compareSparseCandidates).slice(0, MAX_SPARSE_CANDIDATES_PER_LINE),
     ),
   );
 }
@@ -216,14 +224,15 @@ function appendAt<K, V>(groups: Map<K, V[]>, key: K, value: V): void {
 function compareSparseCandidates(
   a: SparseChangedLinePairCandidate,
   b: SparseChangedLinePairCandidate,
-): number {
-  return (
+): Ordering.Ordering {
+  return Num.sign(
     Number(b.hasUniqueFeature) - Number(a.hasUniqueFeature) ||
-    b.evidence - a.evidence ||
-    b.sharedFeatureCount - a.sharedFeatureCount ||
-    Math.abs(a.removedPosition - a.addedPosition) - Math.abs(b.removedPosition - b.addedPosition) ||
-    a.removedPosition - b.removedPosition ||
-    a.addedPosition - b.addedPosition
+      b.evidence - a.evidence ||
+      b.sharedFeatureCount - a.sharedFeatureCount ||
+      Math.abs(a.removedPosition - a.addedPosition) -
+        Math.abs(b.removedPosition - b.addedPosition) ||
+      a.removedPosition - b.removedPosition ||
+      a.addedPosition - b.addedPosition,
   );
 }
 

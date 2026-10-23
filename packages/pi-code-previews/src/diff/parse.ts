@@ -1,3 +1,7 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+
 export const DIFF_ADD_MARKER = "\u0000PI_DIFF_ADD\u0000";
 export const DIFF_REMOVE_MARKER = "\u0000PI_DIFF_REMOVE\u0000";
 
@@ -7,19 +11,22 @@ export type RemovedDiffLine = DiffLine<"-">;
 export type ParsedDiffLine = AddedDiffLine | RemovedDiffLine | DiffLine<" ">;
 
 export function diffLineNumberWidth(lines: Array<ParsedDiffLine | null>): number {
-  return lines.reduce((width, line) => Math.max(width, line?.lineNumber.trim().length ?? 0), 0);
+  return Arr.reduce(lines, 0, (width, line) =>
+    Math.max(width, line ? Str.trim(line.lineNumber).length : 0),
+  );
 }
 
 export function formatDiffLineNumber(lineNumber: string, width: number): string {
-  return width > 0 ? lineNumber.trim().padStart(width, " ") : "";
+  return width > 0 ? Fn.pipe(lineNumber, Str.trim, Str.padStart(width, " ")) : "";
 }
 
 export function parseDiffLine(line: string): ParsedDiffLine | null {
-  if (line.startsWith("+++") || line.startsWith("---")) return null;
+  if (Fn.pipe(line, Str.startsWith("+++")) || Fn.pipe(line, Str.startsWith("---"))) return null;
   if (/^ {2,}\.\.\.$/u.test(line)) return null;
   const kind = line[0];
   if (kind !== "+" && kind !== "-" && kind !== " ") return null;
-  const [, lineNumber = "", content = line.slice(1)] = /^.(\s*\d+)\s(.*)$/su.exec(line) ?? [];
+  const [, lineNumber = "", content = Fn.pipe(line, Str.slice(1))] =
+    /^.(\s*\d+)\s(.*)$/su.exec(line) ?? [];
   return { kind, lineNumber, content };
 }
 

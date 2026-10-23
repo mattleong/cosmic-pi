@@ -1,3 +1,6 @@
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
 import { sanitizeDiagnosticContent } from "pi-cosmic-core";
 import type { CompactIssue } from "./compact-issues";
 
@@ -13,15 +16,15 @@ type NativeTruncatedOutput =
 export function parseNativeTruncatedOutput(text: string): NativeTruncatedOutput | undefined {
   const header = HEADER.exec(text);
   if (!header) return undefined;
-  const rest = text.slice(header[0].length);
+  const rest = Fn.pipe(text, Str.slice(header[0].length));
   const saved = SAVED_FOOTER.exec(rest);
-  if (saved) return { body: rest.slice(0, saved.index), footer: "saved" };
-  const unsaved = rest.lastIndexOf(UNSAVED_FOOTER);
-  if (unsaved >= 0 && rest.endsWith("]"))
+  if (saved) return { body: Fn.pipe(rest, Str.slice(0, saved.index)), footer: "saved" };
+  const unsaved = Fn.pipe(rest, Str.lastIndexOf(UNSAVED_FOOTER));
+  if (Option.isSome(unsaved) && Fn.pipe(rest, Str.endsWith("]")))
     return {
-      body: rest.slice(0, unsaved),
+      body: Fn.pipe(rest, Str.slice(0, unsaved.value)),
       footer: "unsaved",
-      reason: rest.slice(unsaved + UNSAVED_FOOTER.length, -1),
+      reason: Fn.pipe(rest, Str.slice(unsaved.value + UNSAVED_FOOTER.length, -1)),
     };
   return { body: rest, footer: "unknown" };
 }
@@ -51,7 +54,7 @@ export function nativeTruncationIssues(
     {
       severity: "warning",
       code: `${producer.code}-output-save-failed`,
-      message: `Full ${producer.subject.toLowerCase()} couldn't be saved`,
+      message: `Full ${Str.toLowerCase(producer.subject)} couldn't be saved`,
       detail: sanitizeDiagnosticContent(envelope.reason),
     },
   ];

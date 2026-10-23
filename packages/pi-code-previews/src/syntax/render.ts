@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { bundledThemesInfo } from "shiki";
 import { isShikiLanguage, type ShikiHighlighter } from "../boundary/shiki";
@@ -95,7 +98,7 @@ function evictRenderCache(): void {
 }
 
 function rememberRender(key: string, code: string, rendered: string[]): void {
-  const size = rendered.reduce((total, line) => total + line.length, 0);
+  const size = Arr.reduce(rendered, 0, (total, line) => total + line.length);
   renderCache.set(key, { source: code, value: rendered, size });
   renderCacheChars += size;
   evictRenderCache();
@@ -122,8 +125,14 @@ export function renderWithShiki(
   if (!isShikiLanguage(language)) return undefined;
   try {
     const tokens = highlighter.codeToTokensBase(code, { lang: language, theme });
-    const rendered = tokens.map((line) =>
-      normalizeContrast(line.map((token) => ansiFromToken(token)).join(""), theme),
+    const rendered = Arr.map(tokens, (line) =>
+      normalizeContrast(
+        Arr.join(
+          Arr.map(line, (token) => ansiFromToken(token)),
+          "",
+        ),
+        theme,
+      ),
     );
     rememberRender(key, code, rendered);
     return rendered;
@@ -160,7 +169,7 @@ export function shouldSkipHighlight(text: string): boolean {
   return text.length > codePreviewPerformanceConfig.maxHighlightChars;
 }
 
-const themeTypes = new Map(bundledThemesInfo.map((theme) => [theme.id, theme.type]));
+const themeTypes = new Map(Arr.map(bundledThemesInfo, (theme) => [theme.id, theme.type]));
 export function isLightShikiTheme(theme: string): boolean {
   return themeTypes.get(theme) === "light";
 }
@@ -173,12 +182,14 @@ function normalizeContrast(ansi: string, theme: string): string {
 const LOW_CONTRAST_BASIC_FG = new Set(["30", "90", "38;5;0", "38;5;8"]);
 function isLowContrastFg(parameters: string): boolean {
   if (LOW_CONTRAST_BASIC_FG.has(parameters)) return true;
-  if (!parameters.startsWith("38;2;")) return false;
-  const [, , red = Number.NaN, green = Number.NaN, blue = Number.NaN] = parameters
-    .split(";")
-    .map(Number);
+  if (!Fn.pipe(parameters, Str.startsWith("38;2;"))) return false;
+  const [, , red = Number.NaN, green = Number.NaN, blue = Number.NaN] = Arr.map(
+    Str.split(parameters, ";"),
+    Number,
+  );
   return (
-    [red, green, blue].every(Number.isFinite) && 0.2126 * red + 0.7152 * green + 0.0722 * blue < 72
+    Arr.every([red, green, blue], Number.isFinite) &&
+    0.2126 * red + 0.7152 * green + 0.0722 * blue < 72
   );
 }
 const FONT_STYLES = [
@@ -198,14 +209,14 @@ function ansiFromToken(token: { content: string; color?: string; fontStyle?: num
   return open + escapeControlChars(token.content) + close;
 }
 function ansiFg(hex: string): string {
-  const value = Number.parseInt(hex.replace(/^#/, "").slice(0, 6), 16);
+  const value = Number.parseInt(Fn.pipe(hex, Str.replace(/^#/, ""), Str.slice(0, 6)), 16);
   return Number.isFinite(value)
     ? `\x1b[38;2;${(value >> 16) & 255};${(value >> 8) & 255};${value & 255}m`
     : "";
 }
 
 function plainHighlightedText(text: string, theme: Theme): string[] {
-  return expandPreviewTabs(text)
-    .split("\n")
-    .map((line) => theme.fg("toolOutput", escapeLineControlChars(line)));
+  return Arr.map(Str.split(expandPreviewTabs(text), "\n"), (line) =>
+    theme.fg("toolOutput", escapeLineControlChars(line)),
+  );
 }

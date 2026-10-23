@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import { requiredAt } from "./types";
 
 export type WordEmphasisToken = {
@@ -27,6 +30,7 @@ export function wordEmphasisTokens(text: string): WordEmphasisToken[] {
 }
 
 function matchedTokens(text: string, pattern: RegExp, offset: number): WordEmphasisToken[] {
+  // @effect-diagnostics-next-line preferEffectString:off -- Str.matchAll types matches as RegExpMatchArray, dropping the guaranteed index.
   return Array.from(text.matchAll(pattern), ({ 0: value, index }) => ({
     value,
     start: offset + index,
@@ -35,7 +39,7 @@ function matchedTokens(text: string, pattern: RegExp, offset: number): WordEmpha
 }
 
 export function wordTokenValues(text: string): string[] {
-  return Array.from(text.matchAll(WORD_TOKEN_PATTERN), (match) => match[0]);
+  return Array.from(Fn.pipe(text, Str.matchAll(WORD_TOKEN_PATTERN)), (match) => match[0]);
 }
 
 export function isIdentifierToken(value: string): boolean {
@@ -69,15 +73,16 @@ export function splitIdentifierToken(value: string, start: number): WordEmphasis
 }
 
 export function wordEmphasisSimilarityTokenValues(tokens: WordEmphasisToken[]): string[] {
-  return tokens.flatMap(({ value }) => {
+  return Arr.flatMap(tokens, ({ value }) => {
     if (!isIdentifierToken(value)) return [value];
     const parts = identifierSimilarityParts(value);
-    return parts.length > 0 ? parts : [value.toLowerCase()];
+    return parts.length > 0 ? parts : [Str.toLowerCase(value)];
   });
 }
 
 export function identifierSimilarityParts(value: string): string[] {
-  return splitIdentifierToken(value, 0)
-    .map((part) => part.value.toLowerCase())
-    .filter((part) => !/^[$_]+$/.test(part));
+  return Arr.filter(
+    Arr.map(splitIdentifierToken(value, 0), (part) => Str.toLowerCase(part.value)),
+    (part) => !/^[$_]+$/.test(part),
+  );
 }

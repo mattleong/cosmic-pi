@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { stripTerminalControls } from "pi-cosmic-core";
 import { plainTheme } from "pi-cosmic-core/testing";
@@ -39,7 +42,7 @@ export function galleryFrames<TArgs, TDetails>(
   const isError = scenario.isError ?? false;
   const phase = scenario.phase ?? "settled";
   const live = { isPartial: phase !== "settled", executionStarted: phase !== "pending" };
-  return views.flatMap(({ expanded, width }) => {
+  return Arr.flatMap(views, ({ expanded, width }) => {
     const harness = createToolPresentationHarness<TArgs, TDetails, TimingSeed>(tool, {
       width,
       ...(scenario.durationMs !== undefined && {
@@ -68,13 +71,13 @@ export function galleryMessageFrames(
   render: MessageRenderer,
   scenario: GalleryMessageScenario,
 ): string[] {
-  return GALLERY_VIEWS.flatMap(({ expanded, width }) => {
+  return Arr.flatMap(GALLERY_VIEWS, ({ expanded, width }) => {
     const component = render(scenario.message, { expanded, outputPad: 0 }, plainTheme);
     const content = scenario.message.content;
     const fallback = [
       `[${scenario.message.customType}] (Pi default rendering)`,
-      ...(Array.isArray(content)
-        ? content.map((part) => (part.type === "text" ? part.text : `[${part.type}]`))
+      ...(Arr.isArray(content)
+        ? Arr.map(content, (part) => (part.type === "text" ? part.text : `[${part.type}]`))
         : [content]),
     ];
     return frame(scenario.title, expanded, width, component?.render(width) ?? fallback);
@@ -83,6 +86,6 @@ export function galleryMessageFrames(
 
 const frame = (title: string, expanded: boolean, width: number, lines: readonly string[]) => [
   `── ${title} · ${expanded ? "expanded" : "collapsed"} · ${width} cols`,
-  ...lines.map((line) => stripTerminalControls(line).replace(/\s+$/u, "")),
+  ...Arr.map(lines, (line) => Fn.pipe(stripTerminalControls(line), Str.replace(/\s+$/u, ""))),
   "",
 ];

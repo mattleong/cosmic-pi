@@ -21,6 +21,7 @@ import {
 import { createCodePreviewSettingsModel, persistSettingsChange } from "../../src/settings/panel";
 import { createSettingsCategoryItems } from "../../src/settings/ui/index";
 import { effectTest, eventLoopTurn, step } from "../support/effect-test";
+import * as Arr from "effect/Array";
 
 effectTest(
   "a detached Shiki initialization rejection does not escape into save rollback or warnings",
@@ -281,10 +282,10 @@ function gatedPanelSaves(service: CodePreviewSettingsServiceContract) {
 
 const panelValuesFor = (settings: CodePreviewSettings) =>
   new Map(
-    createSettingsCategoryItems(() => settings, Fn.constVoid).map((item) => [
-      item.id,
-      item.currentValue,
-    ]),
+    Arr.map(
+      createSettingsCategoryItems(() => settings, Fn.constVoid),
+      (item) => [item.id, item.currentValue],
+    ),
   );
 
 effectTest(

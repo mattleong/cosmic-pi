@@ -1,4 +1,5 @@
 import * as Predicate from "effect/Predicate";
+import * as Arr from "effect/Array";
 import { sanitizeDiagnosticContent } from "pi-cosmic-core";
 import { ownField, ownObject, type HostObject } from "../shared/untrusted-value";
 import { escapeControlChars } from "../shared/terminal-text";
@@ -18,14 +19,14 @@ export function secretIssues(
   limit: number,
 ): CompactIssue[] {
   const warnings = new Set(
-    enabled ? sources.flatMap((source) => getSecretWarnings(source, limit)) : [],
+    enabled ? Arr.flatMap(sources, (source) => getSecretWarnings(source, limit)) : [],
   );
   return warnings.size > 0
     ? [
         {
           severity: "warning",
           code: "possible-secrets",
-          message: `May contain ${[...warnings].map(withArticle).join(", ")}`,
+          message: `May contain ${Arr.join(Arr.map([...warnings], withArticle), ", ")}`,
         },
       ]
     : [];
@@ -41,7 +42,7 @@ export function bashCommandIssues(command: string, enabled: boolean): CompactIss
         message: "Too long to check for risky operations",
       },
     ];
-  return getBashWarnings(command).map((label, index) => ({
+  return Arr.map(getBashWarnings(command), (label, index) => ({
     severity: "warning",
     code: `command-risk-${index}`,
     message: label,
@@ -131,7 +132,7 @@ const OUTPUT_TRUNCATED = {
 } as const;
 
 export const hasRetainedOutput = (issues: readonly CompactIssue[]) =>
-  issues.some(({ code, severity }) => code === OUTPUT_TRUNCATED.code && severity === "info");
+  Arr.some(issues, ({ code, severity }) => code === OUTPUT_TRUNCATED.code && severity === "info");
 
 const LIMIT_FIELDS = {
   grep: "matchLimitReached",

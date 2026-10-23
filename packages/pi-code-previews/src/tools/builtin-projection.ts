@@ -1,4 +1,7 @@
 import * as Predicate from "effect/Predicate";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import * as Rec from "effect/Record";
 import {
   editResultDetail,
   grepResultDetail,
@@ -128,12 +131,12 @@ function failureSummary(
   output: string,
   issues: readonly CompactIssue[],
 ): CompactSummary | undefined {
-  if (result?.content.some((part) => part.type !== "text")) return undefined;
+  if (Arr.some(result?.content ?? [], (part) => part.type !== "text")) return undefined;
   const invalid = argumentFailureIssue(output);
   if (invalid)
     return {
       // Malformed JSON reaches renderers as `{}`, where argument defaults would invent a subject.
-      subject: args && Object.keys(args).length > 0 ? subject : "",
+      subject: args && Rec.keys(args).length > 0 ? subject : "",
       outcome: "error",
       issues: mergeCompactIssues([invalid], issues),
     };
@@ -213,8 +216,9 @@ function grepCounters(output: string, details: HostObject | undefined): string[]
 
 function builtinFailure(tool: BuiltinCompactTool, output: string, issues: readonly CompactIssue[]) {
   const details = output || `${tool} failed`;
-  if (details.trim() === "Operation aborted") return { outcome: "cancelled" as const, issues: [] };
-  const lines = details.trimEnd().split(/\r?\n/u);
+  if (Str.trim(details) === "Operation aborted")
+    return { outcome: "cancelled" as const, issues: [] };
+  const lines = Str.split(Str.trimEnd(details), /\r?\n/u);
   if (tool !== "bash") return fileFailure(tool, details, lines);
   return shellFailure(details, lines, hasRetainedOutput(issues));
 }

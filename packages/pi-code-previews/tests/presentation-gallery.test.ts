@@ -25,6 +25,11 @@ import {
 import { nativeCall as callRecord, nativeReceipt, scriptResult } from "./support/native-codemode";
 import { builtinToolInfo, inertScheduler } from "./support/renderer-host";
 import * as Match from "effect/Match";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
+import * as Rec from "effect/Record";
 
 function registered(style: "compact" | "preview") {
   setCodePreviewSettings({
@@ -41,7 +46,7 @@ function registered(style: "compact" | "preview") {
     "list_mcp_resources",
     "list_mcp_resource_templates",
   ];
-  const metadata = names.map((name) => {
+  const metadata = Arr.map(names, (name) => {
     const tool = builtinToolInfo(name);
     if (isWebAccessTool(name))
       tool.sourceInfo = {
@@ -65,7 +70,7 @@ function registered(style: "compact" | "preview") {
     pi.registerToolRenderer(createCodePreviewRendererResolver(pi, () => owner, new Set()));
   });
   return new Map<string, ToolRenderers>(
-    names.map((name) => [
+    Arr.map(names, (name) => [
       name,
       captured.resolveToolRenderers(
         name,
@@ -78,18 +83,26 @@ function registered(style: "compact" | "preview") {
 const webCall: ToolRenderers = {
   renderCall: (args) => new Text(JSON.stringify(args), 0, 0),
   renderResult: (result) =>
-    new Text(result.content.find((part) => part.type === "text")?.text.slice(0, 200) ?? "", 0, 0),
+    new Text(
+      Fn.pipe(
+        Option.getOrUndefined(Arr.findFirst(result.content, (part) => part.type === "text"))
+          ?.text ?? "",
+        Str.slice(0, 200),
+      ),
+      0,
+      0,
+    ),
 };
 
 const nativeMcpCall: ToolRenderers = {
   renderCall: (args, _theme, context) => {
-    const fields = Object.entries(Predicate.isObject(args) ? args : {});
-    const entries = fields.map(([key, value]) => `${key}=${JSON.stringify(value)}`);
-    const lines = fields.map(([key, value]) => `  ${key}: ${String(value)}`);
+    const fields = Rec.toEntries(Predicate.isObject(args) ? args : {});
+    const entries = Arr.map(fields, ([key, value]) => `${key}=${JSON.stringify(value)}`);
+    const lines = Arr.map(fields, ([key, value]) => `  ${key}: ${String(value)}`);
     return new Text(
       context.expanded
-        ? ["docs/lookup", ...lines].join("\n")
-        : ["docs/lookup", ...entries].join(" "),
+        ? Arr.join(["docs/lookup", ...lines], "\n")
+        : Arr.join(["docs/lookup", ...entries], " "),
       0,
       0,
     );
@@ -146,7 +159,10 @@ const scenarios: ReadonlyArray<
   {
     tool: "tool_search",
     title: "native tool search pending long query",
-    args: { query: "Find tools for " + "project documentation ".repeat(30), limit: 8 },
+    args: {
+      query: "Find tools for " + Fn.pipe("project documentation ", Str.repeat(30)),
+      limit: 8,
+    },
     phase: "pending",
     narrow: true,
   },
@@ -272,7 +288,7 @@ const scenarios: ReadonlyArray<
   {
     tool: "codemode",
     title: "native long single-line source",
-    args: { code: "// SOURCE_HEAD " + "padding ".repeat(250) + " SOURCE_TAIL" },
+    args: { code: "// SOURCE_HEAD " + Fn.pipe("padding ", Str.repeat(250)) + " SOURCE_TAIL" },
     phase: "pending",
     narrow: true,
   },
@@ -482,15 +498,15 @@ const scenarios: ReadonlyArray<
     result: nativeResult("completed", [
       nativeArgumentCall("edit", {
         path: "/project/src/file.ts",
-        edits: [{ oldText: "old".repeat(200), newText: "new" }],
+        edits: [{ oldText: Fn.pipe("old", Str.repeat(200)), newText: "new" }],
       }),
-      nativeArgumentCall("bash", { command: "pnpm validate; ".repeat(40) }),
+      nativeArgumentCall("bash", { command: Fn.pipe("pnpm validate; ", Str.repeat(40)) }),
       nativeArgumentCall("background_task", {
         action: "start",
         name: "Verify previews",
-        command: "pnpm validate; ".repeat(40),
+        command: Fn.pipe("pnpm validate; ", Str.repeat(40)),
       }),
-      nativeArgumentCall("mcp__docs__lookup", { query: "x".repeat(400) }),
+      nativeArgumentCall("mcp__docs__lookup", { query: Fn.pipe("x", Str.repeat(400)) }),
     ]),
   },
   {
@@ -502,7 +518,9 @@ const scenarios: ReadonlyArray<
       nativeArgumentCall("mcp__docs__lookup", { query: "Effect services" }),
       nativeArgumentCall("mcp__docs__lookup_1234abcd", { query: "Registered alias" }),
       nativeArgumentCall("mcp__team__docs__lookup", { query: "Ambiguous identity" }),
-      nativeArgumentCall(`mcp__${"x".repeat(49)}__c2936b33`, { query: "Truncated identity" }),
+      nativeArgumentCall(`mcp__${Fn.pipe("x", Str.repeat(49))}__c2936b33`, {
+        query: "Truncated identity",
+      }),
     ]),
   },
   {
@@ -514,7 +532,7 @@ const scenarios: ReadonlyArray<
     result: nativeResult("completed", [
       nativeArgumentCall("read_mcp_resource", {
         server: "docs",
-        uri: "docs://guide/" + "chapter/".repeat(40),
+        uri: "docs://guide/" + Fn.pipe("chapter/", Str.repeat(40)),
       }),
       nativeArgumentCall("list_mcp_resources", { server: "docs" }),
       nativeArgumentCall("list_mcp_resource_templates", {}),
@@ -677,7 +695,7 @@ const scenarios: ReadonlyArray<
     args: { query: "Getting started" },
     isError: true,
     result: text(
-      `Warning: truncated output (original token count: 9000)\nTotal output lines: 900\n\nIndex docs-main has no page for that query\n${"diagnostic\n".repeat(3)}…8000 tokens truncated…\n\n[Full output: /tmp/mcp-error.txt (read it with offset/limit)]`,
+      `Warning: truncated output (original token count: 9000)\nTotal output lines: 900\n\nIndex docs-main has no page for that query\n${Fn.pipe("diagnostic\n", Str.repeat(3))}…8000 tokens truncated…\n\n[Full output: /tmp/mcp-error.txt (read it with offset/limit)]`,
       { server: "docs", tool: "lookup", fullOutputPath: "/tmp/mcp-error.txt" },
     ),
   },
@@ -923,13 +941,13 @@ const scenarios: ReadonlyArray<
   {
     tool: "write",
     title: "write running",
-    args: { path: "/project/src/a.ts", content: writeSource.replace("2", "20") },
+    args: { path: "/project/src/a.ts", content: Fn.pipe(writeSource, Str.replace("2", "20")) },
     phase: "running",
   },
   {
     tool: "write",
     title: "write overwrite",
-    args: { path: "/project/src/a.ts", content: writeSource.replace("2", "20") },
+    args: { path: "/project/src/a.ts", content: Fn.pipe(writeSource, Str.replace("2", "20")) },
     result: text("Successfully wrote to /project/src/a.ts", writeBefore(writeSource)),
   },
   {
@@ -950,7 +968,7 @@ const scenarios: ReadonlyArray<
     args: { path: "/project/src/a.ts", content: writeSource },
     result: text(
       "Successfully wrote to /project/src/a.ts",
-      writeBefore(writeSource.replaceAll("\n", "\r\n").replace(/\r\n$/u, "")),
+      writeBefore(Fn.pipe(writeSource, Str.replaceAll("\n", "\r\n"), Str.replace(/\r\n$/u, ""))),
     ),
   },
   { tool: "edit", title: "edit proposal", args: editArgs, phase: "pending" },

@@ -1,3 +1,7 @@
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import type { CompactIssue } from "./compact-issues";
 import { exitStatusMeaning, outputFailureLine } from "./process-failure";
 import { firstLineMessage } from "pi-cosmic-core";
@@ -8,7 +12,8 @@ const TIMED_OUT = /^Command timed out after \d+(?:\.\d+)? seconds$/u;
 
 const beforeLast = (lines: string[]): string[] => {
   let end = lines.length - 1;
-  while (end > 0 && lines[end - 1]?.trim() === "") end -= 1;
+  while (end > 0 && Option.exists(Arr.get(lines, end - 1), (line) => Str.trim(line) === ""))
+    end -= 1;
   return lines.slice(0, end);
 };
 
@@ -27,14 +32,14 @@ export function shellFailure(details: string, lines: string[], retained: boolean
     issues.push({
       severity: "error",
       code: "shell-exit",
-      message: `${last.replace("Command exited", "Exited")}${cause ? `: ${cause}` : ""}`,
+      message: `${Fn.pipe(last, Str.replace("Command exited", "Exited"))}${cause ? `: ${cause}` : ""}`,
     });
   } else if (last === ABORTED) outcome = "cancelled";
   else if (TIMED_OUT.test(last))
     issues.push({
       severity: "error",
       code: "shell-timeout",
-      message: last.replace("Command timed", "Timed"),
+      message: Fn.pipe(last, Str.replace("Command timed", "Timed")),
     });
   else
     issues.push({

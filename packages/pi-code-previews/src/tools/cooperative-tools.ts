@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import type {
   AgentToolResult,
   Theme,
@@ -137,9 +139,9 @@ function renderFallbackToolCall(
 ): Component {
   const lines = [
     theme.fg("toolTitle", theme.bold(nonEmptyText(tool.label) ?? tool.name)),
-    ...fallbackArguments(expandedArgs).map((line) => theme.fg("muted", line)),
+    ...Arr.map(fallbackArguments(expandedArgs), (line) => theme.fg("muted", line)),
   ];
-  return new Text(lines.join("\n"), 0, 0);
+  return new Text(Arr.join(lines, "\n"), 0, 0);
 }
 
 function renderFallbackToolResult<TArgs, TDetails, TState>(
@@ -151,9 +153,9 @@ function renderFallbackToolResult<TArgs, TDetails, TState>(
   const output = getFallbackResultText(result.content, context.showImages);
   if (!output) return new Container();
   const color = context.isError ? "error" : options.isPartial ? "warning" : "toolOutput";
-  const text = output
-    .split("\n")
-    .map((line) => theme.fg(color, escapeControlChars(line)))
-    .join("\n");
+  const text = Arr.join(
+    Arr.map(Str.split(output, "\n"), (line) => theme.fg(color, escapeControlChars(line))),
+    "\n",
+  );
   return new Text(text, 0, 0);
 }

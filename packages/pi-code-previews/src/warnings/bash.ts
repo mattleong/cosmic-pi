@@ -1,3 +1,7 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Rec from "effect/Record";
 import { normalizeShellCommandWhitespace } from "../tools/shell-command";
 
 const BASH_WARNINGS = {
@@ -16,9 +20,10 @@ const BASH_WARNINGS = {
 
 export function getBashWarnings(command: string): string[] {
   const compact = normalizeShellCommandWhitespace(
-    command.replace(/\\\n/g, " ").replace(/\n/g, ";"),
+    Fn.pipe(command, Str.replace(/\\\n/g, " "), Str.replace(/\n/g, ";")),
   );
-  return Object.entries(BASH_WARNINGS)
-    .filter(([, pattern]) => pattern.test(compact))
-    .map(([label]) => label);
+  return Arr.map(
+    Arr.filter(Rec.toEntries(BASH_WARNINGS), ([, pattern]) => pattern.test(compact)),
+    ([label]) => label,
+  );
 }

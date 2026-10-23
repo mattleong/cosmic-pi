@@ -1,9 +1,11 @@
 import { performance } from "node:perf_hooks";
 import { Text } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
+import * as Order from "effect/Order";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Match from "effect/Match";
 import * as Predicate from "effect/Predicate";
+import * as Arr from "effect/Array";
 import { synchronousNow as previewNow } from "pi-cosmic-core";
 import { createSimpleDiff } from "../src/diff/structured";
 import { DeferredPreview } from "../src/preview/deferred";
@@ -67,10 +69,16 @@ if (!clock || clock.p95Ms > 0.002)
 if (!json || json.p95Ms > 0.01)
   throw new Error(`JSON language probe p95 exceeded 0.01ms: ${json?.p95Ms ?? "missing"}`);
 
-const before = Array.from({ length: 250 }, (_, index) => `before ${index}`).join("\n");
-const after = Array.from({ length: 250 }, (_, index) => `after ${index}`).join("\n");
+const before = Arr.join(
+  Array.from({ length: 250 }, (_, index) => `before ${index}`),
+  "\n",
+);
+const after = Arr.join(
+  Array.from({ length: 250 }, (_, index) => `after ${index}`),
+  "\n",
+);
 const sampleMedian = (samples: readonly number[]): number => {
-  const sorted = samples.toSorted((left, right) => left - right);
+  const sorted = Arr.sort(samples, Order.Number);
   return sorted[Math.floor(sorted.length / 2)] ?? 0;
 };
 const measureDiff = () => timeOnce(() => createSimpleDiff(before, after));
@@ -126,5 +134,11 @@ if (computed) throw new Error("Cancelled deferred preview still computed.");
 if (cancellationLatencyMs > 100)
   throw new Error(`Deferred cancellation latency exceeded 100ms: ${cancellationLatencyMs}`);
 benchLog(
-  `deferred method=3-warmup+9-sample-median baselineMs=${committedBaselineMedianMs.toFixed(3)} regressionLimitMs=${regressionLimitMs.toFixed(3)} cpuSamplesMs=${cpuSamplesMs.map((sample) => sample.toFixed(3)).join(",")} cpuMedianMs=${cpuBlockMs.toFixed(3)} cancellationSamplesMs=${cancellationSamplesMs.map((sample) => sample.toFixed(3)).join(",")} cancellationMedianMs=${cancellationLatencyMs.toFixed(3)} worker=not-justified propertySink=${propertySink}`,
+  `deferred method=3-warmup+9-sample-median baselineMs=${committedBaselineMedianMs.toFixed(3)} regressionLimitMs=${regressionLimitMs.toFixed(3)} cpuSamplesMs=${Arr.join(
+    Arr.map(cpuSamplesMs, (sample) => sample.toFixed(3)),
+    ",",
+  )} cpuMedianMs=${cpuBlockMs.toFixed(3)} cancellationSamplesMs=${Arr.join(
+    Arr.map(cancellationSamplesMs, (sample) => sample.toFixed(3)),
+    ",",
+  )} cancellationMedianMs=${cancellationLatencyMs.toFixed(3)} worker=not-justified propertySink=${propertySink}`,
 );

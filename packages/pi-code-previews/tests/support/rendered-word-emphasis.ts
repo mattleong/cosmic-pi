@@ -1,4 +1,8 @@
 import { matchSgrSequence } from "../../src/shared/terminal-text";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
 
 type RenderedWordEmphasis = {
   content: string;
@@ -14,8 +18,10 @@ const WORD_EMPHASIS_OPEN = new Set([
 const WORD_EMPHASIS_CLOSE = "\x1b[49m";
 
 export function parseRenderedWordEmphasis(line: string): RenderedWordEmphasis {
-  const pipe = line.indexOf("│ ");
-  const code = pipe < 0 ? line : line.slice(pipe + "│ ".length);
+  const code = Option.match(Fn.pipe(line, Str.indexOf("│ ")), {
+    onNone: () => line,
+    onSome: (pipe) => Fn.pipe(line, Str.slice(pipe + "│ ".length)),
+  });
   const ranges: Array<[number, number]> = [];
   let content = "";
   let rangeStart: number | undefined;
@@ -34,7 +40,7 @@ export function parseRenderedWordEmphasis(line: string): RenderedWordEmphasis {
         continue;
       }
     }
-    content += code.charAt(index);
+    content += Option.getOrElse(Str.charAt(code, index), () => "");
     index++;
   }
   if (rangeStart !== undefined)
@@ -44,5 +50,7 @@ export function parseRenderedWordEmphasis(line: string): RenderedWordEmphasis {
 
 export function renderedWordEmphasisSpans(line: string): string[] {
   const rendered = parseRenderedWordEmphasis(line);
-  return rendered.ranges.map(([start, end]) => rendered.content.slice(start, end));
+  return Arr.map(rendered.ranges, ([start, end]) =>
+    Fn.pipe(rendered.content, Str.slice(start, end)),
+  );
 }

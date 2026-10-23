@@ -3,10 +3,13 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { renderCompactIssues } from "../../src/preview/compact-issues";
 import type { CompactIssue } from "../../src/tools/compact-issues";
 import { plainTheme as theme, stripAnsi } from "../support/render";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 
 const render = (value: readonly CompactIssue[], width = 100, expanded = false) =>
-  renderCompactIssues(value, theme, width, expanded).map(stripAnsi);
-const squash = (rows: readonly string[]) => rows.join("").replace(/\s/gu, "");
+  Arr.map(renderCompactIssues(value, theme, width, expanded), stripAnsi);
+const squash = (rows: readonly string[]) => Fn.pipe(Arr.join(rows, ""), Str.replace(/\s/gu, ""));
 
 test("narrow widths wrap messages and details without clipping any text", () => {
   const long: CompactIssue[] = [
@@ -21,15 +24,15 @@ test("narrow widths wrap messages and details without clipping any text", () => 
   for (const width of [2, 3, 4, 6, 12, 20, 40])
     for (const expanded of [false, true]) {
       const rows = render(long, width, expanded);
-      expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true);
+      expect(Arr.every(rows, (row) => visibleWidth(row) <= width)).toBe(true);
       const text = squash(rows);
       for (const expected of expanded
-        ? [long[0]!.message, ...long[0]!.detail!.split("\n"), long[1]!.message]
+        ? [long[0]!.message, ...Str.split(long[0]!.detail!, "\n"), long[1]!.message]
         : [long[0]!.message])
-        expect(text).toContain(expected.replace(/\s/gu, ""));
-      expect(text.includes("Continue")).toBe(expanded);
+        expect(text).toContain(Fn.pipe(expected, Str.replace(/\s/gu, "")));
+      expect(Fn.pipe(text, Str.includes("Continue"))).toBe(expanded);
     }
-  expect(render(long, 1, true).every((row) => visibleWidth(row) <= 1)).toBe(true);
+  expect(Arr.every(render(long, 1, true), (row) => visibleWidth(row) <= 1)).toBe(true);
 });
 
 test("untrusted issue text renders as inert single-line messages", () => {
@@ -46,6 +49,6 @@ test("untrusted issue text renders as inert single-line messages", () => {
     80,
     true,
   );
-  expect(rows.join("")).not.toContain("\u001b[2J");
+  expect(Arr.join(rows, "")).not.toContain("\u001b[2J");
   expect(stripAnsi(rows[0]!)).toMatch(/first second.*third/u);
 });

@@ -1,4 +1,8 @@
 import * as Predicate from "effect/Predicate";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Rec from "effect/Record";
 import type { CompactChild } from "./compact-summary";
 import { describeBuiltinCompactSubject, type BuiltinCompactTool } from "./builtin-subject";
 import { getReadLineRange, numericArg } from "./data/args";
@@ -48,8 +52,8 @@ function coreSubject(
   const path = rawPath ? formatDisplayPath(rawPath, cwd) : "";
   if (name === "find" || name === "grep") return searchSubject(text, path);
   if (name !== "read" || !path) return path;
-  const settled = Object.fromEntries(
-    Object.entries(preview.values).filter(([key]) => !preview.partialFields.has(key)),
+  const settled = Rec.fromEntries(
+    Arr.filter(Rec.toEntries(preview.values), ([key]) => !preview.partialFields.has(key)),
   );
   const offset = numericArg(settled, "offset");
   const ranged = offset !== undefined && Number.isSafeInteger(offset) && offset > 0;
@@ -71,7 +75,7 @@ function backgroundTaskSubject(action: string, text: FieldText): string {
 function backgroundTaskCall(preview: NativeArgumentPreview, text: FieldText): CallSubject {
   const action = preview.partialFields.has("action") ? "" : text("action");
   const subject = backgroundTaskSubject(action, text);
-  return action ? { subject, action: action.replaceAll("_", " ") } : { subject };
+  return action ? { subject, action: Fn.pipe(action, Str.replaceAll("_", " ")) } : { subject };
 }
 
 export function nativeCodemodeCallSubject(

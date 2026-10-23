@@ -10,6 +10,9 @@ import {
   scriptResult,
   settledSummary as summarize,
 } from "../support/native-codemode";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 
 const completed = (calls: unknown[]) =>
   scriptResult(
@@ -33,7 +36,10 @@ test("native MCP registered aliases provide targets without recovering remote id
     const projected = subject(name);
     assert.equal(projected.label, "mcp");
     assert.equal(projected.action, "call");
-    assert.equal(projected.subject, name.slice("mcp__".length).replace("__", " / "));
+    assert.equal(
+      projected.subject,
+      Fn.pipe(name, Str.slice("mcp__".length), Str.replace("__", " / ")),
+    );
     assert.deepEqual(subject(name, { server: "spoofed", tool: "guessed" }), projected);
   }
   assert.equal(
@@ -46,14 +52,15 @@ test("native MCP registered aliases provide targets without recovering remote id
 test("resource subjects and expanded argument previews redact complete and cut credentials", () => {
   for (const args of [
     { server: "docs", uri: "https://user:private-value@host/path" },
-    { server: "docs", uri: `https://user:${"private-value".repeat(40)}@host/path` },
+    { server: "docs", uri: `https://user:${Fn.pipe("private-value", Str.repeat(40))}@host/path` },
     { server: "docs", uri: "https://host/path?token=private-value" },
     { server: "docs", uri: "docs://guide", password: "private-value" },
   ]) {
     const result = completed([call("read_mcp_resource", receipt(args))]);
     const row = summarize(result)?.children?.entries[0];
     assert.ok(row);
-    assert.equal(JSON.stringify(row).includes("private-value"), false);
-    assert.ok(row.issues?.some((issue) => issue.code === "native-call-args"));
+    assert.equal(Fn.pipe(JSON.stringify(row), Str.includes("private-value")), false);
+    assert.ok(row.issues);
+    assert.ok(Arr.some(row.issues, (issue) => issue.code === "native-call-args"));
   }
 });

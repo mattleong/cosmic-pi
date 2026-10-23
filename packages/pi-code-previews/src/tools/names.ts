@@ -1,4 +1,7 @@
 import * as Schema from "effect/Schema";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 
 export const CORE_CODE_PREVIEW_TOOLS = [
   "bash",
@@ -27,8 +30,8 @@ export function toolToggleId(tool: CodePreviewToolName): string {
 }
 
 export function parseToolToggleId(id: string): CodePreviewToolName | undefined {
-  const tool = id.startsWith(CODE_PREVIEW_TOOL_TOGGLE_ID_PREFIX)
-    ? id.slice(CODE_PREVIEW_TOOL_TOGGLE_ID_PREFIX.length)
+  const tool = Fn.pipe(id, Str.startsWith(CODE_PREVIEW_TOOL_TOGGLE_ID_PREFIX))
+    ? Fn.pipe(id, Str.slice(CODE_PREVIEW_TOOL_TOGGLE_ID_PREFIX.length))
     : "";
   return isCodePreviewToolName(tool) ? tool : undefined;
 }
@@ -36,9 +39,9 @@ export function parseToolToggleId(id: string): CodePreviewToolName | undefined {
 export function parseCodePreviewTools(
   raw: string | undefined,
 ): Set<CodePreviewToolName> | undefined {
-  const trimmed = raw?.trim();
+  const trimmed = raw && Str.trim(raw);
   if (!trimmed) return undefined;
-  if (trimmed.toLowerCase() === "none") return new Set();
-  const enabled = new Set(trimmed.split(/[\s,]+/).filter(isCodePreviewToolName));
+  if (Str.toLowerCase(trimmed) === "none") return new Set();
+  const enabled = new Set(Arr.filter(Str.split(trimmed, /[\s,]+/), isCodePreviewToolName));
   return enabled.size > 0 ? enabled : undefined;
 }

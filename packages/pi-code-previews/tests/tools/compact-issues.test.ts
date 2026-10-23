@@ -6,6 +6,8 @@ import {
   resolveCompactSummary,
   type CompactSummary,
 } from "../../src/tools/compact-summary";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
 
 const issue = (overrides: Partial<CompactIssue> = {}): CompactIssue => ({
   severity: "error",
@@ -82,7 +84,12 @@ describe("summary resolution", () => {
     const unexplained = resolveCompactSummary(base, "settled", true, "")!;
     expect(unexplained.issues).toHaveLength(1);
     expect(unexplained.issues?.[0]?.severity).toBe("error");
-    expect(unexplained.issues?.[0]?.message.trim()).not.toBe("");
+    expect(
+      Option.fromUndefinedOr(unexplained.issues?.[0]).pipe(
+        Option.map((first) => Str.trim(first.message)),
+        Option.getOrUndefined,
+      ),
+    ).not.toBe("");
   });
 });
 

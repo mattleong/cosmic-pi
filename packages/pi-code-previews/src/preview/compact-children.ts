@@ -1,3 +1,7 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Order from "effect/Order";
+import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import type { CompactChild, CompactSummary } from "../tools/compact-summary";
@@ -7,6 +11,8 @@ import { formatDuration } from "pi-cosmic-core";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 
 const MAX_CHILDREN = 5;
+
+type IndexedChild = { entry: CompactChild; index: number };
 const priority = (child: CompactChild): number =>
   child.status === "pending" || child.status === "running"
     ? 0
@@ -18,15 +24,19 @@ export function selectCompactChildren(
   children: NonNullable<CompactSummary["children"]>,
   limit = MAX_CHILDREN,
 ) {
-  const entries = children.entries
-    .map((entry, index) => ({ entry, index }))
-    .toSorted((a, b) => priority(a.entry) - priority(b.entry) || b.index - a.index)
-    .slice(0, limit)
-    .toSorted((a, b) => a.index - b.index)
-    .map(({ entry }) => entry);
+  const entries = Fn.pipe(
+    Arr.map(children.entries, (entry, index): IndexedChild => ({ entry, index })),
+    Arr.sortBy(
+      Order.mapInput(Order.Number, (item: IndexedChild) => priority(item.entry)),
+      Order.mapInput(Order.flip(Order.Number), (item: IndexedChild) => item.index),
+    ),
+    Arr.take(limit),
+    Arr.sortWith((item) => item.index, Order.Number),
+    Arr.map(({ entry }) => entry),
+  );
   const hiddenFailed =
-    children.entries.filter((entry) => entry.status === "error").length -
-    entries.filter((entry) => entry.status === "error").length;
+    Arr.filter(children.entries, (entry) => entry.status === "error").length -
+    Arr.filter(entries, (entry) => entry.status === "error").length;
   return { entries, omitted: Math.max(0, children.total - entries.length), hiddenFailed };
 }
 
@@ -51,7 +61,7 @@ export function renderCompactChildren(
     flat && omitted > 0
       ? wrapHanging(theme.fg("dim", `… ${omitted} ${calls(omitted)} not listed`), width, "", "", 0)
       : [];
-  entries.forEach((entry, index) => {
+  Arr.forEach(entries, (entry, index) => {
     const branch = index === entries.length - 1 && omitted === 0 ? "╰─" : "├─";
     const prefix = flat ? "" : theme.fg("dim", `  ${branch} `);
     const issueLabel = flat ? "" : compactIssueLabel(entry.issues ?? [], theme);
@@ -108,7 +118,7 @@ function omissionRows(
   const failed = hiddenFailed > 0 ? theme.fg("error", `${hiddenFailed} failed`) : "";
   const single = branch + more + (failed ? ` (${failed})` : "");
   if (visibleWidth(single) <= width) return [single];
-  const spaces = " ".repeat(visibleWidth(branch));
+  const spaces = Fn.pipe(" ", Str.repeat(visibleWidth(branch)));
   const rows = wrapHanging(more, width, branch, spaces, 8);
   return failed
     ? rows.concat(wrapHanging(failed, width, spaces, spaces, visibleWidth(failed)))

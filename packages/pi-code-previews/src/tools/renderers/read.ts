@@ -1,3 +1,5 @@
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import { Container, Text } from "@earendil-works/pi-tui";
 import { renderDisplayPath } from "../../paths/display";
 import { metadata } from "../../preview/format";
@@ -45,7 +47,10 @@ export function readPreviewRenderers(cwd: string): PreviewRenderers {
 
       if (body.kind === "image") {
         return new Text(
-          theme.fg("dim", escapeControlChars(body.text.replace(/^Read image file/i, "image"))),
+          theme.fg(
+            "dim",
+            escapeControlChars(Fn.pipe(body.text, Str.replace(/^Read image file/i, "image"))),
+          ),
           0,
           0,
         );

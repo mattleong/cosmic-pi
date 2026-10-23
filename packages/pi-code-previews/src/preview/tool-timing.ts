@@ -2,6 +2,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { synchronousNow, formatDuration, formatElapsed, invokeHostCallback } from "pi-cosmic-core";
 import * as Predicate from "effect/Predicate";
+import * as Arr from "effect/Array";
 import { captureCodePreviewSessionCapability } from "../application/capability";
 import type { CompactAnimationScheduler } from "../tools/compact-summary";
 import { codePreviewSettings } from "../config/state";
@@ -146,7 +147,7 @@ function settleEndedAt(state: TimingState): void {
 export function getCodePreviewAnimationFrame(context: { readonly state: unknown }): number {
   return invokeHostCallback(() => {
     const state = context.state;
-    if (!Predicate.isObject(state) || Array.isArray(state)) return 0;
+    if (!Predicate.isObject(state) || Arr.isArray(state)) return 0;
     const descriptor = Object.getOwnPropertyDescriptor(state, TIMING_FIELDS.animationFrame);
     const frame: unknown = descriptor && "value" in descriptor ? descriptor.value : undefined;
     return Predicate.isNumber(frame) && Number.isSafeInteger(frame) && frame >= 0 ? frame : 0;

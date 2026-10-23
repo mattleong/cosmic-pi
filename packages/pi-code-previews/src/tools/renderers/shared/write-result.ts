@@ -15,6 +15,7 @@ export function writeBeforeSnapshot(
   toolCallId: string | undefined,
   details: HostObject | undefined,
 ): HostObject | undefined {
+  // @effect-diagnostics-next-line preferEffectRecord:off -- RendererState is an interface, not a record.
   if (Object.hasOwn(state, BEFORE_SNAPSHOT)) return state[BEFORE_SNAPSHOT];
   const before = getCodePreviewBeforeWrite(toolCallId, details);
   state[BEFORE_SNAPSHOT] = before;

@@ -2,6 +2,8 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { renderExpansionAffordance, renderToolHeader, toolRunningLine } from "pi-cosmic-ui/tool";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { hostContainer, type HostContainer } from "../shared/untrusted-value";
@@ -63,7 +65,8 @@ function renderCallList(
   theme: Theme,
   state: RendererState,
 ): Component {
-  const animated = children.entries.some(
+  const animated = Arr.some(
+    children.entries,
     (child) => child.status === "pending" || child.status === "running",
   );
   const coverage =
@@ -124,7 +127,7 @@ export function createNativeCodemodeRenderers(
       if (
         previewStyle &&
         context.isPartial &&
-        !children.entries.some((child) => child.status === "running")
+        !Arr.some(children.entries, (child) => child.status === "running")
       )
         body.addChild(runningLine(theme, context.state));
       if (evidence.fullOutputPath && !nativeCodemodeHeader(result))
@@ -141,10 +144,12 @@ export function createNativeCodemodeRenderers(
             theme,
             "Output",
             new Text(
-              raw
-                .split("\n")
-                .map((line) => theme.fg("toolOutput", escapeControlChars(line)))
-                .join("\n"),
+              Arr.join(
+                Arr.map(Str.split(raw, "\n"), (line) =>
+                  theme.fg("toolOutput", escapeControlChars(line)),
+                ),
+                "\n",
+              ),
               0,
               0,
             ),
@@ -167,7 +172,19 @@ export function createNativeCodemodeRenderers(
           label ? nativeDiscoveryNote : undefined,
         );
         const fallback = new Container();
-        fallback.addChild(new Text(["codemode", label].filter(Boolean).join(" "), 0, 0));
+        fallback.addChild(
+          new Text(
+            Arr.join(
+              Arr.filter(
+                ["codemode", label],
+                (part): part is string => Predicate.isString(part) && Str.isNonEmpty(part),
+              ),
+              " ",
+            ),
+            0,
+            0,
+          ),
+        );
         fallback.addChild(program);
         return safeContent(() => {
           const body = new Container();
@@ -210,7 +227,7 @@ export function createNativeCodemodeRenderers(
               if (counter) rows.unshift(clipToWidth(theme.fg("muted", counter), width));
               if (
                 options.isPartial &&
-                !projected.children?.entries.some((child) => child.status === "running")
+                !Arr.some(projected.children?.entries ?? [], (child) => child.status === "running")
               )
                 rows.push(...new Text(toolRunningLine(theme, animationFrame), 0, 0).render(width));
               if (!options.isPartial && result.content.length)

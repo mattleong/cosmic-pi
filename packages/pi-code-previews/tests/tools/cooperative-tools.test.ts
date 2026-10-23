@@ -13,6 +13,9 @@ import { setCodePreviewSettings } from "../../src/config/state";
 import { plainTheme as theme, renderComponent, textResult } from "../support/render";
 import { withCodePreviewShell } from "../../src/tools/cooperative-tools";
 import { executeDescriptor } from "../support/tool-identity";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 
 const compactProvider = () => ({ subject: "compact-subject", outcome: "success" as const });
 
@@ -116,7 +119,7 @@ test("fallback result rendering sanitizes terminal controls", () => {
 
   assert.ok(component);
   const output = renderComponent(component);
-  assert.equal(output.includes("\u001b"), false);
+  assert.equal(Fn.pipe(output, Str.includes("\u001b")), false);
   assert.match(output, /unsafe␛\[2J␍text/);
 });
 
@@ -133,7 +136,7 @@ test("a display name heads compact rows without changing the registered tool nam
   const h = createToolPresentationHarness(tool);
   h.call({ path: "file" });
   h.result(textResult("done"));
-  const text = h.render().join("\n");
+  const text = Arr.join(h.render(), "\n");
   assert.match(text, /shown-name/u);
   assert.doesNotMatch(text, /registered_model_name/u);
 });

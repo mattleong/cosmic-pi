@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, test, vi } from "vitest";
 import { applyPresentationSettings, createToolPresentationHarness } from "../../testing";
 import { codemodeRenderers, nativeCall, scriptResult } from "../support/native-codemode";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 
 const settings = (
   style: "compact" | "preview",
@@ -46,7 +49,7 @@ for (const style of ["compact", "preview"] as const)
         : result;
       h.call({ code: "// SOURCE_RETAINED" }, { expanded: true });
       h.result(rendered, { expanded: true });
-      const text = h.render(120).join("\n");
+      const text = Arr.join(h.render(120), "\n");
       for (const marker of [
         "SOURCE_RETAINED",
         "record-256.ts",
@@ -54,7 +57,7 @@ for (const style of ["compact", "preview"] as const)
         "OUTPUT_RETAINED",
         "RECOVERY_PATH",
       ])
-        assert.ok(text.includes(marker), marker);
+        assert.ok(Fn.pipe(text, Str.includes(marker)), marker);
     }
     assert.deepEqual(result, before);
   });

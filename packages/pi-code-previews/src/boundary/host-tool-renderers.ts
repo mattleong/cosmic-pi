@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import type { ExtensionAPI, SourceInfo, ToolInfo } from "@earendil-works/pi-coding-agent";
 
 export interface PreviewHostTools {
@@ -18,8 +19,9 @@ export function capturePreviewHostTools(
   }
   for (const name of repeated) tools.delete(name);
   const commands = pi.getCommands();
-  const managers = commands.filter((command) => command.name === "mcp");
-  const anchors = commands.filter(
+  const managers = Arr.filter(commands, (command) => command.name === "mcp");
+  const anchors = Arr.filter(
+    commands,
     (command) => command.name === anchorCommand && command.source === "extension",
   );
   return {

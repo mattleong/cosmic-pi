@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import type {
   AgentToolResult,
   EditToolDetails,
@@ -329,12 +330,18 @@ function editArgs(blocks: number, linesPerBlock: number): EditToolInput {
   return {
     path: "src/example.ts",
     edits: Array.from({ length: blocks }, (_, index) => ({
-      oldText: Array.from({ length: linesPerBlock }, (__, line) =>
-        codeBefore(index * linesPerBlock + line),
-      ).join("\n"),
-      newText: Array.from({ length: linesPerBlock }, (__, line) =>
-        codeAfter(index * linesPerBlock + line),
-      ).join("\n"),
+      oldText: Arr.join(
+        Array.from({ length: linesPerBlock }, (__, line) =>
+          codeBefore(index * linesPerBlock + line),
+        ),
+        "\n",
+      ),
+      newText: Arr.join(
+        Array.from({ length: linesPerBlock }, (__, line) =>
+          codeAfter(index * linesPerBlock + line),
+        ),
+        "\n",
+      ),
     })),
   };
 }
@@ -351,10 +358,13 @@ function diffBlock(
   before: (index: number) => string,
   after: (index: number) => string,
 ): string {
-  return [
-    ...Array.from({ length: count }, (_, index) => `- ${index + 1} ${before(index)}`),
-    ...Array.from({ length: count }, (_, index) => `+ ${index + 1} ${after(index)}`),
-  ].join("\n");
+  return Arr.join(
+    [
+      ...Array.from({ length: count }, (_, index) => `- ${index + 1} ${before(index)}`),
+      ...Array.from({ length: count }, (_, index) => `+ ${index + 1} ${after(index)}`),
+    ],
+    "\n",
+  );
 }
 
 function codeBefore(index: number): string {

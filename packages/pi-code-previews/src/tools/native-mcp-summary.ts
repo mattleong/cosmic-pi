@@ -1,6 +1,11 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Predicate from "effect/Predicate";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Rec from "effect/Record";
 import {
   countLabel,
   decodeUnknownOrUndefined,
@@ -35,13 +40,13 @@ export function nativeMcpEvidence(
   return invokeHostCallback(() => {
     if (!Predicate.isObject(details)) return undefined;
     const input: Partial<Record<string, string>> = {};
-    for (const key of Object.keys(Evidence.fields)) {
+    for (const key of Rec.keys(Evidence.fields)) {
       const descriptor = Object.getOwnPropertyDescriptor(details, key);
       if (!descriptor) continue;
       if (!("value" in descriptor)) return undefined;
       if (descriptor.value === undefined) continue;
       if (!Predicate.isString(descriptor.value)) return undefined;
-      if (key === "fullOutputPath" && !descriptor.value.trim()) continue;
+      if (key === "fullOutputPath" && !Str.trim(descriptor.value)) continue;
       input[key] = descriptor.value;
     }
     return decodeEvidence(input);
@@ -120,7 +125,7 @@ function listingFailureIssues(listing: NativeMcpListing): CompactIssue[] {
   for (const failure of listing.failures.slice(0, MAX_LISTED_FAILURES)) {
     const server = visibleDiagnosticLine(failure.server, 60) || "A server";
     const reason = isAgentGuidance(failure.error) ? "" : failureMessage(failure.error, "", 100);
-    const detail = sanitizeDiagnosticContent(failure.error).trim();
+    const detail = Str.trim(sanitizeDiagnosticContent(failure.error));
     const issue: CompactIssue = {
       severity: "warning",
       code: "mcp-listing-server-failed",
@@ -148,7 +153,7 @@ export function nativeMcpHasRecoverableClipping(
     nativeMcpReceipt(identity, result, args)?.fullOutputPath &&
     first?.type === "text" &&
     parseNativeTruncatedOutput(first.text)?.footer === "saved" &&
-    !result.content.slice(1).some((part) => part.type === "text"),
+    !Arr.some(result.content.slice(1), (part) => part.type === "text"),
   );
 }
 
@@ -167,12 +172,15 @@ function outputIssues(
 const MAX_ERROR_TEXT = 8192;
 
 function errorIssue(identity: NativeMcpIdentity, result: AgentToolResult<unknown>): CompactIssue {
-  const text = result.content
-    .flatMap((part) =>
-      part.type === "text" ? [parseNativeTruncatedOutput(part.text)?.body ?? part.text] : [],
-    )
-    .join("\n")
-    .slice(0, MAX_ERROR_TEXT);
+  const text = Fn.pipe(
+    Arr.join(
+      Arr.flatMap(result.content, (part) =>
+        part.type === "text" ? [parseNativeTruncatedOutput(part.text)?.body ?? part.text] : [],
+      ),
+      "\n",
+    ),
+    Str.slice(0, MAX_ERROR_TEXT),
+  );
   const fallback =
     identity.kind === "tool" ? "The MCP tool reported an error" : "The resource request failed";
   return (
@@ -185,19 +193,22 @@ function errorIssue(identity: NativeMcpIdentity, result: AgentToolResult<unknown
 }
 
 function contentCounters(result: AgentToolResult<unknown>): string[] {
-  const text = getBoundedTextContent(result.content)?.trim();
-  const images = result.content.filter((part) => part.type === "image").length;
+  const bounded = getBoundedTextContent(result.content);
+  const text = bounded && Str.trim(bounded);
+  const images = Arr.filter(result.content, (part) => part.type === "image").length;
   const labels: string[] = [];
-  if (text) labels.push(countLabel(text.split("\n").length, "line"));
+  if (text) labels.push(countLabel(Str.split(text, "\n").length, "line"));
   if (images > 0) labels.push(countLabel(images, "image"));
   const [first] = labels;
-  return labels.length > 1 && first ? [labels.join(", "), first] : labels;
+  return labels.length > 1 && first ? [Arr.join(labels, ", "), first] : labels;
 }
 
 export function nativeMcpProgress(result: AgentToolResult<unknown> | undefined): string {
-  const part = result?.content.find((entry) => entry.type === "text");
-  const text = part?.type === "text" ? part.text.slice(0, 1024) : "";
-  for (const line of text.split("\n")) {
+  const part =
+    result &&
+    Option.getOrUndefined(Arr.findFirst(result.content, (entry) => entry.type === "text"));
+  const text = part?.type === "text" ? Fn.pipe(part.text, Str.slice(0, 1024)) : "";
+  for (const line of Str.split(text, "\n")) {
     const visible = visibleDiagnosticLine(line, 80);
     if (visible) return visible;
   }

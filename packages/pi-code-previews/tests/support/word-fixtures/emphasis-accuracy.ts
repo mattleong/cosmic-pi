@@ -1,5 +1,6 @@
 import { wordEmphasisGoldenCases, type WordEmphasisGoldenCase } from "./emphasis-golden";
 import { profileLine, profilePlacement } from "./profile-lines";
+import * as Arr from "effect/Array";
 
 export const wordEmphasisAccuracyCases: WordEmphasisGoldenCase[] = [
   ...wordEmphasisGoldenCases,
@@ -20,7 +21,7 @@ function largeReorderedBlockCase(count: number): WordEmphasisGoldenCase {
   return {
     name: `sparse anchors recover a reordered ${count}x${count} block`,
     diff: [...removed, ...added],
-    expectedSpans: [...removed.map(() => ["old"]), ...added.map(() => ["new"])],
+    expectedSpans: [...Arr.map(removed, () => ["old"]), ...Arr.map(added, () => ["new"])],
     expectedPairs: Array.from({ length: count }, (_, index): [number, number] => [
       index,
       count + (count - index - 1),
@@ -42,8 +43,8 @@ function mediumScoreReorderedBlockCase(count: number): WordEmphasisGoldenCase {
     name: `medium-score sparse anchors recover a reordered ${count}x${count} block`,
     diff: [...removed, ...added],
     expectedSpans: [
-      ...removed.map((_, position) => profileExpectedSpans(position, count, "removed")),
-      ...added.map((_, position) => profileExpectedSpans(position, count, "added")),
+      ...Arr.map(removed, (_, position) => profileExpectedSpans(position, count, "removed")),
+      ...Arr.map(added, (_, position) => profileExpectedSpans(position, count, "added")),
     ],
     expectedPairs: Array.from({ length: count }, (_, index): [number, number] => [
       index,

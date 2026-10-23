@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import type {
   AgentToolResult,
   Theme,
@@ -49,7 +50,10 @@ function nativeBackground(name: string, downstream: ToolRenderers | undefined): 
     downstream?.renderCall ??
     ((args, theme) =>
       new Text(
-        [theme.fg("toolTitle", theme.bold(name)), ...fallbackArguments(hostValue(args))].join("\n"),
+        Arr.join(
+          [theme.fg("toolTitle", theme.bold(name)), ...fallbackArguments(hostValue(args))],
+          "\n",
+        ),
         0,
         0,
       ));

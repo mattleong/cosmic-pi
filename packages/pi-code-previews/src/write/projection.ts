@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { ownedProjectionSlot, type ProjectionOwnership } from "../shared/projection-ownership";
 import type { ExistingFilePreview } from "./diff";
 
@@ -19,5 +21,7 @@ export function publishWriteProjection(
 export const clearWriteProjection = slot.clear;
 
 export function lookupBeforeWrite(toolCallId: string): CodePreviewBeforeWrite {
-  return slot.read().snapshot?.entries.findLast(([id]) => id === toolCallId)?.[1];
+  const entries = slot.read().snapshot?.entries;
+  if (entries === undefined) return undefined;
+  return Option.getOrUndefined(Arr.findLast(entries, ([id]) => id === toolCallId))?.[1];
 }

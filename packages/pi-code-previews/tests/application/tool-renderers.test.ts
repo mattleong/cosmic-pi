@@ -24,6 +24,9 @@ import {
   presentationResolver,
   setPlainPreviewSettings,
 } from "../support/renderer-host";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 
 const downstream: ToolRenderers = {
   renderCall: () => new Text("DOWNSTREAM CALL", 0, 0),
@@ -101,7 +104,7 @@ it("native tool search rejects foreign, misspelled, inline, duplicate, and missi
   const h = createToolPresentationHarness(renderers);
   h.call({ query: "EXACT_QUERY" });
   h.result({ content: [{ type: "text", text: "EXACT_OUTPUT" }], details: { loaded: [] } });
-  assert.match(h.render(80).join("\n"), /EXACT_QUERY/);
+  assert.match(Arr.join(h.render(80), "\n"), /EXACT_QUERY/);
   publishPreviewToolStatuses(capturePreviewHostTools(pi), new Set(["tool_search"]), new Set());
   assert.equal(getCodePreviewToolStatuses().get("tool_search")?.state, "installed");
   setCodePreviewSettings({ ...defaultCodePreviewSettings, tools: [] });
@@ -208,7 +211,7 @@ for (const style of ["compact"] as const)
           isPartial: false,
         }),
       );
-      assert.match(result.render(100).join("\n"), /COMPLETE OUTPUT/);
+      assert.match(Arr.join(result.render(100), "\n"), /COMPLETE OUTPUT/);
       owner.retire();
     });
 
@@ -263,7 +266,7 @@ it("new rows keep origin-owner appearance and tool selection until the next sess
       marker: "COMPLETE MCP OUTPUT",
     },
   ];
-  const old = fixtures.map((fixture) => {
+  const old = Arr.map(fixtures, (fixture) => {
     const harness = createToolPresentationHarness(resolver(fixture.name, () => downstream)!);
     harness.call(fixture.args);
     harness.result(fixture.result);
@@ -276,11 +279,14 @@ it("new rows keep origin-owner appearance and tool selection until the next sess
   });
   for (const [index, fixture] of fixtures.entries()) {
     old[index]!.invalidate();
-    assert.equal(old[index]!.render(120).join("\n").includes(fixture.marker), false);
+    assert.equal(
+      Fn.pipe(Arr.join(old[index]!.render(120), "\n"), Str.includes(fixture.marker)),
+      false,
+    );
     const fresh = createToolPresentationHarness(resolver(fixture.name, () => downstream)!);
     fresh.call(fixture.args);
     fresh.result(fixture.result);
-    assert.equal(fresh.render(120).join("\n").includes(fixture.marker), false);
+    assert.equal(Fn.pipe(Arr.join(fresh.render(120), "\n"), Str.includes(fixture.marker)), false);
   }
   assert.equal(owner.session?.mode, "off");
   owner.retire();
@@ -291,7 +297,7 @@ it("new rows keep origin-owner appearance and tool selection until the next sess
     const fresh = createToolPresentationHarness(resolver(fixture.name, () => undefined)!);
     fresh.call(fixture.args);
     fresh.result(fixture.result);
-    assert.equal(fresh.render(120).join("\n").includes(fixture.marker), true);
+    assert.equal(Fn.pipe(Arr.join(fresh.render(120), "\n"), Str.includes(fixture.marker)), true);
   }
   assert.equal(owner.session?.mode, "border");
   owner.retire();

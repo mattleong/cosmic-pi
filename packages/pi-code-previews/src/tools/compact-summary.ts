@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { argumentFailureIssue } from "./argument-failure";
 import { compactIssueSeverity, type CompactIssue } from "./compact-issues";
 import { isSafeCompactSummary, type CompactOutcomeSchema } from "./compact-summary-schema";
@@ -65,8 +66,10 @@ export function resolveCompactSummary(
     return summary;
   const explainedByChild =
     summary.outcome === "error" &&
-    (summary.children?.entries.some((child) => compactIssueSeverity(child.issues) === "error") ??
-      false);
+    Arr.some(
+      summary.children?.entries ?? [],
+      (child) => compactIssueSeverity(child.issues) === "error",
+    );
   if (compactIssueSeverity(summary.issues) === "error" || explainedByChild)
     return { ...summary, outcome: "error" };
   return {

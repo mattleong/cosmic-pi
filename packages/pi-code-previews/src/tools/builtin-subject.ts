@@ -1,4 +1,6 @@
+import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
+import * as Str from "effect/String";
 import { ownField, type HostObject } from "../shared/untrusted-value";
 import { escapeControlChars } from "../shared/terminal-text";
 import { getPathArg, getReadLineRange } from "./data/args";
@@ -18,13 +20,15 @@ export function describeBuiltinCompactSubject(
   args: HostObject | undefined,
   cwd: string,
 ): string {
-  const path = escapeControlChars(formatDisplayPath(getPathArg(args), cwd).slice(0, 4096));
+  const path = escapeControlChars(
+    Fn.pipe(formatDisplayPath(getPathArg(args), cwd), Str.slice(0, 4096)),
+  );
   if (tool === "bash")
     return escapeControlChars(
-      normalizeShellCommandWhitespace(stringArg(args, "command").slice(0, 4096)),
+      normalizeShellCommandWhitespace(Fn.pipe(stringArg(args, "command"), Str.slice(0, 4096))),
     );
   if (tool === "find" || tool === "grep") {
-    const pattern = escapeControlChars(stringArg(args, "pattern").slice(0, 4096));
+    const pattern = escapeControlChars(Fn.pipe(stringArg(args, "pattern"), Str.slice(0, 4096)));
     return `${pattern || (tool === "find" ? "*" : "")} in ${path || "."}`;
   }
   if (tool === "read") return path + getReadLineRange(args);

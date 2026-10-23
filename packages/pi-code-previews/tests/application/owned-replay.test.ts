@@ -19,6 +19,7 @@ import {
 } from "../../testing";
 import { resultText } from "../support/render";
 import { executeDescriptor } from "../support/tool-identity";
+import * as Arr from "effect/Array";
 
 beforeAll(() => initTheme("dark", false));
 const source: SourceInfo = {
@@ -112,26 +113,29 @@ for (const style of ["compact"] as const)
         () => {
           const h = fixture();
           const row = hostToolRow("owned", args, h.resolve(), { result });
-          expect(row.render(160).join("\n")).not.toContain("OWNED_CALL");
+          expect(Arr.join(row.render(160), "\n")).not.toContain("OWNED_CALL");
           const wrapped = h.stage();
           expect(executeDescriptor(wrapped)).toEqual(executeDescriptor(h.tool));
           h.replay.publish();
           h.replay.finishStartup();
-          const frames = [true, false, true].map((expanded) => ({
+          const frames = Arr.map([true, false, true], (expanded) => ({
             expanded,
             text: drawToolRow(row, expanded, 160),
           }));
-          for (const { text } of frames.filter((frame) => frame.expanded)) {
+          for (const { text } of Arr.filter(frames, (frame) => frame.expanded)) {
             expect(text).toContain("OWNED_CALL");
             expect(text).toContain("COMPLETE_INPUT");
             expect(text).toContain("COMPLETE_OUTPUT recovery /tmp/evidence.txt");
           }
-          for (const { text } of frames.filter((frame) => !frame.expanded && style === "compact"))
+          for (const { text } of Arr.filter(
+            frames,
+            (frame) => !frame.expanded && style === "compact",
+          ))
             expect(text).toContain("OWNED_SUMMARY");
           expect(h.observed).toBe(result.content);
           h.replay.retire();
           row.setExpanded(true);
-          expect(row.render(160).join("\n")).toContain("OWNED_CALL");
+          expect(Arr.join(row.render(160), "\n")).toContain("OWNED_CALL");
         },
       );
     });
@@ -146,8 +150,8 @@ for (const failure of ["foreign", "duplicateAnchor", "brokenMetadata"] as const)
     h[failure]();
     h.replay.publish();
     row.call(args, { expanded: true });
-    expect(row.render().join("\n")).not.toContain("OWNED_CALL");
-    expect(row.render().join("\n")).toContain("COMPLETE_OUTPUT");
+    expect(Arr.join(row.render(), "\n")).not.toContain("OWNED_CALL");
+    expect(Arr.join(row.render(), "\n")).toContain("COMPLETE_OUTPUT");
     h.replay.retire();
   });
 
@@ -155,7 +159,7 @@ it("cold rows show raw arguments without live terminal controls", () => {
   const h = fixture();
   const row = createToolPresentationHarness(h.resolve()!);
   row.call({ value: "VISIBLE\u009b2JREST" });
-  const text = row.render().join("\n");
+  const text = Arr.join(row.render(), "\n");
   expect(text).not.toContain("\u009b");
   expect(text).toContain("REST");
   h.replay.retire();
@@ -185,7 +189,7 @@ it("a published facade can first draw after startup finishes without borrowing l
       const row = createToolPresentationHarness(cold);
       row.call(args);
       row.result(result);
-      expect(row.render().join("\n")).toContain("OWNED_SUMMARY");
+      expect(Arr.join(row.render(), "\n")).toContain("OWNED_SUMMARY");
     });
     h.replay.retire();
   });
@@ -201,7 +205,7 @@ for (const close of ["finishStartup"] as const)
     h.replay[close]();
     h.replay.publish();
     row.call(args, { expanded: true });
-    expect(row.render().join("\n")).not.toContain("OWNED_CALL");
-    expect(row.render().join("\n")).toContain("COMPLETE_OUTPUT");
+    expect(Arr.join(row.render(), "\n")).not.toContain("OWNED_CALL");
+    expect(Arr.join(row.render(), "\n")).toContain("COMPLETE_OUTPUT");
     expect(h.resolve()).toBeUndefined();
   });

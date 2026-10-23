@@ -1,4 +1,7 @@
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
+import * as Arr from "effect/Array";
 import { MESSAGE_TEXT_LIMIT } from "pi-cosmic-core";
 
 export const COMPACT_ISSUE_MESSAGE_LIMIT = MESSAGE_TEXT_LIMIT;
@@ -15,20 +18,24 @@ export function mergeCompactIssues(
   ...lists: ReadonlyArray<readonly CompactIssue[] | undefined>
 ): CompactIssue[] {
   const merged: CompactIssue[] = [];
-  for (const issue of lists.flatMap((list) => list ?? [])) {
-    const index = merged.findIndex(
+  for (const issue of Arr.flatMap(lists, (list) => list ?? [])) {
+    const found = Arr.findFirstWithIndex(
+      merged,
       (old) =>
         old.code === issue.code && old.severity === issue.severity && old.message === issue.message,
     );
-    const old = merged[index];
-    if (!old) {
+    if (Option.isNone(found)) {
       merged.push(issue);
       continue;
     }
+    const [old, index] = found.value;
     const lines = [
-      ...new Set([...(old.detail?.split("\n") ?? []), ...(issue.detail?.split("\n") ?? [])]),
+      ...new Set([
+        ...(old.detail === undefined ? [] : Str.split(old.detail, "\n")),
+        ...(issue.detail === undefined ? [] : Str.split(issue.detail, "\n")),
+      ]),
     ];
-    merged[index] = { ...old, ...(lines.length > 0 && { detail: lines.join("\n") }) };
+    merged[index] = { ...old, ...(lines.length > 0 && { detail: Arr.join(lines, "\n") }) };
   }
   return merged;
 }
@@ -36,6 +43,6 @@ export function mergeCompactIssues(
 export function compactIssueSeverity(
   issues: readonly CompactIssue[] | undefined,
 ): "error" | "warning" | undefined {
-  if (issues?.some((issue) => issue.severity === "error")) return "error";
-  return issues?.some((issue) => issue.severity === "warning") ? "warning" : undefined;
+  if (Arr.some(issues ?? [], (issue) => issue.severity === "error")) return "error";
+  return Arr.some(issues ?? [], (issue) => issue.severity === "warning") ? "warning" : undefined;
 }

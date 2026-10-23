@@ -1,5 +1,8 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import * as Predicate from "effect/Predicate";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import { renderExpansionAffordance } from "pi-cosmic-ui/tool";
 import { forEachPreviewTextLine } from "./line-counts";
 import { countLabel } from "pi-cosmic-core";
@@ -29,12 +32,12 @@ const lineEntry = <T>(line: T, index: number): PreviewLineEntry<T> => ({
 });
 
 function windowEntries<T>(first: readonly T[], last: readonly T[], hidden: number, total: number) {
-  const entries = first.map((line, index) => lineEntry(line, index));
+  const entries = Arr.map(first, (line, index) => lineEntry(line, index));
   if (last.length === 0) return entries;
   const start = total - last.length;
   return entries.concat(
     { kind: "hidden", hidden },
-    last.map((line, offset) => lineEntry(line, start + offset)),
+    Arr.map(last, (line, offset) => lineEntry(line, start + offset)),
   );
 }
 
@@ -67,14 +70,17 @@ export function hiddenLinesMarker(theme: Theme, hidden: number): string {
 }
 
 export function trimSingleTrailingNewline(text: string): string {
-  if (text.endsWith("\r\n")) return text.slice(0, -2);
-  if (text.endsWith("\n")) return text.slice(0, -1);
+  if (Fn.pipe(text, Str.endsWith("\r\n"))) return Fn.pipe(text, Str.slice(0, -2));
+  if (Fn.pipe(text, Str.endsWith("\n"))) return Fn.pipe(text, Str.slice(0, -1));
   return text;
 }
 
 export function metadata(theme: Theme, parts: Array<string | undefined>): string {
-  const present = parts.filter(Predicate.isTruthy);
-  return present.length ? theme.fg("dim", ` · ${present.join(" · ")}`) : "";
+  const present = Arr.filter(
+    parts,
+    (part): part is string => Predicate.isString(part) && Str.isNonEmpty(part),
+  );
+  return present.length ? theme.fg("dim", ` · ${Arr.join(present, " · ")}`) : "";
 }
 
 export function showingFooter(theme: Theme, shown: number, total: number, label: string): string {

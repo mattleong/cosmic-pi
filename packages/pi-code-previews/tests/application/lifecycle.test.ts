@@ -37,6 +37,7 @@ import {
   executeWriteWithPreviewEffect,
 } from "../../src/write/preview-execution";
 import { lookupBeforeWrite } from "../../src/write/projection";
+import * as Arr from "effect/Array";
 
 for (const cancellation of ["abort", "replacement", "shutdown"] as const) {
   it.effect(`revokes a queued write on ${cancellation} before its predecessor releases`, () =>
@@ -398,7 +399,7 @@ effectTest("a failed write hook keeps presentation and the session runtime live"
   const h = harness({ load: () => Effect.succeed(partialSettings), realRenderers: true });
   const attempts: string[] = [];
   Object.assign(h.pi, {
-    getAllTools: () => ["bash", "read", "write"].map((name) => builtinToolInfo(name)),
+    getAllTools: () => Arr.map(["bash", "read", "write"], (name) => builtinToolInfo(name)),
     registerTool: (tool: ToolDefinition) => {
       attempts.push(tool.name);
       if (tool.name === "write") throw new Error("host mutation failed");

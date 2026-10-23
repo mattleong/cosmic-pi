@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
 import { clipToWidth } from "pi-cosmic-ui/manager";
@@ -23,7 +24,7 @@ export function renderNativeCodemodeProgram(
   let highlighted: Component | undefined;
   try {
     highlighted = new Text(
-      renderHighlightedText(source, "javascript", theme, invalidate).join("\n"),
+      Arr.join(renderHighlightedText(source, "javascript", theme, invalidate), "\n"),
       0,
       0,
     );

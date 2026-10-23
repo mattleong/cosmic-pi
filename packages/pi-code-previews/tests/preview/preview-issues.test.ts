@@ -7,6 +7,9 @@ import { applyPresentationSettings, createToolPresentationHarness } from "../../
 import type { CompactSummaryProvider } from "../../src/tools/compact-summary";
 import { withCodePreviewShell } from "../../src/tools/cooperative-tools";
 import { textResult } from "../support/render";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 
 beforeEach(() =>
   applyPresentationSettings({ toolCallCollapsedStyle: "preview", toolCallTiming: false }),
@@ -43,9 +46,9 @@ const tool = (placeUnderHeading = false, compactSummary = summary) => {
 };
 
 const order = (rendered: readonly string[]) =>
-  rendered.flatMap((line) =>
-    ["HEADING", "CALL-CONTENT", "PROBLEM", "DETAIL", "RISKY", "BODY"].filter((marker) =>
-      line.includes(marker),
+  Arr.flatMap(rendered, (line) =>
+    Arr.filter(["HEADING", "CALL-CONTENT", "PROBLEM", "DETAIL", "RISKY", "BODY"], (marker) =>
+      Fn.pipe(line, Str.includes(marker)),
     ),
   );
 
@@ -87,12 +90,14 @@ test("a failing host theme still shows every issue line within the row width", (
   for (const width of [20, 7]) {
     for (const line of harness.render(width)) {
       expect(visibleWidth(line)).toBeLessThanOrEqual(width);
-      expect(line.includes("\n") || line.includes("\u001b")).toBe(false);
+      expect(Fn.pipe(line, Str.includes("\n")) || Fn.pipe(line, Str.includes("\u001b"))).toBe(
+        false,
+      );
     }
   }
-  const text = harness.render(20).join(" ").replace(/\s+/gu, " ");
+  const text = Fn.pipe(Arr.join(harness.render(20), " "), Str.replace(/\s+/gu, " "));
   for (const fact of [message, "first detail line", "detail line"]) expect(text).toContain(fact);
   harness.call({ path: "a.ts" }, { executionStarted: true });
   harness.result(textResult("failed"), { isError: true });
-  expect(harness.render(80).join(" ")).toContain(message);
+  expect(Arr.join(harness.render(80), " ")).toContain(message);
 });

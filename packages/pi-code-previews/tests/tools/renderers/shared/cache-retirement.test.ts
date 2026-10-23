@@ -19,6 +19,9 @@ import { acquireProjectionOwnership } from "../../../../src/shared/projection-ow
 import { clearSyntaxProjection, installSyntaxRequests } from "../../../../src/syntax/projection";
 import { editPreviewRenderers } from "../../../../src/tools/renderers/edit";
 import { writePreviewRenderers } from "../../../../src/tools/renderers/write";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 
 for (const transition of ["shutdown", "replacement"] as const)
   it.effect(
@@ -52,7 +55,7 @@ for (const transition of ["shutdown", "replacement"] as const)
             schedule: () => assert.fail("a retained row cannot animate through its replacement"),
           });
         for (let turn = 0; turn < 10; turn++) yield* Effect.yieldNow;
-        assert.match(preview.render(80).join("\n"), /retained source/u);
+        assert.match(Arr.join(preview.render(80), "\n"), /retained source/u);
       }).pipe(Effect.ensuring(Effect.sync(() => clearCodePreviewSessionCapability()))),
   );
 
@@ -72,8 +75,8 @@ for (const { kind, draw, owned } of [
           writeCollapsedLines: 100,
           editCollapsedLines: "all",
         });
-        const oldText = `${"const oldValue = 1;\n".repeat(500)}OLD_END\n`;
-        const newText = `${"const newValue = 2;\n".repeat(500)}NEW_END\n`;
+        const oldText = `${Fn.pipe("const oldValue = 1;\n", Str.repeat(500))}OLD_END\n`;
+        const newText = `${Fn.pipe("const newValue = 2;\n", Str.repeat(500))}NEW_END\n`;
         const context = renderContextFixture({
           args: { path: "/project/source.ts", content: newText, edits: [{ oldText, newText }] },
           isPartial: false,
@@ -127,7 +130,7 @@ for (const { kind, draw, owned } of [
           writeCollapsedLines: 1,
           editCollapsedLines: 1,
         });
-        const rendered = preview.render(100).join("\n");
+        const rendered = Arr.join(preview.render(100), "\n");
         assert.match(rendered, kind === "write-call" ? /newValue/u : /oldValue/u);
         if (kind !== "write-result") assert.match(rendered, /NEW_END/u);
         assert.equal(syntaxRequests, 0);

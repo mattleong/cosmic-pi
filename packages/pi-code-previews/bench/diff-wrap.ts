@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { FullWidthDiffText } from "../src/diff/full-width-text";
 import { renderSyntaxHighlightedDiff } from "../src/diff/render";
 import { startBenchmarkShikiSession } from "./shiki-session";
@@ -111,7 +112,7 @@ function makeWrapCases(): WrapCase[] {
     {
       name: "many short changed lines",
       lang: "typescript",
-      diff: changedPairs(160, codeLikeBefore, codeLikeAfter).join("\n"),
+      diff: Arr.join(changedPairs(160, codeLikeBefore, codeLikeAfter), "\n"),
       limit: 320,
     },
     {
@@ -123,7 +124,7 @@ function makeWrapCases(): WrapCase[] {
     {
       name: "unicode wide chars and tabs",
       lang: "markdown",
-      diff: changedPairs(120, unicodeBefore, unicodeAfter).join("\n"),
+      diff: Arr.join(changedPairs(120, unicodeBefore, unicodeAfter), "\n"),
       limit: 240,
     },
   ];
@@ -149,12 +150,12 @@ function codeLikeAfter(index: number): string {
 }
 
 function unicodeBefore(index: number): string {
-  const words = numberedLines("東京", 8).join(" ");
+  const words = Arr.join(numberedLines("東京", 8), " ");
   return `### 行 ${index}\t${words} 👩🏽‍💻 old-value-${index} — café naïve résumé`;
 }
 
 function unicodeAfter(index: number): string {
-  const words = numberedLines("서울", 8).join(" ");
+  const words = Arr.join(numberedLines("서울", 8), " ");
   return `### 行 ${index}\t${words} 🧑🏻‍🚀 new-value-${index} — café naive résumé`;
 }
 
@@ -164,7 +165,7 @@ function minifiedJson(prefix: string, count: number): string {
       id: index,
       key: `${prefix}-${index}`,
       enabled: index % 3 === 0,
-      payload: `${prefix}:${numberedLines("token", 12).join(":")}`,
+      payload: `${prefix}:${Arr.join(numberedLines("token", 12), ":")}`,
     })),
   });
 }

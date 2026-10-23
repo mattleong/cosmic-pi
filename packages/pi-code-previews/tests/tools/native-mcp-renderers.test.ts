@@ -10,6 +10,9 @@ import {
 } from "../../testing";
 import { createNativeMcpRenderers } from "../../src/tools/native-mcp-render";
 import type { CodePreviewRendererPresentation } from "../../src/application/renderer-contract";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 
 const name = "mcp__team_docs__find_page";
 const metadata = (path = "builtin:mcp", exposure: ToolInfo["exposure"] = "direct"): ToolInfo => ({
@@ -60,7 +63,12 @@ test("native call failure still preserves exact expanded input", () => {
   );
   const h = createToolPresentationHarness(renderers);
   h.call({ query: "EXACT_INPUT_AFTER_NATIVE_FAILURE" }, { expanded: true });
-  assert.ok(stripAnsi(h.render(200).join("\n")).includes("EXACT_INPUT_AFTER_NATIVE_FAILURE"));
+  assert.ok(
+    Fn.pipe(
+      stripAnsi(Arr.join(h.render(200), "\n")),
+      Str.includes("EXACT_INPUT_AFTER_NATIVE_FAILURE"),
+    ),
+  );
 });
 
 test("renderer-only downstream never needs labels, schemas or execution fields", () => {
@@ -90,7 +98,7 @@ test("renderer-only downstream never needs labels, schemas or execution fields",
     createNativeMcpRenderers(name, metadata(), downstream, session()),
   );
   h.call({});
-  assert.ok(stripAnsi(h.render(100).join("\n")).includes("FOREIGN_WINNER"));
+  assert.ok(Fn.pipe(stripAnsi(Arr.join(h.render(100), "\n")), Str.includes("FOREIGN_WINNER")));
 });
 
 test("retired scheduling admission never borrows the replacement owner", () => {

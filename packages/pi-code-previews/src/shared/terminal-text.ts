@@ -1,26 +1,34 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Order from "effect/Order";
+import * as Str from "effect/String";
+import { codeUnitAt, indexOfFrom } from "pi-cosmic-core";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 
 const ESCAPE_CODE = 0x1b;
 
 export function escapeControlChars(text: string): string {
+  // @effect-diagnostics-next-line preferEffectString:off -- Str.replace accepts only a string replacement.
   return text.replace(/\p{Cc}/gu, (char) =>
     char === "\t" || char === "\n" ? char : char === "\x1b" ? "␛" : char === "\r" ? "␍" : "�",
   );
 }
 
 export function escapeLineControlChars(line: string): string {
-  return escapeControlChars(line.endsWith("\r") ? line.slice(0, -1) : line);
+  return escapeControlChars(
+    Fn.pipe(line, Str.endsWith("\r")) ? Fn.pipe(line, Str.slice(0, -1)) : line,
+  );
 }
 
 const PRINTABLE_ASCII_RE = /^[ -~]*$/;
 
 export function matchSgrSequence(text: string, index: number): string | undefined {
-  if (text.charCodeAt(index) !== ESCAPE_CODE || text[index + 1] !== "[") return undefined;
+  if (codeUnitAt(text, index) !== ESCAPE_CODE || text[index + 1] !== "[") return undefined;
   for (let end = index + 2; end < text.length; end++) {
-    const code = text.charCodeAt(end);
+    const code = codeUnitAt(text, end);
     if ((code >= 0x30 && code <= 0x39) || code === 0x3b) continue;
-    return text[end] === "m" ? text.slice(index, end + 1) : undefined;
+    return text[end] === "m" ? Fn.pipe(text, Str.slice(index, end + 1)) : undefined;
   }
   return undefined;
 }
@@ -34,10 +42,10 @@ export function replaceSgrSequences(
   for (let index = 0; index < text.length; ) {
     const sequence = match(text, index);
     if (sequence) {
-      out += replace(sequence, sequence.slice(2, -1));
+      out += replace(sequence, Fn.pipe(sequence, Str.slice(2, -1)));
       index += sequence.length;
     } else {
-      out += text.charAt(index);
+      out += text[index] ?? "";
       index++;
     }
   }
@@ -46,7 +54,7 @@ export function replaceSgrSequences(
 
 function isTruncationSafe(row: string): boolean {
   for (let index = 0; index < row.length; ) {
-    const code = row.charCodeAt(index);
+    const code = codeUnitAt(row, index);
     if ((code >= 0x20 && code <= 0x7e) || code === 0x09) {
       index++;
       continue;
@@ -105,7 +113,11 @@ export function injectVisibleRanges(
   },
 ): string {
   const cursor: RangeCursor = { visible: 0, out: "", active: false, rangeIndex: 0 };
-  const sorted = ranges.filter(([start, end]) => end > start).toSorted((a, b) => a[0] - b[0]);
+  const sorted = Arr.sortWith(
+    Arr.filter(ranges, ([start, end]) => end > start),
+    (range: [number, number]) => range[0],
+    Order.Number,
+  );
   for (let i = 0; i < ansi.length; i++) {
     const sgr = matchSgrSequence(ansi, i);
     if (sgr) {
@@ -115,7 +127,7 @@ export function injectVisibleRanges(
     }
     closePassedRanges(cursor, sorted, options.close);
     openCurrentRange(cursor, sorted, options.open);
-    cursor.out += ansi.charAt(i);
+    cursor.out += ansi[i] ?? "";
     cursor.visible++;
   }
   if (cursor.active) cursor.out += options.close;
@@ -214,9 +226,10 @@ export function wrapAnsiToWidth(
       index += ansi.length;
       continue;
     }
-    const nextAnsi = text.indexOf("\x1b", index + 1);
+    const nextAnsi = indexOfFrom(text, "\x1b", index + 1);
     const plainEnd = nextAnsi >= 0 ? nextAnsi : text.length;
-    if (!wrapper.appendPlain(escapeControlChars(text.slice(index, plainEnd)))) return wrapper.rows;
+    if (!wrapper.appendPlain(escapeControlChars(Fn.pipe(text, Str.slice(index, plainEnd)))))
+      return wrapper.rows;
     index = plainEnd;
   }
   return wrapper.finish();
@@ -235,8 +248,14 @@ function truncateLastRow(rows: string[], width: number): string[] {
 }
 
 const ANSI_STATE_GROUPS: Array<{ isSet: (parameters: string) => boolean; reset: string }> = [
-  { isSet: (parameters) => parameters.startsWith("38;") && parameters.length > 3, reset: "39" },
-  { isSet: (parameters) => parameters.startsWith("48;") && parameters.length > 3, reset: "49" },
+  {
+    isSet: (parameters) => Fn.pipe(parameters, Str.startsWith("38;")) && parameters.length > 3,
+    reset: "39",
+  },
+  {
+    isSet: (parameters) => Fn.pipe(parameters, Str.startsWith("48;")) && parameters.length > 3,
+    reset: "49",
+  },
   { isSet: (parameters) => parameters === "1", reset: "22" },
   { isSet: (parameters) => parameters === "2", reset: "22" },
   { isSet: (parameters) => parameters === "3", reset: "23" },
@@ -244,14 +263,15 @@ const ANSI_STATE_GROUPS: Array<{ isSet: (parameters: string) => boolean; reset: 
 ];
 
 function updateAnsiState(current: string, sequence: string): string {
-  const parameters = sequence.slice(2, -1);
+  const parameters = Fn.pipe(sequence, Str.slice(2, -1));
   if (parameters === "0") return "";
-  const groups = ANSI_STATE_GROUPS.filter(
+  const groups = Arr.filter(
+    ANSI_STATE_GROUPS,
     (group) => group.isSet(parameters) || group.reset === parameters,
   );
   if (groups.length === 0) return current + sequence;
   const kept = replaceSgrSequences(current, (existing, existingParameters) =>
-    groups.some((group) => group.isSet(existingParameters)) ? "" : existing,
+    Arr.some(groups, (group) => group.isSet(existingParameters)) ? "" : existing,
   );
-  return groups.some((group) => group.reset === parameters) ? kept : kept + sequence;
+  return Arr.some(groups, (group) => group.reset === parameters) ? kept : kept + sequence;
 }

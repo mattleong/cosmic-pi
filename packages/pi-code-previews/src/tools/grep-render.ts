@@ -1,4 +1,6 @@
+import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
+import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { invokeHostCallback } from "pi-cosmic-core";
 import { expandPreviewTabs, isToolOutputNoticeLine } from "../shared/helpers";
@@ -25,14 +27,14 @@ export function renderGrepOutputLines(
   const search =
     Predicate.isString(pattern) && pattern && ownField(args, "literal") === true
       ? new RegExp(
-          pattern.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"),
+          Fn.pipe(pattern, Str.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")),
           ownField(args, "ignoreCase") === true ? "giu" : "g",
         )
       : undefined;
   const rendered: string[] = [];
   let currentPath = "";
   let currentLanguage: string | undefined;
-  for (const rawLine of output.split("\n")) {
+  for (const rawLine of Str.split(output, "\n")) {
     if (!rawLine) {
       rendered.push("");
       continue;
@@ -77,7 +79,8 @@ function renderGrepParsedLine(
     renderHighlightedText(code, lang, theme, invalidate)[0] ?? theme.fg("toolOutput", code);
   const matchRanges =
     match && search
-      ? Array.from(code.matchAll(search), (found): [number, number] => [
+      ? // @effect-diagnostics-next-line preferEffectString:off -- Str.matchAll types matches as RegExpMatchArray, dropping the guaranteed index.
+        Array.from(code.matchAll(search), (found): [number, number] => [
           found.index,
           found.index + found[0].length,
         ])
@@ -88,7 +91,10 @@ function renderGrepParsedLine(
       close: invokeHostCallback(() => theme.getBgAnsi("toolSuccessBg"), "") || "\x1b[49m",
       reopenAfterSgr: (sequence) => sequence === "\x1b[39m",
     });
-  const lineNumber = theme.fg(match ? "accent" : "dim", parsed.lineNumber.padStart(4));
+  const lineNumber = theme.fg(
+    match ? "accent" : "dim",
+    Fn.pipe(parsed.lineNumber, Str.padStart(4)),
+  );
   const marker = match ? theme.fg("warning", "│") : theme.fg("dim", "┆");
   return `${theme.fg("dim", "  ")}${lineNumber} ${marker} ${highlighted}`;
 }

@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import type { AddedDiffLine, RemovedDiffLine } from "../parse";
 import { suffixAlignmentScore } from "./alignment";
 import { wordEmphasisSimilarityTokenValues, wordEmphasisTokenWeight } from "./tokens";
@@ -24,8 +27,8 @@ export function changedLineSimilarity(
 ): ChangedLineSimilarity {
   const lineFeatures = (line: IndexedChangedLine<AddedDiffLine | RemovedDiffLine>) =>
     similarityFeatures(wordEmphasisSimilarityTokenValues(changedLineTokens(line)));
-  const removedFeatures = removed.map(lineFeatures);
-  const addedFeatures = added.map(lineFeatures);
+  const removedFeatures = Arr.map(removed, lineFeatures);
+  const addedFeatures = Arr.map(added, lineFeatures);
   const documentCounts = new Map<string, number>();
   for (const features of [...removedFeatures, ...addedFeatures]) {
     for (const feature of new Set(features))
@@ -47,8 +50,8 @@ export function changedLineSimilarity(
     weight: similarityTokenListWeight(features, tokenWeight),
   });
   return {
-    removed: removedFeatures.map(similarityLine),
-    added: addedFeatures.map(similarityLine),
+    removed: Arr.map(removedFeatures, similarityLine),
+    added: Arr.map(addedFeatures, similarityLine),
     documentCounts,
     tokenWeight,
   };
@@ -60,7 +63,8 @@ export function hasUniqueSharedSimilarityFeature(
   addedPosition: number,
 ): boolean {
   const addedFeatures = new Set(similarityLineAt(similarity.added, addedPosition).features);
-  return similarityLineAt(similarity.removed, removedPosition).features.some(
+  return Arr.some(
+    similarityLineAt(similarity.removed, removedPosition).features,
     (feature) =>
       addedFeatures.has(feature) &&
       similarity.documentCounts.get(feature) === 2 &&
@@ -153,17 +157,19 @@ function similarityLineAt(lines: SimilarityLine[], position: number): Similarity
 
 function similarityFeatures(tokens: string[]): string[] {
   const features = [...tokens];
-  const weighted = tokens.filter((token) => wordEmphasisTokenWeight(token) >= 1);
+  const weighted = Arr.filter(tokens, (token) => wordEmphasisTokenWeight(token) >= 1);
   for (let index = 0; index + 2 <= weighted.length; index++)
-    features.push(`${SIMILARITY_BIGRAM_PREFIX}${weighted.slice(index, index + 2).join("\u0000")}`);
+    features.push(
+      `${SIMILARITY_BIGRAM_PREFIX}${Arr.join(weighted.slice(index, index + 2), "\u0000")}`,
+    );
   return features;
 }
 
 function similarityTokenListWeight(tokens: string[], weight: SimilarityTokenWeight): number {
-  return tokens.reduce((total, token) => total + weight(token), 0);
+  return Arr.reduce(tokens, 0, (total, token) => total + weight(token));
 }
 
 function baseSimilarityWeight(token: string): number {
-  if (token.startsWith(SIMILARITY_BIGRAM_PREFIX)) return 1.15;
+  if (Fn.pipe(token, Str.startsWith(SIMILARITY_BIGRAM_PREFIX))) return 1.15;
   return wordEmphasisTokenWeight(token);
 }

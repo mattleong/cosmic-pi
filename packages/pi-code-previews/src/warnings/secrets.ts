@@ -1,3 +1,8 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Rec from "effect/Record";
+
 const SECRET_WARNINGS = {
   "private key": /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
   "AWS secret key": /\bAWS_SECRET_ACCESS_KEY\s*=\s*["']?[^\s'"]{12,}/i,
@@ -9,14 +14,15 @@ const SECRET_WARNINGS = {
 
 export function getSecretWarnings(text: string, limit = Infinity): string[] {
   const sample = secretScanSample(text, limit);
-  return Object.entries(SECRET_WARNINGS)
-    .filter(([, pattern]) => pattern.test(sample))
-    .map(([label]) => label);
+  return Arr.map(
+    Arr.filter(Rec.toEntries(SECRET_WARNINGS), ([, pattern]) => pattern.test(sample)),
+    ([label]) => label,
+  );
 }
 
 function secretScanSample(source: string, limit: number): string {
   if (source.length <= limit) return source;
   const half = Math.floor(limit / 2);
-  if (half === 0) return source.slice(0, limit);
-  return `${source.slice(0, half)}\n${source.slice(-half)}`;
+  if (half === 0) return Fn.pipe(source, Str.slice(0, limit));
+  return `${Fn.pipe(source, Str.slice(0, half))}\n${Fn.pipe(source, Str.slice(-half))}`;
 }

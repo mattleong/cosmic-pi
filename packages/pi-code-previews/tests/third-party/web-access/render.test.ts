@@ -4,26 +4,32 @@ import { Text } from "@earendil-works/pi-tui";
 import { it } from "vitest";
 import { createToolPresentationHarness, withPresentationSettings } from "../../../testing";
 import { createWebAccessRenderers } from "../../../src/third-party/web-access/render";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 
 const downstream: ToolRenderers = {
   renderCall: () => new Text("DOWNSTREAM CALL EXTRAS", 0, 0),
   renderResult: (result) =>
     new Text(
-      `DOWNSTREAM RESULT EXTRAS\n${result.content[0]?.type === "text" ? result.content[0].text.slice(0, 200) : ""}`,
+      `DOWNSTREAM RESULT EXTRAS\n${result.content[0]?.type === "text" ? Fn.pipe(result.content[0].text, Str.slice(0, 200)) : ""}`,
       0,
       0,
     ),
 };
 const args = Object.freeze({
   urls: Array.from({ length: 7 }, (_, index) => `https://example.test/${index}`),
-  prompt: `Exact prompt ${"padding ".repeat(80)}ARGUMENT_TAIL`,
+  prompt: `Exact prompt ${Fn.pipe("padding ", Str.repeat(80))}ARGUMENT_TAIL`,
   mode: "raw",
   auth: "browser-profile",
   proxy: "https://proxy.test",
 });
 const image = Object.freeze({ type: "image" as const, data: "aW1hZ2U=", mimeType: "image/png" });
 const content: AgentToolResult<unknown>["content"] = [
-  Object.freeze({ type: "text" as const, text: `${"Page text ".repeat(100)}OUTPUT_TAIL` }),
+  Object.freeze({
+    type: "text" as const,
+    text: `${Fn.pipe("Page text ", Str.repeat(100))}OUTPUT_TAIL`,
+  }),
   Object.freeze({
     type: "text" as const,
     text: "RECOVERY_TAIL use the stored reference private-reference",
@@ -57,7 +63,7 @@ for (const style of ["preview"] as const)
               invalidate: "before",
               overrides: () => ({ showImages: false }),
             });
-            for (const frame of frames.filter((entry) => entry.expanded)) {
+            for (const frame of Arr.filter(frames, (entry) => entry.expanded)) {
               for (const marker of [
                 "DOWNSTREAM CALL EXTRAS",
                 "DOWNSTREAM RESULT EXTRAS",
@@ -68,7 +74,7 @@ for (const style of ["preview"] as const)
                 "browser-profile",
                 "private-reference",
               ])
-                assert.ok(frame.text.includes(marker), marker);
+                assert.ok(Fn.pipe(frame.text, Str.includes(marker)), marker);
             }
             assert.equal(value.content, content);
             assert.equal(value.details, details);
@@ -115,16 +121,16 @@ for (const style of ["preview"] as const)
           };
           harness.call(args, { expanded: true });
           harness.result(value);
-          assert.match(harness.render().join("\n"), /FULL FAILURE OUTPUT AND RECOVERY/);
+          assert.match(Arr.join(harness.render(), "\n"), /FULL FAILURE OUTPUT AND RECOVERY/);
           const failedCalls = calls;
           harness.invalidate();
           harness.call(args, { expanded: false });
           harness.call(args, { expanded: true });
-          assert.match(harness.render().join("\n"), /FULL FAILURE OUTPUT AND RECOVERY/);
+          assert.match(Arr.join(harness.render(), "\n"), /FULL FAILURE OUTPUT AND RECOVERY/);
           assert.equal(calls, failedCalls);
           fail = false;
           harness.result({ ...value, details: { urlCount: 2, successful: 2 } });
-          assert.match(harness.render().join("\n"), /RECOVERED DOWNSTREAM/);
+          assert.match(Arr.join(harness.render(), "\n"), /RECOVERED DOWNSTREAM/);
         },
       );
     });

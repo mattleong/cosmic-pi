@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { createSimpleDiff } from "../../src/diff/structured";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 
 test("createSimpleDiff keeps separated changes distinct", () => {
   const diff = createSimpleDiff("a\nold one\nkeep\nold two\nz", "a\nnew one\nkeep\nnew two\nz");
@@ -18,10 +21,12 @@ test.each([
   ["a\r\nb\r\n", "a\nb\n"],
 ])("createSimpleDiff shows an ending-only change from %j to %j", (before, after) => {
   const rows = (kind: string) =>
-    createSimpleDiff(before, after)
-      .split("\n")
-      .filter((line) => line.startsWith(kind))
-      .map((line) => line.replace(/^[+-]\d+ /u, ""));
+    Arr.map(
+      Arr.filter(Str.split(createSimpleDiff(before, after), "\n"), (line) =>
+        Fn.pipe(line, Str.startsWith(kind)),
+      ),
+      (line) => Fn.pipe(line, Str.replace(/^[+-]\d+ /u, "")),
+    );
   const removed = rows("-");
   const added = rows("+");
   assert.ok(removed.length > 0);
@@ -33,10 +38,10 @@ test.each([6, 7])("createSimpleDiff compacts a %i-line gap without losing number
   const head = Array.from({ length: 5 }, (_, i) => `head${i}`);
   const middle = Array.from({ length: gap }, (_, i) => `gap${i}`);
   const tail = Array.from({ length: 5 }, (_, i) => `tail${i}`);
-  const before = [...head, "old", ...middle, "old end", ...tail].join("\n");
-  const after = [...head, "new", "extra", ...middle, "new end", ...tail].join("\n");
+  const before = Arr.join([...head, "old", ...middle, "old end", ...tail], "\n");
+  const after = Arr.join([...head, "new", "extra", ...middle, "new end", ...tail], "\n");
   const kept: Array<number | "..."> = gap === 6 ? [0, 1, 2, 3, 4, 5] : [0, 1, 2, "...", 4, 5, 6];
-  assert.deepEqual(createSimpleDiff(before, after).split("\n"), [
+  assert.deepEqual(Str.split(createSimpleDiff(before, after), "\n"), [
     "@@ 6 @@",
     " 3 head2",
     " 4 head3",
@@ -44,7 +49,7 @@ test.each([6, 7])("createSimpleDiff compacts a %i-line gap without losing number
     "-6 old",
     "+6 new",
     "+7 extra",
-    ...kept.map((i) => (i === "..." ? i : ` ${i + 8} gap${i}`)),
+    ...Arr.map(kept, (i) => (i === "..." ? i : ` ${i + 8} gap${i}`)),
     `-${gap + 7} old end`,
     `+${gap + 8} new end`,
     ` ${gap + 9} tail0`,

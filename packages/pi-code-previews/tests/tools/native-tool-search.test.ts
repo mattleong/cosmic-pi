@@ -11,6 +11,8 @@ import {
   nativeToolSearchSummary,
 } from "../../src/tools/native-tool-search-summary";
 import { hostContainer } from "../../src/shared/untrusted-value";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 
 beforeEach(() => applyPresentationSettings({ toolCallTiming: false }));
 
@@ -59,9 +61,12 @@ test("receipt and query inspection reject inherited data, accessors, and throwin
   };
   assert.deepEqual(nativeToolSearchReceipt(details), { loaded: ["docs_lookup"] });
   assert.equal(reads, 0);
-  const subject = nativeToolSearchSubject({ query: "query\u001b[2J\n" + "padding ".repeat(1000) });
+  const subject = nativeToolSearchSubject({
+    query: "query\u001b[2J\n" + Fn.pipe("padding ", Str.repeat(1000)),
+  });
   assert.ok(subject.length <= 160);
-  for (const control of ["\u001b", "\n", "\r"]) assert.equal(subject.includes(control), false);
+  for (const control of ["\u001b", "\n", "\r"])
+    assert.equal(Fn.pipe(subject, Str.includes(control)), false);
   for (const query of ["", " \t", "\u0007", "\u001b[2J"])
     assert.equal(nativeToolSearchSubject({ query }), "");
 });

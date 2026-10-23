@@ -4,6 +4,8 @@ import { beforeEach, test } from "vitest";
 import { applyPresentationSettings } from "../../testing";
 import { compactStatus } from "../../src/tools/compact-summary";
 import { nativeCall, scriptResult, settledSummary } from "../support/native-codemode";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 
 const discovery = 'text(await describeNamespace("mcp__chrome_devtools"));';
 const dispatch = (name = "read", status = "ok", id = "private/1") =>
@@ -31,7 +33,12 @@ test("source intent cannot hide unavailable or incomplete ledgers or rewrite out
     const projected = summarize(discovery, { ...result(), details })!;
     assert.equal(projected.outcome, "uncertain");
     assert.equal(
-      projected.issues?.find((issue) => issue.code === "native-call-evidence-incomplete")?.severity,
+      Option.getOrUndefined(
+        Arr.findFirst(
+          projected.issues ?? [],
+          (issue) => issue.code === "native-call-evidence-incomplete",
+        ),
+      )?.severity,
       "warning",
     );
   }

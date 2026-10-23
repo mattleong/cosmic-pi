@@ -2,6 +2,7 @@ import * as Predicate from "effect/Predicate";
 import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Arr from "effect/Array";
 import {
   decodeTolerantFields,
   type JsonObject,
@@ -53,7 +54,7 @@ const decodeToolName = Schema.decodeUnknownOption(Schema.Literals(ALL_CODE_PREVI
 function decodeToolEntries(entries: readonly unknown[]) {
   const tools = new Set<CodePreviewToolName>();
   const diagnostics: TolerantFieldDiagnostic[] = [];
-  entries.forEach((entry, index) => {
+  Arr.forEach(entries, (entry, index) => {
     const tool = decodeToolName(entry);
     if (Option.isSome(tool)) tools.add(tool.value);
     else diagnostics.push({ path: `settings.tools[${index}]`, issue: "invalid" });
@@ -71,7 +72,7 @@ export function normalizeSettingsWithDiagnostics(
   Object.assign(next, decoded.value);
   const entries = decoded.value.tools ? decodeToolEntries(decoded.value.tools) : undefined;
   const tools = entries?.tools ?? new Set(fallback.tools);
-  next.tools = ALL_CODE_PREVIEW_TOOLS.filter((tool) => tools.has(tool));
+  next.tools = Arr.filter(ALL_CODE_PREVIEW_TOOLS, (tool) => tools.has(tool));
   const diagnostics = [...decoded.diagnostics, ...(entries?.diagnostics ?? [])];
   return { settings: next, diagnostics: diagnostics.slice(0, MAX_SETTINGS_DIAGNOSTICS) };
 }
@@ -104,7 +105,9 @@ export function updateSetting(
   id: string,
   value: string,
 ): CodePreviewSettings {
-  const key = CODE_PREVIEW_SETTING_KEYS.find((candidate) => candidate === id);
+  const key = Option.getOrUndefined(
+    Arr.findFirst(CODE_PREVIEW_SETTING_KEYS, (candidate) => candidate === id),
+  );
   if (!key) return cloneCodePreviewSettings(current);
   const decoded = Schema.decodeOption(CodePreviewSettingsSchema)({
     ...current,

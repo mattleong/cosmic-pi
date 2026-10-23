@@ -1,4 +1,6 @@
 import * as Predicate from "effect/Predicate";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 
 import { Container, Text } from "@earendil-works/pi-tui";
 import { trimSingleTrailingNewline } from "../../preview/format";
@@ -36,12 +38,10 @@ export function bashPreviewRenderers(): PreviewRenderers {
       const timeout = Predicate.isNumber(timeoutArg)
         ? theme.fg("muted", ` (timeout ${timeoutArg}s)`)
         : "";
-      const highlighted = renderHighlightedText(
-        command || "…",
-        "bash",
-        theme,
-        renderContext.invalidate,
-      ).join("\n");
+      const highlighted = Arr.join(
+        renderHighlightedText(command || "…", "bash", theme, renderContext.invalidate),
+        "\n",
+      );
       const heading = new Container();
       heading.addChild(
         new Text(`${renderCodePreviewToolTitle("bash", theme)} ${highlighted}${timeout}`, 0, 0),
@@ -60,7 +60,7 @@ export function bashPreviewRenderers(): PreviewRenderers {
       )
         return renderHiddenPreviewExpandHint(renderContext.state, theme, "output");
       const output = trimSingleTrailingNewline(getTextContent(result.content));
-      const lines = output ? output.split("\n") : [];
+      const lines = output ? Str.split(output, "\n") : [];
       const { lines: rawLines, notice } = splitShellNotice(
         renderContext.isError ? withoutShellStatus(lines) : lines,
       );
@@ -68,7 +68,7 @@ export function bashPreviewRenderers(): PreviewRenderers {
       const color = renderContext.isError ? "error" : "muted";
       const text = rawLines.length
         ? renderSelectedOutputLines(rawLines, limit, theme, "output lines", (chunk) =>
-            chunk.map((line) => theme.fg(color, escapeControlChars(line))),
+            Arr.map(chunk, (line) => theme.fg(color, escapeControlChars(line))),
           )
         : theme.fg("muted", "No output");
       return withAgentNotes(new Text(text, 0, 0), theme, expanded ? notice : undefined);

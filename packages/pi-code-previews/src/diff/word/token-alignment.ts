@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { requiredAt, type WordChangeConfidence } from "./types";
 import { tokenAt, wordEmphasisTokenWeight, type WordEmphasisToken } from "./tokens";
 import { suffixAlignedPairs } from "./alignment";
@@ -185,7 +186,7 @@ function longestIncreasingAfterIndexes(
     ordered.push(requiredAt(candidates, index, "anchor candidate"));
     index = previous[index] ?? -1;
   }
-  return ordered.toReversed();
+  return Arr.reverse(ordered);
 }
 
 function tokenCounts(tokens: WordEmphasisToken[], start: number, end: number): Map<string, number> {

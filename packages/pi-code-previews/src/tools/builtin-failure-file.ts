@@ -1,3 +1,7 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
 import type { BuiltinCompactTool } from "./builtin-subject";
 import type { CompactIssue } from "./compact-issues";
 import { firstLineMessage } from "pi-cosmic-core";
@@ -86,9 +90,13 @@ function editFailure(details: string): CompactIssue | undefined {
 export function fileFailure(tool: BuiltinCompactTool, details: string, lines: string[]) {
   const first = lines[0] ?? details;
   const errno = tool === "edit" ? EDIT_ACCESS.exec(first)?.[1] : undefined;
-  const filesystem = filesystemFailures.find(
-    ([prefix]) =>
-      first.startsWith(prefix) || (errno !== undefined && prefix.startsWith(`${errno}: `)),
+  const filesystem = Option.getOrUndefined(
+    Arr.findFirst(
+      filesystemFailures,
+      ([prefix]) =>
+        Fn.pipe(first, Str.startsWith(prefix)) ||
+        (errno !== undefined && Fn.pipe(prefix, Str.startsWith(`${errno}: `))),
+    ),
   );
   const issue: CompactIssue = filesystem
     ? { severity: "error", code: "filesystem", message: filesystem[1] }

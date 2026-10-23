@@ -1,3 +1,7 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
 import type { DiffWordEmphasis } from "../src/config/schema";
 import { renderSyntaxHighlightedDiff } from "../src/diff/render";
 import { wordEmphasisTelemetry } from "../tests/support/word-emphasis-telemetry";
@@ -90,13 +94,13 @@ function makeWordCases(): WordCase[] {
   return [
     {
       name: "token weighted LCS boundary 512x512 reversed",
-      before: numberedLines("tok", 512).join(" "),
-      after: numberedLines("tok", 512).toReversed().join(" "),
+      before: Arr.join(numberedLines("tok", 512), " "),
+      after: Arr.join(Arr.reverse(numberedLines("tok", 512)), " "),
     },
     {
       name: "token anchor fallback 513x513 reversed",
-      before: numberedLines("tok", 513).join(" "),
-      after: numberedLines("tok", 513).toReversed().join(" "),
+      before: Arr.join(numberedLines("tok", 513), " "),
+      after: Arr.join(Arr.reverse(numberedLines("tok", 513)), " "),
     },
     {
       name: "repeated tokens no unique anchors fallback",
@@ -130,8 +134,8 @@ function makeWordCases(): WordCase[] {
     },
     {
       name: "long non-ASCII grapheme snapping",
-      before: `${"é".repeat(10_000)}Old`,
-      after: `${"é".repeat(10_000)}New`,
+      before: `${Fn.pipe("é", Str.repeat(10_000))}Old`,
+      after: `${Fn.pipe("é", Str.repeat(10_000))}New`,
     },
   ];
 }
@@ -175,7 +179,7 @@ function printOverheadSummary(
   results: Array<{ caseName: string; layer: string; mode: string; meanMs: number }>,
   benchCases: PairingCase[],
 ): void {
-  const rows = benchCases.map((benchCase) => {
+  const rows = Arr.map(benchCases, (benchCase) => {
     const off = findResult(results, benchCase.name, "renderChangedBlock", "off");
     const smart = findResult(results, benchCase.name, "renderChangedBlock", "smart");
     const overhead = off && smart ? Math.max(0, smart.meanMs - off.meanMs) : 0;
@@ -198,7 +202,7 @@ function printConfidenceSummary(
   setCodePreviewSettings({ ...codePreviewSettings, wordEmphasis: "smart" });
   benchLog("Word emphasis confidence summary");
   benchTable(
-    wordBenchCases.map((benchCase) => {
+    Arr.map(wordBenchCases, (benchCase) => {
       const ranges = changedRangesWithConfidence(benchCase.before, benchCase.after, "smart");
       return {
         case: benchCase.name,
@@ -210,7 +214,7 @@ function printConfidenceSummary(
   );
   benchLog("Changed-line pair confidence summary");
   benchTable(
-    pairingBenchCases.map((benchCase) => {
+    Arr.map(pairingBenchCases, (benchCase) => {
       const telemetry = wordEmphasisTelemetry(benchCase.diff, benchCase.lines, "smart");
       return {
         case: benchCase.name,
@@ -234,8 +238,11 @@ function findResult(
   layer: string,
   mode: string,
 ): { meanMs: number } | undefined {
-  return results.find(
-    (result) => result.caseName === caseName && result.layer === layer && result.mode === mode,
+  return Option.getOrUndefined(
+    Arr.findFirst(
+      results,
+      (result) => result.caseName === caseName && result.layer === layer && result.mode === mode,
+    ),
   );
 }
 
@@ -248,7 +255,7 @@ function pairingDiff(
     ...Array.from({ length: count }, (_, index) => `- ${index + 1} ${before(index)}`),
     ...Array.from({ length: count }, (_, index) => `+ ${index + 1} ${after(index)}`),
   ];
-  return { diff: lines.join("\n"), lines: lines.length };
+  return { diff: Arr.join(lines, "\n"), lines: lines.length };
 }
 
 function reorderedPairingDiff(count: number): { diff: string; lines: number } {
@@ -282,7 +289,7 @@ function shiftedPairingDiff(count: number) {
       (_, index) => `+ ${index + 2} const item${index} = transform${index}(new${index});`,
     ),
   ];
-  return { diff: lines.join("\n"), lines: lines.length };
+  return { diff: Arr.join(lines, "\n"), lines: lines.length };
 }
 
 function similarBefore(index: number): string {
@@ -303,9 +310,15 @@ function repeatedAfter(index: number): string {
 }
 
 function repeatedTokens(prefix: string, count: number): string {
-  return Array.from({ length: count }, (_, index) => `${prefix}${index % 7}`).join(" ");
+  return Arr.join(
+    Array.from({ length: count }, (_, index) => `${prefix}${index % 7}`),
+    " ",
+  );
 }
 
 function longIdentifier(marker: string, parts: number): string {
-  return Array.from({ length: parts }, (_, index) => `${marker}Segment${index}`).join("");
+  return Arr.join(
+    Array.from({ length: parts }, (_, index) => `${marker}Segment${index}`),
+    "",
+  );
 }

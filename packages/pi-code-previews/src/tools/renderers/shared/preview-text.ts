@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import {
@@ -33,19 +36,24 @@ export function renderContentPreview(options: {
   const width =
     firstLine === undefined ? 0 : String(firstLine + Math.max(0, preview.total - 1)).length;
   const rendered = renderChunkedPreviewEntries(preview, theme, (chunk) => {
-    const normalizedChunk = chunk.map((entry) => expandPreviewTabs(entry.line));
-    const highlighted = renderHighlightedText(normalizedChunk.join("\n"), lang, theme, invalidate);
-    return chunk.map((entry, index) => {
+    const normalizedChunk = Arr.map(chunk, (entry) => expandPreviewTabs(entry.line));
+    const highlighted = renderHighlightedText(
+      Arr.join(normalizedChunk, "\n"),
+      lang,
+      theme,
+      invalidate,
+    );
+    return Arr.map(chunk, (entry, index) => {
       const line =
         highlighted[index] ??
         theme.fg("toolOutput", escapeLineControlChars(normalizedChunk[index] ?? ""));
       if (firstLine === undefined) return line;
-      const lineNumber = String(firstLine + entry.index).padStart(width, " ");
+      const lineNumber = Fn.pipe(String(firstLine + entry.index), Str.padStart(width, " "));
       return `${theme.fg("dim", `${lineNumber} │ `)}${line}`;
     });
   });
   let text = rendered.lines.length
-    ? rendered.lines.join("\n")
+    ? Arr.join(rendered.lines, "\n")
     : theme.fg("muted", options.emptyLabel);
   if (rendered.hidden > 0) text += showingFooter(theme, rendered.shown, preview.total, "lines");
   if (skipHighlight) text += previewFooter(theme, options.skipHighlightLabel);
@@ -60,9 +68,9 @@ export function renderSelectedOutputLines(
   renderChunk: (chunk: string[]) => string[],
 ): string {
   const preview = renderChunkedPreviewEntries(selectPreviewLines(rawLines, limit), theme, (chunk) =>
-    renderChunk(chunk.map((entry) => entry.line)),
+    renderChunk(Arr.map(chunk, (entry) => entry.line)),
   );
-  const text = preview.lines.join("\n");
+  const text = Arr.join(preview.lines, "\n");
   if (preview.hidden === 0) return text;
   return text + showingFooter(theme, preview.shown, rawLines.length, noun);
 }

@@ -11,6 +11,10 @@ import { registerWritePreviewTool } from "../../src/tools/renderers/registration
 import { step } from "../support/effect-test";
 import { codePreviewsUnderTest, offlineModels, scopedSession } from "../support/sdk-session";
 import { quietLoader, quietSettings } from "pi-cosmic-core/testing/sdk";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 
 for (const activeWrite of [false])
   it.live(
@@ -57,7 +61,7 @@ for (const activeWrite of [false])
         });
         const session = yield* scopedSession({ cwd: directory, models, settings, loader });
         const before = new Map(
-          ["bash", "read", "edit", "grep", "find", "ls"].map((name) => [
+          Arr.map(["bash", "read", "edit", "grep", "find", "ls"], (name) => [
             name,
             session.getToolDefinition(name),
           ]),
@@ -66,7 +70,7 @@ for (const activeWrite of [false])
         const callable = session.getCallableToolNames();
         yield* step(() => session.bindExtensions({ mode: "print" }));
         assert.deepEqual(
-          registrations.map((tool) => tool.name),
+          Arr.map(registrations, (tool) => tool.name),
           ["write"],
         );
         assert.deepEqual(session.getActiveToolNames(), active);
@@ -76,12 +80,18 @@ for (const activeWrite of [false])
           assert.ok(definition);
           assert.equal(session.getToolDefinition(name), definition);
           assert.equal(
-            session.getAllTools().find((tool) => tool.name === name)?.sourceInfo.path,
+            Option.getOrUndefined(
+              Arr.findFirst(session.getAllTools(), (tool) => tool.name === name),
+            )?.sourceInfo.path,
             `builtin:${name}`,
           );
         }
-        const bash = session.agent.state.tools.find((tool) => tool.name === "bash");
-        const read = session.agent.state.tools.find((tool) => tool.name === "read");
+        const bash = Option.getOrUndefined(
+          Arr.findFirst(session.agent.state.tools, (tool) => tool.name === "bash"),
+        );
+        const read = Option.getOrUndefined(
+          Arr.findFirst(session.agent.state.tools, (tool) => tool.name === "read"),
+        );
         assert.ok(bash);
         assert.ok(read);
         const shell = yield* step(() =>
@@ -92,21 +102,24 @@ for (const activeWrite of [false])
           ),
         );
         assert.ok(
-          shell.content.some((part) => part.type === "text" && part.text === "kept:/bin/sh"),
+          Arr.some(shell.content, (part) => part.type === "text" && part.text === "kept:/bin/sh"),
           "Native shell prefix and configured shell must remain effective",
         );
         const content = yield* step(() =>
           read.execute("native-read", { path: "source.txt" }, undefined),
         );
         assert.ok(
-          content.content.some(
+          Arr.some(
+            content.content,
             (part) => part.type === "text" && part.text === "NATIVE_READ_CONTENT",
           ),
         );
         const image = yield* step(() =>
           read.execute("native-image", { path: "image.png" }, undefined),
         );
-        const nativeImage = image.content.find((part) => part.type === "image");
+        const nativeImage = Option.getOrUndefined(
+          Arr.findFirst(image.content, (part) => part.type === "image"),
+        );
         assert.ok(nativeImage?.type === "image");
         assert.equal(nativeImage.data, imageData);
         const original = structuredClone(image);
@@ -116,10 +129,10 @@ for (const activeWrite of [false])
         assert.ok(renderers);
         const harness = createToolPresentationHarness(renderers);
         for (const { text } of harness.cycle({ path: "image.png" }, image))
-          assert.equal(text.includes(imageData), false);
+          assert.equal(Fn.pipe(text, Str.includes(imageData)), false);
         assert.deepEqual(image, original);
         assert.equal(
-          image.content.find((part) => part.type === "image"),
+          Option.getOrUndefined(Arr.findFirst(image.content, (part) => part.type === "image")),
           nativeImage,
         );
         const write = registrations[0];

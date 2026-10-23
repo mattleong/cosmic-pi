@@ -7,6 +7,10 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Text, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Rec from "effect/Record";
 import { countLabel, invokeHostCallback, sanitizeDiagnosticContent } from "pi-cosmic-core";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import {
@@ -51,17 +55,17 @@ const unstyled: Pick<Theme, "fg"> = { fg: (_color, text) => text };
 
 function argumentsJson(args: HostContainer | undefined, space?: number): string {
   return invokeHostCallback(() => {
-    if (!Predicate.isObject(args) || Object.keys(args).length === 0) return "";
+    if (!Predicate.isObject(args) || Rec.keys(args).length === 0) return "";
     return JSON.stringify(args, null, space) ?? "";
   }, "");
 }
 
 function textBlock(theme: Theme, text: string, color: "toolOutput" | "error" | "muted"): Text {
   return new Text(
-    compactPlainText(text)
-      .split("\n")
-      .map((line) => theme.fg(color, line))
-      .join("\n"),
+    Arr.join(
+      Arr.map(Str.split(compactPlainText(text), "\n"), (line) => theme.fg(color, line)),
+      "\n",
+    ),
     0,
     0,
   );
@@ -84,22 +88,26 @@ function renderOutput(
 ): Component {
   const raw = getFallbackResultText(result.content, context.showImages);
   const path = nativeMcpEvidence(hostContainer(result.details))?.fullOutputPath;
-  const saved = path && !raw.includes(path) ? sanitizeDiagnosticContent(path) : undefined;
+  const saved =
+    path && !Fn.pipe(raw, Str.includes(path)) ? sanitizeDiagnosticContent(path) : undefined;
   const recovery = saved === undefined ? "" : `Saved output\n${saved}`;
-  return safeContent(() => {
-    const body = new Container();
-    if (saved !== undefined)
-      body.addChild(expandedSection(theme, "Saved output", textBlock(theme, saved, "muted")));
-    if (raw)
-      body.addChild(
-        expandedSection(
-          theme,
-          context.isPartial ? "Progress" : context.isError ? "Error" : "Output",
-          textBlock(theme, raw, context.isError ? "error" : "toolOutput"),
-        ),
-      );
-    return body;
-  }, [recovery, raw].filter(Boolean).join("\n"));
+  return safeContent(
+    () => {
+      const body = new Container();
+      if (saved !== undefined)
+        body.addChild(expandedSection(theme, "Saved output", textBlock(theme, saved, "muted")));
+      if (raw)
+        body.addChild(
+          expandedSection(
+            theme,
+            context.isPartial ? "Progress" : context.isError ? "Error" : "Output",
+            textBlock(theme, raw, context.isError ? "error" : "toolOutput"),
+          ),
+        );
+      return body;
+    },
+    Arr.join(Arr.filter([recovery, raw], Str.isNonEmpty), "\n"),
+  );
 }
 
 function renderProgress(
@@ -128,9 +136,9 @@ function renderOutputPreview(
   theme: Theme,
   context: Context,
 ): Component {
-  const raw = getFallbackResultText(result.content, context.showImages).trim();
+  const raw = Str.trim(getFallbackResultText(result.content, context.showImages));
   if (!raw) return new Container();
-  const lines = compactPlainText(raw).split("\n");
+  const lines = Str.split(compactPlainText(raw), "\n");
   const color = context.isError ? "error" : "toolOutput";
   const preview = (style: Pick<Theme, "fg">): Component => {
     let wrapped: { readonly width: number; readonly rows: readonly string[] } | undefined;
@@ -138,8 +146,8 @@ function renderOutputPreview(
       render(width) {
         if (width <= 0) return [];
         if (wrapped?.width !== width)
-          wrapped = { width, rows: lines.flatMap((line) => wrapTextWithAnsi(line, width)) };
-        const rows = wrapped.rows.slice(0, PREVIEW_LINES).map((row) => style.fg(color, row));
+          wrapped = { width, rows: Arr.flatMap(lines, (line) => wrapTextWithAnsi(line, width)) };
+        const rows = Arr.map(wrapped.rows.slice(0, PREVIEW_LINES), (row) => style.fg(color, row));
         const hidden = wrapped.rows.length - rows.length;
         if (hidden > 0)
           rows.push(
@@ -176,7 +184,7 @@ export function createNativeMcpRenderers(
   const subtitle = (state: RendererState, args: HostContainer | undefined): string => {
     const receipt = Predicate.isObject(state) ? receipts.get(state) : undefined;
     const { action, subject } = nativeMcpHeading(identity, args, receipt);
-    return [action, subject].filter(Boolean).join(" ");
+    return Arr.join(Arr.filter([action, subject], Str.isNonEmpty), " ");
   };
   const heading = (
     theme: Theme,
@@ -213,13 +221,19 @@ export function createNativeMcpRenderers(
     const contextArgs = hostContainer(context.args);
     const json = identity.kind === "tool" && !context.expanded ? argumentsJson(input) : "";
     const preview =
-      json.length > ARGUMENT_PREVIEW_CHARS ? `${json.slice(0, ARGUMENT_PREVIEW_CHARS)}…` : json;
-    const raw = [
-      `${DISPLAY_NAME} ${subtitle(context.state, contextArgs)}`,
-      context.expanded ? argumentsJson(input, 2) : preview,
-    ]
-      .filter(Boolean)
-      .join("\n");
+      json.length > ARGUMENT_PREVIEW_CHARS
+        ? `${Fn.pipe(json, Str.slice(0, ARGUMENT_PREVIEW_CHARS))}…`
+        : json;
+    const raw = Arr.join(
+      Arr.filter(
+        [
+          `${DISPLAY_NAME} ${subtitle(context.state, contextArgs)}`,
+          context.expanded ? argumentsJson(input, 2) : preview,
+        ],
+        Str.isNonEmpty,
+      ),
+      "\n",
+    );
     return safeContent(
       () => {
         const previewLine = preview ? theme.fg("muted", compactPlainText(preview)) : "";

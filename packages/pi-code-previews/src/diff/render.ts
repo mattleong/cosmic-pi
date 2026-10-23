@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { codePreviewSettings } from "../config/state";
 import type { DiffWordEmphasis } from "../config/schema";
@@ -55,7 +58,7 @@ type DiffRenderOptions = {
 
 function renderDiff(diff: string, options: DiffRenderOptions): string {
   const lines = splitLinesLimited(diff, options.limit);
-  const parsedLines = lines.map(parseDiffLine);
+  const parsedLines = Arr.map(lines, parseDiffLine);
   const lineNumberWidth = options.lineNumbers ? diffLineNumberWidth(parsedLines) : 0;
   const highlighted = options.lang
     ? highlightDiffLineRuns(parsedLines, options.lang, options.invalidate)
@@ -63,8 +66,8 @@ function renderDiff(diff: string, options: DiffRenderOptions): string {
   const emphasis = new Map<number, TextRange[]>();
   for (const pair of emphasizedChangedPairs(parsedLines, options.wordEmphasis))
     emphasis.set(pair.removedIndex, pair.ranges.removed).set(pair.addedIndex, pair.ranges.added);
-  return lines
-    .map((line, index) => {
+  return Arr.join(
+    Arr.map(lines, (line, index) => {
       const parsed = parsedLines[index];
       return parsed
         ? renderDiffParsedLine(
@@ -75,15 +78,16 @@ function renderDiff(diff: string, options: DiffRenderOptions): string {
             emphasis.get(index),
           )
         : renderSeparator(line, options.theme);
-    })
-    .join("\n");
+    }),
+    "\n",
+  );
 }
 
 function renderSeparator(line: string, theme: Theme): string {
   const safeLine = escapeControlChars(line);
-  const trimmed = safeLine.trim();
+  const trimmed = Str.trim(safeLine);
   if (trimmed === "...") return theme.fg("muted", "      --- unchanged lines hidden ---");
-  if (trimmed.startsWith("@@")) return theme.fg("accent", theme.bold(safeLine));
+  if (Fn.pipe(trimmed, Str.startsWith("@@"))) return theme.fg("accent", theme.bold(safeLine));
   if (/^(?:---|\+\+\+|diff |index )/u.test(trimmed)) return theme.fg("muted", safeLine);
   return theme.fg("toolDiffContext", safeLine);
 }
@@ -131,10 +135,10 @@ function highlightDiffLineRuns(
 ): Array<string | undefined> {
   const highlighted: Array<string | undefined> = [];
   for (const [start, end] of diffLineRuns(lines, (line) => line.kind)) {
-    const source = lines
-      .slice(start, end)
-      .map((line) => expandPreviewTabs(line?.content ?? ""))
-      .join("\n");
+    const source = Arr.join(
+      Arr.map(lines.slice(start, end), (line) => expandPreviewTabs(line?.content ?? "")),
+      "\n",
+    );
     const rendered = renderWithShiki(source, lang, invalidate);
     if (rendered) {
       for (let index = start; index < end; index++) highlighted[index] = rendered[index - start];

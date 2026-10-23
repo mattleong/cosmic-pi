@@ -1,5 +1,10 @@
 import type { ToolRenderers } from "@earendil-works/pi-coding-agent";
 import * as Predicate from "effect/Predicate";
+import * as Option from "effect/Option";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Rec from "effect/Record";
 import { sanitizeDiagnosticContent } from "pi-cosmic-core";
 import type { CompactIssue } from "./compact-issues";
 
@@ -19,17 +24,22 @@ export function argumentFailureIssue(text: string): CompactIssue | undefined {
   const mismatched = malformed === undefined ? MISMATCHED.exec(text)?.[0] : undefined;
   const prefix = malformed ?? mismatched;
   if (prefix === undefined) return undefined;
-  const body = text.slice(prefix.length);
-  const end = body.indexOf(RECEIVED);
-  const detail = sanitizeDiagnosticContent(end < 0 ? body : body.slice(0, end))
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .join("\n");
+  const body = Fn.pipe(text, Str.slice(prefix.length));
+  const received = Option.match(Fn.pipe(body, Str.indexOf(RECEIVED)), {
+    onNone: () => body,
+    onSome: (end) => Fn.pipe(body, Str.slice(0, end)),
+  });
+  const detail = Arr.join(
+    Arr.filter(
+      Arr.map(Str.split(sanitizeDiagnosticContent(received), "\n"), (line) => Str.trim(line)),
+      Str.isNonEmpty,
+    ),
+    "\n",
+  );
   const message =
     mismatched !== undefined
       ? "The arguments didn't match the tool's schema"
-      : body.startsWith(NOT_AN_OBJECT)
+      : Fn.pipe(body, Str.startsWith(NOT_AN_OBJECT))
         ? "The arguments weren't a JSON object"
         : "The arguments weren't valid JSON";
   return { severity: "error", code: "invalid-arguments", message, ...(detail && { detail }) };
@@ -51,6 +61,6 @@ export function isRejectedEmptyCall(context: CallRenderEvidence): boolean {
     context.isError &&
     context.durationMs === undefined &&
     Predicate.isObject(context.args) &&
-    Object.keys(context.args).length === 0
+    Rec.keys(context.args).length === 0
   );
 }

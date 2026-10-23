@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 
@@ -44,17 +47,23 @@ export function layoutCompactHeader(
   separator = " · ",
   timing?: string,
 ) {
-  const counters = candidateCounters.filter((value) => value.trim());
-  const extra = counters.length ? undefined : optional.find((value) => value?.trim());
+  const counters = Arr.filter(candidateCounters, (value) => Str.isNonEmpty(Str.trim(value)));
+  const extra = counters.length
+    ? undefined
+    : Option.getOrUndefined(
+        Arr.findFirst(optional, (value) => value !== undefined && Str.isNonEmpty(Str.trim(value))),
+      );
   const remaining = width - visibleWidth(identity);
   if (remaining <= 0) return { row: clipToWidth(identity, width, ""), counter: undefined };
   const subjectWidth = visibleWidth(subject);
   const subjectMinimum = subject ? 1 + Math.min(12, subjectWidth) : 0;
   const counterBudget = remaining - subjectMinimum;
-  const counter = counters.find((value) => visibleWidth(`${separator}${value}`) <= counterBudget);
+  const counter = Option.getOrUndefined(
+    Arr.findFirst(counters, (value) => visibleWidth(`${separator}${value}`) <= counterBudget),
+  );
   const counterText = counter === undefined ? "" : `${separator}${counter}`;
   const counterWidth = visibleWidth(counterText);
-  const timingToken = timing?.trim() ? `${separator}${timing}` : "";
+  const timingToken = timing && Str.trim(timing) ? `${separator}${timing}` : "";
   const timingText =
     (!counters.length || counterText.length > 0) &&
     counterWidth + visibleWidth(timingToken) <= counterBudget

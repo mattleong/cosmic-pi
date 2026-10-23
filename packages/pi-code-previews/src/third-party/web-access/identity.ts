@@ -1,6 +1,8 @@
 import type { ToolInfo } from "@earendil-works/pi-coding-agent";
+import * as Fn from "effect/Function";
 import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";
+import * as Str from "effect/String";
 
 export const WEB_ACCESS_LABELS = {
   web_enable: "web tools",
@@ -26,7 +28,7 @@ export function admitsWebAccessSource(tool: ToolInfo): boolean {
     !sourceInfo.baseDir
   )
     return false;
-  const root = sourceInfo.baseDir.replace(/\/$/, "");
+  const root = Fn.pipe(sourceInfo.baseDir, Str.replace(/\/$/, ""));
   const path = sourceInfo.path;
   return path === `${root}/dist/index.js` || path === `${root}/index.ts`;
 }

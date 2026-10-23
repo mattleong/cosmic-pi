@@ -2,6 +2,8 @@ import { expect, test } from "vitest";
 import { planCompactPresentation } from "../../src/tools/compact-presentation";
 import { compactStatus, type CompactSummary } from "../../src/tools/compact-summary";
 import { isSafeCompactSummary } from "../../src/tools/compact-summary-schema";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
 
 const heading = { subject: "full/target.ts", compactSubject: "target.ts", action: "scan" };
 const plan = (
@@ -48,6 +50,11 @@ test("an unsummarised Pi error explains itself with the first line of its text",
   ]);
   const blank = plan(undefined, { isError: true, errorText: " \n " }).collapsedSummary;
   expect(blank.issues).toHaveLength(1);
-  expect(blank.issues?.[0]?.message.trim()).not.toBe("");
+  expect(
+    Option.fromUndefinedOr(blank.issues?.[0]).pipe(
+      Option.map((issue) => Str.trim(issue.message)),
+      Option.getOrUndefined,
+    ),
+  ).not.toBe("");
   expect(plan(undefined, { isError: true }).collapsedSummary.issues).toHaveLength(1);
 });

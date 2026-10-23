@@ -1,6 +1,7 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Arr from "effect/Array";
 import { frozenProjection, type ProjectionError } from "pi-cosmic-core";
 import { acquireProjectionOwnership } from "../shared/projection-ownership";
 import {
@@ -40,7 +41,7 @@ export class CodePreviewWriteService extends Context.Service<
         rememberBeforeWrite: Effect.fn("CodePreviewWriteService.rememberBeforeWrite")(
           (toolCallId: string, before: CodePreviewBeforeWrite) =>
             projection.transition((current) => {
-              const entries = current.entries.filter(([id]) => id !== toolCallId);
+              const entries = Arr.filter(current.entries, ([id]) => id !== toolCallId);
               if (before !== undefined) entries.push([toolCallId, before] as const);
               return Effect.succeed([
                 undefined,

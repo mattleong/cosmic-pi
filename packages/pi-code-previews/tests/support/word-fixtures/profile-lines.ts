@@ -1,3 +1,4 @@
+import * as Str from "effect/String";
 type ProfileSide = "added" | "removed";
 
 export function profileLine(logicalIndex: number, placement: string, side: ProfileSide): string {
@@ -10,7 +11,7 @@ export function profileLine(logicalIndex: number, placement: string, side: Profi
 export function profilePlacement(position: number, count: number): string {
   if (position * 2 === count - 1) return "center";
   const index = position * 2 < count - 1 ? position : count - position - 1;
-  return `${position * 2 < count - 1 ? "cold" : "warm"}${profileIdentifierCode(index).toLowerCase()}`;
+  return `${position * 2 < count - 1 ? "cold" : "warm"}${Str.toLowerCase(profileIdentifierCode(index))}`;
 }
 
 function profileIdentifierCode(index: number): string {

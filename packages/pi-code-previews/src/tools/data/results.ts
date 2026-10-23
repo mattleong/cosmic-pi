@@ -1,6 +1,9 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { getCapabilities, imageFallback } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 
 import { ownField, ownObject, type HostObject } from "../../shared/untrusted-value";
 
@@ -16,12 +19,15 @@ export function getEditDiff(details: HostObject | undefined): string | undefined
 export function getTextContent(
   content: ReadonlyArray<{ readonly type: string; readonly text?: string }> | undefined,
 ): string {
-  return (
-    content
-      ?.filter((part) => part.type === "text")
-      .map((part) => part.text ?? "")
-      .join("\n") ?? ""
-  );
+  return content
+    ? Arr.join(
+        Arr.map(
+          Arr.filter(content, (part) => part.type === "text"),
+          (part) => part.text ?? "",
+        ),
+        "\n",
+      )
+    : "";
 }
 
 export function getFallbackResultText(
@@ -30,10 +36,10 @@ export function getFallbackResultText(
 ): string {
   const text = getTextContent(content);
   if (showImages && getCapabilities().images) return text;
-  const images = content.flatMap((part) =>
+  const images = Arr.flatMap(content, (part) =>
     part.type === "image" ? [imageFallback(part.mimeType)] : [],
   );
-  return [text, ...images].filter(Boolean).join("\n");
+  return Arr.join(Arr.filter([text, ...images], Str.isNonEmpty), "\n");
 }
 
 const MAX_BOUNDED_TEXT_CHARS = 128 * 1024;
@@ -52,7 +58,7 @@ export function getBoundedTextContent(
     if (chars > MAX_BOUNDED_TEXT_CHARS) return undefined;
     texts.push(text);
   }
-  return texts.join("\n");
+  return Arr.join(texts, "\n");
 }
 
 const READ_CONTINUATION_NOTICE =
@@ -62,5 +68,5 @@ export function splitReadContinuationNotice(text: string) {
   const match = /^(.*?)(?:\r?\n){2}(\[[^\r\n]+\])$/s.exec(text);
   const notice = match?.[2];
   if (!match || !notice || !READ_CONTINUATION_NOTICE.test(notice)) return { content: text };
-  return { content: match[1] ?? "", notice: notice.slice(1, -1) };
+  return { content: match[1] ?? "", notice: Fn.pipe(notice, Str.slice(1, -1)) };
 }

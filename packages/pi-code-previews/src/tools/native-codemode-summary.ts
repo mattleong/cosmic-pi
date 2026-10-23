@@ -1,3 +1,7 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import {
   countLabel,
   failureMessage,
@@ -54,7 +58,7 @@ function childIssues(
   label: string | undefined,
 ): CompactIssue[] {
   const issues: CompactIssue[] = [];
-  if (label || call.name.startsWith("mcp__"))
+  if (label || Fn.pipe(call.name, Str.startsWith("mcp__")))
     issues.push({
       code: "native-call-name",
       severity: "info",
@@ -106,7 +110,7 @@ export function nativeCodemodeChildren(
   cwd: string,
 ): NonNullable<CompactSummary["children"]> {
   const calls = evidence.kind === "available" ? evidence.calls : [];
-  return { entries: calls.map((call) => child(call, phase, cwd)), total: calls.length };
+  return { entries: Arr.map(calls, (call) => child(call, phase, cwd)), total: calls.length };
 }
 
 export function nativeCodemodeHeader(
@@ -148,7 +152,7 @@ function callCounters(
   if (evidence.kind === "unavailable" || (complete && calls.length === 0 && intent?.discoveryOnly))
     return [];
   if (!complete) return [`${countLabel(calls.length, "call")} listed`];
-  const toolCalls = intent && calls.every((call) => !nativeModelCalls.has(call.name));
+  const toolCalls = intent && Arr.every(calls, (call) => !nativeModelCalls.has(call.name));
   return [countLabel(calls.length, toolCalls ? "tool call" : "call")];
 }
 
@@ -158,9 +162,11 @@ function scriptErrorText(content: AgentToolResult<unknown>["content"]): string {
   for (let index = content.length - 1; index >= 0; index -= 1) {
     const part = content[index];
     if (part?.type !== "text") continue;
-    const lineStart = part.text.lastIndexOf(`\n${SCRIPT_ERROR}`);
-    if (lineStart >= 0) return part.text.slice(lineStart + 1 + SCRIPT_ERROR.length);
-    if (part.text.startsWith(SCRIPT_ERROR)) return part.text.slice(SCRIPT_ERROR.length);
+    const lineStart = Fn.pipe(part.text, Str.lastIndexOf(`\n${SCRIPT_ERROR}`));
+    if (Option.isSome(lineStart))
+      return Fn.pipe(part.text, Str.slice(lineStart.value + 1 + SCRIPT_ERROR.length));
+    if (Fn.pipe(part.text, Str.startsWith(SCRIPT_ERROR)))
+      return Fn.pipe(part.text, Str.slice(SCRIPT_ERROR.length));
   }
   return "";
 }
@@ -172,10 +178,12 @@ function scriptFailure(
 ): CompactSummary {
   const text = diagnosticHidden ? "" : scriptErrorText(result.content);
   const failure = issue("native-script-error", text || "The script failed");
-  const explained = selectCompactChildren(summary.children).entries.some(
+  const explained = Arr.some(
+    selectCompactChildren(summary.children).entries,
     (entry) =>
       entry.status === "error" &&
-      entry.issues?.some(
+      Arr.some(
+        entry.issues ?? [],
         (cause) => cause.code === "native-child-error" && cause.message === failure.message,
       ),
   );
@@ -200,11 +208,11 @@ function completedOutcome(
   if (unconfirmed)
     return uncertain("native-outcome-uncertain", "Script completion could not be confirmed");
   if (!complete) return { ...summary, outcome: "uncertain" };
-  if (calls.some((call) => call.status === "running" || call.status === "cancelled"))
+  if (Arr.some(calls, (call) => call.status === "running" || call.status === "cancelled"))
     return uncertain("native-call-outcome-uncertain", "Some call outcomes are unconfirmed");
   return {
     ...summary,
-    outcome: calls.some((call) => call.status === "error") ? "warning" : "success",
+    outcome: Arr.some(calls, (call) => call.status === "error") ? "warning" : "success",
   };
 }
 

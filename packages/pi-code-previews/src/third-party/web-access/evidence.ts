@@ -1,5 +1,8 @@
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import * as Rec from "effect/Record";
 import { decodeUnknownOrUndefined, invokeHostCallback } from "pi-cosmic-core";
 import type { WebAccessTool } from "./identity";
 import { nonEmptyText } from "../../shared/helpers";
@@ -69,7 +72,7 @@ function snapshot<Key extends string>(
   value: HostContainer | undefined,
   fields: readonly Key[],
 ): Partial<Record<Key, typeof Field.Type>> | undefined {
-  if (!Predicate.isObject(value) || Array.isArray(value)) return undefined;
+  if (!Predicate.isObject(value) || Arr.isArray(value)) return undefined;
   const input: Partial<Record<Key, typeof Field.Type>> = {};
   for (const key of fields) {
     const field = Object.getOwnPropertyDescriptor(value, key);
@@ -77,7 +80,7 @@ function snapshot<Key extends string>(
     if (!("value" in field)) return undefined;
     const fieldValue: unknown = field.value;
     if (fieldValue === undefined) continue;
-    const raw = Array.isArray(fieldValue) ? arraySnapshot(fieldValue) : fieldValue;
+    const raw = Arr.isArray(fieldValue) ? arraySnapshot(fieldValue) : fieldValue;
     const decoded = decodeField(raw);
     if (decoded === undefined) return undefined;
     input[key] = decoded;
@@ -87,15 +90,19 @@ function snapshot<Key extends string>(
 
 export function webAccessSubject(name: WebAccessTool, args: HostContainer | undefined): string {
   return invokeHostCallback(() => {
-    const input = snapshot(args, Object.keys(Arguments.fields));
+    const input = snapshot(args, Rec.keys(Arguments.fields));
     const fields = input && decodeArguments(input);
     if (!fields) return "";
     if (name === "web_enable") return "enable";
     if (name === "source_check") return fields.claim ?? "";
     if (name === "web_search")
-      return nonEmptyText(fields.queries?.join("; ")) ?? nonEmptyText(fields.query) ?? "";
+      return (
+        nonEmptyText(fields.queries && Arr.join(fields.queries, "; ")) ??
+        nonEmptyText(fields.query) ??
+        ""
+      );
     return (
-      nonEmptyText(fields.urls?.join("; ")) ??
+      nonEmptyText(fields.urls && Arr.join(fields.urls, "; ")) ??
       nonEmptyText(fields.url) ??
       nonEmptyText(fields.query) ??
       "stored result"
@@ -106,7 +113,8 @@ export function webAccessSubject(name: WebAccessTool, args: HostContainer | unde
 export function webAccessArgumentReference(args: HostContainer | undefined): string {
   return invokeHostCallback(() => {
     const input = snapshot(args, ["responseId"]);
-    return decodeText(input?.responseId)?.trim() ?? "";
+    const responseId = decodeText(input?.responseId);
+    return responseId === undefined ? "" : Str.trim(responseId);
   }, "");
 }
 
@@ -125,7 +133,7 @@ function descriptorErrors(
   if (!descriptor) return 0;
   if (!("value" in descriptor)) return undefined;
   if (descriptor.value === undefined) return 0;
-  if (!Array.isArray(descriptor.value)) return undefined;
+  if (!Arr.isArray(descriptor.value)) return undefined;
   const array = arraySnapshot(descriptor.value);
   if (!array) return undefined;
   let count = 0;
@@ -135,13 +143,13 @@ function descriptorErrors(
     if (record[field] === undefined && optional) continue;
     const error = decodeText(record[field]);
     if (error === undefined) return undefined;
-    if (error.trim()) count++;
+    if (Str.trim(error)) count++;
   }
   return count;
 }
 
 function researchErrors(value: HostContainer | undefined): number | undefined {
-  if (!Predicate.isObject(value) || Array.isArray(value)) return undefined;
+  if (!Predicate.isObject(value) || Arr.isArray(value)) return undefined;
   const errors = descriptorErrors(Object.getOwnPropertyDescriptor(value, "errors"), "error", false);
   if (errors === undefined) return undefined;
   const sources = descriptorErrors(
@@ -178,7 +186,7 @@ export function webAccessEvidence(
   value: HostContainer | undefined,
 ): WebAccessEvidence | undefined {
   return invokeHostCallback(() => {
-    const input = snapshot(value, Object.keys(Details.fields));
+    const input = snapshot(value, Rec.keys(Details.fields));
     const details = input && decodeDetails(input);
     if (!details || inconsistentCounts(details)) return undefined;
     const errors = name === "source_check" ? artifactResearchErrors(value) : 0;

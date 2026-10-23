@@ -1,11 +1,14 @@
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Rec from "effect/Record";
 import { nodePath } from "pi-cosmic-core";
 import type { PathIconMode } from "../config/schema";
 
 const NERD_FILE = "\uf15b";
 const NERD_DIR = "\ue5ff";
 
-const NERD_BY_NAME = new Map(
-  Object.entries({
+const NERD_BY_NAME = new Map<string, string>(
+  Rec.toEntries({
     "package.json": "\ue71e",
     "package-lock.json": "\ue71e",
     "tsconfig.json": "\ue628",
@@ -19,8 +22,8 @@ const NERD_BY_NAME = new Map(
   }),
 );
 
-const NERD_BY_EXT = new Map(
-  Object.entries({
+const NERD_BY_EXT = new Map<string, string>(
+  Rec.toEntries({
     ts: "\ue628",
     tsx: "\ue7ba",
     js: "\ue74e",
@@ -56,6 +59,10 @@ export function pathIcon(path: string, isDirectory: boolean, mode: PathIconMode)
   if (mode === "off") return "";
   if (mode === "unicode") return isDirectory ? "▸" : "•";
   if (isDirectory) return NERD_DIR;
-  const name = nodePath.basename(path).toLowerCase();
-  return NERD_BY_NAME.get(name) ?? NERD_BY_EXT.get(nodePath.extname(name).slice(1)) ?? NERD_FILE;
+  const name = Str.toLowerCase(nodePath.basename(path));
+  return (
+    NERD_BY_NAME.get(name) ??
+    NERD_BY_EXT.get(Fn.pipe(nodePath.extname(name), Str.slice(1))) ??
+    NERD_FILE
+  );
 }

@@ -6,13 +6,15 @@ import { applyPresentationSettings, renderContextFixture } from "../../testing";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { withCodePreviewShell } from "../../src/tools/cooperative-tools";
 import { plainTheme } from "../support/render";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
 
 type Definition = ReturnType<typeof createReadToolDefinition>;
 type Context = Parameters<NonNullable<Definition["renderCall"]>>[2];
 type Result = Awaited<ReturnType<Definition["execute"]>>;
 const result: Result = { content: [{ type: "text", text: "raw result" }], details: undefined };
 const modes = ["on", "off", "border"] as const;
-const count = (text: string, phrase: string) => text.split(phrase).length - 1;
+const count = (text: string, phrase: string) => Str.split(text, phrase).length - 1;
 
 beforeEach(() =>
   applyPresentationSettings({
@@ -57,7 +59,7 @@ test("an expanded failed call renderer still shows the exact arguments, inertly"
       { mode, compactSummary: () => ({ subject: "file.ts", outcome: "success" }) },
     );
     const args = { path: "src/\u009b31mfile.ts", offset: 17, limit: 42 };
-    const text = paint(tool, context({ args })).rows.join("\n");
+    const text = Arr.join(paint(tool, context({ args })).rows, "\n");
     for (const value of [/31mfile\.ts/u, /offset\D+17/u, /limit\D+42/u])
       assert.match(text, value, mode);
     assert.doesNotMatch(text, /\u009b/u);
@@ -82,7 +84,7 @@ test("throwing result fallback retains hidden image indicators alongside text", 
     ],
     details: undefined,
   };
-  const text = paint(tool, context({ showImages: false }), value).rows.join("\n");
+  const text = Arr.join(paint(tool, context({ showImages: false }), value).rows, "\n");
   assert.match(text, /image context/u);
   assert.match(text, /image\/png/u);
 });
@@ -115,14 +117,14 @@ test("render-time failures revoke component ownership before invalidation and re
   });
   const ctx = context();
   const failed = paint(tool, ctx);
-  assert.equal(count(failed.rows.join("\n"), "Check cleanup"), 1);
+  assert.equal(count(Arr.join(failed.rows, "\n"), "Check cleanup"), 1);
   assert.doesNotThrow(() => {
     failed.call.invalidate();
     failed.output.invalidate();
   });
   fails = false;
-  assert.match(paint(tool, ctx).rows.join("\n"), /raw result/u);
+  assert.match(Arr.join(paint(tool, ctx).rows, "\n"), /raw result/u);
   ctx.args = { path: "repaired.ts" };
-  assert.match(paint(tool, ctx).rows.join("\n"), /Recovered original result/u);
+  assert.match(Arr.join(paint(tool, ctx).rows, "\n"), /Recovered original result/u);
   assert.equal(inherited, undefined);
 });

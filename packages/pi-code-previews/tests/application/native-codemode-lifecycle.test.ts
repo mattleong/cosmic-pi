@@ -18,6 +18,9 @@ import { codePreviewApplicationLayer } from "../../src/layer";
 import { getCodePreviewToolStatuses } from "../../src/tools/status";
 import { step } from "../support/effect-test";
 import { resultText } from "../support/render";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 
 const preview = {
   ...defaultCodePreviewSettings,
@@ -157,7 +160,7 @@ it.effect("a running native codemode row releases replaced arguments and render 
     collectGarbage();
     assert.equal(released.deref(), undefined);
     for (const context of contexts) assert.equal(context.deref(), undefined);
-    assert.match(row.render(120).join("\n"), /revision 20/u);
+    assert.match(Arr.join(row.render(120), "\n"), /revision 20/u);
   }),
 );
 
@@ -185,9 +188,9 @@ for (const scenario of ["builtin", "inactive", "missing", "foreign", "wrong-buil
         );
         const row = createToolPresentationHarness(selected);
         row.call({ code: "// PROGRAM_RETAINED" }, { expanded: true });
-        const text = row.render(100).join("\n");
-        assert.equal(text.includes("PROGRAM_RETAINED"), admitted);
-        assert.equal(text.includes("NATIVE_CALL_RETAINED"), !admitted);
+        const text = Arr.join(row.render(100), "\n");
+        assert.equal(Fn.pipe(text, Str.includes("PROGRAM_RETAINED")), admitted);
+        assert.equal(Fn.pipe(text, Str.includes("NATIVE_CALL_RETAINED")), !admitted);
         if (!admitted) assert.equal(selected.renderCall, downstream.renderCall);
       }),
   );
@@ -212,13 +215,13 @@ it.effect(
       assert.equal(retained.renderShell, "self");
       const row = createToolPresentationHarness(retained);
       row.call({ code: "// PROGRAM_RETAINED" }, { expanded: true });
-      assert.ok(row.render(100).join("\n").includes("NATIVE_CALL_RETAINED"));
+      assert.ok(Fn.pipe(Arr.join(row.render(100), "\n"), Str.includes("NATIVE_CALL_RETAINED")));
       const startup = h.start();
       yield* Deferred.await(entered);
-      assert.ok(row.render(100).join("\n").includes("NATIVE_CALL_RETAINED"));
+      assert.ok(Fn.pipe(Arr.join(row.render(100), "\n"), Str.includes("NATIVE_CALL_RETAINED")));
       yield* Deferred.succeed(release, undefined);
       yield* step(() => startup);
-      assert.ok(row.render(100).join("\n").includes("PROGRAM_RETAINED"));
+      assert.ok(Fn.pipe(Arr.join(row.render(100), "\n"), Str.includes("PROGRAM_RETAINED")));
       assert.equal(retained.renderShell, "self");
       yield* step(() => h.start());
       assert.equal(h.resolvers.length, 1);
@@ -247,7 +250,7 @@ it.effect(
       h.visible(info(foreign));
       yield* Deferred.succeed(release, undefined);
       yield* step(() => startup);
-      assert.ok(cold.render(100).join("\n").includes("NATIVE_CALL_RETAINED"));
+      assert.ok(Fn.pipe(Arr.join(cold.render(100), "\n"), Str.includes("NATIVE_CALL_RETAINED")));
       assert.equal(h.resolve().renderCall, downstream.renderCall);
       assert.equal(getCodePreviewToolStatuses().get("codemode")?.state, "skipped-conflict");
     }),
@@ -269,10 +272,10 @@ it.effect("cancelled native startup cannot publish into a retained row after rep
     yield* Deferred.await(entered);
     yield* step(() => h.start());
     yield* step(() => stale);
-    assert.ok(cold.render(100).join("\n").includes("NATIVE_CALL_RETAINED"));
+    assert.ok(Fn.pipe(Arr.join(cold.render(100), "\n"), Str.includes("NATIVE_CALL_RETAINED")));
     const current = createToolPresentationHarness(h.resolve());
     current.call({ code: "// CURRENT_PROGRAM" }, { expanded: true });
-    assert.ok(current.render(100).join("\n").includes("CURRENT_PROGRAM"));
+    assert.ok(Fn.pipe(Arr.join(current.render(100), "\n"), Str.includes("CURRENT_PROGRAM")));
     assert.equal(h.resolvers.length, 1);
   }),
 );

@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { codePreviewSettings } from "../../../config/state";
 import { hostObject, type HostObject } from "../../../shared/untrusted-value";
@@ -15,7 +16,8 @@ export function readResultBody(
   args: HostObject | undefined,
 ): ReadResultBody {
   const text = getTextContent(result.content);
-  if (result.content?.some((part) => part.type === "image")) return { kind: "image", text };
+  if (Arr.some(result.content ?? [], (part) => part.type === "image"))
+    return { kind: "image", text };
   const details = hostObject(result.details);
   const notice = oversizedReadNotice(details, text);
   if (notice !== undefined) return { kind: "oversized", notice };

@@ -34,6 +34,9 @@ import {
   setPlainPreviewSettings,
 } from "../support/renderer-host";
 import type { CodePreviewRenderers } from "../../src/tools/renderers/shared/types";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 
 beforeAll(() => initTheme("dark", false));
 afterEach(() => {
@@ -69,7 +72,7 @@ for (const name of ["codemode"] as const)
         const row = hostToolRow(name, { code: "text('EXACT_SOURCE');" }, renderers, {
           result: output,
         });
-        assert.match(row.render(100).join("\n"), /NATIVE RESULT CONTENT/);
+        assert.match(Arr.join(row.render(100), "\n"), /NATIVE RESULT CONTENT/);
         broken = admission === "error";
         if (admission === "native") metadata = [info(name)];
         if (admission === "foreign")
@@ -102,8 +105,8 @@ for (const style of ["preview"] as const)
       const renderers = resolver("bash", () => downstream);
       assert.equal(renderers?.renderShell, "self");
       const row = hostRow(renderers);
-      assert.match(row.render(80).join("\n"), /NATIVE CALL CONTENT/);
-      assert.match(row.render(80).join("\n"), /NATIVE RESULT CONTENT/);
+      assert.match(Arr.join(row.render(80), "\n"), /NATIVE CALL CONTENT/);
+      assert.match(Arr.join(row.render(80), "\n"), /NATIVE RESULT CONTENT/);
       setPlainPreviewSettings({
         toolCallCollapsedStyle: style,
         toolCallBackground: mode,
@@ -132,7 +135,7 @@ for (const style of ["preview"] as const)
         ctrl: false,
       });
       assert.equal(mouse?.handled, true);
-      assert.match(row.render(80).join("\n"), /COMPLETE RETAINED OUTPUT/);
+      assert.match(Arr.join(row.render(80), "\n"), /COMPLETE RETAINED OUTPUT/);
       owner.retire();
     });
   }
@@ -152,7 +155,7 @@ for (const style of ["preview"] as const)
       const row = hostToolRow("tool_search", { query: "EXACT_QUERY", limit: 7 }, renderers, {
         result: { ...output, details: { loaded: ["docs_lookup"] } },
       });
-      assert.match(row.render(80).join("\n"), /NATIVE RESULT CONTENT/);
+      assert.match(Arr.join(row.render(80), "\n"), /NATIVE RESULT CONTENT/);
       setCodePreviewSettings({
         ...defaultCodePreviewSettings,
         toolCallTiming: false,
@@ -164,7 +167,7 @@ for (const style of ["preview"] as const)
         const rendered = drawToolRow(row, expanded, 80);
         assert.match(rendered, /EXACT_QUERY/);
         assert.doesNotMatch(rendered, /NATIVE RESULT CONTENT/);
-        assert.equal(rendered.includes("COMPLETE RETAINED OUTPUT"), expanded);
+        assert.equal(Fn.pipe(rendered, Str.includes("COMPLETE RETAINED OUTPUT")), expanded);
         if (expanded) assert.match(rendered, /"limit": 7/);
       }
       owner.retire();
@@ -183,7 +186,7 @@ for (const style of ["preview"] as const)
         },
       });
       row.invalidate();
-      assert.match(row.render(80).join("\n"), /COMPLETE RETAINED OUTPUT/);
+      assert.match(Arr.join(row.render(80), "\n"), /COMPLETE RETAINED OUTPUT/);
       assert.equal(first.session?.collapsedStyle, style);
       assert.equal(first.session?.mode, mode);
       assert.equal(replacementSchedules, 0);
@@ -214,7 +217,7 @@ for (const name of ["bash"] as const)
       tools: [name],
     });
     owner.publish("/project", new Set([name]), scheduler);
-    const rendered = [...call.render(80), ...result.render(80)].join("\n");
+    const rendered = Arr.join([...call.render(80), ...result.render(80)], "\n");
     assert.match(rendered, /EXACT_SOURCE/);
     assert.match(rendered, /COMPLETE RETAINED OUTPUT/);
     owner.retire();
@@ -243,11 +246,11 @@ it("cold and declined rows preserve independent downstream caches and live panel
   };
   const row = hostRow(resolver("bash", () => panels));
   row.invalidate();
-  assert.match(row.render(80).join("\n"), /CALL SAW OUTPUT/);
+  assert.match(Arr.join(row.render(80), "\n"), /CALL SAW OUTPUT/);
   owner.publish("/project", new Set(), scheduler);
   row.setExpanded(true);
-  assert.match(row.render(80).join("\n"), /CALL SAW OUTPUT/);
-  assert.match(row.render(80).join("\n"), /RESULT PANEL/);
+  assert.match(Arr.join(row.render(80), "\n"), /CALL SAW OUTPUT/);
+  assert.match(Arr.join(row.render(80), "\n"), /RESULT PANEL/);
   owner.retire();
 });
 
@@ -266,10 +269,10 @@ it("retired replay rows never adopt the replacement owner's settings", () => {
   owner.publish("/replacement", new Set(["bash"]), scheduler);
   old.invalidate();
   old.setExpanded(true);
-  assert.match(old.render(80).join("\n"), /NATIVE RESULT CONTENT/);
+  assert.match(Arr.join(old.render(80), "\n"), /NATIVE RESULT CONTENT/);
   const fresh = hostRow(resolver("bash", () => downstream));
   fresh.setExpanded(true);
-  assert.match(fresh.render(80).join("\n"), /COMPLETE RETAINED OUTPUT/);
+  assert.match(Arr.join(fresh.render(80), "\n"), /COMPLETE RETAINED OUTPUT/);
   owner.retire();
 });
 
@@ -318,16 +321,16 @@ effectIt.effect(
       const row = hostRow(resolvers[0]!("bash", () => downstream));
       const starting = dispatch("session_start");
       yield* Deferred.await(entered);
-      assert.match(row.render(80).join("\n"), /NATIVE RESULT CONTENT/);
+      assert.match(Arr.join(row.render(80), "\n"), /NATIVE RESULT CONTENT/);
       yield* Deferred.succeed(release, undefined);
       yield* step(() => starting);
       yield* step(() => dispatch("session_start"));
       assert.equal(resolvers.length, 1);
       row.invalidate();
-      assert.match(row.render(80).join("\n"), /NATIVE RESULT CONTENT/);
+      assert.match(Arr.join(row.render(80), "\n"), /NATIVE RESULT CONTENT/);
       const fresh = hostRow(resolvers[0]!("bash", () => downstream));
       fresh.setExpanded(true);
-      assert.match(fresh.render(80).join("\n"), /COMPLETE RETAINED OUTPUT/);
+      assert.match(Arr.join(fresh.render(80), "\n"), /COMPLETE RETAINED OUTPUT/);
       yield* step(() => dispatch("session_shutdown"));
     }),
 );

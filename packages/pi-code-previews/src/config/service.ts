@@ -6,6 +6,8 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import {
   AgentDirectory,
   freezeSnapshot,
@@ -115,7 +117,7 @@ function editedSettingKeys(
   // Explicit assignments remain edits even while pending saves make the snapshot stale.
   return (
     editedKeys ??
-    CODE_PREVIEW_SETTING_KEYS.filter((key) => !Equal.equals(settings[key], previous[key]))
+    Arr.filter(CODE_PREVIEW_SETTING_KEYS, (key) => !Equal.equals(settings[key], previous[key]))
   );
 }
 
@@ -202,12 +204,14 @@ export class CodePreviewSettingsService extends Context.Service<
         const normalized = normalizeSettingsWithDiagnostics(extract(read.document), fallback);
         if (normalized.diagnostics.length === 0)
           return { settings: normalized.settings, problems: [] } satisfies LoadedSettingsFile;
-        const paths = normalized.diagnostics.map((diagnostic) => diagnostic.path);
+        const paths = Arr.map(normalized.diagnostics, (diagnostic) => diagnostic.path);
         yield* Effect.logWarning(
-          `Ignored invalid code preview setting fields: ${paths.join(", ")}.`,
+          `Ignored invalid code preview setting fields: ${Arr.join(paths, ", ")}.`,
         );
-        const fields = paths.flatMap((field) =>
-          field.startsWith("settings.") ? [field.slice("settings.".length)] : [],
+        const fields = Arr.flatMap(paths, (field) =>
+          Fn.pipe(field, Str.startsWith("settings."))
+            ? [Fn.pipe(field, Str.slice("settings.".length))]
+            : [],
         );
         return {
           settings: normalized.settings,

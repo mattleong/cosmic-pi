@@ -13,13 +13,16 @@ export { stripAnsi } from "pi-cosmic-core";
 export { plainTheme };
 
 export function renderComponent(component: Component, width = 100): string {
-  return component.render(width).join("\n");
+  return Arr.join(component.render(width), "\n");
 }
 
 export const resultText = (content: AgentToolResult<unknown>["content"]): string =>
-  Arr.filterMap(content, (part) =>
-    part.type === "text" ? Result.succeed(part.text) : Result.failVoid,
-  ).join("\n");
+  Arr.join(
+    Arr.filterMap(content, (part) =>
+      part.type === "text" ? Result.succeed(part.text) : Result.failVoid,
+    ),
+    "\n",
+  );
 
 export const textResult = <Details = undefined>(
   text: string,

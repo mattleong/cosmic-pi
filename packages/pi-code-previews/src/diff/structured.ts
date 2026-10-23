@@ -1,3 +1,8 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
+import { codeUnitAt, indexOfFrom } from "pi-cosmic-core";
 import { diffLines } from "diff";
 
 type DiffLine = { readonly text: string; readonly ending: "" | "\n" | "\r\n" };
@@ -17,8 +22,9 @@ interface DiffCursor {
 
 export function createSimpleDiff(before: string, after: string): string {
   const changes = diffLines(before, after);
-  const lastChangeIndex = changes.findLastIndex((change) => change.added || change.removed);
-  if (lastChangeIndex < 0) return "";
+  const lastChange = Arr.findLastIndex(changes, (change) => change.added || change.removed);
+  if (Option.isNone(lastChange)) return "";
+  const lastChangeIndex = lastChange.value;
 
   const cursor: DiffCursor = { oldLine: 1, newLine: 1, firstChangeLine: undefined, lines: [] };
   for (let index = 0; index < changes.length; index++) {
@@ -33,7 +39,7 @@ export function createSimpleDiff(before: string, after: string): string {
 
   const { lines, firstChangeLine } = cursor;
   return firstChangeLine !== undefined && lines.length
-    ? `@@ ${firstChangeLine} @@\n${lines.join("\n")}`
+    ? `@@ ${firstChangeLine} @@\n${Arr.join(lines, "\n")}`
     : "";
 }
 
@@ -62,7 +68,7 @@ function unchangedContext(
 }
 
 function appendUnchanged(cursor: DiffCursor, value: string, beforeLastChange: boolean): void {
-  const chunkLines = splitDiffLines(value).map((line) => line.text);
+  const chunkLines = Arr.map(splitDiffLines(value), (line) => line.text);
   cursor.lines.push(...unchangedContext(chunkLines, cursor, beforeLastChange));
   cursor.oldLine += chunkLines.length;
   cursor.newLine += chunkLines.length;
@@ -87,21 +93,24 @@ function appendChangeRun(cursor: DiffCursor, changes: DiffChanges, start: number
 
 export function createSnippetDiff(before: string, after: string): string {
   const diff = createSimpleDiff(before, after);
-  return diff.slice(diff.indexOf("\n") + 1);
+  return Option.match(Fn.pipe(diff, Str.indexOf("\n")), {
+    onNone: () => diff,
+    onSome: (newline) => Fn.pipe(diff, Str.slice(newline + 1)),
+  });
 }
 
 function splitDiffLines(value: string): DiffLine[] {
   const lines: DiffLine[] = [];
   let start = 0;
   while (start < value.length) {
-    const newline = value.indexOf("\n", start);
+    const newline = indexOfFrom(value, "\n", start);
     if (newline < 0) {
-      lines.push({ text: value.slice(start), ending: "" });
+      lines.push({ text: Fn.pipe(value, Str.slice(start)), ending: "" });
       break;
     }
-    const crlf = newline > start && value.charCodeAt(newline - 1) === 13;
+    const crlf = newline > start && codeUnitAt(value, newline - 1) === 13;
     lines.push({
-      text: value.slice(start, crlf ? newline - 1 : newline),
+      text: Fn.pipe(value, Str.slice(start, crlf ? newline - 1 : newline)),
       ending: crlf ? "\r\n" : "\n",
     });
     start = newline + 1;
@@ -115,5 +124,5 @@ function displayText(line: DiffLine, counterpart: DiffLine | undefined): string 
 }
 
 function contextLines(lines: string[], firstLine: number): string[] {
-  return lines.map((content, offset) => ` ${firstLine + offset} ${content}`);
+  return Arr.map(lines, (content, offset) => ` ${firstLine + offset} ${content}`);
 }

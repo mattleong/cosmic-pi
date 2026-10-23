@@ -33,6 +33,7 @@ import {
 } from "../../src/config/store";
 import type { CodePreviewSettings } from "../../src/config/schema";
 import { createCodePreviewSettingsModel } from "../../src/settings/panel";
+import * as Rec from "effect/Record";
 
 const fileServices = Layer.merge(NodeFileSystem.layer, NodePath.layer);
 
@@ -125,7 +126,7 @@ effectTest("saveSettingsToDisk and loadSettingsFromDisk respect PI_CODING_AGENT_
 
   yield* saveSettingsToDisk(defaultCodePreviewSettings);
   const resetDocument = yield* readSavedDocument(join(agentDir, "code-previews.json"));
-  assert.equal(Object.hasOwn(resetDocument, "toolCallCollapsedStyle"), false);
+  assert.equal(Rec.has(resetDocument, "toolCallCollapsedStyle"), false);
   const reset = yield* loadSettingsFromDisk();
   assert.equal(reset?.toolCallCollapsedStyle, "preview");
 });

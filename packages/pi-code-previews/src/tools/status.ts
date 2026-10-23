@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import type { SourceInfo } from "@earendil-works/pi-coding-agent";
 import { ALL_CODE_PREVIEW_TOOLS, type CodePreviewToolName } from "./names";
 import { formatToolsSettingValue } from "./policy";
@@ -45,12 +46,12 @@ export function getCodePreviewToolStatuses(): Map<CodePreviewToolName, CodePrevi
 
 export function formatCodePreviewToolsWithState(state: CodePreviewToolStatus["state"]): string {
   return formatToolsSettingValue(
-    ALL_CODE_PREVIEW_TOOLS.filter((tool) => toolStatuses.get(tool)?.state === state),
+    Arr.filter(ALL_CODE_PREVIEW_TOOLS, (tool) => toolStatuses.get(tool)?.state === state),
   );
 }
 
 export function formatSkippedCodePreviewToolLines(): string[] {
-  return ALL_CODE_PREVIEW_TOOLS.flatMap((tool) => {
+  return Arr.flatMap(ALL_CODE_PREVIEW_TOOLS, (tool) => {
     const status = toolStatuses.get(tool);
     if (status?.state !== "skipped-conflict") return [];
     return [`  ${tool} — owned by ${formatToolOwner(status.owner)}`];

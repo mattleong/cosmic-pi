@@ -29,6 +29,9 @@ import {
 } from "../../src/syntax/projection";
 import { CodePreviewSyntaxService } from "../../src/syntax/service";
 import { getShikiStatus } from "../../src/syntax/render";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 
 type TokenFixture = { readonly content: string; readonly color: string; readonly offset: number };
 
@@ -103,8 +106,13 @@ describe("session syntax service", () => {
       );
       assert.equal(created, 1);
       assert.equal(getShikiStatus().initialized, true);
-      assert.ok(captured.spans.some((span) => span.name === "pi-code-previews.shiki.initialize"));
-      assert.equal(capturedTelemetrySnapshot(captured).includes("secret-theme-path"), false);
+      assert.ok(
+        Arr.some(captured.spans, (span) => span.name === "pi-code-previews.shiki.initialize"),
+      );
+      assert.equal(
+        Fn.pipe(capturedTelemetrySnapshot(captured), Str.includes("secret-theme-path")),
+        false,
+      );
     }).pipe(
       provideBuiltLayer(Layer.merge(layer, captured.layer)),
       Effect.ensuring(Effect.sync(() => assert.equal(disposed, 1))),
@@ -174,9 +182,9 @@ describe("session syntax service", () => {
         Effect.sync(() => {
           const telemetry = capturedTelemetrySnapshot(captured);
           assert.match(telemetry, /Shiki failed to initialize/);
-          assert.equal(telemetry.includes("secret-theme"), false);
-          assert.equal(telemetry.includes("secret/path"), false);
-          assert.equal(telemetry.includes("sk-secret"), false);
+          assert.equal(Fn.pipe(telemetry, Str.includes("secret-theme")), false);
+          assert.equal(Fn.pipe(telemetry, Str.includes("secret/path")), false);
+          assert.equal(Fn.pipe(telemetry, Str.includes("sk-secret")), false);
         }),
       ),
     );

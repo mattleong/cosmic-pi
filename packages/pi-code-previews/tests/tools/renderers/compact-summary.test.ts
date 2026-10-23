@@ -25,6 +25,10 @@ import type { CompactPhase, CompactSummary } from "../../../src/tools/compact-su
 import type { RendererState, ToolRenderContext } from "../../../src/tools/renderers/shared/types";
 import { previewBodiesDisabled, textResult as result } from "../../support/render";
 import * as Match from "effect/Match";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 
 const originalPerformance = codePreviewPerformanceConfig;
 const secret = "-----BEGIN PRIVATE KEY-----";
@@ -73,11 +77,11 @@ function summary(
 
 function codes(value: CompactSummary | undefined): string[] {
   expect(value).toBeDefined();
-  return value?.issues?.map((issue) => issue.code) ?? [];
+  return Arr.map(value?.issues ?? [], (issue) => issue.code);
 }
 
 function issueFor(value: CompactSummary | undefined, code: string) {
-  return value?.issues?.find((entry) => entry.code === code);
+  return Option.getOrUndefined(Arr.findFirst(value?.issues ?? [], (entry) => entry.code === code));
 }
 
 const tools: BuiltinCompactTool[] = ["read", "bash", "write", "edit", "grep", "find", "ls"];
@@ -128,7 +132,8 @@ describe("issues independent of hidden preview bodies", () => {
   });
 
   test("secret scanning keeps the bounded tail sample of large input", () => {
-    const content = "x".repeat(codePreviewPerformanceConfig.secretScanChars * 2) + "\n" + secret;
+    const content =
+      Fn.pipe("x", Str.repeat(codePreviewPerformanceConfig.secretScanChars * 2)) + "\n" + secret;
     expect(codes(summary("write", { content }))).toContain("possible-secrets");
   });
 
@@ -150,7 +155,12 @@ describe("issues independent of hidden preview bodies", () => {
       result("step 50", { truncation: { truncated: true }, fullOutputPath: "/tmp/pi-bash-1.log" }),
     );
     expect(value?.outcome).toBe("success");
-    expect(value?.issues?.map(({ severity }) => severity)).toEqual(["info"]);
+    expect(
+      Option.fromUndefinedOr(value?.issues).pipe(
+        Option.map((issues) => Arr.map(issues, ({ severity }) => severity)),
+        Option.getOrUndefined,
+      ),
+    ).toEqual(["info"]);
     const issue = issueFor(value, "output-truncated");
     expect(issue?.detail).toContain("/tmp/pi-bash-1.log");
     expect(issueMessageStyleProblems(issue?.message ?? "")).toEqual([]);

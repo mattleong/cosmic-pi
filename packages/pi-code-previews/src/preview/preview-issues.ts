@@ -2,6 +2,7 @@ import type { AgentToolResult, Theme } from "@earendil-works/pi-coding-agent";
 import type { ToolRenderContext } from "../tools/renderers/shared/types";
 import { Container, type Component } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
+import * as Arr from "effect/Array";
 import { invokeHostCallback } from "pi-cosmic-core";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { composeToolComponent, toolStatusLine } from "pi-cosmic-ui/tool";
@@ -98,7 +99,7 @@ function previewIssues<TArgs, TDetails, TState extends object>(
   ];
   const frame = frames.frame(context);
   const cached = frame.issues;
-  if (cached && inputs.every((value, index) => Object.is(value, cached.inputs[index])))
+  if (cached && Arr.every(inputs, (value, index) => Object.is(value, cached.inputs[index])))
     return cached.value;
   const { collapsedSummary } = planCompactPresentation({
     ...compactPresentationInput(provider, phase, result, context),

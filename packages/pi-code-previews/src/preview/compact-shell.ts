@@ -2,6 +2,7 @@ import type { AgentToolResult, Theme } from "@earendil-works/pi-coding-agent";
 import type { ToolRenderContext } from "../tools/renderers/shared/types";
 import { Box, Container, Text, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import * as Schema from "effect/Schema";
+import * as Arr from "effect/Array";
 import { composeToolComponent } from "pi-cosmic-ui/tool";
 import type { ToolCallBackgroundMode } from "../config/schema";
 import { codePreviewSettings } from "../config/state";
@@ -318,9 +319,11 @@ class CompactShell<TArgs, TDetails, TState> implements Component {
     }
     const lines = [
       this.theme.fg("toolTitle", escapeControlChars(this.options.name)),
-      ...fallbackArguments(hostValue(context.args)).map((line) => this.theme.fg("muted", line)),
+      ...Arr.map(fallbackArguments(hostValue(context.args)), (line) =>
+        this.theme.fg("muted", line),
+      ),
     ];
-    return new Text(lines.join("\n"), 0, 0);
+    return new Text(Arr.join(lines, "\n"), 0, 0);
   }
 
   private fallbackResultText(): string {

@@ -5,6 +5,9 @@ import { applyPresentationSettings, createToolPresentationHarness } from "../../
 import type { BuiltinCompactTool } from "../../src/tools/builtin-subject";
 import { builtinRenderers, previewBodiesDisabled, stripAnsi } from "../support/render";
 import * as Match from "effect/Match";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 
 const cases = [
   {
@@ -63,10 +66,10 @@ function builtin(
   return createToolPresentationHarness(renderers!, options);
 }
 function result(...texts: string[]): AgentToolResult<unknown> {
-  return { content: texts.map((text) => ({ type: "text" as const, text })), details: {} };
+  return { content: Arr.map(texts, (text) => ({ type: "text" as const, text })), details: {} };
 }
 function plain(lines: string[]) {
-  return stripAnsi(lines.join("\n"));
+  return stripAnsi(Arr.join(lines, "\n"));
 }
 beforeEach(() => applyPresentationSettings({ toolCallTiming: false, ...previewBodiesDisabled }));
 
@@ -85,17 +88,19 @@ describe("registered builtin presentation", () => {
         const harness = builtin(fixture.name, mode);
         harness.call(fixture.args);
         harness.result(result(fixture.output), { isPartial: true });
-        expect(plain(harness.render(100)).includes(fixture.retained)).toBe(false);
+        expect(Fn.pipe(plain(harness.render(100)), Str.includes(fixture.retained))).toBe(false);
         harness.result(result(fixture.output));
         for (const expanded of [true, false, true]) {
           harness.call(fixture.args, { expanded });
           harness.result(result(fixture.output), { expanded });
           const text = plain(harness.render(100));
-          expect(text.includes(fixture.retained)).toBe(expanded);
+          expect(Fn.pipe(text, Str.includes(fixture.retained))).toBe(expanded);
           for (const marker of sourceMarkers(fixture.name))
-            expect(!expanded || text.includes(marker)).toBe(true);
+            expect(!expanded || Fn.pipe(text, Str.includes(marker))).toBe(true);
           for (const width of [16, 40])
-            expect(harness.render(width).every((line) => visibleWidth(line) <= width)).toBe(true);
+            expect(Arr.every(harness.render(width), (line) => visibleWidth(line) <= width)).toBe(
+              true,
+            );
           harness.invalidate();
         }
       }

@@ -9,6 +9,9 @@ import {
 import { createNativeMcpRenderers } from "../../src/tools/native-mcp-render";
 import type { NativeMcpEvidence } from "../../src/tools/native-mcp-summary";
 import { stripAnsi } from "pi-cosmic-core";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 
 const styleNativeMcp = (definition: ToolDefinition) =>
   createNativeMcpRenderers(definition.name, definition, undefined, {
@@ -49,20 +52,23 @@ test("only a recognized owned recoverable MCP envelope is quietly suppressed", (
   Reflect.setPrototypeOf(inherited, { fullOutputPath: path });
   const cases: Array<{ result: AgentToolResult<unknown>; isError?: boolean; isPartial?: boolean }> =
     [
-      ...[
-        undefined,
-        null,
-        {},
-        { ...details, fullOutputPath: undefined },
-        { ...details, fullOutputPath: "" },
-        { ...details, fullOutputPath: " \n\t " },
-        { ...details, fullOutputPath: 42 },
-        { ...details, fullOutputPath: "x".repeat(4097) },
-        { ...details, server: "other" },
-        { ...details, tool: "other" },
-        inherited,
-        accessor,
-      ].map((metadata) => ({ result: { ...value(), details: metadata } })),
+      ...Arr.map(
+        [
+          undefined,
+          null,
+          {},
+          { ...details, fullOutputPath: undefined },
+          { ...details, fullOutputPath: "" },
+          { ...details, fullOutputPath: " \n\t " },
+          { ...details, fullOutputPath: 42 },
+          { ...details, fullOutputPath: Fn.pipe("x", Str.repeat(4097)) },
+          { ...details, server: "other" },
+          { ...details, tool: "other" },
+          inherited,
+          accessor,
+        ],
+        (metadata) => ({ result: { ...value(), details: metadata } }),
+      ),
       {
         result: value(
           `${header}LOST_OUTPUT\n\n[Could not save the full output: SAVE_FAILURE_RETAINED]`,
@@ -90,18 +96,26 @@ test("only a recognized owned recoverable MCP envelope is quietly suppressed", (
     const h = createToolPresentationHarness(styleNativeMcp(definition()));
     h.call({}, { executionStarted: true, isPartial: item.isPartial ?? false });
     h.result(item.result, { isError: item.isError ?? false, isPartial: item.isPartial ?? false });
-    assert.ok(stripAnsi(h.render(160).join("\n")).includes("Warning: truncated output"));
+    assert.ok(
+      Fn.pipe(stripAnsi(Arr.join(h.render(160), "\n")), Str.includes("Warning: truncated output")),
+    );
     h.call({}, { expanded: true });
     h.result(item.result, {
       expanded: true,
       isError: item.isError ?? false,
       isPartial: item.isPartial ?? false,
     });
-    const expanded = stripAnsi(h.render(400).join("\n"));
+    const expanded = stripAnsi(Arr.join(h.render(400), "\n"));
     for (const part of item.result.content)
       if (part.type === "text")
-        for (const line of part.text.split("\n").filter((entry) => entry.trim()))
-          assert.ok(expanded.includes(line.trim()), "Original text survives expansion");
+        for (const line of Arr.filter(
+          Str.split(part.text, "\n"),
+          (entry) => Str.trim(entry) !== "",
+        ))
+          assert.ok(
+            Fn.pipe(expanded, Str.includes(Str.trim(line))),
+            "Original text survives expansion",
+          );
   }
   assert.equal(getterInvoked, false);
 
@@ -113,6 +127,6 @@ test("only a recognized owned recoverable MCP envelope is quietly suppressed", (
     const h = createToolPresentationHarness(styleNativeMcp(definition()));
     h.call({});
     h.result(value(text));
-    assert.ok(stripAnsi(h.render(160).join("\n")).includes(text));
+    assert.ok(Fn.pipe(stripAnsi(Arr.join(h.render(160), "\n")), Str.includes(text)));
   }
 });

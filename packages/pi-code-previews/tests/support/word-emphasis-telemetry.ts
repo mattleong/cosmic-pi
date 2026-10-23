@@ -4,6 +4,7 @@ import { changedDiffBlocks, parseDiffLine, type ParsedDiffLine } from "../../src
 import { analyzeChangedLineBlock } from "../../src/diff/word/change-block";
 import { shouldEmphasizeChangedPair } from "../../src/diff/word/emphasis";
 import type { WordChangeConfidence } from "../../src/diff/word/types";
+import * as Arr from "effect/Array";
 
 type WordEmphasisTelemetry = {
   changedBlocks: number;
@@ -20,7 +21,7 @@ export function wordEmphasisTelemetry(
   limit = Number.MAX_SAFE_INTEGER,
   wordEmphasis: DiffWordEmphasis = "smart",
 ): WordEmphasisTelemetry {
-  const parsedLines = splitLinesLimited(diff, limit).map(parseDiffLine);
+  const parsedLines = Arr.map(splitLinesLimited(diff, limit), parseDiffLine);
   const telemetry = emptyWordEmphasisTelemetry();
   for (const [start, end] of changedDiffBlocks(parsedLines))
     addChangeBlockTelemetry(parsedLines.slice(start, end), telemetry, wordEmphasis);

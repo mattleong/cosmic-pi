@@ -26,6 +26,10 @@ import { offlineModels } from "../support/sdk-session";
 import { resultText } from "../support/render";
 import { setPlainPreviewSettings } from "../support/renderer-host";
 import { executeDescriptor } from "../support/tool-identity";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 
 beforeAll(() => initTheme("dark", false));
 
@@ -33,7 +37,10 @@ const runSdkHostCallback = <A>(effect: Effect.Effect<A>) => Effect.runPromise(ef
 
 const toolName = "owned_replay_replacement";
 const args = { input: "FULL_INPUT", nested: { lines: ["INPUT_HEAD", "INPUT_TAIL"] } };
-const output = Array.from({ length: 20 }, (_, index) => `FULL_OUTPUT_${index}`).join("\n");
+const output = Arr.join(
+  Array.from({ length: 20 }, (_, index) => `FULL_OUTPUT_${index}`),
+  "\n",
+);
 const recovery = "Read retained evidence from /tmp/owned-replay-receipt.txt";
 const result = {
   role: "toolResult" as const,
@@ -62,12 +69,19 @@ const setStyle = (style: "preview" | "compact") =>
 const draw = (row: ToolExecutionComponent, expanded = false) => drawToolRow(row, expanded, 180);
 
 function historicalRows(session: AgentSession) {
-  const assistant = session.messages.find((message) => message.role === "assistant");
+  const assistant = Option.getOrUndefined(
+    Arr.findFirst(session.messages, (message) => message.role === "assistant"),
+  );
   assert.ok(assistant?.role === "assistant");
-  const call = assistant.content.find((part) => part.type === "toolCall");
+  const call = Option.getOrUndefined(
+    Arr.findFirst(assistant.content, (part) => part.type === "toolCall"),
+  );
   assert.ok(call?.type === "toolCall");
-  const restored = session.messages.find(
-    (message) => message.role === "toolResult" && message.toolCallId === call.id,
+  const restored = Option.getOrUndefined(
+    Arr.findFirst(
+      session.messages,
+      (message) => message.role === "toolResult" && message.toolCallId === call.id,
+    ),
   );
   assert.ok(restored?.role === "toolResult");
   assert.deepEqual(call.arguments, args);
@@ -94,7 +108,9 @@ function historicalRows(session: AgentSession) {
   const row = makeRow(cold);
   const undrawn = makeRow(cold);
   const lazy = resolve();
-  const image = row.children.find((child) => child instanceof Image);
+  const image = Option.getOrUndefined(
+    Arr.findFirst(row.children, (child) => child instanceof Image),
+  );
   assert.ok(image, "Pi keeps the native image child outside the renderer shell");
   return { row, undrawn, lateRow: () => makeRow(lazy), restored, image };
 }
@@ -269,15 +285,18 @@ it.live(
             assert.equal(session.getToolDefinition(toolName), undefined);
             const rows = historicalRows(session);
             retained.push(rows);
-            const coldText = rows.row.render(180).join("\n");
-            assert.ok(coldText.includes("FULL_INPUT"));
-            assert.ok(coldText.includes("FULL_OUTPUT_19"));
-            assert.ok(!coldText.includes("OWNED_INPUT"));
-            assert.ok(!coldText.includes("OWNED_SUMMARY"));
+            const coldText = Arr.join(rows.row.render(180), "\n");
+            assert.ok(Fn.pipe(coldText, Str.includes("FULL_INPUT")));
+            assert.ok(Fn.pipe(coldText, Str.includes("FULL_OUTPUT_19")));
+            assert.ok(!Fn.pipe(coldText, Str.includes("OWNED_INPUT")));
+            assert.ok(!Fn.pipe(coldText, Str.includes("OWNED_SUMMARY")));
             yield* step(() => bind(session));
             const readyText = draw(rows.row);
             assert.ok(
-              readyText.includes(startupStyle === "compact" ? "OWNED_SUMMARY" : "OWNED_INPUT"),
+              Fn.pipe(
+                readyText,
+                Str.includes(startupStyle === "compact" ? "OWNED_SUMMARY" : "OWNED_INPUT"),
+              ),
             );
             assert.deepEqual(authority(session), beforePublish.get(session.sessionId));
           }),
@@ -296,7 +315,7 @@ it.live(
       assert.deepEqual(shutdowns, ["resume"]);
       assert.deepEqual(authority(resumed), initialAuthority);
       setStyle("preview");
-      assert.ok(draw(resumedRows.row).includes("OWNED_SUMMARY"));
+      assert.ok(Fn.pipe(draw(resumedRows.row), Str.includes("OWNED_SUMMARY")));
 
       startupStyle = "preview";
       setStyle("compact");
@@ -308,41 +327,45 @@ it.live(
       const forkedRows = retained[1]!;
       assert.notEqual(forked, resumed);
       assert.notEqual(forked.sessionFile, sessionFile);
-      assert.ok(forked.sessionFile?.startsWith(`${directory}/sessions/`));
+      assert.ok(forked.sessionFile);
+      assert.ok(Fn.pipe(forked.sessionFile, Str.startsWith(`${directory}/sessions/`)));
       assert.equal(forked.sessionManager.getHeader()?.parentSession, sessionFile);
       assert.equal(
-        forked.messages.some(
+        Arr.some(
+          forked.messages,
           (message) => message.role === "user" && message.content === selectedText,
         ),
         false,
       );
       assert.ok(
-        forked.messages.some(
+        Arr.some(
+          forked.messages,
           (message) => message.role === "toolResult" && message.toolCallId === result.toolCallId,
         ),
       );
       assert.deepEqual(starts, ["startup", "resume", "fork"]);
       assert.deepEqual(shutdowns, ["resume", "fork"]);
       assert.deepEqual(authority(forked), initialAuthority);
-      assert.ok(!draw(forkedRows.row).includes("OWNED_SUMMARY"));
+      assert.ok(!Fn.pipe(draw(forkedRows.row), Str.includes("OWNED_SUMMARY")));
       for (const row of [resumedRows.row, resumedRows.undrawn])
-        assert.ok(draw(row).includes("OWNED_SUMMARY"));
+        assert.ok(Fn.pipe(draw(row), Str.includes("OWNED_SUMMARY")));
       const lazyOldRow = resumedRows.lateRow();
       const lazyText = draw(lazyOldRow, true);
-      assert.ok(!lazyText.includes("OWNED_INPUT"));
-      assert.ok(!lazyText.includes("OWNED_SUMMARY"));
-      assert.ok(lazyText.includes("FULL_INPUT"));
-      assert.ok(lazyText.includes("FULL_OUTPUT_19"));
-      assert.ok(lazyText.includes(recovery));
+      assert.ok(!Fn.pipe(lazyText, Str.includes("OWNED_INPUT")));
+      assert.ok(!Fn.pipe(lazyText, Str.includes("OWNED_SUMMARY")));
+      assert.ok(Fn.pipe(lazyText, Str.includes("FULL_INPUT")));
+      assert.ok(Fn.pipe(lazyText, Str.includes("FULL_OUTPUT_19")));
+      assert.ok(Fn.pipe(lazyText, Str.includes(recovery)));
 
       for (const rows of retained) {
         for (const expanded of [true, false, true]) {
           const text = draw(rows.row, expanded);
           if (expanded) {
             for (const input of ["FULL_INPUT", "INPUT_HEAD", "INPUT_TAIL"])
-              assert.ok(text.includes(input));
-            for (const line of output.split("\n")) assert.ok(text.includes(line));
-            assert.ok(text.includes(recovery));
+              assert.ok(Fn.pipe(text, Str.includes(input)));
+            for (const line of Str.split(output, "\n"))
+              assert.ok(Fn.pipe(text, Str.includes(line)));
+            assert.ok(Fn.pipe(text, Str.includes(recovery)));
             assert.deepEqual(observedArgs, args);
             assert.deepEqual(observedResult, { content: result.content, details: result.details });
           }
@@ -351,7 +374,7 @@ it.live(
         }
       }
       assert.deepEqual(authority(forked), beforePublish.get(forked.sessionId));
-      const registered = forked.getAllTools().filter((entry) => entry.name === toolName);
+      const registered = Arr.filter(forked.getAllTools(), (entry) => entry.name === toolName);
       assert.equal(registered.length, 1);
       assert.equal(registered[0]?.exposure, "model-only");
       assert.equal(forked.getActiveToolNames().includes(toolName), false);

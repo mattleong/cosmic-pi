@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { evaluateWordEmphasisAccuracy } from "../tests/support/word-emphasis-accuracy";
 import { benchLog, benchTable } from "./helpers";
 
@@ -23,7 +24,8 @@ benchTable([
   },
 ]);
 
-const misses = report.cases.filter(
+const misses = Arr.filter(
+  report.cases,
   (result) =>
     !result.exactSpans ||
     (result.pairs !== undefined &&
@@ -32,7 +34,7 @@ const misses = report.cases.filter(
 if (misses.length > 0) {
   benchLog("Cases with misses");
   benchTable(
-    misses.map((result) => ({
+    Arr.map(misses, (result) => ({
       case: result.name,
       "exact span lines": `${result.exactSpanLines}/${result.spanLines}`,
       "span false +": result.spans.falsePositive,
@@ -44,7 +46,8 @@ if (misses.length > 0) {
 }
 
 function exactPairCases(): number {
-  return report.cases.filter(
+  return Arr.filter(
+    report.cases,
     (result) => result.pairs?.falsePositive === 0 && result.pairs.falseNegative === 0,
   ).length;
 }

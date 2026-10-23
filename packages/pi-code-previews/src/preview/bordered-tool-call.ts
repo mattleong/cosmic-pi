@@ -7,6 +7,10 @@ import {
   type Component,
 } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import { indexOfFrom } from "pi-cosmic-core";
 import type { RendererState } from "../tools/renderers/shared/types";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { renderExpansionAffordance, toolExpandHint } from "pi-cosmic-ui/tool";
@@ -150,14 +154,14 @@ export class BorderedToolCall implements Component {
     const expand = this.expandLabel ? ` ${this.expandLabel} ` : "";
     return [
       renderBorder(width, border, "╭", "╮", timing),
-      ...this.body.render(innerWidth).map((line) => this.frameLine(line, innerWidth, border)),
+      ...Arr.map(this.body.render(innerWidth), (line) => this.frameLine(line, innerWidth, border)),
       renderBorder(width, border, "╰", "╯", expand),
     ];
   }
 
   private frameLine(line: string, innerWidth: number, border: (value: string) => string): string {
     const truncated = clipToWidth(line, innerWidth, "");
-    const padding = " ".repeat(Math.max(0, innerWidth - visibleWidth(truncated)));
+    const padding = Fn.pipe(" ", Str.repeat(Math.max(0, innerWidth - visibleWidth(truncated))));
     if (startsWithDiffBackground(truncated)) {
       return `${border("│")} ${truncated}${padding} \x1b[49m${border("│")}${RESET_ANSI}`;
     }
@@ -177,16 +181,16 @@ function renderBorder(
   const innerWidth = width - 2;
   const labelWidth = visibleWidth(label);
   if (labelWidth === 0 || labelWidth > innerWidth)
-    return border(`${open}${"─".repeat(innerWidth)}${close}`);
-  return `${border(open)}${border("─".repeat(innerWidth - labelWidth))}${label}${border(close)}`;
+    return border(`${open}${Fn.pipe("─", Str.repeat(innerWidth))}${close}`);
+  return `${border(open)}${border(Fn.pipe("─", Str.repeat(innerWidth - labelWidth)))}${label}${border(close)}`;
 }
 
 function startsWithDiffBackground(line: string): boolean {
-  if (!line.startsWith("\x1b[48;2;")) return false;
-  const end = line.indexOf("m", 7);
+  if (!Fn.pipe(line, Str.startsWith("\x1b[48;2;"))) return false;
+  const end = indexOfFrom(line, "m", 7);
   if (end < 0) return false;
-  const channels = line.slice(7, end).split(";");
-  return channels.length === 3 && channels.every((channel) => /^\d+$/.test(channel));
+  const channels = Str.split(Fn.pipe(line, Str.slice(7, end)), ";");
+  return channels.length === 3 && Arr.every(channels, (channel) => /^\d+$/.test(channel));
 }
 
 export function hiddenPreviewExpandHintForShell(

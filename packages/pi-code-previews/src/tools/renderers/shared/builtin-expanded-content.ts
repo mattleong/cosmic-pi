@@ -1,4 +1,6 @@
 import * as Predicate from "effect/Predicate";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import type { AgentToolResult, Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Text, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import type { BuiltinCompactTool } from "../../builtin-subject";
@@ -41,11 +43,15 @@ export function builtinExpandedContent(tool: BuiltinCompactTool, cwd: string): P
       const container = new Container();
       const operations = tool === "edit" ? getEditPreviewOperations(input) : [];
       const edits = ownField(input, "edits");
-      const completeEdits = Array.isArray(edits) && operations.length === edits.length;
+      const completeEdits = Arr.isArray(edits) && operations.length === edits.length;
       const options = builtinOptionLabels(tool, hostValue(args), completeEdits);
       if (options.length)
         container.addChild(
-          expandedSection(theme, undefined, new Text(theme.fg("muted", options.join(" · ")), 0, 0)),
+          expandedSection(
+            theme,
+            undefined,
+            new Text(theme.fg("muted", Arr.join(options, " · ")), 0, 0),
+          ),
         );
       const command = ownField(input, "command");
       if (tool === "bash" && Predicate.isString(command))
@@ -88,8 +94,8 @@ function splitAgentNotice(tool: BuiltinCompactTool, result: AgentToolResult<unkn
     return { output: notice === undefined ? output : "", notice };
   }
   if (tool === "edit" || tool === "write") return { output, notice: undefined };
-  const split = (tool === "bash" ? splitShellNotice : splitListingNotice)(output.split("\n"));
-  return { output: split.lines.join("\n"), notice: split.notice };
+  const split = (tool === "bash" ? splitShellNotice : splitListingNotice)(Str.split(output, "\n"));
+  return { output: Arr.join(split.lines, "\n"), notice: split.notice };
 }
 
 function builtinResultBody(
@@ -121,18 +127,18 @@ function builtinResultBody(
   if (tool === "write") return writeResultBody(result, output, theme, context, input, path);
   if (tool === "grep")
     return new Text(
-      renderGrepOutputLines(output, theme, input, context.invalidate).join("\n"),
+      Arr.join(renderGrepOutputLines(output, theme, input, context.invalidate), "\n"),
       0,
       0,
     );
   if (tool === "find" || tool === "ls") {
     const pathList = createPathListRenderer(
-      output.split("\n"),
+      Str.split(output, "\n"),
       cwd,
       theme,
       codePreviewSettings.pathIcons,
     );
-    return new Text(pathList.renderChunk(pathList.lines).join("\n"), 0, 0);
+    return new Text(Arr.join(pathList.renderChunk(pathList.lines), "\n"), 0, 0);
   }
   return new Text(escapeControlChars(output), 0, 0);
 }
@@ -184,7 +190,8 @@ function builtinOptionLabels(
     "file_path",
     ...(tool === "grep" || tool === "find" ? ["pattern"] : []),
   ]);
-  return Object.entries(args ?? {}).flatMap(([key, value]) => {
+  // @effect-diagnostics-next-line preferEffectRecord:off -- args is an untyped host value that need not be a record.
+  return Arr.flatMap(Object.entries(args ?? {}), ([key, value]) => {
     if (shown.has(key) || value === undefined || value === false || value === null) return [];
     if (target.has(key) && Predicate.isString(value) && headingShowsExactly(value)) return [];
     if (value === true) return [key];
@@ -203,7 +210,7 @@ function commandBody(command: string, theme: Theme, invalidate?: () => void): Co
     render(width) {
       if (exactInHeading && visibleWidth(command) <= width - 30) return [];
       highlighted ??= new Text(
-        renderHighlightedText(command, "bash", theme, invalidate).join("\n"),
+        Arr.join(renderHighlightedText(command, "bash", theme, invalidate), "\n"),
         0,
         0,
       );

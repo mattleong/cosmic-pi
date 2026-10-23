@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import {
   ToolExecutionComponent,
   type AgentToolResult,
@@ -186,12 +187,12 @@ export function createToolPresentationHarness<TArgs, TDetails, TState = EmptyRec
     },
     invalidate,
     cycle(cycleArgs, value, plan = {}) {
-      return (plan.states ?? [false, true, false, true]).map((expanded) => {
+      return Arr.map(plan.states ?? [false, true, false, true], (expanded) => {
         const state = { ...plan.overrides?.(expanded), expanded };
         if (plan.invalidate === "before") invalidate();
         harness.call(cycleArgs, state);
         if (value) harness.result(value, state);
-        const text = harness.render().join("\n");
+        const text = Arr.join(harness.render(), "\n");
         if (plan.invalidate === "after") invalidate();
         return { expanded, text };
       });
@@ -232,7 +233,7 @@ export function hostToolRow(
 export function drawToolRow(row: ToolExecutionComponent, expanded = false, width = 120): string {
   row.setExpanded(expanded);
   row.invalidate();
-  return row.render(width).join("\n");
+  return Arr.join(row.render(width), "\n");
 }
 
 export const toolRowFrames = (row: ToolExecutionComponent) => [

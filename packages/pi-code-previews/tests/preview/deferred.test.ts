@@ -10,6 +10,9 @@ import {
 import { plainTheme } from "../support/render";
 import { cachedDeferredPreview, cachedPreview } from "../../src/tools/renderers/shared/cache";
 import { effectTest, eventLoopTurn, step } from "../support/effect-test";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 
 afterEach(() => clearCodePreviewSessionCapability());
 
@@ -48,7 +51,7 @@ test("large previews remain synchronous before session acquisition", () => {
   let computes = 0;
   const rendered = preview(
     state,
-    "a".repeat(20_000),
+    Fn.pipe("a", Str.repeat(20_000)),
     () => {
       computes++;
       return component("ready");
@@ -56,7 +59,7 @@ test("large previews remain synchronous before session acquisition", () => {
     () => assert.fail("outside-session preview must not invalidate"),
   );
   assert.equal(computes, 1);
-  assert.match(rendered.render(80).join("\n"), /ready/);
+  assert.match(Arr.join(rendered.render(80), "\n"), /ready/);
 });
 
 effectTest(
@@ -69,7 +72,7 @@ effectTest(
     let invalidations = 0;
     preview(
       state,
-      "a".repeat(20_000),
+      Fn.pipe("a", Str.repeat(20_000)),
       () => {
         firstComputes++;
         return component("obsolete");
@@ -78,7 +81,7 @@ effectTest(
     );
     const current = preview(
       state,
-      "b".repeat(20_000),
+      Fn.pipe("b", Str.repeat(20_000)),
       () => {
         secondComputes++;
         return component("current");
@@ -89,14 +92,14 @@ effectTest(
     assert.equal(firstComputes, 0);
     assert.equal(secondComputes, 1);
     assert.equal(invalidations, 1);
-    assert.match(current.render(80).join("\n"), /current/);
+    assert.match(Arr.join(current.render(80), "\n"), /current/);
   },
 );
 
 effectTest("a failing replacement cannot reuse a cancelled deferred preview", function* () {
   installTestCapability();
   const state = {};
-  const source = "a".repeat(20_000);
+  const source = Fn.pipe("a", Str.repeat(20_000));
   const obsolete = preview(
     state,
     source,
@@ -116,7 +119,7 @@ effectTest("a failing replacement cannot reuse a cancelled deferred preview", fu
   );
   assert.notEqual(current, obsolete);
   yield* step(() => eventLoopTurn());
-  assert.match(current.render(80).join("\n"), /ready/);
+  assert.match(Arr.join(current.render(80), "\n"), /ready/);
 });
 
 effectTest("deferred publication isolates a throwing host invalidation callback", function* () {
@@ -124,12 +127,12 @@ effectTest("deferred publication isolates a throwing host invalidation callback"
   const state = {};
   const current = preview(
     state,
-    "x".repeat(20_000),
+    Fn.pipe("x", Str.repeat(20_000)),
     () => component("ready"),
     () => {
       throw new Error("host invalidation failed");
     },
   );
   yield* step(() => eventLoopTurn());
-  assert.match(current.render(80).join("\n"), /ready/);
+  assert.match(Arr.join(current.render(80), "\n"), /ready/);
 });

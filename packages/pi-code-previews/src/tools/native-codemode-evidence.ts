@@ -1,5 +1,8 @@
 import * as Predicate from "effect/Predicate";
+import * as Str from "effect/String";
 import * as Schema from "effect/Schema";
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
 import { decodeUnknownOrUndefined, invokeHostCallback } from "pi-cosmic-core";
 import { HostContainerSchema, type HostContainer } from "../shared/untrusted-value";
 import { ownData } from "./native-safe-content";
@@ -38,7 +41,7 @@ function callRecord(value: HostContainer | undefined): NativeCodemodeCall | unde
   return invokeHostCallback(() => {
     if (!Predicate.isObject(value)) return undefined;
     const input: Partial<Record<string, typeof FieldValue.Type>> = {};
-    for (const key of Object.keys(Call.fields)) {
+    for (const key of Rec.keys(Call.fields)) {
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (!descriptor) continue;
       if (!("value" in descriptor)) return undefined;
@@ -52,9 +55,9 @@ function callRecord(value: HostContainer | undefined): NativeCodemodeCall | unde
 
 export function nativeCodemodeEvidence(value: HostContainer | undefined): NativeCallEvidence {
   const fullOutputPath = ownData(value, "fullOutputPath", Text);
-  const recovery = fullOutputPath?.trim() ? { fullOutputPath } : {};
+  const recovery = fullOutputPath && Str.trim(fullOutputPath) ? { fullOutputPath } : {};
   const records = ownData(value, "calls", HostContainerSchema);
-  if (!invokeHostCallback(() => Array.isArray(records), false))
+  if (!invokeHostCallback(() => Arr.isArray(records), false))
     return { kind: "unavailable", ...recovery };
   const recordCount = ownData(records, "length", Schema.Natural);
   if (recordCount === undefined) return { kind: "unavailable", ...recovery };

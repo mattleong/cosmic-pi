@@ -15,6 +15,10 @@ import { nativeMcpSummary } from "../../src/tools/native-mcp-summary";
 import { nativeMcpIdentity } from "../../src/tools/native-mcp-identity";
 import { stripAnsi } from "pi-cosmic-core";
 import type { HostValue } from "../../src/shared/untrusted-value";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
 
 const styleNativeMcp = (
   definition: ToolDefinition,
@@ -28,7 +32,7 @@ type ResourceTool = "list_mcp_resources" | "list_mcp_resource_templates" | "read
 function dynamicTool(
   server = "docs",
   tool = "lookup",
-  name = `mcp__${server}__${tool}`.replaceAll(/[^A-Za-z0-9_]/g, "_"),
+  name = Fn.pipe(`mcp__${server}__${tool}`, Str.replaceAll(/[^A-Za-z0-9_]/g, "_")),
 ) {
   const definition: NativeDefinition = {
     name,
@@ -37,7 +41,7 @@ function dynamicTool(
     parameters: { type: "object", properties: { query: { type: "string" } } },
     outputSchema: { type: "object", required: ["content"] },
     exposure: "direct",
-    namespace: { name: `mcp__${server.replaceAll("-", "_")}` },
+    namespace: { name: `mcp__${Fn.pipe(server, Str.replaceAll("-", "_"))}` },
     annotations: { readOnlyHint: true, openWorldHint: true },
     execute: () => Promise.resolve({ content: [], details: { server, tool } }),
   };
@@ -92,8 +96,8 @@ const status = (summary: CompactSummary | undefined) =>
   summary ? compactStatus("settled", summary) : undefined;
 
 const hasControls = (row: string) =>
-  Array.from(row.replaceAll("\u001b[0m", "")).some((character) => {
-    const code = character.codePointAt(0) ?? 0;
+  Arr.some(Array.from(Fn.pipe(row, Str.replaceAll("\u001b[0m", ""))), (character) => {
+    const code = Option.getOrElse(Str.codePointAt(character, 0), () => 0);
     return code < 0x20 || (code >= 0x7f && code <= 0x9f);
   });
 
@@ -116,7 +120,7 @@ test("malformed, foreign, or accessor details decline without invoking getters",
     { server: "docs", tool: "list_mcp_resources" },
     { server: "docs", tool: 7 },
     { ...docs, fullOutputPath: 3 },
-    { server: "x".repeat(5000), tool: "lookup" },
+    { server: Fn.pipe("x", Str.repeat(5000)), tool: "lookup" },
     accessor,
   ])
     assert.equal(summarize(dynamicTool(), result("done", details), {}), undefined);
@@ -146,7 +150,9 @@ test("errors are short human issues while expansion keeps full native text and r
   ]) {
     const summary = summarize(dynamicTool(), result(text, docs), {}, true);
     assert.equal(status(summary), "error");
-    const error = summary?.issues?.find((issue) => issue.severity === "error");
+    const error = Option.getOrUndefined(
+      Arr.findFirst(summary?.issues ?? [], (issue) => issue.severity === "error"),
+    );
     assert.ok(error);
     assert.deepEqual(
       issueMessageStyleProblems(error.message, { forbidden: ["mcp__docs__lookup", "Run /mcp"] }),
@@ -161,8 +167,8 @@ test("errors are short human issues while expansion keeps full native text and r
       result("MCP server docs requires sign-in. Run /mcp to sign in.", docs),
       { overrides: () => ({ isError: true }) },
     );
-    for (const frame of frames.filter((entry) => entry.expanded))
-      assert.ok(stripAnsi(frame.text).includes("Run /mcp to sign in."), style);
+    for (const frame of Arr.filter(frames, (entry) => entry.expanded))
+      assert.ok(Fn.pipe(stripAnsi(frame.text), Str.includes("Run /mcp to sign in.")), style);
   }
 });
 
@@ -172,13 +178,13 @@ for (const style of ["compact", "preview"] as const)
       settings(style, background);
       const original = dynamicTool();
       const tool = styleNativeMcp(original);
-      const long = `${"L".repeat(600)}END`;
+      const long = `${Fn.pipe("L", Str.repeat(600))}END`;
       const args = { query: "effect services", nested: { depth: [1, { flag: true }] }, long };
       const value: AgentToolResult<unknown> = {
         content: [
           {
             type: "text",
-            text: `FIRST_OUTPUT\n${"middle\n".repeat(30)}LAST_OUTPUT\n\n[Full output: /tmp/pi-mcp-full.txt (read it with offset/limit)]`,
+            text: `FIRST_OUTPUT\n${Fn.pipe("middle\n", Str.repeat(30))}LAST_OUTPUT\n\n[Full output: /tmp/pi-mcp-full.txt (read it with offset/limit)]`,
           },
           { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
         ],
@@ -201,7 +207,7 @@ for (const style of ["compact", "preview"] as const)
           "/tmp/pi-mcp-full.txt",
           "image/png",
         ])
-          assert.ok(text.includes(marker), marker.slice(0, 40));
+          assert.ok(Fn.pipe(text, Str.includes(marker)), Fn.pipe(marker, Str.slice(0, 40)));
       }
       assert.deepEqual(value, before);
 
@@ -209,24 +215,27 @@ for (const style of ["compact", "preview"] as const)
         styleNativeMcp(resourceTool("read_mcp_resource")),
         { width: 4000 },
       );
-      const uri = `docs://guide/${"chapter/".repeat(40)}end`;
+      const uri = `docs://guide/${Fn.pipe("chapter/", Str.repeat(40))}end`;
       resource.call({ server: "docs", uri }, { expanded: true });
       resource.result(result("Resource body", { server: "docs", tool: "read_mcp_resource" }), {
         expanded: true,
       });
-      const text = stripAnsi(resource.render().join("\n"));
-      assert.ok(text.includes(`"uri": "${uri}"`));
-      assert.ok(text.includes("Resource body"));
+      const text = stripAnsi(Arr.join(resource.render(), "\n"));
+      assert.ok(Fn.pipe(text, Str.includes(`"uri": "${uri}"`)));
+      assert.ok(Fn.pipe(text, Str.includes("Resource body")));
     });
 
 for (const style of ["compact", "preview"] as const)
   test(`${style} collapsed previews stay bounded and terminal-control safe`, () => {
     settings(style);
     const hostile = "\u001b[31mRED\u001b[0m\u001b]0;title\u0007\r\u009b2J";
-    const output = Array.from(
-      { length: 40 },
-      (_, index) => `line ${index} ${hostile} ${"x".repeat(300)}`,
-    ).join("\n");
+    const output = Arr.join(
+      Array.from(
+        { length: 40 },
+        (_, index) => `line ${index} ${hostile} ${Fn.pipe("x", Str.repeat(300))}`,
+      ),
+      "\n",
+    );
     const tool = styleNativeMcp(dynamicTool(`docs${hostile}`, `look${hostile}up`));
     for (const partial of [true, false]) {
       const h = createToolPresentationHarness(tool);
@@ -256,7 +265,7 @@ for (const style of ["compact", "preview"] as const)
     const h = createToolPresentationHarness(styleNativeMcp(dynamicTool(), probe.schedule));
     h.call({ query: "effect" }, { executionStarted: true });
     h.result(result("\u001b[2K\nIndexing 3/10", docs), { isPartial: true });
-    assert.ok(stripAnsi(h.render(100).join("\n")).includes("Indexing 3/10"));
+    assert.ok(Fn.pipe(stripAnsi(Arr.join(h.render(100), "\n")), Str.includes("Indexing 3/10")));
     assert.ok(probe.scheduled > 0);
     h.result(result("done", docs));
     h.render(100);

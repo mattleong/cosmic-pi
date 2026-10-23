@@ -4,6 +4,7 @@ import { expect, it } from "vitest";
 import { withCodePreviewRenderers } from "../../index";
 import { createToolPresentationHarness, withPresentationSettings } from "../../testing";
 import { resultText } from "../support/render";
+import * as Arr from "effect/Array";
 
 for (const style of ["preview", "compact"] as const) {
   for (const mode of ["on", "off", "border"] as const) {
@@ -38,7 +39,7 @@ for (const style of ["preview", "compact"] as const) {
             states: [true, false, true],
             invalidate: "after",
           });
-          for (const frame of frames.filter((entry) => entry.expanded)) {
+          for (const frame of Arr.filter(frames, (entry) => entry.expanded)) {
             expect(frame.text).toContain(JSON.stringify(exactInput));
             expect(frame.text).toContain("all arguments");
             expect(frame.text).toContain("/tmp/saved.txt");

@@ -2,6 +2,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as Arr from "effect/Array";
 import { invokeHostCallback } from "pi-cosmic-core";
 import {
   bundledLanguages,
@@ -22,8 +23,9 @@ const SPECIAL_LANGUAGES = [
 
 export function isShikiLanguage(language: string): language is BundledLanguage | SpecialLanguage {
   return (
+    // @effect-diagnostics-next-line preferEffectRecord:off -- narrows an arbitrary string; Rec.has requires a known key.
     Object.hasOwn(bundledLanguages, language) ||
-    SPECIAL_LANGUAGES.some((special) => special === language)
+    Arr.some(SPECIAL_LANGUAGES, (special) => special === language)
   );
 }
 

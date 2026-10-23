@@ -1,10 +1,16 @@
 import * as Schema from "effect/Schema";
+import * as Order from "effect/Order";
 import * as Predicate from "effect/Predicate";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Rec from "effect/Record";
 import {
   decodeUnknownOrUndefined,
   isSensitiveDiagnosticKey,
   sanitizeDiagnosticContent,
   sanitizeTerminalLine,
+  codeUnitAt,
 } from "pi-cosmic-core";
 
 const Args = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json));
@@ -27,7 +33,8 @@ function credentialStart(value: string, partial: boolean): number | undefined {
 
 export function safeNativeArgumentText(value: string, partial = false): string {
   const boundary = credentialStart(value, partial);
-  const redacted = boundary !== undefined ? `${value.slice(0, boundary)}[REDACTED]` : value;
+  const redacted =
+    boundary !== undefined ? `${Fn.pipe(value, Str.slice(0, boundary))}[REDACTED]` : value;
   return sanitizeTerminalLine(sanitizeDiagnosticContent(redacted, { maximumLength: 4096 }));
 }
 
@@ -111,9 +118,9 @@ class ArgumentParser {
     const start = this.cursor++;
     let value = "";
     while (this.cursor < this.source.length) {
-      const character = this.source.charAt(this.cursor++);
+      const character = this.source[this.cursor++] ?? "";
       if (character === '"') return this.closedString(value, start, isKey);
-      if (character.charCodeAt(0) < 32) return undefined;
+      if (codeUnitAt(character, 0) < 32) return undefined;
       if (character !== "\\") {
         value += character;
         continue;
@@ -128,12 +135,12 @@ class ArgumentParser {
   }
 
   private escape(): EscapeRead {
-    const escape = this.source.charAt(this.cursor++);
+    const escape = this.source[this.cursor++] ?? "";
     if (escape !== "u") {
       const decodedEscape = stringEscapes.get(escape);
       return decodedEscape === undefined ? undefined : { kind: "text", text: decodedEscape };
     }
-    const hex = this.source.slice(this.cursor, this.cursor + 4);
+    const hex = Fn.pipe(this.source, Str.slice(this.cursor, this.cursor + 4));
     if (!/^[0-9a-f]{0,4}$/iu.test(hex)) return undefined;
     if (hex.length < 4) {
       this.cursor = this.source.length;
@@ -151,8 +158,8 @@ class ArgumentParser {
 
   private unterminatedString(text: string, start: number, isKey: boolean): Value | undefined {
     if (!this.truncated) return undefined;
-    const last = text.charCodeAt(text.length - 1);
-    const value = last >= 0xd800 && last <= 0xdbff ? text.slice(0, -1) : text;
+    const last = codeUnitAt(text, text.length - 1);
+    const value = last >= 0xd800 && last <= 0xdbff ? Fn.pipe(text, Str.slice(0, -1)) : text;
     if (!isKey && credentialStart(value, true) !== undefined)
       this.redactions.push({ start, end: this.cursor });
     return { complete: false, scalar: value };
@@ -227,23 +234,25 @@ class ArgumentParser {
     while (
       this.cursor < this.source.length &&
       !whitespace(this.source[this.cursor]) &&
-      ![",", "}", "]"].includes(this.source.charAt(this.cursor))
+      ![",", "}", "]"].includes(this.source[this.cursor] ?? "")
     )
       this.cursor++;
     if (this.atEnd() && this.truncated) {
-      const token = this.source.slice(start, this.cursor);
-      const literal = ["true", "false", "null"].some((word) => word.startsWith(token));
+      const token = Fn.pipe(this.source, Str.slice(start, this.cursor));
+      const literal = Arr.some(["true", "false", "null"], (word) =>
+        Fn.pipe(word, Str.startsWith(token)),
+      );
       const number = /^-$|^-?(?:0|[1-9]\d*)(?:(?:\.\d+)?(?:[eE][+-]?\d*)?|\.\d*)$/u.test(token);
       return literal || number ? unfinished() : undefined;
     }
-    const scalar = decodeScalar(this.source.slice(start, this.cursor));
+    const scalar = decodeScalar(Fn.pipe(this.source, Str.slice(start, this.cursor)));
     return scalar === undefined ? undefined : { complete: true, scalar };
   }
 }
 
 function mergedRedactions(redactions: readonly Redaction[]): Redaction[] {
   const spans: Redaction[] = [];
-  for (const span of redactions.toSorted((left, right) => left.start - right.start)) {
+  for (const span of Arr.sortWith(redactions, (redaction) => redaction.start, Order.Number)) {
     const previous = spans.at(-1);
     if (previous && span.start <= previous.end)
       spans[spans.length - 1] = { start: previous.start, end: Math.max(previous.end, span.end) };
@@ -254,21 +263,22 @@ function mergedRedactions(redactions: readonly Redaction[]): Redaction[] {
 
 function redactedText(raw: string, redactions: readonly Redaction[]): string {
   let text = raw;
-  for (const span of mergedRedactions(redactions).toReversed())
-    text = `${text.slice(0, span.start)}"[REDACTED]"${text.slice(span.end)}`;
+  for (const span of Arr.reverse(mergedRedactions(redactions)))
+    text = `${Fn.pipe(text, Str.slice(0, span.start))}"[REDACTED]"${Fn.pipe(text, Str.slice(span.end))}`;
   return text;
 }
 
 export function nativeArgumentPreview(raw: string): NativeArgumentPreview | undefined {
   if (!raw || raw.length > 4096) return undefined;
   const decoded = decodeArgs(raw);
-  const truncated = decoded === undefined && raw.length === PREVIEW_LENGTH && raw.endsWith("...");
+  const truncated =
+    decoded === undefined && raw.length === PREVIEW_LENGTH && Fn.pipe(raw, Str.endsWith("..."));
   if (decoded === undefined && !truncated) return undefined;
-  const parser = new ArgumentParser(truncated ? raw.slice(0, -3) : raw, truncated);
+  const parser = new ArgumentParser(truncated ? Fn.pipe(raw, Str.slice(0, -3)) : raw, truncated);
   const root = parser.root();
   if (!root || !parser.atEnd() || root.complete === truncated) return undefined;
   return {
-    values: Object.fromEntries(parser.fields),
+    values: Rec.fromEntries(parser.fields),
     partialFields: parser.partialFields,
     complete: !truncated,
     text: sanitizeDiagnosticContent(redactedText(raw, parser.redactions), { maximumLength: 4096 }),

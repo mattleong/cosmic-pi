@@ -22,6 +22,7 @@ import { codePreviewApplicationLayer } from "../../src/layer";
 import { codePreviewSettingsSubcommand } from "../../src/settings/controller";
 import { step } from "../support/effect-test";
 import { inertScheduler } from "../support/renderer-host";
+import * as Arr from "effect/Array";
 
 const decodeSavedSettings = Schema.decodeUnknownSync(
   Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json)),
@@ -64,7 +65,7 @@ const overlappingSettingsCommands = (commands: readonly string[]) =>
     const command = codePreviewSettingsSubcommand();
     const signal = yield* Effect.abortSignal;
     const ctx = extensionContextFixture({ signal });
-    const pending = commands.map((args) => Promise.resolve(command.handler(args, ctx)));
+    const pending = Arr.map(commands, (args) => Promise.resolve(command.handler(args, ctx)));
     yield* Deferred.succeed(release, undefined);
     yield* step(() => Promise.all([blocked, ...pending]));
 

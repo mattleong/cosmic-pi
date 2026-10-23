@@ -2,6 +2,7 @@ import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type { ToolRenderContext } from "../tools/renderers/shared/types";
 import type { Component } from "@earendil-works/pi-tui";
 import * as Schema from "effect/Schema";
+import * as Arr from "effect/Array";
 import type { ShellRenderBody } from "./tool-shell";
 import { withLastComponent } from "./tool-timing";
 
@@ -43,7 +44,7 @@ export class CompactSlots<TArgs, TDetails, TState> {
       context.isError,
       context.showImages,
     ];
-    const changed = inputs.some((value, index) => !Object.is(value, this.inputs[index]));
+    const changed = Arr.some(inputs, (value, index) => !Object.is(value, this.inputs[index]));
     this.inputs = inputs;
     if (!changed) return;
     for (const entry of this.entries.values()) {

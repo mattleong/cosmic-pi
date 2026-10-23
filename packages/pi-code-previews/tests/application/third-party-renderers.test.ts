@@ -6,6 +6,9 @@ import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { setCodePreviewSettings } from "../../src/config/state";
 import { createToolPresentationHarness, drawToolRow, hostToolRow } from "../../testing";
 import { inertScheduler as scheduler, presentationResolver } from "../support/renderer-host";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 
 beforeAll(() => initTheme("dark", false));
 afterEach(() => setCodePreviewSettings(defaultCodePreviewSettings));
@@ -110,7 +113,7 @@ it("foreign, missing, duplicate, lookalike, renamed, and unsupported sources fal
     for (const tools of [
       [],
       [base, base],
-      ...sources.map((sourceInfo) => [{ ...base, sourceInfo }]),
+      ...Arr.map(sources, (sourceInfo) => [{ ...base, sourceInfo }]),
     ]) {
       const { owner, resolver } = setup(() => tools, ready);
       assert.equal(resolver("web_search", () => downstream)?.renderCall, downstream.renderCall);
@@ -142,7 +145,7 @@ for (const style of ["compact"] as const)
           },
         },
       );
-      assert.match(row.render(100).join("\n"), /ORIGINAL OUTPUT/);
+      assert.match(Arr.join(row.render(100), "\n"), /ORIGINAL OUTPUT/);
       setCodePreviewSettings({
         ...defaultCodePreviewSettings,
         toolCallCollapsedStyle: style,
@@ -158,7 +161,7 @@ for (const style of ["compact"] as const)
         "ORIGINAL CALL",
         "ORIGINAL OUTPUT",
       ])
-        assert.ok(expanded.includes(marker), marker);
+        assert.ok(Fn.pipe(expanded, Str.includes(marker)), marker);
       owner.retire();
     });
 
@@ -171,7 +174,7 @@ it("changed ownership before readiness leaves a retained external row downstream
   tools = [{ ...info(), sourceInfo: { ...info().sourceInfo, source: "npm:other" } }];
   owner.publish("/project", new Set(), scheduler);
   harness.call({ query: "query" }, { expanded: true });
-  assert.match(harness.render().join("\n"), /ORIGINAL OUTPUT/);
-  assert.doesNotMatch(harness.render().join("\n"), /RAW OUTPUT/);
+  assert.match(Arr.join(harness.render(), "\n"), /ORIGINAL OUTPUT/);
+  assert.doesNotMatch(Arr.join(harness.render(), "\n"), /RAW OUTPUT/);
   owner.retire();
 });

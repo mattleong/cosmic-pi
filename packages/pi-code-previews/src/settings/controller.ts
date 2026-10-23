@@ -1,4 +1,6 @@
 import * as Result from "effect/Result";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
   formatDisplayPath,
@@ -28,7 +30,7 @@ import { formatSettingValue, updateSetting } from "../config/values";
 import { createCodePreviewSettingsModel, persistSettingsChange } from "./panel";
 import { SETTING_ITEM_DEFINITIONS, type SettingItemDefinition } from "./ui/registry";
 
-const SCRIPTED_SETTINGS = CODE_PREVIEW_SETTING_KEYS.flatMap((id) => {
+const SCRIPTED_SETTINGS = Arr.flatMap(CODE_PREVIEW_SETTING_KEYS, (id) => {
   if (id === "tools") return [];
   const { description, values }: SettingItemDefinition = SETTING_ITEM_DEFINITIONS[id];
   return [{ id, description, ...(values && { values: [...values] }) }];
@@ -64,7 +66,7 @@ function codePreviewSettingsCommand(
     description: "Configure code previews and how tool calls look",
     title: "Code Previews",
     scopes: [{ name: "global", description: "Save global Code Previews settings" }],
-    descriptors: SCRIPTED_SETTINGS.map((setting) => ({
+    descriptors: Arr.map(SCRIPTED_SETTINGS, (setting) => ({
       ...setting,
       currentValue: (settings: CodePreviewSettings) => formatSettingValue(settings, setting.id),
     })),
@@ -78,17 +80,23 @@ function codePreviewSettingsCommand(
     status: (ctx) => {
       const current = config();
       if (!current) return "Code Previews settings aren't available right now";
-      return [
-        "Code Previews settings",
-        ...SCRIPTED_SETTINGS.map(
-          (setting) => `  ${setting.id} = ${formatSettingValue(current, setting.id)}`,
-        ),
-        `Settings file: ${formatDisplayPath(getSettingsPath(), ctx.cwd)}`,
-      ].join("\n");
+      return Arr.join(
+        [
+          "Code Previews settings",
+          ...Arr.map(
+            SCRIPTED_SETTINGS,
+            (setting) => `  ${setting.id} = ${formatSettingValue(current, setting.id)}`,
+          ),
+          `Settings file: ${formatDisplayPath(getSettingsPath(), ctx.cwd)}`,
+        ],
+        "\n",
+      );
     },
     apply: (ctx, id, value) => {
       if (!config()) return rejectInactiveCodePreviewSession("settings");
-      const setting = SCRIPTED_SETTINGS.find((entry) => entry.id === id);
+      const setting = Option.getOrUndefined(
+        Arr.findFirst(SCRIPTED_SETTINGS, (entry) => entry.id === id),
+      );
       const previous = codePreviewSettings;
       const next = updateSetting(previous, id, value);
       if (!setting || formatSettingValue(next, setting.id) !== value)

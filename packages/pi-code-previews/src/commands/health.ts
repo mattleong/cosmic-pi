@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { notifyAtHostBoundary, type ExtensionSubcommand } from "pi-cosmic-core";
 import { hasCustomSurface, openCommandSurface } from "pi-cosmic-ui/boundary/host-surface";
 import { TextPanelComponent } from "pi-cosmic-ui/manager/panel";
@@ -50,10 +51,12 @@ export const healthSubcommand: ExtensionSubcommand = {
       `Max highlight chars: ${status.maxHighlightChars}`,
       `Path icons: ${codePreviewSettings.pathIcons}`,
       `Settings file: ${getSettingsPath()}`,
-      ...codePreviewSettingsProblems.map((problem) => describeSettingsProblem(problem, ctx.cwd)),
+      ...Arr.map(codePreviewSettingsProblems, (problem) =>
+        describeSettingsProblem(problem, ctx.cwd),
+      ),
     ];
     if (!hasCustomSurface(ctx)) {
-      if (ctx.hasUI) notifyAtHostBoundary(ctx, lines.join("\n"), "info");
+      if (ctx.hasUI) notifyAtHostBoundary(ctx, Arr.join(lines, "\n"), "info");
       return Promise.resolve();
     }
     return openCommandSurface(ctx, {

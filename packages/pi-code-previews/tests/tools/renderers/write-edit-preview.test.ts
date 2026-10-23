@@ -14,6 +14,10 @@ import type { CodePreviewSettings } from "../../../src/config/schema";
 import { setCodePreviewSettings } from "../../../src/config/state";
 import { ALL_CODE_PREVIEW_TOOLS } from "../../../src/tools/names";
 import { builtinRenderers, stripAnsi } from "../../support/render";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
 
 beforeAll(() => initTheme("dark", false));
 afterEach(() => setCodePreviewSettings(defaultCodePreviewSettings));
@@ -44,8 +48,9 @@ function liveRow(
   return row;
 }
 
-const text = (row: ToolExecutionComponent) => stripAnsi(row.render(120).join("\n"));
-const count = (value: string, pattern: RegExp) => value.match(pattern)?.length ?? 0;
+const text = (row: ToolExecutionComponent) => stripAnsi(Arr.join(row.render(120), "\n"));
+const count = (value: string, pattern: RegExp) =>
+  Option.getOrUndefined(Fn.pipe(value, Str.match(pattern)))?.length ?? 0;
 
 const result = <Details>(
   output: string,
@@ -57,8 +62,11 @@ const result = <Details>(
   isError,
 });
 
-const before = `${Array.from({ length: 20 }, (_, index) => `line ${index}`).join("\n")}\n`;
-const content = before.replace("line 10\n", "LINE 10\n");
+const before = `${Arr.join(
+  Array.from({ length: 20 }, (_, index) => `line ${index}`),
+  "\n",
+)}\n`;
+const content = Fn.pipe(before, Str.replace("line 10\n", "LINE 10\n"));
 const overwrite = result("Successfully wrote to a.txt", {
   codePreviewBeforeWrite: { kind: "content", content: before },
 });
@@ -102,7 +110,7 @@ test("a replayed diff-skip reason cannot write terminal control sequences", () =
   );
   for (const expanded of [false, true]) {
     row.setExpanded(expanded);
-    assert.equal(row.render(120).join("\n").includes("\u001b]0;title"), false);
+    assert.equal(Fn.pipe(Arr.join(row.render(120), "\n"), Str.includes("\u001b]0;title")), false);
   }
 });
 
@@ -127,12 +135,15 @@ it.effect.each([
     name: "edit",
     argsAt: (size: number): RowArguments => ({
       path: "/project/a.ts",
-      edits: [{ oldText: "a", newText: "b".repeat(size) }],
+      edits: [{ oldText: "a", newText: Fn.pipe("b", Str.repeat(size)) }],
     }),
   },
   {
     name: "write",
-    argsAt: (size: number): RowArguments => ({ path: "/project/a.ts", content: "c".repeat(size) }),
+    argsAt: (size: number): RowArguments => ({
+      path: "/project/a.ts",
+      content: Fn.pipe("c", Str.repeat(size)),
+    }),
   },
 ] as const)("a $name row releases the render contexts of replaced arguments", ({ name, argsAt }) =>
   Effect.gen(function* () {

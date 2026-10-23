@@ -5,6 +5,9 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 
 type Definition = ToolDefinition;
 const Input = Schema.Struct({ mode: Schema.optionalKey(Schema.String) });
@@ -44,7 +47,7 @@ export function nativeManagerFixture() {
     for (const [name, previous] of definitions) {
       if (
         previous.namespace?.name === `mcp__${server}` &&
-        !names.includes(previous.label.slice(server.length + 1))
+        !names.includes(Fn.pipe(previous.label, Str.slice(server.length + 1)))
       ) {
         api.registerTool({ ...previous, exposure: "hidden" });
         definitions.delete(name);
@@ -58,9 +61,10 @@ export function nativeManagerFixture() {
   };
   const syncServers = () => {
     if (!api) return;
-    const servers = api.getMcpServers().map((server) => server.name);
+    const servers = Arr.map(api.getMcpServers(), (server) => server.name);
     for (const definition of definitions.values()) {
-      const server = definition.namespace?.name.slice("mcp__".length);
+      const server =
+        definition.namespace && Fn.pipe(definition.namespace.name, Str.slice("mcp__".length));
       if (server && !servers.includes(server)) catalog(server, []);
     }
     for (const server of servers) catalog(server, ["lookup"]);

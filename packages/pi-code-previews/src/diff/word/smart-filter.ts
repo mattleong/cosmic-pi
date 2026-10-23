@@ -1,3 +1,6 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import type { WordChangeRanges } from "./types";
 import {
   isIdentifierToken,
@@ -12,36 +15,38 @@ export function filterLowSignalWordEmphasis(
   after: string,
   ranges: WordChangeRanges,
 ): WordChangeRanges {
-  const hasRemovedSignal = ranges.removed.some((range) => hasSmartRangeSignal(before, range));
-  const hasAddedSignal = ranges.added.some((range) => hasSmartRangeSignal(after, range));
+  const hasRemovedSignal = Arr.some(ranges.removed, (range) => hasSmartRangeSignal(before, range));
+  const hasAddedSignal = Arr.some(ranges.added, (range) => hasSmartRangeSignal(after, range));
   return {
-    removed: ranges.removed.filter((range) =>
-      shouldKeepSmartRange(before.slice(range[0], range[1]), hasAddedSignal),
+    removed: Arr.filter(ranges.removed, (range) =>
+      shouldKeepSmartRange(Fn.pipe(before, Str.slice(range[0], range[1])), hasAddedSignal),
     ),
-    added: ranges.added.filter((range) =>
-      shouldKeepSmartRange(after.slice(range[0], range[1]), hasRemovedSignal),
+    added: Arr.filter(ranges.added, (range) =>
+      shouldKeepSmartRange(Fn.pipe(after, Str.slice(range[0], range[1])), hasRemovedSignal),
     ),
   };
 }
 
 function hasSmartRangeSignal(content: string, range: [number, number]): boolean {
-  const tokens = wordTokenValues(content.slice(range[0], range[1]));
-  return tokens.some(isSmartSignalToken);
+  const tokens = wordTokenValues(Fn.pipe(content, Str.slice(range[0], range[1])));
+  return Arr.some(tokens, isSmartSignalToken);
 }
 
 function shouldKeepSmartRange(text: string, oppositeSideHasSignal: boolean): boolean {
   const tokens = wordTokenValues(text);
-  const signalTokens = tokens.filter(isSmartSignalToken);
+  const signalTokens = Arr.filter(tokens, isSmartSignalToken);
   if (signalTokens.length === 0) return false;
-  const wordTokens = signalTokens.filter(
+  const wordTokens = Arr.filter(
+    signalTokens,
     (token) => isIdentifierToken(token) || isNumberToken(token),
   );
-  const hasIntrinsicSignal = signalTokens.some(
+  const hasIntrinsicSignal = Arr.some(
+    signalTokens,
     (token) => isMeaningfulOperatorToken(token) || isSymbolToken(token),
   );
   if (oppositeSideHasSignal || hasIntrinsicSignal) return true;
   return (
-    !wordTokens.every((token) => LOW_SIGNAL_SYNTAX_TOKENS.has(token)) &&
+    !Arr.every(wordTokens, (token) => LOW_SIGNAL_SYNTAX_TOKENS.has(token)) &&
     !isWrapperCallNoise(text, wordTokens)
   );
 }

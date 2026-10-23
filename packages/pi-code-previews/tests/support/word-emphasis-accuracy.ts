@@ -10,6 +10,8 @@ import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/st
 import { initializeShiki } from "../../src/syntax/shiki";
 import { plainTheme } from "./render";
 import { parseRenderedWordEmphasis } from "./rendered-word-emphasis";
+import * as Str from "effect/String";
+import { indexOfFrom } from "pi-cosmic-core";
 
 type AccuracyCounts = {
   truePositive: number;
@@ -49,7 +51,7 @@ type LinePair = [removedLine: number, addedLine: number];
 export function evaluateWordEmphasisAccuracy(): Promise<WordEmphasisAccuracyReport> {
   const previousSettings = { ...codePreviewSettings };
   let prepared: Promise<void> = Promise.resolve();
-  if (wordEmphasisAccuracyCases.some((accuracyCase) => accuracyCase.lang)) {
+  if (Arr.some(wordEmphasisAccuracyCases, (accuracyCase) => Boolean(accuracyCase.lang))) {
     setCodePreviewSettings({ ...previousSettings, syntaxHighlighting: true });
     prepared = initializeShiki(previousSettings.shikiTheme);
   }
@@ -73,7 +75,7 @@ export function evaluateWordEmphasisAccuracy(): Promise<WordEmphasisAccuracyRepo
 function buildWordEmphasisAccuracyReport(
   results: WordEmphasisAccuracyCaseResult[],
 ): WordEmphasisAccuracyReport {
-  const spanCounts = sumMetrics(results.map((result) => result.spans));
+  const spanCounts = sumMetrics(Arr.map(results, (result) => result.spans));
   const pairResults = Arr.filterMap(results, (result) =>
     Result.fromNullishOr(result.pairs, Fn.constVoid),
   );
@@ -81,9 +83,9 @@ function buildWordEmphasisAccuracyReport(
 
   return {
     caseCount: results.length,
-    exactSpanCases: results.filter((result) => result.exactSpans).length,
-    exactSpanLines: results.reduce((total, result) => total + result.exactSpanLines, 0),
-    spanLines: results.reduce((total, result) => total + result.spanLines, 0),
+    exactSpanCases: Arr.filter(results, (result) => result.exactSpans).length,
+    exactSpanLines: Arr.reduce(results, 0, (total, result) => total + result.exactSpanLines),
+    spanLines: Arr.reduce(results, 0, (total, result) => total + result.spanLines),
     labeledPairCases: pairResults.length,
     spans: {
       ...metrics(spanCounts),
@@ -96,12 +98,15 @@ function buildWordEmphasisAccuracyReport(
 }
 
 function evaluateCase(accuracyCase: WordEmphasisGoldenCase): WordEmphasisAccuracyCaseResult {
-  const rendered = renderSyntaxHighlightedDiff(
-    accuracyCase.diff.join("\n"),
-    accuracyCase.lang,
-    plainTheme,
-    accuracyCase.diff.length,
-  ).split("\n");
+  const rendered = Str.split(
+    renderSyntaxHighlightedDiff(
+      Arr.join(accuracyCase.diff, "\n"),
+      accuracyCase.lang,
+      plainTheme,
+      accuracyCase.diff.length,
+    ),
+    "\n",
+  );
   if (rendered.length !== accuracyCase.expectedSpans.length)
     throw new Error(
       `${accuracyCase.name}: rendered ${rendered.length} lines, expected ${accuracyCase.expectedSpans.length}`,
@@ -156,17 +161,17 @@ function rangesForExpectedSpans(
     for (let index = 0; index < spans.length; index++) {
       const span = spans[index];
       const range = explicitRanges[index];
-      if (!span || !range || content.slice(range[0], range[1]) !== span)
+      if (!span || !range || Fn.pipe(content, Str.slice(range[0], range[1])) !== span)
         throw new Error(`${caseName}: explicit range ${index} does not match its expected span`);
     }
-    return explicitRanges.map(([start, end]) => [start, end]);
+    return Arr.map(explicitRanges, ([start, end]) => [start, end]);
   }
 
   const ranges: Range[] = [];
   let cursor = 0;
   for (const span of spans) {
     if (span.length === 0) throw new Error(`${caseName}: expected spans cannot be empty strings`);
-    const start = content.indexOf(span, cursor);
+    const start = indexOfFrom(content, span, cursor);
     if (start < 0)
       throw new Error(
         `${caseName}: expected span ${JSON.stringify(span)} is missing from the line`,
@@ -179,7 +184,7 @@ function rangesForExpectedSpans(
 
 function emphasizedLinePairs(accuracyCase: WordEmphasisGoldenCase): LinePair[] {
   return Array.from(
-    emphasizedChangedPairs(accuracyCase.diff.map(parseDiffLine), accuracyCase.mode ?? "all"),
+    emphasizedChangedPairs(Arr.map(accuracyCase.diff, parseDiffLine), accuracyCase.mode ?? "all"),
     (pair): LinePair => [pair.removedIndex, pair.addedIndex],
   );
 }
@@ -188,8 +193,8 @@ function pairAccuracyCounts(
   accuracyCase: WordEmphasisGoldenCase,
   actualPairs: readonly LinePair[],
 ): AccuracyCounts {
-  const expected = new Set((accuracyCase.expectedPairs ?? []).map(pairKey));
-  const actual = new Set(actualPairs.map(pairKey));
+  const expected = new Set(Arr.map(accuracyCase.expectedPairs ?? [], pairKey));
+  const actual = new Set(Arr.map(actualPairs, pairKey));
   let truePositive = 0;
   for (const pair of actual) if (expected.has(pair)) truePositive++;
   return {
@@ -224,19 +229,19 @@ function coveredCharacters(ranges: readonly Range[]): Set<number> {
 function sameRanges(left: readonly Range[], right: readonly Range[]): boolean {
   return (
     left.length === right.length &&
-    left.every((range, index) => range[0] === right[index]?.[0] && range[1] === right[index]?.[1])
+    Arr.every(
+      left,
+      (range, index) => range[0] === right[index]?.[0] && range[1] === right[index]?.[1],
+    )
   );
 }
 
 function sumMetrics(values: readonly AccuracyCounts[]): AccuracyCounts {
-  return values.reduce(
-    (total, value) => ({
-      truePositive: total.truePositive + value.truePositive,
-      falsePositive: total.falsePositive + value.falsePositive,
-      falseNegative: total.falseNegative + value.falseNegative,
-    }),
-    emptyCounts(),
-  );
+  return Arr.reduce(values, emptyCounts(), (total, value) => ({
+    truePositive: total.truePositive + value.truePositive,
+    falsePositive: total.falsePositive + value.falsePositive,
+    falseNegative: total.falseNegative + value.falseNegative,
+  }));
 }
 
 function emptyCounts(): AccuracyCounts {

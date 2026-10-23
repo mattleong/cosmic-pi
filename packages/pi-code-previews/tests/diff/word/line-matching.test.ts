@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { matchChangedLines, type ChangedLinePair } from "../../../src/diff/word/line-matching";
+import * as Arr from "effect/Array";
 
 test("line matching recovers a shifted 33-line block above the full-matrix cutoff", () => {
   const contents = Array.from({ length: 33 }, (_, index) => uniqueLine(index, "old"));
   const addedOrder = [...Array.from({ length: 32 }, (_, index) => index + 1), 0];
-  const addedContents = addedOrder.map((index) => uniqueLine(index, "new"));
+  const addedContents = Arr.map(addedOrder, (index) => uniqueLine(index, "new"));
 
   const pairs = matchChangedLines(removedLines(contents), addedLines(addedContents));
 
@@ -33,7 +34,7 @@ test("sparse line anchors preserve ambiguity suppression above the cutoff", () =
   const pairs = matchChangedLines(removedLines(removedContents), addedLines(addedContents));
 
   assert.equal(
-    pairs.some((pair) => pair.removedIndex === 0),
+    Arr.some(pairs, (pair) => pair.removedIndex === 0),
     false,
   );
   assert.equal(pairs.length, 31);
@@ -48,7 +49,7 @@ function uniqueLine(index: number, value: "new" | "old"): string {
 }
 
 function changedLines<Kind extends "-" | "+">(kind: Kind, contents: string[], indexOffset = 0) {
-  return contents.map((content, position) => ({
+  return Arr.map(contents, (content, position) => ({
     index: indexOffset + position,
     line: { kind, lineNumber: String(position + 1), content },
   }));
@@ -60,5 +61,5 @@ const addedLines = (contents: string[], indexOffset?: number) =>
   changedLines("+", contents, indexOffset);
 
 function pairPositions(pairs: ChangedLinePair[]): number[][] {
-  return pairs.map((pair) => [pair.removedIndex, pair.addedIndex]);
+  return Arr.map(pairs, (pair) => [pair.removedIndex, pair.addedIndex]);
 }

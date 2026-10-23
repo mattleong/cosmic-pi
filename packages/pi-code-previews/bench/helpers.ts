@@ -2,10 +2,12 @@ import { performance } from "node:perf_hooks";
 import { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import * as Config from "effect/Config";
+import * as Order from "effect/Order";
 import * as Console from "effect/Console";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Arr from "effect/Array";
 
 export function benchLog(...args: ReadonlyArray<unknown>): void {
   Effect.runSync(Console.log(...args));
@@ -54,11 +56,12 @@ export function runBench(
   runFor(WARMUP_MS, fn);
   const samples: Array<{ iterations: number; ms: number }> = [];
   for (let sample = 0; sample < SAMPLES; sample++) samples.push(runFor(SAMPLE_MS, fn));
-  const iterations = samples.reduce((total, sample) => total + sample.iterations, 0);
-  const totalMs = samples.reduce((total, sample) => total + sample.ms, 0);
-  const sampleMeans = samples
-    .map((sample) => sample.ms / sample.iterations)
-    .toSorted((a, b) => a - b);
+  const iterations = Arr.reduce(samples, 0, (total, sample) => total + sample.iterations);
+  const totalMs = Arr.reduce(samples, 0, (total, sample) => total + sample.ms);
+  const sampleMeans = Arr.sort(
+    Arr.map(samples, (sample) => sample.ms / sample.iterations),
+    Order.Number,
+  );
   const meanMs = totalMs / iterations;
   return {
     caseName,
@@ -84,7 +87,7 @@ export function printResults(results: BenchResult[]): void {
     return;
   }
   benchTable(
-    results.map((result) => ({
+    Arr.map(results, (result) => ({
       case: result.caseName,
       layer: result.layer,
       mode: result.mode,
@@ -99,7 +102,7 @@ export function printResults(results: BenchResult[]): void {
 
 export function printLayerSummary(results: BenchResult[]): void {
   benchTable(
-    results.map((result) => ({
+    Arr.map(results, (result) => ({
       case: result.caseName,
       layer: result.layer,
       mode: result.mode,
@@ -112,7 +115,7 @@ export function printLayerSummary(results: BenchResult[]): void {
 }
 
 export function renderComponent(component: Component, width: number): string {
-  return component.render(width).join("\n");
+  return Arr.join(component.render(width), "\n");
 }
 
 export function formatMs(ms: number): string {

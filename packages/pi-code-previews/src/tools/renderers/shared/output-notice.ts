@@ -1,3 +1,5 @@
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import { expandedSection } from "../../../preview/expanded-section";
@@ -15,7 +17,7 @@ function splitTrailingNotice(lines: string[], notice: RegExp): SplitOutput {
     return { lines, notice: undefined };
   let end = lines.length - 1;
   while (end > 0 && lines[end - 1] === "") end -= 1;
-  return { lines: lines.slice(0, end), notice: last.slice(1, -1) };
+  return { lines: lines.slice(0, end), notice: Fn.pipe(last, Str.slice(1, -1)) };
 }
 
 export const splitListingNotice = (lines: string[]): SplitOutput =>

@@ -1,3 +1,7 @@
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Order from "effect/Order";
+import * as Rec from "effect/Record";
 import {
   getSelectListTheme,
   getSettingsListTheme,
@@ -54,7 +58,7 @@ export class ToolPreviewSettingsSubmenu extends Container {
       () =>
         done(
           formatToolsSettingValue(
-            ALL_CODE_PREVIEW_TOOLS.filter((tool) => this.selectedTools.has(tool)),
+            Arr.filter(ALL_CODE_PREVIEW_TOOLS, (tool) => this.selectedTools.has(tool)),
           ),
         ),
     );
@@ -81,7 +85,7 @@ function createToolToggleItems(
   statuses: Map<CodePreviewToolName, CodePreviewToolStatus>,
   required: ReadonlySet<CodePreviewToolName>,
 ): SettingItem[] {
-  return ALL_CODE_PREVIEW_TOOLS.map((tool) => {
+  return Arr.map(ALL_CODE_PREVIEW_TOOLS, (tool) => {
     const status = statuses.get(tool);
     if (status?.state === "skipped-conflict") {
       const owner = formatToolOwner(status.owner);
@@ -118,9 +122,13 @@ export class ThemeSelectSubmenu extends Container {
   constructor(currentTheme: string, done: (selectedValue?: string) => void, theme?: Theme) {
     super();
 
-    const themes: SelectItem[] = Object.keys(bundledThemes)
-      .toSorted()
-      .map((name) => ({ value: name, label: name }));
+    const themes: SelectItem[] = Arr.map(
+      Arr.sort(Rec.keys(bundledThemes), Order.String),
+      (name) => ({
+        value: name,
+        label: name,
+      }),
+    );
 
     this.selectList = new SelectList(
       themes,
@@ -132,8 +140,8 @@ export class ThemeSelectSubmenu extends Container {
       },
     );
 
-    const currentIndex = themes.findIndex((item) => item.value === currentTheme);
-    if (currentIndex >= 0) this.selectList.setSelectedIndex(currentIndex);
+    const currentIndex = Arr.findFirstIndex(themes, (item) => item.value === currentTheme);
+    if (Option.isSome(currentIndex)) this.selectList.setSelectedIndex(currentIndex.value);
 
     this.selectList.onSelect = (item) => done(item.value);
     this.selectList.onCancel = () => done(undefined);

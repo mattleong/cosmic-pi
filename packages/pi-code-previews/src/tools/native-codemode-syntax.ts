@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import type { AnyNode } from "acorn";
 
 export type SyntaxNodeType = AnyNode["type"];
@@ -145,7 +146,7 @@ function accessChildren(node: SyntaxNode<(typeof ACCESS_TYPES)[number]>): readon
       return [node.source, ...present(node.options)];
     case "ArrayExpression":
     case "ArrayPattern":
-      return node.elements.filter((element) => element !== null);
+      return Arr.filter<AnyNode | null, AnyNode>(node.elements, (element) => element !== null);
     case "ObjectExpression":
     case "ObjectPattern":
       return node.properties;

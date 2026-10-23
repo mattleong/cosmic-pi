@@ -1,4 +1,7 @@
 import * as Predicate from "effect/Predicate";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import * as Rec from "effect/Record";
 import { invokeHostCallback } from "pi-cosmic-core";
 import {
   hostObject,
@@ -11,9 +14,9 @@ import { escapeControlChars } from "../../shared/terminal-text";
 export function fallbackArguments(args: HostValue | undefined): string[] {
   return invokeHostCallback(() => {
     if (args === undefined || args === null) return [];
-    if (Predicate.isObject(args) && Object.keys(args).length === 0) return [];
+    if (Predicate.isObject(args) && Rec.keys(args).length === 0) return [];
     const json = JSON.stringify(args, null, 2);
-    return json === undefined ? [] : escapeControlChars(json).split("\n");
+    return json === undefined ? [] : Str.split(escapeControlChars(json), "\n");
   }, []);
 }
 
@@ -28,7 +31,7 @@ export function getPathArg(args: HostObject | undefined): string {
  */
 export function numericArg(args: HostObject | undefined, name: string): number | undefined {
   const value = ownField(args, name);
-  const number = Predicate.isString(value) && value.trim() !== "" ? Number(value) : value;
+  const number = Predicate.isString(value) && Str.trim(value) !== "" ? Number(value) : value;
   return Predicate.isNumber(number) && Number.isFinite(number) ? number : undefined;
 }
 
@@ -62,11 +65,11 @@ export interface EditPreviewOperation {
 
 export function editOperationInputs(args: HostObject | undefined): Array<HostObject | undefined> {
   const edits = ownField(args, "edits");
-  return Array.isArray(edits) ? edits.map((edit) => hostObject(edit)) : [args];
+  return Arr.isArray(edits) ? Arr.map(edits, (edit) => hostObject(edit)) : [args];
 }
 
 export function getEditPreviewOperations(args: HostObject | undefined): EditPreviewOperation[] {
-  return editOperationInputs(args).flatMap((edit) => {
+  return Arr.flatMap(editOperationInputs(args), (edit) => {
     const oldText = ownField(edit, "oldText") ?? ownField(edit, "old_text");
     const newText = ownField(edit, "newText") ?? ownField(edit, "new_text");
     return Predicate.isString(oldText) && Predicate.isString(newText) && oldText !== newText

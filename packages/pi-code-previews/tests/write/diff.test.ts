@@ -16,6 +16,9 @@ import {
   readExistingFileForPreviewEffect,
   shouldSkipWriteDiffComplexity,
 } from "../../src/write/diff";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 
 const previewFileLayer = Layer.merge(NodeFileSystem.layer, NodePath.layer);
 
@@ -31,7 +34,7 @@ it.effect("previous content is bounded, exact and skipped with measured reasons"
     assert.deepEqual(yield* read("bom.txt"), { kind: "content", content: "\uFEFFbefore" });
 
     const maxBytes = defaultCodePreviewPerformanceConfig.maxWriteDiffBytes;
-    yield* fs.writeFileString(join(dir, "large.txt"), "x".repeat(maxBytes + 1));
+    yield* fs.writeFileString(join(dir, "large.txt"), Fn.pipe("x", Str.repeat(maxBytes + 1)));
     const large = yield* read("large.txt");
     assert.equal(large?.kind, "skipped");
     assert.match(getWriteDiffSkipReason(large, "after") ?? "", /previous file too large/);
@@ -77,7 +80,7 @@ it.effect("previous content stays complete and bounded across short filesystem r
 
     const initialInfo = yield* fs.stat(path);
     const maxBytes = defaultCodePreviewPerformanceConfig.maxWriteDiffBytes;
-    yield* fs.writeFileString(path, "x".repeat(maxBytes + 1));
+    yield* fs.writeFileString(path, Fn.pipe("x", Str.repeat(maxBytes + 1)));
     chunkBytes = 16 * 1024;
     const grown = yield* readExistingFileForPreviewEffect(path, "after").pipe(
       Effect.provideService(FileSystem.FileSystem, {
@@ -110,12 +113,18 @@ it.effect("a named pipe is skipped without waiting for a writer", () =>
 );
 
 test("write diff complexity skips rewrites but keeps localized changes", () => {
-  const beforeRewrite = Array.from({ length: 2_000 }, (_, index) => `before ${index}`).join("\n");
-  const afterRewrite = Array.from({ length: 2_000 }, (_, index) => `after ${index}`).join("\n");
+  const beforeRewrite = Arr.join(
+    Array.from({ length: 2_000 }, (_, index) => `before ${index}`),
+    "\n",
+  );
+  const afterRewrite = Arr.join(
+    Array.from({ length: 2_000 }, (_, index) => `after ${index}`),
+    "\n",
+  );
   assert.equal(shouldSkipWriteDiffComplexity(beforeRewrite, afterRewrite), true);
 
   const lines = Array.from({ length: 10_000 }, (_, index) => `line ${index}`);
-  const beforeLocalized = lines.join("\n");
+  const beforeLocalized = Arr.join(lines, "\n");
   lines[5_000] = "changed";
-  assert.equal(shouldSkipWriteDiffComplexity(beforeLocalized, lines.join("\n")), false);
+  assert.equal(shouldSkipWriteDiffComplexity(beforeLocalized, Arr.join(lines, "\n")), false);
 });

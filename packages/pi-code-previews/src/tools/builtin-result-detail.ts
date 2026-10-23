@@ -1,5 +1,8 @@
 import { diffLines } from "diff";
 import * as Predicate from "effect/Predicate";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import { ownField, type HostObject } from "../shared/untrusted-value";
 import { exceedsWriteDiffBytes, shouldSkipWriteDiffComplexity } from "../write/diff";
 import { codePreviewPerformanceConfig } from "../config/state";
@@ -19,10 +22,10 @@ const writeCounts = new WeakMap<
 
 export function editResultDetail(args: HostObject | undefined): string | undefined {
   const edits = ownField(args, "edits");
-  const count = Array.isArray(edits) ? edits.length : 1;
+  const count = Arr.isArray(edits) ? edits.length : 1;
   if (!count || count > 64) return undefined;
   const operations = getEditPreviewOperations(args);
-  if (operations.length !== count || operations.some((operation) => !operation.oldText))
+  if (operations.length !== count || Arr.some(operations, (operation) => !operation.oldText))
     return undefined;
   return countLabel(count, "edit");
 }
@@ -37,8 +40,8 @@ export function grepResultDetail(
     ownField(details, "matchLimitReached") !== undefined
   )
     return undefined;
-  if (output.trim() === "No matches found") return "0 matching lines";
-  const lines = output.replace(/\n$/u, "").split("\n");
+  if (Str.trim(output) === "No matches found") return "0 matching lines";
+  const lines = Str.split(Fn.pipe(output, Str.replace(/\n$/u, "")), "\n");
   let count = 0;
   for (const line of lines) {
     if (line === "--") continue;
@@ -84,6 +87,6 @@ export function projectWriteResultDetail(
   const changes = diffLines(previous, content, { maxEditLength: 256 });
   if (!changes) return undefined;
   const count = (side: "added" | "removed") =>
-    changes.reduce((total, change) => total + (change[side] ? (change.count ?? 0) : 0), 0);
+    Arr.reduce(changes, 0, (total, change) => total + (change[side] ? (change.count ?? 0) : 0));
   return `+${count("added")} −${count("removed")}`;
 }

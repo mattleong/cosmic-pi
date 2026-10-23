@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import type { CodePreviewSettings } from "../config/schema";
 import type { CodePreviewToolName } from "./names";
 
@@ -15,7 +17,7 @@ type PreviewSettings = Pick<
 >;
 
 export function formatToolsSettingValue(tools: readonly CodePreviewToolName[]): string {
-  return tools.length ? tools.join(", ") : "none";
+  return tools.length ? Arr.join(tools, ", ") : "none";
 }
 
 export function getEffectiveCodePreviewToolSet(
@@ -24,7 +26,8 @@ export function getEffectiveCodePreviewToolSet(
 ): Set<CodePreviewToolName> {
   const enabled = new Set(configuredTools);
   for (const { setting, tool } of PREVIEW_SETTINGS) if (!settings[setting]) enabled.add(tool);
-  const shellHidden = PREVIEW_SETTINGS.some(
+  const shellHidden = Arr.some(
+    PREVIEW_SETTINGS,
     (entry) => "commands" in entry && !settings[entry.setting],
   );
   if (!settings.bashResultPreview || shellHidden) enabled.add("bash");
@@ -37,8 +40,12 @@ export function shouldHideShellResultByCommand(
 ): boolean {
   if (!settings.bashResultPreview) return true;
   if (!shellCommand) return false;
-  const policy = PREVIEW_SETTINGS.find(
-    (entry) => "commands" in entry && entry.commands.some((command) => command === shellCommand),
+  const policy = Option.getOrUndefined(
+    Arr.findFirst(
+      PREVIEW_SETTINGS,
+      (entry) =>
+        "commands" in entry && Arr.some(entry.commands, (command) => command === shellCommand),
+    ),
   );
   return policy ? !settings[policy.setting] : false;
 }

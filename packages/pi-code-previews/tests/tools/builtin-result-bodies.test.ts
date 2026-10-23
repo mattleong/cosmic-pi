@@ -3,6 +3,7 @@ import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { applyPresentationSettings, createToolPresentationHarness } from "../../testing";
 import type { BuiltinCompactTool } from "../../src/tools/builtin-subject";
 import { builtinRenderers, stripAnsi } from "../support/render";
+import * as Arr from "effect/Array";
 
 type Style = "compact" | "preview";
 
@@ -35,7 +36,7 @@ function render(
   const tool = harness(name, style);
   tool.call(args, { expanded });
   tool.result(value, { expanded });
-  return stripAnsi(tool.render(200).join("\n"));
+  return stripAnsi(Arr.join(tool.render(200), "\n"));
 }
 
 describe("read results", () => {

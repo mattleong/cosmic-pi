@@ -2,6 +2,7 @@ import { failureMessage, formatDisplayPath, nodePath } from "pi-cosmic-core";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
+import * as Arr from "effect/Array";
 import {
   hasCodePreviewSessionCapability,
   runCodePreviewSessionEffect,
@@ -108,6 +109,6 @@ export function formatSettingsSaveError(cause: unknown): string {
 export function describeSettingsProblem(problem: SettingsLoadProblem, cwd: string): string {
   const file = formatDisplayPath(problem.path, cwd);
   return problem.fields
-    ? `Code Previews ignored invalid settings in ${file}: ${problem.fields.join(", ")}`
+    ? `Code Previews ignored invalid settings in ${file}: ${Arr.join(problem.fields, ", ")}`
     : `Code Previews couldn't read its settings in ${file}`;
 }

@@ -1,5 +1,7 @@
 import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Result from "effect/Result";
+import * as Str from "effect/String";
 
 interface IssueMessageStyleOptions {
   readonly forbidden?: readonly string[];
@@ -27,13 +29,14 @@ export function issueMessageStyleProblems(
   message: string,
   options: IssueMessageStyleOptions = {},
 ): string[] {
-  if (!message.trim()) return ["is blank"];
+  if (!Str.trim(message)) return ["is blank"];
   const problems = Arr.filterMap(RULES, ([pattern, problem]) =>
     pattern.test(message) ? Result.succeed(problem) : Result.failVoid,
   );
   const maxLength = options.maxLength ?? 120;
   if (message.length > maxLength) problems.push(`is longer than ${maxLength} characters`);
   for (const token of options.forbidden ?? [])
-    if (token && message.includes(token)) problems.push(`contains the identifier ${token}`);
+    if (token && Fn.pipe(message, Str.includes(token)))
+      problems.push(`contains the identifier ${token}`);
   return problems;
 }

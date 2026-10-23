@@ -1,3 +1,8 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Rec from "effect/Record";
+import * as Option from "effect/Option";
 import type { DiffWordEmphasis } from "../src/config/schema";
 import {
   benchLog,
@@ -91,7 +96,7 @@ try {
       );
     }
 
-    for (const mode of MODES.filter((candidateMode) => candidateMode !== "off")) {
+    for (const mode of Arr.filter(MODES, (candidateMode) => candidateMode !== "off")) {
       setCodePreviewSettings({ ...codePreviewSettings, wordEmphasis: mode });
       results.push(
         runBench(benchCase.name, "word-ranges", mode, () => {
@@ -123,7 +128,7 @@ function runBench(caseName: string, layer: BenchLayer, mode: string, fn: () => v
 }
 
 function printSummary(results: BenchResult[], benchCases: BenchCase[]): void {
-  const rows = benchCases.map((benchCase) => {
+  const rows = Arr.map(benchCases, (benchCase) => {
     const off = findResult(results, benchCase.name, "render/plain", "off");
     const smartRender = findResult(results, benchCase.name, "render/plain", "smart");
     const allRender = findResult(results, benchCase.name, "render/plain", "all");
@@ -157,15 +162,17 @@ function printLargeDiffEstimates(
   benchCases: BenchCase[],
   scenarios: LargeScenario[],
 ): void {
-  const rows = scenarios.map((scenario) => {
-    const sourceCase = benchCases.find((benchCase) => benchCase.name === scenario.baseCase);
+  const rows = Arr.map(scenarios, (scenario) => {
+    const sourceCase = Option.getOrUndefined(
+      Arr.findFirst(benchCases, (benchCase) => benchCase.name === scenario.baseCase),
+    );
     const smartRanges = findResult(results, scenario.baseCase, "word-ranges", "smart");
     const msPerPair =
       smartRanges && sourceCase
         ? smartRanges.meanMs / Math.max(1, sourceCase.rangePairs.length)
         : 0;
-    const estimates = Object.fromEntries(
-      scenario.pairCounts.map((pairCount) => [
+    const estimates = Rec.fromEntries(
+      Arr.map(scenario.pairCounts, (pairCount) => [
         `${pairCount} pairs`,
         formatDuration(msPerPair * pairCount),
       ]),
@@ -242,13 +249,16 @@ function findResult(
   layer: BenchResult["layer"],
   mode: string,
 ): BenchResult | undefined {
-  return results.find(
-    (result) => result.caseName === caseName && result.layer === layer && result.mode === mode,
+  return Option.getOrUndefined(
+    Arr.findFirst(
+      results,
+      (result) => result.caseName === caseName && result.layer === layer && result.mode === mode,
+    ),
   );
 }
 
 function maxPairChars(pairs: Array<{ before: string; after: string }>): number {
-  return pairs.reduce((max, pair) => Math.max(max, pair.before.length, pair.after.length), 0);
+  return Arr.reduce(pairs, 0, (max, pair) => Math.max(max, pair.before.length, pair.after.length));
 }
 
 function verdict(ms: number): string {
@@ -258,7 +268,7 @@ function verdict(ms: number): string {
 }
 
 function printResults(results: BenchResult[]): void {
-  const rows = results.map((result) => ({
+  const rows = Arr.map(results, (result) => ({
     benchmark: result.name,
     mode: result.mode,
     iterations: result.iterations,
@@ -271,8 +281,8 @@ function printResults(results: BenchResult[]): void {
 }
 
 function makeCases(): BenchCase[] {
-  const mediumShared = numberedLines("token", 180).join(" ");
-  const longShared = numberedLines("shared", 600).join(" ");
+  const mediumShared = Arr.join(numberedLines("token", 180), " ");
+  const longShared = Arr.join(numberedLines("shared", 600), " ");
   const unrelatedPair = unrelatedTokenPair(0, 420);
   const beforeMulti = Array.from(
     { length: 12 },
@@ -314,12 +324,18 @@ function makeCases(): BenchCase[] {
     {
       name: "multi-line replacements",
       lang: "typescript",
-      diff: [...beforeMulti, ...afterMulti].join("\n"),
-      before: beforeMulti.map((line) => line.replace(/^-\s+\d+\s/, "")).join("\n"),
-      after: afterMulti.map((line) => line.replace(/^\+\s+\d+\s/, "")).join("\n"),
-      rangePairs: beforeMulti.map((before, index) => ({
-        before: before.replace(/^-\s+\d+\s/, ""),
-        after: (afterMulti[index] ?? "").replace(/^\+\s+\d+\s/, ""),
+      diff: Arr.join([...beforeMulti, ...afterMulti], "\n"),
+      before: Arr.join(
+        Arr.map(beforeMulti, (line) => Fn.pipe(line, Str.replace(/^-\s+\d+\s/, ""))),
+        "\n",
+      ),
+      after: Arr.join(
+        Arr.map(afterMulti, (line) => Fn.pipe(line, Str.replace(/^\+\s+\d+\s/, ""))),
+        "\n",
+      ),
+      rangePairs: Arr.map(beforeMulti, (before, index) => ({
+        before: Fn.pipe(before, Str.replace(/^-\s+\d+\s/, "")),
+        after: Fn.pipe(afterMulti[index] ?? "", Str.replace(/^\+\s+\d+\s/, "")),
       })),
       limit: beforeMulti.length + afterMulti.length,
     },
@@ -376,12 +392,21 @@ function largeCase(
   return {
     name,
     lang: "typescript",
-    diff: [
-      ...pairs.map((pair, index) => `- ${index + 1} ${pair.before}`),
-      ...pairs.map((pair, index) => `+ ${index + 1} ${pair.after}`),
-    ].join("\n"),
-    before: pairs.map((pair) => pair.before).join("\n"),
-    after: pairs.map((pair) => pair.after).join("\n"),
+    diff: Arr.join(
+      [
+        ...Arr.map(pairs, (pair, index) => `- ${index + 1} ${pair.before}`),
+        ...Arr.map(pairs, (pair, index) => `+ ${index + 1} ${pair.after}`),
+      ],
+      "\n",
+    ),
+    before: Arr.join(
+      Arr.map(pairs, (pair) => pair.before),
+      "\n",
+    ),
+    after: Arr.join(
+      Arr.map(pairs, (pair) => pair.after),
+      "\n",
+    ),
     rangePairs: pairs,
     limit: pairs.length * 2,
   };
@@ -389,8 +414,8 @@ function largeCase(
 
 function unrelatedTokenPair(index: number, tokenCount: number) {
   return {
-    before: numberedLines(`before${index}_`, tokenCount).join(" "),
-    after: numberedLines(`after${index}_`, tokenCount).join(" "),
+    before: Arr.join(numberedLines(`before${index}_`, tokenCount), " "),
+    after: Arr.join(numberedLines(`after${index}_`, tokenCount), " "),
   };
 }
 
@@ -402,7 +427,7 @@ function codeLikePair(index: number) {
 }
 
 function veryLongSharedPair(index: number) {
-  const shared = numberedLines(`shared${index}_`, 600).join(" ");
+  const shared = Arr.join(numberedLines(`shared${index}_`, 600), " ");
   return {
     before: `${shared} oldValue ${shared}`,
     after: `${shared} newValue ${shared}`,

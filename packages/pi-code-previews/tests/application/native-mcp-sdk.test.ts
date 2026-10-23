@@ -16,6 +16,11 @@ import { step } from "../support/effect-test";
 import { codePreviewsUnderTest, offlineModels, scopedSession } from "../support/sdk-session";
 import { quietLoader, quietSettings } from "pi-cosmic-core/testing/sdk";
 import { createToolPresentationHarness } from "../../testing";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
+import * as Order from "effect/Order";
 
 const serializeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json));
 
@@ -77,18 +82,19 @@ for (const builtinFirst of [false])
           settingsManager: settings,
           extensionsOverride: (base) => ({
             ...base,
-            extensions: base.extensions.toSorted((a, b) => {
-              const rank = (path: string) =>
-                path === "builtin:mcp" ? (builtinFirst ? 0 : 1) : builtinFirst ? 1 : 0;
-              return rank(a.path) - rank(b.path);
-            }),
+            extensions: Arr.sort(
+              base.extensions,
+              Order.mapInput(Order.Number, ({ path }: { readonly path: string }) =>
+                path === "builtin:mcp" ? (builtinFirst ? 0 : 1) : builtinFirst ? 1 : 0,
+              ),
+            ),
           }),
           extensionFactories: [
             { name: "code-previews", factory: presentationFactory(agentDir, report) },
             { name: "mcp", builtin: true, replaceable: true, factory: createMcpExtension() },
           ],
         });
-        const order = loader.getExtensions().extensions.map((extension) => extension.path);
+        const order = Arr.map(loader.getExtensions().extensions, (extension) => extension.path);
         assert.deepEqual(
           order,
           builtinFirst
@@ -100,9 +106,10 @@ for (const builtinFirst of [false])
         yield* step(() =>
           session.bindExtensions({ mode: "print", onError: (error) => errors.push(error.error) }),
         );
-        const managers = session.extensionRunner
-          .getRegisteredCommands()
-          .filter((command) => command.name === "mcp");
+        const managers = Arr.filter(
+          session.extensionRunner.getRegisteredCommands(),
+          (command) => command.name === "mcp",
+        );
         assert.equal(managers.length, 1);
         assert.equal(managers[0]?.sourceInfo.path, "builtin:mcp");
         assert.deepEqual(report.tools, []);
@@ -116,7 +123,7 @@ for (const builtinFirst of [false])
         assert.ok(historical);
         const h = createToolPresentationHarness(historical);
         h.call({ query: "historical input" });
-        assert.ok(h.render(200).join("\n").includes("mcp__docs__lookup"));
+        assert.ok(Fn.pipe(Arr.join(h.render(200), "\n"), Str.includes("mcp__docs__lookup")));
         yield* step(() => session.reload());
         assert.deepEqual(report.tools, []);
         assert.deepEqual(errors, []);
@@ -151,7 +158,7 @@ it.live(
               provider = pi;
               pi.registerMcpServer("docs", { command: "never-executed-by-owned-fixture" });
               pi.on("tool_call", (event) =>
-                event.toolName.startsWith("mcp__") && block
+                Fn.pipe(event.toolName, Str.startsWith("mcp__")) && block
                   ? { block: true, reason: "Permission refused" }
                   : undefined,
               );
@@ -207,7 +214,7 @@ it.live(
       assert.ok(resultHooks > 0);
       h.call({}, { expanded: true });
       h.result(returned.result, { expanded: true, showImages: false });
-      assert.ok(h.render(200).join("\n").includes("TEXT_RETAINED"));
+      assert.ok(Fn.pipe(Arr.join(h.render(200), "\n"), Str.includes("TEXT_RETAINED")));
       assert.deepEqual({ ...original }, before);
       assert.deepEqual(report.tools, []);
       const failed = yield* step(() => context.executeTool(name, { mode: "error" }));
@@ -224,7 +231,11 @@ it.live(
       controller.abort();
       assert.equal((yield* step(() => pending)).isError, true);
       manager.catalog("docs", ["added"]);
-      assert.equal(session.getAllTools().find((tool) => tool.name === name)?.exposure, "hidden");
+      assert.equal(
+        Option.getOrUndefined(Arr.findFirst(session.getAllTools(), (tool) => tool.name === name))
+          ?.exposure,
+        "hidden",
+      );
       assert.ok(session.extensionRunner.resolveToolRenderers("mcp__docs__added", () => undefined));
       provider!.unregisterMcpServer("docs");
       yield* step(() =>
@@ -234,7 +245,9 @@ it.live(
         }),
       );
       assert.equal(
-        session.getAllTools().find((tool) => tool.name === "mcp__docs__added")?.exposure,
+        Option.getOrUndefined(
+          Arr.findFirst(session.getAllTools(), (tool) => tool.name === "mcp__docs__added"),
+        )?.exposure,
         "hidden",
       );
       yield* step(() => session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }));

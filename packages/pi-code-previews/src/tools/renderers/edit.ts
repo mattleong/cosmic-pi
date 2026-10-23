@@ -1,4 +1,5 @@
 import * as Predicate from "effect/Predicate";
+import * as Arr from "effect/Array";
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
@@ -94,9 +95,10 @@ export function editPreviewRenderers(cwd: string): PreviewRenderers {
           state,
           "editCallPreview",
           previewKey,
-          operations.reduce(
-            (total, { oldText, newText }) => total + oldText.length + newText.length,
+          Arr.reduce(
+            operations,
             0,
+            (total, { oldText, newText }) => total + oldText.length + newText.length,
           ),
           "Rendering proposed edit diff…",
           theme,
@@ -178,12 +180,12 @@ export function editPreviewRenderers(cwd: string): PreviewRenderers {
 }
 
 function editOperationsSource(operations: EditPreviewOperation[]): string {
-  return JSON.stringify(operations.map(({ oldText, newText }) => [oldText, newText]));
+  return JSON.stringify(Arr.map(operations, ({ oldText, newText }) => [oldText, newText]));
 }
 
 function proposedDiffs(state: RendererState, source: string): Array<ProposedDiff | undefined> {
   const cached = state.editProposedDiffs;
-  if (cached?.source === source && Array.isArray(cached.diffs)) return cached.diffs;
+  if (cached?.source === source && Arr.isArray(cached.diffs)) return cached.diffs;
   const diffs: Array<ProposedDiff | undefined> = [];
   state.editProposedDiffs = { source, diffs };
   return diffs;
@@ -244,7 +246,7 @@ function renderEditCallPreview(
   const counts = complete ? ` ${diffCounts(theme, { additions, removals })}` : "";
   const blocks =
     operations.length > 1 ? theme.fg("muted", ` · ${operations.length} edit blocks`) : "";
-  let text = `${theme.fg("muted", "proposed edit")}${counts}${blocks}\n${sections.join("\n")}`;
+  let text = `${theme.fg("muted", "proposed edit")}${counts}${blocks}\n${Arr.join(sections, "\n")}`;
   if (shown < operations.length)
     text += showingFooter(theme, shown, operations.length, "edit blocks");
   return new FullWidthDiffText(text, theme, settings.diffIntensity);

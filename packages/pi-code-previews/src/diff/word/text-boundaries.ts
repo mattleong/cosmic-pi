@@ -1,3 +1,7 @@
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+
 const NON_ASCII_TEXT_PATTERN = /\P{ASCII}/u;
 const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 type GraphemeSegments = ReturnType<Intl.Segmenter["segment"]>;
@@ -15,7 +19,7 @@ export function commonSuffixLength(before: string, after: string, prefixLength: 
 }
 
 export function needsBoundarySafeOffsets(text: string): boolean {
-  return NON_ASCII_TEXT_PATTERN.test(text) || text.includes("\r\n");
+  return NON_ASCII_TEXT_PATTERN.test(text) || Fn.pipe(text, Str.includes("\r\n"));
 }
 
 export function rangesAtGraphemeBoundaries(
@@ -25,7 +29,7 @@ export function rangesAtGraphemeBoundaries(
   if (ranges.length === 0 || !needsBoundarySafeOffsets(text)) return ranges;
 
   const segmentedText = graphemeSegmenter.segment(text);
-  return ranges.map(([start, end]) => [
+  return Arr.map(ranges, ([start, end]) => [
     graphemeStartAtOrBefore(segmentedText, start, text.length),
     graphemeEndAtOrAfter(segmentedText, end, text.length),
   ]);

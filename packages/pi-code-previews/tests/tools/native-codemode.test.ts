@@ -15,6 +15,9 @@ import {
   settledSummary,
 } from "../support/native-codemode";
 import { stripAnsi } from "../support/render";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 
 const settings = (style: "compact" | "preview", background: "off" | "on" | "border" = "off") =>
   applyPresentationSettings({ toolCallCollapsedStyle: style, toolCallBackground: background });
@@ -104,10 +107,10 @@ test("projection sanitizes bounded attention/targets without changing raw native
   ]);
   const before = structuredClone(value);
   const summary = projection(value)!;
-  assert.equal(JSON.stringify(summary).includes(secret), false);
+  assert.equal(Fn.pipe(JSON.stringify(summary), Str.includes(secret)), false);
   for (const issue of [
     ...(summary.issues ?? []),
-    ...(summary.children?.entries.flatMap((entry) => entry.issues ?? []) ?? []),
+    ...Arr.flatMap(summary.children?.entries ?? [], (entry) => entry.issues ?? []),
   ])
     assert.deepEqual(issueMessageStyleProblems(issue.message), []);
   assert.deepEqual(value, before);
@@ -123,7 +126,8 @@ for (const style of ["compact", "preview"] as const)
     test(`native ${style}/${mode} expansion preserves source, errors, images, spill paths and malformed history`, () => {
       settings(style, mode);
       const tool = codemodeRenderers();
-      const source = Array.from({ length: 20 }, (_, index) => `text('SOURCE_${index}');`).join(
+      const source = Arr.join(
+        Array.from({ length: 20 }, (_, index) => `text('SOURCE_${index}');`),
         "\n",
       );
       const value = output("failed", [call("error", { error: "Nested failure" })], {
@@ -158,7 +162,7 @@ for (const style of ["compact", "preview"] as const)
               "/tmp/native-full.txt",
               "image/png",
             ])
-              assert.ok(text.includes(marker), marker);
+              assert.ok(Fn.pipe(text, Str.includes(marker)), marker);
         }
         for (const width of [16, 40]) assert.ok(harness.render(width).length);
       }
@@ -174,7 +178,7 @@ test("expanded native source/output survive hostile theme construction and drawi
   const h = createToolPresentationHarness(tool, { theme: badTheme });
   h.call({ code: "// SOURCE_COMPLETE\nreturn 1;" }, { expanded: true });
   h.result(output(), { expanded: true });
-  const text = stripAnsi(h.render(100).join("\n"));
-  assert.ok(text.includes("SOURCE_COMPLETE"));
-  assert.ok(text.includes("LAST_OUTPUT"));
+  const text = stripAnsi(Arr.join(h.render(100), "\n"));
+  assert.ok(Fn.pipe(text, Str.includes("SOURCE_COMPLETE")));
+  assert.ok(Fn.pipe(text, Str.includes("LAST_OUTPUT")));
 });

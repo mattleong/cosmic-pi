@@ -17,6 +17,10 @@ import { quietLoader, quietSettings } from "pi-cosmic-core/testing/sdk";
 import { drawToolRow, hostToolRow } from "../../testing";
 import { executeDescriptor } from "../support/tool-identity";
 import { hostContainer } from "../../src/shared/untrusted-value";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 
 beforeAll(() => initTheme("dark", false));
 
@@ -107,7 +111,9 @@ for (const order of ["native-first", "previews-first"] as const)
           const callable = session.getCallableToolNames();
           assert.equal(active.includes("tool_search"), false);
           assert.equal(active.includes("nebula_fixture"), false);
-          const metadata = session.getAllTools().find((tool) => tool.name === "tool_search");
+          const metadata = Option.getOrUndefined(
+            Arr.findFirst(session.getAllTools(), (tool) => tool.name === "tool_search"),
+          );
           assert.ok(metadata);
           assert.deepEqual(metadata.sourceInfo, {
             source: "builtin",
@@ -162,7 +168,7 @@ for (const order of ["native-first", "previews-first"] as const)
                 "RECOVERY_TEXT",
                 '"limit": 3',
               ])
-                assert.ok(rendered.includes(marker), marker);
+                assert.ok(Fn.pipe(rendered, Str.includes(marker)), marker);
             else {
               assert.match(rendered, /\b1\b/);
               assert.doesNotMatch(rendered, /HISTORICAL_OUTPUT|RECOVERY_TEXT/);
@@ -178,7 +184,9 @@ for (const order of ["native-first", "previews-first"] as const)
 
           session.setActiveToolsByName([...active, "tool_search"]);
           assert.equal(session.getCallableToolNames().includes("tool_search"), false);
-          const search = session.agent.state.tools.find((tool) => tool.name === "tool_search");
+          const search = Option.getOrUndefined(
+            Arr.findFirst(session.agent.state.tools, (tool) => tool.name === "tool_search"),
+          );
           assert.ok(search);
           const loaded = yield* step(() =>
             search.execute("deliberate-native-search", { query: "nebula", limit: 1 }, undefined),

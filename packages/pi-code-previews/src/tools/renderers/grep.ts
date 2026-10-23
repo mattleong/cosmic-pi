@@ -1,4 +1,6 @@
 import * as Predicate from "effect/Predicate";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 
 import { Text } from "@earendil-works/pi-tui";
 import { renderGrepOutputLines } from "../../tools/grep-render";
@@ -52,12 +54,12 @@ export function grepPreviewRenderers(cwd: string): PreviewRenderers {
       if (!output || output === "No matches found")
         return new Text(theme.fg("muted", output || "No matches found"), 0, 0);
 
-      const { lines: rawLines, notice } = splitListingNotice(output.split("\n"));
+      const { lines: rawLines, notice } = splitListingNotice(Str.split(output, "\n"));
       const limit = expanded ? rawLines.length : codePreviewSettings.grepCollapsedLines;
       const skipHighlight = shouldSkipHighlight(output);
       let text = renderSelectedOutputLines(rawLines, limit, theme, "grep output lines", (chunk) =>
         renderGrepOutputLines(
-          chunk.join("\n"),
+          Arr.join(chunk, "\n"),
           theme,
           hostObject(renderContext.args),
           renderContext.invalidate,

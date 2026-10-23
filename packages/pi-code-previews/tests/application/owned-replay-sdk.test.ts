@@ -16,6 +16,10 @@ import { quietLoader, quietSettings } from "pi-cosmic-core/testing/sdk";
 import { resultText } from "../support/render";
 import { setPlainPreviewSettings } from "../support/renderer-host";
 import { drawToolRow, hostToolRow } from "../../testing";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
 
 beforeAll(() => initTheme("dark", false));
 for (const foreign of [false])
@@ -112,37 +116,39 @@ for (const foreign of [false])
           });
         };
         let retained = historyRow();
-        assert.ok(!retained.render(160).join("\n").includes("OWNED_SUMMARY"));
+        assert.ok(!Fn.pipe(Arr.join(retained.render(160), "\n"), Str.includes("OWNED_SUMMARY")));
         const errors: string[] = [];
         yield* step(() =>
           session.bindExtensions({ mode: "print", onError: (error) => errors.push(error.error) }),
         );
         const expected = foreign ? "FOREIGN_RENDERER" : "OWNED_SUMMARY";
-        assert.ok(retained.render(160).join("\n").includes(expected));
+        assert.ok(Fn.pipe(Arr.join(retained.render(160), "\n"), Str.includes(expected)));
         const active = session.getActiveToolNames();
         const callable = session.getCallableToolNames();
-        const originalSource = session
-          .getAllTools()
-          .find((entry) => entry.name === tool.name)?.sourceInfo;
+        const originalSource = Option.getOrUndefined(
+          Arr.findFirst(session.getAllTools(), (entry) => entry.name === tool.name),
+        )?.sourceInfo;
         yield* step(() =>
           session.reload({
             beforeSessionStart: () => {
               retained = historyRow();
-              assert.ok(!retained.render(160).join("\n").includes("OWNED_SUMMARY"));
+              assert.ok(
+                !Fn.pipe(Arr.join(retained.render(160), "\n"), Str.includes("OWNED_SUMMARY")),
+              );
             },
           }),
         );
-        assert.ok(retained.render(160).join("\n").includes(expected));
-        const [expanded, , reexpanded] = [true, false, true].map((state) =>
+        assert.ok(Fn.pipe(Arr.join(retained.render(160), "\n"), Str.includes(expected)));
+        const [expanded, , reexpanded] = Arr.map([true, false, true], (state) =>
           drawToolRow(retained, state, 160),
         );
         for (const text of [expanded!, reexpanded!]) {
-          assert.ok(text.includes("FULL_OUTPUT recovery /tmp/receipt.txt"));
-          if (!foreign) assert.ok(text.includes("FULL_INPUT"));
+          assert.ok(Fn.pipe(text, Str.includes("FULL_OUTPUT recovery /tmp/receipt.txt")));
+          if (!foreign) assert.ok(Fn.pipe(text, Str.includes("FULL_INPUT")));
         }
         assert.deepEqual(session.getActiveToolNames(), active);
         assert.deepEqual(session.getCallableToolNames(), callable);
-        const registered = session.getAllTools().filter((entry) => entry.name === tool.name);
+        const registered = Arr.filter(session.getAllTools(), (entry) => entry.name === tool.name);
         assert.equal(registered.length, 1);
         assert.deepEqual(registered[0]?.sourceInfo, originalSource);
         assert.equal(registered[0]?.exposure, "model-only");

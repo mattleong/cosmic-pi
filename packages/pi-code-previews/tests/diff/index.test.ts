@@ -7,6 +7,9 @@ import { plainTheme, stripAnsi } from "../support/render";
 import { FullWidthDiffText } from "../../src/diff/full-width-text";
 import { renderPlainDiff } from "../../src/diff/render";
 import { parseDiffLine } from "../../src/diff/parse";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 
 beforeEach(() => applyPresentationSettings({}));
 
@@ -28,13 +31,25 @@ test("parseDiffLine accepts standard body lines but not file headers", () => {
 });
 
 test("Pi's skipped-context marker parses as a gap, not a context row", () => {
-  const before = Array.from({ length: 40 }, (_, index) => `line ${index}`).join("\n");
-  const after = before.replace("line 3\n", "LINE 3\n").replace("line 35\n", "LINE 35\n");
-  const lines = generateDiffString(before, after).diff.split("\n");
-  const gaps = lines.filter((line) => line.trim() === "...");
+  const before = Arr.join(
+    Array.from({ length: 40 }, (_, index) => `line ${index}`),
+    "\n",
+  );
+  const after = Fn.pipe(
+    before,
+    Str.replace("line 3\n", "LINE 3\n"),
+    Str.replace("line 35\n", "LINE 35\n"),
+  );
+  const lines = Str.split(generateDiffString(before, after).diff, "\n");
+  const gaps = Arr.filter(lines, (line) => Str.trim(line) === "...");
   assert.ok(gaps.length > 0);
   for (const gap of gaps) assert.equal(parseDiffLine(gap), null);
-  assert.ok(lines.filter((line) => line.trim() !== "...").every((line) => parseDiffLine(line)));
+  assert.ok(
+    Arr.every(
+      Arr.filter(lines, (line) => Str.trim(line) !== "..."),
+      (line) => Boolean(parseDiffLine(line)),
+    ),
+  );
 });
 
 test("plain diff escapes terminal control characters", () => {
@@ -43,8 +58,8 @@ test("plain diff escapes terminal control characters", () => {
   const untrustedSequence = `${escape}[31m`;
   const rendered = renderPlainDiff(`+1 hello ${untrustedSequence}red${nul}`, plainTheme, 1);
   const baseline = renderPlainDiff("+1 hello red", plainTheme, 1);
-  assert.equal(rendered.includes(untrustedSequence), false);
-  assert.equal(rendered.split(nul).length, baseline.split(nul).length);
+  assert.equal(Fn.pipe(rendered, Str.includes(untrustedSequence)), false);
+  assert.equal(Str.split(rendered, nul).length, Str.split(baseline, nul).length);
   assert.match(stripAnsi(rendered), /red/);
 });
 
@@ -52,6 +67,6 @@ test("full-width diff wrapping preserves wide graphemes beside a narrow continua
   const diffText = renderPlainDiff("+1 a😀b", plainTheme, 1);
   const rows = new FullWidthDiffText(diffText, plainTheme).render(6);
 
-  assert.ok(rows.every((row) => visibleWidth(row) <= 6));
-  assert.match(stripAnsi(rows.join("")), /😀/);
+  assert.ok(Arr.every(rows, (row) => visibleWidth(row) <= 6));
+  assert.match(stripAnsi(Arr.join(rows, "")), /😀/);
 });

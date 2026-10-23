@@ -4,8 +4,12 @@ import { selectCompactChildren } from "../../src/preview/compact-children";
 import type { CompactIssue } from "../../src/tools/compact-issues";
 import type { CompactChild } from "../../src/tools/compact-summary";
 import { compactChildren, stripAnsi } from "../support/render";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Order from "effect/Order";
 
-const plain = (rows: readonly string[]) => rows.map(stripAnsi);
+const plain = (rows: readonly string[]) => Arr.map(rows, stripAnsi);
 
 describe("compact child selection", () => {
   it("keeps active and problem calls ahead of recent completions, with exact hidden totals", () => {
@@ -25,8 +29,8 @@ describe("compact child selection", () => {
       expect(selected.entries.at(-1)).toBe(entries.at(-1));
       expect(selected.omitted).toBe(total - 5);
       expect(selected.hiddenFailed).toBe(0);
-      const order = selected.entries.map((entry) => entries.indexOf(entry));
-      expect(order).toEqual(order.toSorted((a, b) => a - b));
+      const order = Arr.map(selected.entries, (entry) => entries.indexOf(entry));
+      expect(order).toEqual(Arr.sort(order, Order.Number));
     }
   });
 });
@@ -53,9 +57,11 @@ describe("compact child issues", () => {
           width,
         ),
       );
-      expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true);
-      expect(rows.join("").replace(/[\s│]/gu, "")).toContain(issue.message.replace(/\s/gu, ""));
-      expect(rows.filter((row) => row.includes("read"))).toHaveLength(1);
+      expect(Arr.every(rows, (row) => visibleWidth(row) <= width)).toBe(true);
+      expect(Fn.pipe(Arr.join(rows, ""), Str.replace(/[\s│]/gu, ""))).toContain(
+        Fn.pipe(issue.message, Str.replace(/\s/gu, "")),
+      );
+      expect(Arr.filter(rows, (row) => Fn.pipe(row, Str.includes("read")))).toHaveLength(1);
     }
     expect(
       plain(compactChildren([{ label: "bash", status: "error", issues: [issue] }], 100)),
@@ -71,8 +77,8 @@ describe("compact child rows", () => {
         const rows = compactChildren(
           [
             {
-              label: "read\n日本語\t\u001b[2J\r".repeat(30),
-              subject: "path\n日本語\t\u001b[2J\r".repeat(30),
+              label: Fn.pipe("read\n日本語\t\u001b[2J\r", Str.repeat(30)),
+              subject: Fn.pipe("path\n日本語\t\u001b[2J\r", Str.repeat(30)),
               status: "returned",
               issues: [{ severity: "error", code: "x", message: "bad\n\u001b[2Jtext" }],
             },
@@ -80,9 +86,9 @@ describe("compact child rows", () => {
           width,
           { layout },
         );
-        expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true);
-        expect(rows.join("")).not.toContain("\u001b[2J");
-        expect(stripAnsi(rows.join(""))).not.toMatch(/[\n\r\t]/u);
+        expect(Arr.every(rows, (row) => visibleWidth(row) <= width)).toBe(true);
+        expect(Arr.join(rows, "")).not.toContain("\u001b[2J");
+        expect(stripAnsi(Arr.join(rows, ""))).not.toMatch(/[\n\r\t]/u);
       }
     },
   );

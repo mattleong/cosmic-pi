@@ -1,20 +1,24 @@
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import { codeUnitAt } from "pi-cosmic-core";
+
 export function nonEmptyText(value: string | undefined): string | undefined {
   return value === "" ? undefined : value;
 }
 
 export function isToolOutputNoticeLine(line: string): boolean {
-  return line.startsWith("[") && line.endsWith("]");
+  return Fn.pipe(line, Str.startsWith("[")) && Fn.pipe(line, Str.endsWith("]"));
 }
 
 export function expandPreviewTabs(text: string): string {
-  return text.replace(/\t/g, "   ");
+  return Fn.pipe(text, Str.replace(/\t/g, "   "));
 }
 
 export function hashString(value: string): string {
   let first = 0xdeadbeef;
   let second = 0x41c6ce57;
   for (let index = 0; index < value.length; index++) {
-    const code = value.charCodeAt(index);
+    const code = codeUnitAt(value, index);
     first = Math.imul(first ^ code, 2654435761);
     second = Math.imul(second ^ code, 1597334677);
   }

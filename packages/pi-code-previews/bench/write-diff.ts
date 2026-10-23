@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { summarizeDiff } from "../src/diff/summary";
 import { createSimpleDiff } from "../src/diff/structured";
 import {
@@ -80,10 +82,12 @@ function makeCases(): DiffInputCase[] {
     {
       name: "many scattered hunks",
       before: scatteredBefore,
-      after: scatteredBefore
-        .split("\n")
-        .map((line, index) => (index % 35 === 0 ? `${line} // changed ${index}` : line))
-        .join("\n"),
+      after: Arr.join(
+        Arr.map(Str.split(scatteredBefore, "\n"), (line, index) =>
+          index % 35 === 0 ? `${line} // changed ${index}` : line,
+        ),
+        "\n",
+      ),
     },
     {
       name: "whole-file rewrite",
@@ -118,18 +122,21 @@ function printLargeOneShotTimings(): void {
 
 function fileLines(prefix: string, count: number): string {
   return (
-    Array.from({ length: count }, (_, index) => `${prefix}${index} = ${index};`).join("\n") + "\n"
+    Arr.join(
+      Array.from({ length: count }, (_, index) => `${prefix}${index} = ${index};`),
+      "\n",
+    ) + "\n"
   );
 }
 
 function replaceLine(text: string, lineIndex: number, replacement: string): string {
-  const lines = text.split("\n");
+  const lines = Str.split(text, "\n");
   lines[lineIndex] = replacement;
-  return lines.join("\n");
+  return Arr.join(lines, "\n");
 }
 
 function diffLineCount(diff: string): number {
-  return diff ? diff.split("\n").length : 0;
+  return diff ? Str.split(diff, "\n").length : 0;
 }
 
 function caseSize(benchCase: DiffInputCase): string {
@@ -137,5 +144,5 @@ function caseSize(benchCase: DiffInputCase): string {
 }
 
 function lineCount(text: string): number {
-  return text.split("\n").length - 1;
+  return Str.split(text, "\n").length - 1;
 }

@@ -10,6 +10,9 @@ import { codemodeRenderers } from "../support/native-codemode";
 import { nativeCodemodeSummary } from "../../src/tools/native-codemode-summary";
 import { compactStatus } from "../../src/tools/compact-summary";
 import { stripAnsi } from "../support/render";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 
 beforeEach(() =>
   applyPresentationSettings({
@@ -57,12 +60,14 @@ for (const style of ["compact", "preview"] as const)
     h.result(result, { isPartial: true });
     for (const width of [16, 24, 40, 80]) {
       const rows = h.render(width);
-      assert.ok(rows.every((row) => visibleWidth(row) <= width));
-      assert.ok(stripAnsi(rows.join("")).replace(/\s/gu, "").includes("1failed"));
+      assert.ok(Arr.every(rows, (row) => visibleWidth(row) <= width));
+      assert.ok(
+        Fn.pipe(stripAnsi(Arr.join(rows, "")), Str.replace(/\s/gu, ""), Str.includes("1failed")),
+      );
     }
     h.call(args, { expanded: true, isPartial: true });
     h.result(result, { expanded: true, isPartial: true });
-    const expanded = stripAnsi(h.render(160).join("\n"));
+    const expanded = stripAnsi(Arr.join(h.render(160), "\n"));
     for (const marker of [
       "PROGRAM_RETAINED",
       "mcp__docs__lookup",
@@ -72,6 +77,6 @@ for (const style of ["compact", "preview"] as const)
       "OUTPUT_RETAINED",
       ...Array.from({ length: 5 }, (_, index) => `active-${index}.ts`),
     ])
-      assert.ok(expanded.includes(marker), marker);
+      assert.ok(Fn.pipe(expanded, Str.includes(marker)), marker);
     assert.deepEqual(result, before);
   });

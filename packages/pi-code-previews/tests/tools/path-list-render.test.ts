@@ -3,12 +3,14 @@ import { test } from "vitest";
 import { renderContextFixture, withPresentationSettings } from "../../testing";
 import { plainTheme, renderComponent, textResult } from "../support/render";
 import { pathListPreviewRenderers } from "../../src/tools/renderers/path-list";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 
 function renderCollapsed(paths: string[]): string[] {
   const rendered = withPresentationSettings({ pathIcons: "off", pathListCollapsedLines: 8 }, () =>
     renderComponent(
       pathListPreviewRenderers("find", "/project").renderResult(
-        textResult(paths.join("\n")),
+        textResult(Arr.join(paths, "\n")),
         { expanded: false, isPartial: false },
         plainTheme,
         renderContextFixture({ isPartial: false }),
@@ -16,7 +18,7 @@ function renderCollapsed(paths: string[]): string[] {
       160,
     ),
   );
-  return rendered.split("\n").map((line) => line.trimEnd());
+  return Arr.map(Str.split(rendered, "\n"), (line) => Str.trimEnd(line));
 }
 
 test("tree output draws each path under its own folder whatever the input order", () => {
@@ -29,8 +31,8 @@ test("tree output draws each path under its own folder whatever the input order"
   ]);
   const position = (line: string) => lines.indexOf(line);
 
-  assert.equal(lines.filter((line) => line === "src/").length, 1);
-  assert.equal(lines.filter((line) => line === "tests/").length, 1);
+  assert.equal(Arr.filter(lines, (line) => line === "src/").length, 1);
+  assert.equal(Arr.filter(lines, (line) => line === "tests/").length, 1);
   for (const file of ["  a.ts", "  c.ts", "    d.ts"]) {
     assert.ok(position(file) > position("src/"), file);
     assert.ok(position(file) < position("tests/"), file);

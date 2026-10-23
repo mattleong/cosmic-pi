@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { countLabel, failureMessage, sanitizeDiagnosticContent } from "pi-cosmic-core";
 import type { CompactIssue } from "../../tools/compact-issues";
 import type { CompactSummaryProvider } from "../../tools/compact-summary";
@@ -20,7 +22,7 @@ function reportedIssues(details: WebAccessDetails, error: string | undefined): C
       message: failureMessage(error, "The web tool reported an error"),
       detail: sanitizeDiagnosticContent(error),
     });
-  if (details.browserOpenError?.trim())
+  if (details.browserOpenError && Str.trim(details.browserOpenError))
     issues.push({
       severity: "warning",
       code: "web-browser",
@@ -46,7 +48,7 @@ function failureIssues(details: WebAccessDetails, researchErrors: number): Compa
     [details.unavailable?.length ?? 0, "web capability", "web capabilities", "web-unavailable"],
     [details.missing?.length ?? 0, "web tool", "web tools", "web-missing"],
   ] as const;
-  return failures.flatMap(([count, noun, plural, code]): CompactIssue[] =>
+  return Arr.flatMap(failures, ([count, noun, plural, code]): CompactIssue[] =>
     count > 0
       ? [{ severity: "warning", code, message: `${countLabel(count, noun, plural)} failed` }]
       : [],
@@ -60,8 +62,8 @@ function truncationIssues(
 ): CompactIssue[] {
   if (!details.truncated) return [];
   const reference =
-    nonEmptyText(details.responseId?.trim()) ??
-    nonEmptyText(details.searchId?.trim()) ??
+    nonEmptyText(details.responseId && Str.trim(details.responseId)) ??
+    nonEmptyText(details.searchId && Str.trim(details.searchId)) ??
     (name === "get_search_content" ? webAccessArgumentReference(args) : "");
   return [
     {
@@ -114,7 +116,7 @@ export function webAccessSummary(name: WebAccessTool): CompactSummaryProvider {
     const evidence = webAccessEvidence(name, hostContainer(result.details));
     if (!evidence) return undefined;
     const { details } = evidence;
-    const error = details.error?.trim();
+    const error = details.error && Str.trim(details.error);
     const issues = [
       ...reportedIssues(details, error),
       ...failureIssues(details, evidence.researchErrors),

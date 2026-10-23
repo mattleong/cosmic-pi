@@ -4,6 +4,9 @@ import { issueMessageStyleProblems } from "../../testing";
 import { nativeCodemodeEvidence } from "../../src/tools/native-codemode-evidence";
 import { nativeCall, scriptResult, settledSummary } from "../support/native-codemode";
 import type { HostValue } from "../../src/shared/untrusted-value";
+import * as Str from "effect/String";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 
 const call = (index: number) =>
   nativeCall({
@@ -37,7 +40,7 @@ test("invalid records preserve their valid neighbors and never become successful
     { ...call(0), durationMs: -1 },
     { ...call(0), cost: Number.NaN },
     { ...call(0), args: {} },
-    { ...call(0), error: "x".repeat(4097) },
+    { ...call(0), error: Fn.pipe("x", Str.repeat(4097)) },
     null,
   ]) {
     const details = { calls: [call(1), invalid, call(3)], fullOutputPath: { broken: true } };
@@ -45,7 +48,7 @@ test("invalid records preserve their valid neighbors and never become successful
     assert.equal(evidence.kind, "available");
     if (evidence.kind !== "available") continue;
     assert.deepEqual(
-      evidence.calls.map((entry) => entry.id),
+      Arr.map(evidence.calls, (entry) => entry.id),
       ["private/1", "private/3"],
     );
     assert.equal(evidence.rejected, 1);
@@ -96,7 +99,7 @@ test("accessors and unreadable slots cannot erase neighbors or execute arbitrary
   assert.equal(evidence.kind, "available");
   if (evidence.kind !== "available") return;
   assert.deepEqual(
-    evidence.calls.map((entry) => entry.id),
+    Arr.map(evidence.calls, (entry) => entry.id),
     ["private/1", "private/3"],
   );
   assert.equal(evidence.rejected, 1);

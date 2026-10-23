@@ -1,4 +1,6 @@
 import * as Predicate from "effect/Predicate";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { Text } from "@earendil-works/pi-tui";
 import { renderDisplayPath } from "../../paths/display";
 import { trimSingleTrailingNewline } from "../../preview/format";
@@ -67,12 +69,15 @@ export function pathListPreviewRenderers(tool: "find" | "ls", cwd: string): Prev
         return renderHiddenPreviewExpandHint(state, theme, config.footerNoun);
       if (!output || output === config.emptyMarker)
         return new Text(theme.fg("muted", config.emptyLabel(output)), 0, 0);
-      const { lines: rawLines, notice } = splitListingNotice(output.split("\n"));
+      const { lines: rawLines, notice } = splitListingNotice(Str.split(output, "\n"));
       const notes = expanded ? notice : undefined;
       if (expanded && !previewEnabled)
         return withAgentNotes(
           new Text(
-            rawLines.map((line) => theme.fg("toolOutput", escapeControlChars(line))).join("\n"),
+            Arr.join(
+              Arr.map(rawLines, (line) => theme.fg("toolOutput", escapeControlChars(line))),
+              "\n",
+            ),
             0,
             0,
           ),

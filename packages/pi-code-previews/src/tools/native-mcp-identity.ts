@@ -2,6 +2,9 @@ import { sha256Text } from "pi-cosmic-core";
 import type { ToolInfo } from "@earendil-works/pi-coding-agent";
 import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 
 const NATIVE_MCP_RESOURCE_ACTIONS = {
   read_mcp_resource: "read resource",
@@ -19,7 +22,10 @@ export function nativeMcpResourceAction(name: string): string | undefined {
 }
 
 export function nativeMcpResourceSubject(name: string, server: string, uri: string): string {
-  return [server, name === "read_mcp_resource" ? uri : ""].filter(Boolean).join(" / ");
+  return Arr.join(
+    Arr.filter([server, name === "read_mcp_resource" ? uri : ""], Str.isNonEmpty),
+    " / ",
+  );
 }
 
 export type NativeMcpIdentity =
@@ -46,10 +52,13 @@ export function nativeMcpIdentity(
 }
 
 function matchesAlias(name: string, server: string, tool: string): boolean {
-  const plain = `mcp__${server}__${tool}`.replaceAll(/[^A-Za-z0-9_]/g, "_");
+  const plain = Fn.pipe(`mcp__${server}__${tool}`, Str.replaceAll(/[^A-Za-z0-9_]/g, "_"));
   if (plain.length <= 64 && name === plain) return true;
   if (!/_[a-f0-9]{8}$/.test(name)) return false;
-  return name === `${plain.slice(0, 55)}_${sha256Text(`${server}\0${tool}`).slice(0, 8)}`;
+  return (
+    name ===
+    `${Fn.pipe(plain, Str.slice(0, 55))}_${Fn.pipe(sha256Text(`${server}\0${tool}`), Str.slice(0, 8))}`
+  );
 }
 
 export function nativeMcpReceiptMatches(
@@ -57,8 +66,11 @@ export function nativeMcpReceiptMatches(
   evidence: { readonly server: string; readonly tool: string },
 ): boolean {
   if (identity.kind === "resource") return evidence.tool === identity.name;
-  if (!/^[A-Za-z0-9_-]+$/.test(evidence.server) || !evidence.tool.trim()) return false;
-  if (identity.registered && identity.namespace !== `mcp__${evidence.server.replaceAll("-", "_")}`)
+  if (!/^[A-Za-z0-9_-]+$/.test(evidence.server) || !Str.trim(evidence.tool)) return false;
+  if (
+    identity.registered &&
+    identity.namespace !== `mcp__${Fn.pipe(evidence.server, Str.replaceAll("-", "_"))}`
+  )
     return false;
   return matchesAlias(identity.name, evidence.server, evidence.tool);
 }

@@ -5,6 +5,10 @@ import {
 } from "../../src/tools/builtin-projection";
 import type { BuiltinCompactTool } from "../../src/tools/builtin-subject";
 import { issueMessageStyleProblems } from "../../src/testing/issue-messages";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import * as Option from "effect/Option";
 
 const base: BuiltinCompactProjectionInput = {
   phase: "settled",
@@ -55,7 +59,7 @@ describe("builtin issue style", () => {
         },
       }),
     ];
-    const issues = summaries.flatMap((summary) => summary?.issues ?? []);
+    const issues = Arr.flatMap(summaries, (summary) => summary?.issues ?? []);
     expect(issues.length).toBeGreaterThanOrEqual(summaries.length);
     for (const { message } of issues)
       expect({ message, problems: issueMessageStyleProblems(message) }).toEqual({
@@ -103,14 +107,20 @@ describe("builtin failure classification", () => {
     expect(secret).not.toContain("hunter2secret");
     expect(secret).toContain("[REDACTED]");
     expect(
-      firstShellIssueMessage(`error: ${"x".repeat(200)}\nCommand exited with code 1`)?.length,
+      firstShellIssueMessage(`error: ${Fn.pipe("x", Str.repeat(200))}\nCommand exited with code 1`)
+        ?.length,
     ).toBeLessThanOrEqual(70);
     expect(failed("bash", "partial output\nCommand timed out after 30 seconds")?.issues).toEqual([
       { severity: "error", code: "shell-timeout", message: "Timed out after 30 seconds" },
     ]);
     const unknown = failed("bash", "Command exited with code 7\nunknown tail");
     expect(unknown?.outcome).toBe("error");
-    expect(unknown?.issues?.map(({ code }) => code)).toEqual(["failure"]);
+    expect(
+      Option.fromUndefinedOr(unknown?.issues).pipe(
+        Option.map((issues) => Arr.map(issues, ({ code }) => code)),
+        Option.getOrUndefined,
+      ),
+    ).toEqual(["failure"]);
     expect(JSON.stringify(unknown)).not.toContain("unknown tail");
     expect(failed("bash", "stdout\n\nCommand aborted")).toMatchObject({
       outcome: "cancelled",

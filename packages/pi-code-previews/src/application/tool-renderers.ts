@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import type {
   ExtensionAPI,
   ToolRenderers,
@@ -154,6 +155,6 @@ export function publishPreviewToolStatuses(
     else setCodePreviewToolStatus(name, { state: "installed" });
   }
   setNativeMcpRendererAvailable(
-    host.nativeManager || [...host.tools.values()].some((tool) => isBuiltinTool(tool, "mcp")),
+    host.nativeManager || Arr.some([...host.tools.values()], (tool) => isBuiltinTool(tool, "mcp")),
   );
 }

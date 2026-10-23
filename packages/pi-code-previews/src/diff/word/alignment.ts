@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+
 const ALIGNMENT_SCORE_EPSILON = 1e-9;
 
 type PairScoreAt = (beforeIndex: number, afterIndex: number) => number;
@@ -49,11 +51,14 @@ export function prefixAlignedPairs(
   afterLength: number,
   scoreAt: PairScoreAt,
 ): Array<[number, number]> {
-  return suffixAlignedPairs(beforeLength, afterLength, (i, j) =>
-    scoreAt(beforeLength - 1 - i, afterLength - 1 - j),
-  )
-    .map(([i, j]): [number, number] => [beforeLength - 1 - i, afterLength - 1 - j])
-    .toReversed();
+  return Arr.reverse(
+    Arr.map(
+      suffixAlignedPairs(beforeLength, afterLength, (i, j) =>
+        scoreAt(beforeLength - 1 - i, afterLength - 1 - j),
+      ),
+      ([i, j]): [number, number] => [beforeLength - 1 - i, afterLength - 1 - j],
+    ),
+  );
 }
 
 export function suffixAlignmentScore(

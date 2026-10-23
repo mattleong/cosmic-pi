@@ -1,3 +1,5 @@
+import * as Arr from "effect/Array";
+import * as Order from "effect/Order";
 import {
   commonPrefixLength,
   commonSuffixLength,
@@ -70,7 +72,7 @@ function nonEmptyTokenGroup(group: TokenGroup): TokenGroup | undefined {
 
 function rangesForTokenGroup(tokens: WordEmphasisToken[], group: TokenGroup): TextRange[] {
   return mergeRanges(
-    tokens.slice(group.start, group.end).map((token): TextRange => [token.start, token.end]),
+    Arr.map(tokens.slice(group.start, group.end), (token): TextRange => [token.start, token.end]),
   );
 }
 
@@ -119,7 +121,7 @@ function refinedTokenPairRanges(
 }
 
 function highlightedRangeWidth({ removed, added }: WordChangeRanges): number {
-  return [...removed, ...added].reduce((width, [start, end]) => width + end - start, 0);
+  return Arr.reduce([...removed, ...added], 0, (width, [start, end]) => width + end - start);
 }
 
 function shouldSuppressUnbalancedIdentifierPartRefinement(
@@ -223,8 +225,8 @@ function refinedSoftTokenGroupRanges(
     if (!pairedAfter.has(index)) added.push([token.start, token.end]);
 
   const result = {
-    removed: mergeRanges(removed.toSorted((a, b) => a[0] - b[0])),
-    added: mergeRanges(added.toSorted((a, b) => a[0] - b[0])),
+    removed: mergeRanges(Arr.sortWith(removed, (range) => range[0], Order.Number)),
+    added: mergeRanges(Arr.sortWith(added, (range) => range[0], Order.Number)),
   };
   return hasWordChangeRanges(result) ? result : undefined;
 }
@@ -302,8 +304,11 @@ function isNarrowerThanWholeTokens(
   afterToken: WordEmphasisToken,
 ): boolean {
   return (
-    ranges.removed.some((range) => range[0] > beforeToken.start || range[1] < beforeToken.end) ||
-    ranges.added.some((range) => range[0] > afterToken.start || range[1] < afterToken.end) ||
+    Arr.some(
+      ranges.removed,
+      (range) => range[0] > beforeToken.start || range[1] < beforeToken.end,
+    ) ||
+    Arr.some(ranges.added, (range) => range[0] > afterToken.start || range[1] < afterToken.end) ||
     ranges.removed.length === 0 ||
     ranges.added.length === 0
   );

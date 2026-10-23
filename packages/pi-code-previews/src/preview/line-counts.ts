@@ -1,11 +1,18 @@
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import { indexOfFrom } from "pi-cosmic-core";
 import { forEachRawTextLine } from "../shared/text-lines";
 
 export function countContentLines(content: string): number {
   if (!content) return 0;
   let newlines = 0;
-  for (let index = content.indexOf("\n"); index >= 0; index = content.indexOf("\n", index + 1))
+  for (
+    let index = indexOfFrom(content, "\n", 0);
+    index >= 0;
+    index = indexOfFrom(content, "\n", index + 1)
+  )
     newlines++;
-  return newlines + (content.endsWith("\n") ? 0 : 1);
+  return newlines + (Fn.pipe(content, Str.endsWith("\n")) ? 0 : 1);
 }
 
 export function forEachPreviewTextLine(
