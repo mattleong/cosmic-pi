@@ -73,7 +73,9 @@ use Oxlint's AST and lexical scopes. They report without fixes because each find
   type). Same-file top-level aliases and interfaces are resolved; the subject's own type parameter
   in `V & T`, `Function`, and members the claim does not declare remain valid. Admit callbacks
   with pi-cosmic-core's `ForeignCallable` and decode the result; its implementation file is
-  exempt through an exact-file override.
+  exempt through an exact-file override. Because opaque types count as callable, a duck-typed
+  check of a host class instance, such as a callability check of its methods, is reported;
+  verify it with `instanceof` or `Schema.instanceOf` instead.
 - **`no-eager-effect-finalizer-condition`** catches a conditional/logical `Effect.ensuring`
   decision that reads a binding mutated by a callback in its wrapped Effect pipeline. Defer the
   decision with `Effect.suspend`. Immutable decisions and reads inside lazy callbacks are valid.

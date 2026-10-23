@@ -289,7 +289,7 @@ export const noCallableTypePredicateRule = defineRule({
     },
     messages: {
       callablePredicate:
-        "A callability check cannot verify a callback's parameters or result. Admit foreign callbacks with `ForeignCallable` from pi-cosmic-core and decode the result.",
+        "A callability check cannot verify a callback's parameters or result. Admit foreign callbacks with `ForeignCallable` from pi-cosmic-core and decode the result. Imported and opaque claimed types count as callable, so verify a host class with `instanceof` or `Schema.instanceOf` instead of duck-typing its methods.",
     },
   },
   createOnce(context) {
