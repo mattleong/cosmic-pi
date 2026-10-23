@@ -7,6 +7,10 @@ const randomBytes = (size: number): Uint8Array =>
 
 export const synchronousRandomHex = (bytes: number): string => Hex.encode(randomBytes(bytes));
 
+/** 48 random bits as 10 fixed-width lowercase base-36 digits, short enough for IDs and paths. */
+export const synchronousRandomToken = (): string =>
+  Fn.pipe(Number.parseInt(synchronousRandomHex(6), 16).toString(36), Str.padStart(10, "0"));
+
 export const synchronousRandomUuid = (): string => {
   const bytes = randomBytes(16);
   bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x40;

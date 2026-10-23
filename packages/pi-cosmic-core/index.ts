@@ -189,7 +189,11 @@ export {
   type ProcessLiveness,
 } from "./src/platform/process-start.ts";
 export { synchronousMonotonicNow, synchronousNow } from "./src/platform/native-clock.ts";
-export { synchronousRandomHex, synchronousRandomUuid } from "./src/platform/native-crypto.ts";
+export {
+  synchronousRandomHex,
+  synchronousRandomToken,
+  synchronousRandomUuid,
+} from "./src/platform/native-crypto.ts";
 export { sha256Text } from "./src/security/sha256.ts";
 export { makeTokenVerifier, type TokenVerifier } from "./src/platform/token-verifier.ts";
 export { boundedNdjsonRpcSerialization } from "./src/platform/bounded-ndjson-rpc.ts";
