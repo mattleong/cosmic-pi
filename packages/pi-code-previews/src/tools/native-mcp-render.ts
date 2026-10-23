@@ -44,7 +44,7 @@ import {
 } from "./native-mcp-summary";
 import { nativeMcpHeading } from "./native-mcp-subject";
 import { nativeMcpIdentity } from "./native-mcp-identity";
-import { plainRows, safeContent } from "./native-safe-content";
+import { plainRows, plainText, safeContent } from "./native-safe-content";
 
 const DISPLAY_NAME = "mcp";
 const PREVIEW_LINES = 5;
@@ -192,14 +192,17 @@ export function createNativeMcpRenderers(
     args: HostContainer | undefined,
   ): Component => {
     const text = new Text("", 0, 0);
+    let shown: string | undefined;
     return {
       render(width) {
         const current = subtitle(state, args);
+        let next: string;
         try {
-          text.setText(renderToolHeader({ title: DISPLAY_NAME, subtitle: current }, theme));
+          next = renderToolHeader({ title: DISPLAY_NAME, subtitle: current }, theme);
         } catch {
-          text.setText(escapeControlChars(`${DISPLAY_NAME} ${current}`));
+          next = escapeControlChars(`${DISPLAY_NAME} ${current}`);
         }
+        if (next !== shown) text.setText((shown = next));
         return text.render(width);
       },
       invalidate() {
@@ -224,16 +227,8 @@ export function createNativeMcpRenderers(
       json.length > ARGUMENT_PREVIEW_CHARS
         ? `${Fn.pipe(json, Str.slice(0, ARGUMENT_PREVIEW_CHARS))}…`
         : json;
-    const raw = Arr.join(
-      Arr.filter(
-        [
-          `${DISPLAY_NAME} ${subtitle(context.state, contextArgs)}`,
-          context.expanded ? argumentsJson(input, 2) : preview,
-        ],
-        Str.isNonEmpty,
-      ),
-      "\n",
-    );
+    const title = `${DISPLAY_NAME} ${subtitle(context.state, contextArgs)}`;
+    const raw = (body: string) => Arr.join(Arr.filter([title, body], Str.isNonEmpty), "\n");
     return safeContent(
       () => {
         const previewLine = preview ? theme.fg("muted", compactPlainText(preview)) : "";
@@ -248,7 +243,7 @@ export function createNativeMcpRenderers(
           });
         return body;
       },
-      context.expanded ? raw : plainRows(raw, 2),
+      context.expanded ? plainText(() => raw(argumentsJson(input, 2))) : plainRows(raw(preview), 2),
     );
   };
   const renderExpandedOutput: RenderResult<unknown, unknown, RendererState> = (

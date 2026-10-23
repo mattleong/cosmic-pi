@@ -2,6 +2,7 @@ import * as NodeChildProcessModule from "node:child_process";
 import * as NodeFs from "node:fs";
 import * as NodeOs from "node:os";
 import * as NodePath from "node:path";
+import * as NodeUtil from "node:util";
 
 /**
  * Node builtins for boundaries whose protocol Effect's platform modules cannot express, such as
@@ -21,11 +22,13 @@ export const nodeLockFs = {
   readdirSync: NodeFs.readdirSync,
   writeFileSync: NodeFs.writeFileSync,
   fsyncSync: NodeFs.fsyncSync,
+  fsync: NodeFs.fsync,
   closeSync: NodeFs.closeSync,
   renameSync: NodeFs.renameSync,
   unlinkSync: NodeFs.unlinkSync,
   rmdirSync: NodeFs.rmdirSync,
 };
+export const nodeIsProxy = NodeUtil.types.isProxy;
 export const nodeDisplayHomeDirectory = () => NodeOs.homedir();
 export const nodeTemporaryRoot = () => NodeOs.tmpdir();
 

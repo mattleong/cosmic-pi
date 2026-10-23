@@ -58,7 +58,10 @@ describe("footer registry", () => {
   });
 
   it("bounds a self-perpetuating render loop and recovers for the next operation", () => {
-    const { store, renders } = registry((current) => current.upsert("owner", text("loop")));
+    let revision = 0;
+    const { store, renders } = registry((current) =>
+      current.upsert("owner", text("loop", `${++revision}`)),
+    );
     store.upsert("owner", text("loop"));
     expect(renders).toHaveBeenCalledTimes(1 + FOOTER_REENTRANT_OPERATION_LIMIT);
 
@@ -66,6 +69,23 @@ describe("footer registry", () => {
     store.remove("missing");
     store.upsert("owner", text("loop"));
     expect(renders).toHaveBeenCalledTimes(1 + FOOTER_REENTRANT_OPERATION_LIMIT);
+  });
+
+  it("neither republishes nor repaints an unchanged contribution", () => {
+    const { store, renders } = registry();
+    store.upsert("owner", text("status", "ready"));
+    const snapshot = store.snapshot();
+    renders.mockClear();
+
+    store.upsert("owner", text("status", "ready"));
+    expect(store.snapshot()).toBe(snapshot);
+    expect(renders).not.toHaveBeenCalled();
+
+    store.upsert("owner", text("status", "busy"));
+    expect(store.snapshot().contributions).toEqual([
+      expect.objectContaining({ id: "status", text: "busy" }),
+    ]);
+    expect(renders).toHaveBeenCalledTimes(1);
   });
 
   it("isolates a throwing render request without stranding queued work", () => {

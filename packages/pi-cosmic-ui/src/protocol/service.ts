@@ -17,17 +17,40 @@ import {
   recoverRefreshFailure,
   type RefreshRequest,
 } from "pi-cosmic-core";
-import { emptyTotals, readSessionUsageTotals, type FooterTotals } from "../boundary/host-usage.ts";
+import {
+  emptyTotals,
+  createSessionUsageReader,
+  type FooterTotals,
+} from "../boundary/host-usage.ts";
 import type { ResolvedCosmicUiConfig } from "../config/schema.ts";
 import { CosmicUiConfigStore, type FooterPatch } from "../config/store.ts";
 import type { FooterRepositoryProjection } from "../footer/builtin-contributions.ts";
+import type { FooterGitStatus } from "../footer/git.ts";
 import { RepositoryProbe } from "../probe/repository-probe.ts";
 
 const PULL_REQUEST_REFRESH_INTERVAL_MS = 30_000;
+/** Polling backs off to this after repeated empty or failed pull request lookups. */
+const PULL_REQUEST_MAX_REFRESH_INTERVAL_MS = 120_000;
 const USAGE_RECONCILE_INTERVAL = "1 second";
 const TOTAL_KEYS = ["input", "output", "cacheRead", "cacheWrite", "cost"] as const;
 const sameTotals = (left: FooterTotals, right: FooterTotals) =>
   Arr.every(TOTAL_KEYS, (key) => left[key] === right[key]);
+const GIT_STATUS_KEYS = [
+  "staged",
+  "modified",
+  "untracked",
+  "conflicts",
+  "ahead",
+  "behind",
+  "linesAdded",
+  "linesRemoved",
+  "linesChanged",
+] as const satisfies ReadonlyArray<keyof FooterGitStatus>;
+const sameGitStatus = (left: FooterGitStatus | undefined, right: FooterGitStatus | undefined) =>
+  left === right ||
+  (left !== undefined &&
+    right !== undefined &&
+    Arr.every(GIT_STATUS_KEYS, (key) => left[key] === right[key]));
 export interface CosmicUiProjection extends FooterRepositoryProjection {
   readonly config: ResolvedCosmicUiConfig | undefined;
   readonly pullRequestCheckedAt: number;
@@ -123,6 +146,8 @@ export class CosmicUiService extends Context.Service<CosmicUiService>()(
           .git(cwd, () => state.getSnapshot().probeRevision === revision && currentCwd() === cwd)
           .pipe(Effect.orElseSucceed(() => undefined));
       });
+      /** Doubles after each lookup that finds no pull request, including a failed lookup. */
+      let pullRequestPollDelay = PULL_REQUEST_REFRESH_INTERVAL_MS;
       const fetchPullRequest = Effect.fnUntraced(function* (request: RefreshRequest) {
         if (!isTui()) return undefined;
         const current = yield* state.getState;
@@ -132,28 +157,45 @@ export class CosmicUiService extends Context.Service<CosmicUiService>()(
         const pullRequest = yield* probes
           .pullRequest(currentCwd())
           .pipe(Effect.orElseSucceed(() => undefined));
+        pullRequestPollDelay =
+          pullRequest === undefined
+            ? Math.min(pullRequestPollDelay * 2, PULL_REQUEST_MAX_REFRESH_INTERVAL_MS)
+            : PULL_REQUEST_REFRESH_INTERVAL_MS;
         return { checkedAt: now, pullRequest };
       });
+      // Unchanged probe results skip the commit and its repaint; outside a repository every
+      // poll finds no status.
       const gitRefresh = yield* createSubscriptionRefresh({
         currentKey,
         interval: Effect.succeed(2_000),
         fetch: fetchGit,
-        commit: (gitStatus) => commit((current) => ({ ...current, gitStatus })),
+        commit: (gitStatus) =>
+          Effect.flatMap(state.getState, (current) =>
+            sameGitStatus(current.gitStatus, gitStatus)
+              ? Effect.void
+              : commit((latest) => ({ ...latest, gitStatus })),
+          ),
         spanName: "pi-cosmic-ui.refresh.git",
       });
       const pullRefresh = yield* createSubscriptionRefresh({
         currentKey,
-        interval: Effect.succeed(PULL_REQUEST_REFRESH_INTERVAL_MS),
+        interval: Effect.sync(() => pullRequestPollDelay),
         fetch: fetchPullRequest,
-        commit: (value) =>
-          value === undefined
-            ? Effect.void
-            : commit((current) => ({
-                ...current,
-                pullRequestNumber: value.pullRequest?.number,
-                pullRequestUrl: value.pullRequest?.url,
-                pullRequestCheckedAt: value.checkedAt,
-              })),
+        commit: (value) => {
+          if (value === undefined) return Effect.void;
+          const checked = (current: CosmicUiLiveState): CosmicUiLiveState => ({
+            ...current,
+            pullRequestNumber: value.pullRequest?.number,
+            pullRequestUrl: value.pullRequest?.url,
+            pullRequestCheckedAt: value.checkedAt,
+          });
+          return Effect.flatMap(state.getState, (current) =>
+            current.pullRequestNumber === value.pullRequest?.number &&
+            current.pullRequestUrl === value.pullRequest?.url
+              ? updateState(checked)
+              : commit(checked),
+          );
+        },
         spanName: "pi-cosmic-ui.refresh.pull-request",
       });
       const refreshGit = Effect.fn("CosmicUiService.refreshGit")(function* (force?: boolean) {
@@ -166,6 +208,7 @@ export class CosmicUiService extends Context.Service<CosmicUiService>()(
        * commit leaves them behind, so the next reconciliation repairs the missed notification.
        */
       let notifiedTotals = initialTotals;
+      const readUsageTotals = createSessionUsageReader(options.sessionManager);
       /**
        * Totals change when the host persists usage, and some of that, such as cache warming, has no
        * event. An unreadable session keeps the last complete totals, which the state already holds.
@@ -174,7 +217,7 @@ export class CosmicUiService extends Context.Service<CosmicUiService>()(
         // Serialized so an older read cannot replace totals a newer read already committed.
         yield* usageLock.withPermit(
           Effect.gen(function* () {
-            const read = readSessionUsageTotals(options.sessionManager);
+            const read = readUsageTotals();
             if (read !== undefined && !sameTotals(read, (yield* state.getState).totals))
               yield* updateState((current) => ({ ...current, totals: read }));
             const { totals } = yield* state.getState;

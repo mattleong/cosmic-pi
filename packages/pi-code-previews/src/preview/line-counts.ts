@@ -3,13 +3,16 @@ import * as Str from "effect/String";
 import { indexOfFrom } from "pi-cosmic-core";
 import { forEachRawTextLine } from "../shared/text-lines";
 
+// Bound once: Pi's loader routes each imported-helper call through an interop proxy.
+const indexFrom = indexOfFrom;
+
 export function countContentLines(content: string): number {
   if (!content) return 0;
   let newlines = 0;
   for (
-    let index = indexOfFrom(content, "\n", 0);
+    let index = indexFrom(content, "\n", 0);
     index >= 0;
-    index = indexOfFrom(content, "\n", index + 1)
+    index = indexFrom(content, "\n", index + 1)
   )
     newlines++;
   return newlines + (Fn.pipe(content, Str.endsWith("\n")) ? 0 : 1);

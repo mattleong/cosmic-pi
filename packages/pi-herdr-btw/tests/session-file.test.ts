@@ -28,6 +28,12 @@ const writeSession = (dir: string, name: string, firstLine: string, rest = ""): 
 const writeHeader = (dir: string, name: string, id: string): string =>
   writeSession(dir, name, JSON.stringify({ type: "session", id, timestamp: "t", cwd: "/project" }));
 
+const PADDED_HEADER_PREFIX = '{"type":"session","id":"padded-header","pad":"';
+const PADDED_HEADER_SUFFIX = '"}';
+/** A valid session header line of exactly `bytes` ASCII bytes. */
+const paddedHeaderLine = (bytes: number): string =>
+  `${PADDED_HEADER_PREFIX}${Fn.pipe("x", Str.repeat(bytes - PADDED_HEADER_PREFIX.length - PADDED_HEADER_SUFFIX.length))}${PADDED_HEADER_SUFFIX}`;
+
 describe("session-file validation", () => {
   it.effect("rejects missing files, directories, and symlinks", () =>
     Effect.gen(function* () {
@@ -42,6 +48,35 @@ describe("session-file validation", () => {
       for (const path of [missing, nested, link]) {
         expect(probeSessionHeader(path)).toEqual(SessionHeaderProbe.invalid());
       }
+    }),
+  );
+});
+
+describe("session header probe", () => {
+  it.effect("reads header lines up to the bound regardless of the transcript after them", () =>
+    Effect.gen(function* () {
+      const dir = yield* sessionDirectory;
+      const valid = SessionHeaderProbe.valid({
+        header: { id: "padded-header", parentSession: undefined },
+      });
+      const transcript = Fn.pipe('{"type":"message"}\n', Str.repeat(20_000));
+
+      for (const bytes of [200, 8_191, 8_192, 8_193, 100_000, 256 * 1024 - 1]) {
+        const path = writeSession(
+          dir,
+          `header-${bytes}.jsonl`,
+          paddedHeaderLine(bytes),
+          transcript,
+        );
+        expect(probeSessionHeader(path)).toEqual(valid);
+      }
+
+      const unterminated = nodePath.join(dir, "header-unterminated.jsonl");
+      nodeFs.writeFileSync(unterminated, paddedHeaderLine(20_000));
+      expect(probeSessionHeader(unterminated)).toEqual(valid);
+
+      const oversized = writeSession(dir, "header-oversized.jsonl", paddedHeaderLine(256 * 1024));
+      expect(probeSessionHeader(oversized)).toEqual(SessionHeaderProbe.invalid());
     }),
   );
 });

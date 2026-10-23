@@ -2,13 +2,23 @@ import { setFlagsFromString } from "node:v8";
 import { createContext, runInContext } from "node:vm";
 import { it as effectIt } from "@effect/vitest";
 import * as Arr from "effect/Array";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
+import * as Order from "effect/Order";
 import * as Str from "effect/String";
 import { describe, expect, it } from "vitest";
 import { BACKGROUND_LOG_BOUNDS } from "../src/task/bounds.ts";
 import { LogBuffer, readLogBuffer, splitLogText } from "../src/task/log-buffer.ts";
+import {
+  enforceRetainedLogBudget,
+  logFields,
+  taskRecord,
+  type TaskRecord,
+  type TaskRegistry,
+} from "../src/task/registry.ts";
 import { plainTerminalText } from "../src/task/terminal-text.ts";
+import { taskStatus } from "./support/task-service-double.ts";
 
 const OVERHEAD = BACKGROUND_LOG_BOUNDS.eventOverheadBytes;
 // Room for `count` stored events of `bytes` text bytes each.
@@ -255,5 +265,77 @@ describe("background log buffer", () => {
       false,
     ]);
     expect(buffer.droppedBytes).toBe(12);
+  });
+});
+
+interface StoredEvent {
+  readonly record: TaskRecord;
+  readonly cursor: number;
+  readonly timestamp: number;
+  readonly charged: number;
+  /** Registry order, then cursor order. */
+  readonly order: number;
+}
+
+const evictionOrder = Order.combine(
+  Order.mapInput(Order.Number, (event: StoredEvent) => event.timestamp),
+  Order.mapInput(Order.Number, (event: StoredEvent) => event.order),
+);
+
+describe("total retained log budget", () => {
+  it("evicts the oldest output across tasks, earlier tasks first on ties, until the total fits", () => {
+    let seed = 7;
+    const random = (limit: number) => {
+      seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
+      return seed % limit;
+    };
+    for (let round = 0; round < 300; round++) {
+      const tasks: TaskRegistry = new Map();
+      const stored: StoredEvent[] = [];
+      const taskCount = 1 + random(5);
+      for (let task = 0; task < taskCount; task++) {
+        const record = taskRecord(taskStatus({ id: `task-${task}`, state: "running" }));
+        tasks.set(record.snapshot.id, record);
+        let timestamp = random(4);
+        const eventCount = random(12);
+        for (let event = 0; event < eventCount; event++) {
+          timestamp += random(3);
+          const text = Fn.pipe("x", Str.repeat(1 + random(40)));
+          record.logs.append("stdout", text, timestamp, 1 << 20);
+          stored.push({
+            record,
+            cursor: record.logs.latestCursor,
+            timestamp,
+            charged: text.length + OVERHEAD,
+            order: stored.length,
+          });
+        }
+        record.snapshot = { ...record.snapshot, ...logFields(record.logs) };
+      }
+      const total = Arr.reduce(stored, 0, (sum, event) => sum + event.charged);
+      const budget = random(total + 1);
+      const wakes = new Map(Arr.map([...tasks.values()], (record) => [record, record.wake]));
+
+      // The reference evicts one oldest event at a time.
+      let remaining = total;
+      const evicted = new Set<StoredEvent>();
+      for (const event of Arr.sort(stored, evictionOrder)) {
+        if (remaining <= budget) break;
+        evicted.add(event);
+        remaining -= event.charged;
+      }
+
+      enforceRetainedLogBudget(tasks, budget);
+      for (const record of tasks.values()) {
+        const kept = Arr.filter(stored, (event) => event.record === record && !evicted.has(event));
+        const trimmed = Arr.some(stored, (event) => event.record === record && evicted.has(event));
+        expect(Arr.map(record.logs.events, (event) => event.cursor)).toEqual(
+          Arr.map(kept, (event) => event.cursor),
+        );
+        expect(record.snapshot).toMatchObject(logFields(record.logs));
+        expect(Deferred.isDoneUnsafe(wakes.get(record)!)).toBe(trimmed);
+      }
+      expect(remaining).toBeLessThanOrEqual(budget);
+    }
   });
 });

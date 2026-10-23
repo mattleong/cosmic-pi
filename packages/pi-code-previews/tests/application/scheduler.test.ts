@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
-import { provideBuiltLayer } from "pi-cosmic-core/testing";
+import { macrotask, provideBuiltLayer } from "pi-cosmic-core/testing";
 import {
   clearCodePreviewSessionCapability,
   deferCodePreview,
@@ -68,4 +68,18 @@ it.effect("a throwing host callback cannot terminate the repeating timing fiber"
     assert.equal(fiber.pollUnsafe(), undefined);
     yield* Fiber.interrupt(fiber);
   }).pipe(Effect.scoped),
+);
+
+it.effect("deferred previews leave an event-loop turn between each other", () =>
+  Effect.gen(function* () {
+    const service = yield* CodePreviewSchedulerService;
+    const order: string[] = [];
+    service.defer(() => {
+      order.push("first");
+      setImmediate(() => order.push("turn"));
+    });
+    service.defer(() => order.push("second"));
+    for (let turn = 0; turn < 20 && order.length < 3; turn++) yield* macrotask;
+    assert.deepEqual(order, ["first", "turn", "second"]);
+  }).pipe(provideBuiltLayer(CodePreviewSchedulerService.layer)),
 );

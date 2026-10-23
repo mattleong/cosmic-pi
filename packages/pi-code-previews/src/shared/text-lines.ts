@@ -2,10 +2,13 @@ import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import { indexOfFrom } from "pi-cosmic-core";
 
+// Bound once: Pi's loader routes each imported-helper call through an interop proxy.
+const indexFrom = indexOfFrom;
+
 export function forEachRawTextLine(text: string, callback: (line: string) => false | void): void {
   let start = 0;
   while (start <= text.length) {
-    const newline = indexOfFrom(text, "\n", start);
+    const newline = indexFrom(text, "\n", start);
     if (newline < 0) {
       callback(Fn.pipe(text, Str.slice(start)));
       break;

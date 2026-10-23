@@ -66,6 +66,17 @@ const answerEntries = (
 const indentLines = (text: string, indent: string): string =>
   Fn.pipe(text, Str.replace(/\r?\n/gu, `\n${indent}`));
 
+interface FirstLine {
+  readonly text: string;
+  // A later nonblank line is hidden by the bounded view.
+  readonly hidesMore: boolean;
+}
+
+const firstLine = (text: string): FirstLine => {
+  const [first, ...rest] = Str.split(text, /\r?\n/u);
+  return { text: first, hidesMore: Arr.some(rest, (entry) => Str.isNonEmpty(Str.trim(entry))) };
+};
+
 export function answersBody(
   answers: readonly ReplayedAnswer[],
   titles: ReadonlyMap<string, string>,
@@ -85,25 +96,40 @@ export function answersBody(
       0,
       0,
     );
-  return composeToolComponent((width) => {
-    let cut = false;
-    const fit = (prefix: string, text: string, style: (line: string) => string): string => {
-      const [first, ...rest] = Str.split(text, /\r?\n/u);
-      const line = `${prefix}${style(first)}`;
-      if (Arr.some(rest, (entry) => Str.isNonEmpty(Str.trim(entry))) || visibleWidth(line) > width)
-        cut = true;
-      return clipToWidth(line, width);
-    };
-    const rendered = Arr.flatMap(entries, ({ label, value, note }) => {
-      const answerLine = fit(`${theme.fg("muted", `${label}:`)} `, value, (line) => line);
-      return note === undefined
-        ? [answerLine]
-        : [answerLine, fit("  ", note, (line) => theme.fg("dim", `Note: ${line}`))];
-    });
-    if (cut)
-      rendered.push(clipToWidth(renderExpansionAffordance("Full answers", false, theme), width));
-    return rendered;
-  });
+  // Splitting long answers is width-independent; rows are rebuilt only when the width changes.
+  const firstLines = Arr.map(entries, ({ label, value, note }) => ({
+    label,
+    answer: firstLine(value),
+    note: note === undefined ? undefined : firstLine(note),
+  }));
+  const hidesMore = Arr.some(
+    firstLines,
+    ({ answer, note }) => answer.hidesMore || note?.hidesMore === true,
+  );
+  let last: { readonly width: number; readonly rows: string[] } | undefined;
+  return {
+    render: (width) => {
+      if (last?.width === width) return last.rows;
+      let cut = hidesMore;
+      const fit = (line: string): string => {
+        if (visibleWidth(line) > width) cut = true;
+        return clipToWidth(line, width);
+      };
+      const rows = Arr.flatMap(firstLines, ({ label, answer, note }) => {
+        const answerLine = fit(`${theme.fg("muted", `${label}:`)} ${answer.text}`);
+        return note === undefined
+          ? [answerLine]
+          : [answerLine, fit(`  ${theme.fg("dim", `Note: ${note.text}`)}`)];
+      });
+      if (cut)
+        rows.push(clipToWidth(renderExpansionAffordance("Full answers", false, theme), width));
+      last = { width, rows };
+      return rows;
+    },
+    invalidate: () => {
+      last = undefined;
+    },
+  };
 }
 
 const rawResultSection = (theme: Theme, text: string, isError: boolean): Component =>

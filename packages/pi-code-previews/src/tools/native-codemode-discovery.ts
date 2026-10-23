@@ -13,13 +13,13 @@ import * as Arr from "effect/Array";
 import { invokeHostCallback } from "pi-cosmic-core";
 import { isNativeMcpName } from "./native-mcp-identity";
 import type { HostContainer } from "../shared/untrusted-value";
-import { ownData } from "./native-safe-content";
+import { ownDataReader } from "./native-safe-content";
 import { syntaxChildren, syntaxNodeGuard, unhandledSyntax } from "./native-codemode-syntax";
 
 const MAX_SOURCE_CHARS = 32768;
 const MAX_NODES = 4096;
 const MAX_DEPTH = 128;
-const Source = Schema.String.check(Schema.isMaxLength(MAX_SOURCE_CHARS));
+const ownSource = ownDataReader(Schema.String.check(Schema.isMaxLength(MAX_SOURCE_CHARS)));
 const helpers = new Set(["searchTools", "describeTool", "describeNamespace"]);
 
 export interface NativeDiscoveryIntent {
@@ -330,7 +330,7 @@ export function createNativeDiscoveryProjector(): NativeDiscoveryProjector {
   let previous: string | undefined;
   let intent: NativeDiscoveryIntent | undefined;
   return (args) => {
-    const source = ownData(args, "code", Source);
+    const source = ownSource(args, "code");
     if (source === undefined) return undefined;
     if (source !== previous) {
       previous = source;

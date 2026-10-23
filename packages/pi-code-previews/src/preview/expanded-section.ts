@@ -14,15 +14,32 @@ export function expandedSection(
 ): Component {
   const content = new Container();
   for (const child of children) content.addChild(child);
+  // Children that cache their rows return the same arrays, so unchanged content is not re-indented.
+  let cached:
+    | { readonly width: number; readonly parts: readonly string[][]; readonly rows: string[] }
+    | undefined;
   return {
     render(width) {
       if (width <= 0) return [];
-      const heading = label ? [clipToWidth(`  ${theme.fg("muted", label)}`, width, "")] : [];
       const indent = Math.min(label ? 4 : 2, Math.max(0, width - 2));
+      const parts = Arr.map(content.children, (child) => child.render(width - indent));
+      if (
+        cached?.width === width &&
+        Arr.every(parts, (part, index) => part === cached?.parts[index])
+      )
+        return cached.rows;
+      const heading = label ? [clipToWidth(`  ${theme.fg("muted", label)}`, width, "")] : [];
       const pad = Fn.pipe(" ", Str.repeat(indent));
-      return heading.concat(Arr.map(content.render(width - indent), (line) => `${pad}${line}`));
+      const rows = heading.concat(
+        Arr.flatMap(parts, (lines) => Arr.map(lines, (line) => `${pad}${line}`)),
+      );
+      cached = { width, parts, rows };
+      return rows;
     },
-    invalidate: () => content.invalidate(),
+    invalidate() {
+      cached = undefined;
+      content.invalidate();
+    },
   };
 }
 

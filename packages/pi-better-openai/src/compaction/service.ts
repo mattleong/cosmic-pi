@@ -26,6 +26,7 @@ import type { ResolvedConfig } from "../config/schema.ts";
 import { FAST_SERVICE_TIER } from "../fast/models.ts";
 import { OpenAICompactionClient, type OpenAICompactUsage } from "../boundary/openai-compaction.ts";
 import {
+  coveredInputCache,
   findActiveOpenAICompactionCheckpoint,
   injectOpenAICompactionCheckpoint,
   isEligibleOpenAICompactionModel,
@@ -117,6 +118,7 @@ export class OpenAICompactionService extends Context.Service<OpenAICompactionSer
     ) {
       const client = yield* OpenAICompactionClient;
       const observedOmissions = yield* SynchronizedRef.make<readonly string[]>([]);
+      const coveredInput = coveredInputCache();
       const readContext = Effect.fn("OpenAICompaction.readContext")((willRetry: boolean) =>
         SynchronizedRef.modifyEffect(observedOmissions, (observed) =>
           Effect.try({
@@ -244,7 +246,7 @@ export class OpenAICompactionService extends Context.Service<OpenAICompactionSer
             if (restored?.coverageChanged) return undefined;
             return restored
               ? injectOpenAICompactionCheckpoint(payload, active, (projection) =>
-                  projectOpenAIResponseInput(model, restored.coveredEntries, projection),
+                  coveredInput(model, restored, projection),
                 )
               : undefined;
           },

@@ -1,5 +1,6 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
+import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
@@ -18,6 +19,40 @@ import { escapeLineControlChars } from "../../../shared/terminal-text";
 
 export const pathPreviewLanguage = (path: string, content?: string): string | undefined =>
   resolvePreviewLanguage({ path, content });
+
+interface ObservedArguments {
+  // Weak, so a row that is not redrawn after streaming does not keep replaced arguments alive.
+  readonly first: WeakRef<object>;
+  changed: boolean;
+}
+
+const observedArguments = new WeakMap<object, ObservedArguments>();
+
+/**
+ * Streaming arguments render plain so partial text is neither tokenized on every delta nor kept in
+ * the shared highlight cache. Pi never marks replayed arguments complete, and a row replayed without
+ * a saved result keeps every flag of a streaming row, so a row streams only once its arguments change
+ * between draws; its first draw, including every replayed row's, highlights. Pi replaces the
+ * arguments object on each delta and keeps it across redraws, so identity identifies a change.
+ */
+export function argumentsStreaming(context: {
+  readonly state: unknown;
+  readonly args: unknown;
+  readonly argsComplete: boolean;
+  readonly executionStarted: boolean;
+  readonly isPartial: boolean;
+}): boolean {
+  const { state, args } = context;
+  if (context.argsComplete || context.executionStarted || !context.isPartial) return false;
+  if (!Predicate.isObjectKeyword(state) || !Predicate.isObjectKeyword(args)) return false;
+  const observed = observedArguments.get(state);
+  if (!observed) {
+    observedArguments.set(state, { first: new WeakRef(args), changed: false });
+    return false;
+  }
+  observed.changed ||= observed.first.deref() !== args;
+  return observed.changed;
+}
 
 export function renderContentPreview(options: {
   content: string;

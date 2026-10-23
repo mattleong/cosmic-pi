@@ -5,6 +5,10 @@ import * as Str from "effect/String";
 import { codeUnitAt, indexOfFrom } from "pi-cosmic-core";
 import { diffLines } from "diff";
 
+// Bound once: Pi's loader routes each imported-helper call through an interop proxy.
+const codeAt = codeUnitAt;
+const indexFrom = indexOfFrom;
+
 type DiffLine = { readonly text: string; readonly ending: "" | "\n" | "\r\n" };
 
 const ENDING_SYMBOLS = { "": "", "\n": "␊", "\r\n": "␍␊" } as const;
@@ -103,12 +107,12 @@ function splitDiffLines(value: string): DiffLine[] {
   const lines: DiffLine[] = [];
   let start = 0;
   while (start < value.length) {
-    const newline = indexOfFrom(value, "\n", start);
+    const newline = indexFrom(value, "\n", start);
     if (newline < 0) {
       lines.push({ text: Fn.pipe(value, Str.slice(start)), ending: "" });
       break;
     }
-    const crlf = newline > start && codeUnitAt(value, newline - 1) === 13;
+    const crlf = newline > start && codeAt(value, newline - 1) === 13;
     lines.push({
       text: Fn.pipe(value, Str.slice(start, crlf ? newline - 1 : newline)),
       ending: crlf ? "\r\n" : "\n",

@@ -13,7 +13,7 @@ import {
   type HerdrSessionFilesContract,
   type SessionFileIdentityComparison,
 } from "../boundary/session-file.ts";
-import { confirmedFailure } from "./errors.ts";
+import { confirmedFailure, type HerdrBtwError } from "./errors.ts";
 import type { HerdrBtwLink } from "./link.ts";
 import { parseHerdrBtwSessionId } from "./marker.ts";
 
@@ -31,18 +31,22 @@ export const isValidBlankChildProbe = (
   probe.header.id === childSessionId &&
   probe.header.parentSession === undefined;
 
-export const ensureHerdrProtocol = Effect.fn("HerdrBtw.ensureHerdrProtocol")(function* (
-  client: HerdrClientContract,
-) {
-  const protocol = yield* client.inspectProtocol();
-  if (protocol < MINIMUM_HERDR_PROTOCOL)
-    return yield* confirmedFailure(
-      "inspect protocol",
-      "herdr_upgrade_required",
-      `Herdr BTW needs Herdr protocol ${MINIMUM_HERDR_PROTOCOL} or newer (found ${protocol})`,
-    );
-  return undefined;
-});
+export const HERDR_ENVIRONMENT_UNAVAILABLE_MESSAGE =
+  "Herdr BTW only works in a Pi session inside a Herdr pane";
+
+export const isHerdrEnvironment = (environment: Readonly<NodeJS.ProcessEnv>): boolean =>
+  environment.HERDR_ENV === "1";
+
+export const ensureHerdrProtocol = (protocol: number): Effect.Effect<void, HerdrBtwError> =>
+  protocol < MINIMUM_HERDR_PROTOCOL
+    ? Effect.fail(
+        confirmedFailure(
+          "inspect protocol",
+          "herdr_upgrade_required",
+          `Herdr BTW needs Herdr protocol ${MINIMUM_HERDR_PROTOCOL} or newer (found ${protocol})`,
+        ),
+      )
+    : Effect.void;
 
 export const ensurePiIntegration = Effect.fn("HerdrBtw.ensurePiIntegration")(function* (
   client: HerdrClientContract,
@@ -68,11 +72,11 @@ export const validateBtwInput = Effect.fn("HerdrBtw.validateBtwInput")(function*
   input: HerdrBtwSessionInput,
   files: HerdrSessionFilesContract,
 ) {
-  if (input.environment.HERDR_ENV !== "1" || !input.environment.HERDR_PANE_ID)
+  if (!isHerdrEnvironment(input.environment) || !input.environment.HERDR_PANE_ID)
     return yield* confirmedFailure(
       "validate environment",
       "herdr_environment_unavailable",
-      "Herdr BTW only works in a Pi session inside a Herdr pane",
+      HERDR_ENVIRONMENT_UNAVAILABLE_MESSAGE,
     );
 
   if (!input.sessionFile) return yield* parentSessionUnavailable();

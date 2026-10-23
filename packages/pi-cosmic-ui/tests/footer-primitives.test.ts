@@ -1,4 +1,4 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   getCapabilities,
   getOsc8LinkAtColumn,
@@ -20,6 +20,7 @@ import {
 } from "pi-cosmic-core/testing";
 import { defaultResolvedCosmicUiConfig } from "../src/config/schema.ts";
 import { createFooterComponent } from "../src/footer/component.ts";
+import { clipToWidth } from "../src/manager/chrome.ts";
 import type { CosmicFooterTextContribution } from "../src/protocol/protocol.ts";
 
 const footer = (options: {
@@ -136,4 +137,88 @@ it.each([
   expect(footer({ ...options, pullRequest: { number: 1742, url } }).render(120)).toEqual(
     footer({ ...options, pullRequest: { number: 1742, url: undefined } }).render(120),
   );
+});
+
+it("re-renders host changes behind unchanged identities, and the theme after invalidation", () => {
+  let thinking: ReturnType<ExtensionAPI["getThinkingLevel"]> = "off";
+  let branch = "main";
+  let statuses = new Map<string, string>();
+  let marker = "";
+  const ctx = extensionContextFixture({
+    model: modelFixture({
+      id: "model",
+      provider: "provider",
+      reasoning: true,
+      contextWindow: 200_000,
+    }),
+    modelRegistry: { isUsingOAuth: () => false },
+    sessionManager: {
+      getCwd: () => "/project",
+      getLeafId: () => null,
+      getSessionName: () => undefined,
+    },
+    getContextUsage: () => undefined,
+  });
+  const config = defaultResolvedCosmicUiConfig();
+  const snapshot = { contributions: [] };
+  const projection = {
+    totals: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+    gitStatus: undefined,
+    pullRequestNumber: undefined,
+    pullRequestUrl: undefined,
+    homeDirectory: undefined,
+  };
+  const component = createFooterComponent({
+    pi: extensionApiFixture({ getThinkingLevel: () => thinking }),
+    ctx: () => ctx,
+    footerData: footerDataFixture({
+      getGitBranch: () => branch,
+      getAvailableProviderCount: () => 1,
+      getExtensionStatuses: () => statuses,
+    }),
+    theme: { fg: (_color, value) => `${marker}${value}` },
+    registry: { snapshot: () => snapshot },
+    config: () => config,
+    projection: () => projection,
+  });
+  const text = (width = 120) => Arr.join(component.render(width), "\n");
+
+  expect(text()).toContain("thinking off");
+  thinking = "high";
+  expect(text()).toContain("high");
+  branch = "feature";
+  expect(text()).toContain("⎇ feature");
+  statuses = new Map([["probe", "probe ready"]]);
+  expect(text()).toContain("probe ready");
+  expect(text(40)).toBe(text(40));
+  for (const line of component.render(8)) expect(visibleWidth(line)).toBeLessThanOrEqual(8);
+
+  // Pi invalidates every component when the theme changes.
+  marker = "#";
+  component.invalidate();
+  expect(text()).toContain("#⎇ feature");
+});
+
+it.each([
+  ["", 4],
+  ["plain", 5],
+  ["⌂ café", 6],
+  ["漢字", 4],
+  ["\x1b[31mred\x1b[39m", 3],
+  ["tab\tx", 7],
+] as const)("keeps %j unchanged when it fits %d columns", (text, width) => {
+  expect(clipToWidth(text, width)).toBe(text);
+  expect(clipToWidth(text, width, "")).toBe(text);
+});
+
+it.each([
+  ["plain", 4, "pla…", "plai"],
+  ["⌂ café", 5, "⌂ ca…", "⌂ caf"],
+  ["漢字", 3, "漢…", "漢"],
+  ["\x1b[31mred\x1b[39m", 2, "r…", "re"],
+  ["\x1b[31m\x1b[39m", 0, "", ""],
+  ["text", -1, "", ""],
+] as const)("clips %j to %d columns", (text, width, marked, unmarked) => {
+  expect(stripTerminalSequences(clipToWidth(text, width))).toBe(marked);
+  expect(stripTerminalSequences(clipToWidth(text, width, ""))).toBe(unmarked);
 });

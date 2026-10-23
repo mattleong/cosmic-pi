@@ -8,7 +8,7 @@ import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import { safeTextPrefix, synchronousRandomHex } from "pi-cosmic-core";
 import type { SessionRecord } from "../registry/schema.ts";
-import { IntercomRegistry, ownerIsDead } from "../registry/store.ts";
+import { IntercomRegistry, LIVENESS_CONCURRENCY, ownerIsDead } from "../registry/store.ts";
 import { IntercomSession } from "../session/service.ts";
 import {
   deliverMessage,
@@ -71,8 +71,11 @@ const describeLive = Effect.fn("IntercomTools.describeLive")(function* (
   records: ReadonlyArray<SessionRecord>,
 ) {
   const described = yield* describeSessions(records);
-  return yield* Effect.filter(described, ({ target, result }) =>
-    answered(result) ? Effect.succeed(true) : Effect.map(ownerIsDead(target), (dead) => !dead),
+  return yield* Effect.filter(
+    described,
+    ({ target, result }) =>
+      answered(result) ? Effect.succeed(true) : Effect.map(ownerIsDead(target), (dead) => !dead),
+    { concurrency: LIVENESS_CONCURRENCY },
   );
 });
 

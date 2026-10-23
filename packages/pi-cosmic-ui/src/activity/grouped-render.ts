@@ -174,6 +174,23 @@ function activityList(
   return list;
 }
 
+interface WrappedDetail {
+  readonly text: string;
+  readonly width: number;
+  readonly lines: readonly string[];
+}
+
+// Details hold up to 16 KB and the manager re-renders on every key and spinner frame; keyed by
+// each manager's shell so the wrap lives only as long as its view.
+const wrappedDetails = new WeakMap<ListDetailShell, WrappedDetail>();
+const wrappedDetail = (shell: ListDetailShell, text: string, width: number) => {
+  const cached = wrappedDetails.get(shell);
+  if (cached?.text === text && cached.width === width) return cached.lines;
+  const lines = Arr.flatMap(Str.split(text, "\n"), (line) => wrapTextWithAnsi(line, width));
+  wrappedDetails.set(shell, { text, width, lines });
+  return lines;
+};
+
 function activityDetail(
   { options, state, row, listFocused }: GroupedBodyContext,
   detailHeight: number,
@@ -194,7 +211,7 @@ function activityDetail(
   });
   const showFreshness = detailHeight > 1;
   const details = state.shell.detailWindow(
-    Arr.flatMap(Str.split(detailText, "\n"), (line) => wrapTextWithAnsi(line, detailWidth)),
+    wrappedDetail(state.shell, detailText, detailWidth),
     detailHeight - Number(showFreshness),
     state.detailPosition,
   );

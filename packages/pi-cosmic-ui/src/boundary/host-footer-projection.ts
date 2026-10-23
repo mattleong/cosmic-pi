@@ -66,6 +66,34 @@ export const materializeContextUsage = (ctx: ExtensionContext): FooterContextUsa
     return decoded ? Object.freeze(decoded) : undefined;
   }, undefined);
 
+export const sameContextUsage = (left: FooterContextUsage, right: FooterContextUsage): boolean =>
+  left === right ||
+  (left !== undefined &&
+    right !== undefined &&
+    left.tokens === right.tokens &&
+    left.contextWindow === right.contextWindow &&
+    left.percent === right.percent);
+
+/** Whether two projections render the same footer; the model source only feeds derived fields. */
+export const sameFooterHostProjection = (
+  left: FooterHostProjection,
+  right: FooterHostProjection,
+): boolean =>
+  left.model?.id === right.model?.id &&
+  left.model?.provider === right.model?.provider &&
+  left.model?.reasoning === right.model?.reasoning &&
+  left.cwd === right.cwd &&
+  left.branch === right.branch &&
+  left.sessionName === right.sessionName &&
+  left.subscription === right.subscription &&
+  left.thinking === right.thinking &&
+  left.providerCount === right.providerCount &&
+  left.extensionStatuses.length === right.extensionStatuses.length &&
+  Arr.every(left.extensionStatuses, (status, index) => {
+    const other = right.extensionStatuses[index];
+    return other !== undefined && status.id === other.id && status.text === other.text;
+  });
+
 const byStatusId: Order.Order<readonly [string, string]> = ([left], [right]) =>
   Fn.pipe(left, Str.localeCompare(right));
 

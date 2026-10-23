@@ -3,6 +3,7 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 
 import { Text } from "@earendil-works/pi-tui";
+import { captureCodePreviewSessionCapability } from "../../application/capability";
 import { renderGrepOutputLines } from "../../tools/grep-render";
 import { renderDisplayPath } from "../../paths/display";
 import { metadata, previewFooter, trimSingleTrailingNewline } from "../../preview/format";
@@ -13,6 +14,8 @@ import { numericArg } from "../data/args";
 import { getTextContent } from "../data/results";
 import { renderCodePreviewToolTitle } from "../presentation";
 import { splitListingNotice, withAgentNotes } from "./shared/output-notice";
+import { cachedDeferredPreview } from "./shared/cache";
+import { previewCacheKey } from "./shared/preview-cache-key";
 import { renderSelectedOutputLines } from "./shared/preview-text";
 import { renderResultPrelude } from "./shared/result-prelude";
 import type { PreviewRenderers } from "./shared/types";
@@ -55,20 +58,37 @@ export function grepPreviewRenderers(cwd: string): PreviewRenderers {
         return new Text(theme.fg("muted", output || "No matches found"), 0, 0);
 
       const { lines: rawLines, notice } = splitListingNotice(Str.split(output, "\n"));
-      const limit = expanded ? rawLines.length : codePreviewSettings.grepCollapsedLines;
+      const collapsedLines = codePreviewSettings.grepCollapsedLines;
+      const limit = expanded ? rawLines.length : collapsedLines;
       const skipHighlight = shouldSkipHighlight(output);
-      let text = renderSelectedOutputLines(rawLines, limit, theme, "grep output lines", (chunk) =>
-        renderGrepOutputLines(
-          Arr.join(chunk, "\n"),
-          theme,
-          hostObject(renderContext.args),
-          renderContext.invalidate,
-          !skipHighlight,
-        ),
+      const { args, invalidate } = renderContext;
+      const render = (active: boolean) => {
+        let text = renderSelectedOutputLines(rawLines, limit, theme, "grep output lines", (chunk) =>
+          renderGrepOutputLines(
+            Arr.join(chunk, "\n"),
+            theme,
+            hostObject(args),
+            invalidate,
+            active && !skipHighlight,
+          ),
+        );
+        if (skipHighlight)
+          text += previewFooter(theme, "Syntax highlighting skipped for large grep output");
+        return new Text(text, 0, 0);
+      };
+      // Collapsed previews highlight only their visible lines, so only full output is deferred.
+      const preview = cachedDeferredPreview(
+        renderContext.state,
+        "grepResultPreview",
+        [...previewCacheKey([output], "", expanded, theme, collapsedLines), args],
+        expanded ? output.length : 0,
+        "Rendering matches…",
+        theme,
+        render,
+        invalidate,
+        captureCodePreviewSessionCapability(),
       );
-      if (skipHighlight)
-        text += previewFooter(theme, "Syntax highlighting skipped for large grep output");
-      return withAgentNotes(new Text(text, 0, 0), theme, expanded ? notice : undefined);
+      return withAgentNotes(preview, theme, expanded ? notice : undefined);
     },
   };
 }

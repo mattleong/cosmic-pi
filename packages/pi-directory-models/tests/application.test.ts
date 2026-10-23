@@ -1,8 +1,9 @@
-import type {
-  ExtensionContext,
-  SessionEntry,
-  SessionStartEvent,
-  ThinkingLevelSelectEvent,
+import {
+  buildSessionProjection,
+  type ExtensionContext,
+  type SessionEntry,
+  type SessionStartEvent,
+  type ThinkingLevelSelectEvent,
 } from "@earendil-works/pi-coding-agent";
 import { expect, layer } from "@effect/vitest";
 import * as Arr from "effect/Array";
@@ -10,6 +11,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
@@ -35,6 +37,9 @@ type Model = NonNullable<ExtensionContext["model"]>;
 
 const PreferenceFromJson = Schema.fromJsonString(DirectoryModelPreferenceSchema);
 const encodeJsonDocument = Schema.encodeEffect(Schema.fromJsonString(Schema.Json));
+
+// A replaced document gets a fresh modification time, so a kept stamp shows no write happened.
+const UNCHANGED_STAMP_SECONDS = 978_307_200;
 
 type ThinkingLevel = ThinkingLevelSelectEvent["level"];
 
@@ -219,7 +224,11 @@ const harness = (
           return available.get(`${provider}/${id}`);
         },
       },
-      sessionManager: { getEntries, getLeafId },
+      sessionManager: {
+        getEntries,
+        getLeafId,
+        buildSessionProjection: () => buildSessionProjection(getEntries(), getLeafId()),
+      },
       ui: { notify },
     });
     registerDirectoryModelsApplication(host.pi, options.explicitPreference ?? false);
@@ -240,6 +249,17 @@ const harness = (
       seedRememberedPreference: () => writePreference(agentDirectory, cwd, rememberedPreference),
       readPreference: () => readPreference(agentDirectory, cwd),
       preferenceExists: () => Effect.flatMap(preferencePath(agentDirectory, cwd), fs.exists),
+      stampPreference: () =>
+        Effect.flatMap(preferencePath(agentDirectory, cwd), (target) =>
+          fs.utimes(target, UNCHANGED_STAMP_SECONDS, UNCHANGED_STAMP_SECONDS),
+        ),
+      preferenceModifiedAt: () =>
+        preferencePath(agentDirectory, cwd).pipe(
+          Effect.flatMap(fs.stat),
+          Effect.map((info) =>
+            Option.getOrUndefined(Option.map(info.mtime, (date) => date.getTime() / 1000)),
+          ),
+        ),
       alternate,
       notify,
       getEntries,
@@ -311,6 +331,20 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       yield* h.start("new");
       expect(h.setModel).toHaveBeenLastCalledWith(h.remembered);
       expect(h.thinking()).toBe("high");
+    }),
+  );
+
+  it.effect("does not rewrite a restored preference that is already saved", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      yield* h.seedRememberedPreference();
+      yield* h.stampPreference();
+
+      yield* h.start();
+      expect(h.setModel).toHaveBeenCalledWith(h.remembered);
+      expect(h.thinking()).toBe("high");
+      expect(yield* h.preferenceModifiedAt()).toBe(UNCHANGED_STAMP_SECONDS);
+      expect(h.notify).not.toHaveBeenCalled();
     }),
   );
 
@@ -453,6 +487,54 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       yield* h.emitModel(h.alternate, h.remembered, "restore");
       expect(yield* h.readPreference()).toMatchObject(h.rememberedPreference);
     }),
+  );
+
+  it.effect("writes once for model and thinking events that reach one final state", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      yield* h.start();
+
+      h.select(h.remembered, "medium");
+      yield* h.emitModel(h.remembered, h.initial);
+      expect(yield* h.readPreference()).toMatchObject({
+        provider: h.remembered.provider,
+        model: h.remembered.id,
+        thinkingLevel: "medium",
+      });
+      yield* h.stampPreference();
+      yield* h.emitThinking("medium", "low");
+      expect(yield* h.preferenceModifiedAt()).toBe(UNCHANGED_STAMP_SECONDS);
+
+      h.select(h.remembered, "high");
+      yield* h.emitThinking("high", "medium");
+      expect((yield* h.readPreference()).thinkingLevel).toBe("high");
+      expect(h.notify).not.toHaveBeenCalled();
+    }),
+  );
+
+  it.effect(
+    "replaces a preference another process saved when this session's selection repeats",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness();
+        yield* h.start();
+
+        h.select(h.remembered, "medium");
+        yield* h.emitModel(h.remembered, h.initial);
+        yield* writePreference(h.agentDirectory, h.cwd, {
+          provider: h.alternate.provider,
+          model: h.alternate.id,
+          thinkingLevel: "low",
+        });
+
+        yield* h.emitThinking("medium", "low");
+        expect(yield* h.readPreference()).toMatchObject({
+          provider: h.remembered.provider,
+          model: h.remembered.id,
+          thinkingLevel: "medium",
+        });
+        expect(h.notify).not.toHaveBeenCalled();
+      }),
   );
 
   it.effect("keeps thinking events delayed past restoration idempotent", () =>

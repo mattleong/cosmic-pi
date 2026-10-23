@@ -30,7 +30,7 @@ import { summarizeDiff } from "../../../diff/summary";
 import { formatDiffPreview } from "./diff-preview";
 import { expandedSection } from "../../../preview/expanded-section";
 import { normalizeShellCommandWhitespace } from "../../shell-command";
-import { pathPreviewLanguage, renderContentPreview } from "./preview-text";
+import { argumentsStreaming, pathPreviewLanguage, renderContentPreview } from "./preview-text";
 import { readResultBody } from "./read-result";
 import type { PreviewRenderers, RendererState, ToolRenderContext } from "./types";
 import { writeBeforeSnapshot, writeDiffPlan } from "./write-result";
@@ -58,10 +58,15 @@ export function builtinExpandedContent(tool: BuiltinCompactTool, cwd: string): P
         container.addChild(
           expandedSection(theme, undefined, commandBody(command, theme, context.invalidate)),
         );
+      const highlight = !argumentsStreaming(context);
       const content = ownField(input, "content");
       if (tool === "write" && Predicate.isString(content))
         container.addChild(
-          expandedSection(theme, undefined, source(content, path, theme, context.invalidate)),
+          expandedSection(
+            theme,
+            undefined,
+            source(content, path, theme, context.invalidate, { highlight }),
+          ),
         );
       for (const { oldText, newText } of operations)
         for (const [label, text] of [
@@ -69,7 +74,11 @@ export function builtinExpandedContent(tool: BuiltinCompactTool, cwd: string): P
           ["New text", newText],
         ] as const)
           container.addChild(
-            expandedSection(theme, label, source(text, path, theme, context.invalidate)),
+            expandedSection(
+              theme,
+              label,
+              source(text, path, theme, context.invalidate, { highlight }),
+            ),
           );
       return container;
     },
@@ -115,7 +124,7 @@ function builtinResultBody(
     const body = readResultBody(result, input);
     if (body.kind === "image") return new Text(escapeControlChars(body.text), 0, 0);
     if (body.kind === "oversized") return new Container();
-    return source(body.content, path, theme, context.invalidate, body.firstLine);
+    return source(body.content, path, theme, context.invalidate, { firstLine: body.firstLine });
   }
   if (tool === "edit") {
     const diff = getEditDiff(hostObject(result.details));
@@ -227,12 +236,15 @@ function source(
   path: string,
   theme: Theme,
   invalidate?: () => void,
-  firstLine?: number,
+  {
+    firstLine,
+    highlight = true,
+  }: { readonly firstLine?: number | undefined; readonly highlight?: boolean } = {},
 ): Text {
   return renderContentPreview({
     content,
     limit: 0,
-    lang: pathPreviewLanguage(path, content),
+    lang: highlight ? pathPreviewLanguage(path, content) : undefined,
     theme,
     invalidate,
     firstLine,

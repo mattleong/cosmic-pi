@@ -5,7 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import { expect } from "vitest";
-import { type HerdrPane } from "../src/boundary/herdr-client.ts";
+import { makeHerdrClient, type HerdrPane } from "../src/boundary/herdr-client.ts";
 import { SessionHeaderProbe } from "../src/boundary/session-file.ts";
 import {
   HERDR_BTW_LINK_ENTRY_TYPE,
@@ -53,6 +53,24 @@ const liveChildAgent = (overrides: Partial<HerdrPane> = {}) => ({
   ...overrides,
 });
 
+/** Decodes the given `herdr api snapshot` output with the real client. */
+const snapshotOutputClient = (stdout: string) =>
+  makeHerdrClient(
+    {},
+    {
+      processRunner: () =>
+        Effect.succeed({
+          code: 0,
+          signal: null,
+          stdout,
+          stderr: "",
+          overflowed: false,
+          timedOut: false,
+          cleanupUnconfirmed: false,
+        }),
+    },
+  );
+
 const fixture = (options: HerdrBtwFixtureOptions = {}) =>
   makeServiceFixture({
     createdChildId: NEW_CHILD_ID,
@@ -83,6 +101,27 @@ describe("herdr-btw link restoration", () => {
       HerdrBtwLinkRestoration.restored({ link: LINK }),
     );
   });
+
+  it("lets the newest owned or unreadable link entry decide", () => {
+    const replacement = { ...LINK, agentName: "btw-replacement", terminalId: "term-replacement" };
+    const unreadable = linkEntry({ version: 2 });
+    const truncated = linkEntry({ ...LINK, terminalId: undefined });
+    for (const [entries, expected] of [
+      [[], HerdrBtwLinkRestoration.none()],
+      [
+        [linkEntry(LINK), linkEntry(replacement)],
+        HerdrBtwLinkRestoration.restored({ link: replacement }),
+      ],
+      [[unreadable, linkEntry(LINK)], HerdrBtwLinkRestoration.restored({ link: LINK })],
+      [[linkEntry(LINK), unreadable], HerdrBtwLinkRestoration.malformed()],
+      [[linkEntry(LINK), truncated], HerdrBtwLinkRestoration.malformed()],
+      [
+        [unreadable, linkEntry({ ...LINK, parentSessionId: "ancestor-session" })],
+        HerdrBtwLinkRestoration.malformed(),
+      ],
+    ] as const)
+      expect(restoreHerdrBtwLink(entries, OWNER)).toEqual(expected);
+  });
 });
 
 describe("herdr-btw reuse workflow", () => {
@@ -92,7 +131,6 @@ describe("herdr-btw reuse workflow", () => {
       const result = yield* test.open("continue please");
       expect(result).toMatchObject({ mode: "focused", agentName: LINK.agentName, paneId: "w1:p2" });
       expect(operationNames(test.calls)).toEqual([
-        "inspect protocol",
         "inspect live agents",
         "prompt side-session Pi",
         "focus side-session Pi",
@@ -101,6 +139,44 @@ describe("herdr-btw reuse workflow", () => {
         agentName: LINK.agentName,
         prompt: "Side-session request:\ncontinue please",
       });
+    }),
+  );
+
+  it.effect("refuses an outdated live Herdr before focusing or relaunching the child", () =>
+    Effect.gen(function* () {
+      for (const liveAgents of [[liveChildAgent()], []]) {
+        const test = fixture({ initialLinks: [LINK], liveAgents, protocol: 16 });
+        expect(yield* Effect.flip(test.open())).toMatchObject({
+          code: "herdr_upgrade_required",
+          outcome: "confirmed",
+        });
+        expect(operationNames(test.calls)).not.toContain("focus side-session Pi");
+        expect(operationNames(test.calls)).not.toContain("split BTW pane");
+      }
+    }),
+  );
+
+  it.effect("reports an outdated Herdr even when its snapshot's agents don't decode", () =>
+    Effect.gen(function* () {
+      for (const agents of [[{ ...liveChildAgent(), terminal_id: "" }], "legacy agents"]) {
+        const liveSnapshot = (protocol: number) =>
+          fixture({
+            initialLinks: [LINK],
+            inspectLiveAgents: snapshotOutputClient(
+              JSON.stringify({ result: { snapshot: { protocol, agents } } }),
+            ).inspectLiveAgents,
+          });
+        const outdated = liveSnapshot(16);
+        expect(yield* Effect.flip(outdated.open())).toMatchObject({
+          code: "herdr_upgrade_required",
+          outcome: "confirmed",
+        });
+        expect(operationNames(outdated.calls)).not.toContain("split BTW pane");
+        expect(yield* Effect.flip(liveSnapshot(20).open())).toMatchObject({
+          code: "herdr_inspect_live_agents_protocol_invalid",
+          outcome: "confirmed",
+        });
+      }
     }),
   );
 

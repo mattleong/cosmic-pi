@@ -197,12 +197,16 @@ const validAwaitRelationships = (details: SubagentAwaitDetails): boolean => {
   );
 };
 
+const isObjectValue = Schema.is(Schema.ObjectKeyword);
+// A hostile proxy can throw even here; such input is decoded, and rejected, without the cache.
+const isFrozenObject = Option.liftThrowable(Object.isFrozen);
+
 const safeDecoder = <S extends Schema.ConstraintDecoder<unknown>>(
   schema: S,
   validate: (decoded: S["Type"]) => boolean,
 ) => {
   const decodeTarget = Schema.decodeUnknownOption(schema, DETAILS_PARSE_OPTIONS);
-  return Fn.flow(
+  const decode = Fn.flow(
     Option.liftThrowable(
       Fn.flow(
         decodePreflighted,
@@ -215,6 +219,16 @@ const safeDecoder = <S extends Schema.ConstraintDecoder<unknown>>(
     Option.flatten,
     Option.getOrUndefined,
   );
+  // Published details are deep-frozen and never change, so each decodes once however often it renders.
+  const decodedFrozen = new WeakMap<object, S["Type"] | undefined>();
+  return (input: unknown): S["Type"] | undefined => {
+    if (!isObjectValue(input) || !Option.getOrElse(isFrozenObject(input), () => false))
+      return decode(input);
+    if (decodedFrozen.has(input)) return decodedFrozen.get(input);
+    const decoded = decode(input);
+    decodedFrozen.set(input, decoded);
+    return decoded;
+  };
 };
 
 const validStartAwaitDetails = (details: typeof SubagentStartAwaitCardDetailsSchema.Type) =>

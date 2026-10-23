@@ -21,6 +21,7 @@ import type {
   SubagentServiceContract,
 } from "./service.ts";
 import { snapshotView } from "./state.ts";
+import { runTreeView } from "./tree.ts";
 
 interface RunCompletionObservationDependencies extends Pick<RunContext, "records" | "withLock"> {
   readonly withCompletionGate: WithRunLock;
@@ -42,21 +43,78 @@ const reportStatusOf = (finalText: string | undefined, unresolved: boolean, avai
         ? ("available" as const)
         : ("claimed" as const);
 
-const redactCompletionReport = (view: SubagentRunView): SubagentRunView => {
+const REDACTED_REPORT_TEXT = "[report redacted: owned or already delivered]";
+
+const withoutCompletionReport = (view: SubagentRunView) => {
   const {
     finalText: _finalText,
     finalTextTruncation: _finalTextTruncation,
     reportArchive: _reportArchive,
     ...withoutReport
   } = view;
+  return withoutReport;
+};
+
+const redactCompletionReport = (view: SubagentRunView): SubagentRunView => {
+  const withoutReport = withoutCompletionReport(view);
   return snapshotView({
     ...withoutReport,
     sessionEvents: Arr.map(withoutReport.sessionEvents, (event) =>
-      event.type === "assistant"
-        ? Object.assign({}, event, { text: "[report redacted: owned or already delivered]" })
-        : event,
+      event.type === "assistant" ? Object.assign({}, event, { text: REDACTED_REPORT_TEXT }) : event,
     ),
   });
+};
+
+type ReportStatus = NonNullable<SubagentRunView["reportStatus"]>;
+
+// Keyed by the frozen tree view, then by report status and redaction, so an unchanged target keeps
+// its observed view across revisions, and concurrent waits on it don't evict each other's.
+const observedViews = new WeakMap<SubagentRunView, Map<string, SubagentRunView>>();
+
+/**
+ * A frozen tree view with its report status, redacted unless the observer owns the report. Its
+ * nested values are already frozen, so only the new objects are frozen here.
+ */
+const observedView = (
+  view: SubagentRunView,
+  reportStatus: ReportStatus,
+  redacted: boolean,
+): SubagentRunView => {
+  const variants = observedViews.get(view) ?? new Map<string, SubagentRunView>();
+  const key = `${reportStatus}:${redacted}`;
+  const cached = variants.get(key);
+  if (cached) return cached;
+  const observed: SubagentRunView = redacted
+    ? Object.freeze({
+        ...withoutCompletionReport({ ...view, reportStatus }),
+        sessionEvents: Object.freeze(
+          Arr.map(view.sessionEvents, (event) =>
+            event.type === "assistant"
+              ? Object.freeze(Object.assign({}, event, { text: REDACTED_REPORT_TEXT }))
+              : event,
+          ),
+        ),
+      })
+    : Object.freeze({ ...view, reportStatus });
+  variants.set(key, observed);
+  observedViews.set(view, variants);
+  return observed;
+};
+
+// Each projection's runs by ID, shared by every wait observing that projection.
+const projectedRunIndexes = new WeakMap<
+  ReadonlyArray<SubagentRunView>,
+  ReadonlyMap<string, SubagentRunView>
+>();
+
+const projectedRunIndex = (
+  runs: ReadonlyArray<SubagentRunView>,
+): ReadonlyMap<string, SubagentRunView> => {
+  const cached = projectedRunIndexes.get(runs);
+  if (cached) return cached;
+  const index = new Map(Arr.map(runs, (run) => [run.id, run] as const));
+  projectedRunIndexes.set(runs, index);
+  return index;
 };
 
 export function completionObservationOperations(
@@ -72,30 +130,31 @@ export function completionObservationOperations(
     delivery,
   } = dependencies;
 
-  const withTreeMetadata = (view: SubagentRunView): SubagentRunView => {
-    const projected = Option.getOrUndefined(
-      Arr.findFirst(currentProjection().runs, (candidate) => candidate.id === view.id),
+  // The record's current snapshot with the latest projection's child counts. While that
+  // projection is current, this is the projection's own view of the run.
+  const treeViewOf = (record: RunRecord): SubagentRunView => {
+    const projected = projectedRunIndex(currentProjection().runs).get(record.view.id);
+    return runTreeView(
+      snapshotRun(record),
+      projected?.directChildCount ?? 0,
+      projected?.descendantCount ?? 0,
     );
-    return snapshotView({
-      ...view,
-      directChildCount: projected?.directChildCount ?? 0,
-      descendantCount: projected?.descendantCount ?? 0,
-    });
   };
 
   const observeRecord = (record: RunRecord, claimToken: string): SubagentRunObservation => {
     const generation = record.completionGeneration;
-    const view = withTreeMetadata(snapshotRun(record));
+    const view = treeViewOf(record);
     if (!isTerminalRunState(view.state)) return { run: view };
     const unresolved = record.completionGenerations.has(generation);
     const claimOwner = completionClaimOwner(record, generation);
     const owns = unresolved && claimOwner === claimToken;
-    const observed: SubagentRunView = {
-      ...view,
-      reportStatus: reportStatusOf(view.finalText, unresolved, owns || claimOwner === undefined),
-    };
+    const reportStatus = reportStatusOf(
+      view.finalText,
+      unresolved,
+      owns || claimOwner === undefined,
+    );
     return {
-      run: owns ? snapshotView(observed) : redactCompletionReport(observed),
+      run: observedView(view, reportStatus, !owns),
       ...(owns && {
         completionReceipt: {
           id: record.view.id,
@@ -206,7 +265,7 @@ export function completionObservationOperations(
       record.view.state === "waiting_for_parent" &&
       record.view.question !== undefined &&
       questionRecipientRunId(records, record.view.id) === callerRunId
-        ? [redactCompletionReport(withTreeMetadata(snapshotRun(record)))]
+        ? [redactCompletionReport(treeViewOf(record))]
         : [],
     );
   };

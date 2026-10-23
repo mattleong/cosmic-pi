@@ -1,3 +1,5 @@
+import { initTheme } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import { describe, expect, it, vi } from "vitest";
 import { plainTheme } from "pi-cosmic-core/testing";
 import type { FullScreenSelectionKeybindingId } from "pi-cosmic-ui/manager/keymap";
@@ -190,4 +192,35 @@ describe("/subagents unresolved guidance delivery", () => {
       expect.objectContaining({ assignmentEpoch: 1 }),
     );
   });
+});
+
+const assistant = (text: string) => ({ type: "assistant" as const, text, createdAt: 1 });
+
+it("renders the selected run's current task, messages, and report on every frame", () => {
+  initTheme("dark", false);
+  const member = run("alpha", {
+    state: "completed",
+    endedAt: 900,
+    task: "Review **task one**",
+    sessionEvents: [assistant("- interim one")],
+    finalText: "## Report one",
+  });
+  const { component, setRuns } = makeFleet([member], { height: 40 });
+  const frame = () => Arr.join(component.render(160), "\n");
+  const first = frame();
+  for (const text of ["task one", "interim one", "Report one"]) expect(first).toContain(text);
+  expect(frame()).toBe(first);
+
+  setRuns([
+    {
+      ...member,
+      task: "Review **task two**",
+      sessionEvents: [assistant("- interim two")],
+      finalText: "## Report two",
+    },
+  ]);
+  const next = frame();
+  for (const text of ["task two", "interim two", "Report two"]) expect(next).toContain(text);
+  for (const text of ["task one", "interim one", "Report one"]) expect(next).not.toContain(text);
+  component.dispose();
 });

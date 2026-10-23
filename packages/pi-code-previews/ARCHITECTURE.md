@@ -44,9 +44,11 @@ replacement session's scheduler. Deactivation revokes capabilities immediately; 
 awaits scoped scheduler work. Syntax initialization can fall back to plain text without taking down
 presentation.
 
-Deferred and lazily created diff previews capture their originating capability and display limits.
-If that owner retires before computation or first draw, they render retained evidence as plain text
-without scheduling work, requesting syntax resources, or invalidating the previous host.
+Deferred and lazily created previews (diffs, full-file reads, and expanded grep output) capture their
+originating capability and display limits. If that owner retires before computation or first draw,
+they render retained evidence as plain text without scheduling work, requesting syntax resources, or
+invalidating the previous host. Deferred previews run one at a time, each after yielding to the
+event loop, so a burst of them cannot block input or frames.
 
 Cooperating extensions retain their own executable registrations. They install
 `registerCodePreviewReplay` at factory time, wrap through its `shell` after settings load, publish
@@ -81,9 +83,13 @@ initialization. Syntax initialization failure cannot roll back a committed theme
 
 Syntax and write services own resources and authoritative state; renderers consume synchronous
 projections. Bounded, scoped syntax requests remember failed grammars/themes for the session rather
-than retrying on every draw. Ownership tokens prevent late cleanup from clearing newer caches or
-write evidence. Renderer-local caches, frame state, and component state may be mutable; they are
-presentation state, not a second owner of execution or session resources.
+than retrying on every draw. Arguments that are still streaming render as plain text and stay out of
+the shared highlight cache. A row streams only after its arguments change between draws, before
+they are complete, execution starts, or a result settles. Pi never marks replayed arguments
+complete, so a replayed row's first draw, even one without a saved result, still highlights.
+Ownership tokens prevent late cleanup from clearing newer caches or write evidence. Renderer-local
+caches, frame state, and component state may be mutable; they are presentation state, not a second
+owner of execution or session resources.
 
 ## Evidence and failure behavior
 

@@ -5,14 +5,18 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import {
-  acquireNativeLock,
+  acquireLockOffThread,
   CrossProcessLockError,
-  type CrossProcessLease,
+  ownerIsDead,
+  type CrossProcessLockOwner,
+  type OffThreadLease,
 } from "./cross-process-lock.ts";
 import { nodePath as path } from "./node-builtins.ts";
 
 const INITIAL_RETRY_MILLIS = 5;
 const MAX_RETRY_MILLIS = 100;
+/** How long a waiter trusts its last finding that the current owner is not dead. */
+const OWNER_RECHECK_MILLIS = 1_000;
 
 export class JsonDocumentLockError extends Schema.TaggedError<
   JsonDocumentLockError,
@@ -54,16 +58,15 @@ const lockError = (cause: unknown): JsonDocumentLockError =>
     : JsonDocumentLockError.make({ reason: "unavailable" });
 
 // An unconfirmed release leaves the slot held until this process exits; writers then reclaim it.
-const releaseLease = (lease: CrossProcessLease) =>
-  Effect.try({ try: () => lease.release(), catch: lockError }).pipe(Effect.ignore);
+const releaseLease = (lease: OffThreadLease) => Effect.ignore(lease.release);
+
+interface CheckedOwner {
+  readonly token: string;
+  readonly checkedAt: number;
+}
 
 const makeNodeJsonDocumentLock = (options: JsonDocumentLockOptions): JsonDocumentLockContract => {
   const timeoutMillis = Duration.toMillis(options.timeout);
-  const tryAcquire = (documentPath: string, directory: string) =>
-    Effect.try({
-      try: () => acquireNativeLock(documentPath, { directory }, true),
-      catch: lockError,
-    });
   const acquire = Effect.fnUntraced(function* (
     documentPath: string,
     directory: string,
@@ -71,8 +74,21 @@ const makeNodeJsonDocumentLock = (options: JsonDocumentLockOptions): JsonDocumen
   ) {
     const deadline = (yield* Clock.currentTimeMillis) + timeoutMillis;
     let delay = INITIAL_RETRY_MILLIS;
+    // Probing liveness can spawn `ps` synchronously, so retries against the same owner reuse a
+    // recent finding. Treating that owner as live only delays recovery, which already fails closed.
+    let notDead: CheckedOwner | undefined;
     for (;;) {
-      const lease = yield* tryAcquire(documentPath, directory);
+      const now = yield* Clock.currentTimeMillis;
+      const isDead = (owner: CrossProcessLockOwner): boolean => {
+        if (notDead?.token === owner.token && now - notDead.checkedAt < OWNER_RECHECK_MILLIS)
+          return false;
+        if (ownerIsDead(owner)) return true;
+        notDead = { token: owner.token, checkedAt: now };
+        return false;
+      };
+      const lease = yield* acquireLockOffThread(documentPath, { directory }, isDead).pipe(
+        Effect.mapError(lockError),
+      );
       if (lease !== undefined) return lease;
       if ((yield* Clock.currentTimeMillis) >= deadline)
         return yield* JsonDocumentLockError.make({ reason: "busy" });

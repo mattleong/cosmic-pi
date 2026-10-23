@@ -9,7 +9,7 @@ import { AskUserHostError } from "../questionnaire/errors.ts";
 import type { AskUserOutcome } from "../questionnaire/model.ts";
 import { cancelQuestionnaire } from "../questionnaire/reducer.ts";
 import type { AskUserHost } from "../questionnaire/service.ts";
-import { captureExternalEditorCommand, editWithExternalEditor } from "./host-external-editor.ts";
+import { editWithExternalEditor, readExternalEditorCommand } from "./host-external-editor.ts";
 import type { AskUserPromptGate } from "./host-prompt.ts";
 import type { AskUserDialogBridge } from "./host-ui.ts";
 
@@ -51,7 +51,10 @@ export const askUserTuiHost =
               live = false;
             },
             create: ({ tui, theme, keybindings, getHeight, finish }) => {
-              const command = captureExternalEditorCommand(ctx);
+              // Reading settings takes file locks, so wait until the editor key is first pressed.
+              let command: { readonly value: string | undefined } | undefined;
+              const editorCommand = () =>
+                (command ??= { value: readExternalEditorCommand(ctx) }).value;
               const dialog = new AskUserDialog({
                 tui,
                 theme,
@@ -64,7 +67,7 @@ export const askUserTuiHost =
                 },
                 editExternally: (value) =>
                   live
-                    ? runEditor(editWithExternalEditor(tui, command, value)).then(
+                    ? runEditor(editWithExternalEditor(tui, editorCommand(), value)).then(
                         (result) => (live ? result : undefined),
                         (cause: unknown) => {
                           if (live) throw cause;

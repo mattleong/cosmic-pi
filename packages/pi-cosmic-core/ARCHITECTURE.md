@@ -65,6 +65,9 @@ Synchronous renderers consume detached snapshots. The [projection transaction](s
 keeps waiting, transition work, and snapshot preparation interruptible; external publication,
 internal snapshot replacement, and authoritative state assignment form one narrow uninterruptible
 commit. Failed preparation/publication leaves authoritative state and the internal snapshot unchanged.
+A transition that returns its current state keeps the published snapshot without projecting or
+publishing again. Snapshots reuse, by reference, subtrees this copy of core already validated and
+froze, so preparation cost follows what changed.
 Consumers guard the actual host publication against retired-session authority, including when an
 already-admitted durable commit is allowed to finish.
 
@@ -103,7 +106,8 @@ its target is replaced. Each write and modification is serialized on that real p
 process, then across same-host processes by a [document lock](src/platform/json-document-lock.ts):
 a `CrossProcessLock` whose private root is a `.<name>.lock` directory beside the document. The root
 stays after release, because removing it would race writers creating owner records inside it. Waiting is bounded (five seconds by default) and fails as a typed
-`lock` document error; a crashed writer's lock is reclaimed by the next writer. Writing creates the
+`lock` document error; a crashed writer's lock is reclaimed by the next writer. A waiting writer
+re-probes an owner it already found not dead at most once a second. Writing creates the
 document's directory. Reads take no lock and rely on the atomic replacement. Feature stores validate
 their schemas and combine durable writes with private state/projection installation where those must
 agree. Default seeding rechecks existence inside the modification, and trust gates exclude untrusted
@@ -129,7 +133,8 @@ and unchanged size/modification metadata across the read.
 tightened to 0700, files are created exclusively and synced, replacement commits by an uninterruptible
 rename with nothing fallible after it, and a failed write removes only the file it created. Failures
 are a `PrivateFileError` with a bounded reason and no path or OS message. The cross-process lock
-shares its ownership and mode checks but stays synchronous because its lease callbacks are.
+shares its ownership and mode checks. Its lease callbacks are synchronous, so they fsync inline;
+document locks run the same protocol but wait for those fsyncs on the libuv thread pool.
 
 [Cross-process locks](src/platform/cross-process-lock.ts) are an opt-in, same-host capability.
 Exclusion requires the same private root and actual shared-resource namespace. `tryAcquire` does

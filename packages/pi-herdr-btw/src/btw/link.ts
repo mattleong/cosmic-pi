@@ -1,5 +1,4 @@
 import * as Data from "effect/Data";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core";
 import { BoundedId, BoundedPath, HerdrBtwSessionIdSchema } from "./marker.ts";
@@ -34,6 +33,7 @@ const CustomEntrySchema = Schema.Struct({
   customType: Schema.String.check(Schema.isMaxLength(256)),
   data: Schema.optional(Schema.Unknown),
 });
+const decodeCustomEntry = decodeUnknownOrUndefined(CustomEntrySchema);
 
 export type HerdrBtwLinkRestoration = Data.TaggedEnum<{
   none: Record<never, never>;
@@ -42,28 +42,23 @@ export type HerdrBtwLinkRestoration = Data.TaggedEnum<{
 }>;
 export const HerdrBtwLinkRestoration = Data.taggedEnum<HerdrBtwLinkRestoration>();
 
+/** Later entries override earlier ones, so the newest link entry not owned elsewhere decides. */
 export const restoreHerdrBtwLink = (
-  entries: Iterable<unknown>,
+  entries: ReadonlyArray<unknown>,
   owner: HerdrBtwLinkOwner,
 ): HerdrBtwLinkRestoration => {
-  let restoration: HerdrBtwLinkRestoration = HerdrBtwLinkRestoration.none();
-  for (const entry of entries) {
-    const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(CustomEntrySchema)(entry));
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const decoded = decodeCustomEntry(entries[index]);
     if (decoded?.customType !== HERDR_BTW_LINK_ENTRY_TYPE) continue;
     const linkOwner = decodeLinkOwner(decoded.data);
-    if (!linkOwner) {
-      restoration = HerdrBtwLinkRestoration.malformed();
-      continue;
-    }
+    if (!linkOwner) return HerdrBtwLinkRestoration.malformed();
     if (
       linkOwner.parentSessionId !== owner.sessionId ||
       linkOwner.parentSessionPath !== owner.sessionPath
     )
       continue;
     const link = decodeLink(decoded.data);
-    restoration = link
-      ? HerdrBtwLinkRestoration.restored({ link })
-      : HerdrBtwLinkRestoration.malformed();
+    return link ? HerdrBtwLinkRestoration.restored({ link }) : HerdrBtwLinkRestoration.malformed();
   }
-  return restoration;
+  return HerdrBtwLinkRestoration.none();
 };

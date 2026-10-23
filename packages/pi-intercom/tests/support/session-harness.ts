@@ -14,13 +14,15 @@ import * as Path from "effect/Path";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
+import { currentProcessIdentity, synchronousRandomHex } from "pi-cosmic-core";
 import { extensionContextFixture, recordingExtensionHost } from "pi-cosmic-core/testing";
+import { createServer, type Socket } from "node:net";
 import { vi } from "vitest";
 import { registerIntercomApplication } from "../../src/application.ts";
 import { hostIntercomInbound } from "../../src/boundary/host-inbound.ts";
 import { registerIntercomDelivery } from "../../src/delivery.ts";
 import { intercomLayer } from "../../src/layer.ts";
-import { SessionRecordFromJson } from "../../src/registry/schema.ts";
+import { SessionRecordFromJson, sessionRecord } from "../../src/registry/schema.ts";
 import { IntercomSession, type IntercomSessionInput } from "../../src/session/service.ts";
 import type { SessionToolArgs } from "../../src/tools/contract.ts";
 
@@ -58,6 +60,72 @@ export const onlyRecord = <A, E, R>(records: Effect.Effect<ReadonlyArray<A>, E, 
     const all = yield* records;
     expect(all).toHaveLength(1);
     return yield* Effect.fromNullishOr(all[0]);
+  });
+
+/**
+ * A registry record of a live owner whose socket nobody answers, or `socket` when given, in the
+ * registry of the sessions sharing `where.base`.
+ */
+export const writeForeignRecord = (
+  where: { readonly base: string; readonly sessions: string },
+  sessionId: string,
+  options: { readonly socket?: string; readonly pid?: number; readonly token?: string } = {},
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const paths = yield* Path.Path;
+    const instance = synchronousRandomHex(16);
+    const owner = currentProcessIdentity();
+    const record = sessionRecord({
+      instance,
+      pid: options.pid ?? owner.pid,
+      started: options.pid === undefined ? owner.started : undefined,
+      sessionId,
+      name: undefined,
+      cwd: "/elsewhere",
+      socket: options.socket ?? paths.join(where.base, `${instance}.sock`),
+      token: options.token ?? synchronousRandomHex(32),
+    });
+    const source = yield* Schema.encodeEffect(SessionRecordFromJson)(record);
+    yield* fs.writeFileString(paths.join(where.sessions, `${instance}.json`), source, {
+      mode: 0o600,
+    });
+  });
+
+/** A listener at `socket` that takes connections and never answers them. */
+export const hangingListener = (socket: string) =>
+  Effect.gen(function* () {
+    const peers = new Set<Socket>();
+    const waiters = new Set<{ readonly total: number; readonly wake: () => void }>();
+    yield* Effect.acquireRelease(
+      Effect.callback<ReturnType<typeof createServer>>((resume) => {
+        const server = createServer((peer) => {
+          peer.on("error", () => undefined);
+          peers.add(peer);
+          for (const waiter of waiters)
+            if (peers.size >= waiter.total) {
+              waiters.delete(waiter);
+              waiter.wake();
+            }
+        });
+        server.listen(socket, () => resume(Effect.succeed(server)));
+      }),
+      (server) =>
+        Effect.callback<void>((resume) => {
+          server.close(() => resume(Effect.void));
+          for (const peer of peers) peer.destroy();
+        }),
+    );
+    return {
+      /** Waits until `total` connections have arrived in all. */
+      arrived: (total: number) =>
+        Effect.callback<void>((resume) => {
+          if (peers.size >= total) return resume(Effect.void);
+          const waiter = { total, wake: () => resume(Effect.void) };
+          waiters.add(waiter);
+          return Effect.sync(() => void waiters.delete(waiter));
+        }),
+    };
   });
 
 /** Where sessions of one simulated OS user keep their registry. */
@@ -199,10 +267,10 @@ export const harness = (options: HarnessOptions = {}) =>
 
 /**
  * One session runtime built directly from its layer, with real delivery into a recorded host, so
- * a test can run tool operations against its context. `PI_CODING_AGENT_DIR` must name the shared
- * agent directory.
+ * a test can run tool operations against its context. Its startup sweep may still be running.
+ * `PI_CODING_AGENT_DIR` must name the shared agent directory.
  */
-export const sessionRuntime = (
+export const startSessionRuntime = (
   session: IntercomSessionInput,
   replyText: string,
   fallbackRoot: string,
@@ -226,8 +294,16 @@ export const sessionRuntime = (
         { fallbackRoot },
       ),
     );
-    const record = yield* IntercomSession.use((owned) => owned.record).pipe(
-      Effect.provide(context),
-    );
-    return { context, delivery, sendMessage, record };
+    const { record, swept } = yield* Effect.provide(Effect.service(IntercomSession), context);
+    return { context, delivery, sendMessage, record: yield* record, swept };
   });
+
+/**
+ * A session runtime as `startSessionRuntime` builds it, once its startup sweep has ended, so the
+ * sweep never meets records a test writes afterwards.
+ */
+export const sessionRuntime = (
+  session: IntercomSessionInput,
+  replyText: string,
+  fallbackRoot: string,
+) => Effect.tap(startSessionRuntime(session, replyText, fallbackRoot), ({ swept }) => swept);

@@ -95,10 +95,9 @@ function openTaskManager(
             });
         },
       });
+      // Log rows extend incrementally from each projection; only theme changes invalidate them.
       const unsubscribe = bridge.subscribe(() => {
-        if (revoked()) return;
-        manager.invalidate();
-        tui.requestRender();
+        if (!revoked()) tui.requestRender();
       });
       const stopSpinnerTicker = startHostUiTicker(SPINNER_FRAME_MS, () => {
         if (

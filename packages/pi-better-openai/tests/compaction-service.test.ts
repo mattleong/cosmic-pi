@@ -27,6 +27,7 @@ import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Option from "effect/Option";
+import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import { extensionContextFixture, provideBuiltLayer } from "pi-cosmic-core/testing";
@@ -182,6 +183,8 @@ const summaryStream = (requestModel: Model<Api>, message = "native summary") => 
 const decodePayload = Schema.decodeUnknownSync(
   Schema.Struct({ input: Schema.Array(Schema.Unknown) }),
 );
+const decodeInputItem = Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Unknown));
+const decodeJsonText = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const isConfigurationUpdate = Schema.is(
   Schema.Struct({ type: Schema.Literal("configuration_update") }),
 );
@@ -495,6 +498,84 @@ describe("OpenAICompactionService", () => {
         }).pipe(provideBuiltLayer(serviceLayer(target, client)));
       },
     );
+
+  it.effect(
+    "injects identically from cached, key-reordered, and fresh projections with covered retry omissions",
+    () => {
+      const requestModel = { ...testModel(), compat: { supportsMidConvoEffort: true } };
+      const manager = SessionManager.inMemory("/virtual/injection-comparison");
+      const reply = (text: string, timestamp: number, stopReason: "stop" | "error" = "stop") =>
+        assistantMessage([{ type: "text", text }], {
+          model: requestModel.id,
+          providerThinkingLevel: "high",
+          stopReason,
+          timestamp,
+        });
+      manager.appendMessage({ role: "system", content: "native rules", timestamp: 0 });
+      manager.appendMessage({ role: "user", content: "covered question", timestamp: 1 });
+      const failedId = manager.appendMessage(reply("503 failed response", 2, "error"));
+      const target = fixture({ enabled: true, currentModel: requestModel, manager });
+      const { client } = recordingClient("comparison");
+      const freshInject = (input: readonly unknown[]) =>
+        OpenAICompactionService.use((fresh) => fresh.inject({ input })).pipe(
+          provideBuiltLayer(
+            serviceLayer(fixture({ enabled: true, currentModel: requestModel, manager }), client),
+          ),
+        );
+      return Effect.gen(function* () {
+        const service = yield* OpenAICompactionService;
+        yield* service.filterContext(
+          Arr.flatMap(
+            Arr.filter(manager.buildContextEntries(), (entry) => entry.id !== failedId),
+            sessionEntryToContextMessages,
+          ),
+        );
+        manager.appendMessage(reply("covered answer", 3));
+        const checkpoint = commit(manager, yield* service.compact(compactEvent()));
+        expect(
+          decodeOpenAICompactionDetails(checkpoint.details)?.checkpoint.omittedEntryIds,
+        ).toEqual([failedId]);
+        manager.appendMessage({ role: "user", content: "tail question", timestamp: 4 });
+        const messages = manager.buildSessionContext().messages;
+        const repaired = (yield* service.filterContext(messages)) ?? messages;
+        expect(serializedSnapshot(repaired)).not.toContain("503 failed response");
+        const inputs = yield* Effect.forEach(["high", undefined] as const, (reasoning) =>
+          nativeProviderPayload(requestModel, repaired, reasoning).pipe(
+            Effect.map((payload) => decodePayload(payload).input),
+          ),
+        );
+        // Precondition: only the first payload carries per-reply configuration updates.
+        expect(Arr.map(inputs, (input) => Arr.some(input, isConfigurationUpdate))).toEqual([
+          true,
+          false,
+        ]);
+        // Alternating configuration updates must replace the cached projection each time.
+        for (const input of [...inputs, ...inputs]) {
+          const expected = decodePayload(yield* freshInject(input)).input;
+          expect(expected).toContainEqual(
+            expect.objectContaining({ encrypted_content: "comparison-1" }),
+          );
+          expect(serializedSnapshot(expected)).not.toContain("covered question");
+          expect(decodePayload(yield* service.inject({ input })).input).toEqual(expected);
+          const reordered = Arr.map(input, (item) =>
+            Rec.fromEntries(Arr.reverse(Rec.toEntries(decodeInputItem(item)))),
+          );
+          for (const [index, item] of input.entries())
+            expect(serializedSnapshot(reordered[index])).not.toBe(serializedSnapshot(item));
+          expect(decodePayload(yield* service.inject({ input: reordered })).input).toEqual(
+            expected,
+          );
+          const forged = Arr.map(input, (item) =>
+            decodeJsonText(
+              Str.replace("covered question", "forged question")(serializedSnapshot(item)),
+            ),
+          );
+          expect(serializedSnapshot(forged)).toContain("forged question");
+          expect(yield* service.inject({ input: forged })).toBeUndefined();
+        }
+      }).pipe(provideBuiltLayer(serviceLayer(target, client)));
+    },
+  );
 
   it.effect("is a no-op when disabled or the current model is ineligible", () => {
     const { requests, client } = recordingClient("unused");

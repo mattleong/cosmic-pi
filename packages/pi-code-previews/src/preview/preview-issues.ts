@@ -157,20 +157,34 @@ export function renderWithPreviewIssues<TArgs, TDetails, TState extends object>(
 ): Component {
   frames.frame(context).context = context;
   const detached: ToolRenderContext<TState, TArgs> = { ...context, lastComponent: undefined };
+  let drawn:
+    | {
+        readonly value: PreviewIssues;
+        readonly width: number;
+        readonly expanded: boolean;
+        readonly rows: string[];
+      }
+    | undefined;
   const lines = composeToolComponent((width) => {
     const current = frames.latest(detached);
-    const { issues, cancelled } = previewIssues(frames, provider, current);
+    const value = previewIssues(frames, provider, current);
+    const { expanded } = current;
+    if (drawn?.value === value && drawn.width === width && drawn.expanded === expanded)
+      return drawn.rows;
     const draw = (style: Pick<Theme, "fg">) => {
-      const rows = renderCompactIssues(issues, style, width, current.expanded, "");
-      return rows.length === 0 && cancelled && width > 0
+      const rows = renderCompactIssues(value.issues, style, width, expanded, "");
+      return rows.length === 0 && value.cancelled && width > 0
         ? [clipToWidth(toolStatusLine(style, "stopped", "Cancelled"), width, "")]
         : rows;
     };
+    let rows: string[];
     try {
-      return draw(theme);
+      rows = draw(theme);
     } catch {
-      return draw(UNSTYLED);
+      rows = draw(UNSTYLED);
     }
+    drawn = { value, width, expanded, rows };
+    return rows;
   });
   const slot: IssueSlot = { lines, placed: false };
   issueSlots.set(context.state, slot);

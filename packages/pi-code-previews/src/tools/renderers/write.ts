@@ -24,7 +24,11 @@ import { renderCodePreviewToolTitle } from "../presentation";
 import { executeWriteWithPreview, isKnownNewWrite } from "../../write/preview-execution";
 import { cachedDeferredPreview, cachedPreview } from "./shared/cache";
 import { previewCacheKey } from "./shared/preview-cache-key";
-import { pathPreviewLanguage, renderContentPreview } from "./shared/preview-text";
+import {
+  argumentsStreaming,
+  pathPreviewLanguage,
+  renderContentPreview,
+} from "./shared/preview-text";
 import {
   diffCounts,
   diffPreviewLineLimit,
@@ -86,14 +90,18 @@ export function writePreviewRenderers(cwd: string): PreviewRenderers {
       }
       const collapsedLines = codePreviewSettings.writeCollapsedLines;
       const owner = captureCodePreviewSessionCapability();
-      const previewKey = previewCacheKey([content], path, expanded, theme, collapsedLines);
+      const streaming = argumentsStreaming(renderContext);
+      const previewKey = [
+        ...previewCacheKey([content], path, expanded, theme, collapsedLines),
+        streaming,
+      ];
       const preview = () =>
         cachedPreview(state, "writeCallPreview", previewKey, () =>
           renderContentPreview({
             content,
             limit: expanded ? 0 : collapsedLines,
             lang:
-              owner !== undefined && owner === captureCodePreviewSessionCapability()
+              !streaming && owner !== undefined && owner === captureCodePreviewSessionCapability()
                 ? lang
                 : undefined,
             theme,

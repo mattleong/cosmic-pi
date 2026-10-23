@@ -12,9 +12,12 @@ import { decodeUnknownOrUndefined } from "./schema/decode.ts";
 import { codeUnitAt } from "./text-scan.ts";
 import {
   ESCAPE_STRING_INTRODUCERS,
-  isPrintableCode,
+  printableRunEnd,
   TERMINAL_STRING_INTRODUCERS,
 } from "./security/terminal-styled.ts";
+
+// Bound once because the terminal scans below call it per code unit.
+const codeAt = codeUnitAt;
 const ANSI_ESCAPE_PATTERN = String.raw`\u001B\[[0-?]*[ -/]*[@-~]`;
 const ANSI_ESCAPE_REGEXP = new RegExp(ANSI_ESCAPE_PATTERN, "g");
 const CONTROL_CHARACTER_REGEXP = /\p{Cc}/u;
@@ -56,7 +59,7 @@ export const stripAnsi = (value: string): string =>
 
 const skipControlSequence = (value: string, start: number): number => {
   for (let index = start; index < value.length; index += 1) {
-    const current = codeUnitAt(value, index);
+    const current = codeAt(value, index);
     if (current >= 0x40 && current <= 0x7e) return index;
   }
   return value.length;
@@ -64,7 +67,7 @@ const skipControlSequence = (value: string, start: number): number => {
 
 const skipTerminalString = (value: string, start: number, acceptC1Terminator: boolean): number => {
   for (let index = start; index < value.length; index += 1) {
-    const current = codeUnitAt(value, index);
+    const current = codeAt(value, index);
     if (current === 0x07 || (acceptC1Terminator && current === 0x9c)) return index;
     if (current === 0x1b && value[index + 1] === "\\") return index + 1;
   }
@@ -74,7 +77,7 @@ const skipTerminalString = (value: string, start: number, acceptC1Terminator: bo
 export function stripTerminalControls(value: string): string {
   let result = "";
   for (let index = 0; index < value.length; index += 1) {
-    const code = codeUnitAt(value, index);
+    const code = codeAt(value, index);
     if (code === 0x9b) {
       index = skipControlSequence(value, index + 1);
       continue;
@@ -91,8 +94,12 @@ export function stripTerminalControls(value: string): string {
       else index += 1;
       continue;
     }
-    const character = value[index] ?? "";
-    if (character === "\n" || character === "\t" || isPrintableCode(code)) result += character;
+    // Printable runs, newlines, and tabs are kept unchanged; other controls are dropped.
+    const end = code === 0x0a || code === 0x09 ? index + 1 : printableRunEnd(value, index);
+    if (end > index) {
+      result += Fn.pipe(value, Str.slice(index, end));
+      index = end - 1;
+    }
   }
   return result;
 }

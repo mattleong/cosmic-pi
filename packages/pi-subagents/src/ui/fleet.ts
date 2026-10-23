@@ -60,7 +60,7 @@ import {
   renderFleetPrompt,
 } from "./fleet-render.ts";
 import { projectFleetTree, type FleetTreeRow } from "./run-tree-rows.ts";
-import { renderSubagentSessionOutput } from "./session-output.ts";
+import { renderSubagentSessionOutput, SessionOutputMarkdownCache } from "./session-output.ts";
 import {
   canInterruptRun,
   canRenameRun,
@@ -128,6 +128,7 @@ export class SubagentFleetComponent implements Component, Focusable {
   private readonly shell = new ListDetailShell();
   private readonly options: FleetOptions;
   private readonly collapsedRunIds = new Set<string>();
+  private readonly markdown = new SessionOutputMarkdownCache();
 
   constructor(options: FleetOptions) {
     this.options = options;
@@ -527,6 +528,7 @@ export class SubagentFleetComponent implements Component, Focusable {
       now: this.options.getNow(),
       showTechnicalDetails: this.showTechnicalDetails,
       detailFocused: this.shell.state.pane === "detail",
+      markdown: this.markdown,
     }).render(Math.max(1, width));
   }
 
@@ -572,11 +574,13 @@ export class SubagentFleetComponent implements Component, Focusable {
 
   invalidate(): void {
     this.prompt?.input.invalidate();
+    this.markdown.clear();
   }
 
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.markdown.clear();
     this.options.onDispose?.();
   }
 

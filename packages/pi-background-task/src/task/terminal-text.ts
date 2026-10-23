@@ -18,13 +18,17 @@ const MAX_SGR_PARAMETER_CHARS = 128;
 export const MAX_PENDING_SEQUENCE_CHARS = 4_096;
 
 const SGR_SEQUENCE = new RegExp(String.raw`\u001b\[[0-9;:]*m`, "gu");
-// Controls other than newline and tab, including ESC and the C1 range.
-const NEEDS_PARSING = new RegExp(String.raw`[\u0000-\u0008\u000b-\u001f\u007f-\u009f]`, "u");
+// Controls other than newline and tab, including ESC and the C1 range; text mode keeps the rest.
+const CONTROL = String.raw`[\u0000-\u0008\u000b-\u001f\u007f-\u009f]`;
+const NEEDS_PARSING = new RegExp(CONTROL, "u");
+// Searches from its `lastIndex`, which every use sets first.
+const NEXT_CONTROL = new RegExp(CONTROL, "gu");
+
+// Bound once: Pi's loader routes each call through an imported binding via an interop proxy,
+// which dominates the per-character sequence parsing below.
+const codeAt = codeUnitAt;
 
 type ParserMode = "text" | "escape" | "escape-intermediate" | "csi" | "string" | "string-escape";
-
-const isKept = (code: number): boolean =>
-  code === 0x0a || code === 0x09 || (code >= 0x20 && code !== 0x7f && (code < 0x80 || code > 0x9f));
 
 // Digits, colon, and semicolon.
 const isSgrParameter = (code: number): boolean => code >= 0x30 && code <= 0x3b;
@@ -50,22 +54,19 @@ export class TerminalTextNormalizer {
   write(text: string): string {
     if (this.mode === "text" && !NEEDS_PARSING.test(text)) return text;
     const parts: string[] = [];
-    let run = -1;
-    for (let index = 0; index < text.length; index += 1) {
-      const code = codeUnitAt(text, index);
+    let index = 0;
+    while (index < text.length) {
       if (this.mode !== "text") {
-        if (this.consume(code, parts)) index -= 1;
+        if (!this.consume(codeAt(text, index), parts)) index += 1;
         continue;
       }
-      if (isKept(code)) {
-        if (run < 0) run = index;
-        continue;
-      }
-      if (run >= 0) parts.push(Fn.pipe(text, Str.slice(run, index)));
-      run = -1;
-      this.introduce(code);
+      // Kept text runs to the next control, so it is copied without visiting each character.
+      NEXT_CONTROL.lastIndex = index;
+      const control = NEXT_CONTROL.exec(text)?.index ?? text.length;
+      if (control > index) parts.push(Fn.pipe(text, Str.slice(index, control)));
+      if (control < text.length) this.introduce(codeAt(text, control));
+      index = control + 1;
     }
-    if (run >= 0) parts.push(Fn.pipe(text, Str.slice(run)));
     return Arr.join(parts, "");
   }
 

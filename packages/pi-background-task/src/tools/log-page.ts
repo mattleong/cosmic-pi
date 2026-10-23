@@ -13,6 +13,11 @@ import { plainTerminalText } from "../task/terminal-text.ts";
 
 const STDERR_LABEL = "[stderr] ";
 
+// Bound once: Pi's loader routes each call through an imported binding via an interop proxy,
+// which dominates the per-line scans below.
+const indexAt = indexOfFrom;
+const lastIndexAt = lastIndexOfFrom;
+
 interface LineState {
   stream: BackgroundLogStream | undefined;
   lineStart: boolean;
@@ -20,11 +25,7 @@ interface LineState {
 
 const newlineCount = (text: string): number => {
   let count = 0;
-  for (
-    let index = indexOfFrom(text, "\n", 0);
-    index >= 0;
-    index = indexOfFrom(text, "\n", index + 1)
-  )
+  for (let index = indexAt(text, "\n", 0); index >= 0; index = indexAt(text, "\n", index + 1))
     count += 1;
   return count;
 };
@@ -43,7 +44,7 @@ const renderEvent = (event: BackgroundLogEvent, state: LineState): string => {
   }
   let rendered = prefix;
   for (let start = 0; start < text.length; ) {
-    const newline = indexOfFrom(text, "\n", start);
+    const newline = indexAt(text, "\n", start);
     const end = newline < 0 ? text.length : newline + 1;
     if (state.lineStart) rendered += STDERR_LABEL;
     rendered += Fn.pipe(text, Str.slice(start, end));
@@ -77,7 +78,7 @@ const renderedCost = (event: BackgroundLogEvent) => {
 const firstLines = (text: string, lines: number): string => {
   let end = -1;
   for (let count = 0; count < lines; count += 1) {
-    end = indexOfFrom(text, "\n", end + 1);
+    end = indexAt(text, "\n", end + 1);
     if (end < 0) return text;
   }
   return Fn.pipe(text, Str.slice(0, end + 1));
@@ -86,7 +87,7 @@ const firstLines = (text: string, lines: number): string => {
 const lastLines = (text: string, lines: number): string => {
   let start = Fn.pipe(text, Str.endsWith("\n")) ? text.length - 1 : text.length;
   for (let count = 0; count < lines; count += 1) {
-    start = lastIndexOfFrom(text, "\n", start - 1);
+    start = lastIndexAt(text, "\n", start - 1);
     if (start < 0) return text;
   }
   return Fn.pipe(text, Str.slice(start + 1));

@@ -9,8 +9,15 @@ export function activityAttention(item: ActivityItem): "user" | "parent" | "bloc
   return item.status === "blocked" ? "blocked" : undefined;
 }
 
-export const needsYou = (rows: readonly ActivityRow[]): readonly ActivityRow[] =>
-  Arr.filter(rows, (row) => activityAttention(row) === "user");
+// The widget and manager ask for each published row snapshot on every frame.
+const waitingOnUser = new WeakMap<readonly ActivityRow[], readonly ActivityRow[]>();
+export const needsYou = (rows: readonly ActivityRow[]): readonly ActivityRow[] => {
+  const cached = waitingOnUser.get(rows);
+  if (cached) return cached;
+  const waiting = Arr.filter(rows, (row) => activityAttention(row) === "user");
+  waitingOnUser.set(rows, waiting);
+  return waiting;
+};
 
 const blockedLabels = {
   "parent-review": "parent needs to review",

@@ -63,6 +63,14 @@ interface AskUserDialogOptions {
   readonly collapse: () => void;
 }
 
+interface RenderedView {
+  readonly revision: number;
+  readonly width: number;
+  readonly height: number;
+  readonly rows: number;
+  readonly lines: string[];
+}
+
 export class AskUserDialog implements Focusable {
   private readonly options: Omit<AskUserDialogOptions, "request">;
   private state: QuestionnaireState;
@@ -77,6 +85,10 @@ export class AskUserDialog implements Focusable {
   private readonly keymap = new FullScreenKeymap();
   private readonly viewport = new DialogViewport();
   private hasFocus = false;
+  // Pi renders the visible dialog every frame. Input, refresh, focus, and invalidation bump the
+  // revision so an unchanged dialog reuses its last view instead of rebuilding its layout.
+  private revision = 0;
+  private view: RenderedView | undefined;
   private readonly matchesKeybinding = (input: string, id: FullScreenSelectionKeybindingId) =>
     this.options.keybindings.matches(input, id);
 
@@ -94,11 +106,13 @@ export class AskUserDialog implements Focusable {
   }
 
   set focused(value: boolean) {
+    this.revision++;
     this.hasFocus = value;
     this.editor.focused = value && this.input !== undefined;
   }
 
   private refresh(): void {
+    this.revision++;
     this.options.tui.requestRender();
   }
 
@@ -207,6 +221,7 @@ export class AskUserDialog implements Focusable {
     if (this.externalEditorBusy) return;
     this.externalEditorBusy = true;
     this.inputError = undefined;
+    this.refresh();
     const active = this.input;
     void this.options
       .editExternally(this.editor.getExpandedText())
@@ -229,6 +244,7 @@ export class AskUserDialog implements Focusable {
   }
 
   handleInput(data: string): void {
+    this.revision++;
     if (this.input) {
       this.handleEditorInput(data);
       return;
@@ -399,6 +415,16 @@ export class AskUserDialog implements Focusable {
   render(width: number): string[] {
     const height = this.options.getHeight?.() ?? Infinity;
     if (width < 1 || height < 1) return [];
+    // The editor sizes itself from terminal rows, which can change without changing the height.
+    const rows = this.options.tui.terminal.rows;
+    const view = this.view;
+    if (
+      view?.revision === this.revision &&
+      view.width === width &&
+      view.height === height &&
+      view.rows === rows
+    )
+      return view.lines;
     const lines = renderQuestionnaireView(
       {
         theme: this.options.theme,
@@ -412,15 +438,18 @@ export class AskUserDialog implements Focusable {
       },
       width,
     );
-    return this.viewport.render(
+    const visible = this.viewport.render(
       lines,
       width,
       height,
       this.inputError ? this.options.theme.fg("warning", this.inputError) : undefined,
     );
+    this.view = { revision: this.revision, width, height, rows, lines: visible };
+    return visible;
   }
 
   invalidate(): void {
+    this.revision++;
     this.editor.invalidate();
     this.preview.invalidate();
   }

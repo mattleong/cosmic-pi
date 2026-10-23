@@ -5,7 +5,9 @@ import * as Str from "effect/String";
 import { getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
 import {
   buildSessionContext,
+  sessionEntryToContextMessages,
   SessionManager,
+  type ContextWithSystemEvent,
   type SessionBeforeCompactEvent,
 } from "@earendil-works/pi-coding-agent";
 import { extensionContextFixture, recordingExtensionHost } from "pi-cosmic-core/testing";
@@ -44,6 +46,10 @@ const appendUser = (manager: SessionManager, content: string) =>
   manager.appendMessage({ role: "user", content, timestamp: 1 });
 const appendCheckpoint = (manager: SessionManager, retained = manager.getLeafId()!) =>
   manager.appendCompaction(OPENAI_COMPACTION_SUMMARY, retained, 100, details, true);
+
+// The same JSON values with different text, so every comparison takes the normalized fallback.
+const reorderedKeys = (messages: ContextWithSystemEvent["messages"]) =>
+  Arr.map(messages, (message) => Object.assign({ timestamp: message.timestamp }, message));
 
 function history() {
   const manager = SessionManager.inMemory("/virtual/repair");
@@ -337,6 +343,44 @@ describe("owned checkpoint reconstruction", () => {
     ])
       expect(serializedSnapshot(restored.messages)).toContain(retained);
     expect(serializedSnapshot(restored.messages)).not.toContain("omitted length");
+  });
+
+  for (const checkpointed of [true, false])
+    it(`repairs identically from text-identical and key-reordered context, checkpoint=${checkpointed}`, () => {
+      const manager = SessionManager.inMemory("/virtual/repair-comparison");
+      manager.appendMessage({ role: "system", content: "rules", timestamp: 0 });
+      appendUser(manager, "covered dialogue");
+      appendAssistant(manager, "stop", "covered answer");
+      if (checkpointed) appendCheckpoint(manager);
+      appendUser(manager, "retry question");
+      const failedId = appendAssistant(manager, "error", "503 failed response");
+      const branch = manager.getBranch();
+      // Pi leaves the failed reply out of the context it retries with.
+      const native = Arr.flatMap(
+        Arr.filter(manager.buildContextEntries(), (entry) => entry.id !== failedId),
+        sessionEntryToContextMessages,
+      );
+      const reordered = reorderedKeys(native);
+      for (const [index, message] of native.entries())
+        expect(serializedSnapshot(reordered[index])).not.toBe(serializedSnapshot(message));
+      const repaired = repairOpenAIContext(branch, native);
+      expect(repaired?.omittedEntryIds).toEqual([failedId]);
+      if (checkpointed)
+        expect(serializedSnapshot(repaired?.messages)).toContain("covered dialogue");
+      else expect(repaired?.messages).toBeUndefined();
+      expect(repairOpenAIContext(branch, reordered)).toEqual(repaired);
+    });
+
+  it("repairs nothing without a checkpoint or a retry-omittable reply", () => {
+    const manager = SessionManager.inMemory("/virtual/repair-unowned");
+    appendUser(manager, "dialogue");
+    appendAssistant(manager, "stop", "answer");
+    const native = manager.buildSessionContext().messages;
+    for (const messages of [native, reorderedKeys(native)])
+      expect(repairOpenAIContext(manager.getBranch(), messages)).toEqual({
+        omittedEntryIds: [],
+        messages: undefined,
+      });
   });
 
   it("native fallback summarizes repaired history and retains only a safe post-checkpoint tail", () => {

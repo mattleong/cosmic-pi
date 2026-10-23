@@ -1,4 +1,5 @@
 import * as Arr from "effect/Array";
+import * as Equal from "effect/Equal";
 import * as Option from "effect/Option";
 import { invokeHostCallback } from "pi-cosmic-core";
 import {
@@ -69,16 +70,17 @@ export const createFooterRegistry = (options: {
           ),
           () => -1,
         );
-        if (entries[index]?.contribution !== contribution) {
-          const next = [...entries];
-          if (index >= 0) next[index] = { owner, contribution };
-          else if (
-            next.push({ owner, contribution }) > FOOTER_PRE_SESSION_KEY_LIMIT &&
-            !options.sessionActive()
-          )
-            next.shift();
-          publish(next);
-        }
+        const existing = entries[index]?.contribution;
+        // Contributions are frozen flat records, so an equal one would render identically.
+        if (existing !== undefined && Equal.equals(existing, contribution)) return;
+        const next = [...entries];
+        if (index >= 0) next[index] = { owner, contribution };
+        else if (
+          next.push({ owner, contribution }) > FOOTER_PRE_SESSION_KEY_LIMIT &&
+          !options.sessionActive()
+        )
+          next.shift();
+        publish(next);
         options.requestRender();
       });
     },

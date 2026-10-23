@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { decodeUnknownOrUndefined, invokeHostCallback, notifyAtHostBoundary } from "pi-cosmic-core";
@@ -7,7 +8,7 @@ import {
   freshActivityPresentation,
   type ActivityPresentation,
 } from "../activity/component.ts";
-import type { ActivityRow } from "../activity/model.ts";
+import { isFinished, type ActivityRow } from "../activity/model.ts";
 import {
   ACTIVITY_DISCOVER,
   ACTIVITY_EVENT,
@@ -116,7 +117,14 @@ export function createActivityHost(
         tick: (now) => {
           if (!binding) return;
           binding.now = now;
-          if (binding.active && (binding.rows.length || binding.starting > 0)) safe(binding.render);
+          // Finished rows show fixed times, so only live work or the open manager's ages change.
+          if (
+            binding.active &&
+            (binding.starting > 0 ||
+              binding.manager !== undefined ||
+              Arr.some(binding.rows, (row) => !isFinished(row)))
+          )
+            safe(binding.render);
         },
         connect: (service) => {
           const bound: Binding = {

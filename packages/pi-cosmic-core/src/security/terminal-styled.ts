@@ -1,8 +1,13 @@
 import * as Arr from "effect/Array";
 import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
+import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import { codeUnitAt } from "../text-scan.ts";
+import { isHighSurrogate, isLowSurrogate } from "../text.ts";
+
+// Bound once because the sanitizers call it per code unit.
+const codeAt = codeUnitAt;
 
 const SAFE_SGR_PARAMETERS = /^[0-9;]*$/u;
 const MAX_SAFE_SGR_PARAMETER_LENGTH = 128;
@@ -11,8 +16,15 @@ const MAX_PRESERVED_SGR_BYTES_PER_LINE = 4_096;
 export const TERMINAL_STRING_INTRODUCERS = new Set([0x90, 0x98, 0x9d, 0x9e, 0x9f]);
 export const ESCAPE_STRING_INTRODUCERS = new Set(["]", "P", "X", "^", "_"]);
 
-export const isPrintableCode = (code: number): boolean =>
+const isPrintableCode = (code: number): boolean =>
   code >= 32 && code !== 127 && !(code >= 0x80 && code <= 0x9f);
+
+/** The end of the run of printable code units from `start`, which text mode copies unchanged. */
+export const printableRunEnd = (value: string, start: number): number => {
+  let end = start;
+  while (end < value.length && isPrintableCode(codeAt(value, end))) end += 1;
+  return end;
+};
 
 interface TerminalStyledFragment<Channel extends string = string> {
   readonly channel: Channel;
@@ -243,7 +255,7 @@ const stepCsi = (writer: StyledFragmentWriter, character: string, code: number):
 };
 
 const stepCharacter = (writer: StyledFragmentWriter, character: string): void => {
-  const code = codeUnitAt(character, 0);
+  const code = codeAt(character, 0);
   switch (writer.state.mode) {
     case "text":
       return processText(writer, character, code);
@@ -269,7 +281,22 @@ export function sanitizeTerminalStyledFragments<Channel extends string>(
     states.set(fragment.channel, state);
     const reopenSgr = sgrStatePrefix(state.sgr);
     const writer: StyledFragmentWriter = { state, output: "" };
-    for (const character of fragment.text) stepCharacter(writer, character);
+    const { text } = fragment;
+    let index = 0;
+    while (index < text.length) {
+      // Text mode emits printable characters, surrogate halves included, exactly as they arrive.
+      const plainEnd = state.mode === "text" ? printableRunEnd(text, index) : index;
+      if (plainEnd > index) {
+        writer.output += Fn.pipe(text, Str.slice(index, plainEnd));
+        index = plainEnd;
+      } else {
+        const paired =
+          isHighSurrogate(codeAt(text, index)) && isLowSurrogate(codeAt(text, index + 1));
+        const width = paired ? 2 : 1;
+        stepCharacter(writer, Fn.pipe(text, Str.slice(index, index + width)));
+        index += width;
+      }
+    }
     return { channel: fragment.channel, text: writer.output, reopenSgr };
   });
 }

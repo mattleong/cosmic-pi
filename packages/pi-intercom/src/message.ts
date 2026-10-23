@@ -1,12 +1,13 @@
 import type { ExtensionAPI, MessageRenderer } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import { captureCodePreviewPresentationPolicy, renderCompactRow } from "pi-code-previews";
-import { clipText, sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core";
+import { clipText, indexOfFrom, stripTerminalControls } from "pi-cosmic-core";
 import { sessionSubject } from "./tools/summary.ts";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { composeToolComponent, renderExpansionAffordance } from "pi-cosmic-ui/tool";
@@ -32,22 +33,30 @@ const contentText = (content: string | ReadonlyArray<unknown> | undefined): stri
         "\n",
       );
 
+/** A line of text already stripped of terminal controls, as one line of single spaces. */
+const collapseWhitespace = (line: string): string =>
+  Str.trim(Fn.pipe(line, Str.replace(/\s+/g, " ")));
+
 /**
- * The first line of what the sender wrote: the frame's opening line names the sender and the
- * message starts on the next one.
+ * The first non-empty line of what the sender wrote, from text already stripped of terminal
+ * controls: the frame's opening line names the sender and the message starts on the next one.
+ * Lines after it are never read.
  */
-const firstMessageLine = (text: string): string =>
-  clipText(
-    Option.getOrElse(
-      Arr.findFirst(Arr.map(Str.split(text, "\n").slice(1), sanitizeTerminalLine), Str.isNonEmpty),
-      () => "",
-    ),
-    MAX_LINE_CHARS,
-  );
+const firstMessageLine = (text: string): string => {
+  let end = indexOfFrom(text, "\n", 0);
+  while (end !== -1) {
+    const start = end + 1;
+    end = indexOfFrom(text, "\n", start);
+    const line = collapseWhitespace(Fn.pipe(text, Str.slice(start, end === -1 ? undefined : end)));
+    if (Str.isNonEmpty(line)) return clipText(line, MAX_LINE_CHARS);
+  }
+  return "";
+};
 
 /**
  * Shows a message from another session: the sender and the message's first line collapsed, the
- * full framed text expanded. Undecodable details fall back to a generic sender.
+ * full framed text expanded. Undecodable details fall back to a generic sender. Pi renders every
+ * frame, so the collapsed rows are kept for the width they were rendered at.
  */
 export const renderIntercomMessage: MessageRenderer = (message, options, theme) => {
   const envelope = Option.getOrUndefined(decodeEnvelope(message));
@@ -55,25 +64,30 @@ export const renderIntercomMessage: MessageRenderer = (message, options, theme) 
   if (options.expanded) return new Text(text, options.outputPad, 0);
   const from = envelope?.details?.from;
   const sender = from ? sessionSubject(from) : "another session";
+  const subject = `${sender}: ${firstMessageLine(text)}`;
   const compact = captureCodePreviewPresentationPolicy().toolCallCollapsedStyle === "compact";
   const hint = compact ? undefined : renderExpansionAffordance("message", false, theme);
+  let rendered: { readonly width: number; readonly rows: string[] } | undefined;
   return composeToolComponent((width) => {
+    if (rendered?.width === width) return rendered.rows;
     const inner = Math.max(1, width - options.outputPad * 2);
     const row = renderCompactRow(
       {
         name: "intercom",
         phase: "settled",
-        summary: { action: "Message from", subject: `${sender}: ${firstMessageLine(text)}` },
+        summary: { action: "Message from", subject },
         status: "returned",
       },
       theme,
       inner,
     );
-    return new Text(
+    const rows = new Text(
       hint ? `${row}\n${clipToWidth(hint, inner)}` : row,
       options.outputPad,
       0,
     ).render(width);
+    rendered = { width, rows };
+    return rows;
   });
 };
 

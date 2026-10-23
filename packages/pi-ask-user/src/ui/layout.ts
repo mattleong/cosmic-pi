@@ -39,6 +39,8 @@ export const editorTheme = (theme: Theme): EditorTheme => ({
   },
 });
 
+// Right rows must already be exactly `rightWidth` columns wide, as PreviewPane frames them;
+// only rows past the end of the right column are filled.
 export function joinColumns(
   left: ReadonlyArray<string>,
   right: ReadonlyArray<string>,
@@ -46,11 +48,10 @@ export function joinColumns(
   rightWidth: number,
 ): string[] {
   const count = Math.max(left.length, right.length);
+  const blank = Fn.pipe(" ", Str.repeat(Math.max(0, rightWidth)));
   const lines: string[] = [];
   for (let index = 0; index < count; index++) {
-    lines.push(
-      `${padListDetailRow(left[index] ?? "", leftWidth)}  ${padListDetailRow(right[index] ?? "", rightWidth)}`,
-    );
+    lines.push(`${padListDetailRow(left[index] ?? "", leftWidth)}  ${right[index] ?? blank}`);
   }
   return lines;
 }

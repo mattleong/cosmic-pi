@@ -113,41 +113,61 @@ const runSummary = (run: SubagentRunView): Pick<ActivityItem, "summary"> => {
     : {};
 };
 
+const runActivityItem = (run: SubagentRunView, awaited: boolean): ActivityItem => {
+  const title = sanitizeDiagnosticContent(run.name, { maximumLength: ACTIVITY_LIMITS.title });
+  return withActivityRevision(
+    {
+      id: run.id,
+      kind: "agent" as const,
+      title,
+      ...activityAttention(run),
+      awaited,
+      startedAt: run.startedAt,
+      updatedAt: run.lastActivityAt,
+      ...runSummary(run),
+      actions: Object.freeze(Arr.map(runActions(run, title), (action) => Object.freeze(action))),
+      route: sanitizeDiagnosticContent(formatRunRoute(run), {
+        maximumLength: ACTIVITY_LIMITS.route,
+      }),
+      ...(run.profile !== undefined && { profile: run.profile }),
+      ...(run.endedAt !== undefined && { endedAt: run.endedAt }),
+      ...(run.parentRunId &&
+        run.parentRunId !== "root" && {
+          parent: Object.freeze({
+            providerId: SUBAGENT_ACTIVITY_PROVIDER,
+            itemId: run.parentRunId,
+          }),
+        }),
+    },
+    runIdentity(run),
+  );
+};
+
+interface CachedActivityItems {
+  readonly awaited?: ActivityItem;
+  readonly idle?: ActivityItem;
+}
+
+// Projections keep an unchanged run's frozen view, so its item is built once per change.
+const activityItemCache = new WeakMap<SubagentRunView, CachedActivityItems>();
+
+const cachedRunActivityItem = (run: SubagentRunView, awaited: boolean): ActivityItem => {
+  if (!Object.isFrozen(run)) return runActivityItem(run, awaited);
+  const cached = activityItemCache.get(run);
+  const hit = awaited ? cached?.awaited : cached?.idle;
+  if (hit) return hit;
+  const item = runActivityItem(run, awaited);
+  activityItemCache.set(run, awaited ? { ...cached, awaited: item } : { ...cached, idle: item });
+  return item;
+};
+
 export function subagentActivityItems(
   projection: SubagentProjection,
   presentation: SubagentActivityPresentationSnapshot = EMPTY_ACTIVITY_PRESENTATION,
 ): readonly ActivityItem[] {
   const awaited = new Set(Arr.flatMap(presentation.awaits, (lease) => lease.runIds));
   const rows = projectFleetTree(projection.runs, "root").rows;
-  const runs = Arr.map(rows, ({ run }) => {
-    const title = sanitizeDiagnosticContent(run.name, { maximumLength: ACTIVITY_LIMITS.title });
-    return withActivityRevision(
-      {
-        id: run.id,
-        kind: "agent" as const,
-        title,
-        ...activityAttention(run),
-        awaited: awaited.has(run.id),
-        startedAt: run.startedAt,
-        updatedAt: run.lastActivityAt,
-        ...runSummary(run),
-        actions: Object.freeze(Arr.map(runActions(run, title), (action) => Object.freeze(action))),
-        route: sanitizeDiagnosticContent(formatRunRoute(run), {
-          maximumLength: ACTIVITY_LIMITS.route,
-        }),
-        ...(run.profile !== undefined && { profile: run.profile }),
-        ...(run.endedAt !== undefined && { endedAt: run.endedAt }),
-        ...(run.parentRunId &&
-          run.parentRunId !== "root" && {
-            parent: Object.freeze({
-              providerId: SUBAGENT_ACTIVITY_PROVIDER,
-              itemId: run.parentRunId,
-            }),
-          }),
-      },
-      runIdentity(run),
-    );
-  });
+  const runs = Arr.map(rows, ({ run }) => cachedRunActivityItem(run, awaited.has(run.id)));
   return Object.freeze(runs.slice(0, ACTIVITY_LIMITS.items));
 }
 

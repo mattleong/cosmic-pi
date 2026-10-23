@@ -29,6 +29,11 @@ import {
   withInlineReports,
 } from "./run-block.ts";
 
+const sameViews = (
+  left: ReadonlyArray<SubagentRunView>,
+  right: ReadonlyArray<SubagentRunView>,
+): boolean => left.length === right.length && Arr.every(left, (run, index) => run === right[index]);
+
 const attentionHeadline = (runs: ReadonlyArray<SubagentRunView>): string =>
   Arr.some(runs, isParentActionRequiredRun)
     ? "Parent action required; other unfinished subagents continue independently."
@@ -138,6 +143,9 @@ export function awaitExecutionFor(
   let latestRuns: ReadonlyArray<SubagentRunView> = [];
   let contextRuns: ReadonlyArray<SubagentRunView> = [];
   let lastUpdate = "";
+  let reported:
+    | { readonly runs: typeof latestRuns; readonly context: typeof contextRuns }
+    | undefined;
   let interrupted = false;
   const deliveryAttemptedIds = new Set<string>();
   const visibleContextRuns = (runs: ReadonlyArray<SubagentRunView>) =>
@@ -169,6 +177,12 @@ export function awaitExecutionFor(
       }
       return false;
     });
+    // Without a consumer, only the latest observation is kept for the result.
+    if (!onUpdate) return;
+    // Frozen views keep their identity while unchanged, so the same views give the same details.
+    if (reported && sameViews(runs, reported.runs) && sameViews(contextRuns, reported.context))
+      return;
+    reported = { runs, context: contextRuns };
     const details = awaitDetails({
       runs,
       contextRuns,
@@ -178,7 +192,7 @@ export function awaitExecutionFor(
     const key = JSON.stringify(details);
     if (key === lastUpdate) return;
     lastUpdate = key;
-    onUpdate?.({ content: [{ type: "text", text: progressText(runs) }], details });
+    onUpdate({ content: [{ type: "text", text: progressText(runs) }], details });
   };
   const cancelled = (
     proxyCleanupUnconfirmed = false,

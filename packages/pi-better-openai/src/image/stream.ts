@@ -29,6 +29,7 @@ const decodeErrorBody = Schema.decodeUnknownOption(
     ]),
   ),
 );
+const decodeSseJson = Schema.decodeEffect(Schema.fromJsonString(Schema.Json));
 const messageText = (message: typeof ProviderMessageSchema.Type) =>
   Predicate.isString(message) ? message : message.message;
 const errorBodyReason = (text: string) => {
@@ -102,7 +103,7 @@ export const parseImageSse = Effect.fn("OpenAIImage.parseSse")(function* (
       terminated = true;
       return false;
     }
-    const rawEvent = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Json))(data).pipe(
+    const rawEvent = yield* decodeSseJson(data).pipe(
       Effect.mapError(() => fail("stream", "Codex image response contained malformed JSON.")),
     );
     const event = yield* decodeImageStreamEvent(rawEvent, mimeType, fallbackId).pipe(

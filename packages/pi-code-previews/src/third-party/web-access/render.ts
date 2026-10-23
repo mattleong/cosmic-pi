@@ -9,7 +9,7 @@ import { expandedSection } from "../../preview/expanded-section";
 import { escapeControlChars } from "../../shared/terminal-text";
 import { withCodePreviewRenderers } from "../../tools/cooperative-tools";
 import { getFallbackResultText } from "../../tools/data/results";
-import { plainRows } from "../../tools/native-safe-content";
+import { plainRows, plainText } from "../../tools/native-safe-content";
 import type {
   RenderCall,
   RendererState,
@@ -107,7 +107,7 @@ export function createWebAccessRenderers(
     const full = invokeHostCallback(() => JSON.stringify(args, null, 2) ?? "", "");
     const subject = webAccessSubject(name, hostContainer(args));
     const fallback = context.expanded
-      ? new Text(escapeControlChars(`${label}\nArguments\n${full}`), 0, 0)
+      ? plainText(() => `${label}\nArguments\n${full}`)
       : plainRows(`${label} ${subject}`, 2);
     return compose(
       "call",
@@ -131,7 +131,7 @@ export function createWebAccessRenderers(
     context,
   ) => {
     const raw = getFallbackResultText(result.content, context.showImages);
-    const fallback = options.expanded ? new Text(escapeControlChars(raw), 0, 0) : plainRows(raw, 5);
+    const fallback = options.expanded ? plainText(raw) : plainRows(raw, 5);
     return compose(
       "result",
       [result.content, result.details],

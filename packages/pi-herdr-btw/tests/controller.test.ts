@@ -27,6 +27,7 @@ const harness = (
   registerHerdrBtwCommands(pi, {
     open,
     openNew,
+    insideHerdr: () => true,
     captureAuthority: () => {
       const captured = generation;
       return () => generation === captured;

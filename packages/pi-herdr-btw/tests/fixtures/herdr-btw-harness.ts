@@ -98,6 +98,8 @@ export interface HerdrBtwFixtureOptions {
   readonly recordResult?: HerdrBtwLinkRecordResult;
   readonly liveAgents?: ReadonlyArray<HerdrPane>;
   readonly liveAgentSnapshots?: ReadonlyArray<ReadonlyArray<HerdrPane>>;
+  /** Replaces the canned live-agent snapshots, for example with a real client's decoder. */
+  readonly inspectLiveAgents?: HerdrClientContract["inspectLiveAgents"];
   readonly onLiveAgentSnapshot?: (index: number) => void;
   readonly probes?: Readonly<Record<string, SessionHeaderProbe>>;
   readonly compareSessionFileIdentity?: SessionFileIdentityComparator;
@@ -154,19 +156,25 @@ export const makeServiceFixture = (options: HerdrBtwFixtureOptions = {}) => {
     },
   });
 
+  const inspectLiveAgents = options.inspectLiveAgents;
   const client = HerdrClient.of({
     inspectProtocol: () => run("inspect protocol", undefined, () => options.protocol ?? 20),
     inspectPiIntegration: () => run("inspect Pi integration", undefined, () => true),
     inspectLiveAgents: () =>
-      run("inspect live agents", undefined, () => {
-        const index = snapshotReads++;
-        options.onLiveAgentSnapshot?.(index);
-        return (
-          options.liveAgentSnapshots?.[index] ??
-          options.liveAgents ??
-          (startedAgentName === undefined ? [] : [startedAgentSnapshot(startedAgentName)])
-        );
-      }),
+      inspectLiveAgents === undefined
+        ? run("inspect live agents", undefined, () => {
+            const index = snapshotReads++;
+            options.onLiveAgentSnapshot?.(index);
+            return {
+              protocol: options.protocol ?? 20,
+              agents: Effect.succeed(
+                options.liveAgentSnapshots?.[index] ??
+                  options.liveAgents ??
+                  (startedAgentName === undefined ? [] : [startedAgentSnapshot(startedAgentName)]),
+              ),
+            };
+          })
+        : runEffect("inspect live agents", undefined, inspectLiveAgents),
     resolveCallingPane: () => run("resolve calling pane", undefined, () => parentPane),
     inspectPaneLayout: (paneId) =>
       run("inspect calling pane layout", { paneId }, () => ({

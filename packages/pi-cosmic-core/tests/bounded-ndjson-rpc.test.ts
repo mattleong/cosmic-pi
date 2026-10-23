@@ -39,4 +39,14 @@ describe("bounded NDJSON RPC framing", () => {
     expect(parser.decode("12345")).toEqual([]);
     expect(() => parser.decode("6789")).toThrow();
   });
+
+  it("bounds a frame buffered across chunks by its UTF-8 bytes, joining split surrogate pairs", () => {
+    const chunks = ['"\ud83c', '\udf0c"'];
+    const completed = boundedNdjsonRpcSerialization(6).makeUnsafe();
+    for (const chunk of chunks) expect(completed.decode(chunk)).toEqual([]);
+    expect(completed.decode("\n")).toEqual(["🌌"]);
+    const overflowing = boundedNdjsonRpcSerialization(6).makeUnsafe();
+    for (const chunk of chunks) expect(overflowing.decode(chunk)).toEqual([]);
+    expect(() => overflowing.decode("x")).toThrow(RpcSerialization.MaxBufferSizeExceeded);
+  });
 });

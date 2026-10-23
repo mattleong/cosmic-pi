@@ -61,13 +61,14 @@ export function resolvePreviewLanguage({
   path?: string | undefined;
   content?: string | undefined;
 }): string | undefined {
-  return firstSupported(
-    path && JSX_LANGUAGES.get(Str.toLowerCase(nodePath.extname(path))),
-    path && getLanguageFromPath(path),
-    languageFromPath(path),
-    languageFromShebang(content),
-    languageFromContent(content),
-  );
+  // Content heuristics can parse the whole document, so they run only when the path is unknown.
+  return firstSupported([
+    () => path && JSX_LANGUAGES.get(Str.toLowerCase(nodePath.extname(path))),
+    () => path && getLanguageFromPath(path),
+    () => languageFromPath(path),
+    () => languageFromShebang(content),
+    () => languageFromContent(content),
+  ]);
 }
 
 function languageFromPath(path: string | undefined): string | undefined {
@@ -117,8 +118,9 @@ function languageFromContent(content: string | undefined): string | undefined {
   return undefined;
 }
 
-function firstSupported(...languages: Array<string | undefined>): string | undefined {
-  for (const language of languages) {
+function firstSupported(candidates: ReadonlyArray<() => string | undefined>): string | undefined {
+  for (const candidate of candidates) {
+    const language = candidate();
     if (language && language in bundledLanguages) return language;
   }
   return undefined;

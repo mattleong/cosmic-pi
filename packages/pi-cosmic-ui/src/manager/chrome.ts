@@ -85,8 +85,9 @@ const MANAGER_ACTIVITY_LABELS = {
 export const managerActivityLabel = (kind: ManagerActivityKind): string =>
   MANAGER_ACTIVITY_LABELS[kind];
 
+// visibleWidth caches and has an ASCII fast path; truncateToWidth segments any non-ASCII text.
 export const clipToWidth = (text: string, width: number, marker = "…"): string =>
-  truncateToWidth(text, width, marker);
+  width > 0 && visibleWidth(text) <= width ? text : truncateToWidth(text, width, marker);
 
 export const managerTabs = (tabs: ReadonlyArray<string>, active: number, width: number): string => {
   const full = `  ${Arr.join(tabs, "  ")}`;

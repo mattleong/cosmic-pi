@@ -15,6 +15,7 @@ import {
   type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
+import * as MutableRef from "effect/MutableRef";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
@@ -25,7 +26,12 @@ import {
   type OpenAICompactionCheckpoint,
   type OpenAICompactionJsonObject,
 } from "./protocol.ts";
-import { encodeJson, hasExactPrefix, latestOwnedCheckpoint } from "./context.ts";
+import {
+  encodeJson,
+  hasExactJsonPrefix,
+  latestOwnedCheckpoint,
+  type reconstructOpenAIContext,
+} from "./context.ts";
 
 const OPENAI_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
 const InputJsonSchema = Schema.fromJsonString(Schema.Array(JsonObjectSchema));
@@ -142,12 +148,43 @@ export function projectOpenAIResponseInput(
   return input?.slice(leadingInstructionCount(input), end);
 }
 
+type CoveredContext = Pick<
+  NonNullable<ReturnType<typeof reconstructOpenAIContext>>,
+  "checkpoint" | "coveredEntries" | "coveredOmittedEntryIds"
+>;
+
+/**
+ * Remembers the latest covered projection as each item's `JSON.stringify` text. Covered entries
+ * are fixed for a checkpoint and omission set; a covered context edit stops injection first.
+ */
+export function coveredInputCache() {
+  const latest = MutableRef.make<
+    { readonly key: string; readonly items: readonly string[] | undefined } | undefined
+  >(undefined);
+  return (
+    model: Model<"openai-responses">,
+    restored: CoveredContext,
+    options: CoveredProjectionOptions,
+  ): readonly string[] | undefined => {
+    const key = JSON.stringify([
+      restored.checkpoint.id,
+      model,
+      options.configurationUpdates ?? false,
+      restored.coveredOmittedEntryIds,
+    ]);
+    const cached = MutableRef.get(latest);
+    if (cached?.key === key) return cached.items;
+    const input = projectOpenAIResponseInput(model, restored.coveredEntries, options);
+    const items = input && Arr.map(input, (item) => JSON.stringify(item));
+    MutableRef.set(latest, { key, items });
+    return items;
+  };
+}
+
 export function injectOpenAICompactionCheckpoint<PayloadInput>(
   payload: PayloadInput,
   checkpoint: OpenAICompactionCheckpoint,
-  projectCovered: (
-    options: CoveredProjectionOptions,
-  ) => readonly OpenAICompactionJsonObject[] | undefined,
+  projectCovered: (options: CoveredProjectionOptions) => readonly string[] | undefined,
 ) {
   if (!Predicate.isObject(payload) || !Arr.isArray(payload.input)) return undefined;
   const input: readonly unknown[] = payload.input;
@@ -156,7 +193,7 @@ export function injectOpenAICompactionCheckpoint<PayloadInput>(
   });
   const instructionCount = leadingInstructionCount(input);
   const providerInput = input.slice(instructionCount);
-  if (!coveredInput || !hasExactPrefix(providerInput, coveredInput)) return undefined;
+  if (!coveredInput || !hasExactJsonPrefix(providerInput, coveredInput)) return undefined;
   return {
     ...payload,
     input: [

@@ -2,6 +2,9 @@ import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import { codeUnitAt } from "pi-cosmic-core";
 
+// Bound once: Pi's loader routes each imported-helper call through an interop proxy.
+const codeAt = codeUnitAt;
+
 export function nonEmptyText(value: string | undefined): string | undefined {
   return value === "" ? undefined : value;
 }
@@ -18,7 +21,7 @@ export function hashString(value: string): string {
   let first = 0xdeadbeef;
   let second = 0x41c6ce57;
   for (let index = 0; index < value.length; index++) {
-    const code = codeUnitAt(value, index);
+    const code = codeAt(value, index);
     first = Math.imul(first ^ code, 2654435761);
     second = Math.imul(second ^ code, 1597334677);
   }

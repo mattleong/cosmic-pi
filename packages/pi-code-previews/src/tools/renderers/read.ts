@@ -10,6 +10,9 @@ import { getPathArg, getReadLineRange } from "../data/args";
 import { getTextContent } from "../data/results";
 import { renderCodePreviewToolTitle } from "../presentation";
 import { agentNotesSection } from "./shared/output-notice";
+import { captureCodePreviewSessionCapability } from "../../application/capability";
+import { cachedDeferredPreview } from "./shared/cache";
+import { previewCacheKey } from "./shared/preview-cache-key";
 import { pathPreviewLanguage, renderContentPreview } from "./shared/preview-text";
 import { readResultBody } from "./shared/read-result";
 import { renderResultPrelude } from "./shared/result-prelude";
@@ -63,16 +66,32 @@ export function readPreviewRenderers(cwd: string): PreviewRenderers {
         return expanded && body.notice ? agentNotesSection(theme, body.notice) : new Container();
 
       const { content, firstLine } = body;
-      return renderContentPreview({
-        content,
-        limit: expanded ? 0 : codePreviewSettings.readCollapsedLines,
-        lang: pathPreviewLanguage(getPathArg(input), content),
+      const path = getPathArg(input);
+      const collapsedLines = codePreviewSettings.readCollapsedLines;
+      const { invalidate } = renderContext;
+      const render = (active: boolean) =>
+        renderContentPreview({
+          content,
+          limit: expanded ? 0 : collapsedLines,
+          lang: active ? pathPreviewLanguage(path, content) : undefined,
+          theme,
+          invalidate,
+          firstLine,
+          emptyLabel: "Empty file",
+          skipHighlightLabel: "Syntax highlighting skipped for large file",
+        });
+      // Collapsed previews highlight only their visible lines, so only full files are deferred.
+      return cachedDeferredPreview(
+        renderContext.state,
+        "readResultPreview",
+        [...previewCacheKey([content], path, expanded, theme, collapsedLines), firstLine],
+        expanded ? content.length : 0,
+        "Rendering file…",
         theme,
-        invalidate: renderContext.invalidate,
-        firstLine,
-        emptyLabel: "Empty file",
-        skipHighlightLabel: "Syntax highlighting skipped for large file",
-      });
+        render,
+        invalidate,
+        captureCodePreviewSessionCapability(),
+      );
     },
   };
 }

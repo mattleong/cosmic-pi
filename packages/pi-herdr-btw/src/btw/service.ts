@@ -146,9 +146,21 @@ const makeHerdrBtwService = Effect.fn("HerdrBtwService.make")(function* (
     sessionFile: string,
     sessionId: string,
   ) {
-    yield* ensurePiIntegration(herdr);
-
-    const parentPane = yield* herdr.resolveCallingPane();
+    // The reads are independent, so they run together; checking them in order keeps the first
+    // reported failure stable. Resume already checked the protocol in its live snapshot.
+    const [protocolChecked, integrationChecked, callingPane] = yield* Effect.all(
+      [
+        target.mode === "create"
+          ? herdr.inspectProtocol().pipe(Effect.flatMap(ensureHerdrProtocol))
+          : Effect.void,
+        ensurePiIntegration(herdr),
+        herdr.resolveCallingPane(),
+      ],
+      { concurrency: "unbounded", mode: "result" },
+    );
+    yield* Effect.fromResult(protocolChecked);
+    yield* Effect.fromResult(integrationChecked);
+    const parentPane = yield* Effect.fromResult(callingPane);
     const layout = yield* herdr.inspectPaneLayout(parentPane.pane_id);
     if (layout.workspace_id !== parentPane.workspace_id || layout.tab_id !== parentPane.tab_id)
       return yield* confirmedFailure(
@@ -182,7 +194,8 @@ const makeHerdrBtwService = Effect.fn("HerdrBtwService.make")(function* (
           : target.link;
       const agentName = sideSessionAgentName(sessionId, btwPane.pane_id);
       if (target.mode === "resume") {
-        const newlyLive = yield* Effect.filter(yield* herdr.inspectLiveAgents(), (agent) =>
+        const { agents } = yield* herdr.inspectLiveAgents();
+        const newlyLive = yield* Effect.filter(yield* agents, (agent) =>
           isLinkedAgentConflictCandidate(files, agent, target.link),
         );
         if (newlyLive.length > 0)
@@ -256,7 +269,6 @@ const makeHerdrBtwService = Effect.fn("HerdrBtwService.make")(function* (
     sessionId: string,
   ) {
     const childSessionId = yield* files.createChildSessionId;
-    yield* ensureHerdrProtocol(herdr);
     return yield* launch({ mode: "create", childSessionId }, prompt, sessionFile, sessionId);
   });
 
@@ -303,8 +315,10 @@ const makeHerdrBtwService = Effect.fn("HerdrBtwService.make")(function* (
         "The linked side session's file is missing or was replaced",
       );
 
-    yield* ensureHerdrProtocol(herdr);
-    const liveAgents = yield* Effect.filter(yield* herdr.inspectLiveAgents(), (agent) =>
+    // An outdated server's agents may not match the current shape, so its protocol is checked first.
+    const snapshot = yield* herdr.inspectLiveAgents();
+    yield* ensureHerdrProtocol(snapshot.protocol);
+    const liveAgents = yield* Effect.filter(yield* snapshot.agents, (agent) =>
       isLinkedAgentConflictCandidate(files, agent, link),
     );
     if (liveAgents.length > 0) return yield* focusLiveAgent(link, liveAgents, prompt);

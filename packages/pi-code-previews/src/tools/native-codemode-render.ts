@@ -1,7 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
-import * as Schema from "effect/Schema";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { renderExpansionAffordance, renderToolHeader, toolRunningLine } from "pi-cosmic-ui/tool";
@@ -34,8 +33,9 @@ import {
   nativeEvidenceCoverage,
   type NativeCallEvidence,
 } from "./native-codemode-evidence";
-import { ownData, runningLine, safeContent } from "./native-safe-content";
+import { ownString, runningLine, safeContent } from "./native-safe-content";
 import { sanitizeDiagnosticContent } from "pi-cosmic-core";
+import { argumentsStreaming } from "./renderers/shared/preview-text";
 import {
   createNativeDiscoveryProjector,
   nativeDiscoveryLabel,
@@ -43,8 +43,7 @@ import {
   type NativeDiscoveryProjector,
 } from "./native-codemode-discovery";
 
-const programSource = (args: HostContainer | undefined): string =>
-  ownData(args, "code", Schema.String) ?? "";
+const programSource = (args: HostContainer | undefined): string => ownString(args, "code") ?? "";
 
 const renderSource =
   (discovery: NativeDiscoveryProjector): RenderCall<unknown, RendererState> =>
@@ -53,7 +52,11 @@ const renderSource =
     const program = renderNativeCodemodeProgram(
       programSource(input),
       theme,
-      { expanded: true, invalidate: context.invalidate },
+      {
+        expanded: true,
+        argumentsStreaming: argumentsStreaming(context),
+        invalidate: context.invalidate,
+      },
       discovery(input) ? nativeDiscoveryNote : undefined,
     );
     return safeContent(() => expandedSection(theme, "Program", program), program);
@@ -168,7 +171,11 @@ export function createNativeCodemodeRenderers(
         const program = renderNativeCodemodeProgram(
           programSource(input),
           theme,
-          context,
+          {
+            expanded: context.expanded,
+            argumentsStreaming: argumentsStreaming(context),
+            invalidate: context.invalidate,
+          },
           label ? nativeDiscoveryNote : undefined,
         );
         const fallback = new Container();
@@ -215,13 +222,17 @@ export function createNativeCodemodeRenderers(
             () => new Text(theme.fg("muted", "Details on expand"), 0, 0),
             "Details on expand",
           );
+        let cached: { readonly key: string; readonly rows: string[] } | undefined;
         return safeContent(
           () => ({
             render(width) {
               const animationFrame = getCodePreviewAnimationFrame({ state });
+              const timingEnabled = codePreviewSettings.toolCallTiming;
+              const key = `${width}:${animationFrame}:${timingEnabled}`;
+              if (cached?.key === key) return cached.rows;
               const rows = renderCompactChildren(projected.children, theme, width, {
                 animationFrame,
-                timingEnabled: codePreviewSettings.toolCallTiming,
+                timingEnabled,
               });
               const counter = projected.action ? projected.counters?.[0] : undefined;
               if (counter) rows.unshift(clipToWidth(theme.fg("muted", counter), width));
@@ -242,9 +253,12 @@ export function createNativeCodemodeRenderers(
                     "",
                   ),
                 );
+              cached = { key, rows };
               return rows;
             },
-            invalidate() {},
+            invalidate() {
+              cached = undefined;
+            },
           }),
           "Details on expand",
         );

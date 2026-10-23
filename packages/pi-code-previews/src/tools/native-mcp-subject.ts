@@ -1,11 +1,10 @@
-import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import { nativeMcpResourceSubject, type NativeMcpIdentity } from "./native-mcp-identity";
 import type { HostContainer } from "../shared/untrusted-value";
-import { ownData } from "./native-safe-content";
+import { ownString } from "./native-safe-content";
 
 export function nativeMcpArgumentText(args: HostContainer | undefined, key: string): string {
-  const text = ownData(args, key, Schema.String);
+  const text = ownString(args, key);
   return text === undefined ? "" : Str.trim(text);
 }
 

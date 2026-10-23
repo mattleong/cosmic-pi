@@ -4,6 +4,7 @@ import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { clipText } from "./display.ts";
 import { sanitizeTerminalLine } from "./security.ts";
+import { codeUnitAt, indexOfFrom } from "./text-scan.ts";
 
 export const MESSAGE_TEXT_LIMIT = 240;
 
@@ -32,21 +33,59 @@ function tidy(line: string): string {
   return Str.trim(withoutFinalPeriod(text));
 }
 
+/** The first `\r?\n`-separated line that sanitizes to non-empty text, reading no further. */
+const firstSanitizedLine = (text: string): string | undefined => {
+  let start = 0;
+  for (;;) {
+    const newline = indexOfFrom(text, "\n", start);
+    const end =
+      newline === -1
+        ? text.length
+        : newline > start && codeUnitAt(text, newline - 1) === 0x0d
+          ? newline - 1
+          : newline;
+    const line = sanitizeTerminalLine(Fn.pipe(text, Str.slice(start, end)));
+    if (line !== "") return line;
+    if (newline === -1) return undefined;
+    start = newline + 1;
+  }
+};
+
+/** The tidied first line, or empty when there is none or it starts structured data. */
+const firstLineText = (text: string): string => {
+  const line = firstSanitizedLine(text);
+  return line === undefined || STRUCTURED.test(line) ? "" : tidy(line);
+};
+
+const clippedMessage = (message: string, fallback: string, limit = MESSAGE_TEXT_LIMIT): string =>
+  clipText(message || fallback, Math.min(limit, MESSAGE_TEXT_LIMIT));
+
 export function firstLineMessage(
   text: string,
   fallback: string,
   limit = MESSAGE_TEXT_LIMIT,
 ): string {
-  const line = Option.getOrUndefined(
-    Arr.findFirst(Arr.map(Str.split(text, /\r?\n/u), sanitizeTerminalLine), Str.isNonEmpty),
-  );
-  const message = line === undefined || STRUCTURED.test(line) ? "" : tidy(line);
-  return clipText(message || fallback, Math.min(limit, MESSAGE_TEXT_LIMIT));
+  return clippedMessage(firstLineText(text), fallback, limit);
 }
 
+const NON_WHITESPACE_RUN = /\S+/gu;
+
+/** Whether `text` has more than `limit` non-whitespace code units, counting only that far. */
+const visibleLengthExceeds = (text: string, limit: number): boolean => {
+  let visible = 0;
+  for (const [run] of Fn.pipe(text, Str.matchAll(NON_WHITESPACE_RUN))) {
+    visible += run.length;
+    if (visible > limit) return true;
+  }
+  return false;
+};
+
 export function restatesText(text: string, message: string): boolean {
+  // Collapsing whitespace keeps every other character and dropping a final period removes one,
+  // so text with more non-whitespace than that can't restate the message.
   return (
     message !== "" &&
+    !visibleLengthExceeds(text, message.length + 1) &&
     withoutFinalPeriod(Fn.pipe(text, Str.trim, Str.replace(/\s+/gu, " "))) === message
   );
 }
@@ -60,16 +99,19 @@ export function quoteText(
   text: string,
   options: { readonly limit?: number; readonly failure?: boolean } = {},
 ): QuotedText {
-  const quote = options.failure ? failureMessage : firstLineMessage;
-  const line = isAgentGuidance(text) ? "" : quote(text, "", options.limit);
+  const message = firstLineText(text);
+  const quote = options.failure ? failureFromFirstLine : clippedMessage;
+  const line = isAdvice(message) ? "" : quote(message, "", options.limit);
   return {
     ...(line && { line }),
     ...(Str.trim(text) && !restatesText(text, line) && { detail: text }),
   };
 }
 
+const isAdvice = (message: string): boolean => ADVICE.test(clippedMessage(message, ""));
+
 export function isAgentGuidance(text: string): boolean {
-  return ADVICE.test(firstLineMessage(text, ""));
+  return isAdvice(firstLineText(text));
 }
 
 const STATUS =
@@ -101,8 +143,12 @@ const PHRASE_FAILURES: ReadonlyArray<readonly [RegExp, string]> = [
   [/\bfetch failed\b|\bnetwork error\b/iu, "Network request failed"],
 ];
 
-export function failureMessage(text: string, fallback: string, limit = MESSAGE_TEXT_LIMIT): string {
-  const line = firstLineMessage(text, "");
+function failureFromFirstLine(
+  message: string,
+  fallback: string,
+  limit = MESSAGE_TEXT_LIMIT,
+): string {
+  const line = clippedMessage(message, "");
   const status = STATUS.exec(line)?.[1];
   const code = status === undefined ? undefined : Number(status);
   const phrase = Fn.pipe(
@@ -115,9 +161,13 @@ export function failureMessage(text: string, fallback: string, limit = MESSAGE_T
     Option.map(([, label]) => label),
     Option.getOrUndefined,
   );
-  if (phrase === undefined) return firstLineMessage(text, fallback, limit);
+  if (phrase === undefined) return clippedMessage(message, fallback, limit);
   const shownCode = code !== undefined && phrase !== "Too long for the model's context";
   return clipText(`${phrase}${shownCode ? ` (${code})` : ""}`, limit);
+}
+
+export function failureMessage(text: string, fallback: string, limit = MESSAGE_TEXT_LIMIT): string {
+  return failureFromFirstLine(firstLineText(text), fallback, limit);
 }
 
 export function notificationText(message: string): string {

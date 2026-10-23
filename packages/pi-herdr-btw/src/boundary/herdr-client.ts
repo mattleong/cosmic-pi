@@ -49,8 +49,13 @@ const PaneSchema = Schema.Struct({
   name: Schema.optional(Schema.NullOr(Schema.String.check(Schema.isMaxLength(128)))),
   agent_session: Schema.optional(Schema.NullOr(SessionInfoSchema)),
 });
-const ProtocolSchema = Schema.Struct({
-  protocol: Schema.Int,
+// The live server's protocol is read from its snapshot rather than the CLI's bundled API schema.
+// Agents stay undecoded until callers accept the protocol, so an outdated server's agent shapes
+// can't hide that it needs an upgrade.
+const SnapshotEnvelopeSchema = Schema.Struct({
+  result: Schema.Struct({
+    snapshot: Schema.Struct({ protocol: Schema.Int, agents: Schema.optional(Schema.Unknown) }),
+  }),
 });
 const PaneEnvelopeSchema = Schema.Struct({
   result: Schema.Struct({ pane: PaneSchema }),
@@ -72,14 +77,7 @@ const AgentEnvelopeSchema = Schema.Struct({
 });
 // Agents are decoded individually so one unrelated integration's unexpected shape cannot hide
 // the Pi agents this extension validates.
-const SnapshotEnvelopeSchema = Schema.Struct({
-  result: Schema.Struct({
-    snapshot: Schema.Struct({
-      protocol: Schema.Int,
-      agents: Schema.Array(Schema.Unknown).check(Schema.isMaxLength(4_096)),
-    }),
-  }),
-});
+const SnapshotAgentsSchema = Schema.Array(Schema.Unknown).check(Schema.isMaxLength(4_096));
 const decodeSnapshotAgent = decodeUnknownOrUndefined(PaneSchema);
 const isPiLikeAgent = Schema.is(
   Schema.Union([
@@ -121,6 +119,11 @@ const PaneProcessInfoEnvelopeSchema = Schema.Struct({
 });
 
 export type HerdrPane = typeof PaneSchema.Type;
+export interface HerdrLiveSnapshot {
+  readonly protocol: number;
+  /** Decodes the agents when run; callers check `protocol` first. */
+  readonly agents: Effect.Effect<ReadonlyArray<HerdrPane>, HerdrBtwError>;
+}
 export type HerdrPaneProcessInfo = typeof PaneProcessInfoEnvelopeSchema.Type.result.process_info;
 
 export interface HerdrSplitPaneInput {
@@ -273,18 +276,25 @@ const herdrDecodeFailure = (
   });
 };
 
+const decodeJsonText = Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown));
+
+const decodeValue = <A>(
+  schema: Schema.Decoder<A>,
+  value: unknown,
+  request: HerdrCommandRequest,
+): Effect.Effect<A, HerdrBtwError> =>
+  Schema.decodeUnknownEffect(schema)(value).pipe(
+    Effect.mapError(() => herdrDecodeFailure(request, "protocol")),
+  );
+
 const decodeJson = <A>(
   schema: Schema.Decoder<A>,
   source: string,
   request: HerdrCommandRequest,
 ): Effect.Effect<A, HerdrBtwError> =>
-  Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))(source).pipe(
+  decodeJsonText(source).pipe(
     Effect.mapError(() => herdrDecodeFailure(request, "json")),
-    Effect.flatMap((value) =>
-      Schema.decodeUnknownEffect(schema)(value).pipe(
-        Effect.mapError(() => herdrDecodeFailure(request, "protocol")),
-      ),
-    ),
+    Effect.flatMap((value) => decodeValue(schema, value, request)),
   );
 
 export const makeHerdrClient = (
@@ -324,12 +334,12 @@ export const makeHerdrClient = (
     inspectProtocol: Effect.fn("HerdrClient.inspectProtocol")(() =>
       decoded(
         {
-          args: ["api", "schema", "--json"],
+          args: ["api", "snapshot"],
           operation: "inspect protocol",
           mutation: false,
         },
-        ProtocolSchema,
-      ).pipe(Effect.map((protocol) => protocol.protocol)),
+        SnapshotEnvelopeSchema,
+      ).pipe(Effect.map(({ result }) => result.snapshot.protocol)),
     ),
     inspectPiIntegration: Effect.fn("HerdrClient.inspectPiIntegration")(() =>
       run({
@@ -401,12 +411,19 @@ export const makeHerdrClient = (
         mutation: false,
       };
       return decoded(request, SnapshotEnvelopeSchema).pipe(
-        Effect.flatMap(({ result }) => {
-          const agents = decodeLiveAgents(result.snapshot.agents);
-          return agents === undefined
-            ? Effect.fail(herdrDecodeFailure(request, "protocol"))
-            : Effect.succeed(agents);
-        }),
+        Effect.map(
+          ({ result: { snapshot } }): HerdrLiveSnapshot => ({
+            protocol: snapshot.protocol,
+            agents: decodeValue(SnapshotAgentsSchema, snapshot.agents, request).pipe(
+              Effect.flatMap((entries) => {
+                const agents = decodeLiveAgents(entries);
+                return agents === undefined
+                  ? Effect.fail(herdrDecodeFailure(request, "protocol"))
+                  : Effect.succeed(agents);
+              }),
+            ),
+          }),
+        ),
       );
     }),
     startSideSessionPi: Effect.fn("HerdrClient.startSideSessionPi")(

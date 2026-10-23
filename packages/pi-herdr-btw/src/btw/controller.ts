@@ -5,8 +5,15 @@ import { registerExtensionCommand } from "pi-cosmic-core";
 import { notifyHerdrBtw } from "../boundary/host-notifier.ts";
 import { HerdrBtwError } from "./errors.ts";
 import { HERDR_BTW_COMMAND, HERDR_BTW_NEW_SUBCOMMAND, type HerdrBtwResult } from "./service.ts";
+import { HERDR_ENVIRONMENT_UNAVAILABLE_MESSAGE } from "./validation.ts";
 
 type SideSessionRun = (prompt?: string) => Promise<HerdrBtwResult>;
+
+interface SideSessionHandlers {
+  readonly captureAuthority: () => () => boolean;
+  /** Outside Herdr no workflow runtime exists, so commands stop before reaching it. */
+  readonly insideHerdr: () => boolean;
+}
 
 const isHerdrBtwError = Schema.is(HerdrBtwError);
 
@@ -17,13 +24,17 @@ const SUCCESS_MESSAGES = {
 } satisfies Record<HerdrBtwResult["mode"], string>;
 
 const sideSession =
-  (usage: string, run: SideSessionRun, captureAuthority: () => () => boolean) =>
+  (usage: string, run: SideSessionRun, handlers: SideSessionHandlers) =>
   (args: string, ctx: ExtensionCommandContext): Promise<void> => {
     if (ctx.mode !== "tui") {
       notifyHerdrBtw(ctx, `Open Pi in an interactive terminal to use ${usage}`, "warning");
       return Promise.resolve();
     }
-    const isCurrent = captureAuthority();
+    if (!handlers.insideHerdr()) {
+      notifyHerdrBtw(ctx, HERDR_ENVIRONMENT_UNAVAILABLE_MESSAGE, "error");
+      return Promise.resolve();
+    }
+    const isCurrent = handlers.captureAuthority();
     const trimmed = Str.trim(args);
     return run(trimmed === "" ? undefined : trimmed).then(
       (result) =>
@@ -38,10 +49,9 @@ const sideSession =
 
 export const registerHerdrBtwCommands = (
   pi: ExtensionAPI,
-  handlers: {
+  handlers: SideSessionHandlers & {
     readonly open: SideSessionRun;
     readonly openNew: SideSessionRun;
-    readonly captureAuthority: () => () => boolean;
   },
 ): void => {
   registerExtensionCommand(pi, {
@@ -49,7 +59,7 @@ export const registerHerdrBtwCommands = (
     description: "Open or return to a side conversation in the current tab",
     bare: {
       text: true,
-      handler: sideSession(`/${HERDR_BTW_COMMAND}`, handlers.open, handlers.captureAuthority),
+      handler: sideSession(`/${HERDR_BTW_COMMAND}`, handlers.open, handlers),
     },
     subcommands: [
       {
@@ -59,7 +69,7 @@ export const registerHerdrBtwCommands = (
         handler: sideSession(
           `/${HERDR_BTW_COMMAND} ${HERDR_BTW_NEW_SUBCOMMAND}`,
           handlers.openNew,
-          handlers.captureAuthority,
+          handlers,
         ),
       },
     ],

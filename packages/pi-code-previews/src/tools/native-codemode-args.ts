@@ -13,6 +13,9 @@ import {
   codeUnitAt,
 } from "pi-cosmic-core";
 
+// Bound once: Pi's loader routes each imported-helper call through an interop proxy.
+const codeAt = codeUnitAt;
+
 const Args = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json));
 const Scalar = Schema.fromJsonString(Schema.Union([Schema.Null, Schema.Boolean, Schema.Finite]));
 const decodeArgs = decodeUnknownOrUndefined(Args);
@@ -120,7 +123,7 @@ class ArgumentParser {
     while (this.cursor < this.source.length) {
       const character = this.source[this.cursor++] ?? "";
       if (character === '"') return this.closedString(value, start, isKey);
-      if (codeUnitAt(character, 0) < 32) return undefined;
+      if (codeAt(character, 0) < 32) return undefined;
       if (character !== "\\") {
         value += character;
         continue;
@@ -158,7 +161,7 @@ class ArgumentParser {
 
   private unterminatedString(text: string, start: number, isKey: boolean): Value | undefined {
     if (!this.truncated) return undefined;
-    const last = codeUnitAt(text, text.length - 1);
+    const last = codeAt(text, text.length - 1);
     const value = last >= 0xd800 && last <= 0xdbff ? Fn.pipe(text, Str.slice(0, -1)) : text;
     if (!isKey && credentialStart(value, true) !== undefined)
       this.redactions.push({ start, end: this.cursor });

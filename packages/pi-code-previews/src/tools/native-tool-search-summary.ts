@@ -12,8 +12,13 @@ import {
 } from "pi-cosmic-core";
 import type { CompactSummaryProvider } from "./compact-summary";
 import { argumentFailureIssue } from "./argument-failure";
-import { hostContainer, HostContainerSchema, type HostContainer } from "../shared/untrusted-value";
-import { ownData, visibleDiagnosticLine } from "./native-safe-content";
+import { hostContainer, type HostContainer } from "../shared/untrusted-value";
+import {
+  ownContainer,
+  ownDataReader,
+  ownString,
+  visibleDiagnosticLine,
+} from "./native-safe-content";
 
 const MAX_LOADED = 256;
 const Length = Schema.Natural.check(Schema.isLessThanOrEqualTo(MAX_LOADED));
@@ -22,22 +27,22 @@ const Receipt = Schema.Struct({
   loaded: Schema.Array(ToolName).check(Schema.isMaxLength(MAX_LOADED)),
 });
 const decodeReceipt = decodeUnknownOrUndefined(Receipt);
+const ownLength = ownDataReader(Length);
+const ownValue = ownDataReader(Schema.Unknown);
 
 export function nativeToolSearchReceipt(
   details: HostContainer | undefined,
 ): typeof Receipt.Type | undefined {
-  const source = ownData(details, "loaded", HostContainerSchema);
+  const source = ownContainer(details, "loaded");
   if (!invokeHostCallback(() => Arr.isArray(source), false)) return undefined;
-  const length = ownData(source, "length", Length);
+  const length = ownLength(source, "length");
   if (length === undefined) return undefined;
-  const loaded = Array.from({ length }, (_, index) =>
-    ownData(source, String(index), Schema.Unknown),
-  );
+  const loaded = Array.from({ length }, (_, index) => ownValue(source, String(index)));
   return decodeReceipt({ loaded });
 }
 
 export function nativeToolSearchSubject(args: HostContainer | undefined): string {
-  const query = ownData(args, "query", Schema.String);
+  const query = ownString(args, "query");
   return query === undefined ? "" : visibleDiagnosticLine(Fn.pipe(query, Str.slice(0, 512)), 160);
 }
 

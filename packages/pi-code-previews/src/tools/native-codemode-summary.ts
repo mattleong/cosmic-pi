@@ -104,13 +104,29 @@ function child(call: NativeCodemodeCall, phase: CompactPhase, cwd: string): Comp
   return entry;
 }
 
+type NativeChildren = NonNullable<CompactSummary["children"]>;
+const childrenByEvidence = new WeakMap<NativeCallEvidence, Map<string, NativeChildren>>();
+
 export function nativeCodemodeChildren(
   evidence: NativeCallEvidence,
   phase: CompactPhase,
   cwd: string,
-): NonNullable<CompactSummary["children"]> {
+): NativeChildren {
+  let projected = childrenByEvidence.get(evidence);
+  if (!projected) {
+    projected = new Map();
+    childrenByEvidence.set(evidence, projected);
+  }
+  const key = `${phase}\0${cwd}`;
+  const cached = projected.get(key);
+  if (cached) return cached;
   const calls = evidence.kind === "available" ? evidence.calls : [];
-  return { entries: Arr.map(calls, (call) => child(call, phase, cwd)), total: calls.length };
+  const children = {
+    entries: Arr.map(calls, (call) => child(call, phase, cwd)),
+    total: calls.length,
+  };
+  projected.set(key, children);
+  return children;
 }
 
 export function nativeCodemodeHeader(

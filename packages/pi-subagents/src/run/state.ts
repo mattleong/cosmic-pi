@@ -104,12 +104,16 @@ export interface CapturedOutputText {
   readonly fullText?: string | undefined;
 }
 
-const lineCount = (value: string): number => {
+// Bound once: under Pi's loader each call through the import pays an interop proxy lookup.
+const nextIndexOf = indexOfFrom;
+
+/** The number of lines in `value`, without splitting it. */
+export const lineCount = (value: string): number => {
   let lines = 1;
   for (
-    let index = indexOfFrom(value, "\n", 0);
+    let index = nextIndexOf(value, "\n", 0);
     index !== -1;
-    index = indexOfFrom(value, "\n", index + 1)
+    index = nextIndexOf(value, "\n", index + 1)
   )
     lines += 1;
   return lines;

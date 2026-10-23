@@ -1,17 +1,37 @@
 import { expect, layer } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
+import * as Order from "effect/Order";
+import * as Path from "effect/Path";
 import * as Result from "effect/Result";
 import * as Str from "effect/String";
+import * as TestClock from "effect/testing/TestClock";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { extensionContextFixture, recordingExtensionHost } from "pi-cosmic-core/testing";
 import { afterEach, vi } from "vitest";
 import { registerIntercomApplication } from "../src/application.ts";
 import { hostIntercomInbound } from "../src/boundary/host-inbound.ts";
 import { INTERCOM_MESSAGE_TYPE } from "../src/delivery.ts";
-import { deliverMessage, describeSession, readLastMessage } from "../src/transport/client.ts";
-import { assistantEntry, failureOf, harness, onlyRecord } from "./support/session-harness.ts";
+import { IntercomRegistry } from "../src/registry/store.ts";
+import {
+  DESCRIBE_DEADLINE,
+  deliverMessage,
+  describeSession,
+  readLastMessage,
+} from "../src/transport/client.ts";
+import {
+  assistantEntry,
+  failureOf,
+  hangingListener,
+  harness,
+  onlyRecord,
+  sharedAgentDirectory,
+  startSessionRuntime,
+  writeForeignRecord,
+} from "./support/session-harness.ts";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -175,6 +195,42 @@ layer(nodeFilePlatformLayer)("intercom application", (it) => {
       expect(
         yield* failureOf(describeSession({ socket: next.socket, token: first.token })),
       ).toMatchObject({ reason: "unauthorized" });
+    }),
+  );
+
+  it.effect("starts without waiting for its sweep to hear from a peer that never answers", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const paths = yield* Path.Path;
+      const shared = yield* sharedAgentDirectory();
+      yield* Effect.sync(() => vi.stubEnv("PI_CODING_AGENT_DIR", shared.agentDirectory));
+      const sessions = paths.join(shared.agentDirectory, "intercom", "sessions");
+      yield* fs.makeDirectory(sessions, { recursive: true, mode: 0o700 });
+      const socket = paths.join(shared.base, "stuck.sock");
+      const stuck = yield* hangingListener(socket);
+      yield* writeForeignRecord({ base: shared.base, sessions }, "stuck", { socket });
+
+      // The stuck peer's describe ends only once the test clock passes its deadline, so a startup
+      // that waited for the sweep would never finish.
+      const started = yield* startSessionRuntime(
+        { sessionId: "session-1", name: undefined, cwd: "/project" },
+        "",
+        shared.fallbackRoot,
+      );
+      yield* stuck.arrived(1);
+      yield* TestClock.adjust(DESCRIBE_DEADLINE);
+      yield* started.swept;
+
+      // The stuck peer's owner, this process, still runs, so the sweep kept its record.
+      const { records } = yield* Effect.flatMap(Effect.service(IntercomRegistry), (registry) =>
+        registry.list(),
+      ).pipe(Effect.provide(started.context));
+      expect(
+        Arr.sort(
+          Arr.map(records, ({ sessionId }) => sessionId),
+          Order.String,
+        ),
+      ).toEqual(["session-1", "stuck"]);
     }),
   );
 

@@ -5,6 +5,7 @@ import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
+import { indexOfFrom } from "pi-cosmic-core";
 
 const TOOL_PREVIEW_LINES = 7;
 const TOOL_PREVIEW_CHARS = 1_000;
@@ -31,12 +32,22 @@ const contentText = (content: ContentValue): string =>
 const outputText = (output: ToolOutputValue): string =>
   isContent(output) ? contentText(output) : contentText(output.content);
 
+// Where the preview's last line ends when more lines follow it, without splitting all the output.
+const previewLinesEnd = (text: string): number | undefined => {
+  let end = -1;
+  for (let line = 0; line < TOOL_PREVIEW_LINES; line += 1) {
+    end = indexOfFrom(text, "\n", end + 1);
+    if (end === -1) return undefined;
+  }
+  return end;
+};
+
 const previewText = (text: string): Option.Option<string> => {
   const trimmed = Str.trim(text);
   if (!trimmed) return Option.none();
-  const lines = Str.split(trimmed, "\n");
-  const preview = Arr.join(lines.slice(0, TOOL_PREVIEW_LINES), "\n");
-  const clipped = preview.length > TOOL_PREVIEW_CHARS || lines.length > TOOL_PREVIEW_LINES;
+  const end = previewLinesEnd(trimmed);
+  const preview = end === undefined ? trimmed : Fn.pipe(trimmed, Str.slice(0, end));
+  const clipped = preview.length > TOOL_PREVIEW_CHARS || end !== undefined;
   return Option.some(clipped ? `${Fn.pipe(preview, Str.slice(0, TOOL_PREVIEW_CHARS))}…` : preview);
 };
 

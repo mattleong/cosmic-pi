@@ -44,8 +44,10 @@ Records are 0600. A record is written to an exclusively created, no-follow tempo
 and committed by rename; nothing fallible follows the rename, and an uncommitted temporary file is
 removed. Each record has exactly one writer, the runtime that generated its instance.
 
-Session start sweeps dead owners, reserves the socket path, writes the record, and then
-listens, so a crash after binding leaves a record naming the socket for the sweep. A name change
+Session start reserves the socket path, writes the record, and then listens, so a crash after
+binding leaves a record naming the socket for a later sweep. It then sweeps dead owners in the
+background: startup doesn't wait for the sweep, which a peer that never answers would hold for the
+`Describe` deadline, and disposal interrupts it. A name change
 rewrites the record. Disposal closes the listener and removes its socket, then removes the
 record while holding the write permit and retires the runtime, so a rewrite in progress finishes
 first and none can follow. Replacing a session disposes the old runtime before the new one
@@ -66,14 +68,17 @@ evidence from core's non-blocking `probeProcessLiveness`: the PID is gone, or a 
 time. Unknown liveness, including a record without a comparable start identity, keeps the record. A dead record is claimed by renaming it to a
 tombstone, so one concurrent sweeper retires it; the tombstone is read back and removed only when
 it is still the record judged dead, together with its socket in the shared socket directory.
-Otherwise it goes back unless its owner already wrote a new one. A tombstone left behind is
+Otherwise it goes back unless its owner already wrote a new one. Each claim runs with its check
+and its restore or removal uninterruptibly, so an interrupted sweep never leaves a claimed record
+parked as a tombstone. A tombstone left behind is
 removed only when it decodes to a dead owner or holds an abandoned undecodable record. A record
 file that doesn't decode is retired the same way, by a claim checked to have moved the same
 unchanged file. When the file still names a `pid` and `started`, only positive evidence that
 this owner is dead retires it, since a live owner rewrites its record only at start and on a name
 change; one naming no owner is retired once nothing changed it for a day. A tombstone that doesn't
 decode follows the same rule. One that is unsafe or unreadable is never touched. Each sweep examines a bounded number of records and
-directories for at most two seconds; the next sweep continues.
+directories for at most two seconds, cutting off any probe still running then, and asks about at
+most eight owners at once; the next sweep continues.
 
 ## Socket paths
 
@@ -163,7 +168,7 @@ silence, is reported regardless of listing order. Listing describes every record
 1.5-second `Describe` deadline, marks one that refused unavailable, one that held the connection
 past the deadline unresponsive, and one nothing answered for unreachable, and counts duplicates
 only among answering sessions. Owner liveness can spawn `ps`, so it is checked only for a record that
-didn't answer, and a silent record whose owner is dead is skipped. A send that times out or loses its connection reports an uncertain
+didn't answer, at most eight at once, and a silent record whose owner is dead is skipped. A send that times out or loses its connection reports an uncertain
 outcome and tells the model not to resend. `session_send` is model-only; list and read return
 `pi-intercom/session` structured results to codemode scripts. Arguments go through core's
 `toolArgumentPreparer`; the message length cap is stated in the tool description rather than the
@@ -178,7 +183,8 @@ compact issue; the agent's procedure stays in the expanded detail. Replay is anc
 records, listing diagnostics, the evidence-based sweep, and socket path reservation.
 [Transport tests](tests/transport.test.ts) cover the handshake against rogue listeners, connection
 bounds, stale sockets, oversized frames, deadlines, shutdown, and telemetry over real sockets. [Application tests](tests/application.test.ts) cover registration modes, the child
-marker, rewrites, replacement, removal, and peers reaching live sessions.
+marker, rewrites, replacement, removal, a startup that doesn't wait for its sweep, and peers
+reaching live sessions. [Message tests](tests/message.test.ts) cover the collapsed inbound message.
 [Delivery tests](tests/delivery.test.ts) cover dispositions, holds, retirement, and the
 receive switch. [Tool tests](tests/tools.test.ts) cover listing, sends
 between two runtimes, reads, refusals, uncertainty, and issue wording;

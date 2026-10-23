@@ -83,6 +83,23 @@ describe("herdr-btw workflow", () => {
     );
   }
 
+  it.effect("reports an outdated Herdr before other preflight failures and before splitting", () =>
+    Effect.gen(function* () {
+      for (const options of [
+        { protocol: 16 },
+        { protocol: 16, failOperation: "inspect Pi integration" },
+        { protocol: 16, failOperation: "resolve calling pane" },
+      ] satisfies HerdrBtwFixtureOptions[]) {
+        const test = fixture(options);
+        expect(yield* Effect.flip(test.open())).toMatchObject({
+          code: "herdr_upgrade_required",
+          outcome: "confirmed",
+        });
+        expect(operationNames(test.calls)).not.toContain("split BTW pane");
+      }
+    }),
+  );
+
   it.effect("requires an exact bounded parent session header before a client call", () =>
     Effect.gen(function* () {
       for (const [parentProbe, code] of [

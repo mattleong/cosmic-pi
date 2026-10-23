@@ -6,6 +6,10 @@ import { codeUnitAt, indexOfFrom } from "pi-cosmic-core";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 
+// Bound once: Pi's loader routes each imported-helper call through an interop proxy.
+const codeAt = codeUnitAt;
+const indexFrom = indexOfFrom;
+
 const ESCAPE_CODE = 0x1b;
 
 export function escapeControlChars(text: string): string {
@@ -24,9 +28,9 @@ export function escapeLineControlChars(line: string): string {
 const PRINTABLE_ASCII_RE = /^[ -~]*$/;
 
 export function matchSgrSequence(text: string, index: number): string | undefined {
-  if (codeUnitAt(text, index) !== ESCAPE_CODE || text[index + 1] !== "[") return undefined;
+  if (codeAt(text, index) !== ESCAPE_CODE || text[index + 1] !== "[") return undefined;
   for (let end = index + 2; end < text.length; end++) {
-    const code = codeUnitAt(text, end);
+    const code = codeAt(text, end);
     if ((code >= 0x30 && code <= 0x39) || code === 0x3b) continue;
     return text[end] === "m" ? Fn.pipe(text, Str.slice(index, end + 1)) : undefined;
   }
@@ -54,7 +58,7 @@ export function replaceSgrSequences(
 
 function isTruncationSafe(row: string): boolean {
   for (let index = 0; index < row.length; ) {
-    const code = codeUnitAt(row, index);
+    const code = codeAt(row, index);
     if ((code >= 0x20 && code <= 0x7e) || code === 0x09) {
       index++;
       continue;
@@ -226,7 +230,7 @@ export function wrapAnsiToWidth(
       index += ansi.length;
       continue;
     }
-    const nextAnsi = indexOfFrom(text, "\x1b", index + 1);
+    const nextAnsi = indexFrom(text, "\x1b", index + 1);
     const plainEnd = nextAnsi >= 0 ? nextAnsi : text.length;
     if (!wrapper.appendPlain(escapeControlChars(Fn.pipe(text, Str.slice(index, plainEnd)))))
       return wrapper.rows;

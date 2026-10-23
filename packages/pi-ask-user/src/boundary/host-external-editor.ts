@@ -30,7 +30,7 @@ class ExternalEditorError extends Schema.TaggedError<
   message: Schema.String,
 }) {}
 
-export function captureExternalEditorCommand(ctx: ExtensionContext): string | undefined {
+export function readExternalEditorCommand(ctx: ExtensionContext): string | undefined {
   try {
     return SettingsManager.create(ctx.cwd, undefined, {
       projectTrusted: ctx.isProjectTrusted(),

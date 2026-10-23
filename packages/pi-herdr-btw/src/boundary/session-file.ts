@@ -21,6 +21,7 @@ const { closeSync, constants, fstatSync, lstatSync, openSync, readSync, statSync
 
 const MAX_SESSION_PATH_CHARS = 4_096;
 const MAX_HEADER_LINE_BYTES = 256 * 1024;
+const HEADER_READ_CHUNK_BYTES = 8 * 1024;
 
 const SessionHeaderSchema = Schema.Struct({
   type: Schema.Literal("session"),
@@ -86,16 +87,23 @@ export const compareSessionFileIdentity: SessionFileIdentityComparator = (leftPa
   return comparison ?? "unavailable";
 };
 
+// Headers are small and transcripts can be large, so the buffer grows only while no newline is
+// found. Only bytes past `total` are uninitialized, and they are never read.
 const readFirstLine = (path: string): string | undefined =>
   withRegularSessionDescriptor(path, (descriptor) => {
-    const buffer = Buffer.alloc(MAX_HEADER_LINE_BYTES);
+    let buffer = Buffer.allocUnsafe(HEADER_READ_CHUNK_BYTES);
     let total = 0;
     while (total < MAX_HEADER_LINE_BYTES) {
-      const bytes = readSync(descriptor, buffer, total, MAX_HEADER_LINE_BYTES - total, total);
+      if (total === buffer.length) {
+        const grown = Buffer.allocUnsafe(Math.min(buffer.length * 2, MAX_HEADER_LINE_BYTES));
+        buffer.copy(grown, 0, 0, total);
+        buffer = grown;
+      }
+      const bytes = readSync(descriptor, buffer, total, buffer.length - total, total);
       if (bytes <= 0) break;
+      const newline = buffer.subarray(total, total + bytes).indexOf(0x0a);
+      if (newline !== -1) return buffer.subarray(0, total + newline).toString("utf8");
       total += bytes;
-      const newline = buffer.subarray(0, total).indexOf(0x0a);
-      if (newline !== -1) return buffer.subarray(0, newline).toString("utf8");
     }
     if (total < MAX_HEADER_LINE_BYTES) return buffer.subarray(0, total).toString("utf8");
     return undefined;

@@ -31,7 +31,7 @@ const outputFormats = {
 export const imageOutputMetadata = (format: ImageOutputFormat) => outputFormats[format];
 
 // Grouped repetition exhausts V8's regexp stack on ordinary multi-megabyte images.
-const decodeStrictBase64 = (value: string): Uint8Array | undefined => {
+const decodeStrictBase64 = (value: string): Buffer | undefined => {
   if (
     value.length === 0 ||
     value.length > Math.ceil(MAX_GENERATED_IMAGE_BYTES / 3) * 4 ||
@@ -78,7 +78,7 @@ export const imageOutput = (dependencies: {
     // A valid image in another supported format is kept as returned rather than discarded.
     return {
       ...parsed,
-      data: Buffer.from(bytes).toString("base64"),
+      data: bytes.toString("base64"),
       mimeType: imageOutputMetadata(actualFormat).mimeType,
       bytes,
       outputFormat: actualFormat,

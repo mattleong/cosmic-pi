@@ -154,9 +154,11 @@ class RetainedRendererRow {
     if (!this.context || !this.theme) return;
     this.state ??= { ...this.context.state };
     if (!this.adopted && this.owner.ready && this.owner.live) this.adopt(this.context);
+    const resultStale = through === "result" && this.stale.result;
+    if (!this.stale.call && !resultStale) return;
     const context = { ...this.context, state: this.state };
     if (this.stale.call) this.redrawCall(context, this.theme);
-    if (through === "call" || !this.stale.result) return;
+    if (!resultStale) return;
     this.stale.result = false;
     this.redrawResult(context, this.theme);
   }

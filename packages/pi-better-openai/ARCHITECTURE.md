@@ -107,11 +107,16 @@ user, system, tool, successful assistant, or future-tail messages.
 
 Repair uses `context_with_system` because Pi's conversation-only hook cannot repair
 prompt/tool authority. It replaces only a verified native session prefix and keeps
-other extensions' appended context. Failed repair aborts the request: Pi otherwise
-contains extension exceptions and could continue with incomplete context.
+other extensions' appended context. A branch with neither an owned checkpoint nor a
+retry-omittable reply has nothing to repair and skips the comparison. Failed repair
+aborts the request: Pi otherwise contains extension exceptions and could continue
+with incomplete context.
 Encrypted reuse additionally requires matching-model, JSON-equivalent provider
 prefixes. New covered omissions or edits invalidate reuse; complete plaintext is
-the safe alternative. See [context tests](tests/compaction-context.test.ts) and
+the safe alternative. Injection keeps the latest covered projection serialized,
+keyed by checkpoint, model, configuration-update mode, and covered omissions, and
+consults it only after the covered-edit check. See
+[context tests](tests/compaction-context.test.ts) and
 [projection tests](tests/compaction-projection.test.ts).
 
 [Fallback](src/compaction/fallback.ts) prepares native compaction from that same

@@ -18,10 +18,33 @@ export const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown
 const decodeJson = Schema.decodeSync(Schema.fromJsonString(Schema.Json));
 const asJson = Fn.flow(encodeJson, decodeJson);
 
+// `JSON.stringify` returns undefined for a value JSON cannot represent; `encodeJson` rejects it.
+const jsonTextAt = (values: readonly unknown[], index: number): string | undefined =>
+  JSON.stringify(values[index]);
+
+// Identical text implies equal JSON, so only differing text pays for normalization. Never compare
+// live session objects with `Equal.equals`: it caches hashes by object identity.
+const matchesJsonAt = (actual: readonly unknown[], index: number, expected: string) =>
+  jsonTextAt(actual, index) === expected ||
+  Equal.equals(decodeJson(expected), asJson(actual[index]));
+
 export function hasExactPrefix(actual: readonly unknown[], expected: readonly unknown[]): boolean {
   return (
     actual.length >= expected.length &&
-    Arr.every(expected, (item, index) => Equal.equals(asJson(item), asJson(actual[index])))
+    Arr.every(expected, (item, index) =>
+      matchesJsonAt(actual, index, jsonTextAt(expected, index) ?? encodeJson(item)),
+    )
+  );
+}
+
+/** {@link hasExactPrefix} against expected items already serialized with `JSON.stringify`. */
+export function hasExactJsonPrefix(
+  actual: readonly unknown[],
+  expected: readonly string[],
+): boolean {
+  return (
+    actual.length >= expected.length &&
+    Arr.every(expected, (text, index) => matchesJsonAt(actual, index, text))
   );
 }
 
@@ -144,6 +167,7 @@ export function reconstructOpenAIContext(
   return {
     checkpoint,
     omittedEntryIds,
+    coveredOmittedEntryIds: Arr.filter(omittedEntryIds, (id) => coveredIds.has(id)),
     coverageChanged,
     entries,
     coveredEntries: [...snapshot, ...Arr.filter(conversation, (entry) => coveredIds.has(entry.id))],
@@ -156,6 +180,10 @@ export function repairOpenAIContext(
   messages: ContextWithSystemEvent["messages"],
   observedOmissions: readonly string[] = [],
 ) {
+  const owned = latestOwnedCheckpoint(branch);
+  // Without a checkpoint, repair restores nothing and omits only retry-omittable entries.
+  if (!owned && !Arr.some(branch, isRetryOmittable))
+    return { omittedEntryIds: Arr.empty<string>(), messages: undefined };
   const nativeEntries = buildSessionProjection([...branch]).entries;
   const visibleIds = new Set(
     Arr.map(
@@ -172,7 +200,7 @@ export function repairOpenAIContext(
       if (cursor < messages.length && hasExactPrefix([messages[cursor]], [expected])) cursor++;
       else if (isRetryOmittable(entry)) omitted.add(entry.id);
       else {
-        if (!latestOwnedCheckpoint(branch)) return undefined;
+        if (!owned) return undefined;
         throw new Error("Unable to identify the native session context prefix.");
       }
     }

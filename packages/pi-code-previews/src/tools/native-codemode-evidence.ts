@@ -4,8 +4,8 @@ import * as Schema from "effect/Schema";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import { decodeUnknownOrUndefined, invokeHostCallback } from "pi-cosmic-core";
-import { HostContainerSchema, type HostContainer } from "../shared/untrusted-value";
-import { ownData } from "./native-safe-content";
+import type { HostContainer } from "../shared/untrusted-value";
+import { ownContainer, ownDataReader } from "./native-safe-content";
 
 const Text = Schema.String.check(Schema.isMaxLength(4096));
 const Nonnegative = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0));
@@ -22,6 +22,8 @@ export type NativeCodemodeCall = typeof Call.Type;
 const FieldValue = Schema.Union([Text, Nonnegative, Schema.Undefined]);
 const decodeFieldValue = decodeUnknownOrUndefined(FieldValue);
 const decodeCall = decodeUnknownOrUndefined(Call);
+const ownText = ownDataReader(Text);
+const ownCount = ownDataReader(Schema.Natural);
 const MAX_CALL_RECORDS = 256;
 
 export type NativeCallEvidence = (
@@ -53,18 +55,30 @@ function callRecord(value: HostContainer | undefined): NativeCodemodeCall | unde
   }, undefined);
 }
 
+// Pi replaces result details on each update, so each details object is decoded once.
+const evidenceByDetails = new WeakMap<object, NativeCallEvidence>();
+
 export function nativeCodemodeEvidence(value: HostContainer | undefined): NativeCallEvidence {
-  const fullOutputPath = ownData(value, "fullOutputPath", Text);
+  if (value === undefined) return readEvidence(value);
+  const cached = evidenceByDetails.get(value);
+  if (cached) return cached;
+  const evidence = readEvidence(value);
+  evidenceByDetails.set(value, evidence);
+  return evidence;
+}
+
+function readEvidence(value: HostContainer | undefined): NativeCallEvidence {
+  const fullOutputPath = ownText(value, "fullOutputPath");
   const recovery = fullOutputPath && Str.trim(fullOutputPath) ? { fullOutputPath } : {};
-  const records = ownData(value, "calls", HostContainerSchema);
+  const records = ownContainer(value, "calls");
   if (!invokeHostCallback(() => Arr.isArray(records), false))
     return { kind: "unavailable", ...recovery };
-  const recordCount = ownData(records, "length", Schema.Natural);
+  const recordCount = ownCount(records, "length");
   if (recordCount === undefined) return { kind: "unavailable", ...recovery };
   const inspected = Math.min(recordCount, MAX_CALL_RECORDS);
   const calls: NativeCodemodeCall[] = [];
   for (let index = recordCount - inspected; index < recordCount; index++) {
-    const call = callRecord(ownData(records, String(index), HostContainerSchema));
+    const call = callRecord(ownContainer(records, String(index)));
     if (call) calls.push(call);
   }
   const rejected = inspected - calls.length;

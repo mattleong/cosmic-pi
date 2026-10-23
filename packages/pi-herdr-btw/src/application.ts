@@ -6,6 +6,7 @@ import { registerHerdrBtwParentReference } from "./boundary/host-parent-referenc
 import { captureHerdrBtwSession } from "./boundary/host-session.ts";
 import { registerHerdrBtwCommands } from "./btw/controller.ts";
 import { HerdrBtwService } from "./btw/service.ts";
+import { isHerdrEnvironment } from "./btw/validation.ts";
 import { herdrBtwLayer, type HerdrBtwLayerInput } from "./layer.ts";
 import type { HerdrBtwParentReference } from "./parent-link/policy.ts";
 
@@ -32,6 +33,7 @@ export const registerHerdrBtwApplication = (pi: ExtensionAPI): void => {
 
   registerHerdrBtwCommands(pi, {
     captureAuthority: slot.captureAuthority,
+    insideHerdr: () => isHerdrEnvironment(process.env),
     open: (prompt) => slot.run(HerdrBtwService.use((service) => service.open(prompt))),
     openNew: (prompt) => slot.run(HerdrBtwService.use((service) => service.openNew(prompt))),
   });
@@ -42,6 +44,8 @@ export const registerHerdrBtwApplication = (pi: ExtensionAPI): void => {
       notifyHerdrBtw(ctx, "Herdr BTW couldn't attach to this Pi session", "warning");
       return slot.shutdown();
     }
+    // Commands and side sessions only run inside Herdr panes, so other sessions need no runtime.
+    if (!isHerdrEnvironment(captured.environment)) return slot.shutdown();
     return slot
       .start(
         {

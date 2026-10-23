@@ -84,9 +84,8 @@ export function backgroundTaskActivityDetail(
   let remaining = 12_000;
   const chunks: string[] = [];
   // Plain text per event, so trimming never splits a color sequence into visible text.
-  for (const event of Arr.reverse(task.logs)) {
-    if (remaining <= 0) break;
-    const text = safeTextSuffix(plainTerminalText(event.text), remaining);
+  for (let index = task.logs.length - 1; index >= 0 && remaining > 0; index -= 1) {
+    const text = safeTextSuffix(plainTerminalText(task.logs[index]?.text ?? ""), remaining);
     chunks.push(text);
     remaining -= text.length;
   }

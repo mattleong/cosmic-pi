@@ -114,26 +114,59 @@ export const registryProjection = (tasks: TaskRegistry): BackgroundTaskProjectio
     ),
   });
 
-const oldestLogOwner = (tasks: TaskRegistry): TaskRecord | undefined => {
-  let selected: TaskRecord | undefined;
+/**
+ * The record holding the oldest retained event, earliest in the registry on ties, and whether a
+ * fresh scan would still choose it once its oldest event has the given timestamp.
+ */
+const oldestLogOwner = (tasks: TaskRegistry) => {
+  let owner: TaskRecord | undefined;
+  let ownerAt = Number.POSITIVE_INFINITY;
+  let nextAt = Number.POSITIVE_INFINITY;
+  let nextFollows = false;
   for (const record of tasks.values()) {
-    const first = record.logs.oldestEvent;
-    const selectedFirst = selected?.logs.oldestEvent;
-    if (first && (!selectedFirst || first.timestamp < selectedFirst.timestamp)) selected = record;
+    const at = record.logs.oldestEvent?.timestamp;
+    if (at === undefined) continue;
+    if (at < ownerAt) {
+      nextAt = ownerAt;
+      nextFollows = false;
+      owner = record;
+      ownerAt = at;
+    } else if (at < nextAt) {
+      nextAt = at;
+      nextFollows = true;
+    }
   }
-  return selected;
+  return (
+    owner && {
+      owner,
+      stillOldest: (at: number) => at < nextAt || (at === nextAt && nextFollows),
+    }
+  );
 };
 
 export const enforceRetainedLogBudget = (tasks: TaskRegistry, budget: number) => {
-  let total = Arr.reduce([...tasks.values()], 0, (sum, record) => sum + record.logs.chargedBytes);
+  let total = 0;
+  for (const record of tasks.values()) total += record.logs.chargedBytes;
+  const trimmed = new Set<TaskRecord>();
   while (total > budget) {
-    const selected = oldestLogOwner(tasks);
-    if (!selected?.logs.oldestEvent) break;
-    const before = selected.logs.chargedBytes;
-    selected.logs.dropOldest();
-    total -= before - selected.logs.chargedBytes;
-    selected.snapshot = { ...selected.snapshot, ...logFields(selected.logs) };
-    wakeTaskRecord(selected);
+    const oldest = oldestLogOwner(tasks);
+    if (!oldest) break;
+    const { logs } = oldest.owner;
+    trimmed.add(oldest.owner);
+    do {
+      const before = logs.chargedBytes;
+      logs.dropOldest();
+      total -= before - logs.chargedBytes;
+    } while (
+      total > budget &&
+      logs.oldestEvent !== undefined &&
+      oldest.stillOldest(logs.oldestEvent.timestamp)
+    );
+  }
+  // Each trimmed record publishes its final log fields and wakes its readers once.
+  for (const record of trimmed) {
+    record.snapshot = { ...record.snapshot, ...logFields(record.logs) };
+    wakeTaskRecord(record);
   }
 };
 

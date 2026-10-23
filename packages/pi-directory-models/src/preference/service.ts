@@ -10,7 +10,11 @@ import {
   preferenceFromSelectedModel,
   type DirectoryModelHost,
 } from "../boundary/host-model.ts";
-import type { DirectoryModelPreference } from "../config/schema.ts";
+import {
+  completeSavedPreference,
+  equivalentPreference,
+  type DirectoryModelPreference,
+} from "../config/schema.ts";
 import {
   DirectoryModelStore,
   type DirectoryIdentity,
@@ -80,8 +84,18 @@ export class DirectoryModelPreferenceService extends Context.Service<DirectoryMo
         return identified;
       });
 
+      // Another Pi process may have saved a different preference, so only a stored document that
+      // already holds this capture skips the locked write; an unreadable one is rewritten.
       const write = (identified: DirectoryIdentity, preference: DirectoryModelPreference) =>
-        recovered(store.write(identified, preference), "write", WRITE_WARNING);
+        store.read(identified).pipe(
+          Effect.map((saved) => saved && completeSavedPreference(saved)),
+          Effect.orElseSucceed(() => undefined),
+          Effect.flatMap((stored) =>
+            stored && equivalentPreference(stored, preference)
+              ? Effect.void
+              : recovered(store.write(identified, preference), "write", WRITE_WARNING),
+          ),
+        );
 
       const currentPreference = (canonicalCwd: string) =>
         Effect.suspend(() => {

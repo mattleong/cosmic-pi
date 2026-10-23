@@ -63,6 +63,35 @@ export const descendantRunIds = (
     (record) => record.view.id,
   );
 
+interface RunTreeView {
+  readonly directChildCount: number;
+  readonly descendantCount: number;
+  readonly view: SubagentRunView;
+}
+
+// Keyed by the run's frozen snapshot, so an unchanged run keeps its tree view across projections.
+const runTreeViews = new WeakMap<SubagentRunView, RunTreeView>();
+
+/** A run's frozen snapshot with its place in the tree; the snapshot's nested values stay shared. */
+export const runTreeView = (
+  snapshot: SubagentRunView,
+  directChildCount: number,
+  descendantCount: number,
+): SubagentRunView => {
+  const cached = runTreeViews.get(snapshot);
+  if (cached?.directChildCount === directChildCount && cached.descendantCount === descendantCount)
+    return cached.view;
+  const view: SubagentRunView = Object.freeze({
+    ...snapshot,
+    parentRunId: parentIdOf(snapshot),
+    depth: runDepth(snapshot),
+    directChildCount,
+    descendantCount,
+  });
+  runTreeViews.set(snapshot, { directChildCount, descendantCount, view });
+  return view;
+};
+
 export const projectRunTree = (
   records: ReadonlyMap<string, RunRecord>,
 ): ReadonlyArray<SubagentRunView> => {
@@ -79,15 +108,11 @@ export const projectRunTree = (
       currentParent = parentIdOf(parent.view);
     }
   }
-  return Arr.map(
-    [...records.values()],
-    (record): SubagentRunView =>
-      Object.freeze({
-        ...snapshotRun(record),
-        parentRunId: parentIdOf(record.view),
-        depth: runDepth(record.view),
-        directChildCount: directCounts.get(record.view.id) ?? 0,
-        descendantCount: descendantCounts.get(record.view.id) ?? 0,
-      }),
+  return Arr.map([...records.values()], (record) =>
+    runTreeView(
+      snapshotRun(record),
+      directCounts.get(record.view.id) ?? 0,
+      descendantCounts.get(record.view.id) ?? 0,
+    ),
   );
 };

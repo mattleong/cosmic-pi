@@ -1,4 +1,5 @@
 import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import {
   captureCodePreviewPresentationPolicy,
   expandedArguments,
@@ -43,8 +44,8 @@ import {
   questionnaireToolResult,
 } from "./contract.ts";
 
-const START_OUTPUT_SCHEMA = toPiToolOutputSchema(AskUserAsyncContractSchema);
-const CONTROL_OUTPUT_SCHEMA = toPiToolOutputSchema(AskUserAsyncControlContractSchema);
+// Converted on first registration; only the TUI root registers the async tools.
+const outputSchema = Fn.memoize(toPiToolOutputSchema);
 
 export const renderAskUserAsyncMessage: MessageRenderer = (message, options, theme) =>
   renderAsyncMessage(
@@ -94,7 +95,7 @@ export function registerAsyncAskUserTools(
         renderResult: renderAsyncResult,
         parameters: AskUserAsyncParameters,
         prepareArguments: questionnaireArgumentPreparer("ask_user_async", AskUserAsyncParameters),
-        outputSchema: START_OUTPUT_SCHEMA,
+        outputSchema: outputSchema(AskUserAsyncContractSchema),
         executionMode: "sequential",
         execute(_id, input, signal) {
           return start(input, signal).then((snapshot) =>
@@ -131,7 +132,7 @@ export function registerAsyncAskUserTools(
           "ask_user_async_control",
           AskUserAsyncControlParameters,
         ),
-        outputSchema: CONTROL_OUTPUT_SCHEMA,
+        outputSchema: outputSchema(AskUserAsyncControlContractSchema),
         executionMode: "sequential",
         execute(_id, input, signal) {
           return control(input, signal).then((result) =>

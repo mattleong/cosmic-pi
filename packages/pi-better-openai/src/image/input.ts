@@ -27,7 +27,7 @@ export const imageInputReader = (dependencies: {
   const { fs, path, safeFile, sharp } = dependencies;
   const isInside = (root: string, child: string) =>
     isStrictlyInsidePathWith(path, path.resolve(root), path.resolve(child));
-  const validateInput = Effect.fn("OpenAIImage.validateInput")(function* (
+  const resolveInput = Effect.fn("OpenAIImage.resolveInput")(function* (
     inputPath: string,
     realWorkspace: string,
   ) {
@@ -35,6 +35,13 @@ export const imageInputReader = (dependencies: {
       .realPath(inputPath)
       .pipe(Effect.mapError(() => outsideWorkspace(inputPath)));
     if (!isInside(realWorkspace, realInput)) return yield* outsideWorkspace(inputPath);
+    return realInput;
+  });
+  const validateInput = Effect.fn("OpenAIImage.validateInput")(function* (
+    inputPath: string,
+    realInput: string,
+    realWorkspace: string,
+  ) {
     const verified = yield* safeFile
       .readContainedRegularFile(realInput, realWorkspace, MAX_IMAGE_INPUT_BYTES)
       .pipe(
@@ -61,7 +68,7 @@ export const imageInputReader = (dependencies: {
       );
     const mimeType = metadata.format && INPUT_MIME_TYPES.get(metadata.format);
     if (!mimeType) return yield* fail("input", `Image input is not a readable image: ${inputPath}`);
-    return { path: verified.path, data: verified.bytes, mimeType };
+    return { data: verified.bytes, mimeType };
   });
 
   return Effect.fn("OpenAIImage.readInputs")(function* (
@@ -78,14 +85,16 @@ export const imageInputReader = (dependencies: {
       if (!trimmed) continue;
       const candidate = path.resolve(workspace, trimmed);
       if (!isInside(workspace, candidate)) return yield* outsideWorkspace(candidate);
-      const input = yield* validateInput(candidate, realWorkspace);
-      if (seen.has(input.path)) continue;
+      const realInput = yield* resolveInput(candidate, realWorkspace);
+      // Skip a repeated file before reading it or starting another decoder process.
+      if (seen.has(realInput)) continue;
+      const input = yield* validateInput(candidate, realInput, realWorkspace);
       if (validated.length >= MAX_IMAGE_INPUTS)
         return yield* fail("input", `Too many image inputs (max ${MAX_IMAGE_INPUTS}).`);
       total += input.data.byteLength;
       if (total > MAX_TOTAL_IMAGE_INPUT_BYTES)
         return yield* fail("input", "Image inputs are too large in total (max 50 MB).");
-      seen.add(input.path);
+      seen.add(realInput);
       validated.push({
         mimeType: input.mimeType,
         data: Buffer.from(input.data).toString("base64"),

@@ -49,6 +49,8 @@ interface SessionOutputRenderOptions {
   readonly now?: number;
   readonly showTechnicalDetails?: boolean;
   readonly detailFocused?: boolean;
+  /** Reuses Markdown blocks across renders; without it every render builds its own. */
+  readonly markdown?: SessionOutputMarkdownCache | undefined;
 }
 
 type ToolEvent = Extract<SubagentSessionEvent, { readonly type: "tool" }>;
@@ -89,6 +91,50 @@ const markdownBlock = (text: string, theme: Theme): Markdown =>
   new Markdown(sanitizeTerminalText(text), 2, 0, getMarkdownTheme(), {
     color: (line) => theme.fg("toolOutput", line),
   });
+
+// One run's blocks fit: its task, its report, and an assistant message per retained event.
+const MAX_CACHED_MARKDOWN_BLOCKS = 160;
+const MAX_CACHED_MARKDOWN_CHARS = 512 * 1024;
+
+/**
+ * Markdown blocks by their source text, least recently used first. Each block caches its own
+ * lexing and wrapping per width, so a frame that shows the same text reuses that work. Clear it
+ * when the theme changes.
+ */
+export class SessionOutputMarkdownCache {
+  private readonly blocks = new Map<string, { readonly theme: Theme; readonly block: Markdown }>();
+  private chars = 0;
+
+  block(text: string, theme: Theme): Markdown {
+    const cached = this.blocks.get(text);
+    if (cached) {
+      this.blocks.delete(text);
+      this.chars -= text.length;
+    }
+    const block = cached?.theme === theme ? cached.block : markdownBlock(text, theme);
+    this.blocks.set(text, { theme, block });
+    this.chars += text.length;
+    for (const oldest of this.blocks.keys()) {
+      if (this.blocks.size <= MAX_CACHED_MARKDOWN_BLOCKS && this.chars <= MAX_CACHED_MARKDOWN_CHARS)
+        break;
+      if (oldest === text) break;
+      this.blocks.delete(oldest);
+      this.chars -= oldest.length;
+    }
+    return block;
+  }
+
+  clear(): void {
+    this.blocks.clear();
+    this.chars = 0;
+  }
+}
+
+const markdownFor = (
+  text: string,
+  theme: Theme,
+  cache: SessionOutputMarkdownCache | undefined,
+): Markdown => cache?.block(text, theme) ?? markdownBlock(text, theme);
 
 const activityItems = (
   events: ReadonlyArray<SubagentSessionEvent>,
@@ -219,12 +265,17 @@ const emptyActivityLabel = (run: SubagentRunView): string =>
       : "Interrupted; stop this run and start a replacement when needed."
     : EMPTY_ACTIVITY_LABELS[run.state];
 
-const addAssistantMessage = (container: Container, text: string, theme: Theme): void => {
+const addAssistantMessage = (
+  container: Container,
+  text: string,
+  theme: Theme,
+  markdown: SessionOutputMarkdownCache | undefined,
+): void => {
   const shown =
     text.length > MAX_LIVE_ASSISTANT_CHARS
       ? `${Fn.pipe(text, Str.slice(0, MAX_LIVE_ASSISTANT_CHARS))}…`
       : text;
-  container.addChild(markdownBlock(shown, theme));
+  container.addChild(markdownFor(shown, theme, markdown));
 };
 
 const addLiveActivity = (
@@ -232,6 +283,7 @@ const addLiveActivity = (
   run: SubagentRunView,
   theme: Theme,
   now: number,
+  markdown: SessionOutputMarkdownCache | undefined,
 ): void => {
   const items = activityItems(
     run.sessionEvents,
@@ -240,7 +292,8 @@ const addLiveActivity = (
   const frame = spinnerFrameAt(now);
   for (const item of items) {
     if (item.type === "tools") addToolGroup(container, item.events, theme, frame);
-    else if (item.type === "assistant") addAssistantMessage(container, item.event.text, theme);
+    else if (item.type === "assistant")
+      addAssistantMessage(container, item.event.text, theme, markdown);
     else addStyledRow(container, NOTICE_STYLES[item.event.kind], noticeText(item.event), theme);
   }
   const noticeKinds = new Set(
@@ -267,11 +320,16 @@ const MISSING_REPORT_STATUS = {
   delivered: "Final report already delivered.",
 } satisfies Readonly<Record<NonNullable<SubagentRunView["reportStatus"]>, string>>;
 
-const addAssistantConclusion = (container: Container, run: SubagentRunView, theme: Theme): void => {
+const addAssistantConclusion = (
+  container: Container,
+  run: SubagentRunView,
+  theme: Theme,
+  markdown: SessionOutputMarkdownCache | undefined,
+): void => {
   const output = isTerminalRunState(run.state) ? run.finalText : undefined;
   if (output) {
     addBlock(container, theme.fg("accent", theme.bold("Final report")));
-    container.addChild(markdownBlock(output, theme));
+    container.addChild(markdownFor(output, theme, markdown));
   }
   if (run.state === "completed" && !output && !run.error)
     addBlock(container, theme.fg("dim", MISSING_REPORT_STATUS[run.reportStatus ?? "available"]));
@@ -407,7 +465,7 @@ export function renderSubagentSessionOutput(
   );
   container.addChild(new Text(subtitle, 0, 0));
   addBlock(container, theme.fg("muted", theme.bold("Task")));
-  container.addChild(markdownBlock(run.task, theme));
+  container.addChild(markdownFor(run.task, theme, options.markdown));
   addBlock(container, theme.fg("muted", theme.bold("Activity")));
   addSteeringDelivery(container, run, theme);
   const cleanup = Arr.join(cleanupRecoveryText(run), "\n") || cleanupEvidenceText(run);
@@ -421,8 +479,8 @@ export function renderSubagentSessionOutput(
         sanitizeTerminalText(cleanup),
       ),
     );
-  addLiveActivity(container, run, theme, now);
-  addAssistantConclusion(container, run, theme);
+  addLiveActivity(container, run, theme, now, options.markdown);
+  addAssistantConclusion(container, run, theme, options.markdown);
   if (options.showTechnicalDetails) addTechnicalDetails(container, run, theme);
   return container;
 }

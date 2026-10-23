@@ -294,7 +294,7 @@ const snapshotClient = (agents: ReadonlyArray<unknown>) =>
 
 it.effect("keeps live Pi agents when an unrelated agent has an unexpected shape", () =>
   Effect.gen(function* () {
-    const agents = yield* snapshotClient([
+    const snapshot = yield* snapshotClient([
       {
         ...parentPane,
         agent: "future-agent",
@@ -306,7 +306,7 @@ it.effect("keeps live Pi agents when an unrelated agent has an unexpected shape"
       piAgent,
     ]).inspectLiveAgents();
 
-    expect(agents).toEqual([piAgent]);
+    expect(yield* snapshot.agents).toEqual([piAgent]);
   }),
 );
 
@@ -317,7 +317,12 @@ it.effect("rejects a snapshot whose Pi agent is malformed", () =>
       { ...piAgent, agent: "renamed", name: Fn.pipe("x", Str.repeat(500)) },
       { ...piAgent, agent: null, terminal_id: "" },
     ]) {
-      const error = yield* Effect.flip(snapshotClient([piAgent, malformed]).inspectLiveAgents());
+      const error = yield* Effect.flip(
+        Effect.flatMap(
+          snapshotClient([piAgent, malformed]).inspectLiveAgents(),
+          (snapshot) => snapshot.agents,
+        ),
+      );
       expect(error).toMatchObject({
         code: "herdr_inspect_live_agents_protocol_invalid",
         outcome: "confirmed",

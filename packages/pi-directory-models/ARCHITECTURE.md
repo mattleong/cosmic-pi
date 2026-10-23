@@ -28,7 +28,10 @@ session choices. A failed startup-context read leaves this extension unavailable
 Restoration finishes before activation. Pi's model change cannot be cancelled, so replacement
 waits for its settlement before another runtime can restore a model. Events raised by restoration
 cannot overwrite the saved preference. Admitted changes capture the live selection under the
-service semaphore, preventing delayed events from writing stale event payloads.
+service semaphore, preventing delayed events from writing stale event payloads. Before writing,
+the service reads the stored document without the lock and skips the write only when it decodes to
+the captured preference, so a restore that reproduces the saved document and repeated events for
+one final selection cost no write, while a preference another Pi process saved is still replaced.
 
 Only successful directory identity lookups are cached; failures remain retryable. Directory
 identity uses the native realpath so symlink and letter-case aliases resolve to one canonical cwd.

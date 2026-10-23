@@ -18,6 +18,11 @@ import type {
 
 const COMPACTION_MIN_DEAD_EVENTS = 32;
 
+// Bound once: Pi's loader routes each call through an imported binding via an interop proxy,
+// which dominates the per-character and per-line scans below.
+const codeAt = codeUnitAt;
+const lastIndexAt = lastIndexOfFrom;
+
 const utf8Encoder = new TextEncoder();
 const utf8Decoder = new TextDecoder();
 
@@ -42,8 +47,8 @@ const eventEnd = (text: string, start: number, maxBytes: number, maxLines: numbe
   let sequence = -1;
   let index = start;
   while (index < text.length) {
-    const code = codeUnitAt(text, index);
-    const pair = isHighSurrogate(code) && isLowSurrogate(codeUnitAt(text, index + 1));
+    const code = codeAt(text, index);
+    const pair = isHighSurrogate(code) && isLowSurrogate(codeAt(text, index + 1));
     const size = code < 0x80 ? 1 : code < 0x800 ? 2 : pair ? 4 : 3;
     if (bytes + size > maxBytes && index > start) break;
     bytes += size;
@@ -221,7 +226,7 @@ export class LogBuffer {
       const event = this.store[index];
       const text = event?.text ?? "";
       for (let end = text.length; end > 0; ) {
-        const newline = lastIndexOfFrom(text, "\n", end - 1);
+        const newline = lastIndexAt(text, "\n", end - 1);
         if (newline < 0) break;
         end = newline;
         if (ignoredBreaks > 0) {

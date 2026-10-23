@@ -1,12 +1,13 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { sha256Text } from "../security/sha256.ts";
 import { synchronousRandomHex } from "./native-crypto.ts";
 import { nodeFsConstants as flags, nodeLockFs as fs, nodePath as path } from "./node-builtins.ts";
 import { hasPrivateMode, isOwnedByCurrentUser, isPrivateDirectoryInfo } from "./private-file.ts";
-import { currentProcessIdentity, processLiveness } from "./process-start.ts";
+import { currentProcessIdentity, processLiveness, type ProcessIdentity } from "./process-start.ts";
 
 export class CrossProcessLockError extends Schema.TaggedError<
   CrossProcessLockError,
@@ -50,18 +51,70 @@ const isExists = code("EEXIST");
 const isMissing = code("ENOENT");
 const isRetireRace = code("ENOENT", "ENOTEMPTY", "EEXIST");
 const isSlotOccupied = code("EEXIST", "ENOTEMPTY");
+
+/**
+ * The lock protocol is written once as steps that yield each open descriptor whose contents must
+ * be durable before the protocol continues. Lease callbacks such as `release` are synchronous, so
+ * their driver fsyncs inline; document locks wait for the same fsyncs on the libuv thread pool.
+ * Everything between two yields, including each liveness check and the rename it guards, runs
+ * synchronously, so no other owner can act between a check and its commit within this process.
+ */
+type LockSteps<A> = Generator<number, A, void>;
+
+const resumeAfterFlush = <A>(steps: LockSteps<A>, flush: () => void): IteratorResult<number, A> => {
+  try {
+    flush();
+  } catch (error) {
+    return steps.throw(error);
+  }
+  return steps.next();
+};
+
+const runSynchronously = <A>(steps: LockSteps<A>): A => {
+  let step = steps.next();
+  while (!step.done) {
+    const fd = step.value;
+    step = resumeAfterFlush(steps, () => fs.fsyncSync(fd));
+  }
+  return step.value;
+};
+
+const fsyncOffThread = (fd: number) =>
+  Effect.callback<void, NodeJS.ErrnoException>((resume) => {
+    fs.fsync(fd, (error) => resume(error === null ? Effect.void : Effect.fail(error)));
+  });
+
+const isCrossProcessLockError = Schema.is(CrossProcessLockError);
+
+const failure = (cause: unknown) =>
+  isCrossProcessLockError(cause) ? cause : CrossProcessLockError.make({ reason: "unavailable" });
+
+// Uninterruptible because abandoning the steps would leave descriptors open and a slot half-moved.
+const runOffThread = Effect.fnUntraced(function* <A>(start: () => LockSteps<A>) {
+  const steps = start();
+  let step = yield* Effect.try({ try: () => steps.next(), catch: failure });
+  while (!step.done) {
+    const flushed = yield* Effect.result(fsyncOffThread(step.value));
+    step = yield* Effect.try({
+      try: () => (Result.isSuccess(flushed) ? steps.next() : steps.throw(flushed.failure)),
+      catch: failure,
+    });
+  }
+  return step.value;
+}, Effect.uninterruptible);
+
 // Synchronous, unlike the private-file module, because lease callbacks such as `release` are.
 const privateDirectory = (directory: string, slot?: string) => {
   if (!isPrivateDirectoryInfo(fs.lstatSync(directory))) throw recovery(slot);
 };
-const syncDirectory = (directory: string) => {
+function* syncDirectory(directory: string): LockSteps<void> {
   const fd = fs.openSync(directory, flags.O_RDONLY | flags.O_NOFOLLOW);
   try {
-    fs.fsyncSync(fd);
+    yield fd;
   } finally {
     fs.closeSync(fd);
   }
-};
+}
 const readOwner = (directory: string): Owner => {
   privateDirectory(directory);
   const fd = fs.openSync(path.join(directory, "owner.json"), flags.O_RDONLY | flags.O_NOFOLLOW);
@@ -80,7 +133,7 @@ const readOwner = (directory: string): Owner => {
     fs.closeSync(fd);
   }
 };
-const writeOwner = (directory: string, owner: Owner) => {
+function* writeOwner(directory: string, owner: Owner): LockSteps<void> {
   const temporary = path.join(directory, `pending-${randomToken()}`);
   const fd = fs.openSync(
     temporary,
@@ -89,20 +142,28 @@ const writeOwner = (directory: string, owner: Owner) => {
   );
   try {
     fs.writeFileSync(fd, encode(owner), "utf8");
-    fs.fsyncSync(fd);
+    yield fd;
   } finally {
     fs.closeSync(fd);
   }
   fs.renameSync(temporary, path.join(directory, "owner.json"));
-  syncDirectory(directory);
-};
-const dead = (owner: Owner): boolean => processLiveness(owner) === "dead";
-const retire = (directory: string, owner: Owner, root: string) => {
+  yield* syncDirectory(directory);
+}
+
+/** The recorded evidence about a slot's owner that liveness checks read. */
+export interface CrossProcessLockOwner extends ProcessIdentity {
+  readonly token: string;
+}
+/** Whether an owner is positively dead; anything else keeps its slot held. */
+type OwnerIsDead = (owner: CrossProcessLockOwner) => boolean;
+export const ownerIsDead: OwnerIsDead = (owner) => processLiveness(owner) === "dead";
+
+function* retire(directory: string, owner: Owner, root: string): LockSteps<void> {
   const current = readOwner(directory);
   if (current.token !== owner.token || current.phase !== "quiescent") throw recovery();
   fs.renameSync(directory, `${directory}.retired-${owner.token}`);
-  syncDirectory(root);
-};
+  yield* syncDirectory(root);
+}
 
 const cleanReleased = (directory: string, owner: Owner) => {
   try {
@@ -145,19 +206,19 @@ const readPreviousOwner = (directory: string, attempt = 1): Owner | undefined =>
   throw recovery(directory);
 };
 
-const retireDeadOwner = (directory: string, previous: Owner, root: string): void => {
+function* retireDeadOwner(directory: string, previous: Owner, root: string): LockSteps<void> {
   if (previous.phase === "native-pending") throw recovery(directory);
   try {
-    retire(directory, previous, root);
+    yield* retire(directory, previous, root);
   } catch (retireError) {
     if (!isRetireRace(retireError)) throw retireError;
   }
-};
+}
 
-const publishOwner = (root: string, directory: string, owner: Owner): boolean => {
+function* publishOwner(root: string, directory: string, owner: Owner): LockSteps<boolean> {
   const candidate = path.join(root, `.candidate-${owner.token}`);
   fs.mkdirSync(candidate, { mode: 0o700 });
-  writeOwner(candidate, owner);
+  yield* writeOwner(candidate, owner);
   try {
     fs.renameSync(candidate, directory);
   } catch (error) {
@@ -167,75 +228,87 @@ const publishOwner = (root: string, directory: string, owner: Owner): boolean =>
     throw error;
   }
   try {
-    syncDirectory(root);
+    yield* syncDirectory(root);
   } catch (error) {
     try {
-      retire(directory, owner, root);
+      yield* retire(directory, owner, root);
     } catch {
       throw recovery();
     }
     throw error;
   }
   return true;
-};
+}
 
-const ownedLease = (root: string, directory: string, owner: Owner): CrossProcessLease => {
+interface LeaseSteps {
+  readonly mutationStarted: () => LockSteps<void>;
+  readonly mutationSettled: () => LockSteps<void>;
+  readonly release: () => LockSteps<void>;
+}
+
+const ownedLease = (root: string, directory: string, owner: Owner): LeaseSteps => {
   let pending = false;
   let releaseRequested = false;
   let released = false;
   let uncertain = false;
-  const uncertainOnFailure = (commit: () => void) => {
+  function* uncertainOnFailure(commit: LockSteps<void>): LockSteps<void> {
     try {
-      commit();
+      yield* commit;
     } catch (error) {
       uncertain = true;
       throw error;
     }
-  };
+  }
   const check = () => {
     if (released || uncertain || readOwner(directory).token !== owner.token) throw recovery();
   };
-  const release = () => {
+  function* release(): LockSteps<void> {
     releaseRequested = true;
     if (released || pending || uncertain) return;
     check();
     const destination = `${directory}.released-${owner.token}`;
-    uncertainOnFailure(() => fs.renameSync(directory, destination));
+    try {
+      fs.renameSync(directory, destination);
+    } catch (error) {
+      uncertain = true;
+      throw error;
+    }
     released = true;
-    syncDirectory(root);
+    yield* syncDirectory(root);
     cleanReleased(destination, owner);
-  };
+  }
   return {
-    mutationStarted: () => {
+    *mutationStarted() {
       check();
       if (pending || releaseRequested) throw recovery();
       pending = true;
-      uncertainOnFailure(() => writeOwner(directory, { ...owner, phase: "native-pending" }));
+      yield* uncertainOnFailure(writeOwner(directory, { ...owner, phase: "native-pending" }));
     },
-    mutationSettled: () => {
+    *mutationSettled() {
       check();
       if (!pending) throw recovery();
-      uncertainOnFailure(() => writeOwner(directory, owner));
+      yield* uncertainOnFailure(writeOwner(directory, owner));
       pending = false;
-      if (releaseRequested) release();
+      if (releaseRequested) yield* release();
     },
     release,
   };
 };
 
-export const acquireNativeLock = (
+function* acquireSteps(
   namespace: string,
   options: CrossProcessLockOptions,
-  retryAfterRetire = false,
-): CrossProcessLease | undefined => {
+  retryAfterRetire: boolean,
+  isDead: OwnerIsDead,
+): LockSteps<LeaseSteps | undefined> {
   const root = options.directory;
   ensurePrivateRoot(root);
   const directory = path.join(root, sha256Text(namespace));
   const previous = readPreviousOwner(directory);
   if (previous) {
-    if (!dead(previous)) return undefined;
-    retireDeadOwner(directory, previous, root);
-    return retryAfterRetire ? acquireNativeLock(namespace, options) : undefined;
+    if (!isDead(previous)) return undefined;
+    yield* retireDeadOwner(directory, previous, root);
+    return retryAfterRetire ? yield* acquireSteps(namespace, options, false, isDead) : undefined;
   }
   const { started } = currentProcessIdentity();
   const owner: Owner = {
@@ -245,8 +318,45 @@ export const acquireNativeLock = (
     ...(started !== undefined && { started }),
     phase: "quiescent",
   };
-  return publishOwner(root, directory, owner) ? ownedLease(root, directory, owner) : undefined;
+  return (yield* publishOwner(root, directory, owner))
+    ? ownedLease(root, directory, owner)
+    : undefined;
+}
+
+export const acquireNativeLock = (
+  namespace: string,
+  options: CrossProcessLockOptions,
+  retryAfterRetire = false,
+): CrossProcessLease | undefined => {
+  const lease = runSynchronously(acquireSteps(namespace, options, retryAfterRetire, ownerIsDead));
+  return lease === undefined
+    ? undefined
+    : {
+        mutationStarted: () => runSynchronously(lease.mutationStarted()),
+        mutationSettled: () => runSynchronously(lease.mutationSettled()),
+        release: () => runSynchronously(lease.release()),
+      };
 };
+
+/** A held lock whose release waits for its fsyncs on the libuv thread pool. */
+export interface OffThreadLease {
+  readonly release: Effect.Effect<void, CrossProcessLockError>;
+}
+
+/**
+ * `acquireNativeLock` with retry after retiring a dead owner, waiting for its fsyncs on the libuv
+ * thread pool instead of the event loop. Its lease has no native-mutation phases.
+ */
+export const acquireLockOffThread = (
+  namespace: string,
+  options: CrossProcessLockOptions,
+  isDead: OwnerIsDead,
+): Effect.Effect<OffThreadLease | undefined, CrossProcessLockError> =>
+  runOffThread(() => acquireSteps(namespace, options, true, isDead)).pipe(
+    Effect.map((lease) =>
+      lease === undefined ? undefined : { release: runOffThread(() => lease.release()) },
+    ),
+  );
 
 export interface CrossProcessLockHolder {
   readonly slot: string;
@@ -266,11 +376,6 @@ export const crossProcessLockHolder = (
     return { slot };
   }
 };
-
-const isCrossProcessLockError = Schema.is(CrossProcessLockError);
-
-const failure = (cause: unknown) =>
-  isCrossProcessLockError(cause) ? cause : CrossProcessLockError.make({ reason: "unavailable" });
 
 export class CrossProcessLock extends Context.Service<CrossProcessLock, CrossProcessLockContract>()(
   "pi-cosmic-core/platform/cross-process-lock/CrossProcessLock",

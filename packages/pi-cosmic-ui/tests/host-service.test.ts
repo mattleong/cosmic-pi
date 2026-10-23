@@ -324,6 +324,97 @@ describe("Cosmic UI host service", () => {
     }).pipe(provideBuiltLayer(layer));
   });
 
+  it.effect("repaints only Git results that change, including outside a repository", () => {
+    let status = execResult("## main\n");
+    let changes = 0;
+    const { layer, projection } = serviceLayer({
+      exec: () => Promise.resolve(status),
+      onChange: () => void changes++,
+    });
+    return Effect.gen(function* () {
+      const service = yield* CosmicUiService;
+      yield* service.refreshGit(true);
+      expect(MutableRef.get(projection).gitStatus).toMatchObject({ untracked: 0 });
+      expect(changes).toBe(1);
+      yield* service.refreshGit(true);
+      expect(changes).toBe(1);
+
+      status = execResult("## main\n?? new.ts\n");
+      yield* service.refreshGit(true);
+      expect(MutableRef.get(projection).gitStatus).toMatchObject({ untracked: 1 });
+      expect(changes).toBe(2);
+
+      status = execResult("", 128);
+      yield* service.refreshGit(true);
+      yield* service.refreshGit(true);
+      expect(MutableRef.get(projection).gitStatus).toBeUndefined();
+      expect(changes).toBe(3);
+    }).pipe(provideBuiltLayer(layer));
+  });
+
+  it.effect("backs off pull request polling until a lookup finds one", () => {
+    let lookups = 0;
+    let found = false;
+    const { layer, projection } = serviceLayer({
+      exec: (command) => {
+        if (command !== "gh") return execOk("## main\n");
+        lookups++;
+        return found
+          ? execOk('{"number":3,"url":"https://git.example.test/team/project/pull/3"}')
+          : Promise.resolve(execResult("", 1));
+      },
+      startPolling: true,
+    });
+    const nextLookupAfter = (millis: number, expected: number) =>
+      Effect.gen(function* () {
+        yield* TestClock.adjust(millis - 1);
+        expect(lookups).toBe(expected - 1);
+        yield* TestClock.adjust(1);
+        yield* yieldUntil(() => lookups === expected);
+      });
+    return Effect.gen(function* () {
+      yield* CosmicUiService;
+      yield* nextLookupAfter(30_000, 1);
+      yield* nextLookupAfter(60_000, 2);
+      yield* nextLookupAfter(120_000, 3);
+      found = true;
+      yield* nextLookupAfter(120_000, 4);
+      yield* yieldUntil(() => MutableRef.get(projection).pullRequestNumber === 3);
+      yield* nextLookupAfter(30_000, 5);
+    }).pipe(provideBuiltLayer(layer));
+  });
+
+  it.effect("folds appended usage and refolds a replaced or shortened session", () => {
+    let entries: SessionEntries = [usageEntry(10)];
+    const contextRef = MutableRef.make(
+      extensionContextFixture({
+        cwd: "/project",
+        mode: "tui",
+        // Like Pi, each read copies the list but keeps the entry objects.
+        sessionManager: { getCwd: () => "/project", getEntries: () => [...entries] },
+      }),
+    );
+    const { layer, projection } = serviceLayer({ context: contextRef });
+    const reconciled = Effect.gen(function* () {
+      yield* (yield* CosmicUiService).reconcileUsage();
+      return MutableRef.get(projection).totals.input;
+    });
+    return Effect.gen(function* () {
+      expect(yield* reconciled).toBe(10);
+      entries = [...entries, usageEntry(5)];
+      expect(yield* reconciled).toBe(15);
+      entries = [...entries, usageEntry(1, { ...nativeUsage(1), input: -1 })];
+      expect(yield* reconciled).toBe(15);
+
+      entries = [usageEntry(3)];
+      expect(yield* reconciled).toBe(3);
+      entries = [usageEntry(7), usageEntry(1)];
+      expect(yield* reconciled).toBe(8);
+      entries = [usageEntry(2), usageEntry(2)];
+      expect(yield* reconciled).toBe(4);
+    }).pipe(provideBuiltLayer(layer));
+  });
+
   it.effect(
     "reconciles persisted usage on the Effect clock and keeps the last complete totals",
     () => {

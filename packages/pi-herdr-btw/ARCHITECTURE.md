@@ -27,7 +27,8 @@ The extension never closes user-owned panes.
 
 ## Lifecycle and commit points
 
-Session start captures the parent identity and creates one runtime. Commands revalidate that
+Session start inside Herdr captures the parent identity and creates one runtime; sessions outside
+Herdr create none, and commands there report that they need a Herdr pane. Commands revalidate that
 identity before using it. Command notifications retain their originating session's authority.
 Shutdown revokes that authority and the reference, and disposes workflow resources while leaving
 panes and child sessions available to the user.

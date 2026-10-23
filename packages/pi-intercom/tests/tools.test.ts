@@ -3,27 +3,20 @@ import { expect, layer } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import * as FileSystem from "effect/FileSystem";
 import type * as Layer from "effect/Layer";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Order from "effect/Order";
 import * as Path from "effect/Path";
 import * as Result from "effect/Result";
-import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import * as TestClock from "effect/testing/TestClock";
 import { issueMessageStyleProblems } from "pi-code-previews/testing";
-import {
-  currentProcessIdentity,
-  nodeFilePlatformLayer,
-  synchronousRandomHex,
-} from "pi-cosmic-core";
-import { connect, createServer, type Socket } from "node:net";
+import { nodeFilePlatformLayer, synchronousRandomHex } from "pi-cosmic-core";
+import { connect, createServer } from "node:net";
 import { afterEach, vi } from "vitest";
 import { INTERCOM_MESSAGE_TYPE } from "../src/delivery.ts";
 import type { intercomLayer } from "../src/layer.ts";
-import { SessionRecordFromJson, sessionRecord } from "../src/registry/schema.ts";
 import {
   decodeSessionToolDetails,
   SESSION_TOOL,
@@ -43,10 +36,12 @@ import {
 import { refusalIssue, uncertainIssue } from "../src/tools/summary.ts";
 import {
   assistantEntry,
+  hangingListener,
   harness,
   onlyRecord,
   sessionRuntime,
   sharedAgentDirectory,
+  writeForeignRecord,
 } from "./support/session-harness.ts";
 
 afterEach(() => {
@@ -67,36 +62,6 @@ const twoSessions = Effect.gen(function* () {
   yield* b.start();
   return { shared, a, b };
 });
-
-/**
- * A registry record of a live owner whose socket nobody answers, or `socket` when given, in the
- * registry of the sessions sharing `where.base`.
- */
-const writeForeignRecord = (
-  where: { readonly base: string; readonly sessions: string },
-  sessionId: string,
-  options: { readonly socket?: string; readonly pid?: number; readonly token?: string } = {},
-) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const paths = yield* Path.Path;
-    const instance = synchronousRandomHex(16);
-    const owner = currentProcessIdentity();
-    const record = sessionRecord({
-      instance,
-      pid: options.pid ?? owner.pid,
-      started: options.pid === undefined ? owner.started : undefined,
-      sessionId,
-      name: undefined,
-      cwd: "/elsewhere",
-      socket: options.socket ?? paths.join(where.base, `${instance}.sock`),
-      token: options.token ?? synchronousRandomHex(32),
-    });
-    const source = yield* Schema.encodeEffect(SessionRecordFromJson)(record);
-    yield* fs.writeFileString(paths.join(where.sessions, `${instance}.json`), source, {
-      mode: 0o600,
-    });
-  });
 
 /**
  * Relays connections at `socket` to `target` until a `Deliver` request goes out, then drops both
@@ -125,42 +90,6 @@ const droppingRelay = (socket: string, target: string) =>
     }),
     (server) => Effect.callback<void>((resume) => void server.close(() => resume(Effect.void))),
   );
-
-/** A listener at `socket` that takes connections and never answers them. */
-const hangingListener = (socket: string) =>
-  Effect.gen(function* () {
-    const peers = new Set<Socket>();
-    const waiters = new Set<{ readonly total: number; readonly wake: () => void }>();
-    yield* Effect.acquireRelease(
-      Effect.callback<ReturnType<typeof createServer>>((resume) => {
-        const server = createServer((peer) => {
-          peer.on("error", () => undefined);
-          peers.add(peer);
-          for (const waiter of waiters)
-            if (peers.size >= waiter.total) {
-              waiters.delete(waiter);
-              waiter.wake();
-            }
-        });
-        server.listen(socket, () => resume(Effect.succeed(server)));
-      }),
-      (server) =>
-        Effect.callback<void>((resume) => {
-          server.close(() => resume(Effect.void));
-          for (const peer of peers) peer.destroy();
-        }),
-    );
-    return {
-      /** Waits until `total` connections have arrived in all. */
-      arrived: (total: number) =>
-        Effect.callback<void>((resume) => {
-          if (peers.size >= total) return resume(Effect.void);
-          const waiter = { total, wake: () => resume(Effect.void) };
-          waiters.add(waiter);
-          return Effect.sync(() => void waiters.delete(waiter));
-        }),
-    };
-  });
 
 const unnamedSession = (sessionId: string) => ({ sessionId, name: undefined, cwd: "/project" });
 

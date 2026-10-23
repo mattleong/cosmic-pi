@@ -5,6 +5,7 @@ import {
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
+import * as Fn from "effect/Function";
 import {
   expandedArguments,
   withCodePreviewShell,
@@ -36,7 +37,8 @@ import { questionnaireArgumentPreparer } from "./arguments.ts";
 import { AskUserContractSchema } from "./contract-schema.ts";
 import { askUserContract, questionnaireToolResult } from "./contract.ts";
 
-const OUTPUT_SCHEMA = toPiToolOutputSchema(AskUserContractSchema);
+// Converted on first registration, so processes that never register the tool skip the cost.
+const outputSchema = Fn.memoize(toPiToolOutputSchema);
 
 export function registerAskUserTool(
   pi: ExtensionAPI,
@@ -63,7 +65,7 @@ export function registerAskUserTool(
     ],
     parameters: AskUserParameters,
     prepareArguments: questionnaireArgumentPreparer("ask_user", AskUserParameters),
-    outputSchema: OUTPUT_SCHEMA,
+    outputSchema: outputSchema(AskUserContractSchema),
     executionMode: "sequential",
     execute(_toolCallId, input, signal) {
       return ask(input, signal).then((outcome) =>

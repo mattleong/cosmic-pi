@@ -365,8 +365,10 @@ export function registerCosmicUiApplication(
     workingRow.callStart();
   });
   pi.on("message_start", (_event, ctx) => invalidateContextUsage(ctx));
+  // Context usage derives from persisted entries, which change only at message boundaries, so
+  // streamed chunks keep the footer's cached usage.
   pi.on("message_update", (event, ctx) => {
-    invalidateContextUsage(ctx);
+    updateContext(ctx);
     const update = event.assistantMessageEvent;
     if (
       !update ||

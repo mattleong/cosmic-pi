@@ -1,4 +1,4 @@
-import type { Component } from "@earendil-works/pi-tui";
+import { visibleWidth, type Component } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import { describe, expect, it } from "vitest";
 import { plainTheme as theme } from "pi-cosmic-core/testing";
@@ -127,5 +127,19 @@ describe("async questionnaire replay rendering", () => {
       expect(text).toContain("value");
       expect(text).not.toContain("\u001b");
     }
+  });
+
+  it("fits collapsed answers to each render width", () => {
+    const answers = renderAsyncResult(
+      { details: snapshot, content: [] },
+      { expanded: false, isPartial: false },
+      theme,
+    );
+    const wide = answers.render(240);
+    const narrow = answers.render(12);
+    expect(wide).toEqual(expect.arrayContaining([expect.stringContaining("Tomorrow morning")]));
+    expect(narrow).not.toEqual(wide);
+    expect(Arr.every(narrow, (line) => visibleWidth(line) <= 12)).toBe(true);
+    expect(answers.render(240)).toEqual(wide);
   });
 });

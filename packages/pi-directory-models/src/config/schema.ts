@@ -19,6 +19,8 @@ export const DirectoryModelPreferenceSchema = Schema.Struct({
 
 export type DirectoryModelPreference = typeof DirectoryModelPreferenceSchema.Type;
 
+export const equivalentPreference = Schema.toEquivalence(DirectoryModelPreferenceSchema);
+
 /** The fields a saved preference cannot be applied without; the rest decode independently. */
 const SavedPreferenceEssentialsSchema = DirectoryModelPreferenceSchema.mapFields(
   Struct.omit(["thinkingLevel"]),
@@ -47,6 +49,15 @@ export const decodeSavedPreference = Effect.fn("DirectoryModelPreference.decodeS
     invalidThinkingLevel: saved !== undefined && saved !== null && thinkingLevel === undefined,
   } satisfies SavedDirectoryModelPreference;
 });
+
+/** The complete preference a saved document holds, if its thinking level is usable. */
+export function completeSavedPreference(
+  saved: SavedDirectoryModelPreference,
+): DirectoryModelPreference | undefined {
+  return saved.thinkingLevel === undefined
+    ? undefined
+    : directoryModelPreference(saved.cwd, saved.provider, saved.model, saved.thinkingLevel);
+}
 
 export function directoryModelPreference(
   cwd: string,

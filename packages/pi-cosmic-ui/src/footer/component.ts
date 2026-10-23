@@ -3,6 +3,7 @@ import type {
   ExtensionContext,
   ReadonlyFooterDataProvider,
 } from "@earendil-works/pi-coding-agent";
+import { getCapabilities } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
@@ -28,13 +29,36 @@ import {
   materializeContextUsage,
   materializeFooterHostProjection,
   materializeModel,
+  sameContextUsage,
+  sameFooterHostProjection,
   type FooterContextUsage,
+  type FooterHostProjection,
   type FooterModel,
 } from "../boundary/host-footer-projection.ts";
 import type { FooterRegistry } from "./registry.ts";
 import { clipToWidth } from "../manager/chrome.ts";
 
 type LabeledContribution = CosmicFooterTextContribution & { readonly label: string };
+
+/** Everything a footer render reads except the theme, whose changes reach `invalidate()`. */
+interface FooterRenderInputs {
+  readonly width: number;
+  readonly config: ResolvedCosmicUiConfig;
+  readonly projection: FooterRepositoryProjection;
+  readonly contributions: readonly CosmicFooterContribution[];
+  readonly contextUsage: FooterContextUsage;
+  readonly host: FooterHostProjection;
+  readonly hyperlinks: boolean;
+}
+
+const sameRenderInputs = (left: FooterRenderInputs, right: FooterRenderInputs): boolean =>
+  left.width === right.width &&
+  left.config === right.config &&
+  left.projection === right.projection &&
+  left.contributions === right.contributions &&
+  left.hyperlinks === right.hyperlinks &&
+  sameContextUsage(left.contextUsage, right.contextUsage) &&
+  sameFooterHostProjection(left.host, right.host);
 
 const isRepositoryIdentity = (entry: CosmicFooterTextContribution) =>
   entry.id === "location" ||
@@ -134,6 +158,10 @@ export function createFooterComponent(options: {
         readonly usage: FooterContextUsage;
       }
     | undefined;
+  // Pi renders the footer on every frame, mostly with unchanged inputs.
+  let rendered:
+    | { readonly inputs: FooterRenderInputs; readonly lines: readonly string[] }
+    | undefined;
 
   function invalidateContextUsage(): void {
     cached = undefined;
@@ -154,7 +182,10 @@ export function createFooterComponent(options: {
   }
 
   return {
-    invalidate: invalidateContextUsage,
+    invalidate(): void {
+      cached = undefined;
+      rendered = undefined;
+    },
     invalidateContextUsage,
     render(width: number): string[] {
       if (width <= 0) return [];
@@ -165,12 +196,22 @@ export function createFooterComponent(options: {
         const currentContextUsage = contextUsage(ctx, model?.source);
         const host = materializeFooterHostProjection({ pi, ctx, footerData, model });
         const registrySnapshot = registry.snapshot();
+        const projection = options.projection();
+        const inputs: FooterRenderInputs = {
+          width,
+          config,
+          projection,
+          contributions: registrySnapshot.contributions,
+          contextUsage: currentContextUsage,
+          host,
+          hyperlinks: getCapabilities().hyperlinks,
+        };
+        if (rendered && sameRenderInputs(rendered.inputs, inputs)) return [...rendered.lines];
         const statusPlacements: FooterStatusPlacements = new Map(
           Arr.flatMap(registrySnapshot.contributions, (entry) =>
             entry.kind === "status" ? [[entry.id, entry] as const] : [],
           ),
         );
-        const projection = options.projection();
         const contributions: CosmicFooterContribution[] = [
           ...builtinContributions(host, projection, statusPlacements),
           ...registrySnapshot.contributions,
@@ -191,7 +232,10 @@ export function createFooterComponent(options: {
           currentContextUsage,
           projection.pullRequestUrl,
         );
-        return Arr.map(lines, (line) => clipToWidth(line, width, ""));
+        // Wrapped metric and usage rows can exceed narrow widths by a wide grapheme.
+        const clipped = Arr.map(lines, (line) => clipToWidth(line, width, ""));
+        rendered = { inputs, lines: clipped };
+        return [...clipped];
       }, []);
     },
   };

@@ -10,12 +10,12 @@ import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Arr from "effect/Array";
-import * as Str from "effect/String";
 import * as Order from "effect/Order";
 import { safeSubagentDirectorySegment } from "./child-process.ts";
 import { nodeErrorCode } from "./harness-shared.ts";
 import { MAX_OUTCOME_FILE_PATH_CHARS } from "../run/limits.ts";
 import type { SubagentReportArchive } from "../run/model.ts";
+import { lineCount } from "../run/state.ts";
 import {
   PRIVATE_STATE_RETENTION_MILLIS,
   REPORT_ARCHIVE_ROOT,
@@ -54,8 +54,6 @@ const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
 
 export const reportArchiveRoot = (agentDirectory: string): string =>
   path.join(agentDirectory, SUBAGENT_STATE_ROOT, REPORT_ARCHIVE_ROOT);
-
-const countLines = (text: string): number => Str.split(text, "\n").length;
 
 // A report cut by the archive cap says so in its own file, not only in the notice that links it.
 const archivedContent = (entry: ReportArchiveEntry): string =>
@@ -144,7 +142,7 @@ export const sessionReportArchive = (agentDirectory: string, sessionKey: string)
       return {
         path: file,
         chars: entry.text.length,
-        lines: countLines(entry.text),
+        lines: lineCount(entry.text),
         complete: content === entry.text,
       } satisfies SubagentReportArchive;
     },

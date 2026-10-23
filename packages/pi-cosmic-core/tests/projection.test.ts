@@ -4,7 +4,7 @@ import * as Rec from "effect/Record";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Scheduler from "effect/Scheduler";
-import { freezeSnapshot, frozenProjection } from "../src/projection.ts";
+import { freezeSnapshot, frozenProjection, ProjectionError } from "../src/projection.ts";
 import { interruptingScheduler } from "../testing.ts";
 
 it.effect("commits authoritative state when interrupted at publication", () =>
@@ -102,6 +102,20 @@ it("preserves an own __proto__ property without changing the clone prototype", (
   expect(Object.getPrototypeOf(snapshot)).toBe(Object.prototype);
   expect("polluted" in snapshot).toBe(false);
   expect(Object.isFrozen(Object.getOwnPropertyDescriptor(snapshot, "__proto__")?.value)).toBe(true);
+});
+
+it("reuses already frozen subtrees by identity and still rejects invalid data", () => {
+  const first = freezeSnapshot({ revision: 1, rows: [{ id: "a", tags: ["x"] }] });
+  const next = freezeSnapshot({ revision: 2, rows: first.rows, added: { tags: ["y"] } });
+
+  expect(next.rows).toBe(first.rows);
+  expect(freezeSnapshot(first)).toBe(first);
+  expect(Object.isFrozen(next)).toBe(true);
+  expect(Object.isFrozen(next.added.tags)).toBe(true);
+  expect(() => freezeSnapshot({ rows: first.rows, extra: [1, Number.NaN] })).toThrow(
+    expect.objectContaining({ path: "$.extra[1]" }),
+  );
+  expect(() => freezeSnapshot({ rows: first.rows, run: () => undefined })).toThrow(ProjectionError);
 });
 
 it.effect("does not commit or publish when external publication fails", () =>

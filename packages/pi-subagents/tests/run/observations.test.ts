@@ -112,6 +112,33 @@ describe("SubagentService", () => {
     });
   });
 
+  it.effect("observes a delivered report redacted and frozen", () => {
+    const { fake, layer } = localServiceFixture();
+    return withService(layer, function* (service) {
+      const run = yield* service.start(request({ name: "redacted-observation" }));
+      fake.controls[0]?.settle("Report owned by the first await.");
+      const [owned] = yield* awaitRuns(service, [run.id], "all_finished");
+      expect(owned).toMatchObject({
+        finalText: "Report owned by the first await.",
+        reportStatus: "available",
+      });
+
+      const [delivered] = yield* awaitRuns(service, [run.id], "all_finished");
+      expect(delivered).toMatchObject({ state: "completed", reportStatus: "delivered" });
+      expect(delivered?.finalText).toBeUndefined();
+      const assistantTexts = Arr.flatMap(delivered?.sessionEvents ?? [], (event) =>
+        event.type === "assistant" ? [event.text] : [],
+      );
+      expect(assistantTexts.length).toBeGreaterThan(0);
+      expect(JSON.stringify(assistantTexts)).not.toContain("Report owned by the first await.");
+      expect(Object.isFrozen(delivered)).toBe(true);
+      expect(Object.isFrozen(delivered?.sessionEvents)).toBe(true);
+      expect(Arr.every(delivered?.sessionEvents ?? [], Object.isFrozen)).toBe(true);
+      // Reading the projection never redacts the run's retained report.
+      expect((yield* runView(service, run.id)).finalText).toBe("Report owned by the first await.");
+    });
+  });
+
   it.effect("fails subscribed awaits when the service scope closes", () => {
     const { layer } = localServiceFixture();
     return Effect.gen(function* () {

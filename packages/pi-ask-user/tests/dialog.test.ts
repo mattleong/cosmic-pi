@@ -7,9 +7,11 @@ import {
   tuiFixture,
 } from "pi-cosmic-core/testing";
 import { submitted } from "./support/questionnaire.ts";
-import { type KeyId, matchesKey } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, type KeyId, matchesKey } from "@earendil-works/pi-tui";
 import { it as effectIt } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Str from "effect/String";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { AskUserOutcome } from "../src/questionnaire/model.ts";
 import type { AskUserRequest } from "../src/questionnaire/schema.ts";
@@ -78,6 +80,9 @@ const makeDialog = (
   });
   return { dialog, done, collapse };
 };
+
+const rendered = (dialog: AskUserDialog, width: number): string =>
+  Arr.join(dialog.render(width), "\n");
 
 const typeText = (dialog: AskUserDialog, value: string): void => {
   for (const character of value) dialog.handleInput(character);
@@ -170,4 +175,54 @@ describe("AskUserDialog", () => {
         );
       }),
   );
+
+  effectIt.effect("shows the external editor's state and result without further input", () =>
+    Effect.gen(function* () {
+      const external = deferredPromise<string | undefined>();
+      const { dialog } = makeDialog(request(), () => external.promise);
+      openCustomInput(dialog);
+      const idle = dialog.render(100);
+
+      dialog.handleInput(EXTERNAL_EDITOR);
+      expect(dialog.render(100)).not.toEqual(idle);
+
+      external.resolve("written in the editor");
+      yield* Effect.promise(() =>
+        vi.waitFor(() => expect(rendered(dialog, 100)).toContain("written in the editor")),
+      );
+    }),
+  );
+
+  it("shows the focused choice's own preview at every width", () => {
+    const { dialog } = makeDialog({
+      questions: [
+        {
+          key: "layout",
+          title: "Layout",
+          prompt: "Pick a layout.",
+          mode: "single",
+          choices: [
+            { value: "grid", label: "Grid", description: "Tiles.", preview: "Grid preview body" },
+            { value: "list", label: "List", description: "Rows.", preview: "List preview body" },
+          ],
+        },
+      ],
+    });
+    expect(rendered(dialog, 120)).toContain("Grid preview body");
+    dialog.handleInput(DOWN);
+    for (const width of [120, 80, 120]) {
+      expect(rendered(dialog, width)).toContain("List preview body");
+      expect(rendered(dialog, width)).not.toContain("Grid preview body");
+    }
+  });
+
+  it("places the input cursor only while the dialog has focus", () => {
+    const { dialog } = makeDialog(textRequest);
+    const hasCursor = () => Arr.some(dialog.render(100), Str.includes(CURSOR_MARKER));
+    expect(hasCursor()).toBe(false);
+    dialog.focused = true;
+    expect(hasCursor()).toBe(true);
+    dialog.focused = false;
+    expect(hasCursor()).toBe(false);
+  });
 });

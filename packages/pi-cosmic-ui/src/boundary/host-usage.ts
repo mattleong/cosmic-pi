@@ -44,19 +44,26 @@ export const decodeCompletedAssistantOutput = Fn.flow(
   (completed) => completed?.usage.output,
 );
 
-const decodeFooterTotals = decodeUnknownOrUndefined(FooterTotalsSchema);
-
+/** Sums of decoded non-negative usage stay non-negative; only overflow can make them invalid. */
 export const addAssistantUsage = (
   totals: FooterTotals,
   usage: DecodedAssistantUsage,
-): FooterTotals | undefined =>
-  decodeFooterTotals({
+): FooterTotals | undefined => {
+  const next = {
     input: totals.input + usage.input,
     output: totals.output + usage.output,
     cacheRead: totals.cacheRead + usage.cacheRead,
     cacheWrite: totals.cacheWrite + usage.cacheWrite,
     cost: totals.cost + usage.cost.total,
-  });
+  };
+  return Number.isFinite(next.input) &&
+    Number.isFinite(next.output) &&
+    Number.isFinite(next.cacheRead) &&
+    Number.isFinite(next.cacheWrite) &&
+    Number.isFinite(next.cost)
+    ? next
+    : undefined;
+};
 
 export const decodeContextUsage = decodeUnknownOrUndefined(ContextUsageSchema);
 
@@ -84,21 +91,40 @@ const persistedUsage = (entry: SessionEntry) => {
 };
 
 /**
- * Session totals from persisted usage, or undefined when the session can't be read or an entry
- * holds unreadable usage, so a partial sum never replaces complete totals.
+ * Reads session totals from persisted usage, or undefined when the session can't be read or an
+ * entry holds unreadable usage, so a partial sum never replaces complete totals.
+ *
+ * The session is append-only, so each read folds only entries added since the last complete read.
+ * A shorter session, or one whose last folded entry moved, was replaced (new, resumed, or branched)
+ * and is folded again from its start.
  */
+export const createSessionUsageReader = (sessionManager: ExtensionContext["sessionManager"]) => {
+  let folded = 0;
+  let lastFolded: SessionEntry | undefined;
+  let foldedTotals = emptyTotals();
+  return (): FooterTotals | undefined =>
+    invokeHostCallback<FooterTotals | undefined>(() => {
+      const entries = sessionManager.getEntries();
+      const resumes =
+        folded <= entries.length && (folded === 0 || entries[folded - 1] === lastFolded);
+      let totals = resumes ? foldedTotals : emptyTotals();
+      for (let index = resumes ? folded : 0; index < entries.length; index++) {
+        const entry = entries[index];
+        if (entry === undefined) return undefined;
+        const { required, usage: rawUsage } = persistedUsage(entry);
+        if (rawUsage === undefined && !required) continue;
+        const usage = decodeAssistantUsage(rawUsage);
+        const next = usage && addAssistantUsage(totals, usage);
+        if (next === undefined) return undefined;
+        totals = next;
+      }
+      folded = entries.length;
+      lastFolded = entries.at(-1);
+      foldedTotals = totals;
+      return totals;
+    }, undefined);
+};
+
 export const readSessionUsageTotals = (
   sessionManager: ExtensionContext["sessionManager"],
-): FooterTotals | undefined =>
-  invokeHostCallback<FooterTotals | undefined>(() => {
-    let totals = emptyTotals();
-    for (const entry of sessionManager.getEntries()) {
-      const { required, usage: rawUsage } = persistedUsage(entry);
-      if (rawUsage === undefined && !required) continue;
-      const usage = decodeAssistantUsage(rawUsage);
-      const next = usage && addAssistantUsage(totals, usage);
-      if (next === undefined) return undefined;
-      totals = next;
-    }
-    return totals;
-  }, undefined);
+): FooterTotals | undefined => createSessionUsageReader(sessionManager)();

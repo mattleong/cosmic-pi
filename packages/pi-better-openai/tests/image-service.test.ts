@@ -20,7 +20,7 @@ import { SharpAdapter } from "../src/boundary/sharp.ts";
 import { DEFAULT_IMAGE_CONFIG, type ResolvedConfig } from "../src/config/schema.ts";
 import { OpenAIImageService } from "../src/image/service.ts";
 import { OpenAIImageError, type ToolParams } from "../src/image/types.ts";
-import { makeResolvedConfig, testContext, testModel } from "./helpers.ts";
+import { makeResolvedConfig, serializedSnapshot, testContext, testModel } from "./helpers.ts";
 
 const registryToken = JSON.stringify({ access: "test-token", accountId: "acct_test" });
 const unrelatedModel = testModel("unrelated-model", "anthropic", "anthropic-messages");
@@ -42,6 +42,7 @@ function imageServiceLayer(options: {
   readonly body: Parameters<typeof streamingHttpResponse>[1];
   readonly requests?: StreamingHttpTestRequest[];
   readonly decodedFormats?: readonly string[];
+  readonly decodes?: Uint8Array[];
   readonly status?: number;
 }) {
   let decodeIndex = 0;
@@ -52,9 +53,10 @@ function imageServiceLayer(options: {
   const sharp = Layer.succeed(
     SharpAdapter,
     SharpAdapter.of({
-      decode: () =>
-        Effect.succeed({
-          format: options.decodedFormats?.[decodeIndex++] ?? "png",
+      decode: (bytes) =>
+        Effect.sync(() => {
+          options.decodes?.push(bytes);
+          return { format: options.decodedFormats?.[decodeIndex++] ?? "png" };
         }),
     }),
   );
@@ -225,6 +227,39 @@ describe("OpenAIImageService", () => {
       expect(yield* fs.exists(result.savedPath ?? "")).toBe(true);
       expect(result.note).toContain("webp");
       expect(result.note).toContain("png");
+    }).pipe(provideBuiltLayer(nodePlatformLayer)),
+  );
+
+  it.effect("sends and decodes an input image named twice, or through a symlink, once", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const workspace = yield* fs.makeTempDirectoryScoped({ prefix: "pi-openai-image-inputs-" });
+      yield* fs.writeFile(`${workspace}/input.png`, encoder.encode("input bytes"));
+      yield* fs.symlink(`${workspace}/input.png`, `${workspace}/alias.png`);
+      const requests: StreamingHttpTestRequest[] = [];
+      const decodes: Uint8Array[] = [];
+      yield* OpenAIImageService.use((service) =>
+        service.generate({
+          prompt: "repeated input",
+          images: ["input.png", "./input.png", "alias.png"],
+          save: "none",
+        }),
+      ).pipe(
+        provideBuiltLayer(
+          imageServiceLayer({
+            context: { ...testContext({ token: registryToken }), cwd: workspace },
+            config: makeResolvedConfig(),
+            body: responseBody,
+            requests,
+            decodes,
+          }),
+        ),
+      );
+      expect(
+        Str.split(serializedSnapshot(requests[0]?.encodedJsonBody), "input_image"),
+      ).toHaveLength(2);
+      // One decoder process for the input and one for the generated image.
+      expect(decodes).toHaveLength(2);
     }).pipe(provideBuiltLayer(nodePlatformLayer)),
   );
 

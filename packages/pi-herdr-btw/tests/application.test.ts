@@ -1,8 +1,13 @@
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { extensionContextFixture, recordingExtensionHost } from "pi-cosmic-core/testing";
-import { describe, expect, vi } from "vitest";
+import { afterEach, describe, expect, vi } from "vitest";
 import { registerHerdrBtwApplication } from "../src/application.ts";
+import { HERDR_ENVIRONMENT_UNAVAILABLE_MESSAGE } from "../src/btw/validation.ts";
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 const harness = () => {
   const notify = vi.fn();
@@ -36,12 +41,26 @@ const harness = () => {
 describe("herdr-btw session host capture", () => {
   it.effect("does not report command settlement after the owning session shuts down", () =>
     Effect.gen(function* () {
+      vi.stubEnv("HERDR_ENV", "1");
       const h = harness();
       yield* Effect.promise(() => h.start());
       const pending = h.open();
       yield* Effect.promise(() => h.shutdown());
       yield* Effect.promise(() => Promise.resolve(pending));
       expect(h.notify).not.toHaveBeenCalled();
+    }),
+  );
+
+  it.effect("explains that commands need a Herdr pane when the session runs elsewhere", () =>
+    Effect.gen(function* () {
+      vi.stubEnv("HERDR_ENV", undefined);
+      const h = harness();
+      yield* Effect.promise(() => h.start());
+      yield* Effect.promise(() => Promise.resolve(h.open()));
+      expect(h.notify).toHaveBeenCalledExactlyOnceWith(
+        HERDR_ENVIRONMENT_UNAVAILABLE_MESSAGE,
+        "error",
+      );
     }),
   );
 });

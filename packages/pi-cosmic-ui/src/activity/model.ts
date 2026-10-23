@@ -185,9 +185,24 @@ export function retainActivity(
   });
 }
 
-export function activityPath(rows: readonly ActivityRow[], key: string): readonly ActivityRow[] {
+interface ActivityOwnershipIndex {
+  readonly byKey: ReadonlyMap<string, ActivityRow>;
+  readonly parents: ReadonlyMap<string, string>;
+}
+
+// Published row arrays are immutable snapshots, and renderers ask for paths on every frame.
+const ownershipIndexes = new WeakMap<readonly ActivityRow[], ActivityOwnershipIndex>();
+const ownershipIndex = (rows: readonly ActivityRow[]): ActivityOwnershipIndex => {
+  const cached = ownershipIndexes.get(rows);
+  if (cached) return cached;
   const byKey = new Map(Arr.map(rows, (row) => [row.key, row] as const));
-  const { parents } = resolveActivityOwnership(byKey);
+  const index = { byKey, parents: resolveActivityOwnership(byKey).parents };
+  ownershipIndexes.set(rows, index);
+  return index;
+};
+
+export function activityPath(rows: readonly ActivityRow[], key: string): readonly ActivityRow[] {
+  const { byKey, parents } = ownershipIndex(rows);
   const path: ActivityRow[] = [];
   let cursor = byKey.get(key);
   while (cursor) {
