@@ -14,7 +14,7 @@ import {
 } from "./details-schema.ts";
 import { decodeOutcomeDetails } from "./details-decode.ts";
 import { decodeWorkspaceToolDetails } from "./compact-workspace-summary.ts";
-import { rejectedCallIssue } from "./compact-action-failures.ts";
+import { codedActionFailureIssue, rejectedCallIssue } from "./compact-action-failures.ts";
 
 export interface SummaryArguments {
   action?: unknown;
@@ -124,12 +124,17 @@ export function rejectedCall(
   result: { readonly content: Parameters<typeof getTextContent>[0]; readonly details?: unknown },
 ): CompactSummary | undefined {
   if (isTypedReceipt(result)) return undefined;
+  const text = getTextContent(result.content);
+  const target = rejectedTarget(input, action);
+  // Await and lifecycle failures lead with their code; other actions' text is classified as is.
+  const coded =
+    action === "await" || action === "lifecycle"
+      ? codedActionFailureIssue(text, operation, { oneOfMany: target === "the subagents" })
+      : undefined;
   return {
     ...lanes,
     counters: [],
-    outcome: "error",
-    issues: [
-      rejectedCallIssue(operation, getTextContent(result.content), rejectedTarget(input, action)),
-    ],
+    outcome: coded?.severity === "warning" ? "uncertain" : "error",
+    issues: [coded ?? rejectedCallIssue(operation, text, target)],
   };
 }

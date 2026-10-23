@@ -1,7 +1,5 @@
 import * as Arr from "effect/Array";
-import * as Fn from "effect/Function";
 import * as Order from "effect/Order";
-import * as Str from "effect/String";
 import type {
   SubagentCompletionNotification,
   SubagentNotificationDelivery,
@@ -76,14 +74,12 @@ interface CompletionDeliverySelection {
   readonly notification: SubagentCompletionNotification;
 }
 
-const compareRecordIds: Order.Order<RunRecord> = (left, right) =>
-  Fn.pipe(left.view.id, Str.localeCompare(right.view.id, undefined, { numeric: true }));
-
 export function collectCompletionDeliveryBatch(
   records: ReadonlyMap<string, RunRecord>,
 ): ReadonlyArray<CompletionDeliverySelection> {
   const selected: CompletionDeliverySelection[] = [];
-  for (const record of Arr.sort([...records.values()], compareRecordIds)) {
+  // Records enter the map once, at admission, so its order delivers older runs first.
+  for (const record of records.values()) {
     const completions = Arr.sort(
       [...record.completionGenerations.values()],
       Order.mapInput(

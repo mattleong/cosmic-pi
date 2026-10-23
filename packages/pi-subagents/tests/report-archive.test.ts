@@ -157,7 +157,7 @@ describe("subagent report archive", () => {
     Effect.gen(function* () {
       const agent = yield* temporaryAgent;
       const archive = sessionReportArchive(agent, "session-1");
-      const entry = { id: "agent-r1-1", generation: 1, text: "original" };
+      const entry = { id: "agent-0000000001", generation: 1, text: "original" };
       const original = yield* archive.save(entry);
       const repeated = yield* archive.save({ ...entry, text: "repeated" });
       const replacement = yield* sessionReportArchive(agent, "session-1").save({
@@ -183,12 +183,12 @@ describe("subagent report archive", () => {
         .mockReturnValue("fixed-archive-identity");
       try {
         const original = yield* archive.save({
-          id: "agent-r1-1",
+          id: "agent-0000000001",
           generation: 1,
           text: "original secret",
         });
         const collision = yield* archive
-          .save({ id: "agent-r1-1", generation: 1, text: "replacement" })
+          .save({ id: "agent-0000000001", generation: 1, text: "replacement" })
           .pipe(Effect.flip);
         expect(collision.reason).toBe("file_exists");
         expect(yield* Effect.promise(() => fs.readFile(original.path, "utf8"))).toBe(

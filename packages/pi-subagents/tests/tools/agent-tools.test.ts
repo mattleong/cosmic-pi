@@ -290,14 +290,14 @@ describe("agent tools", () => {
     ];
     for (const code of codes) {
       const [issue] = agentFailureIssues(
-        `[${code}] Agent agent-r1-7 refused.`,
+        `[${code}] Agent agent-0000000007 refused.`,
         "send",
         "The agent",
       );
       expect(issue?.code).toBe(`agent:${code}`);
-      expect(issue?.detail).toContain("agent-r1-7");
+      expect(issue?.detail).toContain("agent-0000000007");
       expect(
-        issueMessageStyleProblems(issue?.message ?? "", { forbidden: ["agent-r1-7"] }),
+        issueMessageStyleProblems(issue?.message ?? "", { forbidden: ["agent-0000000007"] }),
         code,
       ).toEqual([]);
     }
@@ -351,7 +351,12 @@ describe("agent tools", () => {
 
   it("shows every argument once a call is expanded", () => {
     const harness = createToolPresentationHarness(registeredTool("agent_read"));
-    const agentIds = ["agent-r1-1", "agent-r1-2", "agent-r1-3", "agent-r1-4"];
+    const agentIds = [
+      "agent-0000000001",
+      "agent-0000000002",
+      "agent-0000000003",
+      "agent-0000000004",
+    ];
     harness.call({ agentIds }, { expanded: true });
     harness.result(
       {
@@ -364,7 +369,7 @@ describe("agent tools", () => {
     for (const id of agentIds) expect(rendered).toContain(id);
 
     const send = createToolPresentationHarness(registeredTool("agent_send"));
-    send.call({ to: "agent-r1-9", message: "Ship it." }, { expanded: true, isError: true });
+    send.call({ to: "agent-0000000009", message: "Ship it." }, { expanded: true, isError: true });
     send.result(
       {
         content: [{ type: "text", text: "[agent_unavailable] The agent is stopping." }],
@@ -374,7 +379,7 @@ describe("agent tools", () => {
     );
     const failed = Arr.join(send.render(100), "\n");
     expect([
-      Fn.pipe(failed, Str.includes("agent-r1-9")),
+      Fn.pipe(failed, Str.includes("agent-0000000009")),
       Fn.pipe(failed, Str.includes("Ship it.")),
     ]).toEqual([true, true]);
   });

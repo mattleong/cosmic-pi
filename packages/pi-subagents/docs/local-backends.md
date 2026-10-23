@@ -295,7 +295,7 @@ Local Pi run directories (`<agent-dir>/subagents/<session>/<run>-<runtime suffix
 - Normal cleanup removes them. Each root session start sweeps the rest in the background: an entry goes once its owner is provably dead. An entry whose owner record is missing or unreadable goes once it is unchanged for seven days; one whose recorded owner can't be proven dead, such as an identity in another format, is kept.
 - Removal renames to a `.swept-` tombstone first, so a concurrent Pi never reads a half-deleted directory. Failures are skipped.
 - In `/tmp`, the sweep considers only real directories matching `pi-claude-` that the current user owns.
-- The runtime suffix prevents a resumed session's restarted run IDs from reusing an earlier process's directory.
+- The runtime suffix keeps a resumed session's run directories apart from an earlier process's, since random run IDs aren't guaranteed unique.
 - The sweep never touches reports, writer leases, debug ledgers, workspaces, or unrecognized directories, and nested children never sweep.
 
 ## Supervisor channel and completion ownership

@@ -1,17 +1,12 @@
-import * as Fn from "effect/Function";
-import * as Str from "effect/String";
-import { synchronousRandomHex } from "pi-cosmic-core";
+import { synchronousRandomToken } from "pi-cosmic-core";
 
 // 48 random bits as 10 fixed-width base-36 digits, so a counter appended after it stays unambiguous.
-const PROCESS_PREFIX = Fn.pipe(
-  Number.parseInt(synchronousRandomHex(6), 16).toString(36),
-  Str.padStart(10, "0"),
-);
+const PROCESS_PREFIX = synchronousRandomToken();
 let nextRuntimeOrdinal = 1;
 
 /**
- * A namespace for one runtime's IDs. The counter keeps runtimes in one process distinct, and the
- * process-random prefix keeps them from colliding with another process's.
+ * A namespace for one runtime's internal tokens. The counter keeps runtimes in one process
+ * distinct, and the process-random prefix keeps them from colliding with another process's.
  */
 export const allocateRuntimeNamespace = (): string =>
   `r${PROCESS_PREFIX}${(nextRuntimeOrdinal++).toString(36)}`;
@@ -22,10 +17,13 @@ export function identityAllocators(runtimeNamespace: string) {
     let next = 1;
     return (): string => `${kind}-${runtimeNamespace}-${next++}`;
   };
-  const runIdPrefix = `agent-${runtimeNamespace}-`;
-  const allocateRunIdentity = (requestedName: string) => {
+  // Run IDs are random so a model can't predict the next one and address it before its start
+  // returns; the ordinal only numbers default names.
+  const allocateRunIdentity = (requestedName: string, taken: (id: string) => boolean) => {
     const ordinal = nextRunOrdinal++;
-    return { id: `${runIdPrefix}${ordinal}`, name: requestedName || `subagent-${ordinal}` };
+    let id = `agent-${synchronousRandomToken()}`;
+    while (taken(id)) id = `agent-${synchronousRandomToken()}`;
+    return { id, name: requestedName || `subagent-${ordinal}` };
   };
   return {
     allocateClaimToken: ordinalTokens("completion"),

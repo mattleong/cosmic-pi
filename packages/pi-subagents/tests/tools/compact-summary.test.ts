@@ -379,7 +379,7 @@ describe("failure recovery routing", () => {
 
   it("recovers a paused run that can't resume by stopping and replacing it", () => {
     const [issue] = agentFailureIssues(
-      "[agent_resume_unsupported] Agent agent-r1-7 on local/claude is paused and cannot be resumed.",
+      "[agent_resume_unsupported] Agent agent-0000000007 on local/claude is paused and cannot be resumed.",
       "send",
       "The agent",
     );

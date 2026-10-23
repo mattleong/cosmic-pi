@@ -78,9 +78,9 @@ describe("private state sweep", () => {
       const agent = yield* temporaryAgent;
       const root = path.join(agent, "subagents");
       const session = path.join(root, SESSION);
-      const run = path.join(session, "agent-r1-1-0a1b2c3d4e5f");
-      const harness = path.join(root, "local-cli-v1", "codex-agent-r1-2-0123456789ab");
-      const channel = path.join(root, "supervisor-channels-v3", "agent-r1-2-0123456789ab");
+      const run = path.join(session, "agent-0000000001-0a1b2c3d4e5f");
+      const harness = path.join(root, "local-cli-v1", "codex-agent-0000000002-0123456789ab");
+      const channel = path.join(root, "supervisor-channels-v3", "agent-0000000002-0123456789ab");
       yield* entry(run, { "session.jsonl": "{}\n", "system-prompt.md": "prompt" }, reusedPid);
       yield* entry(
         harness,
@@ -105,7 +105,7 @@ describe("private state sweep", () => {
   it.live("keeps state a live process owns, however old", () =>
     Effect.gen(function* () {
       const agent = yield* temporaryAgent;
-      const run = path.join(agent, "subagents", SESSION, "agent-r1-1-0a1b2c3d4e5f");
+      const run = path.join(agent, "subagents", SESSION, "agent-0000000001-0a1b2c3d4e5f");
       yield* entry(run, { "system-prompt.md": "prompt" });
       yield* Effect.orDie(recordPrivateStateOwner(run));
       yield* age(run, 30);
@@ -122,7 +122,7 @@ describe("private state sweep", () => {
       const root = path.join(agent, "subagents");
       const empty = path.join(root, "019fd976-b551-752b-b00e-000000000001");
       const used = path.join(root, SESSION);
-      const run = path.join(used, "agent-r1-1-0a1b2c3d4e5f");
+      const run = path.join(used, "agent-0000000001-0a1b2c3d4e5f");
       yield* io(() => fs.mkdir(empty, { recursive: true, mode: 0o700 }));
       yield* entry(run, { "system-prompt.md": "prompt" });
       yield* Effect.orDie(recordPrivateStateOwner(run));
@@ -179,9 +179,9 @@ describe("private state sweep", () => {
     Effect.gen(function* () {
       const agent = yield* temporaryAgent;
       const root = path.join(agent, "subagents");
-      const fresh = path.join(root, SESSION, "agent-r1-1");
-      const stale = path.join(root, SESSION, "agent-r1-2");
-      const malformed = path.join(root, "supervisor-channels-v3", "agent-r1-4-0123456789ab");
+      const fresh = path.join(root, SESSION, "agent-0000000001");
+      const stale = path.join(root, SESSION, "agent-0000000002");
+      const malformed = path.join(root, "supervisor-channels-v3", "agent-0000000004-0123456789ab");
       yield* entry(fresh, { "system-prompt.md": "prompt" });
       yield* entry(stale, { "system-prompt.md": "prompt" });
       yield* entry(malformed, { "connection.json": "{}", "owner.json": "not json" });
@@ -200,9 +200,9 @@ describe("private state sweep", () => {
     Effect.gen(function* () {
       const agent = yield* temporaryAgent;
       const session = path.join(agent, "subagents", SESSION);
-      const oldFormat = path.join(session, "agent-r1-1");
-      const withoutStart = path.join(session, "agent-r1-2");
-      const reused = path.join(session, "agent-r1-3");
+      const oldFormat = path.join(session, "agent-0000000001");
+      const withoutStart = path.join(session, "agent-0000000002");
+      const reused = path.join(session, "agent-0000000003");
       yield* entry(
         oldFormat,
         { "system-prompt.md": "prompt" },

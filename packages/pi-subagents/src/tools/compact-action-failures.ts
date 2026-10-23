@@ -386,6 +386,29 @@ const AGENT_FAILURE_CODES: ReadonlyMap<string, AgentFailurePresentation> = new M
 const CODED_FAILURE = /^\[([a-z][a-z0-9_]*)\] /u;
 
 /**
+ * The issue for a rejected run action whose error text starts with its code in brackets, phrased
+ * from the code so the IDs the text names stay in the detail. `subject` names the addressed run.
+ */
+export function codedActionFailureIssue(
+  text: string,
+  action: string,
+  subject: { readonly name?: string; readonly oneOfMany?: boolean },
+): CompactIssue | undefined {
+  const code = CODED_FAILURE.exec(Str.trimStart(text))?.[1];
+  if (code === undefined) return undefined;
+  const uncertain = isUncertainToolFailure({ code });
+  const message = Fn.pipe(text, Str.trimStart, Str.replace(CODED_FAILURE, ""));
+  return {
+    severity: uncertain ? "warning" : "error",
+    code: `agent:${code}`,
+    message: uncertain
+      ? unconfirmedMessage(action, undefined)
+      : failedActionMessage(action, { id: "", code, message }, subject.name, subject.oneOfMany),
+    detail: `${Str.trim(text)}\n${failureRecovery(code, message)}`,
+  };
+}
+
+/**
  * Issues for a rejected `agent_*` call. Its error text starts with the refusal code in brackets;
  * `subject` names the agent the call addressed.
  */
@@ -393,20 +416,8 @@ export function agentFailureIssues(text: string, action: string, subject: string
   const code = CODED_FAILURE.exec(Str.trimStart(text))?.[1];
   const known = code === undefined ? undefined : AGENT_FAILURE_CODES.get(code);
   // A message to a run can also fail delivery, with the same codes and recovery as other actions.
-  if (!known && code !== undefined) {
-    const uncertain = isUncertainToolFailure({ code });
-    const message = Fn.pipe(text, Str.trimStart, Str.replace(CODED_FAILURE, ""));
-    return [
-      {
-        severity: uncertain ? "warning" : "error",
-        code: `agent:${code}`,
-        message: uncertain
-          ? unconfirmedMessage(action, undefined)
-          : failedActionMessage(action, { id: "", code, message }, subject),
-        detail: `${Str.trim(text)}\n${failureRecovery(code, message)}`,
-      },
-    ];
-  }
+  const delivery = known ? undefined : codedActionFailureIssue(text, action, { name: subject });
+  if (delivery) return [delivery];
   if (!known) return [rejectedCallIssue(action, text, Str.toLowerCase(subject))];
   return [
     {

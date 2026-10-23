@@ -103,7 +103,7 @@ type RunDirectory = (request: {
 }) => string;
 
 /**
- * Run ids restart with every Pi process, so each runtime adds its own suffix: a resumed session
+ * Run ids are random, not guaranteed unique, so each runtime adds its own suffix: a resumed session
  * never reuses, or races the sweep of, a directory that an earlier process left behind.
  */
 const subagentRunDirectories =

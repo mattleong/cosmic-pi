@@ -82,6 +82,44 @@ export const agentMessageRefusal = (
 export const runNotFound = (id: string): SubagentNotFoundError =>
   SubagentNotFoundError.make({ id, message: `Subagent run not found: ${id}` });
 
+const hasCodePrefix = (message: string, code: string): boolean =>
+  Fn.pipe(message, Str.startsWith(`[${code}]`));
+
+export const codedRefusal = (error: InvalidSubagentRequestError): InvalidSubagentRequestError =>
+  error.code !== undefined && !hasCodePrefix(error.message, error.code)
+    ? invalidRequest(error.code, `[${error.code}] ${error.message}`)
+    : error;
+
+/** The code a run-not-found failure carries in its tool text. */
+const RUN_NOT_FOUND_CODE = "subagent_run_not_found";
+
+/**
+ * Failures carry their code in the text, the only part of a thrown tool error Pi keeps, so the
+ * renderer can classify them without parsing the IDs they name.
+ */
+export const codedFailure = (error: SubagentError): SubagentError => {
+  if (Predicate.isTagged(error, "InvalidSubagentRequestError")) return codedRefusal(error);
+  if (Predicate.isTagged(error, "SubagentNotFoundError"))
+    return hasCodePrefix(error.message, RUN_NOT_FOUND_CODE)
+      ? error
+      : SubagentNotFoundError.make({
+          id: error.id,
+          message: `[${RUN_NOT_FOUND_CODE}] ${error.message}`,
+        });
+  if (
+    Predicate.isTagged(error, "SubagentProcessError") &&
+    error.code !== undefined &&
+    !hasCodePrefix(error.message, error.code)
+  )
+    return SubagentProcessError.make({
+      operation: error.operation,
+      code: error.code,
+      message: `[${error.code}] ${error.message}`,
+      ...(error.pendingDelivery !== undefined && { pendingDelivery: error.pendingDelivery }),
+    });
+  return error;
+};
+
 export const processCauseError = (
   operation: string,
   cause?: unknown,

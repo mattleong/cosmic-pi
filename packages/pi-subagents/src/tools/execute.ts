@@ -18,6 +18,7 @@ import type { SubagentSessionEnvironment } from "../boundary/host-profile-resolu
 import type { SubagentBackendRegistry } from "../backend/service.ts";
 import type { SubagentProfileService } from "../profiles/service.ts";
 import {
+  codedFailure,
   invalidRequest,
   subagentErrorCode,
   type InvalidSubagentRequestError,
@@ -246,7 +247,20 @@ export const executeSubagentActionEffect = Effect.fn("SubagentTools.execute")(fu
         contract: lifecycleContract(args.action, result.outcomes),
       }),
     );
-  });
+  }, Effect.mapError(codedFailure));
+  const executeAwait = Effect.fn("SubagentTools.await")(function* (args: AwaitToolInput["args"]) {
+    const until = awaitUntil(args);
+    const state = awaitExecution ?? awaitExecutionFor(args.runIds, until, onUpdate);
+    const ids = yield* requiredTargetIds(action, args.runIds, MAX_TARGET_RUNS);
+    yield* authorize(ids);
+    return yield* service.withAwaitTerminalObservations(
+      ids,
+      until,
+      state.update,
+      (observations, questions) => completeObservations(state, args, observations, questions),
+      callerRunId,
+    );
+  }, Effect.mapError(codedFailure));
 
   switch (input.tool) {
     case SUBAGENT_TOOL_NAME.start: {
@@ -266,20 +280,8 @@ export const executeSubagentActionEffect = Effect.fn("SubagentTools.execute")(fu
         }),
       );
     }
-    case SUBAGENT_TOOL_NAME.await: {
-      const { args } = input;
-      const until = awaitUntil(args);
-      const state = awaitExecution ?? awaitExecutionFor(args.runIds, until, onUpdate);
-      const ids = yield* requiredTargetIds(action, args.runIds, MAX_TARGET_RUNS);
-      yield* authorize(ids);
-      return yield* service.withAwaitTerminalObservations(
-        ids,
-        until,
-        state.update,
-        (observations, questions) => completeObservations(state, args, observations, questions),
-        callerRunId,
-      );
-    }
+    case SUBAGENT_TOOL_NAME.await:
+      return yield* executeAwait(input.args);
     case SUBAGENT_TOOL_NAME.lifecycle:
       return yield* executeLifecycle(input.args);
   }

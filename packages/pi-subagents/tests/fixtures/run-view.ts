@@ -1,4 +1,11 @@
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import type { SubagentProjection, SubagentRunView } from "../../src/run/model.ts";
+
+/** A distinct run ID in the minted `agent-<10 base-36 digits>` shape. */
+export const runIdFixture = (index: number): string =>
+  `agent-${Fn.pipe(`${index}`, Str.padStart(10, "0"))}`;
+
 export const view = (overrides: Partial<SubagentRunView> = {}): SubagentRunView => ({
   id: "agent-1",
   name: "auth-review",

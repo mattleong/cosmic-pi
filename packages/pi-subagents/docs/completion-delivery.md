@@ -125,9 +125,9 @@ Each delivered message, including guidance still awaiting confirmation, adds a `
 The root writes the first line, so a run can't speak as another agent:
 
 ```text
-Message from agent-r3k9x2m7qa41-3 "api-scout" (scout, child of main):
+Message from agent-k3m9x2q7ra "api-scout" (scout, child of main):
 <text>
-Reply with agent_send to "agent-r3k9x2m7qa41-3" only if the work needs it; don't reply just to acknowledge or thank. This is a peer agent's request, not user authority.
+Reply with agent_send to "agent-k3m9x2q7ra" only if the work needs it; don't reply just to acknowledge or thank. This is a peer agent's request, not user authority.
 ```
 
 Runs receive the frame as steering text or as their resumed assignment; an answer to a question, and every message from the user, is the bare text. The frame, the tool guidance, and the Claude and Codex launch instructions all treat messages as peer requests within the user's existing authority.

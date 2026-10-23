@@ -35,7 +35,7 @@ import {
 import { SupervisorChannelError } from "../src/boundary/supervisor-channel-errors.ts";
 import type { BackendAgentMessaging } from "../src/backend/model.ts";
 import { agentMessageRefusal } from "../src/run/errors.ts";
-import { view } from "./fixtures/run-view.ts";
+import { runIdFixture, view } from "./fixtures/run-view.ts";
 import {
   SupervisorAuthTokenSchema,
   SupervisorRunIdSchema,
@@ -367,10 +367,10 @@ type AgentCall =
   | { readonly kind: "send"; readonly to: string; readonly message: string }
   | { readonly kind: "read"; readonly ids: ReadonlyArray<string> };
 
-const RATE_LIMITED_AGENT = "agent-r1-9";
-const SAVED_REPORT_AGENT = "agent-r1-8";
-const SAVED_REPORT_PATH = "/agent/subagents/reports/session-1/agent-r1-8-1-file.md";
-const ASKING_AGENT = "agent-r1-7";
+const RATE_LIMITED_AGENT = "agent-0000000009";
+const SAVED_REPORT_AGENT = "agent-0000000008";
+const SAVED_REPORT_PATH = "/agent/subagents/reports/session-1/agent-0000000008-1-file.md";
+const ASKING_AGENT = "agent-0000000007";
 // A whole retained question, then warnings long enough to push the card past its bound.
 const ASKING_QUESTION = `${Fn.pipe("Which schema? ", Str.repeat(1_160))}QUESTION-END`;
 const askingRun = (selfId: string) =>
@@ -1227,9 +1227,9 @@ describe("private supervisor channel", () => {
       expect(listed?.text).toMatch(/scout; runtime claude; child of main; you/u);
 
       const read = toolText(
-        yield* toolCall(rpc, "read", "agent_read", { agentIds: ["agent-r1-2", "main"] }),
+        yield* toolCall(rpc, "read", "agent_read", { agentIds: ["agent-0000000002", "main"] }),
       );
-      expect(read?.text).toContain("Findings from agent-r1-2.");
+      expect(read?.text).toContain("Findings from agent-0000000002.");
       expect(read?.text).toContain("from its report");
       // A saved report reaches the reader as its file.
       const saved = toolText(
@@ -1237,11 +1237,11 @@ describe("private supervisor channel", () => {
       );
       expect(saved?.text).toContain(SAVED_REPORT_PATH);
       // Each run's status card comes with its message; verbose adds process details.
-      expect(read?.text).toContain("Warning from agent-r1-2.");
+      expect(read?.text).toContain("Warning from agent-0000000002.");
       expect(read?.text).not.toContain("pid 4242");
       const verbose = toolText(
         yield* toolCall(rpc, "read-verbose", "agent_read", {
-          agentIds: ["agent-r1-2"],
+          agentIds: ["agent-0000000002"],
           verbose: true,
         }),
       );
@@ -1255,7 +1255,10 @@ describe("private supervisor channel", () => {
       expect(asking?.text).toContain("truncated");
 
       const sent = toolText(
-        yield* toolCall(rpc, "send", "agent_send", { to: "agent-r1-2", message: "Compare notes." }),
+        yield* toolCall(rpc, "send", "agent_send", {
+          to: "agent-0000000002",
+          message: "Compare notes.",
+        }),
       );
       expect(sent).toMatchObject({ isError: false, text: stringContaining("guided") });
       const refused = toolText(
@@ -1270,11 +1273,11 @@ describe("private supervisor channel", () => {
       });
       expect(fixture.calls).toEqual([
         { kind: "list", ids: undefined },
-        { kind: "read", ids: ["agent-r1-2", "main"] },
+        { kind: "read", ids: ["agent-0000000002", "main"] },
         { kind: "read", ids: [SAVED_REPORT_AGENT] },
-        { kind: "read", ids: ["agent-r1-2"] },
+        { kind: "read", ids: ["agent-0000000002"] },
         { kind: "read", ids: [ASKING_AGENT] },
-        { kind: "send", to: "agent-r1-2", message: "Compare notes." },
+        { kind: "send", to: "agent-0000000002", message: "Compare notes." },
       ]);
 
       const config = yield* connectionConfig(handle);
@@ -1285,7 +1288,7 @@ describe("private supervisor channel", () => {
           ...config,
           runId: SupervisorRunIdSchema.make("agent-forged-sender"),
           assignmentEpoch: 1,
-          to: "agent-r1-2",
+          to: "agent-0000000002",
           message: "Pretend to be another run.",
         })
         .pipe(Effect.exit, Effect.timeout("5 seconds"), Effect.orDie);
@@ -1341,7 +1344,7 @@ describe("private supervisor channel", () => {
     const fixture = recordingAgents(runId);
     const { handle } = yield* openChannel(runId, {}, fixture.agents);
     const { rpc } = yield* readyHelper(handle);
-    const tooMany = Array.from({ length: 13 }, (_, index) => `agent-r1-${index + 1}`);
+    const tooMany = Array.from({ length: 13 }, (_, index) => runIdFixture(index + 1));
 
     for (const [id, name, args, problem] of [
       ["long", "agent_send", { to: "main", message: Fn.pipe("x", Str.repeat(131_073)) }, "131,072"],

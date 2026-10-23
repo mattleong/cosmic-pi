@@ -23,8 +23,6 @@ import {
   SubagentProcessError,
 } from "../../src/run/errors.ts";
 import * as Arr from "effect/Array";
-import * as Fn from "effect/Function";
-import * as Str from "effect/String";
 import * as Option from "effect/Option";
 
 const completeHistory = (
@@ -88,14 +86,21 @@ describe("SubagentService", () => {
         { concurrency: "unbounded" },
       );
       expect(new Set(Arr.map(runs, (run) => run.id)).size).toBe(12);
-      expect(new Set(Arr.map(runs, (run) => run.name)).size).toBe(12);
-      for (const run of runs) {
-        const ordinal = Fn.pipe(
-          run.id,
-          Str.slice(Option.getOrElse(Fn.pipe(run.id, Str.lastIndexOf("-")), () => -1) + 1),
-        );
-        expect(run.name).toBe(`subagent-${ordinal}`);
-      }
+      expect(new Set(Arr.map(runs, (run) => run.name))).toEqual(
+        new Set(Arr.makeBy(12, (index) => `subagent-${index + 1}`)),
+      );
+    });
+  });
+
+  it.effect("mints run IDs a model can't predict from an earlier start", () => {
+    const { layer } = localServiceFixture();
+    return withService(layer, function* (service) {
+      const first = yield* service.start(request({ name: undefined }));
+      const second = yield* service.start(request({ name: undefined }));
+      // A random token, with no runtime namespace or ordinal to increment.
+      for (const run of [first, second]) expect(run.id).toMatch(/^agent-[0-9a-z]{10}$/u);
+      expect(second.id).not.toBe(first.id);
+      expect([first.name, second.name]).toEqual(["subagent-1", "subagent-2"]);
     });
   });
 

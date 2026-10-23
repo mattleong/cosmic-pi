@@ -137,7 +137,7 @@ const TOOL_SPECS: SubagentToolSpecs = {
   [SUBAGENT_TOOL_NAME.start]: {
     label: "Start Subagents",
     description:
-      "Start background subagents, up to your direct-child limit. Returns run IDs immediately; each report is delivered to you as a saved file when its run finishes, and runs end after reporting. Give every agent a self-contained task with the relevant paths, constraints, and deliverable. The profile sets the role and model route (default generalist). Only the main session can start worktree writers. Subagents started from a codemode script, and their descendants, stay read-only.",
+      "Start background subagents, up to your direct-child limit. Returns run IDs immediately; each report is delivered to you as a saved file when its run finishes, and runs end after reporting. Run IDs are opaque and come only from this result, so a call that names a new run must wait for it. Give every agent a self-contained task with the relevant paths, constraints, and deliverable. The profile sets the role and model route (default generalist). Only the main session can start worktree writers. Subagents started from a codemode script, and their descendants, stay read-only.",
     promptSnippet: "Run bounded, independent tasks in background subagents",
     renderCall: (args, theme, context) =>
       renderSubagentStartCall(args.agents, theme, context.expanded, false, context),

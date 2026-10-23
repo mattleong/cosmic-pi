@@ -13,7 +13,7 @@ import {
   decodeCompactToolDetails,
   decodeStartAwaitCardDetails,
 } from "../src/tools/details-decode.ts";
-import { view } from "./fixtures/run-view.ts";
+import { runIdFixture, view } from "./fixtures/run-view.ts";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
@@ -21,7 +21,7 @@ import * as Order from "effect/Order";
 
 const run = (index = 1, cost?: number): SubagentRunView =>
   view({
-    id: `agent-r2-${index}`,
+    id: runIdFixture(index),
     name: `reader-${index}`,
     task: "Secret full task that must not persist in card details.",
     selection: {
@@ -76,7 +76,7 @@ const startedEntry = (
   effort: "high",
   openaiFastMode: false,
   candidateIndex: 1,
-  runId: `agent-r2-${index + 1}`,
+  runId: runIdFixture(index + 1),
 });
 
 // Long route provenance makes twelve bounded cards exceed the persisted bound before condensing.

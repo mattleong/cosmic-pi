@@ -4,7 +4,6 @@ import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Order from "effect/Order";
-import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
 import type { CompactIssue } from "pi-code-previews";
 import {
@@ -26,8 +25,9 @@ import {
   type AgentSendResult,
 } from "../run/agent-messaging.ts";
 import {
+  codedFailure,
+  codedRefusal,
   invalidRequest,
-  SubagentProcessError,
   type InvalidSubagentRequestError,
   type SubagentError,
 } from "../run/errors.ts";
@@ -403,28 +403,6 @@ const readDetails = (result: AgentReadResult): AgentToolDetails => ({
   }),
   missingIds: [...result.missingIds],
 });
-
-const codedRefusal = (error: InvalidSubagentRequestError): InvalidSubagentRequestError =>
-  error.code !== undefined && !Fn.pipe(error.message, Str.startsWith(`[${error.code}]`))
-    ? invalidRequest(error.code, `[${error.code}] ${error.message}`)
-    : error;
-
-/** Failures carry their code in the text, the only part of a thrown tool error Pi keeps. */
-const codedFailure = (error: SubagentError): SubagentError => {
-  if (Predicate.isTagged(error, "InvalidSubagentRequestError")) return codedRefusal(error);
-  if (
-    Predicate.isTagged(error, "SubagentProcessError") &&
-    error.code !== undefined &&
-    !Fn.pipe(error.message, Str.startsWith(`[${error.code}]`))
-  )
-    return SubagentProcessError.make({
-      operation: error.operation,
-      code: error.code,
-      message: `[${error.code}] ${error.message}`,
-      ...(error.pendingDelivery !== undefined && { pendingDelivery: error.pendingDelivery }),
-    });
-  return error;
-};
 
 /** Scripts can't send agent messages; each agent refuses its own scripted sends. */
 export const scriptedAgentSendRefusal = (): InvalidSubagentRequestError =>

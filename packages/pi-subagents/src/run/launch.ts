@@ -83,7 +83,10 @@ interface RunLaunchDependencies extends Pick<
   readonly records: Map<string, RunRecord>;
   readonly delivery: RunNotificationDelivery;
   readonly isClosed: () => boolean;
-  readonly allocateRunIdentity: (requestedName: string) => {
+  readonly allocateRunIdentity: (
+    requestedName: string,
+    taken: (id: string) => boolean,
+  ) => {
     readonly id: string;
     readonly name: string;
   };
@@ -299,7 +302,9 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
           const scope = yield* Scope.make();
           const initializationSettled = yield* Deferred.make<void>();
           const cleanupSettlement = yield* Deferred.make<"confirmed" | "quarantined">();
-          const { id, name } = allocateRunIdentity(requestedName);
+          const { id, name } = allocateRunIdentity(requestedName, (candidate) =>
+            records.has(candidate),
+          );
           const attemptToken = allocateAssignmentAttemptToken();
           const writerPool = canonicalWriterCwd
             ? yield* writerPools.joinLocked(canonicalWriterCwd, id)

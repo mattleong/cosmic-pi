@@ -288,8 +288,8 @@ const readOnlyIsolation = (
         InvalidSubagentRequestError.make({
           code: "isolation_requires_writer",
           message: isolationFromAgent(input)
-            ? `${planSubject(input.definition, input.agent)} sets worktree isolation but resolved read-only\n\nA read-only run can't be isolated in a worktree. Set the agent's writeIntent to writer, or remove its isolation.`
-            : `${planSubject(input.definition, input.agent)} resolved read-only, so it can't run in a worktree\n\nA read-only run can't be isolated in a worktree. Use profile worker or a writer agent, or omit isolation.`,
+            ? `${planSubject(input.definition, input.agent)} sets worktree isolation but resolved read-only.\n\nA read-only run can't be isolated in a worktree. Set the agent's writeIntent to writer, or remove its isolation.`
+            : `${planSubject(input.definition, input.agent)} resolved read-only, so it can't run in a worktree.\n\nA read-only run can't be isolated in a worktree. Use profile worker or a writer agent, or omit isolation.`,
         }),
       )
     : Effect.succeed(

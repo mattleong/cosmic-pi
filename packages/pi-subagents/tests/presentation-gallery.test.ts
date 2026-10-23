@@ -1800,7 +1800,7 @@ const stalledRuns: ReadonlyArray<SubagentRunView> = [
 
 const messagingRuns: ReadonlyArray<SubagentRunView> = [
   view({
-    id: "agent-r1-1",
+    id: "agent-0000000001",
     name: "pinger",
     state: "running",
     startedAt: minutesAgo(4),
@@ -1812,14 +1812,14 @@ const messagingRuns: ReadonlyArray<SubagentRunView> = [
         type: "notice",
         kind: "message",
         direction: "out",
-        peer: "agent-r1-2",
+        peer: "agent-0000000002",
         text: "hello from pinger",
         createdAt: now - 2_000,
       },
     ],
   }),
   view({
-    id: "agent-r1-2",
+    id: "agent-0000000002",
     name: "ponger",
     state: "running",
     startedAt: minutesAgo(4),
@@ -1831,14 +1831,14 @@ const messagingRuns: ReadonlyArray<SubagentRunView> = [
         type: "notice",
         kind: "message",
         direction: "in",
-        peer: "agent-r1-1",
+        peer: "agent-0000000001",
         text: "hello from pinger",
         createdAt: now - 2_000,
       },
     ],
   }),
   view({
-    id: "agent-r1-3",
+    id: "agent-0000000003",
     name: "quiet-peer",
     state: "running",
     startedAt: minutesAgo(3),

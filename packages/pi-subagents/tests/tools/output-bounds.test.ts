@@ -36,6 +36,7 @@ import type { SubagentRunObservation } from "../../src/run/service.ts";
 import { MAX_ERROR_CHARS, MAX_FINAL_TEXT_CHARS, MAX_NAME_CHARS } from "../../src/run/state.ts";
 import { agentReadText } from "../../src/supervisor/agent-text.ts";
 import { MAX_SUPERVISOR_MCP_AGENT_ID_CHARS } from "../../src/supervisor/mcp-contract.ts";
+import { runIdFixture } from "../fixtures/run-view.ts";
 import {
   MAX_SUPERVISOR_AGENT_CARD_CHARS,
   MAX_SUPERVISOR_AGENT_NAME_CHARS,
@@ -124,7 +125,7 @@ const longText = (tag: string, length: number): string =>
 
 /** A real archive path is at most MAX_OUTCOME_FILE_PATH_CHARS; the archive saves nothing longer. */
 const maxPath = (index: number, kind = "report"): string => {
-  const file = `/agent-r1-${index}-${kind}-1-${Fn.pipe("u", Str.repeat(36))}.md`;
+  const file = `/${runIdFixture(index)}-${kind}-1-${Fn.pipe("u", Str.repeat(36))}.md`;
   return `/${Fn.pipe("d", Str.repeat(MAX_OUTCOME_FILE_PATH_CHARS - file.length - 1))}${file}`;
 };
 
@@ -142,7 +143,7 @@ const worstCandidate: SubagentNextCandidate = {
 };
 
 const worstRun = (index: number): SubagentRunView => {
-  const id = `agent-r1-${index}`;
+  const id = runIdFixture(index);
   const common = {
     id,
     name: longText(`worker-${index}`, MAX_NAME_CHARS),
@@ -240,7 +241,7 @@ const wholeReportRuns = (count: number): ReadonlyArray<SubagentRunView> =>
       Math.min(MAX_FINAL_TEXT_CHARS, 2_048 * (count - index)),
     );
     return view({
-      id: `agent-r1-${index}`,
+      id: runIdFixture(index),
       name: longText(`worker-${index}`, MAX_NAME_CHARS),
       state: "completed",
       reportGeneration: 1,
@@ -413,7 +414,7 @@ describe("worst-case model-facing output", () => {
       (_, index) => {
         const run = worstRun(index % 4 === 3 ? index - 1 : index);
         return {
-          id: `agent-r1-${index}`,
+          id: runIdFixture(index),
           name: run.name,
           generation: 64,
           outcome: run.state === "failed" ? "failed" : "completed",
@@ -458,7 +459,7 @@ describe("worst-case model-facing output", () => {
         code: "profile_no_eligible_model",
         message: longText(`START-FAILURE-${index}`, MAX_ERROR_CHARS),
         admittedRun: {
-          runId: `agent-r1-${index}`,
+          runId: runIdFixture(index),
           cleanupDisposition: "quarantined",
           nextCandidate: worstCandidate,
         },
@@ -728,7 +729,7 @@ describe("worst-case supervisor agent_read", () => {
     const result: SupervisorAgentReadResult = {
       agents: Array.from({ length: MAX_TARGET_RUNS }, (_, index) => ({
         id: Fn.pipe(
-          `agent-r1-${index}-${Fn.pipe("x", Str.repeat(MAX_SUPERVISOR_MCP_AGENT_ID_CHARS))}`,
+          `${runIdFixture(index)}-${Fn.pipe("x", Str.repeat(MAX_SUPERVISOR_MCP_AGENT_ID_CHARS))}`,
           Str.slice(0, MAX_SUPERVISOR_MCP_AGENT_ID_CHARS),
         ),
         name: worstJsonText(MAX_SUPERVISOR_AGENT_NAME_CHARS),
@@ -756,7 +757,7 @@ describe("unsaved report preview boundary", () => {
   const block = (length: number): string =>
     formatRunBlock(
       completionBlock({
-        id: "agent-r1-1",
+        id: "agent-0000000001",
         name: "writer",
         generation: 1,
         outcome: "completed",
