@@ -201,8 +201,8 @@ const DiscoveredCapabilitySchema = Schema.Struct({
   cancel: ForeignCallable<[owner: QuestionnaireOwner]>(),
   ask: ForeignCallable<[request: AskUserRequest, owner: QuestionnaireOwner, signal: AbortSignal]>(),
 });
-export type DiscoveredQuestionnaireRelay = typeof DiscoveredRelaySchema.Type;
-export type DiscoveredQuestionnaireCapability = typeof DiscoveredCapabilitySchema.Type;
+type DiscoveredQuestionnaireRelay = typeof DiscoveredRelaySchema.Type;
+type DiscoveredQuestionnaireCapability = typeof DiscoveredCapabilitySchema.Type;
 const isDiscoveredRelay = Schema.is(DiscoveredRelaySchema);
 const isDiscoveredCapability = Schema.is(DiscoveredCapabilitySchema);
 
