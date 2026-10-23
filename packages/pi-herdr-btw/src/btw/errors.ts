@@ -1,6 +1,9 @@
 import * as Schema from "effect/Schema";
 
-export class HerdrBtwError extends Schema.TaggedError<HerdrBtwError>()("HerdrBtwError", {
+export class HerdrBtwError extends Schema.TaggedError<
+  HerdrBtwError,
+  { readonly brand: unique symbol }
+>()("HerdrBtwError", {
   operation: Schema.String,
   code: Schema.String,
   message: Schema.String,

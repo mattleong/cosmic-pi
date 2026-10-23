@@ -1,7 +1,9 @@
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Result from "effect/Result";
 import * as TestClock from "effect/testing/TestClock";
 import {
   HerdrClient,
@@ -60,7 +62,9 @@ export const operationCount = (calls: ReadonlyArray<HerdrBtwClientCall>, operati
   calls.filter((call) => call.operation === operation).length;
 
 export const operationInputs = (calls: ReadonlyArray<HerdrBtwClientCall>, operation: string) =>
-  calls.flatMap((call) => (call.operation === operation ? [call.input] : []));
+  Arr.filterMap(calls, (call) =>
+    call.operation === operation ? Result.succeed(call.input) : Result.failVoid,
+  );
 
 export const withShellReadiness = <A, E>(workflow: Effect.Effect<A, E>) =>
   Effect.gen(function* () {

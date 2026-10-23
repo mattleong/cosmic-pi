@@ -1,10 +1,13 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import * as Schema from "effect/Schema";
 import { registerExtensionCommand } from "pi-cosmic-core";
 import { notifyHerdrBtw } from "../boundary/host-notifier.ts";
 import { HerdrBtwError } from "./errors.ts";
 import { HERDR_BTW_COMMAND, HERDR_BTW_NEW_SUBCOMMAND, type HerdrBtwResult } from "./service.ts";
 
 type SideSessionRun = (prompt?: string) => Promise<HerdrBtwResult>;
+
+const isHerdrBtwError = Schema.is(HerdrBtwError);
 
 const SUCCESS_MESSAGES = {
   focused: "Switched to your BTW side session",
@@ -26,8 +29,7 @@ const sideSession =
         isCurrent() ? notifyHerdrBtw(ctx, SUCCESS_MESSAGES[result.mode], "info") : undefined,
       (cause: unknown) => {
         if (!isCurrent()) return;
-        const message =
-          cause instanceof HerdrBtwError ? cause.message : "Couldn't open a BTW side session";
+        const message = isHerdrBtwError(cause) ? cause.message : "Couldn't open a BTW side session";
         notifyHerdrBtw(ctx, message, "error");
       },
     );
