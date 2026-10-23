@@ -10,6 +10,8 @@ export {
   QuestionnaireRequestSchema,
   type AskUserOutcome,
   type AskUserRequest,
+  type DiscoveredQuestionnaireCapability,
+  type DiscoveredQuestionnaireRelay,
   type QuestionnaireCapability,
   type QuestionnaireEvents,
   type QuestionnaireOwner,

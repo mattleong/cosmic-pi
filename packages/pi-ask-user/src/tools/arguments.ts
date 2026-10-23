@@ -4,8 +4,7 @@ import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import type { JsonObject, JsonValue } from "pi-cosmic-core";
 import { omitBlankOptionalArguments, toolArgumentPreparer } from "pi-cosmic-core/tool-arguments";
-import type { Static, TSchema } from "typebox";
-import { Check } from "typebox/value";
+import type { TSchema } from "typebox";
 import { AskUserChoiceQuestionSchema } from "../questionnaire/schema.ts";
 
 const decodeArgumentsObject = Schema.decodeUnknownOption(
@@ -54,7 +53,5 @@ export const questionnaireArgumentPreparer = <Parameters extends TSchema>(
     Option.map(withSelectedQuestionShapes),
     // The shared preparer rejects non-object arguments without echoing them.
     Option.getOrNull,
-    toolArgumentPreparer(name, parameters, (value): value is Static<Parameters> =>
-      Check(parameters, value),
-    ),
+    toolArgumentPreparer(name, parameters),
   );

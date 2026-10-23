@@ -29,7 +29,7 @@ export const askAtQuestionnaireBoundary = (
           )
         : AskUserService.use((service) => service.ask(request));
     return Effect.tryPromise({
-      try: (signal) => relay.ask(request, signal),
+      try: (signal) => Promise.resolve<unknown>(relay.ask(request, signal)),
       catch: () => relayFailure("The root questionnaire relay failed or was revoked."),
     }).pipe(
       Effect.flatMap((input) => {

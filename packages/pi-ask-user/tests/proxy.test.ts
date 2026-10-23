@@ -18,21 +18,31 @@ import {
   decodeQuestionnaireOutcome,
   queryQuestionnaireCapability,
   QUESTIONNAIRE_RELAY_QUERY,
-  type QuestionnaireCapability,
   type QuestionnaireEvents,
   type QuestionnaireOwner,
   type QuestionnaireRelay,
   type AskUserOutcome,
+  type AskUserRequest,
 } from "../src/protocol.ts";
-import { AskUserRuntimeClosedError } from "../src/questionnaire/errors.ts";
+import { AskUserHostError, AskUserRuntimeClosedError } from "../src/questionnaire/errors.ts";
 
 const answer: AskUserOutcome = {
   outcome: "submitted",
   answers: [{ key: "route", kind: "choices", values: ["a"], labels: ["A"] }],
 };
 const owner = { runId: "run-1", assignmentEpoch: 0, requestId: "request-1" };
+// Discovered callbacks are foreign, so their results settle as untrusted values.
+const rootCapability = (bus: QuestionnaireEvents) => {
+  const capability = queryQuestionnaireCapability(bus, "root")!;
+  return {
+    ask: (input: AskUserRequest, askOwner: QuestionnaireOwner, signal: AbortSignal) =>
+      Promise.resolve<unknown>(capability.ask(input, askOwner, signal)),
+    cancel: (cancelOwner: QuestionnaireOwner) =>
+      Promise.resolve<unknown>(capability.cancel(cancelOwner)),
+  };
+};
 const askFails = (
-  capability: QuestionnaireCapability,
+  capability: ReturnType<typeof rootCapability>,
   askOwner: QuestionnaireOwner,
 ): Effect.Effect<boolean> =>
   Effect.exit(Effect.tryPromise((signal) => capability.ask(request, askOwner, signal))).pipe(
@@ -92,7 +102,7 @@ it.effect(
         run: (effect, signal) => Effect.runPromise(effect.pipe(Effect.provide(layer)), { signal }),
       });
       expect(queryQuestionnaireCapability(bus, "other")).toBeUndefined();
-      const capability = queryQuestionnaireCapability(bus, "root")!;
+      const capability = rootCapability(bus);
       expect(yield* Effect.tryPromise((signal) => capability.ask(request, owner, signal))).toEqual(
         answer,
       );
@@ -152,6 +162,32 @@ it.effect(
     }),
 );
 
+it.effect("a relay that throws or returns an invalid outcome fails as a typed relay error", () =>
+  Effect.gen(function* () {
+    const bus = createEventBus();
+    const ask = askAtQuestionnaireBoundary(bus, "child", request).pipe(
+      Effect.provide(AskUserService.layer(() => Effect.succeed(answer))),
+    );
+    for (const relayAsk of [
+      () => {
+        throw new Error("hostile relay");
+      },
+      () => Promise.resolve({ outcome: "maybe" }),
+      () => "submitted",
+    ]) {
+      const off = bus.on(QUESTIONNAIRE_RELAY_QUERY, (data) => {
+        relayQueries
+          .normalizeQuery(data)
+          ?.respond({ version: 1, sessionId: "child", ask: relayAsk });
+      });
+      const failure = yield* Effect.flip(ask);
+      expect(failure).toBeInstanceOf(AskUserHostError);
+      expect(failure).toMatchObject({ operation: "relay" });
+      off();
+    }
+  }),
+);
+
 it.effect(
   "root cancel synchronously aborts its owner and acknowledges only after owned cleanup",
   () =>
@@ -183,7 +219,7 @@ it.effect(
           return runtime.runPromise(effect, { signal: ownerSignal });
         },
       });
-      const capability = queryQuestionnaireCapability(bus, "root")!;
+      const capability = rootCapability(bus);
       const asking = capability.ask(request, owner, yield* Effect.abortSignal).then(
         () => undefined,
         () => undefined,
@@ -225,7 +261,7 @@ const registerPendingRuns = () => {
       return completion.promise;
     },
   });
-  return { runs, dispose, capability: queryQuestionnaireCapability(bus, "root")! };
+  return { runs, dispose, capability: rootCapability(bus) };
 };
 
 it.effect("root capabilities bound live owners and refuse a duplicate live owner unrun", () =>

@@ -20,7 +20,9 @@ export const makeActivityFixture = () => {
     activity,
     items: () => Schema.decodeUnknownSync(ActivitySnapshotSchema)(host.get()?.items ?? []),
     invoke: (id: string, action: string, revision: string) =>
-      Effect.tryPromise((signal) => host.capability()!.invoke!(id, action, revision, signal)),
+      Effect.tryPromise((signal) =>
+        Promise.resolve<unknown>(host.capability()!.invoke!(id, action, revision, signal)),
+      ),
     replace: () => {
       current = false;
     },

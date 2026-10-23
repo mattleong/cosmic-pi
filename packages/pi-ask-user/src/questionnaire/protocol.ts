@@ -2,7 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { flow } from "effect/Function";
 import * as Schema from "effect/Schema";
 import * as Predicate from "effect/Predicate";
-import { decodeUnknownOrUndefined, querySessionCapability } from "pi-cosmic-core";
+import { decodeUnknownOrUndefined, ForeignCallable, querySessionCapability } from "pi-cosmic-core";
 import { MAX_CHOICES, MAX_QUESTIONS, MAX_TITLE_LENGTH, type AskUserRequest } from "./schema.ts";
 import {
   normalizeAskUserRequest,
@@ -187,44 +187,36 @@ export const decodeQuestionnaireOutcome = flow(decodeUnknownOrUndefined(RawOutco
   root === undefined ? undefined : captureOutcome(root),
 );
 
-const isQuestionnaireRelay = (value: unknown): value is QuestionnaireRelay =>
-  Predicate.hasProperty(value, "version") &&
-  value.version === 1 &&
-  Predicate.hasProperty(value, "sessionId") &&
-  Predicate.isString(value.sessionId) &&
-  Predicate.hasProperty(value, "ask") &&
-  Predicate.isFunction(value.ask);
-const isQuestionnaireCapability = (value: unknown): value is QuestionnaireCapability =>
-  Predicate.hasProperty(value, "version") &&
-  value.version === 1 &&
-  Predicate.hasProperty(value, "sessionId") &&
-  Predicate.isString(value.sessionId) &&
-  Predicate.hasProperty(value, "generation") &&
-  Predicate.isString(value.generation) &&
-  Predicate.hasProperty(value, "ask") &&
-  Predicate.isFunction(value.ask) &&
-  Predicate.hasProperty(value, "cancel") &&
-  Predicate.isFunction(value.cancel);
+// Candidates come from other extensions: their callbacks are admitted only as callable, so
+// consumers invoke them through Effect.tryPromise and decode what they return.
+const DiscoveredRelaySchema = Schema.Struct({
+  version: Schema.Literal(1),
+  sessionId: Schema.String,
+  ask: ForeignCallable<[request: AskUserRequest, signal: AbortSignal]>(),
+});
+const DiscoveredCapabilitySchema = Schema.Struct({
+  version: Schema.Literal(1),
+  sessionId: Schema.String,
+  generation: Schema.String,
+  cancel: ForeignCallable<[owner: QuestionnaireOwner]>(),
+  ask: ForeignCallable<[request: AskUserRequest, owner: QuestionnaireOwner, signal: AbortSignal]>(),
+});
+export type DiscoveredQuestionnaireRelay = typeof DiscoveredRelaySchema.Type;
+export type DiscoveredQuestionnaireCapability = typeof DiscoveredCapabilitySchema.Type;
+const isDiscoveredRelay = Schema.is(DiscoveredRelaySchema);
+const isDiscoveredCapability = Schema.is(DiscoveredCapabilitySchema);
 
-// Candidates come from other extensions, so only these structural checks establish their shape.
-export const queryQuestionnaireRelay = (
-  events: QuestionnaireEvents,
-  sessionId: string,
-): QuestionnaireRelay | undefined =>
-  querySessionCapability<unknown, QuestionnaireRelay>(
+export const queryQuestionnaireRelay = (events: QuestionnaireEvents, sessionId: string) =>
+  querySessionCapability<unknown, DiscoveredQuestionnaireRelay>(
     events,
     QUESTIONNAIRE_RELAY_QUERY,
     { version: 1, sessionId },
-    (value) => (isQuestionnaireRelay(value) && value.sessionId === sessionId ? value : undefined),
+    (value) => (isDiscoveredRelay(value) && value.sessionId === sessionId ? value : undefined),
   ).candidates.at(-1);
-export const queryQuestionnaireCapability = (
-  events: QuestionnaireEvents,
-  sessionId: string,
-): QuestionnaireCapability | undefined =>
-  querySessionCapability<unknown, QuestionnaireCapability>(
+export const queryQuestionnaireCapability = (events: QuestionnaireEvents, sessionId: string) =>
+  querySessionCapability<unknown, DiscoveredQuestionnaireCapability>(
     events,
     QUESTIONNAIRE_CAPABILITY_QUERY,
     { version: 1, sessionId },
-    (value) =>
-      isQuestionnaireCapability(value) && value.sessionId === sessionId ? value : undefined,
+    (value) => (isDiscoveredCapability(value) && value.sessionId === sessionId ? value : undefined),
   ).candidates.at(-1);
