@@ -5,6 +5,7 @@ import type {
   ThinkingLevelSelectEvent,
 } from "@earendil-works/pi-coding-agent";
 import { expect, layer } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -133,7 +134,10 @@ const harness = (
     };
     const alternate = model("xai", "grok-code");
     const available = new Map(
-      [initial, remembered, alternate].map((value) => [`${value.provider}/${value.id}`, value]),
+      Arr.map(
+        [initial, remembered, alternate],
+        (value) => [`${value.provider}/${value.id}`, value] as const,
+      ),
     );
     let activeModel = initial;
     let thinkingLevel: "low" | "medium" | "high" = "low";
