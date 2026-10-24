@@ -3,6 +3,7 @@ import * as Order from "effect/Order";
 import type {
   BACKGROUND_TASK_NOTIFY_FILTERS,
   BackgroundLogMetadataSchema,
+  BackgroundOutputSkipSchema,
   BackgroundTaskSnapshotSchema,
   BackgroundTaskStateSchema,
   BackgroundTaskWaitResultSchema,
@@ -19,6 +20,7 @@ export type BackgroundTaskStatusWait = Omit<BackgroundTaskWaitResult, "snapshot"
   readonly recent: BackgroundLogSlice;
 };
 export type BackgroundLogMetadata = typeof BackgroundLogMetadataSchema.Type;
+export type BackgroundOutputSkip = typeof BackgroundOutputSkipSchema.Type;
 export type BackgroundTaskWaitResult = typeof BackgroundTaskWaitResultSchema.Type;
 
 export type BackgroundLogStream = "stdout" | "stderr";
@@ -26,17 +28,27 @@ export type BackgroundLogStream = "stdout" | "stderr";
 export interface BackgroundLogEvent {
   readonly cursor: number;
   readonly stream: BackgroundLogStream;
-  /** Normalized output: printable text, newlines, tabs, and complete SGR sequences only. */
+  /**
+   * Normalized output: printable text, newlines, tabs, and complete SGR sequences only. Empty only
+   * for the event that ends a finished task's output after output lost at its end.
+   */
   readonly text: string;
   readonly timestamp: number;
   readonly bytes: number;
-  readonly droppedBefore?: true;
+  /** Bytes of output lost just before this event, which never reached the buffer. */
+  readonly droppedBefore?: number;
 }
 
-export interface BackgroundLogSlice extends BackgroundLogMetadata {
+/**
+ * Retained output a read selected. What it skipped depends on which of the events a result
+ * returns, so each page computes its own with `skippedWithin`.
+ */
+export interface BackgroundLogSlice extends Omit<BackgroundLogMetadata, "skipped"> {
   readonly events: ReadonlyArray<BackgroundLogEvent>;
   /** Text bytes the task retains in total, including events outside this slice. */
   readonly retainedBytes: number;
+  /** Output the read asked for that was discarded before the first event, such as evicted output. */
+  readonly discardedBefore?: BackgroundOutputSkip;
 }
 
 /** A log read, with the identity of the task record it was read from. */
@@ -148,5 +160,6 @@ export function footerStatus(projection: BackgroundTaskProjection): string | und
   return `${countLabel(active, "background task")} running`;
 }
 
-export const discardedOutputText = (bytes: number): string =>
-  `${formatBytes(bytes)} of earlier output was discarded`;
+/** How much discarded output a read missed, such as "12 KiB" or "at least 12 KiB". */
+export const skippedAmountText = (skipped: BackgroundOutputSkip): string =>
+  `${skipped.atLeast ? "at least " : ""}${formatBytes(skipped.bytes)}`;

@@ -53,6 +53,40 @@ describe("terminal output normalization", () => {
     expect(plainTerminalText(whole)).toBe("  VITE v5.0.0  ready in 312 ms\ndoneup\n");
   });
 
+  it("turns progress redrawn with carriage returns into one line per update", () => {
+    expect(normalize("Downloading  10%\rDownloading  55%\rDownloading 100%\n")).toBe(
+      "Downloading  10%\nDownloading  55%\nDownloading 100%\n",
+    );
+    // Erasing the line after the return, as progress bars do, changes nothing.
+    expect(plainTerminalText(normalize("\u001b[32m 10%\u001b[0m\r\u001b[2K 55%"))).toBe(
+      " 10%\n 55%",
+    );
+  });
+
+  it("keeps a CRLF, or a CR already at a line start, a single line break", () => {
+    expect(normalize("one\r\ntwo\r\n\r\nfour\r\n")).toBe("one\ntwo\n\nfour\n");
+    expect(normalize("\r 10%\r\r 55%\r\n")).toBe(" 10%\n 55%\n");
+    expect(normalize("done\n\r\n")).toBe("done\n\n");
+    // A CR that ends one write and the LF that starts the next form one break.
+    expect(normalize("one\r", "\ntwo\r", "\u001b[0m", "\nthree")).toBe("one\ntwo\n\u001b[0mthree");
+    expect(normalize("one\r", "\n", "\n")).toBe("one\n\n");
+    const raw = "a\rb\r\nc\r\r\nd\n\re\r";
+    const whole = normalize(raw);
+    for (let split = 1; split < raw.length; split++)
+      expect(normalize(Fn.pipe(raw, Str.slice(0, split)), Fn.pipe(raw, Str.slice(split)))).toBe(
+        whole,
+      );
+    expect(normalize(...characters(raw))).toBe(whole);
+  });
+
+  it("keeps a line feed after lost output as a line break of its own", () => {
+    const normalizer = new TerminalTextNormalizer();
+    expect(normalizer.write("one\r")).toBe("one\n");
+    normalizer.outputLost();
+    // The lost output may have ended anywhere, so the line feed no longer pairs with the return.
+    expect(normalizer.write("\ntwo\n")).toBe("\ntwo\n");
+  });
+
   it("resumes after an unterminated sequence instead of swallowing later output", () => {
     const longTitle = `\u001b]0;${Fn.pipe("t", Str.repeat(MAX_PENDING_SEQUENCE_CHARS))}`;
     expect(plainTerminalText(normalize(longTitle, "after\n"))).toMatch(/after\n$/u);
@@ -63,7 +97,7 @@ describe("terminal output normalization", () => {
 
     const interrupted = new TerminalTextNormalizer();
     expect(interrupted.write("\u001b]0;half")).toBe("");
-    interrupted.reset();
+    interrupted.outputLost();
     expect(interrupted.write("visible\n")).toBe("visible\n");
   });
 });

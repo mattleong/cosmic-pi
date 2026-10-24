@@ -84,9 +84,16 @@ shutdown or replacement never message the agent.
   and reads select whole events, so cursors page without skipping output.
 - Retained budgets charge a per-event overhead, and evicted events are released at once. Each
   event owns a copy of its text, so keeping part of a large write never keeps the whole write
-  alive outside the budget. Ingress
-  has its own per-task bound outside those budgets. Dropped output remains explicit; literal waits
-  never match across a dropped-byte gap. Wait and publication deadlines use monotonic time.
+  alive outside the budget. Ingress has its own per-task bound outside those budgets, as does the
+  ledger of recent discard totals that keeps loss reports exact: it grows by doubling with
+  evictions to at most 4,096 cursors (32 KiB) while a task runs, and shrinks to 256 (2 KiB) when
+  it finishes.
+- Dropped output remains explicit to the reads that asked for it: a log read or output wait
+  reports discarded output after its cursor or within its lines, never routine eviction it did not
+  ask for, and literal waits never match across a dropped-byte gap. Each result reports only the
+  loss within what it returns, and output lost after the newest event belongs to whatever follows
+  it, so a cursor chain reports each discarded byte once. A finished task's trailing loss becomes
+  a textless event with its own cursor. Wait and publication deadlines use monotonic time.
 - Projections and log slices are detached and immutable. Neither consumer mutation nor later
   buffer eviction can alter earlier results or authoritative byte accounting.
 - Structured results project domain facts rather than parsing display text. Encoding failure

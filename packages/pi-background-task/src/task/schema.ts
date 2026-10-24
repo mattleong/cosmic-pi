@@ -51,11 +51,18 @@ export const BackgroundTaskSnapshotSchema = Schema.Struct({
 const BackgroundTaskSnapshotsSchema = Schema.Array(BackgroundTaskSnapshotSchema).check(
   Schema.isMaxLength(BOUNDS.maxSnapshots),
 );
+// Output a read asked for that the log buffer had already discarded; `atLeast` marks a lower bound.
+export const BackgroundOutputSkipSchema = Schema.Struct({
+  bytes: Schema.Natural,
+  atLeast: Schema.optionalKey(Schema.Literal(true)),
+});
 export const BackgroundLogMetadataSchema = Schema.Struct({
   id: TaskId,
   nextCursor: Schema.Natural,
   earliestAvailableCursor: Schema.Natural,
+  // Everything the task's buffer discarded so far, routine eviction included; not a read's loss.
   droppedBytes: Schema.Natural,
+  skipped: Schema.optionalKey(BackgroundOutputSkipSchema),
   state: BackgroundTaskStateSchema,
 });
 export const BackgroundTaskWaitResultSchema = Schema.Struct({
@@ -65,6 +72,8 @@ export const BackgroundTaskWaitResultSchema = Schema.Struct({
   nextCursor: Schema.Natural,
   earliestAvailableCursor: Schema.Natural,
   droppedBytes: Schema.Natural,
+  // Output an output wait was asked to scan that was discarded before it could.
+  skipped: Schema.optionalKey(BackgroundOutputSkipSchema),
   matchCursor: Schema.optionalKey(Schema.Natural),
   // The contains alternative found, and the plain output line around it.
   matchedText: Schema.optionalKey(MaxChars(BOUNDS.maxContainsChars)),

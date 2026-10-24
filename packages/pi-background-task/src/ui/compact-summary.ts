@@ -17,10 +17,10 @@ import * as Str from "effect/String";
 import { BACKGROUND_TASK_FIELD_BOUNDS } from "../task/bounds.ts";
 import {
   countTaskStates,
-  discardedOutputText,
   failingExitCode,
   isActiveTaskState,
-  type BackgroundLogMetadata,
+  skippedAmountText,
+  type BackgroundOutputSkip,
   type BackgroundTaskSnapshot,
 } from "../task/model.ts";
 import { BACKGROUND_TASK_STATES, BackgroundTaskDetailsSchema } from "../task/schema.ts";
@@ -118,18 +118,18 @@ const issue = (
   detail?: string,
 ): CompactIssue => ({ severity, code, message, ...(detail && { detail }) });
 
-const logLossIssue = (id: string, bytes: number, detail?: string) =>
+// Only output a read asked for and missed warns; routine eviction of old output does not.
+const outputSkippedIssue = (
+  id: string,
+  skipped: BackgroundOutputSkip,
+  reader: "read" | "wait",
+  detail: string,
+) =>
   issue(
     "warning",
     `${id}:log-loss`,
-    discardedOutputText(bytes),
-    Arr.join(
-      Arr.filter(
-        ["Discarded output cannot be recovered.", detail],
-        (part): part is string => Predicate.isString(part) && Str.isNonEmpty(part),
-      ),
-      " ",
-    ),
+    `${Str.capitalize(skippedAmountText(skipped))} of output was discarded before this ${reader}`,
+    `Discarded output cannot be recovered. ${detail}`,
   );
 const cleanupUnconfirmedIssue = (id: string) =>
   issue(
@@ -237,7 +237,6 @@ function taskIssues(value: BackgroundTaskSnapshot, outcome: CompactOutcome): Com
         "Process exited, but its exit code is unknown; inspect task status.",
       ),
     );
-  if (value.droppedLogBytes > 0) issues.push(logLossIssue(value.id, value.droppedLogBytes));
   return issues;
 }
 
@@ -272,17 +271,6 @@ function stopSummary(details: DetailsFor<"stop">, action: string): CompactSummar
     outcome: "returned",
     issues: [],
   };
-}
-
-function cursorIssues(value: Omit<BackgroundLogMetadata, "state">): CompactIssue[] {
-  if (value.droppedBytes <= 0) return [];
-  return [
-    logLossIssue(
-      value.id,
-      value.droppedBytes,
-      `Retained output is readable from afterCursor ${value.earliestAvailableCursor}; the next read continues after cursor ${value.nextCursor}.`,
-    ),
-  ];
 }
 
 function taskLabels(tasks: ReadonlyArray<BackgroundTaskSnapshot>): string[] {
@@ -432,10 +420,16 @@ function waitSummary(
   const { wait } = details;
   if (wait.id !== wait.snapshot.id) return undefined;
   const task = taskSummary(wait.snapshot);
-  const issues = [
-    ...Arr.filter(task.issues, (entry) => entry.code !== `${wait.id}:log-loss`),
-    ...cursorIssues(wait),
-  ];
+  const issues = [...task.issues];
+  if (wait.skipped)
+    issues.push(
+      outputSkippedIssue(
+        wait.id,
+        wait.skipped,
+        "wait",
+        `The wait could not search it. Retained output is readable from afterCursor ${wait.earliestAvailableCursor}.`,
+      ),
+    );
   const texts = waitTexts(args);
   const awaited = awaitedText(texts);
   const unmatched = unmatchedOutput(wait, awaited);
@@ -476,7 +470,15 @@ function logsIssues(details: DetailsFor<"logs">): CompactIssue[] {
   if (logs.state === "timed_out")
     issues.push(runtimeTimeoutIssue(logs.id, undefined, "Read task status for how long it ran."));
   if (logs.state === "stopping") issues.push(cleanupUnconfirmedIssue(logs.id));
-  issues.push(...cursorIssues(logs));
+  if (logs.skipped)
+    issues.push(
+      outputSkippedIssue(
+        logs.id,
+        logs.skipped,
+        "read",
+        `Retained output is readable from afterCursor ${logs.earliestAvailableCursor}; the next read continues after cursor ${logs.nextCursor}.`,
+      ),
+    );
   const page = details.truncation;
   if (page?.cutBytes !== undefined)
     issues.push(

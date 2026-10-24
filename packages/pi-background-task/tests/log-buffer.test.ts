@@ -9,7 +9,7 @@ import * as Order from "effect/Order";
 import * as Str from "effect/String";
 import { describe, expect, it } from "vitest";
 import { BACKGROUND_LOG_BOUNDS } from "../src/task/bounds.ts";
-import { LogBuffer, readLogBuffer, splitLogText } from "../src/task/log-buffer.ts";
+import { LogBuffer, readLogBuffer, skippedWithin, splitLogText } from "../src/task/log-buffer.ts";
 import {
   enforceRetainedLogBudget,
   logFields,
@@ -18,11 +18,18 @@ import {
   type TaskRegistry,
 } from "../src/task/registry.ts";
 import { plainTerminalText } from "../src/task/terminal-text.ts";
+import { combinedLogOutput } from "../src/tools/log-page.ts";
 import { taskStatus } from "./support/task-service-double.ts";
 
 const OVERHEAD = BACKGROUND_LOG_BOUNDS.eventOverheadBytes;
 // Room for `count` stored events of `bytes` text bytes each.
 const budgetFor = (count: number, bytes: number) => count * (bytes + OVERHEAD);
+
+const readTail = (buffer: LogBuffer, tailLines: number) =>
+  readLogBuffer("task-0000000001", buffer, "running", { tailLines });
+// Lost and text bytes before and of the event at each cursor in the ledger test.
+const ledgerGap = (cursor: number) => (cursor % 7 === 0 ? (cursor % 13) + 1 : 0);
+const ledgerSize = (cursor: number) => (cursor % 5) + 1;
 
 const tailText = (buffer: LogBuffer, tailLines: number) =>
   Arr.join(
@@ -59,7 +66,7 @@ describe("background log buffer", () => {
     expect(slice.events).toEqual(original);
     expect(slice).toMatchObject({ nextCursor: 64, earliestAvailableCursor: 0, droppedBytes: 0 });
     expect(buffer.events).toHaveLength(17);
-    expect(buffer.events.at(-1)).toMatchObject({ cursor: 257, text: "done", droppedBefore: true });
+    expect(buffer.events.at(-1)).toMatchObject({ cursor: 257, text: "done", droppedBefore: 7 });
     expect(buffer.bytes).toBe(68);
     expect(buffer.droppedBytes).toBe(4 * 240 + 7);
     expect(buffer.oldestEvent?.cursor).toBe(241);
@@ -257,14 +264,167 @@ describe("background log buffer", () => {
     const buffer = new LogBuffer().append("stdout", "before\n", 0, 1 << 20);
     buffer.addDropped(0).append("stdout", "same\n", 1, 1 << 20);
     buffer.addDropped(12).append("stderr", Fn.pipe("z", Str.repeat(9_000)), 2, 1 << 20);
-    expect(Arr.map(buffer.events, (event) => event.droppedBefore === true)).toEqual([
-      false,
-      false,
-      true,
-      false,
-      false,
-    ]);
+    expect(Arr.map(buffer.events, (event) => event.droppedBefore ?? 0)).toEqual([0, 0, 12, 0, 0]);
     expect(buffer.droppedBytes).toBe(12);
+  });
+
+  it("reports only the discarded output a read asks for", () => {
+    // Four-byte lines; the budget keeps the newest four.
+    const buffer = new LogBuffer();
+    for (let index = 1; index <= 10; index++) {
+      const line = `${Fn.pipe(String.fromCharCode(97 + index), Str.repeat(3))}\n`;
+      buffer.append("stdout", line, index, budgetFor(4, 4));
+    }
+    const read = (options: { readonly afterCursor?: number; readonly tailLines?: number }) =>
+      skippedWithin(readLogBuffer("task-0000000001", buffer, "running", options));
+    expect(buffer).toMatchObject({ earliestCursor: 6, droppedBytes: 24 });
+
+    for (const afterCursor of [6, 8, 10]) expect(read({ afterCursor })).toBeUndefined();
+    expect(read({ afterCursor: 4 })).toEqual({ bytes: 8 });
+    expect(read({ afterCursor: 0 })).toEqual({ bytes: 24 });
+    for (const tailLines of [1, 4]) expect(read({ tailLines })).toBeUndefined();
+    expect(read({ tailLines: 5 })).toEqual({ bytes: 24 });
+    expect(read({})).toEqual({ bytes: 24 });
+
+    // Output lost on its way in is skipped by reads that span it, and by none that start after.
+    buffer.addDropped(5).append("stdout", "new\n", 11, budgetFor(4, 4));
+    expect(read({ afterCursor: 10 })).toEqual({ bytes: 5 });
+    expect(read({ afterCursor: 11 })).toBeUndefined();
+    // The newest line starts after the line break before the gap, so it may have lost its start.
+    for (const tailLines of [1, 2]) expect(read({ tailLines })).toEqual({ bytes: 5 });
+    expect(read({ afterCursor: 0 })).toEqual({ bytes: 33 });
+  });
+
+  it("counts a gap before the newest lines unless it falls before a line break", () => {
+    // The gap follows a line break, so the line after it may have started in the lost output.
+    const whole = new LogBuffer().append("stdout", "aaa\n", 0, 1 << 20);
+    whole.addDropped(50).append("stdout", "bbb\n", 1, 1 << 20);
+    expect(combinedLogOutput(readTail(whole, 1).events)).toBe("bbb\n");
+    expect(skippedWithin(readTail(whole, 1))).toEqual({ bytes: 50 });
+
+    // Here the lines start after a line break the event holds, past the gap before it.
+    const cut = new LogBuffer().append("stdout", "aaa\n", 0, 1 << 20);
+    cut.addDropped(50).append("stdout", "zz\nbbb\n", 1, 1 << 20);
+    expect(combinedLogOutput(readTail(cut, 1).events)).toBe("bbb\n");
+    expect(skippedWithin(readTail(cut, 1))).toBeUndefined();
+    expect(skippedWithin(readTail(cut, 2))).toEqual({ bytes: 50 });
+  });
+
+  it("knows a stream's oldest retained line is cut when that stream's evicted output was", () => {
+    const tailSkip = (writes: ReadonlyArray<readonly ["stdout" | "stderr", string]>) => {
+      const buffer = new LogBuffer();
+      // Each write evicts the one before it.
+      for (const [index, [stream, text]] of writes.entries())
+        buffer.append(stream, text, index, budgetFor(1, 4));
+      return skippedWithin(readLogBuffer("task-0000000001", buffer, "running", { tailLines: 1 }));
+    };
+    // The evicted stdout text "aaa" began the retained stdout line, though stderr ended one since.
+    expect(
+      tailSkip([
+        ["stdout", "aaa"],
+        ["stderr", "err\n"],
+        ["stdout", "bbb\n"],
+      ]),
+    ).toEqual({ bytes: 7 });
+    expect(
+      tailSkip([
+        ["stdout", "aaa\n"],
+        ["stderr", "err"],
+        ["stdout", "bbb\n"],
+      ]),
+    ).toBeUndefined();
+  });
+
+  it("reports output lost after the newest event once, with whatever follows it", () => {
+    const budget = 1 << 20;
+    const buffer = new LogBuffer().append("stdout", "one\n", 0, budget);
+    const read = (afterCursor: number) =>
+      readLogBuffer("task-0000000001", buffer, "running", { afterCursor });
+    buffer.addDropped(7);
+    const before = read(0);
+    expect(skippedWithin(before)).toBeUndefined();
+    buffer.append("stdout", "two\n", 1, budget);
+    const after = read(before.nextCursor);
+    expect(skippedWithin(after)).toEqual({ bytes: 7 });
+    expect(skippedWithin(read(after.nextCursor))).toBeUndefined();
+
+    // Output lost at the end of a finished task takes a cursor, so reads move past it.
+    buffer.addDropped(3);
+    const pending = read(after.nextCursor);
+    expect(skippedWithin(pending)).toBeUndefined();
+    buffer.finish(2, budget);
+    const last = read(pending.nextCursor);
+    expect(last.nextCursor).toBe(pending.nextCursor + 1);
+    expect(skippedWithin(last)).toEqual({ bytes: 3 });
+    expect(combinedLogOutput(last.events)).toBe("");
+    expect(skippedWithin(read(last.nextCursor))).toBeUndefined();
+    const tail = readLogBuffer("task-0000000001", buffer, "exited", { tailLines: 1 });
+    expect(combinedLogOutput(tail.events)).toBe("two\n");
+    expect(skippedWithin(tail)).toEqual({ bytes: 10 });
+  });
+
+  it("keeps exact totals for recently evicted cursors as its ledger grows and wraps", () => {
+    const buffer = new LogBuffer();
+    // Gaps and sizes vary so that every cursor's total differs; each append evicts the previous.
+    const lost: number[] = [0];
+    let appended = 0;
+    const appendUntil = (cursor: number) => {
+      for (; appended < cursor; ) {
+        appended += 1;
+        lost.push((lost.at(-1) ?? 0) + ledgerGap(appended) + ledgerSize(appended));
+        const text = `${Fn.pipe("x", Str.repeat(ledgerSize(appended) - 1))}\n`;
+        buffer.addDropped(ledgerGap(appended)).append("stdout", text, appended, budgetFor(1, 5));
+      }
+    };
+    // What a read after `cursor` skips: every gap after it and the text evicted after it.
+    const expected = (cursor: number) =>
+      (lost[appended] ?? 0) - (lost[cursor] ?? 0) - ledgerSize(appended);
+    const check = (window: number) => {
+      const earliest = buffer.earliestCursor;
+      for (let cursor = 0; cursor < earliest; cursor += 1) {
+        const slice = readLogBuffer("task-0000000001", buffer, "running", { afterCursor: cursor });
+        const skipped = skippedWithin(slice);
+        if (cursor === 0 || earliest - cursor < window)
+          expect(skipped).toEqual({ bytes: expected(cursor) });
+        else {
+          expect(skipped?.atLeast).toBe(true);
+          expect(skipped?.bytes).toBeGreaterThan(0);
+          expect(skipped?.bytes).toBeLessThanOrEqual(expected(cursor));
+        }
+      }
+    };
+    for (const cursor of [40, 65, 129, 1_000, 4_097, 4_098, 9_000]) {
+      appendUntil(cursor);
+      check(4_096);
+    }
+    // A cursor 4,095 behind is exact; one 4,096 behind is a lower bound.
+    const at = (behind: number) =>
+      skippedWithin(
+        readLogBuffer("task-0000000001", buffer, "running", {
+          afterCursor: buffer.earliestCursor - behind,
+        }),
+      );
+    expect(at(4_095)).toEqual({ bytes: expected(buffer.earliestCursor - 4_095) });
+    expect(at(4_096)?.atLeast).toBe(true);
+
+    // A finished task keeps the newest 256.
+    buffer.finish(appended, budgetFor(1, 5));
+    check(256);
+    expect(at(255)).toEqual({ bytes: expected(buffer.earliestCursor - 255) });
+    expect(at(256)?.atLeast).toBe(true);
+  });
+
+  it("bounds the ledger of a task that finished before it evicted anything", () => {
+    const buffer = new LogBuffer();
+    for (let cursor = 1; cursor <= 600; cursor++) buffer.append("stdout", "ab\n", cursor, 1 << 20);
+    buffer.finish(601, 1 << 20);
+    for (let index = 0; index < 500; index++) buffer.dropOldest();
+    const at = (afterCursor: number) =>
+      skippedWithin(readLogBuffer("task-0000000001", buffer, "exited", { afterCursor }));
+    expect(buffer.earliestCursor).toBe(500);
+    expect(at(0)).toEqual({ bytes: 1_500 });
+    expect(at(245)).toEqual({ bytes: 765 });
+    expect(at(244)).toEqual({ bytes: 765, atLeast: true });
   });
 });
 

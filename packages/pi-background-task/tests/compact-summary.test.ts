@@ -6,7 +6,10 @@ import { describe, expect, it } from "vitest";
 import type { CompactIssue } from "pi-code-previews";
 import { issueMessageStyleProblems } from "pi-code-previews/testing";
 import { BACKGROUND_TASK_FIELD_BOUNDS } from "../src/task/bounds.ts";
-import { projectBackgroundTaskCompactSummary } from "../src/ui/compact-summary.ts";
+import {
+  projectBackgroundTaskCompactSummary,
+  taskNoticeSummary,
+} from "../src/ui/compact-summary.ts";
 import type { BackgroundTaskToolInput } from "../src/tools/schema.ts";
 
 type Input = Parameters<typeof projectBackgroundTaskCompactSummary>[0];
@@ -20,6 +23,9 @@ const snapshot = {
   droppedLogBytes: 0,
 };
 const cursors = { nextCursor: 10, earliestAvailableCursor: 0, droppedBytes: 0 };
+type Cursors = Partial<
+  typeof cursors & { readonly skipped: { readonly bytes: number; readonly atLeast?: true } }
+>;
 type Snapshot = typeof snapshot & {
   readonly exitCode?: number | null;
   readonly name?: string;
@@ -38,11 +44,7 @@ const project = (
     result: { details },
     isError,
   });
-const logs = (
-  state = "running",
-  fields: Partial<typeof cursors> = {},
-  omitted?: "earlier" | "later",
-) => ({
+const logs = (state = "running", fields: Cursors = {}, omitted?: "earlier" | "later") => ({
   action: "logs",
   logs: { id: snapshot.id, state, ...cursors, ...fields },
   task: { command: snapshot.command },
@@ -53,7 +55,7 @@ const logs = (
 const wait = (
   outcome: string,
   waitSnapshot: Snapshot = snapshot,
-  fields: Partial<typeof cursors & { id: string; matchCursor: number }> = {},
+  fields: Cursors & { readonly id?: string; readonly matchCursor?: number } = {},
   appliedWaitSeconds = 30,
 ) => ({
   action: "wait",
@@ -126,7 +128,13 @@ describe("background task compact semantics", () => {
       project(logs("failed", {}, "later"), "logs"),
       project(logs("running", {}, "earlier"), "logs"),
       project(logs("timed_out"), "logs"),
-      project(logs("running", { droppedBytes: 18_432 }), "logs"),
+      project(logs("running", { droppedBytes: 18_432, skipped: { bytes: 18_432 } }), "logs"),
+      project(logs("running", { skipped: { bytes: 4_096, atLeast: true } }), "logs"),
+      project(wait("timeout", snapshot, { skipped: { bytes: 2_048 } }), "wait", "settled", false, {
+        until: "output",
+        contains: "ready in",
+        afterCursor: 3,
+      }),
       project(wait("timeout", snapshot), "wait", "settled", false, {
         until: "output",
         contains: "ready in",
@@ -205,6 +213,51 @@ describe("background task row outcomes", () => {
     ["a finished task's logs", logs("exited"), "logs", "success"],
   ] as const)("classifies %s", (_label, details, action, outcome) => {
     expect(project(details, action)?.outcome).toBe(outcome);
+  });
+
+  it("warns about discarded output only when the read or wait missed some", () => {
+    // A long-running task whose buffer evicted old output, as every chatty server's does.
+    const evicting = { ...snapshot, droppedLogBytes: 237_938 };
+    const evicted = { ...cursors, earliestAvailableCursor: 79, droppedBytes: 237_938 };
+    const quiet = [
+      project({ action: "status", snapshot: evicting }),
+      project({ action: "list", tasks: [evicting] }, "list"),
+      project(
+        { action: "stop", snapshot: { ...evicting, ...stopped }, alreadyFinished: false },
+        "stop",
+      ),
+      project(logs("running", evicted), "logs"),
+      project(wait("completed", { ...evicting, ...exited }, evicted), "wait"),
+      project(
+        wait("matched", evicting, { ...evicted, matchCursor: 90 }),
+        "wait",
+        "settled",
+        false,
+        {
+          until: "output",
+          contains: "ready",
+        },
+      ),
+      taskNoticeSummary({ ...evicting, state: "exited", exitCode: 0, endedAt: 2 }),
+    ];
+    for (const summary of quiet) {
+      expect(summary?.issues).toEqual([]);
+      expect(summary?.outcome).not.toBe("warning");
+    }
+    expect(
+      find(project(wait("timeout", evicting, evicted), "wait"), "task-0000000001:log-loss"),
+    ).toBeUndefined();
+
+    const missed = { ...evicted, skipped: { bytes: 4_096 } };
+    const read = project(logs("running", missed), "logs");
+    expect(find(read, "task-0000000001:log-loss")?.severity).toBe("warning");
+    expect(read?.outcome).toBe("warning");
+    const scan = project(wait("timeout", snapshot, missed), "wait", "settled", false, {
+      until: "output",
+      contains: "ready",
+      afterCursor: 3,
+    });
+    expect(find(scan, "task-0000000001:log-loss")?.severity).toBe("warning");
   });
 
   it("reports a stop of a finished task without repeating its failure", () => {

@@ -34,6 +34,7 @@ import {
   type BackgroundTaskStatus,
   type BackgroundTaskState,
   type BackgroundTaskProjection,
+  type ReadBackgroundLogs,
   type StartBackgroundTask,
   type WaitForBackgroundTask,
 } from "../src/task/model.ts";
@@ -47,6 +48,7 @@ import {
   InvalidBackgroundCommandError,
   InvalidBackgroundCwdError,
 } from "../src/task/errors.ts";
+import { skippedWithin } from "../src/task/log-buffer.ts";
 import { BackgroundTaskService, type BackgroundTaskServiceContract } from "../src/task/service.ts";
 import { combinedLogOutput } from "../src/tools/log-page.ts";
 
@@ -257,6 +259,8 @@ const exitWait = (id: string, waitSeconds = 30): WaitForBackgroundTask => ({
   waitSeconds,
 });
 const forkNow = Effect.forkScoped({ startImmediately: true });
+// A 1,000-byte line of one repeated digit.
+const kilobyteLine = (index: number) => `${Fn.pipe(String(index), Str.repeat(999))}\n`;
 const TASK_ID = /^task-[0-9a-z]{10}$/u;
 const emitAndRead = (
   service: BackgroundTaskServiceContract,
@@ -529,6 +533,136 @@ describe("BackgroundTaskService", () => {
       ).toMatchObject({ outcome: "matched", matchCursor: 1 });
       const logs = yield* service.logs({ id: started.id, afterCursor: 0 });
       expect(combinedLogOutput(logs.events)).toBe("  VITE v5.0.0  ready in 312 ms\n");
+      yield* service.stop(started.id);
+    });
+  });
+
+  it.effect("reads carriage-return progress as separate lines, per stream", () => {
+    const harness = serviceHarness();
+    return harness.run(function* (service) {
+      const started = yield* service.start(taskInput());
+      const control = harness.controls[0];
+      if (!control) throw new Error("started process was not captured");
+      const waiting = yield* service
+        .wait(outputWait(started.id, { contains: ["Downloading 100%"] }))
+        .pipe(forkNow);
+      // Each stream's CR ends its own line; the LF that follows in a later write adds no line.
+      control.offer("stdout", "Downloading  10%\r");
+      control.offer("stderr", "  3/9 files\r");
+      control.offer("stdout", "\nDownloading  55%\rDownloading 100%\n");
+      control.offer("stderr", "  9/9 files\r");
+      control.offer("stderr", "\n");
+      control.offer("stdout", "end\n");
+      expect(yield* Fiber.join(waiting)).toMatchObject({
+        outcome: "matched",
+        matchedLine: "Downloading 100%",
+      });
+      yield* service.wait(outputWait(started.id, { contains: ["end"], afterCursor: 0 }));
+
+      const all = yield* service.logs({ id: started.id, afterCursor: 0 });
+      expect(combinedLogOutput(all.events)).toBe(
+        "Downloading  10%\n[stderr]   3/9 files\nDownloading  55%\nDownloading 100%\n[stderr]   9/9 files\nend\n",
+      );
+      const tail = yield* service.logs({ id: started.id, tailLines: 3 });
+      expect(combinedLogOutput(tail.events)).toBe("Downloading 100%\n[stderr]   9/9 files\nend\n");
+      const update = yield* service.wait(
+        outputWait(started.id, { contains: ["55%"], afterCursor: 0 }),
+      );
+      expect(update.outcome).toBe("matched");
+      expect(update.matchedLine).toMatch(/^Downloading\s+55%$/u);
+      // Updates are separate lines, so text never runs from one update into the next.
+      const across = outputWait(started.id, { contains: ["10%Downloading"], afterCursor: 0 });
+      expect(yield* service.wait({ ...across, waitSeconds: 0 })).toMatchObject({
+        outcome: "timeout",
+      });
+      yield* service.stop(started.id);
+    });
+  });
+
+  it.effect("reports discarded output only to the reads and waits that asked for it", () => {
+    const harness = serviceHarness({ logBufferBytesPerTask: 4_096, totalLogBufferBytes: 4_096 });
+    return harness.run(function* (service) {
+      const started = yield* service.start(taskInput());
+      const control = harness.controls[0];
+      // Three 1,000-byte lines fit the budget; each later one evicts the oldest.
+      let cursor = 0;
+      for (let index = 1; index <= 5; index += 1) {
+        const read = yield* emitAndRead(service, control, started.id, cursor, kilobyteLine(index));
+        // A reader that keeps up misses nothing, however much older output was evicted.
+        expect(skippedWithin(read)).toBeUndefined();
+        cursor = read.nextCursor;
+      }
+      const logs = (request: Omit<ReadBackgroundLogs, "id">) =>
+        service.logs({ id: started.id, ...request });
+      const behind = yield* logs({ afterCursor: 1 });
+      expect(behind).toMatchObject({ earliestAvailableCursor: 2, droppedBytes: 2_000 });
+      expect(skippedWithin(behind)).toEqual({ bytes: 1_000 });
+      expect(skippedWithin(yield* logs({ afterCursor: 0 }))).toEqual({ bytes: 2_000 });
+      expect(skippedWithin(yield* logs({ tailLines: 3 }))).toBeUndefined();
+      expect(skippedWithin(yield* logs({ tailLines: 4 }))).toEqual({ bytes: 2_000 });
+      expect(yield* service.status(started.id)).toMatchObject({ droppedLogBytes: 2_000 });
+
+      const exit = yield* service.wait(exitWait(started.id, 0));
+      const absent = (overrides: Partial<WaitForBackgroundTask> = {}) =>
+        service.wait({
+          ...outputWait(started.id, { contains: ["absent"] }),
+          waitSeconds: 0,
+          ...overrides,
+        });
+      const retained = yield* absent();
+      for (const wait of [exit, retained]) {
+        expect(wait).toMatchObject({ outcome: "timeout", droppedBytes: 2_000 });
+        expect(wait.skipped).toBeUndefined();
+      }
+      expect(yield* absent({ afterCursor: 1 })).toMatchObject({
+        outcome: "timeout",
+        skipped: { bytes: 1_000 },
+      });
+
+      // Output lost on its way to the buffer is skipped by a read from before it, and by the
+      // newest line, which may have started in the lost output.
+      control?.offer("stdout", "after the gap\n", 64);
+      yield* service.wait(outputWait(started.id, { contains: ["after the gap"] }));
+      expect(skippedWithin(yield* logs({ afterCursor: cursor }))).toEqual({ bytes: 64 });
+      expect(skippedWithin(yield* logs({ tailLines: 1 }))).toEqual({ bytes: 64 });
+
+      // Once eviction reaches the gap, it lies before the retained output: a wait without a
+      // cursor scans only that output, while a read from the earliest cursor asked for the gap.
+      for (let index = 6; index <= 8; index += 1)
+        cursor = (yield* emitAndRead(service, control, started.id, cursor, kilobyteLine(index)))
+          .nextCursor;
+      const earliest = (yield* logs({ afterCursor: cursor })).earliestAvailableCursor;
+      expect((yield* logs({ afterCursor: earliest })).events[0]?.droppedBefore).toBe(64);
+      expect((yield* absent()).skipped).toBeUndefined();
+      expect((yield* absent({ afterCursor: earliest })).skipped).toEqual({ bytes: 64 });
+      expect(skippedWithin(yield* logs({ afterCursor: earliest }))).toEqual({ bytes: 64 });
+      yield* service.stop(started.id);
+    });
+  });
+
+  it.effect("reports a gap once along a chain of waits and reads, past a match", () => {
+    const harness = serviceHarness();
+    return harness.run(function* (service) {
+      const started = yield* service.start(taskInput());
+      const control = harness.controls[0];
+      control?.offer("stdout", "ready\n");
+      control?.offer("stdout", "later\n", 64);
+      yield* service.wait(outputWait(started.id, { contains: ["later"] }));
+      // The match is in the first event, but the result moves past the gap after it.
+      const matched = yield* service.wait(outputWait(started.id, { afterCursor: 0 }));
+      expect(matched).toMatchObject({
+        outcome: "matched",
+        matchCursor: 1,
+        nextCursor: 2,
+        skipped: { bytes: 64 },
+      });
+      const next = outputWait(started.id, {
+        contains: ["absent"],
+        afterCursor: matched.nextCursor,
+      });
+      expect((yield* service.wait({ ...next, waitSeconds: 0 })).skipped).toBeUndefined();
+      const read = yield* service.logs({ id: started.id, afterCursor: matched.nextCursor });
+      expect(skippedWithin(read)).toBeUndefined();
       yield* service.stop(started.id);
     });
   });
@@ -976,8 +1110,18 @@ describe("BackgroundTaskService", () => {
       expect(yield* Fiber.join(waiting)).toMatchObject({
         outcome: "completed",
         droppedBytes: 64,
-        snapshot: { state: "exited", droppedLogBytes: 64 },
+        snapshot: { state: "exited", droppedLogBytes: 64, logCursor: 2 },
       });
+      // The output lost at the end has a cursor of its own: the read that reaches it reports the
+      // loss, and a read from its cursor does not report it again.
+      const last = yield* service.logs({ id: started.id, afterCursor: 1 });
+      expect(last).toMatchObject({ nextCursor: 2, events: [{ cursor: 2, text: "" }] });
+      expect(skippedWithin(last)).toEqual({ bytes: 64 });
+      const after = yield* service.logs({ id: started.id, afterCursor: last.nextCursor });
+      expect(skippedWithin(after)).toBeUndefined();
+      const tail = yield* service.logs({ id: started.id, tailLines: 1 });
+      expect(combinedLogOutput(tail.events)).toBe("ready\n");
+      expect(skippedWithin(tail)).toEqual({ bytes: 64 });
     });
   });
 

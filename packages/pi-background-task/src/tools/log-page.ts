@@ -4,7 +4,13 @@ import * as Str from "effect/String";
 import { codeUnitAt, indexOfFrom, lastIndexOfFrom } from "pi-cosmic-core/text-scan";
 import { utf8ByteLength, utf8Prefix, utf8Suffix } from "pi-cosmic-core/text";
 import { BACKGROUND_LOG_BOUNDS as LOG_BOUNDS } from "../task/bounds.ts";
-import type { BackgroundLogEvent, BackgroundLogSlice, BackgroundLogStream } from "../task/model.ts";
+import { skippedWithin } from "../task/log-buffer.ts";
+import type {
+  BackgroundLogEvent,
+  BackgroundLogSlice,
+  BackgroundLogStream,
+  BackgroundOutputSkip,
+} from "../task/model.ts";
 import { plainTerminalText } from "../task/terminal-text.ts";
 
 const STDERR_LABEL = "[stderr] ";
@@ -124,6 +130,8 @@ export interface LogPage {
   readonly laterBytes: number;
   /** A single event larger than the whole budget; this part of it cannot be shown. */
   readonly cut?: { readonly cursor: number; readonly bytes: number };
+  /** Discarded output this page asked for: before or between the events it includes. */
+  readonly skipped?: BackgroundOutputSkip;
 }
 
 const fits = (text: string, budget: LogPageBudget) =>
@@ -151,10 +159,9 @@ export function pageLogSlice(
     lines += cost.lines;
     count += 1;
   }
-  const included =
-    direction === "forward"
-      ? slice.events.slice(0, count)
-      : slice.events.slice(slice.events.length - count);
+  const from = direction === "forward" ? 0 : slice.events.length - count;
+  const included = slice.events.slice(from, from + count);
+  const skipped = skippedWithin(slice, from, from + count);
   const last = included.at(-1);
   const clipped = count < slice.events.length;
   const whole = combinedLogOutput(included);
@@ -178,6 +185,7 @@ export function pageLogSlice(
       output !== whole && {
         cut: { cursor: single.cursor, bytes: utf8ByteLength(whole) - utf8ByteLength(output) },
       }),
+    ...(skipped && { skipped }),
   };
 }
 

@@ -26,13 +26,16 @@ interface Fragment {
   readonly cursor: number;
 }
 
-// Splits on newlines so each fragment's reopened style is the style at its line start.
+// Splits on newlines so each fragment's reopened style is the style at its line start. The
+// textless event that marks output lost at the end adds no line.
 const lineFragments = (event: BackgroundLogEvent): Fragment[] =>
-  Arr.map(Str.split(event.text, /(?<=\n)/u), (text) => ({
-    channel: event.stream,
-    text,
-    cursor: event.cursor,
-  }));
+  event.text
+    ? Arr.map(Str.split(event.text, /(?<=\n)/u), (text) => ({
+        channel: event.stream,
+        text,
+        cursor: event.cursor,
+      }))
+    : [];
 
 /** One task's styled log lines and wrapped rows, extended as new events arrive. */
 class TaskLogRows {

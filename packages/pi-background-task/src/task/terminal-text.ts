@@ -5,6 +5,8 @@ import { codeUnitAt } from "pi-cosmic-core/text-scan";
 
 const ESCAPE = 0x1b;
 const BELL = 0x07;
+const NEWLINE = 0x0a;
+const CARRIAGE_RETURN = 0x0d;
 const CANCEL = 0x18;
 const SUBSTITUTE = 0x1a;
 const C1_CSI = 0x9b;
@@ -29,6 +31,8 @@ const NEXT_CONTROL = new RegExp(CONTROL, "gu");
 const codeAt = codeUnitAt;
 
 type ParserMode = "text" | "escape" | "escape-intermediate" | "csi" | "string" | "string-escape";
+// Where the stored text ends: at a line start, at a line start a carriage return made, or mid-line.
+type LinePosition = "start" | "carriage" | "middle";
 
 // Digits, colon, and semicolon.
 const isSgrParameter = (code: number): boolean => code >= 0x30 && code <= 0x3b;
@@ -43,16 +47,21 @@ export const plainTerminalText = (text: string): string =>
 /**
  * Normalizes one output stream as it arrives. The result holds printable text, newlines, tabs,
  * and complete SGR sequences only; every other control, escape, and string sequence is removed,
- * including sequences split across writes. Carriage returns are removed like other controls.
+ * including sequences split across writes.
+ *
+ * A carriage return that ends text becomes a line break, so progress redrawn in place reads as
+ * one line per update. A line feed right after it, even in the next write, belongs to the same
+ * break, and a carriage return at a line start adds none.
  */
 export class TerminalTextNormalizer {
   private mode: ParserMode = "text";
   private pending = 0;
   private parameters = "";
   private sgr = false;
+  private line: LinePosition = "start";
 
   write(text: string): string {
-    if (this.mode === "text" && !NEEDS_PARSING.test(text)) return text;
+    if (this.mode === "text" && !NEEDS_PARSING.test(text)) return this.kept(text);
     const parts: string[] = [];
     let index = 0;
     while (index < text.length) {
@@ -63,15 +72,42 @@ export class TerminalTextNormalizer {
       // Kept text runs to the next control, so it is copied without visiting each character.
       NEXT_CONTROL.lastIndex = index;
       const control = NEXT_CONTROL.exec(text)?.index ?? text.length;
-      if (control > index) parts.push(Fn.pipe(text, Str.slice(index, control)));
-      if (control < text.length) this.introduce(codeAt(text, control));
+      if (control > index) parts.push(this.kept(Fn.pipe(text, Str.slice(index, control))));
+      if (control < text.length) {
+        const code = codeAt(text, control);
+        if (code === CARRIAGE_RETURN) this.carriageReturn(parts);
+        else this.introduce(code);
+      }
       index = control + 1;
     }
     return Arr.join(parts, "");
   }
 
-  /** Discards an unfinished sequence, such as one interrupted by lost output. */
-  reset(): void {
+  /** Text as stored: a line feed that completes a carriage return's break is already written. */
+  private kept(text: string): string {
+    const completesBreak = this.line === "carriage" && codeAt(text, 0) === NEWLINE;
+    if (completesBreak) this.line = "start";
+    const kept = completesBreak ? Fn.pipe(text, Str.slice(1)) : text;
+    if (kept) this.line = codeAt(kept, kept.length - 1) === NEWLINE ? "start" : "middle";
+    return kept;
+  }
+
+  private carriageReturn(parts: string[]): void {
+    if (this.line !== "middle") return;
+    parts.push("\n");
+    this.line = "carriage";
+  }
+
+  /**
+   * Starts fresh after lost output: an unfinished sequence is discarded, and a line feed that
+   * follows is a line break of its own rather than the end of an earlier carriage return's.
+   */
+  outputLost(): void {
+    this.reset();
+    if (this.line === "carriage") this.line = "start";
+  }
+
+  private reset(): void {
     this.mode = "text";
     this.pending = 0;
   }

@@ -5,6 +5,7 @@ import { utf8ByteLength } from "pi-cosmic-core";
 import type {
   BackgroundLogEvent,
   BackgroundLogSlice,
+  BackgroundOutputSkip,
   BackgroundTaskLogs,
   BackgroundTaskState,
   BackgroundTaskStatus,
@@ -89,8 +90,15 @@ export const taskLogSlice = (
   {
     from = 1,
     droppedBytes = 0,
+    discardedBefore,
     task,
-  }: { readonly from?: number; readonly droppedBytes?: number; readonly task?: LogTask } = {},
+  }: {
+    readonly from?: number;
+    readonly droppedBytes?: number;
+    /** Discarded output the read asked for before the first line, such as evicted output. */
+    readonly discardedBefore?: BackgroundOutputSkip;
+    readonly task?: LogTask;
+  } = {},
 ): BackgroundTaskLogs => {
   const events = Arr.map(lines, (line, index) => ({
     ...line,
@@ -105,6 +113,7 @@ export const taskLogSlice = (
       nextCursor: from + lines.length - 1,
       earliestAvailableCursor: from - 1,
       droppedBytes,
+      ...(discardedBefore && { discardedBefore }),
       retainedBytes: Arr.reduce(events, 0, (sum, event) => sum + event.bytes),
       events,
     },

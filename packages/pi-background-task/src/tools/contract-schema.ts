@@ -30,6 +30,16 @@ const envelope = {
   tool: Schema.Literal(BACKGROUND_TASK_TOOL_NAME),
 };
 
+const DroppedBytes = Schema.Natural.annotate({
+  description:
+    "Output the task's log buffer has discarded so far, including routine eviction of old output to stay within its size limit. Informational: a read reports output it missed in skippedBytes.",
+});
+
+const SkippedLowerBound = Schema.Boolean.annotate({
+  description:
+    "skippedBytes is only a lower bound. Exact amounts are kept for afterCursor 0 and for cursors fewer than 4,096 older than earliestAvailableCursor, or fewer than 256 once the task has finished.",
+});
+
 const Finished = Schema.Boolean.annotate({
   description:
     "The task state is terminal. Not proof that the process tree exited, was cleaned up, or succeeded.",
@@ -51,7 +61,7 @@ const TaskContractSchema = Schema.Struct({
     }),
   ),
   logCursor: snapshot.logCursor,
-  droppedLogBytes: snapshot.droppedLogBytes,
+  droppedLogBytes: DroppedBytes,
 });
 
 const LogOutput = Schema.String.annotate({
@@ -102,9 +112,12 @@ const LogsContractSchema = Schema.Struct({
   earliestAvailableCursor: logs.earliestAvailableCursor.annotate({
     description: "Pass as afterCursor to read from the oldest retained output.",
   }),
-  droppedBytes: logs.droppedBytes.annotate({
-    description: "Output the task's log buffer already discarded; it cannot be read again.",
+  droppedBytes: DroppedBytes,
+  skippedBytes: Schema.Natural.annotate({
+    description:
+      "Output this result asked for that was already discarded and cannot be recovered: output after afterCursor through nextCursor, or, without afterCursor, output within or before the lines returned. Reads that each pass the previous nextCursor as afterCursor report each discarded byte once; output lost after the newest output is reported with the output that follows it. 0 when the result missed nothing.",
   }),
+  skippedBytesIsLowerBound: SkippedLowerBound,
 });
 
 const WaitContractSchema = Schema.Struct({
@@ -116,7 +129,12 @@ const WaitContractSchema = Schema.Struct({
   task: TaskContractSchema,
   nextCursor: wait.nextCursor,
   earliestAvailableCursor: wait.earliestAvailableCursor,
-  droppedBytes: wait.droppedBytes,
+  droppedBytes: DroppedBytes,
+  skippedBytes: Schema.Natural.annotate({
+    description:
+      "Output an output wait was asked to scan, after afterCursor or else in retained output, through nextCursor, that was discarded before it could; the awaited text may have been there. 0 when the wait missed nothing and for exit waits.",
+  }),
+  skippedBytesIsLowerBound: SkippedLowerBound,
   matchCursor: wait.matchCursor,
   matchedText: Schema.optionalKey(
     MaxChars(BOUNDS.maxContainsChars).annotate({

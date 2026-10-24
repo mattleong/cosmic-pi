@@ -17,11 +17,13 @@ import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { countLabel, formatBytes } from "pi-cosmic-core/display";
 import { utf8ByteLength } from "pi-cosmic-core/text";
 import { InvalidBackgroundCommandError } from "../task/errors.ts";
+import { skippedWithin } from "../task/log-buffer.ts";
 import {
-  discardedOutputText,
   isActiveTaskState,
+  skippedAmountText,
   type BackgroundLogMetadata,
   type BackgroundLogSlice,
+  type BackgroundOutputSkip,
   type BackgroundTaskNotifyFilter,
   type BackgroundTaskSnapshot,
   type BackgroundTaskStatusWait,
@@ -217,18 +219,30 @@ const waitFinding = (
     : undefined;
 };
 
+/** The output an output wait could not scan because it was discarded first. */
+const waitLoss = (
+  result: BackgroundTaskStatusWait,
+  afterCursor: number | undefined,
+): string | undefined => {
+  if (!result.skipped) return undefined;
+  const amount = Str.capitalize(skippedAmountText(result.skipped));
+  const after = afterCursor === undefined ? "" : ` after cursor ${afterCursor}`;
+  return `[${amount} of output${after} was discarded before this wait could scan it; it cannot be recovered.]`;
+};
+
 const formatWait = (
   result: BackgroundTaskStatusWait,
   task: BackgroundTaskSnapshot,
   tail: string,
-  until: WaitForBackgroundTask["until"],
+  request: WaitForBackgroundTask,
   requestedSeconds?: number,
 ): string =>
   Arr.join(
     Arr.filter(
       [
         withCause(waitHeader(result, requestedSeconds), task),
-        waitFinding(result, until),
+        waitFinding(result, request.until),
+        waitLoss(result, request.afterCursor),
         tail
           ? `Recent output:\n${Str.trimEnd(tail)}`
           : isActiveTaskState(task.state)
@@ -260,35 +274,55 @@ const pageNotice = (truncation: LogPageOmission, cutCursor: number | undefined):
   return `[${Arr.join(parts, " ")}]\n`;
 };
 
-const formatLogs = (slice: BackgroundLogSlice, direction: "forward" | "tail", maxBytes: number) => {
+/** The line that says what discarded output this read asked for, when it asked for any. */
+const lossNotice = (
+  skipped: BackgroundOutputSkip | undefined,
+  afterCursor: number | undefined,
+): string => {
+  if (!skipped) return "";
+  const amount = Str.capitalize(skippedAmountText(skipped));
+  const what =
+    afterCursor === undefined
+      ? "of the requested output was discarded"
+      : `of output after cursor ${afterCursor} was discarded before this read`;
+  return `[${amount} ${what}; it cannot be recovered.]\n`;
+};
+
+const formatLogs = (slice: BackgroundLogSlice, request: ReadBackgroundLogs, maxBytes: number) => {
+  const direction = request.afterCursor === undefined ? "tail" : "forward";
   const header = (cursor: number) =>
     `[${slice.id} state=${slice.state} cursor=${cursor} earliest=${slice.earliestAvailableCursor}]\n`;
-  const loss =
-    slice.droppedBytes > 0
-      ? `[${discardedOutputText(slice.droppedBytes)}; it cannot be recovered.]\n`
-      : "";
-  const reserved =
-    utf8ByteLength(header(slice.nextCursor)) + utf8ByteLength(loss) + LOG_NOTICE_RESERVE_BYTES;
+  // The page decides what it skipped. The whole slice's loss line approximates its length; unit
+  // changes (1023 bytes vs 1.0 KB) can make the page's line a few bytes longer, which the notice
+  // reserve absorbs.
+  const lossRoom = utf8ByteLength(lossNotice(skippedWithin(slice), request.afterCursor));
+  const reserved = utf8ByteLength(header(slice.nextCursor)) + lossRoom + LOG_NOTICE_RESERVE_BYTES;
   const page = pageLogSlice(slice, direction, {
     maxBytes: Math.max(0, maxBytes - reserved),
     maxLines: DEFAULT_MAX_LINES - LOG_HEADER_LINES,
   });
   const truncation = pageOmission(slice, direction, page);
   const notice = truncation ? pageNotice(truncation, page.cut?.cursor) : "";
+  const loss = lossNotice(page.skipped, request.afterCursor);
   const text = `${header(page.nextCursor)}${loss}${notice}${page.output || NO_NEW_OUTPUT}`;
-  return { text: boundedText(text, maxBytes), nextCursor: page.nextCursor, truncation };
+  return {
+    text: boundedText(text, maxBytes),
+    nextCursor: page.nextCursor,
+    truncation,
+    skipped: page.skipped,
+  };
 };
 
 /** The output lines of a logs result, without its header and notice lines. */
 export const backgroundLogLines = (
   text: string,
   details: {
-    readonly logs: Pick<BackgroundLogMetadata, "droppedBytes">;
+    readonly logs: Pick<BackgroundLogMetadata, "skipped">;
     readonly truncation?: unknown;
   },
 ): ReadonlyArray<string> => {
   const headerLines =
-    1 + Number(details.logs.droppedBytes > 0) + Number(details.truncation !== undefined);
+    1 + Number(details.logs.skipped !== undefined) + Number(details.truncation !== undefined);
   const lines = Fn.pipe(text, Str.replace(/\r?\n$/u, ""), Str.split(/\r?\n/u)).slice(headerLines);
   return lines.length === 1 && lines[0] === NO_NEW_OUTPUT ? [] : lines;
 };
@@ -419,14 +453,21 @@ export const executeBackgroundTaskCommand = Effect.fn("BackgroundTaskCommand.exe
       const request = yield* logsRequest(input);
       const slice = yield* service.logs(request);
       const direction = request.afterCursor === undefined ? "tail" : "forward";
-      const { text, nextCursor, truncation } = formatLogs(slice, direction, maxTextBytes);
+      const { text, nextCursor, truncation, skipped } = formatLogs(slice, request, maxTextBytes);
       const { id, state, earliestAvailableCursor, droppedBytes } = slice;
       const { name, command } = slice.task;
       return reply(
         text,
         {
           action: input.action,
-          logs: { id, state, nextCursor, earliestAvailableCursor, droppedBytes },
+          logs: {
+            id,
+            state,
+            nextCursor,
+            earliestAvailableCursor,
+            droppedBytes,
+            ...(skipped && { skipped }),
+          },
           task: { ...(name !== undefined && { name }), command },
           ...(truncation && { truncation }),
         },
@@ -440,10 +481,7 @@ export const executeBackgroundTaskCommand = Effect.fn("BackgroundTaskCommand.exe
       const snapshot = detailsSnapshot(wait.snapshot);
       const tail = recentOutput(recent);
       return reply(
-        boundedText(
-          formatWait(wait, snapshot, tail, request.until, input.waitSeconds),
-          maxTextBytes,
-        ),
+        boundedText(formatWait(wait, snapshot, tail, request, input.waitSeconds), maxTextBytes),
         {
           action: "wait",
           wait: { ...member, snapshot, ...(tail && { tail }) },

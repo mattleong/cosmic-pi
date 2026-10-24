@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import { formatBytes } from "pi-cosmic-core";
+import { BACKGROUND_LOG_BOUNDS } from "../src/task/bounds.ts";
 import { LogBuffer, readLogBuffer } from "../src/task/log-buffer.ts";
 import { MAX_CONTRACT_LOG_OUTPUT_BYTES } from "../src/tools/contract-schema.ts";
 import type { BackgroundTaskServiceContract } from "../src/task/service.ts";
@@ -45,7 +46,7 @@ const bufferService = (buffer: LogBuffer): Partial<BackgroundTaskServiceContract
 // A logs result's text after its header and notice lines, exactly as returned.
 const logBody = (text: string, details: Parameters<typeof backgroundLogLines>[1]) => {
   const headerLines =
-    1 + Number(details.logs.droppedBytes > 0) + Number(details.truncation !== undefined);
+    1 + Number(details.logs.skipped !== undefined) + Number(details.truncation !== undefined);
   return Arr.join(Str.split(text, "\n").slice(headerLines), "\n");
 };
 
@@ -200,6 +201,129 @@ describe("shared background task command", () => {
       expect(logBody(result.text, result.details)).toBe(
         `${Fn.pipe("4", Str.repeat(3_000))}\n${Fn.pipe("5", Str.repeat(3_000))}\n`,
       );
+    }),
+  );
+
+  it.effect("says output cannot be recovered only when this read missed some", () =>
+    Effect.gen(function* () {
+      // Each line is its own 1,000-byte event, and the budget keeps the newest three.
+      const lines = Arr.map([1, 2, 3, 4, 5, 6], (index) => Fn.pipe(String(index), Str.repeat(999)));
+      const buffer = new LogBuffer();
+      for (const [index, line] of lines.entries())
+        buffer.append("stdout", `${line}\n`, index, 3 * 1_096);
+      const service = bufferService(buffer);
+      const read = (window: { readonly afterCursor?: number; readonly tailLines?: number }) =>
+        Effect.gen(function* () {
+          const args = { action: "logs", id: "task-0000000001", ...window } as const;
+          const result = yield* execute(args, service);
+          if (result.details.action !== "logs") throw new Error("logs returned other details");
+          const issues = summarize(args, result)?.issues ?? [];
+          return { ...result, details: result.details, issues };
+        });
+
+      for (const window of [{ afterCursor: 3 }, { afterCursor: 5 }, { tailLines: 3 }]) {
+        const result = yield* read(window);
+        expect(result.details.logs).toMatchObject({ droppedBytes: 3_000 });
+        expect(result.details.logs).not.toHaveProperty("skipped");
+        expect(result.contract).toMatchObject({ droppedBytes: 3_000, skippedBytes: 0 });
+        expect(result.text).not.toContain(formatBytes(3_000));
+        expect(result.issues).toEqual([]);
+      }
+
+      const behind = yield* read({ afterCursor: 1 });
+      expect(behind.details.logs.skipped).toEqual({ bytes: 2_000 });
+      expect(behind.contract).toMatchObject({ skippedBytes: 2_000 });
+      expect(Str.split(behind.text, "\n")[1]).toContain(formatBytes(2_000));
+      expect(backgroundLogLines(behind.text, behind.details)).toEqual(lines.slice(3));
+      expect(Arr.map(behind.issues, (issue) => issue.severity)).toEqual(["warning"]);
+
+      const tail = yield* read({ tailLines: 10 });
+      expect(tail.contract).toMatchObject({ skippedBytes: 3_000 });
+      expect(Str.split(tail.text, "\n")[1]).toContain(formatBytes(3_000));
+      expect(backgroundLogLines(tail.text, tail.details)).toEqual(lines.slice(3));
+    }),
+  );
+
+  it.effect("reports each discarded byte once across a chain of paged reads", () =>
+    Effect.gen(function* () {
+      // 3,000-byte lines with 100 bytes lost before every tenth outgrow a text and a structured page.
+      const buffer = new LogBuffer();
+      let lost = 0;
+      for (let index = 1; index <= 400; index++) {
+        const gap = index % 10 === 0 ? 100 : 0;
+        lost += gap;
+        buffer
+          .addDropped(gap)
+          .append("stdout", `${Fn.pipe("x", Str.repeat(2_999))}\n`, index, 1 << 22);
+      }
+      const service = bufferService(buffer);
+      const read = (afterCursor: number) =>
+        Effect.gen(function* () {
+          const result = yield* execute(
+            { action: "logs", id: "task-0000000001", afterCursor },
+            service,
+          );
+          if (result.details.action !== "logs") throw new Error("logs returned other details");
+          if (result.contract.action !== "logs") throw new Error("logs returned another contract");
+          return { details: result.details, contract: result.contract };
+        });
+
+      const textPages: number[] = [];
+      for (let cursor = 0; cursor < buffer.latestCursor; ) {
+        const { details } = yield* read(cursor);
+        textPages.push(details.logs.skipped?.bytes ?? 0);
+        cursor = details.logs.nextCursor;
+      }
+      expect(textPages.length).toBeGreaterThan(2);
+      expect(Arr.reduce(textPages, 0, (sum, bytes) => sum + bytes)).toBe(lost);
+
+      const structuredPages: number[] = [];
+      for (let cursor = 0; cursor < buffer.latestCursor; ) {
+        const { contract } = yield* read(cursor);
+        expect(contract.skippedBytesIsLowerBound).toBe(false);
+        structuredPages.push(contract.skippedBytes);
+        cursor = contract.nextCursor;
+      }
+      expect(structuredPages.length).toBe(2);
+      expect(Arr.reduce(structuredPages, 0, (sum, bytes) => sum + bytes)).toBe(lost);
+    }),
+  );
+
+  it.effect("marks what it reports for a cursor far behind the retained output as a minimum", () =>
+    Effect.gen(function* () {
+      const buffer = new LogBuffer();
+      for (let index = 0; index <= 5_000; index++)
+        buffer.append("stdout", "abc\n", index, BACKGROUND_LOG_BOUNDS.eventOverheadBytes + 4);
+      const { contract, text } = yield* execute(
+        { action: "logs", id: "task-0000000001", afterCursor: 1 },
+        bufferService(buffer),
+      );
+      if (contract.action !== "logs") throw new Error("logs returned another contract");
+      expect(contract.skippedBytesIsLowerBound).toBe(true);
+      expect(contract.skippedBytes).toBeGreaterThan(0);
+      expect(Str.split(text, "\n")[1]).toMatch(/at least/iu);
+    }),
+  );
+
+  it.effect("tells a wait's missed output apart from output its task evicted earlier", () =>
+    Effect.gen(function* () {
+      const task = taskStatus({ id: "task-0000000001", state: "running", droppedLogBytes: 9_000 });
+      const wait = (fields: Parameters<typeof taskWait>[2]) =>
+        execute(
+          { action: "wait", id: task.id, until: "output", contains: "ready", afterCursor: 3 },
+          { wait: () => Effect.succeed(taskWait(task, "timeout", fields)) },
+        );
+      const evicted = yield* wait({ droppedBytes: 9_000, earliestAvailableCursor: 2 });
+      expect(evicted.text).not.toContain(formatBytes(9_000));
+      expect(evicted.contract).toMatchObject({ droppedBytes: 9_000, skippedBytes: 0 });
+
+      const missed = yield* wait({
+        droppedBytes: 9_000,
+        earliestAvailableCursor: 7,
+        skipped: { bytes: 4_000 },
+      });
+      expect(missed.text).toContain(formatBytes(4_000));
+      expect(missed.contract).toMatchObject({ droppedBytes: 9_000, skippedBytes: 4_000 });
     }),
   );
 

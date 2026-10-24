@@ -5,7 +5,8 @@ import * as Str from "effect/String";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { codeUnitAt, indexOfFrom, lastIndexOfFrom } from "pi-cosmic-core/text-scan";
 import { BACKGROUND_TASK_FIELD_BOUNDS as BOUNDS } from "./bounds.ts";
-import type { BackgroundLogSlice, BackgroundLogStream } from "./model.ts";
+import { skippedWithin } from "./log-buffer.ts";
+import type { BackgroundLogSlice, BackgroundLogStream, BackgroundOutputSkip } from "./model.ts";
 import { plainTerminalText } from "./terminal-text.ts";
 
 // Recent text each stream keeps: enough to match across writes and to show a matched line's start.
@@ -60,6 +61,15 @@ const matchedLine = (text: string, found: Found, clipped: boolean): string => {
   return `${start > lineStart || startCut ? "…" : ""}${window}${stop < lineEnd ? "…" : ""}`;
 };
 
+/** Where an output scan starts. */
+export interface OutputScanStart {
+  readonly afterCursor: number;
+  /** Whether each stream's output up to `afterCursor` ended a line. */
+  readonly linesEnded?: Readonly<Record<BackgroundLogStream, boolean>>;
+  /** Lost output just after `afterCursor` that the scan did not ask for. */
+  readonly ignoredGapBytes?: number;
+}
+
 /** Matches literal text in the plain output readers see, per stream and never across a gap. */
 export class OutputMatcher {
   private readonly recent = { stdout: "", stderr: "" } satisfies Record<
@@ -71,27 +81,41 @@ export class OutputMatcher {
   private readonly alternatives: ReadonlyArray<string>;
   private readonly kept: number;
   private scannedCursor: number;
+  // Discarded output from the starting cursor through the slices scanned, each gap counted once.
+  private skippedBytes = 0;
+  private skippedAtLeast = false;
+  // Counted out of the first slice, which always holds it.
+  private ignoredGapBytes: number;
 
-  /** `linesEnded` says whether each stream's output up to `afterCursor` ended a line. */
-  constructor(
-    alternatives: ReadonlyArray<string>,
-    afterCursor: number,
-    linesEnded: Readonly<Record<BackgroundLogStream, boolean>> = { stdout: true, stderr: true },
-  ) {
+  constructor(alternatives: ReadonlyArray<string>, start: OutputScanStart) {
+    const linesEnded = start.linesEnded ?? { stdout: true, stderr: true };
     this.alternatives = alternatives;
     this.clipped = { stdout: !linesEnded.stdout, stderr: !linesEnded.stderr };
     const longest = Arr.reduce(alternatives, 0, (max, text) => Math.max(max, text.length));
     // Every match found ends in the newest event: the kept text was already searched.
     this.kept = Math.max(longest - 1, LINE_CONTEXT_CHARS);
-    this.scannedCursor = afterCursor;
+    this.scannedCursor = start.afterCursor;
+    this.ignoredGapBytes = start.ignoredGapBytes ?? 0;
   }
 
   get afterCursor(): number {
     return this.scannedCursor;
   }
 
+  /**
+   * Output after the starting cursor and through the newest slice scanned that was discarded
+   * before the scan reached it, including output after a match, which the result moves past.
+   */
+  get skipped(): BackgroundOutputSkip | undefined {
+    const bytes = this.skippedBytes;
+    if (bytes <= 0) return undefined;
+    return this.skippedAtLeast ? { bytes, atLeast: true } : { bytes };
+  }
+
+  /** Scans a slice read after `afterCursor`. */
   match(slice: BackgroundLogSlice): OutputMatch | undefined {
     if (this.alternatives.length === 0) return undefined;
+    this.countSkipped(slice);
     if (slice.earliestAvailableCursor > this.scannedCursor) this.reset();
     let match: OutputMatch | undefined;
     for (const event of slice.events) {
@@ -111,6 +135,15 @@ export class OutputMatcher {
     }
     this.scannedCursor = Math.max(this.scannedCursor, slice.nextCursor);
     return match;
+  }
+
+  private countSkipped(slice: BackgroundLogSlice): void {
+    const skipped = skippedWithin(slice);
+    const ignored = this.ignoredGapBytes;
+    this.ignoredGapBytes = 0;
+    if (!skipped) return;
+    this.skippedBytes += Math.max(0, skipped.bytes - ignored);
+    this.skippedAtLeast ||= skipped.atLeast === true;
   }
 
   // Output was lost, so no stream's next text is known to start a line.

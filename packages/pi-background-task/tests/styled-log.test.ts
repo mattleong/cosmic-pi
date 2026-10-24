@@ -56,4 +56,15 @@ describe("task manager log rows", () => {
     expect(view.rows("task", buffer.events, 33)).toEqual(fresh(buffer.events, 33));
     expect(view.rows("other", [], 33)).toEqual([]);
   });
+
+  it("adds no row for output lost at the end of a finished task", () => {
+    for (const ending of ["done\n", "partial"]) {
+      const buffer = new LogBuffer().append("stdout", ending, 0, 1 << 20);
+      const view = new StyledLogRows(gutter);
+      const before = view.rows("task", buffer.events, 20);
+      buffer.addDropped(64).finish(1, 1 << 20);
+      expect(view.rows("task", buffer.events, 20)).toEqual(before);
+      expect(fresh(buffer.events, 20)).toEqual(before);
+    }
+  });
 });

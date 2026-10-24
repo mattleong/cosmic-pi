@@ -292,6 +292,7 @@ const scenarios: ReadonlyArray<Scenario> = [
           slice("task-0000000003", "running", requestLog.slice(0, 3), {
             from: 212,
             droppedBytes: 18_432,
+            discardedBefore: { bytes: 18_432 },
             task: running,
           }),
         ),
@@ -302,7 +303,13 @@ const scenarios: ReadonlyArray<Scenario> = [
     input: { action: "logs", id: "task-0000000009", tailLines: 3 },
     service: {
       logs: () =>
-        Effect.succeed(slice("task-0000000009", "running", bundleLog, { from: 7, task: noisy })),
+        Effect.succeed(
+          slice("task-0000000009", "running", bundleLog, {
+            from: 7,
+            droppedBytes: 18_432,
+            task: noisy,
+          }),
+        ),
     },
   },
   {
@@ -417,6 +424,26 @@ const scenarios: ReadonlyArray<Scenario> = [
       waitSeconds: 120,
     },
     service: { wait: () => Effect.succeed(taskWait(running, "timeout")) },
+  },
+  {
+    title: "output wait whose cursor fell behind discarded output",
+    input: {
+      action: "wait",
+      id: "task-0000000009",
+      until: "output",
+      contains: "built in",
+      afterCursor: 40,
+    },
+    service: {
+      wait: () =>
+        Effect.succeed(
+          taskWait(noisy, "timeout", {
+            earliestAvailableCursor: 212,
+            droppedBytes: 18_432,
+            skipped: { bytes: 18_432 },
+          }),
+        ),
+    },
   },
   {
     title: "stop",

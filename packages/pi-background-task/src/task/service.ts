@@ -252,7 +252,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
           const timestamp = yield* Clock.currentTimeMillis;
           // Lost output may have cut a sequence short; what follows starts fresh.
           if (droppedBytes > 0)
-            for (const terminal of Rec.values(record.terminal)) terminal.reset();
+            for (const terminal of Rec.values(record.terminal)) terminal.outputLost();
           record.logs
             .addDropped(droppedBytes)
             .append(
@@ -448,8 +448,9 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
             0,
             handle.droppedOutputBytes() - record.ingressDroppedObserved,
           );
-          record.logs.addDropped(unobservedDrops);
+          record.logs.addDropped(unobservedDrops).finish(endedAt, config.logBufferBytesPerTask);
           record.ingressDroppedObserved += unobservedDrops;
+          enforceRetainedLogBudget(tasks, config.totalLogBufferBytes);
           settle(record, completedSnapshot(record, exit, endedAt));
         }),
       );
@@ -621,21 +622,26 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
       yield* validateWaitRequest(request, waitSeconds);
 
       const record = yield* admitRecord(request.id);
-      const afterCursor = request.afterCursor ?? 0;
       const alternatives = request.until === "output" ? (request.contains ?? []) : [];
       // Whether earlier output ended its line decides how a matched line's start is shown.
       const matcher = yield* withLock(
         checkCursor(record, request.afterCursor).pipe(
           Effect.andThen(
-            Effect.sync(() =>
-              alternatives.length === 0
-                ? new OutputMatcher(alternatives, afterCursor)
-                : new OutputMatcher(
-                    alternatives,
-                    afterCursor,
-                    record.logs.linesEndedAt(afterCursor),
-                  ),
-            ),
+            Effect.sync(() => {
+              if (alternatives.length === 0)
+                return new OutputMatcher(alternatives, { afterCursor: request.afterCursor ?? 0 });
+              // Without a cursor the wait scans retained output, so neither eviction nor the gap
+              // just before the oldest retained event skips any of it; with nothing evicted, it
+              // scans all output.
+              const buffer = record.logs;
+              const afterCursor = request.afterCursor ?? buffer.earliestCursor;
+              const retainedOnly = request.afterCursor === undefined && afterCursor > 0;
+              return new OutputMatcher(alternatives, {
+                afterCursor,
+                linesEnded: buffer.linesEndedAt(afterCursor),
+                ...(retainedOnly && { ignoredGapBytes: buffer.oldestEvent?.droppedBefore ?? 0 }),
+              });
+            }),
           ),
         ),
       );
@@ -666,6 +672,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
           };
         // A wait that returns now reports a finished state to the agent.
         claimFinishedNotice(record);
+        const { skipped } = matcher;
         return {
           done: true,
           value: {
@@ -675,6 +682,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
             nextCursor: slice.nextCursor,
             earliestAvailableCursor: slice.earliestAvailableCursor,
             droppedBytes: slice.droppedBytes,
+            ...(skipped && { skipped }),
             ...(match && {
               matchCursor: match.cursor,
               matchedText: match.text,

@@ -8,11 +8,18 @@ import type {
   BackgroundLogEvent,
   BackgroundLogSlice,
   BackgroundLogStream,
+  BackgroundOutputSkip,
   BackgroundTaskState,
 } from "./model.ts";
 import { plainTerminalText } from "./terminal-text.ts";
 
 const COMPACTION_MIN_DEAD_EVENTS = 32;
+// Evicted cursors whose discard totals are kept, so a read from one of them reports exactly how
+// much output it missed; a read from an older cursor gets a lower bound. The ledger starts small
+// and doubles as evictions accumulate; a finished task keeps fewer, since its output is complete.
+const LEDGER_INITIAL_CURSORS = 64;
+const LEDGER_MAX_CURSORS = 4_096;
+const LEDGER_FINISHED_CURSORS = 256;
 
 // Bound once: Pi's loader routes each call through an imported binding via an interop proxy,
 // which dominates the per-character and per-line scans below.
@@ -92,13 +99,87 @@ const styledSuffix = (text: string, maxBytes: number): string => {
   return final >= start ? Fn.pipe(text, Str.slice(final + 1)) : suffix;
 };
 
+/**
+ * The discard total as each recent evicted cursor left. Cursors are evicted in order, one at a
+ * time, so the ring holds the totals of the `count` newest evicted cursors, ending at `newest`.
+ */
+class DiscardLedger {
+  private limit: number;
+  private totals: Float64Array;
+  private newest = 0;
+  private count = 0;
+
+  constructor(limit: number) {
+    this.limit = limit;
+    this.totals = new Float64Array(Math.min(LEDGER_INITIAL_CURSORS, limit));
+  }
+
+  /** The oldest cursor whose total is held. */
+  get oldest(): number {
+    return this.newest - this.count + 1;
+  }
+
+  /** The oldest total held, which bounds the total of any older cursor from above. */
+  get oldestTotal(): number {
+    return this.totalAt(this.oldest) ?? 0;
+  }
+
+  /** Records the total after evicting `cursor`, the cursor after the newest one recorded. */
+  record(cursor: number, total: number): void {
+    if (this.count === this.totals.length && this.count < this.limit)
+      this.resize(Math.min(this.limit, this.count * 2));
+    this.totals[cursor % this.totals.length] = total;
+    this.newest = cursor;
+    this.count = Math.min(this.count + 1, this.totals.length);
+  }
+
+  /** The total recorded for `cursor`, unless it is older than every total held. */
+  totalAt(cursor: number): number | undefined {
+    if (this.count === 0 || cursor < this.oldest || cursor > this.newest) return undefined;
+    return this.totals[cursor % this.totals.length];
+  }
+
+  /** Holds at most the newest `capacity` totals from now on. */
+  limitTo(capacity: number): void {
+    this.limit = Math.min(this.limit, capacity);
+    if (this.totals.length > this.limit) this.resize(this.limit);
+  }
+
+  private resize(capacity: number): void {
+    const totals = new Float64Array(capacity);
+    this.count = Math.min(this.count, capacity);
+    for (let cursor = this.oldest; cursor <= this.newest; cursor += 1)
+      totals[cursor % capacity] = this.totals[cursor % this.totals.length] ?? 0;
+    this.totals = totals;
+  }
+}
+
+/** The events holding a read's newest lines; see `LogBuffer.tail`. */
+interface LogTail {
+  readonly events: BackgroundLogEvent[];
+  readonly fromOldest: boolean;
+}
+
 export class LogBuffer {
   private snapshot: ReadonlyArray<BackgroundLogEvent> | undefined;
   // Evicted slots are cleared at once so their text is released; compaction only reclaims slots.
   private store: Array<BackgroundLogEvent | undefined> = [];
   private start = 0;
-  private gapPending = false;
+  // Lost output that the next stored event follows.
+  private pendingDroppedBytes = 0;
+  // Output discarded up to and including the newest evicted event: everything before the oldest
+  // retained event apart from the gap just before it.
+  private discardedThroughEarliest = 0;
+  // `discardedThroughEarliest` as it was when each recent evicted cursor left.
+  private ledger: DiscardLedger | undefined;
+  private ledgerCursors = LEDGER_MAX_CURSORS;
+  // Each stream's newest evicted output ended a line, so its oldest retained output starts one.
+  private readonly evictedEndsLine: Record<BackgroundLogStream, boolean> = {
+    stdout: true,
+    stderr: true,
+  };
   bytes = 0;
+  /** Output discarded over the task's life, including routine eviction of old output. */
   droppedBytes = 0;
   nextCursor = 1;
 
@@ -166,22 +247,52 @@ export class LogBuffer {
           text: ownedText(piece),
           timestamp,
           bytes,
-          ...(this.gapPending && { droppedBefore: true as const }),
+          ...(this.pendingDroppedBytes > 0 && { droppedBefore: this.pendingDroppedBytes }),
         }),
       );
-      this.gapPending = false;
+      this.pendingDroppedBytes = 0;
       this.bytes += bytes;
       this.nextCursor += 1;
     }
-    while (this.chargedBytes > maxBytes && this.oldestEvent) this.dropOldest();
+    this.evictOver(maxBytes);
     return this;
+  }
+
+  /**
+   * Ends the task's output. Output lost after the newest event becomes a textless event with a
+   * cursor of its own, so the read that reaches it reports the loss and the next read starts past
+   * it. The ledger then keeps fewer cursors, which bounds what retained finished tasks hold.
+   */
+  finish(timestamp: number, maxBytes: number): LogBuffer {
+    this.ledgerCursors = LEDGER_FINISHED_CURSORS;
+    this.ledger?.limitTo(LEDGER_FINISHED_CURSORS);
+    if (this.pendingDroppedBytes <= 0) return this;
+    this.snapshot = undefined;
+    this.store.push(
+      Object.freeze({
+        cursor: this.nextCursor,
+        stream: this.store.at(-1)?.stream ?? "stdout",
+        text: "",
+        timestamp,
+        bytes: 0,
+        droppedBefore: this.pendingDroppedBytes,
+      }),
+    );
+    this.pendingDroppedBytes = 0;
+    this.nextCursor += 1;
+    this.evictOver(maxBytes);
+    return this;
+  }
+
+  private evictOver(maxBytes: number): void {
+    while (this.chargedBytes > maxBytes && this.oldestEvent) this.dropOldest();
   }
 
   /** Counts output lost before reaching the buffer; the next stored event follows a gap. */
   addDropped(droppedBytes: number): LogBuffer {
     if (droppedBytes > 0) {
       this.droppedBytes += droppedBytes;
-      this.gapPending = true;
+      this.pendingDroppedBytes += droppedBytes;
     }
     return this;
   }
@@ -194,11 +305,33 @@ export class LogBuffer {
     this.start += 1;
     this.bytes -= first.bytes;
     this.droppedBytes += first.bytes;
+    this.discardedThroughEarliest += (first.droppedBefore ?? 0) + first.bytes;
+    (this.ledger ??= new DiscardLedger(this.ledgerCursors)).record(
+      first.cursor,
+      this.discardedThroughEarliest,
+    );
+    // Lost output may have held either stream's text, so neither is known to end a line.
+    if (first.droppedBefore) this.evictedEndsLine.stdout = this.evictedEndsLine.stderr = false;
+    this.evictedEndsLine[first.stream] = Fn.pipe(plainTerminalText(first.text), Str.endsWith("\n"));
     if (this.start > COMPACTION_MIN_DEAD_EVENTS && this.start * 2 > this.store.length) {
       this.store = this.store.slice(this.start);
       this.start = 0;
     }
     return this;
+  }
+
+  /**
+   * Output discarded after `cursor` and before the oldest retained event, which is none unless
+   * eviction has passed `cursor`. Every cursor up to the earliest was evicted, so the ledger
+   * holds the newest of them; an older cursor gets a lower bound.
+   */
+  discardedSince(cursor: number): BackgroundOutputSkip | undefined {
+    if (cursor >= this.earliestCursor) return undefined;
+    const exact = cursor <= 0 ? 0 : this.ledger?.totalAt(cursor);
+    const before = exact ?? this.ledger?.oldestTotal ?? 0;
+    const bytes = this.discardedThroughEarliest - before;
+    if (bytes <= 0) return undefined;
+    return exact === undefined ? { bytes, atLeast: true } : { bytes };
   }
 
   /** Retained events after `cursor`, found by binary search without copying older events. */
@@ -234,10 +367,17 @@ export class LogBuffer {
     return low;
   }
 
-  /** The events holding the last `lineLimit` logical lines, trimming the first at a line start. */
-  tail(lineLimit: number): BackgroundLogEvent[] {
-    if (lineLimit <= 0) return [];
-    let ignoredBreaks = Fn.pipe(this.store.at(-1)?.text ?? "", Str.endsWith("\n")) ? 1 : 0;
+  /**
+   * The events holding the last `lineLimit` logical lines, trimming the first at a line start.
+   * `fromOldest` means the lines reach back past the oldest retained event's start, so output
+   * discarded before it may have held some of them. A textless event that ends the output, for
+   * output lost at the end, is returned with the lines before it.
+   */
+  tail(lineLimit: number): LogTail {
+    if (lineLimit <= 0) return { events: [], fromOldest: false };
+    let newest = this.store.length - 1;
+    while (newest > this.start && this.store[newest]?.text === "") newest -= 1;
+    let ignoredBreaks = Fn.pipe(this.store[newest]?.text ?? "", Str.endsWith("\n")) ? 1 : 0;
     let linesLeft = lineLimit;
     for (let index = this.store.length - 1; index >= this.start; index -= 1) {
       const event = this.store[index];
@@ -251,12 +391,36 @@ export class LogBuffer {
           continue;
         }
         linesLeft -= 1;
-        if (linesLeft === 0 && event) return this.trimmedFrom(index, event, newline + 1);
+        if (linesLeft === 0 && event)
+          return { events: this.trimmedFrom(index, event, newline + 1), fromOldest: false };
       }
     }
-    return this.range(this.start);
+    // The oldest retained line completes the request when nothing before it was cut off.
+    const whole = linesLeft === 1 && this.oldestLineWhole();
+    return { events: this.range(this.start), fromOldest: !whole };
   }
 
+  /**
+   * Whether the oldest retained line holds all of its output: no gap precedes it, and each stream
+   * it holds had ended its evicted output with a line break.
+   */
+  private oldestLineWhole(): boolean {
+    if (this.size === 0 || this.oldestEvent?.droppedBefore) return false;
+    const seen: Record<BackgroundLogStream, boolean> = { stdout: false, stderr: false };
+    for (let index = this.start; index < this.store.length; index += 1) {
+      const event = this.store[index];
+      if (!event) continue;
+      if (!seen[event.stream] && !this.evictedEndsLine[event.stream]) return false;
+      seen[event.stream] = true;
+      if (indexOfFrom(event.text, "\n", 0) >= 0) return true;
+    }
+    return true;
+  }
+
+  /**
+   * The events from `index`, the first cut to start at `offset`. A cut event starts after a line
+   * break inside it, so the gap before the whole event is not part of the lines read.
+   */
   private trimmedFrom(
     index: number,
     event: BackgroundLogEvent,
@@ -265,7 +429,9 @@ export class LogBuffer {
     const rest = this.range(index + 1);
     if (offset >= event.text.length) return rest;
     const text = Fn.pipe(event.text, Str.slice(offset));
-    return [Object.freeze({ ...event, text, bytes: utf8ByteLength(text) }), ...rest];
+    const { cursor, stream, timestamp } = event;
+    const bytes = utf8ByteLength(text);
+    return [Object.freeze({ cursor, stream, text, timestamp, bytes }), ...rest];
   }
 
   private range(from: number): BackgroundLogEvent[] {
@@ -278,16 +444,23 @@ export class LogBuffer {
   }
 }
 
+/**
+ * Reads after `afterCursor`, or else the last `tailLines` lines. The slice records the discarded
+ * output the read asked for: each event's gap and, in `discardedBefore`, the output discarded
+ * after the cursor, or before lines that reach past the oldest retained event.
+ */
 export function readLogBuffer(
   id: string,
   buffer: LogBuffer,
   state: BackgroundTaskState,
   options: { readonly afterCursor?: number; readonly tailLines?: number },
 ): BackgroundLogSlice {
-  const events =
-    options.afterCursor === undefined
+  const { afterCursor } = options;
+  const { events, fromOldest } =
+    afterCursor === undefined
       ? buffer.tail(options.tailLines ?? 200)
-      : buffer.eventsAfter(options.afterCursor);
+      : { events: buffer.eventsAfter(afterCursor), fromOldest: true };
+  const discardedBefore = fromOldest ? buffer.discardedSince(afterCursor ?? 0) : undefined;
   return Object.freeze({
     id,
     events: Object.freeze(events),
@@ -295,6 +468,24 @@ export function readLogBuffer(
     earliestAvailableCursor: buffer.earliestCursor,
     droppedBytes: buffer.droppedBytes,
     retainedBytes: buffer.bytes,
+    ...(discardedBefore && { discardedBefore }),
     state,
   });
 }
+
+/**
+ * The discarded output that the events `from` up to `to` of a slice skip: each one's gap, and the
+ * output discarded before the slice when they start with its first event. Output lost after the
+ * newest event belongs to whatever follows it, so a chain of reads reports each gap once.
+ */
+export const skippedWithin = (
+  slice: Pick<BackgroundLogSlice, "events" | "discardedBefore">,
+  from = 0,
+  to = slice.events.length,
+): BackgroundOutputSkip | undefined => {
+  const before = from === 0 ? slice.discardedBefore : undefined;
+  let bytes = before?.bytes ?? 0;
+  for (let index = from; index < to; index += 1) bytes += slice.events[index]?.droppedBefore ?? 0;
+  if (bytes <= 0) return undefined;
+  return before?.atLeast ? { bytes, atLeast: true } : { bytes };
+};

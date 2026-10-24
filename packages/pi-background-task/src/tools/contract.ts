@@ -3,6 +3,7 @@ import { BACKGROUND_TASK_FIELD_BOUNDS as BOUNDS } from "../task/bounds.ts";
 import {
   isActiveTaskState,
   type BackgroundLogSlice,
+  type BackgroundOutputSkip,
   type BackgroundTaskState,
   type BackgroundTaskStatus,
   type BackgroundTaskStatusWait,
@@ -32,6 +33,11 @@ const envelope = {
 } as const;
 
 const isFinished = (state: BackgroundTaskState): boolean => !isActiveTaskState(state);
+
+const skippedFields = (skipped: BackgroundOutputSkip | undefined) => ({
+  skippedBytes: skipped?.bytes ?? 0,
+  skippedBytesIsLowerBound: skipped?.atLeast === true,
+});
 
 const projectTaskContract = (task: BackgroundTaskStatus): BackgroundTaskContractTask => {
   const name = redactedLine(task.name, BOUNDS.maxNameChars);
@@ -96,6 +102,7 @@ export const logsContract = (
     nextCursor: page.nextCursor,
     earliestAvailableCursor: slice.earliestAvailableCursor,
     droppedBytes: slice.droppedBytes,
+    ...skippedFields(page.skipped),
   };
 };
 
@@ -110,6 +117,7 @@ export const waitContract = (
   nextCursor: wait.nextCursor,
   earliestAvailableCursor: wait.earliestAvailableCursor,
   droppedBytes: wait.droppedBytes,
+  ...skippedFields(wait.skipped),
   ...(wait.matchCursor !== undefined && { matchCursor: wait.matchCursor }),
   ...(wait.matchedText !== undefined && { matchedText: wait.matchedText }),
   ...(wait.matchedLine !== undefined && { matchedLine: wait.matchedLine }),
