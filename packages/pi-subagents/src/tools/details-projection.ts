@@ -31,6 +31,7 @@ import {
   MAX_PROTOCOL_ID_CHARS,
   MAX_TARGET_RUNS,
 } from "../run/limits.ts";
+import { agentMessageSenders, type AgentMessageArrivals } from "../run/message-watches.ts";
 import {
   MAX_ERROR_CHARS,
   MAX_FINAL_TEXT_CHARS,
@@ -58,6 +59,7 @@ import {
   MAX_PROGRESS_CHARS,
   MAX_INVALID_AGENT_ENTRIES,
   MAX_WARNING_CHARS,
+  type AwaitAgentMessagesCard,
   type CompactToolActionFailure,
   type InvalidAgentCard,
   type ModelOverrideCard,
@@ -90,6 +92,19 @@ const optionalText = (value: string | undefined, maximum: number): string | unde
 const nonNegative = (value: number): number =>
   Number.isFinite(value) ? Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, value)) : 0;
 export const nonNegativeInteger = (value: number): number => Math.floor(nonNegative(value));
+
+/** The agent messages delivered during a wait: how many, their distinct senders, and whether they ended it. */
+export const projectAgentMessages = (
+  messages: AgentMessageArrivals,
+  endedWait: boolean,
+): AwaitAgentMessagesCard => ({
+  count: Math.max(1, nonNegativeInteger(messages.count)),
+  senders: Arr.map(agentMessageSenders(messages).slice(0, MAX_TARGET_RUNS), ({ id, name }) => ({
+    id: requiredText(id, MAX_PROTOCOL_ID_CHARS, "agent"),
+    name: sanitizeName(name) || "agent",
+  })),
+  ...(endedWait && { endedWait: true as const }),
+});
 
 const projectUsage = (usage: SubagentUsage): SubagentRunCard["usage"] => ({
   input: nonNegative(usage.input),

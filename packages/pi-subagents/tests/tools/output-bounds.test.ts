@@ -20,6 +20,7 @@ import {
   MAX_NOTIFICATION_CHARS,
   MAX_OUTCOME_FILE_PATH_CHARS,
   MAX_PARENT_MESSAGE_CHARS,
+  MAX_PROTOCOL_ID_CHARS,
   MAX_START_BATCH,
   MAX_TARGET_RUNS,
   MAX_TOOL_OUTPUT_CHARS,
@@ -32,6 +33,7 @@ import type {
   SubagentReportArchive,
   SubagentRunView,
 } from "../../src/run/model.ts";
+import type { AgentMessageArrivals } from "../../src/run/message-watches.ts";
 import type { SubagentRunObservation } from "../../src/run/service.ts";
 import { MAX_ERROR_CHARS, MAX_FINAL_TEXT_CHARS, MAX_NAME_CHARS } from "../../src/run/state.ts";
 import { agentReadText } from "../../src/supervisor/agent-text.ts";
@@ -55,6 +57,7 @@ import {
 } from "../../src/tools/format.ts";
 import type { SubagentStartFailure } from "../../src/tools/model.ts";
 import {
+  formatMessageBlock,
   formatRunBlock,
   MAX_ACKNOWLEDGEMENT_BLOCK_CHARS,
   MAX_RESULT_HEADER_CHARS,
@@ -217,6 +220,17 @@ const worstRun = (index: number): SubagentRunView => {
   }
 };
 
+/** Agent messages that ended a wait, with worst-case senders, and more than the wait previews. */
+const worstMessages = (count: number): AgentMessageArrivals => ({
+  count: count + 3,
+  arrivals: Array.from({ length: count }, (_, index) => ({
+    from: Fn.pipe(`m${index}`, Str.padEnd(MAX_PROTOCOL_ID_CHARS, "x")),
+    fromName: longText(`sender-${index}`, MAX_NAME_CHARS),
+    text: longText(`MESSAGE-${index}`, 960),
+    truncated: true,
+  })),
+});
+
 const worstObservations = (count: number): ReadonlyArray<SubagentRunObservation> =>
   Array.from({ length: count }, (_, index) => {
     const run = worstRun(index);
@@ -262,6 +276,8 @@ describe("worst-case model-facing output", () => {
         expect(
           formatRunBlock(runViewBlock(run, runViewOutcome(run, delivered))).length,
         ).toBeLessThanOrEqual(MAX_RUN_BLOCK_CHARS);
+    for (const arrival of worstMessages(MAX_TARGET_RUNS).arrivals)
+      expect(formatMessageBlock(arrival).length).toBeLessThanOrEqual(MAX_RUN_BLOCK_CHARS);
   });
 
   effectTest(
@@ -273,7 +289,7 @@ describe("worst-case model-facing output", () => {
       const tool = captureSubagentTools(
         subagentServiceDouble({
           withAwaitTerminalObservations: (_ids, _until, _onUpdate, use) =>
-            use(observations, questions),
+            use(observations, questions, worstMessages(MAX_TARGET_RUNS)),
           consumeCompletions: (receipts) =>
             Effect.sync(() => {
               consumed.push(...Arr.map(receipts, (receipt) => receipt.id));
@@ -323,6 +339,33 @@ describe("worst-case model-facing output", () => {
       );
     },
   );
+
+  effectTest("previews agent messages in the run slots an await leaves", function* () {
+    const observations = worstObservations(6);
+    const questions = Array.from({ length: 3 }, (_, index) => worstRun(1_000 + index * 4 + 3));
+    const messages = worstMessages(MAX_TARGET_RUNS);
+    const tool = captureSubagentTools(
+      subagentServiceDouble({
+        withAwaitTerminalObservations: (_ids, _until, _onUpdate, use) =>
+          use(observations, questions, messages),
+        consumeCompletions: () => Effect.void,
+      }),
+    ).get("agent_await")!;
+    const result = yield* step(() =>
+      executeTool(tool, {
+        runIds: Arr.map(observations, ({ run }) => run.id),
+        until: "all_finished",
+      }),
+    );
+    const text = resultText(result);
+    expect(text.length).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_CHARS);
+    const previewed = Arr.filter(messages.arrivals, ({ from }) =>
+      Fn.pipe(text, Str.includes(Fn.pipe(from, Str.slice(0, 40)))),
+    );
+    expect(previewed).toHaveLength(MAX_TARGET_RUNS - observations.length - questions.length);
+    const contract = decodeSubagentContract("agent_await")(result.structuredContent);
+    expect(contract?.messagesFrom).toHaveLength(MAX_TARGET_RUNS);
+  });
 
   effectTest(
     "bounds a lifecycle result for MAX_LIFECYCLE_TARGET_RUNS worst-case targets",

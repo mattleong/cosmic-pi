@@ -185,6 +185,39 @@ describe("await contract", () => {
       "not_finished",
     ]);
   });
+
+  it("ends with a message only when the targets alone wouldn't have, and names its senders", () => {
+    const messages = {
+      count: 2,
+      arrivals: [
+        { from: "agent-7", fromName: "api-scout", text: "One.", truncated: false },
+        { from: "agent-7", fromName: "api-scout", text: "Two.", truncated: false },
+      ],
+    };
+    const contractFor = (observations: ReadonlyArray<SubagentRunObservation>) =>
+      decoded(
+        "agent_await",
+        awaitContract({
+          observations,
+          until: "all_finished",
+          requestedRunIds: Arr.map(observations, ({ run }) => run.id),
+          messages,
+        }),
+      );
+    const done = {
+      run: finished("done", { finalText: "Report" }),
+      completionReceipt: receipt("done"),
+    };
+    expect(contractFor([done, { run: view({ id: "busy" }) }])).toMatchObject({
+      outcome: "message",
+      messagesFrom: [{ id: "agent-7", name: "api-scout" }],
+      targets: [{ runId: "done", report: { status: "delivered" } }, { runId: "busy" }],
+    });
+    expect(contractFor([done])).toMatchObject({
+      outcome: "finished",
+      messagesFrom: [{ id: "agent-7", name: "api-scout" }],
+    });
+  });
 });
 
 describe("cleanup evidence", () => {

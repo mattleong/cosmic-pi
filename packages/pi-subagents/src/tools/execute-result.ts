@@ -1,6 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
+import type { AgentMessageArrivals } from "../run/message-watches.ts";
 import type { SubagentRunView } from "../run/model.ts";
 import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
 import { encodeSubagentContract, type SubagentContract } from "./contract-schema.ts";
@@ -18,6 +19,8 @@ export interface SubagentExecutionResult {
   readonly startEntries?: ReadonlyArray<SubagentStartEntry>;
   readonly actionFailures?: ReadonlyArray<SubagentActionFailure>;
   readonly attentionRequired?: boolean;
+  /** Agent messages delivered to an await's caller during its wait. */
+  readonly awaitMessages?: AgentMessageArrivals;
   readonly text?: string;
   readonly contract?: SubagentContract;
 }
@@ -46,6 +49,14 @@ export const presentSubagentResult = (
             awaitedRunIds: requestedAwaitIds,
             awaitUntil: awaitUntil(input.args),
             ...(attentionRequired === true && { attentionRequired: true as const }),
+            ...(executionResult.awaitMessages && {
+              agentMessages: executionResult.awaitMessages,
+            }),
+            // Why the wait ended is the contract's outcome; the cards alone can't tell.
+            ...(executionResult.contract?.tool === SUBAGENT_TOOL_NAME.await &&
+              executionResult.contract.outcome === "message" && {
+                endedByAgentMessage: true as const,
+              }),
           })
         : compactToolDetails({
             action: subagentToolAction(input),

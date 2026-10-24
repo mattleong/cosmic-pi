@@ -42,6 +42,7 @@ import { peerNotifier } from "./coordination.ts";
 import { controlOperations } from "./control.ts";
 import { backendEventHandler } from "./events.ts";
 import { launchOperations } from "./launch.ts";
+import { agentMessageWatches, type AgentMessageArrivals } from "./message-watches.ts";
 import type { RunContext, RunRecord, WithRunLock } from "./internal.ts";
 import { notificationDelivery } from "./notification-delivery.ts";
 import { processControlOperations, processInitializer } from "./process-lifecycle.ts";
@@ -173,12 +174,14 @@ export interface SubagentServiceContract extends WorkspaceCoordinatorContract {
         ) => void)
       | undefined,
     /**
-     * Receives the target observations and any other run whose question reaches this caller,
-     * which ends the wait as well.
+     * Receives the target observations, any other run whose question reaches this caller, and the
+     * agent messages delivered to the caller during the wait; questions and messages end the wait
+     * as well.
      */
     use: (
       observations: ReadonlyArray<SubagentRunObservation>,
       questions?: ReadonlyArray<SubagentRunView>,
+      messages?: AgentMessageArrivals,
     ) => Effect.Effect<A, E, R>,
     /** The awaiting run, or undefined for the root session. */
     callerRunId?: string,
@@ -366,6 +369,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       notifyHost: (notification) => options.notify?.(notification),
     }),
   });
+  const messageWatches = agentMessageWatches();
   const observations = completionObservationOperations({
     ...runContext,
     withCompletionGate,
@@ -373,6 +377,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     waitForRevision,
     allocateClaimToken,
     delivery,
+    messageWatches,
   });
 
   const prepareWriterLeaseForSpawn = writerSpawnPreparation(runContext);
@@ -502,6 +507,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     allocateMessageId,
     revision,
     waitForRevision,
+    messageWatches,
   });
 
   const starts = sessionStartOperations({

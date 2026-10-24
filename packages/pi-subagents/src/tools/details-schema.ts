@@ -442,6 +442,20 @@ export const SubagentStartDetailsSchema = Schema.Struct({
   startFailures: Schema.optionalKey(boundedArray(SubagentCardFailureSchema, MAX_START_BATCH)),
 });
 
+const AwaitAgentMessagesSchema = Schema.Struct({
+  count: nonNegativeInteger.check(Schema.isGreaterThan(0)),
+  senders: boundedArray(
+    Schema.Struct({
+      id: NonEmptyText(MAX_PROTOCOL_ID_CHARS),
+      name: NonEmptyText(MAX_NAME_CHARS),
+    }),
+    MAX_TARGET_RUNS,
+  ),
+  /** The messages ended the wait (outcome `message`): no question did, and the targets hadn't. */
+  endedWait: Schema.optionalKey(Schema.Literal(true)),
+});
+export type AwaitAgentMessagesCard = typeof AwaitAgentMessagesSchema.Type;
+
 export const SubagentAwaitDetailsSchema = Schema.Struct({
   version: Schema.Literal(SUBAGENT_CARD_DETAILS_VERSION),
   action: Schema.Literal("await"),
@@ -455,6 +469,8 @@ export const SubagentAwaitDetailsSchema = Schema.Struct({
   cancellationCleanup: Schema.optionalKey(Schema.Literal("unconfirmed")),
   timedOutSeconds: Schema.optionalKey(Schema.Finite.check(Schema.isInt(), Schema.isGreaterThan(0))),
   endedByUserInput: Schema.optionalKey(Schema.Literal(true)),
+  /** Agent messages delivered to the caller during the wait, whether or not they ended it. */
+  agentMessages: Schema.optionalKey(AwaitAgentMessagesSchema),
   contextOmitted: Schema.optionalKey(Schema.Literal(true)),
   reportsOnlyOmitted: Schema.optionalKey(Schema.Literal(true)),
   contentOmitted: Schema.optionalKey(Schema.Literal(true)),

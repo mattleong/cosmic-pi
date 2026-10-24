@@ -279,6 +279,26 @@ describe("nested await timeouts", () => {
   });
 });
 
+describe("nested await messages", () => {
+  it.effect("returns a nested parent's wait when its child messages it", () => {
+    const { fake, layer, progress } = nestedAwaitFixture();
+    return withService(layer, function* (service) {
+      const { parent, child } = yield* nestedParentAndChild(service);
+      const caller = fake.controls[0]!;
+      offerAwait(caller, "messaged", { runIds: [child.id] });
+      yield* yieldUntil(() => progress.observed > 0);
+      yield* service.agentSend({ kind: "run", runId: child.id }, parent.id, "Which fixture?");
+      yield* yieldUntil(() => responseFor(caller, "messaged") !== undefined);
+      expect(proxiedResult(caller, "messaged")?.structuredContent).toMatchObject({
+        outcome: "message",
+        messagesFrom: [{ id: child.id, name: "child" }],
+        targets: [{ runId: child.id, state: "running" }],
+      });
+      expect((yield* runView(service, child.id)).state).toBe("running");
+    });
+  });
+});
+
 describe("SubagentService parent proxy executions", () => {
   it.effect("binds proxied workspace calls to the authenticated caller", () => {
     const fake = fakeChildLayer();

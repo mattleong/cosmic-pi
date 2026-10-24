@@ -31,6 +31,7 @@ import {
   type SubagentRunView,
 } from "../run/model.ts";
 import { MAX_LIFECYCLE_TARGET_RUNS, MAX_TARGET_RUNS } from "../run/limits.ts";
+import { NO_AGENT_MESSAGE_ARRIVALS, type AgentMessageArrivals } from "../run/message-watches.ts";
 import {
   SubagentService,
   type SubagentHeldStarts,
@@ -196,12 +197,14 @@ export const executeSubagentActionEffect = Effect.fn("SubagentTools.execute")(fu
       : scripted
         ? starts.startScriptSessionOwned(request)
         : starts.startSessionOwned(request);
-  // Every awaited run's block fits, so the result delivers every claimed report.
+  // Every awaited run's block fits, so the result delivers every claimed report. Questions and
+  // agent messages that ended the wait arrive whole on their own; the result previews them.
   const completeObservations = Effect.fn("SubagentTools.completeObservations")(function* (
     state: AwaitExecution,
     args: AwaitToolInput["args"],
     observations: ReadonlyArray<SubagentRunObservation>,
     questions: ReadonlyArray<SubagentRunView>,
+    messages: AgentMessageArrivals,
     deadline: AwaitDeadline | undefined,
   ) {
     // A wait its timeout already ended delivers nothing, so its claims return unconsumed.
@@ -217,13 +220,15 @@ export const executeSubagentActionEffect = Effect.fn("SubagentTools.execute")(fu
     const outcome = {
       runs,
       attentionRequired,
-      text: awaitResultText(state.progressSummary(runs), observations, questions),
+      ...(messages.count > 0 && { awaitMessages: messages }),
+      text: awaitResultText(state.progressSummary(runs), observations, questions, messages),
       awaitContextRuns: withQuestionRuns(state.contextRuns(), questions),
       contract: awaitContract({
         observations,
         until: awaitUntil(args),
         requestedRunIds: state.requestedIds,
         questionsElsewhere: questions.length > 0,
+        messages,
       }),
     };
     const result = yield* Effect.sync(() =>
@@ -270,8 +275,8 @@ export const executeSubagentActionEffect = Effect.fn("SubagentTools.execute")(fu
         ids,
         until,
         state.update,
-        (observations, questions = []) =>
-          completeObservations(state, args, observations, questions, deadline),
+        (observations, questions = [], messages = NO_AGENT_MESSAGE_ARRIVALS) =>
+          completeObservations(state, args, observations, questions, messages, deadline),
         callerRunId,
       );
     const timeoutSeconds = awaitTimeoutSeconds(args);

@@ -15,6 +15,7 @@ import {
   isParentActionRequiredRun,
   type SubagentRunView,
 } from "../run/model.ts";
+import { NO_AGENT_MESSAGE_ARRIVALS, type AgentMessageArrivals } from "../run/message-watches.ts";
 import type { SubagentAwaitUntil, SubagentRunObservation } from "../run/service.ts";
 import { projectRunCardTree } from "../ui/run-tree-rows.ts";
 import { awaitDetails } from "./details.ts";
@@ -22,6 +23,7 @@ import { formatAwaitProgress, formatAwaitSummary } from "./render-await.ts";
 import { cancelledAwaitContract } from "./contract.ts";
 import { encodeSubagentContract } from "./contract-schema.ts";
 import {
+  formatMessageBlock,
   formatRunBlocks,
   runViewBlock,
   runViewOutcome,
@@ -39,18 +41,34 @@ const attentionHeadline = (runs: ReadonlyArray<SubagentRunView>): string =>
     ? "Parent action required; other unfinished subagents continue independently."
     : "";
 
+const messageHeadline = (count: number, shown: number, unfinished: boolean): string => {
+  if (count === 0) return "";
+  const arrived =
+    count === 1
+      ? "An agent message reached you during this wait and follows this result: read it"
+      : `${count} agent messages reached you during this wait and follow this result: read them`;
+  const unshown = count - shown;
+  return `${arrived}, reply with agent_send if the work needs it${unfinished ? ", then call agent_await again" : ""}.${unshown > 0 ? ` ${unshown} of them ${unshown === 1 ? "isn't" : "aren't"} previewed here.` : ""}`;
+};
+
 /**
  * A finished wait's model text: its summary, then one block per awaited run, which hands over
- * every claimed report, and one per other run whose question ended the wait, while slots remain.
- * Delivered reports whose retained copy is whole follow the blocks while they fit.
+ * every claimed report, one per other run whose question ended the wait, and one per agent
+ * message delivered to the caller during it, while slots remain. Delivered reports whose retained
+ * copy is whole follow the blocks while they fit.
  */
 export const awaitResultText = (
   summary: string,
   observations: ReadonlyArray<SubagentRunObservation>,
   questions: ReadonlyArray<SubagentRunView>,
+  messages: AgentMessageArrivals = NO_AGENT_MESSAGE_ARRIVALS,
 ): string => {
   const shownQuestions = questions.slice(0, Math.max(0, MAX_TARGET_RUNS - observations.length));
   const unshown = questions.length - shownQuestions.length;
+  const shownMessages = messages.arrivals.slice(
+    0,
+    Math.max(0, MAX_TARGET_RUNS - observations.length - shownQuestions.length),
+  );
   const blocks = formatRunBlocks(
     [
       summary,
@@ -58,6 +76,11 @@ export const awaitResultText = (
       unshown > 0
         ? `${unshown} more subagent${unshown === 1 ? " waits" : "s wait"} for your reply; each question arrives in its own notice, and agent_list shows them.`
         : "",
+      messageHeadline(
+        messages.count,
+        shownMessages.length,
+        Arr.some(observations, ({ run }) => !isTerminalRunState(run.state)),
+      ),
     ],
     [
       ...Arr.map(observations, ({ run, completionReceipt }) =>
@@ -65,6 +88,7 @@ export const awaitResultText = (
       ),
       ...Arr.map(shownQuestions, (run) => runViewBlock(run, runViewOutcome(run, false))),
     ],
+    Arr.map(shownMessages, formatMessageBlock),
   );
   return withInlineReports(
     blocks,

@@ -2,6 +2,7 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Order from "effect/Order";
 import type { ProfileId } from "../profiles/model.ts";
+import type { AgentMessageArrivals } from "../run/message-watches.ts";
 import type { SubagentRunView } from "../run/model.ts";
 import { MAX_START_BATCH, MAX_TARGET_RUNS } from "../run/limits.ts";
 import { projectRunCardTree } from "../ui/run-tree-rows.ts";
@@ -25,6 +26,7 @@ import {
   condenseStartEntry,
   omitReports,
   projectActionFailures,
+  projectAgentMessages,
   projectFailure,
   projectInvalidAgents,
   projectStartEntry,
@@ -48,6 +50,10 @@ interface AwaitDetailsInput {
   readonly cancelled?: boolean | undefined;
   readonly timedOutSeconds?: number | undefined;
   readonly endedByUserInput?: true | undefined;
+  /** Agent messages delivered to the caller during the wait. */
+  readonly agentMessages?: AgentMessageArrivals | undefined;
+  /** The agent messages ended the wait, as its contract's `message` outcome says. */
+  readonly endedByAgentMessage?: true | undefined;
   readonly cancellationCleanup?: "unconfirmed" | undefined;
 }
 
@@ -173,6 +179,14 @@ const awaitCandidate = (input: AwaitDetailsInput, stage: FitStage): SubagentAwai
     ...(input.cancelled &&
       input.timedOutSeconds !== undefined && { timedOutSeconds: input.timedOutSeconds }),
     ...(input.cancelled && input.endedByUserInput && { endedByUserInput: true as const }),
+    ...(!input.cancelled &&
+      input.agentMessages !== undefined &&
+      input.agentMessages.count > 0 && {
+        agentMessages: projectAgentMessages(
+          input.agentMessages,
+          input.endedByAgentMessage === true,
+        ),
+      }),
     ...(input.cancelled &&
       input.cancellationCleanup === "unconfirmed" && {
         cancellationCleanup: "unconfirmed" as const,

@@ -14,6 +14,7 @@ import {
 } from "pi-cosmic-core/security";
 import { runAttention, runCleanupAttention } from "../run/attention.ts";
 import { MAX_OUTCOME_FILE_PATH_CHARS, MAX_OUTCOME_PREVIEW_CHARS } from "../run/limits.ts";
+import type { AgentMessageArrival } from "../run/message-watches.ts";
 import {
   failedRunNextCandidate,
   isTerminalRunState,
@@ -39,8 +40,9 @@ const PREVIEW_LABELS = {
   report: "Report (no file was saved): ",
   failure: "Failure: ",
   question: "Question: ",
+  message: "Message: ",
 } as const;
-/** A label and the preview of a failure, question, or unsaved report. */
+/** A label and the preview of a failure, question, agent message, or unsaved report. */
 const MAX_PREVIEW_LINE_CHARS =
   MAX_OUTCOME_PREVIEW_CHARS +
   Math.max(...Arr.map(Rec.values(PREVIEW_LABELS), ({ length }) => length));
@@ -222,17 +224,42 @@ export const formatRunBlock = ({ id, name, facts, outcome, actions }: RunBlock):
   );
 };
 
+/**
+ * An agent message that ended a wait: its sender and a preview, within `MAX_RUN_BLOCK_CHARS` by
+ * construction. Like a question's preview, it never replaces the message, which reaches the
+ * recipient whole on its own.
+ */
+export const formatMessageBlock = ({ from, fromName, text, truncated }: AgentMessageArrival) => {
+  const sender =
+    from === fromName
+      ? sanitizeTerminalLine(from)
+      : `${sanitizeTerminalLine(from)} ${freeText(fromName, MAX_BLOCK_NAME_CHARS)}`;
+  const { line, cut } = preview(text);
+  return Arr.join(
+    [
+      clipLine(`${sender} · sent you a message`, MAX_BLOCK_LINE_CHARS),
+      clipLine(`${PREVIEW_LABELS.message}${line}`, MAX_PREVIEW_LINE_CHARS),
+      ...(cut || truncated
+        ? [clipLine("The whole message follows this result.", MAX_PREVIEW_LINE_CHARS)]
+        : []),
+    ],
+    "\n",
+  );
+};
+
 /** Blocks after a header, both bounded, so the result fits by construction. */
 export const formatRunBlocks = (
   header: ReadonlyArray<string>,
   blocks: ReadonlyArray<RunBlock>,
+  /** Blocks already formatted within `MAX_RUN_BLOCK_CHARS`, such as agent messages. */
+  formatted: ReadonlyArray<string> = [],
 ): string => {
   const heading = clipText(
     Fn.pipe(header, Arr.filter(Boolean), Arr.join("\n")),
     MAX_RESULT_HEADER_CHARS,
   );
   return Fn.pipe(
-    [heading, ...Arr.map(blocks, formatRunBlock)],
+    [heading, ...Arr.map(blocks, formatRunBlock), ...formatted],
     Arr.filter(Boolean),
     Arr.join(RUN_BLOCK_SEPARATOR),
   );

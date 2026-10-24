@@ -14,6 +14,7 @@ import type {
   CompactSummaryProvider,
 } from "pi-code-previews";
 import {
+  type AwaitAgentMessagesCard,
   type SubagentRunCard,
   type SubagentStartDetails,
   type SubagentAwaitDetails,
@@ -125,6 +126,38 @@ function awaitCounter(cards: readonly SubagentRunCard[], total: number, subject:
   );
 }
 
+const senderLabel = ({ id, name }: AwaitAgentMessagesCard["senders"][number]): string =>
+  name !== id ? Fn.pipe(name, Str.slice(0, 48)) : id === "main" ? "the main agent" : "an agent";
+
+/** Agent messages that reached the caller during the wait, which may have returned for them. */
+function agentMessageIssue(
+  messages: AwaitAgentMessagesCard,
+  summary: CompactSummary,
+): CompactIssue {
+  // The recorded outcome: the cards can't show every question, or targets without a card.
+  const waitEnded = messages.endedWait === true;
+  const [only] = messages.senders;
+  const one = messages.count === 1 && only !== undefined;
+  const from = Arr.join(
+    Arr.map(messages.senders, ({ id, name }) => (name === id ? id : `${id} (${name})`)),
+    ", ",
+  );
+  const arrived = one
+    ? `an agent message from ${from}`
+    : `${countLabel(messages.count, "agent message")} from ${from}`;
+  if (waitEnded && summary.outcome === "success") summary.outcome = "returned";
+  return {
+    severity: "info",
+    code: "await-agent-message",
+    message: waitEnded
+      ? `Stopped waiting to read ${one ? `a message from ${senderLabel(only)}` : countLabel(messages.count, "agent message")}; subagents keep running`
+      : one
+        ? `A message from ${senderLabel(only)} arrived with these results`
+        : `${countLabel(messages.count, "agent message")} arrived with these results`,
+    detail: `${waitEnded ? "Await returned early for" : "This result also notes"} ${arrived}; child runs were NOT stopped. Each message follows this result: read it, reply with agent_send if the work needs it, then await any unfinished targets again.`,
+  };
+}
+
 function awaitIssues(
   details: SubagentAwaitDetails,
   summary: CompactSummary,
@@ -171,6 +204,8 @@ function awaitIssues(
       detail:
         "Await timed out; child runs were NOT stopped. Await the requested targets again or inspect them with agent_read.",
     });
+  } else if (details.agentMessages) {
+    issues.push(agentMessageIssue(details.agentMessages, summary));
   } else if (details.cancelled) {
     summary.outcome = "cancelled";
     const unconfirmed = details.cancellationCleanup === "unconfirmed";

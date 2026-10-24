@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Semaphore from "effect/Semaphore";
 import { completionObservationOperations } from "../../src/run/completion-observations.ts";
+import { agentMessageWatches } from "../../src/run/message-watches.ts";
 import { view } from "../tools/fixtures/tool-harness.ts";
 import { makeRunContext, runRecordFixture } from "./fixtures/run-context.ts";
 import { useProbe } from "./fixtures/service-harness.ts";
@@ -40,6 +41,7 @@ describe("completion admission", () => {
           wakeCompletionLocked: () => undefined,
           signalOutboxChangedLocked: () => undefined,
         },
+        messageWatches: agentMessageWatches(),
       });
       const probe = useProbe();
       const observe = observations.withAwaitTerminalObservations(

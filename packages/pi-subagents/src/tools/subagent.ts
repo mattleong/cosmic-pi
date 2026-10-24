@@ -148,7 +148,7 @@ const TOOL_SPECS: SubagentToolSpecs = {
   [SUBAGENT_TOOL_NAME.await]: {
     label: "Wait for Subagents",
     description:
-      "Wait for subagents you started, or their descendants, and return their report files, and reports short enough to fit inline, with live progress. Returns early when a selected run pauses, when any subagent asks you a question, or when the user sends a message; children keep running. Follow the steps in the result, then await again.",
+      "Wait for subagents you started, or their descendants, and return their report files, and reports short enough to fit inline, with live progress. Returns early when a selected run pauses, when any subagent asks you a question, when another agent messages you, or when the user sends a message; children keep running. Follow the steps in the result, then await again.",
     promptSnippet: "Wait for subagent reports when your next step depends on them",
     promptGuidelines: [
       "After starting subagents, keep working on parts you didn't delegate; don't redo a subagent's slice while it runs. Call agent_await only when your next step depends on a report; reports arrive on their own, so don't poll agent_list or agent_read.",

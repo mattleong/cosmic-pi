@@ -16,6 +16,7 @@ import type {
 } from "../../src/tools/details-schema.ts";
 import { view } from "./fixtures/tool-harness.ts";
 import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import * as Str from "effect/String";
 
 type SummarizedDetails =
@@ -56,6 +57,11 @@ const messages = (issues: readonly CompactIssue[] | undefined) =>
   Arr.join(
     Arr.map(issues ?? [], (issue) => issue.message),
     "\n",
+  );
+const agentMessageNote = (issues: readonly CompactIssue[] | undefined) =>
+  Arr.findFirst(issues ?? [], (issue) => issue.code === "await-agent-message").pipe(
+    Option.map((issue) => issue.message),
+    Option.getOrUndefined,
   );
 it("treats cleanup quarantine as warning rather than failed work or successful stop", () => {
   const run = view({
@@ -206,6 +212,86 @@ describe("await outcomes", () => {
       { runIds: [run.id] },
     );
     expect(summary?.outcome).toBe("returned");
+  });
+
+  const agentMessages = { count: 1, senders: [{ id: "agent-7", name: "api-scout" }] };
+  const messageEnded = { ...agentMessages, endedWait: true as const };
+
+  it("notes an agent message that ended the wait without treating it as a problem", () => {
+    const running = view({ id: "agent-1", state: "running" });
+    const ended = summarize(
+      "await",
+      awaitReceipt([running], { awaitedRunIds: [running.id], agentMessages: messageEnded }),
+      "settled",
+      { runIds: [running.id] },
+    );
+    expect(ended?.outcome).toBe("returned");
+    const [issue] = ended?.issues ?? [];
+    expect(issue).toMatchObject({ severity: "info" });
+    expect(issueMessageStyleProblems(issue?.message ?? "", { forbidden: ["agent-7"] })).toEqual([]);
+    expect(issueDetails(ended?.issues)).toContain("agent-7");
+
+    // Targets that finished anyway keep the result a success; the message is still noted.
+    const done = view({ id: "agent-1", state: "completed", finalText: "Done" });
+    const finished = summarize(
+      "await",
+      awaitReceipt([done], { awaitedRunIds: [done.id], agentMessages }),
+      "settled",
+      { runIds: [done.id] },
+    );
+    expect(finished?.outcome).toBe("success");
+    expect(issueDetails(finished?.issues)).toContain("agent-7");
+    expect(messages(finished?.issues)).not.toBe(messages(ended?.issues));
+  });
+
+  it("names the recorded reason a wait ended, not one inferred from the cards", () => {
+    const done = view({ id: "agent-1", state: "completed", finalText: "Done" });
+    const noted = agentMessageNote(
+      summarize(
+        "await",
+        awaitReceipt([done], { awaitedRunIds: [done.id], agentMessages }),
+        "settled",
+        {
+          runIds: [done.id],
+        },
+      )?.issues,
+    );
+    const running = view({ id: "agent-1", state: "running" });
+    const endedNote = agentMessageNote(
+      summarize(
+        "await",
+        awaitReceipt([running], { awaitedRunIds: [running.id], agentMessages: messageEnded }),
+        "settled",
+        { runIds: [running.id] },
+      )?.issues,
+    );
+    expect(noted).toBeDefined();
+    expect(endedNote).toBeDefined();
+    expect(noted).not.toBe(endedNote);
+
+    // A pause that arrived with the message ended the wait, so the message is only noted.
+    const paused = view({ id: "agent-1", state: "paused" });
+    const attention = summarize(
+      "await",
+      awaitReceipt([paused], {
+        awaitedRunIds: [paused.id],
+        attentionRequired: true,
+        agentMessages,
+      }),
+      "settled",
+      { runIds: [paused.id] },
+    );
+    expect(attention?.outcome).toBe("warning");
+    expect(agentMessageNote(attention?.issues)).toBe(noted);
+
+    // The only projected target finished, but a requested one without a card hadn't.
+    const partial = summarize(
+      "await",
+      awaitReceipt([done], { awaitedRunIds: [done.id], agentMessages: messageEnded }),
+      "settled",
+      { runIds: [done.id, "agent-2"] },
+    );
+    expect(agentMessageNote(partial?.issues)).toBe(endedNote);
   });
 });
 

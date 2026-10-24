@@ -15,6 +15,7 @@ import {
   isParentActionRequiredRun,
   type SubagentRunView,
 } from "../run/model.ts";
+import { agentMessageSenders, type AgentMessageArrivals } from "../run/message-watches.ts";
 import type { SubagentAwaitUntil, SubagentRunObservation } from "../run/service.ts";
 import { MAX_NAME_CHARS, sanitizeName } from "../run/state.ts";
 import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
@@ -280,20 +281,35 @@ interface AwaitContractInput {
   readonly requestedRunIds: ReadonlyArray<string>;
   /** Another run that the caller did not await asked it a question. */
   readonly questionsElsewhere?: boolean | undefined;
+  /** Agent messages delivered to the caller during the wait. */
+  readonly messages?: AgentMessageArrivals | undefined;
 }
+
+const settled = ({ run }: SubagentRunObservation): boolean => isTerminalRunState(run.state);
 
 export const awaitContract = (input: AwaitContractInput): SubagentAwaitContract => {
   const targets = Arr.map(input.observations, observedTarget);
+  const senders = input.messages ? agentMessageSenders(input.messages) : [];
+  const finished =
+    input.until === "any_finished"
+      ? Arr.some(input.observations, settled)
+      : Arr.every(input.observations, settled);
   return {
     ...envelope(SUBAGENT_TOOL_NAME.await),
+    // Why the wait ended: a message ends it only when its targets alone wouldn't have.
     outcome:
       input.questionsElsewhere === true ||
       Arr.some(targets, (target) => target.parentActionRequired)
         ? "attention"
-        : "finished",
+        : senders.length > 0 && !finished
+          ? "message"
+          : "finished",
     until: input.until,
     requestedRunIds: [...input.requestedRunIds],
     targets,
+    ...(senders.length > 0 && {
+      messagesFrom: Arr.map(senders, ({ id, name }) => ({ id, name: projectName(name) || id })),
+    }),
   };
 };
 

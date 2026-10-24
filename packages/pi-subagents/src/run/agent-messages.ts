@@ -40,6 +40,7 @@ import {
 import { snapshotRun, type RunContext, type RunRecord } from "./internal.ts";
 import type { RunControlMessage } from "./control.ts";
 import { requireControlExpectation } from "./control-admission.ts";
+import type { AgentMessageWatches } from "./message-watches.ts";
 import type { AgentMessageResume } from "./resume.ts";
 import type {
   SubagentControlExpectation,
@@ -70,6 +71,8 @@ interface AgentMessageDependencies extends Pick<
   /** The published projection's revision; every run state change publishes a newer one. */
   readonly revision: Effect.Effect<number>;
   readonly waitForRevision: (after: number) => Effect.Effect<void, SubagentRuntimeClosedError>;
+  /** Waits that a message to their caller ends. */
+  readonly messageWatches: Pick<AgentMessageWatches, "recordLocked">;
 }
 
 /** How long a message waits for its target to leave `starting` before it is refused. */
@@ -309,16 +312,17 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
       }),
     );
 
-  const recordSentLocked = Effect.fn("SubagentMessages.recordSentLocked")(function* (
+  // Recorded once delivered, so a wait it ends returns with the message already at its recipient.
+  const recordDeliveredLocked = Effect.fn("SubagentMessages.recordDeliveredLocked")(function* (
     sender: AgentSender,
     to: string,
     text: string,
     now: number,
   ) {
     const record = sender.id === MAIN_AGENT_ID ? undefined : records.get(sender.id);
-    if (!record) return;
-    recordMessageLocked(record, "out", to, text, now);
-    yield* publish;
+    if (record) recordMessageLocked(record, "out", to, text, now);
+    const watched = dependencies.messageWatches.recordLocked(to, sender.id, sender.name, text);
+    if (record || watched) yield* publish;
   });
 
   const deliverRunMessage = (
@@ -407,7 +411,7 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
     const { sender } = claimed;
     if (sender) {
       const now = yield* Clock.currentTimeMillis;
-      yield* withLock(recordSentLocked(sender, to, text, now));
+      yield* withLock(recordDeliveredLocked(sender, to, text, now));
     }
     return { messageId, to, ...delivered };
   });

@@ -74,7 +74,7 @@ The main agent and Pi subagents share one `agent_*` family. `agent_start`, `agen
 | Tool              | Does                                                                                                                                                |
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `agent_start`     | Starts background subagents by profile or custom agent                                                                                              |
-| `agent_await`     | Waits for runs you started and returns their reports, early when one asks you a question                                                            |
+| `agent_await`     | Waits for runs you started and returns their reports, early when one asks you a question or another agent messages you                              |
 | `agent_lifecycle` | Interrupts or stops runs you started                                                                                                                |
 | `agent_worktree`  | Reviews, tests, applies, revises, or discards a worktree writer's proposal                                                                          |
 | `agent_profiles`  | Shows each profile's route and the configured custom agents                                                                                         |

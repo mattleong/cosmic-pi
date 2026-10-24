@@ -493,6 +493,31 @@ const awaitScenarios = Effect.gen(function* () {
         ),
     },
   });
+  const agentMessage = yield* scenario("another agent messages you", awaitInput, {
+    service: {
+      withAwaitTerminalObservations: (_ids, _until, _onUpdate, use) =>
+        Effect.suspend(() =>
+          use(
+            [
+              { run: { ...authReview, state: "running", finalText: undefined } },
+              { run: { ...docsSweep, state: "running", finalText: undefined } },
+            ],
+            [],
+            {
+              count: 1,
+              arrivals: [
+                {
+                  from: dbMigration.id,
+                  fromName: dbMigration.name,
+                  text: "The sessions table gains a refresh_expires_at column; auth-review should check it.",
+                  truncated: false,
+                },
+              ],
+            },
+          ),
+        ),
+    },
+  });
   const cutReport = yield* scenario(
     "a long report is cut and saved to a file",
     { tool: "agent_await", args: { runIds: ["agent-1"], until: "all_finished" } },
@@ -526,7 +551,7 @@ const awaitScenarios = Effect.gen(function* () {
       },
     },
   );
-  return [live, settled, cancelled, userInput, siblingQuestion, cutReport];
+  return [live, settled, cancelled, userInput, siblingQuestion, agentMessage, cutReport];
 });
 
 const candidate = (overrides: Partial<ProfileCandidate> = {}): ProfileCandidate => ({

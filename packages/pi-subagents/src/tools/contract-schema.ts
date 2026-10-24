@@ -199,11 +199,24 @@ const StartContractSchema = Schema.Struct({
 // fields but renders any other output schema in full on every request.
 const AwaitContractSchema = Schema.Struct({
   ...envelope(SUBAGENT_TOOL_NAME.await),
-  outcome: Schema.Literals(["finished", "attention", "cancelled", "timed_out", "user_input"]),
+  outcome: Schema.Literals([
+    "finished",
+    "attention",
+    "message",
+    "cancelled",
+    "timed_out",
+    "user_input",
+  ]),
   until: UntilSchema,
   requestedRunIds: RunIdsSchema,
   /** An ended wait (cancelled, timed out, or user input) withholds every report. */
   targets: RunTargetsSchema,
+  /** Distinct senders of the first `MAX_TARGET_RUNS` agent messages delivered during the wait. */
+  messagesFrom: Schema.optionalKey(
+    Schema.Array(Schema.Struct({ id: RunIdSchema, name: NameSchema })).check(
+      Schema.isMaxLength(MAX_TARGET_RUNS),
+    ),
+  ),
   /** Only on an ended wait. */
   unobservedRunIds: Schema.optionalKey(RunIdsSchema),
   /** Only on an ended wait. */

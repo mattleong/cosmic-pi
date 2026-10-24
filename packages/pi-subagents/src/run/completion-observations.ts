@@ -11,6 +11,7 @@ import {
   releaseCompletionClaim,
   type StartFailureHold,
 } from "./completion.ts";
+import { MAIN_AGENT_ID } from "./agent-messaging.ts";
 import { invalidRequest, type SubagentError, type SubagentRuntimeClosedError } from "./errors.ts";
 import { snapshotRun, type RunContext, type RunRecord, type WithRunLock } from "./internal.ts";
 import {
@@ -19,6 +20,11 @@ import {
   type SubagentProjection,
   type SubagentRunView,
 } from "./model.ts";
+import type {
+  AgentMessageArrivals,
+  AgentMessageWatch,
+  AgentMessageWatches,
+} from "./message-watches.ts";
 import type { RunNotificationDelivery } from "./notification-delivery.ts";
 import { questionRecipientRunId } from "./notification-routing.ts";
 import type {
@@ -38,6 +44,7 @@ interface RunCompletionObservationDependencies extends Pick<RunContext, "records
     RunNotificationDelivery,
     "wakeCompletionLocked" | "signalOutboxChangedLocked"
   >;
+  readonly messageWatches: Pick<AgentMessageWatches, "watchLocked">;
 }
 
 const reportStatusOf = (finalText: string | undefined, unresolved: boolean, available: boolean) =>
@@ -134,6 +141,7 @@ export function completionObservationOperations(
     waitForRevision,
     allocateClaimToken,
     delivery,
+    messageWatches,
   } = dependencies;
 
   // The record's current snapshot with the latest projection's child counts. While that
@@ -230,9 +238,11 @@ export function completionObservationOperations(
       readonly record: RunRecord;
       readonly generation: number;
     }>;
+    /** Messages to the caller from here on end the wait; earlier ones don't. */
+    readonly messages: AgentMessageWatch;
   }
   // An await claims every target's current or next outcome. Questions stay with their notices.
-  const acquireCompletionClaims = (ids: ReadonlyArray<string>) =>
+  const acquireCompletionClaims = (ids: ReadonlyArray<string>, recipient: string) =>
     withCompletionGate(
       withLock(
         Effect.acquireRelease(
@@ -270,7 +280,8 @@ export function completionObservationOperations(
               claimCompletion(record, generation, claimToken),
             );
             if (claimed.length > 0) delivery.signalOutboxChangedLocked();
-            return { claimToken, selected, claimed } satisfies CompletionClaim;
+            const messages = messageWatches.watchLocked(recipient);
+            return { claimToken, selected, claimed, messages } satisfies CompletionClaim;
           }),
           releaseCompletionClaims,
         ),
@@ -279,6 +290,7 @@ export function completionObservationOperations(
   const releaseCompletionClaims = (claim: CompletionClaim) =>
     withLock(
       Effect.sync(() => {
+        claim.messages.closeLocked();
         for (const claimed of claim.claimed)
           if (releaseCompletionClaim(claimed.record, claimed.generation, claim.claimToken))
             delivery.wakeCompletionLocked();
@@ -286,10 +298,11 @@ export function completionObservationOperations(
     );
   const withCompletionClaims = <A, E, R>(
     ids: ReadonlyArray<string>,
+    recipient: string,
     use: (claim: CompletionClaim) => Effect.Effect<A, E, R>,
   ) =>
     Effect.scopedWith((scope) =>
-      acquireCompletionClaims(ids).pipe(Scope.provide(scope), Effect.flatMap(use)),
+      acquireCompletionClaims(ids, recipient).pipe(Scope.provide(scope), Effect.flatMap(use)),
     );
 
   // Questions from runs the caller is not awaiting, which nonetheless reach this caller first.
@@ -311,6 +324,7 @@ export function completionObservationOperations(
   interface TerminalObservations {
     readonly observations: ReadonlyArray<SubagentRunObservation>;
     readonly questions: ReadonlyArray<SubagentRunView>;
+    readonly messages: AgentMessageArrivals;
   }
 
   const waitForTerminalObservations = (
@@ -335,12 +349,15 @@ export function completionObservationOperations(
           const runs = Arr.map(observations, (observation) => observation.run);
           const terminalCount = Arr.filter(runs, (run) => isTerminalRunState(run.state)).length;
           const questions = questionsForCallerLocked(claim, callerRunId);
+          const messages = claim.messages.arrivals();
           const parentActionRequired =
             Arr.some(runs, isParentActionRequiredRun) || questions.length > 0;
           const done =
             parentActionRequired ||
+            messages.count > 0 ||
             (until === "any_finished" ? terminalCount > 0 : terminalCount === runs.length);
-          if (done) return { done: true as const, runs, result: { observations, questions } };
+          if (done)
+            return { done: true as const, runs, result: { observations, questions, messages } };
           return { done: false as const, runs, revision: currentProjection().revision };
         }),
       ).pipe(
@@ -361,6 +378,7 @@ export function completionObservationOperations(
       use: (
         observations: ReadonlyArray<SubagentRunObservation>,
         questions?: ReadonlyArray<SubagentRunView>,
+        messages?: AgentMessageArrivals,
       ) => Effect.Effect<A, E, R>,
       callerRunId?: string,
     ): Effect.fn.Return<A, SubagentError | E, R> {
@@ -369,9 +387,11 @@ export function completionObservationOperations(
           "run_ids_required",
           "Await requires at least one subagent run ID.",
         );
-      return yield* withCompletionClaims(ids, (claim) =>
+      return yield* withCompletionClaims(ids, callerRunId ?? MAIN_AGENT_ID, (claim) =>
         waitForTerminalObservations(claim, until, callerRunId, onUpdate).pipe(
-          Effect.flatMap(({ observations, questions }) => use(observations, questions)),
+          Effect.flatMap(({ observations, questions, messages }) =>
+            use(observations, questions, messages),
+          ),
         ),
       );
     });
