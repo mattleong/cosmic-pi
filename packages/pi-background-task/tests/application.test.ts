@@ -1,5 +1,6 @@
 import {
   createEventBus,
+  type AgentBeforeSettleEvent,
   type ExtensionAPI,
   type ExtensionCommandContext,
   type ExtensionContext,
@@ -15,6 +16,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import {
   deferredPromise,
   extensionContextFixture,
@@ -52,6 +54,20 @@ const context = (cwd: string) =>
   });
 
 const decodeDetails = Schema.decodeUnknownSync(BackgroundTaskDetailsSchema);
+
+const completedSettle: AgentBeforeSettleEvent = {
+  type: "agent_before_settle",
+  outcome: "completed",
+  entries: [],
+  continue: false,
+  context: {
+    contextEntries: [],
+    contextMessages: [],
+    llmMessages: [],
+    pendingMessages: [],
+    canContinue: true,
+  },
+};
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -111,6 +127,20 @@ const harness = (
         return Promise.resolve(tasks.handler(args, ctx));
       },
       emit: (name: DefaultedEventName, ctx: ExtensionContext) => host.emit(name, ctx),
+      /** Settles a completed run through every handler, chaining their results as Pi does. */
+      settle: (ctx: ExtensionContext) =>
+        Arr.reduce(
+          host.handlers.get("agent_before_settle"),
+          Promise.resolve(completedSettle),
+          (previous, handler) =>
+            previous.then((event) =>
+              Promise.resolve(handler(event, ctx)).then((result) => ({
+                ...event,
+                entries: result?.entries ?? event.entries,
+                continue: result?.continue ?? event.continue,
+              })),
+            ),
+        ),
       globalSettings: documents.readObject(settingsPath),
       breakAgentDirectory: documents
         .writeObject(blocker, {})
@@ -415,6 +445,69 @@ describe("background-task Pi lifecycle", () => {
           yield* Effect.promise(() => app.emit("session_shutdown", ctx));
           yield* Effect.sleep("100 millis");
           expect(sendMessage.mock.calls).toHaveLength(1);
+        }).pipe(Effect.ensuring(Effect.promise(() => app.emit("session_shutdown", ctx))));
+      }).pipe(Effect.scoped),
+    30_000,
+  );
+
+  /** The guidelines a session's background_task registration carries. */
+  const registeredGuidelines = (subagentChild: boolean) =>
+    Effect.gen(function* () {
+      const app = yield* harness(() => Promise.resolve(), { subagentChild });
+      const ctx = context(process.cwd());
+      return yield* Effect.promise(() => app.emit("session_start", ctx)).pipe(
+        Effect.map(() =>
+          Option.match(
+            Arr.findLast(app.tools, ({ name }) => name === "background_task"),
+            {
+              onNone: () => [],
+              onSome: (tool) => tool.promptGuidelines ?? [],
+            },
+          ),
+        ),
+        Effect.ensuring(Effect.promise(() => app.emit("session_shutdown", ctx))),
+      );
+    });
+
+  it.live(
+    "adds guidance to the tool only in a subagent's own session",
+    () =>
+      Effect.gen(function* () {
+        const root = yield* registeredGuidelines(false);
+        const child = yield* registeredGuidelines(true);
+        expect(root.length).toBeGreaterThan(0);
+        expect(child).toEqual(expect.arrayContaining([...root]));
+        expect(child.length).toBeGreaterThan(root.length);
+      }).pipe(Effect.scoped),
+    30_000,
+  );
+
+  it.live.each([
+    { session: "a subagent's own session", subagentChild: true },
+    { session: "a root session", subagentChild: false },
+  ])(
+    "reminds a settling run of the tasks its end would stop only in $session",
+    ({ subagentChild }) =>
+      Effect.gen(function* () {
+        const app = yield* harness(() => Promise.resolve(), { subagentChild });
+        const ctx = context(process.cwd());
+        yield* Effect.gen(function* () {
+          yield* Effect.promise(() => app.emit("session_start", ctx));
+          const started = yield* Effect.promise(() =>
+            app.execute({ action: "start", command: "sleep 30" }, ctx),
+          );
+          const details = decodeDetails(started.details);
+          if (details.action !== "start") throw new Error("start returned the wrong action");
+          const settled = yield* Effect.promise(() => app.settle(ctx));
+          const reminder = Arr.findFirst(
+            settled.entries,
+            (entry) =>
+              entry.type === "custom_message" &&
+              Predicate.isString(entry.content) &&
+              Str.includes(details.snapshot.id)(entry.content),
+          );
+          expect(Option.isSome(reminder)).toBe(subagentChild);
+          expect(settled.continue).toBe(subagentChild);
         }).pipe(Effect.ensuring(Effect.promise(() => app.emit("session_shutdown", ctx))));
       }).pipe(Effect.scoped),
     30_000,

@@ -3,6 +3,7 @@ import {
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
 import * as Predicate from "effect/Predicate";
@@ -36,6 +37,7 @@ import { discoverActivityView } from "pi-cosmic-ui/activity/view";
 import { taskProjectionBridge } from "./boundary/host-ui.ts";
 import { BackgroundTaskConfigStore, BackgroundTaskSettingsFiles } from "./config/store.ts";
 import type { BackgroundTaskConfig } from "./config/schema.ts";
+import { isActiveTaskState } from "./task/model.ts";
 import { TASK_NOTICE_MESSAGE_TYPE } from "./task/notice.ts";
 import { BackgroundTaskService } from "./task/service.ts";
 import {
@@ -75,8 +77,13 @@ export function registerBackgroundTaskApplication(
   // Historical notices render without restoring delivery authority.
   pi.registerMessageRenderer(TASK_NOTICE_MESSAGE_TYPE, renderTaskNotice);
   let idleHost: ExtensionContext | undefined;
-  const deliverNotice = isSubagentChildProcess()
-    ? registerSubagentTaskNoticeDelivery(pi)
+  // A subagent's tasks stop when its run ends, so it settles them before reporting. The published
+  // projection follows every task state change and is empty once the activation retires.
+  const subagentChild = isSubagentChildProcess();
+  const deliverNotice = subagentChild
+    ? registerSubagentTaskNoticeDelivery(pi, {
+        activeTasks: () => Arr.filter(bridge.get().tasks, (task) => isActiveTaskState(task.state)),
+      })
     : registerTaskNoticeDelivery(pi, {
         isIdle: () => invokeHostCallback(() => idleHost?.isIdle() ?? false, false),
         later: (check) => {
@@ -131,7 +138,7 @@ export function registerBackgroundTaskApplication(
           scheduleAnimation: (interval, tick) =>
             slot.isCurrent(token) ? prepared.scheduler.schedule(interval, tick) : undefined,
         },
-        replay.shell,
+        { shell: replay.shell, subagentChild },
       );
       if (publishesReplay) replay.publish();
       const sessionId = invokeHostCallback(() => {

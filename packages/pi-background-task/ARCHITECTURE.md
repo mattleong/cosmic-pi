@@ -42,7 +42,12 @@ task's start opted in with `notify`; otherwise completion sends nothing.
   message](src/task/notice.ts) owns its stored type and redacted details. [Notice
   delivery](src/boundary/host-notice.ts) formats it and hands it to core's shared session wake, which
   starts a turn only for an idle session; in a subagent's own session it never starts one, since an
-  idle subagent's run is settling, reported, or paused for its parents. The [notice
+  idle subagent's run is settling, reported, or paused for its parents. A subagent's run end stops
+  its tasks, so there the tool registers extra guidance, and a completed run that settles with tasks
+  still running continues once per prompt with a reminder to wait for or stop them. That decision
+  reads the published task projection without waiting: Pi commits settle entries before it checks
+  whether the run was aborted, so a decision that waited could leave the reminder in a run paused
+  meanwhile. The [notice
   renderer](src/ui/notice-message.ts) shows delivered and historical notices without delivery
   authority.
 

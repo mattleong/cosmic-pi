@@ -51,11 +51,20 @@ export interface BackgroundTaskToolRunner {
   ) => Promise<A>;
 }
 
+export interface BackgroundTaskToolOptions {
+  readonly shell?: typeof withCodePreviewShell;
+  /** Registers in a subagent's own Pi session, whose tasks stop when its run ends. */
+  readonly subagentChild?: boolean;
+}
+
 interface BackgroundTaskRenderState {
   backgroundTaskSubject?: string;
 }
 
 const TITLE = "Background task";
+
+const SUBAGENT_GUIDELINE =
+  "You are running as a subagent, so ending your turn ends your run and stops every background task you started, and a notify message can't reach you after that. Before your final report, wait for each task whose result the report needs and stop the tasks you no longer need.";
 
 const headingSubtitle = (
   args: Partial<BackgroundTaskToolInput>,
@@ -100,7 +109,7 @@ const backgroundTaskToolResult = (
 export function registerBackgroundTaskTool(
   pi: ExtensionAPI,
   runner: BackgroundTaskToolRunner,
-  shell: typeof withCodePreviewShell = withCodePreviewShell,
+  { shell = withCodePreviewShell, subagentChild = false }: BackgroundTaskToolOptions = {},
 ): void {
   const tool = defineTool<
     typeof BackgroundTaskParameters,
@@ -115,6 +124,7 @@ export function registerBackgroundTaskTool(
     promptGuidelines: [
       "Use background_task only when a server, watcher, long test suite, or other command can run independently; use bash when validation or the next step must finish before responding.",
       'When you start a task whose result you will act on later, set notify to "exit" (or "failure" to hear only about failures and timeouts) and continue independent work: a message arrives when it finishes, with its outcome and recent output, so don\'t poll it. No message follows a stop you made, or a finish you already saw in a tool result.',
+      ...(subagentChild ? [SUBAGENT_GUIDELINE] : []),
       "At a dependency barrier, use wait instead of polling status or logs. The maxWaitSeconds setting (30 seconds by default) caps every wait, and the result reports the applied limit and the task's recent output. A timeout leaves the task running; call wait again until it matches or completes. Output waits match the plain text that logs shows within one stream, without the [stderr] label; contains may list a few alternatives, such as a ready line and an error, and the result names the one found and its line. Set afterCursor to an earlier nextCursor to wait only for new output, because earlier retained output can match immediately.",
       "Use logs only when output is needed for a decision, the task fails, or the user asks. For one bounded snapshot, omit afterCursor and set a small tailLines value. For incremental reads, set afterCursor to the previous nextCursor and optionally waitSeconds; don't combine tailLines with afterCursor.",
       "Stop background tasks when they are no longer needed; every task's process group is terminated when the Pi session is replaced or shut down. Run services in the foreground: daemonized or detached processes escape that cleanup.",

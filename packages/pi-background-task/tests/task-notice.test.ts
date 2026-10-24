@@ -1,13 +1,17 @@
 import type {
   AgentBeforeSettleEvent,
+  AgentBeforeSettleEventResult,
+  BeforeAgentStartEvent,
   BoundaryContextPreview,
   ExtensionAPI,
+  SessionBoundaryDraft,
 } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { it as effectIt } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
+import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
 import { applyPresentationSettings } from "pi-code-previews/testing";
 import {
@@ -20,7 +24,7 @@ import {
   registerSubagentTaskNoticeDelivery,
   taskNoticeContent,
 } from "../src/boundary/host-notice.ts";
-import type { BackgroundTaskNotice } from "../src/task/model.ts";
+import type { BackgroundTaskNotice, BackgroundTaskStatus } from "../src/task/model.ts";
 import {
   TASK_NOTICE_MESSAGE_TYPE,
   taskNoticeDetails,
@@ -154,24 +158,53 @@ const settleEvent = (
   },
 });
 
-const subagentHarness = () => {
+const userPrompt: BeforeAgentStartEvent = {
+  type: "before_agent_start",
+  messageType: "user",
+  prompt: "Next assignment.",
+  systemPrompt: "",
+  systemPromptOptions: {
+    cwd: "/project",
+    selectedTools: [],
+    hiddenTools: [],
+    toolSnippets: {},
+    toolGuidelines: {},
+    promptGuidelines: [],
+    appendSystemPrompt: "",
+    sections: {},
+    contextFiles: [],
+    skills: [],
+  },
+};
+
+const subagentHarness = (activeTasks: () => ReadonlyArray<BackgroundTaskStatus>) => {
   const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>();
   const host = recordingExtensionHost({}, { sendMessage });
-  const deliver = registerSubagentTaskNoticeDelivery(host.pi);
+  const deliver = registerSubagentTaskNoticeDelivery(host.pi, { activeTasks });
   const ctx = extensionContextFixture({});
+  /** The handler's own return, before Pi awaits it. */
+  const settleResult = (event: AgentBeforeSettleEvent) =>
+    host.handlers.get("agent_before_settle")[0]?.(event, ctx);
   const settle = (event: AgentBeforeSettleEvent) =>
-    Effect.promise(() =>
-      Promise.resolve(host.handlers.get("agent_before_settle")[0]?.(event, ctx)),
-    );
-  return { sendMessage, deliver, settle };
+    Effect.promise(() => Promise.resolve(settleResult(event)));
+  const prompt = Effect.promise(() => host.emit("before_agent_start", ctx, userPrompt));
+  return { sendMessage, deliver, settleResult, settle, prompt };
 };
+
+const entryText = (result: AgentBeforeSettleEventResult | void): string =>
+  Arr.join(
+    Arr.flatMap(result?.entries ?? [], (entry) =>
+      entry.type === "custom_message" && Predicate.isString(entry.content) ? [entry.content] : [],
+    ),
+    "\n",
+  );
 
 describe("background task notices in a subagent session", () => {
   effectIt.effect(
     "never starts a turn, but continues a settling run until the notice is answered",
     () =>
       Effect.gen(function* () {
-        const test = subagentHarness();
+        const test = subagentHarness(() => []);
         test.deliver(failedNotice, () => true);
         test.deliver(failedNotice, () => false);
         expect(test.sendMessage).toHaveBeenCalledTimes(1);
@@ -192,4 +225,48 @@ describe("background task notices in a subagent session", () => {
         expect(yield* test.settle(settleEvent([reply, notice], [], "aborted"))).toBeUndefined();
       }),
   );
+
+  effectIt.effect(
+    "reminds a settling run once per prompt of the running tasks its end would stop",
+    () =>
+      Effect.gen(function* () {
+        const server = taskStatus({ id: "task-0000000002", name: "dev server", state: "running" });
+        const stopping = taskStatus({ id: "task-0000000003", state: "stopping" });
+        let active: ReadonlyArray<BackgroundTaskStatus> = [server, stopping];
+        const test = subagentHarness(() => active);
+        const report = settleEvent([fauxAssistantMessage("Report.")]);
+        const earlier: SessionBoundaryDraft = { type: "custom", customType: "earlier" };
+
+        const reminded = yield* test.settle({ ...report, entries: [earlier] });
+        expect(reminded).toMatchObject({ continue: true });
+        expect(reminded?.entries?.[0]).toBe(earlier);
+        expect(entryText(reminded)).toContain(server.id);
+        expect(entryText(reminded)).not.toContain(stopping.id);
+        // A run that keeps its tasks after the reminder still settles and reports.
+        expect(yield* test.settle(report)).toBeUndefined();
+
+        yield* test.prompt;
+        expect(yield* test.settle(settleEvent([], [], "aborted"))).toBeUndefined();
+        expect(entryText(yield* test.settle(report))).toContain(server.id);
+
+        yield* test.prompt;
+        active = [stopping];
+        expect(yield* test.settle(report)).toBeUndefined();
+        active = [];
+        expect(yield* test.settle(report)).toBeUndefined();
+        const notice = settleEvent([fauxAssistantMessage("Report."), contextNotice()]);
+        expect(yield* test.settle(notice)).toEqual({ entries: [], continue: true });
+      }),
+  );
+
+  it("decides without waiting, so a pause during the boundary can't keep the reminder", () => {
+    // Pi commits a settle handler's entries before it checks whether the run was aborted, and
+    // gives the handler no abort signal. A pause arrives as host I/O, which can't run between a
+    // decision that never yields and that commit.
+    const server = taskStatus({ id: "task-0000000002", state: "running" });
+    const test = subagentHarness(() => [server]);
+    const result = test.settleResult(settleEvent([fauxAssistantMessage("Report.")]));
+    expect(Predicate.isPromiseLike(result)).toBe(false);
+    expect(entryText(Predicate.isPromiseLike(result) ? undefined : result)).toContain(server.id);
+  });
 });

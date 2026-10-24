@@ -1,9 +1,14 @@
-import type { AgentBeforeSettleEventResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type {
+  AgentBeforeSettleEvent,
+  AgentBeforeSettleEventResult,
+  CustomMessageEntryDraft,
+  ExtensionAPI,
+} from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
 import * as Match from "effect/Match";
 import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
-import { clipText, formatDuration } from "pi-cosmic-core/display";
+import { clipText, countLabel, formatDuration } from "pi-cosmic-core/display";
 import { deliverAgentMessage } from "pi-cosmic-core/host-agent-messages";
 import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import { hasUnansweredNotice, registerSessionWake } from "pi-cosmic-core/host-wake";
@@ -17,8 +22,11 @@ const WAKE_MESSAGE_TYPE = "pi-background-task-wake";
 const WAKE_TEXT =
   "Background tasks finished while you were busy; their notices are shown above. Act on them now and continue the task.";
 
+const RUN_END_REMINDER_TYPE = "pi-background-task-run-end-reminder";
+
 const MAX_NOTICE_CHARS = 8_000;
 const MAX_COMMAND_CHARS = 300;
+const MAX_REMINDED_TASKS = 8;
 
 const finish = (task: BackgroundTaskSnapshot): string =>
   Match.value(task.state).pipe(
@@ -109,17 +117,65 @@ export function registerTaskNoticeDelivery(
 }
 
 /**
+ * What a settling subagent reads while tasks its run's end would stop are still running. Its
+ * report is its last message, so it has to give the whole report again after acting on this.
+ */
+const runEndReminder = (tasks: ReadonlyArray<BackgroundTaskSnapshot>): CustomMessageEntryDraft => {
+  const listed = Arr.map(Arr.take(tasks, MAX_REMINDED_TASKS), taskLabel);
+  const unlisted = tasks.length - listed.length;
+  const names = Arr.join(unlisted > 0 ? [...listed, `${unlisted} more`] : listed, ", ");
+  return {
+    type: "custom_message",
+    customType: RUN_END_REMINDER_TYPE,
+    content: sanitizeDiagnosticContent(
+      `Your run is about to end, which stops ${countLabel(tasks.length, "background task")} still running: ${names}. No notice can reach you after it ends. Wait for any task whose result your report needs and stop the rest, then reply with your complete final report, because your parent receives only your last message.`,
+      { maximumLength: MAX_NOTICE_CHARS },
+    ),
+    display: false,
+  };
+};
+
+export interface SubagentTaskSettleHost {
+  /**
+   * The current activation's active tasks, read synchronously: Pi commits a settle handler's
+   * entries before it checks for an abort and gives the handler no abort signal, so a decision
+   * that waited could leave the reminder in a run paused meanwhile.
+   */
+  readonly activeTasks: () => ReadonlyArray<BackgroundTaskSnapshot>;
+}
+
+/**
  * Exit notices in a subagent's own Pi session, which never start a turn. An idle subagent's run is
  * settling, reported, or paused for its parents, and a turn started then would replace its report
  * or resume it without them. The notice is appended for its next turn instead; a busy subagent's
- * settling run continues so it reads the notice before it reports. Registers at factory time.
+ * settling run continues so it reads the notice before it reports. A completed run that settles
+ * with tasks still starting or running, which its end would stop, continues once per prompt with a
+ * reminder to wait for or stop them, so a run that keeps them still reports. Registers at factory
+ * time.
  */
-export function registerSubagentTaskNoticeDelivery(pi: ExtensionAPI): TaskNoticeDelivery {
-  pi.on("agent_before_settle", (event): AgentBeforeSettleEventResult | undefined =>
-    event.outcome === "completed" && hasUnansweredNotice(event.context, NOTICE_TYPES)
+export function registerSubagentTaskNoticeDelivery(
+  pi: ExtensionAPI,
+  host: SubagentTaskSettleHost,
+): TaskNoticeDelivery {
+  let reminded = false;
+  pi.on("before_agent_start", (event) => {
+    if (event.messageType === "user") reminded = false;
+  });
+  const continueForNotice = (
+    event: AgentBeforeSettleEvent,
+  ): AgentBeforeSettleEventResult | undefined =>
+    hasUnansweredNotice(event.context, NOTICE_TYPES)
       ? { entries: event.entries, continue: true }
-      : undefined,
-  );
+      : undefined;
+  pi.on("agent_before_settle", (event): AgentBeforeSettleEventResult | undefined => {
+    if (event.outcome !== "completed") return undefined;
+    if (reminded) return continueForNotice(event);
+    // A task already stopping needs nothing more from the subagent.
+    const running = Arr.filter(host.activeTasks(), (task) => task.state !== "stopping");
+    if (running.length === 0) return continueForNotice(event);
+    reminded = true;
+    return { entries: [...event.entries, runEndReminder(running)], continue: true };
+  });
   return (notice, isCurrent) => {
     invokeHostCallback(() => {
       if (!isCurrent()) return;
