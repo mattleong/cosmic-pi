@@ -674,13 +674,16 @@ export function fakeWriterLeaseLayer(
 }
 
 // The fake children never run Node. Skipping the real Node-binary check keeps launches free of
-// filesystem I/O, so polling a forked start stays deterministic.
-const localPiBackendRegistryLayer = Layer.effect(
-  SubagentBackendRegistry,
-  ChildProcess.use((childProcesses) =>
-    Effect.succeed(backendRegistryFor([localPiBackendDriver(childProcesses, Effect.void)])),
-  ),
-);
+// filesystem I/O, so polling a forked start stays deterministic. Other runtimes' drivers may join.
+const localPiBackendRegistryLayer = (otherDrivers: ReadonlyArray<BackendDriver> = []) =>
+  Layer.effect(
+    SubagentBackendRegistry,
+    ChildProcess.use((childProcesses) =>
+      Effect.succeed(
+        backendRegistryFor([localPiBackendDriver(childProcesses, Effect.void), ...otherDrivers]),
+      ),
+    ),
+  );
 
 const layerOver = <R>(
   registry: Layer.Layer<SubagentBackendRegistry, never, R>,
@@ -697,7 +700,8 @@ export const serviceLayer = (
   options: SubagentServiceOptions = {},
   profiles?: ReturnType<typeof profileLayerFor>,
   writerLeases?: Layer.Layer<WriterLeaseService>,
-) => layerOver(localPiBackendRegistryLayer, options, profiles, writerLeases);
+  otherDrivers?: ReadonlyArray<BackendDriver>,
+) => layerOver(localPiBackendRegistryLayer(otherDrivers), options, profiles, writerLeases);
 
 interface FakeNativeReportControl {
   readonly prompts: string[];
@@ -836,9 +840,12 @@ export function localServiceFixture(
   fake = fakeChildLayer(),
   profiles = profileLayerFor({}),
   writerLeases = fakeWriterLeaseLayer(),
+  otherDrivers: ReadonlyArray<BackendDriver> = [],
 ) {
   const { projections, notifications, options: captured } = capturing(options);
-  const layer = serviceLayer(captured, profiles, writerLeases).pipe(Layer.provide(fake.layer));
+  const layer = serviceLayer(captured, profiles, writerLeases, otherDrivers).pipe(
+    Layer.provide(fake.layer),
+  );
   return { fake, projections, notifications, layer };
 }
 

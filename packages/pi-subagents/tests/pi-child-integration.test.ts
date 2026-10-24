@@ -138,8 +138,12 @@ describe("installed Pi child through the local launch path", () => {
           expect(assignment?.systemPrompt).toContain(childSystemPrompt(first));
           assert(assignment !== undefined);
           expect(Arr.sort(assignment.tools, Order.String)).toEqual(
-            Arr.sort(childToolPolicy(activeTools).enabled, Order.String),
+            Arr.sort(childToolPolicy(activeTools, first.writeIntent).enabled, Order.String),
           );
+          // The installed Pi never declares file-mutation tools to a read-only child.
+          expect(first.writeIntent).toBe("read-only");
+          expect(assignment.tools).toEqual(expect.arrayContaining(["read", "bash"]));
+          for (const name of ["edit", "write"]) expect(assignment.tools).not.toContain(name);
           expect(yield* exited(started.pid)).toBe(true);
 
           const sessionFile = completed?.sessionFile ?? "";
@@ -154,6 +158,14 @@ describe("installed Pi child through the local launch path", () => {
             finalText: SCRIPT.resumedWithHistory,
             sessionFile,
           });
+          // A respawned resume keeps its read-only tool policy.
+          const resumedTools = Option.getOrUndefined(
+            Arr.findFirst(yield* readObservations(agentDirectory), (observation) =>
+              Fn.pipe(observation.prompt, Str.includes(SCRIPT.resumeTask)),
+            ),
+          )?.tools;
+          expect(resumedTools).toEqual(expect.arrayContaining(["read", "bash"]));
+          for (const name of ["edit", "write"]) expect(resumedTools).not.toContain(name);
 
           const parent = yield* service.start(scripted("scripted-parent", SCRIPT.holdTask));
           const descendant = yield* service.start(

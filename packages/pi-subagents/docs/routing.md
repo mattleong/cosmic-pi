@@ -6,9 +6,8 @@ Part of the [pi-subagents](../README.md) architecture documentation. See [ARCHIT
 
 Only configuration version 6 is accepted. Any other version fails activation and store writes, and documents are never rewritten automatically. Every other invalid field degrades instead of failing activation, and each leaves a path-only diagnostic in the activation log and `/subagents doctor` (diagnostics redact profile-set and agent names). Ordinary fields are ignored: an unknown root key, and an invalid `delegation`, which inherits from the next scope or the default. Safety controls fail closed, to their most restrictive setting rather than a looser inherited one:
 
-- a `nesting` limit takes its minimum ([Nesting](#nesting-capacity-and-spend));
+- a `nesting` limit takes its minimum ([Nesting](#nesting-and-capacity));
 - an invalid `writerWorkspaceMode` becomes `worktree`;
-- an unusable `sessionSpendLimit` blocks spending unless another scope declares a valid one;
 - an invalid `WorktreeCreate` declaration fails every tree's setup ([Worktree hooks](local-backends.md#worktree-hooks)).
 
 ### Profile sets
@@ -43,18 +42,20 @@ Cross-field decoding rejects:
 
 Only the seven declared profile IDs are accepted. An explicit launch profile always wins, and an omitted profile resolves to `generalist`. The main agent chooses the profile by deliverable; the profile determines the route.
 
-### Nesting, capacity, and spend
+### Nesting and capacity
 
 - The built-in `nesting` is `{ maxDirectChildren: 12, maxDepth: 3, maxActiveRuns: 16 }`. Each field is optional and merges over the scope below it. Direct children are an integer from 1 to 32, depth from 0 to 8, and `maxActiveRuns` from 1 to 64. A configured fraction is floored and a number outside the bounds clamped; a value that isn't a number takes the field's minimum, and a `nesting` value that isn't an object takes every minimum. Unknown keys are ignored.
 - Policy precedence is Session, trusted Project, Global, then built-in. A start batch captures one route and policy revision.
 - Admission counts active direct children and reservations for one parent, then active processes across the tree against `maxActiveRuns` (`tree_capacity`).
-- Optional root `sessionSpendLimit` (US dollars up to 100,000, Project over Global; a larger value is clamped) stops new starts with `session_spend_limit` once the session's known subagent cost reaches it, and resumes by agent messages with `agent_spend_limit`. A declared limit that isn't a positive number falls back to the other scope's valid limit; with none, every start fails with `session_spend_limit_invalid` and every resume by agent message with `agent_spend_limit_invalid` until it is fixed.
-- That cost includes evicted runs and earlier runtimes: each run's usage is appended as a `pi-subagents-usage` custom session entry (never sent to the model) when its assignment settles and when the runtime ends. `/reload`, `/tree`, and resume restore the sum across every branch, because navigating back refunds nothing. A fork keeps the entries on its path.
-- Usage since a run last settled is lost if Pi crashes, and Codex reports no cost, so the total is a lower bound.
 
 Optional root `agents` declares [custom agents](#custom-agents) in global and trusted-project documents.
 
 Optional root `delegation` follows the same precedence ([Delegation settings](settings-workspace.md#delegation-settings)). Optional root `hooks` declares `WorktreeCreate` and `WorktreeRemove` commands in global and trusted-project documents; both scopes run, global first ([Worktree hooks](local-backends.md#worktree-hooks)).
+
+### Session usage
+
+- The footer shows the session's known subagent cost, which includes evicted runs and earlier runtimes: each run's usage is appended as a `pi-subagents-usage` custom session entry (never sent to the model) when its assignment settles and when the runtime ends. `/reload`, `/tree`, and resume restore the sum across every branch, because navigating back refunds nothing. A fork keeps the entries on its path.
+- Usage since a run last settled is lost if Pi crashes, and Codex reports no cost, so the total is a lower bound.
 
 ## Custom agents
 
@@ -77,7 +78,7 @@ A custom agent is a named role the user declares in a configuration document's r
 - Names match `^[a-z][a-z0-9-]{0,47}$` and can't be a profile ID. A document holds at most 32 agents. A name is the agent's identity across the Global and Project documents and in launches, so a name such as `code_reviewer` fails closed instead of being rewritten to one that could match, or be shadowed by, another entry.
 - `description` and `instructions` are required and nonblank. A description longer than 200 characters is cut to 200, with diagnostic `agents[i].description`, and the agent still applies. Instructions hold up to 128 KiB of UTF-8, like a task; longer ones fail the entry closed, since cutting them would change what the agent does.
 - `profile` selects the route and defaults to `generalist`. Optional `effort` (a concrete level, not `default`), `context`, and `writeIntent` override every candidate of that route; `isolation` is the agent's writer workspace mode, so an agent with `writeIntent: "read-only"` can't set it (the entry fails closed with diagnostic `agents[i].isolation`).
-- `tools: { allow?, deny? }` lists root tool names. `allow` keeps only those tools and `deny` removes tools, applied to the Pi child's inherited active-tool snapshot. The child's own `agent_*` tools, `agent_contact_parent` included, are always kept.
+- `tools: { allow?, deny? }` lists root tool names. `allow` keeps only those tools and `deny` removes tools, applied to the Pi child's inherited active-tool snapshot. The child's own `agent_*` tools, `agent_contact_parent` included, are always kept. Read-only intent wins over `allow`: a read-only run never gets `edit` or `write`, and its start entry warns when `allow` names them.
 - Unknown keys are rejected. Diagnostics identify entries by position, like profile sets.
 
 ### Layering and failure
@@ -98,11 +99,24 @@ A custom agent is a named role the user declares in a configuration document's r
 
 ## Candidate planning and host resolution
 
-- Pure planning preserves declared order and resolves Pi model catalog and auth compatibility. The host boundary records typed skips in launch provenance and continues to the next candidate only before service ownership begins.
-- The registry performs bounded executable, auth, model-effort, write-policy, and private-harness readiness before owning a run scope, lease, supervisor channel, or process. Once `SubagentService.start` begins, lease, spawn, transport, or control errors never fall through. There is no derived local fallback.
+- Pure planning preserves declared order and resolves Pi model catalog and auth compatibility. The host boundary records typed skips in launch provenance and continues to the next candidate.
+- The registry performs bounded executable, auth, model-effort, write-policy, and private-harness readiness before owning a run scope, lease, supervisor channel, or process. Once `SubagentService.start` begins, only a [startup fallback](#startup-fallback) moves on; lease, spawn, transport, control, and admission errors never fall through. There is no derived local fallback.
 - Parent-model selection, inherited `generalist` effort, fork headroom, and fork session identity come from the immediate parent, not the root. The Pi child bridge captures live native facts at each proxy call outside the public arguments; the coordinator binds them to the authenticated run record and checks the registered session before planning.
 - A parent without a stable native Pi branch cannot fork; it never borrows the root transcript. Registry, authentication, project trust, and the active-tool allowlist stay root-owned.
-- Claude Code's zero-inference initialize response resolves aliases at selected startup, but entitlement can still fail after selection; that failure doesn't fall through.
+- Claude Code's zero-inference initialize response resolves aliases at selected startup, but entitlement can still fail after selection. Such a failure falls through only as a [startup fallback](#startup-fallback), before the task is issued.
+
+### Startup fallback
+
+A profile-routed launch whose startup fails before its task is issued, on a listed startup failure, continues on the frozen plan's next candidate in the same run. `run/candidate-fallback.ts` owns the rules.
+
+- **Issued.** The task is issued when the run's assignment leaves `preparing` for `issuing`, just before the backend's start control: Pi's `prompt` RPC, Claude's stream-input user message, or Codex's `turn/start`. Until then a backend has only its launch configuration and zero-inference initialization (Pi `get_state`, Claude `initialize` and its non-querying probe, Codex `initialize` and `thread/start`), so no task side effect can exist. Any failure after it, and a stop, never falls back.
+- **Candidate failures** move to the next candidate: the runtime can't run the candidate's model, effort, or service tier, or refused to initialize with them (`pi_model_not_found`, `pi_model_mismatch`, `pi_effort_unsupported`, `claude_model_mismatch`, `initialize_rejected`, `codex_model_mismatch`, `codex_service_tier_mismatch`).
+- **Runtime failures** move past every remaining candidate on that runtime, each skipped with `runtime_startup_failed` and no probe, since they would fail the same way: the process exited during startup, or its handshake or private supervisor server failed (`local_claude_exited`, `claude_initialize_invalid`, `claude_native_init_missing`, `claude_native_init_invalid`, `mcp_status_rejected`, `claude_mcp_status_invalid`, `claude_supervisor_mcp_unavailable`, `claude_supervisor_tools_missing`, `local_codex_exited`, `codex_request_rejected`). Two are bounded waits that expired, for Claude's native init event and its supervisor server's connection, so a route waits each out at most once per runtime.
+- **Never eligible.** A correlated request that timed out or whose send was uncertain (`*_outcome_uncertain`), unconfirmed cleanup, and request, admission, capacity, cancellation, transport, and uncoded failures end the start. The backend's own recorded failure classifies an attempt before the start error it caused.
+- **Between attempts.** The failed candidate's scope closes and its processes must be confirmed gone; its private run state, such as a forked transcript copy, is reclaimed before another backend can take the run. A stop, runtime shutdown, or closed session ends the chain, checked before the route lookup, before the service's preflight, and at install. The host continues the same plan with the same model resolution and readiness probes, skipping candidates that fail them and a failed runtime's candidates as above. The service then repeats its own preflight, and a candidate failing it is skipped the same way. Admission is rechecked under the run lock.
+- **Stops.** A probe whose cleanup or outcome couldn't be confirmed (`*_cleanup_unconfirmed`, `*_outcome_uncertain`), at the host or the service, ends the chain without probing further: the run fails with that probe's error, lists its candidate as skipped, and names no next candidate. A candidate with another write intent ends the chain, since admission and workspace ownership were decided for the first; the run names it as its next candidate. A failed route lookup or run-state reclaim also ends it. Each stop records its reason in a system warning and in the final failure.
+- **One run.** The run keeps its ID, assignment, workspace, writer-pool membership, usage, and history; its scope, backend, capabilities, launch, route fields, and next candidate follow the new candidate. A writer's pool membership, and with it the cross-process lease, passes to the next candidate without being released; its cleanup stays pending meanwhile, and a stop, shutdown, or the start's failure releases it. Each failed candidate joins `selection.skippedCandidates` with its code and reason, and a system warning naming every one appears in the start result, run card, notices, and `agent_read`.
+- **Final failure.** The run settles once, so the start-failure hold reports it once, on the route candidate the run last tried. After a fallback or stop its error leads with the last failure, or an unconfirmed probe's, names each candidate tried, and says why fallback stopped. When no later candidate passes planning and preflight, the run lists them as skipped and names no next candidate.
 
 ### Effort
 
@@ -126,15 +140,15 @@ A root start item's optional `model: { runtime, model, effort? }` replaces the p
 - The profile still supplies the role guidance, context, and write intent, or a [custom agent](#custom-agents) its instructions and overrides. Fast mode is off. An omitted `effort` is `default`, resolved like a route candidate's ([Effort](#effort)).
 - Before any readiness check or service ownership, the override is checked with the shared selector grammar and candidate cross-field policy. A malformed selector, `parent` outside Pi, a runtime-incompatible explicit effort, or a forking profile such as `oracle` on Claude or Codex fails with `model_override_invalid`.
 - Planning and the full host preflight then run as for any candidate. Any skip fails the launch with `model_override_unavailable`; the profile's route is never tried.
-- Selection provenance records route source `override`, and the frozen route holds only the override, so a failed run names no further candidate.
+- Selection provenance records route source `override`. An override that names one of the profile's route candidates, by runtime, selector, and effort (or selector alone when it omits effort), freezes that route at the candidate, so a failed run still names the [next candidate](#explicit-route-continuation) after it. Any other override freezes a route of itself alone and names no further candidate.
 - Start entries, run cards, and status show the requested override as `modelOverride` alongside the actual route.
 
 ## Explicit route continuation
 
-A launch freezes its route, the declared candidates and the one it selected, so later edits never change what a failed run reports. Nothing continues a failed run on another candidate: fallback ends when service ownership begins, and resume continues the failed run's own session on the same candidate ([resume admission](#resume-admission)).
+A launch freezes its route, the declared candidates and the one it selected, so later edits never change what a failed run reports. Only a [startup fallback](#startup-fallback) moves a run to another candidate, and only before its task is issued; resume continues the failed run's own session on the same candidate ([resume admission](#resume-admission)).
 
 - A failed root child's run block, completion notice, and `agent_read` card name the frozen route's next candidate, `Next candidate: runtime/model:effort; start a new run with that model`, or say the route has no further candidates. A start that admitted a run and then failed names it in its recovery line.
-- The parent decides. A new run on that candidate is an ordinary launch with a [model override](#per-launch-model-override), its own task, and a new run ID; its planning and preflight check the candidate, which the hint doesn't.
+- The parent decides. A new run on that candidate is an ordinary launch with a [model override](#per-launch-model-override), its own task, and a new run ID; its planning and preflight check the candidate, which the hint doesn't. That override never falls back, but if it fails it names the route's next candidate in turn.
 - Only root children get the hint, because nested start items take no model. Unresolved guidance delivery suppresses it, since the run may have acted on that guidance.
 - Writers may have left partial side effects, and a worktree writer's workspace stays a proposal its parent applies or discards.
 

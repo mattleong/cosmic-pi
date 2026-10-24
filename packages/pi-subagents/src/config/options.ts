@@ -49,14 +49,6 @@ interface ResolvedWorktreeHooks extends Readonly<
   readonly invalidWorktreeCreate: ReadonlyArray<string>;
 }
 
-/**
- * The session's spending cap. A declared limit that can't be used, with no valid one from another
- * scope, blocks spending rather than removing the cap.
- */
-export type SessionSpendLimit =
-  | { readonly kind: "limited"; readonly dollars: number }
-  | { readonly kind: "invalid"; readonly diagnostic: string };
-
 export interface ResolvedSubagentConfig {
   readonly globalConfigPath: string;
   readonly projectConfigPath: string;
@@ -67,7 +59,6 @@ export interface ResolvedSubagentConfig {
   readonly delegation: DelegationMode;
   /** Untrusted project documents contribute none. */
   readonly hooks: ResolvedWorktreeHooks;
-  readonly sessionSpendLimit?: SessionSpendLimit | undefined;
   readonly profiles: Readonly<Record<ProfileId, ProfileRoute>>;
   readonly profileSources: Readonly<Record<ProfileId, ProfileRouteSource>>;
   /** Global agents overlaid by trusted-project agents of the same name. */
@@ -257,25 +248,11 @@ const worktreeHooks = (
   };
 };
 
-const sessionSpendLimit = (
-  global: DecodedSubagentConfig,
-  project: DecodedSubagentConfig | undefined,
-): SessionSpendLimit | undefined => {
-  const dollars = project?.file.sessionSpendLimit ?? global.file.sessionSpendLimit;
-  if (dollars !== undefined) return { kind: "limited", dollars };
-  if (project?.invalidSessionSpendLimit)
-    return { kind: "invalid", diagnostic: "project.sessionSpendLimit" };
-  if (global.invalidSessionSpendLimit)
-    return { kind: "invalid", diagnostic: "global.sessionSpendLimit" };
-  return undefined;
-};
-
 export function resolveSubagentConfig(input: ResolveSubagentConfigInput): ResolvedSubagentConfig {
   const project = input.projectTrusted ? input.project : undefined;
   const global = resolveProfileSetLayer(input.global, "global", BUILTIN_PROFILE_LAYER);
   const effective = project ? resolveProfileSetLayer(project, "project", global) : global;
   const policy = layeredPolicy(project, input.global);
-  const spendLimit = sessionSpendLimit(input.global, project);
   const agents = resolveCustomAgents([
     agentLayer("global", input.global),
     ...(project ? [agentLayer("project", project)] : []),
@@ -289,7 +266,6 @@ export function resolveSubagentConfig(input: ResolveSubagentConfigInput): Resolv
     writerWorkspaceMode: policy.writerWorkspaceMode,
     delegation: policy.delegation,
     hooks: worktreeHooks(input.global, project),
-    ...(spendLimit !== undefined && { sessionSpendLimit: spendLimit }),
     profiles: effective.profiles,
     profileSources: effective.profileSources,
     agents: agents.agents,

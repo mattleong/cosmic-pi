@@ -5,6 +5,7 @@ import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import { hasControlCharacter } from "pi-cosmic-core/security";
+import type { SubagentWriteIntent } from "../domain/routing.ts";
 import type { CustomAgentTools } from "../profiles/agents.ts";
 import { type InvalidSubagentRequestError, invalidRequest } from "./errors.ts";
 import type { StartSubagentRequest } from "./model.ts";
@@ -124,21 +125,44 @@ export const piRootActiveToolSnapshot = (
   return Effect.succeed(Object.freeze(inherited));
 };
 
+/** Pi's built-in file-mutation tools, which a read-only Pi child never receives. */
+export const PI_FILE_MUTATION_TOOL_NAMES: ReadonlyArray<string> = Object.freeze(["edit", "write"]);
+const FILE_MUTATION_TOOL_NAME_SET: ReadonlySet<string> = new Set(PI_FILE_MUTATION_TOOL_NAMES);
+
+/** Whether a Pi child of this write intent is denied the tool: file mutation, for readers. */
+export const isWithheldPiChildTool = (name: string, writeIntent: SubagentWriteIntent): boolean =>
+  writeIntent !== "writer" && FILE_MUTATION_TOOL_NAME_SET.has(name);
+
+export interface PiChildToolSnapshot {
+  readonly tools: ReadonlyArray<string>;
+  /** File-mutation tools the agent's allow list named that a read-only child doesn't receive. */
+  readonly withheld: ReadonlyArray<string>;
+}
+
 /**
- * Narrows a Pi child's inherited tools by a custom agent's allow and deny lists. The inherited
- * snapshot never holds coordination tools, which the child registers itself, so no list can
- * remove them.
+ * Narrows a Pi child's inherited tools by a custom agent's allow and deny lists and by its write
+ * intent. Read-only intent wins over an allow list, so a reader never receives a file-mutation
+ * tool. The inherited snapshot never holds coordination tools, which the child registers itself,
+ * so no list can remove them.
  */
-export const customAgentToolSnapshot = (
+export const piChildToolSnapshot = (
   inherited: ReadonlyArray<string>,
   tools: CustomAgentTools | undefined,
-): ReadonlyArray<string> =>
-  Object.freeze(
+  writeIntent: SubagentWriteIntent,
+): PiChildToolSnapshot => ({
+  tools: Object.freeze(
     Arr.filter(
       inherited,
-      (name) => (tools?.allow?.includes(name) ?? true) && !(tools?.deny?.includes(name) ?? false),
+      (name) =>
+        (tools?.allow?.includes(name) ?? true) &&
+        !(tools?.deny?.includes(name) ?? false) &&
+        !isWithheldPiChildTool(name, writeIntent),
     ),
-  );
+  ),
+  withheld: Object.freeze(
+    Arr.dedupe(Arr.filter(tools?.allow ?? [], (name) => isWithheldPiChildTool(name, writeIntent))),
+  ),
+});
 
 export const childSystemPrompt = (request: StartSubagentRequest): string =>
   Arr.join(
@@ -175,9 +199,22 @@ export const childSystemPrompt = (request: StartSubagentRequest): string =>
               ],
               "\n\n",
             )
-        : "You are read-only. Your tools can still modify files, so use them only to inspect and validate; don't edit, write, generate, or otherwise change project files. If the task needs changes, say what should change in your report or ask the parent.",
+        : readOnlyGuidance(request.runtime),
     ],
     "\n\n",
+  );
+
+// Only a Pi child loses tools for being read-only; inherited extension and MCP tools, and native
+// tools such as Codex's apply_patch, may still change files, so the guidance never says otherwise.
+const readOnlyGuidance = (runtime: StartSubagentRequest["runtime"]): string =>
+  Arr.join(
+    [
+      runtime === "pi"
+        ? "You are read-only, so you don't have Pi's edit and write tools. Bash and your other tools may still be able to change files: use them only to inspect and validate, never to edit, write, generate, or otherwise change project files."
+        : "You are read-only. Use your tools only to inspect and validate, never to edit, write, generate, or otherwise change project files, even where a tool or the sandbox would allow it.",
+      "If the task needs changes, say what should change in your report or ask the parent.",
+    ],
+    " ",
   );
 
 // Shown to a forked child before its task so it doesn't continue the inherited conversation.

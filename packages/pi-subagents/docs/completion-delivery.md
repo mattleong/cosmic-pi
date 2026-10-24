@@ -119,7 +119,7 @@ A message is delivered when it is sent or refused; nothing is stored for later. 
 
 - **Runs.** A run waiting on a question is `answered` when the sender is one of its ancestors, including `main`, through the claimed path in [Parent messages](#parent-messages), and `guided` and `parked` behind the question otherwise. A running run is `guided` by steering, with [Claude guidance](#claude-guidance-delivery) delivery rules. A paused, completed, failed, or stopped local Pi run is `resumed` with the message as its next assignment when the sender is one of its ancestors, including `main`.
 - **Main agent.** `boundary/host-agent-messages.ts` sends a displayed `pi-subagents-agent-message` (details `from`, `fromName`, `to`, `messageId`) through the shared [parent wake](#parent-wake-policy). The message is `guided`, and its `mainState` says how it arrived: `idle` when it started a turn, `busy` when the settling run continues for it (the type is a root notice type), and `held` while a dialog is open, until it closes, or after an interrupt, until the user's next prompt. A session that was replaced reads as `unavailable` to `agent_read`.
-- **Refusals.** Each is an `[agent_…]` code that `tools/compact-action-failures.ts` presents: `agent_self_target`; `agent_not_found` for unknown or evicted IDs; `agent_unavailable` for a run still starting after the [wait](#limits), stopping, or being evicted or reclaimed, for a resume from outside the run's ancestry or while a stop of the run or an ancestor is still in progress, and for a replaced main session; `agent_resume_unsupported` for a paused or finished Claude or Codex run, which can't resume; and `agent_spend_limit` for a resume once the session reached its `sessionSpendLimit`.
+- **Refusals.** Each is an `[agent_…]` code that `tools/compact-action-failures.ts` presents: `agent_self_target`; `agent_not_found` for unknown or evicted IDs; `agent_unavailable` for a run still starting after the [wait](#limits), stopping, or being evicted or reclaimed, for a resume from outside the run's ancestry or while a stop of the run or an ancestor is still in progress, and for a replaced main session; and `agent_resume_unsupported` for a paused or finished Claude or Codex run, which can't resume.
 
 Each delivered message, including guidance still awaiting confirmation, adds a `message` notice to the session events of the sending and receiving runs.
 
@@ -137,13 +137,13 @@ Runs receive the frame as steering text or as their resumed assignment; an answe
 
 ### Resume by ancestors
 
-A run's ancestors, including `main`, may resume it once it paused or finished, writers included, by the same rule that lets them answer its question: a new assignment is a decision for the run's own line of parents. Any other sender is refused with `agent_unavailable` and told to message the run's parent. Every [resume admission](routing.md#resume-admission) check applies. The run keeps its parent, which still receives the report. Like a new start, a resume by an agent message is refused under the same admission lock once the session's subagents reached `sessionSpendLimit`, and while an explicit stop of the run or an ancestor is still closing it. A worktree writer resumes in its own worktree and reopens its review, and its proposal still goes to its parent.
+A run's ancestors, including `main`, may resume it once it paused or finished, writers included, by the same rule that lets them answer its question: a new assignment is a decision for the run's own line of parents. Any other sender is refused with `agent_unavailable` and told to message the run's parent. Every [resume admission](routing.md#resume-admission) check applies. The run keeps its parent, which still receives the report. A resume by an agent message is refused while an explicit stop of the run or an ancestor is still closing it. A worktree writer resumes in its own worktree and reopens its review, and its proposal still goes to its parent.
 
 ### Limits
 
 - Guidance and answers have at most 65,536 characters (`MAX_AGENT_MESSAGE_CHARS`, the parent channel's wire bound), whether an agent or the user sends them. A message that resumes a run is its next assignment, so it takes up to 131,072, like a task, and so does the user's resume text. Every runtime's tool takes up to 131,072 and the root refuses a longer guidance or answer with `message_too_large` once it knows how the message reaches its target. List and read take at most 12 IDs.
 - A message to a run that is still `starting` is first checked like any other, so one that would be refused anyway is refused at once. It then waits up to five seconds, interruptibly and holding nothing, for the run's state change to be published, and is delivered as usual or refused with `agent_unavailable` if the run is still starting.
-- Nothing caps how often agents message, wake, or resume each other, as in Claude Code and Codex. A loop between agents runs until the user interrupts it, a run finishes, or a resume reaches `sessionSpendLimit`. Messages never start a main-agent turn while a dialog is open, until it closes, or after the user interrupted, until the next prompt.
+- Nothing caps how often agents message, wake, or resume each other, as in Claude Code and Codex. A loop between agents runs until the user interrupts it or a run finishes. Messages never start a main-agent turn while a dialog is open, until it closes, or after the user interrupted, until the next prompt.
 
 ### Last-message reads
 
@@ -188,7 +188,8 @@ Each tool completion carries a bounded output preview (seven lines, at most 1,00
 ## Stalls, wait timeouts, and partial output
 
 - `run/stall.ts` derives presentation-only stall signals: a tool open for five minutes, three consecutive failed tool calls, or two minutes without activity while no tool is open. Every streamed model event counts as activity. Nothing stops or retries a run because of elapsed time.
-- `agent_await` accepts `timeoutSeconds`, floored and clamped to 1–3600 by the tool rather than rejected. A timeout ends only that wait, like a cancellation: children keep running, claims are released, and the outcome is `timed_out`.
+- `agent_await` accepts `timeoutSeconds`, floored and clamped to 1–3600 by the tool rather than rejected. A timeout ends only that wait, like a cancellation: children keep running, claims are released before it returns, and the outcome is `timed_out`. A wait already delivering what it observed when the timeout fires finishes and delivers it, so a timeout never consumes a report it doesn't return.
+- The root applies every timeout, a nested Pi caller's included: the child forwards its clamped `timeoutSeconds`, so its result is the root's, either delivered outcomes or a timeout with confirmed cleanup. A dropped root connection still fails the wait at once. The child keeps only a backstop 30 seconds past the timeout, for a root answer lost while the connection stays up, such as one whose send was uncertain: it cancels the wait at the root and returns a timeout whose cleanup is unconfirmed, consuming nothing.
 - A wait ends early with outcome `attention` when a run it doesn't await asks this caller a question; the question stays in the outbox.
 - A root wait ends with `user_input` when the user sends a message, so the parent can read it.
 - A failed assignment's error includes up to 2,000 characters of the failing attempt's own text, never earlier attempts' ([completion rules](local-backends.md#supervisor-channel-and-completion-ownership)).
@@ -224,7 +225,7 @@ Root and local Pi registrations keep bounded activation-owned receipts. A matchi
 - If delivery was attempted before a late abort, the script result marks those reports `unknown`; `agent_read` can recover an already-delivered report.
 - A root wait returns only after its claims are released, without stopping children, consuming reports, or retrying.
 - Await waits interruptibly for the notification gate, then the run lock. Only claim insertion and its scoped finalizer are masked, and the private scope owns claims only.
-- Proxy cancellation has no root-cleanup acknowledgement. Its result carries `cancellationCleanup: "unconfirmed"`, and an immediate replacement await may fail with `completion_claim_conflict`.
+- Proxy cancellation, which the nested caller's abort or its timeout backstop causes, has no root-cleanup acknowledgement. Its result carries `cancellationCleanup: "unconfirmed"`, and an immediate replacement await may fail with `completion_claim_conflict`.
 - Finished observations classify `reportStatus` as `available`, `claimed`, `delivered`, or `missing` without touching claims. Cards without it have unknown availability.
 
 ## Run cancellation and cleanup

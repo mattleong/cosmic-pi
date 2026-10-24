@@ -1,4 +1,6 @@
+import type * as Effect from "effect/Effect";
 import type * as Redacted from "effect/Redacted";
+import type { SubagentError } from "./errors.ts";
 import type {
   SubagentContextMode,
   SubagentEffort,
@@ -11,6 +13,7 @@ import type {
   ProfileCandidate,
   ProfileId,
   ProfileRouteContinuation,
+  SkippedProfileCandidate,
   SubagentModelOverride,
   SubagentSelectionProvenance,
 } from "../profiles/model.ts";
@@ -194,6 +197,13 @@ export const nextRouteCandidate = ({
   return next ? { runtime: next.runtime, model: next.model, effort: next.effort } : "none";
 };
 
+/** The candidate a frozen route selected, as a next-candidate hint names it. */
+export const selectedRouteCandidate = ({
+  candidates,
+  selectedCandidateIndex,
+}: ProfileRouteContinuation): SubagentNextCandidate =>
+  nextRouteCandidate({ candidates, selectedCandidateIndex: selectedCandidateIndex - 1 });
+
 /**
  * A completed assignment's report, saved to a private file: the report the parent reads. A failure
  * longer than its preview is saved the same way.
@@ -343,6 +353,8 @@ export interface StartSubagentRequest {
   readonly selection?: SubagentSelectionProvenance | undefined;
   readonly modelOverride?: SubagentModelOverride | undefined;
   readonly routeContinuation?: ProfileRouteContinuation | undefined;
+  /** Present only on profile-routed launches; a model override never falls back. */
+  readonly routeFallback?: RouteFallback | undefined;
   readonly workspace?: WorkspaceHandle | undefined;
   readonly writerWorkspaceMode?: WriterWorkspaceMode | undefined;
   readonly writerWorkspaceModeOverride?: WriterWorkspaceMode | undefined;
@@ -362,6 +374,68 @@ export interface StartSubagentRequest {
   /** A same-model fork whose requests can reuse the parent's cached prompt prefix. */
   readonly sharesParentPromptCache?: boolean | undefined;
 }
+
+/** The launch facts that change with the route candidate a start runs on. */
+export type StartCandidate = Pick<
+  StartSubagentRequest,
+  | "runtime"
+  | "model"
+  | "effort"
+  | "effortWasExplicit"
+  | "context"
+  | "writeIntent"
+  | "openaiFastMode"
+  | "runtimeApiKey"
+  | "activeTools"
+  | "sharesParentPromptCache"
+> & {
+  readonly selection: SubagentSelectionProvenance;
+  readonly routeContinuation: ProfileRouteContinuation;
+};
+
+/** The request on another route candidate; nothing the previous candidate resolved carries over. */
+export const onStartCandidate = (
+  request: StartSubagentRequest,
+  candidate: StartCandidate,
+): StartSubagentRequest => {
+  const { runtimeApiKey: _runtimeApiKey, sharesParentPromptCache: _shared, ...shared } = request;
+  return { ...shared, ...candidate };
+};
+
+export interface RouteFallbackRequest {
+  /** The selection of the candidate the launch moves past. */
+  readonly selection: SubagentSelectionProvenance;
+  /** That candidate, as the launch passed it over. */
+  readonly failed: SkippedProfileCandidate;
+  /**
+   * Runtimes whose own startup failed during this launch, each with the failure that showed it;
+   * their remaining candidates are skipped without a probe.
+   */
+  readonly failedRuntimes: ReadonlyMap<SubagentRuntime, SkippedProfileCandidate>;
+}
+
+/** A candidate whose readiness probe couldn't confirm its cleanup or its outcome. */
+export interface UnsafeCandidateProbe {
+  readonly candidate: SkippedProfileCandidate;
+  readonly error: SubagentError;
+}
+
+export interface RouteFallbackStep {
+  /** Every candidate passed over so far in route order, the failed one included. */
+  readonly skippedCandidates: ReadonlyArray<SkippedProfileCandidate>;
+  /** The next candidate that passed planning and preflight; absent once the route is exhausted. */
+  readonly next?: StartCandidate | undefined;
+  /** Ends the route at a candidate whose probe may have left a process behind. */
+  readonly unsafe?: UnsafeCandidateProbe | undefined;
+}
+
+/**
+ * Resolves the route candidate after one whose startup failed before its task was issued, from the
+ * launch's frozen plan.
+ */
+export type RouteFallback = (
+  request: RouteFallbackRequest,
+) => Effect.Effect<RouteFallbackStep, SubagentError>;
 
 export const hasSubagentCapability = (
   run: Pick<SubagentRunView, "capabilities">,

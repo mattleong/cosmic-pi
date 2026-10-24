@@ -165,7 +165,6 @@ describe("SubagentConfigStore activation", () => {
           version: 6,
           nesting: { maxDepth: 5, maxActiveRuns: 40 },
           delegation: "encouraged",
-          sessionSpendLimit: 10,
         },
         [PROJECT]: {
           version: 6,
@@ -173,7 +172,6 @@ describe("SubagentConfigStore activation", () => {
           nesting: { maxDirectChildren: 4, maxDepth: "deep", extra: true },
           writerWorkspaceMode: "elsewhere",
           delegation: 7,
-          sessionSpendLimit: -1,
           hooks: "pnpm install",
         },
       });
@@ -181,8 +179,6 @@ describe("SubagentConfigStore activation", () => {
       expect(config.nesting).toEqual({ maxDirectChildren: 4, maxDepth: 0, maxActiveRuns: 40 });
       expect(config.writerWorkspaceMode).toBe("worktree");
       expect(config.delegation).toBe("encouraged");
-      // Another scope's valid limit still applies.
-      expect(config.sessionSpendLimit).toEqual({ kind: "limited", dollars: 10 });
       expect(config.hooks).toEqual({
         WorktreeCreate: [],
         WorktreeRemove: [],
@@ -196,7 +192,6 @@ describe("SubagentConfigStore activation", () => {
             "project.nesting.maxDepth",
             "project.writerWorkspaceMode",
             "project.delegation",
-            "project.sessionSpendLimit",
             "project.hooks",
           ],
           Order.String,
@@ -212,7 +207,6 @@ describe("SubagentConfigStore activation", () => {
         [GLOBAL]: {
           version: 6,
           nesting: { maxDirectChildren: 0, maxDepth: 99, maxActiveRuns: 1_000 },
-          sessionSpendLimit: 1_000_000,
           hooks: {
             WorktreeCreate: [
               { command: ["fast"], timeout: 0 },
@@ -224,7 +218,6 @@ describe("SubagentConfigStore activation", () => {
       });
       const config = yield* store.load(CWD, AGENT, false);
       expect(config.nesting).toEqual({ maxDirectChildren: 1, maxDepth: 8, maxActiveRuns: 64 });
-      expect(config.sessionSpendLimit).toEqual({ kind: "limited", dollars: 100_000 });
       expect(config.hooks.WorktreeCreate).toEqual([
         { command: ["fast"], timeout: 1, scope: "global" },
         { command: ["slow"], timeout: 3_600, scope: "global" },
@@ -236,30 +229,11 @@ describe("SubagentConfigStore activation", () => {
           "global.nesting.maxDirectChildren",
           "global.nesting.maxDepth",
           "global.nesting.maxActiveRuns",
-          "global.sessionSpendLimit",
           "global.hooks.WorktreeCreate[0].timeout",
           "global.hooks.WorktreeCreate[1].timeout",
           "global.hooks.WorktreeCreate[2].timeout",
         ]),
       );
-    }),
-  );
-
-  it.effect("blocks spending when the only declared spend limit is invalid", () =>
-    Effect.gen(function* () {
-      for (const sessionSpendLimit of ["10", 0, -5, null, true]) {
-        const { store } = yield* setup({
-          [GLOBAL]: v6({}),
-          [PROJECT]: { version: 6, sessionSpendLimit },
-        });
-        const config = yield* store.load(CWD, AGENT, true);
-        expect(config.sessionSpendLimit).toEqual({
-          kind: "invalid",
-          diagnostic: "project.sessionSpendLimit",
-        });
-        expect(config.diagnostics).toEqual(["project.sessionSpendLimit"]);
-        expect((yield* store.load(CWD, AGENT, false)).sessionSpendLimit).toBeUndefined();
-      }
     }),
   );
 

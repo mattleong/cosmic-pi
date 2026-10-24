@@ -81,8 +81,6 @@ export type WorktreeCreateSetup = ReadonlyArray<WorktreeHook> | InvalidWorktreeC
 
 export const MIN_DIRECT_CHILDREN = 1;
 export const MAX_DIRECT_CHILDREN = 32;
-/** Optional cap, in US dollars, on what one session's subagents may spend before new starts stop. */
-const MAX_SESSION_SPEND_LIMIT = 100_000;
 
 export const MIN_ACTIVE_RUNS = 1;
 export const MAX_ACTIVE_RUNS = 64;
@@ -111,7 +109,6 @@ interface SubagentConfigFile {
   readonly writerWorkspaceMode?: WriterWorkspaceMode | undefined;
   readonly delegation?: DelegationMode | undefined;
   readonly hooks?: WorktreeHooks | undefined;
-  readonly sessionSpendLimit?: number | undefined;
   readonly agents?: Readonly<Record<string, CustomAgentDefinition>> | undefined;
 }
 
@@ -125,8 +122,6 @@ export interface DecodedSubagentConfig {
   readonly invalidAgents: ReadonlyArray<string>;
   /** The document's `agents` value is not an object of at most 32 entries. */
   readonly invalidAgentsContainer: boolean;
-  /** The document declares a `sessionSpendLimit` that can't be used; spending fails closed. */
-  readonly invalidSessionSpendLimit: boolean;
   /** Diagnostics of WorktreeCreate declarations that can't run; tree setup fails closed. */
   readonly invalidWorktreeCreate: ReadonlyArray<string>;
   readonly unsupportedVersion: boolean;
@@ -322,7 +317,6 @@ interface DecodedBody {
   readonly invalidDefaultProfileSet: boolean;
   readonly invalidAgents: ReadonlyArray<string>;
   readonly invalidAgentsContainer: boolean;
-  readonly invalidSessionSpendLimit: boolean;
   readonly invalidWorktreeCreate: ReadonlyArray<string>;
 }
 
@@ -333,7 +327,6 @@ const EMPTY_BODY: DecodedBody = Object.freeze({
   invalidDefaultProfileSet: false,
   invalidAgents: Object.freeze([]),
   invalidAgentsContainer: false,
-  invalidSessionSpendLimit: false,
   invalidWorktreeCreate: Object.freeze([]),
 });
 
@@ -480,7 +473,6 @@ const ROOT_KEYS: ReadonlySet<string> = new Set([
   "writerWorkspaceMode",
   "delegation",
   "hooks",
-  "sessionSpendLimit",
   "agents",
 ]);
 
@@ -527,21 +519,6 @@ const decodeDocumentNesting = (
     nesting[field] = limit ?? minimum;
   }
   return Rec.size<string, unknown>(nesting) > 0 ? Object.freeze(nesting) : undefined;
-};
-
-const decodeSessionSpendLimit = (
-  value: FieldValue,
-  path: string,
-  diagnostics: string[],
-): number | undefined => {
-  // A limit has no meaningful minimum to clamp up to; the caller fails a nonpositive one closed.
-  if (!Predicate.isNumber(value) || !Number.isFinite(value) || value <= 0) {
-    diagnostics.push(path);
-    return undefined;
-  }
-  if (value <= MAX_SESSION_SPEND_LIMIT) return value;
-  diagnostics.push(path);
-  return MAX_SESSION_SPEND_LIMIT;
 };
 
 const decodeDefaultProfileSet = (root: UnknownRecord, scope: string, diagnostics: string[]) => {
@@ -667,10 +644,6 @@ const decodeCurrentBody = (
   const hooks = Rec.has(root, "hooks")
     ? decodeWorktreeHooks(root.hooks, `${scope}.hooks`, diagnostics)
     : undefined;
-  const spendLimitDeclared = Rec.has(root, "sessionSpendLimit");
-  const sessionSpendLimit = spendLimitDeclared
-    ? decodeSessionSpendLimit(root.sessionSpendLimit, `${scope}.sessionSpendLimit`, diagnostics)
-    : undefined;
   const nesting = Rec.has(root, "nesting")
     ? decodeDocumentNesting(root.nesting, `${scope}.nesting`, diagnostics)
     : undefined;
@@ -693,7 +666,6 @@ const decodeCurrentBody = (
       ...(writerWorkspaceMode !== undefined && { writerWorkspaceMode }),
       ...(delegation !== undefined && { delegation }),
       ...(hooks?.hooks !== undefined && { hooks: hooks.hooks }),
-      ...(sessionSpendLimit !== undefined && { sessionSpendLimit }),
       ...(agents && Rec.size(agents.agents) > 0 && { agents: agents.agents }),
     },
     invalidProfileSetRoutes: decoded?.invalidProfileSetRoutes ?? {},
@@ -701,7 +673,6 @@ const decodeCurrentBody = (
     invalidDefaultProfileSet,
     invalidAgents: agents?.invalidAgents ?? [],
     invalidAgentsContainer: agents?.containerInvalid ?? false,
-    invalidSessionSpendLimit: spendLimitDeclared && sessionSpendLimit === undefined,
     invalidWorktreeCreate: hooks?.invalidCreate ?? [],
   };
 };
@@ -743,7 +714,6 @@ const decodeConfigRoot = (
     invalidDefaultProfileSet: body.invalidDefaultProfileSet || missingDefault,
     invalidAgents: body.invalidAgents,
     invalidAgentsContainer: body.invalidAgentsContainer,
-    invalidSessionSpendLimit: body.invalidSessionSpendLimit,
     invalidWorktreeCreate: body.invalidWorktreeCreate,
     unsupportedVersion,
   };

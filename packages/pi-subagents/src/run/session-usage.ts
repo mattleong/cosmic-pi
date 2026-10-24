@@ -1,4 +1,3 @@
-import type { SessionSpendLimit } from "../config/options.ts";
 import type { RunRecord } from "./internal.ts";
 import { emptyUsage, isTerminalRunState, type SubagentUsage } from "./model.ts";
 import { addUsage } from "./state.ts";
@@ -34,24 +33,6 @@ export const sessionUsageLocked = (
   let total = addUsage(ledger.restored, ledger.retired);
   for (const record of records.values()) total = addUsage(total, withoutContext(record.view.usage));
   return total;
-};
-
-/** Why the session's spend limit refuses new spending, if it does. */
-export type SpendLimitRefusal =
-  | { readonly kind: "reached"; readonly spent: number; readonly dollars: number }
-  | { readonly kind: "invalid"; readonly diagnostic: string };
-
-export const spendLimitRefusalLocked = (
-  ledger: SessionUsageLedger,
-  records: ReadonlyMap<string, RunRecord>,
-  spendLimit: SessionSpendLimit | undefined,
-): SpendLimitRefusal | undefined => {
-  if (spendLimit === undefined) return undefined;
-  if (spendLimit.kind === "invalid") return spendLimit;
-  const spent = sessionUsageLocked(ledger, records).cost ?? 0;
-  return spent >= spendLimit.dollars
-    ? { kind: "reached", spent, dollars: spendLimit.dollars }
-    : undefined;
 };
 
 const usageSince = (current: SubagentUsage, recorded: SubagentUsage): SubagentUsage => {

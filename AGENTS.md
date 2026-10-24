@@ -33,7 +33,7 @@ Read the package's `ARCHITECTURE.md` and the relevant [shared contracts](docs/ar
 - Accept input generously; reject only what would change the outcome or break a safety, security, or integrity guarantee.
   - Tool arguments: treat null or blank optional values as absent. Ignore empty, `false`, or zero values in fields the chosen action doesn't use, but reject meaningful ones. Clamp out-of-range numbers in the service and state the cap in the description rather than as a schema maximum, since Pi rejects arguments before `execute`. Truncate display-only text such as names and titles instead of rejecting it.
   - Configuration and producer protocols: decode per field. An invalid field falls back to its inherited value or default with a diagnostic, and the rest of the document still applies.
-  - Invalid safety controls, such as spend limits, isolation modes, setup hooks, and nesting limits, fail closed to their most restrictive setting.
+  - Invalid safety controls, such as isolation modes, setup hooks, and nesting limits, fail closed to their most restrictive setting.
   - Keep bounds that protect memory, persistence, or security, and keep rejecting input that is ambiguous or would be silently misapplied.
 - Change tool contracts, saved tool results, configuration documents, and other persisted formats in place. Do not bump their versions, keep decode-only fields, add migrations, or handle legacy data; saved data that no longer decodes fails with a clear message or falls back to generic rendering. Existing `version` fields stay at their current values.
 - Package tests live under `tests/` and use `*.test.ts`, as required by the test runners. Organize them around behavior; mirroring source folders is optional.

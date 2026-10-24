@@ -4,16 +4,9 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import { WriterLeaseReleaseError } from "../../src/boundary/writer-lease.ts";
-import { emptyUsage } from "../../src/run/model.ts";
 import type { SubagentServiceContract } from "../../src/run/service.ts";
 import { WorkspaceError } from "../../src/workspace/model.ts";
-import {
-  completeLocalRun,
-  profileLayerFor,
-  request,
-  runView,
-  withService,
-} from "./fixtures/service-harness.ts";
+import { completeLocalRun, request, runView, withService } from "./fixtures/service-harness.ts";
 import {
   gateCreate,
   leasesWith,
@@ -309,28 +302,16 @@ describe("writer workspace lifecycle", () => {
     });
   });
 
-  it.effect("checks tree capacity and spend limit before creating a workspace", () =>
-    Effect.gen(function* () {
-      const full = workspaceFixture();
-      yield* withService(full.layer, function* (service) {
-        yield* service.start(request({ cwd: "/repo", ...nesting({ maxActiveRuns: 1 }) }));
-        expect(
-          yield* service.start(repoWriter(nesting({ maxActiveRuns: 1 }))).pipe(Effect.flip),
-        ).toMatchObject({ code: "tree_capacity" });
-        expect(full.entries.size).toBe(0);
-      });
-      const spent = workspaceFixture({
-        profiles: profileLayerFor({ version: 6, sessionSpendLimit: 1 }),
-        serviceOptions: { restoredSessionUsage: { ...emptyUsage(), cost: 2 } },
-      });
-      yield* withService(spent.layer, function* (service) {
-        expect(yield* service.start(repoWriter()).pipe(Effect.flip)).toMatchObject({
-          code: "session_spend_limit",
-        });
-        expect(spent.entries.size).toBe(0);
-      });
-    }),
-  );
+  it.effect("checks tree capacity before creating a workspace", () => {
+    const f = workspaceFixture();
+    return withService(f.layer, function* (service) {
+      yield* service.start(request({ cwd: "/repo", ...nesting({ maxActiveRuns: 1 }) }));
+      expect(
+        yield* service.start(repoWriter(nesting({ maxActiveRuns: 1 }))).pipe(Effect.flip),
+      ).toMatchObject({ code: "tree_capacity" });
+      expect(f.entries.size).toBe(0);
+    });
+  });
 
   it.effect("a nested start cannot take the tree slot a creating worktree launch holds", () => {
     const f = workspaceFixture();

@@ -527,16 +527,27 @@ const formatStartFailure = (failure: SubagentStartFailure): string => {
   );
 };
 
-const formatStartedEntry = (run: SubagentRunView): string =>
-  Arr.join(
+/** A started run's launch warnings: its route's, then a system one such as a candidate fallback. */
+export const startedRunWarning = (
+  run: Pick<SubagentRunView, "selection" | "systemWarning">,
+): string | undefined => {
+  const warning = Arr.join(
+    Arr.filter([run.selection.warning ?? "", run.systemWarning ?? ""], Str.isNonEmpty),
+    " ",
+  );
+  return warning || undefined;
+};
+
+const formatStartedEntry = (run: SubagentRunView): string => {
+  const warning = startedRunWarning(run);
+  return Arr.join(
     [
       startLine(formatStartedRun(run)),
-      ...(run.selection.warning
-        ? [startLine(`  Warning: ${sanitizeTerminalLine(run.selection.warning)}`)]
-        : []),
+      ...(warning ? [startLine(`  Warning: ${sanitizeTerminalLine(warning)}`)] : []),
     ],
     "\n",
   );
+};
 
 /** One bounded entry per launch, so every launch of a full batch is listed. */
 export const formatStartResult = (

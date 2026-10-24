@@ -28,9 +28,12 @@ import type * as Scope from "effect/Scope";
 import {
   AGENT_TOOL_NAMES,
   CONTACT_PARENT_TOOL_NAME,
+  isWithheldPiChildTool,
   NESTED_SUBAGENT_TOOL_NAMES,
   PI_CHILD_EXCLUDED_TOOL_ARGUMENT,
+  PI_FILE_MUTATION_TOOL_NAMES,
 } from "../run/tool-policy.ts";
+import type { SubagentWriteIntent } from "../domain/routing.ts";
 import { processCauseError as processError, type SubagentProcessError } from "../run/errors.ts";
 import type { BackendLaunchRequest } from "../backend/model.ts";
 import {
@@ -129,16 +132,27 @@ const reclaimChildRunState = (runDirectory: string) =>
     ),
   );
 
-export const childToolPolicy = (rootActiveTools: ReadonlyArray<string>) => ({
+/**
+ * A Pi child's `--tools` and `--exclude-tools` arguments. Every spawn, resumes included, applies
+ * its write intent here, and a read-only child also excludes the file-mutation tools, so Pi never
+ * registers them for it, whatever its snapshot names or an extension activates.
+ */
+export const childToolPolicy = (
+  activeTools: ReadonlyArray<string>,
+  writeIntent: SubagentWriteIntent,
+) => ({
   enabled: [
     ...new Set([
-      ...rootActiveTools,
+      ...Arr.filter(activeTools, (name) => !isWithheldPiChildTool(name, writeIntent)),
       CONTACT_PARENT_TOOL_NAME,
       ...NESTED_SUBAGENT_TOOL_NAMES,
       ...AGENT_TOOL_NAMES,
     ]),
   ],
-  excluded: PI_CHILD_EXCLUDED_TOOL_ARGUMENT,
+  excluded:
+    writeIntent === "writer"
+      ? PI_CHILD_EXCLUDED_TOOL_ARGUMENT
+      : Arr.join([PI_CHILD_EXCLUDED_TOOL_ARGUMENT, ...PI_FILE_MUTATION_TOOL_NAMES], ","),
 });
 
 export const requestCooperativeAbort = (
@@ -334,7 +348,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
       : undefined;
 
   const cliEntry = nodePath.join(getPackageDir(), "dist", "bundle", "cli.js");
-  const toolPolicy = childToolPolicy(request.activeTools);
+  const toolPolicy = childToolPolicy(request.activeTools, request.writeIntent);
   const cliArgs = [
     "--mode",
     "rpc",

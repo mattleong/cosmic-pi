@@ -21,13 +21,7 @@ import { WorkspaceService, type WorkspaceServiceContract } from "../../../src/wo
 import type { WorktreeCreateSetup } from "../../../src/config/schema.ts";
 import type { StartSubagentRequest } from "../../../src/run/model.ts";
 import type { SubagentServiceContract, SubagentServiceOptions } from "../../../src/run/service.ts";
-import {
-  fakeChildLayer,
-  fakeWriterLeaseLayer,
-  type profileLayerFor,
-  request,
-  serviceLayer,
-} from "./service-harness.ts";
+import { fakeChildLayer, fakeWriterLeaseLayer, request, serviceLayer } from "./service-harness.ts";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 
@@ -120,7 +114,6 @@ export function workspaceFixture({
   sourceCwd = "/repo",
   canonicalize = (cwd: string) => cwd,
   writerLeases,
-  profiles,
   children = fakeChildLayer(),
   worktreeCreate,
   serviceOptions,
@@ -128,7 +121,6 @@ export function workspaceFixture({
   readonly sourceCwd?: string;
   readonly canonicalize?: (cwd: string) => string;
   readonly writerLeases?: Layer.Layer<WriterLeaseService>;
-  readonly profiles?: ReturnType<typeof profileLayerFor>;
   readonly children?: ReturnType<typeof fakeChildLayer>;
   readonly worktreeCreate?: WorktreeCreateSetup;
   readonly serviceOptions?: SubagentServiceOptions;
@@ -429,7 +421,7 @@ export function workspaceFixture({
     WorkspaceService,
     Effect.map(WriterLeaseService, engineFor),
   ).pipe(Layer.provide(leaseLayer));
-  const layer = serviceLayer(options, profiles, leaseLayer).pipe(
+  const layer = serviceLayer(options, undefined, leaseLayer).pipe(
     Layer.provide(children.layer),
     Layer.provide(engineLayer),
   );

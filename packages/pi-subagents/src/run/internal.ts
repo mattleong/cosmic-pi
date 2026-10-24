@@ -112,7 +112,8 @@ export interface RunRecord {
   readonly scriptOrigin: boolean;
   view: StoredRunView;
   scope: Scope.Closeable;
-  readonly driver: BackendDriver;
+  /** The candidate's backend; a start that falls back before its task is issued replaces it. */
+  driver: BackendDriver;
   /** The next spawn's request, with the current session's resume token once it started. */
   launch: BackendLaunchRequest;
   /** Latest native parent facts admitted through this run's authenticated Pi channel. */
@@ -148,6 +149,12 @@ export interface RunRecord {
   evictionClaim?: { readonly parentRunId?: string | undefined } | undefined;
   readonly canonicalWriterCwd?: CanonicalWriterCwd | undefined;
   writerPool?: WriterPoolEntry | undefined;
+  /**
+   * A failed startup candidate's closed scope whose processes are gone but whose writer-pool
+   * membership, and so the cross-process lease, waits for the next candidate. Its cleanup stays
+   * pending until that candidate takes the run or a later close of the scope detaches the pool.
+   */
+  writerPoolHandover?: Scope.Closeable | undefined;
   closingScope?: Scope.Closeable | undefined;
   closingScopeSettled?: Deferred.Deferred<void> | undefined;
   initialization?: RunInitialization | undefined;

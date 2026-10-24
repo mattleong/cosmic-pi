@@ -376,11 +376,9 @@ describe("subagent compact semantic policy", () => {
 
 describe("failure recovery routing", () => {
   it("routes a start failure by its exact code before broader code fragments", () => {
-    for (const [code, knob] of [
-      ["workspace_nested_writer_unsupported", "root"],
-      ["session_spend_limit", "sessionSpendLimit"],
-    ] as const)
-      expect(failureRecovery(code, "Refused.", "start"), code).toContain(knob);
+    expect(failureRecovery("workspace_nested_writer_unsupported", "Refused.", "start")).toContain(
+      "root",
+    );
   });
 
   it("recovers a paused run that can't resume by stopping and replacing it", () => {

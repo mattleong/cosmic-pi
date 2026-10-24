@@ -86,7 +86,7 @@ Subagents also get `agent_contact_parent` to report progress, record a warning, 
 
 ### Agent messaging
 
-Nothing is stored for later: each send reports what happened or why it was refused. A resumed run still reports to its own parent, naming who resumed it. Messages are peer requests, never user authority. Nothing caps how often agents message each other; press Esc to stop a loop, and set `sessionSpendLimit` to stop resumes past a spend limit. Details are in [Agent messages](docs/completion-delivery.md#agent-messages). To message other Pi sessions, use [pi-intercom](../pi-intercom/README.md).
+Nothing is stored for later: each send reports what happened or why it was refused. A resumed run still reports to its own parent, naming who resumed it. Messages are peer requests, never user authority. Nothing caps how often agents message each other; press Esc to stop a loop. Details are in [Agent messages](docs/completion-delivery.md#agent-messages). To message other Pi sessions, use [pi-intercom](../pi-intercom/README.md).
 
 ## Configuration
 
@@ -127,7 +127,7 @@ Most people configure routes in `/subagents profiles`. Saved settings live in `~
 }
 ```
 
-If a candidate is unavailable at launch, such as an unauthenticated CLI, the next one is tried. After a run has started, nothing falls back: a failed run names its route's next candidate, and the parent may start a new run with that model.
+If a candidate is unavailable at launch, such as an unauthenticated CLI, the next one is tried. A run whose startup fails before its task is issued, because the runtime can't run that model or the runtime itself failed to start, moves to the next candidate in the same run and says so in a warning ([startup fallback](docs/routing.md#startup-fallback)). Once its task is issued, nothing falls back: a failed run names its route's next candidate, and the parent may start a new run with that model.
 
 `hooks` mirror Claude Code's `WorktreeCreate` and `WorktreeRemove`, but run after the engine creates an isolated tree and before it removes one rather than replacing either. A `.worktreeinclude` file at the checkout's top level names ignored local files, such as `.env`, to copy into isolated trees. See [Worktree hooks](docs/local-backends.md#worktree-hooks) and [Included files](docs/local-backends.md#included-files).
 

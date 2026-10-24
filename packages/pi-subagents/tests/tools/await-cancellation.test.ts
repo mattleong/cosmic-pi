@@ -356,7 +356,8 @@ describe("await timeout", () => {
       let cleaned = false;
       const waiting = yield* Effect.forkChild(
         awaitWithinTimeout(
-          Effect.never.pipe(Effect.onInterrupt(() => Effect.sync(() => void (cleaned = true)))),
+          () =>
+            Effect.never.pipe(Effect.onInterrupt(() => Effect.sync(() => void (cleaned = true)))),
           5,
         ),
       );
@@ -373,13 +374,61 @@ describe("await timeout", () => {
     Effect.gen(function* () {
       const waiting = yield* Effect.forkChild(
         awaitWithinTimeout(
-          Effect.never.pipe(Effect.onInterrupt(() => Effect.die("cleanup failed"))),
+          () => Effect.never.pipe(Effect.onInterrupt(() => Effect.die("cleanup failed"))),
           5,
         ),
       );
       yield* TestClock.adjust(Duration.seconds(5));
       const exit = yield* Fiber.await(waiting);
       expect(Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)).toBe(true);
+    }),
+  );
+
+  it.effect("lets a wait that began delivering at its timeout finish and deliver", () =>
+    Effect.gen(function* () {
+      const delivering = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      let interrupted = false;
+      const waiting = yield* Effect.forkChild(
+        awaitWithinTimeout(
+          (deadline) =>
+            Effect.sleep(Duration.seconds(4)).pipe(
+              Effect.andThen(Effect.sync(() => deadline.enterDelivery())),
+              Effect.tap(() => Deferred.succeed(delivering, undefined)),
+              Effect.tap(() => Deferred.await(release)),
+              Effect.onInterrupt(() => Effect.sync(() => void (interrupted = true))),
+            ),
+          5,
+        ),
+      );
+      yield* TestClock.adjust(Duration.seconds(4));
+      yield* Deferred.await(delivering);
+      yield* TestClock.adjust(Duration.seconds(1));
+      expect(waiting.pollUnsafe()).toBeUndefined();
+      yield* Deferred.succeed(release, undefined);
+      expect(yield* Fiber.join(waiting)).toEqual(Result.succeed(true));
+      expect(interrupted).toBe(false);
+    }),
+  );
+
+  it.effect("refuses delivery to a wait whose timeout already ended it", () =>
+    Effect.gen(function* () {
+      const admitted: boolean[] = [];
+      const waiting = yield* Effect.forkChild(
+        awaitWithinTimeout(
+          (deadline) =>
+            // The outcome arrives at the deadline, but only after the timeout expired the wait.
+            Effect.never.pipe(
+              Effect.onInterrupt(() =>
+                Effect.sync(() => void admitted.push(deadline.enterDelivery())),
+              ),
+            ),
+          5,
+        ),
+      );
+      yield* TestClock.adjust(Duration.seconds(5));
+      expect(yield* Fiber.join(waiting)).toEqual(Result.fail({ kind: "timed_out", seconds: 5 }));
+      expect(admitted).toEqual([false]);
     }),
   );
 });

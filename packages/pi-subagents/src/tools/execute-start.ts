@@ -26,12 +26,13 @@ import {
 } from "../run/errors.ts";
 import type { StartSubagentRequest, SubagentRunView } from "../run/model.ts";
 import { MAX_START_BATCH } from "../run/limits.ts";
-import { getFailedStartRecovery } from "../run/launch.ts";
+import { getFailedStartRecovery, getFailedStartRoute } from "../run/launch.ts";
 import {
   disallowedLaunchOverrideMessage,
   firstDisallowedLaunchOverride,
 } from "../run/launch-validation.ts";
 import { startDetails } from "./details.ts";
+import { startedRunWarning } from "./format.ts";
 import { projectModelOverride } from "./details-projection.ts";
 import type { SubagentStartEntry } from "./details-schema.ts";
 import type {
@@ -107,6 +108,12 @@ const routeForRequest = (request: StartSubagentRequest): SubagentStartResolvedRo
   ...routeFields(request, request.selection),
 });
 
+/** A failed launch's route: the candidate its admitted run last tried, else the one it resolved. */
+const routeForFailure = (
+  request: StartSubagentRequest,
+  error: SubagentError,
+): SubagentStartResolvedRoute => routeForRequest({ ...request, ...getFailedStartRoute(error) });
+
 const startEntriesFor = (
   specs: ReadonlyArray<SubagentStartSpec>,
   outcomes: ReadonlyMap<number, SubagentStartOutcome>,
@@ -129,7 +136,10 @@ const startEntriesFor = (
         profile: outcome.run.profile ?? base.profile,
         status: "started" as const,
         routeStatus: "selected" as const,
-        ...routeFields(outcome.run, outcome.run.selection),
+        ...routeFields(outcome.run, {
+          candidateIndex: outcome.run.selection.candidateIndex,
+          warning: startedRunWarning(outcome.run),
+        }),
         runId: outcome.run.id,
         cwd: outcome.run.cwd,
         ...(outcome.run.writerWorkspaceMode !== undefined && {
@@ -237,7 +247,7 @@ export const executeStartBatch = Effect.fn("SubagentTools.start")(function* (
         return (rejected ? Effect.fail(rejected) : input.startOwned(request)).pipe(
           Effect.map((run): SubagentStartOutcome => ({ index, run })),
           Effect.catch((error) =>
-            Effect.succeed(failureFor(spec, index, error, routeForRequest(request))),
+            Effect.succeed(failureFor(spec, index, error, routeForFailure(request, error))),
           ),
         );
       }),

@@ -32,14 +32,6 @@ const START_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
     ["workspace_nested_writer_unsupported"],
     "Ask the root to launch this writer in a worktree, or start a writer that shares your directory.",
   ],
-  [
-    ["session_spend_limit"],
-    "This session's subagents reached its sessionSpendLimit; leave the work to the user or ask them to raise the limit.",
-  ],
-  [
-    ["session_spend_limit_invalid"],
-    "The configured sessionSpendLimit is invalid, so no subagents start; ask the user to fix it in pi-subagents.json and run /reload.",
-  ],
   [["node_executable"], "Restart Pi so it runs on the installed Node, then retry the launch."],
   [NO_ELIGIBLE_ROUTE_CODES, noEligibleRouteRecovery],
   [
@@ -351,16 +343,6 @@ const AGENT_FAILURES = {
     message: (subject) => `${subject} can't be resumed`,
     recovery:
       "Claude and Codex runs can't be resumed. Stop a paused one with agent_lifecycle and start a replacement; a finished one closed on its report, so start a new agent with the context it needs, or message its parent.",
-  },
-  agent_spend_limit: {
-    message: (subject) => `${subject} can't be resumed after the session's spend limit`,
-    recovery:
-      "This session's subagents reached sessionSpendLimit, so agent messages can't resume finished runs. Message an agent that is still running, or leave it to the user.",
-  },
-  agent_spend_limit_invalid: {
-    message: (subject) => `${subject} can't be resumed while sessionSpendLimit is invalid`,
-    recovery:
-      "The configured sessionSpendLimit is invalid, so agent messages can't resume finished runs. Message an agent that is still running, or ask the user to fix the limit and run /reload.",
   },
   too_many_targets: {
     message: () => "Too many agents were named",

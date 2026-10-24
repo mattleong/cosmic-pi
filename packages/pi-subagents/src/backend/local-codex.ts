@@ -458,11 +458,15 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
       "thread/start",
     );
     if (started.model !== request.model)
-      return yield* protocolError(
+      return yield* processError(
+        "initialize",
+        "codex_model_mismatch",
         `Codex selected model ${started.model} instead of required model ${request.model}.`,
       );
     if (request.openaiFastMode && started.serviceTier !== FAST_SERVICE_TIER)
-      return yield* protocolError(
+      return yield* processError(
+        "initialize",
+        "codex_service_tier_mismatch",
         `Codex selected service tier ${started.serviceTier ?? "default"} instead of required ${FAST_SERVICE_TIER} fast mode.`,
       );
     threadId = started.thread.id;

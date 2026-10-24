@@ -8,7 +8,7 @@ import * as Scope from "effect/Scope";
 import { processError } from "./errors.ts";
 import type { RunContext, RunRecord } from "./internal.ts";
 import type { WriterPools } from "./writer-pool.ts";
-import type { BackendHandle } from "../backend/model.ts";
+import type { BackendDriver, BackendHandle } from "../backend/model.ts";
 import type { SubagentCleanupDiagnostic } from "./model.ts";
 import {
   boundedCleanupDiagnostic,
@@ -21,6 +21,27 @@ type ExitedScopeOwnership = Data.TaggedEnum<{
   Wait: { readonly settled: Deferred.Deferred<void> };
 }>;
 const ExitedScopeOwnership = Data.taggedEnum<ExitedScopeOwnership>();
+
+const reclaimWithinBound = (
+  record: RunRecord,
+  reclaim: NonNullable<BackendDriver["reclaimRunState"]>,
+) =>
+  reclaim({
+    parentSessionId: record.launch.parentSessionId,
+    runId: record.view.id,
+  }).pipe(
+    Effect.timeoutOrElse({
+      duration: "5 seconds",
+      orElse: () =>
+        Effect.fail(
+          processError(
+            "reclaim private run state",
+            "run_state_reclaim_timeout",
+            "Timed out while reclaiming private subagent run state.",
+          ),
+        ),
+    }),
+  );
 
 export function recordCleanup(
   dependencies: Pick<RunContext, "withLock" | "publish"> & {
@@ -42,21 +63,7 @@ export function recordCleanup(
     if (!claimed) return;
     const reclaim = record.driver.reclaimRunState;
     if (reclaim)
-      yield* reclaim({
-        parentSessionId: record.launch.parentSessionId,
-        runId: record.view.id,
-      }).pipe(
-        Effect.timeoutOrElse({
-          duration: "5 seconds",
-          orElse: () =>
-            Effect.fail(
-              processError(
-                "reclaim private run state",
-                "run_state_reclaim_timeout",
-                "Timed out while reclaiming private subagent run state.",
-              ),
-            ),
-        }),
+      yield* reclaimWithinBound(record, reclaim).pipe(
         Effect.tapError((error) =>
           withLock(
             Effect.sync(() => {
@@ -82,6 +89,36 @@ export function recordCleanup(
       }),
     );
   });
+
+  /**
+   * Reclaims the private state a failed startup candidate's backend left, such as a forked
+   * transcript copy, before another candidate, possibly on another backend, takes the run. The
+   * run's own reclaim stays pending for whichever backend runs it next.
+   */
+  const reclaimCandidateRunState = Effect.fn("SubagentRecordCleanup.reclaimCandidateRunState")(
+    function* (record: RunRecord) {
+      const reclaim = yield* withLock(
+        Effect.sync(() => {
+          const owned = record.driver.reclaimRunState;
+          // A session shutdown reclaiming the run already owns its state.
+          if (!owned || record.runStateReclaimState !== "pending") return undefined;
+          record.runStateReclaimState = "running";
+          return owned;
+        }),
+      );
+      if (!reclaim) return;
+      yield* reclaimWithinBound(record, reclaim).pipe(
+        Effect.ensuring(
+          withLock(
+            Effect.sync(() => {
+              record.runStateReclaimState = "pending";
+            }),
+          ),
+        ),
+      );
+    },
+  );
+
   const markCleanupPending = (record: RunRecord) =>
     withLock(
       Effect.gen(function* () {
@@ -213,10 +250,50 @@ export function recordCleanup(
     );
   };
 
+  /**
+   * Ends a handover that no next candidate took: the run leaves its writer pool, releasing the
+   * lease if it was the last member, and its cleanup is confirmed or quarantined.
+   */
+  const finishWriterPoolHandover = Effect.fn("SubagentRecordCleanup.finishWriterPoolHandover")(
+    function* (record: RunRecord, scope: Scope.Closeable) {
+      const owned = yield* withLock(
+        Effect.sync(() => {
+          if (record.scope !== scope || record.writerPoolHandover !== scope) return false;
+          record.writerPoolHandover = undefined;
+          return true;
+        }),
+      );
+      if (!owned) return undefined;
+      const detached = yield* Effect.exit(detachWriterPoolAfterCleanup(record, scope));
+      if (Exit.isFailure(detached))
+        return yield* retainCleanupQuarantine(
+          record,
+          scope,
+          failureDiagnostic("writer-lease", detached.cause),
+        );
+      yield* clearCleanupPending(record, scope);
+      return undefined;
+    },
+  );
+
+  /** A closed candidate's processes are gone; its cleanup stays pending while the pool is held. */
+  const holdWriterPoolHandover = (record: RunRecord, scope: Scope.Closeable) =>
+    withLock(
+      Effect.gen(function* () {
+        if (record.scope !== scope) return;
+        record.writerPoolHandover = scope;
+        record.process = undefined;
+        const { pid: _pid, ...view } = record.view;
+        record.view = view;
+        yield* publish;
+      }),
+    );
+
   // A scope is closed once. Cached Scope.close success is never evidence of later cleanup.
-  const closeRecordScope = (
+  const closeScope = (
     record: RunRecord,
-    scope: Scope.Closeable = record.scope,
+    scope: Scope.Closeable,
+    handOverWriterPool: boolean,
   ): Effect.Effect<void> =>
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
@@ -246,7 +323,9 @@ export function recordCleanup(
               () => record.scope === scope && record.closingScopeSettled !== claim.settled,
             ),
           );
-          if (abandoned) yield* restore(closeRecordScope(record, scope));
+          if (abandoned) yield* restore(closeScope(record, scope, handOverWriterPool));
+          // Any other close of a handed-over scope ends the handover.
+          else if (!handOverWriterPool) yield* finishWriterPoolHandover(record, scope);
           return;
         }
         if (claim.spawnSettled)
@@ -270,6 +349,7 @@ export function recordCleanup(
           yield* markCleanupPending(record);
           const closed = yield* Effect.exit(Scope.close(scope, Exit.void));
           if (Exit.isFailure(closed)) return yield* scopeFailure(record, scope, closed.cause);
+          if (handOverWriterPool) return yield* holdWriterPoolHandover(record, scope);
           const detached = yield* Effect.exit(detachWriterPoolAfterCleanup(record, scope));
           if (Exit.isFailure(detached))
             return yield* retainCleanupQuarantine(
@@ -282,6 +362,20 @@ export function recordCleanup(
         }).pipe(Effect.ensuring(Deferred.succeed(closeSettled, undefined)));
       }),
     );
+
+  const closeRecordScope = (
+    record: RunRecord,
+    scope: Scope.Closeable = record.scope,
+  ): Effect.Effect<void> => closeScope(record, scope, false);
+
+  /**
+   * Closes a failed startup candidate's scope for a startup fallback. Its processes must be
+   * confirmed gone, but the run keeps its writer-pool membership, so a writer's lease passes to the
+   * next candidate without a gap; `writerPoolHandover` records that. Any later close of the same
+   * scope, such as a stop, shutdown, or the start's failure, ends the handover.
+   */
+  const closeCandidateScope = (record: RunRecord): Effect.Effect<void> =>
+    closeScope(record, record.scope, true);
 
   const verifyCleanup = (record: RunRecord): Effect.Effect<void> =>
     Effect.uninterruptible(
@@ -399,9 +493,11 @@ export function recordCleanup(
 
   return {
     reclaimRecordRunState,
+    reclaimCandidateRunState,
     markCleanupPending,
     retainCleanupQuarantine,
     closeRecordScope,
+    closeCandidateScope,
     verifyCleanup,
     closeExitedScope,
   };

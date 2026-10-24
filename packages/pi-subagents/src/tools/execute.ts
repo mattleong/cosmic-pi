@@ -46,8 +46,10 @@ import {
   awaitResultText,
   awaitWithinTimeout,
   observeAwaitInterruption,
+  type AwaitDeadline,
   type AwaitEnding,
   type AwaitExecution,
+  type ProxyWaitBackstop,
 } from "./execute-await.ts";
 import { executeModelsAction } from "./execute-models.ts";
 import { executeWorkspaceAction } from "./execute-workspace.ts";
@@ -71,6 +73,7 @@ export interface SubagentToolRuntime {
         input: SubagentToolInput,
         signal: AbortSignal | undefined,
         onInterruption?: () => void,
+        backstop?: ProxyWaitBackstop,
       ) => Promise<AgentToolResult<unknown>>)
     | undefined;
   readonly startUiTicker?: ((intervalMs: number, tick: () => void) => () => void) | undefined;
@@ -198,8 +201,11 @@ export const executeSubagentActionEffect = Effect.fn("SubagentTools.execute")(fu
     state: AwaitExecution,
     args: AwaitToolInput["args"],
     observations: ReadonlyArray<SubagentRunObservation>,
-    questions: ReadonlyArray<SubagentRunView> = [],
+    questions: ReadonlyArray<SubagentRunView>,
+    deadline: AwaitDeadline | undefined,
   ) {
+    // A wait its timeout already ended delivers nothing, so its claims return unconsumed.
+    if (deadline?.enterDelivery() === false) return yield* Effect.interrupt;
     const runs = Arr.map(observations, (observation) => observation.run);
     const attention = [...runs, ...questions];
     const attentionRequired = Arr.some(attention, isParentActionRequiredRun);
@@ -252,18 +258,29 @@ export const executeSubagentActionEffect = Effect.fn("SubagentTools.execute")(fu
       }),
     );
   }, Effect.mapError(codedFailure));
+  // The timeout applies here for root and nested callers alike, so the result is either the
+  // delivered outcomes or a timeout whose claims were released, never a delivery cut short.
   const executeAwait = Effect.fn("SubagentTools.await")(function* (args: AwaitToolInput["args"]) {
     const until = awaitUntil(args);
     const state = awaitExecution ?? awaitExecutionFor(args.runIds, until, onUpdate);
     const ids = yield* requiredTargetIds(action, args.runIds, MAX_TARGET_RUNS);
     yield* authorize(ids);
-    return yield* service.withAwaitTerminalObservations(
-      ids,
-      until,
-      state.update,
-      (observations, questions) => completeObservations(state, args, observations, questions),
-      callerRunId,
-    );
+    const wait = (deadline?: AwaitDeadline) =>
+      service.withAwaitTerminalObservations(
+        ids,
+        until,
+        state.update,
+        (observations, questions = []) =>
+          completeObservations(state, args, observations, questions, deadline),
+        callerRunId,
+      );
+    const timeoutSeconds = awaitTimeoutSeconds(args);
+    if (timeoutSeconds === undefined) return yield* wait();
+    const bounded = yield* awaitWithinTimeout(wait, timeoutSeconds);
+    if (Result.isSuccess(bounded)) return bounded.success;
+    const result = state.cancelled(false, bounded.failure);
+    invokeHostCallback(() => onUpdate?.(result), undefined);
+    return result;
   }, Effect.mapError(codedFailure));
 
   switch (input.tool) {
@@ -299,8 +316,8 @@ export const executeSubagentActionEffect = Effect.fn("SubagentTools.execute")(fu
 
 /**
  * A root wait ends at its timeout, the host's abort, or the user's next message, exactly like a
- * cancellation; children keep running. The timeout runs on the effect's clock and settles as a
- * result; the signals interrupt the run, which the await state records.
+ * cancellation; children keep running. The await action applies the timeout on the effect's clock
+ * and settles it as a result; the signals interrupt the run, which the await state records.
  */
 const executeRootAwait = (
   pi: ExtensionAPI,
@@ -327,23 +344,11 @@ const executeRootAwait = (
     state,
     scripted,
   );
-  const timeoutSeconds = awaitTimeoutSeconds(input.args);
-  const bounded =
-    timeoutSeconds === undefined
-      ? wait
-      : awaitWithinTimeout(wait, timeoutSeconds).pipe(
-          Effect.flatMap(
-            Result.match({
-              onSuccess: Effect.succeed,
-              onFailure: (ending) => Effect.sync(() => ended(ending)),
-            }),
-          ),
-        );
   const userInput = runtime.userInput?.();
   const endings = Arr.filter([signal, userInput], Predicate.isNotUndefined);
   return runtime
     .run(
-      observeAwaitInterruption(bounded, state.markInterrupted),
+      observeAwaitInterruption(wait, state.markInterrupted),
       endings.length > 1 ? AbortSignal.any(endings) : endings[0],
     )
     .catch((cause: unknown) => {
@@ -357,8 +362,17 @@ const executeRootAwait = (
 };
 
 /**
- * A nested wait runs in the root, so only the abort signal reaches it; the root's completion-claim
- * cleanup after the abort is unconfirmed here.
+ * How long past its timeout a nested wait waits for the root's answer. The root answers at the
+ * timeout, so only an answer lost while the connection stays up, such as a response send whose
+ * outcome was uncertain, reaches it.
+ */
+const NESTED_AWAIT_BACKSTOP_GRACE_SECONDS = 30;
+
+/**
+ * A nested wait runs in the root, which applies its timeout and answers with either the delivered
+ * outcomes or a timeout whose claims it released. Here only the abort signal or the backstop ends
+ * it, cancelling it at the root without consuming anything; the root's completion-claim cleanup
+ * after that cancellation is unconfirmed.
  */
 const executeProxiedAwait = (
   proxyCall: NonNullable<SubagentToolRuntime["proxyCall"]>,
@@ -367,18 +381,26 @@ const executeProxiedAwait = (
   onUpdate: AgentToolUpdateCallback<unknown> | undefined,
 ): Promise<AgentToolResult<unknown>> => {
   const state = awaitExecutionFor(input.args.runIds, awaitUntil(input.args), onUpdate);
+  // The root clamps again; sending the clamped value keeps a non-finite one off the JSON wire.
   const timeoutSeconds = awaitTimeoutSeconds(input.args);
-  const timeout =
-    timeoutSeconds === undefined ? undefined : AbortSignal.timeout(timeoutSeconds * 1000);
-  const endings = Arr.filter([signal, timeout], Predicate.isNotUndefined);
-  const waitSignal = endings.length > 1 ? AbortSignal.any(endings) : endings[0];
-  return proxyCall(input, waitSignal, state.markInterrupted).catch((cause: unknown) => {
+  const { timeoutSeconds: _requested, ...args } = input.args;
+  const forwarded: AwaitToolInput = {
+    tool: input.tool,
+    args: timeoutSeconds === undefined ? args : { ...args, timeoutSeconds },
+  };
+  let ending: AwaitEnding = { kind: "cancelled" };
+  const backstop: ProxyWaitBackstop | undefined =
+    timeoutSeconds === undefined
+      ? undefined
+      : {
+          seconds: timeoutSeconds + NESTED_AWAIT_BACKSTOP_GRACE_SECONDS,
+          onExpired: () => {
+            ending = { kind: "timed_out", seconds: timeoutSeconds };
+          },
+        };
+  return proxyCall(forwarded, signal, state.markInterrupted, backstop).catch((cause: unknown) => {
     if (!state.wasInterrupted()) throw cause;
-    const ending: AwaitEnding =
-      signal?.aborted !== true && timeout?.aborted === true && timeoutSeconds !== undefined
-        ? { kind: "timed_out", seconds: timeoutSeconds }
-        : { kind: "cancelled" };
-    const result = state.cancelled(true, ending);
+    const result = state.cancelled(true, signal?.aborted === true ? { kind: "cancelled" } : ending);
     invokeHostCallback(() => onUpdate?.(result), undefined);
     return result;
   });

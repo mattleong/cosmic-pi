@@ -19,6 +19,8 @@ import { InvalidSubagentRequestError } from "../src/run/errors.ts";
 import {
   AGENT_TOOL_NAMES,
   NESTED_SUBAGENT_TOOL_NAMES,
+  PI_FILE_MUTATION_TOOL_NAMES,
+  piChildToolSnapshot,
   piRootActiveToolSnapshot,
 } from "../src/run/tool-policy.ts";
 import { sweepAbandonedPrivateState } from "../src/boundary/private-state.ts";
@@ -91,7 +93,7 @@ describe("subagent child process boundary", () => {
         "session_read",
         "bash",
       ]);
-      const policy = childToolPolicy(snapshot);
+      const policy = childToolPolicy(snapshot, "writer");
 
       expect(policy.enabled).toEqual([
         "read",
@@ -120,6 +122,43 @@ describe("subagent child process boundary", () => {
         expect(Str.split(policy.excluded, ",")).not.toContain(name);
     }),
   );
+
+  it("keeps file-mutation tools from a read-only child at every spawn, whatever its snapshot", () => {
+    const snapshot = ["read", "edit", "bash", "write", "codemode"];
+    const reader = childToolPolicy(snapshot, "read-only");
+    expect(reader.enabled).toEqual(expect.arrayContaining(["read", "bash", "codemode"]));
+    for (const name of PI_FILE_MUTATION_TOOL_NAMES) {
+      expect(reader.enabled).not.toContain(name);
+      // Excluded tools are never registered, so neither an extension nor codemode can reach them.
+      expect(Str.split(reader.excluded, ",")).toContain(name);
+    }
+    const writer = childToolPolicy(snapshot, "writer");
+    expect(writer.enabled).toEqual(expect.arrayContaining(snapshot));
+    for (const name of PI_FILE_MUTATION_TOOL_NAMES)
+      expect(Str.split(writer.excluded, ",")).not.toContain(name);
+  });
+
+  it("withholds file-mutation tools from a read-only snapshot even when an allow list names them", () => {
+    const inherited = ["read", "edit", "write", "bash", "grep"];
+    expect(piChildToolSnapshot(inherited, undefined, "read-only")).toEqual({
+      tools: ["read", "bash", "grep"],
+      withheld: [],
+    });
+    expect(piChildToolSnapshot(inherited, undefined, "writer").tools).toEqual(inherited);
+    const allow = { allow: ["read", "edit", "write", "edit"] };
+    expect(piChildToolSnapshot(inherited, allow, "read-only")).toEqual({
+      tools: ["read"],
+      withheld: ["edit", "write"],
+    });
+    expect(piChildToolSnapshot(inherited, allow, "writer")).toEqual({
+      tools: ["read", "edit", "write"],
+      withheld: [],
+    });
+    expect(piChildToolSnapshot(inherited, { deny: ["bash"] }, "read-only").tools).toEqual([
+      "read",
+      "grep",
+    ]);
+  });
 
   it.effect("rejects root tool snapshots that cannot round-trip through Pi CLI arguments", () =>
     Effect.gen(function* () {

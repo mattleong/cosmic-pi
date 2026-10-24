@@ -383,6 +383,8 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       questionnaires
         .drain(record)
         .pipe(Effect.andThen(ownedCleanup.closeRecordScope(record, scope))),
+    closeCandidateScope: (record) =>
+      questionnaires.drain(record).pipe(Effect.andThen(ownedCleanup.closeCandidateScope(record))),
   };
   const { closeRecordScope } = cleanup;
 
@@ -461,9 +463,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     },
   });
 
-  const currentSpendLimit = profileService.capture.pipe(
-    Effect.map((snapshot) => snapshot.effectiveConfig.sessionSpendLimit),
-  );
   const launch = launchOperations({
     ...runContext,
     backendRegistry,
@@ -476,7 +475,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     submitPrompt: assignment.submitPrompt,
     initializeProcess,
     workspaces,
-    currentSpendLimit,
   });
 
   const rootNesting = profileService.capture.pipe(
@@ -491,7 +489,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     closeRecordScope,
     workspaces,
     currentNesting: rootNesting,
-    currentSpendLimit,
   });
 
   const projection = SubscriptionRef.get(projectionRef);

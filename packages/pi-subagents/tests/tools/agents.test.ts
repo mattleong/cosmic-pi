@@ -262,13 +262,58 @@ describe("custom agent launches", () => {
       // The child launch always enables parent contact and agent coordination, and never
       // cross-session messaging.
       for (const agent of ["denied", "allowed"]) {
-        const policy = childToolPolicy(toolsFor(agent) ?? []);
+        const policy = childToolPolicy(toolsFor(agent) ?? [], "read-only");
         expect(policy.enabled).toEqual(
           expect.arrayContaining(["agent_contact_parent", ...AGENT_TOOL_NAMES]),
         );
         expect(policy.enabled).not.toContain("session_send");
         expect(Str.split(policy.excluded, ",")).toContain("session_send");
       }
+    },
+  );
+
+  effectTest(
+    "withholds file-mutation tools from a read-only agent even when its allow list names them",
+    function* () {
+      const requests: StartSubagentRequest[] = [];
+      const allow = ["read", "bash", "edit", "write"];
+      const profiles = servicesWith({
+        reader: agentDefinition({ tools: { allow } }),
+        writer: agentDefinition({ writeIntent: "writer", tools: { allow } }),
+        plain: agentDefinition(),
+      });
+      const args = {
+        agents: [
+          { task: "Review", agent: "reader" },
+          { task: "Fix", agent: "writer" },
+          { task: "Review", agent: "plain" },
+        ],
+      };
+      const result = yield* invokeOptionalTool(
+        startWith(requests, { profiles, activeTools: [...allow, "grep"] }),
+        args,
+      );
+      const requestFor = (agent: string) =>
+        Option.getOrUndefined(Arr.findFirst(requests, (request) => request.agent === agent));
+      expect(requestFor("reader")).toMatchObject({
+        writeIntent: "read-only",
+        activeTools: ["read", "bash"],
+      });
+      // Read-only intent wins over the allow list, and the start entry says so.
+      expect(requestFor("reader")?.selection?.warning).toBeDefined();
+      expect(requestFor("writer")).toMatchObject({ writeIntent: "writer", activeTools: allow });
+      expect(requestFor("writer")?.selection?.warning).toBeUndefined();
+      // Without an allow list a reader loses them silently, as every read-only run does.
+      expect(requestFor("plain")).toMatchObject({ activeTools: ["read", "bash", "grep"] });
+      expect(requestFor("plain")?.selection?.warning).toBeUndefined();
+      for (const agent of ["reader", "plain"]) {
+        const policy = childToolPolicy(requestFor(agent)?.activeTools ?? [], "read-only");
+        expect(policy.enabled).not.toContain("edit");
+        expect(policy.enabled).not.toContain("write");
+      }
+      const details = decodeStartDetails(result?.details);
+      expect(details.startEntries[0]).toMatchObject({ warning: stringContaining("edit") });
+      expect(issueStyleProblems(compactIssues("agent_start", args, details))).toEqual([]);
     },
   );
 

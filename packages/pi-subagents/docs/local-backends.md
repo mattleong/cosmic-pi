@@ -79,11 +79,12 @@ After `pauseRequested`, new guidance, replies, and ancestor notifications are re
 
 ### Tool snapshot and read-only semantics
 
-- At every launch the root snapshots its current active tool names and project-trust decision. `writeIntent` does not filter them. Competing coordinator and orchestrator tools and pi-intercom's cross-session `session_*` tools are always denied, and a [custom agent](routing.md#declaration)'s `tools.allow` and `tools.deny` filter the snapshot further, always keeping the child's own `agent_*` tools, `agent_contact_parent` included. The root never passes its own `agent_*` tools down; the child registers authenticated proxies for them.
+- At every launch the root snapshots its current active tool names and project-trust decision. Competing coordinator and orchestrator tools and pi-intercom's cross-session `session_*` tools are always denied, and a [custom agent](routing.md#declaration)'s `tools.allow` and `tools.deny` filter the snapshot further, always keeping the child's own `agent_*` tools, `agent_contact_parent` included. The root never passes its own `agent_*` tools down; the child registers authenticated proxies for them.
+- A read-only child never gets Pi's file-mutation tools `edit` and `write`. Its snapshot drops them even when a custom agent's `tools.allow` names them, and the start entry then warns. Every spawn, nested and resumed ones included, also passes them to `--exclude-tools`, so Pi never registers them for that child, whatever an extension or codemode asks. Writers keep them.
 - The public extension returns before importing the root application when `PI_SUBAGENT_CHILD === "1"`; a packaged private extension registers authenticated proxies of the root's `agent_*` tools and its own `agent_contact_parent`. Nested children have no `/subagents` command; the root fleet shows every descendant.
 - An active name is not an implementation transfer: the child can use it only when its trust mode discovers the provider. A nested start returns to the root for a fresh snapshot, so child-local toggles do not control grandchildren. The snapshot's count, names, and size are validated before ownership.
 - Proxy requests cannot carry ancestry. The root binds them to the channel's run and authorizes `agent_await` and `agent_lifecycle` targets against that subtree, while `agent_list`, `agent_read`, and `agent_send` targets may be any agent in the tree; `agent_worktree` mutations use the stricter direct-parent check.
-- Pi read-only is a no-mutation prompt and writer-lease policy, not a sandbox or confidentiality boundary. It receives the same tool snapshot as a writer, so native codemode is available to either intent; codemode's nested tool events surface as activity.
+- Pi read-only withholds Pi's `edit` and `write` tools and adds a no-mutation prompt and writer-lease policy; it is not a sandbox or confidentiality boundary. `bash` and the other inherited tools, native codemode included, stay available to either intent and can still change files, so the prompt tells readers to use them only to inspect and validate. Codemode's nested tool events surface as activity.
 - Native Claude and Codex launches keep their fixed tools and sandboxes and do not consume the snapshot.
 
 ### Child bridge
@@ -112,7 +113,7 @@ Each question and proxy call owns one exact Deferred entry through `acquireUseRe
 
 The root `SubagentService` owns one writer pool per directory. Nested Pi writer requests enter the same admission path, so pools and leases are tree-wide. Pools are keyed by a SHA-256 digest of the directory's device and inode, so relative and symlink aliases collide and renaming does not change ownership. Read-only runs never join a pool.
 
-The first member acquires and durably marks the cross-process lease before any member spawns; concurrent members wait for that preparation. The lease is held until the last member confirms backend cleanup.
+The first member acquires and durably marks the cross-process lease before any member spawns; concurrent members wait for that preparation. The lease is held until the last member confirms backend cleanup. A run whose startup falls back keeps its membership while its failed candidate's processes close, so the lease passes to the next candidate without a gap ([startup fallback](routing.md#startup-fallback)).
 
 ### Shared-checkout writers
 
@@ -149,7 +150,7 @@ The parent's review and apply procedure is in the [reference](reference.md#revie
 - A `worktree` writer launches in a detached, locked linked worktree of the user's repository at `<agent-dir>/subagent-worktrees/<id>/worker`. Its cwd lease protects that directory, not the parent checkout.
 - Only the root starts worktree writers. A nested caller's writers share its checkout or worker tree whatever the session default, and one whose custom agent sets `isolation: "worktree"` fails with `workspace_nested_writer_unsupported`.
 - Read-only runs never acquire workspaces, and nested readers inherit their parent's effective cwd, including a worktree.
-- A worktree launch checks parent, spend limit, and tree and direct-child capacity first, then holds one parent direct-child slot until admission or failure. Held slots count toward direct-child and tree limits. If running runs alone fill a limit, the launch fails at once; if only creating launches fill it, it waits interruptibly, holding nothing.
+- A worktree launch checks its parent and its tree and direct-child capacity first, then holds one parent direct-child slot until admission or failure. Held slots count toward direct-child and tree limits. If running runs alone fill a limit, the launch fails at once; if only creating launches fill it, it waits interruptibly, holding nothing.
 - The binding is recorded as soon as the engine acquires the workspace. A start that is never admitted frees its slot and discards the workspace; if that discard fails, the binding remains for the parent to discard. Admitted starts that fail keep their workspace as an ordinary proposal.
 
 ### Worktrees and captures
@@ -362,7 +363,7 @@ Claude Code keeps temp files in `$CLAUDE_CODE_TMPDIR/claude-<uid>`, which defaul
 
 ### Initialization and input correlation
 
-- Startup sends the initialize control, then one `shouldQuery:false` input to obtain `system/init` without inference. It validates cwd, session, resolved model, MCP errors, and a connected `pi_subagents_supervisor` inventory of exactly the five supervisor tools. Initialization and start have 60-second deadlines, and initialization failure is post-spawn, never candidate fallback.
+- Startup sends the initialize control, then one `shouldQuery:false` input to obtain `system/init` without inference. It validates cwd, session, resolved model, MCP errors, and a connected `pi_subagents_supervisor` inventory of exactly the five supervisor tools. Initialization and start have 60-second deadlines. An initialization failure moves to another candidate only as a [startup fallback](routing.md#startup-fallback) allows.
 - Every outbound input carries a fresh UUID, and acknowledgement requires native replay of exactly that UUID from the active session. Delayed duplicates of confirmed UUIDs are acknowledged silently from the same session only.
 - User frames with a non-null `parent_tool_use_id` are native-agent forwarding: their text becomes activity, and forwarded tool results keep their nested tool lifecycle.
 - Claude-owned synthetic `task-notification`, `auto-continuation`, and `peer` messages own a subturn inside the active assignment. Replayed `<task-notification>` commands are accepted only as complete same-session, active-assignment, text-only envelopes; near misses, qualified subkinds, channel or peer origins, and cross-session delivery fail closed.

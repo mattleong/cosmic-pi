@@ -93,6 +93,28 @@ export const observeAwaitInterruption = <A, E, R>(
       )
     : effect;
 
+/**
+ * Ends a proxied wait whose answer never arrived by a deadline: the wait is interrupted, which
+ * cancels it at the root, after `onExpired` records why.
+ */
+export interface ProxyWaitBackstop {
+  readonly seconds: number;
+  readonly onExpired: () => void;
+}
+
+export const withProxyWaitBackstop = <A, E, R>(
+  wait: Effect.Effect<A, E, R>,
+  backstop: ProxyWaitBackstop | undefined,
+): Effect.Effect<A, E, R> =>
+  backstop
+    ? wait.pipe(
+        Effect.timeoutOrElse({
+          duration: Duration.seconds(backstop.seconds),
+          orElse: () => Effect.sync(backstop.onExpired).pipe(Effect.andThen(Effect.interrupt)),
+        }),
+      )
+    : wait;
+
 /** Why a wait ended before its targets finished; children keep running in every case. */
 export type AwaitEnding =
   | { readonly kind: "cancelled" }
@@ -100,21 +122,51 @@ export type AwaitEnding =
   | { readonly kind: "user_input" };
 
 /**
- * Bounds a wait by its timeout on the effect's clock. At the timeout the wait is interrupted and
- * its cleanup awaited, so released completion claims settle before the ending is reported. A wait
- * that still finished, or failed for another reason during that cleanup, reports that instead,
- * and so does one whose caller is interrupted meanwhile.
+ * A timed wait's hand-off to its timeout. The wait calls `enterDelivery` before it consumes
+ * anything; false means the timeout already ended it, so it must deliver nothing.
+ */
+export interface AwaitDeadline {
+  readonly enterDelivery: () => boolean;
+}
+
+const deliveryGate = () => {
+  let phase: "waiting" | "delivering" | "expired" = "waiting";
+  return {
+    enterDelivery: () => {
+      if (phase === "expired") return false;
+      phase = "delivering";
+      return true;
+    },
+    /** Ends a wait that hasn't begun delivering; false lets a delivery in progress finish. */
+    expire: () => {
+      if (phase === "delivering") return false;
+      phase = "expired";
+      return true;
+    },
+  };
+};
+
+/**
+ * Bounds a wait by its timeout on the effect's clock. At the timeout a wait that hasn't begun
+ * delivering is interrupted and its cleanup awaited, so released completion claims settle before
+ * the ending is reported; one already delivering finishes, so a timeout never splits a delivery.
+ * A wait that still finished, or failed for another reason during that cleanup, reports that
+ * instead, and so does one whose caller is interrupted meanwhile.
  */
 export const awaitWithinTimeout = <A, E, R>(
-  wait: Effect.Effect<A, E, R>,
+  wait: (deadline: AwaitDeadline) => Effect.Effect<A, E, R>,
   timeoutSeconds: number,
 ): Effect.Effect<Result.Result<A, AwaitEnding>, E, R> =>
   Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
-      const waiting = yield* Effect.forkChild(restore(wait));
-      const settled = yield* restore(
+      const gate = deliveryGate();
+      const waiting = yield* Effect.forkChild(restore(wait(gate)));
+      let settled = yield* restore(
         Fiber.await(waiting).pipe(Effect.timeoutOption(Duration.seconds(timeoutSeconds))),
       ).pipe(Effect.exit);
+      // Expired in the step that observed the timeout, so the wait can't begin delivering after.
+      if (Exit.isSuccess(settled) && Option.isNone(settled.value) && !gate.expire())
+        settled = yield* restore(Fiber.await(waiting).pipe(Effect.asSome)).pipe(Effect.exit);
       const finished = Exit.isSuccess(settled) ? Option.getOrUndefined(settled.value) : undefined;
       if (finished === undefined) yield* Fiber.interrupt(waiting);
       const exit = finished ?? (yield* Fiber.await(waiting));

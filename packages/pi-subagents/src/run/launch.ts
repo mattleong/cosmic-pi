@@ -1,21 +1,20 @@
-import {
-  retireRunUsageLocked,
-  spendLimitRefusalLocked,
-  type SessionUsageLedger,
-} from "./session-usage.ts";
-import type { SessionSpendLimit } from "../config/options.ts";
+import { retireRunUsageLocked, type SessionUsageLedger } from "./session-usage.ts";
 import * as Arr from "effect/Array";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Order from "effect/Order";
 import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import * as Scope from "effect/Scope";
 import { firstLineMessage } from "pi-cosmic-core/message-text";
+import type { BackendStartupState } from "../backend/model.ts";
 import type { SubagentBackendRegistryContract } from "../backend/service.ts";
+import { skippedCandidateRoute, type SkippedProfileCandidate } from "../profiles/model.ts";
+import type { SubagentRuntime } from "../domain/routing.ts";
 import {
   DEFAULT_MAX_ACTIVE_RUNS,
   DEFAULT_SUBAGENT_NESTING_POLICY,
@@ -36,12 +35,22 @@ import { peerNoticeText } from "./coordination.ts";
 import { taskPrompt } from "./tool-policy.ts";
 import {
   invalidRequest,
+  isCleanupUnconfirmed,
+  isOutcomeUncertain,
   processError,
-  SubagentCapacityError,
+  subagentErrorCode,
   type SubagentError,
   SubagentHistoryCapacityError,
   SubagentRuntimeClosedError,
 } from "./errors.ts";
+import {
+  candidateFallbackFailure,
+  candidateStartupFailureLocked,
+  exhaustRouteLocked,
+  retargetRunLocked,
+  stopFallbackLocked,
+  type FallbackStop,
+} from "./candidate-fallback.ts";
 import {
   commitRunInitialization,
   completeRunInitialization,
@@ -55,10 +64,15 @@ import {
   failedRunNextCandidate,
   isActiveRunState,
   isTerminalRunState,
+  onStartCandidate,
+  selectedRouteCandidate,
   SUBAGENT_ROOT_RUN_ID,
   type FailedStartRecovery,
+  type RouteFallback,
   type StartSubagentRequest,
+  type SubagentNextCandidate,
   type SubagentRunView,
+  type UnsafeCandidateProbe,
 } from "./model.ts";
 import type { RunAssignment } from "./assignment.ts";
 import type { RunNotificationDelivery } from "./notification-delivery.ts";
@@ -83,6 +97,17 @@ const failedStartRecoveries = new WeakMap<SubagentError, FailedStartRecovery>();
 
 export const getFailedStartRecovery = (error: SubagentError): FailedStartRecovery | undefined =>
   failedStartRecoveries.get(error);
+
+/** The candidate a failed start's admitted run last tried, which a fallback may have changed. */
+export type FailedStartRoute = Pick<
+  SubagentRunView,
+  "runtime" | "model" | "effort" | "openaiFastMode" | "selection"
+>;
+
+const failedStartRoutes = new WeakMap<SubagentError, FailedStartRoute>();
+
+export const getFailedStartRoute = (error: SubagentError): FailedStartRoute | undefined =>
+  failedStartRoutes.get(error);
 
 // A run's error says what failed, never a rendered cause, whose stack frames and dependency paths
 // would reach its card, previews, and failure file. A defect keeps its message's first line.
@@ -125,7 +150,6 @@ interface RunLaunchDependencies extends Pick<
   readonly initializeProcess: RunProcessInitializer;
   readonly workspaces: Pick<RunWorkspaceControl, "bind" | "heldLaunchSlots">;
   readonly sessionUsage: SessionUsageLedger;
-  readonly currentSpendLimit: Effect.Effect<SessionSpendLimit | undefined>;
 }
 
 const runtimeClosedError = () =>
@@ -186,40 +210,17 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
     return parent;
   });
 
-  const spendLimitLocked = Effect.fn("SubagentLaunch.spendLimitLocked")(function* (
-    spendLimit: SessionSpendLimit | undefined,
-  ) {
-    const refusal = spendLimitRefusalLocked(dependencies.sessionUsage, records, spendLimit);
-    if (refusal?.kind === "invalid")
-      return yield* invalidRequest(
-        "session_spend_limit_invalid",
-        `The configured sessionSpendLimit is invalid (${refusal.diagnostic}); no new runs start until it is fixed.`,
-      );
-    if (refusal)
-      return yield* SubagentCapacityError.make({
-        limit: refusal.dollars,
-        code: "session_spend_limit",
-        message: `This session's subagents have spent $${refusal.spent.toFixed(2)} of its $${refusal.dollars.toFixed(2)} limit (sessionSpendLimit); no new runs start.`,
-      });
-    return undefined;
-  });
-
   // Writers check what admission will refuse before canonicalizing a cwd or acquiring a
   // workspace; admission repeats every check under the same lock.
   const validate = (request: StartSubagentRequest, scriptedRoot = false) =>
     validateStartRequest(request).pipe(
       Effect.tap(() =>
         request.writeIntent === "writer"
-          ? dependencies.currentSpendLimit.pipe(
-              Effect.flatMap((spendLimit) =>
-                withLock(
-                  Effect.gen(function* () {
-                    yield* enforceScriptedAdmissionLocked(request, scriptedRoot);
-                    yield* parentLocked(request);
-                    yield* spendLimitLocked(spendLimit);
-                  }),
-                ),
-              ),
+          ? withLock(
+              Effect.gen(function* () {
+                yield* enforceScriptedAdmissionLocked(request, scriptedRoot);
+                yield* parentLocked(request);
+              }),
             )
           : Effect.void,
       ),
@@ -236,7 +237,6 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
         const parentRunId = request.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
         const nestingPolicy: SubagentNestingPolicy =
           request.nestingPolicy ?? DEFAULT_SUBAGENT_NESTING_POLICY;
-        const spendLimit = yield* dependencies.currentSpendLimit;
         const driver = yield* restore(
           backendRegistry.resolve({
             runtime: request.runtime,
@@ -294,7 +294,6 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
               workspaces.heldLaunchSlots(undefined, request),
             );
             if (treeFailure) return yield* treeFailure;
-            yield* spendLimitLocked(spendLimit);
             if (!canonicalWriterCwd) return undefined;
             const writerFailure = writerConflictError(
               records,
@@ -445,24 +444,31 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
                 ),
               );
         const peerNotice = peerNoticeText(records.values(), reserved.view.id);
-        const initialPrompt = taskPrompt(request, peerNotice);
-        const initialize = Effect.gen(function* () {
+        const initialize = Effect.fn("SubagentLaunch.initialize")(function* (
+          candidate: StartSubagentRequest,
+        ) {
           const state = yield* initializeProcess(reserved);
           yield* Effect.yieldNow;
           if (
-            request.runtime === "pi" &&
+            candidate.runtime === "pi" &&
             state.model !== undefined &&
-            !samePiModel(state.model, request.model)
+            !samePiModel(state.model, candidate.model)
           )
             return yield* invalidRequest(
               "pi_model_mismatch",
-              `Pi selected model ${state.model} instead of required model ${request.model}.`,
+              `Pi selected model ${state.model} instead of required model ${candidate.model}.`,
             );
-          if (request.effortWasExplicit && state.effort !== request.effort)
+          if (candidate.effortWasExplicit && state.effort !== candidate.effort)
             return yield* invalidRequest(
               "pi_effort_unsupported",
-              `Model ${request.model} does not support requested effort ${request.effort}; effective level was ${state.effort}.`,
+              `Model ${candidate.model} does not support requested effort ${candidate.effort}; effective level was ${state.effort}.`,
             );
+          return yield* activate(state, candidate);
+        });
+        const activate = Effect.fn("SubagentLaunch.activate")(function* (
+          state: BackendStartupState,
+          candidate: StartSubagentRequest,
+        ) {
           const startedAt = yield* Clock.currentTimeMillis;
           const activated = yield* withLock(
             Effect.gen(function* () {
@@ -503,16 +509,237 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
                   "start_cancelled",
                   `Subagent ${reserved.view.id} changed state before its task could be issued.`,
                 );
+              // The task is issued from here on, so no other candidate may take the run.
               reserved.assignment.phase = "issuing";
               return reserved.assignment.attemptToken;
             }),
           );
-          const issued = yield* submitPrompt(reserved, initialPrompt, "start", attemptToken);
+          const issued = yield* submitPrompt(
+            reserved,
+            taskPrompt(candidate, peerNotice),
+            "start",
+            attemptToken,
+          );
           yield* sendPeerNotices(reserved.view.id);
           return issued;
         });
 
-        return yield* restore(initialize).pipe(
+        // Each candidate this launch started on that failed, in order.
+        const tried: SkippedProfileCandidate[] = [];
+        // Runtimes whose own startup failed, so the route passes over their other candidates.
+        const failedRuntimes = new Map<SubagentRuntime, SkippedProfileCandidate>();
+        // Once the launch moved past a candidate or stopped trying, its final failure names every
+        // one it tried and why it stopped; an attempt's own failure is the last of them.
+        const failedStart = (error: SubagentError, fromAttempt: boolean, stop?: FallbackStop) =>
+          Effect.fail(
+            tried.length > (fromAttempt ? 1 : 0) || stop
+              ? candidateFallbackFailure(error, tried, stop)
+              : error,
+          );
+        // A stop, runtime shutdown, or issued task ends the chain before each step.
+        const preparingLocked = Effect.fn("SubagentLaunch.preparingLocked")(function* () {
+          if (isClosed()) return yield* runtimeClosedError();
+          if (
+            reserved.stoppedByParent ||
+            reserved.view.state !== "starting" ||
+            reserved.assignment.phase !== "preparing"
+          )
+            return yield* invalidRequest(
+              "start_cancelled",
+              `Subagent ${reserved.view.id} was stopped during startup.`,
+            );
+          return undefined;
+        });
+        const stillPreparing = withLock(preparingLocked()).pipe(
+          Effect.catch((error) => failedStart(error, false)),
+        );
+        /** Ends the chain with the attempt's failure, naming why and recording it on the run. */
+        const stopFallback = Effect.fn("SubagentLaunch.stopFallback")(function* (
+          lastError: SubagentError,
+          stop: FallbackStop,
+          hint: {
+            readonly skippedCandidates?: ReadonlyArray<SkippedProfileCandidate> | undefined;
+            readonly nextCandidate: SubagentNextCandidate | "keep" | "drop";
+          },
+          failure: SubagentError = lastError,
+        ) {
+          const stoppedAt = yield* Clock.currentTimeMillis;
+          yield* withLock(
+            Effect.gen(function* () {
+              stopFallbackLocked(reserved, { stop, failed: tried, ...hint, now: stoppedAt });
+              yield* publish;
+            }),
+          );
+          return yield* failedStart(
+            failure,
+            failure === lastError,
+            failure === lastError ? stop : undefined,
+          );
+        });
+        // A probe that couldn't confirm its cleanup or outcome may have left a process behind, so
+        // the run fails with its error and suggests no candidate.
+        const endOnUnsafeProbe = (
+          lastError: SubagentError,
+          unsafe: UnsafeCandidateProbe,
+          skippedCandidates: ReadonlyArray<SkippedProfileCandidate>,
+        ) =>
+          stopFallback(
+            lastError,
+            { code: unsafe.candidate.code, reason: unsafe.candidate.reason },
+            { skippedCandidates: [...skippedCandidates, unsafe.candidate], nextCandidate: "drop" },
+            unsafe.error,
+          );
+        const startOn = (
+          candidate: StartSubagentRequest,
+        ): Effect.Effect<SubagentRunView, SubagentError> =>
+          restore(initialize(candidate)).pipe(
+            Effect.catch((error) => fallBackFrom(candidate, error)),
+          );
+        const fallBackFrom = Effect.fn("SubagentLaunch.fallBackFrom")(function* (
+          candidate: StartSubagentRequest,
+          error: SubagentError,
+        ) {
+          const { failure, fallBack } = yield* withLock(
+            Effect.sync(() => candidateStartupFailureLocked(reserved, candidate, error)),
+          );
+          tried.push(failure);
+          const routeFallback = candidate.routeFallback;
+          if (!fallBack || !routeFallback) return yield* failedStart(error, true);
+          if (fallBack === "runtime" && !failedRuntimes.has(candidate.runtime))
+            failedRuntimes.set(candidate.runtime, failure);
+          // The failed candidate's processes are gone before another candidate takes the run,
+          // which keeps its writer-pool membership so a writer's lease never lapses.
+          yield* cleanup.closeCandidateScope(reserved);
+          const handedOver = yield* withLock(
+            Effect.sync(() => reserved.writerPoolHandover === reserved.scope),
+          );
+          if (!handedOver) return yield* failedStart(error, true);
+          // So is its private state, which the next candidate's backend may not know how to reclaim.
+          const reclaimed = yield* cleanup.reclaimCandidateRunState(reserved).pipe(Effect.result);
+          if (Result.isFailure(reclaimed))
+            return yield* stopFallback(
+              error,
+              { code: subagentErrorCode(reclaimed.failure), reason: reclaimed.failure.message },
+              { nextCandidate: "keep" },
+            );
+          return yield* moveOn(candidate, failure, routeFallback, error);
+        });
+        const moveOn = Effect.fn("SubagentLaunch.moveOn")(function* (
+          from: StartSubagentRequest,
+          failed: SkippedProfileCandidate,
+          routeFallback: RouteFallback,
+          lastError: SubagentError,
+        ): Effect.fn.Return<SubagentRunView, SubagentError> {
+          yield* stillPreparing;
+          const step = yield* restore(
+            routeFallback({
+              selection: from.selection ?? reserved.view.selection,
+              failed,
+              failedRuntimes,
+            }),
+          ).pipe(Effect.result);
+          if (Result.isFailure(step))
+            return yield* stopFallback(
+              lastError,
+              { code: subagentErrorCode(step.failure), reason: step.failure.message },
+              { nextCandidate: "keep" },
+            );
+          const { skippedCandidates, unsafe } = step.success;
+          if (unsafe) return yield* endOnUnsafeProbe(lastError, unsafe, skippedCandidates);
+          const candidate = step.success.next;
+          if (!candidate) {
+            yield* withLock(
+              Effect.gen(function* () {
+                exhaustRouteLocked(reserved, skippedCandidates);
+                yield* publish;
+              }),
+            );
+            return yield* failedStart(lastError, true);
+          }
+          const next = onStartCandidate(from, candidate);
+          // Admission and workspace ownership hold for the launch's write intent only.
+          if (next.writeIntent !== request.writeIntent)
+            return yield* stopFallback(
+              lastError,
+              {
+                code: "fallback_write_intent_changed",
+                reason: `The next candidate, ${next.runtime}/${next.model}, runs ${next.writeIntent}, but this run was admitted ${request.writeIntent}.`,
+              },
+              // That candidate is still the route's next one for a new run.
+              {
+                skippedCandidates,
+                nextCandidate: selectedRouteCandidate(candidate.routeContinuation),
+              },
+            );
+          yield* stillPreparing;
+          const prepared = yield* restore(
+            backendRegistry.resolve({ runtime: next.runtime, context: next.context }).pipe(
+              Effect.tap((nextDriver) =>
+                nextDriver.preflight({
+                  context: next.context,
+                  writeIntent: next.writeIntent,
+                  model: next.model,
+                  effort: next.effort,
+                  cwd,
+                }),
+              ),
+            ),
+          ).pipe(Effect.result);
+          if (Result.isFailure(prepared)) {
+            const skipped: SkippedProfileCandidate = {
+              ...(candidate.selection.candidateIndex !== undefined && {
+                candidateIndex: candidate.selection.candidateIndex,
+              }),
+              candidate: skippedCandidateRoute(next),
+              code: subagentErrorCode(prepared.failure),
+              reason: prepared.failure.message,
+            };
+            if (isCleanupUnconfirmed(prepared.failure) || isOutcomeUncertain(prepared.failure))
+              return yield* endOnUnsafeProbe(
+                lastError,
+                { candidate: skipped, error: prepared.failure },
+                skippedCandidates,
+              );
+            // Like a planning skip, a candidate that fails preflight here passes to the one after it.
+            return yield* moveOn(next, skipped, routeFallback, lastError);
+          }
+          const retarget = yield* Effect.all({
+            scope: Scope.make(),
+            cleanupSettlement: Deferred.make<"confirmed" | "quarantined">(),
+            settled: Deferred.make<void>(),
+            now: Clock.currentTimeMillis,
+          });
+          const installed = yield* withLock(
+            Effect.gen(function* () {
+              yield* preparingLocked();
+              // Another close of the failed candidate's scope ended its handover.
+              if (reserved.writerPoolHandover !== reserved.scope)
+                return yield* invalidRequest(
+                  "start_cancelled",
+                  `Subagent ${reserved.view.id} was stopped during startup.`,
+                );
+              yield* checkAdmissionLocked(reserved);
+              retargetRunLocked(reserved, {
+                plan: { request: next, parentRunId, cwd },
+                driver: prepared.success,
+                scope: retarget.scope,
+                cleanupSettlement: retarget.cleanupSettlement,
+                initialization: { settled: retarget.settled },
+                failed: tried,
+                now: retarget.now,
+              });
+              yield* publish;
+              return undefined;
+            }),
+          ).pipe(Effect.result);
+          if (Result.isFailure(installed)) {
+            yield* Scope.close(retarget.scope, Exit.void);
+            return yield* failedStart(installed.failure, false);
+          }
+          return yield* startOn(next);
+        });
+
+        return yield* startOn(request).pipe(
           Effect.onError((cause) =>
             Effect.gen(function* () {
               const interruptedOnly = Cause.hasInterruptsOnly(cause);
@@ -553,6 +780,8 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
                 const nextCandidate = failedRunNextCandidate(reserved.view);
                 const failureFile = reserved.view.errorArchive;
                 const warning = foldRunWarnings(reserved.warningSlots);
+                const { runtime, model, effort, openaiFastMode, selection } = reserved.view;
+                failedStartRoutes.set(error, { runtime, model, effort, openaiFastMode, selection });
                 failedStartRecoveries.set(error, {
                   runId: reserved.view.id,
                   cleanupDisposition:

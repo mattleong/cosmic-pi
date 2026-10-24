@@ -50,7 +50,11 @@ import { decodeSubagentContract, isSubagentContractTool } from "../tools/contrac
 import type { AgentToolInput, SubagentToolInput } from "../tools/schema.ts";
 import { registerAgentTools } from "../tools/agent.ts";
 import { scriptedAgentSendRefusal } from "../tools/execute-agents.ts";
-import { observeAwaitInterruption } from "../tools/execute-await.ts";
+import {
+  observeAwaitInterruption,
+  withProxyWaitBackstop,
+  type ProxyWaitBackstop,
+} from "../tools/execute-await.ts";
 import type { SubagentProxyRequest } from "../tools/proxy-protocol.ts";
 import { publishChildQuestionnaireRelay } from "./host-ask-user.ts";
 import {
@@ -263,6 +267,7 @@ export function registerSubagentChildBridge(
     encoded: SubagentProxyRequest,
     signal: AbortSignal | undefined,
     onInterruption?: () => void,
+    backstop?: ProxyWaitBackstop,
   ): Promise<AgentToolResult<unknown>> => {
     if (!isActivationCurrent(input, token))
       return Promise.reject(new Error("Subagent proxy is unavailable for this session."));
@@ -276,23 +281,26 @@ export function registerSubagentChildBridge(
     return slot
       .run(
         observeAwaitInterruption(
-          pendingProxy.await(
-            requestId,
-            ipc.sendContact({
-              channel: "pi-subagents",
-              type: "proxy_request",
+          withProxyWaitBackstop(
+            pendingProxy.await(
               requestId,
-              tool: request.tool,
-              argumentsJson: request.argumentsJson,
-            }),
-            () => {
-              if (isActivationCurrent(input, token))
-                slot.fork(
-                  sendCancel("proxy_cancel", requestId).pipe(
-                    Effect.ensuring(Effect.sync(() => input.questionnaires.delete(requestId))),
-                  ),
-                );
-            },
+              ipc.sendContact({
+                channel: "pi-subagents",
+                type: "proxy_request",
+                requestId,
+                tool: request.tool,
+                argumentsJson: request.argumentsJson,
+              }),
+              () => {
+                if (isActivationCurrent(input, token))
+                  slot.fork(
+                    sendCancel("proxy_cancel", requestId).pipe(
+                      Effect.ensuring(Effect.sync(() => input.questionnaires.delete(requestId))),
+                    ),
+                  );
+              },
+            ),
+            backstop,
           ),
           onInterruption,
         ),
@@ -423,7 +431,16 @@ export function registerSubagentChildBridge(
         toolInput: SubagentToolInput,
         signal?: AbortSignal,
         onInterruption?: () => void,
-      ) => proxyCall(input, token, encodeSubagentProxyInput(toolInput), signal, onInterruption);
+        backstop?: ProxyWaitBackstop,
+      ) =>
+        proxyCall(
+          input,
+          token,
+          encodeSubagentProxyInput(toolInput),
+          signal,
+          onInterruption,
+          backstop,
+        );
       const scheduleAnimation: CompactAnimationScheduler = (interval, tick) =>
         isActivationCurrent(input, token) ? scheduler.schedule(interval, tick) : undefined;
       const owner = receipts.activate();

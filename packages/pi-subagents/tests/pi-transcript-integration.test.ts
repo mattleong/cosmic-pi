@@ -89,8 +89,8 @@ describe("installed Pi transcript reconstruction", () => {
           settingsManager: settings,
           sessionManager: SessionManager.open(forkFile),
           resourceLoader: loader,
-          tools: [...childToolPolicy(["child_alpha", "child_beta"]).enabled],
-          excludeTools: Str.split(childToolPolicy([]).excluded, ","),
+          tools: [...childToolPolicy(["child_alpha", "child_beta"], "read-only").enabled],
+          excludeTools: Str.split(childToolPolicy([], "read-only").excluded, ","),
         });
         fake.setResponses([
           (context) => {
@@ -230,8 +230,8 @@ describe("installed Pi transcript reconstruction", () => {
             settingsManager: settings,
             sessionManager: SessionManager.open(forkFile),
             resourceLoader: loader,
-            tools: [...childToolPolicy(["child_alpha"]).enabled],
-            excludeTools: Str.split(childToolPolicy([]).excluded, ","),
+            tools: [...childToolPolicy(["child_alpha"], "read-only").enabled],
+            excludeTools: Str.split(childToolPolicy([], "read-only").excluded, ","),
           });
           fake.setResponses([
             (context) => {

@@ -24,7 +24,6 @@ import {
   localServiceFixture,
   nativeReportRequest,
   nativeReportServiceFixture,
-  profileLayerFor,
   request,
   runView,
   withService,
@@ -375,39 +374,6 @@ describe("agent messaging", () => {
       });
     },
   );
-
-  it.effect("refuses resumes by agent messages once the session reached its spend limit", () => {
-    const fake = fakeChildLayer();
-    const { projections, layer } = localServiceFixture(
-      {},
-      fake,
-      profileLayerFor({ version: 6, sessionSpendLimit: 1 }),
-    );
-    return withService(layer, function* (service) {
-      const worker = yield* service.start(request({ name: "worker" }));
-      fake.controls[0]!.offer({
-        type: "message_end",
-        message: {
-          role: "assistant",
-          stopReason: "stop",
-          content: [{ type: "text", text: "Costly work." }],
-          usage: { input: 10, totalTokens: 10, cost: { total: 1.5 } },
-        },
-      });
-      fake.controls[0]!.offer({ type: "turn_end" });
-      yield* yieldUntil(() => (projections.at(-1)?.sessionUsage?.cost ?? 0) >= 1.5, 200);
-      yield* completeLocalRun(service, fake.controls[0]!, worker.id);
-
-      expect(
-        yield* service.agentSend(MAIN, worker.id, "One more pass.").pipe(Effect.flip),
-      ).toMatchObject({ code: "agent_spend_limit" });
-      expect(yield* runView(service, worker.id)).toMatchObject({
-        state: "completed",
-        assignmentEpoch: 1,
-      });
-      expect(fake.controls).toHaveLength(1);
-    });
-  });
 
   it.effect("never limits messages up, down, or across the tree", () => {
     const { layer } = localServiceFixture();

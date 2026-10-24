@@ -1,6 +1,7 @@
 import { queryQuestionnaireRelay } from "pi-ask-user/protocol";
 import { createEventBus, defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import {
   deferredPromise,
   extensionContextFixture,
@@ -16,7 +17,7 @@ import { childToolPolicy } from "../src/boundary/child-process.ts";
 import type { LocalPiChildIpcHandlers, ParentContactError } from "../src/boundary/local-pi-ipc.ts";
 import { NESTED_START_GUIDELINE } from "../src/delegation/prompt.ts";
 import { AGENT_TOOL_NAMES, SUBAGENT_TOOL_NAME } from "../src/run/tool-policy.ts";
-import { lifecycleContract } from "../src/tools/contract.ts";
+import { cancelledAwaitContract, lifecycleContract } from "../src/tools/contract.ts";
 import { view } from "./fixtures/run-view.ts";
 import { describeActivationLifecycle } from "./support/activation-lifecycle.ts";
 import { effectTest, eventLoopTurn, settle, step } from "./support/effect-test.ts";
@@ -165,6 +166,15 @@ const rejection = (promise: Promise<unknown>) =>
     (cause: unknown) => cause,
   );
 
+// Management proxies wrap their arguments with the caller's parent context.
+const decodeForwardedTimeout = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      argumentsJson: Schema.fromJsonString(Schema.Struct({ timeoutSeconds: Schema.Finite })),
+    }),
+  ),
+);
+
 afterEach(() => {
   vi.unstubAllEnvs();
 });
@@ -245,6 +255,106 @@ describe("local Pi child bridge", () => {
     expect(yield* step(() => pending)).toBeDefined();
     yield* settle(harness.shutdown);
   });
+
+  effectTest(
+    "leaves a nested await's clamped timeout to the root, behind a backstop",
+    function* () {
+      const harness = makeHarness();
+      yield* settle(harness.start);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+      try {
+        let settled = false;
+        const pending = execute(
+          harness.latestTool(SUBAGENT_TOOL_NAME.await),
+          { runIds: ["a"], until: "all_finished", timeoutSeconds: 86_400 },
+          undefined,
+        ).finally(() => {
+          settled = true;
+        });
+        const request = yield* harness.awaitContact("proxy_request");
+        expect(decodeForwardedTimeout(request.argumentsJson).argumentsJson.timeoutSeconds).toBe(
+          3_600,
+        );
+        // The root answers at the timeout, so within its backstop the child neither gives up nor
+        // cancels on its own.
+        yield* step(() => vi.advanceTimersByTimeAsync(3_600_000 + 29_000));
+        expect(settled).toBe(false);
+        expect(contactOfType(harness.contacts, "proxy_cancel")).toBeUndefined();
+        harness.currentListener().handlers.onControl({
+          channel: "pi-subagents",
+          type: "proxy_response",
+          requestId: request.requestId,
+          ok: true,
+          payloadJson: JSON.stringify({
+            content: [{ type: "text", text: "Await timed out after 3600s" }],
+            structuredContent: cancelledAwaitContract({
+              runs: [view({ id: "a" })],
+              requestedRunIds: ["a"],
+              until: "all_finished",
+              cleanup: "confirmed",
+              ending: "timed_out",
+            }),
+          }),
+        });
+        expect((yield* step(() => pending)).structuredContent).toMatchObject({
+          outcome: "timed_out",
+          cleanup: "confirmed",
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+
+      // A root answer lost while the connection stays up ends at the backstop, as a timeout that
+      // cancels the wait at the root and doesn't claim its cleanup.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+      try {
+        const lost = execute(
+          harness.latestTool(SUBAGENT_TOOL_NAME.await),
+          { runIds: ["a"], until: "all_finished", timeoutSeconds: 60 },
+          undefined,
+        );
+        yield* step(() =>
+          vi.waitFor(() =>
+            expect(
+              Arr.filter(harness.contacts, (contact) => contact.type === "proxy_request"),
+            ).toHaveLength(2),
+          ),
+        );
+        const lostRequest = yield* harness.awaitContact("proxy_request");
+        yield* step(() => vi.advanceTimersByTimeAsync(90_000));
+        expect((yield* step(() => lost)).structuredContent).toMatchObject({
+          outcome: "timed_out",
+          cleanup: "unconfirmed",
+        });
+        yield* harness.awaitContact("proxy_cancel", { requestId: lostRequest.requestId });
+      } finally {
+        vi.useRealTimers();
+      }
+
+      // The caller's own abort still ends a timed wait at once and cancels it at the root.
+      const abort = new AbortController();
+      const cancelled = execute(
+        harness.latestTool(SUBAGENT_TOOL_NAME.await),
+        { runIds: ["a"], until: "all_finished", timeoutSeconds: 60 },
+        abort.signal,
+      );
+      yield* step(() =>
+        vi.waitFor(() =>
+          expect(
+            Arr.filter(harness.contacts, (contact) => contact.type === "proxy_request"),
+          ).toHaveLength(3),
+        ),
+      );
+      const cancelledRequest = yield* harness.awaitContact("proxy_request");
+      abort.abort();
+      expect((yield* step(() => cancelled)).structuredContent).toMatchObject({
+        outcome: "cancelled",
+        cleanup: "unconfirmed",
+      });
+      yield* harness.awaitContact("proxy_cancel", { requestId: cancelledRequest.requestId });
+      yield* settle(harness.shutdown);
+    },
+  );
 
   effectTest("re-registers on reload and rejects stale tool definitions", function* () {
     const harness = makeHarness();
@@ -491,7 +601,9 @@ describe("nested tool surface", () => {
     expect(harness.activeTools()).not.toContain(SUBAGENT_TOOL_NAME.workspace);
     // Every child coordinates with the session's agents, whatever its tool policy.
     expect(harness.activeTools()).toEqual(expect.arrayContaining([...AGENT_TOOL_NAMES]));
-    expect(childToolPolicy(["read"]).enabled).not.toContain(SUBAGENT_TOOL_NAME.workspace);
+    expect(childToolPolicy(["read"], "read-only").enabled).not.toContain(
+      SUBAGENT_TOOL_NAME.workspace,
+    );
     expect(harness.latestTool(SUBAGENT_TOOL_NAME.start).promptGuidelines).toContain(
       NESTED_START_GUIDELINE,
     );

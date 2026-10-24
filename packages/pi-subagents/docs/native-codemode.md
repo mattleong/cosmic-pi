@@ -16,7 +16,7 @@ These examples are for the root session. Nested Pi children delegate only throug
 - Messages, answers to questions, and resumes (`agent_send`), worktree review and integration, and interrupt require the main agent.
 - A script's stop uses the root's normal target authority, so it can stop any run in the session. Stop only runs the script launched or that the user approved stopping.
 
-These are orchestration safeguards, not capability confinement: read-only Pi agents and native tools keep their cooperative authority.
+These are orchestration safeguards, not capability confinement: read-only Pi agents don't get `edit` or `write` ([tool snapshot](local-backends.md#tool-snapshot-and-read-only-semantics)), but `bash` and other native tools keep their cooperative authority.
 
 ## Results and failures
 

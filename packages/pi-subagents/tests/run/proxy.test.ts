@@ -10,9 +10,16 @@ import {
   recordingExtensionHost,
   yieldUntil,
 } from "pi-cosmic-core/testing";
-import { SubagentService, type SubagentServiceOptions } from "../../src/run/service.ts";
+import {
+  SubagentService,
+  type SubagentServiceContract,
+  type SubagentServiceOptions,
+} from "../../src/run/service.ts";
 import { executeSubagentActionEffect } from "../../src/tools/execute.ts";
-import { decodeSubagentProxyRequest } from "../../src/tools/proxy-protocol.ts";
+import {
+  decodeSubagentProxyRequest,
+  decodeSubagentProxyResult,
+} from "../../src/tools/proxy-protocol.ts";
 import { SUBAGENT_TOOL_NAME } from "../../src/run/tool-policy.ts";
 import type { BackendProxyResult } from "../../src/backend/model.ts";
 import type { LocalPiParentControl } from "../../src/backend/local-pi-protocol.ts";
@@ -29,7 +36,9 @@ import {
 } from "./fixtures/service-harness.ts";
 import { stoppedWriter, workspaceFixture } from "./fixtures/workspace-engine.ts";
 import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
+import * as Str from "effect/String";
 
 type ProxyResponse = Extract<LocalPiParentControl, { readonly type: "proxy_response" }>;
 
@@ -100,6 +109,175 @@ const coordinatorProxyOptions = (): SubagentServiceOptions => {
     },
   };
 };
+
+/** A root coordinator for nested awaits, optionally over an intercepted service. */
+const nestedAwaitFixture = (
+  intercept: (service: SubagentServiceContract) => SubagentServiceContract = (service) => service,
+) => {
+  const host = recordingExtensionHost();
+  const context = extensionContextFixture();
+  const progress = { observed: 0 };
+  const fixture = localServiceFixture({
+    notify: acknowledgeCompletions,
+    proxyHandler: (service, callerRunId, proxyRequest) => {
+      const input = decodeSubagentProxyRequest(proxyRequest);
+      if (Result.isFailure(input)) return Effect.fail(input.failure);
+      return executeSubagentActionEffect(
+        host.pi,
+        { cwd: "/project", projectTrusted: true },
+        input.success,
+        () => {
+          progress.observed += 1;
+        },
+        context,
+        callerRunId,
+      ).pipe(Effect.provideService(SubagentService, intercept(service)));
+    },
+  });
+  return { ...fixture, progress };
+};
+
+const offerAwait = (
+  control: FakeChildControl,
+  requestId: string,
+  args: { readonly runIds: ReadonlyArray<string>; readonly timeoutSeconds?: number },
+) =>
+  control.offerIpc({
+    channel: "pi-subagents",
+    type: "proxy_request",
+    requestId,
+    tool: "agent_await",
+    argumentsJson: JSON.stringify({ until: "all_finished", ...args }),
+  });
+
+const proxiedResult = (control: FakeChildControl, requestId: string) => {
+  const response = responseFor(control, requestId);
+  expect(response?.ok).toBe(true);
+  return decodeSubagentProxyResult(response?.payloadJson ?? "");
+};
+
+const nestedParentAndChild = (service: SubagentServiceContract) =>
+  Effect.gen(function* () {
+    const parent = yield* service.start(request({ name: "awaiting-parent" }));
+    const child = yield* service.startSessionOwnedFrom(parent.id, request({ name: "child" }));
+    return { parent, child };
+  });
+
+describe("nested await timeouts", () => {
+  it.effect("times out at the root with claims released, so the next await works", () => {
+    const { fake, layer, progress } = nestedAwaitFixture();
+    return withService(layer, function* (service) {
+      const { child } = yield* nestedParentAndChild(service);
+      const caller = fake.controls[0]!;
+      offerAwait(caller, "timed", { runIds: [child.id], timeoutSeconds: 30 });
+      yield* yieldUntil(() => progress.observed > 0);
+      yield* TestClock.adjust("29 seconds");
+      expect(responseFor(caller, "timed")).toBeUndefined();
+      yield* TestClock.adjust("1 second");
+      yield* yieldUntil(() => responseFor(caller, "timed") !== undefined);
+      const timedOut = proxiedResult(caller, "timed");
+      expect(timedOut?.structuredContent).toMatchObject({
+        outcome: "timed_out",
+        cleanup: "confirmed",
+      });
+      expect(timedOut?.details).toMatchObject({ cancelled: true, timedOutSeconds: 30 });
+      expect(timedOut?.details).not.toHaveProperty("cancellationCleanup");
+      expect((yield* runView(service, child.id)).state).toBe("running");
+
+      const observedBefore = progress.observed;
+      offerAwait(caller, "again", { runIds: [child.id] });
+      yield* yieldUntil(() => progress.observed > observedBefore);
+      expect(responseFor(caller, "again")).toBeUndefined();
+      fake.controls[1]!.settle("Report after the timeout.");
+      yield* yieldUntil(() => responseFor(caller, "again") !== undefined);
+      expect(proxiedResult(caller, "again")?.structuredContent).toMatchObject({
+        outcome: "finished",
+        targets: [{ runId: child.id, report: { status: "delivered" } }],
+      });
+    });
+  });
+
+  it.effect("finishes a delivery that the timeout finds in progress", () => {
+    const consuming = Deferred.makeUnsafe<void>();
+    const release = Deferred.makeUnsafe<void>();
+    const { fake, layer, progress, notifications } = nestedAwaitFixture((service) => ({
+      ...service,
+      consumeCompletions: ((receipts) =>
+        Deferred.succeed(consuming, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.andThen(service.consumeCompletions(receipts)),
+        )) satisfies SubagentServiceContract["consumeCompletions"],
+    }));
+    return withService(layer, function* (service) {
+      const { child } = yield* nestedParentAndChild(service);
+      const caller = fake.controls[0]!;
+      offerAwait(caller, "boundary", { runIds: [child.id], timeoutSeconds: 30 });
+      yield* yieldUntil(() => progress.observed > 0);
+      fake.controls[1]!.settle("Report at the boundary.");
+      yield* Deferred.await(consuming);
+      yield* TestClock.adjust("30 seconds");
+      expect(responseFor(caller, "boundary")).toBeUndefined();
+      yield* Deferred.succeed(release, undefined);
+      yield* yieldUntil(() => responseFor(caller, "boundary") !== undefined);
+      expect(proxiedResult(caller, "boundary")?.structuredContent).toMatchObject({
+        outcome: "finished",
+        targets: [{ runId: child.id, report: { status: "delivered" } }],
+      });
+      // Delivered once, by the await: no notice repeats it.
+      yield* TestClock.adjust("100 millis");
+      expect(Arr.filter(caller.ipc, (message) => message.type === "proxy_notification")).toEqual(
+        [],
+      );
+      expect(
+        Arr.filter(notifications, (notification) => notification.type === "completed"),
+      ).toEqual([]);
+    });
+  });
+
+  it.effect("leaves an outcome the timeout beat unconsumed for the nested parent's notice", () => {
+    const terminal = Deferred.makeUnsafe<void>();
+    const { fake, layer, progress } = nestedAwaitFixture((service) => ({
+      ...service,
+      withAwaitTerminalObservations: ((ids, until, onUpdate, use, callerRunId) =>
+        service.withAwaitTerminalObservations(
+          ids,
+          until,
+          onUpdate,
+          (observations, questions) =>
+            Deferred.succeed(terminal, undefined).pipe(
+              Effect.andThen(Effect.never),
+              Effect.andThen(use(observations, questions)),
+            ),
+          callerRunId,
+        )) satisfies SubagentServiceContract["withAwaitTerminalObservations"],
+    }));
+    return withService(layer, function* (service) {
+      const { child } = yield* nestedParentAndChild(service);
+      const caller = fake.controls[0]!;
+      offerAwait(caller, "beaten", { runIds: [child.id], timeoutSeconds: 30 });
+      yield* yieldUntil(() => progress.observed > 0);
+      fake.controls[1]!.settle("Report the timeout beat.");
+      yield* Deferred.await(terminal);
+      yield* TestClock.adjust("30 seconds");
+      yield* yieldUntil(() => responseFor(caller, "beaten") !== undefined);
+      expect(proxiedResult(caller, "beaten")?.structuredContent).toMatchObject({
+        outcome: "timed_out",
+        cleanup: "confirmed",
+        targets: [{ runId: child.id, report: { status: "deferred" } }],
+      });
+      // The released report reaches the nested parent as its own notice.
+      yield* TestClock.adjust("100 millis");
+      yield* yieldUntil(() =>
+        Arr.some(
+          caller.ipc,
+          (message) =>
+            message.type === "proxy_notification" &&
+            Fn.pipe(message.message, Str.includes(child.id)),
+        ),
+      );
+    });
+  });
+});
 
 describe("SubagentService parent proxy executions", () => {
   it.effect("binds proxied workspace calls to the authenticated caller", () => {
