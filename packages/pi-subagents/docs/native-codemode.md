@@ -4,7 +4,7 @@ Part of the [pi-subagents](../README.md) documentation. Service-side gates are i
 
 Native Pi `codemode` runs JavaScript that coordinates ordinary subagents inside the main agent's turn. Pi owns the VM, dispatch, cancellation, and model access. Scripts suit short read-only coordination whose receipts the main agent needs in the same turn. Agents launched by a script still run in the background, and the main agent keeps responsibility for recovery, writer handoffs, and synthesis.
 
-These examples are for the root session. Nested Pi children delegate only through their model-only proxies of the root's management tools, though their scripts may call `agent_list` and `agent_read`, and Claude and Codex children reach the root only through the supervisor channel. An explicit `profile` always wins; an omitted profile uses `generalist`.
+These examples are for the root session. Nested Pi children delegate only through their model-only proxies of the root's management tools, though their scripts may call `agent_list` and `agent_read`, and Claude children reach the root only through the supervisor channel. An explicit `profile` always wins; an omitted profile uses `generalist`.
 
 ## Script boundary
 

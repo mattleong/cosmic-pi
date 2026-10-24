@@ -1,20 +1,11 @@
-import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
-import * as Rec from "effect/Record";
-import type * as Schema from "effect/Schema";
 import { hasControlCharacter } from "pi-cosmic-core/security";
 import { hasObjectRuntimeType } from "pi-cosmic-core/runtime-values";
 import { nodeFsPromises as fs, nodePath } from "pi-cosmic-core/platform/node-builtins";
 import { PrivateFileError, tryPrivateFileOperation } from "pi-cosmic-core/platform/private-file";
-import { homedir } from "node:os";
-import { decodeUnknownJsonOption } from "./wire-shared.ts";
 
-const MAX_AUTH_BYTES = 64 * 1024;
 const MAX_PATH_CHARS = 4_096;
-
-export const tomlString = (value: string): string => JSON.stringify(value);
 
 export const nodeErrorCode = (cause: unknown): string | undefined =>
   cause && hasObjectRuntimeType(cause) && "code" in cause && Predicate.isString(cause.code)
@@ -44,53 +35,3 @@ export const safeAgentDirectory = Effect.fn("HarnessShared.safeAgentDirectory")(
   if (!(yield* isRealDirectory(canonical))) return yield* unsafeEntry();
   return canonical;
 });
-
-const boundedJsonValue = (value: Schema.Json, depth = 0): boolean => {
-  if (depth > 16) return false;
-  if (value === null || Predicate.isString(value) || Predicate.isBoolean(value)) return true;
-  if (Predicate.isNumber(value)) return Number.isFinite(value);
-  if (Arr.isArray<Schema.Json>(value))
-    return value.length <= 1_024 && Arr.every(value, (entry) => boundedJsonValue(entry, depth + 1));
-  if (!hasObjectRuntimeType(value)) return false;
-  const entries = Rec.toEntries(value);
-  return (
-    entries.length <= 1_024 &&
-    Arr.every(entries, ([key, entry]) => key.length <= 1_024 && boundedJsonValue(entry, depth + 1))
-  );
-};
-
-const validatedCodexAuth = (bytes: Buffer): string | undefined => {
-  if (bytes.length <= 1 || bytes.length > MAX_AUTH_BYTES) return undefined;
-  const decoded = decodeUnknownJsonOption(bytes.toString("utf8"));
-  return Option.isSome(decoded) &&
-    Predicate.isObject(decoded.value) &&
-    boundedJsonValue(decoded.value)
-    ? `${JSON.stringify(decoded.value)}\n`
-    : undefined;
-};
-
-const readValidatedCodexAuthFromHome = (sourceHome: string): Effect.Effect<string | undefined> => {
-  const path = nodePath.join(sourceHome, "auth.json");
-  return tryPrivateFileOperation(() => fs.lstat(path)).pipe(
-    Effect.filterOrFail(
-      (stat) =>
-        stat.isFile() && !stat.isSymbolicLink() && stat.size > 1 && stat.size <= MAX_AUTH_BYTES,
-      unsafeEntry,
-    ),
-    Effect.andThen(tryPrivateFileOperation(() => fs.readFile(path))),
-    Effect.map(validatedCodexAuth),
-    Effect.orElseSucceed(() => undefined),
-  );
-};
-
-/** The user's Codex credential, normalized, or nothing when it is missing, unsafe, or invalid. */
-export const readValidatedCodexAuth = (
-  sourceEnvironment: NodeJS.ProcessEnv,
-): Effect.Effect<string | undefined> =>
-  safeAgentDirectory(
-    sourceEnvironment.CODEX_HOME ??
-      nodePath.join((sourceEnvironment.HOME ?? "") || homedir(), ".codex"),
-  ).pipe(
-    Effect.flatMap(readValidatedCodexAuthFromHome),
-    Effect.orElseSucceed(() => undefined),
-  );

@@ -2,7 +2,7 @@
 
 Part of the [pi-subagents](../README.md) architecture documentation. See [ARCHITECTURE.md](../ARCHITECTURE.md) for ownership and [Completion and delivery](completion-delivery.md) for assignment and report ownership.
 
-All three local adapters translate native behavior into normalized handles, controls, and events. Run orchestration never constructs or decodes native wire frames, and backend continuation state is an opaque token that only its adapter interprets.
+Both local adapters translate native behavior into normalized handles, controls, and events. Run orchestration never constructs or decodes native wire frames, and backend continuation state is an opaque token that only its adapter interprets.
 
 ## Shared process transport
 
@@ -12,13 +12,12 @@ All three local adapters translate native behavior into normalized handles, cont
 - Spawn through finalizer registration is masked, so closing the caller's scope always releases a process that exists. Cleanup confirms process-group absence before releasing ownership. Forced termination sends SIGTERM and allows two seconds before SIGKILL.
 - For writers, the transport snapshots process groups that the child's members started outside its own group before any signal, because those are reparented once the child dies. Release stays `cleanup_unconfirmed` while a recorded group survives, and incomplete discovery refuses later explicit recovery. A writer that exits on its own, such as after a crash, was never snapshotted, so its release stays unconfirmed (`descendant-snapshot`) until manual recovery.
 - When a CLI's output ends, pending initialization, requests, and input fail with the exit status followed by bounded, sanitized stderr, so a rejected flag reaches the failed launch. Scope teardown keeps immediate generic closure and never waits for an exit receipt.
-- Pi, Claude, and Codex children exit within about a second of stdin closing, which happens when the root process dies, so no parent-death watchdog runs. Pi's crash paths exit without closing scopes, so a [host-exit guard](../../pi-cosmic-core/src/platform/process-group-exit-guard.ts) also sends SIGKILL to each child's process group if the root process exits while it is held. The transport holds it from spawn until its scope closes, or until the child exits and its group is already gone. It doesn't reach groups the child's members started outside its own, such as Pi's bash commands, or survive a SIGKILL of the root process.
+- Pi and Claude children exit within about a second of stdin closing, which happens when the root process dies, so no parent-death watchdog runs. Pi's crash paths exit without closing scopes, so a [host-exit guard](../../pi-cosmic-core/src/platform/process-group-exit-guard.ts) also sends SIGKILL to each child's process group if the root process exits while it is held. The transport holds it from spawn until its scope closes, or until the child exits and its group is already gone. It doesn't reach groups the child's members started outside its own, such as Pi's bash commands, or survive a SIGKILL of the root process.
 
 Child stdout lines are limited to 4 MiB. The shared parser never buffers an oversized line: it keeps a 2 KiB prefix and 256-byte suffix, discards the rest through the newline, and keeps parsing.
 
 - **Pi** repeats whole messages and tool results (including images up to 4.5 MiB) in aggregate events. The backend skips oversized `agent_end`, `turn_end`, `entry_appended`, and tool-result `message_start`/`message_end` events; settlement comes from `agent_settled`. A skipped `turn_end` or `entry_appended` still refreshes usage. An oversized `tool_execution_end` closes its tool from the leading `toolCallId`/`toolName` and trailing `isError`. Any other oversized event fails the run as a protocol error.
 - **Claude** closes an oversized `user` line whose first part is a `tool_result` as a success for that `tool_use_id`, and counts an oversized `stream_event` as activity. Other oversized Claude lines are protocol errors.
-- **Codex** treats every oversized line as a protocol error.
 
 ## Local Pi ownership and safety
 
@@ -32,12 +31,12 @@ Child stdout lines are limited to 4 MiB. The shared parser never buffers an over
 - Fresh children use a dedicated session directory; forks receive a private copy of the stable parent branch.
 - A child whose `get_state` reports a different model than its route (ignoring `@` context variants) fails with `pi_model_mismatch`. After startup, status follows the `provider/model` each assistant `message_end` reports; relaunch and resume still use the route's model.
 - Children load extensions from Pi settings and installed packages only, never the root's temporary `-e` extensions. A model registered only by a `-e` provider fails with `pi_model_not_found` and a `pi install` remedy in its detail.
-- Pi children and the Claude/Codex supervisor helper run on `process.execPath`. When that binary is gone (for example after `brew upgrade`), every launch preflight fails with `node_executable_missing` and a restart-Pi message.
+- Pi children and the Claude supervisor helper run on `process.execPath`. When that binary is gone (for example after `brew upgrade`), every launch preflight fails with `node_executable_missing` and a restart-Pi message.
 
 ### Environment and credentials
 
 - Pi children inherit the parent environment except Node loader settings, Pi session identity, and Git's repository-local variables (`git rev-parse --local-env-vars` and `GIT_CONFIG_KEY_*`/`GIT_CONFIG_VALUE_*`), so a parent started from a Git hook cannot redirect a child's Git.
-- Claude and Codex children receive only an allowlist: identity, locale, paths, certificate settings including `NODE_EXTRA_CA_CERTS`, and proxy variables.
+- Claude children receive only an allowlist: identity, locale, paths, certificate settings including `NODE_EXTRA_CA_CERTS`, and proxy variables.
 - Runtime API keys cross through an ephemeral environment bootstrap, never argv. `boundary/host-child-pi.ts` consumes and scrubs them once during child extension registration.
 - The OpenAI priority-tier hook reads `pi-subagents-fast-mode` on each provider request (Pi applies CLI flags after loading extensions). Only boolean `true` enables it, and each request still checks the active provider, model, and payload.
 
@@ -52,7 +51,7 @@ A fork **shares the parent's prompt cache** (`sharesParentPromptCache`) when its
 - Anthropic requests withdraw the parent's other tools in place. So do OpenAI Responses requests on models with additional tools, where Pi declares every tool in place and announces removals as text.
 - With tool search alone, which can add tools but not withdraw them, OpenAI Responses requests keep the parent's tool declarations, drop the child's removals and redefinitions, and add its new tools. A request that no longer starts with the inherited prompt, such as after the child compacts, is sent unchanged.
 - OpenAI Responses requests carry the parent's `prompt_cache_key`.
-- Branches whose system messages carry prompt text, or that hold an encrypted checkpoint, are isolated instead. Codex is excluded because Pi derives its `session-id` header from the child's own session.
+- Branches whose system messages carry prompt text, or that hold an encrypted checkpoint, are isolated instead. The `openai-codex-responses` API is excluded because Pi derives its `session-id` header from the child's own session.
 
 Every other fork is **isolated**: parent `role: "system"` messages and Better OpenAI encrypted checkpoints become inert anchors, inherited compactions lose only `systemMessage`, and Pi reconstructs the plaintext branch behind them. Assistant thinking is copied; Pi sends it only to the model that produced it.
 
@@ -85,7 +84,7 @@ After `pauseRequested`, new guidance, replies, and ancestor notifications are re
 - An active name is not an implementation transfer: the child can use it only when its trust mode discovers the provider. A nested start returns to the root for a fresh snapshot, so child-local toggles do not control grandchildren. The snapshot's count, names, and size are validated before ownership.
 - Proxy requests cannot carry ancestry. The root binds them to the channel's run and authorizes `agent_await` and `agent_lifecycle` targets against that subtree, while `agent_list`, `agent_read`, and `agent_send` targets may be any agent in the tree; `agent_worktree` mutations use the stricter direct-parent check.
 - Pi read-only withholds Pi's `edit` and `write` tools and adds a no-mutation prompt and writer-lease policy; it is not a sandbox or confidentiality boundary. `bash` and the other inherited tools, native codemode included, stay available to either intent and can still change files, so the prompt tells readers to use them only to inspect and validate. Codemode's nested tool events surface as activity.
-- Native Claude and Codex launches keep their fixed tools and sandboxes and do not consume the snapshot.
+- Native Claude launches keep their fixed tools and sandbox and do not consume the snapshot.
 
 ### Child bridge
 
@@ -103,7 +102,7 @@ Each question and proxy call owns one exact Deferred entry through `acquireUseRe
 ## Structured child questionnaires
 
 - Only explicit blocking `ask_user` requests from local Pi children are relayed, through the versioned `pi-ask-user/protocol` root capability. `pi-ask-user` remains the sole registrar and must be discoverable in the child; a missing relay or capability fails closed.
-- Native Claude/Codex, asynchronous questionnaires, `agent_contact_parent` questions, and raw `extension_ui_request` forwarding are not supported.
+- Native Claude, asynchronous questionnaires, `agent_contact_parent` questions, and raw `extension_ui_request` forwarding are not supported.
 - The root derives owner run, assignment epoch, and request ID from coordinator state. A separate strict 128 KiB decoder keeps questionnaires out of tool input.
 - `run/questionnaire-lifetime.ts` keeps at most 256 request-ID tombstones per assignment, so replayed answered or cancelled identities cannot reopen a dialog.
 - Pause, stop, settlement, and assignment replacement revoke queued, visible, or hidden waits; process cleanup joins their finalizers outside the service lock, and shutdown revokes before leaf-first release. A stalled owned cleanup keeps stop and shutdown waiting.
@@ -293,7 +292,7 @@ For manual recovery, confirm every writer process and descendant is dead, preser
 
 ## Private state housekeeping
 
-Local Pi run directories (`<agent-dir>/subagents/<session>/<run>-<runtime suffix>`), local CLI harnesses (a Codex harness holds a copied `auth.json` and thread rollouts), supervisor channel state, and Claude temp roots (`/tmp/pi-claude-XXXXXX`) each carry an `owner.json` naming the root Pi process and its start identity.
+Local Pi run directories (`<agent-dir>/subagents/<session>/<run>-<runtime suffix>`), local CLI harnesses, supervisor channel state, and Claude temp roots (`/tmp/pi-claude-XXXXXX`) each carry an `owner.json` naming the root Pi process and its start identity.
 
 - Normal cleanup removes them. Each root session start sweeps the rest in the background: an entry goes once its owner is provably dead. An entry whose owner record is missing or unreadable goes once it is unchanged for seven days; one whose recorded owner can't be proven dead, such as an identity in another format, is kept.
 - Removal renames to a `.swept-` tombstone first, so a concurrent Pi never reads a half-deleted directory. Failures are skipped.
@@ -303,15 +302,15 @@ Local Pi run directories (`<agent-dir>/subagents/<session>/<run>-<runtime suffix
 
 ## Supervisor channel and completion ownership
 
-Local Claude and Codex each acquire one authenticated supervisor channel inside their backend scope; local Pi uses its RPC/IPC transport instead.
+Local Claude acquires one authenticated supervisor channel inside its backend scope; local Pi uses its RPC/IPC transport instead.
 
 ### Completion
 
 - **Pi:** only `agent_settled` decides the outcome, using the latest assistant attempt's bounded text and stop reason. A successful `stop` with nonempty text completes. Provider errors, unrequested aborts, output limits, tool-use-only endings, and empty reports fail. Before that, the child bridge gives a textless final message one hidden reminder to write its report; earlier messages are never promoted to the report.
-- **Claude and Codex:** completion belongs exclusively to a supervisor `agent_submit_report` call. Raw CLI text and native turn completion don't settle the assignment. The channel records exact accepted-report epoch evidence before acknowledging, and Claude results and Codex `turn/completed` query it directly, so causality, not scheduling, decides a missing report.
+- **Claude:** completion belongs exclusively to a supervisor `agent_submit_report` call. Raw CLI text and native turn completion don't settle the assignment. The channel records exact accepted-report epoch evidence before acknowledging, and Claude results query it directly, so causality, not scheduling, decides a missing report.
 - The first turn that ends without an accepted report gets one automatic reminder input in the same assignment. A second miss, or an unsendable reminder, fails with the latest turn's final text, bounded to 2,000 characters.
 - If transport closes before forwarding drains, the adapter reprojects the accepted report. Interruption emits no completion-shaped event.
-- Every candidate closes on report: forwarding an accepted report closes the process and channel while keeping bounded projection data. Codex forwards it at once; Claude normally holds it until Claude's own result for that assignment arrives, for at most 10 seconds. Nothing is written into the project.
+- A Claude candidate closes on report: forwarding an accepted report closes the process and channel while keeping bounded projection data. The adapter normally holds it until Claude's own result for that assignment arrives, for at most 10 seconds. Nothing is written into the project.
 - Failures can leave completed writes behind; the parent continues by resuming the run or starting a new one.
 
 ### Report events and channel
@@ -322,26 +321,21 @@ Local Claude and Codex each acquire one authenticated supervisor channel inside 
 - Event admission reserves cancellation capacity for the pending question and every admitted proxy RPC.
 - The standalone helper (`supervisor-mcp-helper.mjs`, run through Jiti from installed `node_modules`) exposes only five tools: `agent_contact_parent` (whose `kind` selects progress, a warning, or a blocking question, as for a Pi child), `agent_submit_report`, `agent_list`, `agent_send`, and `agent_read`. It dispatches up to 16 calls concurrently, so a blocked question never blocks other calls. Each call commits exactly one JSON-RPC frame after its operation's exit, and the writer closes before active calls and sockets. A question cancelled once its reply's acknowledgement has begun still answers with that reply, since the parent has already consumed it.
 - The `agent_*` tools reach every agent in the root tree, as the root's tools do. Each spawn hands the channel `agent_*` operations that the root already bound to that run as the caller. RPC payloads authenticate the run but never name the caller, and a mismatched run ID closes the peer. Results return as bounded text: list shows ID, name, state, role, model, worktree proposal, whether the run waits on its parent, and parent; read shows each run's status card (with `verbose`, its route, capability, process, and timing details) and its last message, a completed run's saved report file, or a finished run's unsaved report or error, marked when truncated; send shows its disposition. Root refusals return as tool errors that name their code.
-- `supervisor/mcp-contract.ts` owns tool names, argument keys, the message bounds (64 KiB for `agent_contact_parent`, as for a Pi child, and 128 KiB for `agent_send`, as for the root's tool), the 256-character ID bounds, the report bound (480 KiB, the most whose worst-case JSON escaping fits both the 3 MiB channel line and the 4 MiB CLI stdout line, where Claude stream-json and Codex item arguments echo the submission; the root saves it whole to the report file), and the 12-ID bound for `agent_list` and `agent_read`. Patterns are enforced when decoding, not advertised in input schemas, which some providers reject. A rejected call names the failing argument and rule without echoing values.
-- Config reads and state cleanup stay on the Node boundary because Effect FileSystem lacks `lstat` and `O_NOFOLLOW`. MCP and Codex stdio use the shared byte-bounded line parser, because `Stream.splitLines` has no size bound.
-- Helper metadata contains only the fixed packaged command, the private config path, and Claude JSON/Codex TOML fragments: no profile fields, user configuration, credentials, or environment.
+- `supervisor/mcp-contract.ts` owns tool names, argument keys, the message bounds (64 KiB for `agent_contact_parent`, as for a Pi child, and 128 KiB for `agent_send`, as for the root's tool), the 256-character ID bounds, the report bound (480 KiB, the most whose worst-case JSON escaping fits both the 3 MiB channel line and the 4 MiB CLI stdout line, where Claude stream-json echoes the submission; the root saves it whole to the report file), and the 12-ID bound for `agent_list` and `agent_read`. Patterns are enforced when decoding, not advertised in input schemas, which some providers reject. A rejected call names the failing argument and rule without echoing values.
+- Config reads and state cleanup stay on the Node boundary because Effect FileSystem lacks `lstat` and `O_NOFOLLOW`. MCP and child stdio use the shared byte-bounded line parser, because `Stream.splitLines` has no size bound.
+- Helper metadata contains only the fixed packaged command, the private config path, and the Claude JSON fragment: no profile fields, user configuration, credentials, or environment.
 
 ### Native sub-agents and main-agent-only tools
 
-Native sub-agents can reach the child's supervisor tools: Claude sub-agents share the child's MCP connection, and Codex starts a helper per sub-agent thread. `agent_contact_parent`, `agent_submit_report`, and `agent_send` belong to the child's main agent; a sub-agent's call fails with a tool error telling it to return its findings to the agent that started it. `agent_list` and `agent_read` stay open to sub-agents.
+Claude's native sub-agents share the child's MCP connection, so they can reach its supervisor tools. `agent_contact_parent`, `agent_submit_report`, and `agent_send` belong to the child's main agent; a sub-agent's call fails with a tool error telling it to return its findings to the agent that started it. `agent_list` and `agent_read` stay open to sub-agents.
 
-The caller is identified at the call, never from output ordering:
-
-- **Claude:** initialization registers an SDK `PreToolUse` hook for the three tools. Hook input carries `agent_id` only for a native sub-agent, and the driver denies those calls. Managed settings that disable hooks may disable this check.
-- **Codex:** the helper forwards the request's `_meta.threadId`, and the channel refuses any thread other than the main thread registered from `thread/start`. A call without `_meta.threadId` is admitted, so older supported releases still report.
+The caller is identified at the call, never from output ordering: initialization registers an SDK `PreToolUse` hook for the three tools. Hook input carries `agent_id` only for a native sub-agent, and the driver denies those calls. Managed settings that disable hooks may disable this check.
 
 ## CLI versions
 
 - Claude Code routes require 2.1.224 or later, the first release with the `crossSessionInbound` setting the harness uses to refuse cross-session input.
-- Codex routes require 0.145.0, the app-server v2 subset the adapter was generated from; `--strict-config` rejects older releases.
 - Each `LocalCliProcess` runs `<cli> --version` once per session and caches the answer; an unavailable CLI is probed again next preflight. The first dotted `major.minor.patch` triple is the version.
-- Below the minimum, preflight fails with `<runtime>_version_unsupported` and routing moves to the next candidate. Unrecognized output never blocks a launch.
-- Codex native sub-agent items follow the 0.162.1 app-server schema, which adds `subAgentActivity` items and collaboration tools to the 0.145 subset.
+- Below the minimum, preflight fails with `claude_version_unsupported` and routing moves to the next candidate. Unrecognized output never blocks a launch.
 
 ## Local Claude
 
@@ -406,42 +400,16 @@ pnpm --filter pi-subagents smoke:local-claude-steering
 
 Scenarios are `tool` (default, foreground `sleep 25`), `generation`, and `native-agent`. The probe sends one guidance input after observed activity, distinguishes confirmed or late replay from completion with unconfirmed guidance, and reports missing activity as inconclusive. A ten-second replay miss alone is not proof of a failed worker.
 
-## Local Codex
+### Live sandbox canary
 
-### Launch and harness
-
-- Local Codex starts only `codex app-server --stdio --strict-config` against an isolated 0700 `CODEX_HOME`. Native agents (`[agents]`, `multi_agent`) are enabled within Codex's limits; apps, plugins, hooks, skills discovery, memories, browser, image, web search, and network are disabled.
-- Only a bounded, validated `auth.json` is copied from the source `CODEX_HOME` into 0600 private state, without passing the source path to the child; otherwise the fixed `OPENAI_API_KEY` fallback applies. Unconfirmable partial harness cleanup returns `harness_cleanup_unconfirmed`.
-- `thread/start` passes the subagent prompt as `developerInstructions` and starts a persistent thread, because a context-forking native sub-agent loads its parent's rollout. Rollouts and the thread database live only in the private home, so harness cleanup and the sweep remove them. Nothing resumes a Codex thread.
-- `thread/start` and `turn/start` omit `environments`, so Codex uses its default local environment.
-- Fast candidates send `serviceTier: "priority"` on both calls, and initialization fails unless `thread/start` confirms it. Provider fallback is disabled, and the exact model returned by `thread/start` is verified before a turn.
-- Effort is limited to minimal, low, medium, high, xhigh, and max.
-
-### Sandbox
-
-- Approval is `never`. The sandbox is read-only or workspace-write with network disabled; server-initiated approval requests are protocol violations. The supervisor helper intentionally runs outside the sandbox.
-- Writer turns set `excludeSlashTmp` and `excludeTmpdirEnvVar`; the only writable root besides the cwd is the run's private 0700 `tmp` directory, which the generated `[sandbox_workspace_write]` default matches.
-- `TMPDIR`, `TMP`, `TEMP`, and the shell's `TMPPREFIX` point there. Read-only children cannot write it either.
-
-### Protocol
-
-- The accepted v2 subset is `initialize`, `thread/start`, `turn/start`, `turn/steer`, `turn/interrupt`, their responses, and relevant bounded notifications.
-- Only `commandExecution`, `fileChange`, `mcpToolCall`, and `webSearch` items own a tool lifecycle. `fileChange` entries keep every source path and move destination in their tool activity.
-- `agentMessage`, `reasoning`, `collabAgentToolCall`, `subAgentActivity`, and unknown informational items surface as activity; unrecognized fields and kinds there are ignored, but an item without an ID fails the protocol. Turn, usage, report, and tool notifications decode strictly.
-- An uncertain interrupt keeps its exact turn and epoch; a second interrupt is rejected, and a late interrupted completion settles through `run_settled` as a pause.
-- `thread/tokenUsage/updated` reports only its own thread, and native sub-agents run in their own threads, so the adapter keeps a running-total watermark for up to 64 threads. Codex reports no cost, so cost stays unknown rather than `$0`.
-
-### Live sandbox canaries
-
-Opt-in canaries check that the installed CLIs still enforce the generated policy. They can incur provider usage:
+An opt-in canary checks that the installed CLI still enforces the generated policy. It can incur provider usage:
 
 ```bash
 PI_SUBAGENTS_REAL_CLAUDE_MODEL='<native model selector>' pnpm --filter pi-subagents smoke:local-claude-sandbox
-PI_SUBAGENTS_REAL_CODEX_MODEL='<native model selector>' pnpm --filter pi-subagents smoke:local-codex-sandbox
 ```
 
-Each runtime launches a read-only and a writer child in a fresh `workspace` directory beside an `outside` sibling. The child attempts Bash redirects inside and outside its cwd, into `/tmp`, into the parent's `$TMPDIR`, and into its private temp directory (Claude also tries the shared `/tmp/claude-<uid>`), then file-tool edits inside and outside its cwd.
+It launches a read-only and a writer child in a fresh `workspace` directory beside an `outside` sibling. The child attempts Bash redirects inside and outside its cwd, into `/tmp`, into the parent's `$TMPDIR`, into the shared `/tmp/claude-<uid>`, and into its private temp directory, then file-tool edits inside and outside its cwd.
 
-- Read-only children must change nothing, except that a Claude child must succeed in its private temp directory.
+- Read-only children must change nothing except their private temp directory, where the write must succeed.
 - Writers may change only files in their cwd and private temp directory, and must succeed there.
-- A write where it should be blocked is a security failure; missing evidence is inconclusive. Codex emits no item notifications for sandbox-denied attempts, so the canary relies on the child's report for them.
+- A write where it should be blocked is a security failure; missing evidence is inconclusive. A read-only child has no file-editing tool, so the canary relies on its report for those attempts.

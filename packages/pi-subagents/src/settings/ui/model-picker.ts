@@ -6,7 +6,6 @@ import {
   type ModelPickerModel,
 } from "pi-cosmic-ui/manager/model-picker";
 import type { SearchableSelectHostOptions } from "pi-cosmic-ui/manager/searchable-select";
-import { FAST_SERVICE_TIER } from "pi-better-openai/fast-models";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import type { NativeRuntimeModel } from "../../boundary/native-model-catalog.ts";
 import {
@@ -76,17 +75,17 @@ export const createNativeModelOptions = (
 ): ProfileModelOption[] =>
   Arr.flatMap(models, (model) => {
     if (!isSafeNativeModelSelector(model.selector)) return [];
-    const fastModeAvailable = model.supportedServiceTiers.includes(FAST_SERVICE_TIER);
     return [
       {
         provider: "profile",
         id: model.selector,
         selector: model.selector,
         label: `${boundedMiddle(sanitizeTerminalLine(model.selector), 72)}${nativeModelStatus(model, currentSelector)}`,
-        description: `${model.label && model.label !== model.selector ? `${boundedMiddle(sanitizeTerminalLine(model.label), 72)} · ` : ""}${model.description ? `${boundedMiddle(sanitizeTerminalLine(model.description), 96)} · ` : ""}reasoning levels: ${Arr.join(model.supportedEfforts, ", ") || "default"}${fastModeAvailable ? " · fast mode available" : ""}`,
+        description: `${model.label && model.label !== model.selector ? `${boundedMiddle(sanitizeTerminalLine(model.label), 72)} · ` : ""}${model.description ? `${boundedMiddle(sanitizeTerminalLine(model.description), 96)} · ` : ""}reasoning levels: ${Arr.join(model.supportedEfforts, ", ") || "default"}`,
         searchText: `${model.selector} ${model.label} ${model.description ?? ""}`,
         supportedEfforts: model.supportedEfforts,
-        fastModeAvailable,
+        // Claude Code has no OpenAI service tier.
+        fastModeAvailable: false,
       },
     ];
   });

@@ -34,7 +34,6 @@ export interface LocalCliInterrupt {
 }
 
 export const localCliInterrupts = <Interrupt extends LocalCliInterrupt>(
-  runtime: "Claude" | "Codex",
   events: Pick<LocalCliRawEventOwnership, "offer" | "release">,
   currentEpoch: () => number,
 ) => {
@@ -75,8 +74,8 @@ export const localCliInterrupts = <Interrupt extends LocalCliInterrupt>(
                 "interrupt",
                 "interrupt_not_sent",
                 current.abandoned
-                  ? `A previous ${runtime} interrupt lifecycle is still unresolved; a second interrupt would be ambiguously correlated.`
-                  : `Another ${runtime} interrupt lifecycle is already pending.`,
+                  ? "A previous Claude interrupt lifecycle is still unresolved; a second interrupt would be ambiguously correlated."
+                  : "Another Claude interrupt lifecycle is already pending.",
               ));
           if (error) return { error } as const;
           current = options.make({

@@ -8,7 +8,6 @@ import * as Rec from "effect/Record";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
-import { isJsonObject } from "pi-cosmic-core/platform/json-document";
 import { runtimeTypeName } from "pi-cosmic-core/runtime-values";
 import { AGENT_TOOL_NAME, CONTACT_PARENT_TOOL_NAME } from "../run/tool-policy.ts";
 import type { SupervisorRpcFailure } from "./protocol.ts";
@@ -20,7 +19,6 @@ import {
   MAX_SUPERVISOR_MCP_AGENT_MESSAGE_CHARS,
   MAX_SUPERVISOR_MCP_CONTACT_CHARS,
   MAX_SUPERVISOR_MCP_REPORT_CHARS,
-  MAX_SUPERVISOR_MCP_THREAD_ID_CHARS,
   SUPERVISOR_MCP_AGENT_IDS_ARGUMENT_KEY,
   SUPERVISOR_MCP_AGENT_SEND_ARGUMENT_KEYS,
   SUPERVISOR_MCP_CONTACT_ARGUMENT_KEYS,
@@ -53,8 +51,6 @@ export type DecodedMcpMessage =
       readonly id: RpcId;
       readonly name: string;
       readonly arguments: Schema.Json;
-      /** The native thread making the call, when the runtime names it in the request metadata. */
-      readonly nativeThreadId?: string | undefined;
     }
   | {
       readonly method: "unknown";
@@ -71,8 +67,6 @@ type McpToolResult = {
 /** Nonblank text of at most `maximum` characters. */
 export const boundedTextSchema = (maximum: number) =>
   Schema.String.check(Schema.isMaxLength(maximum), Schema.isPattern(/\S/u));
-
-const isThreadId = Schema.is(boundedTextSchema(MAX_SUPERVISOR_MCP_THREAD_ID_CHARS));
 
 export const validRpcId = Schema.is(RpcIdSchema);
 
@@ -182,13 +176,6 @@ const decodeServedMessage = Schema.decodeUnknownResult(
 );
 const decodeUnservedMessage = Schema.decodeUnknownResult(UnknownMessage, exactMessage);
 
-// Codex names the calling thread, including a native sub-agent's own thread, in `_meta.threadId`.
-const callerThreadId = (meta: Schema.Json | undefined): string | undefined => {
-  if (!isJsonObject(meta)) return undefined;
-  const threadId = meta.threadId;
-  return isThreadId(threadId) ? threadId : undefined;
-};
-
 export const decodeMcpMessage = (value: Schema.Json): DecodedMcpMessage | undefined => {
   const served = decodeServedMessage(value);
   if (Result.isFailure(served))
@@ -211,16 +198,13 @@ export const decodeMcpMessage = (value: Schema.Json): DecodedMcpMessage | undefi
     case "ping":
     case "tools/list":
       return { method: message.method, id: message.id };
-    case "tools/call": {
-      const nativeThreadId = callerThreadId(message.params._meta);
+    case "tools/call":
       return {
         method: "tools/call",
         id: message.id,
         name: message.params.name,
         arguments: message.params.arguments,
-        ...(nativeThreadId !== undefined && { nativeThreadId }),
       };
-    }
   }
   return Fn.absurd<DecodedMcpMessage>(message);
 };

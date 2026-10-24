@@ -3,7 +3,7 @@
 Procedures and safety notes behind the [README](../README.md). [ARCHITECTURE.md](../ARCHITECTURE.md) covers ownership and lifecycle; the other files in this directory own the detailed contracts:
 
 - [Routing](routing.md): configuration schema, candidate planning, launch contract, and route continuation.
-- [Local backends](local-backends.md): Pi, Claude, and Codex drivers, writer pools, worktrees, and the supervisor channel.
+- [Local backends](local-backends.md): Pi and Claude drivers, writer pools, worktrees, and the supervisor channel.
 - [Completion and delivery](completion-delivery.md): reports, waits, cancellation, presentation, and Activity.
 - [Settings workspace](settings-workspace.md): profile editor, saved sets, delegation, nesting, and doctor.
 - [Native Pi codemode scripting](native-codemode.md): read-only scripts with ordinary subagents.
@@ -97,7 +97,7 @@ Ignored dependencies are absent too. A `WorktreeCreate` hook in `pi-subagents.js
 ## Tool access and sandboxing
 
 - Pi children receive the root's active tool snapshot; Pi read-only is a prompt and lease policy, not a sandbox ([Local Pi](local-backends.md#local-pi-ownership-and-safety)).
-- Claude and Codex children run under their native sandboxes, which fail startup rather than run unsandboxed ([Local Claude](local-backends.md#local-claude), [Local Codex](local-backends.md#local-codex)).
+- Claude children run under Claude Code's native sandbox, which fails startup rather than run unsandboxed ([Local Claude](local-backends.md#local-claude)).
 - Allowed reads, model network access, runtime defects, and external services may still disclose data or have side effects.
 - Writer leases are shared across Pi processes on the same machine; a refusal that requires manual recovery names the lock directory to inspect ([Writer pools](local-backends.md#writer-pools-and-cross-process-safety)).
 

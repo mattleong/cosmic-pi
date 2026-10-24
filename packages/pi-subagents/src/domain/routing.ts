@@ -7,7 +7,7 @@ import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 
 export type SubagentContextMode = "fresh" | "fork";
 export type SubagentWriteIntent = "writer" | "read-only";
-export type SubagentRuntime = "pi" | "claude" | "codex";
+export type SubagentRuntime = "pi" | "claude";
 
 export const SUBAGENT_EFFORTS = [
   "off",
@@ -23,7 +23,6 @@ export type SubagentEffort = (typeof SUBAGENT_EFFORTS)[number];
 const SUBAGENT_RUNTIME_EFFORTS = {
   pi: SUBAGENT_EFFORTS,
   claude: ["low", "medium", "high", "xhigh", "max"],
-  codex: ["minimal", "low", "medium", "high", "xhigh", "max"],
 } as const satisfies Readonly<Record<SubagentRuntime, ReadonlyArray<SubagentEffort>>>;
 
 export const subagentRuntimeEfforts = (runtime: SubagentRuntime): ReadonlyArray<SubagentEffort> =>

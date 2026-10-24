@@ -1,12 +1,12 @@
 # pi-subagents
 
-Background subagents for Pi on macOS and Linux. The main agent delegates work to profile-routed agents running on Pi, Claude Code, or Codex, keeps working, and gets their reports back automatically.
+Background subagents for Pi on macOS and Linux. The main agent delegates work to profile-routed agents running on Pi or Claude Code, keeps working, and gets their reports back automatically.
 
 ## Features
 
 - **Seven profiles**, from fast read-only `scout`s to `worker`s that edit code, each routed to a model you choose.
 - **Custom agents** you define in `pi-subagents.json`: named roles with their own instructions, effort, and tool lists, routed through a profile.
-- **Three local runtimes:** Pi, Claude Code, and Codex, with ordered fallback candidates per profile.
+- **Two local runtimes:** Pi and Claude Code, with ordered fallback candidates per profile.
 - **Background by default.** Reports and failures arrive automatically; the agent waits only when it needs a result.
 - **Two-way supervision:** children can ask the parent questions and report progress; the parent can answer or guide them, interrupt, resume, or stop them.
 - **Agent messaging:** any agent in the session can list, message, and read any other, including the main agent.
@@ -23,7 +23,7 @@ pi install "$PWD/packages/pi-subagents"
 pi install "$PWD/packages/pi-cosmic-ui"   # recommended: shared Activity view
 ```
 
-Requires Pi 1.4.0 or later. Claude Code routes need Claude Code 2.1.224 or later and Codex routes need Codex 0.145.0 or later, installed and signed in; an older CLI's routes are skipped in favor of the next candidate. Tested with Claude Code 2.1.259 through 2.1.300 and Codex 0.162.1; see [CLI versions](docs/local-backends.md#cli-versions) for how versions are checked. Pi routes need nothing extra.
+Requires Pi 1.4.0 or later. Claude Code routes need Claude Code 2.1.224 or later, installed and signed in; an older CLI's routes are skipped in favor of the next candidate. Tested with Claude Code 2.1.259 through 2.1.300; see [CLI versions](docs/local-backends.md#cli-versions) for how versions are checked. Pi routes need nothing extra.
 
 ## Usage
 
@@ -82,7 +82,7 @@ The main agent and Pi subagents share one `agent_*` family. `agent_start`, `agen
 | `agent_read`      | Shows each run's status card and latest message or report, and main's latest message, without taking a report from its parent                       |
 | `agent_send`      | Messages one agent now: answers a question from a run you supervise, guides a running agent, wakes an idle main agent, or resumes a finished Pi run |
 
-Subagents also get `agent_contact_parent` to report progress, record a warning, or ask a blocking question, and Claude and Codex subagents submit their final report with `agent_submit_report`. Native Pi codemode supports [read-only scripting](docs/native-codemode.md) with ordinary subagents; writer launches and recovery remain main-agent decisions.
+Subagents also get `agent_contact_parent` to report progress, record a warning, or ask a blocking question, and Claude subagents submit their final report with `agent_submit_report`. Native Pi codemode supports [read-only scripting](docs/native-codemode.md) with ordinary subagents; writer launches and recovery remain main-agent decisions.
 
 ### Agent messaging
 
@@ -131,7 +131,7 @@ If a candidate is unavailable at launch, such as an unauthenticated CLI, the nex
 
 `hooks` mirror Claude Code's `WorktreeCreate` and `WorktreeRemove`, but run after the engine creates an isolated tree and before it removes one rather than replacing either. A `.worktreeinclude` file at the checkout's top level names ignored local files, such as `.env`, to copy into isolated trees. See [Worktree hooks](docs/local-backends.md#worktree-hooks) and [Included files](docs/local-backends.md#included-files).
 
-Custom agents add named roles to the same files. Each one routes through a profile, replaces that profile's guidance with its instructions, and can pin effort, context, write intent, and the Pi tools its child inherits; tool lists skip Claude and Codex candidates. Launch one with `"agent": "auth-reviewer"` instead of a profile. See [Custom agents](docs/routing.md#custom-agents).
+Custom agents add named roles to the same files. Each one routes through a profile, replaces that profile's guidance with its instructions, and can pin effort, context, write intent, and the Pi tools its child inherits; tool lists skip Claude candidates. Launch one with `"agent": "auth-reviewer"` instead of a profile. See [Custom agents](docs/routing.md#custom-agents).
 
 ```json
 {
@@ -152,7 +152,7 @@ When you ask for a specific model, the agent can set it on one launch with `"mod
 
 ## How it works
 
-The root Pi session owns the coordinator: configuration, the run tree, backends, writer pools, and completion delivery; nested Pi sessions use authenticated proxy tools. Pi children talk over an RPC bridge, while Claude Code (stream-json) and Codex (app-server) report through a private loopback MCP supervisor. Writer leases are shared across Pi processes on the same machine. Shared-checkout writers in one directory coordinate by task scope and aren't isolated from each other; worktree writers edit a private Git worktree whose changes the parent applies. Claude and Codex runs use their native sandboxes. Stopping a run stops its subtree, and shutting down the root stops everything.
+The root Pi session owns the coordinator: configuration, the run tree, backends, writer pools, and completion delivery; nested Pi sessions use authenticated proxy tools. Pi children talk over an RPC bridge, while Claude Code (stream-json) reports through a private loopback MCP supervisor. Writer leases are shared across Pi processes on the same machine. Shared-checkout writers in one directory coordinate by task scope and aren't isolated from each other; worktree writers edit a private Git worktree whose changes the parent applies. Claude runs use Claude Code's native sandbox. Stopping a run stops its subtree, and shutting down the root stops everything.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for ownership and lifecycle, and the docs for detail:
 

@@ -92,7 +92,7 @@ describe("SubagentConfigStore activation", () => {
       Effect.gen(function* () {
         const local = declaredCandidate("openai/local");
         for (const scope of ["global", "project"] as const)
-          for (const runtime of ["pi", "claude", "codex"])
+          for (const runtime of ["pi", "claude"])
             for (const invalidFirst of [true, false]) {
               const invalid = declaredCandidate(runtime === "pi" ? "openai/invalid" : "native", {
                 host: "local",

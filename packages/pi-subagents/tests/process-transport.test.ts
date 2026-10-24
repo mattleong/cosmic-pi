@@ -14,6 +14,7 @@ import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import { signalProcessGroup } from "pi-cosmic-core";
 import { temporaryDirectory, yieldUntil } from "pi-cosmic-core/testing";
+import { claudeUserFrame } from "../src/backend/local-claude-protocol.ts";
 import { localPiBackendDriver } from "../src/backend/local-pi.ts";
 import { ChildProcess } from "../src/boundary/child-process.ts";
 import { SubagentProcessError } from "../src/run/errors.ts";
@@ -47,7 +48,7 @@ const nativeRequest = {
 };
 const acquireNative = (writer = false) =>
   acquireLocalCliTransport({ ...nativeRequest, writer }, boundary);
-const notification = { method: "initialized" as const };
+const notification = claudeUserFrame("fixture");
 
 const foreignListener = () => {};
 const fixture = () => {
@@ -133,7 +134,7 @@ describe("shared process transport", () => {
         const f = fixture();
         const { handle, release } = yield* openNative(f);
         const invalid = {
-          method: "initialized" as const,
+          ...notification,
           toJSON: () => {
             throw new Error("encode");
           },

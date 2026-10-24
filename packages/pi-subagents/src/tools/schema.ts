@@ -86,7 +86,7 @@ const ModelOverrideParameters = Type.Object(
     runtime: StringEnum(PROFILE_CANDIDATE_RUNTIMES, { description: "Local runtime." }),
     model: nonblankString(
       MAX_PROFILE_MODEL_SELECTOR_CHARS,
-      "Native model selector: provider/model or parent for pi, a Claude Code or Codex model name otherwise.",
+      "Native model selector: provider/model or parent for pi, a Claude Code model name for claude.",
     ),
     effort: Type.Optional(
       StringEnum(PROFILE_CANDIDATE_EFFORTS, {

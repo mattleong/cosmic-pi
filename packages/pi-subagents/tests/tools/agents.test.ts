@@ -193,7 +193,7 @@ describe("custom agent launches", () => {
     },
   );
 
-  effectTest("skips Claude and Codex candidates when the agent sets tool lists", function* () {
+  effectTest("skips Claude candidates when the agent sets tool lists", function* () {
     const requests: StartSubagentRequest[] = [];
     const { preflight, registry } = countingRegistry();
     const profiles = profileServiceFor({

@@ -9,7 +9,6 @@ import { synchronousRandomHex } from "pi-cosmic-core";
 import { temporaryDirectory, provideBuiltLayer } from "pi-cosmic-core/testing";
 import { describe, expect, it } from "vitest";
 import { localClaudeBackendDriver } from "../src/backend/local-claude.ts";
-import { localCodexBackendDriver } from "../src/backend/local-codex.ts";
 import type { BackendEvent } from "../src/backend/model.ts";
 import type { LocalCliProcessContract } from "../src/boundary/local-cli-process.ts";
 import { SupervisorChannel } from "../src/boundary/supervisor-channel.ts";
@@ -28,26 +27,11 @@ const sharedClaudeTemporaryDirectory = path.join("/tmp", `claude-${process.getui
 const ORIGINAL = "ORIGINAL";
 const CANARY = "CANARY";
 
-const RUNTIMES = {
-  claude: {
-    enabled: process.env.PI_SUBAGENTS_REAL_CLAUDE_SANDBOX_SMOKE === "1",
-    modelVariable: "PI_SUBAGENTS_REAL_CLAUDE_MODEL",
-    driver: localClaudeBackendDriver,
-    /** Claude Code gives sandboxed Bash `<CLAUDE_CODE_TMPDIR>/claude-<uid>` as its `$TMPDIR`. */
-    shellTemporaryDirectory: (root: string) =>
-      path.join(root, path.basename(sharedClaudeTemporaryDirectory)),
-    /** Claude Code's shell writes its cwd record and here-documents there, read-only or not. */
-    readOnlyWritesPrivateTemporary: true,
-  },
-  codex: {
-    enabled: process.env.PI_SUBAGENTS_REAL_CODEX_SANDBOX_SMOKE === "1",
-    modelVariable: "PI_SUBAGENTS_REAL_CODEX_MODEL",
-    driver: localCodexBackendDriver,
-    shellTemporaryDirectory: (root: string) => root,
-    readOnlyWritesPrivateTemporary: false,
-  },
-} as const;
-type Runtime = keyof typeof RUNTIMES;
+const ENABLED = process.env.PI_SUBAGENTS_REAL_CLAUDE_SANDBOX_SMOKE === "1";
+const MODEL_VARIABLE = "PI_SUBAGENTS_REAL_CLAUDE_MODEL";
+/** Claude Code gives sandboxed Bash `<CLAUDE_CODE_TMPDIR>/claude-<uid>` as its `$TMPDIR`. */
+const shellTemporaryDirectory = (root: string) =>
+  path.join(root, path.basename(sharedClaudeTemporaryDirectory));
 
 type Target =
   | "insideShell"
@@ -100,12 +84,10 @@ const sharedTemporaryFiles = (tag: string) => [
 ];
 
 /**
- * Every child tries the shared /tmp and the parent's $TMPDIR, and a Claude child also tries
- * Claude Code's shared per-user directory. A child with a private temp directory also tries it
- * through its own $TMPDIR.
+ * Every child tries the shared /tmp, the parent's $TMPDIR, and Claude Code's shared per-user
+ * directory. A child with a private temp directory also tries it through its own $TMPDIR.
  */
 const canaryTargets = (
-  runtime: Runtime,
   root: string,
   tag: string,
   privateTemporaryDirectory: string | undefined,
@@ -119,24 +101,10 @@ const canaryTargets = (
             key: "privateTmpShell",
             tool: "shell",
             requested: `"$TMPDIR/${privateName}"`,
-            file: path.join(
-              RUNTIMES[runtime].shellTemporaryDirectory(privateTemporaryDirectory),
-              privateName,
-            ),
+            file: path.join(shellTemporaryDirectory(privateTemporaryDirectory), privateName),
             evidence: privateName,
           },
         ];
-  const sharedClaudeTarget: ReadonlyArray<CanaryTarget> =
-    runtime === "claude"
-      ? [
-          fileTarget(
-            "sharedClaudeTmpShell",
-            "shell",
-            sharedClaudeTemporaryDirectory,
-            temporaryName(tag, "claude-tmp"),
-          ),
-        ]
-      : [];
   const cwd = path.join(root, "workspace");
   const sibling = path.join(root, "outside");
   return [
@@ -144,7 +112,12 @@ const canaryTargets = (
     fileTarget("outsideShell", "shell", sibling, "sibling-shell-canary.txt"),
     fileTarget("slashTmpShell", "shell", "/tmp", temporaryName(tag, "slash-tmp")),
     fileTarget("parentTmpShell", "shell", parentTemporaryDirectory, temporaryName(tag, "tmpdir")),
-    ...sharedClaudeTarget,
+    fileTarget(
+      "sharedClaudeTmpShell",
+      "shell",
+      sharedClaudeTemporaryDirectory,
+      temporaryName(tag, "claude-tmp"),
+    ),
     ...privateTarget,
     fileTarget("insideEdit", "edit", cwd, EDIT_TARGETS.cwd),
     fileTarget("outsideEdit", "edit", sibling, EDIT_TARGETS.sibling),
@@ -213,18 +186,16 @@ const CANARY_SYSTEM_PROMPT = Arr.join(
   " ",
 );
 
-const runCanary = (runtime: Runtime, writeIntent: SubagentWriteIntent) =>
+const runCanary = (writeIntent: SubagentWriteIntent) =>
   Effect.gen(function* () {
-    const { driver, modelVariable } = RUNTIMES[runtime];
-    const model = yield* Config.String(modelVariable).pipe(Config.withDefault(""));
-    if (!model) return yield* Effect.die(`Set ${modelVariable} for the live sandbox canary.`);
+    const model = yield* Config.String(MODEL_VARIABLE).pipe(Config.withDefault(""));
+    if (!model) return yield* Effect.die(`Set ${MODEL_VARIABLE} for the live sandbox canary.`);
     const { root, tag } = yield* canarySetup;
     // Claude Code creates it the same way; a missing directory would block the write for the
     // wrong reason.
-    if (runtime === "claude")
-      yield* Effect.promise(() =>
-        fs.mkdir(sharedClaudeTemporaryDirectory, { recursive: true, mode: 0o700 }),
-      );
+    yield* Effect.promise(() =>
+      fs.mkdir(sharedClaudeTemporaryDirectory, { recursive: true, mode: 0o700 }),
+    );
     const agentDirectory = yield* temporaryDirectory("pi-subagents-sandbox-agent-").pipe(
       Effect.flatMap((directory) => Effect.promise(() => fs.realpath(directory))),
     );
@@ -240,7 +211,7 @@ const runCanary = (runtime: Runtime, writeIntent: SubagentWriteIntent) =>
           ),
     };
     const launch = backendLaunch({
-      runId: `sandbox-${runtime}-${synchronousRandomHex(4)}`,
+      runId: `sandbox-claude-${synchronousRandomHex(4)}`,
       name: `sandbox-canary-${writeIntent}`,
       cwd: path.join(root, "workspace"),
       writeIntent,
@@ -253,11 +224,11 @@ const runCanary = (runtime: Runtime, writeIntent: SubagentWriteIntent) =>
     let report: string | undefined;
     // A private temp directory leaves with its harness, so outcomes are read while the run lives.
     const { targets, outcome } = yield* Effect.gen(function* () {
-      const backend = driver(observedProcesses, yield* SupervisorChannel);
+      const backend = localClaudeBackendDriver(observedProcesses, yield* SupervisorChannel);
       yield* backend.preflight(launch);
       const handle = yield* backend.spawn(launch);
       yield* handle.controls.initialize;
-      const planned = canaryTargets(runtime, root, tag, yield* Ref.get(privateTemporaryDirectory));
+      const planned = canaryTargets(root, tag, yield* Ref.get(privateTemporaryDirectory));
       yield* handle.controls.start(canaryTask(planned), 1);
       while (report === undefined) {
         const event: BackendEvent = yield* takeBackendEvent(handle, {
@@ -289,7 +260,6 @@ const runCanary = (runtime: Runtime, writeIntent: SubagentWriteIntent) =>
     }).pipe(Effect.scoped, provideBuiltLayer(SupervisorChannel.layer({ agentDirectory })));
 
     const metadata = encodeJson({
-      runtime,
       writeIntent,
       model,
       attempts: [...attempts.values()],
@@ -297,8 +267,8 @@ const runCanary = (runtime: Runtime, writeIntent: SubagentWriteIntent) =>
       report,
     });
     yield* Effect.logInfo("Local CLI sandbox canary", metadata);
-    // Codex app-server 0.162 emits no item notifications for sandbox-denied commands or patches,
-    // so the report's per-attempt lines are the only evidence of those attempts.
+    // A read-only child has no file-editing tool, so its report's per-attempt lines are the only
+    // evidence of those attempts.
     const unattempted = Arr.map(
       Arr.filter(
         targets,
@@ -321,90 +291,80 @@ const expectAttempts = (unattempted: ReadonlyArray<Target>, report: string, meta
   );
 };
 
-for (const runtime of ["claude", "codex"] as const)
-  describe.skipIf(!RUNTIMES[runtime].enabled)(`installed local ${runtime} sandbox canary`, () => {
-    it(
-      "keeps a read-only child out of its cwd and every shared temp directory",
-      () =>
-        Effect.runPromise(
-          runCanary(runtime, "read-only").pipe(
-            Effect.map(({ targets, outcome, metadata, unattempted, report }) => {
-              const { privateTmpShell, ...shared } = outcome;
-              expect(
-                shared,
-                `SECURITY: a read-only canary was written; metadata: ${metadata}`,
-              ).toEqual(
-                Rec.fromEntries(
-                  Arr.map(
-                    Arr.filter(targets, (target) => target.key !== "privateTmpShell"),
-                    (target) => [target.key, target.tool === "edit" ? ORIGINAL : undefined],
-                  ),
+describe.skipIf(!ENABLED)("installed local Claude sandbox canary", () => {
+  it(
+    "keeps a read-only child out of its cwd and every shared temp directory",
+    () =>
+      Effect.runPromise(
+        runCanary("read-only").pipe(
+          Effect.map(({ targets, outcome, metadata, unattempted, report }) => {
+            const { privateTmpShell, ...shared } = outcome;
+            expect(
+              shared,
+              `SECURITY: a read-only canary was written; metadata: ${metadata}`,
+            ).toEqual(
+              Rec.fromEntries(
+                Arr.map(
+                  Arr.filter(targets, (target) => target.key !== "privateTmpShell"),
+                  (target) => [target.key, target.tool === "edit" ? ORIGINAL : undefined],
                 ),
-              );
-              if (Arr.some(targets, (target) => target.key === "privateTmpShell")) {
-                const writable = RUNTIMES[runtime].readOnlyWritesPrivateTemporary;
-                expect(
-                  privateTmpShell,
-                  writable
-                    ? `The read-only child could not write its private temp directory; metadata: ${metadata}`
-                    : `SECURITY: a read-only canary was written; metadata: ${metadata}`,
-                ).toBe(writable ? CANARY : undefined);
-              }
-              expectAttempts(unattempted, report, metadata);
-            }),
-          ),
+              ),
+            );
+            // Claude Code's shell writes its cwd record and here-documents there, read-only or not.
+            if (Arr.some(targets, (target) => target.key === "privateTmpShell"))
+              expect(
+                privateTmpShell,
+                `The read-only child could not write its private temp directory; metadata: ${metadata}`,
+              ).toBe(CANARY);
+            expectAttempts(unattempted, report, metadata);
+          }),
         ),
-      300_000,
-    );
+      ),
+    300_000,
+  );
 
-    it(
-      "lets a writer child write its cwd and private temp directory, not the shared ones",
-      () =>
-        Effect.runPromise(
-          runCanary(runtime, "writer").pipe(
-            Effect.map(({ targets, outcome, metadata, unattempted, report }) => {
-              const sharedClaudeTemporary = Arr.some(
-                targets,
-                (target) => target.key === "sharedClaudeTmpShell",
-              );
-              expect(
-                {
-                  outsideShell: outcome.outsideShell,
-                  outsideEdit: outcome.outsideEdit,
-                  slashTmpShell: outcome.slashTmpShell,
-                  parentTmpShell: outcome.parentTmpShell,
-                  ...(sharedClaudeTemporary && {
-                    sharedClaudeTmpShell: outcome.sharedClaudeTmpShell,
-                  }),
-                },
-                `SECURITY: a writer canary escaped its cwd; metadata: ${metadata}`,
-              ).toEqual({
-                outsideShell: undefined,
-                outsideEdit: ORIGINAL,
-                slashTmpShell: undefined,
-                parentTmpShell: undefined,
-                ...(sharedClaudeTemporary && { sharedClaudeTmpShell: undefined }),
-              });
-              const privateTemporary = Arr.some(
-                targets,
-                (target) => target.key === "privateTmpShell",
-              );
-              expect(
-                {
-                  insideShell: outcome.insideShell,
-                  insideEdit: outcome.insideEdit,
-                  ...(privateTemporary && { privateTmpShell: outcome.privateTmpShell }),
-                },
-                `The writer could not write its cwd or private temp directory; metadata: ${metadata}`,
-              ).toEqual({
-                insideShell: CANARY,
-                insideEdit: CANARY,
-                ...(privateTemporary && { privateTmpShell: CANARY }),
-              });
-              expectAttempts(unattempted, report, metadata);
-            }),
-          ),
+  it(
+    "lets a writer child write its cwd and private temp directory, not the shared ones",
+    () =>
+      Effect.runPromise(
+        runCanary("writer").pipe(
+          Effect.map(({ targets, outcome, metadata, unattempted, report }) => {
+            expect(
+              {
+                outsideShell: outcome.outsideShell,
+                outsideEdit: outcome.outsideEdit,
+                slashTmpShell: outcome.slashTmpShell,
+                parentTmpShell: outcome.parentTmpShell,
+                sharedClaudeTmpShell: outcome.sharedClaudeTmpShell,
+              },
+              `SECURITY: a writer canary escaped its cwd; metadata: ${metadata}`,
+            ).toEqual({
+              outsideShell: undefined,
+              outsideEdit: ORIGINAL,
+              slashTmpShell: undefined,
+              parentTmpShell: undefined,
+              sharedClaudeTmpShell: undefined,
+            });
+            const privateTemporary = Arr.some(
+              targets,
+              (target) => target.key === "privateTmpShell",
+            );
+            expect(
+              {
+                insideShell: outcome.insideShell,
+                insideEdit: outcome.insideEdit,
+                ...(privateTemporary && { privateTmpShell: outcome.privateTmpShell }),
+              },
+              `The writer could not write its cwd or private temp directory; metadata: ${metadata}`,
+            ).toEqual({
+              insideShell: CANARY,
+              insideEdit: CANARY,
+              ...(privateTemporary && { privateTmpShell: CANARY }),
+            });
+            expectAttempts(unattempted, report, metadata);
+          }),
         ),
-      300_000,
-    );
-  });
+      ),
+    300_000,
+  );
+});

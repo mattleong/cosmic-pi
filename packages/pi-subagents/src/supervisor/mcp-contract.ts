@@ -37,12 +37,11 @@ export const MAX_SUPERVISOR_MCP_AGENT_MESSAGE_CHARS = MAX_TASK_CHARS;
 /**
  * A submitted report travels as JSON, which can spend six bytes on one character (`\u0001`), on two
  * bounded lines: the 3 MiB supervisor channel line, and the 4 MiB CLI stdout line, because Claude
- * stream-json and Codex item arguments echo the submission. This cap fits the smaller with room for
- * the envelope, below the 1 MiB archive cap.
+ * stream-json echoes the submission. This cap fits the smaller with room for the envelope, below
+ * the 1 MiB archive cap.
  */
 export const MAX_SUPERVISOR_MCP_REPORT_CHARS = 480 * 1024;
 export const MAX_SUPERVISOR_MCP_DELIVERY_ID_CHARS = 256;
-export const MAX_SUPERVISOR_MCP_THREAD_ID_CHARS = 256;
 /** Matches the root's `agent_list` and `agent_read` target bound. */
 export const MAX_SUPERVISOR_MCP_AGENT_IDS = 12;
 export const MAX_SUPERVISOR_MCP_AGENT_ID_CHARS = 80;

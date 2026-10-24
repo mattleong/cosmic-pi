@@ -22,7 +22,6 @@ import * as Scope from "effect/Scope";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as RpcServer from "effect/rpc/RpcServer";
 import * as Predicate from "effect/Predicate";
-import * as Arr from "effect/Array";
 import type { BackendAgentMessaging } from "../backend/model.ts";
 import {
   isSupervisorRunId,
@@ -36,11 +35,8 @@ import {
   type SupervisorRunId,
   SupervisorRpcGroup,
 } from "../supervisor/protocol.ts";
-import {
-  SUPERVISOR_MCP_REGISTRATION,
-  SUPERVISOR_MCP_TOOL_NAMES,
-} from "../supervisor/mcp-contract.ts";
-import { nodeErrorCode, safeAgentDirectory, tomlString } from "./harness-shared.ts";
+import { SUPERVISOR_MCP_REGISTRATION } from "../supervisor/mcp-contract.ts";
+import { nodeErrorCode, safeAgentDirectory } from "./harness-shared.ts";
 import {
   recordPrivateStateOwner,
   removePrivateStateOwner,
@@ -71,10 +67,6 @@ interface ClaudeSupervisorMcpMetadata {
   };
 }
 
-interface CodexSupervisorMcpMetadata {
-  readonly tomlFragment: string;
-}
-
 export interface SupervisorConnectionMetadata {
   readonly host: typeof LOOPBACK_HOST;
   readonly port: number;
@@ -82,7 +74,6 @@ export interface SupervisorConnectionMetadata {
   readonly connectionConfigPath: string;
   readonly helperPath: string;
   readonly claudeMcp: ClaudeSupervisorMcpMetadata;
-  readonly codexMcp: CodexSupervisorMcpMetadata;
 }
 
 export interface SupervisorChannelHandle extends SupervisorChannelControls {
@@ -143,19 +134,6 @@ const makeMetadata = (
           env: {},
         },
       },
-    },
-    codexMcp: {
-      tomlFragment: Arr.join(
-        [
-          `[mcp_servers.${SUPERVISOR_MCP_REGISTRATION}]`,
-          `command = ${tomlString(command)}`,
-          `args = [${Arr.join(Arr.map(args, tomlString), ", ")}]`,
-          "required = true",
-          `enabled_tools = [${Arr.join(Arr.map(SUPERVISOR_MCP_TOOL_NAMES, tomlString), ", ")}]`,
-          'default_tools_approval_mode = "approve"',
-        ],
-        "\n",
-      ),
     },
   };
 };

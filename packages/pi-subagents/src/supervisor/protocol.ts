@@ -12,7 +12,6 @@ import {
   MAX_SUPERVISOR_MCP_AGENT_MESSAGE_CHARS,
   MAX_SUPERVISOR_MCP_CONTACT_CHARS,
   MAX_SUPERVISOR_MCP_REPORT_CHARS,
-  MAX_SUPERVISOR_MCP_THREAD_ID_CHARS,
   SUPERVISOR_MCP_AGENT_ID_PATTERN_SOURCE,
   SUPERVISOR_MCP_DELIVERY_ID_PATTERN_SOURCE,
   SUPERVISOR_MCP_NONBLANK_PATTERN_SOURCE,
@@ -107,15 +106,6 @@ const MessagePayload = {
   requestId: SupervisorChannelIdSchema,
   message: SupervisorContactMessageSchema,
 };
-/** The native thread that made a main-agent-only call, when the runtime identifies it. */
-const MainAgentCallPayload = {
-  nativeThreadId: Schema.optional(
-    Schema.String.check(
-      Schema.isMinLength(1),
-      Schema.isMaxLength(MAX_SUPERVISOR_MCP_THREAD_ID_CHARS),
-    ),
-  ),
-};
 
 export class SupervisorRpcFailure extends Schema.TaggedError<
   SupervisorRpcFailure,
@@ -154,7 +144,7 @@ const SupervisorAcknowledgeAssignmentRpc = Rpc.make("SupervisorAcknowledgeAssign
 
 const contactRpc = <const Tag extends string>(tag: Tag) =>
   Rpc.make(tag, {
-    payload: { ...MessagePayload, ...MainAgentCallPayload },
+    payload: MessagePayload,
     success: Schema.String,
     error: SupervisorRpcFailure,
   });
@@ -162,7 +152,7 @@ export const SupervisorProgressRpc = contactRpc("SupervisorProgress");
 const SupervisorWarningRpc = contactRpc("SupervisorWarning");
 
 const SupervisorQuestionRpc = Rpc.make("SupervisorQuestion", {
-  payload: { ...MessagePayload, ...MainAgentCallPayload },
+  payload: MessagePayload,
   success: Schema.Struct({
     questionId: SupervisorChannelIdSchema,
     message: SupervisorReplySchema,
@@ -184,7 +174,6 @@ const SupervisorReportRpc = Rpc.make("SupervisorReport", {
     requestId: SupervisorChannelIdSchema,
     deliveryId: SupervisorDeliveryIdSchema,
     text: SupervisorReportTextSchema,
-    ...MainAgentCallPayload,
   },
   success: Schema.Struct({
     duplicate: Schema.Boolean,
@@ -212,7 +201,7 @@ export const MAX_SUPERVISOR_AGENT_FACT_CHARS = 512;
  * cut with a marker. JSON spends up to six bytes on one UTF-16 unit, since a lone surrogate
  * survives sanitizing and is written as `\ud800`. Twelve cards and texts, 12 × (24,576 + 16,640)
  * × 6 bytes ≈ 2.83 MiB, leave room for names, IDs, and envelopes below both the 3 MiB channel
- * line and the 4 MiB CLI stdout line, where Claude stream-json and Codex items echo the result.
+ * line and the 4 MiB CLI stdout line, where Claude stream-json echoes the result.
  */
 export const MAX_SUPERVISOR_AGENT_CARD_CHARS = 24 * 1024;
 const boundedFact = Schema.String.check(
@@ -265,7 +254,6 @@ const SupervisorAgentSendRpc = Rpc.make("SupervisorAgentSend", {
     ...AssignedPayload,
     to: SupervisorAgentIdSchema,
     message: SupervisorAgentMessageSchema,
-    ...MainAgentCallPayload,
   },
   success: Schema.Struct({
     messageId: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128)),

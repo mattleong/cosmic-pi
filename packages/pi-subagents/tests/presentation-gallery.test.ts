@@ -58,7 +58,6 @@ import {
   InvalidSubagentRequestError,
   SubagentNotFoundError,
   SubagentProcessError,
-  UnsupportedSubagentCapabilityError,
 } from "../src/run/errors.ts";
 import type { StartSubagentRequest, SubagentRunView } from "../src/run/model.ts";
 import { scriptedWriterAdmissionError } from "../src/run/launch-policy.ts";
@@ -159,8 +158,8 @@ const apiAudit = view({
   name: "api-audit",
   task: "Audit the public API surface for breaking changes",
   profile: "researcher",
-  runtime: "codex",
-  model: "gpt-5.5",
+  runtime: "claude",
+  model: "sonnet",
   effort: "medium",
   state: "completed",
   reportGeneration: 1,
@@ -754,14 +753,14 @@ const agentScenarios = Effect.all([
     sent("agent-2", "docs-sweep", "resumed"),
   ),
   agentScenario(
-    "finished Codex run can't resume",
+    "finished Claude run can't resume",
     { tool: "agent_send", args: { to: "agent-3", message: "Recheck v0.2." } },
     {
       agentSend: () =>
         Effect.fail(
           agentMessageRefusal(
             "agent_resume_unsupported",
-            "Agent agent-3 on local/codex is completed and cannot be resumed.",
+            "Agent agent-3 on local/claude is completed and cannot be resumed.",
           ),
         ),
     },
@@ -896,16 +895,15 @@ const lifecycleScenarios = Effect.all([
     { service: { interrupt: (id) => updated(id, { state: "paused" }) } },
   ),
   scenario(
-    "interrupt unsupported",
+    "interrupt already pending",
     { tool: "agent_lifecycle", args: { action: "interrupt", runIds: ["agent-3"] } },
     {
       service: {
         interrupt: (id) =>
           Effect.fail(
-            UnsupportedSubagentCapabilityError.make({
-              backend: "local/codex",
-              capability: "interrupt",
-              message: `local/codex subagents do not support interruption. Stop with agent_lifecycle({ action: "stop", runIds: ["${id}"] }) or wait with agent_await.`,
+            InvalidSubagentRequestError.make({
+              code: "interrupt_in_flight",
+              message: `Subagent ${id} already has an interrupt pending.`,
             }),
           ),
       },

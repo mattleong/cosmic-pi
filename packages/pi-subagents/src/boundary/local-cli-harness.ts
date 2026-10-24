@@ -1,11 +1,9 @@
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
-import * as Str from "effect/String";
 import {
   createPrivateFile,
   ensurePrivateDirectory,
@@ -27,11 +25,10 @@ import {
   type ClaudeWriterCwdPolicy,
 } from "../backend/claude-policy.ts";
 import type { SubagentRuntime } from "../domain/routing.ts";
-import { readValidatedCodexAuth, safeAgentDirectory, tomlString } from "./harness-shared.ts";
+import { safeAgentDirectory } from "./harness-shared.ts";
 import {
   CLAUDE_TEMPORARY_PARENT,
   CLAUDE_TEMPORARY_PREFIX,
-  CODEX_CATALOG_HARNESS_ROOT,
   LOCAL_CLI_HARNESS_ROOT,
   recordPrivateStateOwner,
   SUBAGENT_STATE_ROOT,
@@ -68,7 +65,7 @@ const SAFE_ENV_KEYS = new Set([
 
 export interface LocalCliHarnessOptions {
   readonly agentDirectory: string;
-  readonly executables?: { readonly claude: string; readonly codex: string } | undefined;
+  readonly executables?: { readonly claude: string } | undefined;
   readonly environment?: NodeJS.ProcessEnv | undefined;
   readonly harnessFault?: "after-claude-settings" | undefined;
   readonly harnessCleanupFault?: boolean | undefined;
@@ -78,7 +75,7 @@ export interface LocalCliHarnessOptions {
 }
 
 export interface LocalCliHarnessRequest {
-  readonly runtime: Extract<SubagentRuntime, "claude" | "codex">;
+  readonly runtime: Extract<SubagentRuntime, "claude">;
   readonly launch: BackendLaunchRequest;
   readonly supervisor: SupervisorConnectionMetadata;
 }
@@ -89,8 +86,8 @@ interface LocalCliHarness {
   readonly args: ReadonlyArray<string>;
   readonly env: NodeJS.ProcessEnv;
   /**
-   * The child's private temp directory, removed with the harness. Codex's lives inside the
-   * harness; Claude's is a short root of its own under `/tmp` with its own owner record.
+   * The child's private temp directory, removed with the harness: a short root of its own under
+   * `/tmp` with its own owner record.
    */
   readonly temporaryDirectory: string;
 }
@@ -129,110 +126,31 @@ const prepareStep = <Value>(operation: () => PromiseLike<Value>) =>
 const preparePrivate = <Value>(effect: Effect.Effect<Value, PrivateFileError>) =>
   effect.pipe(Effect.mapError(harnessPrepareFailed));
 
-export const approvedCodexApiKey = (source: NodeJS.ProcessEnv): string | undefined => {
-  const apiKey = source.OPENAI_API_KEY;
-  return Predicate.isString(apiKey) &&
-    apiKey.length > 0 &&
-    apiKey.length <= 8_192 &&
-    !/[\0\r\n]/u.test(apiKey)
-    ? apiKey
-    : undefined;
-};
-
 export const sanitizeLocalCliEnvironment = (
   source: NodeJS.ProcessEnv,
-  runtime: Extract<SubagentRuntime, "claude" | "codex">,
   launch?: BackendLaunchRequest,
-): NodeJS.ProcessEnv => {
-  const codexApiKey = runtime === "codex" ? approvedCodexApiKey(source) : undefined;
-  return {
-    ...Rec.fromEntries(
-      Arr.filter(
-        Rec.toEntries(source),
-        ([key, value]) => value !== undefined && SAFE_ENV_KEYS.has(key),
-      ),
+): NodeJS.ProcessEnv => ({
+  ...Rec.fromEntries(
+    Arr.filter(
+      Rec.toEntries(source),
+      ([key, value]) => value !== undefined && SAFE_ENV_KEYS.has(key),
     ),
-    ...(codexApiKey && { OPENAI_API_KEY: codexApiKey }),
-    ...(launch && {
-      PI_SUBAGENT_CHILD: "1",
-      PI_SUBAGENT_PARENT_SESSION: launch.parentSessionId,
-      PI_SUBAGENT_RUN_ID: launch.runId,
-    }),
-  };
-};
+  ),
+  ...(launch && {
+    PI_SUBAGENT_CHILD: "1",
+    PI_SUBAGENT_PARENT_SESSION: launch.parentSessionId,
+    PI_SUBAGENT_RUN_ID: launch.runId,
+  }),
+});
 
 export const claudeWriterCwdPolicy = (cwd: string | undefined): ClaudeWriterCwdPolicy | undefined =>
   Predicate.isString(cwd) && nodePath.isAbsolute(cwd) ? claudeWriterCwdRulePolicy(cwd) : undefined;
-
-export const codexArgv = (): ReadonlyArray<string> => ["app-server", "--stdio", "--strict-config"];
-
-const CODEX_DISABLED_FEATURES = Str.split(
-  "apps auth_elicitation browser_use computer_use fast_mode goals guardian_approval image_generation in_app_browser memories plugins remote_plugin skill_search standalone_web_search tool_suggest workspace_dependencies",
-  " ",
-);
-
-const CODEX_TEMPORARY_DIRECTORY = "tmp";
 
 const temporaryEnvironment = (directory: string): NodeJS.ProcessEnv => ({
   TMPDIR: directory,
   TMP: directory,
   TEMP: directory,
 });
-
-const codexBaseConfig = (
-  openaiFastMode = false,
-  temporaryDirectory?: string,
-): ReadonlyArray<string> => [
-  'approval_policy = "never"',
-  'web_search = "disabled"',
-  "[analytics]",
-  "enabled = false",
-  "[shell_environment_policy]",
-  'inherit = "core"',
-  'exclude = ["OPENAI_API_KEY", "CODEX_HOME", "PI_SUBAGENT_CHILD", "PI_SUBAGENT_PARENT_SESSION", "PI_SUBAGENT_RUN_ID"]',
-  // zsh writes here-documents under TMPPREFIX, which defaults to /tmp, rather than TMPDIR.
-  ...(temporaryDirectory === undefined
-    ? []
-    : [`set = { TMPPREFIX = ${tomlString(nodePath.join(temporaryDirectory, "zsh"))} }`]),
-  "[agents]",
-  "enabled = true",
-  "[features]",
-  ...Arr.map(
-    CODEX_DISABLED_FEATURES,
-    (feature) => `${feature} = ${feature === "fast_mode" && openaiFastMode}`,
-  ),
-  "multi_agent = true",
-  "hooks = false",
-];
-
-/**
- * Every turn sends its own sandbox policy; this gives the thread's configured workspace-write
- * default the same temp-directory rule.
- */
-const codexWorkspaceWriteConfig = (temporaryDirectory: string): ReadonlyArray<string> => [
-  "[sandbox_workspace_write]",
-  `writable_roots = [${tomlString(temporaryDirectory)}]`,
-  "network_access = false",
-  "exclude_tmpdir_env_var = true",
-  "exclude_slash_tmp = true",
-];
-
-const codexConfig = (
-  supervisor: SupervisorConnectionMetadata,
-  openaiFastMode: boolean,
-  temporaryDirectory: string,
-): string =>
-  Arr.join(
-    [
-      ...codexBaseConfig(openaiFastMode, temporaryDirectory),
-      ...codexWorkspaceWriteConfig(temporaryDirectory),
-      supervisor.codexMcp.tomlFragment,
-      "",
-    ],
-    "\n",
-  );
-
-const codexCatalogConfig = (): string => Arr.join([...codexBaseConfig(), ""], "\n");
 
 const removeTemporaryDirectory = (
   directory: string | undefined,
@@ -274,8 +192,7 @@ const prepareOwnedHarness = <Harness>(
   rootName: string,
   namePrefix: string,
   build: (directory: string) => Effect.Effect<Harness, LocalCliHarnessError>,
-  cleanup: (directory: string) => Effect.Effect<void, LocalCliHarnessError> = (directory) =>
-    removeLocalCliHarness({ directory }),
+  cleanup: (directory: string) => Effect.Effect<void, LocalCliHarnessError>,
 ): Effect.Effect<Harness, LocalCliHarnessError> =>
   Effect.uninterruptible(
     Effect.gen(function* () {
@@ -296,23 +213,8 @@ const prepareOwnedHarness = <Harness>(
     }),
   );
 
-const prepareCodexHome = Effect.fn("LocalCliHarness.prepareCodexHome")(function* (
-  directory: string,
-  config: string,
-  environment: NodeJS.ProcessEnv,
-): Effect.fn.Return<string, LocalCliHarnessError> {
-  const codexHome = nodePath.join(directory, "codex-home");
-  yield* prepareStep(() => fs.mkdir(codexHome, { mode: 0o700 }));
-  yield* preparePrivate(createPrivateFile(nodePath.join(codexHome, "config.toml"), config));
-  const auth = yield* readValidatedCodexAuth(environment);
-  if (auth) yield* preparePrivate(createPrivateFile(nodePath.join(codexHome, "auth.json"), auth));
-  else if (!approvedCodexApiKey(environment)) return yield* harnessPrepareFailed();
-  return codexHome;
-});
-
 interface HarnessLaunch {
   readonly executable: string;
-  readonly sourceEnvironment: NodeJS.ProcessEnv;
   readonly env: NodeJS.ProcessEnv;
 }
 
@@ -320,20 +222,17 @@ const harnessLaunch = (
   options: LocalCliHarnessOptions,
   request: LocalCliHarnessRequest,
   directory: string,
-): Effect.Effect<HarnessLaunch, LocalCliHarnessError> => {
-  const sourceEnvironment = options.environment ?? process.env;
-  return prepareStep(() => fs.lstat(directory)).pipe(
+): Effect.Effect<HarnessLaunch, LocalCliHarnessError> =>
+  prepareStep(() => fs.lstat(directory)).pipe(
     Effect.flatMap((directoryStat) =>
       !directoryStat.isDirectory() || directoryStat.isSymbolicLink()
         ? Effect.fail(harnessPrepareFailed())
         : Effect.succeed({
             executable: options.executables?.[request.runtime] ?? request.runtime,
-            sourceEnvironment,
-            env: sanitizeLocalCliEnvironment(sourceEnvironment, request.runtime, request.launch),
+            env: sanitizeLocalCliEnvironment(options.environment ?? process.env, request.launch),
           }),
     ),
   );
-};
 
 /**
  * Claude Code's per-user temp directory, shared with the user's other Claude Code sessions.
@@ -390,29 +289,6 @@ const buildClaudeHarness = Effect.fn("LocalCliHarness.buildClaudeHarness")(funct
   };
 });
 
-const buildCodexHarness = Effect.fn("LocalCliHarness.buildCodexHarness")(function* (
-  options: LocalCliHarnessOptions,
-  request: LocalCliHarnessRequest,
-  directory: string,
-): Effect.fn.Return<LocalCliHarness, LocalCliHarnessError> {
-  const launch = yield* harnessLaunch(options, request, directory);
-  // Codex writers may not write the shared /tmp or $TMPDIR; this is their private temp space.
-  const temporaryDirectory = nodePath.join(directory, CODEX_TEMPORARY_DIRECTORY);
-  yield* prepareStep(() => fs.mkdir(temporaryDirectory, { mode: 0o700 }));
-  const codexHome = yield* prepareCodexHome(
-    directory,
-    codexConfig(request.supervisor, request.launch.openaiFastMode, temporaryDirectory),
-    launch.sourceEnvironment,
-  );
-  return {
-    directory,
-    executable: launch.executable,
-    args: codexArgv(),
-    env: { ...launch.env, ...temporaryEnvironment(temporaryDirectory), CODEX_HOME: codexHome },
-    temporaryDirectory,
-  };
-});
-
 /**
  * Claude Code puts its own temp files and sandboxed Bash's `$TMPDIR` under `CLAUDE_CODE_TMPDIR`,
  * so each Claude child gets a fresh 0700 root there instead of the user's shared directory.
@@ -446,35 +322,12 @@ export const prepareLocalCliHarness = (
       Effect.gen(function* () {
         if (options.afterHarnessDirectoryCreated)
           yield* prepareStep(options.afterHarnessDirectoryCreated);
-        return yield* request.runtime === "claude"
-          ? prepareClaudeHarness(options, request, directory)
-          : buildCodexHarness(options, request, directory);
+        return yield* prepareClaudeHarness(options, request, directory);
       }),
     (directory) =>
       options.harnessCleanupFault
         ? Effect.fail(harnessCleanupFailed())
         : removeLocalCliHarness({ directory }),
-  );
-
-interface CodexCatalogHarness {
-  readonly env: NodeJS.ProcessEnv;
-  readonly release: Effect.Effect<void, LocalCliHarnessError>;
-}
-
-export const prepareCodexCatalogHarness = (options: {
-  readonly agentDirectory: string;
-  readonly environment: NodeJS.ProcessEnv;
-}): Effect.Effect<CodexCatalogHarness, LocalCliHarnessError> =>
-  prepareOwnedHarness(options.agentDirectory, CODEX_CATALOG_HARNESS_ROOT, "codex", (directory) =>
-    prepareCodexHome(directory, codexCatalogConfig(), options.environment).pipe(
-      Effect.map((codexHome) => ({
-        env: {
-          ...sanitizeLocalCliEnvironment(options.environment, "codex"),
-          CODEX_HOME: codexHome,
-        },
-        release: removeLocalCliHarness({ directory }),
-      })),
-    ),
   );
 
 export type ProbeResult = Omit<BoundedProcessResult, "signal">;
@@ -518,28 +371,3 @@ export const runProbeEffect = (
     sweepProcessTreeOnExit: true,
     detached: true,
   }).pipe(Effect.catch((error) => Effect.succeed(probeFailureResult(error))));
-
-export const runIsolatedCodexAuthProbe = (
-  executable: string,
-  agentDirectory: string,
-  environment: NodeJS.ProcessEnv,
-): Effect.Effect<ProbeResult, LocalCliHarnessError> =>
-  Effect.uninterruptibleMask((restore) =>
-    Effect.gen(function* () {
-      const harness = yield* prepareCodexCatalogHarness({ agentDirectory, environment });
-      const result = yield* Effect.exit(
-        restore(runProbeEffect(executable, ["login", "status"], harness.env)),
-      );
-      const released = yield* Effect.exit(harness.release);
-      if (Exit.isFailure(released)) {
-        if (Exit.isFailure(result)) return yield* harnessCleanupFailed();
-        return {
-          ...result.value,
-          code: null,
-          cleanupUnconfirmed: true,
-          stderr: "Codex readiness probe private harness cleanup could not be confirmed.",
-        };
-      }
-      return yield* result;
-    }),
-  );

@@ -77,7 +77,7 @@ describe("runtime switches", () => {
   effectTest("keeps native runtime and model unchanged after failed discovery", function* () {
     const editor = liveCatalogEditor();
     editor.loadModelPicker.mockRejectedValueOnce(new Error("Discovery failed"));
-    editor.chooseRunWith("local/codex");
+    editor.chooseRunWith("local/claude");
     yield* step(settleTurn);
     expect(editor.saveDraft).not.toHaveBeenCalled();
     expect(editor.candidates()).toEqual([profileCandidate("test/first")]);
@@ -188,7 +188,7 @@ describe("profile workspace disposal", () => {
           revision: 1,
           overrides: {
             generalist: {
-              candidates: [profileCandidate("gpt-5.4", { runtime: "codex", openaiFastMode: true })],
+              candidates: [profileCandidate("opus", { runtime: "claude" })],
             },
           },
         }),

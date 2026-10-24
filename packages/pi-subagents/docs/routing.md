@@ -23,19 +23,19 @@ Only configuration version 6 is accepted. Any other version fails activation and
 
 A route is exactly `"disabled"`, one candidate, or an ordered array of 1–32 candidates. Candidate fields:
 
-- `runtime`: `pi`, `claude`, or `codex`.
+- `runtime`: `pi` or `claude`.
 - `model`: a native selector. Pi uses `parent` or canonical `provider/model`, including registry `@` context variants such as `cursor/gpt-5.5@1m`.
 - `effort`: `default`, `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`.
 - `context`: `fresh` or `fork`.
 - `writeIntent`: `read-only` or `writer`.
-- `openaiFastMode`: optional, default false. When true, eligible Pi or Codex candidates request OpenAI's `priority` service tier.
+- `openaiFastMode`: optional, default false. When true, eligible Pi candidates request OpenAI's `priority` service tier.
 
 Native selectors share one fail-closed 256-character grammar across configuration, settings, and all adapter preflights: a leading alphanumeric followed by alphanumerics or `._:/@-`, plus Claude's exact long-context suffix such as `[1m]`.
 
 Cross-field decoding rejects:
 
 - fork or `parent` model selection outside local Pi;
-- fast mode for Claude, for an explicit Pi selector outside the `openai` and `openai-codex` providers, or for malformed Codex syntax. Pi `parent` is checked against the active model, and Codex `priority` support against the authenticated catalog, at launch;
+- fast mode for Claude, or for an explicit Pi selector outside the `openai` and `openai-codex` providers. Pi `parent` is checked against the active model at launch;
 - unknown candidate keys, runtime-incompatible effort, and malformed selectors.
 
 ### Profiles
@@ -55,7 +55,7 @@ Optional root `delegation` follows the same precedence ([Delegation settings](se
 ### Session usage
 
 - The footer shows the session's known subagent cost, which includes evicted runs and earlier runtimes: each run's usage is appended as a `pi-subagents-usage` custom session entry (never sent to the model) when its assignment settles and when the runtime ends. `/reload`, `/tree`, and resume restore the sum across every branch, because navigating back refunds nothing. A fork keeps the entries on its path.
-- Usage since a run last settled is lost if Pi crashes, and Codex reports no cost, so the total is a lower bound.
+- Usage since a run last settled is lost if Pi crashes, so the total is a lower bound.
 
 ## Custom agents
 
@@ -91,8 +91,8 @@ A custom agent is a named role the user declares in a configuration document's r
 
 - `agent_start` items take `agent` instead of `profile`; setting both fails with `agent_profile_conflict`. Unknown names fail with `agent_unknown`.
 - The start item's `agent` choices and their descriptions are generated when the root registers its tools, and the field is absent when no agents are configured. Nested Pi children accept any agent name and the root resolves it.
-- Planning applies the agent's overrides to each candidate before the usual checks. A candidate the overrides don't fit, such as fork context or an unsupported explicit effort on Claude or Codex, is skipped with `agent_candidate_incompatible`.
-- Tool lists can only be enforced on a Pi child, so Claude and Codex candidates are skipped with `agent_tools_unsupported` whenever an agent sets `allow` or `deny`. There is no unfiltered fallback.
+- Planning applies the agent's overrides to each candidate before the usual checks. A candidate the overrides don't fit, such as fork context or an unsupported explicit effort on Claude, is skipped with `agent_candidate_incompatible`.
+- Tool lists can only be enforced on a Pi child, so Claude candidates are skipped with `agent_tools_unsupported` whenever an agent sets `allow` or `deny`. There is no unfiltered fallback.
 - An item's `isolation` wins over the agent's; the agent's wins over the session default. When the selected candidate is read-only, a requested `worktree` from either one fails with `isolation_requires_writer` before admission: a read-only run keeps write-capable tools, so dropping the worktree would silently remove its protection. A requested `shared-checkout` asks for nothing stronger, so the launch ignores it and starts read-only, with a launch warning in its start entry and card.
 - A [model override](#per-launch-model-override) launched with an agent takes the agent's effort, context, and write intent defaults, and fails with `model_override_invalid` when the agent's tool lists need Pi.
 - The child's system prompt names the agent and carries its instructions in place of the profile guidance. Run cards, start entries, status, and the orchestration contract report `agent` alongside the routed `profile`.
@@ -109,9 +109,9 @@ A custom agent is a named role the user declares in a configuration document's r
 
 A profile-routed launch whose startup fails before its task is issued, on a listed startup failure, continues on the frozen plan's next candidate in the same run. `run/candidate-fallback.ts` owns the rules.
 
-- **Issued.** The task is issued when the run's assignment leaves `preparing` for `issuing`, just before the backend's start control: Pi's `prompt` RPC, Claude's stream-input user message, or Codex's `turn/start`. Until then a backend has only its launch configuration and zero-inference initialization (Pi `get_state`, Claude `initialize` and its non-querying probe, Codex `initialize` and `thread/start`), so no task side effect can exist. Any failure after it, and a stop, never falls back.
-- **Candidate failures** move to the next candidate: the runtime can't run the candidate's model, effort, or service tier, or refused to initialize with them (`pi_model_not_found`, `pi_model_mismatch`, `pi_effort_unsupported`, `claude_model_mismatch`, `initialize_rejected`, `codex_model_mismatch`, `codex_service_tier_mismatch`).
-- **Runtime failures** move past every remaining candidate on that runtime, each skipped with `runtime_startup_failed` and no probe, since they would fail the same way: the process exited during startup, or its handshake or private supervisor server failed (`local_claude_exited`, `claude_initialize_invalid`, `claude_native_init_missing`, `claude_native_init_invalid`, `mcp_status_rejected`, `claude_mcp_status_invalid`, `claude_supervisor_mcp_unavailable`, `claude_supervisor_tools_missing`, `local_codex_exited`, `codex_request_rejected`). Two are bounded waits that expired, for Claude's native init event and its supervisor server's connection, so a route waits each out at most once per runtime.
+- **Issued.** The task is issued when the run's assignment leaves `preparing` for `issuing`, just before the backend's start control: Pi's `prompt` RPC or Claude's stream-input user message. Until then a backend has only its launch configuration and zero-inference initialization (Pi `get_state`, Claude `initialize` and its non-querying probe), so no task side effect can exist. Any failure after it, and a stop, never falls back.
+- **Candidate failures** move to the next candidate: the runtime can't run the candidate's model or effort, or refused to initialize with them (`pi_model_not_found`, `pi_model_mismatch`, `pi_effort_unsupported`, `claude_model_mismatch`, `initialize_rejected`).
+- **Runtime failures** move past every remaining candidate on that runtime, each skipped with `runtime_startup_failed` and no probe, since they would fail the same way: the process exited during startup, or its handshake or private supervisor server failed (`local_claude_exited`, `claude_initialize_invalid`, `claude_native_init_missing`, `claude_native_init_invalid`, `mcp_status_rejected`, `claude_mcp_status_invalid`, `claude_supervisor_mcp_unavailable`, `claude_supervisor_tools_missing`). Two are bounded waits that expired, for Claude's native init event and its supervisor server's connection, so a route waits each out at most once per runtime.
 - **Never eligible.** A correlated request that timed out or whose send was uncertain (`*_outcome_uncertain`), unconfirmed cleanup, and request, admission, capacity, cancellation, transport, and uncoded failures end the start. The backend's own recorded failure classifies an attempt before the start error it caused.
 - **Between attempts.** The failed candidate's scope closes and its processes must be confirmed gone; its private run state, such as a forked transcript copy, is reclaimed before another backend can take the run. A stop, runtime shutdown, or closed session ends the chain, checked before the route lookup, before the service's preflight, and at install. The host continues the same plan with the same model resolution and readiness probes, skipping candidates that fail them and a failed runtime's candidates as above. The service then repeats its own preflight, and a candidate failing it is skipped the same way. Admission is rechecked under the run lock.
 - **Stops.** A probe whose cleanup or outcome couldn't be confirmed (`*_cleanup_unconfirmed`, `*_outcome_uncertain`), at the host or the service, ends the chain without probing further: the run fails with that probe's error, lists its candidate as skipped, and names no next candidate. A candidate with another write intent ends the chain, since admission and workspace ownership were decided for the first; the run names it as its next candidate. A failed route lookup or run-state reclaim also ends it. Each stop records its reason in a system warning and in the final failure.
@@ -122,8 +122,8 @@ A profile-routed launch whose startup fails before its task is issued, on a list
 
 - An explicit `effort` is strict: an unsupported level skips the candidate or fails its launch.
 - `default` takes the profile's default, else the parent's thinking level (`generalist` inherits the parent's and falls back to `high`). Profile defaults win: oracle stays `high`.
-- Planning moves a default to the nearest supported level, the way Pi clamps thinking: the next higher, else the next lower. An inherited `off` becomes `low` for Claude and `minimal` for Codex; a planner's `xhigh` becomes `high` on a Pi model without `xhigh` or `max`.
-- Claude and Codex catalogs aren't consulted at launch. Codex excludes delegation-enabling and unknown effort values.
+- Planning moves a default to the nearest supported level, the way Pi clamps thinking: the next higher, else the next lower. An inherited `off` becomes `low` for Claude; a planner's `xhigh` becomes `high` on a Pi model without `xhigh` or `max`.
+- Claude's catalog isn't consulted at launch.
 
 ### Provenance and start details
 
@@ -138,7 +138,7 @@ A profile-routed launch whose startup fails before its task is issued, on a list
 A root start item's optional `model: { runtime, model, effort? }` replaces the profile's route for that launch with one candidate. It is always available to the root; there is no configuration switch. Nested children's start schema omits it.
 
 - The profile still supplies the role guidance, context, and write intent, or a [custom agent](#custom-agents) its instructions and overrides. Fast mode is off. An omitted `effort` is `default`, resolved like a route candidate's ([Effort](#effort)).
-- Before any readiness check or service ownership, the override is checked with the shared selector grammar and candidate cross-field policy. A malformed selector, `parent` outside Pi, a runtime-incompatible explicit effort, or a forking profile such as `oracle` on Claude or Codex fails with `model_override_invalid`.
+- Before any readiness check or service ownership, the override is checked with the shared selector grammar and candidate cross-field policy. A malformed selector, `parent` outside Pi, a runtime-incompatible explicit effort, or a forking profile such as `oracle` on Claude fails with `model_override_invalid`.
 - Planning and the full host preflight then run as for any candidate. Any skip fails the launch with `model_override_unavailable`; the profile's route is never tried.
 - Selection provenance records route source `override`. An override that names one of the profile's route candidates, by runtime, selector, and effort (or selector alone when it omits effort), freezes that route at the candidate, so a failed run still names the [next candidate](#explicit-route-continuation) after it. Any other override freezes a route of itself alone and names no further candidate.
 - Start entries, run cards, and status show the requested override as `modelOverride` alongside the actual route.
@@ -183,10 +183,10 @@ Start is always background and nonblocking. `agent_await` supports `all_finished
 ### Model-facing guidance
 
 - Tool descriptions state what a tool does and its rules; parameter descriptions state formats and choices, with `profile` choices generated from the definitions; guideline bullets state when to act; tool results carry recovery steps with exact run IDs.
-- A start with no runnable candidate (`profile_no_eligible_model` or `backend_not_implemented`) points the user to `/subagents doctor` and `/subagents profiles`. The start guideline forbids running `claude`, `codex`, or `pi` from the shell instead, which would bypass sandbox policy and supervision.
+- A start with no runnable candidate (`profile_no_eligible_model` or `backend_not_implemented`) points the user to `/subagents doctor` and `/subagents profiles`. The start guideline forbids running `claude` or `pi` from the shell instead, which would bypass sandbox policy and supervision.
 - The root's delegation rule comes from its [delegation mode](settings-workspace.md#delegation-settings). Nested Pi children get a restrained rule and never get `agent_worktree`.
 - In every audience the parent keeps working after launch, awaits only at a dependency or synthesis barrier, coordinates rather than edits while shared-checkout writers run, and treats worktree reports as proposals.
 
 ### Model discovery
 
-`agent_profiles` projects every resolved candidate as a structured card with `runtime`, `model`, `effort`, `context`, `writeIntent`, `openaiFastMode`, `status`, and `reason`. It also lists each custom agent with its routed profile, overrides, tool lists, and that profile's candidates after the agent's overrides, plus the agents that fail closed. A `profile` filter keeps only agents routed to that profile. Discovery is static: executable, auth, catalog, service-tier, and harness readiness are checked at launch.
+`agent_profiles` projects every resolved candidate as a structured card with `runtime`, `model`, `effort`, `context`, `writeIntent`, `openaiFastMode`, `status`, and `reason`. It also lists each custom agent with its routed profile, overrides, tool lists, and that profile's candidates after the agent's overrides, plus the agents that fail closed. A `profile` filter keeps only agents routed to that profile. Discovery is static: executable, auth, catalog, and harness readiness are checked at launch.

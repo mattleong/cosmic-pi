@@ -4,7 +4,6 @@ import { CodePreviewSchedulerService } from "pi-code-previews";
 import { nodeFilePlatformLayer } from "pi-cosmic-core/platform/node-file";
 import { SafeFile } from "pi-cosmic-core/platform/safe-file";
 import { localClaudeBackendDriver } from "./backend/local-claude.ts";
-import { localCodexBackendDriver } from "./backend/local-codex.ts";
 import { localPiBackendDriver } from "./backend/local-pi.ts";
 import { backendRegistryFor, SubagentBackendRegistry } from "./backend/service.ts";
 import { ChildProcess } from "./boundary/child-process.ts";
@@ -34,7 +33,6 @@ const subagentBackendRegistryLayer = Layer.effect(
     return backendRegistryFor([
       localPiBackendDriver(children),
       localClaudeBackendDriver(localCli, supervisor),
-      localCodexBackendDriver(localCli, supervisor),
     ]);
   }),
 );
@@ -108,7 +106,7 @@ export const subagentApplicationLayer = (options: SubagentLayerOptions) => {
     profiles,
     configStore,
     backend,
-    NativeModelCatalog.layer(directory),
+    NativeModelCatalog.layer(),
     CodePreviewSchedulerService.layer,
     // Doctor reads the checkout's .worktreeinclude the way workspace creation does, and checks
     // that private state is writable.

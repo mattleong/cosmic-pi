@@ -1,13 +1,13 @@
 # Architecture
 
-`pi-subagents` owns session-scoped background agents on local Pi, Claude, and Codex on macOS and Linux, and messaging among the agents of one root session.
+`pi-subagents` owns session-scoped background agents on local Pi and Claude on macOS and Linux, and messaging among the agents of one root session.
 
 ## Ownership and boundaries
 
 - `extension.ts`, `application/`, and `layer.ts` register the extension and compose its Effect runtime through Cosmic Core's session-runtime slot. Root sessions own application services; nested Pi processes use authenticated proxies.
 - `config/store.ts` is the configuration persistence entrypoint. `profiles/` owns route planning, custom agent resolution, and the revisioned Current Session working set. `domain/` holds pure routing policy.
 - `run/` owns `SubagentService`: authoritative run records under one shared lock, admission and writer pools, process lifecycle, assignment transitions, completion claims, agent messaging, and immutable fleet projections. Factories receive only the capabilities they need from the service's composition root. The root session's main agent is reached through host capabilities in `boundary/host-agent-messages.ts`.
-- `backend/` translates Pi, Claude, and Codex behavior into normalized handles, controls, and events. `boundary/` and `supervisor/` own host integration, processes, files, leases, and authenticated transport. Run orchestration never interprets native wire protocols.
+- `backend/` translates Pi and Claude behavior into normalized handles, controls, and events. `boundary/` and `supervisor/` own host integration, processes, files, leases, and authenticated transport. Run orchestration never interprets native wire protocols.
 - `workspace/` owns the isolated-writer artifact model and service; `boundary/git-*` owns their Git operations and worktree hooks. Run-level bindings keep parent authority and cleanup evidence; workspace operations serialize separately from ordinary run activity.
 - `delegation/` owns each delegation mode's prompt guidance, applied to the root session through `boundary/host-delegation-prompt.ts`.
 - `tools/` owns public contracts, execution, and compact presentation. `settings/` owns commands and editors. `ui/` and settings rendering consume immutable projections, and Activity actions recheck activation, revision, and capabilities before reaching services.

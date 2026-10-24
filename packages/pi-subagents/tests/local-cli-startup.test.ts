@@ -4,7 +4,6 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import { localClaudeBackendDriver } from "../src/backend/local-claude.ts";
-import { localCodexBackendDriver } from "../src/backend/local-codex.ts";
 import type { LocalCliHandle, LocalCliWireEvent } from "../src/boundary/local-cli-transport.ts";
 import type { ProcessExit } from "../src/boundary/process-transport.ts";
 import type { SupervisorEvent } from "../src/supervisor/protocol.ts";
@@ -16,10 +15,8 @@ import {
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 
-const drivers = { claude: localClaudeBackendDriver, codex: localCodexBackendDriver } as const;
-
 // A CLI that rejects its launch: it prints to stderr and exits as soon as it is first written to.
-const failedStartup = (runtime: keyof typeof drivers, exit: ProcessExit) =>
+const failedStartup = (exit: ProcessExit) =>
   Effect.gen(function* () {
     const childEvents = yield* Queue.unbounded<LocalCliWireEvent, Cause.Done>();
     const exited = yield* Deferred.make<ProcessExit>();
@@ -40,7 +37,7 @@ const failedStartup = (runtime: keyof typeof drivers, exit: ProcessExit) =>
       hasAcceptedReport: () => Effect.succeed(false),
       acceptedReportForEpoch: () => Effect.undefined,
     });
-    const backend = yield* drivers[runtime](
+    const backend = yield* localClaudeBackendDriver(
       { preflight: () => Effect.void, spawn: () => Effect.succeed(child) },
       { open: () => Effect.succeed(supervisor) },
     ).spawn(backendLaunch());
@@ -48,22 +45,20 @@ const failedStartup = (runtime: keyof typeof drivers, exit: ProcessExit) =>
   });
 
 describe("local CLI startup failure", () => {
-  for (const runtime of ["claude", "codex"] as const) {
-    it.effect(`keeps ${runtime}'s exit status and redacted stderr`, () =>
-      Effect.gen(function* () {
-        const failure = yield* failedStartup(runtime, {
-          exitCode: 2,
-          stderr:
-            "\u001b[31merror: unknown option '--forward-subagent-text'\u001b[0m token=secret-credential\n",
-        });
-        const [summary, ...detail] = Str.split(failure.message, "\n");
-        expect(summary).toContain("code 2");
-        expect(summary).not.toContain("unknown option");
-        expect(Arr.join(detail, "\n")).toContain("unknown option '--forward-subagent-text'");
-        expect(failure.message).toContain("[REDACTED]");
-        expect(failure.message).not.toContain("secret-credential");
-        expect(failure.message).not.toContain("\u001b");
-      }).pipe(Effect.scoped),
-    );
-  }
+  it.effect("keeps Claude's exit status and redacted stderr", () =>
+    Effect.gen(function* () {
+      const failure = yield* failedStartup({
+        exitCode: 2,
+        stderr:
+          "\u001b[31merror: unknown option '--forward-subagent-text'\u001b[0m token=secret-credential\n",
+      });
+      const [summary, ...detail] = Str.split(failure.message, "\n");
+      expect(summary).toContain("code 2");
+      expect(summary).not.toContain("unknown option");
+      expect(Arr.join(detail, "\n")).toContain("unknown option '--forward-subagent-text'");
+      expect(failure.message).toContain("[REDACTED]");
+      expect(failure.message).not.toContain("secret-credential");
+      expect(failure.message).not.toContain("\u001b");
+    }).pipe(Effect.scoped),
+  );
 });

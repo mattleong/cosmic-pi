@@ -25,15 +25,13 @@ import {
   type LocalCliVersion,
 } from "../backend/local-cli-version.ts";
 import { acquireLocalClaudeDebug, type LocalClaudeDebugRecorder } from "./local-claude-debug.ts";
-import { readValidatedCodexAuth, safeAgentDirectory } from "./harness-shared.ts";
+import { safeAgentDirectory } from "./harness-shared.ts";
 import { requireNodeExecutable } from "./node-executable.ts";
 import {
-  approvedCodexApiKey,
   claudeAuthLoggedIn,
   claudeWriterCwdPolicy,
   prepareLocalCliHarness,
   removeLocalCliHarness,
-  runIsolatedCodexAuthProbe,
   runProbeEffect,
   type ProbeResult,
   sanitizeLocalCliEnvironment,
@@ -46,7 +44,7 @@ import {
   type LocalCliHandle,
 } from "./local-cli-transport.ts";
 
-export type LocalCliRuntime = Extract<SubagentRuntime, "claude" | "codex">;
+export type LocalCliRuntime = Extract<SubagentRuntime, "claude">;
 
 interface LocalCliPreflightRequest {
   readonly runtime: LocalCliRuntime;
@@ -82,7 +80,7 @@ const validateLocalPreflightRequest = Effect.fn("LocalCliProcess.validateLocalPr
         `local/${request.runtime} supports fresh context only.`,
       );
     const claudeSandboxPlatforms: ReadonlyArray<NodeJS.Platform> = ["darwin", "linux"];
-    if (request.runtime === "claude" && !claudeSandboxPlatforms.includes(process.platform))
+    if (!claudeSandboxPlatforms.includes(process.platform))
       return yield* preflightError(
         "claude_shell_confinement_unsupported",
         "Local Claude subagents require a current supported strict Bash sandbox platform.",
@@ -98,16 +96,12 @@ const validateLocalPreflightRequest = Effect.fn("LocalCliProcess.validateLocalPr
         `${request.runtime}_effort_unsupported`,
         `${request.runtime} does not support required effort ${request.effort}; supported efforts: ${Arr.join(supportedEfforts, ", ")}.`,
       );
-    if (
-      request.runtime === "claude" &&
-      request.writeIntent === "writer" &&
-      !claudeWriterCwdPolicy(request.cwd)
-    )
+    if (request.writeIntent === "writer" && !claudeWriterCwdPolicy(request.cwd))
       return yield* preflightError(
         "claude_writer_confinement_unsupported",
         "Local Claude writer confinement requires a canonical absolute cwd representable by current noninteractive sandbox and scoped Edit policies.",
       );
-    // The supervisor MCP helper that Claude and Codex start runs on this Node binary.
+    // The supervisor MCP helper that Claude starts runs on this Node binary.
     yield* requireNodeExecutable();
     yield* safeAgentDirectory(options.agentDirectory).pipe(
       Effect.mapError(() =>
@@ -129,7 +123,7 @@ const runVersionProbe = (
   runProbeEffect(
     options.executables?.[runtime] ?? runtime,
     ["--version"],
-    sanitizeLocalCliEnvironment(environment, runtime),
+    sanitizeLocalCliEnvironment(environment),
   ).pipe(
     Effect.flatMap((result) => {
       if (result.cleanupUnconfirmed)
@@ -153,52 +147,20 @@ const requireSupportedVersion = (runtime: LocalCliRuntime, version: LocalCliVers
       )
     : Effect.void;
 
-const resolveCodexApiKeyFallback = Effect.fn("LocalCliProcess.resolveCodexApiKeyFallback")(
-  function* (request: LocalCliPreflightRequest, environment: NodeJS.ProcessEnv) {
-    if (request.runtime !== "codex") return false;
-    const auth = yield* readValidatedCodexAuth(environment);
-    const fallback = !auth && approvedCodexApiKey(environment) !== undefined;
-    if (!auth && !fallback)
-      return yield* preflightError(
-        "codex_harness_auth_unavailable",
-        "Codex has no bounded valid auth.json to copy and no approved OPENAI_API_KEY fallback.",
-      );
-    return fallback;
-  },
-);
-
 const runLocalPreflightProbe = (
   options: LocalCliHarnessOptions,
   request: LocalCliPreflightRequest,
   environment: NodeJS.ProcessEnv,
-  codexApiKeyFallback: boolean,
-): Effect.Effect<ProbeResult, InvalidSubagentRequestError> => {
-  const executable = options.executables?.[request.runtime] ?? request.runtime;
-  if (request.runtime === "claude" || codexApiKeyFallback)
-    return runProbeEffect(
-      executable,
-      request.runtime === "claude" ? ["auth", "status", "--json"] : ["--version"],
-      sanitizeLocalCliEnvironment(environment, request.runtime),
-    );
-  return runIsolatedCodexAuthProbe(executable, options.agentDirectory, environment).pipe(
-    Effect.mapError((error) =>
-      error.reason === "cleanup_unconfirmed"
-        ? preflightError(
-            "codex_preflight_cleanup_unconfirmed",
-            "codex readiness probe private harness cleanup could not be confirmed; no later candidate will be attempted.",
-          )
-        : preflightError(
-            "codex_preflight_failed",
-            "Unable to run bounded codex readiness preflight.",
-          ),
-    ),
+): Effect.Effect<ProbeResult> =>
+  runProbeEffect(
+    options.executables?.[request.runtime] ?? request.runtime,
+    ["auth", "status", "--json"],
+    sanitizeLocalCliEnvironment(environment),
   );
-};
 
 const validateLocalProbeResult = Effect.fn("LocalCliProcess.validateLocalProbeResult")(function* (
   request: LocalCliPreflightRequest,
   result: ProbeResult,
-  codexApiKeyFallback: boolean,
 ) {
   if (result.cleanupUnconfirmed)
     return yield* preflightError(
@@ -219,19 +181,10 @@ const validateLocalProbeResult = Effect.fn("LocalCliProcess.validateLocalProbeRe
         ? `${request.runtime} executable is unavailable.`
         : `${request.runtime} authentication is unavailable.`,
     );
-  if (request.runtime === "claude" && !claudeAuthLoggedIn(result.stdout))
+  if (!claudeAuthLoggedIn(result.stdout))
     return yield* preflightError(
       "claude_unauthenticated",
       "Claude Code auth status did not confirm an authenticated account.",
-    );
-  if (
-    request.runtime === "codex" &&
-    !codexApiKeyFallback &&
-    !/logged in/i.test(`${result.stdout}\n${result.stderr}`)
-  )
-    return yield* preflightError(
-      "codex_unauthenticated",
-      "Codex login status did not confirm an authenticated account.",
     );
   return undefined;
 });
@@ -254,15 +207,11 @@ const acquireLocalCli = Effect.fn("LocalCliProcess.acquire")(function* (
     ),
     (owned) => removeLocalCliHarness(owned).pipe(Effect.orDie),
   );
-  const sourceEnvironment = options.environment ?? process.env;
-  const claudeDebug =
-    request.runtime === "claude"
-      ? yield* acquireLocalClaudeDebug({
-          agentDirectory: options.agentDirectory,
-          environment: sourceEnvironment,
-          runId: request.launch.runId,
-        })
-      : undefined;
+  const claudeDebug = yield* acquireLocalClaudeDebug({
+    agentDirectory: options.agentDirectory,
+    environment: options.environment ?? process.env,
+    runId: request.launch.runId,
+  });
   const transport = yield* acquireLocalCliTransport({
     executable: harness.executable,
     args: harness.args,
@@ -286,7 +235,7 @@ const makeLocalCliProcess = Effect.fn("LocalCliProcess.make")(function* (
   const versions = yield* Cache.makeWith(
     (runtime: LocalCliRuntime) => runVersionProbe(options, runtime, environment),
     {
-      capacity: 2,
+      capacity: 1,
       timeToLive: (exit) =>
         Exit.isSuccess(exit) && exit.value.status !== "unavailable"
           ? Duration.infinity
@@ -304,14 +253,8 @@ const makeLocalCliProcess = Effect.fn("LocalCliProcess.make")(function* (
     ) {
       yield* validateLocalPreflightRequest(options, request);
       yield* requireSupportedVersion(request.runtime, yield* cachedVersion(request.runtime));
-      const codexApiKeyFallback = yield* resolveCodexApiKeyFallback(request, environment);
-      const result = yield* runLocalPreflightProbe(
-        options,
-        request,
-        environment,
-        codexApiKeyFallback,
-      );
-      yield* validateLocalProbeResult(request, result, codexApiKeyFallback);
+      const result = yield* runLocalPreflightProbe(options, request, environment);
+      yield* validateLocalProbeResult(request, result);
     }),
     version,
     spawn: (request) => acquireLocalCli(options, request),

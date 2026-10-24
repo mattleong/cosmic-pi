@@ -204,8 +204,8 @@ export const childSystemPrompt = (request: StartSubagentRequest): string =>
     "\n\n",
   );
 
-// Only a Pi child loses tools for being read-only; inherited extension and MCP tools, and native
-// tools such as Codex's apply_patch, may still change files, so the guidance never says otherwise.
+// Only a Pi child's guidance names tools it loses for being read-only; inherited extension and MCP
+// tools may still change files, so the guidance never says otherwise.
 const readOnlyGuidance = (runtime: StartSubagentRequest["runtime"]): string =>
   Arr.join(
     [

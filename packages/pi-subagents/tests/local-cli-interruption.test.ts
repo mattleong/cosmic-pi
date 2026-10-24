@@ -21,7 +21,6 @@ const interruptHarness = () => {
   const offered: Array<[BackendEvent, LocalCliWireEvent | undefined]> = [];
   const released: LocalCliWireEvent[] = [];
   const interrupts = localCliInterrupts<LocalCliInterrupt>(
-    "Codex",
     {
       offer: (event, rawOwner) => Effect.sync(() => void offered.push([event, rawOwner])),
       release: (rawOwner) => Effect.sync(() => void released.push(rawOwner)),

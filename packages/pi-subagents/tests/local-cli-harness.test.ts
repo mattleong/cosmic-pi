@@ -11,6 +11,7 @@ import { deferredPromise, temporaryDirectory } from "pi-cosmic-core/testing";
 import {
   prepareLocalCliHarness,
   removeLocalCliHarness,
+  sanitizeLocalCliEnvironment,
 } from "../src/boundary/local-cli-harness.ts";
 import { localCliProcess } from "./support/local-cli-process.ts";
 import { backendLaunch, supervisorMetadata } from "./fixtures/backend-supervisor.ts";
@@ -42,15 +43,6 @@ const supervisor = (directory: string) =>
   });
 
 const SHARED_TEMPORARY_DIRECTORY = "/shared/tmp";
-
-/** Codex needs a credential; the parent's temp variables name the shared temp directory. */
-const codexEnvironment = (environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv => ({
-  ...environment,
-  OPENAI_API_KEY: "sk-fixture",
-  TMPDIR: SHARED_TEMPORARY_DIRECTORY,
-  TMP: SHARED_TEMPORARY_DIRECTORY,
-  TEMP: SHARED_TEMPORARY_DIRECTORY,
-});
 
 /** What a child can leave behind: a directory tree without owner write or search access. */
 const lockDirectoryTree = (directory: string) =>
@@ -138,7 +130,7 @@ describe("local CLI harness ownership", () => {
       const service = yield* localCliProcess({
         agentDirectory: test.agentDirectory,
         environment: test.environment,
-        executables: { claude: executable, codex: executable },
+        executables: { claude: executable },
         afterHarnessDirectoryCreated: () => {
           Deferred.doneUnsafe(entered, Effect.void);
           return gate.promise;
@@ -167,6 +159,28 @@ describe("local CLI harness ownership", () => {
       expect(yield* Effect.promise(() => harnessEntries(test.agentDirectory))).toEqual([]);
       expect(yield* claudeTemporaryRoots(test.directory)).toEqual([]);
     }).pipe(Effect.scoped),
+  );
+
+  it.live("passes only allowlisted variables to Claude children, probes, and catalogs", () =>
+    Effect.gen(function* () {
+      const test = yield* setup;
+      const environment = {
+        ...test.environment,
+        OPENAI_API_KEY: "sk-parent-secret",
+        NODE_OPTIONS: "--require /tmp/inject.cjs",
+      };
+      const harness = yield* prepareLocalCliHarness(
+        { agentDirectory: test.agentDirectory, environment, claudeTemporaryParent: test.directory },
+        { runtime: "claude", launch: backendLaunch(), supervisor: supervisor(test.directory) },
+      );
+      // Probes and the model catalog spawn with the launch-free form of the same filter.
+      for (const env of [harness.env, sanitizeLocalCliEnvironment(environment)]) {
+        expect(env).toMatchObject({ HOME: test.environment.HOME, PATH: test.environment.PATH });
+        expect(env).not.toHaveProperty("OPENAI_API_KEY");
+        expect(env).not.toHaveProperty("NODE_OPTIONS");
+      }
+      yield* removeLocalCliHarness(harness);
+    }),
   );
 
   it.live("gives a Claude child a private temp root short enough for its sandboxed Bash", () =>
@@ -220,7 +234,7 @@ describe("local CLI harness ownership", () => {
         const service = yield* localCliProcess({
           agentDirectory: test.agentDirectory,
           environment: test.environment,
-          executables: { claude: executable, codex: executable },
+          executables: { claude: executable },
           claudeTemporaryParent: test.directory,
         });
         yield* service
@@ -236,32 +250,5 @@ describe("local CLI harness ownership", () => {
         expect(yield* claudeTemporaryRoots(test.directory)).toEqual([]);
         expect(yield* Effect.promise(() => harnessEntries(test.agentDirectory))).toEqual([]);
       }),
-  );
-
-  it.live("removes the thread rollouts a Codex child persists in its private home", () =>
-    Effect.gen(function* () {
-      const test = yield* setup;
-      const harness = yield* prepareLocalCliHarness(
-        { agentDirectory: test.agentDirectory, environment: codexEnvironment(test.environment) },
-        { runtime: "codex", launch: backendLaunch(), supervisor: supervisor(test.directory) },
-      );
-      const codexHome = harness.env.CODEX_HOME;
-      if (codexHome === undefined) return yield* Effect.die("Codex needs a private home.");
-      const rollouts = nodePath.join(codexHome, "sessions", "2026", "10", "15");
-      const rollout = nodePath.join(rollouts, "rollout-thread.jsonl");
-      yield* Effect.promise(() =>
-        fs.mkdir(rollouts, { recursive: true }).then(() => fs.writeFile(rollout, "{}\n")),
-      );
-      yield* removeLocalCliHarness(harness);
-      const remains = yield* Effect.promise(() =>
-        fs.lstat(rollout).then(
-          () => true,
-          () => false,
-        ),
-      );
-      expect(remains).toBe(false);
-      expect(yield* Effect.promise(() => harnessEntries(test.agentDirectory))).toEqual([]);
-      return undefined;
-    }),
   );
 });

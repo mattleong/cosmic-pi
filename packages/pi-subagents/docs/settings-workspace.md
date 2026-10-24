@@ -15,7 +15,7 @@ Part of the [pi-subagents](../README.md) architecture documentation. Routing pol
 
 One dashboard holds Current Session and Saved profiles tabs, each remembering its position. Editors keep the selected profile, candidate, field, and Advanced expansion during internal navigation. The dashboard keeps editors and dialogs in one custom host lifetime, opened on Cosmic UI's shared `screen` surface.
 
-- Candidate sections are labelled Primary and Fallback N. Main fields are Model, Reasoning, File access, and Run with (local Pi, Claude, or Codex only); Advanced holds Context and OpenAI fast mode where applicable.
+- Candidate sections are labelled Primary and Fallback N. Main fields are Model, Reasoning, File access, and Run with (local Pi or Claude only); Advanced holds Context and OpenAI fast mode where applicable.
 - Each section's Manage menu has Duplicate, valid Move up/Move down, and Delete. Delete confirms and warns when it would disable the profile; there is no standalone Disable.
 - Add fallback and Undo changes appear under the profile name; disabled profiles show Add model instead.
 - Save these profiles as a set, below the profile list, captures all seven profiles.
@@ -42,7 +42,7 @@ Behavior:
 
 ## Native model discovery
 
-- Switching a candidate to Claude or Codex opens that runtime's live-catalog picker, which offers only advertised models and commits runtime and model together. Neither runtime has a built-in model.
+- Switching a candidate to Claude opens its live-catalog picker, which offers only advertised models and commits runtime and model together. Claude has no built-in model.
 - The Claude picker asks the installed CLI for its catalog without inference. Before each lookup it reads only the validated `model` field of `$HOME/.claude/settings.json` (regular files up to 64 KiB, following that path's symlink for dotfile managers). `CLAUDE_CONFIG_DIR` and project settings are not consulted; missing settings use `default`.
 - With a preference set, discovery combines the default and preferred-selector catalogs, and both probes must succeed. Aliases and context suffixes such as `[1m]` stay separate choices, and an alias target the CLI doesn't list gains its own row.
 - The selector is part of the cache key, keyed by cwd, so changing the preference updates discovery on the next access without reload.
@@ -93,7 +93,7 @@ Custom agents are edited by hand in the root `agents` object of `~/.pi/agent/pi-
 - configuration diagnostics, the current profile set, and project trust;
 - for every profile, the launch preflight against its first eligible route (each distinct route probed once, up to four at a time, each bounded to 20 seconds); a failing first route is a warning when a fallback exists;
 - the same route check for every custom agent after its overrides, and a failure for each agent entry or `agents` object that fails closed;
-- each Claude Code or Codex CLI version a route uses, failing below the minimum and warning when missing or unrecognized;
+- the Claude Code CLI version, when a route uses it, failing below the minimum and warning when missing or unrecognized;
 - whether private agent state is writable, the Git version isolated writers would use, the configured worktree hooks per event and scope, the checkout's `.worktreeinclude` patterns, and whether the shared Activity view is installed.
 
 The report is a user notification and never enters the model's context.

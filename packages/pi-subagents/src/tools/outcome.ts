@@ -58,7 +58,7 @@ export const NO_ELIGIBLE_ROUTE_CODES: ReadonlyArray<string> = [
 ];
 
 export const noEligibleRouteRecovery =
-  "No configured candidate for this profile can start. Tell the user: /subagents doctor diagnoses runtimes and authentication, and /subagents profiles edits the route. Don't run claude, codex, or pi from the shell instead.";
+  "No configured candidate for this profile can start. Tell the user: /subagents doctor diagnoses runtimes and authentication, and /subagents profiles edits the route. Don't run claude or pi from the shell instead.";
 
 export const unconfirmedActionRecovery =
   "The action may already have taken effect. Do not resend, retry, or launch a replacement while the outcome or cleanup is unconfirmed; inspect the run with agent_read before choosing recovery.";

@@ -1,10 +1,6 @@
 import * as Effect from "effect/Effect";
 import type * as Schema from "effect/Schema";
 import type {
-  CodexInitializedNotification,
-  CodexRequest,
-} from "../backend/local-codex-protocol.ts";
-import type {
   ClaudeControlRequestFrame,
   ClaudeHookResponseFrame,
   ClaudeUserFrame,
@@ -25,9 +21,7 @@ export type LocalCliWireEvent = ProcessWireEvent<LocalCliMessage>;
 export type LocalCliOutboundFrame =
   | ClaudeUserFrame
   | ClaudeControlRequestFrame
-  | ClaudeHookResponseFrame
-  | CodexRequest
-  | CodexInitializedNotification;
+  | ClaudeHookResponseFrame;
 
 export type LocalCliHandle = ProcessTransportHandle<LocalCliMessage, LocalCliOutboundFrame>;
 

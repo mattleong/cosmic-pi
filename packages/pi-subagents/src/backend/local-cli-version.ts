@@ -4,23 +4,19 @@ import { clipText } from "pi-cosmic-core/display";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import type { SubagentRuntime } from "../domain/routing.ts";
 
-type LocalCliRuntime = Extract<SubagentRuntime, "claude" | "codex">;
+type LocalCliRuntime = Extract<SubagentRuntime, "claude">;
 
 export const LOCAL_CLI_LABELS = {
   claude: "Claude Code",
-  codex: "Codex",
 } as const satisfies Record<LocalCliRuntime, string>;
 
 /**
- * The oldest releases that accept every flag, setting, and protocol shape the adapters send.
+ * The oldest releases that accept every flag, setting, and protocol shape the adapter sends.
  * Claude Code 2.1.224 added the `crossSessionInbound` setting the harness uses to refuse
- * cross-session input (`--forward-subagent-text` arrived in 2.1.211). Codex 0.145.0 is the
- * app-server v2 subset the adapter was generated from; `--strict-config` rejects older releases
- * that do not know every feature key in the private configuration.
+ * cross-session input (`--forward-subagent-text` arrived in 2.1.211).
  */
 export const LOCAL_CLI_MINIMUM_VERSIONS = {
   claude: "2.1.224",
-  codex: "0.145.0",
 } as const satisfies Record<LocalCliRuntime, string>;
 
 export type LocalCliVersion =

@@ -27,7 +27,6 @@ export const PRIVATE_STATE_RETENTION_MILLIS = 7 * 24 * 60 * 60 * 1000;
 export const SUBAGENT_STATE_ROOT = "subagents";
 export const REPORT_ARCHIVE_ROOT = "reports";
 export const LOCAL_CLI_HARNESS_ROOT = "local-cli-v1";
-export const CODEX_CATALOG_HARNESS_ROOT = "native-model-catalog-v1";
 export const SUPERVISOR_CHANNEL_ROOT = "supervisor-channels-v3";
 export const WRITER_LEASE_ROOT = "writer-leases-v3";
 export const LOCAL_CLAUDE_DEBUG_ROOT = "local-claude-debug-v1";
@@ -41,11 +40,7 @@ export const CLAUDE_TEMPORARY_PREFIX = "pi-claude-";
 const CLAUDE_TEMPORARY_NAME = /^pi-claude-[A-Za-z0-9]{6}$/u;
 const CLAUDE_TEMPORARY_TOMBSTONE = /^\.swept-pi-claude-[A-Za-z0-9]{6}-[0-9a-f]{12}$/u;
 
-const OWNED_ENTRY_ROOTS = [
-  LOCAL_CLI_HARNESS_ROOT,
-  CODEX_CATALOG_HARNESS_ROOT,
-  SUPERVISOR_CHANNEL_ROOT,
-] as const;
+const OWNED_ENTRY_ROOTS = [LOCAL_CLI_HARNESS_ROOT, SUPERVISOR_CHANNEL_ROOT] as const;
 const NAMED_ROOTS: ReadonlySet<string> = new Set([
   ...OWNED_ENTRY_ROOTS,
   REPORT_ARCHIVE_ROOT,
@@ -229,10 +224,9 @@ interface PrivateStateSweepOptions {
 
 /**
  * Removes private run state that crashed or killed Pi sessions left behind: local Pi run
- * directories under `subagents/<session>/`, local CLI harnesses (which can hold a copied Codex
- * credential), supervisor channel state, and Claude children's temp roots under `/tmp`. Reports,
- * writer leases, debug ledgers, and writer workspaces have their own owners and are never
- * touched. Every entry failure is ignored.
+ * directories under `subagents/<session>/`, local CLI harnesses, supervisor channel state, and
+ * Claude children's temp roots under `/tmp`. Reports, writer leases, debug ledgers, and writer
+ * workspaces have their own owners and are never touched. Every entry failure is ignored.
  */
 export const sweepAbandonedPrivateState = Effect.fn("PrivateState.sweepAbandonedPrivateState")(
   function* (

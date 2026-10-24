@@ -167,17 +167,17 @@ describe("per-launch model override", () => {
   });
 
   effectTest("status cards and contract targets report the override", function* () {
-    const modelOverride = { runtime: "codex", model: "gpt-5.5" } as const;
+    const modelOverride = { runtime: "claude", model: "sonnet" } as const;
     const run = view({
       id: "agent-7",
-      runtime: "codex",
-      model: "gpt-5.5",
+      runtime: "claude",
+      model: "sonnet",
       modelOverride,
       selection: {
         source: "profile-candidate",
         routeSource: "override",
         candidateIndex: 0,
-        reason: "Profile reviewer selected model override candidate 1 (local/codex).",
+        reason: "Profile reviewer selected model override candidate 1 (local/claude).",
         skippedCandidates: [],
       },
     });
@@ -203,7 +203,7 @@ describe("per-launch model override", () => {
       agentIds: [run.id],
       verbose: true,
     });
-    expect(result?.content[0]?.text).toContain("codex/gpt-5.5");
+    expect(result?.content[0]?.text).toContain("claude/sonnet");
     expect(result?.structuredContent).toMatchObject({
       agents: [{ id: run.id, status: { runId: run.id, modelOverride } }],
     });

@@ -20,8 +20,8 @@ import { MAX_ERROR_CHARS, sanitizeDiagnosticText } from "./state.ts";
 import { recordRunWarning } from "./warnings.ts";
 
 /**
- * Startup failures of the candidate itself: the runtime can't run its model, effort, or service
- * tier, or refused to initialize with them. The route's next candidate may still start.
+ * Startup failures of the candidate itself: the runtime can't run its model or effort, or refused
+ * to initialize with them. The route's next candidate may still start.
  */
 const CANDIDATE_STARTUP_FAILURE_CODES: ReadonlySet<string> = new Set([
   // Local Pi: no loaded provider offers the model, or the child chose another model or effort.
@@ -31,9 +31,6 @@ const CANDIDATE_STARTUP_FAILURE_CODES: ReadonlySet<string> = new Set([
   // Claude Code chose another model, or refused initialization of the CLI launched with it.
   "claude_model_mismatch",
   "initialize_rejected",
-  // Codex chose another model or service tier.
-  "codex_model_mismatch",
-  "codex_service_tier_mismatch",
 ]);
 
 /**
@@ -51,8 +48,6 @@ const RUNTIME_STARTUP_FAILURE_CODES: ReadonlySet<string> = new Set([
   "claude_mcp_status_invalid",
   "claude_supervisor_mcp_unavailable",
   "claude_supervisor_tools_missing",
-  "local_codex_exited",
-  "codex_request_rejected",
 ]);
 
 /** How far a startup failure moves the launch: to the next candidate, or past its runtime. */

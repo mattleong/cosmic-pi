@@ -176,7 +176,6 @@ describe("profile model catalog", () => {
                     label: "Claude\u001b[2J\nSafe",
                     description: "Native\u0007 description",
                     supportedEfforts: ["high"],
-                    supportedServiceTiers: [],
                     isDefault: true,
                   },
                 ]),

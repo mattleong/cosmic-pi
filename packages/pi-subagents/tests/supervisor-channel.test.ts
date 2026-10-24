@@ -720,61 +720,6 @@ describe("private supervisor channel", () => {
     });
 
   liveTest(
-    "refuses parent contact and the report from a native sub-agent thread but accepts the main agent's",
-    function* () {
-      const { handle } = yield* openChannel("agent-native-thread");
-      const { rpc } = yield* readyHelper(handle);
-      handle.setMainAgentThread("main-thread");
-      const fromThread = (id: string, name: string, args: JsonRpcObject, threadId: string) =>
-        rpc.request({
-          jsonrpc: "2.0",
-          id,
-          method: "tools/call",
-          params: { name, arguments: args, _meta: { threadId, progressToken: 1 } },
-        });
-      const report = { delivery_id: "delivery-native", report: "Sub-agent findings." };
-
-      for (const [id, name, args] of [
-        ["sub-report", "agent_submit_report", report],
-        ["sub-question", "agent_contact_parent", { kind: "question", message: "Which file?" }],
-        ["sub-progress", "agent_contact_parent", { kind: "progress", message: "Halfway." }],
-        ["sub-warning", "agent_contact_parent", { kind: "warning", message: "Risky." }],
-      ] as const) {
-        const refused = yield* fromThread(id, name, args, "sub-agent-thread");
-        expect(refused).toMatchObject({
-          result: { isError: true, content: [{ text: stringContaining("parent") }] },
-        });
-      }
-      expect(Queue.sizeUnsafe(handle.events)).toBe(0);
-
-      yield* fromThread(
-        "main-progress",
-        "agent_contact_parent",
-        { kind: "progress", message: "Halfway." },
-        "main-thread",
-      );
-      expect(yield* takeEvent(handle)).toMatchObject({
-        kind: "progress",
-        message: "Halfway.",
-      });
-
-      const accepted = yield* fromThread(
-        "main-report",
-        "agent_submit_report",
-        report,
-        "main-thread",
-      );
-      expect(accepted).toMatchObject({
-        result: { content: [{ text: stringContaining("accepted") }] },
-      });
-      expect(yield* takeEvent(handle)).toMatchObject({
-        type: "report",
-        text: "Sub-agent findings.",
-      });
-    },
-  );
-
-  liveTest(
     "spawns the helper and keeps blocked questions concurrent, correlated, cancellable, and epoch-safe",
     function* () {
       const opened = yield* openChannel();
@@ -794,10 +739,6 @@ describe("private supervisor channel", () => {
         command: process.execPath,
         env: {},
       });
-      expect(handle.metadata.codexMcp.tomlFragment).toContain(
-        "[mcp_servers.pi_subagents_supervisor]",
-      );
-      expect(handle.metadata.codexMcp.tomlFragment).not.toContain("env =");
 
       const stateMode = (yield* step(() => stat(handle.metadata.stateDirectory))).mode & 0o777;
       const configMode =
@@ -1296,45 +1237,6 @@ describe("private supervisor channel", () => {
       expect(Exit.isFailure(forged)).toBe(true);
       yield* direct.close;
       expect(fixture.calls).toHaveLength(6);
-    },
-    20_000,
-  );
-
-  liveTest(
-    "refuses agent_send from a native sub-agent thread but lets it list and read",
-    function* () {
-      const runId = "agent-supervisor-native-agents";
-      const fixture = recordingAgents(runId);
-      const { handle } = yield* openChannel(runId, {}, fixture.agents);
-      const { rpc } = yield* readyHelper(handle);
-      handle.setMainAgentThread("main-thread");
-      const fromThread = (id: string, name: string, args: JsonRpcObject, threadId: string) =>
-        rpc
-          .request({
-            jsonrpc: "2.0",
-            id,
-            method: "tools/call",
-            params: { name, arguments: args, _meta: { threadId } },
-          })
-          .pipe(Effect.map(toolText));
-      const message = { to: "main", message: "Sub-agent findings." };
-
-      expect(yield* fromThread("sub-send", "agent_send", message, "sub-thread")).toMatchObject({
-        isError: true,
-        text: stringContaining("main agent"),
-      });
-      expect(yield* fromThread("sub-list", "agent_list", {}, "sub-thread")).toMatchObject({
-        isError: false,
-      });
-      expect(
-        yield* fromThread("sub-read", "agent_read", { agentIds: ["main"] }, "sub-thread"),
-      ).toMatchObject({ isError: false });
-      expect(Arr.map(fixture.calls, (call) => call.kind)).toEqual(["list", "read"]);
-
-      expect(yield* fromThread("main-send", "agent_send", message, "main-thread")).toMatchObject({
-        isError: false,
-      });
-      expect(fixture.calls.at(-1)).toEqual({ kind: "send", ...message });
     },
     20_000,
   );

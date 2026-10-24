@@ -36,7 +36,7 @@ const setup = Effect.gen(function* () {
     cwd,
     settings: nodePath.join(home, ".claude", "settings.json"),
     options: {
-      executables: { claude: executable, codex: executable },
+      executables: { claude: executable },
       environment: {
         HOME: home,
         PATH: path,
@@ -69,7 +69,7 @@ describe("Claude catalog preference", () => {
         );
         const catalog = yield* makeNativeModelCatalog({
           ...test.options,
-          executables: { claude: descendantFixture, codex: descendantFixture },
+          executables: { claude: descendantFixture },
         });
         yield* catalog.list("claude", test.cwd).pipe(Effect.orDie);
         const pid = Number(yield* step(() => fs.readFile(pidFile, "utf8")));

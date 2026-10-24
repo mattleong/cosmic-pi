@@ -7,7 +7,6 @@ import * as Schema from "effect/Schema";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import { localClaudeBackendDriver } from "../src/backend/local-claude.ts";
 import type { ClaudeInboundFrame } from "../src/backend/local-claude-protocol.ts";
-import { localCodexBackendDriver } from "../src/backend/local-codex.ts";
 import type {
   LocalCliHandle,
   LocalCliOutboundFrame,
@@ -22,7 +21,6 @@ import {
   backendLaunch,
   backendSupervisor,
   supervisorMetadata,
-  takeBackendEvent,
 } from "./fixtures/backend-supervisor.ts";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
@@ -230,107 +228,5 @@ describe("native sub-agent report ownership", () => {
         });
       }
     }).pipe(Effect.scoped),
-  );
-
-  it.effect("Codex names its main thread and follows 0.162 sub-agent activity", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const childEvents = yield* Queue.unbounded<LocalCliWireEvent, Cause.Done>();
-        const supervisorEvents = yield* Queue.unbounded<SupervisorEvent, Cause.Done>();
-        const mainThreads: string[] = [];
-        const notify = (method: string, params: Schema.Json) =>
-          Queue.offerUnsafe(childEvents, { type: "message", value: { method, params } });
-        const child: LocalCliHandle = {
-          pid: 1,
-          events: childEvents,
-          awaitExit: Effect.never,
-          acknowledge: () => {},
-          terminate: () => Effect.void,
-          send: (frame) =>
-            Effect.sync(() => {
-              if (!("id" in frame) || !("method" in frame)) return;
-              const result = Match.value(frame.method).pipe(
-                Match.when("initialize", () => ({
-                  codexHome: "/tmp",
-                  platformFamily: "unix",
-                  platformOs: "macos",
-                  userAgent: "fixture",
-                })),
-                Match.when("thread/start", () => ({
-                  model: "fixture",
-                  cwd: process.cwd(),
-                  serviceTier: null,
-                  thread: { id: "main-thread" },
-                })),
-                Match.orElse(() => ({ turn: { id: "main-turn", status: "inProgress" } })),
-              );
-              Queue.offerUnsafe(childEvents, { type: "message", value: { id: frame.id, result } });
-            }),
-        };
-        const backend = yield* localCodexBackendDriver(
-          { preflight: () => Effect.void, spawn: () => Effect.succeed(child) },
-          {
-            open: () =>
-              Effect.succeed(
-                backendSupervisor(supervisorMetadata({ tomlFragment: "" }), supervisorEvents, {
-                  hasAcceptedReport: () => Effect.succeed(true),
-                  acceptedReportForEpoch: () => Effect.undefined,
-                  setMainAgentThread: (threadId) => void mainThreads.push(threadId),
-                }),
-              ),
-          },
-        ).spawn(backendLaunch());
-        yield* backend.controls.initialize;
-        expect(mainThreads).toEqual(["main-thread"]);
-        yield* backend.controls.start("Start", 1);
-        expect(yield* takeBackendEvent(backend)).toMatchObject({ type: "run_started" });
-
-        const mainItem = (method: string, item: Schema.Json) =>
-          notify(method, { threadId: "main-thread", turnId: "main-turn", item });
-        const spawned = {
-          id: "call-spawn",
-          type: "subAgentActivity",
-          kind: "started",
-          agentThreadId: "sub-thread",
-          agentPath: "/root/report",
-          model: "gpt-native",
-          reasoningEffort: "low",
-        };
-        mainItem("item/started", spawned);
-        mainItem("item/completed", spawned);
-        mainItem("item/completed", {
-          id: "call-message",
-          type: "collabAgentToolCall",
-          tool: "sendMessage",
-          status: "interrupted",
-          senderThreadId: "main-thread",
-          receiverThreadIds: ["sub-thread"],
-          prompt: null,
-          model: null,
-          reasoningEffort: null,
-          agentsStates: { "sub-thread": { status: "interrupted" } },
-        });
-        notify("item/completed", {
-          threadId: "sub-thread",
-          turnId: "sub-turn",
-          item: { id: "call-list", type: "collabAgentToolCall", tool: "listAgentsLater" },
-        });
-        mainItem("item/completed", {
-          ...spawned,
-          id: "subagent-completed",
-          kind: "completed",
-          model: null,
-          reasoningEffort: null,
-        });
-
-        const states: string[] = [];
-        while (states.length < 3) {
-          const event = yield* takeBackendEvent(backend);
-          expect(event.type).not.toBe("protocol_error");
-          if (event.type === "native_agent_activity") states.push(event.state);
-        }
-        expect(states).toEqual(["running", "activity", "completed"]);
-      }),
-    ),
   );
 });

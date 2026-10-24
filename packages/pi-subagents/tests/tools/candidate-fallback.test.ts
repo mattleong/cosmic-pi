@@ -155,7 +155,7 @@ const hostBackends = (
 const NATIVE_CAPABILITIES = ["steer", "interrupt", "parent-contact"] as const;
 
 /**
- * A Claude or Codex driver whose initialization fails with a code for some models, and whose
+ * A Claude driver whose initialization fails with a code for some models, and whose
  * service-side preflight may fail too. Each spawn records its model and how many run-state reclaims
  * preceded it.
  */
@@ -475,43 +475,16 @@ describe("startup failure scope", () => {
     });
   });
 
-  it.effect("moves a Codex candidate failure to the next Codex candidate", () => {
-    const codex = fakeNativeDriver("codex", {
-      initializeFailures: { "gpt-a": "codex_service_tier_mismatch" },
-    });
-    const { layer } = localServiceFixture(
-      { notify: acknowledgeCompletions },
-      fakeChildLayer(),
-      profileLayerFor({}),
-      fakeWriterLeaseLayer(),
-      [codex.driver],
-    );
-    return withService(layer, function* (service) {
-      const result = yield* start(
-        service,
-        mixedProfiles([nativeCandidate("codex", "gpt-a"), nativeCandidate("codex", "gpt-b")]),
-        [{ task: "Map the auth flow" }],
-        hostBackends().registry,
-      );
-      expect(result.structuredContent).toMatchObject({ outcome: "started" });
-      expect(Arr.map(codex.spawns, ({ model }) => model)).toEqual(["gpt-a", "gpt-b"]);
-      expect((yield* runViews(service))[0]).toMatchObject({ runtime: "codex", model: "gpt-b" });
-    });
-  });
-
   it.effect("passes over a failed runtime's other candidates without probing them", () => {
     const claude = fakeNativeDriver("claude", {
       initializeFailures: { opus: "claude_native_init_missing" },
-    });
-    const codex = fakeNativeDriver("codex", {
-      initializeFailures: { "gpt-a": "local_codex_exited" },
     });
     const { layer, fake } = localServiceFixture(
       { notify: acknowledgeCompletions },
       fakeChildLayer(),
       profileLayerFor({}),
       fakeWriterLeaseLayer(),
-      [claude.driver, codex.driver],
+      [claude.driver],
     );
     return withService(layer, function* (service) {
       const host = hostBackends();
@@ -519,9 +492,8 @@ describe("startup failure scope", () => {
         service,
         mixedProfiles([
           nativeCandidate("claude", "opus"),
-          nativeCandidate("codex", "gpt-a"),
           nativeCandidate("claude", "sonnet"),
-          nativeCandidate("codex", "gpt-b"),
+          nativeCandidate("claude", "haiku"),
           declaredCandidate(REPORTED, { effort: "default" }),
         ]),
         [{ task: "Map the auth flow" }],
@@ -529,17 +501,15 @@ describe("startup failure scope", () => {
       );
       expect(result.structuredContent).toMatchObject({ outcome: "started" });
       expect(Arr.map(claude.spawns, ({ model }) => model)).toEqual(["opus"]);
-      expect(Arr.map(codex.spawns, ({ model }) => model)).toEqual(["gpt-a"]);
       expect(host.probed).not.toContain("sonnet");
-      expect(host.probed).not.toContain("gpt-b");
+      expect(host.probed).not.toContain("haiku");
       expect(fake.controls).toHaveLength(1);
       const [run] = yield* runViews(service);
       expect(run).toMatchObject({ state: "running", runtime: "pi", model: REPORTED });
       expect(run?.selection.skippedCandidates).toMatchObject([
         { candidate: { model: "opus" }, code: "claude_native_init_missing" },
-        { candidate: { model: "gpt-a" }, code: "local_codex_exited" },
         { candidate: { model: "sonnet" }, code: "runtime_startup_failed" },
-        { candidate: { model: "gpt-b" }, code: "runtime_startup_failed" },
+        { candidate: { model: "haiku" }, code: "runtime_startup_failed" },
       ]);
     });
   });

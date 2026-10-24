@@ -75,7 +75,6 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
     lastResultText: undefined,
   };
   const interrupts = localCliInterrupts<PendingInterrupt>(
-    "Claude",
     { offer, release },
     () => handleState.assignmentEpoch,
   );

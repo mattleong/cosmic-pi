@@ -270,9 +270,9 @@ export type SelectableCandidateField = Exclude<
   "model" | "advanced" | "actions" | "add" | "reset"
 >;
 
-const RUN_WITH_PRODUCTS = { pi: "Pi", claude: "Claude Code", codex: "Codex" } as const;
+const RUN_WITH_PRODUCTS = { pi: "Pi", claude: "Claude Code" } as const;
 
-const RUN_WITH_CHOICES = Arr.map(["pi", "claude", "codex"] as const, (runtime) => ({
+const RUN_WITH_CHOICES = Arr.map(["pi", "claude"] as const, (runtime) => ({
   value: `local/${runtime}`,
   label: runWithLabel({ runtime }),
   description: `Run ${RUN_WITH_PRODUCTS[runtime]} locally on this computer`,

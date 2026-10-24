@@ -210,7 +210,7 @@ describe("subagent v6 profile configuration and resolution", () => {
     ["claude", "claude-opus-5", true],
     ["claude", "-dangerous-option", false],
     ["claude", "bad\u001bmodel", false],
-    ["codex", "model,(glob)*", false],
+    ["claude", "model,(glob)*", false],
   ] as const)("classifies %s native selector case %#", (runtime, selector, valid) => {
     expect(isNativeProfileModelSelector(runtime, selector)).toBe(valid);
   });
@@ -262,27 +262,21 @@ describe("subagent v6 profile configuration and resolution", () => {
   });
 
   it("moves soft efforts to the nearest level the runtime and model support", () => {
-    const routed = (runtime: "claude" | "codex", parentEffort: "off" | "minimal" | "max") =>
+    const routed = (parentEffort: "off" | "minimal" | "max") =>
       resolveProfilePlan(
         "generalist",
         resolveTestConfig(
           document({
-            profiles: {
-              generalist: candidate({
-                runtime,
-                model: runtime === "claude" ? "sonnet" : "gpt-5.4",
-              }),
-            },
+            profiles: { generalist: candidate({ runtime: "claude", model: "sonnet" }) },
           }),
         ),
         { ...environment, parentModel: { model: "openai/gpt-parent", effort: parentEffort } },
       );
-    expect(routed("claude", "off")).toMatchObject({
+    expect(routed("off")).toMatchObject({
       attempts: [{ effort: "low", effortWasExplicit: false }],
     });
-    expect(routed("claude", "minimal")).toMatchObject({ attempts: [{ effort: "low" }] });
-    expect(routed("codex", "off")).toMatchObject({ attempts: [{ effort: "minimal" }] });
-    expect(routed("codex", "max")).toMatchObject({ attempts: [{ effort: "max" }] });
+    expect(routed("minimal")).toMatchObject({ attempts: [{ effort: "low" }] });
+    expect(routed("max")).toMatchObject({ attempts: [{ effort: "max" }] });
     const planner = resolveTestConfig(
       document({ profiles: { planner: candidate({ model: "openai/gpt-review" }) } }),
     );

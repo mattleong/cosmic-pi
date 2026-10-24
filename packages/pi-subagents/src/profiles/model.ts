@@ -41,7 +41,7 @@ export const isProfileId = Schema.is(Schema.Literals(PROFILE_IDS));
 
 export const MAX_PROFILE_CANDIDATES = 32;
 export const MAX_PROFILE_MODEL_SELECTOR_CHARS = 256;
-export const PROFILE_CANDIDATE_RUNTIMES = ["pi", "claude", "codex"] as const;
+export const PROFILE_CANDIDATE_RUNTIMES = ["pi", "claude"] as const;
 export const PROFILE_CANDIDATE_CONTEXTS = ["fresh", "fork"] as const;
 export const PROFILE_CANDIDATE_WRITE_INTENTS = ["read-only", "writer"] as const;
 export const PROFILE_CANDIDATE_EFFORTS = ["default", ...SUBAGENT_EFFORTS] as const;
@@ -128,7 +128,6 @@ export const isLocalPiProfileCandidate = (candidate: Pick<ProfileCandidate, "run
   candidate.runtime === "pi";
 
 export const supportsSubagentFastMode = (runtime: SubagentRuntime, model: string): boolean => {
-  if (runtime === "codex") return isNativeProfileModelSelector("codex", model);
   if (runtime !== "pi") return false;
   if (model === "parent") return true;
   const selected = splitPiModelSelector(model);

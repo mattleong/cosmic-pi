@@ -73,21 +73,18 @@ const exitedProcessId = Effect.callback<number>((resume) => {
 const reusedPid = reusedProcessIdentity();
 
 describe("private state sweep", () => {
-  it.live("removes state as soon as its owner is gone, credentials and rollouts included", () =>
+  it.live("removes state as soon as its owner is gone, harness settings included", () =>
     Effect.gen(function* () {
       const agent = yield* temporaryAgent;
       const root = path.join(agent, "subagents");
       const session = path.join(root, SESSION);
       const run = path.join(session, "agent-0000000001-0a1b2c3d4e5f");
-      const harness = path.join(root, "local-cli-v1", "codex-agent-0000000002-0123456789ab");
+      const harness = path.join(root, "local-cli-v1", "claude-agent-0000000002-0123456789ab");
       const channel = path.join(root, "supervisor-channels-v3", "agent-0000000002-0123456789ab");
       yield* entry(run, { "session.jsonl": "{}\n", "system-prompt.md": "prompt" }, reusedPid);
       yield* entry(
         harness,
-        {
-          "codex-home/auth.json": '{"token":"secret"}',
-          "codex-home/sessions/2026/10/15/rollout-thread.jsonl": "{}\n",
-        },
+        { "settings.json": "{}\n", "mcp.json": "{}\n", "system-prompt.md": "prompt" },
         { pid: yield* exitedProcessId },
       );
       yield* entry(channel, { "connection.json": "{}" }, reusedPid);

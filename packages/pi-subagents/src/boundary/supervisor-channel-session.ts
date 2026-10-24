@@ -45,8 +45,6 @@ export interface SupervisorChannelControls {
     message: string,
   ) => Effect.Effect<void, SupervisorChannelError>;
   readonly cancelPending: (reason?: string) => void;
-  /** Admits main-agent-only calls only from this native thread when the caller names its thread. */
-  readonly setMainAgentThread: (threadId: string) => void;
 }
 
 export const supervisorChannelSession = Effect.fn("SupervisorChannel.session")(function* ({
@@ -271,9 +269,6 @@ export const supervisorChannelSession = Effect.fn("SupervisorChannel.session")(f
         acceptedReportForEpoch(epoch).pipe(Effect.map((report) => report !== undefined)),
       reply,
       cancelPending,
-      setMainAgentThread: (threadId) => {
-        state.mainAgentThreadId = threadId;
-      },
     } satisfies SupervisorChannelControls,
   };
 });

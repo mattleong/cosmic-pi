@@ -106,7 +106,7 @@ const SCRIPTED_SUBAGENT_GUIDELINE =
 const DELIVERABLE_GUIDELINE =
   "Give each subagent one bounded slice with a concrete deliverable, and choose its profile by that deliverable. Read-only work is not automatically scouting.";
 const FAILED_START_GUIDELINE =
-  "If a start fails, follow its Next step or tell the user; don't run claude, codex, or pi from the shell instead.";
+  "If a start fails, follow its Next step or tell the user; don't run claude or pi from the shell instead.";
 const FAILED_RUN_GUIDELINE =
   "If a profiled run fails and names its next candidate, start a new run with that model before a generalist replacement; don't replace a profile the user disabled or relaunch work whose outcome is uncertain.";
 const SHARED_CHECKOUT_SCOPES =

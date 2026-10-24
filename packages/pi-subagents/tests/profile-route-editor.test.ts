@@ -42,7 +42,7 @@ const load = (
 const threeRoute = [
   candidate("openai/one", { effort: "low" }),
   candidate("claude-opus-5", { runtime: "claude", effort: "medium" }),
-  candidate("gpt-5.6-codex", { runtime: "codex", effort: "xhigh", writeIntent: "writer" }),
+  candidate("claude-sonnet-5", { runtime: "claude", effort: "xhigh", writeIntent: "writer" }),
 ];
 
 describe("ordered profile-route editor state", () => {
@@ -85,7 +85,7 @@ describe("ordered profile-route editor state", () => {
 
 describe("profile candidate normalization and validation", () => {
   it("rejects unsafe native selectors with the same bounded config rules", () => {
-    for (const runtime of ["pi", "claude", "codex"] as const) {
+    for (const runtime of ["pi", "claude"] as const) {
       const model = runtime === "pi" ? "provider/model,(glob)*" : "model,(glob)*";
       expect(updateCandidateModel(candidate("openai/model", { runtime }), model).candidate).toBe(
         undefined,

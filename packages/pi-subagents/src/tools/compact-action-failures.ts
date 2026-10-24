@@ -342,7 +342,7 @@ const AGENT_FAILURES = {
   agent_resume_unsupported: {
     message: (subject) => `${subject} can't be resumed`,
     recovery:
-      "Claude and Codex runs can't be resumed. Stop a paused one with agent_lifecycle and start a replacement; a finished one closed on its report, so start a new agent with the context it needs, or message its parent.",
+      "Claude runs can't be resumed. Stop a paused one with agent_lifecycle and start a replacement; a finished one closed on its report, so start a new agent with the context it needs, or message its parent.",
   },
   too_many_targets: {
     message: () => "Too many agents were named",

@@ -164,7 +164,7 @@ type CustomAgentCandidate =
 
 /**
  * Applies an agent's overrides to one route candidate. Tool lists filter only a Pi child's
- * inherited tools, so Claude and Codex candidates fail closed when an agent sets them.
+ * inherited tools, so Claude candidates fail closed when an agent sets them.
  */
 export const customAgentCandidate = (
   candidate: ProfileCandidate,

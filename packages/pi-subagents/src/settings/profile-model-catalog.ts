@@ -159,7 +159,6 @@ const configuredNativeModel = (runtime: LocalCliRuntime, current: string): Nativ
   label: current,
   description: "Current model",
   supportedEfforts: runtimeEfforts(runtime),
-  supportedServiceTiers: [],
   isDefault: false,
 });
 

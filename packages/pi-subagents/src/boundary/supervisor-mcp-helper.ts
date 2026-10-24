@@ -109,17 +109,13 @@ const main = Effect.gen(function* () {
   const executeTool = (request: ToolCall): Effect.Effect<void> => {
     const call = decodeSupervisorToolCall(request.name, request.arguments);
     return Result.isSuccess(call)
-      ? runSupervisorTool(
-          supervisor,
-          call.success,
-          (exit) =>
-            writeToolResponse(
-              toolResponseFromExit(
-                request.id,
-                Exit.map(exit, (result) => toolResult(result.text, result.isError)),
-              ),
+      ? runSupervisorTool(supervisor, call.success, (exit) =>
+          writeToolResponse(
+            toolResponseFromExit(
+              request.id,
+              Exit.map(exit, (result) => toolResult(result.text, result.isError)),
             ),
-          { nativeThreadId: request.nativeThreadId },
+          ),
         )
       : Effect.uninterruptible(
           writeToolResponse(

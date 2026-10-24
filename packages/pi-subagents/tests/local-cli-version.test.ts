@@ -8,7 +8,7 @@ import { nodeFsPromises as fs, nodePath } from "./support/node-builtins.ts";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 
-// A signed-in Claude Code or Codex stand-in that logs each invocation beside its version text.
+// A signed-in Claude Code stand-in that logs each invocation beside its version text.
 const CLI_SCRIPT = `#!/bin/sh
 echo "$*" >> "$HOME/cli-fixture.log"
 case "$*" in
@@ -31,12 +31,8 @@ const versionedCli = (versionOutput: string) =>
     yield* step(() => fs.writeFile(nodePath.join(home, "cli-version.txt"), `${versionOutput}\n`));
     const processes = yield* localCliProcess({
       agentDirectory,
-      environment: {
-        HOME: home,
-        PATH: inheritedPath(process.env),
-        OPENAI_API_KEY: "fixture-api-key",
-      },
-      executables: { claude: executable, codex: executable },
+      environment: { HOME: home, PATH: inheritedPath(process.env) },
+      executables: { claude: executable },
     });
     return { processes, home };
   });
@@ -46,9 +42,9 @@ const versionProbes = (home: string) =>
     Effect.map((log) => Arr.filter(Str.split(log, "\n"), (line) => line === "--version").length),
   );
 
-const preflight = (processes: LocalCliProcessContract, runtime: "claude" | "codex") =>
+const preflight = (processes: LocalCliProcessContract) =>
   processes.preflight({
-    runtime,
+    runtime: "claude",
     context: "fresh",
     writeIntent: "read-only",
     model: "fixture-model",
@@ -56,22 +52,18 @@ const preflight = (processes: LocalCliProcessContract, runtime: "claude" | "code
   });
 
 describe("local CLI versions", () => {
-  for (const runtime of ["claude", "codex"] as const) {
-    it.live(`skips a ${runtime} route whose CLI is older than the supported minimum`, () =>
-      Effect.gen(function* () {
-        const { processes } = yield* versionedCli(
-          runtime === "claude" ? "2.1.100 (Claude Code)" : "codex-cli 0.120.0",
-        );
-        const failure = yield* Effect.flip(preflight(processes, runtime));
-        expect(failure.code).toBe(`${runtime}_version_unsupported`);
-      }),
-    );
-  }
+  it.live("skips a Claude route whose CLI is older than the supported minimum", () =>
+    Effect.gen(function* () {
+      const { processes } = yield* versionedCli("2.1.100 (Claude Code)");
+      const failure = yield* Effect.flip(preflight(processes));
+      expect(failure.code).toBe("claude_version_unsupported");
+    }),
+  );
 
   it.live("admits an unrecognized version format instead of blocking", () =>
     Effect.gen(function* () {
       const { processes } = yield* versionedCli("Claude Code (development build)");
-      yield* preflight(processes, "claude");
+      yield* preflight(processes);
       expect(yield* processes.version?.("claude") ?? Effect.void).toMatchObject({
         status: "unrecognized",
       });

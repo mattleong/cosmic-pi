@@ -26,8 +26,9 @@ type RequestMessage = ContextWithSystemEvent["messages"][number];
 type ForkPromptCacheRoute = "native" | "additional-tools" | "tool-search";
 
 /**
- * Codex is excluded: Pi derives its `session-id` header from the child's own session after
- * extension headers apply, and measured forks never reached the parent's cache without it.
+ * The `openai-codex-responses` API is excluded: Pi derives its `session-id` header from the child's
+ * own session after extension headers apply, and measured forks never reached the parent's cache
+ * without it.
  */
 export const forkPromptCacheRoute = (
   model: Pick<Model<Api>, "api" | "compat">,

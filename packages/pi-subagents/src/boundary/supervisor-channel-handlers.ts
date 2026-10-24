@@ -40,7 +40,6 @@ import {
   hasEventCapacity,
   offerContact,
   type PendingQuestion,
-  refuseNativeSubAgent,
   type SupervisorChannelState,
   type SupervisorContactPayload,
   synchronizeReadiness,
@@ -58,18 +57,14 @@ const dispatchContact = (
   payload: SupervisorContactPayload,
   clientId: number,
 ): Effect.Effect<string, SupervisorRpcFailure> =>
-  Effect.flatMap(
-    authorizeAssignment(state, clientId, payload).pipe(
-      Effect.andThen(refuseNativeSubAgent(state, payload)),
-    ),
-    () =>
-      offerContact(state, kind, payload)
-        ? Effect.succeed(
-            kind === "progress"
-              ? "Progress delivered to the parent projection."
-              : "Warning recorded in parent-visible run status.",
-          )
-        : Effect.fail(eventQueueFull()),
+  Effect.flatMap(authorizeAssignment(state, clientId, payload), () =>
+    offerContact(state, kind, payload)
+      ? Effect.succeed(
+          kind === "progress"
+            ? "Progress delivered to the parent projection."
+            : "Warning recorded in parent-visible run status.",
+        )
+      : Effect.fail(eventQueueFull()),
   );
 
 const agentMessaging = (
@@ -162,10 +157,8 @@ const dispatchAgent = <A>(
   clientId: number,
   payload: Parameters<typeof authorizeAssignment>[2],
   call: (agents: BackendAgentMessaging) => Effect.Effect<A, SubagentError>,
-  admit: Effect.Effect<void, SupervisorRpcFailure> = Effect.void,
 ): Effect.Effect<A, SupervisorRpcFailure | SupervisorAgentRefusal> =>
   authorizeAssignment(state, clientId, payload).pipe(
-    Effect.andThen(admit),
     Effect.andThen(agentMessaging(state)),
     Effect.flatMap((agents) => call(agents).pipe(Effect.mapError(agentRefusal))),
   );
@@ -249,7 +242,6 @@ export const supervisorChannelHandlers = (state: SupervisorChannelState) =>
       SupervisorQuestion: Effect.fn("SupervisorChannelHandlers.question")(
         function* (payload, options) {
           yield* authorizeAssignment(state, options.client.id, payload);
-          yield* refuseNativeSubAgent(state, payload);
           if (state.pendingQuestion)
             return yield* rpcFailure(
               "question_pending",
@@ -310,7 +302,6 @@ export const supervisorChannelHandlers = (state: SupervisorChannelState) =>
 
       SupervisorReport: Effect.fn("SupervisorChannelHandlers.report")(function* (payload, options) {
         yield* authorizeAssignment(state, options.client.id, payload);
-        yield* refuseNativeSubAgent(state, payload);
         const previous = state.reports.get(payload.deliveryId);
         if (previous) {
           if (
@@ -367,23 +358,18 @@ export const supervisorChannelHandlers = (state: SupervisorChannelState) =>
         ),
 
       SupervisorAgentSend: (payload, options) =>
-        dispatchAgent(
-          state,
-          options.client.id,
-          payload,
-          (agents) =>
-            agents.send(payload.to, payload.message).pipe(
-              Effect.map((sent) => ({
-                messageId: sent.messageId,
-                to: sent.to,
-                name: agentName(sent.name, sent.to),
-                disposition: sent.disposition,
-                confirmed: sent.confirmed,
-                ...(sent.mainState !== undefined && { mainState: sent.mainState }),
-                ...(sent.parked && { parked: true as const }),
-              })),
-            ),
-          refuseNativeSubAgent(state, payload),
+        dispatchAgent(state, options.client.id, payload, (agents) =>
+          agents.send(payload.to, payload.message).pipe(
+            Effect.map((sent) => ({
+              messageId: sent.messageId,
+              to: sent.to,
+              name: agentName(sent.name, sent.to),
+              disposition: sent.disposition,
+              confirmed: sent.confirmed,
+              ...(sent.mainState !== undefined && { mainState: sent.mainState }),
+              ...(sent.parked && { parked: true as const }),
+            })),
+          ),
         ),
 
       SupervisorAgentRead: (payload, options) =>

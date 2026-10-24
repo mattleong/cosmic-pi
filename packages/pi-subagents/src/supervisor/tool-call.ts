@@ -364,13 +364,9 @@ const uncertain = () =>
 
 const ok = (text: string, isError = false): SupervisorToolResult => ({ text, isError });
 
-interface SupervisorToolCaller {
-  readonly nativeThreadId?: string | undefined;
-}
-
 // The model can act on these refusals, so they return as tool errors rather than RPC failures.
 const refusalAsToolError = (error: SupervisorRpcFailure) =>
-  error.code === "report_schema_invalid" || error.code === "native_sub_agent_refused"
+  error.code === "report_schema_invalid"
     ? Effect.succeed(ok(error.message, true))
     : Effect.fail(error);
 const agentRefusalAsToolError = (error: SupervisorAgentRefusal) =>
@@ -403,13 +399,9 @@ interface SupervisorCallContext {
   readonly auth: SupervisorToolClient["auth"];
   readonly assignmentEpoch: number;
   readonly requestId: typeof SupervisorChannelIdSchema.Type;
-  readonly identity: { readonly nativeThreadId?: string };
 }
 
-const callContext = (
-  client: SupervisorToolClient,
-  caller: SupervisorToolCaller,
-): SupervisorToolStep<SupervisorCallContext> =>
+const callContext = (client: SupervisorToolClient): SupervisorToolStep<SupervisorCallContext> =>
   Effect.suspend(() => {
     const assignmentEpoch = client.assignmentEpoch();
     if (Deferred.isDoneUnsafe(client.closed) || assignmentEpoch < 1)
@@ -424,18 +416,16 @@ const callContext = (
       auth: client.auth,
       assignmentEpoch,
       requestId: SupervisorChannelIdSchema.make(synchronousRandomUuid()),
-      identity:
-        caller.nativeThreadId === undefined ? {} : { nativeThreadId: caller.nativeThreadId },
     });
   });
 
 // The parent's reply, then the acknowledgement that consumes it and yields the result.
 const questionReply = (
-  { rpc, auth, assignmentEpoch, requestId, identity }: SupervisorCallContext,
+  { rpc, auth, assignmentEpoch, requestId }: SupervisorCallContext,
   message: string,
   settle: ReturnType<typeof settleTransportFailures>,
 ) =>
-  rpc.SupervisorQuestion({ ...auth, assignmentEpoch, requestId, message, ...identity }).pipe(
+  rpc.SupervisorQuestion({ ...auth, assignmentEpoch, requestId, message }).pipe(
     Effect.map((reply) =>
       rpc
         .SupervisorAcknowledgeQuestionReply({
@@ -456,14 +446,14 @@ const questionReply = (
   );
 
 const answerSupervisorTool = Effect.fn("SupervisorToolCall.answerSupervisorTool")(function* (
-  { rpc, auth, assignmentEpoch, requestId, identity }: SupervisorCallContext,
+  { rpc, auth, assignmentEpoch, requestId }: SupervisorCallContext,
   call: Exclude<SupervisorToolCall, { readonly kind: "question" }>,
 ) {
   switch (call.kind) {
     case "report": {
       const { deliveryId, report: text } = call;
       return yield* rpc
-        .SupervisorReport({ ...auth, assignmentEpoch, requestId, deliveryId, text, ...identity })
+        .SupervisorReport({ ...auth, assignmentEpoch, requestId, deliveryId, text })
         .pipe(
           Effect.timeout(CALL_TIMEOUT_MILLIS),
           Effect.map((result) =>
@@ -482,7 +472,6 @@ const answerSupervisorTool = Effect.fn("SupervisorToolCall.answerSupervisorTool"
         assignmentEpoch,
         requestId,
         message: call.message,
-        ...identity,
       }).pipe(
         Effect.timeout(CALL_TIMEOUT_MILLIS),
         Effect.as(ok(contact.text)),
@@ -527,7 +516,6 @@ const answerSupervisorTool = Effect.fn("SupervisorToolCall.answerSupervisorTool"
           assignmentEpoch,
           to: call.to,
           message: call.message,
-          ...identity,
         })
         .pipe(
           Effect.timeout(AGENT_SEND_TIMEOUT_MILLIS),
@@ -545,10 +533,9 @@ const answerSupervisorTool = Effect.fn("SupervisorToolCall.answerSupervisorTool"
 const requestSupervisorTool = (
   client: SupervisorToolClient,
   call: SupervisorToolCall,
-  caller: SupervisorToolCaller,
 ): SupervisorToolStep<SupervisorToolStep<SupervisorToolResult>> => {
   const settle = settleTransportFailures(client);
-  return callContext(client, caller).pipe(
+  return callContext(client).pipe(
     Effect.flatMap((context) =>
       call.kind === "question"
         ? questionReply(context, call.message, settle)
@@ -568,10 +555,9 @@ export const runSupervisorTool = <A, E, R>(
   client: SupervisorToolClient,
   call: SupervisorToolCall,
   deliver: (exit: Exit.Exit<SupervisorToolResult, SupervisorToolError>) => Effect.Effect<A, E, R>,
-  caller: SupervisorToolCaller = {},
 ): Effect.Effect<A, E, R> =>
   Effect.uninterruptibleMask((restore) =>
-    Effect.exit(Effect.flatten(restore(requestSupervisorTool(client, call, caller)))).pipe(
+    Effect.exit(Effect.flatten(restore(requestSupervisorTool(client, call)))).pipe(
       Effect.flatMap(deliver),
     ),
   );

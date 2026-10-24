@@ -19,14 +19,9 @@ import { hasControlCharacter } from "pi-cosmic-core/security";
 import { nodeFilePlatformLayer } from "pi-cosmic-core/platform/node-file";
 import { SafeFile } from "pi-cosmic-core/platform/safe-file";
 import { readClaudeModelPreference } from "./claude-model-preference.ts";
-import { initializeRequest, initializedNotification } from "../backend/local-codex-protocol.ts";
 import { claudeInitializeFrame } from "../backend/local-claude-protocol.ts";
 import { SUBAGENT_EFFORTS, type SubagentEffort } from "../domain/routing.ts";
-import {
-  codexArgv,
-  prepareCodexCatalogHarness,
-  sanitizeLocalCliEnvironment,
-} from "./local-cli-harness.ts";
+import { sanitizeLocalCliEnvironment } from "./local-cli-harness.ts";
 import type { LocalCliRuntime } from "./local-cli-process.ts";
 import { decodeUnknownJsonOption } from "./wire-shared.ts";
 
@@ -52,11 +47,6 @@ const Description = Schema.String.check(
   hasOnlySafeDescriptionControls,
 );
 const Effort = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(32));
-const ServiceTier = Schema.String.check(
-  Schema.isMinLength(1),
-  Schema.isMaxLength(64),
-  hasNoTerminalControls,
-);
 
 const ClaudeCatalogCorrelatedFrame = Schema.Struct({
   type: Schema.Literal("control_response"),
@@ -89,55 +79,16 @@ const ClaudeCatalogResponse = Schema.Struct({
   }),
 });
 
-const CodexCatalogCorrelatedFrame = Schema.Struct({ id: Schema.Literal(CATALOG_REQUEST_ID) });
-const CodexCatalogErrorResponse = Schema.Struct({
-  id: Schema.Literal(CATALOG_REQUEST_ID),
-  error: Schema.Struct({
-    code: Schema.Number.check(Schema.isFinite(), Schema.isInt()),
-    message: Description,
-    data: Schema.optional(Schema.Unknown),
-  }),
-});
-const CodexCatalogResponse = Schema.Struct({
-  id: Schema.Literal(CATALOG_REQUEST_ID),
-  result: Schema.Struct({
-    data: Schema.Array(
-      Schema.Struct({
-        id: Selector,
-        model: Selector,
-        displayName: Label,
-        description: Description,
-        isDefault: Schema.Boolean,
-        supportedReasoningEfforts: Schema.Array(
-          Schema.Struct({
-            reasoningEffort: Effort,
-            description: Schema.optional(Description),
-          }),
-        ),
-        serviceTiers: Schema.optional(
-          Schema.Array(
-            Schema.Struct({
-              id: ServiceTier,
-              name: Label,
-              description: Description,
-            }),
-          ),
-        ),
-      }),
-    ),
-    nextCursor: Schema.optional(Schema.Union([Schema.String, Schema.Null])),
-  }),
-});
-
+const isCatalogCorrelated = Schema.is(ClaudeCatalogCorrelatedFrame);
+const isCatalogRejected = Schema.is(ClaudeCatalogErrorResponse);
 const decodeClaudeCatalog = Schema.decodeUnknownEffect(ClaudeCatalogResponse);
-const decodeCodexCatalog = Schema.decodeUnknownEffect(CodexCatalogResponse);
+const catalogRequest = `${JSON.stringify(claudeInitializeFrame(CATALOG_REQUEST_ID))}\n`;
 
 export interface NativeRuntimeModel {
   readonly selector: string;
   readonly label: string;
   readonly description: string;
   readonly supportedEfforts: ReadonlyArray<SubagentEffort>;
-  readonly supportedServiceTiers: ReadonlyArray<string>;
   readonly isDefault: boolean;
 }
 
@@ -145,7 +96,7 @@ class NativeModelCatalogError extends Schema.TaggedError<
   NativeModelCatalogError,
   { readonly brand: unique symbol }
 >()("NativeModelCatalogError", {
-  runtime: Schema.Literals(["claude", "codex"]),
+  runtime: Schema.Literal("claude"),
   code: Schema.String,
   message: Schema.String,
 }) {}
@@ -158,8 +109,7 @@ export interface NativeModelCatalogContract {
 }
 
 export interface NativeModelCatalogLayerOptions {
-  readonly agentDirectory?: string | undefined;
-  readonly executables?: { readonly claude: string; readonly codex: string } | undefined;
+  readonly executables?: { readonly claude: string } | undefined;
   readonly environment?: NodeJS.ProcessEnv | undefined;
 }
 
@@ -213,8 +163,7 @@ const runCatalogProcess = (
   Effect.scoped(
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
-        const protocol = CATALOG_PROTOCOLS[runtime];
-        const input = new TextEncoder().encode(protocol.request);
+        const input = new TextEncoder().encode(catalogRequest);
         const child = yield* restore(
           ChildProcess.make(executable, [...args], {
             cwd,
@@ -275,7 +224,7 @@ const runCatalogProcess = (
               ),
             ),
           ),
-          Stream.filter((frame) => protocol.isCorrelated(frame)),
+          Stream.filter(isCatalogCorrelated),
           Stream.runHead,
           Effect.flatMap((frame) =>
             Effect.fromOption(frame, () =>
@@ -331,7 +280,6 @@ const claudeRuntimeModel = (model: ClaudeAdvertisedModel): NativeRuntimeModel =>
       (model.resolvedModel === model.value ? model.value : `Resolves to ${model.resolvedModel}`),
   ),
   supportedEfforts: normalizeEfforts(model.supportedEffortLevels ?? []),
-  supportedServiceTiers: [],
   isDefault: model.value === "default",
 });
 
@@ -361,94 +309,19 @@ const withExplicitClaudeModels = (
   });
 };
 
-const jsonLines = (...frames: ReadonlyArray<Schema.Json>): string =>
-  `${Arr.join(
-    Arr.map(frames, (frame) => JSON.stringify(frame)),
-    "\n",
-  )}\n`;
-
-const CATALOG_PROTOCOLS = {
-  claude: {
-    product: "Claude Code",
-    request: jsonLines(claudeInitializeFrame(CATALOG_REQUEST_ID)),
-    isCorrelated: Schema.is(ClaudeCatalogCorrelatedFrame),
-    isRejected: Schema.is(ClaudeCatalogErrorResponse),
-    decode: (frame: Schema.Json) =>
-      decodeClaudeCatalog(frame).pipe(
-        Effect.map((response) => withExplicitClaudeModels(response.response.response.models)),
-      ),
-  },
-  codex: {
-    product: "Codex",
-    request: jsonLines(initializeRequest("pi-subagents-initialize"), initializedNotification(), {
-      id: CATALOG_REQUEST_ID,
-      method: "model/list",
-      params: { includeHidden: false, limit: 100 },
-    }),
-    isCorrelated: Schema.is(CodexCatalogCorrelatedFrame),
-    isRejected: Schema.is(CodexCatalogErrorResponse),
-    decode: (frame: Schema.Json) =>
-      decodeCodexCatalog(frame).pipe(
-        Effect.map((response) =>
-          Arr.map(
-            response.result.data,
-            (model): NativeRuntimeModel => ({
-              selector: model.model,
-              label: model.displayName,
-              description: normalizeDescription(model.description),
-              supportedEfforts: normalizeEfforts(
-                Arr.map(model.supportedReasoningEfforts, (effort) => effort.reasoningEffort),
-              ),
-              supportedServiceTiers: [
-                ...new Set(Arr.map(model.serviceTiers ?? [], (tier) => tier.id)),
-              ],
-              isDefault: model.isDefault,
-            }),
-          ),
-        ),
-      ),
-  },
-};
-
-const discoverCatalog = Effect.fn("NativeModelCatalog.discover")(function* (
+const discoverCatalog = (
   runtime: LocalCliRuntime,
   cwd: string,
   options: NativeModelCatalogLayerOptions,
   probeSelector: string,
-) {
-  const executable = options.executables?.[runtime] ?? runtime;
-  const sourceEnvironment = options.environment ?? process.env;
-  const args = runtime === "claude" ? claudeArgs(probeSelector) : codexArgv();
-  if (runtime !== "codex" || !options.agentDirectory)
-    return yield* runCatalogProcess(
-      runtime,
-      executable,
-      args,
-      cwd,
-      sanitizeLocalCliEnvironment(sourceEnvironment, runtime),
-    );
-  return yield* Effect.acquireUseRelease(
-    prepareCodexCatalogHarness({
-      agentDirectory: options.agentDirectory,
-      environment: sourceEnvironment,
-    }).pipe(
-      Effect.mapError(() =>
-        catalogError(runtime, "catalog_failed", "Unable to prepare the Codex model catalog."),
-      ),
-    ),
-    (harness) => runCatalogProcess(runtime, executable, args, cwd, harness.env),
-    (harness) =>
-      harness.release.pipe(
-        Effect.mapError(() =>
-          catalogError(
-            runtime,
-            "catalog_cleanup_unconfirmed",
-            "Codex model catalog private harness cleanup could not be confirmed.",
-          ),
-        ),
-      ),
+): Effect.Effect<Schema.Json, NativeModelCatalogError> =>
+  runCatalogProcess(
+    runtime,
+    options.executables?.[runtime] ?? runtime,
+    claudeArgs(probeSelector),
+    cwd,
+    sanitizeLocalCliEnvironment(options.environment ?? process.env),
   );
-});
 
 class CatalogCacheKey extends Data.Class<{
   readonly runtime: LocalCliRuntime;
@@ -462,34 +335,34 @@ const loadNativeModelCatalog =
     key: CatalogCacheKey,
   ): Effect.Effect<ReadonlyArray<NativeRuntimeModel>, NativeModelCatalogError> => {
     const { runtime, cwd } = key;
-    const protocol = CATALOG_PROTOCOLS[runtime];
     const load = (probeSelector: string) =>
       discoverCatalog(runtime, cwd, options, probeSelector).pipe(
         Effect.flatMap((frame) =>
-          protocol.isRejected(frame)
+          isCatalogRejected(frame)
             ? Effect.fail(
                 catalogError(
                   runtime,
                   "catalog_request_rejected",
-                  `${protocol.product} rejected the bounded model catalog request.`,
+                  "Claude Code rejected the bounded model catalog request.",
                 ),
               )
-            : protocol
-                .decode(frame)
-                .pipe(
-                  Effect.mapError(() =>
-                    catalogError(
-                      runtime,
-                      "catalog_protocol_invalid",
-                      `${runtime} returned an invalid model catalog.`,
-                    ),
+            : decodeClaudeCatalog(frame).pipe(
+                Effect.map((response) =>
+                  withExplicitClaudeModels(response.response.response.models),
+                ),
+                Effect.mapError(() =>
+                  catalogError(
+                    runtime,
+                    "catalog_protocol_invalid",
+                    `${runtime} returned an invalid model catalog.`,
                   ),
                 ),
+              ),
         ),
       );
     return Effect.gen(function* () {
       const defaults = yield* load("default");
-      if (runtime !== "claude" || key.probeSelector === "default") return defaults;
+      if (key.probeSelector === "default") return defaults;
       const preferred = yield* load(key.probeSelector);
       return [
         ...new Map(
@@ -509,13 +382,10 @@ const makeNativeModelCatalog = Effect.fn("NativeModelCatalog.make")(function* (
   });
   return {
     list: Effect.fn("NativeModelCatalog.list")(function* (runtime, cwd) {
-      const probeSelector =
-        runtime === "claude"
-          ? yield* readClaudeModelPreference(
-              sanitizeLocalCliEnvironment(options.environment ?? process.env, runtime),
-              safeFile,
-            )
-          : "default";
+      const probeSelector = yield* readClaudeModelPreference(
+        sanitizeLocalCliEnvironment(options.environment ?? process.env),
+        safeFile,
+      );
       return yield* Cache.get(cache, new CatalogCacheKey({ runtime, cwd, probeSelector }));
     }),
   } satisfies NativeModelCatalogContract;

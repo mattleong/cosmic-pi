@@ -17,7 +17,6 @@ export const supervisorMetadata = (
   > & {
     readonly command?: string;
     readonly args?: ReadonlyArray<string>;
-    readonly tomlFragment?: string;
   } = {},
 ): SupervisorConnectionMetadata => ({
   host: "127.0.0.1",
@@ -35,16 +34,13 @@ export const supervisorMetadata = (
       },
     },
   },
-  codexMcp: {
-    tomlFragment: options.tomlFragment ?? "[mcp_servers.pi_subagents_supervisor]\nrequired = true",
-  },
 });
 
 export const backendSupervisor = (
   metadata: SupervisorConnectionMetadata,
   events: SupervisorChannelHandle["events"],
   behavior: Pick<SupervisorChannelHandle, "hasAcceptedReport" | "acceptedReportForEpoch"> &
-    Partial<Pick<SupervisorChannelHandle, "setAssignmentEpoch" | "setMainAgentThread">>,
+    Partial<Pick<SupervisorChannelHandle, "setAssignmentEpoch">>,
 ): SupervisorChannelHandle => ({
   metadata,
   events,
@@ -52,7 +48,6 @@ export const backendSupervisor = (
   setAssignmentEpoch: () => Effect.void,
   reply: () => Effect.void,
   cancelPending: () => {},
-  setMainAgentThread: () => {},
   ...behavior,
 });
 

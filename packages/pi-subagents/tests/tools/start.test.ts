@@ -153,8 +153,8 @@ describe("subagent tool", () => {
       profiles: {
         reviewer: {
           host: "local",
-          runtime: "codex",
-          model: "gpt-5.4",
+          runtime: "claude",
+          model: "opus",
           effort: "high",
           context: "fresh",
           writeIntent: "read-only",

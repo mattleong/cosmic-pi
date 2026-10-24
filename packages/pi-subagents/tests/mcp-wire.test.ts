@@ -102,14 +102,7 @@ describe("MCP message decoding", () => {
     expect(decodeMcpMessage(value)).toBeUndefined();
   });
 
-  it("names the native calling thread only when its metadata names one within bounds", () => {
-    expect(decodeMcpMessage(toolCall({ _meta: { threadId: "thread-1" } }))).toMatchObject({
-      nativeThreadId: "thread-1",
-    });
-    for (const threadId of [" ", Fn.pipe("t", Str.repeat(257)), 3])
-      expect(decodeMcpMessage(toolCall({ _meta: { threadId } }))).not.toHaveProperty(
-        "nativeThreadId",
-      );
+  it("accepts tool-call metadata within its bounds", () => {
     expect(decodeMcpMessage(toolCall({ _meta: nested(6) }))).toMatchObject({
       method: "tools/call",
     });
