@@ -47,6 +47,13 @@ been swept after leader exit, it is never signalled again, because the system ma
 The boundary spawns the shell with Node's child-process API rather than Effect's process
 spawner, whose cleanup signals the group again after a nonzero exit, including at scope release.
 
+The task's stdin is a pipe that nothing writes. Keeping it open matters because many watchers and
+dev servers, such as `esbuild --watch`, exit cleanly once their input ends, which `/dev/null`
+would do at once. The boundary closes the pipe when it dispatches any stop, when the group settles,
+at scope release, and after a failed spawn, so no pipe outlives its task; errors on it are
+ignored, so a task that closes its end can't fail the host. A command that reads input, such as a
+prompt, waits until it is stopped or its timeout ends it.
+
 Cleanup covers only the task's original process group. A process that starts its own session or
 process group, such as a `setsid` child, a detached spawn, or a build daemon, is not tracked and
 survives stop, shutdown, and host exit. If such a process keeps the task's pipes open, delivery

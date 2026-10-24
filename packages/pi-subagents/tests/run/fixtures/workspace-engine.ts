@@ -58,6 +58,7 @@ type GatedOperation =
   | "create"
   | "freeze"
   | "prepare"
+  | "integrate"
   | "discard"
   | "createHooks"
   | "inspectWorkerChanges";
@@ -309,7 +310,7 @@ export function workspaceFixture({
           }),
         ),
       integrate: (target) =>
-        requireEntry(target).pipe(
+        gated("integrate", requireEntry(target)).pipe(
           Effect.tap((entry) =>
             hooks.integrateStops
               ? Effect.sync(() =>

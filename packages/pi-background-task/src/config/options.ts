@@ -172,7 +172,8 @@ const SETTING_DESCRIPTORS = {
   shellPath: {
     id: "shellPath",
     label: "Shell",
-    description: "The shell tasks run in; empty uses the platform default.",
+    description:
+      "The shell tasks run in, instead of Pi's shell and command prefix; empty uses Pi's.",
     values: [],
     openValues: true,
     parse: (value) => Str.trim(value),

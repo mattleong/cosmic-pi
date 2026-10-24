@@ -7,39 +7,41 @@ import {
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
+import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { countLabel, formatBytes } from "pi-cosmic-core/display";
 import { utf8ByteLength } from "pi-cosmic-core/text";
-import { BACKGROUND_TASK_FIELD_BOUNDS } from "../task/bounds.ts";
 import { InvalidBackgroundCommandError } from "../task/errors.ts";
 import {
   discardedOutputText,
+  isActiveTaskState,
   type BackgroundLogMetadata,
   type BackgroundLogSlice,
+  type BackgroundTaskNotifyFilter,
   type BackgroundTaskSnapshot,
-  type BackgroundTaskStatus,
   type BackgroundTaskStatusWait,
   type ReadBackgroundLogs,
   type StartBackgroundTask,
   type WaitForBackgroundTask,
 } from "../task/model.ts";
+import { detailsSnapshot } from "../task/redaction.ts";
 import { BACKGROUND_TASK_ACTIONS, type BackgroundTaskDetailsSchema } from "../task/schema.ts";
 import { BackgroundTaskService, type BackgroundTaskFilter } from "../task/service.ts";
 import {
   clearContract,
   logsContract,
-  redactedLine,
   stopContract,
   taskActionContract,
   tasksActionContract,
   waitContract,
 } from "./contract.ts";
 import type { BackgroundTaskContract } from "./contract-schema.ts";
-import { pageLogSlice, pageOmission, type LogPageOmission } from "./log-page.ts";
+import { pageLogSlice, pageOmission, recentOutput, type LogPageOmission } from "./log-page.ts";
 import type { BackgroundTaskToolInput } from "./schema.ts";
 
 export type BackgroundTaskToolDetails = typeof BackgroundTaskDetailsSchema.Type;
@@ -72,6 +74,7 @@ const FIELD_ACTIONS = {
   cwd: ["start"],
   name: ["start"],
   timeoutSeconds: ["start"],
+  notify: ["start"],
   id: ["status", "logs", "wait", "stop"],
   state: ["list"],
   until: ["wait"],
@@ -94,13 +97,16 @@ const fieldList = (fields: ReadonlyArray<string>): string =>
 const invalidCommand = (message: string) =>
   Effect.fail(InvalidBackgroundCommandError.make({ message }));
 
+const isBlank = (value: string): boolean => Str.trim(value) === "";
+
 // Placeholders that models fill unused fields with; they carry no request, so an action that
 // does not use the field ignores them instead of rejecting the call.
 const isPlaceholder = (value: BackgroundTaskToolInput[BackgroundTaskField]): boolean =>
   value === undefined ||
   value === false ||
   value === 0 ||
-  (Predicate.isString(value) && Str.trim(value) === "");
+  (Predicate.isString(value) && isBlank(value)) ||
+  (Arr.isArray(value) && Arr.every(value, isBlank));
 
 const validateFields = (
   input: BackgroundTaskToolInput,
@@ -123,6 +129,12 @@ const validateFields = (
 const MAX_TASK_LINE_CHARS = 8_192;
 const ERROR_PREFIX = "\n  error: ";
 
+// What a start that asked for a notice tells the agent to expect.
+const NOTICE_PROMISES = {
+  exit: "A message will tell you when it finishes; you don't need to poll.",
+  failure: "A message will tell you if it fails or times out; you don't need to poll for that.",
+} as const satisfies Record<BackgroundTaskNotifyFilter, string>;
+
 const formatBackgroundTask = (task: BackgroundTaskSnapshot): string => {
   const exit = task.exitCode === undefined ? "" : ` code=${task.exitCode ?? "null"}`;
   const signal = task.signal ? ` signal=${task.signal}` : "";
@@ -140,16 +152,6 @@ const boundedText = (text: string, maxBytes: number): string =>
   truncateHead(text, { maxLines: DEFAULT_MAX_LINES, maxBytes }).content;
 
 const CAUSE_PREFIX = "\n  cause: ";
-
-// Details keep the same short, redacted cause that the text shows, so rendering never
-// depends on the result text a tool_result hook may have rewritten.
-const detailsSnapshot = ({
-  failureCause,
-  ...snapshot
-}: BackgroundTaskStatus): BackgroundTaskSnapshot => {
-  const cause = redactedLine(failureCause, BACKGROUND_TASK_FIELD_BOUNDS.maxErrorChars);
-  return cause === undefined ? snapshot : { ...snapshot, failureCause: cause };
-};
 
 const withCause = (line: string, task: BackgroundTaskSnapshot): string =>
   task.failureCause ? `${line}${CAUSE_PREFIX}${task.failureCause}` : line;
@@ -188,7 +190,10 @@ const formatTaskList = (
   return Arr.join(lines, "\n");
 };
 
-const formatWait = (result: BackgroundTaskStatusWait, requestedSeconds?: number): string => {
+const exitFields = (task: BackgroundTaskSnapshot): string =>
+  `${task.exitCode === undefined ? "" : ` code=${task.exitCode ?? "null"}`}${task.signal ? ` signal=${task.signal}` : ""}`;
+
+const waitHeader = (result: BackgroundTaskStatusWait, requestedSeconds?: number): string => {
   const cursor = result.matchCursor ?? result.nextCursor;
   const applied = result.appliedWaitSeconds;
   const capped =
@@ -196,9 +201,44 @@ const formatWait = (result: BackgroundTaskStatusWait, requestedSeconds?: number)
       ? ` (capped from ${requestedSeconds}s by maxWaitSeconds)`
       : "";
   return sanitizeTerminalLine(
-    `${result.id} ${result.outcome} state=${result.snapshot.state} cursor=${cursor} limit=${applied}s${capped}`,
+    `${result.id} ${result.outcome} state=${result.snapshot.state}${exitFields(result.snapshot)} cursor=${cursor} limit=${applied}s${capped}`,
   );
 };
+
+/** What an output wait found, or that the task finished without it. */
+const waitFinding = (
+  result: BackgroundTaskStatusWait,
+  until: WaitForBackgroundTask["until"],
+): string | undefined => {
+  if (result.outcome === "matched" && result.matchedText !== undefined)
+    return `Found ${JSON.stringify(result.matchedText)}${result.matchedLine ? ` in: ${result.matchedLine}` : ""}`;
+  return until === "output" && result.outcome === "completed"
+    ? "The task finished without printing the awaited text."
+    : undefined;
+};
+
+const formatWait = (
+  result: BackgroundTaskStatusWait,
+  task: BackgroundTaskSnapshot,
+  tail: string,
+  until: WaitForBackgroundTask["until"],
+  requestedSeconds?: number,
+): string =>
+  Arr.join(
+    Arr.filter(
+      [
+        withCause(waitHeader(result, requestedSeconds), task),
+        waitFinding(result, until),
+        tail
+          ? `Recent output:\n${Str.trimEnd(tail)}`
+          : isActiveTaskState(task.state)
+            ? "No output yet."
+            : "No output.",
+      ],
+      Predicate.isString,
+    ),
+    "\n",
+  );
 
 const NO_NEW_OUTPUT = "(no new output)";
 // Room for the paging notice line, whose cursors and sizes are known only after paging.
@@ -280,6 +320,23 @@ const logsRequest = (input: BackgroundTaskToolInput) =>
     }),
   );
 
+const decodeContains = Schema.decodeUnknownOption(
+  Schema.Union([Schema.String, Schema.Array(Schema.String)]),
+);
+
+/** One text or a list of alternatives, as the alternatives to match; empty ones are dropped. */
+const containsAlternatives = (contains: NonNullable<BackgroundTaskToolInput["contains"]>) =>
+  Option.match(decodeContains(contains), {
+    onNone: () =>
+      Effect.fail(
+        InvalidBackgroundCommandError.make({
+          message: "contains must be one text or a list of texts.",
+        }),
+      ),
+    onSome: (decoded) =>
+      Effect.succeed(Arr.filter(Predicate.isString(decoded) ? [decoded] : decoded, Str.isNonEmpty)),
+  });
+
 const waitRequest = Effect.fn("BackgroundTaskCommand.waitRequest")(function* (
   input: BackgroundTaskToolInput,
 ) {
@@ -290,13 +347,16 @@ const waitRequest = Effect.fn("BackgroundTaskCommand.waitRequest")(function* (
     });
   }
   // An exit wait does not use contains or afterCursor, so it ignores their placeholders.
-  const exitPlaceholder = (value: string | number | undefined) =>
+  const exitPlaceholder = (value: BackgroundTaskToolInput["contains" | "afterCursor"]) =>
     until === "exit" && isPlaceholder(value);
+  const contains =
+    input.contains === undefined || exitPlaceholder(input.contains)
+      ? undefined
+      : yield* containsAlternatives(input.contains);
   const request: WaitForBackgroundTask = {
     id: yield* required(input.id, "id", input.action),
     until,
-    ...(input.contains !== undefined &&
-      !exitPlaceholder(input.contains) && { contains: input.contains }),
+    ...(contains !== undefined && { contains }),
     ...(input.afterCursor !== undefined &&
       !exitPlaceholder(input.afterCursor) && { afterCursor: input.afterCursor }),
     ...(input.waitSeconds !== undefined && { waitSeconds: input.waitSeconds }),
@@ -322,11 +382,12 @@ export const executeBackgroundTaskCommand = Effect.fn("BackgroundTaskCommand.exe
         ...(input.timeoutSeconds !== undefined && {
           timeoutSeconds: input.timeoutSeconds,
         }),
+        ...(input.notify !== undefined && { notify: input.notify }),
       };
       const task = yield* service.start(request);
       const snapshot = detailsSnapshot(task);
       return taskReply(
-        `Started ${formatBackgroundTask(snapshot)}`,
+        `Started ${formatBackgroundTask(snapshot)}${input.notify === undefined ? "" : `\n${NOTICE_PROMISES[input.notify]}`}`,
         snapshot,
         maxTextBytes,
         { action: "start", snapshot },
@@ -373,19 +434,30 @@ export const executeBackgroundTaskCommand = Effect.fn("BackgroundTaskCommand.exe
       );
     }
     case "wait": {
-      const wait = yield* service.wait(yield* waitRequest(input));
-      const { appliedWaitSeconds, ...member } = wait;
+      const request = yield* waitRequest(input);
+      const wait = yield* service.wait(request);
+      const { appliedWaitSeconds, recent, ...member } = wait;
       const snapshot = detailsSnapshot(wait.snapshot);
-      return taskReply(
-        formatWait(wait, input.waitSeconds),
-        snapshot,
-        maxTextBytes,
-        { action: "wait", wait: { ...member, snapshot }, appliedWaitSeconds },
-        waitContract(wait),
+      const tail = recentOutput(recent);
+      return reply(
+        boundedText(
+          formatWait(wait, snapshot, tail, request.until, input.waitSeconds),
+          maxTextBytes,
+        ),
+        {
+          action: "wait",
+          wait: { ...member, snapshot, ...(tail && { tail }) },
+          appliedWaitSeconds,
+        },
+        waitContract(wait, tail),
       );
     }
     case "stop": {
-      const stop = yield* service.stop(yield* required(input.id, "id", input.action), input.force);
+      const stop = yield* service.stop(
+        yield* required(input.id, "id", input.action),
+        input.force,
+        "agent",
+      );
       // Only the service knows whether the task finished before this stop landed.
       const { alreadyFinished } = stop;
       const snapshot = detailsSnapshot(stop.snapshot);
@@ -398,7 +470,7 @@ export const executeBackgroundTaskCommand = Effect.fn("BackgroundTaskCommand.exe
       );
     }
     case "stop_all": {
-      const tasks = yield* service.stopAll(input.force);
+      const tasks = yield* service.stopAll(input.force, "agent");
       return reply(
         boundedText(`Stopped ${countLabel(tasks.length, "background task")}.`, maxTextBytes),
         { action: input.action, tasks: Arr.map(tasks, detailsSnapshot) },

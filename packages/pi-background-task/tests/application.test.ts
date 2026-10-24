@@ -66,7 +66,13 @@ const useAgentDirectory = (directory: string) =>
  */
 const harness = (
   loadSettings: BackgroundTaskApplicationBoundaries["loadSettings"],
-  options: { readonly events?: ExtensionAPI["events"]; readonly settings?: JsonObject } = {},
+  options: {
+    readonly events?: ExtensionAPI["events"];
+    readonly settings?: JsonObject;
+    readonly host?: Partial<ExtensionAPI>;
+    /** Registers as a subagent's own Pi session, whatever session runs the tests. */
+    readonly subagentChild?: boolean;
+  } = {},
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -78,9 +84,13 @@ const harness = (
     const settingsPath = path.join(agentDirectory, "extensions", "pi-background-task.json");
     if (options.settings) yield* documents.writeObject(settingsPath, options.settings);
     yield* useAgentDirectory(agentDirectory);
+    vi.stubEnv("PI_SUBAGENT_CHILD", options.subagentChild ? "1" : undefined);
     // A regular file where the agent directory belongs makes session startup fail.
     const blocker = path.join(agentDirectory, "not-a-directory");
-    const host = recordingExtensionHost({}, { events: options.events ?? createEventBus() });
+    const host = recordingExtensionHost(
+      {},
+      { ...options.host, events: options.events ?? createEventBus() },
+    );
     registerBackgroundTaskApplication(host.pi, { loadSettings });
     return {
       tools: host.registrations,
@@ -356,6 +366,58 @@ describe("background-task Pi lifecycle", () => {
       }).pipe(Effect.scoped),
     // Starts four real node processes, each slow to start on a loaded runner.
     60_000,
+  );
+
+  it.live.each([
+    { session: "a root session starts the idle agent's turn", subagentChild: false },
+    { session: "a subagent's own session appends it without a turn", subagentChild: true },
+  ])(
+    "sends a notifying task's finish, where $session, and nothing after shutdown",
+    ({ subagentChild }) =>
+      Effect.gen(function* () {
+        const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>();
+        const app = yield* harness(() => Promise.resolve(), {
+          // Tasks run with the shell settings Pi's bash tool uses.
+          host: { sendMessage, getSettings: () => ({ shellCommandPrefix: "greeting=hello" }) },
+          subagentChild,
+        });
+        const ctx = context(process.cwd());
+        const start = (command: string) =>
+          Effect.promise(() => app.execute({ action: "start", command, notify: "exit" }, ctx)).pipe(
+            Effect.map((result) => {
+              const details = decodeDetails(result.details);
+              if (details.action !== "start") throw new Error("start returned the wrong action");
+              return details.snapshot.id;
+            }),
+          );
+        yield* Effect.gen(function* () {
+          yield* Effect.promise(() => app.emit("session_start", ctx));
+          const id = yield* start('echo "$greeting"; exit 3');
+          for (
+            let attempt = 0;
+            attempt < 1_000 && sendMessage.mock.calls.length === 0;
+            attempt += 1
+          )
+            yield* Effect.sleep("10 millis");
+          expect(sendMessage.mock.calls).toHaveLength(1);
+          const [message, options] = sendMessage.mock.calls[0] ?? [];
+          expect(message).toMatchObject({
+            customType: "pi-background-task-finished",
+            display: true,
+            details: { task: { id, state: "failed", exitCode: 3 } },
+          });
+          expect(options).toEqual({ deliverAs: "steer", triggerTurn: !subagentChild });
+          const content = Predicate.isString(message?.content) ? message.content : "";
+          expect(content).toContain(id);
+          expect(content).toContain("hello");
+
+          yield* start("sleep 30");
+          yield* Effect.promise(() => app.emit("session_shutdown", ctx));
+          yield* Effect.sleep("100 millis");
+          expect(sendMessage.mock.calls).toHaveLength(1);
+        }).pipe(Effect.ensuring(Effect.promise(() => app.emit("session_shutdown", ctx))));
+      }).pipe(Effect.scoped),
+    30_000,
   );
 
   it.effect("interrupts a never-settling settings load on shutdown", () =>

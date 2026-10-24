@@ -6,10 +6,11 @@ import type { RunRecord } from "./internal.ts";
 import { diffStatTotals, type WorkspaceDiffStatFile } from "../workspace/diffstat.ts";
 import { MAX_OUTCOME_DIFFSTAT_FILES, type SubagentWorkspaceDiffStat } from "./model.ts";
 import {
+  holdBindingLocked,
+  isTreeInUse,
   mapWorkspaceError,
   recordWorkspaceOutcomeLocked,
-  runHoldsCwd,
-  runsWithin,
+  releaseBindingLocked,
   type WorkspaceBinding,
   type WorkspaceControlContext,
 } from "./workspace-binding.ts";
@@ -38,7 +39,7 @@ const outcomeDiffStat = (
 export function workspaceSettleOperations(
   context: WorkspaceControlContext,
   publish: Effect.Effect<void>,
-  discardLocked: ReturnType<typeof workspaceReviewOperations>["held"]["discardLocked"],
+  discardHeld: ReturnType<typeof workspaceReviewOperations>["held"]["discardHeld"],
 ) {
   const { engine, records, state, withLock, operations } = context;
   // The parent may already be reviewing or applying it; only an untouched, settled
@@ -60,7 +61,7 @@ export function workspaceSettleOperations(
       binding.state.knowledge.kind !== "unreviewed"
     )
       return undefined;
-    if (Arr.some([...runsWithin(records, [binding.handle.artifactRoot]).keys()], runHoldsCwd))
+    if (isTreeInUse(records, state.launchReservations, binding.handle.artifactRoot))
       return undefined;
     return binding;
   };
@@ -83,17 +84,15 @@ export function workspaceSettleOperations(
           const changes = yield* engine
             .inspectWorkerChanges({ workspaceId, ownerId, processCleanupConfirmed: true })
             .pipe(Effect.mapError(mapWorkspaceError));
-          yield* withLock(
-            Effect.uninterruptible(
+          const changedFileCount = changes.changedPaths.length;
+          const uncapturedFileCount = changes.uncapturedPaths.length;
+          const unchanged = changedFileCount === 0 && uncapturedFileCount === 0;
+          // An unchanged workspace stays busy through its discard, which records the outcome.
+          yield* Effect.acquireUseRelease(
+            withLock(
               Effect.gen(function* () {
-                if (eligibleLocked(record, assignmentEpoch) !== binding) return;
-                const changedFileCount = changes.changedPaths.length;
-                const uncapturedFileCount = changes.uncapturedPaths.length;
-                // Discard records the auto-discarded outcome itself.
-                if (changedFileCount === 0 && uncapturedFileCount === 0) {
-                  yield* discardLocked(engine, binding, "auto-discarded");
-                  return;
-                }
+                if (eligibleLocked(record, assignmentEpoch) !== binding) return undefined;
+                if (unchanged) return holdBindingLocked(state.bindings, binding);
                 recordWorkspaceOutcomeLocked(binding, {
                   status: "proposal",
                   changedFileCount,
@@ -103,8 +102,12 @@ export function workspaceSettleOperations(
                   }),
                 });
                 yield* publish;
+                return undefined;
               }),
             ),
+            (held) => (held ? discardHeld(engine, held, "auto-discarded") : Effect.void),
+            (held) =>
+              held ? withLock(Effect.sync(() => releaseBindingLocked(held))) : Effect.void,
           );
         }),
       );

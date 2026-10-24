@@ -6,8 +6,10 @@ import { runAttention, runCleanupAttention, type AttentionRun } from "../run/att
 import {
   sanitizeTerminalLine,
   sanitizeDiagnosticContent,
+  sanitizeDiagnosticError,
   stripTerminalControls as sanitizeTerminalText,
 } from "pi-cosmic-core/security";
+import { safeTextPrefix } from "pi-cosmic-core/text";
 import { synchronousNow } from "pi-cosmic-core/platform/native-clock";
 import { countLabel, clipText } from "pi-cosmic-core/display";
 import {
@@ -19,8 +21,12 @@ import {
   type SubagentRunView,
   type SubagentWorkspaceOutcome,
 } from "../run/model.ts";
-import { MAX_CONTACT_TEXT_CHARS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
-import { clipWithMarker, MAX_ERROR_CHARS } from "../run/state.ts";
+import {
+  MAX_CONTACT_TEXT_CHARS,
+  MAX_OUTCOME_FILE_PATH_CHARS,
+  MAX_TOOL_OUTPUT_CHARS,
+} from "../run/limits.ts";
+import { clipWithMarker, failureFileText, MAX_ERROR_CHARS } from "../run/state.ts";
 import { distinctRunWarnings } from "../run/warnings.ts";
 import { aggregateUsage } from "../ui/metrics.ts";
 import {
@@ -445,22 +451,50 @@ type FailedStartRecovery = NonNullable<SubagentStartFailure["admittedRun"]>;
 export const formatFailedStartRecovery = (recovery: FailedStartRecovery): string =>
   `admitted ${sanitizeTerminalLine(recovery.runId)}${recovery.cleanupDisposition === "quarantined" ? " · cleanup quarantined" : ""}`;
 
-export const failedStartRecoveryAction = (recovery: FailedStartRecovery): string =>
-  recovery.cleanupDisposition === "quarantined"
-    ? `Inspect ${sanitizeTerminalLine(recovery.runId)} with agent_read before starting a replacement; its cleanup is unconfirmed.`
+/** The admitted run's next step, which starts with reading it. */
+export const failedStartRecoveryAction = (recovery: FailedStartRecovery): string => {
+  const runId = sanitizeTerminalLine(recovery.runId);
+  return recovery.cleanupDisposition === "quarantined"
+    ? `Inspect ${runId} with agent_read before starting a replacement; its cleanup is unconfirmed.`
     : recovery.nextCandidate === undefined || recovery.nextCandidate === "none"
-      ? "Review the failure, then start a new run if the work still needs one."
-      : `Start a new run with its route's next candidate, ${candidateLabel(recovery.nextCandidate)}.`;
+      ? `Review the failure with agent_read ${runId}, then start a new run if the work still needs one.`
+      : `Review the failure with agent_read ${runId}, then start a new run with its route's next candidate, ${candidateLabel(recovery.nextCandidate)}.`;
+};
+
+/** A failed admitted run's warning on one redacted line, cut with a pointer to the whole one. */
+const failedStartWarningLine = (
+  recovery: FailedStartRecovery,
+  warning: string,
+  maximum: number,
+): string => {
+  const label = "Warning: ";
+  const pointer = ` … (cut; agent_read ${sanitizeTerminalLine(recovery.runId)} has the full warning)`;
+  const whole = sanitizeDiagnosticError(warning, { maximumLength: Number.MAX_SAFE_INTEGER });
+  const room = maximum - label.length;
+  return clipText(
+    `${label}${whole.length <= room ? whole : `${Str.trimEnd(safeTextPrefix(whole, room - pointer.length))}${pointer}`}`,
+    maximum,
+  );
+};
 
 /** A start result line, such as a started run or a failed launch's recovery step. */
 const MAX_START_LINE_CHARS = 320;
-/** A failed launch's index, name, code, and message. */
+/** A failed launch's index, name, code, and message, when no failure file holds the rest. */
 const MAX_START_FAILURE_LINE_CHARS = 640;
+/** The admitted run's ID and cleanup, or its warning. */
+const MAX_START_NOTE_CHARS = 160;
+/** A saved failure's path and size. */
+const MAX_START_FILE_LINE_CHARS = MAX_OUTCOME_FILE_PATH_CHARS + 112;
 /**
- * Each launch of a start batch is at most two lines: a started run and its route warning, or a
- * failed launch and up to two recovery lines; so a full batch always fits the tool output.
+ * Each launch of a start batch is a few bounded lines: a started run and its route warning, or a
+ * failed launch and its recovery: the admitted run, its saved failure, its warning, and the next
+ * step. A failure with a saved file shows only its start, as a notice does. So a full batch
+ * always fits the tool output.
  */
-export const MAX_START_ENTRY_CHARS = MAX_START_FAILURE_LINE_CHARS + 2 * MAX_START_LINE_CHARS + 2;
+export const MAX_START_ENTRY_CHARS = Math.max(
+  MAX_START_FAILURE_LINE_CHARS + 2 * MAX_START_NOTE_CHARS + MAX_START_LINE_CHARS + 3,
+  2 * MAX_START_LINE_CHARS + 2 * MAX_START_NOTE_CHARS + MAX_START_FILE_LINE_CHARS + 4,
+);
 /** The `Failed starts (N)` heading. */
 export const MAX_START_HEADER_CHARS = 64;
 
@@ -470,14 +504,21 @@ const formatStartFailure = (failure: SubagentStartFailure): string => {
   const target = failure.name ? ` ${sanitizeTerminalLine(failure.name)}` : "";
   const code = failure.code ? ` [${sanitizeTerminalLine(failure.code)}]` : "";
   const recovery = failure.admittedRun;
+  const file = recovery?.failureFile;
   const noEligibleRoute = NO_ELIGIBLE_ROUTE_CODES.includes(failure.code ?? "");
   return Fn.pipe(
     [
       startLine(
         `  #${failure.index + 1}${target}${code}: ${sanitizeTerminalLine(failure.message)}`,
-        MAX_START_FAILURE_LINE_CHARS,
+        file ? MAX_START_LINE_CHARS : MAX_START_FAILURE_LINE_CHARS,
       ),
-      recovery ? startLine(`    ${formatFailedStartRecovery(recovery)}`) : undefined,
+      recovery
+        ? startLine(`    ${formatFailedStartRecovery(recovery)}`, MAX_START_NOTE_CHARS)
+        : undefined,
+      file ? startLine(`    ${failureFileText(file)}`, MAX_START_FILE_LINE_CHARS) : undefined,
+      recovery?.warning
+        ? `    ${failedStartWarningLine(recovery, recovery.warning, MAX_START_NOTE_CHARS - 4)}`
+        : undefined,
       recovery ? startLine(`    Next: ${failedStartRecoveryAction(recovery)}`) : undefined,
       !recovery && noEligibleRoute ? startLine(`    Next: ${noEligibleRouteRecovery}`) : undefined,
     ],

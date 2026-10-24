@@ -304,10 +304,15 @@ export interface SubagentProjection {
 export const FAILED_START_CLEANUP_DISPOSITIONS = ["pending", "confirmed", "quarantined"] as const;
 type FailedStartCleanupDisposition = (typeof FAILED_START_CLEANUP_DISPOSITIONS)[number];
 
+/** A run that failed during its start after admission, as the start call reports it. */
 export interface FailedStartRecovery {
   readonly runId: string;
   readonly cleanupDisposition: FailedStartCleanupDisposition;
   readonly nextCandidate?: SubagentNextCandidate;
+  /** The whole failure, saved when it is longer than its preview. */
+  readonly failureFile?: SubagentReportArchive;
+  /** The run's latest child and system warnings, folded as its notice would carry them. */
+  readonly warning?: string;
 }
 
 /** Native facts captured by the immediate Pi parent, never launch authority or credentials. */

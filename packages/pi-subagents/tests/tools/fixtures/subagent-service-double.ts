@@ -1,6 +1,6 @@
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import type { SubagentServiceContract } from "../../../src/run/service.ts";
+import type { SubagentHeldStarts, SubagentServiceContract } from "../../../src/run/service.ts";
 
 export type SubagentServiceDoubleInput = Partial<SubagentServiceContract>;
 
@@ -18,6 +18,7 @@ const unexpectedService: SubagentServiceContract = {
   withAwaitTerminalObservations: () => unexpected("withAwaitTerminalObservations"),
   consumeCompletions: (receipts) =>
     receipts.length === 0 ? Effect.void : unexpected("consumeCompletions"),
+  withStartFailureHold: () => unexpected("withStartFailureHold"),
   send: () => unexpected("send"),
   interrupt: () => unexpected("interrupt"),
   resume: () => unexpected("resume"),
@@ -40,17 +41,28 @@ const unexpectedService: SubagentServiceContract = {
   deliverPendingCompletions: unexpected("deliverPendingCompletions"),
 };
 
+/** The double's own starts, which hold nothing: its failures never reach a notice anyway. */
+const heldStarts = (service: SubagentServiceContract): SubagentHeldStarts => ({
+  startSessionOwned: (request) => service.startSessionOwned(request),
+  startScriptSessionOwned: (request) => service.startScriptSessionOwned(request),
+  startSessionOwnedFrom: (callerRunId, request) =>
+    service.startSessionOwnedFrom(callerRunId, request),
+  workspaceRevise: (...args) => service.workspaceRevise(...args),
+});
+
 export function subagentServiceDouble(base: SubagentServiceDoubleInput): SubagentServiceContract {
   const start = base.start ?? unexpectedService.start;
   const startSessionOwned = base.startSessionOwned ?? start;
-  return {
+  const service: SubagentServiceContract = {
     ...unexpectedService,
     start,
     startSessionOwned,
     startScriptSessionOwned: startSessionOwned,
     startSessionOwnedFrom: (_callerRunId, request) => startSessionOwned(request),
+    withStartFailureHold: (use) => use(heldStarts(service)),
     ...base,
   };
+  return service;
 }
 
 export const signalAwaitEntry = (

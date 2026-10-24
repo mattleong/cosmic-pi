@@ -2,7 +2,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { toolArgumentPreparer } from "pi-cosmic-core/tool-arguments";
 import { Type, type Static } from "typebox";
 import { BACKGROUND_TASK_FIELD_BOUNDS } from "../task/bounds.ts";
-import { BACKGROUND_TASK_ACTIONS } from "../task/schema.ts";
+import { BACKGROUND_TASK_ACTIONS, BACKGROUND_TASK_NOTIFY_FILTERS } from "../task/schema.ts";
 
 export const BackgroundTaskParameters = Type.Object({
   action: StringEnum(BACKGROUND_TASK_ACTIONS, { description: "Background task operation" }),
@@ -30,6 +30,12 @@ export const BackgroundTaskParameters = Type.Object({
       description: "Runtime limit in seconds for start; omitted means no timeout",
     }),
   ),
+  notify: Type.Optional(
+    StringEnum(BACKGROUND_TASK_NOTIFY_FILTERS, {
+      description:
+        'For start: message you when the task finishes ("exit") or only when it fails or times out ("failure"); omitted means no message',
+    }),
+  ),
   id: Type.Optional(
     Type.String({
       maxLength: BACKGROUND_TASK_FIELD_BOUNDS.maxIdChars,
@@ -46,11 +52,17 @@ export const BackgroundTaskParameters = Type.Object({
     }),
   ),
   contains: Type.Optional(
-    Type.String({
-      minLength: 1,
-      maxLength: BACKGROUND_TASK_FIELD_BOUNDS.maxContainsChars,
-      description: 'Literal text required for until="output"; invalid for until="exit".',
-    }),
+    Type.Union(
+      [
+        Type.String({ maxLength: BACKGROUND_TASK_FIELD_BOUNDS.maxContainsChars }),
+        Type.Array(Type.String({ maxLength: BACKGROUND_TASK_FIELD_BOUNDS.maxContainsChars }), {
+          maxItems: BACKGROUND_TASK_FIELD_BOUNDS.maxContainsAlternatives,
+        }),
+      ],
+      {
+        description: `Literal text required for until="output", or up to ${BACKGROUND_TASK_FIELD_BOUNDS.maxContainsAlternatives} alternatives to match whichever appears first; invalid for until="exit".`,
+      },
+    ),
   ),
   afterCursor: Type.Optional(
     Type.Integer({

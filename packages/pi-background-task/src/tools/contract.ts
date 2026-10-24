@@ -1,5 +1,4 @@
 import * as Arr from "effect/Array";
-import { sanitizeDiagnosticError, sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { BACKGROUND_TASK_FIELD_BOUNDS as BOUNDS } from "../task/bounds.ts";
 import {
   isActiveTaskState,
@@ -9,6 +8,7 @@ import {
   type BackgroundTaskStatusWait,
   type BackgroundTaskStopResult,
 } from "../task/model.ts";
+import { redactedLine } from "../task/redaction.ts";
 import {
   BACKGROUND_TASK_CONTRACT_ID,
   BACKGROUND_TASK_CONTRACT_VERSION,
@@ -30,11 +30,6 @@ const envelope = {
   version: BACKGROUND_TASK_CONTRACT_VERSION,
   tool: BACKGROUND_TASK_TOOL_NAME,
 } as const;
-
-export const redactedLine = (value: string | undefined, maximum: number): string | undefined => {
-  const line = value === undefined ? "" : sanitizeTerminalLine(value);
-  return line ? sanitizeDiagnosticError(line, { maximumLength: maximum }) : undefined;
-};
 
 const isFinished = (state: BackgroundTaskState): boolean => !isActiveTaskState(state);
 
@@ -87,7 +82,8 @@ export const logsContract = (
 ): BackgroundTaskLogsContract => {
   const page = pageLogSlice(slice, direction, {
     maxBytes: MAX_CONTRACT_LOG_OUTPUT_BYTES,
-    maxLines: Number.POSITIVE_INFINITY,
+    // Every line takes at least a byte, so only the byte bound applies.
+    maxLines: MAX_CONTRACT_LOG_OUTPUT_BYTES + 1,
   });
   return {
     ...envelope,
@@ -103,7 +99,10 @@ export const logsContract = (
   };
 };
 
-export const waitContract = (wait: BackgroundTaskStatusWait): BackgroundTaskWaitContract => ({
+export const waitContract = (
+  wait: BackgroundTaskStatusWait,
+  tail: string,
+): BackgroundTaskWaitContract => ({
   ...envelope,
   action: "wait",
   outcome: wait.outcome,
@@ -112,6 +111,9 @@ export const waitContract = (wait: BackgroundTaskStatusWait): BackgroundTaskWait
   earliestAvailableCursor: wait.earliestAvailableCursor,
   droppedBytes: wait.droppedBytes,
   ...(wait.matchCursor !== undefined && { matchCursor: wait.matchCursor }),
+  ...(wait.matchedText !== undefined && { matchedText: wait.matchedText }),
+  ...(wait.matchedLine !== undefined && { matchedLine: wait.matchedLine }),
+  tail,
   appliedWaitSeconds: wait.appliedWaitSeconds,
 });
 

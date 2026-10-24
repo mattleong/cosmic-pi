@@ -14,15 +14,34 @@ import {
   type StartSubagentRequest,
   type SubagentWorkspaceOutcome,
 } from "./model.ts";
+import { runInSessionScope } from "./session-owned.ts";
 
 export interface LaunchSlot {
   readonly caller: string;
 }
 
-/** A shared-checkout launch between mode selection and admission, keyed by its target cwd. */
-export interface SharedReservation {
+/**
+ * A read-only or shared-checkout launch between its workspace checks and admission, keyed by its
+ * target cwd.
+ */
+export interface LaunchReservation {
   readonly cwd: string;
   readonly caller: string;
+  /** A shared-checkout writer; integration refuses while one launches in its target. */
+  readonly sharedWriter: boolean;
+}
+
+/**
+ * The directories destructive engine work changes outside the run lock. Until it ends, launches
+ * there wait and resumes there refuse, so no run takes a tree it removes or sees a checkout it is
+ * half-way through writing. Worktree launches need no exclusion: the engine's operation gate
+ * queues their snapshots behind the work.
+ */
+export interface WorkspaceExclusion {
+  /** Discard and integration remove the workspace's trees. */
+  readonly artifactRoot: string;
+  /** Integration and rollback write this checkout's files. */
+  readonly target?: string | undefined;
 }
 
 export interface RevisionHold {
@@ -126,6 +145,50 @@ export const updateKnowledge = (
     settleBinding(binding, { phase: "idle", knowledge: update(settled.knowledge) });
 };
 
+/** A binding an operation keeps busy; `heldLocked` confirms, under the run lock, it still does. */
+export interface HeldBinding {
+  readonly binding: WorkspaceBinding;
+  readonly token: symbol;
+  readonly heldLocked: Effect.Effect<void, SubagentError>;
+}
+
+/**
+ * Marks a settled binding busy for one operation, which its token alone then admits; undefined
+ * while a launch, revision, or another operation holds it.
+ */
+export const holdBindingLocked = (
+  bindings: ReadonlyMap<string, WorkspaceBinding>,
+  binding: WorkspaceBinding,
+): HeldBinding | undefined => {
+  const { state } = binding;
+  if (state.phase === "busy" || state.phase === "creating" || state.phase === "revising")
+    return undefined;
+  const token = Symbol("workspace operation");
+  binding.state = { phase: "busy", token, settled: state };
+  return {
+    binding,
+    token,
+    heldLocked: Effect.suspend(() =>
+      bindings.get(binding.handle.workspaceId) === binding &&
+      binding.state.phase === "busy" &&
+      binding.state.token === token
+        ? Effect.void
+        : Effect.fail(
+            invalid(
+              "workspace_owner_unavailable",
+              "Workspace ownership changed while the operation was running.",
+            ),
+          ),
+    ),
+  };
+};
+
+/** Ends an operation's hold, restoring the settled state it kept unless the hold already ended. */
+export const releaseBindingLocked = ({ binding, token }: HeldBinding) => {
+  const { state } = binding;
+  if (state.phase === "busy" && state.token === token) binding.state = state.settled;
+};
+
 /** Integrated, discarded, or left mid-integration: it never takes another assignment. */
 export const isBindingFinished = (binding: WorkspaceBinding) => {
   const phase = settledState(binding)?.phase;
@@ -156,7 +219,11 @@ export type WorkspaceControlDependencies = Pick<
 
 interface WorkspaceControlState {
   mode: WriterWorkspaceMode;
-  readonly sharedReservations: Set<SharedReservation>;
+  readonly launchReservations: Set<LaunchReservation>;
+  /** Destructive engine work running outside the run lock; see `excludeTrees`. */
+  readonly exclusions: Set<WorkspaceExclusion>;
+  /** Completes when an exclusion ends, waking the launches it held. */
+  exclusionReleased: Deferred.Deferred<void>;
   /** Session-wide: an integration's lease release or outcome is unknown. Cleared only by restart. */
   integrationQuarantined: boolean;
   readonly bindings: Map<string, WorkspaceBinding>;
@@ -180,6 +247,16 @@ export interface WorkspaceControlContext extends WorkspaceControlDependencies {
    * `requireBinding` to refuse.
    */
   readonly awaitWriterCleanup: (workspaceId: string) => Effect.Effect<void, SubagentError>;
+  /**
+   * Runs destructive engine work outside the run lock. `claimLocked` checks occupancy under the
+   * lock and names the directories the work changes, which stay excluded until it ends. The work
+   * runs in the session scope, so shutdown interrupts and joins it, and commits its own outcome
+   * under the lock.
+   */
+  readonly excludeTrees: <C extends { readonly exclusion: WorkspaceExclusion }, A>(
+    claimLocked: Effect.Effect<C, SubagentError>,
+    work: (claim: C) => Effect.Effect<A, SubagentError>,
+  ) => Effect.Effect<A, SubagentError>;
   readonly operations: Semaphore.Semaphore;
 }
 
@@ -198,6 +275,16 @@ export const mapWorkspaceError = (error: {
 export const isWithin = (cwd: string, root: string) =>
   cwd === root || Fn.pipe(cwd, Str.startsWith(`${Fn.pipe(root, Str.replace(/\/$/, ""))}/`));
 
+export const overlaps = (cwd: string, root: string) => isWithin(cwd, root) || isWithin(root, cwd);
+
+/** Whether destructive work excludes a run in `cwd`. */
+export const isExcluded = (exclusions: ReadonlySet<WorkspaceExclusion>, cwd: string) =>
+  Arr.some(
+    [...exclusions],
+    ({ artifactRoot, target }) =>
+      isWithin(cwd, artifactRoot) || (target !== undefined && overlaps(cwd, target)),
+  );
+
 export const runHoldsCwd = (record: RunRecord) =>
   isActiveRunState(record.view.state) || record.process !== undefined || isCleanupOwed(record);
 
@@ -215,6 +302,15 @@ export const runsWithin = (
           : [],
     ),
   );
+
+/** Whether a run holds, or a launch is about to take, a directory within `tree`. */
+export const isTreeInUse = (
+  records: ReadonlyMap<string, RunRecord>,
+  reservations: ReadonlySet<LaunchReservation>,
+  tree: string,
+) =>
+  Arr.some([...runsWithin(records, [tree]).keys()], runHoldsCwd) ||
+  Arr.some([...reservations], (reservation) => isWithin(reservation.cwd, tree));
 
 const isAutoDiscarded = (binding: WorkspaceBinding | undefined) => {
   const settled = binding && settledState(binding);
@@ -260,7 +356,9 @@ export const workspaceControlContext = Effect.fn("SubagentWorkspace.controlConte
   const { engine, ownerId, records } = dependencies;
   const state: WorkspaceControlState = {
     mode: dependencies.initialMode,
-    sharedReservations: new Set(),
+    launchReservations: new Set(),
+    exclusions: new Set(),
+    exclusionReleased: yield* Deferred.make<void>(),
     integrationQuarantined: false,
     bindings: new Map(),
     launchSlots: new Set(),
@@ -355,6 +453,23 @@ export const workspaceControlContext = Effect.fn("SubagentWorkspace.controlConte
               ),
         ),
       );
+  const releaseExclusionLocked = (exclusion: WorkspaceExclusion) => {
+    if (!state.exclusions.delete(exclusion)) return;
+    const released = state.exclusionReleased;
+    state.exclusionReleased = Deferred.makeUnsafe<void>();
+    Deferred.doneUnsafe(released, Effect.void);
+  };
+  const excludeTrees: WorkspaceControlContext["excludeTrees"] = (claimLocked, work) =>
+    Effect.acquireUseRelease(
+      dependencies.withLock(
+        claimLocked.pipe(
+          Effect.tap(({ exclusion }) => Effect.sync(() => state.exclusions.add(exclusion))),
+        ),
+      ),
+      (claim) => runInSessionScope(dependencies.ownerScope, work(claim)),
+      ({ exclusion }) =>
+        dependencies.withLock(Effect.sync(() => releaseExclusionLocked(exclusion))),
+    );
   return {
     ...dependencies,
     state,
@@ -362,6 +477,7 @@ export const workspaceControlContext = Effect.fn("SubagentWorkspace.controlConte
     requireEngine,
     requireBinding,
     awaitWriterCleanup,
+    excludeTrees,
     operations: yield* Semaphore.make(1),
   };
 });

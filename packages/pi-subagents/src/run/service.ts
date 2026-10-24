@@ -127,6 +127,12 @@ export interface SubagentRunObservation {
   readonly completionReceipt?: SubagentCompletionReceipt | undefined;
 }
 
+/** The operations that start runs, bound to one `withStartFailureHold` call. */
+export type SubagentHeldStarts = Pick<
+  SubagentServiceContract,
+  "startSessionOwned" | "startScriptSessionOwned" | "startSessionOwnedFrom" | "workspaceRevise"
+>;
+
 export interface SubagentServiceContract extends WorkspaceCoordinatorContract {
   readonly start: (request: StartSubagentRequest) => Effect.Effect<SubagentRunView, SubagentError>;
   readonly startSessionOwned: (
@@ -139,6 +145,15 @@ export interface SubagentServiceContract extends WorkspaceCoordinatorContract {
     callerRunId: string,
     request: StartSubagentRequest,
   ) => Effect.Effect<SubagentRunView, SubagentError>;
+  /**
+   * Runs `use` with starts whose failures after admission it reports itself: such a failure
+   * returns to `use` while its outcome stays claimed, so no notice or await repeats it. A
+   * successful `use` reported every one, so their outcomes are consumed; any other exit releases
+   * them to their notices, and a run that fails after `use` ended is never held.
+   */
+  readonly withStartFailureHold: <A, E, R>(
+    use: (starts: SubagentHeldStarts) => Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E, R>;
   readonly captureLaunchParent: (
     runId: string,
     nativeContext?: SubagentParentContext,
@@ -499,24 +514,51 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     redactCompletionReport: observations.redactCompletionReport,
   });
 
+  const { holdStartFailures, ...observationOperations } = observations;
   const service: SubagentServiceContract = {
-    ...observations,
+    ...observationOperations,
     start: Effect.fn("SubagentService.start")(starts.start),
-    startSessionOwned: Effect.fn("SubagentService.startSessionOwned")(starts.startSessionOwned),
-    startScriptSessionOwned: Effect.fn("SubagentService.startScriptSessionOwned")(
-      starts.startScriptSessionOwned,
+    startSessionOwned: Effect.fn("SubagentService.startSessionOwned")(
+      (request: StartSubagentRequest) => starts.startSessionOwned(request),
     ),
+    startScriptSessionOwned: Effect.fn("SubagentService.startScriptSessionOwned")(
+      (request: StartSubagentRequest) => starts.startScriptSessionOwned(request),
+    ),
+    // The hold never leaves the service: `use` gets only starts bound to it.
+    withStartFailureHold: (use) =>
+      holdStartFailures((hold) =>
+        use({
+          startSessionOwned: Effect.fn("SubagentService.startSessionOwned")(
+            (request: StartSubagentRequest) => starts.startSessionOwned(request, hold),
+          ),
+          startScriptSessionOwned: Effect.fn("SubagentService.startScriptSessionOwned")(
+            (request: StartSubagentRequest) => starts.startScriptSessionOwned(request, hold),
+          ),
+          startSessionOwnedFrom: Effect.fn("SubagentService.startSessionOwnedFrom")(
+            (callerRunId: string, request: StartSubagentRequest) =>
+              starts.startSessionOwnedFrom(callerRunId, request, hold),
+          ),
+          workspaceRevise: Effect.fn("SubagentService.workspaceRevise")(
+            workspaces.revise((request: StartSubagentRequest) =>
+              launch.start(request, false, hold),
+            ),
+          ),
+        }),
+      ),
     workspaceList: Effect.fn("SubagentService.workspaceList")(workspaces.workspaceList),
     workspaceReview: Effect.fn("SubagentService.workspaceReview")(workspaces.workspaceReview),
     workspacePrepare: Effect.fn("SubagentService.workspacePrepare")(workspaces.workspacePrepare),
     workspaceDiscard: Effect.fn("SubagentService.workspaceDiscard")(workspaces.workspaceDiscard),
     workspaceApply: Effect.fn("SubagentService.workspaceApply")(workspaces.workspaceApply),
-    workspaceRevise: Effect.fn("SubagentService.workspaceRevise")(workspaces.revise(launch.start)),
+    workspaceRevise: Effect.fn("SubagentService.workspaceRevise")(
+      workspaces.revise((request: StartSubagentRequest) => launch.start(request)),
+    ),
     inspectWriterWorkspace: workspaces.inspectWriterWorkspace,
     sweepOrphanedWorkspaces: workspaces.sweepOrphanedWorkspaces,
     setWriterWorkspaceMode: workspaces.setWriterWorkspaceMode,
     startSessionOwnedFrom: Effect.fn("SubagentService.startSessionOwnedFrom")(
-      starts.startSessionOwnedFrom,
+      (callerRunId: string, request: StartSubagentRequest) =>
+        starts.startSessionOwnedFrom(callerRunId, request),
     ),
     captureLaunchParent: starts.captureLaunchParent,
     ...visibilityOperations(runContext),

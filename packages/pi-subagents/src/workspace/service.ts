@@ -156,6 +156,9 @@ export class WorkspaceService extends Context.Service<WorkspaceService, Workspac
         const safe = yield* SafeFile;
         const provided = <A, E>(effect: Effect.Effect<A, E, SafeFile>) =>
           effect.pipe(Effect.provideService(SafeFile, safe));
+        // The session's operations queue here before taking a checkout's store lock, so a launch
+        // or rebase behind its own long integration or discard waits for it rather than timing
+        // out on that lock, which only other sessions contend for.
         const run = <A, E>(effect: Effect.Effect<A, E, SafeFile>) =>
           lock.withPermits(1)(provided(effect));
         // Collection holds the service's permit, so the first operation sees its result.

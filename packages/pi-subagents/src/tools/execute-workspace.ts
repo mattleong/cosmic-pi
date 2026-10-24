@@ -2,18 +2,22 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import { clipText, countLabel } from "pi-cosmic-core/display";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { Check } from "typebox/value";
-import { invalidRequest } from "../run/errors.ts";
+import { invalidRequest, subagentErrorCode, type SubagentError } from "../run/errors.ts";
+import { getFailedStartRecovery } from "../run/launch.ts";
+import { failureFileText } from "../run/state.ts";
 import { SubagentService, type SubagentServiceContract } from "../run/service.ts";
 import { SUBAGENT_ROOT_RUN_ID } from "../run/model.ts";
 import type { WorkspaceReviseOptions } from "../run/workspace-launch.ts";
 import type { WorkspaceIntegrationOutcome } from "../run/workspace-integration.ts";
 import { UnavailableWorkspaceArtifactSchema, WorkspaceRecordSchema } from "../workspace/model.ts";
 import type { WorkspaceToolDetails, WorkspaceWarning } from "./details-schema.ts";
+import { failedStartRecoveryAction } from "./format.ts";
 import {
   WorkspaceParameters,
   workspaceOperationError,
@@ -330,6 +334,36 @@ const executeWorkspaceApply = Effect.fn("SubagentTools.workspaceApply")(function
 });
 
 /**
+ * A revision whose successor was admitted and then failed during startup. Its call holds the
+ * successor's outcome from a notice, so the failure names the run, its saved failure, and its
+ * warning, after a first line without IDs.
+ */
+const successorStartFailure = (error: SubagentError): Effect.Effect<never, SubagentError> => {
+  const admitted = getFailedStartRecovery(error);
+  if (!admitted) return Effect.fail(error);
+  const runId = sanitizeTerminalLine(admitted.runId);
+  const next =
+    admitted.cleanupDisposition === "quarantined"
+      ? failedStartRecoveryAction(admitted)
+      : `Review the failure with agent_read ${runId}, then revise again, or apply or discard the worktree.`;
+  return Effect.fail(
+    invalidRequest(
+      subagentErrorCode(error),
+      Arr.join(
+        [
+          `The revision's writer failed during startup: ${error.message}`,
+          `Successor runId=${runId} was admitted before it failed.`,
+          ...(admitted.failureFile ? [failureFileText(admitted.failureFile)] : []),
+          ...(admitted.warning ? [`Warning: ${admitted.warning}`] : []),
+          `Next: ${next}`,
+        ],
+        "\n",
+      ),
+    ),
+  );
+};
+
+/**
  * `resolveLaunch` resolves an adopted workspace's recorded launch for its first revision; the
  * host supplies it with its profiles and parent context.
  */
@@ -358,12 +392,17 @@ export const executeWorkspaceAction = Effect.fn("SubagentTools.workspace")(funct
       yield* service.workspaceDiscard(workspaceId, callerRunId);
       return result("Discarded the worktree proposal; parent files were not changed.", receipt);
     case "revise": {
-      const { run, rebase } = yield* service.workspaceRevise(
-        workspaceId,
-        operation.message ?? "",
-        callerRunId,
-        { rebase: operation.rebase, resolveLaunch },
+      // A successor that fails during startup is this call's failure, so no notice repeats it.
+      const revised = yield* service.withStartFailureHold((starts) =>
+        starts
+          .workspaceRevise(workspaceId, operation.message ?? "", callerRunId, {
+            rebase: operation.rebase,
+            resolveLaunch,
+          })
+          .pipe(Effect.result),
       );
+      if (Result.isFailure(revised)) return yield* successorStartFailure(revised.failure);
+      const { run, rebase } = revised.success;
       const conflicts = rebase?.conflictedPaths ?? [];
       const rebased =
         rebase === undefined

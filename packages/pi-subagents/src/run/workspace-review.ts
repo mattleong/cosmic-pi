@@ -1,4 +1,3 @@
-import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
@@ -15,14 +14,15 @@ import type { WorkspaceServiceContract } from "../workspace/service.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
 import { SUBAGENT_ROOT_RUN_ID } from "./model.ts";
 import {
+  type HeldBinding,
+  holdBindingLocked,
+  isTreeInUse,
   mapWorkspaceError,
   type RevisionKnowledge,
   revisionKnowledge,
-  runHoldsCwd,
-  runsWithin,
   recordWorkspaceOutcomeLocked,
+  releaseBindingLocked,
   settleBinding,
-  settledState,
   updateKnowledge,
   type WorkspaceBinding,
   workspaceBusyError,
@@ -58,13 +58,6 @@ export interface WorkspaceReviewOptions {
 
 /** UTF-16 units per review page. */
 const REVIEW_PAGE_CHARS = 16_000;
-
-/** A binding this operation keeps busy; `heldLocked` confirms, under the run lock, it still does. */
-interface HeldBinding {
-  readonly binding: WorkspaceBinding;
-  readonly token: symbol;
-  readonly heldLocked: () => Effect.Effect<void, SubagentError>;
-}
 
 const isHighSurrogate = (code: number) => code >= 0xd800 && code <= 0xdbff;
 const isLowSurrogate = (code: number) => code >= 0xdc00 && code <= 0xdfff;
@@ -123,8 +116,8 @@ export function workspaceReviewOperations(
   context: WorkspaceControlContext,
   publish: Effect.Effect<void>,
 ) {
-  const { records, withLock, state, requireBinding, requireEngine, operations, worktreeCreate } =
-    context;
+  const { records, withLock, state, requireBinding, requireEngine, operations } = context;
+  const { worktreeCreate, excludeTrees } = context;
   const checkout = integrationTarget(context);
   /** Marks the binding busy for `use`, so resume, revise, and other operations refuse it. */
   const hold = <A>(
@@ -134,37 +127,17 @@ export function workspaceReviewOperations(
   ): Effect.Effect<A, SubagentError> =>
     Effect.acquireUseRelease(
       withLock(
-        Effect.gen(function* () {
-          const binding = yield* requireBinding(workspaceId, caller);
-          const settled = settledState(binding);
-          if (!settled) return yield* workspaceBusyError();
-          const token = Symbol("workspace operation");
-          binding.state = { phase: "busy", token, settled };
-          const holds = () => binding.state.phase === "busy" && binding.state.token === token;
-          return {
-            binding,
-            heldLocked: () =>
-              state.bindings.get(workspaceId) === binding && holds()
-                ? Effect.void
-                : Effect.fail(
-                    invalid(
-                      "workspace_owner_unavailable",
-                      "Workspace ownership changed while the operation was running.",
-                    ),
-                  ),
-            token,
-          };
-        }),
+        requireBinding(workspaceId, caller).pipe(
+          Effect.flatMap((binding) =>
+            Effect.suspend(() => {
+              const held = holdBindingLocked(state.bindings, binding);
+              return held ? Effect.succeed(held) : Effect.fail(workspaceBusyError());
+            }),
+          ),
+        ),
       ),
       use,
-      ({ binding, token }) =>
-        withLock(
-          Effect.sync(() => {
-            const { state: current } = binding;
-            if (current.phase === "busy" && current.token === token)
-              binding.state = current.settled;
-          }),
-        ),
+      (held) => withLock(Effect.sync(() => releaseBindingLocked(held))),
     );
   const operate = <A>(
     workspaceId: string,
@@ -205,7 +178,7 @@ export function workspaceReviewOperations(
     const reopened = revisionKnowledge(binding)?.kind === "reopened" && !revisionId;
     const revision = yield* reviewedRevision(service, binding, revisionId);
     yield* withLock(
-      heldLocked().pipe(
+      heldLocked.pipe(
         Effect.andThen(
           Effect.sync(() => {
             if (reopened) updateKnowledge(binding, () => ({ kind: "unreviewed" }));
@@ -249,42 +222,60 @@ export function workspaceReviewOperations(
     preparation: WorkspacePreparation,
     origin: "prepare" | "apply",
   ) =>
-    heldLocked().pipe(
+    heldLocked.pipe(
       Effect.andThen(
         Effect.sync(() => updateKnowledge(binding, withPreparation(preparation, origin))),
       ),
     );
   /**
-   * Like integration, destructive cleanup holds admission closed from the cwd check through
-   * removal, so callers run this under the run lock. A stopped integration's rollback writes the
-   * parent's files, so it also holds the integration target. Natural writer completion does not
-   * stop its read-only descendants.
+   * Like integration, destructive cleanup keeps admission out of the workspace's trees from the
+   * cwd check through removal; the engine removes them outside the run lock. A stopped
+   * integration's rollback writes the parent's files, so it also holds the integration target.
+   * Natural writer completion does not stop its read-only descendants.
    */
-  const discardLocked = Effect.fn("SubagentWorkspace.discardLocked")(function* (
+  const discardHeld = Effect.fn("SubagentWorkspace.discardHeld")(function* (
     service: WorkspaceServiceContract,
-    binding: WorkspaceBinding,
+    { binding, heldLocked }: HeldBinding,
     outcome: "discarded" | "auto-discarded" = "discarded",
   ): Effect.fn.Return<void, SubagentError> {
     const { workspaceId, ownerId } = binding.handle;
     const artifact = yield* service
       .inspect({ workspaceId, ownerId })
       .pipe(Effect.mapError(mapWorkspaceError));
-    if (Arr.some([...runsWithin(records, [artifact.handle.artifactRoot]).keys()], runHoldsCwd))
-      return yield* invalid(
-        "workspace_process_unsettled",
-        "A run still uses this workspace. Stop it and confirm cleanup before discard.",
-      );
+    const { artifactRoot, sourceRoot } = artifact.handle;
+    const integrating = artifact.status === "integrating";
     const discard = service
       .discard({ workspaceId, ownerId, processCleanupConfirmed: true })
       .pipe(Effect.mapError(mapWorkspaceError));
-    if (artifact.status === "integrating") {
-      yield* checkout.requireIdleLocked(artifact.handle.sourceRoot);
-      yield* checkout.holdLocked(workspaceId, artifact.handle, discard);
-    } else yield* discard;
-    settleBinding(binding, { phase: "finished", outcome });
-    recordWorkspaceOutcomeLocked(binding, { status: outcome });
-    yield* publish;
-    return undefined;
+    yield* excludeTrees(
+      Effect.gen(function* () {
+        yield* heldLocked;
+        if (isTreeInUse(records, state.launchReservations, artifactRoot))
+          return yield* invalid(
+            "workspace_process_unsettled",
+            "A run still uses this workspace. Stop it and confirm cleanup before discard.",
+          );
+        if (integrating) yield* checkout.requireIdleLocked(sourceRoot);
+        return { exclusion: { artifactRoot, target: integrating ? sourceRoot : undefined } };
+      }),
+      // Once the engine has discarded, the outcome commits even if the caller is cancelled.
+      () =>
+        Effect.uninterruptibleMask((restore) =>
+          restore(
+            integrating ? checkout.holdTarget(workspaceId, artifact.handle, discard) : discard,
+          ).pipe(
+            Effect.andThen(
+              withLock(
+                Effect.suspend(() => {
+                  settleBinding(binding, { phase: "finished", outcome });
+                  recordWorkspaceOutcomeLocked(binding, { status: outcome });
+                  return publish;
+                }),
+              ),
+            ),
+          ),
+        ),
+    );
   });
   const workspaceReview = Effect.fn("SubagentWorkspace.workspaceReview")(function* (
     workspaceId: string,
@@ -306,7 +297,7 @@ export function workspaceReviewOperations(
         const { diff: _diff, ...revision } = current;
         return yield* withLock(
           Effect.gen(function* () {
-            yield* heldLocked();
+            yield* heldLocked;
             if (offset > text.length)
               return yield* invalid(
                 "workspace_diff_bounds",
@@ -353,9 +344,7 @@ export function workspaceReviewOperations(
     caller: string = SUBAGENT_ROOT_RUN_ID,
   ): Effect.fn.Return<void, SubagentError> {
     const service = yield* requireEngine;
-    yield* operate(workspaceId, caller, ({ binding, heldLocked }) =>
-      withLock(heldLocked().pipe(Effect.andThen(discardLocked(service, binding)))),
-    );
+    yield* operate(workspaceId, caller, (held) => discardHeld(service, held));
   });
   return {
     workspaceReview,
@@ -369,7 +358,7 @@ export function workspaceReviewOperations(
       prepareHeld,
       provisionHeld,
       markPrepared,
-      discardLocked,
+      discardHeld,
     },
   };
 }

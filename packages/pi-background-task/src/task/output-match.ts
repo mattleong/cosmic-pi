@@ -1,16 +1,88 @@
+import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
 import * as Str from "effect/String";
+import { sanitizeTerminalLine } from "pi-cosmic-core/security";
+import { codeUnitAt, indexOfFrom, lastIndexOfFrom } from "pi-cosmic-core/text-scan";
+import { BACKGROUND_TASK_FIELD_BOUNDS as BOUNDS } from "./bounds.ts";
 import type { BackgroundLogSlice, BackgroundLogStream } from "./model.ts";
 import { plainTerminalText } from "./terminal-text.ts";
 
+// Recent text each stream keeps: enough to match across writes and to show a matched line's start.
+const LINE_CONTEXT_CHARS = BOUNDS.maxMatchedLineChars;
+const NEWLINE = 0x0a;
+
+export interface OutputMatch {
+  readonly cursor: number;
+  /** The alternative found. */
+  readonly text: string;
+  /** The plain output line holding the match, clipped around it. */
+  readonly line: string;
+}
+
+interface Found {
+  readonly index: number;
+  readonly text: string;
+}
+
+/** The alternative that starts earliest in `text`, the first listed on a tie. */
+const earliest = (text: string, alternatives: ReadonlyArray<string>): Found | undefined =>
+  Arr.reduce(alternatives, undefined, (best: Found | undefined, alternative) =>
+    Option.match(Fn.pipe(text, Str.indexOf(alternative)), {
+      onNone: () => best,
+      onSome: (index) =>
+        best === undefined || index < best.index ? { index, text: alternative } : best,
+    }),
+  );
+
+/**
+ * The line of `text` holding `found` as one display line, at most `maxMatchedLineChars`, keeping
+ * the match in view when the line is longer. `clipped` means `text` does not start at a line
+ * start, so a line that starts with `text` is shown as cut.
+ */
+const matchedLine = (text: string, found: Found, clipped: boolean): string => {
+  const end = found.index + found.text.length;
+  const lineBreak = found.index === 0 ? -1 : lastIndexOfFrom(text, "\n", found.index - 1);
+  const lineStart = lineBreak + 1;
+  const startCut = clipped && lineBreak < 0;
+  const nextBreak = indexOfFrom(text, "\n", end);
+  const lineEnd = nextBreak < 0 ? text.length : nextBreak;
+  const limit = BOUNDS.maxMatchedLineChars;
+  if (lineEnd - lineStart <= limit - Number(startCut)) {
+    const line = sanitizeTerminalLine(Fn.pipe(text, Str.slice(lineStart, lineEnd)));
+    return startCut ? `…${line}` : line;
+  }
+  // Room for an ellipsis at each cut end, with a quarter of the rest before the match.
+  const room = limit - 2;
+  const start = Math.max(lineStart, Math.min(found.index - Math.floor(room / 4), lineEnd - room));
+  const stop = Math.min(lineEnd, start + room);
+  const window = sanitizeTerminalLine(Fn.pipe(text, Str.slice(start, stop)));
+  return `${start > lineStart || startCut ? "…" : ""}${window}${stop < lineEnd ? "…" : ""}`;
+};
+
 /** Matches literal text in the plain output readers see, per stream and never across a gap. */
 export class OutputMatcher {
-  private readonly carry = { stdout: "", stderr: "" } satisfies Record<BackgroundLogStream, string>;
-  private readonly contains: string | undefined;
+  private readonly recent = { stdout: "", stderr: "" } satisfies Record<
+    BackgroundLogStream,
+    string
+  >;
+  // The kept text of a stream does not start at a line start.
+  private readonly clipped: Record<BackgroundLogStream, boolean>;
+  private readonly alternatives: ReadonlyArray<string>;
+  private readonly kept: number;
   private scannedCursor: number;
 
-  constructor(contains: string | undefined, afterCursor: number) {
-    this.contains = contains;
+  /** `linesEnded` says whether each stream's output up to `afterCursor` ended a line. */
+  constructor(
+    alternatives: ReadonlyArray<string>,
+    afterCursor: number,
+    linesEnded: Readonly<Record<BackgroundLogStream, boolean>> = { stdout: true, stderr: true },
+  ) {
+    this.alternatives = alternatives;
+    this.clipped = { stdout: !linesEnded.stdout, stderr: !linesEnded.stderr };
+    const longest = Arr.reduce(alternatives, 0, (max, text) => Math.max(max, text.length));
+    // Every match found ends in the newest event: the kept text was already searched.
+    this.kept = Math.max(longest - 1, LINE_CONTEXT_CHARS);
     this.scannedCursor = afterCursor;
   }
 
@@ -18,27 +90,34 @@ export class OutputMatcher {
     return this.scannedCursor;
   }
 
-  match(slice: BackgroundLogSlice): number | undefined {
-    const contains = this.contains;
-    if (!contains) return undefined;
+  match(slice: BackgroundLogSlice): OutputMatch | undefined {
+    if (this.alternatives.length === 0) return undefined;
     if (slice.earliestAvailableCursor > this.scannedCursor) this.reset();
-    let matchCursor: number | undefined;
+    let match: OutputMatch | undefined;
     for (const event of slice.events) {
       if (event.droppedBefore) this.reset();
-      const candidate = this.carry[event.stream] + plainTerminalText(event.text);
-      if (Fn.pipe(candidate, Str.includes(contains))) {
-        matchCursor = event.cursor;
+      const candidate = this.recent[event.stream] + plainTerminalText(event.text);
+      const found = earliest(candidate, this.alternatives);
+      if (found) {
+        const line = matchedLine(candidate, found, this.clipped[event.stream]);
+        match = { cursor: event.cursor, text: found.text, line };
         break;
       }
-      this.carry[event.stream] =
-        contains.length > 1 ? Fn.pipe(candidate, Str.slice(-(contains.length - 1))) : "";
+      const cut = candidate.length - this.kept;
+      if (cut > 0) {
+        this.clipped[event.stream] = codeUnitAt(candidate, cut - 1) !== NEWLINE;
+        this.recent[event.stream] = Fn.pipe(candidate, Str.slice(cut));
+      } else this.recent[event.stream] = candidate;
     }
     this.scannedCursor = Math.max(this.scannedCursor, slice.nextCursor);
-    return matchCursor;
+    return match;
   }
 
+  // Output was lost, so no stream's next text is known to start a line.
   private reset(): void {
-    this.carry.stdout = "";
-    this.carry.stderr = "";
+    this.recent.stdout = "";
+    this.recent.stderr = "";
+    this.clipped.stdout = true;
+    this.clipped.stderr = true;
   }
 }

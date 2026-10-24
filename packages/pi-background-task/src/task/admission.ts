@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import type * as Path from "effect/Path";
@@ -44,6 +45,7 @@ export const normalizeStartRequest = Effect.fn("BackgroundTaskAdmission.normaliz
       cwd,
       ...(name && { name }),
       ...(request.timeoutSeconds !== undefined && { timeoutSeconds: request.timeoutSeconds }),
+      ...(request.notify !== undefined && { notify: request.notify }),
     };
     return prepared;
   },
@@ -52,11 +54,16 @@ export const normalizeStartRequest = Effect.fn("BackgroundTaskAdmission.normaliz
 const validCursor = (cursor: number | undefined) =>
   cursor === undefined || (Number.isInteger(cursor) && cursor >= 0);
 
-const validContains = (contains: string | undefined) =>
+const validAlternative = (text: string) =>
+  text !== "" &&
+  text.length <= BACKGROUND_TASK_FIELD_BOUNDS.maxContainsChars &&
+  !Fn.pipe(text, Str.includes("\0"));
+
+const validContains = (contains: ReadonlyArray<string> | undefined) =>
   contains !== undefined &&
-  contains !== "" &&
-  contains.length <= BACKGROUND_TASK_FIELD_BOUNDS.maxContainsChars &&
-  !Fn.pipe(contains, Str.includes("\0"));
+  contains.length > 0 &&
+  contains.length <= BACKGROUND_TASK_FIELD_BOUNDS.maxContainsAlternatives &&
+  Arr.every(contains, validAlternative);
 
 export const validateWaitRequest = Effect.fn("BackgroundTaskAdmission.validateWaitRequest")(
   function* (request: WaitForBackgroundTask, waitSeconds: number) {
@@ -75,7 +82,7 @@ export const validateWaitRequest = Effect.fn("BackgroundTaskAdmission.validateWa
       );
     if (request.until === "output" && !validContains(request.contains))
       return yield* invalidCommand(
-        `Output waits require a non-empty contains value of at most ${BACKGROUND_TASK_FIELD_BOUNDS.maxContainsChars} characters with no NUL byte.`,
+        `Output waits require contains: one text or up to ${BACKGROUND_TASK_FIELD_BOUNDS.maxContainsAlternatives} alternatives, each non-empty, at most ${BACKGROUND_TASK_FIELD_BOUNDS.maxContainsChars} characters, and with no NUL byte.`,
       );
     return undefined;
   },

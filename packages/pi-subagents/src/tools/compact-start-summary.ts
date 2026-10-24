@@ -8,6 +8,7 @@ import type { SubagentCardFailure, SubagentStartDetails } from "./details-schema
 import { failedStartRecoveryAction, formatFailedStartRecovery } from "./format.ts";
 import { isUncertainToolFailure } from "./outcome.ts";
 import { failureMessage } from "pi-cosmic-core/message-text";
+import { failureFileText } from "../run/state.ts";
 
 type AdmittedRun = NonNullable<
   NonNullable<SubagentStartDetails["startFailures"]>[number]["admittedRun"]
@@ -78,10 +79,21 @@ export function summarizeStart(
       code: `run:${recovery.runId}:admitted-run`,
       message: `${label}: ${admittedRunMessage(recovery)}`,
       detail: Arr.join(
-        [formatFailedStartRecovery(recovery), failedStartRecoveryAction(recovery)],
+        [
+          formatFailedStartRecovery(recovery),
+          ...(recovery.failureFile ? [failureFileText(recovery.failureFile)] : []),
+          failedStartRecoveryAction(recovery),
+        ],
         "\n",
       ),
     });
+    // The start result replaces the run's notice, so it carries the warning that notice would.
+    if (recovery.warning)
+      issues.push({
+        severity: "warning",
+        code: `run:${recovery.runId}:warning`,
+        ...quoted(label, recovery.warning, "reported a warning"),
+      });
   }
   if (compactIssueSeverity(issues) === "error") summary.outcome = "error";
   else if (phase === "settled" && started !== total) summary.outcome = "uncertain";

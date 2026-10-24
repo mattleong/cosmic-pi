@@ -133,6 +133,17 @@ describe("background task compact semantics", () => {
         waitSeconds: 120,
       }),
       project(wait("timeout", snapshot, {}, 0), "wait"),
+      project(wait("timeout", snapshot), "wait", "settled", false, {
+        until: "output",
+        contains: ["ready in", "error", "EADDRINUSE"],
+      }),
+      project(
+        wait("completed", { ...snapshot, state: "exited", exitCode: 0 }),
+        "wait",
+        "settled",
+        false,
+        { until: "output", contains: ["ready", "listening"] },
+      ),
       project(
         wait("completed", {
           ...snapshot,

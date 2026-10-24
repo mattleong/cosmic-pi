@@ -9,6 +9,10 @@ export const BACKGROUND_TASK_FIELD_BOUNDS = Object.freeze({
   maxNameChars: 256,
   maxIdChars: 256,
   maxContainsChars: 256,
+  // An output wait matches any of a few literal alternatives.
+  maxContainsAlternatives: 8,
+  // The output line around a match that a wait reports.
+  maxMatchedLineChars: 400,
   maxTailLines: 2_000,
   maxWaitSeconds: 3_600,
   maxSignalChars: 256,
@@ -26,4 +30,7 @@ export const BACKGROUND_LOG_BOUNDS = Object.freeze({
   // In-flight output per task, independent of retained budgets; at least one pipe read.
   minIngressBytes: 64 * 1_024,
   maxIngressBytes: 256 * 1_024,
+  // The newest output a wait result or an exit notice repeats, so the agent rarely needs logs.
+  recentOutputLines: 20,
+  recentOutputBytes: 4_096,
 });

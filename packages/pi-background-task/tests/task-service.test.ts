@@ -28,12 +28,14 @@ import { BackgroundTaskConfigStore } from "../src/config/store.ts";
 import type { BackgroundTaskConfig } from "../src/config/schema.ts";
 import { BACKGROUND_TASK_FIELD_BOUNDS } from "../src/task/bounds.ts";
 import { OUTPUT_FAILURE_LINE_LIMIT } from "pi-code-previews";
-import type {
-  BackgroundTaskStatus,
-  BackgroundTaskState,
-  BackgroundTaskProjection,
-  StartBackgroundTask,
-  WaitForBackgroundTask,
+import {
+  isActiveTaskState,
+  type BackgroundTaskNotice,
+  type BackgroundTaskStatus,
+  type BackgroundTaskState,
+  type BackgroundTaskProjection,
+  type StartBackgroundTask,
+  type WaitForBackgroundTask,
 } from "../src/task/model.ts";
 import {
   BackgroundRuntimeClosedError,
@@ -66,6 +68,7 @@ interface FakeProcessOptions {
   readonly completeOnGraceful?: boolean;
   readonly completeOnForce?: boolean;
   readonly failTermination?: boolean;
+  readonly failSpawn?: boolean;
   readonly spawnGate?: Deferred.Deferred<void>;
 }
 
@@ -77,6 +80,12 @@ function fakeProcessLayer(options: FakeProcessOptions = {}) {
       Effect.acquireRelease(
         Effect.gen(function* () {
           if (options.spawnGate) yield* Deferred.await(options.spawnGate);
+          if (options.failSpawn)
+            return yield* LocalProcessError.make({
+              operation: "spawn",
+              reason: "spawn",
+              message: "Fixture spawn failed.",
+            });
           const output = yield* Queue.unbounded<
             {
               readonly stream: "stdout" | "stderr";
@@ -172,9 +181,11 @@ function serviceHarness(
     normalizeConfig({ stopGraceMs: 0, ...overrides }),
   );
   const dependencies = Layer.mergeAll(fake.layer, config, Path.layer);
-  const layer = BackgroundTaskService.layer({ publish: onProjection }).pipe(
-    Layer.provide(dependencies),
-  );
+  const notices: BackgroundTaskNotice[] = [];
+  const layer = BackgroundTaskService.layer({
+    publish: onProjection,
+    notify: (notice) => void notices.push(notice),
+  }).pipe(Layer.provide(dependencies));
   const run = <A, Eff extends Effect.Effect<unknown, unknown, unknown>>(
     test: (service: BackgroundTaskServiceContract) => Generator<Eff, A, unknown>,
   ) =>
@@ -182,7 +193,7 @@ function serviceHarness(
       const service = yield* BackgroundTaskService;
       return yield* test(service);
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
-  return { ...fake, layer, run };
+  return { ...fake, layer, run, notices };
 }
 
 const realServiceLayer = (overrides: Partial<BackgroundTaskConfig> = {}) =>
@@ -208,7 +219,7 @@ const outputWait = (
 ): WaitForBackgroundTask => ({
   id,
   until: "output",
-  contains: "ready",
+  contains: ["ready"],
   waitSeconds: 30,
   ...overrides,
 });
@@ -260,6 +271,28 @@ const emitAndRead = (
     control?.offer(stream, text);
     return yield* Fiber.join(reading);
   });
+
+/** Learns that tasks finished from projections, which never claim a task's notice. */
+const finishWatcher = () => {
+  const finished = new Map<string, Deferred.Deferred<void>>();
+  const entry = (id: string) => {
+    const existing = finished.get(id);
+    if (existing) return existing;
+    const created = Deferred.makeUnsafe<void>();
+    finished.set(id, created);
+    return created;
+  };
+  return {
+    publish: (projection: BackgroundTaskProjection) => {
+      for (const task of projection.tasks)
+        if (!isActiveTaskState(task.state)) Deferred.doneUnsafe(entry(task.id), Effect.void);
+    },
+    finished: (id: string) => Deferred.await(entry(id)),
+  };
+};
+
+const noticeStates = (notices: ReadonlyArray<BackgroundTaskNotice>) =>
+  Arr.map(notices, ({ task }) => [task.id, task.state] as const);
 
 const awaitState = (state: BackgroundTaskState) => {
   const reached = Deferred.makeUnsafe<void>();
@@ -426,7 +459,7 @@ describe("BackgroundTaskService", () => {
     return harness.run(function* (service) {
       const started = yield* service.start(taskInput());
       const waiting = yield* service
-        .wait(outputWait(started.id, { contains: "ready now", afterCursor: 0 }))
+        .wait(outputWait(started.id, { contains: ["ready now"], afterCursor: 0 }))
         .pipe(forkNow);
 
       harness.controls[0]?.offer("stdout", "rea");
@@ -485,14 +518,14 @@ describe("BackgroundTaskService", () => {
       const control = harness.controls[0];
       if (!control) throw new Error("started process was not captured");
       const waiting = yield* service
-        .wait(outputWait(started.id, { contains: "ready in 312 ms" }))
+        .wait(outputWait(started.id, { contains: ["ready in 312 ms"] }))
         .pipe(forkNow);
       control.offer("stdout", "  \u001b[32mVITE\u001b[39m v5.0.0  \u001b[32mready in\u001b");
       yield* Effect.yieldNow;
       control.offer("stdout", "[39m \u001b[1m312\u001b[22m ms\n");
       expect(yield* Fiber.join(waiting)).toMatchObject({ outcome: "matched", matchCursor: 2 });
       expect(
-        yield* service.wait(outputWait(started.id, { contains: "VITE v5.0.0", afterCursor: 0 })),
+        yield* service.wait(outputWait(started.id, { contains: ["VITE v5.0.0"], afterCursor: 0 })),
       ).toMatchObject({ outcome: "matched", matchCursor: 1 });
       const logs = yield* service.logs({ id: started.id, afterCursor: 0 });
       expect(combinedLogOutput(logs.events)).toBe("  VITE v5.0.0  ready in 312 ms\n");
@@ -511,7 +544,7 @@ describe("BackgroundTaskService", () => {
       control.offer("stdout", "\u0007ready\n");
       control.offer("stderr", "\u001b]8;;https://x.example/");
       control.offer("stdout", "later\n");
-      yield* service.wait(outputWait(started.id, { contains: "later", afterCursor: 0 }));
+      yield* service.wait(outputWait(started.id, { contains: ["later"], afterCursor: 0 }));
       const logs = yield* service.logs({ id: started.id, afterCursor: 0 });
       expect(combinedLogOutput(logs.events)).toBe("[stderr] IMPORTANT ERROR\nready\nlater\n");
       yield* service.stop(started.id);
@@ -1033,6 +1066,249 @@ describe("BackgroundTaskService", () => {
       yield* Scope.close(scope, Exit.void);
       expect(harness.controls[0]?.modes).toContain("graceful");
       expect(Deferred.isDoneUnsafe(terminal.reached)).toBe(true);
+    });
+  });
+});
+
+describe("BackgroundTaskService exit notices", () => {
+  it.effect("notifies on every finish for exit and only on failures for failure", () => {
+    const watcher = finishWatcher();
+    const harness = serviceHarness({}, watcher.publish);
+    return harness.run(function* (service) {
+      const cases = [
+        { notify: "exit", exit: { exitCode: 0 }, notified: true },
+        { notify: "exit", exit: { exitCode: 1 }, notified: true },
+        { notify: "failure", exit: { exitCode: 0 }, notified: false },
+        { notify: "failure", exit: { exitCode: 2 }, notified: true },
+        { notify: "failure", exit: { exitCode: null, signal: "SIGKILL" }, notified: true },
+        { notify: undefined, exit: { exitCode: 1 }, notified: false },
+      ] as const;
+      const expected: Array<readonly [string, BackgroundTaskState]> = [];
+      for (const [index, { notify, exit, notified }] of cases.entries()) {
+        const started = yield* service.start(taskInput(notify ? { notify } : {}));
+        harness.controls[index]?.offer("stdout", `output of ${index}\n`);
+        yield* Effect.yieldNow;
+        harness.controls[index]?.complete(exit);
+        yield* watcher.finished(started.id);
+        if (notified) expected.push([started.id, exit.exitCode === 0 ? "exited" : "failed"]);
+      }
+      expect(noticeStates(harness.notices)).toEqual(expected);
+      const [first] = harness.notices;
+      expect(Arr.map(first?.recent.events ?? [], (event) => event.text)).toEqual(["output of 0\n"]);
+    });
+  });
+
+  it.effect("notifies a failure filter when a runtime timeout stops the task", () => {
+    const watcher = finishWatcher();
+    const harness = serviceHarness({}, watcher.publish);
+    return harness.run(function* (service) {
+      const started = yield* service.start(taskInput({ notify: "failure", timeoutSeconds: 10 }));
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust("10 seconds");
+      yield* watcher.finished(started.id);
+      expect(noticeStates(harness.notices)).toEqual([[started.id, "timed_out"]]);
+    });
+  });
+
+  it.effect("sends no notice when a read in progress reports the finish", () => {
+    const watcher = finishWatcher();
+    const harness = serviceHarness({}, watcher.publish);
+    return harness.run(function* (service) {
+      const waited = yield* service.start(taskInput({ notify: "exit" }));
+      const waiting = yield* service.wait(exitWait(waited.id)).pipe(forkNow);
+      harness.controls[0]?.complete();
+      expect(yield* Fiber.join(waiting)).toMatchObject({ outcome: "completed" });
+
+      const read = yield* service.start(taskInput({ notify: "exit" }));
+      const reading = yield* service.logs({ id: read.id, waitSeconds: 30 }).pipe(forkNow);
+      harness.controls[1]?.complete({ exitCode: 1 });
+      expect(yield* Fiber.join(reading)).toMatchObject({ state: "failed" });
+
+      // A wait that returned while the task still ran told the agent nothing about its finish.
+      const matched = yield* service.start(taskInput({ notify: "exit" }));
+      harness.controls[2]?.offer("stdout", "ready\n");
+      expect(yield* service.wait(outputWait(matched.id))).toMatchObject({ outcome: "matched" });
+      harness.controls[2]?.complete();
+      yield* watcher.finished(matched.id);
+
+      expect(noticeStates(harness.notices)).toEqual([[matched.id, "exited"]]);
+    });
+  });
+
+  it.effect("sends no notice for the agent's own stops, unlike a stop from the user", () => {
+    const watcher = finishWatcher();
+    const harness = serviceHarness({}, watcher.publish);
+    return harness.run(function* (service) {
+      const agentStopped = yield* service.start(taskInput({ notify: "exit" }));
+      yield* service.stop(agentStopped.id, false, "agent");
+      const userStopped = yield* service.start(taskInput({ notify: "exit" }));
+      yield* service.stop(userStopped.id);
+      yield* service.start(taskInput({ notify: "exit" }));
+      yield* service.start(taskInput({ notify: "exit" }));
+      expect(yield* service.stopAll(false, "agent")).toHaveLength(2);
+      expect(noticeStates(harness.notices)).toEqual([[userStopped.id, "stopped"]]);
+    });
+  });
+
+  it.effect("sends no notice for tasks the runtime stops while it shuts down", () => {
+    const harness = serviceHarness();
+    return Effect.gen(function* () {
+      yield* harness.run(function* (service) {
+        yield* service.start(taskInput({ notify: "exit" }));
+        yield* service.start(taskInput({ notify: "failure", timeoutSeconds: 60 }));
+      });
+      expect(Arr.map(harness.controls, (control) => control.modes)).toEqual([
+        ["graceful"],
+        ["graceful"],
+      ]);
+      expect(harness.notices).toEqual([]);
+    });
+  });
+
+  it.effect(
+    "sends a deferred notice once a read in progress ends without reporting the finish",
+    () => {
+      // The read is cancelled in the same registry transition that finishes the task, so it never
+      // inspects the finished task, as a cancelled tool call or an earlier return would not.
+      let reading: Fiber.Fiber<unknown, unknown> | undefined;
+      const harness = serviceHarness({}, (projection) => {
+        if (Arr.some(projection.tasks, (task) => !isActiveTaskState(task.state)))
+          reading?.interruptUnsafe();
+      });
+      return harness.run(function* (service) {
+        const started = yield* service.start(taskInput({ notify: "exit" }));
+        const read = yield* service.logs({ id: started.id, waitSeconds: 30 }).pipe(forkNow);
+        reading = read;
+        yield* Effect.yieldNow;
+        harness.controls[0]?.complete({ exitCode: 1 });
+        const exit = yield* Fiber.await(read);
+        expect(Exit.hasInterrupts(exit)).toBe(true);
+        expect(noticeStates(harness.notices)).toEqual([[started.id, "failed"]]);
+        expect(harness.notices[0]?.retained).toBe(true);
+      });
+    },
+  );
+
+  it.effect("sends no failure notice for a stop from the user", () => {
+    const watcher = finishWatcher();
+    const harness = serviceHarness({}, watcher.publish);
+    return harness.run(function* (service) {
+      const started = yield* service.start(taskInput({ notify: "failure" }));
+      expect((yield* service.stop(started.id)).snapshot.state).toBe("stopped");
+      yield* watcher.finished(started.id);
+      expect(harness.notices).toEqual([]);
+    });
+  });
+
+  it.effect("sends no notice for a start that reported its spawn failure", () => {
+    const harness = serviceHarness({}, () => {}, { failSpawn: true });
+    return harness.run(function* (service) {
+      for (const notify of ["exit", "failure"] as const)
+        expect(yield* service.start(taskInput({ notify })).pipe(Effect.flip)).toBeInstanceOf(
+          BackgroundSpawnError,
+        );
+      expect(Arr.map(yield* service.list(), (task) => task.state)).toEqual(["failed", "failed"]);
+      expect(harness.notices).toEqual([]);
+    });
+  });
+
+  it.effect("says whether the finished task is still listed when its notice is sent", () => {
+    const watcher = finishWatcher();
+    const harness = serviceHarness({ maxRetained: 1 }, watcher.publish);
+    return harness.run(function* (service) {
+      const kept = yield* service.start(taskInput({ notify: "exit" }));
+      harness.controls[0]?.complete();
+      yield* watcher.finished(kept.id);
+      // Both finish at the same test-clock time, so retention trims the earlier-started task as
+      // it finishes, before its notice is sent.
+      const trimmed = yield* service.start(taskInput({ notify: "exit" }));
+      const later = yield* service.start(taskInput());
+      harness.controls[2]?.complete();
+      yield* watcher.finished(later.id);
+      harness.controls[1]?.complete();
+      // A trimmed task never appears finished in a projection; its notice shows it finished.
+      while (harness.notices.length < 2) yield* Effect.yieldNow;
+      expect(
+        Arr.map(harness.notices, (notice) => [notice.task.id, notice.retained] as const),
+      ).toEqual([
+        [kept.id, true],
+        [trimmed.id, false],
+      ]);
+      expect(Arr.map(yield* service.list(), (task) => task.id)).toEqual([later.id]);
+    });
+  });
+});
+
+describe("BackgroundTaskService wait results", () => {
+  it.effect("matches whichever alternative appears first and reports its line", () => {
+    const harness = serviceHarness();
+    return harness.run(function* (service) {
+      const started = yield* service.start(taskInput());
+      const waiting = yield* service
+        .wait(outputWait(started.id, { contains: ["error", "ready in"] }))
+        .pipe(forkNow);
+      harness.controls[0]?.offer("stdout", "  VITE ready");
+      yield* Effect.yieldNow;
+      harness.controls[0]?.offer("stdout", " in 312 ms\nnext line\n");
+      const result = yield* Fiber.join(waiting);
+      expect(result).toMatchObject({
+        outcome: "matched",
+        matchCursor: 2,
+        matchedText: "ready in",
+        matchedLine: "VITE ready in 312 ms",
+      });
+      expect(combinedLogOutput(result.recent.events)).toBe("  VITE ready in 312 ms\nnext line\n");
+      yield* service.stop(started.id);
+    });
+  });
+
+  it.effect("keeps a long matched line bounded with the match in view", () => {
+    const harness = serviceHarness();
+    return harness.run(function* (service) {
+      const started = yield* service.start(taskInput());
+      const line = `${Fn.pipe("x", Str.repeat(2_000))} ready ${Fn.pipe("y", Str.repeat(2_000))}\n`;
+      harness.controls[0]?.offer("stdout", line);
+      const result = yield* service.wait(outputWait(started.id));
+      expect(result.matchedLine).toContain(" ready ");
+      expect(result.matchedLine?.length).toBeLessThanOrEqual(
+        BACKGROUND_TASK_FIELD_BOUNDS.maxMatchedLineChars,
+      );
+      yield* service.stop(started.id);
+    });
+  });
+
+  it.effect("marks a matched line whose start came before the output it scanned", () => {
+    const harness = serviceHarness();
+    return harness.run(function* (service) {
+      const started = yield* service.start(taskInput());
+      const control = harness.controls[0];
+      const matchedAfter = (afterCursor: number, contains: string) =>
+        service.wait(outputWait(started.id, { contains: [contains], afterCursor }));
+      control?.offer("stdout", "Compiling... ");
+      yield* matchedAfter(0, "Compiling");
+      control?.offer("stdout", "done, ready\n");
+      expect((yield* matchedAfter(1, "ready")).matchedLine).toBe("…done, ready");
+      expect((yield* matchedAfter(0, "ready")).matchedLine).toBe("Compiling... done, ready");
+      control?.offer("stdout", "ready again\n");
+      expect((yield* matchedAfter(2, "again")).matchedLine).toBe("ready again");
+      yield* service.stop(started.id);
+    });
+  });
+
+  it.effect("returns at once with the recent output when the task exits without a match", () => {
+    const harness = serviceHarness();
+    return harness.run(function* (service) {
+      const started = yield* service.start(taskInput());
+      const waiting = yield* service
+        .wait(outputWait(started.id, { contains: ["ready", "listening"] }))
+        .pipe(forkNow);
+      harness.controls[0]?.offer("stderr", "Error: port in use\n");
+      yield* Effect.yieldNow;
+      harness.controls[0]?.complete({ exitCode: 1 });
+      const result = yield* Fiber.join(waiting);
+      expect(result).toMatchObject({ outcome: "completed", snapshot: { state: "failed" } });
+      expect(result.matchCursor).toBeUndefined();
+      expect(combinedLogOutput(result.recent.events)).toBe("[stderr] Error: port in use\n");
     });
   });
 });

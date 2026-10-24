@@ -15,10 +15,12 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Str from "effect/String";
 import { nodeFilePlatformLayer, signalProcess, utf8ByteLength } from "pi-cosmic-core";
+import { nodePath } from "pi-cosmic-core/platform/node-builtins";
 import { provideBuiltLayer } from "pi-cosmic-core/testing";
 import {
   LocalProcess,
   makeBackgroundProcessEnvironment,
+  type HostShellSettings,
   type LocalProcessHandle,
   type LocalProcessOutput,
   type LocalProcessRequest,
@@ -30,8 +32,10 @@ import { BACKGROUND_TASK_FIELD_BOUNDS } from "../src/task/bounds.ts";
 vi.setConfig({ testTimeout: 60_000 });
 const processTimeout = "20 seconds";
 
-const withLocalProcess = <A, E>(effect: Effect.Effect<A, E, LocalProcess | Scope.Scope>) =>
-  effect.pipe(Effect.scoped, provideBuiltLayer(LocalProcess.layer));
+const withLocalProcess = <A, E>(
+  effect: Effect.Effect<A, E, LocalProcess | Scope.Scope>,
+  shell: HostShellSettings = {},
+) => effect.pipe(Effect.scoped, provideBuiltLayer(LocalProcess.layerFor(shell)));
 const spawnProcess = (command: string, overrides: Partial<LocalProcessRequest> = {}) =>
   LocalProcess.use((processes) =>
     processes.spawn({ command, cwd: ".", ingressBufferBytes: 64 * 1024, ...overrides }),
@@ -69,6 +73,22 @@ const pollUntil = (done: Effect.Effect<boolean>) =>
 
 const awaitProcessDeath = (pid: number) => pollUntil(Effect.sync(() => !processAlive(pid)));
 
+const outputText = (events: Iterable<LocalProcessOutput>) =>
+  Arr.join(
+    Arr.map([...events], (event) => event.text),
+    "",
+  );
+
+/** A stand-in shell that prints the command it was asked to run instead of running it. */
+const echoingShell = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const shell = path.join(yield* fs.makeTempDirectoryScoped({ prefix: "bg-shell-" }), "shell");
+  yield* fs.writeFileString(shell, `#!/bin/sh\nprintf 'ran:%s' "$2"\n`);
+  yield* fs.chmod(shell, 0o755);
+  return shell;
+}).pipe(Effect.provide(nodeFilePlatformLayer));
+
 describe("local process boundary", () => {
   it("filters blocked environment keys with case-sensitive names", () => {
     const blocked = {
@@ -97,6 +117,123 @@ describe("local process boundary", () => {
       FORCE_COLOR: "1",
     });
   });
+
+  it("puts Pi's tool directory on PATH once", () => {
+    expect(makeBackgroundProcessEnvironment({ PATH: "/usr/bin:/bin" }, "/agent/bin")).toEqual({
+      PATH: "/agent/bin:/usr/bin:/bin",
+      FORCE_COLOR: "1",
+    });
+    expect(makeBackgroundProcessEnvironment({ PATH: "/bin:/agent/bin" }, "/agent/bin")).toEqual({
+      PATH: "/bin:/agent/bin",
+      FORCE_COLOR: "1",
+    });
+    expect(makeBackgroundProcessEnvironment({}, "/agent/bin")).toEqual({
+      PATH: "/agent/bin",
+      FORCE_COLOR: "1",
+    });
+  });
+
+  it.live("runs commands in bash when no shell is configured", () =>
+    withLocalProcess(
+      Effect.gen(function* () {
+        const result = yield* collectUntilExit(
+          yield* spawnProcess("[[ 1 == 1 ]] && echo {1..3} && [[ ! -o posix ]] && echo bash"),
+        );
+        expect(result.exit.exitCode).toBe(0);
+        expect(outputText(result.events)).toBe("1 2 3\nbash\n");
+      }),
+    ),
+  );
+
+  it.live("runs Pi's shell with Pi's command prefix", () =>
+    Effect.gen(function* () {
+      const prefixed = yield* withLocalProcess(
+        Effect.flatMap(spawnProcess('echo "$greeting"'), collectUntilExit),
+        { commandPrefix: "greeting=hello" },
+      );
+      expect(outputText(prefixed.events)).toBe("hello\n");
+
+      const shell = yield* echoingShell;
+      const custom = yield* withLocalProcess(
+        Effect.flatMap(spawnProcess("build"), collectUntilExit),
+        {
+          shellPath: shell,
+          commandPrefix: "setup",
+        },
+      );
+      expect(outputText(custom.events)).toBe("ran:setup\nbuild");
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("lets the package shellPath replace Pi's shell and command prefix", () =>
+    Effect.gen(function* () {
+      const shell = yield* echoingShell;
+      const result = yield* withLocalProcess(
+        Effect.flatMap(spawnProcess("build", { shellPath: shell }), collectUntilExit),
+        { shellPath: "/bin/bash", commandPrefix: "exit 9" },
+      );
+      expect(result.exit.exitCode).toBe(0);
+      expect(outputText(result.events)).toBe("ran:build");
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("finds the package shellPath as Node's shell option does", () =>
+    Effect.gen(function* () {
+      const bare = yield* withLocalProcess(
+        Effect.flatMap(spawnProcess('echo "$0"', { shellPath: "sh" }), collectUntilExit),
+        { commandPrefix: "exit 9" },
+      );
+      expect(bare.exit.exitCode).toBe(0);
+      expect(outputText(bare.events)).toBe("sh\n");
+
+      const shell = yield* echoingShell;
+      const relative = yield* withLocalProcess(
+        Effect.flatMap(
+          spawnProcess("build", { shellPath: "./shell", cwd: nodePath.dirname(shell) }),
+          collectUntilExit,
+        ),
+      );
+      expect(outputText(relative.events)).toBe("ran:build");
+
+      const missing = yield* withLocalProcess(
+        spawnProcess("true", { shellPath: "no-such-shell-for-tasks" }).pipe(Effect.flip),
+      );
+      expect(missing.message).toContain("no-such-shell-for-tasks");
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("ends the task's input when a stop is dispatched", () =>
+    withLocalProcess(
+      Effect.gen(function* () {
+        // The task ignores SIGTERM, so only the end of its input lets it exit before a forced stop.
+        const handle = yield* spawnProcess(
+          "trap '' TERM; printf ready; cat >/dev/null; printf ' input ended'",
+        );
+        expect(yield* firstOutput(handle)).toBe("ready");
+        yield* handle.terminate("graceful");
+        const rest = yield* collectUntilExit(handle).pipe(Effect.timeout(processTimeout));
+        expect(rest.exit).toEqual({ exitCode: 0 });
+        expect(outputText(rest.events)).toBe(" input ended");
+      }),
+    ),
+  );
+
+  it.live("keeps stdin open until the task is stopped", () =>
+    withLocalProcess(
+      Effect.gen(function* () {
+        // Like esbuild --watch, this exits as soon as its input ends.
+        const handle = yield* spawnProcess(
+          `node -e "process.stdin.on('end', () => process.exit(3)); process.stdin.resume(); process.stdout.write('ready')"`,
+        );
+        expect(yield* firstOutput(handle)).toBe("ready");
+        const early = yield* handle.awaitExit.pipe(Effect.timeoutOption("300 millis"));
+        expect(Option.isNone(early)).toBe(true);
+        yield* handle.terminate("graceful");
+        yield* handle.awaitExit.pipe(Effect.timeout(processTimeout));
+        expect(yield* awaitProcessDeath(handle.pid)).toBe(true);
+      }),
+    ),
+  );
 
   it.live("captures stdout, stderr, and exit", () =>
     withLocalProcess(

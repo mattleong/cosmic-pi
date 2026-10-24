@@ -1,5 +1,9 @@
 import * as Schema from "effect/Schema";
-import { BACKGROUND_TASK_FIELD_BOUNDS as BOUNDS } from "./bounds.ts";
+import { utf8ByteLength } from "pi-cosmic-core/text";
+import {
+  BACKGROUND_LOG_BOUNDS as LOG_BOUNDS,
+  BACKGROUND_TASK_FIELD_BOUNDS as BOUNDS,
+} from "./bounds.ts";
 
 export const BACKGROUND_TASK_ACTIONS = [
   "start",
@@ -11,6 +15,7 @@ export const BACKGROUND_TASK_ACTIONS = [
   "stop_all",
   "clear",
 ] as const;
+export const BACKGROUND_TASK_NOTIFY_FILTERS = ["exit", "failure"] as const;
 export const BACKGROUND_TASK_STATES = [
   "starting",
   "running",
@@ -61,6 +66,18 @@ export const BackgroundTaskWaitResultSchema = Schema.Struct({
   earliestAvailableCursor: Schema.Natural,
   droppedBytes: Schema.Natural,
   matchCursor: Schema.optionalKey(Schema.Natural),
+  // The contains alternative found, and the plain output line around it.
+  matchedText: Schema.optionalKey(MaxChars(BOUNDS.maxContainsChars)),
+  matchedLine: Schema.optionalKey(MaxChars(BOUNDS.maxMatchedLineChars)),
+  // The newest plain output when the wait returned, as logs shows it; absent without output.
+  tail: Schema.optionalKey(
+    Schema.String.check(
+      Schema.isMaxLength(LOG_BOUNDS.recentOutputBytes),
+      Schema.makeFilter((tail: string) => utf8ByteLength(tail) <= LOG_BOUNDS.recentOutputBytes, {
+        expected: `at most ${LOG_BOUNDS.recentOutputBytes} UTF-8 bytes`,
+      }),
+    ),
+  ),
 });
 
 export const AppliedWaitSecondsSchema = Schema.Finite.check(

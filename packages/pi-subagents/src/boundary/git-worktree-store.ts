@@ -186,15 +186,20 @@ const lockFailure = (error: CrossProcessLockError, directory: string) =>
         : `Lock directory: ${directory}\nIt must be a private directory owned by the current user.`,
   });
 
+// A session's own operations queue behind its operation gate before taking the lock, so a holder
+// in this process is another engine here, such as another session of this Pi process.
 const lockTimeout = (sourceRoot: string, directory: string) => {
   const holder = crossProcessLockHolder(sourceLockNamespace(sourceRoot), { directory });
+  const here = holder.ownerPid === process.pid;
   return WorkspaceError.make({
     operation: "lock",
-    message: "Another Pi session is still changing workspaces for this checkout.",
+    message: here
+      ? "Another workspace operation in this Pi process is still changing workspaces for this checkout."
+      : "Another Pi session is still changing workspaces for this checkout.",
     detail: Arr.join(
       [
         `Lock: ${holder.slot}`,
-        `Owner: ${holder.ownerPid === undefined ? "unknown process" : `process ${holder.ownerPid}`}`,
+        `Owner: ${holder.ownerPid === undefined ? "unknown process" : `process ${holder.ownerPid}${here ? " (this Pi process)" : ""}`}`,
         `Waited ${Duration.format(WORKSPACE_LOCK_WAIT)}. Try again once that operation finishes; a lock whose process has exited is reclaimed automatically.`,
       ],
       "\n",

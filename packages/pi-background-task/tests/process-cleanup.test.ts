@@ -94,7 +94,7 @@ describe("real process cleanup", () => {
         const ready = yield* service.wait({
           id: task.id,
           until: "output",
-          contains: "ready",
+          contains: ["ready"],
           waitSeconds: 30,
         });
         expect(ready.outcome).toBe("matched");

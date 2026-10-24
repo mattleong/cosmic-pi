@@ -34,6 +34,7 @@ import {
   toolStatusLine,
 } from "pi-cosmic-ui/tool";
 import type { SubagentStartFailure } from "./model.ts";
+import { failureFileText } from "../run/state.ts";
 
 // Raw call arguments reach the renderer before Pi validates them, and models send null for absent
 // fields; a malformed field or entry renders as absent instead of failing the row.
@@ -225,6 +226,17 @@ const launchFailureSection = (
           theme.fg("toolOutput", boundedLine(failure.message, 2_048)),
           ...(failure.admittedRun
             ? [theme.fg("dim", formatFailedStartRecovery(failure.admittedRun))]
+            : []),
+          ...(failure.admittedRun?.failureFile
+            ? [
+                theme.fg(
+                  "dim",
+                  boundedLine(failureFileText(failure.admittedRun.failureFile), 2_048),
+                ),
+              ]
+            : []),
+          ...(failure.admittedRun?.warning
+            ? [theme.fg("warning", boundedLine(`Warning: ${failure.admittedRun.warning}`, 2_048))]
             : []),
           theme.fg(
             "dim",

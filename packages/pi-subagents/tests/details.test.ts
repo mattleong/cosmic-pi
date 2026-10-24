@@ -324,6 +324,24 @@ const writerRun = (): SubagentRunView => ({ ...run(), writeIntent: "writer" });
 const runCards = (details: ReturnType<typeof compactToolDetails>) =>
   details.action === "models" ? [] : details.cards;
 
+/** A launch admitted and then failed, with a saved failure and a long warning. */
+const failedAdmittedStart = (index: number) => ({
+  index,
+  message: `Launch ${index} failed: ${Fn.pipe("m", Str.repeat(600))}`,
+  code: "launch_failed",
+  admittedRun: {
+    runId: `agent-admitted-${index}`,
+    cleanupDisposition: "confirmed" as const,
+    failureFile: {
+      path: `/agent/subagent-reports/${Fn.pipe("p", Str.repeat(300))}-${index}-failure.md`,
+      chars: 9_000,
+      lines: 12,
+      complete: true,
+    },
+    warning: `System warning: ${Fn.pipe("w", Str.repeat(600))}`,
+  },
+});
+
 const startRunIds = (items: ReadonlyArray<SubagentStartEntry>) =>
   Arr.map(items, (entry) => (entry.status === "started" ? entry.runId : undefined));
 
@@ -421,6 +439,27 @@ describe("persisted subagent detail fitting", () => {
     );
     for (const entry of details.startEntries)
       expect(entry.routeStatus === "selected" && entry.warning).toMatch(/^Route warning \d+: w/u);
+  });
+
+  it("keeps a failed start's saved failure and warning, and still fits a full batch of them", () => {
+    const entries = Array.from({ length: 32 }, (_, index): SubagentStartEntry => {
+      const { runId: _runId, ...selected } = startedEntry(index, `launch-${index}`);
+      return { ...selected, status: "failed" };
+    });
+    const one = startDetails({
+      startEntries: entries.slice(0, 1),
+      startFailures: [failedAdmittedStart(0)],
+    });
+    const recovery = one.startFailures?.[0]?.admittedRun;
+    expect(recovery?.failureFile).toEqual(failedAdmittedStart(0).admittedRun.failureFile);
+    expect(recovery?.warning).toMatch(/^System warning: w/u);
+    const failures = Arr.map(entries, (entry) => failedAdmittedStart(entry.index));
+    const all = startDetails({ startEntries: entries, startFailures: failures });
+    expect(JSON.stringify(all).length).toBeLessThanOrEqual(48_000);
+    expect(decodeStartAwaitCardDetails(all)).toEqual(all);
+    expect(Arr.map(all.startFailures ?? [], (failure) => failure.admittedRun?.runId)).toEqual(
+      Arr.map(failures, (failure) => failure.admittedRun.runId),
+    );
   });
 
   it("keeps collapsed issue messages when cards are condensed", () => {

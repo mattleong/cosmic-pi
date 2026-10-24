@@ -231,6 +231,8 @@ const failedLaunch = (
   const name = projectName(spec.name ?? "");
   const profile = knownProfile(outcome?.resolvedRoute?.profile ?? spec.profile);
   const admitted = failure.admittedRun;
+  const errorFile = projectReportFile(admitted?.failureFile);
+  const warning = metadata(admitted?.warning, MAX_CONTRACT_PREVIEW_CHARS);
   return {
     index,
     status: "failed",
@@ -239,7 +241,12 @@ const failedLaunch = (
     ...knownAgent(outcome?.resolvedRoute?.agent ?? spec.agent),
     failure: projectFailure(failure),
     ...(admitted !== undefined && {
-      admittedRun: { runId: admitted.runId, cleanup: admitted.cleanupDisposition },
+      admittedRun: {
+        runId: admitted.runId,
+        cleanup: admitted.cleanupDisposition,
+        ...(errorFile !== undefined && { errorFile }),
+        ...(warning !== undefined && { warning }),
+      },
     }),
   };
 };

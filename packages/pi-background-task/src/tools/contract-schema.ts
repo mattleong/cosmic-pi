@@ -2,7 +2,10 @@ import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
 import { freezeSnapshot } from "pi-cosmic-core/projection";
 import { utf8ByteLength } from "pi-cosmic-core/text";
-import { BACKGROUND_TASK_FIELD_BOUNDS as BOUNDS } from "../task/bounds.ts";
+import {
+  BACKGROUND_LOG_BOUNDS as LOG_BOUNDS,
+  BACKGROUND_TASK_FIELD_BOUNDS as BOUNDS,
+} from "../task/bounds.ts";
 import {
   AppliedWaitSecondsSchema,
   BackgroundLogMetadataSchema,
@@ -115,6 +118,25 @@ const WaitContractSchema = Schema.Struct({
   earliestAvailableCursor: wait.earliestAvailableCursor,
   droppedBytes: wait.droppedBytes,
   matchCursor: wait.matchCursor,
+  matchedText: Schema.optionalKey(
+    MaxChars(BOUNDS.maxContainsChars).annotate({
+      description: "The contains alternative an output wait found.",
+    }),
+  ),
+  matchedLine: Schema.optionalKey(
+    MaxChars(BOUNDS.maxMatchedLineChars).annotate({
+      description:
+        "The plain output line holding the match, on one line and clipped around it when long; a leading … marks a line that started in output the wait did not scan.",
+    }),
+  ),
+  tail: Schema.String.annotate({
+    description: `The newest output when the wait returned, as logs shows it: at most ${LOG_BOUNDS.recentOutputLines} lines and ${LOG_BOUNDS.recentOutputBytes} UTF-8 bytes, not credential-redacted, and "" without output.`,
+  }).check(
+    Schema.isMaxLength(LOG_BOUNDS.recentOutputBytes),
+    Schema.makeFilter((tail: string) => utf8ByteLength(tail) <= LOG_BOUNDS.recentOutputBytes, {
+      expected: `at most ${LOG_BOUNDS.recentOutputBytes} UTF-8 bytes`,
+    }),
+  ),
   appliedWaitSeconds: AppliedWaitSecondsSchema.annotate({
     description:
       "The longest this call would wait: waitSeconds capped by the maxWaitSeconds setting, which is also the default. After a timeout, call wait again.",

@@ -44,11 +44,28 @@ export const quotedWaitText = (text: string): string =>
 
 const textValue = (value: string | undefined) => (Predicate.isString(value) ? value : "");
 
+/** The non-empty texts an output wait was asked to find, from one text or a list. */
+const waitTexts = (args: Partial<BackgroundTaskToolInput>): ReadonlyArray<string> => {
+  if (args.until !== "output") return [];
+  const { contains } = args;
+  const texts = Predicate.isString(contains) ? [contains] : Arr.isArray(contains) ? contains : [];
+  return Arr.filter(texts, (text) => Predicate.isString(text) && Str.isNonEmpty(text));
+};
+
+/** The awaited texts, quoted: one, two joined by "or", or the first and how many others. */
+const awaitedText = (texts: ReadonlyArray<string>): string => {
+  const [first, second] = texts;
+  if (first === undefined) return "";
+  if (second === undefined) return quotedWaitText(first);
+  return texts.length === 2
+    ? `${quotedWaitText(first)} or ${quotedWaitText(second)}`
+    : `${quotedWaitText(first)} or ${countLabel(texts.length - 1, "other")}`;
+};
+
 function waitSubject(args: Partial<BackgroundTaskToolInput>): string {
   if (args.until === "exit") return "for exit";
-  return args.until === "output" && textValue(args.contains)
-    ? `for ${quotedWaitText(textValue(args.contains))}`
-    : "";
+  const awaited = awaitedText(waitTexts(args));
+  return awaited ? `for ${awaited}` : "";
 }
 
 export function backgroundTaskCallSubject(args: Partial<BackgroundTaskToolInput>): string {
@@ -234,6 +251,13 @@ function taskSummary(value: BackgroundTaskSnapshot): TaskSummary {
   };
 }
 
+/** A finished task's notice: its outcome and issues as a status row has them, and its duration. */
+export function taskNoticeSummary(value: BackgroundTaskSnapshot): TaskSummary {
+  const task = taskSummary(value);
+  const ran = value.endedAt === undefined ? [] : [formatDuration(value.endedAt - value.startedAt)];
+  return { ...task, metadata: [...(task.metadata ?? []), ...ran] };
+}
+
 // A confirmed stop is the stop action's success, not a cancelled request.
 const stopOutcome = (outcome: CompactOutcome): CompactOutcome =>
   outcome === "cancelled" ? "success" : outcome;
@@ -277,7 +301,7 @@ function waitTimeoutIssue(
   appliedWaitSeconds: number,
 ): CompactIssue {
   const state = taskStateLabel(snapshot.state);
-  const contains = args.until === "output" && Predicate.isString(args.contains) && args.contains;
+  const awaited = awaitedText(waitTexts(args));
   const waited =
     appliedWaitSeconds > 0
       ? `Waited ${formatDuration(appliedWaitSeconds * 1_000)}`
@@ -290,8 +314,8 @@ function waitTimeoutIssue(
   return issue(
     "warning",
     `${id}:wait-timeout`,
-    contains
-      ? `${waited} for ${quotedWaitText(contains)}; the task is still ${state}`
+    awaited
+      ? `${waited} for ${awaited}; the task is still ${state}`
       : `${waited} for the task to exit; it is still ${state}`,
     `Wait timed out; this does not stop the background task. Call wait again to keep waiting.${capped}`,
   );
@@ -373,15 +397,30 @@ function aggregateSummary(
   };
 }
 
-function waitMetadata(wait: DetailsFor<"wait">["wait"], state: string): string {
-  if (wait.outcome === "matched") return `output found, ${state}`;
+function waitMetadata(
+  wait: DetailsFor<"wait">["wait"],
+  state: string,
+  alternatives: number,
+): string {
+  if (wait.outcome === "matched")
+    return alternatives > 1 && wait.matchedText !== undefined
+      ? `found ${quotedWaitText(wait.matchedText)}, ${state}`
+      : `output found, ${state}`;
   return wait.outcome === "timeout" ? `still ${taskStateLabel(wait.snapshot.state)}` : state;
 }
 
+/** An output wait whose task finished first: the awaited text never appeared. */
+const unmatchedOutput = (wait: DetailsFor<"wait">["wait"], awaited: string): boolean =>
+  wait.outcome === "completed" && awaited !== "";
+
 // The task's own failure or uncertainty leads; otherwise the wait outcome classifies the row.
-function waitOutcome(wait: DetailsFor<"wait">["wait"], task: CompactOutcome): CompactOutcome {
+function waitOutcome(
+  wait: DetailsFor<"wait">["wait"],
+  task: CompactOutcome,
+  unmatched: boolean,
+): CompactOutcome {
   if (task === "error" || task === "uncertain") return task;
-  if (wait.outcome === "timeout") return "warning";
+  if (wait.outcome === "timeout" || unmatched) return "warning";
   return wait.outcome === "matched" ? "success" : task;
 }
 
@@ -397,15 +436,28 @@ function waitSummary(
     ...Arr.filter(task.issues, (entry) => entry.code !== `${wait.id}:log-loss`),
     ...cursorIssues(wait),
   ];
+  const texts = waitTexts(args);
+  const awaited = awaitedText(texts);
+  const unmatched = unmatchedOutput(wait, awaited);
   if (wait.outcome === "timeout")
     issues.unshift(waitTimeoutIssue(wait.id, wait.snapshot, args, details.appliedWaitSeconds));
+  // The task's own failure, already listed, explains more than the missing output.
+  if (unmatched)
+    issues.push(
+      issue(
+        "warning",
+        `${wait.id}:output-missing`,
+        `Finished without printing ${awaited}`,
+        "The task ended before the awaited output appeared; its recent output is in the result.",
+      ),
+    );
   const state = task.metadata?.[0] ?? taskStateLabel(wait.snapshot.state);
   return {
     ...task,
     action,
-    metadata: [waitMetadata(wait, state)],
+    metadata: [waitMetadata(wait, state, texts.length)],
     issues,
-    outcome: waitOutcome(wait, task.outcome),
+    outcome: waitOutcome(wait, task.outcome, unmatched),
   };
 }
 

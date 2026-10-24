@@ -1,0 +1,133 @@
+import type { AgentBeforeSettleEventResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
+import * as Match from "effect/Match";
+import * as Predicate from "effect/Predicate";
+import * as Str from "effect/String";
+import { clipText, formatDuration } from "pi-cosmic-core/display";
+import { deliverAgentMessage } from "pi-cosmic-core/host-agent-messages";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
+import { hasUnansweredNotice, registerSessionWake } from "pi-cosmic-core/host-wake";
+import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core/security";
+import type { BackgroundTaskNotice, BackgroundTaskSnapshot } from "../task/model.ts";
+import { TASK_NOTICE_MESSAGE_TYPE, taskNoticeDetails } from "../task/notice.ts";
+import { recentOutput } from "../tools/log-page.ts";
+
+const NOTICE_TYPES: ReadonlySet<string> = new Set([TASK_NOTICE_MESSAGE_TYPE]);
+const WAKE_MESSAGE_TYPE = "pi-background-task-wake";
+const WAKE_TEXT =
+  "Background tasks finished while you were busy; their notices are shown above. Act on them now and continue the task.";
+
+const MAX_NOTICE_CHARS = 8_000;
+const MAX_COMMAND_CHARS = 300;
+
+const finish = (task: BackgroundTaskSnapshot): string =>
+  Match.value(task.state).pipe(
+    Match.when("exited", () => "exited with code 0"),
+    Match.when("failed", () => {
+      if (task.error) return `couldn't start: ${sanitizeTerminalLine(task.error)}`;
+      if (task.signal) return `was killed by ${sanitizeTerminalLine(task.signal)}`;
+      return Predicate.isNumber(task.exitCode)
+        ? `failed with exit code ${task.exitCode}`
+        : "failed without an exit code";
+    }),
+    Match.when("timed_out", () => "timed out and was stopped"),
+    Match.when("stopped", () => "was stopped by the user"),
+    Match.orElse((state) => `is ${state}`),
+  );
+
+const taskLabel = (task: BackgroundTaskSnapshot): string => {
+  const name = task.name === undefined ? "" : sanitizeTerminalLine(task.name);
+  return name ? `${JSON.stringify(name)} (${task.id})` : task.id;
+};
+
+/**
+ * What the agent reads when a task finishes: which task, how and after how long it ended, the
+ * failure's cause, and its newest output, then how to read more while the task is still listed.
+ * Credentials it recognizes are redacted and the whole notice is bounded.
+ */
+export const taskNoticeContent = ({ task, recent, retained }: BackgroundTaskNotice): string => {
+  const duration =
+    task.endedAt === undefined ? "" : ` after ${formatDuration(task.endedAt - task.startedAt)}`;
+  const output = Str.trimEnd(recentOutput(recent));
+  const cause = task.failureCause === undefined ? "" : sanitizeTerminalLine(task.failureCause);
+  const content = Arr.join(
+    Arr.filter(
+      [
+        `Background task ${taskLabel(task)} ${finish(task)}${duration}.`,
+        `Command: ${clipText(sanitizeTerminalLine(task.command), MAX_COMMAND_CHARS)}`,
+        cause ? `Cause: ${cause}` : undefined,
+        output ? `Recent output:\n${output}` : "It printed no output.",
+        retained
+          ? `For more output, call background_task with action "logs" and id "${task.id}".`
+          : "Its record was already cleared, so no more output can be read.",
+      ],
+      Predicate.isString,
+    ),
+    "\n",
+  );
+  return sanitizeDiagnosticContent(content, { maximumLength: MAX_NOTICE_CHARS });
+};
+
+const noticeMessage = (notice: BackgroundTaskNotice) => ({
+  customType: TASK_NOTICE_MESSAGE_TYPE,
+  content: taskNoticeContent(notice),
+  details: taskNoticeDetails(notice.task),
+});
+
+export interface TaskNoticeHost {
+  /** Whether the session has neither a run nor a compaction in progress. */
+  readonly isIdle: () => boolean;
+  /** Runs `check` again shortly, outside the current host callback. */
+  readonly later: (check: () => void) => void;
+}
+
+/**
+ * Sends a finished task's notice. `isCurrent` is checked again in the callback that sends it, so a
+ * retired runtime never delivers into its successor.
+ */
+export type TaskNoticeDelivery = (notice: BackgroundTaskNotice, isCurrent: () => boolean) => void;
+
+/**
+ * Owns how exit notices reach the agent, on the shared session wake: an idle session starts a
+ * turn, a busy one reads the notice before its turn settles, and wakes wait behind an open dialog
+ * or a user interrupt until the user's next prompt. Registers at factory time.
+ */
+export function registerTaskNoticeDelivery(
+  pi: ExtensionAPI,
+  host: TaskNoticeHost,
+): TaskNoticeDelivery {
+  const wake = registerSessionWake(pi, {
+    noticeTypes: NOTICE_TYPES,
+    wakeMessage: { customType: WAKE_MESSAGE_TYPE, content: WAKE_TEXT },
+    isIdle: host.isIdle,
+    later: host.later,
+    holdDuringDialogs: true,
+  });
+  return (notice, isCurrent) => {
+    deliverAgentMessage(pi, wake, noticeMessage(notice), isCurrent);
+  };
+}
+
+/**
+ * Exit notices in a subagent's own Pi session, which never start a turn. An idle subagent's run is
+ * settling, reported, or paused for its parents, and a turn started then would replace its report
+ * or resume it without them. The notice is appended for its next turn instead; a busy subagent's
+ * settling run continues so it reads the notice before it reports. Registers at factory time.
+ */
+export function registerSubagentTaskNoticeDelivery(pi: ExtensionAPI): TaskNoticeDelivery {
+  pi.on("agent_before_settle", (event): AgentBeforeSettleEventResult | undefined =>
+    event.outcome === "completed" && hasUnansweredNotice(event.context, NOTICE_TYPES)
+      ? { entries: event.entries, continue: true }
+      : undefined,
+  );
+  return (notice, isCurrent) => {
+    invokeHostCallback(() => {
+      if (!isCurrent()) return;
+      // Pi holds a busy session's notice until its turn ends, outside the steering queue.
+      pi.sendMessage(
+        { ...noticeMessage(notice), display: true },
+        { deliverAs: "steer", triggerTurn: false },
+      );
+    }, undefined);
+  };
+}

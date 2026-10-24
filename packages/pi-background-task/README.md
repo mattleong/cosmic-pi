@@ -5,7 +5,8 @@ Session-scoped background tasks for Pi. The agent can start long-running command
 ## Features
 
 - **One agent tool**, `background_task`, with `start`, `list`, `status`, `logs`, `wait`, `stop`, `stop_all`, and `clear` actions.
-- **Bounded waits** for a task to exit or for text to appear in its output, without polling. Each wait is capped by the `maxWaitSeconds` setting.
+- **Bounded waits** for a task to exit or for any of a few texts to appear in its output, without polling. Each wait is capped by the `maxWaitSeconds` setting and returns the matched line and the task's recent output.
+- **Opt-in exit notices:** a task started with `notify` messages the agent when it finishes, or only when it fails, waking an idle agent instead of leaving it to poll.
 - **Task manager** in the shared Activity view: browse tasks, read recent logs, follow output, stop or clear tasks.
 - **Footer status** while tasks are active, such as `2 background tasks running`; the count includes tasks still starting or stopping.
 - **Native codemode results:** scripts receive structured task data instead of text.
@@ -45,10 +46,10 @@ Optional JSON in `~/.pi/agent/extensions/pi-background-task.json`, or `.pi/exten
 }
 ```
 
-Set `shellPath` to run tasks in a specific shell instead of the platform default. `maxWaitSeconds` goes up to 3600. In `/tasks settings`, the two byte settings also accept sizes such as `512KiB` or `4m`.
+Tasks run in Pi's shell, normally bash, with Pi's `shellPath` and `shellCommandPrefix` settings, as its `bash` tool does. Set this package's `shellPath` to run tasks in another shell instead, without Pi's prefix. `maxWaitSeconds` goes up to 3600. In `/tasks settings`, the two byte settings also accept sizes such as `512KiB` or `4m`.
 
 ## How it works
 
-Each Pi session owns its task registry, bounded log buffers, and wait barriers. Tasks are non-interactive, run with your own permissions, and have no default timeout. Output is sanitized as it arrives; `logs` and the standalone manager show it without credential redaction, while the Activity view redacts credentials it recognizes. A stop that can't confirm the process exited keeps the task in `stopping` rather than reporting it finished; stopping it again forces it. Cleanup reaches each task's own process group and nothing that detaches from it, and no cleanup runs if Pi itself is killed with `SIGKILL` or the machine goes down. Task IDs are random tokens that belong to one session runtime, so IDs from an earlier runtime must not be reused.
+Each Pi session owns its task registry, bounded log buffers, and wait barriers. Tasks are non-interactive: stdin stays open but is never written, so watchers keep running and a command that prompts or reads stdin waits until it is stopped; give such commands `</dev/null` or non-interactive flags. They run with your own permissions and have no default timeout. Output is sanitized as it arrives; `logs` and the standalone manager show it without credential redaction, while the Activity view redacts credentials it recognizes. A stop that can't confirm the process exited keeps the task in `stopping` rather than reporting it finished; stopping it again forces it. Cleanup reaches each task's own process group and nothing that detaches from it, and no cleanup runs if Pi itself is killed with `SIGKILL` or the machine goes down. Task IDs are random tokens that belong to one session runtime, so IDs from an earlier runtime must not be reused.
 
 See [docs/reference.md](docs/reference.md) for the tool, manager, and codemode result contracts, and [ARCHITECTURE.md](ARCHITECTURE.md) for ownership and lifecycle.

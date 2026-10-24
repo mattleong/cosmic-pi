@@ -1,12 +1,14 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
-import { indexOfFrom, lastIndexOfFrom } from "pi-cosmic-core/text-scan";
+import { codeUnitAt, indexOfFrom, lastIndexOfFrom } from "pi-cosmic-core/text-scan";
 import { utf8ByteLength, utf8Prefix, utf8Suffix } from "pi-cosmic-core/text";
+import { BACKGROUND_LOG_BOUNDS as LOG_BOUNDS } from "../task/bounds.ts";
 import type { BackgroundLogEvent, BackgroundLogSlice, BackgroundLogStream } from "../task/model.ts";
 import { plainTerminalText } from "../task/terminal-text.ts";
 
 const STDERR_LABEL = "[stderr] ";
+const NEWLINE = 0x0a;
 
 // Bound once: Pi's loader routes each call through an imported binding via an interop proxy,
 // which dominates the per-line scans below.
@@ -82,10 +84,27 @@ const firstLines = (text: string, lines: number): string => {
 const lastLines = (text: string, lines: number): string => {
   let start = Fn.pipe(text, Str.endsWith("\n")) ? text.length - 1 : text.length;
   for (let count = 0; count < lines; count += 1) {
+    // A search from before the start would find a leading line break again.
+    if (start <= 0) return text;
     start = lastIndexAt(text, "\n", start - 1);
     if (start < 0) return text;
   }
   return Fn.pipe(text, Str.slice(start + 1));
+};
+
+/**
+ * The end of `text` within `maxBytes`, starting at a line start unless the last line alone is too
+ * large, when its end is kept instead.
+ */
+const lineAlignedSuffix = (text: string, maxBytes: number): string => {
+  if (utf8ByteLength(text) <= maxBytes) return text;
+  const suffix = utf8Suffix(text, maxBytes);
+  const cut = text.length - suffix.length;
+  if (cut === 0 || codeUnitAt(text, cut - 1) === NEWLINE) return suffix;
+  const newline = indexAt(suffix, "\n", 0);
+  return newline < 0 || newline === suffix.length - 1
+    ? suffix
+    : Fn.pipe(suffix, Str.slice(newline + 1));
 };
 
 export interface LogPageBudget {
@@ -161,6 +180,17 @@ export function pageLogSlice(
       }),
   };
 }
+
+/**
+ * The newest output of a tail slice as readers see it, within the lines and bytes a wait result or
+ * an exit notice repeats. Unlike a page, it keeps whole lines rather than whole events, so one large
+ * event never crowds out the lines around it.
+ */
+export const recentOutput = (slice: BackgroundLogSlice): string =>
+  lineAlignedSuffix(
+    lastLines(combinedLogOutput(slice.events), LOG_BOUNDS.recentOutputLines),
+    LOG_BOUNDS.recentOutputBytes,
+  );
 
 /** Retained output a page leaves out, and the afterCursor that reads it. */
 export interface LogPageOmission {

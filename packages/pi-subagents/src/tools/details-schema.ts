@@ -20,7 +20,12 @@ import {
   profileCandidateValidationIssues,
   type ProfileCandidate,
 } from "../profiles/model.ts";
-import { MAX_PROTOCOL_ID_CHARS, MAX_START_BATCH, MAX_TARGET_RUNS } from "../run/limits.ts";
+import {
+  MAX_OUTCOME_FILE_PATH_CHARS,
+  MAX_PROTOCOL_ID_CHARS,
+  MAX_START_BATCH,
+  MAX_TARGET_RUNS,
+} from "../run/limits.ts";
 import {
   MAX_OUTCOME_DIFFSTAT_FILES,
   FAILED_START_CLEANUP_DISPOSITIONS,
@@ -361,6 +366,16 @@ const FailedStartRecoverySchema = Schema.Struct({
       }),
     ]),
   ),
+  /** The whole failure, saved when it is longer than its preview. */
+  failureFile: Schema.optionalKey(
+    Schema.Struct({
+      path: NonEmptyText(MAX_OUTCOME_FILE_PATH_CHARS),
+      chars: nonNegativeInteger,
+      lines: nonNegativeInteger,
+      complete: Schema.Boolean,
+    }),
+  ),
+  warning: Schema.optionalKey(NonEmptyText(MAX_WARNING_CHARS)),
 });
 
 const SubagentCardFailureSchema = Schema.Struct({

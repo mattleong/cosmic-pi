@@ -10,12 +10,12 @@ import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
 import { isCleanupOwed } from "./internal.ts";
 import { isActiveRunState } from "./model.ts";
 import {
-  isWithin,
+  type HeldBinding,
+  isTreeInUse,
   mapWorkspaceError,
+  overlaps,
   recordWorkspaceOutcomeLocked,
   revisionKnowledge,
-  runHoldsCwd,
-  runsWithin,
   settleBinding,
   type WorkspaceControlContext,
 } from "./workspace-binding.ts";
@@ -39,19 +39,20 @@ export interface WorkspaceIntegrationResult extends WorkspaceIntegrationOutcome 
 
 /**
  * Integration and rollback both write the parent's files, so both refuse while a shared-checkout
- * writer is active or launching in the target and hold its writer-pool leases throughout. Callers
- * hold the run lock, which keeps this session's writer admission out until they return.
+ * writer is active or launching in the target and hold its writer-pool leases throughout. Their
+ * exclusion of the target keeps this session's new runs out of it until they end.
  */
 export function integrationTarget(context: WorkspaceControlContext) {
-  const { records, writerLeases: leases, state } = context;
+  const { records, writerLeases: leases, state, withLock } = context;
   /** Refuses while a shared-checkout writer of this session is active or launching in the target. */
   const requireIdleLocked = (sourceRoot: string): Effect.Effect<void, SubagentError> =>
     Effect.suspend(() => {
-      // Worktree launches need no check: the engine's source lock orders their snapshots.
-      const overlapsTarget = (cwd: string) =>
-        isWithin(cwd, sourceRoot) || isWithin(sourceRoot, cwd);
-      return Arr.some([...state.sharedReservations], (reservation) =>
-        overlapsTarget(reservation.cwd),
+      // Worktree launches need no check: the engine orders their snapshots, queueing this
+      // session's behind its operation gate and other sessions' behind the checkout's lock.
+      const overlapsTarget = (cwd: string) => overlaps(cwd, sourceRoot);
+      return Arr.some(
+        [...state.launchReservations],
+        (reservation) => reservation.sharedWriter && overlapsTarget(reservation.cwd),
       ) ||
         Arr.some(
           [...records.values()],
@@ -75,7 +76,7 @@ export function integrationTarget(context: WorkspaceControlContext) {
    * `beforeRelease` runs once `use` ends, however it ends. A release that can't be confirmed
    * quarantines integration and writer admission until restart.
    */
-  const holdLocked = Effect.fn("SubagentWorkspace.holdLocked")(function* <A>(
+  const holdTarget = Effect.fn("SubagentWorkspace.holdTarget")(function* <A>(
     workspaceId: string,
     handle: WorkspaceHandle,
     use: Effect.Effect<A, SubagentError>,
@@ -123,10 +124,12 @@ export function integrationTarget(context: WorkspaceControlContext) {
               for (const lease of Arr.reverse(owned))
                 yield* leases.release(lease).pipe(
                   Effect.catch(() =>
-                    Effect.sync(() => {
-                      releaseFailed = true;
-                      state.integrationQuarantined = true;
-                    }),
+                    withLock(
+                      Effect.sync(() => {
+                        releaseFailed = true;
+                        state.integrationQuarantined = true;
+                      }),
+                    ),
                   ),
                 );
             }),
@@ -140,99 +143,117 @@ export function integrationTarget(context: WorkspaceControlContext) {
       }),
     );
   });
-  return { requireIdleLocked, holdLocked };
+  return { requireIdleLocked, holdTarget };
 }
 
-/** Integration of an exact prepared pair, which apply composes; see `integrateLocked`. */
+/** Integration of an exact prepared pair, which apply composes; see `integrateHeld`. */
 export function workspaceIntegrationOperations(
   context: WorkspaceControlContext,
   publish: Effect.Effect<void>,
 ) {
-  const { records, state, requireBinding, requireEngine } = context;
+  const { records, state, withLock, requireBinding, requireEngine, excludeTrees } = context;
   const checkout = integrationTarget(context);
   /**
-   * Integrates the exact prepared pair. Callers hold the operations permit and run lock; `held`
-   * admits a binding that operation's token keeps busy.
+   * Integrates the exact prepared pair of a binding `held` keeps busy. Callers hold the operations
+   * permit. `beforeLocked` runs first in the claim under the run lock; the engine then integrates
+   * outside it, excluding the workspace's trees and the target checkout.
    */
-  const integrateLocked = Effect.fn("SubagentWorkspace.integrateLocked")(function* (
-    workspaceId: string,
+  const integrateHeld = Effect.fn("SubagentWorkspace.integrateHeld")(function* (
+    { binding, token }: HeldBinding,
+    caller: string,
     revisionId: string,
     preparationId: string,
-    caller: string,
-    held?: symbol,
+    beforeLocked: Effect.Effect<void, SubagentError> = Effect.void,
   ): Effect.fn.Return<WorkspaceIntegrationResult, SubagentError> {
-    const binding = yield* requireBinding(workspaceId, caller, held);
     const service = yield* requireEngine;
-    if (state.integrationQuarantined)
-      return yield* invalid(
-        "workspace_integration_quarantined",
-        "Integration ownership is quarantined; further integration is blocked pending manual recovery.",
-      );
-    yield* checkout.requireIdleLocked(binding.handle.sourceRoot);
-    const knowledge = revisionKnowledge(binding);
-    const recorded = knowledge?.kind === "prepared" && knowledge.preparationId === preparationId;
+    const { workspaceId, ownerId, sourceRoot } = binding.handle;
     const artifact = yield* service
-      .inspect({ workspaceId, ownerId: binding.handle.ownerId })
+      .inspect({ workspaceId, ownerId })
       .pipe(Effect.mapError(mapWorkspaceError));
-    if (
-      !recorded ||
-      !artifact.preparation ||
-      artifact.preparation.preparationId !== preparationId ||
-      artifact.preparation.revisionId !== revisionId ||
-      artifact.revision?.revisionId !== revisionId
-    )
-      return yield* invalid(
-        "workspace_preparation_stale",
-        "The tested integration preparation no longer matches this revision.",
-      );
-    const known = {
-      changedPaths: artifact.revision.changedPaths,
-      leftOutPaths: artifact.revision.uncapturedPaths ?? [],
-      preparedCwd: artifact.preparation.cwd,
-    };
-    const retainTrees = Arr.some(
-      [...runsWithin(records, [artifact.handle.artifactRoot]).keys()],
-      runHoldsCwd,
-    );
-    let applying = false;
-    const { value, leaseReleaseUnconfirmed } = yield* checkout.holdLocked(
-      workspaceId,
-      binding.handle,
+    const { artifactRoot } = artifact.handle;
+    return yield* excludeTrees(
       Effect.gen(function* () {
-        applying = true;
-        const integration = yield* service
-          .integrate({
+        yield* beforeLocked;
+        yield* requireBinding(workspaceId, caller, token);
+        if (state.integrationQuarantined)
+          return yield* invalid(
+            "workspace_integration_quarantined",
+            "Integration ownership is quarantined; further integration is blocked pending manual recovery.",
+          );
+        yield* checkout.requireIdleLocked(sourceRoot);
+        const knowledge = revisionKnowledge(binding);
+        const recorded =
+          knowledge?.kind === "prepared" && knowledge.preparationId === preparationId;
+        if (
+          !recorded ||
+          !artifact.preparation ||
+          artifact.preparation.preparationId !== preparationId ||
+          artifact.preparation.revisionId !== revisionId ||
+          artifact.revision?.revisionId !== revisionId
+        )
+          return yield* invalid(
+            "workspace_preparation_stale",
+            "The tested integration preparation no longer matches this revision.",
+          );
+        return {
+          exclusion: { artifactRoot, target: sourceRoot },
+          known: {
+            changedPaths: artifact.revision.changedPaths,
+            leftOutPaths: artifact.revision.uncapturedPaths ?? [],
+            preparedCwd: artifact.preparation.cwd,
+          },
+          retainTrees: isTreeInUse(records, state.launchReservations, artifactRoot),
+        };
+      }),
+      ({ known, retainTrees }) =>
+        Effect.gen(function* () {
+          let applying = false;
+          const { value, leaseReleaseUnconfirmed } = yield* checkout.holdTarget(
             workspaceId,
-            ownerId: binding.handle.ownerId,
-            revisionId,
-            preparationId,
-            processCleanupConfirmed: true,
-            retainTrees,
-          })
-          .pipe(Effect.mapError(mapWorkspaceError));
-        applying = false;
-        settleBinding(binding, { phase: "finished", outcome: "integrated" });
-        recordWorkspaceOutcomeLocked(binding, { status: "integrated" });
-        yield* publish;
-        return integration;
-      }),
-      Effect.gen(function* () {
-        if (!applying) return;
-        const current = yield* service
-          .inspect({ workspaceId, ownerId: binding.handle.ownerId })
-          .pipe(Effect.option);
-        if (Option.isNone(current)) {
-          state.integrationQuarantined = true;
-          settleBinding(binding, { phase: "finished", outcome: "unknown" });
-          return;
-        }
-        // Only discard, which rolls the touched files back, may follow.
-        if (current.value.status === "integrating")
-          settleBinding(binding, { phase: "stopped-integration" });
-      }),
+            binding.handle,
+            Effect.gen(function* () {
+              applying = true;
+              const integration = yield* service
+                .integrate({
+                  workspaceId,
+                  ownerId,
+                  revisionId,
+                  preparationId,
+                  processCleanupConfirmed: true,
+                  retainTrees,
+                })
+                .pipe(Effect.mapError(mapWorkspaceError));
+              applying = false;
+              yield* withLock(
+                Effect.suspend(() => {
+                  settleBinding(binding, { phase: "finished", outcome: "integrated" });
+                  recordWorkspaceOutcomeLocked(binding, { status: "integrated" });
+                  return publish;
+                }),
+              );
+              return integration;
+            }),
+            Effect.gen(function* () {
+              if (!applying) return;
+              const current = yield* service.inspect({ workspaceId, ownerId }).pipe(Effect.option);
+              yield* withLock(
+                Effect.sync(() => {
+                  if (Option.isNone(current)) {
+                    state.integrationQuarantined = true;
+                    settleBinding(binding, { phase: "finished", outcome: "unknown" });
+                    return;
+                  }
+                  // Only discard, which rolls the touched files back, may follow.
+                  if (current.value.status === "integrating")
+                    settleBinding(binding, { phase: "stopped-integration" });
+                }),
+              );
+            }),
+          );
+          const { record: _record, ...committed } = value;
+          return { ...committed, ...known, leaseReleaseUnconfirmed };
+        }),
     );
-    const { record: _record, ...committed } = value;
-    return { ...committed, ...known, leaseReleaseUnconfirmed };
   });
-  return integrateLocked;
+  return integrateHeld;
 }

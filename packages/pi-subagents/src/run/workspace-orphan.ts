@@ -73,7 +73,8 @@ export function workspaceOrphanOperations(
   context: WorkspaceControlContext,
   visibleRecords: (listing: WorkspaceListing) => Effect.Effect<WorkspaceListing, SubagentError>,
 ) {
-  const { requireEngine, writerLeases, operations, state, withLock, ownerFor } = context;
+  const { requireEngine, writerLeases, operations, state, withLock, ownerFor, excludeTrees } =
+    context;
   const checkout = integrationTarget(context);
   const withStoppedWriter = <A>(
     workspaceId: string,
@@ -149,15 +150,17 @@ export function workspaceOrphanOperations(
     const discard = service.discardOrphan({ workspaceId }).pipe(Effect.mapError(orphanError));
     // A mid-integration record stays so until its discard, whose rollback writes the parent's
     // files like integration.
+    const { artifactRoot, sourceRoot } = record.handle;
     return yield* operations.withPermits(1)(
       withStoppedWriter(
         workspaceId,
         record.handle,
         record.status === "integrating"
-          ? withLock(
+          ? excludeTrees(
               checkout
-                .requireIdleLocked(record.handle.sourceRoot)
-                .pipe(Effect.andThen(checkout.holdLocked(workspaceId, record.handle, discard))),
+                .requireIdleLocked(sourceRoot)
+                .pipe(Effect.as({ exclusion: { artifactRoot, target: sourceRoot } })),
+              () => checkout.holdTarget(workspaceId, record.handle, discard),
             ).pipe(Effect.asVoid)
           : discard,
       ),

@@ -462,6 +462,8 @@ describe("worst-case model-facing output", () => {
           runId: runIdFixture(index),
           cleanupDisposition: "quarantined",
           nextCandidate: worstCandidate,
+          failureFile: archive(maxPath(index, "failure")),
+          warning: longText(`WARNING-${index}`, MAX_ERROR_CHARS),
         },
       }),
     );
@@ -469,7 +471,10 @@ describe("worst-case model-facing output", () => {
     const text = formatStartResult([], failures);
 
     expect(text.length).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_CHARS);
-    for (const failure of failures) expect(text).toContain(`#${failure.index + 1} launch-`);
+    for (const failure of failures) {
+      expect(text).toContain(`#${failure.index + 1} launch-`);
+      expect(text).toContain(failure.admittedRun?.failureFile?.path);
+    }
   });
 
   effectTest("agent_read returns the whole pending question an await previews", function* () {

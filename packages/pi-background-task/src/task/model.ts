@@ -1,6 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
 import type {
+  BACKGROUND_TASK_NOTIFY_FILTERS,
   BackgroundLogMetadataSchema,
   BackgroundTaskSnapshotSchema,
   BackgroundTaskStateSchema,
@@ -11,9 +12,11 @@ import { countLabel, formatBytes } from "pi-cosmic-core/display";
 export type BackgroundTaskState = typeof BackgroundTaskStateSchema.Type;
 export type BackgroundTaskSnapshot = typeof BackgroundTaskSnapshotSchema.Type;
 export type BackgroundTaskStatus = BackgroundTaskSnapshot & { readonly failureCause?: string };
-export type BackgroundTaskStatusWait = Omit<BackgroundTaskWaitResult, "snapshot"> & {
+export type BackgroundTaskStatusWait = Omit<BackgroundTaskWaitResult, "snapshot" | "tail"> & {
   readonly snapshot: BackgroundTaskStatus;
   readonly appliedWaitSeconds: number;
+  /** The newest retained output when the wait returned. */
+  readonly recent: BackgroundLogSlice;
 };
 export type BackgroundLogMetadata = typeof BackgroundLogMetadataSchema.Type;
 export type BackgroundTaskWaitResult = typeof BackgroundTaskWaitResultSchema.Type;
@@ -56,11 +59,24 @@ export interface BackgroundTaskProjection {
   readonly tasks: ReadonlyArray<BackgroundTaskView>;
 }
 
+/** Which finish sends the agent a notice: any, or only a failure or timeout. */
+export type BackgroundTaskNotifyFilter = (typeof BACKGROUND_TASK_NOTIFY_FILTERS)[number];
+
 export interface StartBackgroundTask {
   readonly command: string;
   readonly cwd: string;
   readonly name?: string;
   readonly timeoutSeconds?: number;
+  readonly notify?: BackgroundTaskNotifyFilter;
+}
+
+/** A task that finished with a notice due to the agent. */
+export interface BackgroundTaskNotice {
+  readonly task: BackgroundTaskStatus;
+  /** The newest retained output when the task finished. */
+  readonly recent: BackgroundLogSlice;
+  /** The registry still lists the task, so its logs can be read. */
+  readonly retained: boolean;
 }
 
 export interface ReadBackgroundLogs {
@@ -73,7 +89,8 @@ export interface ReadBackgroundLogs {
 export interface WaitForBackgroundTask {
   readonly id: string;
   readonly until: "exit" | "output";
-  readonly contains?: string;
+  /** Literal alternatives; an output wait matches the first of them to appear. */
+  readonly contains?: ReadonlyArray<string>;
   readonly afterCursor?: number;
   readonly waitSeconds?: number;
 }
@@ -86,6 +103,15 @@ const ACTIVE_TASK_STATES: ReadonlySet<BackgroundTaskState> = new Set([
 
 export const isActiveTaskState = (state: BackgroundTaskState): boolean =>
   ACTIVE_TASK_STATES.has(state);
+
+/**
+ * Whether a finish sends a notice. A failure is a nonzero exit, a death by signal, a failed
+ * start, or a timeout; a stop is not one.
+ */
+export const notifiesOn = (
+  filter: BackgroundTaskNotifyFilter,
+  task: Pick<BackgroundTaskSnapshot, "state">,
+): boolean => filter === "exit" || task.state === "failed" || task.state === "timed_out";
 
 export const failingExitCode = (
   task: Pick<BackgroundTaskSnapshot, "exitCode">,

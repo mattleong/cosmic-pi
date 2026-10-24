@@ -31,7 +31,11 @@ import {
   type SubagentRunView,
 } from "../run/model.ts";
 import { MAX_LIFECYCLE_TARGET_RUNS, MAX_TARGET_RUNS } from "../run/limits.ts";
-import { SubagentService, type SubagentRunObservation } from "../run/service.ts";
+import {
+  SubagentService,
+  type SubagentHeldStarts,
+  type SubagentRunObservation,
+} from "../run/service.ts";
 import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
 import { executeStartBatch, resolveRecordedLaunch } from "./execute-start.ts";
 import { presentSubagentResult } from "./execute-result.ts";
@@ -183,12 +187,12 @@ export const executeSubagentActionEffect = Effect.fn("SubagentTools.execute")(fu
       : environment;
   const authorize = (ids: ReadonlyArray<string>) =>
     callerRunId ? service.authorizeTargets(callerRunId, ids) : Effect.void;
-  const startOwned = (request: StartSubagentRequest) =>
+  const startOwned = (starts: SubagentHeldStarts, request: StartSubagentRequest) =>
     callerRunId
-      ? service.startSessionOwnedFrom(callerRunId, request)
+      ? starts.startSessionOwnedFrom(callerRunId, request)
       : scripted
-        ? service.startScriptSessionOwned(request)
-        : service.startSessionOwned(request);
+        ? starts.startScriptSessionOwned(request)
+        : starts.startSessionOwned(request);
   // Every awaited run's block fits, so the result delivers every claimed report.
   const completeObservations = Effect.fn("SubagentTools.completeObservations")(function* (
     state: AwaitExecution,
@@ -264,20 +268,25 @@ export const executeSubagentActionEffect = Effect.fn("SubagentTools.execute")(fu
 
   switch (input.tool) {
     case SUBAGENT_TOOL_NAME.start: {
-      const result = yield* executeStartBatch({
-        agents: input.args.agents,
-        pi,
-        ctx,
-        environment: launchEnvironment,
-        startOwned,
-        onUpdate,
-        readOnly: scripted,
-      });
-      return yield* Effect.sync(() =>
-        presentSubagentResult(input, {
-          ...result,
-          contract: startContract(input.args.agents, result.startOutcomes),
-        }),
+      const args = input.args;
+      // The result reports each launch that failed after admission, so no notice repeats it.
+      return yield* service.withStartFailureHold((starts) =>
+        executeStartBatch({
+          agents: args.agents,
+          pi,
+          ctx,
+          environment: launchEnvironment,
+          startOwned: (request) => startOwned(starts, request),
+          onUpdate,
+          readOnly: scripted,
+        }).pipe(
+          Effect.map((result) =>
+            presentSubagentResult(input, {
+              ...result,
+              contract: startContract(args.agents, result.startOutcomes),
+            }),
+          ),
+        ),
       );
     }
     case SUBAGENT_TOOL_NAME.await:

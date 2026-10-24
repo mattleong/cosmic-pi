@@ -5,7 +5,7 @@ import type {
   SubagentNotificationDelivery,
 } from "../boundary/host-notifier.ts";
 import type { CompletionGenerationRecord, RunRecord } from "./internal.ts";
-import { failedRunNextCandidate } from "./model.ts";
+import { failedRunNextCandidate, isTerminalRunState } from "./model.ts";
 import { MAX_COMPLETION_DELIVERY_BATCH, MAX_UNRESOLVED_REPORT_GENERATIONS } from "./limits.ts";
 
 export const completionNotificationKey = (id: string, generation: number): string =>
@@ -36,6 +36,48 @@ export const releaseCompletionClaim = (
   if (completionClaimOwner(record, generation) !== claimToken) return false;
   record.completionClaims.delete(generation);
   return true;
+};
+
+/**
+ * The failed outcomes a start call returns to its caller, claimed so neither a notice nor an
+ * await repeats them while the call composes its result. Changed only under the run lock.
+ */
+export interface StartFailureHold {
+  readonly claimToken: string;
+  /** False once the call ended; a start that fails afterwards leaves its outcome to its notice. */
+  open: boolean;
+  /** Each held run's outcome generation, by run ID. */
+  readonly held: Map<string, number>;
+}
+
+/**
+ * Claims the generation a failing start's outcome takes before its settlement queues it, as an
+ * await claims a working run's next outcome. Returns the generation, or undefined when the call
+ * already ended or another operation owns that outcome.
+ */
+export const holdStartFailureLocked = (
+  hold: StartFailureHold,
+  record: RunRecord,
+): number | undefined => {
+  if (!hold.open) return undefined;
+  const generation = record.completionGeneration + (isTerminalRunState(record.view.state) ? 0 : 1);
+  if (!claimCompletion(record, generation, hold.claimToken)) return undefined;
+  hold.held.set(record.view.id, generation);
+  return generation;
+};
+
+/**
+ * Keeps the hold only on a failed outcome, since the caller reports nothing else. Returns whether
+ * it released the claim, which the caller follows by waking delivery.
+ */
+export const releaseUnlessStartFailedLocked = (
+  hold: StartFailureHold,
+  record: RunRecord,
+  generation: number,
+): boolean => {
+  if (record.completionGenerations.get(generation)?.outcome === "failed") return false;
+  hold.held.delete(record.view.id);
+  return releaseCompletionClaim(record, generation, hold.claimToken);
 };
 
 const isCompletionEligible = (record: RunRecord, generation: number): boolean =>

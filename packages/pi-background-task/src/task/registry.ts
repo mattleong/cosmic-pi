@@ -15,6 +15,7 @@ import {
   isActiveTaskState,
   sortTasksByActivity,
   type BackgroundLogStream,
+  type BackgroundTaskNotifyFilter,
   type BackgroundTaskProjection,
   type BackgroundTaskStatus,
 } from "./model.ts";
@@ -36,11 +37,22 @@ export interface TaskRecord {
   graceWindowOpen: boolean;
   ingressDroppedObserved: number;
   awaiters: number;
+  /** Which finish notifies the agent; absent when the start asked for no notice. */
+  readonly notify?: BackgroundTaskNotifyFilter;
+  /** The agent learned of the finish from a tool result or caused it, so no notice is sent. */
+  noticeClaimed: boolean;
+  /** The task finished with a notice due once the reads in progress return. */
+  noticeDue: boolean;
+  /** Waits and log reads in progress, which may report the finish themselves. */
+  readers: number;
 }
 
 export type TaskRegistry = Map<string, TaskRecord>;
 
-export const taskRecord = (snapshot: BackgroundTaskStatus): TaskRecord => ({
+export const taskRecord = (
+  snapshot: BackgroundTaskStatus,
+  notify?: BackgroundTaskNotifyFilter,
+): TaskRecord => ({
   snapshot,
   logs: new LogBuffer(),
   terminal: { stdout: new TerminalTextNormalizer(), stderr: new TerminalTextNormalizer() },
@@ -50,7 +62,16 @@ export const taskRecord = (snapshot: BackgroundTaskStatus): TaskRecord => ({
   graceWindowOpen: false,
   ingressDroppedObserved: 0,
   awaiters: 0,
+  ...(notify && { notify }),
+  noticeClaimed: false,
+  noticeDue: false,
+  readers: 0,
 });
+
+/** A finished state that a tool result reports answers the agent, so it claims the notice. */
+export const claimFinishedNotice = (record: TaskRecord) => {
+  if (!isActiveTaskState(record.snapshot.state)) record.noticeClaimed = true;
+};
 
 export const logFields = (logs: LogBuffer) => ({
   logCursor: logs.latestCursor,

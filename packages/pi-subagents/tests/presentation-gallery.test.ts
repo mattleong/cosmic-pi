@@ -1430,6 +1430,40 @@ const receiptScenarios: ReadonlyArray<ToolScenario> = [
       }),
     },
   },
+  {
+    tool: "agent_start",
+    title: "a launch fails with a saved failure and a warning",
+    args: { agents: [{ name: "auth-review", task: "Review auth" }] },
+    isError: true,
+    result: {
+      content: [{ type: "text" as const, text: "Agent-facing launch report" }],
+      details: startDetails({
+        startEntries: [
+          { ...route, index: 0, name: "auth-review", status: "failed", candidateIndex: 0 },
+        ],
+        startFailures: [
+          {
+            index: 0,
+            name: "auth-review",
+            code: "start_failed_before_prompt",
+            message: `Provider rejected the session: ${Fn.pipe("quota detail ", Str.repeat(30))}`,
+            admittedRun: {
+              runId: "agent-1",
+              cleanupDisposition: "confirmed",
+              nextCandidate: "none",
+              failureFile: {
+                path: "/home/me/.pi/agent/subagent-reports/session-1/agent-1-1-failure.md",
+                chars: 420,
+                lines: 1,
+                complete: true,
+              },
+              warning: "System warning: The provider rate-limited startup; retried twice.",
+            },
+          },
+        ],
+      }),
+    },
+  },
 ];
 
 const contactParentTool = () =>

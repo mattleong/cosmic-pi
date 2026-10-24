@@ -2,6 +2,8 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as Context from "effect/Context";
 import * as TestClock from "effect/testing/TestClock";
 import { CrossProcessLock, crossProcessLockHolder } from "pi-cosmic-core";
 import { nodeFsPromises as fs, nodePath as path, nodeSpawn } from "../support/node-builtins.ts";
@@ -14,9 +16,11 @@ import { WorkspaceService } from "../../src/workspace/service.ts";
 import { waitForDead } from "../support/process-liveness.ts";
 import {
   commitRepository,
+  exists,
   failureOf,
   io,
   temporaryDirectory,
+  workspaceTarget,
   workspaceTests,
   writeFile,
 } from "./fixtures/repository.ts";
@@ -91,6 +95,79 @@ it.effect("stops waiting when interrupted", () =>
     held?.release();
     expect(yield* locks.tryAcquire(sourceLockNamespace("/repo"))).toBeDefined();
   }).pipe(Effect.scoped),
+);
+
+const livePause = TestClock.withLive(Effect.sleep("5 millis"));
+
+const untilExists = (file: string) =>
+  Effect.gen(function* () {
+    for (let attempt = 0; attempt < 2_000; attempt++) {
+      if (yield* exists(file)) return undefined;
+      yield* livePause;
+    }
+    return yield* Effect.die(new Error(`${file} never appeared.`));
+  });
+
+/** Joins `fiber`, advancing the test clock in small steps so its process sweeps can finish. */
+const joinAdvancing = <A, E>(fiber: Fiber.Fiber<A, E>) =>
+  Effect.gen(function* () {
+    while (fiber.pollUnsafe() === undefined) {
+      yield* TestClock.adjust("10 millis");
+      yield* livePause;
+    }
+    return yield* Fiber.join(fiber);
+  });
+
+it.effect(
+  "queues a create behind the session's own long discard instead of timing out on the lock",
+  () =>
+    Effect.gen(function* () {
+      const temporary = yield* temporaryDirectory("workspace-queue-");
+      const root = path.join(temporary, "source");
+      const agent = path.join(temporary, "agent");
+      const entered = path.join(temporary, "entered");
+      const release = path.join(temporary, "release");
+      yield* io(() => fs.mkdir(agent, { mode: 0o700 }));
+      yield* TestClock.withLive(commitRepository(root, [["src/main.ts", "baseline\n"]]));
+      // The discard holds the checkout's store lock while this hook waits to be released.
+      const hold = {
+        command: [
+          "/bin/sh",
+          "-c",
+          'touch "$1"; while [ ! -e "$2" ]; do sleep 0.02; done',
+          "sh",
+          entered,
+          release,
+        ],
+        timeout: 3_600,
+      };
+      // Everything but the queued create runs on the live clock.
+      const context = yield* TestClock.withLive(
+        Layer.build(WorkspaceService.layer({ agentDirectory: agent, worktreeRemove: [hold] })),
+      );
+      const service = Context.get(context, WorkspaceService);
+      const first = yield* TestClock.withLive(
+        service.create({ sourceCwd: root, ownerId: "parent" }),
+      );
+      const discarding = yield* TestClock.withLive(service.discard(workspaceTarget(first))).pipe(
+        Effect.forkChild,
+      );
+      yield* untilExists(entered);
+      const creating = yield* service
+        .create({ sourceCwd: root, ownerId: "parent" })
+        .pipe(Effect.forkChild);
+      // Well past the store lock's two-minute wait.
+      for (let step = 0; step < 30; step++) {
+        yield* TestClock.adjust("5 seconds");
+        yield* livePause;
+      }
+      expect(creating.pollUnsafe()).toBeUndefined();
+      yield* writeFile(release, "");
+      yield* Fiber.join(discarding);
+      const second = yield* joinAdvancing(creating);
+      expect(second.workspaceId).not.toBe(first.workspaceId);
+    }).pipe(Effect.scoped),
+  60_000,
 );
 
 const exitedProcessId = Effect.gen(function* () {

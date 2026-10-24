@@ -20,6 +20,7 @@ import {
 import { projectBackgroundTaskCompactSummary } from "../src/ui/compact-summary.ts";
 import {
   provideTaskService,
+  taskLogSlice,
   taskLogs,
   taskServiceDouble,
   taskStatus,
@@ -411,6 +412,7 @@ describe("background task action parameters", () => {
         [{ action: "list", state: "active", id: "task-0000000001" }, ["id"]],
         [{ action: "status", id: "task-0000000001", force: true }, ["force"]],
         [{ action: "start", command: "pnpm dev", waitSeconds: 5 }, ["waitSeconds"]],
+        [{ action: "status", id: "task-0000000001", notify: "exit" }, ["notify"]],
         [{ action: "logs", id: "task-0000000001", afterCursor: 3, tailLines: 20 }, ["afterCursor"]],
       ];
       for (const [input, fields] of rejected) {
@@ -427,6 +429,7 @@ describe("background task action parameters", () => {
     Effect.gen(function* () {
       const accepted: ReadonlyArray<BackgroundTaskToolInput> = [
         { action: "start", command: "pnpm dev", cwd: ".", name: "dev", timeoutSeconds: 60 },
+        { action: "start", command: "pnpm test", notify: "failure" },
         { action: "list", state: "completed" },
         { action: "status", id: "task-0000000001" },
         { action: "logs", id: "task-0000000001", afterCursor: 2, waitSeconds: 5 },
@@ -438,6 +441,7 @@ describe("background task action parameters", () => {
           contains: "ready",
           afterCursor: 2,
         },
+        { action: "wait", id: "task-0000000001", until: "output", contains: ["ready", "failed"] },
         { action: "wait", id: "task-0000000001", until: "exit", waitSeconds: 10 },
         { action: "stop", id: "task-0000000001", force: true },
         { action: "stop_all", force: true },
@@ -457,7 +461,7 @@ describe("background task argument leniency", () => {
     Effect.gen(function* () {
       // Each call reaches the service with only the arguments its action uses.
       const lenient: ReadonlyArray<readonly [BackgroundTaskToolInput, ReadonlyArray<unknown>]> = [
-        [{ action: "stop_all", id: "", force: false, tailLines: 0 }, [false]],
+        [{ action: "stop_all", id: "", force: false, tailLines: 0 }, [false, "agent"]],
         [{ action: "clear", id: " ", force: false, waitSeconds: 0, command: "" }, []],
         [
           { action: "start", command: "pnpm dev", afterCursor: 0, waitSeconds: 0, force: false },
@@ -473,6 +477,14 @@ describe("background task argument leniency", () => {
             cwd: "",
           },
           [{ id: "task-0000000001", until: "exit" }],
+        ],
+        [
+          { action: "wait", id: "task-0000000001", until: "exit", contains: [" ", ""] },
+          [{ id: "task-0000000001", until: "exit" }],
+        ],
+        [
+          { action: "wait", id: "task-0000000001", until: "output", contains: ["ready", ""] },
+          [{ id: "task-0000000001", until: "output", contains: ["ready"] }],
         ],
         [
           {
@@ -521,6 +533,18 @@ describe("background task argument leniency", () => {
       ).toEqual({ action: "wait", id: "task-0000000001", until: "output", contains });
   });
 
+  it("accepts contains as one text or a few alternatives", () => {
+    const wait = { action: "wait", id: "task-0000000001", until: "output" } as const;
+    for (const contains of ["ready", ["ready", " ", "failed"]])
+      expect(prepareBackgroundTaskArguments({ ...wait, contains })).toEqual({ ...wait, contains });
+    expect(() =>
+      prepareBackgroundTaskArguments({
+        ...wait,
+        contains: Array.from({ length: 9 }, (_, index) => `ready ${index}`),
+      }),
+    ).toThrow(/contains/u);
+  });
+
   it("names the invalid field and its allowed values", () => {
     expect(() => prepareBackgroundTaskArguments({ action: "launch", command: "make" })).toThrow(
       /action[\s\S]*start/u,
@@ -554,6 +578,68 @@ describe("background task results", () => {
       expect(exact.text).toContain("10");
       expect(defaulted.text).not.toBe(capped.text);
       expect(defaulted.text).toContain("30");
+    }),
+  );
+
+  it.effect("reports what an output wait found with the task's recent output", () =>
+    Effect.gen(function* () {
+      const running = taskStatus({ id: "task-0000000001", state: "running", logCursor: 2 });
+      const requests: Array<Parameters<BackgroundTaskServiceContract["wait"]>[0]> = [];
+      const found = {
+        matchCursor: 1,
+        matchedText: "ready in",
+        matchedLine: "VITE ready in 312 ms",
+        recent: taskLogSlice(running.id, "running", [
+          { stream: "stdout", text: "  VITE ready in 312 ms\n" },
+          { stream: "stdout", text: "  Local: http://localhost:5173/\n" },
+        ]),
+      };
+      const result = yield* execute(
+        { action: "wait", id: running.id, until: "output", contains: ["error", "ready in"] },
+        {
+          wait: (request) => {
+            requests.push(request);
+            return Effect.succeed(taskWait(running, "matched", found));
+          },
+        },
+      );
+      expect(requests).toMatchObject([{ contains: ["error", "ready in"] }]);
+      for (const text of ["VITE ready in 312 ms", "http://localhost:5173/"])
+        expect(result.text).toContain(text);
+      const reported = { matchedText: "ready in", matchedLine: "VITE ready in 312 ms" };
+      expect(result.details).toMatchObject({ action: "wait", wait: reported });
+      expect(result.contract).toMatchObject({ action: "wait", ...reported });
+      if (result.details.action !== "wait" || result.contract.action !== "wait")
+        throw new Error("wait returned another action");
+      for (const tail of [result.details.wait.tail, result.contract.tail])
+        expect(tail).toContain("Local: http://localhost:5173/");
+    }),
+  );
+
+  it.effect("says when an output wait ended because its task finished first", () =>
+    Effect.gen(function* () {
+      const failed = taskStatus({
+        id: "task-0000000001",
+        state: "failed",
+        endedAt: 2,
+        exitCode: 1,
+      });
+      const args = { action: "wait", id: failed.id, until: "output", contains: "ready" } as const;
+      const result = yield* execute(args, {
+        wait: () =>
+          Effect.succeed(
+            taskWait(failed, "completed", {
+              recent: taskLogSlice(failed.id, "failed", [
+                { stream: "stderr", text: "Error: port in use\n" },
+              ]),
+            }),
+          ),
+      });
+      expect(result.text).toContain("Error: port in use");
+      expect(result.contract).toMatchObject({ outcome: "completed", task: { exitCode: 1 } });
+      expect(result.contract).not.toHaveProperty("matchedText");
+      const issues = summarize(args, result)?.issues ?? [];
+      expect(Arr.map(issues, (issue) => issue.code)).toContain("task-0000000001:output-missing");
     }),
   );
 

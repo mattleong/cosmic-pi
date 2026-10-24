@@ -7,7 +7,9 @@ import {
   captureRegistrations,
   galleryDirectory,
   galleryFrames,
+  galleryMessageFrames,
   writeGallerySection,
+  type GalleryMessageScenario,
   type GalleryScenario,
 } from "pi-code-previews/testing";
 import { extensionContextFixture } from "pi-cosmic-core/testing";
@@ -19,8 +21,11 @@ import {
 } from "../src/task/errors.ts";
 import type { BackgroundLogEvent, BackgroundTaskStatus } from "../src/task/model.ts";
 import type { BackgroundTaskServiceContract } from "../src/task/service.ts";
+import { taskNoticeContent } from "../src/boundary/host-notice.ts";
+import { TASK_NOTICE_MESSAGE_TYPE, taskNoticeDetails } from "../src/task/notice.ts";
 import { registerBackgroundTaskTool } from "../src/tools/background-task.ts";
 import { executeBackgroundTaskCommand } from "../src/tools/command.ts";
+import { renderTaskNotice } from "../src/ui/notice-message.ts";
 import type { BackgroundTaskToolInput } from "../src/tools/schema.ts";
 import {
   provideTaskService,
@@ -220,6 +225,11 @@ const scenarios: ReadonlyArray<Scenario> = [
     service: { start: started("task-0000000010", 48590) },
   },
   {
+    title: "started a task that reports when it finishes",
+    input: { action: "start", command: "pnpm test", name: "tests", notify: "exit" },
+    service: { start: started("task-0000000015", 48633) },
+  },
+  {
     title: "started an unnamed task in a subdirectory",
     input: {
       action: "start",
@@ -335,6 +345,26 @@ const scenarios: ReadonlyArray<Scenario> = [
     service: { wait: () => Effect.succeed(taskWait(running, "matched", { matchCursor: 9 })) },
   },
   {
+    title: "wait matched one of several alternatives",
+    input: {
+      action: "wait",
+      id: "task-0000000003",
+      until: "output",
+      contains: ["error", "EADDRINUSE", "Local:"],
+    },
+    service: {
+      wait: () =>
+        Effect.succeed(
+          taskWait(running, "matched", {
+            matchCursor: 10,
+            matchedText: "Local:",
+            matchedLine: "➜ Local: http://localhost:5173/",
+            recent: slice("task-0000000003", "running", serverLog, { from: 9 }),
+          }),
+        ),
+    },
+  },
+  {
     title: "wait completed",
     input: { action: "wait", id: "task-0000000008", until: "exit" },
     service: { wait: () => Effect.succeed(taskWait(finished, "completed")) },
@@ -342,7 +372,35 @@ const scenarios: ReadonlyArray<Scenario> = [
   {
     title: "wait completed with a failure",
     input: { action: "wait", id: "task-0000000001", until: "exit" },
-    service: { wait: () => Effect.succeed(taskWait(failed, "completed")) },
+    service: {
+      wait: () =>
+        Effect.succeed(
+          taskWait(failed, "completed", {
+            recent: slice("task-0000000001", "failed", testLog, { from: 9 }),
+          }),
+        ),
+    },
+  },
+  {
+    title: "output wait whose task exited without the awaited text",
+    input: { action: "wait", id: "task-0000000003", until: "output", contains: "ready in" },
+    service: {
+      wait: () =>
+        Effect.succeed(
+          taskWait({ ...running, state: "failed", endedAt: 2, exitCode: 1 }, "completed", {
+            recent: slice(
+              "task-0000000003",
+              "failed",
+              [
+                out("  VITE v6.3.5"),
+                err("error when starting dev server:"),
+                err("Error: listen EADDRINUSE: address already in use :::5173"),
+              ],
+              { from: 4 },
+            ),
+          }),
+        ),
+    },
   },
   {
     title: "wait timed out",
@@ -487,6 +545,48 @@ const settleRegistered = (scenario: RegisteredScenario): Effect.Effect<GallerySc
   );
 };
 
+const notice = (
+  title: string,
+  taskStatusValue: BackgroundTaskStatus,
+  lines: ReadonlyArray<Line>,
+): GalleryMessageScenario => {
+  const value = { ...taskStatusValue, startedAt: 1_000, endedAt: 94_000 };
+  return {
+    title,
+    message: {
+      role: "custom",
+      timestamp: 0,
+      customType: TASK_NOTICE_MESSAGE_TYPE,
+      display: true,
+      content: taskNoticeContent({
+        task: value,
+        recent: slice(value.id, value.state, lines, { from: 1 }),
+        retained: true,
+      }),
+      details: taskNoticeDetails(value),
+    },
+  };
+};
+
+const noticeScenarios: ReadonlyArray<GalleryMessageScenario> = [
+  notice("task exited", finished, [out("Found 0 errors in 212 files.")]),
+  notice("task failed with a cause", failed, testLog),
+  notice("task timed out", timedOut, [out("Applying migration 0042_add_sessions...")]),
+  notice("task stopped by the user", stoppedServer, serverLog),
+  notice("task killed without output", killed, []),
+  {
+    title: "notice whose details could not be read",
+    message: {
+      role: "custom",
+      timestamp: 0,
+      customType: TASK_NOTICE_MESSAGE_TYPE,
+      display: true,
+      content: "Background task task-0000000099 exited with code 0 after 3s.",
+      details: { task: { id: "task-0000000099" } },
+    },
+  },
+];
+
 const directory = galleryDirectory(process.env) ?? "";
 
 describe.skipIf(!directory)("presentation gallery", () => {
@@ -511,6 +611,13 @@ describe.skipIf(!directory)("presentation gallery", () => {
           for (const scenario of results)
             lines.push(
               ...galleryFrames(tool, { ...scenario, title: `${style} · ${scenario.title}` }),
+            );
+          for (const scenario of noticeScenarios)
+            lines.push(
+              ...galleryMessageFrames(renderTaskNotice, {
+                ...scenario,
+                title: `${style} · notice · ${scenario.title}`,
+              }),
             );
         } finally {
           restore();

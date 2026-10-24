@@ -2,7 +2,8 @@
 
 `pi-background-task` runs local commands in session-owned background processes. It exposes the
 `background_task` tool, `/tasks`, and Activity/footer projections. Tasks are neither durable jobs
-nor a command sandbox, and completion does not automatically send messages or trigger agent turns.
+nor a command sandbox. A finish sends the agent a message, and may start its turn, only when the
+task's start opted in with `notify`; otherwise completion sends nothing.
 
 ## Ownership and boundaries
 
@@ -13,9 +14,12 @@ nor a command sandbox, and completion does not automatically send messages or tr
   scoped process monitors. Registry transitions and each task's mutable log buffer share a
   semaphore. [Registry policy](src/task/registry.ts), [admission](src/task/admission.ts), and
   [output matching](src/task/output-match.ts) keep deterministic work separate from orchestration.
-- [Local-process boundary](src/boundary/local-process.ts) owns shell spawning, output streams,
-  bounded ingress, process-group termination, and release. It spawns through Node's child-process
-  API so that it alone signals each group, using core's process-tree helpers and host-exit guard.
+- [Local-process boundary](src/boundary/local-process.ts) owns shell spawning, the task's stdin
+  pipe, output streams, bounded ingress, process-group termination, and release. It runs commands
+  in Pi's shell with Pi's command prefix, as the bash tool does, unless the package's `shellPath`
+  replaces both; [host shell settings](src/boundary/host-shell.ts) are read when the runtime starts.
+  It spawns through Node's child-process API so that it alone signals each group, using core's
+  process-tree helpers and host-exit guard.
 - [Terminal normalization](src/task/terminal-text.ts) runs per stream at intake. [Log
   buffers](src/task/log-buffer.ts) own retained output, bounded events, and byte accounting;
   [log paging](src/tools/log-page.ts) renders the labeled plain text results share;
@@ -34,6 +38,13 @@ nor a command sandbox, and completion does not automatically send messages or tr
 - [Host UI](src/boundary/host-ui.ts), [Activity integration](src/boundary/host-activity.ts), and
   [manager](src/ui/manager.ts) consume projections. The manager owns local interaction state and
   delegates shared screen mechanics to Cosmic UI; service state remains authoritative.
+- The task service decides when an opted-in exit notice is due. The [notice
+  message](src/task/notice.ts) owns its stored type and redacted details. [Notice
+  delivery](src/boundary/host-notice.ts) formats it and hands it to core's shared session wake, which
+  starts a turn only for an idle session; in a subagent's own session it never starts one, since an
+  idle subagent's run is settling, reported, or paused for its parents. The [notice
+  renderer](src/ui/notice-message.ts) shows delivered and historical notices without delivery
+  authority.
 
 ## Lifecycle
 
@@ -52,6 +63,9 @@ retain their activation token; `/tasks` captures authority for each invocation. 
 settings pickers, and Activity actions cannot target a later registry, even if a task ID repeats.
 Shutdown closes admission and attempts to settle active processes before interrupting their monitors.
 If Pi exits without shutdown, core's host-exit guard kills every task group that has not settled.
+Exit notices belong to the activation that started their tasks: closed admission stops the service
+from sending any, and deactivation revokes the delivery callback before cleanup, so tasks stopped by
+shutdown or replacement never message the agent.
 
 ## Critical invariants
 
@@ -78,6 +92,10 @@ If Pi exits without shutdown, core's host-exit guard kills every task group that
 - Structured results project domain facts rather than parsing display text. Encoding failure
   preserves the receipt of an applied action, without replay or rollback. A terminal state alone
   does not prove success or process-tree cleanup.
+- An exit notice is sent at most once, from the registry transition that settles the task or the
+  return of the last read in progress on it. A finished state that a tool read reports, the agent's
+  own stop, including one that finds the task already finished, or a start that reported its spawn
+  failure claims the notice first, so the agent never learns the same finish twice.
 
 The focused [process lifecycle note](docs/process-lifecycle.md) explains cancellation handoff and
 platform cleanup limits. [Task-service tests](tests/task-service.test.ts),

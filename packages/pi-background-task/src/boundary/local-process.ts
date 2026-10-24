@@ -1,11 +1,12 @@
 import { StringDecoder } from "node:string_decoder";
+import { getAgentDir, getShellConfig } from "@earendil-works/pi-coding-agent";
 import { awaitProcessGroupExit, signalProcessGroup } from "pi-cosmic-core/platform/process-tree";
 import {
   guardProcessGroupAtHostExit,
   type ProcessGroupExitGuard,
 } from "pi-cosmic-core/platform/process-group-exit-guard";
 import { nodeFilePlatformLayer } from "pi-cosmic-core/platform/node-file";
-import { nodeSpawn, type NodeChildProcess } from "pi-cosmic-core/platform/node-builtins";
+import { nodePath, nodeSpawn, type NodeChildProcess } from "pi-cosmic-core/platform/node-builtins";
 import { utf8ByteLength, utf8Suffix } from "pi-cosmic-core/text";
 import * as Arr from "effect/Array";
 import type * as Cause from "effect/Cause";
@@ -16,11 +17,13 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Queue from "effect/Queue";
 import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
+import * as Str from "effect/String";
 import * as Stream from "effect/Stream";
 import type { BackgroundLogStream } from "../task/model.ts";
 
@@ -37,8 +40,15 @@ const BLOCKED_ENVIRONMENT_KEYS = new Set([
 export interface LocalProcessRequest {
   readonly command: string;
   readonly cwd: string;
+  /** The package's own shell, which replaces Pi's shell and its command prefix. */
   readonly shellPath?: string;
   readonly ingressBufferBytes: number;
+}
+
+/** Pi's shell settings, which its bash tool also runs commands with. */
+export interface HostShellSettings {
+  readonly shellPath?: string;
+  readonly commandPrefix?: string;
 }
 
 export interface LocalProcessOutput {
@@ -98,17 +108,64 @@ const processError = (reason: LocalProcessError["reason"], subject?: string) =>
       : PROCESS_FAILURES[reason].message,
   });
 
-export function makeBackgroundProcessEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+/**
+ * The task environment: the host's, without the keys that would load Pi's own startup code or
+ * session identity into the task, with Pi's tool directory on `PATH` as its bash tool has it, and
+ * with color requested from CLIs that see only pipes.
+ */
+export function makeBackgroundProcessEnvironment(
+  source: NodeJS.ProcessEnv,
+  binDirectory?: string,
+): NodeJS.ProcessEnv {
   const environment = Rec.fromEntries(
     Arr.filter(
       Rec.toEntries(source),
       ([key, value]) => value !== undefined && !BLOCKED_ENVIRONMENT_KEYS.has(key),
     ),
   );
+  if (binDirectory) {
+    // Matches Pi's own lookup, which takes the first key that names PATH in any case.
+    const pathKey = Option.getOrElse(
+      Arr.findFirst(Rec.keys(environment), (key) => Str.toLowerCase(key) === "path"),
+      () => "PATH",
+    );
+    const current = environment[pathKey] ?? "";
+    if (!Arr.contains(Str.split(current, nodePath.delimiter), binDirectory))
+      environment[pathKey] = current
+        ? `${binDirectory}${nodePath.delimiter}${current}`
+        : binDirectory;
+  }
   if (environment.FORCE_COLOR === undefined && environment.NO_COLOR === undefined)
     environment.FORCE_COLOR = "1";
   return environment;
 }
+
+interface ShellInvocation {
+  readonly file: string;
+  readonly args: ReadonlyArray<string>;
+}
+
+/**
+ * Runs the command as Pi's bash tool does: in Pi's shell, normally bash, after Pi's command
+ * prefix. The package's `shellPath` replaces both, since a prefix written for Pi's shell may not
+ * parse in another; it is spawned as Node's `shell` option would, so a bare name is found on
+ * `PATH` and a relative path resolves in the task's cwd. Throws when Pi's shell does not exist.
+ */
+const shellInvocation = (
+  request: LocalProcessRequest,
+  host: HostShellSettings,
+): ShellInvocation => {
+  if (request.shellPath !== undefined)
+    return { file: request.shellPath, args: ["-c", request.command] };
+  // Pi feeds the command on stdin only for a legacy Windows WSL shell, which never applies here.
+  const config = getShellConfig(host.shellPath);
+  const command = host.commandPrefix
+    ? `${host.commandPrefix}\n${request.command}`
+    : request.command;
+  return { file: config.shell, args: [...config.args, command] };
+};
+
+const isMissingFile = Schema.is(Schema.Struct({ code: Schema.Literal("ENOENT") }));
 
 interface ProcessTreeTermination {
   readonly terminate: (mode: "graceful" | "force") => Effect.Effect<void, LocalProcessError>;
@@ -177,6 +234,13 @@ const makePosixGroupTermination = Effect.fn("LocalProcess.makePosixGroupTerminat
   } satisfies ProcessTreeTermination;
 });
 
+const missingShell = (shellPath: string | undefined) =>
+  LocalProcessError.make({
+    reason: "spawn",
+    operation: PROCESS_FAILURES.spawn.operation,
+    message: shellPath ? `Couldn't find the shell ${shellPath}` : "Couldn't find a shell",
+  });
+
 const verifyCwd = (fs: FileSystem.FileSystem, cwd: string) =>
   fs.stat(cwd).pipe(
     Effect.mapError(() => processError("cwd", cwd)),
@@ -204,17 +268,26 @@ const verifyCwd = (fs: FileSystem.FileSystem, cwd: string) =>
  */
 const spawnGroupLeader = (
   request: LocalProcessRequest,
+  host: HostShellSettings,
   leaderExit: Deferred.Deferred<LocalProcessExit>,
 ) =>
   Effect.callback<NodeChildProcess, LocalProcessError>((resume) => {
+    let shell: ShellInvocation;
+    try {
+      shell = shellInvocation(request, host);
+    } catch {
+      resume(Effect.fail(missingShell(host.shellPath)));
+      return;
+    }
     let child: NodeChildProcess;
     try {
-      child = nodeSpawn(request.command, [], {
+      child = nodeSpawn(shell.file, shell.args, {
         cwd: request.cwd,
         detached: true,
-        env: makeBackgroundProcessEnvironment(process.env),
-        shell: request.shellPath ?? true,
-        stdio: ["ignore", "pipe", "pipe"],
+        env: makeBackgroundProcessEnvironment(process.env, nodePath.join(getAgentDir(), "bin")),
+        // Stdin stays an open pipe that is never written: many watchers and dev servers exit
+        // when their input ends, as they would at once on /dev/null.
+        stdio: ["pipe", "pipe", "pipe"],
       });
     } catch {
       resume(Effect.fail(processError("spawn")));
@@ -225,11 +298,27 @@ const spawnGroupLeader = (
     child.once("exit", (exitCode, signal) =>
       Deferred.doneUnsafe(leaderExit, Exit.succeed({ exitCode, ...(signal && { signal }) })),
     );
-    child.on("error", () => resume(Effect.fail(processError("spawn"))));
+    child.on("error", (error) => {
+      // After a failed spawn nothing else closes the input pipe; later errors come from a stop.
+      child.stdin?.destroy();
+      // The working directory was verified, so a missing file is the package's own shell.
+      resume(
+        Effect.fail(
+          request.shellPath !== undefined && isMissingFile(error)
+            ? missingShell(request.shellPath)
+            : processError("spawn"),
+        ),
+      );
+    });
+    // Nothing writes to stdin, so its errors, such as a task that closed its end, are not failures.
+    child.stdin?.on("error", () => undefined);
     child.once("spawn", () => resume(Effect.succeed(child)));
   });
 
-const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (request: LocalProcessRequest) {
+const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (
+  request: LocalProcessRequest,
+  host: HostShellSettings,
+) {
   const ingressBufferBytes = Math.max(1, Math.floor(request.ingressBufferBytes));
   const outputQueue = yield* Queue.dropping<LocalProcessOutput, Cause.Done>(INGRESS_CHUNKS);
   const decoders = {
@@ -243,9 +332,14 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (request: Loc
   let abandoned = false;
 
   const leaderExit = yield* Deferred.make<LocalProcessExit>();
-  const child = yield* spawnGroupLeader(request, leaderExit);
+  const child = yield* spawnGroupLeader(request, host, leaderExit);
+  // A stop ends the task's input as well as signalling it; settlement and release close it too.
+  const closeInput = () => void child.stdin?.destroy();
   const pid = child.pid;
-  if (pid === undefined) return yield* processError("spawn");
+  if (pid === undefined) {
+    closeInput();
+    return yield* processError("spawn");
+  }
   // Covers host exits that skip scope cleanup until the group is confirmed settled.
   const exitGuard = yield* guardProcessGroupAtHostExit(pid);
   const tree = yield* makePosixGroupTermination(
@@ -337,8 +431,11 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (request: Loc
   observe("stderr", child.stderr);
   const exitFiber = yield* Deferred.await(leaderExit).pipe(
     Effect.tap(tree.settleExit),
+    Effect.tap(Effect.sync(closeInput)),
     Effect.forkScoped({ startImmediately: true }),
   );
+  const terminate = (mode: "graceful" | "force") =>
+    Effect.sync(closeInput).pipe(Effect.andThen(tree.terminate(mode)));
 
   // Each pull takes the whole queue, so delivery is recorded per event as the reader receives it.
   const output = Stream.fromQueue(outputQueue).pipe(
@@ -359,12 +456,13 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (request: Loc
     leaderExited: Deferred.isDone(leaderExit),
     droppedOutputBytes: () => totalDroppedBytes,
     abandonOutput: Effect.sync(abandonOutput),
-    terminate: tree.terminate,
-    release: tree.terminate("force").pipe(
+    terminate,
+    release: terminate("force").pipe(
       Effect.timeoutOrElse({ duration: "2500 millis", orElse: () => Effect.void }),
       Effect.ignore,
       Effect.ensuring(
         Effect.sync(() => {
+          closeInput();
           closeOutput();
           // A leader that outlived a failed kill no longer keeps the host running.
           child.unref();
@@ -377,7 +475,8 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (request: Loc
 export class LocalProcess extends Context.Service<LocalProcess, LocalProcessContract>()(
   "pi-background-task/boundary/local-process/LocalProcess",
 ) {
-  static readonly layerWith = (fileSystem: Layer.Layer<FileSystem.FileSystem>) =>
+  /** Spawns with Pi's shell settings, read once for the session runtime. */
+  static readonly layerFor = (host: HostShellSettings) =>
     Layer.effect(
       this,
       Effect.gen(function* () {
@@ -387,13 +486,14 @@ export class LocalProcess extends Context.Service<LocalProcess, LocalProcessCont
             verifyCwd(fs, request.cwd).pipe(
               Effect.andThen(
                 // Acquisition stays uninterruptible; see spawnGroupLeader.
-                Effect.acquireRelease(acquireProcess(request), (handle) => handle.release),
+                Effect.acquireRelease(acquireProcess(request, host), (handle) => handle.release),
               ),
               Effect.map(({ release: _release, ...handle }) => handle),
             ),
         });
       }),
-    ).pipe(Layer.provide(fileSystem));
+    ).pipe(Layer.provide(nodeFilePlatformLayer));
 
-  static readonly layer = this.layerWith(nodeFilePlatformLayer);
+  /** Spawns as Pi does without shell settings. */
+  static readonly layer = this.layerFor({});
 }

@@ -234,4 +234,16 @@ describe("Pi model confirmation", () => {
       );
     });
   });
+
+  it.effect("keeps the failure's own message, without stack frames, as the run's error", () => {
+    const { layer } = localServiceFixture();
+    return withService(layer, function* (service) {
+      const failure = yield* service
+        .start(request({ model: "openai-codex/gpt-6-luna" }))
+        .pipe(Effect.flip);
+      const [run] = yield* runViews(service);
+      expect(run).toMatchObject({ state: "failed", error: failure.message });
+      expect(run?.error).not.toMatch(/\n\s*at\s|node_modules|file:\/\//u);
+    });
+  });
 });

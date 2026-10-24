@@ -1,10 +1,16 @@
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
 import * as Str from "effect/String";
 import { invokeHostCallback } from "pi-cosmic-core/host-session";
-import { claimCompletion, completionClaimOwner, releaseCompletionClaim } from "./completion.ts";
+import {
+  claimCompletion,
+  completionClaimOwner,
+  releaseCompletionClaim,
+  type StartFailureHold,
+} from "./completion.ts";
 import { invalidRequest, type SubagentError, type SubagentRuntimeClosedError } from "./errors.ts";
 import { snapshotRun, type RunContext, type RunRecord, type WithRunLock } from "./internal.ts";
 import {
@@ -185,6 +191,38 @@ export function completionObservationOperations(
     ),
   );
 
+  // The call reported every failure it held once it composed its result, so success consumes them;
+  // any other exit hands them to their notices. Only `holdStartFailures` creates and ends a hold,
+  // so no hold outlives its call.
+  const endStartFailureHold = (hold: StartFailureHold, reported: boolean) =>
+    withLock(
+      Effect.sync(() => {
+        hold.open = false;
+        for (const [id, generation] of hold.held) {
+          const record = records.get(id);
+          if (!record || completionClaimOwner(record, generation) !== hold.claimToken) continue;
+          record.completionClaims.delete(generation);
+          if (!reported) {
+            delivery.wakeCompletionLocked();
+            continue;
+          }
+          record.completionGenerations.delete(generation);
+          delivery.signalOutboxChangedLocked();
+        }
+        hold.held.clear();
+      }),
+    );
+  const holdStartFailures = <A, E, R>(
+    use: (hold: StartFailureHold) => Effect.Effect<A, E, R>,
+  ): Effect.Effect<A, E, R> =>
+    Effect.acquireUseRelease(
+      Effect.sync(
+        (): StartFailureHold => ({ claimToken: allocateClaimToken(), open: true, held: new Map() }),
+      ),
+      use,
+      (hold, exit) => endStartFailureHold(hold, Exit.isSuccess(exit)),
+    );
+
   interface CompletionClaim {
     readonly claimToken: string;
     readonly selected: ReadonlyArray<RunRecord>;
@@ -341,5 +379,6 @@ export function completionObservationOperations(
     redactCompletionReport,
     consumeCompletions,
     withAwaitTerminalObservations,
+    holdStartFailures,
   };
 }

@@ -20,16 +20,23 @@ import {
   isProjectTrusted,
   notifyAtHostBoundary,
 } from "pi-cosmic-core/host-session";
+import { isSubagentChildProcess } from "pi-cosmic-core/host-environment";
 import { makePiManagedRuntime } from "pi-cosmic-core/runtime";
 import {
   makePiSessionRuntimeSlot,
   PiSessionRuntimeError,
 } from "pi-cosmic-core/runtime/session-runtime";
 import { registerBackgroundTaskActivity } from "./boundary/host-activity.ts";
+import {
+  registerSubagentTaskNoticeDelivery,
+  registerTaskNoticeDelivery,
+} from "./boundary/host-notice.ts";
+import { readHostShellSettings } from "./boundary/host-shell.ts";
 import { discoverActivityView } from "pi-cosmic-ui/activity/view";
 import { taskProjectionBridge } from "./boundary/host-ui.ts";
 import { BackgroundTaskConfigStore, BackgroundTaskSettingsFiles } from "./config/store.ts";
 import type { BackgroundTaskConfig } from "./config/schema.ts";
+import { TASK_NOTICE_MESSAGE_TYPE } from "./task/notice.ts";
 import { BackgroundTaskService } from "./task/service.ts";
 import {
   backgroundTaskLayer,
@@ -39,6 +46,7 @@ import {
 } from "./layer.ts";
 import { registerTasksCommand } from "./settings/controller.ts";
 import { registerBackgroundTaskTool } from "./tools/background-task.ts";
+import { renderTaskNotice } from "./ui/notice-message.ts";
 
 interface BackgroundTaskSessionActivation extends BackgroundTaskSessionInput {
   readonly publicationOwner: MutableRef.MutableRef<boolean>;
@@ -46,6 +54,7 @@ interface BackgroundTaskSessionActivation extends BackgroundTaskSessionInput {
 }
 
 const UNAVAILABLE = "Background Tasks aren't available in this session";
+const IDLE_CHECK_INTERVAL = "50 millis";
 const REPLACED = "Background Tasks session was replaced";
 const CANCELLED = "Opening background tasks was cancelled";
 
@@ -63,6 +72,17 @@ export function registerBackgroundTaskApplication(
 ): void {
   const bridge = taskProjectionBridge(pi.events);
   const replay = registerCodePreviewReplay(pi, { command: "tasks", tools: ["background_task"] });
+  // Historical notices render without restoring delivery authority.
+  pi.registerMessageRenderer(TASK_NOTICE_MESSAGE_TYPE, renderTaskNotice);
+  let idleHost: ExtensionContext | undefined;
+  const deliverNotice = isSubagentChildProcess()
+    ? registerSubagentTaskNoticeDelivery(pi)
+    : registerTaskNoticeDelivery(pi, {
+        isIdle: () => invokeHostCallback(() => idleHost?.isIdle() ?? false, false),
+        later: (check) => {
+          slot.fork(Effect.sleep(IDLE_CHECK_INTERVAL).pipe(Effect.andThen(Effect.sync(check))));
+        },
+      });
   let releaseActivity: (() => void) | undefined;
   let openActivity: ((signal?: AbortSignal) => Promise<boolean>) | undefined;
   let currentConfig: BackgroundTaskConfig | undefined;
@@ -77,14 +97,23 @@ export function registerBackgroundTaskApplication(
       readonly scheduler: CodePreviewSchedulerServiceContract;
     }
   >({
-    makeRuntime: (input) =>
-      makePiManagedRuntime(
+    makeRuntime: (input) => {
+      // Notices, like projections, belong to the activation that started their tasks.
+      const isOwner = () => MutableRef.get(input.publicationOwner);
+      return makePiManagedRuntime(
         pi,
-        backgroundTaskLayer(input, (projection) => {
-          if (MutableRef.get(input.publicationOwner)) bridge.publish(projection);
-        }),
+        backgroundTaskLayer(
+          input,
+          (projection) => {
+            if (isOwner()) bridge.publish(projection);
+          },
+          (notice) => {
+            if (isOwner()) deliverNotice(notice, isOwner);
+          },
+        ),
         { agentDirectory: getAgentDir, packageName: "pi-background-task" },
-      ),
+      );
+    },
     startup: Effect.fn("BackgroundTaskApplication.startup")(function* (input) {
       yield* bestEffortHostBootstrap("pi-background-task.preview-settings", (signal) =>
         boundaries.loadSettings(input.cwd, input.projectTrusted, signal),
@@ -110,6 +139,7 @@ export function registerBackgroundTaskApplication(
         return Predicate.isString(id) && id.length > 0 ? id : undefined;
       }, undefined);
       currentConfig = prepared.config;
+      idleHost = ctx;
       bridge.setFooterEnabled(prepared.config.showFooterStatus);
       bridge.setContext(ctx);
       openActivity = (signal) => {
@@ -140,6 +170,7 @@ export function registerBackgroundTaskApplication(
     onDeactivated: (input) => {
       MutableRef.set(input.publicationOwner, false);
       currentConfig = undefined;
+      idleHost = undefined;
       openActivity = undefined;
       releaseActivity?.();
       releaseActivity = undefined;
@@ -195,6 +226,7 @@ export function registerBackgroundTaskApplication(
           ctx,
           cwd: captured.cwd,
           projectTrusted: isProjectTrusted(ctx),
+          shell: readHostShellSettings(pi),
           publicationOwner: MutableRef.make(true),
           publishesReplay,
         },

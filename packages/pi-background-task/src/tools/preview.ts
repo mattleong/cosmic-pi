@@ -3,7 +3,6 @@ import { wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
-import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
 import { exitStatusMeaning } from "pi-code-previews";
 import { countLabel } from "pi-cosmic-core/display";
@@ -104,20 +103,49 @@ const EMPTY_LISTS = {
   all: "No background tasks",
 } as const;
 
+const COLLAPSED_TAIL_LINES = 4;
+
+/** The last few lines of a finished task's output, collapsed; expansion shows the full result. */
+function tailRows(tail: string | undefined, theme: PreviewTheme): Row[] {
+  const lines = tail ? Str.split(Fn.pipe(tail, Str.replace(/\n+$/u, "")), "\n") : [];
+  if (lines.length === 0) return [];
+  const shown = lines.slice(-COLLAPSED_TAIL_LINES);
+  return [
+    ...Arr.map(shown, (line) => ({ text: theme.fg("toolOutput", line) })),
+    ...(shown.length < lines.length
+      ? [
+          {
+            text: renderExpansionAffordance(
+              `Showing ${shown.length} of ${lines.length} recent lines`,
+              false,
+              theme,
+            ),
+          },
+        ]
+      : []),
+  ];
+}
+
 function waitRows(
   details: Extract<BackgroundTaskToolDetails, { readonly action: "wait" }>,
-  args: Partial<BackgroundTaskToolInput>,
+  expanded: boolean,
   theme: PreviewTheme,
 ): Row[] {
+  const { wait } = details;
   const found =
-    details.wait.outcome === "matched"
-      ? Predicate.isString(args.contains) && args.contains
-        ? `Found ${quotedWaitText(args.contains)}`
-        : "Found the awaited output"
+    wait.outcome === "matched"
+      ? wait.matchedText === undefined
+        ? "Found the awaited output"
+        : `Found ${quotedWaitText(wait.matchedText)}`
       : undefined;
   return [
-    { text: taskPreviewLine(details.wait.snapshot, theme) },
+    { text: taskPreviewLine(wait.snapshot, theme) },
     ...(found ? [{ text: theme.fg("muted", found) }] : []),
+    ...(found && wait.matchedLine
+      ? [{ text: theme.fg("toolOutput", sanitizeTerminalLine(wait.matchedLine)) }]
+      : []),
+    // Expansion shows the whole tail in the raw result.
+    ...(wait.outcome === "completed" && !expanded ? tailRows(wait.tail, theme) : []),
   ];
 }
 
@@ -140,7 +168,7 @@ function detailRows(
           : []),
       ];
     case "wait":
-      return waitRows(details, args, theme);
+      return waitRows(details, expanded, theme);
     case "list":
       return taskRows(
         details.tasks,

@@ -261,6 +261,7 @@ describe("subagent compact semantic policy", () => {
 
   it("writes every issue message in the shared style, without run IDs", () => {
     const id = "run-7f3a";
+    const failurePath = "/agent/subagent-reports/session-1/run-7f3a-1-failure.md";
     const runs: Partial<SubagentRunView>[] = [
       { state: "failed", error: "Error: 429 Too Many Requests: rate limit exceeded\n  at stack" },
       { state: "failed", error: "Inspect subagent status before retrying." },
@@ -354,6 +355,8 @@ describe("subagent compact semantic policy", () => {
                 runId: id,
                 cleanupDisposition,
                 nextCandidate: { runtime: "pi", model: "openai/next", effort: "high" },
+                failureFile: { path: failurePath, chars: 900, lines: 3, complete: true },
+                warning: "System warning: Provider rate limit reached; retried twice.",
               },
             },
           ],
@@ -362,7 +365,10 @@ describe("subagent compact semantic policy", () => {
     expect(issues.length).toBeGreaterThan(runs.length);
     for (const issue of issues)
       expect(
-        issueMessageStyleProblems(issue.message, { forbidden: [id, "ws-7f3a"], maxLength: 160 }),
+        issueMessageStyleProblems(issue.message, {
+          forbidden: [id, "ws-7f3a", failurePath],
+          maxLength: 160,
+        }),
         issue.message,
       ).toEqual([]);
   });

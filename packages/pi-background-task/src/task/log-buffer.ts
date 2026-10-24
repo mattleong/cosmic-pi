@@ -10,6 +10,7 @@ import type {
   BackgroundLogStream,
   BackgroundTaskState,
 } from "./model.ts";
+import { plainTerminalText } from "./terminal-text.ts";
 
 const COMPACTION_MIN_DEAD_EVENTS = 32;
 
@@ -202,6 +203,27 @@ export class LogBuffer {
 
   /** Retained events after `cursor`, found by binary search without copying older events. */
   eventsAfter(cursor: number): BackgroundLogEvent[] {
+    return this.range(this.indexAfter(cursor));
+  }
+
+  /**
+   * Whether each stream's output up to `cursor` ends at a line break, so its next output starts a
+   * line. A stream whose earlier output is no longer retained counts as not ending one.
+   */
+  linesEndedAt(cursor: number): Record<BackgroundLogStream, boolean> {
+    const ended: Partial<Record<BackgroundLogStream, boolean>> = {};
+    for (let index = this.indexAfter(cursor) - 1; index >= this.start; index -= 1) {
+      const event = this.store[index];
+      if (!event || ended[event.stream] !== undefined) continue;
+      ended[event.stream] = Fn.pipe(plainTerminalText(event.text), Str.endsWith("\n"));
+      if (ended.stdout !== undefined && ended.stderr !== undefined) break;
+    }
+    // With nothing evicted, a stream without earlier output starts a line.
+    const complete = this.earliestCursor === 0;
+    return { stdout: ended.stdout ?? complete, stderr: ended.stderr ?? complete };
+  }
+
+  private indexAfter(cursor: number): number {
     let low = this.start;
     let high = this.store.length;
     while (low < high) {
@@ -209,7 +231,7 @@ export class LogBuffer {
       if ((this.store[middle]?.cursor ?? Number.POSITIVE_INFINITY) > cursor) high = middle;
       else low = middle + 1;
     }
-    return this.range(low);
+    return low;
   }
 
   /** The events holding the last `lineLimit` logical lines, trimming the first at a line start. */

@@ -243,11 +243,13 @@ Resume and revise never change the workspace before the writer is admitted.
 ### Concurrency
 
 - Review and prepare queue on the coordinator's workspace operation lock, mark the binding busy, and call the engine outside the run lock.
-- Integration and discard queue on the same lock and hold the run lock through occupancy checks and destructive engine work, so they may briefly delay unrelated run mutations.
+- Integration, discard, and automatic discard queue on the same lock and keep the binding busy. They check occupancy under the run lock, then run the engine outside it in the session scope, and commit the outcome under it again, so other runs, messages, and tools proceed meanwhile.
+- Until that engine work ends, it excludes the workspace's trees and, for integration or rollback, the target checkout from new runs: read-only and shared-checkout launches there wait, and resuming a run there refuses with `workspace_operation_in_progress`. Cancelling the caller interrupts the work and waits for it to end, as shutdown does; integration and rollback run to their end once they hold the target's leases.
+- Worktree launches and revise rebases need no exclusion: every engine operation of a session queues on the engine's in-process operation gate before taking the checkout's store lock, so one behind this session's integration or discard waits for it rather than timing out on that lock.
 - Apply keeps the binding busy throughout and takes the operation lock for each phase; `prepare` releases it while the prepared tree's `WorktreeCreate` hooks run.
-- Integration and the rollback of a stopped one refuse with `workspace_target_busy` only while a shared-checkout writer is active, cleaning up, or launching in an overlapping cwd, or another session's writer holds the source root's or session directory's lease. Worktree launches don't block them, because the engine's checkout lock orders their snapshots.
-- Discard refuses while any run holds a directory within the artifact.
-- Every mutating engine operation holds a `CrossProcessLock` keyed by the real root of the record's source checkout, under `<agent-dir>/subagent-worktrees/locks`. Waits poll interruptibly for up to two minutes, then fail naming the owner process; a dead owner's lock is reclaimed. Listing takes no lock.
+- Integration and the rollback of a stopped one refuse with `workspace_target_busy` only while a shared-checkout writer is active, cleaning up, or launching in an overlapping cwd, or another session's writer holds the source root's or session directory's lease. Worktree launches don't block them, because the engine orders their snapshots.
+- Discard refuses while any run holds a directory within the artifact or is launching into one.
+- Every mutating engine operation holds a `CrossProcessLock` keyed by the real root of the record's source checkout, under `<agent-dir>/subagent-worktrees/locks`. Only other sessions contend for it. Waits poll interruptibly for up to two minutes, then fail naming the owner process, and say when that process is this one; a dead owner's lock is reclaimed. Listing takes no lock.
 - Git is resolved once per process (`/usr/bin/git`, else the first absolute `git` on `PATH`) and must be 2.31 or later.
 
 ### Integration and rollback

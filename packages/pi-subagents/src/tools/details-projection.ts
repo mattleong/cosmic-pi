@@ -26,7 +26,11 @@ import {
   type SubagentUsage,
   type SubagentWorkspaceDiffStat,
 } from "../run/model.ts";
-import { MAX_PROTOCOL_ID_CHARS, MAX_TARGET_RUNS } from "../run/limits.ts";
+import {
+  MAX_OUTCOME_FILE_PATH_CHARS,
+  MAX_PROTOCOL_ID_CHARS,
+  MAX_TARGET_RUNS,
+} from "../run/limits.ts";
 import {
   MAX_ERROR_CHARS,
   MAX_FINAL_TEXT_CHARS,
@@ -415,12 +419,22 @@ export const condenseRunCard = (card: SubagentRunCard): SubagentRunCard => {
   };
 };
 
+// A failure file stays in a start's details only while its path fits the bound text lines use.
+const projectFailureFile = (
+  archive: SubagentReportArchive | undefined,
+): SubagentReportArchive | undefined => {
+  const file = projectReportFile(archive);
+  return file && file.path.length <= MAX_OUTCOME_FILE_PATH_CHARS ? file : undefined;
+};
+
 export const projectFailure = (failure: SubagentCardFailure): SubagentCardFailure => {
   const name = optionalText(failure.name, MAX_NAME_CHARS);
   const code = optionalText(failure.code, MAX_FAILURE_CODE_CHARS);
   const message = requiredText(failure.message, MAX_FAILURE_MESSAGE_CHARS, "Launch failed.");
   const recovery = failure.admittedRun;
   const next = recovery?.nextCandidate;
+  const failureFile = recovery && projectFailureFile(recovery.failureFile);
+  const warning = optionalText(recovery?.warning, MAX_WARNING_CHARS);
   const admittedRun = recovery
     ? {
         runId: requiredText(recovery.runId, MAX_PROTOCOL_ID_CHARS, "unknown-run"),
@@ -435,6 +449,8 @@ export const projectFailure = (failure: SubagentCardFailure): SubagentCardFailur
                   effort: next.effort,
                 },
         }),
+        ...(failureFile !== undefined && { failureFile }),
+        ...(warning !== undefined && { warning }),
       }
     : undefined;
   return {
@@ -446,10 +462,13 @@ export const projectFailure = (failure: SubagentCardFailure): SubagentCardFailur
   };
 };
 
-export const condenseFailure = (failure: SubagentCardFailure): SubagentCardFailure => ({
-  ...failure,
-  message: condensed(failure.message),
-});
+/** Condensed details keep a failed start's recovery but leave its file and warning to the text. */
+export const condenseFailure = (failure: SubagentCardFailure): SubagentCardFailure => {
+  const condensedFailure = { ...failure, message: condensed(failure.message) };
+  if (!failure.admittedRun) return condensedFailure;
+  const { failureFile: _failureFile, warning: _warning, ...admittedRun } = failure.admittedRun;
+  return { ...condensedFailure, admittedRun };
+};
 
 export const projectStartEntry = (entry: SubagentStartEntry): SubagentStartEntry => {
   const agent = optionalText(entry.agent, MAX_CUSTOM_AGENT_NAME_CHARS);

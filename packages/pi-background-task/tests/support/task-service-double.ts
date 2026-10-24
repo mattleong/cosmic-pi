@@ -65,6 +65,7 @@ export const taskWait = (
   earliestAvailableCursor: 0,
   droppedBytes: 0,
   appliedWaitSeconds: 30,
+  recent: taskLogSlice(snapshot.id, snapshot.state, []),
   ...fields,
 });
 

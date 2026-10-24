@@ -184,6 +184,10 @@ const StartContractSchema = Schema.Struct({
           Schema.Struct({
             runId: RunIdSchema,
             cleanup: Schema.Literals(FAILED_START_CLEANUP_DISPOSITIONS),
+            /** The saved failure, when it is longer than its preview. */
+            errorFile: Schema.optionalKey(Schema.Struct(ReportFileFields)),
+            /** A preview of the run's folded child and system warnings. */
+            warning: Schema.optionalKey(NonEmptyText(MAX_CONTRACT_PREVIEW_CHARS)),
           }),
         ),
       }),

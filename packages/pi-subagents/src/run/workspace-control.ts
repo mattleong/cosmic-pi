@@ -238,7 +238,7 @@ function workspaceControlOperations(
     );
   });
   const review = workspaceReviewOperations(context, publish);
-  const integrateLocked = workspaceIntegrationOperations(context, publish);
+  const integrateHeld = workspaceIntegrationOperations(context, publish);
   const orphans = workspaceOrphanOperations(context, sourceRecords);
   const isOrphan = (workspaceId: string, caller: string) =>
     caller === SUBAGENT_ROOT_RUN_ID && !state.bindings.has(workspaceId);
@@ -269,7 +269,7 @@ function workspaceControlOperations(
             .pipe(Effect.andThen(review.workspaceDiscard(workspaceId, caller))),
     );
   const launch = workspaceLaunchOperations(context);
-  const apply = workspaceApplyOperations(context, review.held, integrateLocked);
+  const apply = workspaceApplyOperations(context, review.held, integrateHeld);
   return {
     ...launch,
     revise:
@@ -285,11 +285,7 @@ function workspaceControlOperations(
       adopting(args[0], args[2] ?? SUBAGENT_ROOT_RUN_ID, apply(...args)),
     sweepOrphanedWorkspaces: orphans.sweepOrphans,
     /** Forked once a worktree writer completes; see `workspaceSettleOperations`. */
-    settleCompletedWorkspace: workspaceSettleOperations(
-      context,
-      publish,
-      review.held.discardLocked,
-    ),
+    settleCompletedWorkspace: workspaceSettleOperations(context, publish, review.held.discardHeld),
     workspaceList,
     inspectWriterWorkspace,
     setWriterWorkspaceMode,

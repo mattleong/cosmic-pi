@@ -35,7 +35,7 @@ Effect.runFork(
       command: "sleep 60 & echo ready; wait",
       cwd: process.cwd(),
     });
-    yield* service.wait({ id: task.id, until: "output", contains: "ready", waitSeconds: 10 });
+    yield* service.wait({ id: task.id, until: "output", contains: ["ready"], waitSeconds: 10 });
     process.send?.(`group:${task.pid ?? 0}`);
     process.send?.("ready");
     yield* exitRequested;

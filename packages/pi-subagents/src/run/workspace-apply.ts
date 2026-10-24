@@ -60,7 +60,7 @@ const appliedResult = (
 export function workspaceApplyOperations(
   context: WorkspaceControlContext,
   phases: ReturnType<typeof workspaceReviewOperations>["held"],
-  integrateLocked: ReturnType<typeof workspaceIntegrationOperations>,
+  integrateHeld: ReturnType<typeof workspaceIntegrationOperations>,
 ) {
   const { withLock, operations, requireEngine, state } = context;
   /**
@@ -78,9 +78,7 @@ export function workspaceApplyOperations(
     const service = yield* requireEngine;
     return yield* phases.hold(workspaceId, caller, (held) =>
       Effect.gen(function* () {
-        const { binding, token } = held;
-        const integrate = (revisionId: string, preparationId: string) =>
-          integrateLocked(workspaceId, revisionId, preparationId, caller, token);
+        const { binding } = held;
         const prepared = yield* withLock(
           Effect.gen(function* () {
             if (isBindingFinished(binding)) return yield* workspaceFinishedError(binding);
@@ -99,7 +97,7 @@ export function workspaceApplyOperations(
         );
         if (prepared) {
           const integration = yield* operations.withPermits(1)(
-            withLock(integrate(prepared.revisionId, prepared.preparationId)),
+            integrateHeld(held, caller, prepared.revisionId, prepared.preparationId),
           );
           return appliedResult(
             integration,
@@ -115,10 +113,12 @@ export function workspaceApplyOperations(
           phases.prepareHeld(service, held, revision.revisionId),
         );
         const integration = yield* operations.withPermits(1)(
-          withLock(
-            phases
-              .markPrepared(held, preparation, "apply")
-              .pipe(Effect.andThen(integrate(revision.revisionId, preparation.preparationId))),
+          integrateHeld(
+            held,
+            caller,
+            revision.revisionId,
+            preparation.preparationId,
+            phases.markPrepared(held, preparation, "apply"),
           ),
         );
         return appliedResult(

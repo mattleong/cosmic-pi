@@ -9,8 +9,12 @@ import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Order from "effect/Order";
+import * as Predicate from "effect/Predicate";
+import * as Result from "effect/Result";
 import * as Scope from "effect/Scope";
+import { firstLineMessage } from "pi-cosmic-core/message-text";
 import type { SubagentBackendRegistryContract } from "../backend/service.ts";
 import {
   DEFAULT_MAX_ACTIVE_RUNS,
@@ -23,6 +27,11 @@ import {
   treeCapacityError,
   writerConflictError,
 } from "./admission.ts";
+import {
+  holdStartFailureLocked,
+  releaseUnlessStartFailedLocked,
+  type StartFailureHold,
+} from "./completion.ts";
 import { peerNoticeText } from "./coordination.ts";
 import { taskPrompt } from "./tool-policy.ts";
 import {
@@ -59,6 +68,7 @@ import type { RunRecordCleanup } from "./record-cleanup.ts";
 import { cleanupFailureDiagnostic } from "./cleanup-diagnostic.ts";
 import type { RunSettlement } from "./settlement.ts";
 import { MAX_ERROR_CHARS, sanitizeDiagnosticText, sanitizeName } from "./state.ts";
+import { foldRunWarnings } from "./warnings.ts";
 import { scriptOriginForStart, scriptedWriterAdmissionError } from "./launch-policy.ts";
 import type { RunWorkspaceControl } from "./workspace-control.ts";
 import {
@@ -73,6 +83,25 @@ const failedStartRecoveries = new WeakMap<SubagentError, FailedStartRecovery>();
 
 export const getFailedStartRecovery = (error: SubagentError): FailedStartRecovery | undefined =>
   failedStartRecoveries.get(error);
+
+// A run's error says what failed, never a rendered cause, whose stack frames and dependency paths
+// would reach its card, previews, and failure file. A defect keeps its message's first line.
+const startFailureMessage = (cause: Cause.Cause<SubagentError>): string =>
+  Option.match(Cause.findErrorOption(cause), {
+    onSome: (error) => error.message,
+    onNone: () => {
+      const defect = Result.getOrUndefined(Cause.findDefect(cause));
+      const line = firstLineMessage(
+        Predicate.hasProperty(defect, "message") && Predicate.isString(defect.message)
+          ? defect.message
+          : "",
+        "",
+      );
+      return line
+        ? `Subagent startup failed unexpectedly: ${line}.`
+        : "Subagent startup failed unexpectedly.";
+    },
+  });
 
 interface RunLaunchDependencies extends Pick<
   RunContext,
@@ -199,6 +228,7 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
   const start = (
     request: StartSubagentRequest,
     scriptedRoot = false,
+    hold?: StartFailureHold,
   ): Effect.Effect<SubagentRunView, SubagentError> =>
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
@@ -486,7 +516,16 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
           Effect.onError((cause) =>
             Effect.gen(function* () {
               const interruptedOnly = Cause.hasInterruptsOnly(cause);
-              yield* withLock(Effect.sync(() => completeRunInitialization(reserved)));
+              // The caller gets this failure as its start result, so a hold keeps its outcome
+              // from also reaching a notice or an await.
+              const heldGeneration = yield* withLock(
+                Effect.sync(() => {
+                  completeRunInitialization(reserved);
+                  return hold && !interruptedOnly
+                    ? holdStartFailureLocked(hold, reserved)
+                    : undefined;
+                }),
+              );
               yield* cleanup.markCleanupPending(reserved);
               if (!reserved.stoppedByParent) {
                 if (interruptedOnly) yield* settle(reserved, "stopped");
@@ -494,16 +533,26 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
                   yield* settle(
                     reserved,
                     "failed",
-                    sanitizeDiagnosticText(Cause.pretty(cause), MAX_ERROR_CHARS),
+                    sanitizeDiagnosticText(startFailureMessage(cause), MAX_ERROR_CHARS),
                   );
               }
+              if (hold && heldGeneration !== undefined)
+                yield* withLock(
+                  Effect.sync(() => {
+                    if (releaseUnlessStartFailedLocked(hold, reserved, heldGeneration))
+                      delivery.wakeCompletionLocked();
+                  }),
+                );
               yield* cleanup.closeRecordScope(reserved);
             }),
           ),
+          // The start result carries what the run's notice would, since its hold may replace it.
           Effect.tapError((error) =>
             withLock(
               Effect.sync(() => {
                 const nextCandidate = failedRunNextCandidate(reserved.view);
+                const failureFile = reserved.view.errorArchive;
+                const warning = foldRunWarnings(reserved.warningSlots);
                 failedStartRecoveries.set(error, {
                   runId: reserved.view.id,
                   cleanupDisposition:
@@ -511,6 +560,8 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
                       ? "pending"
                       : reserved.cleanupDisposition,
                   ...(nextCandidate && { nextCandidate }),
+                  ...(failureFile && { failureFile }),
+                  ...(warning && warning !== reserved.view.error && { warning }),
                 });
               }),
             ),

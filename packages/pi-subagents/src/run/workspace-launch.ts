@@ -19,13 +19,13 @@ import {
   bindingSlot,
   clearBindingSlot,
   isBindingFinished,
+  isExcluded,
+  isTreeInUse,
+  type LaunchReservation,
   type LaunchSlot,
   mapWorkspaceError,
   reopenBindingLocked,
   type RevisionHold,
-  runHoldsCwd,
-  runsWithin,
-  type SharedReservation,
   UNREVIEWED,
   type WorkspaceBinding,
   type WorkspaceControlContext,
@@ -60,7 +60,8 @@ export interface WorkspaceRevised {
 
 interface LaunchSelection {
   readonly mode: WriterWorkspaceMode;
-  readonly slotWait?: Deferred.Deferred<void>;
+  /** Resolves when the launch may check again: a slot or excluded directory was released. */
+  readonly wait?: Deferred.Deferred<void>;
 }
 
 interface Succession {
@@ -142,6 +143,12 @@ const workspaceOwnerChanged = () =>
     "Workspace ownership changed while its revision was being prepared. Retry the revision.",
   );
 
+const excludedResumeError = () =>
+  invalid(
+    "workspace_operation_in_progress",
+    "A workspace operation is removing or writing this run's directory. Retry once it finishes.",
+  );
+
 const integrationQuarantinedError = () =>
   invalid(
     "workspace_integration_quarantined",
@@ -170,6 +177,15 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
     const slot = bindingSlot(binding);
     clearBindingSlot(binding);
     releaseSlotLocked(slot);
+  };
+  /**
+   * Reserves a launch's directory until admission, so destructive work sees it; while that work
+   * excludes the directory, returns the wait for it to end instead.
+   */
+  const reserveLaunchLocked = (reservation: LaunchReservation) => {
+    if (isExcluded(state.exclusions, reservation.cwd)) return state.exclusionReleased;
+    state.launchReservations.add(reservation);
+    return undefined;
   };
   /** Admission settles a new workspace, or commits a revision to its successor. */
   const bind = (request: StartSubagentRequest, admitted?: RunRecord) => {
@@ -229,8 +245,8 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
     }
     const mode = request.writerWorkspaceModeOverride ?? state.mode;
     if (mode !== "worktree") return { mode };
-    const slotWait = yield* worktreeCapacityLocked(request, caller);
-    return { mode, ...(slotWait && { slotWait }) };
+    const wait = yield* worktreeCapacityLocked(request, caller);
+    return { mode, ...(wait && { wait }) };
   });
   const discardUnadmitted = (binding: WorkspaceBinding) => {
     const { workspaceId, ownerId } = binding.handle;
@@ -267,21 +283,23 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
     Effect.uninterruptibleMask((restore) => {
       const caller = request.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
       const slot: LaunchSlot = { caller };
-      const reservation: SharedReservation = { cwd: request.cwd, caller };
-      const select: Effect.Effect<Omit<LaunchSelection, "slotWait">, SubagentError> = withLock(
+      const reservation: LaunchReservation = { cwd: request.cwd, caller, sharedWriter: true };
+      const select: Effect.Effect<Omit<LaunchSelection, "wait">, SubagentError> = withLock(
         checkLaunchLocked(request).pipe(
-          Effect.tap(({ mode, slotWait }) =>
-            Effect.sync(() => {
-              if (slotWait) return;
-              if (mode === "worktree") state.launchSlots.add(slot);
-              else state.sharedReservations.add(reservation);
-            }),
-          ),
+          Effect.map((selection): LaunchSelection => {
+            if (selection.wait) return selection;
+            if (selection.mode !== "worktree") {
+              const wait = reserveLaunchLocked(reservation);
+              return wait ? { ...selection, wait } : selection;
+            }
+            state.launchSlots.add(slot);
+            return selection;
+          }),
         ),
       ).pipe(
-        Effect.flatMap(({ mode, slotWait }) =>
-          slotWait
-            ? restore(Deferred.await(slotWait)).pipe(Effect.andThen(() => select))
+        Effect.flatMap(({ mode, wait }) =>
+          wait
+            ? restore(Deferred.await(wait)).pipe(Effect.andThen(() => select))
             : Effect.succeed({ mode }),
         ),
       );
@@ -342,7 +360,7 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
           Effect.ensuring(
             withLock(
               Effect.sync(() => {
-                state.sharedReservations.delete(reservation);
+                state.launchReservations.delete(reservation);
                 releaseSlotLocked(slot);
                 const holder = binding ?? succession?.binding;
                 if (holder && bindingSlot(holder) === slot) clearBindingSlot(holder);
@@ -373,7 +391,7 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
             "The revision that requested this rebase no longer holds its workspace.",
           );
         // A rebase removes and rewrites the worker's files, like discard removes them.
-        if (Arr.some([...runsWithin(records, [binding.handle.artifactRoot]).keys()], runHoldsCwd))
+        if (isTreeInUse(records, state.launchReservations, binding.handle.artifactRoot))
           return yield* invalid(
             "workspace_process_unsettled",
             "A run still uses this workspace's tree. Stop it and confirm cleanup before a rebase rebuilds the tree.",
@@ -419,17 +437,46 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
         return { run, rebase };
       }).pipe(Effect.ensuring(withLock(Effect.sync(() => releaseRevisionLocked(held)))));
     });
+  /**
+   * A read-only launch waits while destructive work excludes its directory, so it never starts in
+   * a tree being removed or a checkout being written.
+   */
+  const launchReader = (
+    request: StartSubagentRequest,
+    start: WorkspaceStart,
+  ): Effect.Effect<SubagentRunView, SubagentError> => {
+    const reservation: LaunchReservation = {
+      cwd: request.cwd,
+      caller: request.parentRunId ?? SUBAGENT_ROOT_RUN_ID,
+      sharedWriter: false,
+    };
+    const reserve: Effect.Effect<void> = withLock(
+      Effect.sync(() => reserveLaunchLocked(reservation)),
+    ).pipe(
+      Effect.flatMap((wait) =>
+        wait ? Deferred.await(wait).pipe(Effect.andThen(() => reserve)) : Effect.void,
+      ),
+    );
+    return reserve.pipe(
+      Effect.andThen(() =>
+        start({ ...request, workspace: undefined, writerWorkspaceMode: undefined }),
+      ),
+      Effect.ensuring(withLock(Effect.sync(() => state.launchReservations.delete(reservation)))),
+    );
+  };
   const withLaunch = (
     request: StartSubagentRequest,
     start: WorkspaceStart,
   ): Effect.Effect<SubagentRunView, SubagentError> =>
-    request.writeIntent === "writer"
-      ? launchWriter(request, start)
-      : start({ ...request, workspace: undefined, writerWorkspaceMode: undefined });
+    request.writeIntent === "writer" ? launchWriter(request, start) : launchReader(request, start);
   const invalidateForResume = Effect.fn("SubagentWorkspace.invalidateForResume")(function* (
     record: RunRecord,
   ): Effect.fn.Return<() => void, SubagentError> {
-    if (!record.view.workspaceId) return () => {};
+    if (!record.view.workspaceId) {
+      // A worktree writer's own binding is busy throughout any work that excludes its tree.
+      if (isExcluded(state.exclusions, record.view.cwd)) return yield* excludedResumeError();
+      return () => {};
+    }
     const binding = state.bindings.get(record.view.workspaceId);
     const phase = binding?.state.phase;
     if (!binding || binding.record !== record || phase === "creating" || phase === "revising")
