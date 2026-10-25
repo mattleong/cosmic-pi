@@ -255,7 +255,7 @@ describe("agent messaging", () => {
       yield* yieldUntil(() => latest(projections, native.id)?.state === "completed");
       expect(
         yield* service.agentSend(MAIN, native.id, "One more thing.").pipe(Effect.flip),
-      ).toMatchObject({ code: "agent_resume_unsupported" });
+      ).toMatchObject({ code: "backend_resume_unavailable" });
       expect(
         yield* service.agentSend(MAIN, "agent-missing-1", "Hello.").pipe(Effect.flip),
       ).toMatchObject({ code: "agent_not_found" });

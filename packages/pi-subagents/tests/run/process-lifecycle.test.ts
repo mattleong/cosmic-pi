@@ -59,7 +59,7 @@ const processFixture = () =>
         const pool = yield* context.writerPools.joinLocked(cwd, id);
         const record: RunRecord = {
           scriptOrigin: false,
-          view: view({ id, name: id, state: "starting", writeIntent: "writer", capabilities: [] }),
+          view: view({ id, name: id, state: "starting", writeIntent: "writer" }),
           scope: yield* Scope.fork(owner),
           driver,
           launch: {

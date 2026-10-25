@@ -11,7 +11,6 @@ import { MAX_START_BATCH, MAX_TARGET_RUNS, MAX_TOOL_OUTPUT_CHARS } from "../run/
 import {
   CompactSubagentToolDetailsSchema,
   DETAILS_PARSE_OPTIONS,
-  MAX_CARD_CAPABILITIES,
   MAX_CARD_SKIPS,
   MAX_INVALID_AGENT_ENTRIES,
   RUN_DETAILS_ACTIONS,
@@ -63,9 +62,7 @@ const preflightArray = (
 };
 
 const preflightCard: FieldsVisitor = (card) => {
-  if (!card) return true;
-  if (!preflightArray(card, "capabilities", MAX_CARD_CAPABILITIES)) return false;
-  if (!Rec.has(card, "selection")) return true;
+  if (!card || !Rec.has(card, "selection")) return true;
   const selection = card.selection;
   return (
     !Predicate.isObject(selection) || preflightArray(selection, "skippedCandidates", MAX_CARD_SKIPS)

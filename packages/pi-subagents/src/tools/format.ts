@@ -112,18 +112,11 @@ export const proposalGuidance = (
 
 const ordinaryPauseRecovery = (run: AttentionRun): ReadonlyArray<string> => {
   const id = JSON.stringify(run.id);
-  if (run.capabilities.includes("resume"))
-    return [
-      `Paused run ${runTarget(run)} needs a parent decision.`,
-      `1. Review it: agent_read({ agentIds: [${id}] }).`,
-      `2. Resume it with guidance: agent_send({ to: ${id}, message: "Continue with the reviewed guidance." }).`,
-      `3. Await it again: agent_await({ runIds: [${id}], until: "all_finished" }).`,
-    ];
   return [
-    `Paused run ${runTarget(run)} cannot resume on its backend.`,
-    `1. Stop it: agent_lifecycle({ action: "stop", runIds: [${id}] }).`,
-    "2. Launch a corrected replacement with agent_start.",
-    "3. Await the replacement run ID with agent_await.",
+    `Paused run ${runTarget(run)} needs a parent decision.`,
+    `1. Review it: agent_read({ agentIds: [${id}] }).`,
+    `2. Resume it with guidance: agent_send({ to: ${id}, message: "Continue with the reviewed guidance." }).`,
+    `3. Await it again: agent_await({ runIds: [${id}], until: "all_finished" }).`,
   ];
 };
 
@@ -231,7 +224,7 @@ const optionalStatusField = (
 
 /** Options for status cards. */
 export interface RunFormatOptions {
-  /** Adds route selection, context, capabilities, process, cwd, and timing fields. */
+  /** Adds route selection, context, process, cwd, and timing fields. */
   readonly verbose?: boolean | undefined;
   /** The caller's cwd; a compact card names the run's cwd only when it works elsewhere. */
   readonly parentCwd?: string | undefined;
@@ -362,10 +355,6 @@ const verboseStatusFields = (run: SubagentRunView): ReadonlyArray<string | undef
     optionalStatusField("Workspace mode", run.writerWorkspaceMode),
     statusField("Cwd", run.cwd),
     optionalStatusField("Source cwd", run.sourceCwd),
-    statusField(
-      "Capabilities",
-      `${Arr.join(run.capabilities, ", ") || "none"}; stop/await always available`,
-    ),
     run.pid ? statusField("Process", `pid ${run.pid}`) : undefined,
     optionalStatusField("Elapsed", formatSessionAge(run.endedAt ?? now, run.startedAt)),
     optionalStatusField("Activity", formatSessionActivity(now, run.lastActivityAt)),

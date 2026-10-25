@@ -181,14 +181,13 @@ const withheldTarget = (run: SubagentRunView): ContractWithheldRunTarget => ({
 
 /**
  * A read's status, the detail surface, which carries the whole pending question, both retained
- * warnings, the error, the run's capabilities, and cleanup diagnostics.
+ * warnings, the error, and cleanup diagnostics.
  */
 export const readStatusTarget = (run: SubagentRunView): ContractReadStatus => {
   const cleanup = projectRunCleanup(run.cleanup);
   return {
     ...targetFields(run, MAX_CONTACT_TEXT_CHARS),
     report: withheldReport(run),
-    capabilities: [...new Set(run.capabilities)],
     ...(cleanup !== undefined && { cleanup }),
   };
 };

@@ -95,7 +95,6 @@ export const profileServiceFor = (
 
 export const fallbackProfileService = profileServiceFor(undefined);
 export const testBackendDriver = {
-  capabilities: [],
   supportsContext: () => true,
   preflight: () => Effect.void,
   spawn: () => Effect.die("unused"),

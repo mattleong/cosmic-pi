@@ -115,23 +115,6 @@ const runSelectionSummary = (run: SubagentRunCard): string => {
   return sanitizeTerminalLine(Arr.join(parts, " · "));
 };
 
-const CAPABILITY_LABELS = new Map<string, string>([
-  ["parent-contact", "ask the parent"],
-  ["peer-notice", "notify peers"],
-  ["native-fork", "fork"],
-]);
-
-const runControls = (run: SubagentRunCard): string => {
-  const labels = Arr.map(
-    run.capabilities,
-    (capability) => CAPABILITY_LABELS.get(capability) ?? capability,
-  );
-  const last = labels.pop();
-  return last === undefined
-    ? "no live controls"
-    : `can ${labels.length ? `${Arr.join(labels, ", ")} and ${last}` : last}`;
-};
-
 const runWriterSummary = (run: SubagentRunCard): string | undefined => {
   if (run.writeIntent !== "writer") return undefined;
   return run.workspaceId ? `Writer · worktree ${run.workspaceId}` : "Writer · shared cwd";
@@ -143,7 +126,7 @@ const dimLines = (text: string, width: number, theme: Theme): string[] =>
 const routineRunDiagnostics = (run: SubagentRunCard, width: number, theme: Theme): string[] => {
   const selection = runSelectionSummary(run);
   const assignment = (run.reportGeneration || 1) > 1 ? ` · assignment ${run.reportGeneration}` : "";
-  const details = `${run.context === "fork" ? "Forked context" : "Fresh context"}${assignment} · ${runControls(run)}`;
+  const details = `${run.context === "fork" ? "Forked context" : "Fresh context"}${assignment}`;
   return [
     ...dimLines(`ID: ${run.id}`, width, theme),
     ...(selection ? dimLines(selection, width, theme) : []),

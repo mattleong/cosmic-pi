@@ -1,6 +1,5 @@
 import { closeOpenToolSessionEvents } from "./session-events.ts";
 import type { SessionUsageLedger } from "./session-usage.ts";
-import * as Fn from "effect/Function";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
@@ -12,15 +11,9 @@ import type {
   BackendStartupState,
 } from "../backend/model.ts";
 import type { CanonicalWriterCwd, WriterLeaseContract } from "../boundary/writer-lease.ts";
+import type { SubagentError, SubagentNotFoundError } from "./errors.ts";
 import {
-  type SubagentError,
-  type SubagentNotFoundError,
-  UnsupportedSubagentCapabilityError,
-} from "./errors.ts";
-import {
-  hasSubagentCapability,
   isTerminalRunState,
-  type SubagentCapability,
   type SubagentParentContext,
   type SubagentReportArchive,
   type SubagentReportTruncation,
@@ -258,33 +251,4 @@ export const commitRunInitialization = (record: RunRecord, state: BackendStartup
     ...(state.sessionFile && { sessionFile: state.sessionFile }),
   };
   return pending;
-};
-
-const unsupportedCapabilityMessage = (capability: SubagentCapability, id: string): string => {
-  switch (capability) {
-    case "steer":
-      return `Subagent ${id} does not support mid-turn guidance. Await with agent_await({ runIds: ["${id}"], until: "all_finished" }), inspect with agent_read({ agentIds: ["${id}"] }), or stop with agent_lifecycle({ action: "stop", runIds: ["${id}"] }).`;
-    case "interrupt":
-      return `Subagent ${id} does not support interruption. Stop with agent_lifecycle({ action: "stop", runIds: ["${id}"] }) or wait with agent_await.`;
-    case "parent-contact":
-      return `Subagent ${id} does not support parent questions; use agent_await or agent_read instead.`;
-    case "native-fork":
-    case "peer-notice":
-    case "resume":
-      return `Subagent ${id} does not support ${capability}. Inspect supported operations with agent_read({ agentIds: ["${id}"] }).`;
-  }
-  return Fn.absurd(capability);
-};
-
-export const requireCapability = (
-  record: RunRecord,
-  capability: SubagentCapability,
-): Effect.Effect<void, UnsupportedSubagentCapabilityError> => {
-  if (hasSubagentCapability(record.view, capability)) return Effect.void;
-  return Effect.fail(
-    UnsupportedSubagentCapabilityError.make({
-      capability,
-      message: unsupportedCapabilityMessage(capability, record.view.id),
-    }),
-  );
 };

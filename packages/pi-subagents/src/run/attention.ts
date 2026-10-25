@@ -8,7 +8,6 @@ export interface AttentionRun {
   readonly writeIntent: SubagentRunView["writeIntent"];
   readonly cleanup?: SubagentRunView["cleanup"] | undefined;
   readonly writerCleanupQuarantined?: boolean | undefined;
-  readonly capabilities: SubagentRunView["capabilities"];
 }
 
 /**
@@ -25,13 +24,13 @@ export const runCleanupAttention = (
       : undefined;
 
 type RunAttention =
-  | { readonly kind: "paused"; readonly canResume: boolean }
+  | { readonly kind: "paused" }
   | { readonly kind: "question"; readonly message: string }
   | { readonly kind: "question-unavailable" };
 
 export const runAttention = (run: AttentionRun): RunAttention | undefined =>
   run.state === "paused"
-    ? { kind: "paused", canResume: run.capabilities.includes("resume") }
+    ? { kind: "paused" }
     : run.question
       ? { kind: "question", message: run.question.message }
       : run.state === "waiting_for_parent"

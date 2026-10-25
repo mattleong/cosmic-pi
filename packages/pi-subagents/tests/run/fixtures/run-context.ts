@@ -77,7 +77,6 @@ export const makeTestSettlement = (overrides: Partial<RunContext> = {}) =>
   );
 
 const inertDriver: BackendDriver = {
-  capabilities: [],
   supportsContext: () => true,
   preflight: () => Effect.void,
   spawn: () => Effect.die("unused"),

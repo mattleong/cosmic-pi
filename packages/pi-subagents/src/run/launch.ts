@@ -331,7 +331,7 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
             : undefined;
           const record: RunRecord = {
             scriptOrigin: scriptOriginForStart(records, request, scriptedRoot),
-            view: initialRunView(plan, parent, id, driver.capabilities, now),
+            view: initialRunView(plan, parent, id, now),
             scope,
             driver,
             launch: backendLaunchRequest(plan, { id, name }),

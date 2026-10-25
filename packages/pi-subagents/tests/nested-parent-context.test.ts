@@ -82,7 +82,6 @@ const backendFixture = (parent: SessionManager) => {
   const launches: BackendLaunchRequest[] = [];
   const controls: Array<{ readonly offer: (event: BackendEvent) => void; released: boolean }> = [];
   const driver: BackendDriver = {
-    capabilities: [],
     supportsContext: () => true,
     preflight: () => Effect.void,
     spawn: (launch) =>

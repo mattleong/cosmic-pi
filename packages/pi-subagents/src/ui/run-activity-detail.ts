@@ -89,7 +89,6 @@ const technical = (run: SubagentRunView): string =>
       `ID: ${run.id} · assignment/report: ${run.reportGeneration} · report: ${run.reportStatus ?? "unknown"}`,
       `Route: ${run.model}`,
       `Cwd: ${run.cwd} · PID: ${run.pid ?? "none"}`,
-      `Capabilities: ${Arr.join(run.capabilities, ", ")}`,
       `Writes: ${run.writeIntent}`,
       `Workspace: ${run.writerWorkspaceMode ?? "shared-checkout"} · ${run.workspaceId ?? "none"}`,
       run.sessionFile ? `Session: ${run.sessionFile}` : "",

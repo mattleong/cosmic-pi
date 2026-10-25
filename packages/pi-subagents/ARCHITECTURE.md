@@ -10,7 +10,7 @@
 - `backend/` translates the Pi child's RPC and IPC protocol into normalized handles, controls, and events. `boundary/` owns host integration, processes, files, leases, and authenticated transport. Run orchestration never interprets native wire protocols.
 - `workspace/` owns the isolated-writer artifact model and service; `boundary/git-*` owns their Git operations and worktree hooks. Run-level bindings keep parent authority and cleanup evidence; workspace operations serialize separately from ordinary run activity.
 - `delegation/` owns each delegation mode's prompt guidance, applied to the root session through `boundary/host-delegation-prompt.ts`.
-- `tools/` owns public contracts, execution, and compact presentation. `settings/` owns commands and editors. `ui/` and settings rendering consume immutable projections, and Activity actions recheck activation, revision, and capabilities before reaching services.
+- `tools/` owns public contracts, execution, and compact presentation. `settings/` owns commands and editors. `ui/` and settings rendering consume immutable projections, and Activity actions recheck activation, revision, and action availability before reaching services.
 
 ## Lifecycle
 

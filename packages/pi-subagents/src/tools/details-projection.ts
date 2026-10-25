@@ -341,7 +341,6 @@ export const projectSubagentRunCard = (run: SubagentRunView): SubagentRunCard =>
     openaiFastMode: run.openaiFastMode,
     context: run.context,
     writeIntent: run.writeIntent,
-    capabilities: [...run.capabilities],
     startedAt: nonNegative(run.startedAt),
     lastActivityAt: nonNegative(run.lastActivityAt),
     usage: projectUsage(run.usage),

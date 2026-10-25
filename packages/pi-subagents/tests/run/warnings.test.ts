@@ -8,7 +8,6 @@ import { executeAgentActionEffect } from "../../src/tools/execute-agents.ts";
 import { MAX_CONTACT_TEXT_CHARS } from "../../src/run/limits.ts";
 import {
   contactParentFrame,
-  fakeEventBackendLayer,
   localServiceFixture,
   eventBackendRequest,
   eventBackendServiceFixture,
@@ -39,10 +38,7 @@ describe("run warnings", () => {
   it.effect("keeps an assignment's child and system warnings until the next assignment", () => {
     // A paused native run resumes in the same process, which can still emit the earlier
     // assignment's events.
-    const backend = fakeEventBackendLayer({
-      capabilities: ["steer", "interrupt", "resume"],
-    });
-    const { projections, notifications, layer } = eventBackendServiceFixture(backend);
+    const { backend, projections, notifications, layer } = eventBackendServiceFixture();
     return withService(layer, function* (service) {
       const run = yield* service.start(eventBackendRequest({ name: "warned" }));
       const control = backend.controls[0]!;

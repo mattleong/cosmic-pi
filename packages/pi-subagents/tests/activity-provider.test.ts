@@ -145,7 +145,6 @@ describe("subagent activity provider", () => {
     "session",
     "cancel",
     "dispose",
-    "policy",
     "host-withdrawal",
     "host-restored",
     "host-replaced",
@@ -187,12 +186,6 @@ describe("subagent activity provider", () => {
               ...(changed === "epoch" && { assignmentEpoch: selected.assignmentEpoch + 1 }),
               ...(changed === "question" && {
                 question: { requestId: "q-new", message: "Another question" },
-              }),
-              ...(changed === "policy" && {
-                capabilities: Arr.filter(
-                  selected.capabilities,
-                  (capability) => capability !== "parent-contact",
-                ),
               }),
             },
           ],

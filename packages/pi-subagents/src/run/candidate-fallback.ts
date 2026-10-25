@@ -185,7 +185,6 @@ export const retargetRunLocked = (record: RunRecord, retarget: CandidateRetarget
     effort: next.effort,
     context: next.context,
     openaiFastMode: next.openaiFastMode,
-    capabilities: driver.capabilities,
     ...(next.selection && { selection: next.selection }),
     ...(next.routeContinuation && { nextCandidate: nextRouteCandidate(next.routeContinuation) }),
     lastActivityAt: now,

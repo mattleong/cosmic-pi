@@ -236,7 +236,7 @@ function awaitIssues(
       code: "parent-action",
       message: "A subagent needs attention before it can continue",
       detail:
-        "Parent action required; inspect the targets with agent_read for the question or pause capabilities before acting.",
+        "Parent action required; inspect the targets with agent_read for the question or pause before acting.",
     });
   if (details.attentionRequired && !details.cancelled) summary.outcome = "warning";
 }

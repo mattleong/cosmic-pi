@@ -18,11 +18,7 @@ import {
   MAX_START_BATCH,
   MAX_TARGET_RUNS,
 } from "../run/limits.ts";
-import {
-  FAILED_START_CLEANUP_DISPOSITIONS,
-  PI_SUBAGENT_CAPABILITIES,
-  SUBAGENT_RUN_STATES,
-} from "../run/model.ts";
+import { FAILED_START_CLEANUP_DISPOSITIONS, SUBAGENT_RUN_STATES } from "../run/model.ts";
 import { MAX_NAME_CHARS } from "../run/state.ts";
 import { AGENT_TOOL_NAME, SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
 import {
@@ -99,7 +95,7 @@ const ReportSchema = Schema.Union([
 const attentionSchema = (questionChars: number) =>
   Schema.Union([
     Schema.Struct({ kind: Schema.Literal("question-unavailable") }),
-    Schema.Struct({ kind: Schema.Literal("paused"), canResume: Schema.Boolean }),
+    Schema.Struct({ kind: Schema.Literal("paused") }),
     Schema.Struct({ kind: Schema.Literal("question"), message: NonEmptyText(questionChars) }),
   ]);
 /** A question's preview; its notice delivers the whole question. */
@@ -142,13 +138,10 @@ const WithheldRunTargetSchema = Schema.Struct(
 );
 /**
  * A read's status, the detail surface, carries the whole pending question, both retained warnings,
- * and the error, plus the run's capabilities and cleanup evidence.
+ * and the error, plus the run's cleanup evidence.
  */
 const ReadStatusSchema = Schema.Struct({
   ...runTargetFields(WithheldReportSchema, MAX_CONTACT_TEXT_CHARS),
-  capabilities: Schema.Array(Schema.Literals(PI_SUBAGENT_CAPABILITIES)).check(
-    Schema.isMaxLength(PI_SUBAGENT_CAPABILITIES.length),
-  ),
   cleanup: Schema.optionalKey(RunCleanupSchema),
 });
 const RunTargetsSchema = Schema.Array(RunTargetSchema).check(Schema.isMaxLength(MAX_TARGET_RUNS));

@@ -2,7 +2,7 @@ import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import type { RunRecord } from "./internal.ts";
-import { hasSubagentCapability, isActiveRunState } from "./model.ts";
+import { isActiveRunState } from "./model.ts";
 import { countLabel } from "pi-cosmic-core/display";
 import { safeTextPrefix } from "pi-cosmic-core/text";
 
@@ -55,11 +55,7 @@ export const peerNotifier =
       Effect.forEach(
         Arr.flatMap([...records.values()], (record) => {
           const process = record.process;
-          return process &&
-            isActiveRunState(record.view.state) &&
-            hasSubagentCapability(record.view, "peer-notice")
-            ? [{ record, process }]
-            : [];
+          return process && isActiveRunState(record.view.state) ? [{ record, process }] : [];
         }),
         ({ record, process }) =>
           process.controls

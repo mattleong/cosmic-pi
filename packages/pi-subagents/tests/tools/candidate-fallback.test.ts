@@ -154,7 +154,6 @@ const fakeDriver = (
 ) => {
   const spawns: string[] = [];
   const driver: BackendDriver = {
-    capabilities: [],
     supportsContext: (context) => context === "fresh",
     preflight: ({ model }) => {
       const code = options.preflightFailures?.[model];

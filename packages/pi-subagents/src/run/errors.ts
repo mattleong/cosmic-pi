@@ -67,7 +67,6 @@ export const AGENT_MESSAGE_REFUSAL_CODES = [
   "agent_self_target",
   "agent_not_found",
   "agent_unavailable",
-  "agent_resume_unsupported",
 ] as const;
 export type AgentMessageRefusalCode = (typeof AGENT_MESSAGE_REFUSAL_CODES)[number];
 
@@ -156,14 +155,6 @@ export class SubagentRuntimeClosedError extends Schema.TaggedError<
   { readonly brand: unique symbol }
 >()("SubagentRuntimeClosedError", { message: Schema.String }) {}
 
-export class UnsupportedSubagentCapabilityError extends Schema.TaggedError<
-  UnsupportedSubagentCapabilityError,
-  { readonly brand: unique symbol }
->()("UnsupportedSubagentCapabilityError", {
-  capability: Schema.String,
-  message: Schema.String,
-}) {}
-
 export type SubagentError =
   | InvalidSubagentRequestError
   | SubagentNotFoundError
@@ -172,5 +163,4 @@ export type SubagentError =
   | SubagentWriterConflictError
   | SubagentProcessError
   | SubagentProtocolError
-  | SubagentRuntimeClosedError
-  | UnsupportedSubagentCapabilityError;
+  | SubagentRuntimeClosedError;

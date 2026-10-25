@@ -18,7 +18,6 @@ import {
   SubagentProcessError,
   type SubagentError,
 } from "../run/errors.ts";
-import { PI_SUBAGENT_CAPABILITIES } from "../run/model.ts";
 import { localPiUsage } from "./local-pi-usage.ts";
 import { requireNodeExecutable } from "../boundary/node-executable.ts";
 import { isSafeNativeModelSelector } from "../profiles/model.ts";
@@ -474,7 +473,6 @@ export const localPiBackendDriver = (
   // Children run on Pi's Node binary; a fake child boundary that never starts Node replaces the check.
   nodeExecutableCheck: Effect.Effect<void, InvalidSubagentRequestError> = requireNodeExecutable(),
 ): BackendDriver => ({
-  capabilities: PI_SUBAGENT_CAPABILITIES,
   supportsContext: (context) => context === "fresh" || context === "fork",
   preflight: (request) =>
     isSafeNativeModelSelector(request.model)

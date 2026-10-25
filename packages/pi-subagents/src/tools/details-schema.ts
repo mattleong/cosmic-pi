@@ -28,7 +28,6 @@ import {
 import {
   MAX_OUTCOME_DIFFSTAT_FILES,
   FAILED_START_CLEANUP_DISPOSITIONS,
-  PI_SUBAGENT_CAPABILITIES,
   SUBAGENT_RUN_STATES,
 } from "../run/model.ts";
 import { MAX_ERROR_CHARS, MAX_FINAL_TEXT_CHARS, MAX_NAME_CHARS } from "../run/state.ts";
@@ -64,12 +63,6 @@ const nonNegativeNumber = Schema.Number.check(
 const nonNegativeInteger = nonNegativeNumber.check(Schema.isInt());
 const boundedArray = <S extends Schema.Constraint>(schema: S, maximum: number) =>
   Schema.Array(schema).check(Schema.isMaxLength(maximum));
-
-export const MAX_CARD_CAPABILITIES = PI_SUBAGENT_CAPABILITIES.length;
-const CardCapabilitiesSchema = boundedArray(
-  Schema.Literals(PI_SUBAGENT_CAPABILITIES),
-  MAX_CARD_CAPABILITIES,
-);
 
 const MAX_WORKSPACE_WARNINGS = 6;
 const MAX_WORKSPACE_WARNING_DETAIL_CHARS = 4_096;
@@ -245,7 +238,6 @@ const SubagentRunCardSchema = Schema.Struct({
   writeIntent: WriteIntentSchema,
   cleanup: Schema.optionalKey(RunCleanupSchema),
   writerCleanupQuarantined: Schema.optionalKey(Schema.Boolean),
-  capabilities: CardCapabilitiesSchema,
   startedAt: nonNegativeNumber,
   lastActivityAt: nonNegativeNumber,
   usage: UsageSchema,

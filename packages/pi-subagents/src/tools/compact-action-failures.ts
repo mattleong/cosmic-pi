@@ -91,7 +91,6 @@ const ACTION_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
     ["interrupt_in_flight"],
     "An interrupt is still pending; await the run, then send again once it pauses or runs.",
   ],
-  [["capability", "unsupported"], "Inspect the run's capabilities with agent_read."],
   [
     ["profile", "candidate", "auth", "model"],
     "Inspect the effective route with agent_profiles or edit it with /subagents profiles.",
@@ -338,11 +337,6 @@ const AGENT_FAILURES = {
     message: (subject) => `${subject} can't receive messages right now`,
     recovery:
       "Check the agent's state with agent_list. A starting agent accepts messages once it runs. A stopping Pi agent, or one inside a subtree being stopped, can be resumed with a message once the stop finishes. A removed agent can't receive messages.",
-  },
-  agent_resume_unsupported: {
-    message: (subject) => `${subject} can't be resumed`,
-    recovery:
-      "Stop a paused one with agent_lifecycle and start a replacement; for a finished one, start a new agent with the context it needs, or message its parent.",
   },
   too_many_targets: {
     message: () => "Too many agents were named",

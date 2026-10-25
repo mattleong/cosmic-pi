@@ -3,7 +3,7 @@ import { issueMessageStyleProblems, renderContextFixture } from "pi-code-preview
 import * as Fn from "effect/Function";
 import type * as Schema from "effect/Schema";
 import { assert, describe, expect, it } from "vitest";
-import { agentFailureIssues, failureRecovery } from "../../src/tools/compact-action-failures.ts";
+import { failureRecovery } from "../../src/tools/compact-action-failures.ts";
 import { createSubagentCompactSummary } from "../../src/tools/compact-summary.ts";
 import { SUBAGENT_TOOL_NAME } from "../../src/run/tool-policy.ts";
 import { compactToolDetails } from "../../src/tools/details.ts";
@@ -436,15 +436,5 @@ describe("failure recovery routing", () => {
     expect(failureRecovery("workspace_nested_writer_unsupported", "Refused.", "start")).toContain(
       "root",
     );
-  });
-
-  it("recovers a paused run that can't resume by stopping and replacing it", () => {
-    const [issue] = agentFailureIssues(
-      "[agent_resume_unsupported] Agent agent-0000000007 is paused and cannot be resumed.",
-      "send",
-      "The agent",
-    );
-    expect(issue?.detail).toContain("agent_lifecycle");
-    expect(issueMessageStyleProblems(issue?.message ?? "")).toEqual([]);
   });
 });

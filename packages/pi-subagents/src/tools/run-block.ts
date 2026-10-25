@@ -334,9 +334,7 @@ const attentionAction = (run: SubagentRunView): string | undefined => {
   const attention = runAttention(run);
   switch (attention?.kind) {
     case "paused":
-      return attention.canResume
-        ? `Paused for a decision: review with agent_read, then resume with agent_send({ to: ${id}, message: "..." }).`
-        : `Paused and can't resume: stop it with agent_lifecycle({ action: "stop", runIds: [${id}] }), then start a replacement.`;
+      return `Paused for a decision: review with agent_read, then resume with agent_send({ to: ${id}, message: "..." }).`;
     case "question":
       return `Reply with agent_send({ to: ${id}, message: "..." }), then call agent_await again.`;
     case "question-unavailable":

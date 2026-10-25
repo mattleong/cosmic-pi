@@ -56,7 +56,6 @@ const registry = (probed: string[]) =>
   Layer.succeed(
     SubagentBackendRegistry,
     backendRegistryFor({
-      capabilities: [],
       supportsContext: () => true,
       spawn: () => Effect.die("doctor never launches"),
       preflight: (request) => {
@@ -111,7 +110,6 @@ describe("subagents doctor", () => {
       const probing = Layer.succeed(
         SubagentBackendRegistry,
         backendRegistryFor({
-          capabilities: [],
           supportsContext: () => true,
           spawn: () => Effect.die("doctor never launches"),
           preflight: () =>

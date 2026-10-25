@@ -444,7 +444,7 @@ const AgentReadParameters = Type.Object(
     verbose: Type.Optional(
       Type.Boolean({
         description:
-          "Add route selection, context, capabilities, process, cwd, and timing details to each run's status card.",
+          "Add route selection, context, process, cwd, and timing details to each run's status card.",
       }),
     ),
   },

@@ -22,7 +22,6 @@ export const view = (overrides: Partial<SubagentRunView> = {}): SubagentRunView 
   openaiFastMode: false,
   reportGeneration: 0,
   assignmentEpoch: 1,
-  capabilities: ["steer", "interrupt", "resume", "parent-contact", "peer-notice", "native-fork"],
   model: "openai-codex/gpt-5.6-sol",
   effort: "high",
   startedAt: 1,

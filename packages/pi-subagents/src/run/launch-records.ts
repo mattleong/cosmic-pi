@@ -8,7 +8,6 @@ import {
   isTerminalRunState,
   nextRouteCandidate,
   type StartSubagentRequest,
-  type SubagentCapability,
 } from "./model.ts";
 import { MAX_TASK_CHARS } from "./state.ts";
 import { childSystemPrompt } from "./tool-policy.ts";
@@ -44,7 +43,6 @@ export const initialRunView = (
   { request, parentRunId, cwd }: LaunchPlan,
   parent: RunRecord | undefined,
   id: string,
-  capabilities: ReadonlyArray<SubagentCapability>,
   now: number,
 ): StoredRunView => ({
   id,
@@ -75,7 +73,6 @@ export const initialRunView = (
   writeIntent: request.writeIntent,
   openaiFastMode: request.openaiFastMode,
   reportGeneration: 0,
-  capabilities,
   model: request.model,
   effort: request.effort,
   startedAt: now,

@@ -3,7 +3,6 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import {
-  hasSubagentCapability,
   isTerminalRunState,
   type SubagentRunView,
   type SubagentControlExpectation,
@@ -15,7 +14,6 @@ import {
   isCleanupOwed,
   clearRunActivity,
   commitRunPauseLocked,
-  requireCapability,
   snapshotRun,
   type RunContext,
   type RunRecord,
@@ -129,7 +127,6 @@ export function controlOperations(dependencies: RunControlDependencies) {
     record: RunRecord,
   ) {
     const id = record.view.id;
-    yield* requireCapability(record, "parent-contact");
     const question = record.view.question;
     if (!question)
       return yield* invalidRequest(
@@ -159,7 +156,6 @@ export function controlOperations(dependencies: RunControlDependencies) {
     steerWaiting: boolean,
   ) {
     const id = record.view.id;
-    yield* requireCapability(record, "steer");
     if (steerWaiting && record.view.state === "waiting_for_parent") {
       if (record.pauseRequested)
         return yield* invalidRequest(
@@ -169,15 +165,11 @@ export function controlOperations(dependencies: RunControlDependencies) {
       admitTurnInput(record);
       return { delivery: "guided" as const, record };
     }
-    if (record.view.state === "paused" || record.view.state === "completed") {
-      const recovery = hasSubagentCapability(record.view, "resume")
-        ? `send the message with agent_send({ to: "${id}", message: "..." }) to resume it`
-        : `this backend cannot resume it; stop it with agent_lifecycle({ action: "stop", runIds: ["${id}"] }) and start a replacement`;
+    if (record.view.state === "paused" || record.view.state === "completed")
       return yield* invalidRequest(
         "run_not_running",
-        `Subagent ${id} is ${record.view.state}; ${recovery}.`,
+        `Subagent ${id} is ${record.view.state}; send the message with agent_send({ to: "${id}", message: "..." }) to resume it.`,
       );
-    }
     if (record.view.state === "starting")
       return yield* invalidRequest(
         "run_starting",
@@ -339,7 +331,6 @@ export function controlOperations(dependencies: RunControlDependencies) {
           Effect.gen(function* () {
             const selected = yield* requireRecord(id);
             yield* requireControlExpectation(selected, expected);
-            yield* requireCapability(selected, "interrupt");
             if (selected.view.state !== "running" && selected.view.state !== "waiting_for_parent")
               return yield* invalidRequest(
                 "interrupt_state_invalid",

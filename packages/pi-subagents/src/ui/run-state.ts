@@ -6,7 +6,6 @@ import {
   type ManagerStatusColor,
 } from "pi-cosmic-ui/manager";
 import {
-  hasSubagentCapability,
   isActiveRunState,
   isResumableRunState,
   type SubagentRunState,
@@ -39,23 +38,19 @@ export const runStateColor = (state: SubagentRunState): ManagerStatusColor =>
 export type RunMessageMode = "guidance" | "reply";
 
 export const runMessageMode = (run: SubagentRunView): RunMessageMode | undefined => {
-  if (run.state === "waiting_for_parent")
-    return hasSubagentCapability(run, "parent-contact") ? "reply" : undefined;
-  return run.state === "running" && hasSubagentCapability(run, "steer") ? "guidance" : undefined;
+  if (run.state === "waiting_for_parent") return "reply";
+  return run.state === "running" ? "guidance" : undefined;
 };
 
 export const canInterruptRun = (run: SubagentRunView): boolean =>
-  (run.state === "running" || run.state === "waiting_for_parent") &&
-  hasSubagentCapability(run, "interrupt");
+  run.state === "running" || run.state === "waiting_for_parent";
 
 export const canStopRun = (run: SubagentRunView): boolean =>
   (isActiveRunState(run.state) && run.state !== "stopping") ||
   (run.cleanup?.disposition === "quarantined" && run.cleanup.recovery === "stop");
 
 export const canResumeRun = (run: SubagentRunView): boolean =>
-  isResumableRunState(run.state) &&
-  runCleanupAttention(run) === undefined &&
-  hasSubagentCapability(run, "resume");
+  isResumableRunState(run.state) && runCleanupAttention(run) === undefined;
 
 const UNNAMEABLE_STATES: ReadonlySet<SubagentRunState> = new Set([
   "starting",

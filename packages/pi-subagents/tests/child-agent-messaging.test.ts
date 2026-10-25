@@ -24,7 +24,6 @@ import type { BackendDriver, BackendEvent } from "../src/backend/model.ts";
 import { backendRegistryFor, SubagentBackendRegistry } from "../src/backend/service.ts";
 import { registerSubagentChildBridge } from "../src/boundary/host-child.ts";
 import type { LocalPiChildIpcHandlers } from "../src/boundary/local-pi-ipc.ts";
-import { PI_SUBAGENT_CAPABILITIES } from "../src/run/model.ts";
 import { SubagentService } from "../src/run/service.ts";
 import { AGENT_TOOL_NAMES } from "../src/run/tool-policy.ts";
 import { decodeSubagentContract } from "../src/tools/contract-schema.ts";
@@ -54,7 +53,6 @@ const backendFixture = () => {
     readonly offer: (event: BackendEvent) => void;
   }> = [];
   const driver: BackendDriver = {
-    capabilities: PI_SUBAGENT_CAPABILITIES,
     supportsContext: () => true,
     preflight: () => Effect.void,
     spawn: (launch) =>

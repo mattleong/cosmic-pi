@@ -29,7 +29,6 @@ import {
   commitRunInitialization,
   completeRunInitialization,
   type PendingInitializationSettlement,
-  requireCapability,
   snapshotRun,
   type RunContext,
   type RunRecord,
@@ -315,7 +314,6 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
         withLock(
           Effect.gen(function* () {
             const record = yield* requireRecord(id);
-            yield* requireCapability(record, "resume");
             return {
               record,
               assignment: record.assignment,
@@ -392,7 +390,6 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
                 "resume_state_invalid",
                 `Subagent ${id} changed while resume was being prepared.`,
               );
-            yield* requireCapability(selected, "resume");
             const stateFailure = resumeStateError(selected);
             if (stateFailure) return yield* stateFailure;
             // An explicit stop of a subtree outranks agent messages until it finishes.

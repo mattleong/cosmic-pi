@@ -150,9 +150,7 @@ function attentionIssues(
         requestedPause ? "info" : "warning",
         "paused-recovery",
         `${label} is paused`,
-        attention.canResume
-          ? `Paused. Review it with agent_read, then resume it with agent_send({ to: ${id}, message: "Continue with reviewed guidance." }), then agent_await again.`
-          : `Paused; this backend cannot resume. Stop with agent_lifecycle({ action: "stop", runIds: [${id}] }), then launch a corrected replacement and await its run ID.`,
+        `Paused. Review it with agent_read, then resume it with agent_send({ to: ${id}, message: "Continue with reviewed guidance." }), then agent_await again.`,
       );
       return;
     case "question":

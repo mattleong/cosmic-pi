@@ -8,12 +8,7 @@ import type {
   SubagentEffort,
   SubagentWriteIntent,
 } from "../domain/routing.ts";
-import type {
-  RuntimeApiKey,
-  SubagentCapability,
-  SubagentUsage,
-  SubagentCleanupDiagnostic,
-} from "../run/model.ts";
+import type { RuntimeApiKey, SubagentUsage, SubagentCleanupDiagnostic } from "../run/model.ts";
 import type {
   AgentCaller,
   AgentListResult,
@@ -200,7 +195,6 @@ export interface BackendPreflightRequest {
 }
 
 export interface BackendDriver {
-  readonly capabilities: ReadonlyArray<SubagentCapability>;
   readonly supportsContext: (context: SubagentContextMode) => boolean;
   readonly preflight: (
     request: BackendPreflightRequest,

@@ -11,7 +11,6 @@ import { declaredCandidate } from "../fixtures/profiles.ts";
 import { profileServiceFor } from "../tools/fixtures/tool-harness.ts";
 
 const driver: BackendDriver = {
-  capabilities: [],
   supportsContext: (context) => context === "fresh",
   preflight: () => Effect.void,
   spawn: () => Effect.die("The session fixture delegates spawning to its owned service boundary."),

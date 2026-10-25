@@ -14,7 +14,6 @@ import {
 } from "./errors.ts";
 import type { RunRecord } from "./internal.ts";
 import {
-  hasSubagentCapability,
   isTerminalRunState,
   SUBAGENT_ROOT_RUN_ID,
   type SubagentReportArchive,
@@ -275,8 +274,6 @@ export const planRunMessage = (
     case "completed":
     case "failed":
     case "stopped":
-      if (!hasSubagentCapability(record.view, "resume"))
-        return refuse("agent_resume_unsupported", `Agent ${id} is ${state} and cannot be resumed.`);
       return fromAncestor
         ? { kind: "resume" }
         : refuse(

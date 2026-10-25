@@ -38,7 +38,6 @@ describe("SubagentService", () => {
       const counts = leaseCounts();
       const projections: SubagentProjection[] = [];
       const driver: BackendDriver = {
-        capabilities: ["steer"],
         supportsContext: (context) => context === "fresh",
         preflight: () => Effect.void,
         spawn: () =>

@@ -31,16 +31,6 @@ export const SUBAGENT_RUN_STATES = [
 ] as const;
 export type SubagentRunState = (typeof SUBAGENT_RUN_STATES)[number];
 
-export const PI_SUBAGENT_CAPABILITIES = [
-  "steer",
-  "interrupt",
-  "resume",
-  "parent-contact",
-  "peer-notice",
-  "native-fork",
-] as const;
-export type SubagentCapability = (typeof PI_SUBAGENT_CAPABILITIES)[number];
-
 export interface SubagentUsage {
   readonly input: number;
   readonly output: number;
@@ -213,7 +203,6 @@ export interface SubagentRunView {
   readonly openaiFastMode: boolean;
   readonly reportGeneration: number;
   readonly assignmentEpoch: number;
-  readonly capabilities: ReadonlyArray<SubagentCapability>;
   readonly model: string;
   readonly effort: SubagentEffort;
   readonly pid?: number | undefined;
@@ -383,11 +372,6 @@ export interface RouteFallbackStep {
 export type RouteFallback = (
   request: RouteFallbackRequest,
 ) => Effect.Effect<RouteFallbackStep, SubagentError>;
-
-export const hasSubagentCapability = (
-  run: Pick<SubagentRunView, "capabilities">,
-  capability: SubagentCapability,
-): boolean => run.capabilities.includes(capability);
 
 export const isParentActionRequiredRun = (
   run: Pick<SubagentRunView, "state" | "cleanup" | "writerCleanupQuarantined"> & {

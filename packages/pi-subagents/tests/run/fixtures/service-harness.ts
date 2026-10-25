@@ -713,7 +713,6 @@ export function fakeEventBackendLayer(
   options: {
     readonly initialStartGate?: Deferred.Deferred<void> | undefined;
     readonly interruptGate?: Deferred.Deferred<void> | undefined;
-    readonly capabilities?: BackendDriver["capabilities"] | undefined;
     readonly releaseGate?: Deferred.Deferred<void> | undefined;
     /** Replaces recorded guidance delivery, such as with a failed one. */
     readonly steer?: ((message: string) => Effect.Effect<void, SubagentProcessError>) | undefined;
@@ -723,7 +722,6 @@ export function fakeEventBackendLayer(
   const launches: BackendLaunchRequest[] = [];
   const agentMessaging: Array<BackendAgentMessaging | undefined> = [];
   const driver: BackendDriver = {
-    capabilities: options.capabilities ?? ["steer"],
     supportsContext: (context) => context === "fresh",
     preflight: () => Effect.void,
     spawn: (launch, agents) =>

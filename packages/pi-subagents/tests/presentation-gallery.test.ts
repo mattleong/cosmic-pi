@@ -162,7 +162,6 @@ const apiAudit = view({
   effort: "medium",
   state: "completed",
   reportGeneration: 1,
-  capabilities: ["steer", "interrupt", "parent-contact"],
   finalText: "No breaking changes in the public API since v0.1.",
   usage: usage(40_300, 0.22),
   ...timing(9, 2),
