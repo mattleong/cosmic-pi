@@ -6,6 +6,7 @@ import {
   type ExtensionToolContext,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import type { BackendDriver } from "../../../src/backend/model.ts";
 import {
@@ -109,6 +110,8 @@ export type CaptureOptions = {
   readonly thinkingLevel?: ReturnType<ExtensionAPI["getThinkingLevel"]>;
   readonly startUiTicker?: SubagentToolRuntime["startUiTicker"];
   readonly toolPresentation?: SubagentToolRuntime["toolPresentation"];
+  /** The clock tool effects run on, such as the test's. */
+  readonly clock?: Clock.Clock;
 };
 
 const textResult = <Details>(result: AgentToolResult<Details>): CapturedToolResult => ({
@@ -132,6 +135,7 @@ export const captureSubagentTools = (
     thinkingLevel = "high",
     startUiTicker,
     toolPresentation,
+    clock,
   }: CaptureOptions = {},
 ): ReadonlyMap<string, CapturedTool> => {
   const tools = new Map<string, CapturedTool>();
@@ -153,6 +157,7 @@ export const captureSubagentTools = (
           Effect.provideService(SubagentService, service),
           Effect.provideService(SubagentProfileService, profiles),
           Effect.provideService(SubagentBackendRegistry, registry),
+          (provided) => (clock ? Effect.provideService(provided, Clock.Clock, clock) : provided),
         ),
         signal ? { signal } : undefined,
       ),

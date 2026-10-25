@@ -20,11 +20,13 @@ import type { SubagentAwaitUntil, SubagentRunObservation } from "../run/service.
 import { MAX_NAME_CHARS, sanitizeName } from "../run/state.ts";
 import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
 import { runAttention } from "../run/attention.ts";
+import { runStall } from "../run/stall.ts";
 import { MAX_CONTACT_TEXT_CHARS } from "../run/limits.ts";
 import { distinctRunWarnings } from "../run/warnings.ts";
 import {
   MAX_CONTRACT_MESSAGE_CHARS,
   MAX_CONTRACT_PREVIEW_CHARS,
+  MAX_CONTRACT_TOOL_NAME_CHARS,
   type ContractAttention,
   type ContractFailure,
   type ContractLifecycleAction,
@@ -32,6 +34,7 @@ import {
   type ContractReadStatus,
   type ContractReport,
   type ContractRunTarget,
+  type ContractStall,
   type ContractStartLaunch,
   type ContractWithheldReport,
   type ContractWithheldRunTarget,
@@ -95,6 +98,21 @@ export const projectAttention = (
   return message ? { kind: "question", message } : { kind: "question-unavailable" };
 };
 
+/** A running run's stall sign at `now`, in whole seconds. */
+export const projectStall = (run: SubagentRunView, now: number): ContractStall | undefined => {
+  const stall = runStall(run, now);
+  if (stall === undefined) return undefined;
+  if (stall.kind === "failing-tools") return stall;
+  const seconds = Math.floor(stall.sinceMillis / 1_000);
+  return stall.kind === "idle"
+    ? { kind: "idle", seconds }
+    : {
+        kind: "tool-open",
+        tool: metadata(stall.toolName, MAX_CONTRACT_TOOL_NAME_CHARS) ?? "tool",
+        seconds,
+      };
+};
+
 /** The retained child and system warnings. */
 const projectWarnings = (run: SubagentRunView, chars: number): ContractRunTarget["warnings"] => {
   const warnings = distinctRunWarnings(run);
@@ -145,13 +163,18 @@ const observedReport = ({ run, completionReceipt }: SubagentRunObservation): Con
       };
 };
 
-/** `detailChars` bounds the question, warnings, and error: previews, or a read's whole text. */
+/**
+ * `detailChars` bounds the question, warnings, and error: previews, or a read's whole text. With
+ * `now`, a running run carries its stall sign.
+ */
 const targetFields = (
   run: SubagentRunView,
+  now: number | undefined,
   detailChars = MAX_CONTRACT_PREVIEW_CHARS,
 ): Omit<ContractRunTarget, "report"> => {
   const profile = knownProfile(run.profile);
   const attention = projectAttention(run, detailChars);
+  const stall = now === undefined ? undefined : projectStall(run, now);
   const error = metadata(run.error, detailChars);
   const errorFile = error === undefined ? undefined : projectReportFile(run.errorArchive);
   return {
@@ -168,6 +191,7 @@ const targetFields = (
     ...projectModelOverride(run.modelOverride),
     parentActionRequired: isParentActionRequiredRun(run),
     ...(attention !== undefined && { attention }),
+    ...(stall !== undefined && { stall }),
     warnings: projectWarnings(run, detailChars),
     ...(error !== undefined && { error }),
     ...(errorFile !== undefined && { errorFile }),
@@ -175,7 +199,7 @@ const targetFields = (
 };
 
 const withheldTarget = (run: SubagentRunView): ContractWithheldRunTarget => ({
-  ...targetFields(run),
+  ...targetFields(run, undefined),
   report: withheldReport(run),
 });
 
@@ -183,17 +207,17 @@ const withheldTarget = (run: SubagentRunView): ContractWithheldRunTarget => ({
  * A read's status, the detail surface, which carries the whole pending question, both retained
  * warnings, the error, and cleanup diagnostics.
  */
-export const readStatusTarget = (run: SubagentRunView): ContractReadStatus => {
+export const readStatusTarget = (run: SubagentRunView, now: number): ContractReadStatus => {
   const cleanup = projectRunCleanup(run.cleanup);
   return {
-    ...targetFields(run, MAX_CONTACT_TEXT_CHARS),
+    ...targetFields(run, now, MAX_CONTACT_TEXT_CHARS),
     report: withheldReport(run),
     ...(cleanup !== undefined && { cleanup }),
   };
 };
 
-const observedTarget = (observation: SubagentRunObservation): ContractRunTarget => ({
-  ...targetFields(observation.run),
+const observedTarget = (observation: SubagentRunObservation, now: number): ContractRunTarget => ({
+  ...targetFields(observation.run, now),
   report: observedReport(observation),
 });
 
@@ -282,12 +306,16 @@ interface AwaitContractInput {
   readonly questionsElsewhere?: boolean | undefined;
   /** Agent messages delivered to the caller during the wait. */
   readonly messages?: AgentMessageArrivals | undefined;
+  /** When the result was produced, for stall signs. */
+  readonly now: number;
 }
 
 const settled = ({ run }: SubagentRunObservation): boolean => isTerminalRunState(run.state);
 
 export const awaitContract = (input: AwaitContractInput): SubagentAwaitContract => {
-  const targets = Arr.map(input.observations, observedTarget);
+  const targets = Arr.map(input.observations, (observation) =>
+    observedTarget(observation, input.now),
+  );
   const senders = input.messages ? agentMessageSenders(input.messages) : [];
   const finished =
     input.until === "any_finished"
@@ -319,6 +347,8 @@ interface CancelledAwaitContractInput {
   readonly cleanup: "confirmed" | "unconfirmed";
   readonly deliveryAttemptedIds?: ReadonlySet<string>;
   readonly ending?: "cancelled" | "timed_out" | "user_input" | undefined;
+  /** When the result was produced, for stall signs; without it there are none. */
+  readonly now: number | undefined;
 }
 
 export const cancelledAwaitContract = (
@@ -331,7 +361,7 @@ export const cancelledAwaitContract = (
     until: input.until,
     requestedRunIds: [...input.requestedRunIds],
     targets: Arr.map(input.runs, (run) => ({
-      ...targetFields(run),
+      ...targetFields(run, input.now),
       report: input.deliveryAttemptedIds?.has(run.id) ? { status: "unknown" } : withheldReport(run),
     })),
     unobservedRunIds: Arr.filter(input.requestedRunIds, (id) => !observed.has(id)),

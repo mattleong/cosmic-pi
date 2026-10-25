@@ -149,11 +149,12 @@ describe("report retention", () => {
         expect(Arr.join(readText, "\n")).toContain("finding 0\n");
 
         const observations = yield* awaitObservations(service, [run.id]);
-        const text = awaitResultText("", observations, []);
+        const text = awaitResultText("", observations, [], 0);
         const contract = awaitContract({
           observations,
           until: "all_finished",
           requestedRunIds: [run.id],
+          now: 0,
         });
         expect(() => encodeSubagentContract(contract)).not.toThrow();
         const [target] = contract.targets;
@@ -201,13 +202,14 @@ describe("report retention", () => {
           observations,
           until: "all_finished",
           requestedRunIds: [run.id],
+          now: 0,
         }).targets;
         const delivered = target?.report;
         expect(delivered && "text" in delivered && delivered.truncated).toBe(true);
         expect(delivered && "text" in delivered && delivered.text.length).toBeLessThanOrEqual(
           MAX_OUTCOME_PREVIEW_CHARS,
         );
-        const text = awaitResultText("", observations, []);
+        const text = awaitResultText("", observations, [], 0);
         expect(text).toContain("finding 0 finding 1");
         expect(text).toContain("agent_read");
       });
@@ -295,7 +297,7 @@ describe("report retention", () => {
 
             const failed = yield* runView(service, run.id);
             expect((failed.error?.length ?? 0) > MAX_OUTCOME_PREVIEW_CHARS).toBe(long);
-            expect(readStatusTarget(failed).errorFile !== undefined).toBe(long);
+            expect(readStatusTarget(failed, 0).errorFile !== undefined).toBe(long);
             yield* TestClock.adjust("100 millis");
             yield* yieldUntil(() => notifications.length > 0);
             const notified = completedRun(notifications[0]);
@@ -361,6 +363,7 @@ describe("report retention", () => {
           observations: yield* awaitObservations(service, [run.id]),
           until: "all_finished",
           requestedRunIds: [run.id],
+          now: 0,
         }).targets;
         expect(target?.report).toMatchObject({
           status: "delivered",

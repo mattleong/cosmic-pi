@@ -40,6 +40,7 @@ export const MAX_CONTRACT_PREVIEW_CHARS = MAX_OUTCOME_PREVIEW_CHARS;
 export const MAX_CONTRACT_MESSAGE_CHARS = 1_024;
 export const MAX_CONTRACT_TASK_CHARS = 256;
 export const MAX_CONTRACT_MODEL_CHARS = 256;
+export const MAX_CONTRACT_TOOL_NAME_CHARS = 128;
 
 const FAILURE_DISPOSITIONS = [
   "unconfirmed",
@@ -101,6 +102,21 @@ const attentionSchema = (questionChars: number) =>
 /** A question's preview; its notice delivers the whole question. */
 const AttentionSchema = attentionSchema(MAX_CONTRACT_PREVIEW_CHARS);
 
+/**
+ * A running run's stall sign when the result was produced, in whole seconds: a tool open for 5
+ * minutes, 3 failed tools in a row, or 2 minutes without activity. Elapsed time alone doesn't show
+ * that a run is stuck, and a sign never ends a wait.
+ */
+const StallSchema = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("tool-open"),
+    tool: NonEmptyText(MAX_CONTRACT_TOOL_NAME_CHARS),
+    seconds: count,
+  }),
+  Schema.Struct({ kind: Schema.Literal("failing-tools"), count }),
+  Schema.Struct({ kind: Schema.Literal("idle"), seconds: count }),
+]);
+
 const FailureSchema = Schema.Struct({
   disposition: Schema.Literals(FAILURE_DISPOSITIONS),
   code: Schema.optionalKey(NonEmptyText(MAX_FAILURE_CODE_CHARS)),
@@ -120,6 +136,7 @@ const runTargetFields = <Report extends Schema.Top>(report: Report, detailChars:
   parentActionRequired: Schema.Boolean,
   writerCleanupQuarantined: Schema.optionalKey(Schema.Boolean),
   attention: Schema.optionalKey(attentionSchema(detailChars)),
+  stall: Schema.optionalKey(StallSchema),
   warnings: Schema.Array(
     Schema.Struct({
       source: Schema.optionalKey(Schema.Literals(["child", "system"])),
@@ -269,6 +286,7 @@ const AgentListContractSchema = Schema.Struct({
         }),
       ),
       attention: Schema.optionalKey(AttentionSchema),
+      stall: Schema.optionalKey(StallSchema),
       task: Schema.optionalKey(NonEmptyText(MAX_CONTRACT_TASK_CHARS)),
       self: Schema.Boolean,
     }),
@@ -331,6 +349,7 @@ export type ContractReadStatus = typeof ReadStatusSchema.Type;
 export type ContractReport = typeof ReportSchema.Type;
 export type ContractWithheldReport = typeof WithheldReportSchema.Type;
 export type ContractAttention = typeof AttentionSchema.Type;
+export type ContractStall = typeof StallSchema.Type;
 export type ContractFailure = typeof FailureSchema.Type;
 export type ContractStartLaunch = SubagentStartContract["launches"][number];
 export type ContractLifecycleResult = SubagentLifecycleContract["results"][number];

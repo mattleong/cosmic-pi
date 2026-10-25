@@ -210,6 +210,7 @@ export function hostNotifier(
             details: {
               version: 1,
               kind: "completed",
+              ids: Arr.map(runs, (run) => run.id),
               total: runs.length,
               failed: Arr.filter(runs, (run) => run.outcome === "failed").length,
               warnings: Arr.filter(runs, (run) => Boolean(Str.trim(run.warning ?? ""))).length,
@@ -234,7 +235,12 @@ export function hostNotifier(
             pi,
             {
               customType: QUESTION_MESSAGE_TYPE,
-              details: { version: 1, kind: "question", name: displayName(notification.name) },
+              details: {
+                version: 1,
+                kind: "question",
+                id: notification.id,
+                name: displayName(notification.name),
+              },
               content: clip(questionContent(notification)),
             },
             startTurn,

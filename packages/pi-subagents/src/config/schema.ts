@@ -496,7 +496,8 @@ const MOST_RESTRICTIVE_NESTING: SubagentNestingOverrides = Object.freeze({
   maxActiveRuns: NESTING_BOUNDS.maxActiveRuns.minimum,
 });
 
-const decodeDocumentNesting = (
+/** Decodes saved nesting limits per field; documents and the reload handoff both use it. */
+export const decodeDocumentNesting = (
   value: FieldValue,
   path: string,
   diagnostics: string[],

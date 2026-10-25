@@ -28,11 +28,13 @@ export const createProfileOverrideHandoff = () => {
     captureSnapshot: () => snapshot,
     open: () => ++owner,
     publish,
-    publishSnapshot: (from: number, next: SessionProfileSnapshot) => {
-      if (from !== owner) return;
+    /** False when `from` no longer owns the handoff, so nothing was published. */
+    publishSnapshot: (from: number, next: SessionProfileSnapshot): boolean => {
+      if (from !== owner) return false;
       publish(from, sessionProfileSeed(next));
       snapshot = next;
       baseConfig = next.baseConfig;
+      return true;
     },
     clear: () => {
       owner += 1;

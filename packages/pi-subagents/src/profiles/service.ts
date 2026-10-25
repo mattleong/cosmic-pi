@@ -18,6 +18,7 @@ import {
 } from "./resolve.ts";
 import {
   conflict,
+  restoredSessionProfileSnapshot,
   sessionProfileSeed,
   sessionProfileSnapshot,
   patchSessionDelegationSnapshot,
@@ -29,7 +30,10 @@ import {
   type SessionProfileEditError,
   type SessionNestingPatch,
   type SessionProfileOverrideSeed,
+  type RestoredSessionProfile,
   type SessionProfilePatch,
+  type SessionProfileRestore,
+  type SessionProfileRestoreResets,
   type SessionProfileSetPatch,
   type SessionProfileSnapshot,
 } from "./session-overrides.ts";
@@ -81,6 +85,10 @@ export interface SubagentProfileLayerOptions {
   /** The base configuration a replaced runtime published, which /tree keeps. */
   readonly sessionBaseConfig?: ResolvedSubagentConfig | undefined;
   readonly initialSessionOverrides?: SessionProfileOverrideSeed | undefined;
+  /** A reload handoff, which replaces `initialSessionOverrides` once rebuilt over the configuration. */
+  readonly restoredSession?: SessionProfileRestore | undefined;
+  /** Receives the session settings `restoredSession` couldn't keep, when there are any. */
+  readonly reportRestoreResets?: ((resets: SessionProfileRestoreResets) => void) | undefined;
   /**
    * Receives the initial snapshot and every committed change, including its base configuration.
    * A throw fails that change and leaves the committed snapshot unchanged.
@@ -90,23 +98,28 @@ export interface SubagentProfileLayerOptions {
 
 type SubagentProfileServiceOptions = Pick<
   SubagentProfileLayerOptions,
-  "initialSessionOverrides" | "publishSession"
+  "initialSessionOverrides" | "restoredSession" | "reportRestoreResets" | "publishSession"
 >;
 
 const subagentProfileService = Effect.fn("SubagentProfileService.make")(function* (
   config: ResolvedSubagentConfig,
   options: SubagentProfileServiceOptions,
 ): Effect.fn.Return<SubagentProfileServiceContract, ProjectionError> {
+  const restored: RestoredSessionProfile = options.restoredSession
+    ? restoredSessionProfileSnapshot(config, options.restoredSession)
+    : { snapshot: sessionProfileSnapshot(config, options.initialSessionOverrides) };
   // A failed publication leaves the committed snapshot unchanged, so the handoff that /reload
   // and /tree restore from never disagrees with this service.
   const projection = yield* frozenProjection<SessionProfileSnapshot, SessionProfileSnapshot>(
-    sessionProfileSnapshot(config, options.initialSessionOverrides),
+    restored.snapshot,
     Fn.identity,
     (snapshot) => options.publishSession?.(snapshot),
   );
   // Serializes edits with saved-set writes, which read the snapshot without republishing it, so
   // a failed publication cannot report a saved-set write that already committed as failed.
   const lock = yield* Semaphore.make(1);
+  const { resets } = restored;
+  if (resets) yield* Effect.sync(() => options.reportRestoreResets?.(resets));
   const commit = <E>(
     transition: (current: SessionProfileSnapshot) => Effect.Effect<SessionProfileSnapshot, E>,
   ): Effect.Effect<SessionProfileSnapshot, E | ProjectionError> =>

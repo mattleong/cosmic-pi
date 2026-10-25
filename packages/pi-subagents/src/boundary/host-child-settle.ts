@@ -11,6 +11,7 @@ import { invokeHostCallback } from "pi-cosmic-core/host-session";
 
 export const PROXY_NOTIFICATION_MESSAGE_TYPE = "pi-subagents-proxy-notification";
 export const FINAL_REPORT_REMINDER_MESSAGE_TYPE = "pi-subagents-final-report-reminder";
+export const PEER_NOTICE_MESSAGE_TYPE = "pi-subagents-peer-notice";
 
 const PROXY_NOTICE_TYPES: ReadonlySet<string> = new Set([PROXY_NOTIFICATION_MESSAGE_TYPE]);
 

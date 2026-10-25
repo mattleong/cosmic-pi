@@ -132,6 +132,7 @@ describe("nested Pi proxy protocol", () => {
       requestedRunIds: [run.id],
       until: "all_finished",
       cleanup: "confirmed",
+      now: 0,
     });
     expect(
       decodeSubagentProxyResult(

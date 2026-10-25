@@ -49,7 +49,7 @@ import { restoreSessionUsage, sessionUsageRecorder } from "../boundary/host-sess
 import { registerSubagentErrorReceipts } from "../boundary/host-tool-result.ts";
 import { registerUserInputSignal } from "../boundary/host-user-input.ts";
 import { subagentProjectionBridge } from "../boundary/host-ui.ts";
-import type { SessionProfileOverrideSeed } from "../profiles/session-overrides.ts";
+import type { SessionProfileRestoreResets } from "../profiles/session-overrides.ts";
 import {
   subagentApplicationLayer,
   type SubagentApplication,
@@ -71,7 +71,12 @@ import { registerSubagentTools } from "../tools/subagent.ts";
 import { registerApplicationCommands } from "./commands.ts";
 import { orphanSweepNotice, registerSubagentMessageRenderers } from "./messages.ts";
 import { createProfileOverrideHandoff } from "./profile-override-handoff.ts";
-import { profileReloadHandoff, profileReloadSessionKey } from "./profile-reload-handoff.ts";
+import {
+  profileReloadHandoff,
+  profileReloadSessionKey,
+  sessionRestoreNotice,
+  type ProfileReloadCapture,
+} from "./profile-reload-handoff.ts";
 
 const ROOT_TOOL_NAME_SET: ReadonlySet<string> = new Set(ROOT_TOOL_NAMES);
 const PARENT_IDLE_CHECK_INTERVAL = "50 millis";
@@ -147,7 +152,7 @@ const activateWorktreeTool = (pi: ExtensionAPI): void =>
       pi.setActiveTools([...active, SUBAGENT_TOOL_NAME.workspace]);
   }, undefined);
 
-function notifyActivationFailure(ctx: ExtensionContext, message: string): void {
+function notifyActivationWarning(ctx: ExtensionContext, message: string): void {
   if (invokeHostCallback(() => ctx.hasUI, false)) notifyAtHostBoundary(ctx, message, "warning");
 }
 
@@ -183,7 +188,10 @@ export function registerSubagentApplication(
   const notify = hostNotifier(pi, { delivery: wake });
   let startupFailureTools: ReadonlyArray<string> = [];
   let hasRegisteredTools = false;
-  let incompatibleReload = false;
+  // A reload handoff no runtime has applied yet, and resets no activation has announced: a failed
+  // start keeps both, so the session never runs on configuration a dropped override restricted.
+  let pendingRestore: ProfileReloadCapture | undefined;
+  let unannouncedResets: SessionProfileRestoreResets | undefined;
   let retainingTools = false;
 
   const disableTools = (): void => {
@@ -229,19 +237,11 @@ export function registerSubagentApplication(
         const ownsActivation = slot.captureAuthority();
         if (activation.trigger !== "tree") profileOverrideHandoff.clear();
         const owner = profileOverrideHandoff.open();
-        const restoreReload = activation.trigger === "reload" || incompatibleReload;
-        incompatibleReload = false;
-        let restoredReload: SessionProfileOverrideSeed | undefined;
-        try {
-          restoredReload =
-            restoreReload && activation.sessionKey
-              ? profileReloadHandoff.capture(activation.sessionKey)
-              : undefined;
-        } catch (error) {
-          incompatibleReload = Predicate.isTagged(error, "IncompatibleProfileReloadHandoffError");
-          throw error;
-        }
-        if (restoredReload) profileOverrideHandoff.publish(owner, restoredReload);
+        if (activation.trigger === "reload")
+          pendingRestore = activation.sessionKey
+            ? profileReloadHandoff.capture(activation.sessionKey)
+            : undefined;
+        const restore = pendingRestore;
         const sessionBaseConfig = profileOverrideHandoff.captureBaseConfig();
         let worktreeSeen = false;
         const layer = subagentApplicationLayer({
@@ -251,9 +251,18 @@ export function registerSubagentApplication(
           agentDirectory: activation.agentDirectory,
           projectTrusted: activation.projectTrusted,
           ...(sessionBaseConfig && { sessionBaseConfig }),
-          initialSessionOverrides: restoredReload ?? profileOverrideHandoff.capture(),
+          initialSessionOverrides: profileOverrideHandoff.capture(),
+          restoredSession: restore?.restore,
+          reportRestoreResets: (resets) => {
+            if (ownsActivation()) unannouncedResets = resets;
+          },
           publishSession: (snapshot) => {
-            profileOverrideHandoff.publishSnapshot(owner, snapshot);
+            // The service's first snapshot applies the restore, failing closed, as this session's.
+            if (
+              profileOverrideHandoff.publishSnapshot(owner, snapshot) &&
+              pendingRestore === restore
+            )
+              pendingRestore = undefined;
             // The footer is presentation; its failure must not fail the committed change.
             if (ownsActivation() && currentActivation === activation)
               invokeHostCallback(showSessionFooter, undefined);
@@ -410,7 +419,7 @@ export function registerSubagentApplication(
         } catch {
           disableTools();
           if (!slot.isCurrent(token)) return;
-          notifyActivationFailure(activation.ctx, "Subagents couldn't register their tools");
+          notifyActivationWarning(activation.ctx, "Subagents couldn't register their tools");
           if (slot.isCurrent(token)) slot.shutdown().catch(() => undefined);
           return;
         }
@@ -422,8 +431,10 @@ export function registerSubagentApplication(
         bridge.publish(prepared.projection);
         currentActivation = activation;
         showSessionFooter();
-        if (activation.trigger === "reload" && activation.sessionKey)
-          profileReloadHandoff.clear(activation.sessionKey);
+        if (unannouncedResets) {
+          notifyActivationWarning(activation.ctx, sessionRestoreNotice(unannouncedResets));
+          unannouncedResets = undefined;
+        }
         bridge.setContext(activation.ctx);
         // A new session declares agent_worktree only once it has a worktree, which the orphan
         // check below or the first worktree writer supplies. Reload keeps it, and resume and tree
@@ -477,11 +488,9 @@ export function registerSubagentApplication(
       onDeactivated: () => detachActivation(retainingTools),
       onStartFailure: (activation) => {
         disableTools();
-        notifyActivationFailure(
+        notifyActivationWarning(
           activation.ctx,
-          incompatibleReload
-            ? "Subagents cannot restore this session's profile settings; start a fresh Pi session"
-            : "Subagents couldn't start; check pi-subagents.json, then run /reload",
+          "Subagents couldn't start; check pi-subagents.json, then run /reload",
         );
       },
     });
@@ -505,7 +514,7 @@ export function registerSubagentApplication(
     );
     if (agentDirectory === undefined) {
       const shutdown = slot.shutdown();
-      notifyActivationFailure(ctx, "Subagents couldn't read this session's environment");
+      notifyActivationWarning(ctx, "Subagents couldn't read this session's environment");
       return shutdown;
     }
     const activation: CapturedActivation = {
@@ -523,7 +532,11 @@ export function registerSubagentApplication(
   pi.on("session_start", (event, ctx) => {
     try {
       const trigger = event.reason === "reload" ? "reload" : "start";
-      if (trigger === "start") profileReloadHandoff.clear();
+      if (trigger === "start") {
+        profileReloadHandoff.clear();
+        pendingRestore = undefined;
+        unannouncedResets = undefined;
+      }
       return prepareActivation(ctx, trigger).finally(replay.finishStartup);
     } catch (error) {
       replay.finishStartup();
@@ -567,9 +580,13 @@ export function registerSubagentApplication(
     const sessionKey = profileReloadSessionKey(ctx) ?? currentActivation?.sessionKey;
     detachActivation(reload);
     if (reload) {
+      // A handoff no runtime applied goes back as it came, so the next one restores it instead.
       const authoritative = profileOverrideHandoff.captureAuthoritative();
-      if (sessionKey && authoritative) profileReloadHandoff.publish(sessionKey, authoritative);
+      if (pendingRestore) pendingRestore.retain();
+      else if (sessionKey && authoritative) profileReloadHandoff.publish(sessionKey, authoritative);
     } else profileReloadHandoff.clear();
+    pendingRestore = undefined;
+    unannouncedResets = undefined;
     profileOverrideHandoff.clear();
     return reload ? retainingToolsDuring(() => slot.shutdown()) : slot.shutdown();
   };

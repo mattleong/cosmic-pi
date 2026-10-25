@@ -1,6 +1,7 @@
 import type { AgentToolResult, AgentToolUpdateCallback } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -25,6 +26,7 @@ import { encodeSubagentContract } from "./contract-schema.ts";
 import {
   formatMessageBlock,
   formatRunBlocks,
+  runStallOutcome,
   runViewBlock,
   runViewOutcome,
   wholeSavedReport,
@@ -51,16 +53,22 @@ const messageHeadline = (count: number, shown: number, unfinished: boolean): str
   return `${arrived}, reply with agent_send if the work needs it${unfinished ? ", then call agent_await again" : ""}.${unshown > 0 ? ` ${unshown} of them ${unshown === 1 ? "isn't" : "aren't"} previewed here.` : ""}`;
 };
 
+/** A run's outcome without a report this result hands over, or its stall sign at `now`. */
+const pendingOutcome = (run: SubagentRunView, now: number | undefined) =>
+  runViewOutcome(run, false) ?? (now === undefined ? undefined : runStallOutcome(run, now));
+
 /**
  * A finished wait's model text: its summary, then one block per awaited run, which hands over
  * every claimed report, one per other run whose question ended the wait, and one per agent
  * message delivered to the caller during it, while slots remain. Delivered reports whose retained
- * copy is whole follow the blocks while they fit.
+ * copy is whole follow the blocks while they fit. A running run's block names its stall sign at
+ * `now`.
  */
 export const awaitResultText = (
   summary: string,
   observations: ReadonlyArray<SubagentRunObservation>,
   questions: ReadonlyArray<SubagentRunView>,
+  now: number,
   messages: AgentMessageArrivals = NO_AGENT_MESSAGE_ARRIVALS,
 ): string => {
   const shownQuestions = questions.slice(0, Math.max(0, MAX_TARGET_RUNS - observations.length));
@@ -84,7 +92,10 @@ export const awaitResultText = (
     ],
     [
       ...Arr.map(observations, ({ run, completionReceipt }) =>
-        runViewBlock(run, runViewOutcome(run, completionReceipt !== undefined)),
+        runViewBlock(
+          run,
+          completionReceipt === undefined ? pendingOutcome(run, now) : runViewOutcome(run, true),
+        ),
       ),
       ...Arr.map(shownQuestions, (run) => runViewBlock(run, runViewOutcome(run, false))),
     ],
@@ -101,17 +112,18 @@ export const awaitResultText = (
   );
 };
 
+/** Calls `onInterruption` with the time on the effect's clock when the effect is interrupted. */
 export const observeAwaitInterruption = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
-  onInterruption?: () => void,
+  onInterruption?: (now: number) => void,
 ): Effect.Effect<A, E, R> =>
   onInterruption
     ? Effect.uninterruptibleMask((restore) =>
         restore(effect).pipe(
           Effect.onExit((exit) =>
-            Effect.sync(() => {
-              if (Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)) onInterruption();
-            }),
+            Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)
+              ? Effect.map(Clock.currentTimeMillis, onInterruption)
+              : Effect.void,
           ),
         ),
       )
@@ -223,6 +235,8 @@ export function awaitExecutionFor(
     | { readonly runs: typeof latestRuns; readonly context: typeof contextRuns }
     | undefined;
   let interrupted = false;
+  /** When the wait was interrupted, on the clock that stamps run activity, if known. */
+  let interruptedAt: number | undefined;
   const deliveryAttemptedIds = new Set<string>();
   const visibleContextRuns = (runs: ReadonlyArray<SubagentRunView>) =>
     Arr.map(projectRunCardTree(contextRuns), (row) => row.run).slice(
@@ -270,7 +284,9 @@ export function awaitExecutionFor(
     lastUpdate = key;
     onUpdate({ content: [{ type: "text", text: progressText(runs) }], details });
   };
+  /** `now` is when the wait ended on the Effect clock, for stall signs; without it there are none. */
   const cancelled = (
+    now: number | undefined,
     proxyCleanupUnconfirmed = false,
     ending: AwaitEnding = { kind: "cancelled" },
   ): AgentToolResult<unknown> => {
@@ -308,7 +324,7 @@ export function awaitExecutionFor(
           run,
           run.state === "completed" && deliveryAttemptedIds.has(run.id)
             ? { kind: "note", text: "Report delivery may have committed; agent_read gives it." }
-            : runViewOutcome(run, false),
+            : pendingOutcome(run, now),
         ),
       ),
     );
@@ -322,6 +338,7 @@ export function awaitExecutionFor(
           cleanup: proxyCleanupUnconfirmed ? "unconfirmed" : "confirmed",
           deliveryAttemptedIds,
           ending: ending.kind,
+          now,
         }),
       ),
       details: awaitDetails({
@@ -342,10 +359,12 @@ export function awaitExecutionFor(
     progressSummary,
     update,
     contextRuns: () => contextRuns,
-    markInterrupted: () => {
+    markInterrupted: (now?: number) => {
+      interruptedAt = now;
       interrupted = true;
     },
     wasInterrupted: () => interrupted,
+    interruptedAt: () => interruptedAt,
     markDeliveryAttempt: (attempted: ReadonlyArray<string>) => {
       for (const id of attempted) deliveryAttemptedIds.add(id);
     },

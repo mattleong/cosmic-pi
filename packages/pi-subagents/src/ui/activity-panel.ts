@@ -1,6 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { formatElapsed } from "pi-cosmic-core/display";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
@@ -8,7 +7,7 @@ import * as Option from "effect/Option";
 import * as Order from "effect/Order";
 import * as Str from "effect/String";
 import { MAIN_AGENT_ID } from "../run/agent-messaging.ts";
-import { runStall, type RunStall } from "../run/stall.ts";
+import { runStall, runStallLabel } from "../run/stall.ts";
 import {
   managerLayoutTier,
   type ManagerLayoutTier,
@@ -344,18 +343,6 @@ const activityIdentity = (
 const messageActivity = (message: RunMessagePreview): string =>
   `↔ ${message.direction === "out" ? "to" : "from"} ${message.peer}: "${message.text}"`;
 
-const stallLabel = (stall: RunStall): string => {
-  switch (stall.kind) {
-    case "idle":
-      return `no activity for ${formatElapsed(stall.sinceMillis)}`;
-    case "tool-open":
-      return `${stall.toolName} running for ${formatElapsed(stall.sinceMillis)}`;
-    case "failing-tools":
-      return `${stall.count} failed tools in a row`;
-  }
-  return Fn.absurd(stall);
-};
-
 interface ActivityMetadataVariant {
   readonly parts: ReadonlyArray<string>;
   /** A lone message preview may be clipped to fit the row. */
@@ -373,7 +360,7 @@ const activityMetadataVariants = (
   const stall = ancestorOnly ? undefined : runStall(run, now);
   const message = stall || ancestorOnly ? undefined : recentRunMessage(panel, run.id, now);
   const activity = stall
-    ? stallLabel(stall)
+    ? runStallLabel(stall)
     : message
       ? messageActivity(message)
       : ancestorOnly

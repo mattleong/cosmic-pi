@@ -1,10 +1,14 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Schema from "effect/Schema";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
+import * as Arr from "effect/Array";
+import { PROFILE_IDS } from "../profiles/model.ts";
 import {
-  cloneSessionProfileOverrideSeed,
   decodeSessionProfileOverrideSeed,
+  decodeSessionProfileRestore,
   type SessionProfileOverrideSeed,
+  type SessionProfileRestore,
+  type SessionProfileRestoreResets,
 } from "../profiles/session-overrides.ts";
 
 const PROFILE_RELOAD_HANDOFF_KEY = Symbol.for("@cosmic-pi/pi-subagents/profile-reload-handoff/v1");
@@ -21,12 +25,11 @@ interface ProfileReloadEnvelope {
   readonly seed: SessionProfileOverrideSeed;
 }
 
-export class IncompatibleProfileReloadHandoffError extends Schema.TaggedError<
-  IncompatibleProfileReloadHandoffError,
-  { readonly brand: unique symbol }
->()("IncompatibleProfileReloadHandoffError", { message: Schema.String }) {}
-
-// An envelope may come from an earlier module instance, so it is decoded as unknown input.
+// An envelope may come from an earlier module instance, so it is decoded as unknown input. Its
+// session key decodes alone, so a session recognizes its own envelope even in another shape.
+const decodeEnvelopeSessionKey = decodeUnknownOrUndefined(
+  Schema.Struct({ sessionKey: ProfileReloadSessionKeySchema }),
+);
 const decodeEnvelope = decodeUnknownOrUndefined(
   Schema.Struct({
     version: Schema.Literal(2),
@@ -42,7 +45,12 @@ const deleteEnvelope = (): void => {
   } catch {}
 };
 
-const readEnvelopeValue = (): { readonly value?: unknown } | undefined => {
+/** The handoff slot's own value, read or written as is. */
+interface EnvelopeSlot {
+  readonly value?: unknown;
+}
+
+const readEnvelopeValue = (): EnvelopeSlot | undefined => {
   try {
     const descriptor = Object.getOwnPropertyDescriptor(globalThis, PROFILE_RELOAD_HANDOFF_KEY);
     if (!descriptor) return {};
@@ -52,38 +60,15 @@ const readEnvelopeValue = (): { readonly value?: unknown } | undefined => {
   }
 };
 
-const writeEnvelope = (envelope: ProfileReloadEnvelope): void => {
+const writeEnvelopeValue = (slot: EnvelopeSlot): void => {
   try {
     Reflect.defineProperty(globalThis, PROFILE_RELOAD_HANDOFF_KEY, {
       configurable: true,
       enumerable: true,
       writable: true,
-      value: envelope,
+      value: slot.value,
     });
   } catch {}
-};
-
-const readEnvelope = (
-  sessionKey?: string,
-): Pick<ProfileReloadEnvelope, "sessionKey" | "seed"> | undefined => {
-  const slot = readEnvelopeValue();
-  if (!slot) {
-    deleteEnvelope();
-    return undefined;
-  }
-  if (slot.value === undefined) return undefined;
-  const decoded = decodeEnvelope(slot.value);
-  if (decoded) {
-    const seed = decodeSessionProfileOverrideSeed(decoded.seed);
-    if (seed?.baseline) return { sessionKey: decoded.sessionKey, seed };
-    if (decoded.sessionKey === sessionKey)
-      throw IncompatibleProfileReloadHandoffError.make({
-        message:
-          "Subagents cannot restore this session's profile settings. Start a fresh Pi session to recover.",
-      });
-  }
-  deleteEnvelope();
-  return undefined;
 };
 
 export const profileReloadSessionKey = (ctx: ExtensionContext): string | undefined => {
@@ -95,13 +80,34 @@ export const profileReloadSessionKey = (ctx: ExtensionContext): string | undefin
   }
 };
 
+/** A session's captured handoff and what still decodes from it. */
+export interface ProfileReloadCapture {
+  readonly restore: SessionProfileRestore;
+  /**
+   * Puts the captured handoff back unchanged, for a runtime that never applied it, so the next
+   * reload decodes, fails closed, and reports exactly as this one would have.
+   */
+  readonly retain: () => void;
+}
+
 export const profileReloadHandoff = {
-  capture: (sessionKey: string): SessionProfileOverrideSeed | undefined => {
-    if (!isProfileReloadSessionKey(sessionKey)) return undefined;
-    const envelope = readEnvelope(sessionKey);
-    return envelope?.sessionKey === sessionKey
-      ? cloneSessionProfileOverrideSeed(envelope.seed)
-      : undefined;
+  /**
+   * Restores what still decodes from this session's handoff. Reading clears any handoff, so one
+   * that no longer decodes affects only the reload that read it unless it is retained.
+   */
+  capture: (sessionKey: string): ProfileReloadCapture | undefined => {
+    const slot = readEnvelopeValue();
+    deleteEnvelope();
+    if (
+      slot?.value === undefined ||
+      !isProfileReloadSessionKey(sessionKey) ||
+      decodeEnvelopeSessionKey(slot.value)?.sessionKey !== sessionKey
+    )
+      return undefined;
+    return {
+      restore: decodeSessionProfileRestore(decodeEnvelope(slot.value)?.seed),
+      retain: () => writeEnvelopeValue(slot),
+    };
   },
   publish: (sessionKey: string, seed: SessionProfileOverrideSeed): void => {
     try {
@@ -111,19 +117,50 @@ export const profileReloadHandoff = {
       }
       const decodedSeed = decodeSessionProfileOverrideSeed(seed);
       if (!decodedSeed?.baseline) return;
-      writeEnvelope(
-        Object.freeze({
+      writeEnvelopeValue({
+        value: Object.freeze({
           version: 2,
           sessionKey,
           seed: decodedSeed,
         } satisfies ProfileReloadEnvelope),
-      );
+      });
     } catch {}
   },
-  clear: (sessionKey?: string): void => {
-    try {
-      if (sessionKey !== undefined && readEnvelope(sessionKey)?.sessionKey !== sessionKey) return;
-      deleteEnvelope();
-    } catch {}
-  },
+  clear: deleteEnvelope,
+};
+
+const listed = (items: ReadonlyArray<string>): string =>
+  Arr.isReadonlyArrayNonEmpty(items) && items.length > 1
+    ? `${Arr.join(Arr.dropRight(items, 1), ", ")} and ${Arr.lastNonEmpty(items)}`
+    : Arr.join(items, "");
+
+/** The user's notice naming the session settings a reload couldn't keep. */
+export const sessionRestoreNotice = (resets: SessionProfileRestoreResets): string => {
+  if (resets.unreadable)
+    return "Subagents couldn't read this session's settings after reload, so they use the saved configuration with writer routes read-only and nesting limits at their minimum.";
+  const reset = [
+    ...(resets.routes.length === PROFILE_IDS.length
+      ? ["profile routes"]
+      : Arr.map(resets.routes, (profile) => `${profile} route`)),
+    ...(resets.profileSet ? ["profile set"] : []),
+    ...(resets.delegation ? ["delegation mode"] : []),
+  ];
+  return Arr.join(
+    [
+      ...(reset.length > 0
+        ? [`Subagents reset this session's ${listed(reset)} to the saved configuration.`]
+        : []),
+      ...(resets.readOnly.length > 0
+        ? [
+            `The ${listed(resets.readOnly)} ${resets.readOnly.length === 1 ? "route stays" : "routes stay"} read-only.`,
+          ]
+        : []),
+      ...(resets.nesting
+        ? [
+            "Invalid session nesting limits were brought within their bounds or set to their minimum.",
+          ]
+        : []),
+    ],
+    " ",
+  );
 };

@@ -1,5 +1,6 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
@@ -45,7 +46,14 @@ import {
   type AgentListContract,
   type AgentReadContract,
 } from "./contract-schema.ts";
-import { envelope, metadata, projectAttention, projectName, readStatusTarget } from "./contract.ts";
+import {
+  envelope,
+  metadata,
+  projectAttention,
+  projectName,
+  projectStall,
+  readStatusTarget,
+} from "./contract.ts";
 import { compactRunIssues } from "./compact-run-issues.ts";
 import { projectReportFile, projectSubagentRunCard } from "./details-projection.ts";
 import {
@@ -59,6 +67,7 @@ import {
   formatRunCard,
   formatRunModel,
   proposalGuidance,
+  runStallFact,
   type RunFormatOptions,
 } from "./format.ts";
 import type { AgentToolInput } from "./schema.ts";
@@ -84,6 +93,11 @@ const agentWorktreeFact = (run: SubagentRunView | undefined): string | undefined
       ? proposalGuidance(run.workspaceId, run.workspaceOutcome)
       : `worktree ${sanitizeTerminalLine(run.workspaceId)}`;
 
+const stallSignFact = (run: SubagentRunView, now: number): string | undefined => {
+  const fact = runStallFact(run, now);
+  return fact && `stall sign: ${fact}`;
+};
+
 const agentAttentionFact = (run: SubagentRunView | undefined): string | undefined => {
   const kind = run && projectAttention(run)?.kind;
   if (kind === undefined) return undefined;
@@ -91,7 +105,7 @@ const agentAttentionFact = (run: SubagentRunView | undefined): string | undefine
 };
 
 // Lists parents before children, indented by depth.
-const listLine = (entry: AgentListEntry): string => {
+const listLine = (entry: AgentListEntry, now: number): string => {
   if (entry.kind === "main")
     return `- ${MAIN_AGENT_ID}: ${entry.state}${entry.self ? " (you)" : ""}`;
   const role = entry.agent ?? entry.profile;
@@ -103,6 +117,7 @@ const listLine = (entry: AgentListEntry): string => {
       entry.run?.writeIntent === "writer" && entry.run.workspaceId === undefined && "writer",
       agentWorktreeFact(entry.run),
       agentAttentionFact(entry.run),
+      entry.run && stallSignFact(entry.run, now),
       entry.parentId && `child of ${sanitizeTerminalLine(entry.parentId)}`,
       entry.self && "you",
     ],
@@ -114,12 +129,16 @@ const listLine = (entry: AgentListEntry): string => {
   return `${Fn.pipe("  ", Str.repeat(Math.max(0, (entry.depth ?? 1) - 1)))}- ${agentLabel(entry)}: ${Arr.join(facts, ", ")}${task}`;
 };
 
-const listText = (result: AgentListResult): string =>
+const listText = (result: AgentListResult, now: number): string =>
   Fn.pipe(
     [
       result.agents.length === 0
         ? "No matching agents."
-        : `Agents in this session (${result.agents.length}):\n${Fn.pipe(result.agents, Arr.map(listLine), Arr.join("\n"))}`,
+        : `Agents in this session (${result.agents.length}):\n${Fn.pipe(
+            result.agents,
+            Arr.map((entry) => listLine(entry, now)),
+            Arr.join("\n"),
+          )}`,
       missingText(result.missingIds),
     ],
     Arr.filter(Boolean),
@@ -136,7 +155,7 @@ const WORKTREE_STATUS = {
   "auto-discarded": "discarded",
 } as const satisfies Record<SubagentWorkspaceOutcome["status"], string>;
 
-const listContract = (result: AgentListResult): AgentListContract => ({
+const listContract = (result: AgentListResult, now: number): AgentListContract => ({
   ...envelope(AGENT_TOOL_NAME.list),
   agents: Arr.map(result.agents, (entry) => {
     const profile = knownProfile(entry.profile);
@@ -144,6 +163,7 @@ const listContract = (result: AgentListResult): AgentListContract => ({
     const { run } = entry;
     const model = run && metadata(formatRunModel(run), MAX_CONTRACT_MODEL_CHARS);
     const attention = run && projectAttention(run);
+    const stall = run && projectStall(run, now);
     const outcome = run?.workspaceOutcome;
     return {
       id: entry.id,
@@ -164,6 +184,7 @@ const listContract = (result: AgentListResult): AgentListContract => ({
         },
       }),
       ...(attention !== undefined && { attention }),
+      ...(stall !== undefined && { stall }),
       ...(task !== undefined && { task }),
       self: entry.self,
     };
@@ -328,7 +349,7 @@ const readBody = (result: AgentReadResult, options: AgentReadOptions): string =>
   );
 };
 
-const readContract = (result: AgentReadResult): AgentReadContract => ({
+const readContract = (result: AgentReadResult, now: number): AgentReadContract => ({
   ...envelope(AGENT_TOOL_NAME.read),
   agents: Arr.map(result.agents, (readout) => {
     const text = readText(readout.text);
@@ -350,7 +371,7 @@ const readContract = (result: AgentReadResult): AgentReadContract => ({
             (text !== undefined || reportFile !== undefined) && { source: readout.source }),
           ...(reportFile !== undefined && { reportFile }),
           reportGeneration: readout.reportGeneration,
-          status: readStatusTarget(readout.run),
+          status: readStatusTarget(readout.run, now),
         };
   }),
   missingIds: [...result.missingIds],
@@ -418,10 +439,11 @@ export const executeAgentActionEffect = Effect.fn("SubagentTools.agents")(functi
   switch (input.tool) {
     case AGENT_TOOL_NAME.list: {
       const result = yield* service.agentList(caller, input.args.agentIds);
+      const now = yield* Clock.currentTimeMillis;
       return {
-        content: [{ type: "text", text: boundToolOutput(listText(result)) }],
+        content: [{ type: "text", text: boundToolOutput(listText(result, now)) }],
         details: listDetails(result),
-        structuredContent: encodeSubagentContract(listContract(result)),
+        structuredContent: encodeSubagentContract(listContract(result, now)),
       } satisfies AgentToolResult<unknown>;
     }
     case AGENT_TOOL_NAME.send: {
@@ -434,11 +456,12 @@ export const executeAgentActionEffect = Effect.fn("SubagentTools.agents")(functi
     }
     case AGENT_TOOL_NAME.read: {
       const result = yield* service.agentRead(caller, input.args.agentIds);
-      const options = { caller, parentCwd: callerCwd, verbose: input.args.verbose === true };
+      const now = yield* Clock.currentTimeMillis;
+      const options = { caller, parentCwd: callerCwd, verbose: input.args.verbose === true, now };
       return {
         content: [{ type: "text", text: boundToolOutput(readBody(result, options)) }],
         details: readDetails(result),
-        structuredContent: encodeSubagentContract(readContract(result)),
+        structuredContent: encodeSubagentContract(readContract(result, now)),
       } satisfies AgentToolResult<unknown>;
     }
   }

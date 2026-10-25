@@ -27,7 +27,10 @@ import { isSubagentChildProcess } from "pi-cosmic-core/host-environment";
 import { makePiManagedRuntime } from "pi-cosmic-core/runtime";
 import { makePiSessionRuntimeSlot } from "pi-cosmic-core/runtime/session-runtime";
 import { safeTextPrefix } from "pi-cosmic-core/text";
-import { registerSubagentMessageRenderers } from "../application/messages.ts";
+import {
+  registerSubagentMessageOrigins,
+  registerSubagentMessageRenderers,
+} from "../application/messages.ts";
 import type { LocalPiContact, LocalPiParentControl } from "../backend/local-pi-protocol.ts";
 import { MAX_PARENT_MESSAGE_CHARS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import { clipUtf8Text } from "../run/state.ts";
@@ -69,7 +72,7 @@ import {
   consumeRuntimeApiCredentials,
   registerChildPiFastModeHook,
 } from "./host-child-pi.ts";
-import { registerChildSettle } from "./host-child-settle.ts";
+import { PEER_NOTICE_MESSAGE_TYPE, registerChildSettle } from "./host-child-settle.ts";
 import { parentCorrelations, parentContactRejection } from "./host-child-correlation.ts";
 import {
   openLocalPiChildIpc,
@@ -147,6 +150,7 @@ export function registerSubagentChildBridge(
   boundaries: SubagentChildBridgeBoundaries = LIVE_CHILD_BRIDGE_BOUNDARIES,
 ): void {
   registerSubagentMessageRenderers(pi);
+  registerSubagentMessageOrigins(pi);
   const receipts = registerSubagentErrorReceipts(pi);
   pi.registerFlag("pi-subagents-fast-mode", {
     description: "Private OpenAI fast-mode request for this subagent",
@@ -251,7 +255,7 @@ export function registerSubagentChildBridge(
       invokeBestEffort(() =>
         pi.sendMessage(
           {
-            customType: "pi-subagents-peer-notice",
+            customType: PEER_NOTICE_MESSAGE_TYPE,
             content: message.message,
             display: true,
           },

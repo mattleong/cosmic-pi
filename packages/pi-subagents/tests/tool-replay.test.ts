@@ -48,6 +48,7 @@ const cutReport: AgentToolResult<unknown> = {
         "",
         [{ run: cutRun, completionReceipt: { id: "agent-1", generation: 1, claimToken: "c" } }],
         [],
+        0,
       ),
     },
   ],

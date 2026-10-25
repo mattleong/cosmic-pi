@@ -6,6 +6,7 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
@@ -212,6 +213,7 @@ export const executeSubagentActionEffect = Effect.fn("SubagentTools.execute")(fu
     const runs = Arr.map(observations, (observation) => observation.run);
     const attention = [...runs, ...questions];
     const attentionRequired = Arr.some(attention, isParentActionRequiredRun);
+    const now = yield* Clock.currentTimeMillis;
     if (scripted && attentionRequired)
       return yield* invalidRequest(
         "scripted_parent_attention_required",
@@ -221,7 +223,7 @@ export const executeSubagentActionEffect = Effect.fn("SubagentTools.execute")(fu
       runs,
       attentionRequired,
       ...(messages.count > 0 && { awaitMessages: messages }),
-      text: awaitResultText(state.progressSummary(runs), observations, questions, messages),
+      text: awaitResultText(state.progressSummary(runs), observations, questions, now, messages),
       awaitContextRuns: withQuestionRuns(state.contextRuns(), questions),
       contract: awaitContract({
         observations,
@@ -229,6 +231,7 @@ export const executeSubagentActionEffect = Effect.fn("SubagentTools.execute")(fu
         requestedRunIds: state.requestedIds,
         questionsElsewhere: questions.length > 0,
         messages,
+        now,
       }),
     };
     const result = yield* Effect.sync(() =>
@@ -283,7 +286,7 @@ export const executeSubagentActionEffect = Effect.fn("SubagentTools.execute")(fu
     if (timeoutSeconds === undefined) return yield* wait();
     const bounded = yield* awaitWithinTimeout(wait, timeoutSeconds);
     if (Result.isSuccess(bounded)) return bounded.success;
-    const result = state.cancelled(false, bounded.failure);
+    const result = state.cancelled(yield* Clock.currentTimeMillis, false, bounded.failure);
     invokeHostCallback(() => onUpdate?.(result), undefined);
     return result;
   }, Effect.mapError(codedFailure));
@@ -335,7 +338,7 @@ const executeRootAwait = (
 ): Promise<AgentToolResult<unknown>> => {
   const state = awaitExecutionFor(input.args.runIds, awaitUntil(input.args), onUpdate);
   const ended = (ending: AwaitEnding) => {
-    const result = state.cancelled(false, ending);
+    const result = state.cancelled(state.interruptedAt(), false, ending);
     invokeHostCallback(() => onUpdate?.(result), undefined);
     return result;
   };
@@ -358,11 +361,11 @@ const executeRootAwait = (
     )
     .catch((cause: unknown) => {
       if (!state.wasInterrupted()) throw cause;
-      return ended(
+      const ending: AwaitEnding =
         signal?.aborted !== true && userInput?.aborted === true
           ? { kind: "user_input" }
-          : { kind: "cancelled" },
-      );
+          : { kind: "cancelled" };
+      return ended(ending);
     });
 };
 
@@ -403,9 +406,15 @@ const executeProxiedAwait = (
             ending = { kind: "timed_out", seconds: timeoutSeconds };
           },
         };
-  return proxyCall(forwarded, signal, state.markInterrupted, backstop).catch((cause: unknown) => {
+  // The root's clock stamps the runs, so a wait ended here names no stall signs.
+  const interrupted = () => state.markInterrupted();
+  return proxyCall(forwarded, signal, interrupted, backstop).catch((cause: unknown) => {
     if (!state.wasInterrupted()) throw cause;
-    const result = state.cancelled(true, signal?.aborted === true ? { kind: "cancelled" } : ending);
+    const result = state.cancelled(
+      undefined,
+      true,
+      signal?.aborted === true ? { kind: "cancelled" } : ending,
+    );
     invokeHostCallback(() => onUpdate?.(result), undefined);
     return result;
   });

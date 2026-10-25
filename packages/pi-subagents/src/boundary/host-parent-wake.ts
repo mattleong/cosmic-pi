@@ -15,7 +15,7 @@ import { isActiveRunState, SUBAGENT_ROOT_RUN_ID } from "../run/model.ts";
 import { AGENT_MESSAGE_TYPE } from "./host-agent-messages.ts";
 import { COMPLETION_MESSAGE_TYPE, QUESTION_MESSAGE_TYPE } from "./host-notifier.ts";
 
-const QUESTION_REMINDER_MESSAGE_TYPE = "pi-subagents-question-reminder";
+export const QUESTION_REMINDER_MESSAGE_TYPE = "pi-subagents-question-reminder";
 export const WAKE_MESSAGE_TYPE = "pi-subagents-wake";
 
 const ROOT_NOTICE_TYPES: ReadonlySet<string> = new Set([

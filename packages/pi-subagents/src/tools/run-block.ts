@@ -25,7 +25,7 @@ import {
 } from "../run/model.ts";
 import { failureFileText, reportFileText, reportTruncationText } from "../run/state.ts";
 import { runStateLabel } from "../ui/run-state.ts";
-import { nextCandidateText, proposalGuidance, runProfileLabel } from "./format.ts";
+import { nextCandidateText, proposalGuidance, runProfileLabel, runStallSign } from "./format.ts";
 
 /**
  * Multi-run model-facing output (await, lifecycle, and completion notices) gives each run one
@@ -395,6 +395,17 @@ export const runViewOutcome = (
         ? "Report availability unknown here; agent_read gives it."
         : WITHHELD_REPORT_NOTES[run.reportStatus],
   };
+};
+
+/** A running run's stall sign at `now`, as the outcome of a block that has no other. */
+export const runStallOutcome = (run: SubagentRunView, now: number): RunBlockOutcome | undefined => {
+  const sign = runStallSign(run, now);
+  return sign === undefined
+    ? undefined
+    : {
+        kind: "note",
+        text: `Stall sign: ${sign}. To check on it, read it with agent_read or message it with agent_send.`,
+      };
 };
 
 /** A run's block from its projected view. */

@@ -63,6 +63,25 @@ const decodeModelsDetails = Schema.decodeUnknownOption(
   }),
 );
 
+const decodeModelSources = Schema.decodeUnknownOption(
+  Schema.Struct({
+    profiles: Schema.Array(Schema.Struct({ id: Schema.String, source: Schema.String })),
+  }),
+);
+
+const decodeWorkerRoute = Schema.decodeUnknownOption(
+  Schema.Struct({
+    profiles: Schema.Tuple([
+      Schema.Struct({
+        source: Schema.String,
+        candidates: Schema.Array(
+          Schema.Struct({ model: Schema.String, writeIntent: Schema.String }),
+        ),
+      }),
+    ]),
+  }),
+);
+
 const applicationFixture = (
   overrides: Partial<ExtensionAPI> = {},
   options: Parameters<typeof registerSubagentApplication>[1] = {
@@ -565,70 +584,205 @@ describe("subagent Pi registration", () => {
   );
 
   effectTest(
-    "keeps incompatible reload settings inactive through tree changes until a fresh session",
+    "restores what a stale reload handoff still decodes and keeps subagents active",
     function* () {
       const reloadSlot = Symbol.for("@cosmic-pi/pi-subagents/profile-reload-handoff/v1");
-      const envelope = {
-        version: 2,
-        sessionKey: "application-incompatible-session",
-        seed: {
-          revision: 7,
-          overrides: {
-            worker: {
-              candidates: [{ ...profileCandidate("openai/invalid"), host: "local" }],
-            },
-          },
-          baseline: completeBaseline("global"),
-        },
-      };
-      const slotHoldsEnvelope = () =>
-        Object.getOwnPropertyDescriptor(globalThis, reloadSlot)?.value === envelope;
       Object.defineProperty(globalThis, reloadSlot, {
         configurable: true,
         enumerable: true,
         writable: true,
-        value: envelope,
+        value: {
+          version: 2,
+          sessionKey: "application-stale-handoff",
+          seed: {
+            revision: 7,
+            overrides: {
+              reviewer: { candidates: [profileCandidate("openai/kept")] },
+              // A field an earlier version saved and this one no longer knows.
+              worker: {
+                candidates: [
+                  {
+                    ...profileCandidate("openai/retired", { writeIntent: "writer" }),
+                    runtime: "local",
+                  },
+                ],
+              },
+            },
+            baseline: completeBaseline("global"),
+          },
+        },
       });
       const tools = activeToolTracker();
-      let { emit } = applicationFixture(tools.overrides);
+      let application = applicationFixture(tools.overrides);
       const notify = vi.fn();
-      const contextFor = (sessionId: string) =>
-        sessionContext(
-          { hasUI: true, mode: "tui", isProjectTrusted: () => false, ui: { notify } },
-          sessionId,
-        );
-      let ctx = contextFor("application-incompatible-session");
+      const ctx = sessionContext(
+        {
+          hasUI: true,
+          mode: "tui",
+          isProjectTrusted: () => false,
+          ui: { notify },
+          model: undefined,
+          modelRegistry: { getAvailable: () => [] },
+        },
+        "application-stale-handoff",
+      );
       yield* Effect.addFinalizer(() =>
         settle(() =>
-          emit("session_shutdown", ctx, { type: "session_shutdown", reason: "quit" }),
+          application.emit("session_shutdown", ctx, { type: "session_shutdown", reason: "quit" }),
         ).pipe(Effect.ensuring(Effect.sync(() => Reflect.deleteProperty(globalThis, reloadSlot)))),
       );
-      for (const event of ["session_start", "session_tree", "session_start"] as const) {
-        yield* settle(() =>
-          event === "session_tree"
-            ? emit("session_tree", ctx)
-            : emit("session_start", ctx, { type: "session_start", reason: "reload" }),
+      const profileSources = Effect.fnUntraced(function* () {
+        const tool = application.tools.get("agent_profiles");
+        if (!tool) return {};
+        const result = yield* Effect.promise(() =>
+          tool.execute("models", {}, undefined, undefined, ctx),
         );
-        expect(tools.active()).toEqual(["read"]);
-        expect(slotHoldsEnvelope()).toBe(true);
-      }
-      expect(Arr.some(notify.mock.calls, ([, level]) => level === "warning")).toBe(true);
+        return Option.match(decodeModelSources(result.details), {
+          onNone: () => ({}),
+          onSome: (details) =>
+            Rec.fromEntries(Arr.map(details.profiles, ({ id, source }) => [id, source])),
+        });
+      });
+      const warnings = () => Arr.filter(notify.mock.calls, ([, level]) => level === "warning");
 
       yield* settle(() =>
-        emit("session_shutdown", ctx, { type: "session_shutdown", reason: "reload" }),
+        application.emit("session_start", ctx, { type: "session_start", reason: "reload" }),
       );
-      emit = applicationFixture(tools.overrides).emit;
-      yield* settle(() => emit("session_start", ctx, { type: "session_start", reason: "reload" }));
-      yield* settle(() => emit("session_tree", ctx));
-      expect(tools.active()).toEqual(["read"]);
-      expect(slotHoldsEnvelope()).toBe(true);
-
-      ctx = contextFor("application-compatible-new-session");
-      yield* settle(() => emit("session_start", ctx, { type: "session_start", reason: "new" }));
       expect(tools.active()).toContain("agent_start");
       expect(Rec.has<string | symbol, unknown>(globalThis, reloadSlot)).toBe(false);
+      expect(yield* profileSources()).toMatchObject({ reviewer: "session", worker: "global" });
+      expect(warnings()).toHaveLength(1);
+
+      yield* settle(() =>
+        application.emit("session_shutdown", ctx, { type: "session_shutdown", reason: "reload" }),
+      );
+      application = applicationFixture(tools.overrides);
+      yield* settle(() =>
+        application.emit("session_start", ctx, { type: "session_start", reason: "reload" }),
+      );
+      expect(tools.active()).toContain("agent_start");
+      expect(yield* profileSources()).toMatchObject({ reviewer: "session", worker: "global" });
+      expect(warnings()).toHaveLength(1);
     },
   );
+
+  for (const recovery of ["tree", "reload"] as const)
+    effectTest(
+      `keeps a dropped read-only route read-only through a failed restoring start and a ${recovery}`,
+      function* () {
+        const reloadSlot = Symbol.for("@cosmic-pi/pi-subagents/profile-reload-handoff/v1");
+        const slotPresent = () => Rec.has<string | symbol, unknown>(globalThis, reloadSlot);
+        const baseline = completeBaseline("global");
+        Object.defineProperty(globalThis, reloadSlot, {
+          configurable: true,
+          enumerable: true,
+          writable: true,
+          value: {
+            version: 2,
+            sessionKey: "application-failed-restore",
+            seed: {
+              revision: 3,
+              // The session made worker read-only with a route this version can't decode.
+              overrides: {
+                worker: {
+                  candidates: [{ ...profileCandidate("openai/retired"), runtime: "local" }],
+                },
+              },
+              baseline: {
+                ...baseline,
+                profiles: {
+                  ...baseline.profiles,
+                  worker: {
+                    candidates: [profileCandidate("openai/writer", { writeIntent: "writer" })],
+                  },
+                },
+              },
+            },
+          },
+        });
+        const makeLayer = SubagentLayers.subagentApplicationLayer;
+        let failing = true;
+        const capture = vi
+          .spyOn(SubagentLayers, "subagentApplicationLayer")
+          .mockImplementation((options) =>
+            failing
+              ? makeLayer(options).pipe(
+                  Layer.provide(Layer.effectDiscard(Effect.die("configuration unavailable"))),
+                )
+              : makeLayer(options),
+          );
+        const tools = activeToolTracker();
+        let application = applicationFixture(tools.overrides);
+        const notify = vi.fn();
+        const ctx = sessionContext(
+          {
+            hasUI: true,
+            mode: "tui",
+            isProjectTrusted: () => false,
+            ui: { notify },
+            model: undefined,
+            modelRegistry: { getAvailable: () => [] },
+          },
+          "application-failed-restore",
+        );
+        yield* Effect.addFinalizer(() =>
+          settle(() =>
+            application.emit("session_shutdown", ctx, { type: "session_shutdown", reason: "quit" }),
+          ).pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                capture.mockRestore();
+                Reflect.deleteProperty(globalThis, reloadSlot);
+              }),
+            ),
+          ),
+        );
+        const workerRoute = Effect.fnUntraced(function* () {
+          const tool = application.tools.get("agent_profiles");
+          if (!tool) return undefined;
+          const result = yield* Effect.promise(() =>
+            tool.execute("models", { profile: "worker" }, undefined, undefined, ctx),
+          );
+          return Option.getOrUndefined(
+            Option.map(decodeWorkerRoute(result.details), ({ profiles: [worker] }) => worker),
+          );
+        });
+        const warnings = () => Arr.filter(notify.mock.calls, ([, level]) => level === "warning");
+        const reload = Effect.fnUntraced(function* () {
+          yield* settle(() =>
+            application.emit("session_shutdown", ctx, {
+              type: "session_shutdown",
+              reason: "reload",
+            }),
+          );
+          application = applicationFixture(tools.overrides);
+          yield* settle(() =>
+            application.emit("session_start", ctx, { type: "session_start", reason: "reload" }),
+          );
+        });
+
+        yield* settle(() =>
+          application.emit("session_start", ctx, { type: "session_start", reason: "reload" }),
+        );
+        expect(tools.active()).not.toContain("agent_start");
+        const failureWarnings = warnings().length;
+
+        failing = false;
+        if (recovery === "tree") yield* settle(() => application.emit("session_tree", ctx));
+        else yield* reload();
+        expect(tools.active()).toContain("agent_start");
+        expect(slotPresent()).toBe(false);
+        const readOnlyWorker = {
+          source: "session",
+          candidates: [{ model: "openai/writer", writeIntent: "read-only" }],
+        };
+        expect(yield* workerRoute()).toEqual(readOnlyWorker);
+        expect(warnings()).toHaveLength(failureWarnings + 1);
+
+        yield* reload();
+        expect(yield* workerRoute()).toEqual(readOnlyWorker);
+      },
+    );
 
   effectTest(
     "preserves session overrides across tree and reload but clears them for a new session",

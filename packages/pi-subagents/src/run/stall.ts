@@ -1,5 +1,7 @@
 import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
+import { formatElapsed } from "pi-cosmic-core/display";
 import type { SubagentRunView } from "./model.ts";
 
 const STALL_IDLE_MILLIS = 2 * 60 * 1000;
@@ -14,8 +16,9 @@ export type RunStall =
 type StallRun = Pick<SubagentRunView, "state" | "lastActivityAt" | "sessionEvents">;
 
 /**
- * Signs that a running child may be stuck. They are presentation only: elapsed time is not a safe
- * reason to stop a run, so nothing acts on them automatically.
+ * Signs that a running child may be stuck. They are presentation only, for Activity and the
+ * parent's run views: elapsed time is not a safe reason to stop a run, so nothing acts on them
+ * automatically, and they never end a wait.
  */
 export const runStall = (run: StallRun, now: number): RunStall | undefined => {
   if (run.state !== "running") return undefined;
@@ -34,4 +37,17 @@ export const runStall = (run: StallRun, now: number): RunStall | undefined => {
   if (!open && now - run.lastActivityAt >= STALL_IDLE_MILLIS)
     return { kind: "idle", sinceMillis: now - run.lastActivityAt };
   return undefined;
+};
+
+/** A stall sign as facts, such as `bash running for 7m`. */
+export const runStallLabel = (stall: RunStall): string => {
+  switch (stall.kind) {
+    case "idle":
+      return `no activity for ${formatElapsed(stall.sinceMillis)}`;
+    case "tool-open":
+      return `${stall.toolName} running for ${formatElapsed(stall.sinceMillis)}`;
+    case "failing-tools":
+      return `${stall.count} failed tools in a row`;
+  }
+  return Fn.absurd(stall);
 };

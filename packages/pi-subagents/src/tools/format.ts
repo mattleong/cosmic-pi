@@ -27,6 +27,7 @@ import {
   MAX_TOOL_OUTPUT_CHARS,
 } from "../run/limits.ts";
 import { clipWithMarker, failureFileText, MAX_ERROR_CHARS } from "../run/state.ts";
+import { runStall, runStallLabel, type RunStall } from "../run/stall.ts";
 import { distinctRunWarnings } from "../run/warnings.ts";
 import { aggregateUsage } from "../ui/metrics.ts";
 import {
@@ -222,8 +223,31 @@ const optionalStatusField = (
   maximum?: number,
 ): string | undefined => (value ? statusField(label, value, maximum) : undefined);
 
+/** A running run's stall sign at `now` as facts, such as `bash running for 7m`. */
+export const runStallFact = (run: SubagentRunView, now: number): string | undefined => {
+  const stall = runStall(run, now);
+  return stall && sanitizeTerminalLine(runStallLabel(stall));
+};
+
+/** Why each stall sign alone doesn't show that a run is stuck; signs never advise stopping it. */
+const STALL_SIGN_CAVEATS = {
+  "tool-open": "long tool calls can be normal",
+  "failing-tools": "it may still recover",
+  idle: "a quiet run may still be working",
+} as const satisfies Record<RunStall["kind"], string>;
+
+/** A running run's stall sign at `now` with its caveat, such as `bash running for 7m; long …`. */
+export const runStallSign = (run: SubagentRunView, now: number): string | undefined => {
+  const stall = runStall(run, now);
+  return (
+    stall && `${sanitizeTerminalLine(runStallLabel(stall))}; ${STALL_SIGN_CAVEATS[stall.kind]}`
+  );
+};
+
 /** Options for status cards. */
 export interface RunFormatOptions {
+  /** When the card is produced; a running run's card then names its stall sign. */
+  readonly now?: number | undefined;
   /** Adds route selection, context, process, cwd, and timing fields. */
   readonly verbose?: boolean | undefined;
   /** The caller's cwd; a compact card names the run's cwd only when it works elsewhere. */
@@ -303,6 +327,11 @@ const actionFields = (run: SubagentRunView): ReadonlyArray<string | undefined> =
     : undefined,
 ];
 
+const stallField = (run: SubagentRunView, now: number | undefined): string | undefined => {
+  const sign = now === undefined ? undefined : runStallSign(run, now);
+  return sign && statusField("Stall sign", `${sign}. Message it with agent_send to check.`);
+};
+
 /** Diagnostics every card shows when present, after its actions. */
 const compactStatusFields = (
   run: SubagentRunView,
@@ -320,10 +349,13 @@ const compactStatusFields = (
   cleanupEvidenceText(run) || undefined,
   isActiveRunState(run.state) ? optionalStatusField("Current tool", run.currentTool) : undefined,
   isActiveRunState(run.state) ? optionalStatusField("Progress", run.progress) : undefined,
+  stallField(run, options.now),
 ];
 
-const verboseStatusFields = (run: SubagentRunView): ReadonlyArray<string | undefined> => {
-  const now = synchronousNow();
+const verboseStatusFields = (
+  run: SubagentRunView,
+  now: number,
+): ReadonlyArray<string | undefined> => {
   return [
     run.depth === undefined
       ? undefined
@@ -395,7 +427,7 @@ export const formatRunCard = (run: SubagentRunView, options: RunFormatOptions = 
       options.readerIsParent ? attentionRecoveryText([run]) || undefined : undefined,
       ...actionFields(run),
       ...compactStatusFields(run, options),
-      ...(options.verbose ? verboseStatusFields(run) : []),
+      ...(options.verbose ? verboseStatusFields(run, options.now ?? synchronousNow()) : []),
     ],
     Arr.filter(Predicate.isNotUndefined),
     Arr.join("\n"),

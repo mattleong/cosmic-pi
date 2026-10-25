@@ -293,6 +293,7 @@ describe("local Pi child bridge", () => {
               until: "all_finished",
               cleanup: "confirmed",
               ending: "timed_out",
+              now: 0,
             }),
           }),
         });

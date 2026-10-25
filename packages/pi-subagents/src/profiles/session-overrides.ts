@@ -8,6 +8,7 @@ import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import { freezeSnapshot } from "pi-cosmic-core/projection";
 import type { ResolvedProfileSetSelection, ResolvedSubagentConfig } from "../config/options.ts";
 import {
+  decodeDocumentNesting,
   decodeProfileRoute,
   decodeSubagentNestingOverrides,
   DelegationModeSchema,
@@ -93,32 +94,34 @@ export class SessionProfileInvalidError extends Schema.TaggedError<
 
 export type SessionProfileEditError = SessionProfileConflictError | SessionProfileInvalidError;
 
-const SessionProfileOverrideSeedInputSchema = Schema.Struct({
-  revision: Schema.Finite.check(
-    Schema.isInt(),
-    Schema.isGreaterThanOrEqualTo(0),
-    Schema.isLessThanOrEqualTo(MAX_SESSION_PROFILE_REVISION),
+const SessionProfileRevisionSchema = Schema.Finite.check(
+  Schema.isInt(),
+  Schema.isGreaterThanOrEqualTo(0),
+  Schema.isLessThanOrEqualTo(MAX_SESSION_PROFILE_REVISION),
+);
+
+const SessionProfileBaselineSchema = Schema.Struct({
+  origin: Schema.Union([
+    Schema.Struct({ scope: Schema.Literal("builtin") }),
+    Schema.Struct({
+      scope: Schema.Literals(["global", "project"]),
+      name: Schema.optional(Schema.String),
+      invalid: Schema.optional(Schema.Boolean),
+    }),
+  ]),
+  profiles: Schema.Struct(mapProfileIds(() => ProfileRouteSchema)),
+  profileSources: Schema.Record(
+    Schema.Literals(PROFILE_IDS),
+    Schema.Literals(PROFILE_ROUTE_SOURCES),
   ),
+});
+
+const SessionProfileOverrideSeedInputSchema = Schema.Struct({
+  revision: SessionProfileRevisionSchema,
   overrides: Schema.Struct(mapProfileIds(() => Schema.optionalKey(ProfileRouteSchema))),
   nesting: Schema.optional(SubagentNestingOverridesSchema),
   delegation: Schema.optional(DelegationModeSchema),
-  baseline: Schema.optional(
-    Schema.Struct({
-      origin: Schema.Union([
-        Schema.Struct({ scope: Schema.Literal("builtin") }),
-        Schema.Struct({
-          scope: Schema.Literals(["global", "project"]),
-          name: Schema.optional(Schema.String),
-          invalid: Schema.optional(Schema.Boolean),
-        }),
-      ]),
-      profiles: Schema.Struct(mapProfileIds(() => ProfileRouteSchema)),
-      profileSources: Schema.Record(
-        Schema.Literals(PROFILE_IDS),
-        Schema.Literals(PROFILE_ROUTE_SOURCES),
-      ),
-    }),
-  ),
+  baseline: Schema.optional(SessionProfileBaselineSchema),
 });
 
 const cloneOrigin = (origin: ResolvedProfileSetSelection): ResolvedProfileSetSelection => {
@@ -212,6 +215,171 @@ export const decodeSessionProfileOverrideSeed = Fn.flow(
     return cloneSessionProfileOverrideSeed(decoded);
   },
 );
+
+/** A reload handoff decoded field by field: what still decodes, and what didn't. */
+export interface SessionProfileRestore {
+  readonly seed: SessionProfileOverrideSeed;
+  readonly lost: {
+    /** Nothing could be read, so every part fell back, failing closed. */
+    readonly unreadable: boolean;
+    /**
+     * Profiles whose saved route, an override or the baseline's, didn't decode, and whether it
+     * visibly admitted a writer.
+     */
+    readonly profiles: ReadonlyArray<{
+      readonly profile: ProfileId;
+      readonly from: "override" | "baseline";
+      readonly admittedWriter: boolean;
+    }>;
+    readonly baseline: boolean;
+    readonly delegation: boolean;
+    readonly nesting: boolean;
+  };
+}
+
+/** Session settings a restore reset, for the user's notice. */
+export interface SessionProfileRestoreResets {
+  /** Nothing could be read, so the configuration applies with writers read-only. */
+  readonly unreadable: boolean;
+  /** Profiles whose session route was dropped for the configuration's. */
+  readonly routes: ReadonlyArray<ProfileId>;
+  /** Profiles kept read-only because the route they lost admitted no writer. */
+  readonly readOnly: ReadonlyArray<ProfileId>;
+  readonly profileSet: boolean;
+  readonly delegation: boolean;
+  /** Invalid nesting limits were clamped, or took their most restrictive value. */
+  readonly nesting: boolean;
+}
+
+const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
+const decodeUnknownRecord = decodeUnknownOrUndefined(UnknownRecordSchema);
+const decodeRevision = decodeUnknownOrUndefined(SessionProfileRevisionSchema);
+const decodeDelegation = decodeUnknownOrUndefined(DelegationModeSchema);
+const decodeBaseline = Fn.flow(
+  decodeUnknownOrUndefined(SessionProfileBaselineSchema, { onExcessProperty: "error" }),
+  (baseline): SessionProfileBaseline | undefined =>
+    baseline && isValidOrigin(baseline.origin) && isDetachedBaselineProvenanceValid(baseline)
+      ? cloneBaseline(baseline)
+      : undefined,
+);
+const decodeCandidateList = decodeUnknownOrUndefined(
+  Schema.Struct({ candidates: Schema.Array(Schema.Unknown) }),
+);
+const isWriterCandidate = Schema.is(Schema.Struct({ writeIntent: Schema.Literal("writer") }));
+
+/** Reads only write intent from a route that no longer decodes. */
+const admitsWriter = Fn.flow(decodeCandidateList, (route): boolean =>
+  Arr.some(route?.candidates ?? [], isWriterCandidate),
+);
+
+/**
+ * Keeps each part of a reload handoff that still decodes. Nesting limits are safety controls, so
+ * invalid ones, or a seed too damaged to show them, take their most restrictive values.
+ */
+export const decodeSessionProfileRestore = Fn.flow(
+  decodeUnknownRecord,
+  (fields): SessionProfileRestore => {
+    const savedOverrides = decodeUnknownRecord(fields?.overrides);
+    const savedBaselineProfiles = decodeUnknownRecord(
+      decodeUnknownRecord(fields?.baseline)?.profiles,
+    );
+    const baseline = decodeBaseline(fields?.baseline);
+    const overrides: Partial<Record<ProfileId, ProfileRoute>> = {};
+    const profiles: Array<SessionProfileRestore["lost"]["profiles"][number]> = [];
+    for (const profile of PROFILE_IDS) {
+      if (savedOverrides && !Rec.has(savedOverrides, profile)) {
+        if (!baseline)
+          profiles.push({
+            profile,
+            from: "baseline",
+            admittedWriter: admitsWriter(savedBaselineProfiles?.[profile]),
+          });
+        continue;
+      }
+      const saved = savedOverrides?.[profile];
+      const route = decodeProfileRoute(saved);
+      if (route) overrides[profile] = route;
+      else profiles.push({ profile, from: "override", admittedWriter: admitsWriter(saved) });
+    }
+    const nestingDiagnostics: string[] = [];
+    const nesting =
+      fields && !Rec.has(fields, "nesting")
+        ? undefined
+        : decodeDocumentNesting(fields?.nesting, "nesting", nestingDiagnostics);
+    // An unknown key changes no limit.
+    const nestingChanged = Arr.some(nestingDiagnostics, (path) => path !== "nesting.<unknown>");
+    const delegation = decodeDelegation(fields?.delegation);
+    return {
+      seed: cloneSessionProfileOverrideSeed({
+        revision: decodeRevision(fields?.revision) ?? 0,
+        overrides,
+        ...(nesting && { nesting }),
+        ...(delegation && { delegation }),
+        ...(baseline && { baseline }),
+      }),
+      lost: {
+        unreadable: fields === undefined,
+        profiles,
+        baseline: !baseline,
+        delegation: fields?.delegation !== undefined && !delegation,
+        nesting: nestingChanged,
+      },
+    };
+  },
+);
+
+export interface RestoredSessionProfile {
+  readonly snapshot: SessionProfileSnapshot;
+  /** Present when the restore reset anything. */
+  readonly resets?: SessionProfileRestoreResets | undefined;
+}
+
+/**
+ * Builds the restored snapshot over the current configuration. A lost route falls back to the
+ * configuration's, but stays read-only when the lost one admitted no writer, so a reset never
+ * widens what the session let a profile do.
+ */
+export const restoredSessionProfileSnapshot = (
+  baseConfig: ResolvedSubagentConfig,
+  restore: SessionProfileRestore,
+): RestoredSessionProfile => {
+  const fallback = sessionProfileSnapshot(baseConfig, restore.seed);
+  const overrides: Partial<Record<ProfileId, ProfileRoute>> = { ...fallback.overrides };
+  const readOnly: ProfileId[] = [];
+  for (const { profile, admittedWriter } of restore.lost.profiles) {
+    const { candidates } = fallback.effectiveConfig.profiles[profile];
+    if (admittedWriter || !Arr.some(candidates, (candidate) => candidate.writeIntent === "writer"))
+      continue;
+    overrides[profile] = {
+      candidates: Arr.map(candidates, (candidate) => ({ ...candidate, writeIntent: "read-only" })),
+    };
+    readOnly.push(profile);
+  }
+  const resets: SessionProfileRestoreResets = {
+    unreadable: restore.lost.unreadable,
+    routes: Arr.flatMap(restore.lost.profiles, ({ profile, from }) =>
+      from === "override" ? [profile] : [],
+    ),
+    readOnly,
+    profileSet: restore.lost.baseline,
+    delegation: restore.lost.delegation,
+    nesting: restore.lost.nesting,
+  };
+  const changed =
+    resets.unreadable ||
+    resets.routes.length > 0 ||
+    readOnly.length > 0 ||
+    resets.profileSet ||
+    resets.delegation ||
+    resets.nesting;
+  return {
+    snapshot:
+      readOnly.length > 0
+        ? sessionProfileSnapshot(baseConfig, { ...restore.seed, overrides })
+        : fallback,
+    ...(changed && { resets }),
+  };
+};
 
 export const sessionProfileSnapshot = (
   baseConfig: ResolvedSubagentConfig,

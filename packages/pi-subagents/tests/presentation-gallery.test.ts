@@ -467,13 +467,13 @@ const awaitScenarios = Effect.gen(function* () {
     tool: awaitInput.tool,
     title: "waiting cancelled",
     args: awaitInput.args,
-    result: cancellation.cancelled(),
+    result: cancellation.cancelled(0),
   };
   const userInput: ToolScenario = {
     tool: awaitInput.tool,
     title: "user sent a message",
     args: awaitInput.args,
-    result: cancellation.cancelled(false, { kind: "user_input" }),
+    result: cancellation.cancelled(0, false, { kind: "user_input" }),
   };
   const siblingQuestion = yield* scenario("another worker asks a question", awaitInput, {
     service: {

@@ -33,6 +33,7 @@ const observedTargets = (observations: ReadonlyArray<SubagentRunObservation>) =>
       observations,
       until: "all_finished",
       requestedRunIds: Arr.map(observations, (observation) => observation.run.id),
+      now: 0,
     }),
   ).targets;
 
@@ -169,6 +170,7 @@ describe("await contract", () => {
         requestedRunIds: ["done", "old", "busy", "never-seen"],
         until: "all_finished",
         cleanup: "unconfirmed",
+        now: 0,
       }),
     );
     expect(JSON.stringify(contract)).not.toContain(secretReport);
@@ -200,6 +202,7 @@ describe("await contract", () => {
           observations,
           until: "all_finished",
           requestedRunIds: Arr.map(observations, ({ run }) => run.id),
+          now: 0,
           messages,
         }),
       );
@@ -235,7 +238,7 @@ describe("cleanup evidence", () => {
   });
 
   it("redacts bounded cleanup diagnostics in a read's status", () => {
-    const target = readStatusTarget(quarantined);
+    const target = readStatusTarget(quarantined, 0);
     expect(target.cleanup?.diagnostic?.code?.length).toBeLessThanOrEqual(80);
     expect(target.cleanup?.diagnostic?.message.length).toBeLessThanOrEqual(1_024);
     expect(JSON.stringify(target)).not.toContain("lease-secret");
