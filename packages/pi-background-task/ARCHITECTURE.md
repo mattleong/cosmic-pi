@@ -49,6 +49,9 @@ task's start opted in with `notify`; otherwise completion sends nothing.
   meanwhile. The [notice
   renderer](src/ui/notice-message.ts) shows delivered and historical notices without delivery
   authority.
+- Notices, the wake message, and the run-end reminder reach the model inside core's [message-origin
+  marker](../../docs/architecture/pi-boundaries.md#model-visible-extension-messages), so the model
+  never reads them as user text; a notice names the task whose output it relays.
 
 ## Lifecycle
 

@@ -7,9 +7,11 @@ import type {
 import * as Arr from "effect/Array";
 import * as Match from "effect/Match";
 import * as Predicate from "effect/Predicate";
+import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import { clipText, countLabel, formatDuration } from "pi-cosmic-core/display";
 import { deliverAgentMessage } from "pi-cosmic-core/host-agent-messages";
+import { originFromDetails, registerMessageOrigins } from "pi-cosmic-core/host-message-origin";
 import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import { hasUnansweredNotice, registerSessionWake } from "pi-cosmic-core/host-wake";
 import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core/security";
@@ -23,6 +25,34 @@ const WAKE_TEXT =
   "Background tasks finished while you were busy; their notices are shown above. Act on them now and continue the task.";
 
 const RUN_END_REMINDER_TYPE = "pi-background-task-run-end-reminder";
+
+const TASK_OUTPUT = {
+  author: "other",
+  relays: "a background task's exit status and output",
+} as const;
+
+/**
+ * Marks every notice and reminder this extension keeps in model context, so the model can tell them
+ * from text the user typed; a notice names the task whose output it relays. Registers at factory
+ * time, in root and subagent sessions alike.
+ */
+export function registerTaskMessageOrigins(pi: ExtensionAPI): void {
+  registerMessageOrigins(pi, {
+    extension: "pi-background-task",
+    types: {
+      [TASK_NOTICE_MESSAGE_TYPE]: originFromDetails(
+        Schema.Struct({ task: Schema.Struct({ id: Schema.String }) }),
+        ({ task }) => ({
+          author: "other",
+          relays: `the exit status and output of background task ${task.id}`,
+        }),
+        TASK_OUTPUT,
+      ),
+      [WAKE_MESSAGE_TYPE]: { author: "extension" },
+      [RUN_END_REMINDER_TYPE]: { author: "extension" },
+    },
+  });
+}
 
 const MAX_NOTICE_CHARS = 8_000;
 const MAX_COMMAND_CHARS = 300;

@@ -121,6 +121,7 @@ const harness = (
         return Promise.resolve(tasks.handler(args, ctx));
       },
       emit: (name: DefaultedEventName, ctx: ExtensionContext) => host.emit(name, ctx),
+      modelContext: host.modelContext,
       /** Settles a completed run through every handler, chaining their results as Pi does. */
       settle: (ctx: ExtensionContext) =>
         Arr.reduce(
@@ -144,6 +145,33 @@ const harness = (
   }).pipe(Effect.provide(nodeFilePlatformLayer));
 
 describe("background-task Pi lifecycle", () => {
+  it.effect.each([false, true])(
+    "marks its notices as automated in model requests only (subagent child: %s)",
+    (subagentChild) =>
+      Effect.gen(function* () {
+        const app = yield* harness(() => Promise.resolve(), { subagentChild });
+        const notice = {
+          role: "custom" as const,
+          customType: "pi-background-task-finished",
+          content: "Background task task-0000000001 exited with code 0.",
+          display: true,
+          details: { task: { id: "task-0000000001" } },
+          timestamp: 1,
+        };
+        const typed = { role: "user" as const, content: "Run the tests.", timestamp: 2 };
+        const sent = yield* Effect.promise(() =>
+          app.modelContext(context(process.cwd()), [typed, notice]),
+        );
+        expect(sent[0]).toEqual(typed);
+        expect(sent[1]).toMatchObject({ customType: notice.customType, details: notice.details });
+        const content = sent[1]?.role === "custom" ? sent[1].content : "";
+        expect(content).toContain("<pi_extension_message");
+        expect(content).toContain("background task task-0000000001");
+        expect(content).toContain("not typed by the user");
+        expect(content).toContain(notice.content);
+      }),
+  );
+
   it.effect.each(["session_start", "session_tree"] as const)(
     "interrupts a never-settling settings load on %s replacement",
     (event) =>

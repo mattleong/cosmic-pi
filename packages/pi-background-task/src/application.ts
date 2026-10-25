@@ -30,6 +30,7 @@ import {
 import { registerBackgroundTaskActivity } from "./boundary/host-activity.ts";
 import {
   registerSubagentTaskNoticeDelivery,
+  registerTaskMessageOrigins,
   registerTaskNoticeDelivery,
 } from "./boundary/host-notice.ts";
 import { readHostShellSettings } from "./boundary/host-shell.ts";
@@ -76,6 +77,7 @@ export function registerBackgroundTaskApplication(
   const replay = registerCodePreviewReplay(pi, { command: "tasks", tools: ["background_task"] });
   // Historical notices render without restoring delivery authority.
   pi.registerMessageRenderer(TASK_NOTICE_MESSAGE_TYPE, renderTaskNotice);
+  registerTaskMessageOrigins(pi);
   let idleHost: ExtensionContext | undefined;
   // A subagent's tasks stop when its run ends, so it settles them before reporting. The published
   // projection follows every task state change and is empty once the activation retires.
