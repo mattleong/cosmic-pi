@@ -537,6 +537,32 @@ describe("BackgroundTaskService", () => {
     });
   });
 
+  it.effect("stores colored output as plain text and charges budgets only for that text", () => {
+    const harness = serviceHarness({ logBufferBytesPerTask: 4_096, totalLogBufferBytes: 4_096 });
+    return harness.run(function* (service) {
+      const started = yield* service.start(taskInput());
+      const control = harness.controls[0];
+      if (!control) throw new Error("started process was not captured");
+      // Five colored 1,000-byte lines, each opening sequence split across writes; three fit.
+      for (let index = 1; index <= 5; index += 1) {
+        control.offer("stdout", "\u001b[3");
+        control.offer("stdout", `${index};1m${Fn.pipe(String(index), Str.repeat(999))}\u001b[0m\n`);
+      }
+      control.complete();
+      yield* service.wait(exitWait(started.id));
+      const logs = yield* service.logs({ id: started.id, afterCursor: 0 });
+      expect(Arr.map(logs.events, ({ text, bytes }) => ({ text, bytes }))).toEqual(
+        Arr.map([3, 4, 5], (index) => ({ text: kilobyteLine(index), bytes: 1_000 })),
+      );
+      expect(logs).toMatchObject({
+        earliestAvailableCursor: 2,
+        retainedBytes: 3_000,
+        droppedBytes: 2_000,
+      });
+      expect(skippedWithin(logs)).toEqual({ bytes: 2_000 });
+    });
+  });
+
   it.effect("reads carriage-return progress as separate lines, per stream", () => {
     const harness = serviceHarness();
     return harness.run(function* (service) {

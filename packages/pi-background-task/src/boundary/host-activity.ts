@@ -17,7 +17,6 @@ import {
   type BackgroundTaskState,
   type BackgroundTaskView,
 } from "../task/model.ts";
-import { plainTerminalText } from "../task/terminal-text.ts";
 import type { BackgroundTaskProjectionBridge } from "./host-ui.ts";
 import { taskStateLabel } from "../ui/task-state.ts";
 
@@ -102,9 +101,8 @@ export function backgroundTaskActivityDetail(
   if (!task) return undefined;
   let remaining = 12_000;
   const chunks: string[] = [];
-  // Plain text per event, so trimming never splits a color sequence into visible text.
   for (let index = task.logs.length - 1; index >= 0 && remaining > 0; index -= 1) {
-    const text = safeTextSuffix(plainTerminalText(task.logs[index]?.text ?? ""), remaining);
+    const text = safeTextSuffix(task.logs[index]?.text ?? "", remaining);
     chunks.push(text);
     remaining -= text.length;
   }

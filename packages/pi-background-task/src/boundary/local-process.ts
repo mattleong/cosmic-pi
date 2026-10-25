@@ -110,8 +110,7 @@ const processError = (reason: LocalProcessError["reason"], subject?: string) =>
 
 /**
  * The task environment: the host's, without the keys that would load Pi's own startup code or
- * session identity into the task, with Pi's tool directory on `PATH` as its bash tool has it, and
- * with color requested from CLIs that see only pipes.
+ * session identity into the task, and with Pi's tool directory on `PATH` as its bash tool has it.
  */
 export function makeBackgroundProcessEnvironment(
   source: NodeJS.ProcessEnv,
@@ -135,8 +134,6 @@ export function makeBackgroundProcessEnvironment(
         ? `${binDirectory}${nodePath.delimiter}${current}`
         : binDirectory;
   }
-  if (environment.FORCE_COLOR === undefined && environment.NO_COLOR === undefined)
-    environment.FORCE_COLOR = "1";
   return environment;
 }
 

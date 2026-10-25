@@ -19,7 +19,7 @@ import {
   type BackgroundTaskProjection,
   type BackgroundTaskStatus,
 } from "./model.ts";
-import { plainTerminalText, TerminalTextNormalizer } from "./terminal-text.ts";
+import { TerminalTextNormalizer } from "./terminal-text.ts";
 
 export interface TaskRecord {
   snapshot: BackgroundTaskStatus;
@@ -90,7 +90,7 @@ const recentOutputLines = (record: TaskRecord): string[] =>
       Arr.map(
         readLogBuffer(record.snapshot.id, record.logs, record.snapshot.state, { tailLines: 200 })
           .events,
-        (event) => plainTerminalText(event.text),
+        (event) => event.text,
       ),
       "",
     ),

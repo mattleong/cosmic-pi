@@ -2,11 +2,7 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import { describe, expect, it } from "vitest";
-import {
-  MAX_PENDING_SEQUENCE_CHARS,
-  plainTerminalText,
-  TerminalTextNormalizer,
-} from "../src/task/terminal-text.ts";
+import { MAX_PENDING_SEQUENCE_CHARS, TerminalTextNormalizer } from "../src/task/terminal-text.ts";
 
 const normalize = (...writes: string[]) => {
   const normalizer = new TerminalTextNormalizer();
@@ -22,7 +18,7 @@ const VITE =
   "  \u001b[32m\u001b[1mVITE\u001b[22m v5.0.0\u001b[39m  \u001b[2mready in \u001b[0m\u001b[1m312\u001b[22m\u001b[2m ms\u001b[22m\r\n";
 
 describe("terminal output normalization", () => {
-  it("keeps text and colors and removes every other control or sequence", () => {
+  it("keeps plain text and removes every control and sequence, colors included", () => {
     const raw = Arr.join(
       [
         "\u001b]0;evil-title\u0007",
@@ -34,12 +30,12 @@ describe("terminal output normalization", () => {
         "\u001b7\u001b(B",
         "a\tb\bc\r\n",
         "\u001b[31;1mred\u001b[0m\n",
+        "\u001b[38;2;255;0;0mtrue\u001b[38:5:196m256\u001b[4:3mcurly\u001b[m\n",
+        `\u001b[${Fn.pipe("1;", Str.repeat(200))}mlong\n`,
       ],
       "",
     );
-    const normalized = normalize(raw);
-    expect(normalized).toBe("link\u001b[31mc1\u001b[0ma\tbc\n\u001b[31;1mred\u001b[0m\n");
-    expect(plainTerminalText(normalized)).toBe("linkc1a\tbc\nred\n");
+    expect(normalize(raw)).toBe("linkc1a\tbc\nred\ntrue256curly\nlong\n");
   });
 
   it("gives the same result however a write is split, including inside a sequence", () => {
@@ -50,7 +46,7 @@ describe("terminal output normalization", () => {
       expect(normalize(Fn.pipe(raw, Str.slice(0, split)), Fn.pipe(raw, Str.slice(split)))).toBe(
         whole,
       );
-    expect(plainTerminalText(whole)).toBe("  VITE v5.0.0  ready in 312 ms\ndoneup\n");
+    expect(whole).toBe("  VITE v5.0.0  ready in 312 ms\ndoneup\n");
   });
 
   it("turns progress redrawn with carriage returns into one line per update", () => {
@@ -58,9 +54,7 @@ describe("terminal output normalization", () => {
       "Downloading  10%\nDownloading  55%\nDownloading 100%\n",
     );
     // Erasing the line after the return, as progress bars do, changes nothing.
-    expect(plainTerminalText(normalize("\u001b[32m 10%\u001b[0m\r\u001b[2K 55%"))).toBe(
-      " 10%\n 55%",
-    );
+    expect(normalize("\u001b[32m 10%\u001b[0m\r\u001b[2K 55%")).toBe(" 10%\n 55%");
   });
 
   it("keeps a CRLF, or a CR already at a line start, a single line break", () => {
@@ -68,7 +62,7 @@ describe("terminal output normalization", () => {
     expect(normalize("\r 10%\r\r 55%\r\n")).toBe(" 10%\n 55%\n");
     expect(normalize("done\n\r\n")).toBe("done\n\n");
     // A CR that ends one write and the LF that starts the next form one break.
-    expect(normalize("one\r", "\ntwo\r", "\u001b[0m", "\nthree")).toBe("one\ntwo\n\u001b[0mthree");
+    expect(normalize("one\r", "\ntwo\r", "\u001b[0m", "\nthree")).toBe("one\ntwo\nthree");
     expect(normalize("one\r", "\n", "\n")).toBe("one\n\n");
     const raw = "a\rb\r\nc\r\r\nd\n\re\r";
     const whole = normalize(raw);
@@ -89,10 +83,8 @@ describe("terminal output normalization", () => {
 
   it("resumes after an unterminated sequence instead of swallowing later output", () => {
     const longTitle = `\u001b]0;${Fn.pipe("t", Str.repeat(MAX_PENDING_SEQUENCE_CHARS))}`;
-    expect(plainTerminalText(normalize(longTitle, "after\n"))).toMatch(/after\n$/u);
-    expect(normalize("\u001b]0;title", "\u001b[32mgreen\u001b[0m\n")).toBe(
-      "\u001b[32mgreen\u001b[0m\n",
-    );
+    expect(normalize(longTitle, "after\n")).toMatch(/after\n$/u);
+    expect(normalize("\u001b]0;title", "\u001b[32mgreen\u001b[0m\n")).toBe("green\n");
     expect(normalize("\u001b[12", "\nnext\n")).toBe("\nnext\n");
 
     const interrupted = new TerminalTextNormalizer();

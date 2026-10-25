@@ -101,7 +101,6 @@ describe("local process boundary", () => {
     };
     expect(makeBackgroundProcessEnvironment({ PATH: "/bin", ...blocked })).toEqual({
       PATH: "/bin",
-      FORCE_COLOR: "1",
     });
 
     const lowerCase = {
@@ -112,25 +111,28 @@ describe("local process boundary", () => {
       pi_session_file: "/private/session.jsonl",
       pi_session_id: "private",
     };
-    expect(makeBackgroundProcessEnvironment(lowerCase)).toEqual({
-      ...lowerCase,
-      FORCE_COLOR: "1",
-    });
+    expect(makeBackgroundProcessEnvironment(lowerCase)).toEqual(lowerCase);
   });
 
   it("puts Pi's tool directory on PATH once", () => {
     expect(makeBackgroundProcessEnvironment({ PATH: "/usr/bin:/bin" }, "/agent/bin")).toEqual({
       PATH: "/agent/bin:/usr/bin:/bin",
-      FORCE_COLOR: "1",
     });
     expect(makeBackgroundProcessEnvironment({ PATH: "/bin:/agent/bin" }, "/agent/bin")).toEqual({
       PATH: "/bin:/agent/bin",
-      FORCE_COLOR: "1",
     });
-    expect(makeBackgroundProcessEnvironment({}, "/agent/bin")).toEqual({
-      PATH: "/agent/bin",
-      FORCE_COLOR: "1",
-    });
+    expect(makeBackgroundProcessEnvironment({}, "/agent/bin")).toEqual({ PATH: "/agent/bin" });
+  });
+
+  it("passes color settings through without requesting color", () => {
+    expect(makeBackgroundProcessEnvironment({ PATH: "/bin" }, "/agent/bin")).not.toHaveProperty(
+      "FORCE_COLOR",
+    );
+    for (const color of [{ FORCE_COLOR: "0" }, { FORCE_COLOR: "3" }, { NO_COLOR: "1" }])
+      expect(makeBackgroundProcessEnvironment({ PATH: "/bin", ...color })).toEqual({
+        PATH: "/bin",
+        ...color,
+      });
   });
 
   it.live("runs commands in bash when no shell is configured", () =>

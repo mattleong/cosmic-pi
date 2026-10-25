@@ -11,7 +11,6 @@ import type {
   BackgroundLogStream,
   BackgroundOutputSkip,
 } from "../task/model.ts";
-import { plainTerminalText } from "../task/terminal-text.ts";
 
 const STDERR_LABEL = "[stderr] ";
 const NEWLINE = 0x0a;
@@ -34,7 +33,7 @@ const newlineCount = (text: string): number => {
 };
 
 const renderEvent = (event: BackgroundLogEvent, state: LineState): string => {
-  const text = plainTerminalText(event.text);
+  const { text } = event;
   if (!text) return "";
   // A stream switch mid-line starts a new line, so the streams never share one.
   const separator = state.stream !== undefined && state.stream !== event.stream && !state.lineStart;
@@ -71,7 +70,7 @@ export const combinedLogOutput = (events: ReadonlyArray<BackgroundLogEvent>): st
 
 // What one event can add to combined output, whatever precedes it.
 const renderedCost = (event: BackgroundLogEvent) => {
-  const text = plainTerminalText(event.text);
+  const { text } = event;
   if (!text) return { bytes: 0, lines: 0 };
   const breaks = newlineCount(text);
   const labels = event.stream === "stderr" ? (breaks + 1) * STDERR_LABEL.length : 0;

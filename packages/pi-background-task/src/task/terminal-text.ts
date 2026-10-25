@@ -14,12 +14,10 @@ const C1_STRING_TERMINATOR = 0x9c;
 // DCS, SOS, OSC, PM, and APC.
 const C1_STRING_INTRODUCERS = new Set([0x90, 0x98, 0x9d, 0x9e, 0x9f]);
 const ESCAPE_STRING_INTRODUCERS = new Set([0x5d, 0x50, 0x58, 0x5e, 0x5f]);
-const MAX_SGR_PARAMETER_CHARS = 128;
 // An escape or string sequence still open after this many characters is discarded, so a broken
 // sequence cannot swallow the output that follows it.
 export const MAX_PENDING_SEQUENCE_CHARS = 4_096;
 
-const SGR_SEQUENCE = new RegExp(String.raw`\u001b\[[0-9;:]*m`, "gu");
 // Controls other than newline and tab, including ESC and the C1 range; text mode keeps the rest.
 const CONTROL = String.raw`[\u0000-\u0008\u000b-\u001f\u007f-\u009f]`;
 const NEEDS_PARSING = new RegExp(CONTROL, "u");
@@ -34,20 +32,10 @@ type ParserMode = "text" | "escape" | "escape-intermediate" | "csi" | "string" |
 // Where the stored text ends: at a line start, at a line start a carriage return made, or mid-line.
 type LinePosition = "start" | "carriage" | "middle";
 
-// Digits, colon, and semicolon.
-const isSgrParameter = (code: number): boolean => code >= 0x30 && code <= 0x3b;
-
 /**
- * Removes SGR sequences from normalized text. Normalized text contains no other escapes, so the
- * result is the plain text readers and output waits see, independent of neighboring events.
- */
-export const plainTerminalText = (text: string): string =>
-  Fn.pipe(text, Str.includes("\u001b")) ? Fn.pipe(text, Str.replace(SGR_SEQUENCE, "")) : text;
-
-/**
- * Normalizes one output stream as it arrives. The result holds printable text, newlines, tabs,
- * and complete SGR sequences only; every other control, escape, and string sequence is removed,
- * including sequences split across writes.
+ * Normalizes one output stream as it arrives into plain text: printable text, newlines, and tabs
+ * only. Every other control, escape, and string sequence, colors included, is removed, including
+ * sequences split across writes.
  *
  * A carriage return that ends text becomes a line break, so progress redrawn in place reads as
  * one line per update. A line feed right after it, even in the next write, belongs to the same
@@ -56,8 +44,6 @@ export const plainTerminalText = (text: string): string =>
 export class TerminalTextNormalizer {
   private mode: ParserMode = "text";
   private pending = 0;
-  private parameters = "";
-  private sgr = false;
   private line: LinePosition = "start";
 
   write(text: string): string {
@@ -66,7 +52,7 @@ export class TerminalTextNormalizer {
     let index = 0;
     while (index < text.length) {
       if (this.mode !== "text") {
-        if (!this.consume(codeAt(text, index), parts)) index += 1;
+        if (!this.consume(codeAt(text, index))) index += 1;
         continue;
       }
       // Kept text runs to the next control, so it is copied without visiting each character.
@@ -112,23 +98,15 @@ export class TerminalTextNormalizer {
     this.pending = 0;
   }
 
-  private enter(mode: ParserMode): void {
-    this.mode = mode;
-    if (mode === "csi") {
-      this.parameters = "";
-      this.sgr = true;
-    }
-  }
-
   private introduce(code: number): void {
     this.pending = 1;
-    if (code === ESCAPE) this.enter("escape");
-    else if (code === C1_CSI) this.enter("csi");
-    else if (C1_STRING_INTRODUCERS.has(code)) this.enter("string");
+    if (code === ESCAPE) this.mode = "escape";
+    else if (code === C1_CSI) this.mode = "csi";
+    else if (C1_STRING_INTRODUCERS.has(code)) this.mode = "string";
   }
 
   /** Advances an open sequence; returns true when the character must be read again as text. */
-  private consume(code: number, parts: string[]): boolean {
+  private consume(code: number): boolean {
     this.pending += 1;
     if (this.pending > MAX_PENDING_SEQUENCE_CHARS) {
       this.reset();
@@ -140,7 +118,7 @@ export class TerminalTextNormalizer {
     }
     if (this.mode === "escape") return this.escape(code);
     if (this.mode === "escape-intermediate") return this.escapeIntermediate(code);
-    if (this.mode === "csi") return this.controlSequence(code, parts);
+    if (this.mode === "csi") return this.controlSequence(code);
     if (this.mode === "string") {
       if (code === BELL || code === C1_STRING_TERMINATOR) this.reset();
       else if (code === ESCAPE) this.mode = "string-escape";
@@ -157,8 +135,8 @@ export class TerminalTextNormalizer {
   }
 
   private escape(code: number): boolean {
-    if (code === 0x5b) this.enter("csi");
-    else if (ESCAPE_STRING_INTRODUCERS.has(code)) this.enter("string");
+    if (code === 0x5b) this.mode = "csi";
+    else if (ESCAPE_STRING_INTRODUCERS.has(code)) this.mode = "string";
     else if (code === ESCAPE) this.pending = 1;
     else if (code >= 0x20 && code <= 0x2f) this.mode = "escape-intermediate";
     else {
@@ -179,22 +157,13 @@ export class TerminalTextNormalizer {
     return code < 0x30 || code > 0x7e;
   }
 
-  private controlSequence(code: number, parts: string[]): boolean {
+  private controlSequence(code: number): boolean {
     if (code >= 0x40 && code <= 0x7e) {
-      if (code === 0x6d && this.sgr) parts.push(`\u001b[${this.parameters}m`);
       this.reset();
       return false;
     }
-    if (code >= 0x30 && code <= 0x3f) {
-      if (this.sgr && isSgrParameter(code) && this.parameters.length < MAX_SGR_PARAMETER_CHARS)
-        this.parameters += String.fromCharCode(code);
-      else this.sgr = false;
-      return false;
-    }
-    if (code >= 0x20 && code <= 0x2f) {
-      this.sgr = false;
-      return false;
-    }
+    // Parameter and intermediate characters.
+    if (code >= 0x20 && code <= 0x3f) return false;
     if (code === ESCAPE) {
       this.pending = 1;
       this.mode = "escape";

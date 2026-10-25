@@ -17,7 +17,6 @@ import {
   type TaskRecord,
   type TaskRegistry,
 } from "../src/task/registry.ts";
-import { plainTerminalText } from "../src/task/terminal-text.ts";
 import { combinedLogOutput } from "../src/tools/log-page.ts";
 import { taskStatus } from "./support/task-service-double.ts";
 
@@ -233,12 +232,9 @@ describe("background log buffer", () => {
     }),
   );
 
-  it("stores large writes as bounded events that never split a style sequence or character", () => {
-    const red = "\u001b[31m";
-    const reset = "\u001b[0m";
-    const line = `${red}error${reset} 🙂 ${Fn.pipe("x", Str.repeat(37))}\n`;
-    const text =
-      Fn.pipe(line, Str.repeat(400)) + `${red}${Fn.pipe("y", Str.repeat(9_000))}${reset}`;
+  it("stores large writes as bounded events that never split a character", () => {
+    const line = `error 🙂 ${Fn.pipe("x", Str.repeat(37))}\n`;
+    const text = Fn.pipe(line, Str.repeat(400)) + Fn.pipe("🙂y", Str.repeat(3_000));
     const buffer = new LogBuffer().append("stdout", text, 0, 1 << 20);
     const events = buffer.events;
     expect(events.length).toBeGreaterThan(1);
@@ -253,8 +249,6 @@ describe("background log buffer", () => {
       expect(Str.split(event.text, "\n").length - 1).toBeLessThanOrEqual(
         BACKGROUND_LOG_BOUNDS.maxEventLines,
       );
-      expect(plainTerminalText(event.text)).not.toContain("\u001b");
-      expect(plainTerminalText(event.text)).not.toMatch(/\[[0-9;]*m/u);
       expect(Buffer.from(event.text, "utf8").toString("utf8")).toBe(event.text);
     }
     expect(splitLogText("short\n")).toEqual(["short\n"]);

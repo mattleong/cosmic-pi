@@ -11,7 +11,6 @@ import type {
   BackgroundOutputSkip,
   BackgroundTaskState,
 } from "./model.ts";
-import { plainTerminalText } from "./terminal-text.ts";
 
 const COMPACTION_MIN_DEAD_EVENTS = 32;
 // Evicted cursors whose discard totals are kept, so a read from one of them reports exactly how
@@ -41,13 +40,12 @@ const isLowSurrogate = (code: number) => code >= 0xdc00 && code <= 0xdfff;
 
 /**
  * Where the stored event starting at `start` ends: within the byte and line bounds, at a line
- * break when one falls in the second half, and never inside an SGR sequence or surrogate pair.
+ * break when one falls in the second half, and never inside a surrogate pair.
  */
 const eventEnd = (text: string, start: number, maxBytes: number, maxLines: number): number => {
   let bytes = 0;
   let lines = 0;
   let lineBreak = -1;
-  let sequence = -1;
   let index = start;
   while (index < text.length) {
     const code = codeAt(text, index);
@@ -55,8 +53,6 @@ const eventEnd = (text: string, start: number, maxBytes: number, maxLines: numbe
     const size = code < 0x80 ? 1 : code < 0x800 ? 2 : pair ? 4 : 3;
     if (bytes + size > maxBytes && index > start) break;
     bytes += size;
-    if (code === 0x1b) sequence = index;
-    else if (code === 0x6d) sequence = -1;
     index += pair ? 2 : 1;
     if (code === 0x0a) {
       lineBreak = index;
@@ -65,11 +61,6 @@ const eventEnd = (text: string, start: number, maxBytes: number, maxLines: numbe
     }
   }
   if (index >= text.length) return text.length;
-  if (sequence > start) return sequence;
-  if (sequence === start) {
-    const final = indexOfFrom(text, "m", sequence);
-    return final < 0 ? index : final + 1;
-  }
   return lineBreak > start + (index - start) / 2 ? lineBreak : index;
 };
 
@@ -86,17 +77,6 @@ export const splitLogText = (
     start = end;
   }
   return pieces;
-};
-
-/** The newest text within `maxBytes` that does not begin inside an SGR sequence. */
-const styledSuffix = (text: string, maxBytes: number): string => {
-  const suffix = utf8Suffix(text, maxBytes);
-  const start = text.length - suffix.length;
-  if (start === 0) return suffix;
-  const escape = lastIndexOfFrom(text, "\u001b", start - 1);
-  if (escape < 0) return suffix;
-  const final = indexOfFrom(text, "m", escape);
-  return final >= start ? Fn.pipe(text, Str.slice(final + 1)) : suffix;
 };
 
 /**
@@ -230,7 +210,7 @@ export class LogBuffer {
     if (first === pieces.length) {
       // Only a budget smaller than one event reaches this: keep what fits of the newest piece.
       const newest = pieces.at(-1) ?? "";
-      const kept = styledSuffix(newest, maxBytes - LOG_BOUNDS.eventOverheadBytes);
+      const kept = utf8Suffix(newest, maxBytes - LOG_BOUNDS.eventOverheadBytes);
       for (const bytes of sizes.slice(0, -1)) this.addDropped(bytes);
       this.addDropped((sizes.at(-1) ?? 0) - utf8ByteLength(kept));
       pieces.splice(0, pieces.length, kept);
@@ -312,7 +292,7 @@ export class LogBuffer {
     );
     // Lost output may have held either stream's text, so neither is known to end a line.
     if (first.droppedBefore) this.evictedEndsLine.stdout = this.evictedEndsLine.stderr = false;
-    this.evictedEndsLine[first.stream] = Fn.pipe(plainTerminalText(first.text), Str.endsWith("\n"));
+    this.evictedEndsLine[first.stream] = Fn.pipe(first.text, Str.endsWith("\n"));
     if (this.start > COMPACTION_MIN_DEAD_EVENTS && this.start * 2 > this.store.length) {
       this.store = this.store.slice(this.start);
       this.start = 0;
@@ -348,7 +328,7 @@ export class LogBuffer {
     for (let index = this.indexAfter(cursor) - 1; index >= this.start; index -= 1) {
       const event = this.store[index];
       if (!event || ended[event.stream] !== undefined) continue;
-      ended[event.stream] = Fn.pipe(plainTerminalText(event.text), Str.endsWith("\n"));
+      ended[event.stream] = Fn.pipe(event.text, Str.endsWith("\n"));
       if (ended.stdout !== undefined && ended.stderr !== undefined) break;
     }
     // With nothing evicted, a stream without earlier output starts a line.

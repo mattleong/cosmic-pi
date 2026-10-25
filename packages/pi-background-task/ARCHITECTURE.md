@@ -83,9 +83,11 @@ shutdown or replacement never message the agent.
   group is never signalled again.
 - Admitted readers retain their task record. Clearing or evicting registry entries removes
   discoverability without invalidating in-flight waits or reinserting removed tasks.
-- Stored output holds only text and complete SGR sequences, so stripping SGR from any one event
-  gives the plain text that reads, waits, and Activity share. Events are split to a bounded size,
-  and reads select whole events, so cursors page without skipping output.
+- Stored output is plain text: intake keeps printable text, newlines, and tabs, turns carriage
+  returns into line breaks, and removes every other control and escape sequence, colors included,
+  so reads, waits, and Activity share each event's text as stored and retained budgets
+  count only that text. Events are split to a bounded size, and reads select whole events, so
+  cursors page without skipping output.
 - Retained budgets charge a per-event overhead, and evicted events are released at once. Each
   event owns a copy of its text, so keeping part of a large write never keeps the whole write
   alive outside the budget. Ingress has its own per-task bound outside those budgets, as does the

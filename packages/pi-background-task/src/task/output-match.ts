@@ -7,7 +7,6 @@ import { codeUnitAt, indexOfFrom, lastIndexOfFrom } from "pi-cosmic-core/text-sc
 import { BACKGROUND_TASK_FIELD_BOUNDS as BOUNDS } from "./bounds.ts";
 import { skippedWithin } from "./log-buffer.ts";
 import type { BackgroundLogSlice, BackgroundLogStream, BackgroundOutputSkip } from "./model.ts";
-import { plainTerminalText } from "./terminal-text.ts";
 
 // Recent text each stream keeps: enough to match across writes and to show a matched line's start.
 const LINE_CONTEXT_CHARS = BOUNDS.maxMatchedLineChars;
@@ -120,7 +119,7 @@ export class OutputMatcher {
     let match: OutputMatch | undefined;
     for (const event of slice.events) {
       if (event.droppedBefore) this.reset();
-      const candidate = this.recent[event.stream] + plainTerminalText(event.text);
+      const candidate = this.recent[event.stream] + event.text;
       const found = earliest(candidate, this.alternatives);
       if (found) {
         const line = matchedLine(candidate, found, this.clipped[event.stream]);

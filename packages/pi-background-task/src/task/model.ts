@@ -29,8 +29,8 @@ export interface BackgroundLogEvent {
   readonly cursor: number;
   readonly stream: BackgroundLogStream;
   /**
-   * Normalized output: printable text, newlines, tabs, and complete SGR sequences only. Empty only
-   * for the event that ends a finished task's output after output lost at its end.
+   * Normalized plain text: printable text, newlines, and tabs only. Empty only for the event that
+   * ends a finished task's output after output lost at its end.
    */
   readonly text: string;
   readonly timestamp: number;
