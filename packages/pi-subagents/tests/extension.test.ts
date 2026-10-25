@@ -32,3 +32,18 @@ it.effect.each([
     expect(Exit.isSuccess(result)).toBe(succeeds);
   }).pipe(Effect.provide(NodeFileSystem.layer)),
 );
+
+// Pi loads extensions through jiti, whose module graph differs from the test runner's.
+it.effect("registers the parent application when Pi's loader imports the entry", () =>
+  Effect.gen(function* () {
+    vi.stubEnv("PI_SUBAGENT_CHILD", undefined);
+    const jiti = createJiti(import.meta.url, { moduleCache: false, fsCache: false });
+    const result = yield* Effect.gen(function* () {
+      const { default: extension } = yield* Effect.tryPromise(() =>
+        jiti.import<{ default: Extension }>(fileURLToPath(new URL("../index.ts", import.meta.url))),
+      );
+      yield* Effect.tryPromise(() => Promise.resolve(extension(extensionApiFixture({}))));
+    }).pipe(Effect.exit);
+    expect(result).toStrictEqual(Exit.void);
+  }),
+);
