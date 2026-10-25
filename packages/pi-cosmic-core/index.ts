@@ -121,6 +121,17 @@ export {
   type AgentMessageRecipientState,
   type SessionLatestReply,
 } from "./src/host-agent-messages.ts";
+export {
+  markMessageOrigins,
+  MESSAGE_ORIGIN_TAG,
+  originFromDetails,
+  registerMessageOrigins,
+  type DetailsOriginRule,
+  type MessageOrigin,
+  type MessageOriginRule,
+  type MessageOriginSource,
+  withOriginMarkerOf,
+} from "./src/host-message-origin.ts";
 export { isSubagentChildProcess } from "./src/host-environment.ts";
 export {
   safeTextPrefix,

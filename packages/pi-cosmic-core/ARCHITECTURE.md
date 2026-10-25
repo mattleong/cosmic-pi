@@ -18,6 +18,7 @@ implementation; the ownership and lifecycle guarantees are what refactors must p
 | [Host commands](src/host-command.ts) and [capabilities](src/session-capability.ts) | Command routing and checked synchronous capability exchange                   | Command actions, protocol identity and admission policy        |
 | [Session wake](src/host-wake.ts)                                                   | When notices start, continue, or wait for a turn                              | Notice content, reminders, extra settle work                   |
 | [Agent messages](src/host-agent-messages.ts)                                       | Message frame, delivery through the wake, latest-reply reads, delivery text   | Sender labels, reply tools, notice types, refusals             |
+| [Message origins](src/host-message-origin.ts)                                      | Request-only origin marker for custom messages, marker neutralization         | Message types, who authored each, origin wording from details  |
 | [Tool arguments](src/schema/tool-arguments.ts)                                     | Pi `prepareArguments` hooks: blank optionals, Pi-equivalent coercion, errors  | Parameter schemas, field aliases, tool-specific shape checks   |
 | [Test kit](src/testing/)                                                           | Shared deterministic Layers, host fixtures, and scoped process/SDK harnesses  | Feature-specific fakes and behavioral assertions               |
 
@@ -108,6 +109,21 @@ defined `entries` and `continue`, so each owner returns `undefined` when it has 
 keeps earlier handlers' entries otherwise; [two owners in one session](tests/host-wake-session.test.ts)
 each get their notices continued.
 
+## Message origins
+
+Pi sends a custom message to the model as ordinary user text. [`registerMessageOrigins`](src/host-message-origin.ts)
+installs one `context` handler per extension that wraps the extension's listed message types in a
+`pi_extension_message` marker naming the extension, the type, and who wrote the content, derived
+only from the message's type and `details`. It replaces matching elements' content in place and
+returns nothing, because Pi folds every system message into a single leading one when a `context`
+handler returns a list, and it stays in `context` so it always runs before Better OpenAI's
+`context_with_system` repair. Only the model request changes: Pi hands handlers a copy, which
+[the request-chain tests](tests/host-message-origin.test.ts) check through Pi's own
+`ExtensionRunner`, as the test host's `modelContext` does for every package. Markers inside content,
+disguised or split across parts, are neutralized; a later transformation that matches the request
+against the stored transcript accepts a marked message through `withOriginMarkerOf`. The [shared contract](../../docs/architecture/pi-boundaries.md#model-visible-extension-messages)
+says how consumers choose an origin.
+
 [Bounded NDJSON framing](src/platform/bounded-ndjson-rpc.ts) for Effect RPC caps every frame,
 complete or still buffered, in UTF-8 bytes and throws on oversized or malformed frames so the
 transport closes the peer. `latestAssistantText` reads the latest assistant reply on a branch within
@@ -189,6 +205,7 @@ The [workspace Effect guide](../../docs/architecture/effect-v4.md) and
 anchors are the [session lifecycle](tests/session-runtime.test.ts),
 [atomic projection](tests/projection.test.ts), [refresh ownership](tests/refresh-coordinator.test.ts),
 [subscription refresh](tests/subscription-refresh.test.ts), [session wake](tests/host-wake.test.ts),
+[message origins](tests/host-message-origin.test.ts),
 [document races](tests/json-document.test.ts),
 [document files and processes](tests/json-document-files.test.ts),
 [process cleanup](tests/process-runner.test.ts), [host-exit guard](tests/process-group-exit-guard.test.ts),

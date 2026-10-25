@@ -42,6 +42,24 @@ Cosmic UI providers use session identity, host activation, and registration owne
 
 Explicitly routed Pi-child questionnaires use authenticated assignment ownership and exact-owner cancellation acknowledgement. Subagent cleanup joins questionnaire/editor finalizers; it does not make waiting for an answer uninterruptible. Parent coordination questions remain a separate protocol.
 
+## Model-visible extension messages
+
+Pi sends a custom message (`pi.sendMessage`, or a `custom_message` settle entry) to the model as ordinary user text. An extension that keeps custom messages in model context registers them once, at factory time, with core's [`registerMessageOrigins`](../../packages/pi-cosmic-core/src/host-message-origin.ts), naming each type and who writes its content. Its `context` handler wraps each matching message, for that request only, in a marker; `source` names the extension:
+
+```text
+<pi_extension_message source="pi-subagents" type="pi-subagents-completed" origin="automated extension message relaying reports and outcomes from subagent agent-k3m9x2q7ra; not typed by the user">
+…the stored content…
+</pi_extension_message>
+```
+
+- **Truthful origins.** Text the extension writes is `extension`. Text another agent, Pi session, or process wrote is `other`, naming that author, such as a subagent's report or another session's agent. Words the user wrote, such as questionnaire answers or an image command's result, are `user`, labeled as relayed by the extension and never as automated or "not typed by the user". The owning package decides each type's origin; core only renders it.
+- **Deterministic bytes, system messages in place.** The origin derives only from the message's type and `details` (`originFromDetails`), which Pi stores but never sends, so the same stored message renders the same marker every turn. Undecodable details fall back to a generic origin of the same kind. Pi folds every system message into one leading message once a `context` handler returns a list or replaces an element, so the handler replaces only each matching element's content in place and returns nothing: mid-conversation prompt and tool changes stay where they are, and marking alone never rewrites a cached prefix. Sessions resumed after upgrading miss the prompt cache once, because their history is now marked.
+- **No breakout.** A `<` or fullwidth `＜` that starts an opening or closing marker inside content is escaped, whatever its case, `-` or `_` spelling, whitespace, or invisible format characters around the `/` and inside the name, and also when the marker is split across adjacent text parts. Other text, including emoji joiner sequences, is untouched, and attribute values are escaped.
+- **Request only.** Pi runs `context` handlers on a copy of the transcript, so the stored session, the chat view, renderers, and settle checks still see the original content. Mutating that copy relies on Pi's behavior rather than its documented contract; core's tests drive Pi's own `ExtensionRunner` to pin it. String and content-array forms, image parts, and every other message, with its identity and order, are kept.
+- **Ordering and composition.** `context` handlers all run before any `context_with_system` handler, which chain in extension load order, so marking always precedes Better OpenAI's checkpoint repair. That repair accepts a marked message as its stored original (`withOriginMarkerOf`) and rebuilds the checkpointed prefix from stored messages, so a checkpointed session sends that prefix unmarked; marking after it would change checkpoint-covered messages and stop the checkpoint from replacing them. Filters such as Ask User's receipt check and other extensions' markers compose in any order.
+
+Messages that arrive as Pi user prompts, such as an agent message sent into a subagent child over RPC, are outside this contract and rely on their own framing.
+
 ## Filesystem, process, and security adapters
 
 Use core's scoped platform mechanisms for ordinary I/O. Specialized adapters may own filesystem, process, socket, or VM behavior when their protocol requires it; keep permissions, limits, failure translation, and cleanup explicit. Do not spread direct I/O or runtime helpers through domain services. Exact diagnostic exceptions should track these boundaries rather than an arbitrary folder convention.

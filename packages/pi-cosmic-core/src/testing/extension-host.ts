@@ -1,5 +1,10 @@
 import {
+  createExtensionRuntime,
   defineTool,
+  ExtensionRunner,
+  SessionManager,
+  type ContextEvent,
+  type Extension,
   type ExtensionAPI,
   type ExtensionContext,
   type MessageRenderer,
@@ -23,7 +28,14 @@ import { extensionApiFixture } from "./host.ts";
 import { overlay } from "./overlay.ts";
 
 type ToolSchema = ToolDefinition["parameters"];
+type HandlerFn = Extension["handlers"] extends Map<string, Array<infer H>> ? H : never;
 type Command = Omit<RegisteredCommand, "name" | "sourceInfo">;
+
+// Pi stores every handler untyped and passes it the event of its name and the context.
+const hostHandler =
+  <Name extends "context" | "context_with_system">(handler: RecordedHandler<Name>): HandlerFn =>
+  (event, ctx) =>
+    Promise.resolve(handler(event as ExtensionEventNamed<Name>, ctx as ExtensionContext));
 
 export interface RecordedEmit {
   <Name extends DefaultedEventName>(
@@ -151,9 +163,52 @@ export const recordingExtensionHost = (
     };
     return run(0);
   };
+  /**
+   * The messages Pi's own `ExtensionRunner` sends to the model after the recorded `context` and
+   * `context_with_system` handlers, including how Pi copies the transcript and restores system
+   * messages. `messages` stands in for the stored transcript; handlers receive `ctx`. Rejects when
+   * a handler threw, which Pi would only report.
+   */
+  const modelContext = (
+    ctx: ExtensionContext,
+    messages: ContextEvent["messages"],
+  ): Promise<ContextEvent["messages"]> => {
+    const runner = new ExtensionRunner(
+      [
+        {
+          path: source.path,
+          resolvedPath: source.path,
+          sourceInfo: source,
+          handlers: new Map<string, HandlerFn[]>([
+            ["context", Arr.map(table.context, hostHandler)],
+            ["context_with_system", Arr.map(table.context_with_system, hostHandler)],
+          ]),
+          tools: new Map(),
+          messageRenderers: new Map(),
+          commands: new Map(),
+          flags: new Map(),
+          shortcuts: new Map(),
+        },
+      ],
+      createExtensionRuntime(),
+      ctx.cwd,
+      // Unused: every handler receives `ctx`.
+      SessionManager.inMemory(ctx.cwd),
+      ctx.modelRegistry,
+    );
+    runner.createContext = () => ctx;
+    const errors: string[] = [];
+    runner.onError((error) => errors.push(`${error.event}: ${error.error}`));
+    return runner
+      .emitContext(messages)
+      .then((sent) =>
+        errors.length === 0 ? sent : Promise.reject(new Error(Arr.join(errors, "\n"))),
+      );
+  };
   return {
     pi,
     handlers,
+    modelContext,
     commands,
     tools,
     registrations,

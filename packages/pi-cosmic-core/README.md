@@ -85,7 +85,7 @@ no generated build.
 | `text`, `text-scan`, `display`, `message-text`                                                                                         | Text scans, bounded text, formatting, and message summaries             |
 | `security`, `security/sha256`                                                                                                          | Redaction, terminal safety, and hashing                                 |
 | `schema/decode`, `schema/foreign-callable`, `schema/tool-output`                                                                       | Unknown input, foreign callbacks, and tool output schemas               |
-| `host-session`, `host-command`, `host-wake`, `host-transcript`, `host-agent-messages`                                                  | Host callbacks, commands, delivery, and transcript helpers              |
+| `host-session`, `host-command`, `host-wake`, `host-transcript`, `host-agent-messages`, `host-message-origin`                           | Host callbacks, commands, delivery, message origins, and transcripts    |
 | `session-capability`, `settings-completion`, `settings-dispatch`                                                                       | Capability exchange and settings routing                                |
 | `runtime`                                                                                                                              | Managed runtime creation, abort forwarding, and quiet host logging      |
 | `runtime/pi-api`, `runtime/session-runtime`, `runtime/host-bootstrap`                                                                  | Pi API service, session authority, and best-effort startup              |

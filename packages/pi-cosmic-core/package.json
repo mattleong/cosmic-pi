@@ -67,6 +67,7 @@
     "./host-wake": "./src/host-wake.ts",
     "./host-transcript": "./src/host-transcript.ts",
     "./host-agent-messages": "./src/host-agent-messages.ts",
+    "./host-message-origin": "./src/host-message-origin.ts",
     "./host-environment": "./src/host-environment.ts",
     "./text": "./src/text.ts",
     "./text-scan": "./src/text-scan.ts",
