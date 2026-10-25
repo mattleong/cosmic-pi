@@ -7,7 +7,7 @@ Session-scoped background tasks for Pi. The agent can start long-running command
 - **One agent tool**, `background_task`, with `start`, `list`, `status`, `logs`, `wait`, `stop`, `stop_all`, and `clear` actions.
 - **Bounded waits** for a task to exit or for any of a few texts to appear in its output, without polling. Each wait is capped by the `maxWaitSeconds` setting and returns the matched line and the task's recent output.
 - **Opt-in exit notices:** a task started with `notify` messages the agent when it finishes, or only when it fails, waking an idle agent instead of leaving it to poll.
-- **Task manager** in the shared Activity view: browse tasks, read recent logs, follow output, stop or clear tasks.
+- **Activity view** from `pi-cosmic-ui`: browse tasks, read recent logs, follow output, stop or clear tasks.
 - **Footer status** while tasks are active, such as `2 background tasks running`; the count includes tasks still starting or stopping.
 - **Native codemode results:** scripts receive structured task data instead of text.
 - **Process-group cleanup** when the session reloads, switches, forks, navigates the tree, or shuts down, and when Pi exits abruptly. Processes that start their own session or process group, such as daemons, aren't tracked.
@@ -18,15 +18,16 @@ Not published to npm; install from a [local clone](../../README.md#install). Aft
 
 ```bash
 pi install "$PWD/packages/pi-background-task"
+pi install "$PWD/packages/pi-cosmic-ui"   # required for /tasks
 ```
 
-Install `pi-cosmic-ui` too for the shared Activity view; without it, `/tasks` opens a standalone manager.
+`/tasks` opens the shared Activity view from `pi-cosmic-ui`; without it, `/tasks` only shows a notice. The tool works either way.
 
 ## Usage
 
 Ask the agent to run something in the background, such as a dev server, a long test suite, or a build watcher. It starts the task, carries on, and uses `wait` or `logs` when it needs the result.
 
-- `/tasks` opens the manager. Use `j`/`k` or the arrows to move, Enter for details, `f` to follow output, `x` to stop a task, `c` to clear finished tasks, and `q` to close.
+- `/tasks` opens background tasks in Activity. Use `j`/`k` or the arrows to move, Enter for details, `f` to follow output, `x` to stop a task, `c` to clear finished tasks, and `q` to close.
 - `/tasks settings` edits settings. Run `/tasks settings help` to list them, or `/tasks settings status` to see the active values.
 
 ## Configuration
@@ -50,6 +51,6 @@ Tasks run in Pi's shell, normally bash, with Pi's `shellPath` and `shellCommandP
 
 ## How it works
 
-Each Pi session owns its task registry, bounded log buffers, and wait barriers. Tasks are non-interactive: stdin stays open but is never written, so watchers keep running and a command that prompts or reads stdin waits until it is stopped; give such commands `</dev/null` or non-interactive flags. They run with your own permissions and have no default timeout. Output is sanitized as it arrives; `logs` and the standalone manager show it without credential redaction, while the Activity view redacts credentials it recognizes. A stop that can't confirm the process exited keeps the task in `stopping` rather than reporting it finished; stopping it again forces it. Cleanup reaches each task's own process group and nothing that detaches from it, and no cleanup runs if Pi itself is killed with `SIGKILL` or the machine goes down. Task IDs are random tokens that belong to one session runtime, so IDs from an earlier runtime must not be reused.
+Each Pi session owns its task registry, bounded log buffers, and wait barriers. Tasks are non-interactive: stdin stays open but is never written, so watchers keep running and a command that prompts or reads stdin waits until it is stopped; give such commands `</dev/null` or non-interactive flags. They run with your own permissions and have no default timeout. Output is sanitized as it arrives; `logs` shows it without credential redaction, while the Activity view redacts credentials it recognizes. A stop that can't confirm the process exited keeps the task in `stopping` rather than reporting it finished; stopping it again forces it. Cleanup reaches each task's own process group and nothing that detaches from it, and no cleanup runs if Pi itself is killed with `SIGKILL` or the machine goes down. Task IDs are random tokens that belong to one session runtime, so IDs from an earlier runtime must not be reused.
 
-See [docs/reference.md](docs/reference.md) for the tool, manager, and codemode result contracts, and [ARCHITECTURE.md](ARCHITECTURE.md) for ownership and lifecycle.
+See [docs/reference.md](docs/reference.md) for the tool, Activity, and codemode result contracts, and [ARCHITECTURE.md](ARCHITECTURE.md) for ownership and lifecycle.

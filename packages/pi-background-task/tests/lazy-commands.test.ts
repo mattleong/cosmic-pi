@@ -8,7 +8,6 @@ import {
   recordingExtensionHost,
 } from "pi-cosmic-core/testing";
 import { vi } from "vitest";
-import type { BackgroundTaskProjectionBridge } from "../src/boundary/host-ui.ts";
 import { registerTasksCommand } from "../src/settings/controller.ts";
 
 const harness = (wait: Promise<void> = Promise.resolve()) => {
@@ -26,18 +25,11 @@ const harness = (wait: Promise<void> = Promise.resolve()) => {
     },
     ui: { notify },
   });
-  const openTaskManager = vi.fn<typeof import("../src/settings/task-manager.ts").openTaskManager>(
-    () => Promise.resolve(),
-  );
   const settingsHandler = vi.fn<(args: string, ctx: ExtensionCommandContext) => Promise<void>>(() =>
     Promise.resolve(),
   );
   const entered = deferredPromise();
   const modules = {
-    manager: vi.fn(() => {
-      entered.resolve();
-      return wait.then(() => ({ openTaskManager }));
-    }),
     settings: vi.fn(() => {
       entered.resolve();
       return wait.then(() => ({
@@ -52,17 +44,8 @@ const harness = (wait: Promise<void> = Promise.resolve()) => {
   const openActivity = vi.fn<(signal?: AbortSignal) => Promise<boolean>>(() =>
     Promise.resolve(false),
   );
-  const bridge: BackgroundTaskProjectionBridge = {
-    get: () => ({ tasks: [] }),
-    publish: () => undefined,
-    subscribe: () => () => undefined,
-    clear: () => undefined,
-    setContext: () => undefined,
-    setFooterEnabled: () => undefined,
-  };
   registerTasksCommand(
     host.pi,
-    bridge,
     {
       captureAuthority: () => {
         const captured = generation;
@@ -70,8 +53,6 @@ const harness = (wait: Promise<void> = Promise.resolve()) => {
       },
       isAvailable: () => available,
       openActivity,
-      stop: () => Promise.resolve(),
-      clear: () => Promise.resolve(),
       config: () => undefined,
       read: () => Promise.resolve({}),
       write: () => Promise.resolve(),
@@ -86,7 +67,6 @@ const harness = (wait: Promise<void> = Promise.resolve()) => {
     notify,
     modules,
     entered,
-    openTaskManager,
     settingsHandler,
     openActivity,
     originalSignal: signal.signal,
@@ -108,7 +88,7 @@ const harness = (wait: Promise<void> = Promise.resolve()) => {
 };
 
 describe("lazy /tasks command implementations", () => {
-  it.effect("keeps help and completions ready without loading managers or settings", () =>
+  it.effect("keeps help and completions ready without loading settings", () =>
     Effect.gen(function* () {
       const h = harness();
       yield* Effect.promise(() => h.run("help"));
@@ -119,38 +99,28 @@ describe("lazy /tasks command implementations", () => {
       expect(
         Arr.some(choices ?? [], (choice) => choice.value === "settings project maxRunning inherit"),
       ).toBe(true);
-      expect(h.modules.manager).not.toHaveBeenCalled();
       expect(h.modules.settings).not.toHaveBeenCalled();
       yield* Effect.promise(() => h.run("settings maxRunning 16"));
       expect(h.settingsHandler).toHaveBeenCalledWith("maxRunning 16", h.ctx);
-      expect(h.modules.manager).not.toHaveBeenCalled();
     }),
   );
 
-  it.effect("loads the standalone manager on first use only when Activity declines", () =>
+  it.effect("opens Activity and explains when Activity is unavailable", () =>
     Effect.gen(function* () {
       const h = harness();
       h.openActivity.mockResolvedValueOnce(true);
       yield* Effect.promise(() => h.run(""));
-      expect(h.modules.manager).not.toHaveBeenCalled();
+      expect(h.openActivity).toHaveBeenCalledWith(h.originalSignal);
+      expect(h.notify).not.toHaveBeenCalled();
       yield* Effect.promise(() => h.run(""));
-      expect(h.openTaskManager).toHaveBeenCalledWith(
-        h.ctx,
-        expect.anything(),
-        expect.anything(),
-        expect.any(Function),
-      );
+      expect(h.notify).toHaveBeenCalledWith(expect.stringContaining("pi-cosmic-ui"), "warning");
     }),
   );
 
-  for (const args of ["", "settings maxRunning 16"])
-    it.effect.each([
-      "shutdown",
-      "replacement",
-      "abort",
-      "abort-cleared",
-      "abort-replaced",
-    ] as const)(`does not invoke ${args || "the manager"} after %s during loading`, (reason) =>
+  const args = "settings maxRunning 16";
+  it.effect.each(["shutdown", "replacement", "abort", "abort-cleared", "abort-replaced"] as const)(
+    `does not invoke ${args} after %s during loading`,
+    (reason) =>
       Effect.gen(function* () {
         const pending = deferredPromise();
         const h = harness(pending.promise);
@@ -159,39 +129,33 @@ describe("lazy /tasks command implementations", () => {
         h.retire(reason);
         pending.resolve();
         yield* Effect.promise(() => running);
-        expect(h.openTaskManager).not.toHaveBeenCalled();
         expect(h.settingsHandler).not.toHaveBeenCalled();
         expect(h.notify).not.toHaveBeenCalled();
         if (reason === "replacement") {
           yield* Effect.promise(() => h.run(args));
-          expect(args ? h.settingsHandler : h.openTaskManager).toHaveBeenCalledOnce();
+          expect(h.settingsHandler).toHaveBeenCalledOnce();
         }
       }),
-    );
+  );
 
-  for (const args of ["", "settings maxRunning 16"])
-    it.effect(
-      `retains the admitted signal through ${args || "manager"} execution after the getter changes`,
-      () =>
-        Effect.gen(function* () {
-          const pending = deferredPromise();
-          const h = harness(pending.promise);
-          const running = h.run(args);
-          yield* Effect.promise(() => h.entered.promise);
-          h.setSignal(new AbortController().signal);
-          pending.resolve();
-          yield* Effect.promise(() => running);
-          const invocation = args
-            ? h.settingsHandler.mock.calls[0]?.[1]
-            : h.openTaskManager.mock.calls[0]?.[0];
-          expect(invocation?.signal).toBe(h.originalSignal);
-          h.retire("abort-cleared");
-          expect(invocation?.signal?.aborted).toBe(true);
-        }),
-    );
+  it.effect(`retains the admitted signal through ${args} execution after the getter changes`, () =>
+    Effect.gen(function* () {
+      const pending = deferredPromise();
+      const h = harness(pending.promise);
+      const running = h.run(args);
+      yield* Effect.promise(() => h.entered.promise);
+      h.setSignal(new AbortController().signal);
+      pending.resolve();
+      yield* Effect.promise(() => running);
+      const invocation = h.settingsHandler.mock.calls[0]?.[1];
+      expect(invocation?.signal).toBe(h.originalSignal);
+      h.retire("abort-cleared");
+      expect(invocation?.signal?.aborted).toBe(true);
+    }),
+  );
 
-  it.effect.each(["abort-cleared", "abort-replaced"] as const)(
-    "does not start the manager fallback after %s while Activity opens",
+  it.effect.each(["shutdown", "abort-cleared", "abort-replaced"] as const)(
+    "does not report missing Activity after %s while Activity opens",
     (reason) =>
       Effect.gen(function* () {
         const pending = deferredPromise<boolean>();
@@ -202,8 +166,6 @@ describe("lazy /tasks command implementations", () => {
         h.retire(reason);
         pending.resolve(false);
         yield* Effect.promise(() => running);
-        expect(h.modules.manager).not.toHaveBeenCalled();
-        expect(h.openTaskManager).not.toHaveBeenCalled();
         expect(h.notify).not.toHaveBeenCalled();
       }),
   );
@@ -212,24 +174,24 @@ describe("lazy /tasks command implementations", () => {
     Effect.gen(function* () {
       const h = harness();
       const failure = new Error("command module unavailable");
-      h.modules.manager.mockRejectedValueOnce(failure);
+      h.modules.settings.mockRejectedValueOnce(failure);
       const failed = yield* Effect.promise(() =>
-        h.run("").then(
+        h.run(args).then(
           () => undefined,
           (cause: unknown) => cause,
         ),
       );
       expect(failed).toBe(failure);
-      yield* Effect.promise(() => h.run(""));
-      expect(h.openTaskManager).toHaveBeenCalledOnce();
+      yield* Effect.promise(() => h.run(args));
+      expect(h.settingsHandler).toHaveBeenCalledOnce();
     }),
   );
 
-  it.effect("suppresses retired import failures and avoids imports for non-terminal fallback", () =>
+  it.effect("suppresses retired import failures and needs no Activity outside a terminal", () =>
     Effect.gen(function* () {
       const pending = deferredPromise();
       const h = harness(pending.promise);
-      const running = h.run("");
+      const running = h.run(args);
       yield* Effect.promise(() => h.entered.promise);
       h.retire("abort-cleared");
       pending.reject(new Error("retired module failure"));
@@ -244,7 +206,7 @@ describe("lazy /tasks command implementations", () => {
           ),
         ),
       );
-      expect(rpc.modules.manager).not.toHaveBeenCalled();
+      expect(rpc.openActivity).not.toHaveBeenCalled();
       expect(rpc.notify).toHaveBeenCalledWith(expect.any(String), "warning");
     }),
   );

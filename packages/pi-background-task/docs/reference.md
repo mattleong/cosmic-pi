@@ -1,12 +1,12 @@
 # pi-background-task reference
 
-Detailed tool, manager, and result contracts behind the [README](../README.md). [ARCHITECTURE.md](../ARCHITECTURE.md) owns process, lifecycle, sanitization, and rendering internals; this file links to it rather than repeating them.
+Detailed tool, Activity, and result contracts behind the [README](../README.md). [ARCHITECTURE.md](../ARCHITECTURE.md) owns process, lifecycle, sanitization, and rendering internals; this file links to it rather than repeating them.
 
 ## Parameters
 
 The tool keeps one flat parameter schema for provider portability, but each action accepts only its own fields: `start` takes `command`, `cwd`, `name`, `timeoutSeconds`, and `notify`; `list` takes `state`; `status` takes `id`; `logs` takes `id`, `afterCursor`, `tailLines`, and `waitSeconds`; `wait` takes `id`, `until`, `contains`, `afterCursor`, and `waitSeconds`; `stop` takes `id` and `force`; `stop_all` takes `force`; `clear` takes nothing. Null and blank optional fields count as omitted. A field the action doesn't use is ignored when it holds a placeholder (`""`, `false`, or `0`); any other value rejects the call before it touches a task, so `stop_all` or `clear` with an `id` never widens into acting on every task. Likewise, an exit `wait` ignores an empty or blank `contains`, including a list of blank texts, and an `afterCursor` of `0`, and `logs` treats `tailLines: 0` as omitted. `logs` rejects `afterCursor` combined with a nonzero `tailLines`. `timeoutSeconds: 0` on `start` is rejected; omit it for no timeout. Invalid arguments are reported with the field, its allowed values, and a bounded copy of what was received. Native codemode calls go through the same validation.
 
-`command` runs exactly as submitted, whitespace included, and may hold up to 64 KiB of UTF-8, enough for heredocs and long file lists; write longer scripts to a file and run that. The shell receives the command as a single argument, and Linux limits one argument to 128 KiB. Task snapshots, results, and the task manager show the first 2,048 characters of the command.
+`command` runs exactly as submitted, whitespace included, and may hold up to 64 KiB of UTF-8, enough for heredocs and long file lists; write longer scripts to a file and run that. The shell receives the command as a single argument, and Linux limits one argument to 128 KiB. Task snapshots, results, and Activity show the first 2,048 characters of the command.
 
 ## Shell and environment
 
@@ -16,7 +16,7 @@ The task inherits Pi's environment with these changes:
 
 - Pi's tool directory, `~/.pi/agent/bin` or `$PI_CODING_AGENT_DIR/bin`, is added to the front of `PATH` unless it is already there, as the `bash` tool adds it.
 - `BASH_ENV`, `ENV`, `NODE_OPTIONS`, and `NODE_PATH` are removed, so a task's shell and Node programs don't load the startup files and module paths Pi itself was started with. `PI_SESSION_FILE` and `PI_SESSION_ID` are removed, so a task can't be mistaken for, or act as, the session that started it. Names are matched exactly.
-- `FORCE_COLOR=1` is set unless `FORCE_COLOR` or `NO_COLOR` is already set. A task's output goes to pipes, where most CLIs drop color; the standalone manager shows it, and `logs`, waits, and the Activity view remove it.
+- `FORCE_COLOR=1` is set unless `FORCE_COLOR` or `NO_COLOR` is already set. A task's output goes to pipes, where most CLIs drop color; `logs`, waits, and the Activity view remove it.
 
 A task's stdin is an open pipe that nothing ever writes. Watchers and dev servers that exit when their input ends, such as `esbuild --watch` or `--serve`, keep running. A command that may prompt or read stdin, such as `apt-get install`, `terraform apply`, `npm create`, `read`, or a bare `cat` or `jq .`, never sees the end of its input, so it waits until it is stopped or its `timeoutSeconds` ends it. Give such commands `</dev/null` or non-interactive flags, such as `-y` or `-auto-approve`, or supply their input with a pipe or heredoc. A stop closes the pipe along with signalling the task.
 
@@ -48,11 +48,9 @@ Each result reports only the loss within the output it returns, so a result cut 
 
 `stop` on a task that already finished, including one that finished while the call was arriving, stops nothing and says so. `stop_all` stops every active task at once, so they share one grace window, and reports only the tasks it stopped. `list` with a `state` filter describes an empty result by that filter.
 
-## Task manager
+## Activity
 
-In the Activity view, `h`/`l` change pane or expand and collapse hierarchy, and `t` toggles technical metadata. Task details include bounded recent logs and technical fields; viewing never waits for process exit. `c` on a finished task clears **all finished task records in this session**. Retained Activity summaries may remain as unavailable history, without actions or fresh-ID authority. No command-entry field or workflow-wide execution action is added.
-
-When shared Activity is unavailable, `/tasks` opens its standalone responsive task manager with stop, clear, follow, technical details, and configured Pi navigation. Its details for a finished task show the exit code, signal, start error, and failure cause when they are known. Rejected, cancelled, replaced, or failed admitted openings never open a second fallback surface.
+`/tasks` opens the shared Activity view from `pi-cosmic-ui`; without it, or outside an interactive terminal, `/tasks` shows a notice instead. In the Activity view, `h`/`l` change pane or expand and collapse hierarchy, and `t` toggles technical metadata. Task details include bounded recent logs and technical fields, and explain how a finished task ended: its exit code or signal with the usual meaning, such as `command not found`, any start error, and the redacted output line naming its failure cause. Viewing never waits for process exit. `c` on a finished task clears **all finished task records in this session**. Retained Activity summaries may remain as unavailable history, without actions or fresh-ID authority. No command-entry field or workflow-wide execution action is added.
 
 The footer counts every active task, including tasks still starting or stopping, and clears when no tasks remain active. Failed and timed-out tasks stay available in `/tasks` and the task tool without persistent footer reminders. When `pi-cosmic-ui` renders both extensions, subagent status occupies its own line above background-task status.
 
@@ -99,6 +97,6 @@ Settings are read when the session's task runtime starts, so changes apply after
 
 `logBufferBytesPerTask` bounds each task's retained output and `totalLogBufferBytes` bounds all tasks' retained output together; the total is raised to at least the per-task value. Each retained chunk also counts a fixed overhead of about 100 bytes, so a flood of tiny writes keeps less text. Output still on its way to the buffer has a separate per-task bound of 64 to 256 KiB that neither setting reduces.
 
-Captured output is normalized per stream as it arrives, including sequences split across writes. Color and text-style (SGR) sequences are kept. A carriage return that ends text becomes a line break, so progress that tools such as `curl`, `ffmpeg`, and `rsync --progress` redraw in place reads as one line per update; a CRLF, even split across writes, stays one line break unless output was lost between the two. Cursor movement, screen erasure, terminal titles, hyperlinks, clipboard writes, other escape sequences, and other control characters are removed. A sequence still open after 4 KiB is discarded so it cannot hide the output that follows. `logs`, `wait`, and transcript cards use the text without colors. The Activity view, which `/tasks` normally opens, shows plain text and redacts credentials it recognizes, such as bearer tokens and `api_key=` values. Only the standalone manager, which `/tasks` opens when Activity is unavailable, shows the colors; like `logs` output, it does not redact credentials.
+Captured output is normalized per stream as it arrives, including sequences split across writes. Color and text-style (SGR) sequences are kept. A carriage return that ends text becomes a line break, so progress that tools such as `curl`, `ffmpeg`, and `rsync --progress` redraw in place reads as one line per update; a CRLF, even split across writes, stays one line break unless output was lost between the two. Cursor movement, screen erasure, terminal titles, hyperlinks, clipboard writes, other escape sequences, and other control characters are removed. A sequence still open after 4 KiB is discarded so it cannot hide the output that follows. `logs`, `wait`, and transcript cards use the text without colors. The Activity view, which `/tasks` opens, shows plain text and redacts credentials it recognizes, such as bearer tokens and `api_key=` values.
 
 Interactive PTYs, persistent reattachment, and remote execution are deferred to later phases.

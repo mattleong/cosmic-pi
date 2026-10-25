@@ -7,6 +7,7 @@ import * as Fn from "effect/Function";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Str from "effect/String";
+import { exitStatusMeaning } from "pi-code-previews";
 import { ACTIVITY_HOST, ACTIVITY_LIMITS, ActivitySnapshotSchema } from "pi-cosmic-ui/activity";
 import { fakeActivityHost } from "pi-cosmic-ui/activity/testing";
 import {
@@ -88,6 +89,25 @@ describe("background task activity provider", () => {
     const detail = backgroundTaskActivityDetail(projection, "task") ?? "";
     expect(detail).not.toContain(secret);
     expect(detail).toContain("server ready\nusing Bearer");
+  });
+
+  it("explains how a finished task ended, with its redacted failure cause", () => {
+    const secret = "sk-abcdefgh12345678";
+    const detail = (ending: Partial<BackgroundTaskView>) =>
+      backgroundTaskActivityDetail(
+        { tasks: [{ ...task, state: "failed", endedAt: 2, ...ending }] },
+        "task",
+      ) ?? "";
+    const exited = detail({
+      exitCode: 127,
+      failureCause: `\u001b]0;evil-title\u0007FAIL auth.test.ts with ${secret}`,
+    });
+    expect(exited).toContain(exitStatusMeaning(127));
+    expect(exited).toContain("FAIL auth.test.ts with");
+    for (const hidden of [secret, "evil-title", "\u001b"]) expect(exited).not.toContain(hidden);
+    expect(detail({ exitCode: null, signal: "SIGKILL" })).toContain(
+      exitStatusMeaning(undefined, "SIGKILL"),
+    );
   });
 
   it("shows captured output as plain text, without escape remnants, however it is trimmed", () => {

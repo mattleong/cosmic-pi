@@ -6,14 +6,14 @@ A pnpm workspace for Pi extensions.
 
 - [`pi-ask-user`](packages/pi-ask-user) — structured, responsive questionnaires for decisions the agent should not guess.
 - [`pi-better-openai`](packages/pi-better-openai) — fast mode, usage visibility, reusable OpenAI UI primitives, footer polish, and OpenAI image generation.
-- [`pi-background-task`](packages/pi-background-task) — session-scoped background tasks with an agent tool and full-screen `/tasks` manager.
+- [`pi-background-task`](packages/pi-background-task) — session-scoped background tasks with an agent tool; `/tasks` opens them in the shared Activity view.
 - [`pi-code-previews`](packages/pi-code-previews) — syntax-highlighted builtin previews, native codemode/MCP presentation, and a reusable tool shell.
 - [`pi-cosmic-core`](packages/pi-cosmic-core) — shared Effect-first runtime foundations for the extension packages.
 - [`pi-directory-models`](packages/pi-directory-models) — per-directory model and thinking-level preferences for fresh Pi sessions.
 - [`pi-herdr-btw`](packages/pi-herdr-btw) — deterministic reusable blank Pi side sessions in user-owned panes in the current Herdr tab.
 - [`pi-intercom`](packages/pi-intercom) — discovery of, and messaging between, your live Pi sessions on this machine.
 - [`pi-cosmic-ui`](packages/pi-cosmic-ui) — composable, responsive shared UI elements: the footer and information area, and the Activity view for subagents and tasks.
-- [`pi-subagents`](packages/pi-subagents) — session-scoped background subagents with supervisor communication, messaging among a session's agents, and a `/subagents` fleet UI.
+- [`pi-subagents`](packages/pi-subagents) — session-scoped background subagents running as local Pi processes, with supervisor communication and messaging among a session's agents; `/subagents` opens them in the shared Activity view.
 
 ## Requirements
 
@@ -41,7 +41,7 @@ pi install "$PWD/packages/pi-intercom"
 pi install "$PWD/packages/pi-subagents"
 ```
 
-Or run `scripts/install-all.sh` to install dependencies and register every extension at once. Add `-l` to `pi install` to register an extension for the current project only.
+Or run `scripts/install-all.sh` to install dependencies and register every extension at once. Add `-l` to `pi install` to register an extension for the current project only. `/subagents` and `/tasks` open the Activity view from `pi-cosmic-ui`, so install it alongside `pi-subagents` or `pi-background-task`.
 
 Pi loads local packages in place, so updating is `git pull`, then `pnpm install` if dependencies changed, then `/reload`. Pi's `git:` sources don't work for this repository: each extension is a workspace package that depends on its siblings through pnpm workspace links.
 

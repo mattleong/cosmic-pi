@@ -66,7 +66,7 @@ Notifications, replies, and confirmations use short human-facing wording without
 
 ## Managers and settings commands
 
-Use the shared Cosmic UI manager navigation, action vocabulary, confirmation behavior, and settings command shell. Disruptive manager actions ask for the same key again and allow cancellation. `registerExtensionCommand` owns routing and completion; settings use `/<extension> settings` with help, status, scope, and assignment support. Preserve existing public commands, native `/mcp` grammar, and feature-owned manager fallback when the Activity host is unavailable. The [UI integration guide](../../packages/pi-cosmic-ui/docs/extension-authors.md) describes these APIs without duplicating their implementation here.
+Use the shared Cosmic UI manager navigation, action vocabulary, confirmation behavior, and settings command shell. Disruptive manager actions ask for the same key again and allow cancellation. `registerExtensionCommand` owns routing and completion; settings use `/<extension> settings` with help, status, scope, and assignment support. Preserve existing public commands and native `/mcp` grammar. Commands that open Activity show a notice when the Activity host is unavailable. The [UI integration guide](../../packages/pi-cosmic-ui/docs/extension-authors.md) describes these APIs without duplicating their implementation here.
 
 ## Retention and validation
 

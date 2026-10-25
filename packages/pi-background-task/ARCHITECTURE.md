@@ -29,15 +29,14 @@ task's start opted in with `notify`; otherwise completion sends nothing.
   field. The [config store](src/config/store.ts) resolves global and trusted project settings and
   handles explicit single-field writes. Reading configuration never creates a default file or
   probes an untrusted project, and a write never replaces a document it can't read.
-- The [`/tasks` command](src/settings/controller.ts) opens Activity or the standalone manager when
-  the runtime is available; the [settings subcommand](src/settings/task-settings.ts) adapts the
-  shared settings command and picker.
+- The [`/tasks` command](src/settings/controller.ts) opens Cosmic UI's Activity view when the
+  runtime is available, and shows a notice when the runtime or Activity is not; the [settings
+  subcommand](src/settings/task-settings.ts) adapts the shared settings command and picker.
 - [Tool execution](src/tools/command.ts) produces text, presentation details, and a separate
   [native result contract](src/tools/contract.ts) from service facts. Renderers do not infer task
   state from log text or own processes.
-- [Host UI](src/boundary/host-ui.ts), [Activity integration](src/boundary/host-activity.ts), and
-  [manager](src/ui/manager.ts) consume projections. The manager owns local interaction state and
-  delegates shared screen mechanics to Cosmic UI; service state remains authoritative.
+- [Host UI](src/boundary/host-ui.ts) and [Activity integration](src/boundary/host-activity.ts)
+  consume projections; service state remains authoritative.
 - The task service decides when an opted-in exit notice is due. The [notice
   message](src/task/notice.ts) owns its stored type and redacted details. [Notice
   delivery](src/boundary/host-notice.ts) formats it and hands it to core's shared session wake, which
@@ -58,14 +57,14 @@ replace the runtime. Deactivation revokes publication and command capabilities b
 so settling old processes cannot repopulate replacement UI. Startup loads trusted preview
 settings before the current activation registers its wrapped tool. History replay is
 presentation-only and never starts tasks. Command metadata and completions register eagerly;
-the standalone manager and settings implementation load on invocation, not during startup.
-Invocations capture the session-slot generation and exact host signal before loading, pin that
-signal for downstream handlers without freezing other host getters, and recheck authority before
-opening UI, changing settings, or reporting failures. An available Activity host avoids loading the manager.
+the settings implementation loads on invocation, not during startup. Invocations capture the
+session-slot generation and exact host signal before loading, pin that signal for downstream
+handlers without freezing other host getters, and recheck authority before opening UI, changing
+settings, or reporting failures.
 
 Tree navigation joins process-tree cleanup before activating a fresh registry. Tool callbacks
-retain their activation token; `/tasks` captures authority for each invocation. Retained managers,
-settings pickers, and Activity actions cannot target a later registry, even if a task ID repeats.
+retain their activation token; `/tasks` captures authority for each invocation. Retained settings
+pickers and Activity actions cannot target a later registry, even if a task ID repeats.
 Shutdown closes admission and attempts to settle active processes before interrupting their monitors.
 If Pi exits without shutdown, core's host-exit guard kills every task group that has not settled.
 Exit notices belong to the activation that started their tasks: closed admission stops the service

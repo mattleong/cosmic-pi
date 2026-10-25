@@ -211,13 +211,11 @@ export function registerBackgroundTaskApplication(
       signal,
     );
 
-  registerTasksCommand(pi, bridge, {
+  registerTasksCommand(pi, {
     captureAuthority: slot.captureAuthority,
     isAvailable: slot.isActive,
     openActivity: (signal) =>
       openActivity ? openActivity(signal) : Promise.reject(new Error(UNAVAILABLE)),
-    stop: (id) => stopTask(id),
-    clear: () => clearTasks(),
     config: () => currentConfig,
     read: (location) => run(BackgroundTaskSettingsFiles.use((files) => files.read(location))),
     write: (location, id, value) =>

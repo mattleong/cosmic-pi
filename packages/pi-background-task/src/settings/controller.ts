@@ -3,32 +3,24 @@ import { withCapturedHostSignal } from "pi-cosmic-core/host-invocation";
 import * as Predicate from "effect/Predicate";
 import { captureHostSignal, notifyAtHostBoundary } from "pi-cosmic-core/host-session";
 import { registerExtensionCommand, type ExtensionSubcommand } from "pi-cosmic-core/host-command";
-import type { BackgroundTaskProjectionBridge } from "../boundary/host-ui.ts";
 import type { TaskSettingsActions } from "./task-settings.ts";
 import { TASK_SETTINGS_COMMAND } from "./task-settings-options.ts";
 
-export interface TaskManagerActions {
+export interface TaskCommandActions extends TaskSettingsActions {
   readonly isAvailable: () => boolean;
-  readonly openActivity?: (signal?: AbortSignal) => Promise<boolean>;
-  readonly stop: (id: string) => Promise<void>;
-  readonly clear: () => Promise<void>;
+  readonly openActivity: (signal?: AbortSignal) => Promise<boolean>;
 }
 
-export type TaskCommandActions = TaskManagerActions & TaskSettingsActions;
-
 interface TaskCommandModules {
-  readonly manager: () => Promise<typeof import("./task-manager.ts")>;
   readonly settings: () => Promise<typeof import("./task-settings.ts")>;
 }
 
 const COMMAND_MODULES: TaskCommandModules = {
-  manager: () => import("./task-manager.ts"),
   settings: () => import("./task-settings.ts"),
 };
 
 export function registerTasksCommand(
   pi: ExtensionAPI,
-  bridge: BackgroundTaskProjectionBridge,
   actions: TaskCommandActions,
   modules: TaskCommandModules = COMMAND_MODULES,
 ): void {
@@ -49,18 +41,9 @@ export function registerTasksCommand(
       if (isCurrent()) throw cause;
     });
   };
-  const openManager = (ctx: ExtensionCommandContext, isCurrent: () => boolean): Promise<void> => {
-    if (!isCurrent()) return Promise.resolve();
-    return modules
-      .manager()
-      .then(({ openTaskManager }) =>
-        isCurrent() ? openTaskManager(ctx, bridge, actions, isCurrent) : undefined,
-      );
-  };
-
   registerExtensionCommand(pi, {
     name: "tasks",
-    description: "Open the background task manager, or change its settings",
+    description: "Open background tasks in Activity, or change their settings",
     bare: {
       handler: (_args, ctx) =>
         invoke(ctx, (invocation, isCurrent) => {
@@ -81,11 +64,17 @@ export function registerTasksCommand(
             );
             return Promise.resolve();
           }
-          return actions.openActivity
-            ? actions
-                .openActivity(invocation.signal)
-                .then((opened) => (opened ? undefined : openManager(invocation, isCurrent)))
-            : openManager(invocation, isCurrent);
+          return actions
+            .openActivity(invocation.signal)
+            .then((opened) =>
+              opened || !isCurrent()
+                ? undefined
+                : notifyAtHostBoundary(
+                    invocation,
+                    "/tasks needs Activity from pi-cosmic-ui; install or enable it, then run /reload",
+                    "warning",
+                  ),
+            );
         }),
     },
     subcommands: [

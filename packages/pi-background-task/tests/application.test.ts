@@ -20,8 +20,6 @@ import * as Str from "effect/String";
 import {
   deferredPromise,
   extensionContextFixture,
-  piKeybindingsFixture,
-  macrotask,
   recordingExtensionHost,
   type DefaultedEventName,
 } from "pi-cosmic-core/testing";
@@ -31,16 +29,12 @@ import {
   signalProcess,
   type JsonObject,
 } from "pi-cosmic-core";
-import { fakeCustomSurfaceHost } from "pi-cosmic-ui/testing";
 import { fakeActivityHost } from "pi-cosmic-ui/activity/testing";
 import { afterEach, vi } from "vitest";
 import {
   registerBackgroundTaskApplication,
   type BackgroundTaskApplicationBoundaries,
 } from "../src/application.ts";
-import type { BackgroundTaskProjectionBridge } from "../src/boundary/host-ui.ts";
-import { registerTasksCommand, type TaskCommandActions } from "../src/settings/controller.ts";
-import type { BackgroundTaskState, BackgroundTaskView } from "../src/task/model.ts";
 import { BackgroundTaskDetailsSchema } from "../src/task/schema.ts";
 import type { BackgroundTaskToolInput } from "../src/tools/schema.ts";
 
@@ -148,91 +142,6 @@ const harness = (
       restoreAgentDirectory: useAgentDirectory(agentDirectory),
     };
   }).pipe(Effect.provide(nodeFilePlatformLayer));
-
-const managerTask = (state: BackgroundTaskState): BackgroundTaskView => {
-  const activeOrSettled = {
-    id: "manager-task",
-    name: "manager-task",
-    command: "manager-command",
-    cwd: "/tmp",
-    state,
-    startedAt: 0,
-    logCursor: 0,
-    droppedLogBytes: 0,
-    logs: [],
-  };
-  return state === "running" ? activeOrSettled : { ...activeOrSettled, endedAt: 1 };
-};
-
-function tasksCommandHarness(
-  state: BackgroundTaskState = "exited",
-  actions: Partial<TaskCommandActions> = {},
-) {
-  const host = fakeCustomSurfaceHost({
-    rows: 8,
-    keybindings: piKeybindingsFixture({ matches: () => false }),
-  });
-  const notify = vi.fn<ExtensionUIContext["notify"]>();
-  const ui = { notify, custom: host.ctx.ui.custom.bind(host.ctx.ui) };
-  const custom = vi.spyOn(ui, "custom");
-  const ctx = extensionContextFixture({
-    cwd: "/tmp",
-    mode: "tui",
-    hasUI: true,
-    signal: undefined,
-    ui,
-  });
-  const extension = recordingExtensionHost();
-  const listeners = new Set<() => void>();
-  const bridge: BackgroundTaskProjectionBridge = {
-    get: () => ({ tasks: [managerTask(state)] }),
-    publish: () => undefined,
-    subscribe: (listener: () => void) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    setContext: () => undefined,
-    setFooterEnabled: () => undefined,
-    clear: () => undefined,
-  };
-  registerTasksCommand(extension.pi, bridge, {
-    isAvailable: () => true,
-    stop: () => Promise.resolve(),
-    clear: () => Promise.resolve(),
-    config: () => undefined,
-    read: () => Promise.resolve({}),
-    write: () => Promise.resolve(),
-    captureAuthority: () => () => true,
-    ...actions,
-  });
-  const run = (args: string) =>
-    Promise.resolve(extension.commands.get("tasks")!.handler(args, ctx));
-  return {
-    custom,
-    notify,
-    run,
-    host,
-    publish: () => {
-      for (const listener of listeners) listener();
-    },
-    open: (args = "") => {
-      const opened = run(args);
-      return vi.waitFor(() => {
-        host.mount();
-        const openedSurface = host.overlays.at(-1);
-        if (!openedSurface) throw new Error("task manager surface did not mount");
-        return {
-          surface: openedSurface,
-          isOpen: () => host.doneCalls === 0,
-          close: Effect.gen(function* () {
-            openedSurface.handleInput?.("\x1b");
-            yield* Effect.promise(() => opened);
-          }),
-        };
-      });
-    },
-  };
-}
 
 describe("background-task Pi lifecycle", () => {
   it.effect.each(["session_start", "session_tree"] as const)(
@@ -638,98 +547,45 @@ describe("background-task settings in a session", () => {
     }),
   );
 
-  it.effect(
-    "/tasks explains a runtime that isn't running instead of failing or opening a manager",
-    () =>
-      Effect.gen(function* () {
-        const app = yield* harness(() => Promise.resolve());
-        const surfaces = fakeCustomSurfaceHost({
-          rows: 8,
-          keybindings: piKeybindingsFixture({ matches: () => false }),
+  it.effect("/tasks explains a runtime that isn't running or a missing Activity view", () =>
+    Effect.gen(function* () {
+      const app = yield* harness(() => Promise.resolve());
+      const notify = vi.fn<ExtensionUIContext["notify"]>();
+      const terminal = (signal?: AbortSignal) =>
+        extensionContextFixture({
+          cwd: process.cwd(),
+          mode: "tui",
+          hasUI: true,
+          signal,
+          ui: { notify },
         });
-        const notify = vi.fn<ExtensionUIContext["notify"]>();
-        const ui = { notify, custom: surfaces.ctx.ui.custom.bind(surfaces.ctx.ui) };
-        const custom = vi.spyOn(ui, "custom");
-        const terminal = (signal?: AbortSignal) =>
-          extensionContextFixture({ cwd: process.cwd(), mode: "tui", hasUI: true, signal, ui });
-        const warnings = () =>
-          Arr.filter(notify.mock.calls, ([, level]) => level === "warning").length;
-        const ctx = terminal();
-        const unavailableNotice = Effect.gen(function* () {
-          const before = warnings();
-          yield* Effect.promise(() => app.command("", ctx));
-          expect(warnings()).toBe(before + 1);
-        });
+      const ctx = terminal();
+      const notice = Effect.gen(function* () {
+        notify.mockClear();
+        yield* Effect.promise(() => app.command("", ctx));
+        expect(notify).toHaveBeenCalledOnce();
+        const [message, level] = notify.mock.calls[0] ?? [];
+        expect(level).toBe("warning");
+        return message;
+      });
+      const unavailable = yield* notice;
+      expect(unavailable).not.toContain("pi-cosmic-ui");
 
-        yield* unavailableNotice;
+      yield* app.breakAgentDirectory;
+      yield* Effect.promise(() => app.emit("session_start", ctx));
+      yield* app.restoreAgentDirectory;
+      expect(app.tools).toHaveLength(0);
+      expect(yield* notice).toBe(unavailable);
 
-        yield* app.breakAgentDirectory;
-        yield* Effect.promise(() => app.emit("session_start", ctx));
-        yield* app.restoreAgentDirectory;
-        expect(app.tools).toHaveLength(0);
-        yield* unavailableNotice;
+      yield* Effect.promise(() => app.emit("session_start", terminal(AbortSignal.abort())));
+      expect(yield* notice).toBe(unavailable);
 
-        yield* Effect.promise(() => app.emit("session_start", terminal(AbortSignal.abort())));
-        yield* unavailableNotice;
-        expect(custom).not.toHaveBeenCalled();
+      // A running runtime needs Cosmic UI's Activity view, which this host doesn't provide.
+      yield* Effect.promise(() => app.emit("session_start", ctx));
+      expect(yield* notice).toContain("pi-cosmic-ui");
 
-        yield* Effect.promise(() => app.emit("session_start", ctx));
-        const before = warnings();
-        const opened = app.command("", ctx);
-        yield* Effect.promise(() =>
-          vi.waitFor(() => {
-            surfaces.mount();
-            expect(custom).toHaveBeenCalledTimes(1);
-          }),
-        );
-        surfaces.overlays.at(-1)?.handleInput?.("\x1b");
-        yield* Effect.promise(() => opened);
-        expect(warnings()).toBe(before);
-
-        yield* Effect.promise(() => app.emit("session_shutdown", ctx));
-        yield* unavailableNotice;
-        expect(custom).toHaveBeenCalledTimes(1);
-      }),
-  );
-});
-
-describe("/tasks action feedback", () => {
-  it.effect.each([
-    { action: "stop", state: "running", key: "x" },
-    { action: "clear", state: "exited", key: "c" },
-  ] as const)(
-    "revokes old $action confirmations and notifications, not new openings",
-    ({ action, state, key }) =>
-      Effect.gen(function* () {
-        let generation = 1;
-        const pending = deferredPromise();
-        const mutate = vi.fn(() => pending.promise);
-        const command = tasksCommandHarness(state, {
-          [action]: mutate,
-          captureAuthority: () => {
-            const token = generation;
-            return () => token === generation;
-          },
-        });
-        const old = yield* Effect.promise(() => command.open());
-        old.surface.render(120);
-        old.surface.handleInput?.(key);
-        generation++;
-        old.surface.handleInput?.(key);
-        expect(mutate).not.toHaveBeenCalled();
-        expect(old.isOpen()).toBe(false);
-        yield* old.close;
-
-        const current = yield* Effect.promise(() => command.open());
-        current.surface.render(120);
-        current.surface.handleInput?.(key);
-        current.surface.handleInput?.(key);
-        expect(mutate).toHaveBeenCalledTimes(1);
-        generation++;
-        pending.reject(new Error("retired action failed"));
-        yield* macrotask;
-        expect(command.notify).not.toHaveBeenCalled();
-        yield* current.close;
-      }),
+      yield* Effect.promise(() => app.emit("session_shutdown", ctx));
+      expect(yield* notice).toBe(unavailable);
+    }),
   );
 });

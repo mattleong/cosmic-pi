@@ -4,15 +4,18 @@ import {
   type ActivityEvents,
   type ActivityItem,
 } from "pi-cosmic-ui/activity";
+import { exitStatusMeaning } from "pi-code-previews";
 import { safeTextSuffix } from "pi-cosmic-core/text";
-import { sanitizeDiagnosticContent } from "pi-cosmic-core/security";
+import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core/security";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import {
   isActiveTaskState,
   sortTasksByActivity,
   type BackgroundTaskProjection,
   type BackgroundTaskState,
+  type BackgroundTaskView,
 } from "../task/model.ts";
 import { plainTerminalText } from "../task/terminal-text.ts";
 import type { BackgroundTaskProjectionBridge } from "./host-ui.ts";
@@ -74,6 +77,21 @@ export function backgroundTaskActivityItems(
   );
 }
 
+const withMeaning = (value: string, meaning: string | undefined): string =>
+  meaning ? `${value} (${meaning})` : value;
+
+const exitLine = (task: BackgroundTaskView): string => {
+  const code = Predicate.isNumber(task.exitCode)
+    ? withMeaning(String(task.exitCode), exitStatusMeaning(task.exitCode))
+    : task.exitCode === null
+      ? "unknown"
+      : "none";
+  const signal = task.signal
+    ? withMeaning(task.signal, exitStatusMeaning(undefined, task.signal))
+    : "none";
+  return `Exit: ${code} · signal: ${signal}`;
+};
+
 export function backgroundTaskActivityDetail(
   projection: BackgroundTaskProjection,
   id: string,
@@ -90,6 +108,8 @@ export function backgroundTaskActivityDetail(
     chunks.push(text);
     remaining -= text.length;
   }
+  // The cause is an output line, so it drops terminal controls before the shared redaction.
+  const cause = task.failureCause && sanitizeTerminalLine(task.failureCause);
   const header = sanitizeDiagnosticContent(
     Arr.join(
       [
@@ -97,10 +117,11 @@ export function backgroundTaskActivityDetail(
         task.command,
         task.cwd,
         `ID: ${task.id} · PID: ${task.pid ?? "none"}`,
-        `Exit: ${task.exitCode ?? "none"} · signal: ${task.signal ?? "none"}`,
+        exitLine(task),
         `Started: ${task.startedAt} · ended: ${task.endedAt ?? "none"}`,
         `Log cursor: ${task.logCursor} · dropped bytes: ${task.droppedLogBytes}`,
-        task.error ?? "",
+        ...(task.error ? [`Error: ${task.error}`] : []),
+        ...(cause ? [`Cause: ${cause}`] : []),
       ],
       "\n",
     ),
