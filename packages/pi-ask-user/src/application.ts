@@ -28,6 +28,7 @@ import {
   captureHistoricalDeliveries,
   createQuestionnaireGeneration,
   hostAsyncDelivery,
+  registerAskUserMessageOrigins,
 } from "./boundary/host-delivery.ts";
 import {
   createQuestionnaireActivity,
@@ -229,6 +230,7 @@ export function askUserWithDependencies(
       acceptsAsyncMessage(message, currentGeneration, historicalDeliveries),
     ),
   }));
+  registerAskUserMessageOrigins(pi);
 
   pi.on("session_shutdown", () => {
     replay.retire();

@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import { originFromDetails, registerMessageOrigins } from "pi-cosmic-core/host-message-origin";
 import { synchronousRandomUuid } from "pi-cosmic-core/platform/native-crypto";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import { AskUserHostError } from "../questionnaire/errors.ts";
@@ -16,6 +17,22 @@ const Metadata = Schema.Struct({
 const Receipt = Schema.Struct({ version: Schema.Literal(1), ...Metadata.fields });
 const decodeReceipt = decodeUnknownOrUndefined(Receipt);
 const decodeMetadata = decodeUnknownOrUndefined(Metadata);
+
+/**
+ * Marks delivered results in model requests. Submitted answers are the user's own words, relayed;
+ * a cancelled or failed questionnaire's result is the extension's.
+ */
+export const registerAskUserMessageOrigins = (pi: ExtensionAPI): void =>
+  registerMessageOrigins(pi, {
+    extension: "pi-ask-user",
+    types: {
+      [ASYNC_MESSAGE_TYPE]: originFromDetails(
+        Schema.Struct({ outcome: Schema.Struct({ outcome: Schema.Literal("submitted") }) }),
+        () => ({ author: "user", relays: "the user's answers to an ask_user questionnaire" }),
+        { author: "extension" },
+      ),
+    },
+  });
 
 export const createQuestionnaireGeneration = (): string => synchronousRandomUuid();
 

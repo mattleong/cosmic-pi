@@ -51,6 +51,10 @@ Automatic delivery writes a branch receipt before sending an answer message. Con
 accepts current-generation answers or historical answers supported by receipts on the active
 branch. An answer message cannot establish its own provenance. This preserves valid history
 without admitting delayed messages from an abandoned branch.
+Admitted answer messages reach the model inside core's [message-origin
+marker](../../docs/architecture/pi-boundaries.md#model-visible-extension-messages): submitted
+answers are labeled as the user's words relayed by the extension, never as automated text, while
+a cancelled or failed result is labeled automated.
 
 ## Critical invariants
 

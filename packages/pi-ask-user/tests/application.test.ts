@@ -3,6 +3,7 @@ import { eventually, makeTuiHost, waitMounted } from "./support/host.ts";
 import { startExtension, withoutRelayMarker } from "./support/extension.ts";
 import type { CustomEntry, CustomMessageEntry } from "@earendil-works/pi-coding-agent";
 import { layer } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import { makeSessionCapabilityProtocol, nodeFilePlatformLayer } from "pi-cosmic-core";
@@ -79,11 +80,58 @@ const openMounted = (
     return yield* Effect.promise(() => opening);
   });
 
+const receiptEntry = (deliveryId: string) =>
+  ({
+    id: deliveryId,
+    parentId: null,
+    timestamp: "2026-01-01T00:00:00Z",
+    type: "custom",
+    customType: ASYNC_RECEIPT_TYPE,
+    data: { version: 1, generation: "previous", deliveryId },
+  }) satisfies CustomEntry;
+
+const answerMessage = (deliveryId: string, outcome: string) => ({
+  role: "custom" as const,
+  customType: ASYNC_MESSAGE_TYPE,
+  content: `Request r · delivery ${deliveryId} · ${outcome}`,
+  display: true,
+  details: { generation: "previous", deliveryId, outcome: { outcome } },
+  timestamp: 0,
+});
+
 const request = {
   questions: [{ ...defaultQuestion, choices: [defaultQuestion.choices[0]!] }],
 } satisfies AskUserRequest;
 
 layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
+  it.effect("labels admitted answers as the user's words and other results as automated", () =>
+    Effect.gen(function* () {
+      const h = yield* harness(() => Promise.resolve(), {
+        mode: "print",
+        hasUI: false,
+        sessionManager: { getBranch: () => [receiptEntry("answered"), receiptEntry("cancelled")] },
+      });
+      yield* Effect.promise(() => h.emit("session_start"));
+      const sent = yield* Effect.promise(() =>
+        h.modelContext(h.ctx, [
+          answerMessage("answered", "submitted"),
+          answerMessage("unreceipted", "submitted"),
+          answerMessage("cancelled", "cancelled"),
+        ]),
+      );
+
+      expect(sent).toHaveLength(2);
+      const [answered, cancelled] = Arr.map(sent, (message) =>
+        message.role === "custom" && Predicate.isString(message.content) ? message.content : "",
+      );
+      expect(answered).toContain("<pi_extension_message");
+      expect(answered).toContain("the user's answers");
+      expect(answered).not.toContain("not typed by the user");
+      expect(cancelled).toContain("not typed by the user");
+      yield* Effect.promise(() => h.emit("session_shutdown"));
+    }),
+  );
+
   for (const mode of ["print", "json"] as const) {
     it.effect(
       `keeps receipt-backed history without starting questionnaire tools or preview settings in ${mode}`,
