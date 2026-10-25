@@ -12,6 +12,7 @@ import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import { withOriginMarkerOf } from "pi-cosmic-core/host-message-origin";
 import { decodeOpenAICompactionDetails } from "./protocol.ts";
 
 export const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -175,6 +176,17 @@ export function reconstructOpenAIContext(
   };
 }
 
+type ContextMessage = ContextWithSystemEvent["messages"][number];
+
+// Earlier `context` handlers may wrap custom messages in an origin marker for this request only;
+// the stored message is still the native one. The restored prefix is rebuilt from stored messages.
+const matchesNativeMessage = (actual: ContextMessage | undefined, expected: ContextMessage) => {
+  if (actual === undefined) return false;
+  if (hasExactPrefix([actual], [expected])) return true;
+  const marked = withOriginMarkerOf(actual, expected);
+  return marked !== undefined && hasExactPrefix([actual], [marked]);
+};
+
 export function repairOpenAIContext(
   branch: readonly SessionEntry[],
   messages: ContextWithSystemEvent["messages"],
@@ -197,7 +209,7 @@ export function repairOpenAIContext(
   let cursor = 0;
   for (const { sourceEntry: entry, messages: projected } of nativeEntries) {
     for (const expected of projected) {
-      if (cursor < messages.length && hasExactPrefix([messages[cursor]], [expected])) cursor++;
+      if (cursor < messages.length && matchesNativeMessage(messages[cursor], expected)) cursor++;
       else if (isRetryOmittable(entry)) omitted.add(entry.id);
       else {
         if (!owned) return undefined;

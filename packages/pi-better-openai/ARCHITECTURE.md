@@ -27,7 +27,9 @@ bodies, native decoder errors, and secrets stay out of diagnostics.
 ## Lifecycle and configuration
 
 Factory loading registers `/openai`, the service-free `openai-image` message
-renderer, and the renderer-only image replay bridge. `session_start` creates the
+renderer, its [message-origin marker](../../docs/architecture/pi-boundaries.md#model-visible-extension-messages)
+(the user's `/openai image` result, never automated text), and the renderer-only
+image replay bridge. `session_start` creates the
 session runtime, loads trusted preview settings, initializes services, and activates
 the current session's image command/tool and request-injection ingress. The replay
 bridge publishes only after successful tool registration; startup settlement
@@ -125,8 +127,12 @@ assistant responses on the active branch; stored omission metadata cannot delete
 user, system, tool, successful assistant, or future-tail messages.
 
 Repair uses `context_with_system` because Pi's conversation-only hook cannot repair
-prompt/tool authority. It replaces only a verified native session prefix and keeps
-other extensions' appended context. A branch with neither an owned checkpoint nor a
+prompt/tool authority. Origin markers are applied in `context`, before every
+`context_with_system` handler; repair accepts a marked message as its stored message
+and rebuilds the restored prefix from stored messages, so a checkpointed session sends
+those messages unmarked and its checkpoint still matches, rather than cancelling the
+request. It replaces only a verified native session prefix and keeps other extensions'
+appended context. A branch with neither an owned checkpoint nor a
 retry-omittable reply has nothing to repair and skips the comparison. Failed repair
 aborts the request: Pi otherwise contains extension exceptions and could continue
 with incomplete context.

@@ -3,6 +3,7 @@ import { expect, layer } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
+import { registerMessageOrigins } from "pi-cosmic-core/host-message-origin";
 import { deferredPromise } from "pi-cosmic-core/testing";
 import { afterEach, vi } from "vitest";
 import { OPENAI_COMPACTION_DETAILS_TYPE } from "../src/compaction/protocol.ts";
@@ -15,6 +16,21 @@ afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
+
+const checkpoint = {
+  type: OPENAI_COMPACTION_DETAILS_TYPE,
+  checkpoint: {
+    version: 1,
+    provider: "openai",
+    api: "openai-responses",
+    model: "gpt-5.5",
+    output: [{ type: "compaction", encrypted_content: "encrypted" }],
+    omittedEntryIds: [],
+    createdAt: 0,
+  },
+};
+const appendCheckpoint = (manager: SessionManager, retained: string) =>
+  manager.appendCompaction("owned", retained, 100, checkpoint, true);
 
 const checkpointedSession = (cwd: string) => {
   const manager = SessionManager.inMemory(cwd);
@@ -85,6 +101,42 @@ layer(nodeFilePlatformLayer)("compaction session authority", (it) => {
         yield* h.emit("session_shutdown", ctx);
       }),
     );
+
+  it.effect("keeps requests with origin-marked messages and later system messages", () =>
+    Effect.gen(function* () {
+      const h = yield* extensionHarness();
+      registerMessageOrigins(h.pi, {
+        extension: "pi-subagents",
+        types: { "pi-subagents-completed": { author: "extension" } },
+      });
+      const manager = SessionManager.inMemory(h.cwd);
+      manager.appendMessage({ role: "system", content: "system", timestamp: 0 });
+      manager.appendCustomMessageEntry("pi-subagents-completed", "Covered report.", true);
+      manager.appendMessage({ role: "user", content: "covered history", timestamp: 1 });
+      appendCheckpoint(manager, manager.getLeafId()!);
+      manager.appendMessage({
+        role: "system",
+        content: "",
+        toolsAdded: [{ name: "write", description: "write", parameters: { type: "object" } }],
+        timestamp: 2,
+      });
+      manager.appendCustomMessageEntry("pi-subagents-completed", "Next step: push.", true);
+      manager.appendMessage({ role: "user", content: "tail question", timestamp: 3 });
+      const abort = vi.fn();
+      const ctx = { ...h.ctx, sessionManager: manager, abort };
+      yield* h.emit("session_start", ctx);
+
+      const sent = yield* Effect.promise(() =>
+        h.modelContext(ctx, manager.buildSessionContext().messages),
+      );
+
+      expect(abort).not.toHaveBeenCalled();
+      expect(sent[0]?.role).toBe("system");
+      expect(serializedSnapshot(sent)).toContain("covered history");
+      expect(serializedSnapshot(sent)).toContain("Next step: push.");
+      yield* h.emit("session_shutdown", ctx);
+    }),
+  );
 
   it.effect("shutdown cancels delayed compaction without late projection", () =>
     Effect.gen(function* () {

@@ -14,6 +14,7 @@ import {
 } from "pi-code-previews";
 import { failureMessage } from "pi-cosmic-core/message-text";
 import { invokeHostCallback, notifyAtHostBoundary } from "pi-cosmic-core/host-session";
+import { registerMessageOrigins } from "pi-cosmic-core/host-message-origin";
 import { type ExtensionCommand } from "pi-cosmic-core/host-command";
 import { containCommandFailure, safeHostSignal } from "../boundary/host-ui.ts";
 import { imageCompactSummary, isSignInFailure } from "./compact-summary.ts";
@@ -65,6 +66,23 @@ export function registerOpenAIImageMessageRenderer(
 ): NoteImageCwd {
   pi.registerMessageRenderer(OPENAI_IMAGE_MESSAGE, renderer.render);
   return renderer.noteCwd;
+}
+
+/**
+ * Marks a delivered image in model requests as the result of the user's own `/openai image`
+ * command, whose prompt the user typed, rather than as text the user sent or an automated notice.
+ */
+export function registerOpenAIImageMessageOrigin(pi: ExtensionAPI): void {
+  registerMessageOrigins(pi, {
+    extension: "pi-better-openai",
+    types: {
+      [OPENAI_IMAGE_MESSAGE]: {
+        author: "user",
+        relays:
+          "the image generated for the user's /openai image command and the prompt the user typed",
+      },
+    },
+  });
 }
 
 export interface OpenAIImageRegistrationOptions {

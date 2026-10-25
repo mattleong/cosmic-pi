@@ -69,6 +69,7 @@ import {
 import {
   OPENAI_IMAGE_TOOL,
   registerOpenAIImage,
+  registerOpenAIImageMessageOrigin,
   registerOpenAIImageMessageRenderer,
   type OpenAIImageMessageRenderer,
 } from "./image/register.ts";
@@ -140,6 +141,7 @@ export function betterOpenAIWithDependencies(
     description: "OpenAI usage, fast mode, images, and settings",
   });
   const noteImageCwd = registerOpenAIImageMessageRenderer(pi, dependencies.imageMessageRenderer);
+  registerOpenAIImageMessageOrigin(pi);
   const replay = registerCodePreviewReplay(pi, { command: COMMAND, tools: [OPENAI_IMAGE_TOOL] });
   const config = () => {
     const cfg = MutableRef.get(configProjection);
