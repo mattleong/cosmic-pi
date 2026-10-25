@@ -18,7 +18,7 @@ Not published to npm; install from a [local clone](../../README.md#install). Aft
 pi install "$PWD/packages/pi-cosmic-ui"
 ```
 
-Other Cosmic Pi extensions detect it automatically. Without it, they fall back to Pi's status line and their own managers.
+Other Cosmic Pi extensions detect it automatically. Without it, they fall back to Pi's status line, and `/subagents` and `/tasks` show a notice instead of opening Activity.
 
 ## Usage
 

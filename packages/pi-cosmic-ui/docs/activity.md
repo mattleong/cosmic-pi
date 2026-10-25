@@ -4,7 +4,7 @@ The shared Activity view behind `/activity`, `/subagents`, and `/tasks`, and the
 
 ## Activity view
 
-`/activity`, `/subagents`, and `/tasks` open the same two-pane manager, with **Subagents → Tasks** sections (plus **Attention** for standalone questions). The latter commands select matching standalone work first, or reveal a matching nested item; they do not filter other sections away. Producer managers remain fallbacks when Activity is unavailable. Ordinary `/activity` preserves the session selection and zoom when reopened.
+`/activity`, `/subagents`, and `/tasks` open the same two-pane manager, with **Subagents → Tasks** sections (plus **Attention** for standalone questions). The latter commands select matching standalone work first, or reveal a matching nested item; they do not filter other sections away. When Activity is unavailable, `/subagents` and `/tasks` show a notice instead. Ordinary `/activity` preserves the session selection and zoom when reopened.
 
 Nested work appears beneath its explicit owner. Queued agents show as queued until they start, and work cancelled before it started shows its producer's reason beside its row.
 

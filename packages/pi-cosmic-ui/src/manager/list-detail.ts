@@ -1,15 +1,9 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import * as Data from "effect/Data";
 import * as Fn from "effect/Function";
-import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
 import type { ManagerLayoutTier } from "./chrome.ts";
-import {
-  decodeFullScreenPrintable,
-  type FullScreenAction,
-  type FullScreenResolution,
-  type PageSteps,
-} from "./keymap.ts";
+import { type FullScreenAction, type PageSteps } from "./keymap.ts";
 import {
   isListMotion,
   isMovementMotion,
@@ -252,12 +246,3 @@ export const listWindowStart = (count: number, selected: number, limit: number):
   const size = Math.max(1, limit);
   return Math.max(0, Math.min(Math.max(0, count - size), selected - Math.floor(size / 2)));
 };
-
-export const confirmedReservedShortcut = (
-  resolution: FullScreenResolution | undefined,
-  data: string,
-  key: string,
-): boolean =>
-  Predicate.isTagged(resolution, "Shortcut") &&
-  resolution.key === key &&
-  decodeFullScreenPrintable(data) === key;

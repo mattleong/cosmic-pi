@@ -176,12 +176,7 @@ export const detailFieldRows = (
   );
 };
 
-export const framedRow = (
-  frame: ListDetailFrame,
-  line: string,
-  inner: number,
-  pane?: ListDetailPane,
-) => {
+const framedRow = (frame: ListDetailFrame, line: string, inner: number, pane?: ListDetailPane) => {
   const edge = pane && frame.pane ? frame.pane(pane, "│") : frame.outer("│");
   return `${edge}${padListDetailRow(line, inner)}${edge}`;
 };
