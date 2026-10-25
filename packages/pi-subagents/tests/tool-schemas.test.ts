@@ -14,7 +14,6 @@ import {
   scopedPrintSession,
 } from "pi-cosmic-core/testing/sdk";
 import { WRITER_WORKSPACE_MODES } from "../src/config/schema.ts";
-import { toolDefinitions as supervisorToolDefinitions } from "../src/supervisor/mcp-wire.ts";
 import {
   startToolParameters,
   subagentArgumentPreparer,
@@ -54,11 +53,6 @@ describe("model-facing tool schemas", () => {
       }
     },
   );
-
-  it("keeps the supervisor MCP schemas provider-portable", () => {
-    for (const tool of supervisorToolDefinitions)
-      expect(toolSchemaPortabilityProblems(tool.inputSchema)).toEqual([]);
-  });
 });
 
 describe("subagent argument preparation", () => {

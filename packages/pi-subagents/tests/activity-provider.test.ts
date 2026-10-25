@@ -295,24 +295,17 @@ describe("subagent activity provider", () => {
         messageId: "message-1",
         to: id,
         name: id,
-        disposition: id === "pending" ? ("guided" as const) : ("answered" as const),
-        confirmed: id !== "pending",
+        disposition: "answered" as const,
       }),
     );
     const service = subagentServiceDouble({ send });
-    const pendingNotices = vi.fn();
     const act = (id: string, action: "reply" | "message", input: string) =>
-      runSubagentActivityAction(service, id, { action, input }, expected, pendingNotices).pipe(
-        Effect.orDie,
-      );
+      runSubagentActivityAction(service, id, { action, input }, expected).pipe(Effect.orDie);
     yield* act("selected", "reply", "Yes");
     yield* act("selected", "message", "Go");
     expect(send.mock.calls).toEqual([
       ["selected", "Yes", expected],
       ["selected", "Go", expected],
     ]);
-    expect(pendingNotices).not.toHaveBeenCalled();
-    yield* act("pending", "message", "Go");
-    expect(pendingNotices).toHaveBeenCalledTimes(1);
   });
 });

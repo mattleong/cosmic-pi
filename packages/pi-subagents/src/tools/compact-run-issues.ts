@@ -6,7 +6,6 @@ import { skippedCandidateLabel } from "../profiles/model.ts";
 import { runAttention, runCleanupAttention } from "../run/attention.ts";
 import { reportFileText, reportTruncationText } from "../run/state.ts";
 import type { SubagentRunCard } from "./details-schema.ts";
-import { steeringDeliveryEvidence } from "./outcome.ts";
 import { cleanupRecoveryText, proposalDiffStatLines, proposalGuidance } from "./format.ts";
 import { countLabel } from "pi-cosmic-core/display";
 import { failureMessage, firstLineMessage, quoteText } from "pi-cosmic-core/message-text";
@@ -106,15 +105,6 @@ export function compactRunIssues(
     const add = cardIssueAdder(issues, card);
     attentionIssues(card, label, add, options.requestedPause === true);
     cleanupIssues(card, label, add);
-    if (card.steeringDelivery) {
-      const evidence = steeringDeliveryEvidence[card.steeringDelivery];
-      add(
-        card.steeringDelivery === "confirmed" ? "info" : "warning",
-        "steering-delivery",
-        `${label}: ${Str.uncapitalize(evidence.message)}`,
-        `steeringDelivery=${card.steeringDelivery}. ${evidence.detail}`,
-      );
-    }
     evidenceIssues(card, label, add);
     const quiet =
       options.quietHistory === true &&

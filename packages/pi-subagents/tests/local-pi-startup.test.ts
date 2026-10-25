@@ -11,7 +11,7 @@ import { localPiBackendDriver } from "../src/backend/local-pi.ts";
 import type { ChildWireEvent } from "../src/boundary/child-process.ts";
 import type { ProcessExit } from "../src/boundary/process-transport.ts";
 import type { SubagentError } from "../src/run/errors.ts";
-import { backendLaunch } from "./fixtures/backend-supervisor.ts";
+import { backendLaunch } from "./fixtures/backend-launch.ts";
 
 const fakePiChild = Effect.gen(function* () {
   const events = yield* Queue.unbounded<ChildWireEvent, Cause.Done>();

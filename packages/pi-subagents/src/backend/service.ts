@@ -1,12 +1,10 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as Arr from "effect/Array";
 import { InvalidSubagentRequestError } from "../run/errors.ts";
-import type { SubagentContextMode, SubagentRuntime } from "../domain/routing.ts";
+import type { SubagentContextMode } from "../domain/routing.ts";
 import type { BackendDriver, BackendPreflightRequest } from "./model.ts";
 
 interface BackendSelection {
-  readonly runtime: SubagentRuntime;
   readonly context: SubagentContextMode;
 }
 
@@ -20,34 +18,20 @@ export interface SubagentBackendRegistryContract {
   ) => Effect.Effect<BackendDriver, InvalidSubagentRequestError>;
 }
 
-export const backendRegistryFor = (
-  drivers: ReadonlyArray<BackendDriver>,
-): SubagentBackendRegistryContract => {
-  const byRuntime = new Map<SubagentRuntime, BackendDriver>(
-    Arr.map(drivers, (driver) => [driver.runtime, driver]),
-  );
-  const resolve: SubagentBackendRegistryContract["resolve"] = (selection) => {
-    const driver = byRuntime.get(selection.runtime);
-    if (!driver)
-      return Effect.fail(
-        InvalidSubagentRequestError.make({
-          code: "backend_not_implemented",
-          message: `local/${selection.runtime} is configured but has no registered pi-subagents driver.`,
-        }),
-      );
-    if (!driver.supportsContext(selection.context))
-      return Effect.fail(
-        InvalidSubagentRequestError.make({
-          code: "context_unsupported",
-          message: `local/${selection.runtime} does not support ${selection.context} context.`,
-        }),
-      );
-    return Effect.succeed(driver);
-  };
+export const backendRegistryFor = (driver: BackendDriver): SubagentBackendRegistryContract => {
+  const resolve: SubagentBackendRegistryContract["resolve"] = (selection) =>
+    driver.supportsContext(selection.context)
+      ? Effect.succeed(driver)
+      : Effect.fail(
+          InvalidSubagentRequestError.make({
+            code: "context_unsupported",
+            message: `Subagents do not support ${selection.context} context.`,
+          }),
+        );
   return {
     resolve,
     preflight: (selection, request) =>
-      resolve(selection).pipe(Effect.tap((driver) => driver.preflight(request))),
+      resolve(selection).pipe(Effect.tap((resolved) => resolved.preflight(request))),
   };
 };
 

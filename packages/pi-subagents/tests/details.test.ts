@@ -32,16 +32,15 @@ const run = (index = 1, cost?: number): SubagentRunView =>
       skippedCandidates: [
         {
           candidateIndex: 0,
-          candidate: { runtime: "pi", model: "first", effort: "high" },
+          candidate: { model: "first", effort: "high" },
           code: "unavailable",
           reason: "Unavailable.",
         },
       ],
     },
-    nextCandidate: { runtime: "pi", model: "private/next-model", effort: "high" },
+    nextCandidate: { model: "private/next-model", effort: "high" },
     cwd: "/private/project",
     state: "completed",
-    runtime: "claude",
     reportGeneration: 1,
     capabilities: ["steer", "interrupt", "parent-contact"],
     model: "provider/model",
@@ -71,7 +70,6 @@ const startedEntry = (
   profile: "reviewer",
   status: "started",
   routeStatus: "selected",
-  runtime: "pi",
   model: "openai-codex/gpt-5.6-sol",
   effort: "high",
   openaiFastMode: false,
@@ -95,7 +93,6 @@ const oversizedBatch = (
       skippedCandidates: Array.from({ length: 8 }, (_skipped, skip) => ({
         candidateIndex: skip,
         candidate: {
-          runtime: "pi",
           model: `candidate-${skip}-${Fn.pipe("c", Str.repeat(1_000))}`,
           effort: "high",
         },
@@ -150,7 +147,6 @@ describe("persisted subagent details version 2", () => {
     expect(serialized).not.toContain("routeSource");
     expect(serialized).not.toContain('candidateIndex":0');
     expect(details.cards[0]).toMatchObject({
-      runtime: "claude",
       reportGeneration: 1,
       context: "fresh",
       writeIntent: "read-only",
@@ -425,7 +421,7 @@ describe("persisted subagent detail fitting", () => {
         admittedRun: {
           runId: `agent-admitted-${entry.index}`,
           cleanupDisposition: "confirmed" as const,
-          nextCandidate: { runtime: "pi" as const, model: "openai/next", effort: "high" as const },
+          nextCandidate: { model: "openai/next", effort: "high" as const },
         },
       }),
     );

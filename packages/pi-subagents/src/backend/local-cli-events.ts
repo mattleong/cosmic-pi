@@ -2,20 +2,19 @@ import type * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Queue from "effect/Queue";
-import type { LocalCliWireEvent } from "../boundary/local-cli-transport.ts";
 import type { BackendEvent } from "./model.ts";
 
-export interface LocalCliRawEventOwnership<Raw = LocalCliWireEvent> {
+export interface LocalCliRawEventOwnership<Raw> {
   readonly offer: (event: BackendEvent, raw?: Raw) => Effect.Effect<void>;
   readonly release: (raw: Raw) => Effect.Effect<void>;
   readonly acknowledge: (event: BackendEvent) => void;
   readonly acknowledgeAll: () => void;
 }
 
-export const makeLocalCliRawEventOwnership = <Raw = LocalCliWireEvent>(
+export const makeLocalCliRawEventOwnership = <Raw>(
   events: Queue.Queue<BackendEvent, Cause.Done>,
   acknowledgeRaw: (raw: Raw) => void,
-  label = "local-CLI",
+  label: string,
 ): LocalCliRawEventOwnership<Raw> => {
   const rawOwners = new Map<BackendEvent, Raw>();
   // Activity only refreshes the run's throttled liveness timestamp, so one pending event per
@@ -54,9 +53,10 @@ export const makeLocalCliRawEventOwnership = <Raw = LocalCliWireEvent>(
   return { offer, release, acknowledge, acknowledgeAll };
 };
 
-export const localCliEventIngress = Effect.fn("LocalCliEvents.ingress")(function* <
-  Raw = LocalCliWireEvent,
->(acknowledgeRaw: (raw: Raw) => void, label?: string) {
+export const localCliEventIngress = Effect.fn("LocalCliEvents.ingress")(function* <Raw>(
+  acknowledgeRaw: (raw: Raw) => void,
+  label: string,
+) {
   const events = yield* Queue.bounded<BackendEvent, Cause.Done>(512);
   const ownership = makeLocalCliRawEventOwnership(events, acknowledgeRaw, label);
   yield* Effect.addFinalizer(() =>

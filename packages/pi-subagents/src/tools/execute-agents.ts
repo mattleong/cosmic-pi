@@ -61,7 +61,6 @@ import {
   proposalGuidance,
   type RunFormatOptions,
 } from "./format.ts";
-import { pendingDeliveryEvidence } from "./outcome.ts";
 import type { AgentToolInput } from "./schema.ts";
 import { isTextFragment } from "./text-fragments.ts";
 
@@ -78,14 +77,14 @@ const missingText = (missingIds: ReadonlyArray<string>): string =>
     : `Not in this session: ${Fn.pipe(missingIds, Arr.map(sanitizeTerminalLine), Arr.join(", "))}. Call agent_list without agentIds for current agent IDs.`;
 
 // A worktree writer's proposal, once its assignment finished, names how to apply it.
-export const agentWorktreeFact = (run: SubagentRunView | undefined): string | undefined =>
+const agentWorktreeFact = (run: SubagentRunView | undefined): string | undefined =>
   run?.workspaceId === undefined
     ? undefined
     : isTerminalRunState(run.state) || run.workspaceOutcome !== undefined
       ? proposalGuidance(run.workspaceId, run.workspaceOutcome)
       : `worktree ${sanitizeTerminalLine(run.workspaceId)}`;
 
-export const agentAttentionFact = (run: SubagentRunView | undefined): string | undefined => {
+const agentAttentionFact = (run: SubagentRunView | undefined): string | undefined => {
   const kind = run && projectAttention(run)?.kind;
   if (kind === undefined) return undefined;
   return kind === "paused" ? "paused for its parent" : "waiting for its parent's reply";
@@ -96,7 +95,7 @@ const listLine = (entry: AgentListEntry): string => {
   if (entry.kind === "main")
     return `- ${MAIN_AGENT_ID}: ${entry.state}${entry.self ? " (you)" : ""}`;
   const role = entry.agent ?? entry.profile;
-  const model = entry.run ? formatRunModel(entry.run) : entry.runtime && `local/${entry.runtime}`;
+  const model = entry.run && formatRunModel(entry.run);
   const facts = Arr.filter(
     [
       entry.state,
@@ -153,7 +152,6 @@ const listContract = (result: AgentListResult): AgentListContract => ({
       state: entry.state,
       ...(entry.parentId !== undefined && { parentId: entry.parentId }),
       ...(entry.depth !== undefined && { depth: entry.depth }),
-      ...(entry.runtime !== undefined && { runtime: entry.runtime }),
       ...(model !== undefined && { model }),
       ...(profile !== undefined && { profile }),
       ...(entry.agent !== undefined && isCustomAgentName(entry.agent) && { agent: entry.agent }),
@@ -190,9 +188,7 @@ const listDetails = (result: AgentListResult): AgentToolDetails => {
 const guidedText = (result: AgentSendResult, label: string): string => {
   if (result.mainState !== undefined)
     return agentMessageDeliveryText(result.mainState, "The main agent");
-  const sent = result.confirmed
-    ? `Delivered your message to ${label} as guidance for its current work.`
-    : `Sent your message to ${label} as guidance; ${Str.toLowerCase(pendingDeliveryEvidence.message)}. ${pendingDeliveryEvidence.detail}`;
+  const sent = `Delivered your message to ${label} as guidance for its current work.`;
   return result.parked
     ? `${sent} It is waiting on an answer to its own question, which only its ancestors can give, so it sees your message once one of them answers.`
     : sent;
@@ -217,7 +213,6 @@ const sendDetails = (result: AgentSendResult): AgentToolDetails => ({
   to: result.to,
   name: agentName(result),
   disposition: result.disposition,
-  confirmed: result.confirmed,
   ...(result.mainState !== undefined && { mainState: result.mainState }),
   ...(result.parked && { parked: true }),
 });
@@ -251,10 +246,8 @@ const isParentOf = (caller: AgentCaller, run: SubagentRunView): boolean =>
   (caller.kind === "main" ? SUBAGENT_ROOT_RUN_ID : caller.runId);
 
 /** A run's status card, with its parent's next steps when the reader is that parent. */
-export const agentReadCard = (
-  run: SubagentRunView,
-  { caller, ...options }: AgentReadOptions,
-): string => formatRunCard(run, { ...options, readerIsParent: isParentOf(caller, run) });
+const agentReadCard = (run: SubagentRunView, { caller, ...options }: AgentReadOptions): string =>
+  formatRunCard(run, { ...options, readerIsParent: isParentOf(caller, run) });
 
 /** The heading before a read's message, such as `Report (report 3) (truncated):`. */
 const MAX_READ_HEADING_CHARS = 64;

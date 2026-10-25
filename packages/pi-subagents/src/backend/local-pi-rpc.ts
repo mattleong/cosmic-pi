@@ -85,7 +85,6 @@ export const localPiRpc = (child: Pick<ChildProcessHandle, "send" | "sendContact
               ? "Subagent did not answer clear_queue; queue clearing may already have applied, but abort was not sent. Inspect the run with agent_read before retrying interrupt."
               : `Subagent did not answer ${commandLabel(command)}; the command may already have applied. Inspect the run with agent_read before retrying.`,
         }),
-      awaitEarlyResponse: true,
     }).pipe(
       Effect.filterOrFail(
         (response) => response.success,
@@ -124,7 +123,6 @@ export const localPiRpc = (child: Pick<ChildProcessHandle, "send" | "sendContact
           .sendContactControl(makeControl(id))
           .pipe(Effect.catchIf(isOutcomeUncertain, () => Effect.void)),
       timeoutError,
-      awaitEarlyResponse: true,
     });
 
   const resolveIpcAck = (requestId: string, outcome: Effect.Effect<void, SubagentError>) => {

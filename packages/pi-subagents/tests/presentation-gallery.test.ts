@@ -158,8 +158,7 @@ const apiAudit = view({
   name: "api-audit",
   task: "Audit the public API surface for breaking changes",
   profile: "researcher",
-  runtime: "claude",
-  model: "sonnet",
+  model: "claude-bridge/claude-sonnet-5-5",
   effort: "medium",
   state: "completed",
   reportGeneration: 1,
@@ -186,7 +185,7 @@ const migrationReview = view({
   state: "failed",
   error: "Error: 429 Too Many Requests: rate limit exceeded\n    at Client.request",
   parentRunId: "root",
-  nextCandidate: { runtime: "claude", model: "claude-opus-4-7", effort: "high" },
+  nextCandidate: { model: "claude-bridge/claude-opus-5-5", effort: "high" },
   selection: {
     source: "profile-candidate",
     reason: "Profile model selection.",
@@ -282,7 +281,6 @@ const launched = (request: StartSubagentRequest, id: string) =>
     name: request.name ?? "subagent",
     task: request.task,
     profile: request.profile,
-    runtime: request.runtime,
     model: request.model,
     effort: request.effort,
     context: request.context,
@@ -360,13 +358,13 @@ const startScenarios = Effect.gen(function* () {
             name: "auth-review",
             profile: "reviewer",
             task: "Review the session refresh flow",
-            model: { runtime: "pi", model: "openai-codex/gpt-5.6-sol", effort: "xhigh" },
+            model: { model: "openai-codex/gpt-5.6-sol", effort: "xhigh" },
           },
           {
             name: "docs-sweep",
             profile: "scout",
             task: "Find stale refreshToken references",
-            model: { runtime: "claude", model: "opus" },
+            model: { model: "openai/retired-model" },
           },
         ],
       },
@@ -554,7 +552,6 @@ const awaitScenarios = Effect.gen(function* () {
 });
 
 const candidate = (overrides: Partial<ProfileCandidate> = {}): ProfileCandidate => ({
-  runtime: "pi",
   model: "openai-codex/gpt-5.6-sol",
   effort: "high",
   context: "fresh",
@@ -571,7 +568,7 @@ const configuredRoutes = profileServiceFor({
 
 const agentRoutes = profileServiceFor({
   profiles: {
-    reviewer: [candidate({ runtime: "claude", model: "opus" }), candidate()],
+    reviewer: [candidate({ model: "openai/retired-model" }), candidate()],
   },
   agents: {
     "auth-reviewer": {
@@ -620,7 +617,6 @@ const listEntry = (run: SubagentRunView): AgentListEntry => ({
   state: run.state,
   parentId: run.parentRunId ?? "main",
   depth: run.depth ?? 1,
-  runtime: run.runtime,
   ...(run.profile && { profile: run.profile }),
   task: run.task,
   self: false,
@@ -641,7 +637,6 @@ const runReadout = (run: SubagentRunView, text?: string): AgentReadout => ({
 const read = (agents: ReadonlyArray<AgentReadout>, missingIds: ReadonlyArray<string> = []) => ({
   agentRead: () => Effect.succeed({ agents, missingIds }),
 });
-const guidance = "Also check the refresh-token rotation path.";
 const sessionAgents: ReadonlyArray<AgentListEntry> = [
   { id: "main", name: "main", kind: "main", state: "busy", self: true },
   ...Arr.map([authReview, schemaCheck, docsSweep, apiAudit], listEntry),
@@ -650,10 +645,9 @@ const sent = (
   to: string,
   name: string,
   disposition: AgentSendResult["disposition"],
-  delivery: Partial<Pick<AgentSendResult, "confirmed" | "mainState" | "parked">> = {},
+  delivery: Partial<Pick<AgentSendResult, "mainState" | "parked">> = {},
 ) => ({
-  agentSend: () =>
-    Effect.succeed({ messageId: "message-1", to, name, disposition, confirmed: true, ...delivery }),
+  agentSend: () => Effect.succeed({ messageId: "message-1", to, name, disposition, ...delivery }),
 });
 const peerNote = "The refresh test fixtures moved to tests/auth/fixtures; update your imports.";
 
@@ -716,11 +710,6 @@ const agentScenarios = Effect.all([
     sent("agent-6", "db-migration", "answered"),
   ),
   agentScenario(
-    "delivery awaiting confirmation",
-    { tool: "agent_send", args: { to: "agent-1", message: guidance } },
-    sent("agent-1", "auth-review", "guided", { confirmed: false }),
-  ),
-  agentScenario(
     "reply already in flight",
     { tool: "agent_send", args: { to: "agent-6", message: "Yes, go ahead." } },
     {
@@ -751,19 +740,6 @@ const agentScenarios = Effect.all([
     "message resumes a finished run",
     { tool: "agent_send", args: { to: "agent-2", message: "Also check docs/cli.md." } },
     sent("agent-2", "docs-sweep", "resumed"),
-  ),
-  agentScenario(
-    "finished Claude run can't resume",
-    { tool: "agent_send", args: { to: "agent-3", message: "Recheck v0.2." } },
-    {
-      agentSend: () =>
-        Effect.fail(
-          agentMessageRefusal(
-            "agent_resume_unsupported",
-            "Agent agent-3 on local/claude is completed and cannot be resumed.",
-          ),
-        ),
-    },
   ),
   agentScenario(
     "agent unavailable",
@@ -1236,7 +1212,6 @@ const awaited = (
 const route = {
   profile: "reviewer",
   routeStatus: "selected",
-  runtime: "pi",
   model: "openai-codex/gpt-5.6-sol",
   effort: "high",
   openaiFastMode: false,
@@ -1446,7 +1421,7 @@ const receiptScenarios: ReadonlyArray<ToolScenario> = [
             admittedRun: {
               runId: "agent-1",
               cleanupDisposition: "confirmed",
-              nextCandidate: { runtime: "pi", model: "anthropic/claude-opus-4-7", effort: "high" },
+              nextCandidate: { model: "anthropic/claude-opus-4-7", effort: "high" },
             },
           },
         ],

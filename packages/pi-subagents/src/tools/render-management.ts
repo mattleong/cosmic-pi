@@ -107,7 +107,7 @@ export const renderProfileRoutesComponent = (
     lines.push(
       theme.fg(
         "dim",
-        "Launch checks pending · executable, authentication, native integration, and private harness are checked at launch.",
+        "Launch checks pending · executable and authentication are checked at launch.",
       ),
     );
     return Arr.flatMap(lines, (line) =>

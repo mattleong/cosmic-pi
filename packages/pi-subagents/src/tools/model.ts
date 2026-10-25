@@ -7,7 +7,6 @@ import type {
 import type {
   SubagentContextMode,
   SubagentEffort,
-  SubagentRuntime,
   SubagentWriteIntent,
 } from "../domain/routing.ts";
 import type { WriterWorkspaceMode } from "../config/schema.ts";
@@ -25,7 +24,6 @@ export interface SubagentStartFailure {
 export interface SubagentStartResolvedRoute {
   readonly profile: string;
   readonly agent?: string | undefined;
-  readonly runtime: SubagentRuntime;
   readonly model: string;
   readonly effort: SubagentEffort;
   readonly openaiFastMode: boolean;

@@ -32,8 +32,6 @@ import {
   acknowledgeCompletions,
   awaitObservations,
   localServiceFixture,
-  nativeReportRequest,
-  nativeReportServiceFixture,
   request,
   runView,
   withService,
@@ -369,28 +367,6 @@ describe("report retention", () => {
           path: completed.reportArchive?.path,
           complete: false,
         });
-      });
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect("archives a runtime-submitted report longer than the in-memory cap whole", () =>
-    Effect.gen(function* () {
-      const agent = yield* temporaryDirectory("report-retention-");
-      const { backend, projections, layer } = nativeReportServiceFixture(undefined, {
-        archiveReport: sessionReportArchive(agent, "session-1"),
-      });
-      const report = `${findings(20_000)}!`;
-      expect(report.length).toBeGreaterThan(MAX_FINAL_TEXT_CHARS);
-      yield* withService(layer, function* (service) {
-        const run = yield* service.start(nativeReportRequest());
-        backend.controls[0]?.report(run.id, 1, "long-report", report);
-        yield* untilSettled(() => projections.at(-1)?.runs[0]?.state === "completed");
-
-        const completed = yield* runView(service, run.id);
-        expect(completed.finalText?.length).toBeLessThanOrEqual(MAX_FINAL_TEXT_CHARS);
-        expect(completed.finalTextTruncation?.originalChars).toBe(report.length);
-        expect(completed.reportArchive?.complete).toBe(true);
-        expect(yield* readFile(completed.reportArchive?.path ?? "missing")).toBe(report);
       });
     }).pipe(Effect.scoped),
   );

@@ -23,7 +23,6 @@ import {
 } from "./tools/fixtures/tool-harness.ts";
 
 const route = (overrides: Partial<ProfileCandidate> = {}): ProfileCandidate => ({
-  runtime: "pi",
   model: "parent",
   effort: "default",
   context: "fresh",

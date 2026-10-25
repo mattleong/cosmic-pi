@@ -11,20 +11,19 @@ import { declaredCandidate } from "../fixtures/profiles.ts";
 import { profileServiceFor } from "../tools/fixtures/tool-harness.ts";
 
 const driver: BackendDriver = {
-  runtime: "claude",
   capabilities: [],
   supportsContext: (context) => context === "fresh",
   preflight: () => Effect.void,
   spawn: () => Effect.die("The session fixture delegates spawning to its owned service boundary."),
 };
-const registry = backendRegistryFor([driver]);
+const registry = backendRegistryFor(driver);
 const profilesFor = () =>
   profileServiceFor({
     profiles: {
-      scout: [declaredCandidate("sonnet", { runtime: "claude" })],
-      reviewer: [declaredCandidate("sonnet", { runtime: "claude" })],
-      worker: [declaredCandidate("sonnet", { runtime: "claude", writeIntent: "writer" })],
-      generalist: [declaredCandidate("sonnet", { runtime: "claude" })],
+      scout: [declaredCandidate("parent", { effort: "default" })],
+      reviewer: [declaredCandidate("parent", { effort: "default" })],
+      worker: [declaredCandidate("parent", { effort: "default", writeIntent: "writer" })],
+      generalist: [declaredCandidate("parent", { effort: "default" })],
     },
   });
 

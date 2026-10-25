@@ -223,9 +223,7 @@ export function controlOperations(dependencies: RunControlDependencies) {
   ): Effect.Effect<SubagentRunView, SubagentError> =>
     processControls.steer(record, message.guidance).pipe(
       Effect.tapError((error) =>
-        Predicate.isTagged(error, "SubagentProcessError") &&
-        isOutcomeUncertain(error) &&
-        !error.pendingDelivery
+        Predicate.isTagged(error, "SubagentProcessError") && isOutcomeUncertain(error)
           ? retainControlWarning(record, error.message)
           : Effect.void,
       ),

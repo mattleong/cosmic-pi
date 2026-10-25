@@ -83,11 +83,8 @@ interface ProcessTransportOptions<Message, Frame, Attachment> {
   readonly label: string;
   readonly error: (operation: string, cause?: unknown, code?: string) => SubagentProcessError;
   readonly message: (value: Schema.Json) => Message;
-  readonly maxOutboundBytes?: number;
-  readonly terminateOnParserOverflow: boolean;
   /** Writers must not release ownership while a command the child detached may still write. */
   readonly confirmDetachedDescendants: boolean;
-  readonly synchronousWriteFailure: "not_sent" | "defect";
   readonly requestAbort?: (
     send: (frame: Frame) => Effect.Effect<void, SubagentProcessError>,
   ) => Effect.Effect<void>;
@@ -259,13 +256,11 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
                 { type: "oversized_line", ...line },
                 Buffer.byteLength(line.prefix, "utf8") + Buffer.byteLength(line.suffix, "utf8"),
               ),
-            onOverflow: () => {
+            onOverflow: () =>
               offer({
                 type: "protocol_error",
                 message: `${label} output exceeded its bounded parser budget.`,
-              });
-              if (options.terminateOnParserOverflow) force();
-            },
+              }),
           })
         : () => {};
       const onStdoutError = (error: Error) => {
@@ -354,11 +349,6 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
           } catch (error) {
             return notSent("encode frame for", error);
           }
-          if (
-            options.maxOutboundBytes !== undefined &&
-            Buffer.byteLength(encoded, "utf8") > options.maxOutboundBytes
-          )
-            return notSent("encode frame for", "Frame exceeded limit.");
           try {
             stdin.write(encoded, (error) =>
               resume(
@@ -368,8 +358,7 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
               ),
             );
           } catch (error) {
-            if (options.synchronousWriteFailure === "defect") resume(Effect.die(error));
-            else notSent("send frame to", error);
+            notSent("send frame to", error);
           }
         }).pipe(
           Effect.timeoutOrElse({

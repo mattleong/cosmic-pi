@@ -307,13 +307,12 @@ const renderRunRoute = (
 ): string => {
   if (layout === "full")
     return dimmed ? theme.fg("dim", formatRunRouteLine(run)) : formatRunRouteLine(run, theme);
-  const { profile, hostRuntime, model, narrowModel } = projectRunRoutePresentation(run);
-  const plain =
-    layout === "model" ? `${profile} · ${narrowModel}` : `${profile} ${hostRuntime} ${model}`;
+  const { profile, model, narrowModel } = projectRunRoutePresentation(run);
+  const plain = layout === "model" ? `${profile} · ${narrowModel}` : `${profile} ${model}`;
   if (dimmed) return theme.fg("dim", plain);
   return layout === "model"
     ? `${theme.fg("muted", profile)}${theme.fg("dim", " · ")}${theme.fg("toolOutput", narrowModel)}`
-    : `${theme.fg("muted", profile)} ${theme.fg("toolOutput", `${hostRuntime} ${model}`)}`;
+    : `${theme.fg("muted", profile)} ${theme.fg("toolOutput", model)}`;
 };
 
 const activityIdentity = (

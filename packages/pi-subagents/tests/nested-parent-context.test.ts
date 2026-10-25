@@ -81,8 +81,7 @@ const contextFor = (session: SessionManager, model = rootModel): ExtensionContex
 const backendFixture = (parent: SessionManager) => {
   const launches: BackendLaunchRequest[] = [];
   const controls: Array<{ readonly offer: (event: BackendEvent) => void; released: boolean }> = [];
-  const driver = (runtime: BackendDriver["runtime"]): BackendDriver => ({
-    runtime,
+  const driver: BackendDriver = {
     capabilities: [],
     supportsContext: () => true,
     preflight: () => Effect.void,
@@ -109,7 +108,7 @@ const backendFixture = (parent: SessionManager) => {
                   model: launch.model,
                   effort: launch.effort,
                   sessionId: session.getSessionId(),
-                  ...(runtime === "pi" && { sessionFile: session.getSessionFile() }),
+                  sessionFile: session.getSessionFile(),
                 }),
                 start: (_message: string, assignmentEpoch: number) =>
                   Effect.sync(() => control.offer({ type: "run_started", assignmentEpoch })),
@@ -127,14 +126,11 @@ const backendFixture = (parent: SessionManager) => {
         }),
         ({ release }) => release,
       ).pipe(Effect.map(({ handle }) => handle)),
-  });
+  };
   return {
     launches,
     controls,
-    layer: Layer.succeed(
-      SubagentBackendRegistry,
-      backendRegistryFor([driver("pi"), driver("claude")]),
-    ),
+    layer: Layer.succeed(SubagentBackendRegistry, backendRegistryFor(driver)),
   };
 };
 
@@ -145,7 +141,6 @@ const profiles = profileLayerFor({
     nested: {
       profiles: {
         oracle: Arr.map([0, 1], () => ({
-          runtime: "pi",
           model: "parent",
           effort: "default",
           context: "fork",
@@ -301,7 +296,6 @@ describe("authenticated immediate-parent context", () => {
           parentSessionId: child.getSessionId(),
           parentSessionFile: child.getSessionFile(),
           parentLeafId: findingsLeaf,
-          sharesParentPromptCache: true,
           activeTools: ["read", "bash"],
         });
         const fork = SessionManager.open(yield* createForkedSession(oracle, directory));
@@ -365,7 +359,7 @@ describe("authenticated immediate-parent context", () => {
     }),
   );
 
-  it.live("never substitutes root fork context for an uncaptured Pi or non-Pi parent", () =>
+  it.live("never substitutes root fork context for an uncaptured parent", () =>
     Effect.gen(function* () {
       const directory = yield* temporaryDirectory("pi-nested-no-root-");
       const root = SessionManager.create(directory, directory);
@@ -385,32 +379,23 @@ describe("authenticated immediate-parent context", () => {
         const parent = yield* service.start(
           request({ cwd: directory, model: "openai/child-model" }),
         );
-        const native = yield* service.start(
-          request({ cwd: directory, runtime: "claude", model: "native-model" }),
-        );
-        for (const run of [parent, native]) {
-          const environment = yield* service.captureLaunchParent(run.id);
-          const failure = yield* resolveProfileStart(
-            host.pi,
-            { task: "Must not inherit root", profile: "oracle" },
-            rootCtx,
-            { ...environment, projectTrusted: true },
-          ).pipe(Effect.flip);
-          expect(failure).toMatchObject({ code: "fork_context_unavailable" });
-          expect(environment.parentContext.sessionFile).toBeUndefined();
-        }
+        const environment = yield* service.captureLaunchParent(parent.id);
+        const failure = yield* resolveProfileStart(
+          host.pi,
+          { task: "Must not inherit root", profile: "oracle" },
+          rootCtx,
+          { ...environment, projectTrusted: true },
+        ).pipe(Effect.flip);
+        expect(failure).toMatchObject({ code: "fork_context_unavailable" });
+        expect(environment.parentContext.sessionFile).toBeUndefined();
         const childContext = capturePiParentContext(host.pi, contextFor(child, childModel));
         for (const forged of [
           { ...childContext, sessionId: root.getSessionId() },
           { ...childContext, sessionFile: root.getSessionFile() },
         ]) {
-          const failure = yield* service.captureLaunchParent(parent.id, forged).pipe(Effect.flip);
-          expect(failure).toMatchObject({ code: "parent_context_mismatch" });
+          const mismatch = yield* service.captureLaunchParent(parent.id, forged).pipe(Effect.flip);
+          expect(mismatch).toMatchObject({ code: "parent_context_mismatch" });
         }
-        const rejected = yield* service
-          .captureLaunchParent(native.id, childContext)
-          .pipe(Effect.flip);
-        expect(rejected).toMatchObject({ code: "parent_context_mismatch" });
         const ephemeral = yield* service.start(
           request({ cwd: directory, model: "openai/child-model" }),
         );
@@ -445,7 +430,7 @@ describe("authenticated immediate-parent context", () => {
           })
           .pipe(Effect.flip);
         expect(forged).toMatchObject({ code: "parent_context_mismatch" });
-        expect(backend.launches).toHaveLength(3);
+        expect(backend.launches).toHaveLength(2);
       }).pipe(Effect.provide(layer));
     }),
   );

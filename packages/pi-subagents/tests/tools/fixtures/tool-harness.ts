@@ -9,6 +9,7 @@ import {
 import * as Effect from "effect/Effect";
 import type { BackendDriver } from "../../../src/backend/model.ts";
 import {
+  backendRegistryFor,
   SubagentBackendRegistry,
   type SubagentBackendRegistryContract,
 } from "../../../src/backend/service.ts";
@@ -21,7 +22,6 @@ import {
 } from "../../../src/profiles/service.ts";
 import type { ProfileCandidate, ProfileId } from "../../../src/profiles/model.ts";
 import type { SessionProfileOverrideSeed } from "../../../src/profiles/session-overrides.ts";
-import { InvalidSubagentRequestError } from "../../../src/run/errors.ts";
 import type { StartSubagentRequest } from "../../../src/run/model.ts";
 import { SubagentService, type SubagentServiceContract } from "../../../src/run/service.ts";
 import type { SubagentToolRuntime } from "../../../src/tools/execute.ts";
@@ -95,22 +95,12 @@ export const profileServiceFor = (
 
 export const fallbackProfileService = profileServiceFor(undefined);
 export const testBackendDriver = {
-  runtime: "pi",
   capabilities: [],
   supportsContext: () => true,
   preflight: () => Effect.void,
   spawn: () => Effect.die("unused"),
 } satisfies BackendDriver;
-const fixtureBackend = (selection: { readonly runtime: string }) =>
-  selection.runtime === "pi"
-    ? Effect.succeed(testBackendDriver)
-    : Effect.fail(
-        InvalidSubagentRequestError.make({
-          code: "backend_not_implemented",
-          message: `local/${selection.runtime} is unavailable in this fixture.`,
-        }),
-      );
-export const testBackendRegistry = { resolve: fixtureBackend, preflight: fixtureBackend };
+export const testBackendRegistry = backendRegistryFor(testBackendDriver);
 
 export type CaptureOptions = {
   readonly activeTools?: ReadonlyArray<string>;
@@ -260,7 +250,6 @@ export const startCapturingService = (requests: StartSubagentRequest[]) =>
         requests.push(input);
         return view({
           id: `agent-${requests.length}`,
-          runtime: input.runtime,
           openaiFastMode: input.openaiFastMode,
           context: input.context,
           writeIntent: input.writeIntent,

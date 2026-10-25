@@ -191,7 +191,6 @@ describe("subagent Pi registration", () => {
           to: pending.id,
           name: pending.name,
           disposition: "answered" as const,
-          confirmed: true,
         }),
       );
       const service = subagentServiceDouble({

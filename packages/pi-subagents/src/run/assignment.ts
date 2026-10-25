@@ -88,28 +88,16 @@ export function assignmentOperations(dependencies: RunAssignmentDependencies) {
     },
   );
 
-  // A report the attempt already accepted proves its task was issued, so it answers a start
-  // request that failed afterwards, as one does when the exit following the report cancels it.
-  const answerFailedStart = Effect.fn("SubagentAssignment.answerFailedStart")(function* (
-    record: RunRecord,
-    attemptToken: string,
-  ) {
-    const answer = yield* withLock(
-      Effect.gen(function* () {
-        if (record.assignment.attemptToken !== attemptToken) return undefined;
-        if (record.assignment.phase === "reported")
-          return { kind: "unchanged" as const, view: snapshotRun(record) };
-        if (!isCurrentIssuingAssignment(record, attemptToken) || !record.assignment.pendingReport)
-          return undefined;
-        const now = yield* Clock.currentTimeMillis;
-        return yield* activateAssignmentLocked(record, runningView(record, now));
-      }),
+  // A report proves the attempt's task was issued, so it answers a start request that failed
+  // afterwards: an uncertain start's own events can activate and settle the assignment first.
+  const answerFailedStart = (record: RunRecord, attemptToken: string) =>
+    withLock(
+      Effect.sync(() =>
+        record.assignment.attemptToken === attemptToken && record.assignment.phase === "reported"
+          ? snapshotRun(record)
+          : undefined,
+      ),
     );
-    if (!answer) return undefined;
-    return answer.kind === "unchanged"
-      ? answer.view
-      : yield* replayAssignmentActivation(record, answer);
-  });
 
   const submitPrompt = (
     record: RunRecord,

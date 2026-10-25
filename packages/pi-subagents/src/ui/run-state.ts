@@ -7,7 +7,6 @@ import {
 } from "pi-cosmic-ui/manager";
 import {
   hasSubagentCapability,
-  hasUnresolvedSteeringDelivery,
   isActiveRunState,
   isResumableRunState,
   type SubagentRunState,
@@ -42,14 +41,12 @@ export type RunMessageMode = "guidance" | "reply";
 export const runMessageMode = (run: SubagentRunView): RunMessageMode | undefined => {
   if (run.state === "waiting_for_parent")
     return hasSubagentCapability(run, "parent-contact") ? "reply" : undefined;
-  if (hasUnresolvedSteeringDelivery(run)) return undefined;
   return run.state === "running" && hasSubagentCapability(run, "steer") ? "guidance" : undefined;
 };
 
 export const canInterruptRun = (run: SubagentRunView): boolean =>
   (run.state === "running" || run.state === "waiting_for_parent") &&
-  hasSubagentCapability(run, "interrupt") &&
-  !hasUnresolvedSteeringDelivery(run);
+  hasSubagentCapability(run, "interrupt");
 
 export const canStopRun = (run: SubagentRunView): boolean =>
   (isActiveRunState(run.state) && run.state !== "stopping") ||

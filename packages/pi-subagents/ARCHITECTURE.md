@@ -1,20 +1,20 @@
 # Architecture
 
-`pi-subagents` owns session-scoped background agents on local Pi and Claude on macOS and Linux, and messaging among the agents of one root session.
+`pi-subagents` owns session-scoped background agents running as local Pi processes on macOS and Linux, and messaging among the agents of one root session.
 
 ## Ownership and boundaries
 
 - `extension.ts`, `application/`, and `layer.ts` register the extension and compose its Effect runtime through Cosmic Core's session-runtime slot. Root sessions own application services; nested Pi processes use authenticated proxies.
 - `config/store.ts` is the configuration persistence entrypoint. `profiles/` owns route planning, custom agent resolution, and the revisioned Current Session working set. `domain/` holds pure routing policy.
 - `run/` owns `SubagentService`: authoritative run records under one shared lock, admission and writer pools, process lifecycle, assignment transitions, completion claims, agent messaging, and immutable fleet projections. Factories receive only the capabilities they need from the service's composition root. The root session's main agent is reached through host capabilities in `boundary/host-agent-messages.ts`.
-- `backend/` translates Pi and Claude behavior into normalized handles, controls, and events. `boundary/` and `supervisor/` own host integration, processes, files, leases, and authenticated transport. Run orchestration never interprets native wire protocols.
+- `backend/` translates the Pi child's RPC and IPC protocol into normalized handles, controls, and events. `boundary/` owns host integration, processes, files, leases, and authenticated transport. Run orchestration never interprets native wire protocols.
 - `workspace/` owns the isolated-writer artifact model and service; `boundary/git-*` owns their Git operations and worktree hooks. Run-level bindings keep parent authority and cleanup evidence; workspace operations serialize separately from ordinary run activity.
 - `delegation/` owns each delegation mode's prompt guidance, applied to the root session through `boundary/host-delegation-prompt.ts`.
 - `tools/` owns public contracts, execution, and compact presentation. `settings/` owns commands and editors. `ui/` and settings rendering consume immutable projections, and Activity actions recheck activation, revision, and capabilities before reaching services.
 
 ## Lifecycle
 
-Command registration, help, and completions stay eager; fleet, profile dashboard, settings, and doctor implementations load only when invoked. Each invocation captures the session-slot generation and exact host signal before loading, pins that signal for downstream handlers without freezing other host getters, and rechecks authority before calling the implementation or publishing failures. Activity remains the first-choice manager; its standalone fallback loads only when needed. Tools and historical rendering are never deferred.
+Command registration, help, and completions stay eager; profile dashboard, settings, and doctor implementations load only when invoked. Each invocation captures the session-slot generation and exact host signal before loading, pins that signal for downstream handlers without freezing other host getters, and rechecks authority before calling the implementation or publishing failures. Bare `/subagents` opens Cosmic UI's Activity view, which it requires; without it the command shows a notice. Tools and historical rendering are never deferred.
 
 One root runtime owns the descendant tree and its processes, transports, leases, and fibers. Only the current session-slot token may activate tools or publish state. On shutdown, publication is revoked, the operation scope retires so blocked work settles without publishing, and backends close leaf-first.
 
@@ -32,7 +32,7 @@ One root runtime owns the descendant tree and its processes, transports, leases,
 - Shared-checkout writers in one cwd share its writer pool and cross-process lease without file claims; they coordinate by task scope and are not isolated from each other. Another process holding the lease refuses the whole pool.
 - Worktree reports are proposals, and only the root starts worktree writers; nested writers share their caller's directory. Only an explicit `apply` by the authenticated direct parent integrates one (once a root adopts an orphaned proposal, it is that proposal's parent for apply, discard, and revise), publishing exactly one revision's changed paths and refusing parent drift in them. Files the checkout's `.worktreeinclude` copies into isolated trees never enter a capture, so they never reach Git objects, revisions, or integration. Integration writes the parent's files through a scratch index, never its index. An interrupted integration stays mid-integration until discard, by its session or another root once that session ends, puts back each touched file still holding the parent's or the proposal's content; while any holds something else, discard refuses and changes nothing. Rules are in [Isolated workspace lifecycle](docs/local-backends.md#isolated-workspace-lifecycle).
 - Workspace operations wait for a finished writer's process cleanup and refuse a running writer or quarantined cleanup. Destructive workspace operations run their engine work outside the run lock, in the session scope, excluding their trees and an integration's target checkout from new runs and resumes until it ends, and never remove a tree a run still holds. A session's engine operations queue on one gate before any checkout lock, so its worktree launches wait behind them. Another session's root may adopt, discard, or sweep an orphaned workspace only once its owner lease is free and it holds the original writer lease; adoption rewrites the owner atomically under the checkout's store lock.
-- Only a child's main agent may contact its parent (progress, warnings, and blocking questions), submit its report, or send agent messages; native sub-agent identity is decided at the call, never from output ordering.
+- A child contacts its parent (progress, warnings, and blocking questions) and sends agent messages only through its run's authenticated bridge. Its report is the final message of its settled assignment, never earlier output.
 - Tools and UI read frozen projections. A terminal state or start receipt does not prove cleanup or completion. Native result contracts stay separate from bounded presentation details.
 - Multi-run model output gives each run one fixed-size block, so a full batch fits by construction and every outcome an await claims is shown and delivered; `agent_read` is the detail surface. A question reaches the model whole only through its own notice ([run blocks](docs/completion-delivery.md#model-facing-run-blocks)).
 - Delegation modes change only the root session's prompt guidance; they never restrict tools or reach nested children.
@@ -45,9 +45,9 @@ Runs belong to one live root session, which owns their processes, authority, rep
 - **Detached runner or file-based run state.** Runs, conversations, and processes are never resumed from files; private run files are scratch state the root owns and the startup sweep reclaims. Worktree proposals are the deliberate exception: they are durable artifacts a later root may adopt, apply, discard, or revise.
 - **Missions or schedules.** Work starts from a parent turn; nothing runs without a session to receive its report.
 - **Watchdog reviewer.** Stall detection and the parent's own review supervise runs; a second reviewer would split the parent's authority.
-- **Agent memory.** Profiles and [custom agents](docs/routing.md#custom-agents) route to a runtime and model; the parent writes each assignment, and runs carry no memory between sessions.
+- **Agent memory.** Profiles and [custom agents](docs/routing.md#custom-agents) route to a model; the parent writes each assignment, and runs carry no memory between sessions.
 - **Lazy tool loader.** Tools register with the activation, and children receive the root's active tools at launch.
-- **Pane inspectors.** The root's fleet and Activity views show every run's transcript from one projection.
+- **Pane inspectors.** The root's Activity view shows every run's details and recent activity from one projection.
 - **Cross-session messaging.** It belongs to [pi-intercom](../pi-intercom/ARCHITECTURE.md); pi-subagents never reaches another root.
 - **Workflow scripts.** Orchestration is the parent agent's job, optionally through native codemode scripts calling the ordinary tools.
 

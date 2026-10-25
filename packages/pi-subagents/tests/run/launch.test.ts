@@ -5,7 +5,6 @@ import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import type { SubagentRunView } from "../../src/run/model.ts";
 import type { SubagentServiceContract } from "../../src/run/service.ts";
-import { isSupervisorRunId } from "../../src/supervisor/protocol.ts";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import {
   completeLocalRun,
@@ -47,13 +46,15 @@ const completeHistory = (
     return ids;
   });
 
+// Run IDs fit every agent ID bound: alphanumeric start, at most 80 characters.
+const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/;
 describe("SubagentService", () => {
   it.effect("records each launch's next frozen route candidate", () =>
     withService(localServiceFixture().layer, function* (service) {
       const first = yield* service.start(request({ routeContinuation: reviewerContinuation(0) }));
       const last = yield* service.start(request({ routeContinuation: reviewerContinuation(1) }));
       const unrouted = yield* service.start(request());
-      expect(first.nextCandidate).toEqual({ runtime: "pi", model: "parent", effort: "high" });
+      expect(first.nextCandidate).toEqual({ model: "parent", effort: "high" });
       expect(last.nextCandidate).toBe("none");
       expect(unrouted.nextCandidate).toBeUndefined();
     }),
@@ -70,8 +71,8 @@ describe("SubagentService", () => {
         return { second, stale };
       });
 
-      expect(isSupervisorRunId(first.id)).toBe(true);
-      expect(isSupervisorRunId(result.second.id)).toBe(true);
+      expect(first.id).toMatch(RUN_ID);
+      expect(result.second.id).toMatch(RUN_ID);
       expect(result.second.id).not.toBe(first.id);
       expect(result.stale).toBeInstanceOf(SubagentNotFoundError);
       expect(result.stale).toMatchObject({ id: first.id });

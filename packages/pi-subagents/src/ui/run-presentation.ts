@@ -38,7 +38,6 @@ export const formatSessionActivity = (now: number, earlier: number | undefined):
 
 interface RunRoutePresentationInput {
   readonly profile?: string | undefined;
-  readonly runtime?: string | undefined;
   readonly model: string;
   readonly effort: string;
   readonly openaiFastMode?: boolean | undefined;
@@ -47,7 +46,6 @@ interface RunRoutePresentationInput {
 
 export const projectRunRoutePresentation = (run: RunRoutePresentationInput) => {
   const profile = sanitizeTerminalLine(run.profile ?? "generalist");
-  const hostRuntime = `local/${sanitizeTerminalLine(run.runtime ?? "pi")}`;
   const providerModel = sanitizeTerminalLine(run.model);
   const providerSeparator = Option.getOrElse(Fn.pipe(providerModel, Str.indexOf("/")), () => -1);
   const modelName =
@@ -59,23 +57,20 @@ export const projectRunRoutePresentation = (run: RunRoutePresentationInput) => {
   const override = run.modelOverride ? " · override" : "";
   return {
     profile,
-    hostRuntime,
     model: `${providerModel}:${effort}${fast}${override}`,
     narrowModel: `${modelName}:${effort}${fast}${override}`,
   };
 };
 
-export const formatRunRoute = (run: RunRoutePresentationInput): string => {
-  const route = projectRunRoutePresentation(run);
-  return `${route.hostRuntime} · ${route.model}`;
-};
+export const formatRunRoute = (run: RunRoutePresentationInput): string =>
+  projectRunRoutePresentation(run).model;
 
 export const formatRunRouteLine = (
   run: RunRoutePresentationInput,
   theme?: Pick<Theme, "fg">,
 ): string => {
-  const { profile, hostRuntime, model } = projectRunRoutePresentation(run);
+  const { profile, model } = projectRunRoutePresentation(run);
   return theme
-    ? `${theme.fg("muted", profile)} ${theme.fg("dim", "→")} ${theme.fg("toolOutput", `${hostRuntime} · ${model}`)}`
-    : `${profile} → ${hostRuntime} · ${model}`;
+    ? `${theme.fg("muted", profile)} ${theme.fg("dim", "→")} ${theme.fg("toolOutput", model)}`
+    : `${profile} → ${model}`;
 };

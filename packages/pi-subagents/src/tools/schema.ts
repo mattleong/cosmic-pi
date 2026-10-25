@@ -19,7 +19,6 @@ import { PROFILE_DEFINITIONS } from "../profiles/definitions.ts";
 import {
   MAX_PROFILE_MODEL_SELECTOR_CHARS,
   PROFILE_CANDIDATE_EFFORTS,
-  PROFILE_CANDIDATE_RUNTIMES,
   PROFILE_IDS,
 } from "../profiles/model.ts";
 import {
@@ -83,10 +82,9 @@ const PROFILE_PARAMETER_DESCRIPTION = Arr.join(
 
 const ModelOverrideParameters = Type.Object(
   {
-    runtime: StringEnum(PROFILE_CANDIDATE_RUNTIMES, { description: "Local runtime." }),
     model: nonblankString(
       MAX_PROFILE_MODEL_SELECTOR_CHARS,
-      "Native model selector: provider/model or parent for pi, a Claude Code model name for claude.",
+      "Model selector: provider/model, or parent for the parent's current model.",
     ),
     effort: Type.Optional(
       StringEnum(PROFILE_CANDIDATE_EFFORTS, {

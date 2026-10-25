@@ -7,16 +7,14 @@ import {
 } from "pi-cosmic-ui/manager/model-picker";
 import type { SearchableSelectHostOptions } from "pi-cosmic-ui/manager/searchable-select";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
-import type { NativeRuntimeModel } from "../../boundary/native-model-catalog.ts";
 import {
   isSafeNativeModelSelector,
   supportsSubagentFastMode,
   type ProfileId,
 } from "../../profiles/model.ts";
-import type { SubagentEffort, SubagentRuntime } from "../../domain/routing.ts";
+import type { SubagentEffort } from "../../domain/routing.ts";
 import type { ProjectedPiModel } from "../profile-model-catalog.ts";
 import { profileRouteOptionLabel } from "../profile-route-editor.ts";
-import { runWithLabel } from "./profile-workspace-model.ts";
 import { selectHost } from "./profile-workspace-selectors.ts";
 
 export interface ProfileModelOption extends ModelPickerModel {
@@ -35,7 +33,7 @@ export function createPiModelOptions(input: {
   const models = Arr.flatMap(input.models, (model) => {
     const selector = `${model.provider}/${model.id}`;
     return isSafeNativeModelSelector(selector)
-      ? [{ ...model, selector, fastModeAvailable: supportsSubagentFastMode("pi", selector) }]
+      ? [{ ...model, selector, fastModeAvailable: supportsSubagentFastMode(selector) }]
       : [];
   });
   const parent = input.parentModel;
@@ -49,46 +47,11 @@ export function createPiModelOptions(input: {
         : "Use the current Pi model when this run starts",
       searchText: `parent ${canonical ?? "active model"} ${parent?.name ?? ""}`,
       supportedEfforts: parent?.supportedEfforts,
-      fastModeAvailable: canonical ? supportsSubagentFastMode("pi", canonical) : false,
+      fastModeAvailable: canonical ? supportsSubagentFastMode(canonical) : false,
     },
     ...models,
   ];
 }
-
-const nativeModelStatus = (
-  model: NativeRuntimeModel,
-  currentSelector: string | undefined,
-): string => {
-  const labels = Arr.filter(
-    [
-      model.isDefault ? "default" : undefined,
-      model.selector === currentSelector ? "current" : undefined,
-    ],
-    (label) => label !== undefined,
-  );
-  return labels.length ? ` · ${Arr.join(labels, ", ")}` : "";
-};
-
-export const createNativeModelOptions = (
-  models: ReadonlyArray<NativeRuntimeModel>,
-  currentSelector: string | undefined,
-): ProfileModelOption[] =>
-  Arr.flatMap(models, (model) => {
-    if (!isSafeNativeModelSelector(model.selector)) return [];
-    return [
-      {
-        provider: "profile",
-        id: model.selector,
-        selector: model.selector,
-        label: `${boundedMiddle(sanitizeTerminalLine(model.selector), 72)}${nativeModelStatus(model, currentSelector)}`,
-        description: `${model.label && model.label !== model.selector ? `${boundedMiddle(sanitizeTerminalLine(model.label), 72)} · ` : ""}${model.description ? `${boundedMiddle(sanitizeTerminalLine(model.description), 96)} · ` : ""}reasoning levels: ${Arr.join(model.supportedEfforts, ", ") || "default"}`,
-        searchText: `${model.selector} ${model.label} ${model.description ?? ""}`,
-        supportedEfforts: model.supportedEfforts,
-        // Claude Code has no OpenAI service tier.
-        fastModeAvailable: false,
-      },
-    ];
-  });
 
 export const retainUnavailableCurrent = (
   current: string,
@@ -112,7 +75,6 @@ export const retainUnavailableCurrent = (
 export interface ProfileModelPickerContext {
   readonly profile: ProfileId;
   readonly candidateIndex: number;
-  readonly runtime: SubagentRuntime;
 }
 
 interface ProfileModelPickerPageOptions extends SearchableSelectHostOptions {
@@ -134,7 +96,7 @@ export const profileModelPickerPage = (options: ProfileModelPickerPageOptions) =
     ...selectHost(options),
     breadcrumb: `${targetLabel} · ${context.profile} · ${optionLabel} · Model`,
     title: `Choose model · ${context.profile} · ${optionLabel}`,
-    subtitle: `${targetLabel} · ${runWithLabel(context)}`,
+    subtitle: targetLabel,
     scopedModels: scopedChoices ?? [],
     allModels: options.choices,
     current: initialSelection,

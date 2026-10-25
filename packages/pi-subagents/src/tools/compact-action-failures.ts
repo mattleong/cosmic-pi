@@ -43,7 +43,7 @@ const START_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
     "Install the extension that provides the model with pi install, or choose another route in /subagents profiles.",
   ],
   [
-    ["profile", "candidate", "auth", "harness", "model", "unsupported", "confinement", "readiness"],
+    ["profile", "candidate", "auth", "model", "unsupported", "readiness"],
     "Inspect the effective route with agent_profiles or choose a compatible route in /subagents profiles.",
   ],
   [
@@ -93,7 +93,7 @@ const ACTION_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
   ],
   [["capability", "unsupported"], "Inspect the run's capabilities with agent_read."],
   [
-    ["profile", "candidate", "auth", "harness", "model"],
+    ["profile", "candidate", "auth", "model"],
     "Inspect the effective route with agent_profiles or edit it with /subagents profiles.",
   ],
 ];
@@ -103,7 +103,7 @@ const UNCERTAIN_FAILURE_RECOVERY_RULES: ReadonlyArray<FailureRecoveryRule> = [
     "Do not resend the reply automatically; inspect the run with agent_read and wait for its next event.",
   ],
   [
-    ["guidance_outcome_uncertain", "steer_outcome_uncertain"],
+    ["guidance_outcome_uncertain"],
     "The guidance may already have arrived; do not resend it. Inspect the run with agent_read and wait for its next event.",
   ],
 ];
@@ -342,7 +342,7 @@ const AGENT_FAILURES = {
   agent_resume_unsupported: {
     message: (subject) => `${subject} can't be resumed`,
     recovery:
-      "Claude runs can't be resumed. Stop a paused one with agent_lifecycle and start a replacement; a finished one closed on its report, so start a new agent with the context it needs, or message its parent.",
+      "Stop a paused one with agent_lifecycle and start a replacement; for a finished one, start a new agent with the context it needs, or message its parent.",
   },
   too_many_targets: {
     message: () => "Too many agents were named",

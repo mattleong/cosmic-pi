@@ -51,7 +51,7 @@ const previewText = (text: string): Option.Option<string> => {
   return Option.some(clipped ? `${Fn.pipe(preview, Str.slice(0, TOOL_PREVIEW_CHARS))}…` : preview);
 };
 
-/** The first lines of a tool's output for the fleet view, bounded before the run sanitizes it. */
+/** The first lines of a tool's output for Activity, bounded before the run sanitizes it. */
 export const toolOutputPreview = Fn.flow(
   Schema.decodeUnknownOption(ToolOutput),
   Option.map(outputText),

@@ -20,9 +20,9 @@ import { registerSubagentTools } from "../../src/tools/subagent.ts";
 import { fakeAgentMain } from "../run/fixtures/agent-main.ts";
 import {
   awaitObservations,
-  fakeNativeReportBackendLayer,
-  nativeReportRequest,
-  nativeReportServiceFixture,
+  fakeEventBackendLayer,
+  eventBackendRequest,
+  eventBackendServiceFixture,
   runView,
 } from "../run/fixtures/service-harness.ts";
 import { stringContaining } from "../support/matchers.ts";
@@ -32,7 +32,7 @@ import { captureSubagentTools, executeTool, view } from "./fixtures/tool-harness
 
 const rootTools = Effect.gen(function* () {
   const main = fakeAgentMain({ state: "busy" });
-  const fixture = nativeReportServiceFixture(fakeNativeReportBackendLayer(), {
+  const fixture = eventBackendServiceFixture(fakeEventBackendLayer(), {
     agentMain: main.capabilities,
   });
   const { pi, tools } = recordingExtensionHost();
@@ -46,7 +46,7 @@ const rootTools = Effect.gen(function* () {
     run: (effect, signal) => runtime.run(effect, signal),
   });
   const start = (name: string) =>
-    step(() => runtime.run(service.startSessionOwned(nativeReportRequest({ name }))));
+    step(() => runtime.run(service.startSessionOwned(eventBackendRequest({ name }))));
   const send = (from: SubagentRunView, text: string) =>
     step(() =>
       runtime.run(service.agentSend({ kind: "run", runId: from.id }, MAIN_AGENT_ID, text)),
@@ -103,7 +103,7 @@ it.live("returns for a message to main without consuming reports, and awaits aga
 
     const second = awaitTool([worker.id]);
     yield* second.observing;
-    fixture.backend.controls[0]!.report(worker.id, 1, "worker-report", "Worker report.");
+    fixture.backend.controls[0]!.complete("Worker report.");
     const finished = yield* second.result;
     expect(finished.structuredContent).toMatchObject({
       outcome: "finished",
@@ -121,7 +121,7 @@ it.live("delivers a finished report once beside the message that ended the wait"
     const peer = yield* start("peer");
 
     const waiting = awaitTool([done.id, busy.id], showsCompleted(done.id));
-    fixture.backend.controls[0]!.report(done.id, 1, "done-report", "Done report.");
+    fixture.backend.controls[0]!.complete("Done report.");
     yield* waiting.observing;
     yield* send(peer, "Busy needs the new API key.");
     const result = yield* waiting.result;

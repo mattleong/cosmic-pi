@@ -30,7 +30,7 @@ test.each(["compact"] as const)(
           generation: 1,
           outcome: "failed",
           error: "PRIVATE_STACK_TRACE",
-          nextCandidate: { runtime: "pi", model: "openai/next", effort: "high" },
+          nextCandidate: { model: "openai/next", effort: "high" },
         },
         {
           id: "PRIVATE_RUN_ID_WRITER",

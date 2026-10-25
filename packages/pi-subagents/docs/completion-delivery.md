@@ -1,16 +1,15 @@
 # Completion, projection, and delivery
 
-Part of the [pi-subagents](../README.md) architecture documentation. See [ARCHITECTURE.md](../ARCHITECTURE.md) for ownership and [Local backends](local-backends.md) for backend-specific completion evidence.
+Part of the [pi-subagents](../README.md) architecture documentation. See [ARCHITECTURE.md](../ARCHITECTURE.md) for ownership and [Local backend](local-backends.md) for backend-specific completion evidence.
 
 ## Assignment epochs, questions, and phases
 
 Every assignment has a monotonic, never-reused epoch and a `preparing`/`issuing`/`running`/`reported` phase.
 
-- Supervisor epochs are prepared before task issue, advance only after a live authenticated peer acknowledges them, and become unready on disconnect until a new peer handshakes. Each supervisor call captures the epoch it observed.
 - Events from older epochs, and activity, tool, progress, warning, and question events while idle `reported`, are ignored. Handle-scoped lifecycle warnings stay visible but never trigger a parent turn.
-- Progress, warnings, and questions, all sent with `agent_contact_parent`, normalize to `supervisor_contact` events. Pi and Claude children both send up to 64 KiB; the root keeps 16 KiB, cutting a longer message at its start with a marker naming its size. Warnings update the parent-visible projection and session history without a model message; the latest child warning and latest system warning are kept separately and folded into the terminal outcome.
+- Progress, warnings, and questions, all sent with `agent_contact_parent`, normalize to `supervisor_contact` events. Pi children send up to 64 KiB; the root keeps 16 KiB, cutting a longer message at its start with a marker naming its size. Warnings update the parent-visible projection and session history without a model message; the latest child warning and latest system warning are kept separately and folded into the terminal outcome.
 - Child instructions escalate risks that could invalidate current parent work into questions. One question may block per run at a time; an assignment may ask again once it settles.
-- Reply, MCP cancellation, socket loss, adapter cancellation, and scope close settle the exact owned question. A question has no deadline: it waits for a reply until the child's turn is aborted, the run is stopped, or the session ends. Every definite question-death path emits a correlated cancellation, for which the channel reserves queue capacity, so `waiting_for_parent` never outlives its question.
+- Reply, the child's cancellation, transport loss, adapter cancellation, and scope close settle the exact owned question. A question has no deadline: it waits for a reply until the child's turn is aborted, the run is stopped, or the session ends. Every definite question-death path emits a correlated cancellation, so `waiting_for_parent` never outlives its question.
 - A reply timeout after transmission returns `reply_outcome_uncertain`, closes the question without retry, and keeps a system warning.
 
 ### Parent messages
@@ -18,28 +17,23 @@ Every assignment has a monotonic, never-reused epoch and a `preparing`/`issuing`
 `agent_send` is the one message path; there is no separate reply tool. Its target is claimed under the run lock, which decides its delivery:
 
 - A target in `waiting_for_parent` is **answered** when the sender is one of its ancestors, including `main`, since its question reaches the nearest ancestor that can take it: the claim marks the reply in flight, clears the question, and commits in the owner scope, so cancelling the caller never abandons the claimed question. A definitely unsent reply (`reply_send_failed`) restores the question for another send. Any other sender **guides** it: the guidance steers the turn blocked in `agent_contact_parent`, so the run sees it only once an ancestor answers, and the result marks it `parked` and tells the sender so.
-- A running target is **guided**: the message steers its running turn under the existing steer admission, and the turn-input claim is released when the caller finishes. Guidance whose native delivery is still being confirmed returns `confirmed: false` rather than failing; the model is told not to resend.
+- A running target is **guided**: the message steers its running turn under the existing steer admission, and the turn-input claim is released when the caller finishes.
 - A paused or finished local Pi target is **resumed** when the sender is one of its ancestors, including `main`, and refused otherwise ([Resume by ancestors](#resume-by-ancestors)).
 - A target with a reply already in flight refuses with `reply_in_flight` rather than steering; uncertain-delivery codes keep their meaning and their compact issue says not to resend.
-- The user's Activity and fleet reply and message actions go through the same delivery as bare text, with `main`'s authority to answer. They apply only while the run is as the user saw it, and never resume a run; the resume action does that.
-- Report `deliveryId` retries with identical text return the original sequence without a second event; conflicting reuse fails.
+- The user's Activity reply and message actions go through the same delivery as bare text, with `main`'s authority to answer. They apply only while the run is as the user saw it, and never resume a run; the resume action does that.
 
 ### Start confirmation and report commit
 
-- A report received while `controls.start` is in flight is held in one bounded slot and committed only after start confirmation, or correlated `run_started` evidence after an uncertain result. A backend exit or failure that arrives first commits the held report instead of failing the run, and a start request that then fails returns the completed run, since the report proves its task was issued; only an explicit stop discards it.
+- A settlement received while `controls.start` is in flight is held in one slot and replayed only after start confirmation, or correlated `run_started` evidence after an uncertain result. A start request that fails after that evidence already completed the assignment returns the completed run, since the report proves its task was issued.
 - A definite resume-start failure fails the resumed assignment with its error and closes the run's backend; earlier reports stay with their completion generations. Outcome uncertainty keeps the new assignment with a system warning.
 - Confirmation, uncertainty, and reconciliation share one predicate under the run lock: the attempt token matches, the assignment is still issuing, and the run is active. Late prompt replies cannot revive a stopped or failed run or create another report generation.
-- Activation drains `pendingReport` and `pendingRunSettled` under the run lock. A buffered report wins over settlement and commits its watermark, payload, `reported` phase, and completed projection atomically, so backend exit can never replace an accepted report with a retryable failure. `settlement.ts` owns this drain and commit.
-
-### Claude guidance delivery
-
-Local Claude guidance has a separate optional `steeringDelivery` fact: `pending`, `confirmed`, `not-sent`, `report-unconfirmed`, or `unresolved`, bound to the handle, epoch, and delivery sequence. A matching accepted report completes with a warning that guidance stayed unconfirmed. Terminal pending guidance becomes `unresolved` and suppresses a failed run's next-candidate hint, even after cleanup. Details are in [Local Claude](local-backends.md#local-claude).
+- Activation drains `pendingRunSettled` under the run lock and replays it once the lock is released. `settlement.ts` owns this drain.
 
 ## Close-on-report lifetime and root shutdown
 
 - Every run closes after reporting.
 - Completion payloads and exclusive await claims survive process cleanup.
-- `agent_send` answers or steers active assignments, and from an ancestor may [resume](#resume-by-ancestors) a paused or finished local Pi run, as do the user's Activity and `/subagents` resume actions. Local Pi supports paused in-place resume and respawn of completed, failed, and stopped sessions; Claude does not advertise resume. Each resume is a new epoch with session-owned admission.
+- `agent_send` answers or steers active assignments, and from an ancestor may [resume](#resume-by-ancestors) a paused or finished local Pi run, as does the user's Activity resume action. Local Pi supports paused in-place resume and respawn of completed, failed, and stopped sessions. Each resume is a new epoch with session-owned admission.
 - Natural completion or failure closes only that run's backend scope; descendants stay attached to their original run nodes. Cleanup interrupts the run's proxy waits and joins finalizers that release their completion claims, so descendant reports reach a surviving ancestor or the root.
 - Explicit stop marks the subtree against new admission and closes it leaf-first. Root shutdown, replacement, tree navigation, and reload close all children leaf-first, detach confirmed pool members, then release each safely releasable final lease.
 - Local Pi run directories, transcripts included, stay until eviction or runtime end, so a stopped run's `Session:` link keeps working. A paused, completed, failed, or stopped run can resume until its state is reclaimed ([resume admission](routing.md#resume-admission)).
@@ -66,7 +60,7 @@ The root TUI installs one read-only widget above the editor from the same projec
 - Values are deeply frozen and at most 48,000 characters of canonical JSON. Version-1 or unsupported history uses a bounded sanitized text fallback; nothing reconstructs cards.
 - Start details hold the request-ordered entry list and never run cards. Await details hold cards, `awaitUntil`, and only the latest report generation, with explicit truncation evidence.
 - Await cards target only the requested IDs for completion and claims, adding report-free descendants and any run whose question ended the wait, up to 12 cards. Banners count the true `runCount`, and omitted runs get a cue to query them with `agent_read`.
-- Usage cost renders only when the backend reports it, as Pi and Claude do. A fleet subtotal over runs with unknown cost is marked as a lower bound.
+- Usage cost renders only when the backend reports it, as Pi does. A fleet subtotal over runs with unknown cost is marked as a lower bound.
 - Absent capabilities are unknown. An explicit lack of `resume` keeps stop-and-replace guidance.
 - `agent_profiles` details persist each candidate's policy fields plus `status` and `reason`, keeping all seven routes, up to 32 candidates per route, and every resolved custom agent even when condensed. Routes too large even condensed leave the call without details, so it renders its full text generically.
 
@@ -115,13 +109,13 @@ The root TUI installs one read-only widget above the editor from the same projec
 
 ### Dispositions
 
-A message is delivered when it is sent or refused; nothing is stored for later. One claim under the run lock decides the delivery from the target's state, and once admitted the delivery commits in the session scope, so cancelling the sender never abandons it. The result is `answered`, `guided`, or `resumed`, with `confirmed` false only for guidance whose native delivery is still being confirmed.
+A message is delivered when it is sent or refused; nothing is stored for later. One claim under the run lock decides the delivery from the target's state, and once admitted the delivery commits in the session scope, so cancelling the sender never abandons it. The result is `answered`, `guided`, or `resumed`.
 
-- **Runs.** A run waiting on a question is `answered` when the sender is one of its ancestors, including `main`, through the claimed path in [Parent messages](#parent-messages), and `guided` and `parked` behind the question otherwise. A running run is `guided` by steering, with [Claude guidance](#claude-guidance-delivery) delivery rules. A paused, completed, failed, or stopped local Pi run is `resumed` with the message as its next assignment when the sender is one of its ancestors, including `main`.
+- **Runs.** A run waiting on a question is `answered` when the sender is one of its ancestors, including `main`, through the claimed path in [Parent messages](#parent-messages), and `guided` and `parked` behind the question otherwise. A running run is `guided` by steering, with the backend's [guidance delivery](local-backends.md#guidance-interruption-and-turn-input) rules. A paused, completed, failed, or stopped local Pi run is `resumed` with the message as its next assignment when the sender is one of its ancestors, including `main`.
 - **Main agent.** `boundary/host-agent-messages.ts` sends a displayed `pi-subagents-agent-message` (details `from`, `fromName`, `to`, `messageId`) through the shared [parent wake](#parent-wake-policy). The message is `guided`, and its `mainState` says how it arrived: `idle` when it started a turn, `busy` when the settling run continues for it (the type is a root notice type), and `held` while a dialog is open, until it closes, or after an interrupt, until the user's next prompt. A session that was replaced reads as `unavailable` to `agent_read`.
-- **Refusals.** Each is an `[agent_…]` code that `tools/compact-action-failures.ts` presents: `agent_self_target`; `agent_not_found` for unknown or evicted IDs; `agent_unavailable` for a run still starting after the [wait](#limits), stopping, or being evicted or reclaimed, for a resume from outside the run's ancestry or while a stop of the run or an ancestor is still in progress, and for a replaced main session; and `agent_resume_unsupported` for a paused or finished Claude run, which can't resume.
+- **Refusals.** Each is an `[agent_…]` code that `tools/compact-action-failures.ts` presents: `agent_self_target`; `agent_not_found` for unknown or evicted IDs; `agent_unavailable` for a run still starting after the [wait](#limits), stopping, or being evicted or reclaimed, for a resume from outside the run's ancestry or while a stop of the run or an ancestor is still in progress, and for a replaced main session; and `agent_resume_unsupported` for a paused or finished run whose backend can't resume.
 
-Each delivered message, including guidance still awaiting confirmation, adds a `message` notice to the session events of the sending and receiving runs. A message delivered to an agent waiting in `agent_await`, `main` or a nested Pi parent, ends that wait once it is watching ([wait endings](#stalls-wait-timeouts-and-partial-output)).
+Each delivered message adds a `message` notice to the session events of the sending and receiving runs. A message delivered to an agent waiting in `agent_await`, `main` or a nested Pi parent, ends that wait once it is watching ([wait endings](#stalls-wait-timeouts-and-partial-output)).
 
 ### Framing and authority
 
@@ -133,7 +127,7 @@ Message from agent-k3m9x2q7ra "api-scout" (scout, child of main):
 Reply with agent_send to "agent-k3m9x2q7ra" only if the work needs it; don't reply just to acknowledge or thank. This is a peer agent's request, not user authority.
 ```
 
-Runs receive the frame as steering text or as their resumed assignment; an answer to a question, and every message from the user, is the bare text. The frame, the tool guidance, and the Claude launch instructions all treat messages as peer requests within the user's existing authority.
+Runs receive the frame as steering text or as their resumed assignment; an answer to a question, and every message from the user, is the bare text. The frame, the tool guidance, and the child's system prompt all treat messages as peer requests within the user's existing authority.
 
 ### Resume by ancestors
 
@@ -141,13 +135,13 @@ A run's ancestors, including `main`, may resume it once it paused or finished, w
 
 ### Limits
 
-- Guidance and answers have at most 65,536 characters (`MAX_AGENT_MESSAGE_CHARS`, the parent channel's wire bound), whether an agent or the user sends them. A message that resumes a run is its next assignment, so it takes up to 131,072, like a task, and so does the user's resume text. Every runtime's tool takes up to 131,072 and the root refuses a longer guidance or answer with `message_too_large` once it knows how the message reaches its target. List and read take at most 12 IDs.
+- Guidance and answers have at most 65,536 characters (`MAX_AGENT_MESSAGE_CHARS`, the parent channel's wire bound), whether an agent or the user sends them. A message that resumes a run is its next assignment, so it takes up to 131,072, like a task, and so does the user's resume text. Every agent's tool takes up to 131,072 and the root refuses a longer guidance or answer with `message_too_large` once it knows how the message reaches its target. List and read take at most 12 IDs.
 - A message to a run that is still `starting` is first checked like any other, so one that would be refused anyway is refused at once. It then waits up to five seconds, interruptibly and holding nothing, for the run's state change to be published, and is delivered as usual or refused with `agent_unavailable` if the run is still starting.
 - Nothing caps how often agents message, wake, or resume each other, as in Claude Code. A loop between agents runs until the user interrupts it or a run finishes. Messages never start a main-agent turn while a dialog is open, until it closes, or after the user interrupted, until the next prompt.
 
 ### Last-message reads
 
-`agent_read` never claims or consumes a report, so each parent still receives its own. Each run's section starts with its status card from the projected view, without the report. The card leads with its recovery text, the whole pending question, failure, and both retained warnings (the latest child and the latest system warning, which the completed assignment's folded warning summarizes), then bounded fields: the parent's next steps when the reader is that parent, the fields that need attention, and with `verbose` route selection, context, capabilities, process, cwd, and timing. A single run's card, and a retained report beside it, always fit the tool result; a latest message too long for the rest is cut and marked. Its structured result carries the card as `status`, a withheld run target with the whole question, warnings, and error, and its persisted details carry the card's bounded issues, so the compact row raises a run's question, warnings, or failure as warnings without failing the read. A Claude child's `agent_read` keeps a card's first 24 KiB, which always hold its header and whole question, and marks a longer card as cut; it bounds each text to a run's retained size, so a longer `main` message is cut and marked.
+`agent_read` never claims or consumes a report, so each parent still receives its own. Each run's section starts with its status card from the projected view, without the report. The card leads with its recovery text, the whole pending question, failure, and both retained warnings (the latest child and the latest system warning, which the completed assignment's folded warning summarizes), then bounded fields: the parent's next steps when the reader is that parent, the fields that need attention, and with `verbose` route selection, context, capabilities, process, cwd, and timing. A single run's card, and a retained report beside it, always fit the tool result; a latest message too long for the rest is cut and marked. Its structured result carries the card as `status`, a withheld run target with the whole question, warnings, and error, and its persisted details carry the card's bounded issues, so the compact row raises a run's question, warnings, or failure as warnings without failing the read.
 
 - `main`: the last assistant message on the root's current branch, text parts joined and bounded to 32 KiB, with `idle` or `busy`; `unavailable` without text once the session that owned it was replaced.
 - A run: the latest assistant message of its current or last assignment, as retained (16 KiB). A completed run gives its report instead: its [report file](#report-files) as `reportFile` with the retained copy as text beside it (marked truncated when the report was longer), or, when no file was saved, the whole retained report as text under the note that notices use. A read of several runs adds retained copies beside their files, smallest first, while they fit the result; every card is kept. Another finished run without a message falls back to that assignment's report, then its error, never an earlier assignment's report; `source` says which, and `reportGeneration` dates it. Otherwise `textStatus` is `none`. The `status` target never carries report availability: its `report.status` is only `not_finished` or `unknown`.
@@ -158,7 +152,7 @@ A run's ancestors, including `main`, may resume it once it paused or finished, w
 
 The saved file is the report: parents read it with their read tool. Model-facing surfaces repeat a report's body only when the run retained it whole and it fits beside the fixed blocks ([inline reports](#model-facing-run-blocks)), and always keep the file line.
 
-- Backends sanitize each assistant message once and bound it to 1 MiB (`MAX_ARCHIVED_REPORT_CHARS`), recording its original character and line counts when cut. A local Pi handle hands its settlement to the run and then drops its own reference to the settled text, keeping only a weak identity for stale-settlement checks. Claude submits reports of up to 480 KiB, the most whose worst-case JSON escaping fits both the 3 MiB supervisor channel line and the 4 MiB CLI stdout line, where Claude stream-json echoes the submission.
+- Backends sanitize each assistant message once and bound it to 1 MiB (`MAX_ARCHIVED_REPORT_CHARS`), recording its original character and line counts when cut. A local Pi handle hands its settlement to the run and then drops its own reference to the settled text, keeping only a weak identity for stale-settlement checks.
 - Root settlement writes each admitted completed report generation, uncut up to 1 MiB, to `<agent dir>/subagents/reports/<session>/<run>-<generation>-<archive UUID>.md` (directory 0700, file 0600) before queuing its completion, whether a notice or an await delivers it. A report that its full outbox can't queue is not archived. Each file is created exclusively, so an ID colliding with another runtime's cannot overwrite it. A report beyond 1 MiB is saved cut, ends with a note saying so, and is marked incomplete.
 - The file is saved inside the settlement's locked, uninterruptible transition, so it commits atomically with the outcome: backend exit or failure, guidance, pause, and stop wait for it rather than overtaking a report being saved. The write is asynchronous and bounded to 1 MiB of local I/O, so it delays other run-lock transitions but never blocks the event loop. The settlement waits at most five seconds (`REPORT_SAVE_DEADLINE_MILLIS`): a save that fails or misses the deadline logs a fixed warning and settles without a file, so the parent gets the report inline. A save that missed its deadline still finishes, since cutting it short could leave a partial file, and removes the file nobody names; session shutdown waits for it. A settlement that fails after saving removes the file it created.
 - Root and nested completion notices, `agent_await` text and contract, and `agent_read` of a completed run give the run's identity and state, the file's path, its size in characters and lines, and whether it is complete, with one instruction to read it. The contract's delivered `report` carries `path`, `chars`, `lines`, and `complete`, and delivering it consumes the report. Tool guidance tells parents that reports arrive as files.
@@ -166,7 +160,7 @@ The saved file is the report: parents read it with their read tool. Model-facing
 - The archive saves nothing under a path longer than 384 characters (`MAX_OUTCOME_FILE_PATH_CHARS`) or one a reference can't name verbatim. A report without a file is previewed in notices, await blocks, and the contract's delivered `{ text, truncated }`, with a pointer to `agent_read`, which returns the retained report under a note that no file was saved. A failure without a file is previewed the same way.
 - Expanded completion notice rows show the notice's run blocks and any reports it repeated; report bodies stay visible in `agent_await` tool cards and the Activity panel.
 - A run keeps its report bounded to 16 KiB (`MAX_FINAL_TEXT_CHARS`), with the cut's size, and settlement releases any fuller copy. `agent_read` of a completed run returns the report's file when one was saved with that retained copy beside it, and the retained copy alone when none was. Persisted cards carry the retained text, `reportTruncation`, and `reportArchive`, so expanded and replayed tool rows show the report beside its file. A whole saved copy makes a cut routine information; an incomplete one is a warning.
-- Nested parents can read the file: it lives under the root's agent directory, nested Pi children run as the same local user without a sandbox, and Pi's read tool takes absolute paths. Claude children's `Read` permission has no path rule.
+- Nested parents can read the file: it lives under the root's agent directory, nested Pi children run as the same local user without a sandbox, and Pi's read tool takes absolute paths.
 - Each root session start prunes reports older than seven days, then the oldest beyond 64 MiB, then empty session directories.
 - Before `/reload` or leaving the session replaces the runtime, the root holds wakes and hands every eligible completion to the notifier (bounded to two seconds), then appends one `pi-subagents-stopped` message naming the runs it stops, without starting a turn.
 - `/tree` is different: Pi has already switched branches, so the runs stop without appending reports or a message to the new branch. Only the user's warning remains.
@@ -182,9 +176,9 @@ The saved file is the report: parents read it with their read tool. Model-facing
 - An await that agent messages reached during the wait adds one block per message after the run blocks, in the slots they leave: the sender, and a preview of at most 240 characters.
 - Because every block fits, an await always shows every outcome it claimed and consumes every claimed report. The contract's `deferred` report status marks a report the result didn't deliver: a newer generation that appeared unclaimed during the wait, or one held by a wait that ended (cancelled, timed out, or by user input) before delivering it.
 
-## Live transcript in the fleet
+## Live activity
 
-Each tool completion carries a bounded output preview (seven lines, at most 1,000 characters) decoded from the native result and sanitized within the session-event budget. The fleet and Activity details interleave the start of each assistant message (up to 1,200 characters) with tool groups. The latest assistant message is omitted once it is the delivered report, shown in full below. Pi children also report context-window fill, which turns to a warning at 80%.
+Each tool completion carries a bounded output preview (seven lines, at most 1,000 characters) decoded from the native result and sanitized within the session-event budget. Activity details show a run's twelve most recent session events, tool states with their previews and the end of each assistant message, after its result. Pi children also report context-window fill, shown on the details' usage line.
 
 ## Stalls, wait timeouts, and partial output
 
@@ -194,7 +188,7 @@ Each tool completion carries a bounded output preview (seven lines, at most 1,00
 - A wait ends early with outcome `attention` when a run it doesn't await asks this caller a question; the question stays in the outbox.
 - A wait ends early with outcome `message` when another agent's message is delivered to its caller, from anywhere in the tree (`main` included for a nested caller), so the caller reads it now instead of when the wait ends. The wait starts watching in the locked step that claims its completions, and a delivery records itself under the same lock once delivered, so a message delivered once the wait is watching ends it. Watching starts after the call's setup, such as a nested call's proxy lookups, target authorization, and the completion gate, so a message that arrives just as the call starts may be read after the wait instead. Like a question's early return, it delivers the outcomes it observed and previews each message in a block after the run blocks, while slots remain; the message itself reaches the caller whole as its next input. When a question or the targets end the wait as well, the outcome is `attention` or `finished`, and the result still previews the messages.
 - A root wait ends with `user_input` when the user sends a message, so the parent can read it.
-- A failed assignment's error includes up to 2,000 characters of the failing attempt's own text, never earlier attempts' ([completion rules](local-backends.md#supervisor-channel-and-completion-ownership)).
+- A failed assignment's error includes up to 2,000 characters of the failing attempt's own text, never earlier attempts' ([completion rules](local-backends.md#completion-ownership)).
 
 ## Script results and report read-back
 
@@ -218,8 +212,7 @@ Root and local Pi registrations keep bounded activation-owned receipts. A matchi
 
 - `hasSubagentToolFailure`: any unconfirmed or definite failure marks the call.
 - Model text lists unconfirmed and failed targets separately. Recovery hints for uncertain or cleanup-unconfirmed codes never advise retrying or resending.
-- `agent_send` guidance that the local Claude caller-wait timeout leaves pending (`steer_outcome_uncertain` with `pendingDelivery`) is not a failure: the send returns `guided` with `confirmed: false`, a warning issue that forbids resending, retrying, interrupting, or replacing the worker merely because confirmation is pending. Other uncertain send codes throw with their code, and their issue says not to resend.
-- Later reads and awaits report delivery through the card's `steeringDelivery`. The `/subagents` fleet treats pending guidance the same way.
+- Uncertain `agent_send` codes throw with their code, and their issue says not to resend.
 
 ## Cancelled waits and report availability
 
@@ -236,7 +229,7 @@ Cleanup evidence is independent of task state and accepted reports; its fields a
 
 - `cleanup` and `writerCleanupQuarantined` are optional fields in version-2 details cards; script results carry `writerCleanupQuarantined` on every run target and `cleanup` only on a read's status. Absence is unknown, not confirmed cleanup.
 - Native lifecycle `status: "succeeded"` acknowledges the operation, not cleanup. Compact stop results stay warnings while cleanup is pending or quarantined.
-- Explicit stop may reverify transport cleanup only when `cleanup.recovery` is `stop`, including on terminal runs; Activity and the fleet expose this without restarting the task. Manual recovery covers unknown finalizers, incomplete descendant snapshots, and uncertain lease failures.
+- Explicit stop may reverify transport cleanup only when `cleanup.recovery` is `stop`, including on terminal runs; Activity exposes this without restarting the task. Manual recovery covers unknown finalizers, incomplete descendant snapshots, and uncertain lease failures.
 - Cleanup quarantine never recommends stopping healthy pool peers.
 
 Cancellation and ownership:
@@ -266,7 +259,7 @@ Shared rules for registration, replay, compact issues, and expansion are in [too
 - `tools/schema.ts` holds the tool catalogs: the management tools' parameter schemas plus any cross-field validator, and the agent tools' schemas. Root execution and the nested-Pi wire carry the same `{ tool, args }` input.
 - Each `prepareArguments` hook drops null and blank optional fields, validates and coerces as Pi does, rejects blank required strings, and returns `[invalid_arguments]` lists naming allowed values and likely replacements for unknown fields.
 - `execute-result.ts` separates model text, persisted details, and script results.
-- Model text is compact. A start lists one bounded entry per launch (`id name · profile · runtime/model:effort`, plus `worktree <id>` for an isolated writer, and its route warning), or the launch's failure and recovery. Await and lifecycle results give one [run block](#model-facing-run-blocks) per run, and an await adds the whole reports that fit after them. A read is the detail surface: its card is a header line, then the fields that need attention (parent, a failed run's next candidate, a cwd other than the caller's, route warnings, worktree proposal with its files, quarantined cleanup, warnings, the whole failure and pending question), followed by the latest message, the report's file with its retained copy, or an unsaved report. `agent_read` with `verbose` adds route selection, context, capabilities, process, cwd, and timing. Pending cleanup is never reported; only quarantine is.
+- Model text is compact. A start lists one bounded entry per launch (`id name · profile · provider/model:effort`, plus `worktree <id>` for an isolated writer, and its route warning), or the launch's failure and recovery. Await and lifecycle results give one [run block](#model-facing-run-blocks) per run, and an await adds the whole reports that fit after them. A read is the detail surface: its card is a header line, then the fields that need attention (parent, a failed run's next candidate, a cwd other than the caller's, route warnings, worktree proposal with its files, quarantined cleanup, warnings, the whole failure and pending question), followed by the latest message, the report's file with its retained copy, or an unsaved report. `agent_read` with `verbose` adds route selection, context, capabilities, process, cwd, and timing. Pending cleanup is never reported; only quarantine is.
 - A worktree writer's proposal is stated once, as `proposal: N files, +A −D · agent_worktree apply workspaceId=…`, in cards, `agent_list` lines, issue details, and notifications. Once applied or discarded, it reads `workspace applied` or `workspace discarded`.
 - `agent_worktree` pages complete immutable diffs and keeps patches out of persisted details. Its producers record display spans while composing output, so expansion never parses text.
 - `boundary/host-tool-result.ts` owns the receipts that set Pi's error flag, including decoded child-proxy results, and tracks call provenance from native events, never arguments. Unknown provenance fails closed.
@@ -276,7 +269,6 @@ Shared rules for registration, replay, compact issues, and expansion are in [too
 - All eight root tools and the child proxies use the shared presentation shell and the shared compact setting, projected from decoded domain details.
 - Pi parses malformed tool-call JSON as `{}` and refuses to run the call; while `isRejectedEmptyCall` holds, preview headings show only the tool's label instead of describing argument defaults, and the shared argument issue explains the rejection.
 - `agent_contact_parent` uses content-only callbacks; arbitrary replies stay verbatim, prefixed once with `PARENT_REPLY_PREFIX`. Warning calls keep the full warning as issue detail; settled questions and replies decline compaction.
-- The five supervisor tools are served over private MCP and have no Pi renderer.
 
 ### Compact issues
 
@@ -292,15 +284,14 @@ Shared rules for registration, replay, compact issues, and expansion are in [too
 
 `application/messages.ts` registers root and child message renderers. Each row shows typed counts and a lone run's name, with full content on expansion. `host-notifier.ts` attaches display metadata without altering content, delivery keys, or acknowledgement. A completed worktree writer's block carries its proposal line, which names the workspace ID and adds the change counts once they are known.
 
-## Activity provider and fleet
+## Activity provider
 
 - `boundary/host-activity.ts` registers the root's Cosmic UI Activity provider. Pure `ui/run-activity.ts` projects the complete authorized root tree, including terminal history, into items, details, and action policy.
 - Launch leases appear as provider count metadata and await leases as row metadata, without synthetic rows or moving run ownership.
 - Each item's revision hashes its published fields, plus assignment and question identity for runs, so unrelated progress never makes an action stale.
 - Credentials are redacted before summaries or details leave the producer.
 - Actions recheck cancellation, session token, item revision, and capabilities before reaching the service. Destructive actions declare their confirmation scope, including descendant shutdown for stop.
-- Message, reply, rename, and resume hand off to the abort-aware Pi input boundary after the manager closes. Post-input checks compare captured assignment and question identity and current capabilities, not the item revision. Stop and interrupt run in place.
-- Rename belongs to the user: it changes only the root-owned display name, for any runtime, and never reaches the child.
+- Message, reply, rename, and resume hand off to the abort-aware Pi input boundary after the manager closes. Post-input checks compare captured assignment and question identity and current capabilities, not the item revision. Stop and interrupt run in place. Every action carries the epoch, session, state, and question identity it captured, rechecked under the run lock.
+- Rename belongs to the user: it changes only the root-owned display name and never reaches the child.
 - Parent-contact questions target the parent, never the user. Pauses and missing-question waits remain blocked rows.
-- `host-ui.ts` removes the legacy widget only after Cosmic UI acknowledges its provider, and restores it if that acknowledgement is lost. `/subagents` falls back to the standalone fleet only when the unified manager is absent or unavailable before admission.
-- The full-screen fleet shows one parent-before-child hierarchy, expanded initially. Left/Right collapse or expand a subtree, and Enter inspects a run. Fleet actions carry the epoch, session, state, and question identity captured by their prompt, rechecked under the run lock.
+- `host-ui.ts` removes the legacy widget only after Cosmic UI acknowledges its provider, and restores it if that acknowledgement is lost. `/subagents` opens Activity, and shows a notice instead when Cosmic UI's Activity view is absent or unavailable.

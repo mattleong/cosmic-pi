@@ -8,10 +8,10 @@ import { executeAgentActionEffect } from "../../src/tools/execute-agents.ts";
 import { MAX_CONTACT_TEXT_CHARS } from "../../src/run/limits.ts";
 import {
   contactParentFrame,
-  fakeNativeReportBackendLayer,
+  fakeEventBackendLayer,
   localServiceFixture,
-  nativeReportRequest,
-  nativeReportServiceFixture,
+  eventBackendRequest,
+  eventBackendServiceFixture,
   request,
   runView,
   withService,
@@ -39,12 +39,12 @@ describe("run warnings", () => {
   it.effect("keeps an assignment's child and system warnings until the next assignment", () => {
     // A paused native run resumes in the same process, which can still emit the earlier
     // assignment's events.
-    const backend = fakeNativeReportBackendLayer({
+    const backend = fakeEventBackendLayer({
       capabilities: ["steer", "interrupt", "resume"],
     });
-    const { projections, notifications, layer } = nativeReportServiceFixture(backend);
+    const { projections, notifications, layer } = eventBackendServiceFixture(backend);
     return withService(layer, function* (service) {
-      const run = yield* service.start(nativeReportRequest({ name: "warned" }));
+      const run = yield* service.start(eventBackendRequest({ name: "warned" }));
       const control = backend.controls[0]!;
       const contact = (assignmentEpoch: number, kind: "progress" | "warning", message: string) =>
         control.offer({
@@ -81,9 +81,9 @@ describe("run warnings", () => {
       expect((yield* runView(service, run.id)).childWarning).toBeUndefined();
 
       contact(2, "warning", "Tests are flaky.");
-      control.offer({ type: "warning", message: "Guidance is unconfirmed." });
+      control.offer({ type: "warning", message: "Extension reloaded." });
       yield* yieldUntil(() => latest(projections)?.systemWarning !== undefined);
-      control.report(run.id, 1, "report-2", "Done.");
+      control.complete("Done.");
       yield* yieldUntil(() => latest(projections)?.state === "completed");
       yield* TestClock.adjust("100 millis");
       yield* yieldUntil(() => Arr.some(notifications, (notice) => notice.type === "completed"));
@@ -92,15 +92,15 @@ describe("run warnings", () => {
       );
       const folded = completed?.type === "completed" ? completed.runs[0]?.warning : undefined;
       expect(folded).toContain("Tests are flaky.");
-      expect(folded).toContain("Guidance is unconfirmed.");
+      expect(folded).toContain("Extension reloaded.");
       expect(folded).not.toContain("Stale warning.");
     });
   });
 
   it.effect("shows identical child and system warnings once, under the latest source", () => {
-    const { backend, projections, layer } = nativeReportServiceFixture();
+    const { backend, projections, layer } = eventBackendServiceFixture();
     return withService(layer, function* (service) {
-      const run = yield* service.start(nativeReportRequest({ name: "repeated" }));
+      const run = yield* service.start(eventBackendRequest({ name: "repeated" }));
       const warning = "The report was rejected.";
       backend.controls[0]!.offer({
         type: "supervisor_contact",
@@ -127,7 +127,7 @@ describe("run warnings", () => {
     const warning = `Start of the warning. ${Fn.pipe("w", Str.repeat(40_000))}`;
     const cutOf = `of ${warning.length.toLocaleString("en-US")} characters`;
     const pi = localServiceFixture();
-    const native = nativeReportServiceFixture();
+    const native = eventBackendServiceFixture();
     const retained = (projections: ReadonlyArray<SubagentProjection>) => {
       const kept = latest(projections)?.childWarning ?? "";
       expect(kept.length).toBeLessThanOrEqual(MAX_CONTACT_TEXT_CHARS);
@@ -142,7 +142,7 @@ describe("run warnings", () => {
         retained(pi.projections);
       });
       yield* withService(native.layer, function* (service) {
-        yield* service.start(nativeReportRequest({ name: "native-warned" }));
+        yield* service.start(eventBackendRequest({ name: "native-warned" }));
         native.backend.controls[0]?.offer({
           type: "supervisor_contact",
           assignmentEpoch: 1,

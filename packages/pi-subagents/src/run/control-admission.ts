@@ -17,6 +17,6 @@ export const requireControlExpectation = (
     : Effect.fail(
         invalidRequest(
           "run_control_changed",
-          "This subagent changed before the action could start. Refresh the fleet and try again.",
+          "This subagent changed before the action could start. Check its current state in Activity and try again.",
         ),
       );

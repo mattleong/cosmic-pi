@@ -1,25 +1,19 @@
 import { describe, expect, it } from "@effect/vitest";
-import { snapshotRun } from "../../src/run/internal.ts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import { processError } from "../../src/run/errors.ts";
 import { MAX_ERROR_CHARS } from "../../src/run/state.ts";
-import { makeTestSettlement, runningAssignment, runRecordFixture } from "./fixtures/run-context.ts";
-import { view } from "../tools/fixtures/tool-harness.ts";
-import { emptyUsage } from "../../src/run/model.ts";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import {
   assistantMessageEndFrame,
   awaitObservations,
   awaitRuns,
-  fakeNativeReportBackendLayer,
-  inputDeliveryFrame,
+  fakeEventBackendLayer,
   localServiceFixture,
-  nativeReportFrame,
-  nativeReportRequest,
-  nativeReportServiceFixture,
+  eventBackendRequest,
+  eventBackendServiceFixture,
   request,
   runView,
   withService,
@@ -101,7 +95,7 @@ describe("local Pi terminal evidence", () => {
 const rawPrimary = () =>
   processError(
     "steer",
-    "steer_outcome_uncertain",
+    "guidance_outcome_uncertain",
     `Primary acknowledgement failure token=secret-credential \u001b[31m${Fn.pipe("x", Str.repeat(9000))}`,
   );
 
@@ -114,15 +108,15 @@ const expectSanitized = (text: string | undefined) => {
 };
 
 describe("primary failure privacy", () => {
-  for (const source of ["backend", "exit"] as const)
+  for (const source of ["protocol", "exit"] as const)
     it.effect(`redacts and bounds the primary ${source} error before public run projection`, () => {
-      const { backend, projections, layer } = nativeReportServiceFixture();
+      const { backend, projections, layer } = eventBackendServiceFixture();
       return withService(layer, function* (service) {
-        const run = yield* service.start(nativeReportRequest());
+        const run = yield* service.start(eventBackendRequest());
         const primary = rawPrimary();
         backend.controls[0]!.offer(
-          source === "backend"
-            ? { type: "backend_failure", error: primary }
+          source === "protocol"
+            ? { type: "protocol_error", message: primary.message }
             : { type: "exit", exitCode: null, diagnostic: "generic exit", failure: primary },
         );
         yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
@@ -136,52 +130,20 @@ describe("primary failure privacy", () => {
 });
 
 describe("SubagentService", () => {
-  it.effect("stale guidance acknowledgements cannot resolve a newer same-epoch delivery", () => {
-    const { backend, projections, layer } = nativeReportServiceFixture();
-    return withService(layer, function* (service) {
-      const run = yield* service.start(nativeReportRequest());
-      const control = backend.controls[0]!;
-      control.offer(inputDeliveryFrame(1, 1, "pending"));
-      control.offer(inputDeliveryFrame(1, 1, "confirmed"));
-      control.offer(inputDeliveryFrame(1, 2, "pending"));
-      control.offer(inputDeliveryFrame(1, 1, "confirmed"));
-      control.offer(inputDeliveryFrame(2, 3, "confirmed"));
-      control.offer({
-        type: "supervisor_contact",
-        assignmentEpoch: 1,
-        requestId: "after-stale",
-        kind: "progress",
-        message: "After stale evidence",
-      });
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.progress === "After stale evidence");
-      expect((yield* runView(service, run.id)).steeringDelivery).toBe("pending");
-      control.offer(inputDeliveryFrame(1, 2, "confirmed"));
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.steeringDelivery === "confirmed");
-      expect((yield* runView(service, run.id)).state).toBe("running");
-    });
-  });
   it.effect(
     "keeps a report arriving during start admission queued for exact-once await delivery",
     () => {
       const report = "Report completed while prompt admission was in flight.";
       const initialStartGate = Deferred.makeUnsafe<void>();
-      const { backend, projections, notifications, layer } = nativeReportServiceFixture(
-        fakeNativeReportBackendLayer({ initialStartGate }),
+      const { backend, projections, notifications, layer } = eventBackendServiceFixture(
+        fakeEventBackendLayer({ initialStartGate }),
       );
       return withService(layer, function* (service) {
         const starting = yield* service
-          .startSessionOwned(nativeReportRequest({ name: "fast-report" }))
+          .startSessionOwned(eventBackendRequest({ name: "fast-report" }))
           .pipe(Effect.forkScoped);
         yield* yieldUntil(() => backend.controls[0]?.assignmentEpochs[0] === 1);
-        const id = projections.at(-1)?.runs[0]?.id;
-        expect(id).toBeDefined();
-        backend.controls[0]?.offer({
-          type: "assistant_message",
-          assignmentEpoch: 1,
-          text: report,
-          usage: { ...emptyUsage(), cost: 0 },
-        });
-        backend.controls[0]?.offer(nativeReportFrame(id!, 1, 1, "report-during-start", report));
+        backend.controls[0]?.complete(report);
         yield* yieldUntil(() =>
           Arr.last(projections).pipe(
             Option.flatMap((projection) => Arr.head(projection.runs)),
@@ -257,13 +219,13 @@ describe("SubagentService", () => {
   );
 
   it.effect("ignores a report after terminal failure", () => {
-    const { backend, projections, layer } = nativeReportServiceFixture();
+    const { backend, projections, layer } = eventBackendServiceFixture();
     return withService(layer, function* (service) {
-      const run = yield* service.start(nativeReportRequest());
+      const run = yield* service.start(eventBackendRequest());
       const control = backend.controls[0]!;
       control.offer({ type: "protocol_error", message: "Process failed before report." });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
-      control.offer(nativeReportFrame(run.id, 1, 1, "late", "Must not resurrect the run."));
+      control.complete("Must not resurrect the run.");
       for (let i = 0; i < 10; i++) yield* Effect.yieldNow;
       expect(yield* runView(service, run.id)).toMatchObject({
         state: "failed",
@@ -274,17 +236,13 @@ describe("SubagentService", () => {
 
   it.effect("commits an initial report only after the matching start command confirms", () => {
     const initialStartGate = Deferred.makeUnsafe<void>();
-    const { backend, projections, layer } = nativeReportServiceFixture(
-      fakeNativeReportBackendLayer({ initialStartGate }),
+    const { backend, projections, layer } = eventBackendServiceFixture(
+      fakeEventBackendLayer({ initialStartGate }),
     );
     return withService(layer, function* (service) {
-      const starting = yield* service.start(nativeReportRequest()).pipe(Effect.forkScoped);
+      const starting = yield* service.start(eventBackendRequest()).pipe(Effect.forkScoped);
       yield* yieldUntil(() => backend.controls[0]?.assignmentEpochs[0] === 1);
-      const id = projections.at(-1)?.runs[0]?.id;
-      expect(id).toBeDefined();
-      backend.controls[0]?.offer(
-        nativeReportFrame(id!, 1, 1, "initial-in-flight", "Fast initial report."),
-      );
+      backend.controls[0]?.complete("Fast initial report.");
       yield* Effect.yieldNow;
       expect(projections.at(-1)?.runs[0]?.state).not.toBe("completed");
       yield* Deferred.succeed(initialStartGate, undefined);
@@ -296,51 +254,11 @@ describe("SubagentService", () => {
     });
   });
 
-  it.effect("rejects conflicting report sequences without poisoning a valid later delivery", () =>
-    Effect.gen(function* () {
-      const first = { assignmentEpoch: 1, sequence: 1, deliveryId: "first" };
-      const record = yield* runRecordFixture({
-        view: view({ state: "running" }),
-        stoppedByParent: false,
-        warningSlots: {},
-        assignment: runningAssignment(2),
-        lastBackendReport: first,
-      });
-      const settlement = yield* makeTestSettlement();
-      yield* settlement.acceptBackendReport(record, {
-        runId: record.view.id,
-        assignmentEpoch: 2,
-        sequence: 1,
-        deliveryId: "conflicting",
-        text: "Must not commit.",
-      });
-      expect(snapshotRun(record).warning).toContain("reused delivery identity");
-      expect(record.lastBackendReport).toEqual(first);
-      expect(record.view.reportGeneration).toBe(0);
-      record.assignment.phase = "issuing";
-      const valid = {
-        runId: record.view.id,
-        assignmentEpoch: 2,
-        sequence: 2,
-        deliveryId: "second",
-        text: "Valid buffered report.",
-      };
-      yield* settlement.acceptBackendReport(record, valid);
-      expect(record.assignment.pendingReport).toEqual(valid);
-      expect(record.lastBackendReport?.sequence).toBe(1);
-    }),
-  );
-
   it.effect("keeps an atomically committed completed report deliverable after stop", () => {
-    const { backend, projections, notifications, layer } = nativeReportServiceFixture();
+    const { backend, projections, notifications, layer } = eventBackendServiceFixture();
     return withService(layer, function* (service) {
-      const run = yield* service.start(nativeReportRequest());
-      backend.controls[0]?.report(
-        run.id,
-        1,
-        "committed-before-stop",
-        "Committed before event-fiber cleanup.",
-      );
+      const run = yield* service.start(eventBackendRequest());
+      backend.controls[0]?.complete("Committed before event-fiber cleanup.");
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
       expect((yield* service.stop(run.id)).state).toBe("completed");
       expect(backend.controls[0]?.released()).toBe(1);
@@ -361,10 +279,10 @@ describe("SubagentService", () => {
   });
 
   it.effect("closes an active native backend on session shutdown", () => {
-    const { backend, layer } = nativeReportServiceFixture();
+    const { backend, layer } = eventBackendServiceFixture();
     return Effect.gen(function* () {
       const run = yield* withService(layer, function* (service) {
-        const started = yield* service.start(nativeReportRequest());
+        const started = yield* service.start(eventBackendRequest());
         expect(backend.controls[0]!.released()).toBe(0);
         return started;
       });

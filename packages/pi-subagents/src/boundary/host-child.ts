@@ -30,7 +30,6 @@ import { safeTextPrefix } from "pi-cosmic-core/text";
 import { registerSubagentMessageRenderers } from "../application/messages.ts";
 import type { LocalPiContact, LocalPiParentControl } from "../backend/local-pi-protocol.ts";
 import { MAX_PARENT_MESSAGE_CHARS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
-import { PARENT_REPLY_PREFIX } from "../supervisor/protocol.ts";
 import { clipUtf8Text } from "../run/state.ts";
 import {
   AGENT_TOOL_NAME,
@@ -70,7 +69,6 @@ import {
   consumeRuntimeApiCredentials,
   registerChildPiFastModeHook,
 } from "./host-child-pi.ts";
-import { registerForkPromptCacheHooks } from "./fork-prompt-cache.ts";
 import { registerChildSettle } from "./host-child-settle.ts";
 import { parentCorrelations, parentContactRejection } from "./host-child-correlation.ts";
 import {
@@ -79,6 +77,7 @@ import {
   type LocalPiChildIpcChannel,
 } from "./local-pi-ipc.ts";
 
+const PARENT_REPLY_PREFIX = "Parent reply: ";
 const MAX_TOOL_REPLY_BYTES = MAX_TOOL_OUTPUT_CHARS - PARENT_REPLY_PREFIX.length;
 // Every private name is removed on deactivation, whichever surface this child registered.
 const CHILD_PRIVATE_TOOL_NAME_SET: ReadonlySet<string> = new Set([
@@ -486,7 +485,6 @@ export function registerSubagentChildBridge(
   });
 
   registerChildPiFastModeHook(pi, () => pi.getFlag("pi-subagents-fast-mode") === true);
-  registerForkPromptCacheHooks(pi, process.env);
 
   pi.on("session_start", (_event, ctx) => {
     deactivate(currentSession);

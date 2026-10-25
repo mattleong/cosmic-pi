@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Schema from "effect/Schema";
 import type { JsonObject } from "pi-cosmic-core";
-import { describe, expect, vi } from "vitest";
+import { describe, expect } from "vitest";
 import { childToolPolicy } from "../../src/boundary/child-process.ts";
 import { PROFILE_DEFINITIONS } from "../../src/profiles/definitions.ts";
 import { PROFILE_IDS } from "../../src/profiles/model.ts";
@@ -27,7 +27,6 @@ import {
   invokeOptionalTool,
   profileServiceFor,
   startCapturingService,
-  testBackendRegistry,
   view,
   type CaptureOptions,
 } from "./fixtures/tool-harness.ts";
@@ -49,7 +48,8 @@ const decodeStartSchema = Schema.decodeUnknownSync(
 );
 
 const piParent = declaredCandidate("parent", { effort: "default" });
-const claudeOpus = declaredCandidate("opus", { runtime: "claude", effort: "high" });
+// No model the session offers, so planning skips it.
+const piMissing = declaredCandidate("openai/missing", { effort: "high" });
 
 const agentDefinition = (fields: JsonObject = {}): JsonObject => ({
   description: "Reviews auth changes against the threat model.",
@@ -81,11 +81,6 @@ const issueStyleProblems = (issues: ReturnType<typeof compactIssues>) =>
 
 const agentProperty = (parameters: TSchema | undefined) =>
   decodeStartSchema(parameters).properties.agents.items.properties.agent;
-
-const countingRegistry = () => {
-  const preflight = vi.fn(testBackendRegistry.preflight);
-  return { preflight, registry: { ...testBackendRegistry, preflight } };
-};
 
 describe("custom agent launches", () => {
   effectTest(
@@ -125,28 +120,6 @@ describe("custom agent launches", () => {
       });
     },
   );
-
-  effectTest("skips candidates the agent's overrides don't fit, with a typed reason", function* () {
-    const requests: StartSubagentRequest[] = [];
-    const { preflight, registry } = countingRegistry();
-    const profiles = servicesWith({ forked: agentDefinition({ context: "fork" }) }, [
-      claudeOpus,
-      piParent,
-    ]);
-    yield* invokeOptionalTool(startWith(requests, { profiles, registry }), {
-      agents: [{ task: "Recheck the decision", agent: "forked" }],
-    });
-
-    expect(Arr.map(preflight.mock.calls, ([selection]) => selection.runtime)).toEqual(["pi"]);
-    expect(requests[0]).toMatchObject({
-      runtime: "pi",
-      context: "fork",
-      selection: {
-        candidateIndex: 1,
-        skippedCandidates: [{ candidateIndex: 0, code: "agent_candidate_incompatible" }],
-      },
-    });
-  });
 
   effectTest(
     "refuses a worktree for a read-only route and ignores a shared checkout, with a warning",
@@ -192,37 +165,6 @@ describe("custom agent launches", () => {
       expect(requests[2]?.selection?.warning).toBeUndefined();
     },
   );
-
-  effectTest("skips Claude candidates when the agent sets tool lists", function* () {
-    const requests: StartSubagentRequest[] = [];
-    const { preflight, registry } = countingRegistry();
-    const profiles = profileServiceFor({
-      profiles: {
-        reviewer: [claudeOpus, piParent],
-        scout: claudeOpus,
-      },
-      agents: {
-        restricted: agentDefinition({ tools: { deny: ["bash"] } }),
-        "claude-only": agentDefinition({ profile: "scout", tools: { allow: ["read"] } }),
-      },
-    });
-    const result = yield* invokeOptionalTool(startWith(requests, { profiles, registry }), {
-      agents: [
-        { task: "Review", agent: "restricted" },
-        { task: "Map", agent: "claude-only" },
-      ],
-    });
-
-    expect(Arr.map(preflight.mock.calls, ([selection]) => selection.runtime)).toEqual(["pi"]);
-    expect(requests).toHaveLength(1);
-    expect(requests[0]).toMatchObject({
-      runtime: "pi",
-      selection: { skippedCandidates: [{ code: "agent_tools_unsupported" }] },
-    });
-    expect(decodeStartDetails(result?.details).startFailures).toMatchObject([
-      { index: 1, code: "profile_no_eligible_model" },
-    ]);
-  });
 
   effectTest(
     "filters the Pi child's inherited tools but keeps its supervision tools",
@@ -367,9 +309,9 @@ describe("custom agent launches", () => {
         {
           task: "Implement",
           agent: "writer",
-          model: { runtime: "pi", model: "openai-codex/gpt-5.6-sol" },
+          model: { model: "openai-codex/gpt-5.6-sol" },
         },
-        { task: "Review", agent: "tooled", model: { runtime: "claude", model: "opus" } },
+        { task: "Review", agent: "tooled", model: { model: "opus" } },
       ],
     });
     expect(requests).toHaveLength(1);
@@ -435,10 +377,10 @@ describe("custom agent status", () => {
 describe("custom agent discovery", () => {
   effectTest("shows each agent with its overridden candidates and invalid entries", function* () {
     const profiles = profileServiceFor({
-      profiles: { reviewer: [claudeOpus, piParent], scout: claudeOpus },
+      profiles: { reviewer: [piMissing, piParent], scout: piMissing },
       agents: {
         restricted: agentDefinition({ effort: "low", tools: { deny: ["bash"] } }),
-        "claude-only": agentDefinition({ profile: "scout", tools: { allow: ["read"] } }),
+        unrouted: agentDefinition({ profile: "scout", tools: { allow: ["read"] } }),
         broken: agentDefinition({ unknown: true }),
       },
     });
@@ -455,24 +397,25 @@ describe("custom agent discovery", () => {
         effort: "low",
         deniedToolCount: 1,
         candidates: [
-          expect.objectContaining({ runtime: "claude", status: "skipped" }),
-          expect.objectContaining({ runtime: "pi", effort: "low", status: "eligible" }),
+          expect.objectContaining({ model: "openai/missing", effort: "low", status: "skipped" }),
+          expect.objectContaining({ model: "parent", effort: "low", status: "eligible" }),
         ],
       }),
       expect.objectContaining({
-        name: "claude-only",
-        candidates: [expect.objectContaining({ runtime: "claude", status: "skipped" })],
+        name: "unrouted",
+        candidates: [expect.objectContaining({ model: "openai/missing", status: "skipped" })],
       }),
     ]);
     const issues = compactIssues("agent_profiles", {}, details);
     expect(Arr.map(issues, (issue) => issue.code)).toEqual([
-      "agent:claude-only:unavailable",
+      "profile:scout:unavailable",
+      "agent:unrouted:unavailable",
       "agents:invalid",
     ]);
     expect(issueStyleProblems(issues)).toEqual([]);
     expect(details.invalidAgents).toEqual([{ scope: "global", name: "broken" }]);
     expect(result?.structuredContent).toMatchObject({
-      agents: [{ name: "restricted", tools: { deny: ["bash"] } }, { name: "claude-only" }],
+      agents: [{ name: "restricted", tools: { deny: ["bash"] } }, { name: "unrouted" }],
       invalidAgents: [{ scope: "global", name: "broken" }],
     });
   });
@@ -548,7 +491,6 @@ describe("adopted workspaces launched as custom agents", () => {
       profile: "worker",
       name: "fixer",
       task: "Fix the failing test",
-      runtime: "pi",
       effort: "low",
       writeIntent: "writer",
       writerWorkspaceModeOverride: "worktree",

@@ -5,7 +5,7 @@ import { ChildProcess } from "../../src/boundary/child-process.ts";
 import { nodeSpawn } from "../support/node-builtins.ts";
 import { detachedDescendantGroups, terminateProcessTree } from "../../src/boundary/process-tree.ts";
 import type { ProcessTransportRuntime } from "../../src/boundary/process-transport.ts";
-import { backendLaunch } from "./backend-supervisor.ts";
+import { backendLaunch } from "./backend-launch.ts";
 
 // Starts a subagent child through the real launch boundary, then exits the way Pi's crash paths
 // do: without closing scopes. The child keeps the launch's spawn options but runs a shell whose

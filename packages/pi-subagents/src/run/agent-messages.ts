@@ -32,7 +32,6 @@ import {
   agentMessageRefusal,
   callerNotRegistered,
   invalidRequest,
-  isPendingSteerDelivery,
   type InvalidSubagentRequestError,
   type SubagentError,
   type SubagentRuntimeClosedError,
@@ -158,7 +157,7 @@ const deliverToMain = Effect.fn("SubagentMessages.deliverToMain")(function* (
       "agent_unavailable",
       "The main agent's session is no longer accepting messages.",
     );
-  return { disposition: "guided" as const, confirmed: true, mainState: disposition };
+  return { disposition: "guided" as const, mainState: disposition };
 });
 
 /**
@@ -330,13 +329,11 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
     to: string,
     text: string,
   ): Effect.Effect<Omit<AgentSendResult, "messageId" | "to">, SubagentError> => {
-    const { sender, record } = claimed;
+    const { sender } = claimed;
     const recordReceived = (received: RunRecord, delivery: SubagentSendDelivery, now: number) =>
       sender
         ? recordMessageLocked(received, "in", sender.id, text, now)
         : recordUserMessageLocked(received, delivery, text, now);
-    // Guidance still being confirmed may already have arrived, so it is reported, not failed,
-    // and recorded on the receiver as the sender records it.
     return dependencies
       .deliverToRun(
         to,
@@ -352,30 +349,9 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
           (outcome): Omit<AgentSendResult, "messageId" | "to"> => ({
             name: outcome.run.name,
             disposition: outcome.delivery,
-            confirmed: true,
             ...(parked(outcome.delivery, outcome.run) && { parked: true }),
             run: outcome.run,
           }),
-        ),
-        Effect.catchIf(isPendingSteerDelivery, () =>
-          Clock.currentTimeMillis.pipe(
-            Effect.flatMap((now) =>
-              withLock(
-                Effect.gen(function* () {
-                  recordReceived(record, "guided", now);
-                  yield* publish;
-                  const run = snapshotRun(record);
-                  return {
-                    name: run.name,
-                    disposition: "guided" as const,
-                    confirmed: false,
-                    ...(parked("guided", run) && { parked: true as const }),
-                    run,
-                  };
-                }),
-              ),
-            ),
-          ),
         ),
       );
   };
@@ -406,7 +382,7 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
         recordNoticeLocked: (record, now) =>
           recordMessageLocked(record, "in", sender.id, text, now),
       });
-      delivered = { name: run.name, disposition: "resumed", confirmed: true, run };
+      delivered = { name: run.name, disposition: "resumed", run };
     } else delivered = yield* deliverRunMessage(claimed, to, text);
     const { sender } = claimed;
     if (sender) {
@@ -451,9 +427,9 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
     });
 
   /**
-   * The user's message from Activity or the fleet, delivered like an agent's but as bare text: it
-   * answers a waiting run or steers a running one, never resumes one, and applies only while the
-   * run is as `expected` captured it.
+   * The user's message from Activity, delivered like an agent's but as bare text: it answers a
+   * waiting run or steers a running one, never resumes one, and applies only while the run is as
+   * `expected` captured it.
    */
   const sendFromUser = (
     id: string,

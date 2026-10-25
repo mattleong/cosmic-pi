@@ -1,11 +1,9 @@
-import { contentText, type SystemMessage } from "@earendil-works/pi-ai";
 import { nodeFsPromises, nodePath } from "pi-cosmic-core/platform/node-builtins";
 import { removePrivateTree } from "pi-cosmic-core/platform/private-file";
 import { sha256Text } from "pi-cosmic-core/security/sha256";
 import { synchronousRandomHex, synchronousRandomUuid } from "pi-cosmic-core/platform/native-crypto";
 import { fileURLToPath } from "node:url";
 import { isGitLocalEnvironmentKey } from "./git-local-environment.ts";
-import { FORK_PROMPT_CACHE_KEY_ENV, forkPromptCacheKey } from "./fork-prompt-cache.ts";
 import {
   getAgentDir,
   getPackageDir,
@@ -62,7 +60,6 @@ const BLOCKED_ENV_KEYS = new Set([
   "PI_SESSION_ID",
   RUNTIME_API_KEY_ENV,
   RUNTIME_API_PROVIDER_ENV,
-  FORK_PROMPT_CACHE_KEY_ENV,
 ]);
 
 export type ChildLaunchRequest = Omit<BackendLaunchRequest, "resumeToken"> & {
@@ -175,10 +172,6 @@ export function childProcessEnvironment(
     PI_SUBAGENT_CHILD: "1",
     PI_SUBAGENT_PARENT_SESSION: request.parentSessionId,
     PI_SUBAGENT_RUN_ID: request.runId,
-    ...(request.context === "fork" &&
-      request.sharesParentPromptCache && {
-        [FORK_PROMPT_CACHE_KEY_ENV]: forkPromptCacheKey(request.parentSessionId),
-      }),
     ...(request.runtimeApiKey && {
       [RUNTIME_API_KEY_ENV]: Redacted.value(request.runtimeApiKey),
       [RUNTIME_API_PROVIDER_ENV]: Fn.pipe(
@@ -204,20 +197,6 @@ const isSessionHeader = Schema.is(
 );
 const encodeJsonLine = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
-// A fork either keeps the parent's prompt state verbatim, so a same-model child's requests start
-// with the parent's cached prefix and its first prompt patch overrides every inherited section, or
-// replaces it with inert anchors.
-type ForkPromptState = "shared" | "isolated";
-
-const hasPromptText = (message: SystemMessage): boolean => contentText(message.content).length > 0;
-
-// Section patches cannot withdraw prompt text, and the child cannot replay encrypted checkpoints.
-const preventsPromptSharing = (entry: SessionEntry): boolean =>
-  (entry.type === "message" && entry.message.role === "system" && hasPromptText(entry.message)) ||
-  (entry.type === "compaction" &&
-    (isEncryptedWorkspaceCheckpoint(entry.details) ||
-      (entry.systemMessage !== undefined && hasPromptText(entry.systemMessage))));
-
 const forkAnchor = (entry: SessionEntry, parentId: string | null): SessionEntry => ({
   type: "custom",
   customType: "pi-subagents-fork-anchor",
@@ -226,18 +205,14 @@ const forkAnchor = (entry: SessionEntry, parentId: string | null): SessionEntry 
   timestamp: entry.timestamp,
 });
 
-const cloneEntry = (
-  entry: SessionEntry,
-  parentId: string | null,
-  prompt: ForkPromptState,
-): SessionEntry => {
+// The parent's prompt state never reaches the child: its system messages and encrypted checkpoints
+// become inert anchors, and Pi rebuilds the plaintext branch behind them.
+const cloneEntry = (entry: SessionEntry, parentId: string | null): SessionEntry => {
   if (
     entry.type === "label" ||
+    (entry.type === "message" && entry.message.role === "system") ||
     (entry.type === "compaction" && isEncryptedWorkspaceCheckpoint(entry.details))
   )
-    return forkAnchor(entry, parentId);
-  if (prompt === "shared") return { ...entry, parentId };
-  if (entry.type === "message" && entry.message.role === "system")
     return forkAnchor(entry, parentId);
   if (entry.type === "compaction") {
     const cloned = { ...entry, parentId };
@@ -289,13 +264,9 @@ export const createForkedSession = Effect.fn("ChildProcess.createForkedSession")
       cwd: request.cwd,
       parentSession: request.parentSessionFile,
     };
-    const prompt: ForkPromptState =
-      request.sharesParentPromptCache && !Arr.some(branch, preventsPromptSharing)
-        ? "shared"
-        : "isolated";
     let parentId: string | null = null;
     const entries = Arr.map(branch, (entry) => {
-      const cloned = cloneEntry(entry, parentId, prompt);
+      const cloned = cloneEntry(entry, parentId);
       parentId = cloned.id;
       return cloned;
     });
@@ -387,9 +358,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
       label: "Subagent RPC",
       error: processError,
       message: (value): ChildWireEvent => ({ type: "rpc_message", value }),
-      terminateOnParserOverflow: false,
       confirmDetachedDescendants: request.writeIntent === "writer",
-      synchronousWriteFailure: "not_sent",
       requestAbort: requestCooperativeAbort,
       attach: (child, offer) =>
         attachLocalPiParentIpc(child, {

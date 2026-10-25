@@ -1,4 +1,4 @@
-import { compactIssueSeverity, type CompactIssue } from "pi-code-previews";
+import type { CompactIssue } from "pi-code-previews";
 import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
 import * as Fn from "effect/Function";
 import type * as Schema from "effect/Schema";
@@ -146,7 +146,6 @@ const selected = {
   ...pending,
   status: "started",
   routeStatus: "selected",
-  runtime: "pi",
   model: "provider/model",
   effort: "low",
   openaiFastMode: false,
@@ -296,34 +295,10 @@ describe("await outcomes", () => {
 });
 
 describe("subagent compact semantic policy", () => {
-  it("treats pending and unresolved steering as delivery uncertainty, not worker failure", () => {
-    for (const steeringDelivery of ["pending", "unresolved"] as const) {
-      for (const state of ["running", "completed"] as const) {
-        const run = view({ steeringDelivery, state });
-        const summary = summarize("lifecycle", stoppedOf(run), "settled", {
-          action: "stop",
-          runIds: [run.id],
-        });
-        expect(summary?.outcome).toBe("uncertain");
-        expect(compactIssueSeverity(summary?.issues)).toBe("warning");
-        expect(issueDetails(summary?.issues)).toContain(`steeringDelivery=${steeringDelivery}`);
-        expect(issueDetails(summary?.issues)).toContain("Do not resend");
-        expect(messages(summary?.issues)).not.toContain("failed");
-      }
-    }
-    for (const steeringDelivery of ["confirmed", "not-sent", "report-unconfirmed"] as const) {
-      const summary = summarize("lifecycle", stoppedOf({ steeringDelivery }), "settled", {
-        action: "stop",
-        runIds: ["agent-1"],
-      });
-      expect(summary?.outcome).toBe(steeringDelivery === "confirmed" ? "success" : "warning");
-      expect(issueDetails(summary?.issues)).toContain(`steeringDelivery=${steeringDelivery}`);
-    }
-  });
   it("never advises resending or retrying an unconfirmed action", () => {
     for (const code of [
       "interrupt_outcome_uncertain",
-      "claude_steering_outcome_uncertain",
+      "guidance_outcome_uncertain",
       "stop_cleanup_unconfirmed",
       "writer_lease_cleanup_unconfirmed",
     ]) {
@@ -368,17 +343,13 @@ describe("subagent compact semantic policy", () => {
           ...view().selection,
           skippedCandidates: [
             {
-              candidate: { runtime: "pi", model: "alt", effort: "high" },
+              candidate: { model: "alt", effort: "high" },
               code: "pi_model_unknown",
               reason: "Missing",
             },
           ],
         },
       },
-      ...Arr.map(
-        ["pending", "confirmed", "not-sent", "report-unconfirmed", "unresolved"] as const,
-        (steeringDelivery) => ({ steeringDelivery }),
-      ),
       {
         state: "completed",
         finalText: "Done",
@@ -440,7 +411,7 @@ describe("subagent compact semantic policy", () => {
               admittedRun: {
                 runId: id,
                 cleanupDisposition,
-                nextCandidate: { runtime: "pi", model: "openai/next", effort: "high" },
+                nextCandidate: { model: "openai/next", effort: "high" },
                 failureFile: { path: failurePath, chars: 900, lines: 3, complete: true },
                 warning: "System warning: Provider rate limit reached; retried twice.",
               },
@@ -469,7 +440,7 @@ describe("failure recovery routing", () => {
 
   it("recovers a paused run that can't resume by stopping and replacing it", () => {
     const [issue] = agentFailureIssues(
-      "[agent_resume_unsupported] Agent agent-0000000007 on local/claude is paused and cannot be resumed.",
+      "[agent_resume_unsupported] Agent agent-0000000007 is paused and cannot be resumed.",
       "send",
       "The agent",
     );

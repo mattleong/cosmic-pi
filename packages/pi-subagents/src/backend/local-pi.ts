@@ -474,7 +474,6 @@ export const localPiBackendDriver = (
   // Children run on Pi's Node binary; a fake child boundary that never starts Node replaces the check.
   nodeExecutableCheck: Effect.Effect<void, InvalidSubagentRequestError> = requireNodeExecutable(),
 ): BackendDriver => ({
-  runtime: "pi",
   capabilities: PI_SUBAGENT_CAPABILITIES,
   supportsContext: (context) => context === "fresh" || context === "fork",
   preflight: (request) =>

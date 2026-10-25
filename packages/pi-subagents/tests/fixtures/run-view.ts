@@ -20,7 +20,6 @@ export const view = (overrides: Partial<SubagentRunView> = {}): SubagentRunView 
   context: "fresh",
   writeIntent: "read-only",
   openaiFastMode: false,
-  runtime: "pi",
   reportGeneration: 0,
   assignmentEpoch: 1,
   capabilities: ["steer", "interrupt", "resume", "parent-contact", "peer-notice", "native-fork"],

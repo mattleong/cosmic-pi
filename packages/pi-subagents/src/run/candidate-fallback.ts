@@ -1,7 +1,6 @@
 import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import type * as Scope from "effect/Scope";
 import * as Str from "effect/String";
@@ -20,50 +19,19 @@ import { MAX_ERROR_CHARS, sanitizeDiagnosticText } from "./state.ts";
 import { recordRunWarning } from "./warnings.ts";
 
 /**
- * Startup failures of the candidate itself: the runtime can't run its model or effort, or refused
- * to initialize with them. The route's next candidate may still start.
+ * Startup failures of the candidate itself: no loaded provider offers its model, or the child chose
+ * another model or effort. The route's next candidate may still start.
  */
 const CANDIDATE_STARTUP_FAILURE_CODES: ReadonlySet<string> = new Set([
-  // Local Pi: no loaded provider offers the model, or the child chose another model or effort.
   "pi_model_not_found",
   "pi_model_mismatch",
   "pi_effort_unsupported",
-  // Claude Code chose another model, or refused initialization of the CLI launched with it.
-  "claude_model_mismatch",
-  "initialize_rejected",
 ]);
-
-/**
- * Startup failures of the runtime rather than the candidate: its process exited, or its handshake
- * or private supervisor server failed. Its other candidates would fail the same way, so the launch
- * passes over all of them. Two are bounded waits that expired, Claude's native init event and its
- * supervisor server's connection, which a route therefore waits out at most once per runtime.
- */
-const RUNTIME_STARTUP_FAILURE_CODES: ReadonlySet<string> = new Set([
-  "local_claude_exited",
-  "claude_initialize_invalid",
-  "claude_native_init_missing",
-  "claude_native_init_invalid",
-  "mcp_status_rejected",
-  "claude_mcp_status_invalid",
-  "claude_supervisor_mcp_unavailable",
-  "claude_supervisor_tools_missing",
-]);
-
-/** How far a startup failure moves the launch: to the next candidate, or past its runtime. */
-export type StartupFailureScope = "candidate" | "runtime";
-
-const startupFailureScope = (code: string): StartupFailureScope | undefined =>
-  CANDIDATE_STARTUP_FAILURE_CODES.has(code)
-    ? "candidate"
-    : RUNTIME_STARTUP_FAILURE_CODES.has(code)
-      ? "runtime"
-      : undefined;
 
 /** A failed startup attempt on one candidate, and whether the launch may move past it. */
 export interface CandidateStartupFailure {
   readonly failure: SkippedProfileCandidate;
-  readonly fallBack?: StartupFailureScope | undefined;
+  readonly fallBack: boolean;
 }
 
 /**
@@ -92,18 +60,17 @@ export const candidateStartupFailureLocked = (
     attempt.routeFallback !== undefined &&
     record.assignment.phase === "preparing" &&
     record.view.state === "starting" &&
-    !record.stoppedByParent
-      ? startupFailureScope(code)
-      : undefined;
+    !record.stoppedByParent &&
+    CANDIDATE_STARTUP_FAILURE_CODES.has(code);
   // Settlements from the failed candidate's closing process stay pending instead of ending the run;
   // the next candidate's install or the start's failure releases them.
   if (fallBack) record.initialization ??= { settled: Deferred.makeUnsafe<void>() };
-  return { failure, ...(fallBack && { fallBack }) };
+  return { failure, fallBack };
 };
 
 /** A candidate as a failed run's next-candidate hint writes it. */
-const candidateLabel = ({ runtime, model, effort }: SkippedProfileCandidate["candidate"]) =>
-  `${runtime}/${model}${effort === "default" ? "" : `:${effort}`}`;
+const candidateLabel = ({ model, effort }: SkippedProfileCandidate["candidate"]) =>
+  `${model}${effort === "default" ? "" : `:${effort}`}`;
 
 const failureReason = ({ code, reason }: SkippedProfileCandidate): string =>
   `[${code}] ${firstLineMessage(reason, "startup failed")}`;
@@ -214,7 +181,6 @@ export const retargetRunLocked = (record: RunRecord, retarget: CandidateRetarget
   const notice = latest ? fallbackWarning([latest], label) : warning;
   record.view = {
     ...view,
-    runtime: next.runtime,
     model: next.model,
     effort: next.effort,
     context: next.context,
@@ -270,11 +236,8 @@ interface FallbackStopRecord {
   readonly failed: ReadonlyArray<SkippedProfileCandidate>;
   /** The candidates passed over before the stop, once the route lookup got that far. */
   readonly skippedCandidates?: ReadonlyArray<SkippedProfileCandidate> | undefined;
-  /**
-   * The failed run's next-candidate hint: kept, replaced, or dropped when suggesting any candidate
-   * would be unsafe.
-   */
-  readonly nextCandidate: SubagentNextCandidate | "keep" | "drop";
+  /** The failed run's next-candidate hint: kept or replaced. */
+  readonly nextCandidate: SubagentNextCandidate | "keep";
   readonly now: number;
 }
 
@@ -293,11 +256,7 @@ export const stopFallbackLocked = (record: RunRecord, stopped: FallbackStopRecor
     MAX_ERROR_CHARS,
   );
   const { nextCandidate: previous, ...view } = record.view;
-  const hint = Match.value(nextCandidate).pipe(
-    Match.when("keep", () => previous),
-    Match.when("drop", () => undefined),
-    Match.orElse((candidate) => candidate),
-  );
+  const hint = nextCandidate === "keep" ? previous : nextCandidate;
   record.view = {
     ...view,
     ...(skippedCandidates && {

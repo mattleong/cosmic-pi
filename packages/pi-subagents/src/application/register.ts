@@ -467,14 +467,7 @@ export function registerSubagentApplication(
             act: (id, request, signal, expected) =>
               slot.run(
                 SubagentService.use((service) =>
-                  runSubagentActivityAction(service, id, request, expected, () => {
-                    if (isCurrent())
-                      notifyAtHostBoundary(
-                        activation.ctx,
-                        "Guidance delivery is still pending",
-                        "warning",
-                      );
-                  }),
+                  runSubagentActivityAction(service, id, request, expected),
                 ),
                 signal,
               ),
@@ -494,7 +487,6 @@ export function registerSubagentApplication(
     });
 
   registerApplicationCommands(pi, {
-    bridge,
     run: slot.run,
     current: () => currentActivation,
     captureAuthority: slot.captureAuthority,

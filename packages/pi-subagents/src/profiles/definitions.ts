@@ -79,7 +79,6 @@ export const PROFILE_DEFINITIONS = {
 export const builtinProfileCandidate = (id: ProfileId): ProfileCandidate => {
   const definition = PROFILE_DEFINITIONS[id];
   return {
-    runtime: "pi",
     model: "parent",
     effort: "default",
     context: definition.defaultContext,

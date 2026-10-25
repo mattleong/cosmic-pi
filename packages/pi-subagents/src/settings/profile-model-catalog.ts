@@ -4,18 +4,13 @@ import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { freezeSnapshot } from "pi-cosmic-core/projection";
-import { sanitizeTerminalLine } from "pi-cosmic-core/security";
-import type { LocalCliRuntime } from "../boundary/local-cli-process.ts";
-import type { NativeRuntimeModel } from "../boundary/native-model-catalog.ts";
 import { decodeSubagentEffort, type SubagentEffort } from "../domain/routing.ts";
 import {
   isSafeNativeModelSelector,
   type ProfileCandidate,
   type ProfileId,
 } from "../profiles/model.ts";
-import { runtimeEfforts, runtimeLabel } from "./profile-route-editor.ts";
 import {
-  createNativeModelOptions,
   createPiModelOptions,
   retainUnavailableCurrent,
   type ProfileModelOption,
@@ -135,7 +130,6 @@ export interface CandidateModelPickerData {
   readonly choices: ReadonlyArray<ProfileModelOption>;
   readonly scopedChoices?: ReadonlyArray<ProfileModelOption> | undefined;
   readonly current: string;
-  readonly defaultSelector?: string | undefined;
   readonly context: ProfileModelPickerContext;
   readonly warning?: string | undefined;
 }
@@ -144,80 +138,14 @@ export interface CandidateModelPickerInput {
   readonly profile: ProfileId;
   readonly candidateIndex: number;
   readonly candidate: ProfileCandidate;
-  readonly listNativeModels: (
-    runtime: LocalCliRuntime,
-    signal?: AbortSignal,
-  ) => Promise<ReadonlyArray<NativeRuntimeModel>>;
   readonly piCatalog: ProfileModelCatalogSnapshot;
   readonly parentSelector?: string | undefined;
-  readonly signal?: AbortSignal | undefined;
-  readonly modelPending?: boolean | undefined;
 }
-
-const configuredNativeModel = (runtime: LocalCliRuntime, current: string): NativeRuntimeModel => ({
-  selector: current,
-  label: current,
-  description: "Current model",
-  supportedEfforts: runtimeEfforts(runtime),
-  isDefault: false,
-});
 
 const pickerContext = (input: CandidateModelPickerInput): ProfileModelPickerContext => ({
   profile: input.profile,
   candidateIndex: input.candidateIndex,
-  runtime: input.candidate.runtime,
 });
-
-interface NativeModelLoadFailure {
-  readonly models: ReadonlyArray<NativeRuntimeModel>;
-  readonly warning: string;
-}
-
-const loadNativeModels = (
-  input: CandidateModelPickerInput,
-  runtime: LocalCliRuntime,
-): Promise<CandidateModelPickerData> =>
-  Promise.resolve()
-    .then(() => input.listNativeModels(runtime, input.signal))
-    .then(
-      (advertised) => {
-        const models = Arr.filter(advertised, (model) => isSafeNativeModelSelector(model.selector));
-        return {
-          models,
-          warning:
-            models.length !== advertised.length
-              ? "Some model names could not be used safely and were left out."
-              : undefined,
-        };
-      },
-      (cause: unknown): NativeModelLoadFailure => ({
-        models: [],
-        warning: `${
-          cause instanceof Error
-            ? sanitizeTerminalLine(cause.message)
-            : `Could not load ${runtimeLabel(runtime)} models.`
-        }${input.modelPending ? "" : " Showing the current model instead."}`,
-      }),
-    )
-    .then(({ models, warning }) => {
-      const current = input.modelPending ? undefined : input.candidate.model;
-      const catalog = new Map<string, NativeRuntimeModel>();
-      for (const model of [
-        ...models,
-        ...(current ? [configuredNativeModel(runtime, current)] : []),
-      ])
-        if (!catalog.has(model.selector)) catalog.set(model.selector, model);
-      const base = {
-        choices: createNativeModelOptions([...catalog.values()], current),
-        current: input.candidate.model,
-        defaultSelector:
-          Option.getOrUndefined(Arr.findFirst(models, (model) => model.isDefault))?.selector ??
-          models[0]?.selector ??
-          input.candidate.model,
-        context: pickerContext(input),
-      };
-      return warning ? { ...base, warning: sanitizeTerminalLine(warning) } : base;
-    });
 
 type PiModelOptionsInput = Pick<
   CandidateModelPickerInput,
@@ -239,17 +167,14 @@ const piModelOptions = (
 export const supportedPiEfforts = (
   input: PiModelOptionsInput,
 ): ReadonlyArray<SubagentEffort> | undefined =>
-  input.candidate.runtime === "pi"
-    ? Option.getOrUndefined(
-        Arr.findFirst(piModelOptions(input), (option) => option.selector === input.candidate.model),
-      )?.supportedEfforts
-    : undefined;
+  Option.getOrUndefined(
+    Arr.findFirst(piModelOptions(input), (option) => option.selector === input.candidate.model),
+  )?.supportedEfforts;
 
 export function loadCandidateModelPicker(
   input: CandidateModelPickerInput,
 ): Promise<CandidateModelPickerData> {
   const candidate = input.candidate;
-  if (candidate.runtime !== "pi") return loadNativeModels(input, candidate.runtime);
   const snapshot = input.piCatalog;
   const optionsFor = (models: ReadonlyArray<ProjectedPiModel>) =>
     retainUnavailableCurrent(candidate.model, piModelOptions(input, models));

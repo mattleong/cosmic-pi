@@ -103,18 +103,12 @@ describe("report files saved during settlement", () => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect("saves a buffered report's file when its assignment activates", () =>
+  it.effect("saves a buffered settlement's file when its assignment activates", () =>
     Effect.gen(function* () {
       const gate = yield* gatedReportArchive;
-      const { record, settlement } = yield* fixture(gate.archive);
+      const { record, settle, settlement } = yield* fixture(gate.archive);
       record.assignment = { ...runningAssignment(1), phase: "issuing", outcomeUncertain: true };
-      yield* settlement.acceptBackendReport(record, {
-        runId: record.view.id,
-        assignmentEpoch: 1,
-        sequence: 1,
-        deliveryId: "buffered",
-        text: "Buffered report.",
-      });
+      yield* settle("Buffered report.");
       expect(gate.saved).toEqual([]);
 
       const activating = yield* Effect.forkChild(settlement.runStartedFromBackend(record, 1));

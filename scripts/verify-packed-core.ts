@@ -368,24 +368,6 @@ try {
     killSignal: "SIGKILL",
   });
 
-  const packedSupervisorHelper = join(
-    temporaryDirectory,
-    "node_modules/pi-subagents/src/boundary/supervisor-mcp-helper.mjs",
-  );
-  const helperSmoke = spawnSync(process.execPath, [packedSupervisorHelper], {
-    cwd: temporaryDirectory,
-    env: consumerEnvironment,
-    encoding: "utf8",
-  });
-  if (
-    helperSmoke.status !== 2 ||
-    !helperSmoke.stderr.includes("Private supervisor helper configuration argument is invalid.")
-  ) {
-    throw new Error(
-      `Packed supervisor helper did not execute its typed source through the package launcher:\n${helperSmoke.stdout ?? ""}${helperSmoke.stderr ?? ""}`,
-    );
-  }
-
   const packedSharpDecoder = join(
     temporaryDirectory,
     "node_modules/pi-better-openai/src/boundary/sharp-decoder.mjs",

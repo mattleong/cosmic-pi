@@ -34,7 +34,7 @@ import { samePiModel } from "./model-catalog.ts";
 
 const ACTIVITY_PUBLISH_INTERVAL_MILLIS = 1_000;
 
-/** Every runtime's contact message is kept to the retained bound, saying how much was cut. */
+/** A child's contact message is kept to the retained bound, saying how much was cut. */
 const retainedContactText = (message: string): string =>
   clipWithMarker(
     message,
@@ -54,10 +54,8 @@ type HandledBackendEvent = Exclude<
 >;
 
 const DELEGATED_EVENT_TYPES = [
-  "backend_failure",
   "run_started",
   "run_settled",
-  "report",
   "assistant_message",
   "tool_started",
   "supervisor_contact",
@@ -142,8 +140,8 @@ export function backendEventHandler(dependencies: RunEventDependencies) {
     record: RunRecord,
     event: Extract<BackendEvent, { readonly type: "assistant_message" }>,
   ) => {
-    // Only the bounded text and its cut are kept: a Pi report is recaptured from its settlement,
-    // and a submitted report carries its own text, so no intermediate message needs a full copy.
+    // Only the bounded text and its cut are kept: a report is recaptured from its settlement, so
+    // no intermediate message needs a full copy.
     const captured = captureOutputText({
       text: event.text ?? "",
       originalSize: event.originalSize,
@@ -222,8 +220,6 @@ export function backendEventHandler(dependencies: RunEventDependencies) {
     event: DelegatedBackendEvent,
   ): Effect.Effect<unknown, SubagentError> => {
     switch (event.type) {
-      case "backend_failure":
-        return settlement.failRun(record, event.error.message, event.error);
       case "run_started":
         return settlement.runStartedFromBackend(record, event.assignmentEpoch);
       case "run_settled":
@@ -233,8 +229,6 @@ export function backendEventHandler(dependencies: RunEventDependencies) {
           event.terminal,
           () => record.process?.controls.isSettlementCurrent?.(event) ?? true,
         );
-      case "report":
-        return settlement.acceptBackendReport(record, event);
       case "assistant_message":
         return handleAssistantMessage(record, event);
       case "tool_started":
@@ -256,53 +250,12 @@ export function backendEventHandler(dependencies: RunEventDependencies) {
     event: ViewBackendEvent,
   ): Effect.Effect<unknown, SubagentError> => {
     switch (event.type) {
-      case "input_delivery":
-        return mutateAt(record, event.assignmentEpoch, (current, now) => {
-          const owner = record.steeringDeliveryOwner;
-          if (
-            owner?.epoch === event.assignmentEpoch &&
-            (event.sequence < owner.sequence ||
-              (event.sequence === owner.sequence && current.steeringDelivery !== "pending"))
-          )
-            return undefined;
-          record.steeringDeliveryOwner = { epoch: event.assignmentEpoch, sequence: event.sequence };
-          const warning =
-            event.state === "report-unconfirmed"
-              ? "The supervisor report was accepted, but pending guidance acknowledgement and incorporation remain unconfirmed. Do not resend the guidance."
-              : undefined;
-          return {
-            ...current,
-            steeringDelivery: event.state,
-            ...(warning && recordRunWarning(record, current.sessionEvents, "system", warning, now)),
-          };
-        });
       case "activity":
         return mutateAt(record, event.assignmentEpoch, (current, now) =>
           now - current.lastActivityAt < ACTIVITY_PUBLISH_INTERVAL_MILLIS
             ? undefined
             : { ...current, lastActivityAt: now },
         );
-      case "native_agent_activity":
-        return mutateAt(record, event.assignmentEpoch, (current, now) => {
-          const activityId = sanitizeDiagnosticText(event.activityId, 256);
-          const kind = sanitizeDiagnosticText(event.kind, 128);
-          let total = current.nativeActivity?.total ?? 0;
-          if (event.state === "running") {
-            if (!record.nativeAgents.has(activityId) && record.nativeAgents.size < 64) {
-              record.nativeAgents.add(activityId);
-              total = Math.min(Number.MAX_SAFE_INTEGER, total + 1);
-            }
-          } else if (event.state !== "activity") record.nativeAgents.delete(activityId);
-          return {
-            ...current,
-            lastActivityAt: now,
-            nativeActivity: {
-              active: record.nativeAgents.size,
-              total,
-              latest: { id: activityId, kind, state: event.state, updatedAt: now },
-            },
-          };
-        });
       case "tool_finished":
         return mutateAt(record, event.assignmentEpoch, (current, now) => {
           if (current.state === "paused") return undefined;

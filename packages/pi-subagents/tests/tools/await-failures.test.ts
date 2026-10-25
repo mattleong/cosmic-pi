@@ -15,7 +15,7 @@ import { callerNotRegistered, codedFailure, runNotFound } from "../../src/run/er
 import { SUBAGENT_TOOL_NAME } from "../../src/run/tool-policy.ts";
 import { createSubagentCompactSummary } from "../../src/tools/compact-summary.ts";
 import { registerSubagentTools } from "../../src/tools/subagent.ts";
-import { nativeReportServiceFixture } from "../run/fixtures/service-harness.ts";
+import { eventBackendServiceFixture } from "../run/fixtures/service-harness.ts";
 import { step } from "../support/effect-test.ts";
 import { executeTool } from "./fixtures/tool-harness.ts";
 
@@ -35,7 +35,7 @@ const settledIssue = (args: { readonly runIds: ReadonlyArray<string> }, text: st
 
 it.live("names an unknown awaited run without its ID until the call is expanded", () =>
   Effect.gen(function* () {
-    const fixture = nativeReportServiceFixture();
+    const fixture = eventBackendServiceFixture();
     const { pi, tools } = recordingExtensionHost();
     const runtime = yield* Effect.acquireRelease(
       Effect.sync(() =>

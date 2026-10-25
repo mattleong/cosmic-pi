@@ -13,7 +13,6 @@ import {
   MAX_PROFILE_MODEL_SELECTOR_CHARS,
   PROFILE_CANDIDATE_CONTEXTS,
   PROFILE_CANDIDATE_EFFORTS,
-  PROFILE_CANDIDATE_RUNTIMES,
   PROFILE_CANDIDATE_WRITE_INTENTS,
   PROFILE_IDS,
   PROFILE_ROUTE_SOURCES,
@@ -31,7 +30,6 @@ import {
   FAILED_START_CLEANUP_DISPOSITIONS,
   PI_SUBAGENT_CAPABILITIES,
   SUBAGENT_RUN_STATES,
-  STEERING_DELIVERY_STATES,
 } from "../run/model.ts";
 import { MAX_ERROR_CHARS, MAX_FINAL_TEXT_CHARS, MAX_NAME_CHARS } from "../run/state.ts";
 import { WriterWorkspaceModeSchema } from "../config/schema.ts";
@@ -120,7 +118,6 @@ export const WorkspaceToolDetailsSchema = Schema.Struct({
 });
 export type WorkspaceToolDetails = typeof WorkspaceToolDetailsSchema.Type;
 
-const RuntimeSchema = Schema.Literals(PROFILE_CANDIDATE_RUNTIMES);
 const EffortSchema = Schema.Literals(SUBAGENT_EFFORTS);
 const CandidateEffortSchema = Schema.Literals(PROFILE_CANDIDATE_EFFORTS);
 const ContextSchema = Schema.Literals(PROFILE_CANDIDATE_CONTEXTS);
@@ -145,14 +142,12 @@ const UsageSchema = Schema.Struct({
 });
 
 const SkippedCandidateRouteSchema = Schema.Struct({
-  runtime: RuntimeSchema,
   model: NonEmptyText(MAX_CARD_MODEL_CHARS),
   effort: CandidateEffortSchema,
 });
 
 /** The requested per-launch model override; the actual route stays in the card's route fields. */
 export const ModelOverrideCardSchema = Schema.Struct({
-  runtime: RuntimeSchema,
   model: NonEmptyText(MAX_CARD_MODEL_CHARS),
   effort: Schema.optionalKey(CandidateEffortSchema),
 });
@@ -233,10 +228,8 @@ const SubagentRunCardSchema = Schema.Struct({
   id: NonEmptyText(MAX_PROTOCOL_ID_CHARS),
   name: NonEmptyText(MAX_NAME_CHARS),
   state: Schema.Literals(SUBAGENT_RUN_STATES),
-  steeringDelivery: Schema.optionalKey(Schema.Literals(STEERING_DELIVERY_STATES)),
   profile: Schema.optionalKey(ProfileIdSchema),
   agent: Schema.optionalKey(AgentNameSchema),
-  runtime: RuntimeSchema,
   reportGeneration: nonNegativeInteger,
   reportStatus: Schema.optionalKey(
     Schema.Literals(["available", "claimed", "delivered", "missing"]),
@@ -245,26 +238,6 @@ const SubagentRunCardSchema = Schema.Struct({
   depth: Schema.optionalKey(nonNegativeInteger),
   directChildCount: Schema.optionalKey(nonNegativeInteger),
   descendantCount: Schema.optionalKey(nonNegativeInteger),
-  nativeActivity: Schema.optionalKey(
-    Schema.Struct({
-      active: nonNegativeInteger,
-      total: nonNegativeInteger,
-      latest: Schema.optionalKey(
-        Schema.Struct({
-          id: Schema.optionalKey(NonEmptyText(256)),
-          kind: NonEmptyText(128),
-          state: Schema.Literals([
-            "running",
-            "activity",
-            "completed",
-            "failed",
-            "stopped",
-          ] as const),
-          updatedAt: nonNegativeNumber,
-        }),
-      ),
-    }),
-  ),
   model: NonEmptyText(MAX_CARD_MODEL_CHARS),
   effort: EffortSchema,
   openaiFastMode: Schema.Boolean,
@@ -317,7 +290,6 @@ const StartEntryIdentityFields = {
 const SelectedStartEntryFields = {
   ...WorkspaceCardFields,
   routeStatus: Schema.Literal("selected"),
-  runtime: RuntimeSchema,
   model: NonEmptyText(MAX_CARD_MODEL_CHARS),
   effort: EffortSchema,
   openaiFastMode: Schema.Boolean,
@@ -360,7 +332,6 @@ const FailedStartRecoverySchema = Schema.Struct({
     Schema.Union([
       Schema.Literal("none"),
       Schema.Struct({
-        runtime: RuntimeSchema,
         model: NonEmptyText(MAX_CARD_MODEL_CHARS),
         effort: CandidateEffortSchema,
       }),
@@ -392,7 +363,6 @@ const hasValidProfileCandidatePolicy = Schema.makeFilter((candidate: ProfileCand
     : "Profile candidate violates cross-field policy.",
 );
 const ProfileCandidateCardSchema = Schema.Struct({
-  runtime: RuntimeSchema,
   model: NonEmptyText(MAX_PROFILE_MODEL_SELECTOR_CHARS),
   effort: CandidateEffortSchema,
   context: ContextSchema,
@@ -565,8 +535,6 @@ export const AgentToolDetailsSchema = Schema.Union([
     to: AgentIdSchema,
     name: AgentDetailsNameSchema,
     disposition: Schema.Literals(["answered", "guided", "resumed"]),
-    /** False while guidance's native delivery is still being confirmed. */
-    confirmed: Schema.Boolean,
     /** The main agent's state when guidance reached it. */
     mainState: Schema.optionalKey(Schema.Literals(["idle", "busy", "held"])),
     /** Guidance waiting behind the run's own question until an ancestor answers. */

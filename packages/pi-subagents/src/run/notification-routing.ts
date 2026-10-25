@@ -54,7 +54,7 @@ const canAcceptNotification = (record: RunRecord): boolean =>
   !record.pauseRequested &&
   record.process?.controls.deliverNotification !== undefined;
 
-/** Pi ancestors that can take a notification about `sourceRunId`, nearest first. */
+/** Ancestors that can take a notification about `sourceRunId`, nearest first. */
 const notifiableAncestors = (
   records: ReadonlyMap<string, RunRecord>,
   sourceRunId: string,
@@ -64,7 +64,7 @@ const notifiableAncestors = (
   while (parentRunId !== SUBAGENT_ROOT_RUN_ID) {
     const parent = records.get(parentRunId);
     if (!parent) break;
-    if (parent.view.runtime === "pi" && canAcceptNotification(parent)) candidates.push(parent);
+    if (canAcceptNotification(parent)) candidates.push(parent);
     parentRunId = parent.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
   }
   return candidates;

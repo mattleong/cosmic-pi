@@ -43,7 +43,6 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 
 const route = (overrides: Partial<ProfileCandidate> = {}): ProfileCandidate => ({
-  runtime: "pi",
   model: "parent",
   effort: "default",
   context: "fresh",
@@ -153,8 +152,7 @@ describe("subagent tool", () => {
       profiles: {
         reviewer: {
           host: "local",
-          runtime: "claude",
-          model: "opus",
+          model: "openai/opus",
           effort: "high",
           context: "fresh",
           writeIntent: "read-only",
@@ -300,7 +298,7 @@ describe("subagent tool", () => {
 
     for (const forged of [
       { effort: "high" },
-      { backend: "claude-cli" },
+      { backend: "local-cli" },
       { routeContinuation: {} },
       { supersedes: {} },
     ]) {

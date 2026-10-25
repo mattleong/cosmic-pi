@@ -1,12 +1,12 @@
 # pi-subagents
 
-Background subagents for Pi on macOS and Linux. The main agent delegates work to profile-routed agents running on Pi or Claude Code, keeps working, and gets their reports back automatically.
+Background subagents for Pi on macOS and Linux. The main agent delegates work to profile-routed agents running as local Pi processes, keeps working, and gets their reports back automatically.
 
 ## Features
 
 - **Seven profiles**, from fast read-only `scout`s to `worker`s that edit code, each routed to a model you choose.
 - **Custom agents** you define in `pi-subagents.json`: named roles with their own instructions, effort, and tool lists, routed through a profile.
-- **Two local runtimes:** Pi and Claude Code, with ordered fallback candidates per profile.
+- **Any model Pi can run**, Claude models included through a Pi provider, with ordered fallback candidates per profile.
 - **Background by default.** Reports and failures arrive automatically; the agent waits only when it needs a result.
 - **Two-way supervision:** children can ask the parent questions and report progress; the parent can answer or guide them, interrupt, resume, or stop them.
 - **Agent messaging:** any agent in the session can list, message, and read any other, including the main agent.
@@ -20,10 +20,10 @@ Not published to npm; install from a [local clone](../../README.md#install). Aft
 
 ```bash
 pi install "$PWD/packages/pi-subagents"
-pi install "$PWD/packages/pi-cosmic-ui"   # recommended: shared Activity view
+pi install "$PWD/packages/pi-cosmic-ui"   # required for /subagents: shared Activity view
 ```
 
-Requires Pi 1.4.0 or later. Claude Code routes need Claude Code 2.1.224 or later, installed and signed in; an older CLI's routes are skipped in favor of the next candidate. Tested with Claude Code 2.1.259 through 2.1.300; see [CLI versions](docs/local-backends.md#cli-versions) for how versions are checked. Pi routes need nothing extra.
+Requires Pi 1.4.0 or later. Subagents run on the installed Pi and its providers and need nothing extra.
 
 ## Usage
 
@@ -48,9 +48,11 @@ Ask for work that splits into independent pieces, and the agent launches subagen
 | `oracle`     | fork    | read-only | high          |
 | `generalist` | fresh   | read-only | parent effort |
 
+Read-only subagents don't get Pi's `edit` and `write` tools and are told not to change files, but `bash` and other inherited tools can still write. Read-only is cooperative, not a sandbox.
+
 | Command               | Action                                                      |
 | --------------------- | ----------------------------------------------------------- |
-| `/subagents`          | Open the fleet in the Activity manager                      |
+| `/subagents`          | Open subagents in the Activity manager                      |
 | `/subagents profiles` | Choose models and fallbacks for each profile                |
 | `/subagents settings` | Delegation, nesting limits, writer workspace                |
 | `/subagents doctor`   | Check Pi, configuration, and each profile's route readiness |
@@ -69,7 +71,7 @@ The mode only changes prompt guidance; no tools are restricted, and subagents ke
 
 ### Tools
 
-The main agent and Pi subagents share one `agent_*` family. `agent_start`, `agent_await`, `agent_lifecycle`, and `agent_worktree` act on agents you started and their descendants; `agent_list`, `agent_read`, and `agent_send` reach any agent in the session, the main agent and subagents at any depth on any runtime:
+The main agent and Pi subagents share one `agent_*` family. `agent_start`, `agent_await`, `agent_lifecycle`, and `agent_worktree` act on agents you started and their descendants; `agent_list`, `agent_read`, and `agent_send` reach any agent in the session, the main agent and subagents at any depth:
 
 | Tool              | Does                                                                                                                                                |
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -82,7 +84,7 @@ The main agent and Pi subagents share one `agent_*` family. `agent_start`, `agen
 | `agent_read`      | Shows each run's status card and latest message or report, and main's latest message, without taking a report from its parent                       |
 | `agent_send`      | Messages one agent now: answers a question from a run you supervise, guides a running agent, wakes an idle main agent, or resumes a finished Pi run |
 
-Subagents also get `agent_contact_parent` to report progress, record a warning, or ask a blocking question, and Claude subagents submit their final report with `agent_submit_report`. Native Pi codemode supports [read-only scripting](docs/native-codemode.md) with ordinary subagents; writer launches and recovery remain main-agent decisions.
+Subagents also get `agent_contact_parent` to report progress, record a warning, or ask a blocking question. Native Pi codemode supports [read-only scripting](docs/native-codemode.md) with ordinary subagents; writer launches and recovery remain main-agent decisions.
 
 ### Agent messaging
 
@@ -101,14 +103,12 @@ Most people configure routes in `/subagents profiles`. Saved settings live in `~
       "profiles": {
         "reviewer": [
           {
-            "runtime": "claude",
-            "model": "opus",
+            "model": "claude-bridge/claude-opus-5-5",
             "effort": "high",
             "context": "fresh",
             "writeIntent": "read-only"
           },
           {
-            "runtime": "pi",
             "model": "openai-codex/gpt-5.6-sol",
             "effort": "high",
             "context": "fresh",
@@ -127,11 +127,11 @@ Most people configure routes in `/subagents profiles`. Saved settings live in `~
 }
 ```
 
-If a candidate is unavailable at launch, such as an unauthenticated CLI, the next one is tried. A run whose startup fails before its task is issued, because the runtime can't run that model or the runtime itself failed to start, moves to the next candidate in the same run and says so in a warning ([startup fallback](docs/routing.md#startup-fallback)). Once its task is issued, nothing falls back: a failed run names its route's next candidate, and the parent may start a new run with that model.
+If a candidate is unavailable at launch, such as a model whose provider isn't signed in, the next one is tried. A run whose startup fails before its task is issued, because Pi can't run that model or effort, moves to the next candidate in the same run and says so in a warning ([startup fallback](docs/routing.md#startup-fallback)). Once its task is issued, nothing falls back: a failed run names its route's next candidate, and the parent may start a new run with that model.
 
 `hooks` mirror Claude Code's `WorktreeCreate` and `WorktreeRemove`, but run after the engine creates an isolated tree and before it removes one rather than replacing either. A `.worktreeinclude` file at the checkout's top level names ignored local files, such as `.env`, to copy into isolated trees. See [Worktree hooks](docs/local-backends.md#worktree-hooks) and [Included files](docs/local-backends.md#included-files).
 
-Custom agents add named roles to the same files. Each one routes through a profile, replaces that profile's guidance with its instructions, and can pin effort, context, write intent, and the Pi tools its child inherits; tool lists skip Claude candidates. Launch one with `"agent": "auth-reviewer"` instead of a profile. See [Custom agents](docs/routing.md#custom-agents).
+Custom agents add named roles to the same files. Each one routes through a profile, replaces that profile's guidance with its instructions, and can pin effort, context, write intent, and the Pi tools its child inherits. Launch one with `"agent": "auth-reviewer"` instead of a profile. See [Custom agents](docs/routing.md#custom-agents).
 
 ```json
 {
@@ -148,11 +148,11 @@ Custom agents add named roles to the same files. Each one routes through a profi
 }
 ```
 
-When you ask for a specific model, the agent can set it on one launch with `"model": { "runtime": "claude", "model": "opus" }`. The profile still sets the role, context, and write intent, but that launch tries only the named model: if it's unavailable the launch fails, and a failed run can't be retried onto another candidate. See [Per-launch model override](docs/routing.md#per-launch-model-override).
+When you ask for a specific model, the agent can set it on one launch with `"model": { "model": "claude-bridge/claude-opus-5-5" }`. The profile still sets the role, context, and write intent, but that launch tries only the named model: if it's unavailable the launch fails, and a failed run can't be retried onto another candidate. See [Per-launch model override](docs/routing.md#per-launch-model-override).
 
 ## How it works
 
-The root Pi session owns the coordinator: configuration, the run tree, backends, writer pools, and completion delivery; nested Pi sessions use authenticated proxy tools. Pi children talk over an RPC bridge, while Claude Code (stream-json) reports through a private loopback MCP supervisor. Writer leases are shared across Pi processes on the same machine. Shared-checkout writers in one directory coordinate by task scope and aren't isolated from each other; worktree writers edit a private Git worktree whose changes the parent applies. Claude runs use Claude Code's native sandbox. Stopping a run stops its subtree, and shutting down the root stops everything.
+The root Pi session owns the coordinator: configuration, the run tree, backends, writer pools, and completion delivery; nested Pi sessions use authenticated proxy tools. Pi children talk over an RPC bridge. Writer leases are shared across Pi processes on the same machine. Shared-checkout writers in one directory coordinate by task scope and aren't isolated from each other; worktree writers edit a private Git worktree whose changes the parent applies. No subagent runs in an OS sandbox: read-only children lack Pi's `edit` and `write` tools and are told not to change files, and they never hold a writer lease. Stopping a run stops its subtree, and shutting down the root stops everything.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for ownership and lifecycle, and the docs for detail:
 

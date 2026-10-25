@@ -84,10 +84,9 @@ const resumeStateError = (record: RunRecord): InvalidSubagentRequestError | unde
 };
 
 const resumeUnavailableError = (record: RunRecord): InvalidSubagentRequestError => {
-  const { id, runtime } = record.view;
   return invalidRequest(
     "backend_resume_unavailable",
-    `Subagent ${id} cannot resume because local/${runtime} did not provide continuation state. Start a new run instead.`,
+    `Subagent ${record.view.id} cannot resume because its backend did not provide continuation state. Start a new run instead.`,
   );
 };
 

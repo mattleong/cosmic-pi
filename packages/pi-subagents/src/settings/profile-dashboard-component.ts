@@ -5,7 +5,7 @@ import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { type Component, type Focusable } from "@earendil-works/pi-tui";
 import { FullScreenKeymap } from "pi-cosmic-ui/manager/keymap";
 import { isProjectTrusted } from "pi-cosmic-core/host-session";
-import type { FleetManagerActions } from "./controller.ts";
+import type { SubagentCommandActions } from "./controller.ts";
 import { ProfileEditVisit } from "./profile-edit-visit.ts";
 import { ProfileWorkspaceComponent, type ProfileWorkspaceOptions } from "./profile-workspace.ts";
 import {
@@ -28,7 +28,7 @@ type Child = Component & { focused?: boolean; dispose?: () => void };
 interface ProfileDashboardOptions {
   readonly workspace: ProfileWorkspaceOptions;
   readonly ctx: ExtensionCommandContext;
-  readonly actions: FleetManagerActions;
+  readonly actions: SubagentCommandActions;
   readonly isCurrent: () => boolean;
   readonly onInspection: (inspection: ProfileSettingsInspection) => void;
   readonly awaitDialog: <T>(register: (finish: (value: T) => void) => () => void) => Promise<T>;

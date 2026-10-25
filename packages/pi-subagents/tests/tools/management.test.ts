@@ -8,7 +8,6 @@ import { yieldUntil } from "pi-cosmic-core/testing";
 import { beforeAll, describe, expect } from "vitest";
 import { effectTest, step } from "../support/effect-test.ts";
 import { InvalidSubagentRequestError } from "../../src/run/errors.ts";
-import { STEERING_DELIVERY_STATES, hasUnresolvedSteeringDelivery } from "../../src/run/model.ts";
 import { decodeSubagentContract } from "../../src/tools/contract-schema.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import {
@@ -34,60 +33,41 @@ const resultText = (result: {
 describe("subagent tool", () => {
   beforeAll(() => initTheme("dark", false));
 
-  effectTest(
-    "keeps native steering evidence in await and read and names no next candidate while it is unresolved",
-    function* () {
-      for (const steeringDelivery of STEERING_DELIVERY_STATES) {
-        const run = view({
-          state: "failed",
-          parentRunId: "root",
-          steeringDelivery,
-          nextCandidate: { runtime: "pi", model: "openai/next-model", effort: "high" },
-        });
-        const tools = captureSubagentTools(
-          subagentServiceDouble({
-            agentRead: () =>
-              Effect.succeed({
-                agents: [
-                  {
-                    kind: "run",
-                    id: run.id,
-                    name: run.name,
-                    state: run.state,
-                    textStatus: "none",
-                    truncated: false,
-                    reportGeneration: 0,
-                    run,
-                  },
-                ],
-                missingIds: [],
-              }),
-            withAwaitTerminalObservations: (_ids, _until, _onUpdate, use) => use([{ run }]),
+  effectTest("names a failed root run's next candidate in await and read", function* () {
+    const run = view({
+      state: "failed",
+      parentRunId: "root",
+      nextCandidate: { model: "openai/next-model", effort: "high" },
+    });
+    const tools = captureSubagentTools(
+      subagentServiceDouble({
+        agentRead: () =>
+          Effect.succeed({
+            agents: [
+              {
+                kind: "run",
+                id: run.id,
+                name: run.name,
+                state: run.state,
+                textStatus: "none",
+                truncated: false,
+                reportGeneration: 0,
+                run,
+              },
+            ],
+            missingIds: [],
           }),
-        );
-        for (const [toolName, args] of [
-          ["agent_read", { agentIds: [run.id] }],
-          ["agent_await", { runIds: [run.id], until: "all_finished" }],
-        ] as const) {
-          const response = yield* step(() => executeTool(tools.get(toolName)!, args));
-          if (toolName === "agent_await")
-            expect(response.details).toMatchObject({
-              cards: [{ steeringDelivery, state: "failed" }],
-            });
-          const text = resultText(response);
-          expect(text).toContain(`steeringDelivery=${steeringDelivery}`);
-          // An await block carries the state and its rule; agent_read has the full evidence.
-          const detail = toolName === "agent_read";
-          if (hasUnresolvedSteeringDelivery(run)) {
-            if (detail) expect(text).toContain("Do not resend");
-            expect(text).not.toContain("openai/next-model");
-          } else expect(text).toContain("pi/openai/next-model:high");
-          if (steeringDelivery === "confirmed" && detail)
-            expect(text).toContain("does not prove the model incorporated");
-        }
-      }
-    },
-  );
+        withAwaitTerminalObservations: (_ids, _until, _onUpdate, use) => use([{ run }]),
+      }),
+    );
+    for (const [toolName, args] of [
+      ["agent_read", { agentIds: [run.id] }],
+      ["agent_await", { runIds: [run.id], until: "all_finished" }],
+    ] as const) {
+      const response = yield* step(() => executeTool(tools.get(toolName)!, args));
+      expect(resultText(response)).toContain("openai/next-model:high");
+    }
+  });
 
   effectTest(
     "returns cancellation only after owned wait cleanup, without a progress callback",
@@ -208,7 +188,6 @@ describe("subagent tool", () => {
           to,
           name: "worker",
           disposition: "answered",
-          confirmed: true,
         }),
     });
     const tools = captureSubagentTools(service);

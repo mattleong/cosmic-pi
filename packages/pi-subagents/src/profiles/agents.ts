@@ -8,12 +8,7 @@ import type {
   SubagentEffort,
   SubagentWriteIntent,
 } from "../domain/routing.ts";
-import {
-  isProfileId,
-  profileCandidateValidationIssues,
-  type ProfileCandidate,
-  type ProfileId,
-} from "./model.ts";
+import { isProfileId, type ProfileCandidate, type ProfileId } from "./model.ts";
 
 export const MAX_CUSTOM_AGENTS = 32;
 export const MAX_CUSTOM_AGENT_NAME_CHARS = 48;
@@ -146,51 +141,16 @@ export const lookupCustomAgent = (
   );
 };
 
-export const hasCustomAgentToolPolicy = (agent: Pick<CustomAgent, "tools">): boolean =>
-  agent.tools?.allow !== undefined || agent.tools?.deny !== undefined;
-
-const CUSTOM_AGENT_SKIP_CODES = {
-  toolsUnsupported: "agent_tools_unsupported",
-  candidateIncompatible: "agent_candidate_incompatible",
-} as const;
-
-type CustomAgentCandidate =
-  | { readonly kind: "eligible"; readonly candidate: ProfileCandidate }
-  | {
-      readonly kind: "skipped";
-      readonly code: (typeof CUSTOM_AGENT_SKIP_CODES)[keyof typeof CUSTOM_AGENT_SKIP_CODES];
-      readonly reason: string;
-    };
-
 /**
- * Applies an agent's overrides to one route candidate. Tool lists filter only a Pi child's
- * inherited tools, so Claude candidates fail closed when an agent sets them.
+ * Applies an agent's overrides to one route candidate. They never touch the model or fast mode,
+ * the only fields candidate validation checks, so every overridden candidate stays valid.
  */
 export const customAgentCandidate = (
   candidate: ProfileCandidate,
   agent: CustomAgent,
-): CustomAgentCandidate => {
-  if (hasCustomAgentToolPolicy(agent) && candidate.runtime !== "pi")
-    return {
-      kind: "skipped",
-      code: CUSTOM_AGENT_SKIP_CODES.toolsUnsupported,
-      reason: `Agent ${agent.name} sets tool lists, which only local Pi children can enforce; local/${candidate.runtime} is skipped.`,
-    };
-  const overridden: ProfileCandidate = {
-    ...candidate,
-    effort: agent.effort ?? candidate.effort,
-    context: agent.context ?? candidate.context,
-    writeIntent: agent.writeIntent ?? candidate.writeIntent,
-  };
-  const issues = profileCandidateValidationIssues(overridden);
-  if (issues.length === 0) return { kind: "eligible", candidate: overridden };
-  return {
-    kind: "skipped",
-    code: CUSTOM_AGENT_SKIP_CODES.candidateIncompatible,
-    reason: `Agent ${agent.name}'s overrides don't fit local/${candidate.runtime} ${candidate.model}: ${Fn.pipe(
-      issues,
-      Arr.map((issue) => issue.code),
-      Arr.join(", "),
-    )}.`,
-  };
-};
+): ProfileCandidate => ({
+  ...candidate,
+  effort: agent.effort ?? candidate.effort,
+  context: agent.context ?? candidate.context,
+  writeIntent: agent.writeIntent ?? candidate.writeIntent,
+});

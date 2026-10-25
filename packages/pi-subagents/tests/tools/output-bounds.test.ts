@@ -4,7 +4,6 @@ import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
-import * as Schema from "effect/Schema";
 import { extensionApiFixture } from "pi-cosmic-core/testing";
 import { assert, describe, expect, it, vi } from "vitest";
 import {
@@ -12,7 +11,6 @@ import {
   hostNotifier,
   type SubagentCompletionNotification,
 } from "../../src/boundary/host-notifier.ts";
-import { MAX_PROCESS_LINE_BYTES } from "../../src/boundary/process-transport.ts";
 import {
   MAX_COMPLETION_DELIVERY_BATCH,
   MAX_CONTACT_TEXT_CHARS,
@@ -36,19 +34,8 @@ import type {
 import type { AgentMessageArrivals } from "../../src/run/message-watches.ts";
 import type { SubagentRunObservation } from "../../src/run/service.ts";
 import { MAX_ERROR_CHARS, MAX_FINAL_TEXT_CHARS, MAX_NAME_CHARS } from "../../src/run/state.ts";
-import { agentReadText } from "../../src/supervisor/agent-text.ts";
-import { MAX_SUPERVISOR_MCP_AGENT_ID_CHARS } from "../../src/supervisor/mcp-contract.ts";
 import { runIdFixture } from "../fixtures/run-view.ts";
-import {
-  MAX_SUPERVISOR_AGENT_CARD_CHARS,
-  MAX_SUPERVISOR_AGENT_NAME_CHARS,
-  MAX_SUPERVISOR_AGENT_READ_CHARS,
-  MAX_SUPERVISOR_CHANNEL_LINE_BYTES,
-  type SupervisorAgentReadResult,
-  SupervisorRpcGroup,
-} from "../../src/supervisor/protocol.ts";
 import { decodeSubagentContract } from "../../src/tools/contract-schema.ts";
-import { agentReadCard } from "../../src/tools/execute-agents.ts";
 import {
   formatStartResult,
   MAX_ACTION_FAILURE_LINE_CHARS,
@@ -140,7 +127,6 @@ const archive = (path: string): SubagentReportArchive => ({
 });
 
 const worstCandidate: SubagentNextCandidate = {
-  runtime: "pi",
   model: Fn.pipe("m", Str.repeat(MAX_PROFILE_MODEL_SELECTOR_CHARS)),
   effort: "xhigh",
 };
@@ -155,7 +141,6 @@ const worstRun = (index: number): SubagentRunView => {
     warning: longText(`WARNING-${index}`, MAX_CONTACT_TEXT_CHARS),
     parentRunId: "root",
     nextCandidate: worstCandidate,
-    steeringDelivery: "unresolved" as const,
     writeIntent: "writer" as const,
     writerWorkspaceMode: "worktree" as const,
     workspaceId: Fn.pipe("w", Str.repeat(36)),
@@ -756,49 +741,8 @@ describe("worst-case single-run agent_read", () => {
           expect(Arr.every(lines, (line) => Fn.pipe(line, Str.startsWith(indent)))).toBe(true);
           expect(shown).toContain("QUESTION-END");
         }
-        // A child's wire card keeps the whole question too.
-        const card = agentReadCard(run, { caller: { kind: "main" } });
-        expect(Option.getOrElse(Fn.pipe(card, Str.indexOf("QUESTION-END")), () => -1)).toBeLessThan(
-          MAX_SUPERVISOR_AGENT_CARD_CHARS - "QUESTION-END\n… [status card truncated]".length,
-        );
       },
     );
-});
-
-/** Text at `length` UTF-16 units that JSON escapes at up to six bytes each. */
-const worstJsonText = (length: number): string =>
-  Fn.pipe(`"\\\n${Fn.pipe("\uD800", Str.repeat(length))}`, Str.slice(0, length));
-
-const jsonBytes = (value: SupervisorAgentReadResult | string): number =>
-  Buffer.byteLength(JSON.stringify(value), "utf8");
-
-describe("worst-case supervisor agent_read", () => {
-  it("fits MAX_TARGET_RUNS reads in one channel line, MCP line, and CLI stdout line", () => {
-    const result: SupervisorAgentReadResult = {
-      agents: Array.from({ length: MAX_TARGET_RUNS }, (_, index) => ({
-        id: Fn.pipe(
-          `${runIdFixture(index)}-${Fn.pipe("x", Str.repeat(MAX_SUPERVISOR_MCP_AGENT_ID_CHARS))}`,
-          Str.slice(0, MAX_SUPERVISOR_MCP_AGENT_ID_CHARS),
-        ),
-        name: worstJsonText(MAX_SUPERVISOR_AGENT_NAME_CHARS),
-        state: "waiting_for_parent",
-        card: worstJsonText(MAX_SUPERVISOR_AGENT_CARD_CHARS),
-        text: worstJsonText(MAX_SUPERVISOR_AGENT_READ_CHARS),
-        truncated: true,
-        source: "assistant",
-      })),
-      missingIds: [],
-    };
-    // The result is at the schema's allowance: each text is as long as it admits.
-    const success = SupervisorRpcGroup.requests.get("SupervisorAgentRead")?.successSchema;
-    expect(success && Schema.decodeSync(success)(result)).toEqual(result);
-    // Generous room for the RPC envelope, the MCP response, and the CLI's echo around the text.
-    const envelope = 64 * 1024;
-    expect(jsonBytes(result) + envelope).toBeLessThan(MAX_SUPERVISOR_CHANNEL_LINE_BYTES);
-    const toolText = agentReadText(result);
-    expect(jsonBytes(toolText) + envelope).toBeLessThan(MAX_SUPERVISOR_CHANNEL_LINE_BYTES);
-    expect(jsonBytes(toolText) + envelope).toBeLessThan(MAX_PROCESS_LINE_BYTES);
-  });
 });
 
 describe("unsaved report preview boundary", () => {

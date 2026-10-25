@@ -58,7 +58,7 @@ export const settledAssignmentLocked = (
 const PARTIAL_OUTPUT_CHARS = 2_000;
 
 // The failed attempt's own text, so the parent can judge the failure before retrying.
-export const partialOutput = (finalText: string | undefined): string => {
+const partialOutput = (finalText: string | undefined): string => {
   const text = finalText === undefined ? undefined : Str.trim(finalText);
   if (!text) return "";
   const shown =
@@ -89,10 +89,6 @@ export const viewForSettlement = (
   lastActivityAt: now,
   currentTool: undefined,
   question: undefined,
-  ...(record.view.steeringDelivery === "pending" && {
-    steeringDelivery:
-      state === "completed" ? ("report-unconfirmed" as const) : ("unresolved" as const),
-  }),
   ...(state === "completed" && { reportGeneration: record.completionGeneration }),
   ...(finalText && { finalText, ...report }),
   ...(error !== undefined && { error, ...(errorArchive && { errorArchive }) }),

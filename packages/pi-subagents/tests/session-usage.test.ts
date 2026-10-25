@@ -9,9 +9,9 @@ import {
 } from "../src/boundary/host-session-usage.ts";
 import { emptyUsage, type SubagentUsage } from "../src/run/model.ts";
 import {
-  fakeNativeReportBackendLayer,
-  nativeReportRequest,
-  nativeReportServiceFixture,
+  fakeEventBackendLayer,
+  eventBackendRequest,
+  eventBackendServiceFixture,
   withService,
 } from "./run/fixtures/service-harness.ts";
 import * as Arr from "effect/Array";
@@ -38,29 +38,29 @@ describe("session subagent usage", () => {
       const host = hostSession();
       const recorded: SubagentUsage[] = [];
       const record = sessionUsageRecorder(host.pi, host.ctx);
-      const first = nativeReportServiceFixture(fakeNativeReportBackendLayer(), {
+      const first = eventBackendServiceFixture(fakeEventBackendLayer(), {
         recordSessionUsage: (usage) => {
           recorded.push(usage);
           record(usage);
         },
       });
       yield* withService(first.layer, function* (service) {
-        const settled = yield* service.start(nativeReportRequest());
+        yield* service.start(eventBackendRequest());
         const control = first.backend.controls[0]!;
         control.offer({ type: "usage", usage: charge(0.25) });
         yield* yieldUntil(() => first.projections.at(-1)?.runs[0]?.usage.cost === 0.25, 200);
         expect(recorded).toEqual([]);
-        control.report(settled.id, 1, "report", "Done");
+        control.complete("Done");
         yield* yieldUntil(() => recorded.length === 1, 200);
 
-        yield* service.start(nativeReportRequest());
+        yield* service.start(eventBackendRequest());
         first.backend.controls[1]!.offer({ type: "usage", usage: charge(0.5) });
         yield* yieldUntil(() => first.projections.at(-1)?.sessionUsage?.cost === 0.75, 200);
         expect(recorded).toHaveLength(1);
       });
       expect(Arr.map(recorded, (usage) => usage.cost)).toEqual([0.25, 0.5]);
 
-      const second = nativeReportServiceFixture(fakeNativeReportBackendLayer(), {
+      const second = eventBackendServiceFixture(fakeEventBackendLayer(), {
         restoredSessionUsage: restoreSessionUsage(host.ctx),
       });
       yield* withService(second.layer, function* (service) {

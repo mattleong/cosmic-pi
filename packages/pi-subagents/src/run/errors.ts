@@ -51,7 +51,6 @@ export class SubagentProcessError extends Schema.TaggedError<
   operation: Schema.String,
   message: Schema.String,
   code: Schema.optional(Schema.String),
-  pendingDelivery: Schema.optional(Schema.Boolean),
 }) {}
 
 export const processError = (
@@ -120,7 +119,6 @@ export const codedFailure = (error: SubagentError): SubagentError => {
       operation: error.operation,
       code: error.code,
       message: `[${error.code}] ${error.message}`,
-      ...(error.pendingDelivery !== undefined && { pendingDelivery: error.pendingDelivery }),
     });
   return error;
 };
@@ -148,9 +146,6 @@ export const isOutcomeUncertain = (error: { readonly code?: string | undefined }
 export const isCleanupUnconfirmed = (error: { readonly code?: string | undefined }): boolean =>
   error.code !== undefined && Fn.pipe(error.code, Str.endsWith("_cleanup_unconfirmed"));
 
-/** The code of guidance whose native delivery is still being confirmed. */
-export const PENDING_STEER_DELIVERY_CODE = "steer_outcome_uncertain";
-
 export class SubagentProtocolError extends Schema.TaggedError<
   SubagentProtocolError,
   { readonly brand: unique symbol }
@@ -165,7 +160,6 @@ export class UnsupportedSubagentCapabilityError extends Schema.TaggedError<
   UnsupportedSubagentCapabilityError,
   { readonly brand: unique symbol }
 >()("UnsupportedSubagentCapabilityError", {
-  backend: Schema.String,
   capability: Schema.String,
   message: Schema.String,
 }) {}
@@ -180,10 +174,3 @@ export type SubagentError =
   | SubagentProtocolError
   | SubagentRuntimeClosedError
   | UnsupportedSubagentCapabilityError;
-
-/** Guidance that may already have arrived while its delivery is still being tracked. */
-// A boolean, not a refinement: other process errors must stay in the remaining error channel.
-export const isPendingSteerDelivery = (error: SubagentError): boolean =>
-  Predicate.isTagged(error, "SubagentProcessError") &&
-  error.pendingDelivery === true &&
-  error.code === PENDING_STEER_DELIVERY_CODE;

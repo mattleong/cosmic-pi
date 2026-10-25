@@ -5,7 +5,7 @@ import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import { nodeFilePlatformLayer, SafeFile } from "pi-cosmic-core";
-import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
+import { extensionApiFixture, extensionContextFixture, modelFixture } from "pi-cosmic-core/testing";
 import { runSubagentDoctor } from "../src/application/doctor.ts";
 import { backendRegistryFor, SubagentBackendRegistry } from "../src/backend/service.ts";
 import { subagentProfileServiceLayerFor } from "../src/profiles/service.ts";
@@ -19,9 +19,15 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 
-const claude = (model: string) => ({
-  runtime: "claude",
-  model,
+const MODEL_IDS = ["haiku", "opus", "sonnet", "fable", "mythos", "spark"];
+const testModels = Arr.map(MODEL_IDS, (id) =>
+  modelFixture({ provider: "test", id, reasoning: true }),
+);
+const doctorContext = (overrides: Parameters<typeof extensionContextFixture>[0] = {}) =>
+  extensionContextFixture({ modelRegistry: { getAvailable: () => testModels }, ...overrides });
+
+const pi = (model: string) => ({
+  model: `test/${model}`,
   effort: "high",
   context: "fresh",
   writeIntent: "read-only",
@@ -33,9 +39,9 @@ const config = {
   profileSets: {
     doctor: {
       profiles: {
-        scout: claude("haiku"),
-        reviewer: [claude("opus"), claude("sonnet")],
-        researcher: claude("haiku"),
+        scout: pi("haiku"),
+        reviewer: [pi("opus"), pi("sonnet")],
+        researcher: pi("haiku"),
       },
     },
   },
@@ -49,25 +55,22 @@ const doctor = (input: Parameters<typeof runSubagentDoctor>[0]) =>
 const registry = (probed: string[]) =>
   Layer.succeed(
     SubagentBackendRegistry,
-    backendRegistryFor([
-      {
-        runtime: "claude",
-        capabilities: [],
-        supportsContext: () => true,
-        spawn: () => Effect.die("doctor never launches"),
-        preflight: (request) => {
-          probed.push(request.model);
-          return request.model === "opus"
-            ? Effect.fail(
-                InvalidSubagentRequestError.make({
-                  code: "claude_unauthenticated",
-                  message: "Claude Code is not signed in.",
-                }),
-              )
-            : Effect.void;
-        },
+    backendRegistryFor({
+      capabilities: [],
+      supportsContext: () => true,
+      spawn: () => Effect.die("doctor never launches"),
+      preflight: (request) => {
+        probed.push(request.model);
+        return request.model === "test/opus"
+          ? Effect.fail(
+              InvalidSubagentRequestError.make({
+                code: "provider_unauthenticated",
+                message: "The provider is not signed in.",
+              }),
+            )
+          : Effect.void;
       },
-    ]),
+    }),
   );
 
 describe("subagents doctor", () => {
@@ -77,7 +80,7 @@ describe("subagents doctor", () => {
       const probed: string[] = [];
       const checks = yield* doctor({
         pi: extensionApiFixture(),
-        ctx: extensionContextFixture(),
+        ctx: doctorContext(),
         agentDirectory,
         activityViewAvailable: false,
         projectTrusted: true,
@@ -85,8 +88,8 @@ describe("subagents doctor", () => {
       const byLabel = new Map(Arr.map(checks, (item) => [item.label, item]));
       expect(byLabel.get("Profile scout")?.status).toBe("ok");
       expect(byLabel.get("Profile reviewer")).toMatchObject({ status: "warning" });
-      expect(byLabel.get("Profile reviewer")?.detail).toContain("claude_unauthenticated");
-      expect(Arr.filter(probed, (model) => model === "haiku")).toHaveLength(1);
+      expect(byLabel.get("Profile reviewer")?.detail).toContain("provider_unauthenticated");
+      expect(Arr.filter(probed, (model) => model === "test/haiku")).toHaveLength(1);
       expect(byLabel.get("Private state")?.status).toBe("ok");
       expect(byLabel.get("Node")?.status).toBe("ok");
       expect(byLabel.get("Git")?.status).toBe("ok");
@@ -107,27 +110,24 @@ describe("subagents doctor", () => {
       let peak = 0;
       const probing = Layer.succeed(
         SubagentBackendRegistry,
-        backendRegistryFor([
-          {
-            runtime: "claude",
-            capabilities: [],
-            supportsContext: () => true,
-            spawn: () => Effect.die("doctor never launches"),
-            preflight: () =>
-              Effect.gen(function* () {
-                active += 1;
-                peak = Math.max(peak, active);
-                yield* Queue.offer(admitted, undefined);
-                yield* Queue.take(releases);
-                active -= 1;
-              }),
-          },
-        ]),
+        backendRegistryFor({
+          capabilities: [],
+          supportsContext: () => true,
+          spawn: () => Effect.die("doctor never launches"),
+          preflight: () =>
+            Effect.gen(function* () {
+              active += 1;
+              peak = Math.max(peak, active);
+              yield* Queue.offer(admitted, undefined);
+              yield* Queue.take(releases);
+              active -= 1;
+            }),
+        }),
       );
-      const routes = ["haiku", "opus", "sonnet", "fable", "mythos", "spark"];
+      const routes = MODEL_IDS;
       const running = yield* doctor({
         pi: extensionApiFixture(),
-        ctx: extensionContextFixture(),
+        ctx: doctorContext(),
         agentDirectory,
         activityViewAvailable: undefined,
         projectTrusted: true,
@@ -139,12 +139,12 @@ describe("subagents doctor", () => {
               profileSets: {
                 doctor: {
                   profiles: {
-                    scout: claude(routes[0]!),
-                    reviewer: claude(routes[1]!),
-                    researcher: claude(routes[2]!),
-                    planner: claude(routes[3]!),
-                    worker: claude(routes[4]!),
-                    oracle: claude(routes[5]!),
+                    scout: pi(routes[0]!),
+                    reviewer: pi(routes[1]!),
+                    researcher: pi(routes[2]!),
+                    planner: pi(routes[3]!),
+                    worker: pi(routes[4]!),
+                    oracle: pi(routes[5]!),
                   },
                 },
               },
@@ -189,7 +189,7 @@ describe("subagents doctor", () => {
       );
       const checks = yield* doctor({
         pi: extensionApiFixture(),
-        ctx: extensionContextFixture(),
+        ctx: doctorContext(),
         agentDirectory,
         activityViewAvailable: true,
         projectTrusted: true,
@@ -218,7 +218,7 @@ describe("subagents doctor", () => {
       yield* writeFile(path.join(checkout, ".worktreeinclude"), "# local\n.env\nconfig/*.local\n");
       const checks = yield* doctor({
         pi: extensionApiFixture(),
-        ctx: extensionContextFixture({ cwd: checkout }),
+        ctx: doctorContext({ cwd: checkout }),
         agentDirectory,
         activityViewAvailable: true,
         projectTrusted: false,
@@ -238,7 +238,7 @@ describe("subagents doctor", () => {
       const probed: string[] = [];
       const checks = yield* doctor({
         pi: extensionApiFixture(),
-        ctx: extensionContextFixture(),
+        ctx: doctorContext(),
         agentDirectory,
         activityViewAvailable: undefined,
         projectTrusted: true,
@@ -270,7 +270,7 @@ describe("subagents doctor", () => {
       expect(byLabel.get("Agent strict-review")?.status).toBe("warning");
       expect(byLabel.get("Agent broken")?.status).toBe("failed");
       // Agents share routes with their profiles, which are probed once.
-      expect(Arr.filter(probed, (model) => model === "haiku")).toHaveLength(1);
+      expect(Arr.filter(probed, (model) => model === "test/haiku")).toHaveLength(1);
     }).pipe(Effect.scoped),
   );
 });

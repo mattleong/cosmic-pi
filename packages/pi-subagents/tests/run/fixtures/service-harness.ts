@@ -13,7 +13,6 @@ import type {
   BackendEvent,
   BackendAgentMessaging,
   BackendLaunchRequest,
-  BackendReport,
 } from "../../../src/backend/model.ts";
 import { backendRegistryFor, SubagentBackendRegistry } from "../../../src/backend/service.ts";
 import {
@@ -36,12 +35,12 @@ import {
 import type { OversizedLine } from "../../../src/boundary/bounded-line-parser.ts";
 import type { ProcessExit } from "../../../src/boundary/process-transport.ts";
 import { runNotFound, SubagentProcessError } from "../../../src/run/errors.ts";
-import type {
-  StartSubagentRequest,
-  SteeringDeliveryState,
-  SubagentProjection,
-  SubagentCleanupDiagnostic,
-  SubagentRunView,
+import {
+  emptyUsage,
+  type StartSubagentRequest,
+  type SubagentProjection,
+  type SubagentCleanupDiagnostic,
+  type SubagentRunView,
 } from "../../../src/run/model.ts";
 import type { ProfileRouteContinuation } from "../../../src/profiles/model.ts";
 import { profileCandidate } from "../../fixtures/profiles.ts";
@@ -674,16 +673,13 @@ export function fakeWriterLeaseLayer(
 }
 
 // The fake children never run Node. Skipping the real Node-binary check keeps launches free of
-// filesystem I/O, so polling a forked start stays deterministic. Other runtimes' drivers may join.
-const localPiBackendRegistryLayer = (otherDrivers: ReadonlyArray<BackendDriver> = []) =>
-  Layer.effect(
-    SubagentBackendRegistry,
-    ChildProcess.use((childProcesses) =>
-      Effect.succeed(
-        backendRegistryFor([localPiBackendDriver(childProcesses, Effect.void), ...otherDrivers]),
-      ),
-    ),
-  );
+// filesystem I/O, so polling a forked start stays deterministic.
+const localPiBackendRegistryLayer = Layer.effect(
+  SubagentBackendRegistry,
+  ChildProcess.use((childProcesses) =>
+    Effect.succeed(backendRegistryFor(localPiBackendDriver(childProcesses, Effect.void))),
+  ),
+);
 
 const layerOver = <R>(
   registry: Layer.Layer<SubagentBackendRegistry, never, R>,
@@ -700,41 +696,33 @@ export const serviceLayer = (
   options: SubagentServiceOptions = {},
   profiles?: ReturnType<typeof profileLayerFor>,
   writerLeases?: Layer.Layer<WriterLeaseService>,
-  otherDrivers?: ReadonlyArray<BackendDriver>,
-) => layerOver(localPiBackendRegistryLayer(otherDrivers), options, profiles, writerLeases);
+) => layerOver(localPiBackendRegistryLayer, options, profiles, writerLeases);
 
-interface FakeNativeReportControl {
+interface FakeEventBackendControl {
   readonly prompts: string[];
   readonly assignmentEpochs: number[];
   readonly terminations: Array<"graceful" | "force">;
-  readonly offer: (
-    event: BackendEvent | ({ readonly type: "report" } & Omit<BackendReport, "assignmentEpoch">),
-  ) => void;
-  readonly report: (
-    runId: string,
-    sequence: number,
-    deliveryId: string,
-    text: string,
-    extra?: { readonly evidence?: string },
-  ) => void;
+  readonly offer: (event: BackendEvent) => void;
+  /** Ends the current assignment with `text` as its final reply, as a Pi child settles. */
+  readonly complete: (text: string) => void;
   readonly released: () => number;
 }
 
-export function fakeNativeReportBackendLayer(
+/** A backend whose test emits normalized events directly, without the Pi wire protocol. */
+export function fakeEventBackendLayer(
   options: {
     readonly initialStartGate?: Deferred.Deferred<void> | undefined;
     readonly interruptGate?: Deferred.Deferred<void> | undefined;
     readonly capabilities?: BackendDriver["capabilities"] | undefined;
     readonly releaseGate?: Deferred.Deferred<void> | undefined;
-    /** Replaces recorded guidance delivery, such as with a still-pending confirmation. */
+    /** Replaces recorded guidance delivery, such as with a failed one. */
     readonly steer?: ((message: string) => Effect.Effect<void, SubagentProcessError>) | undefined;
   } = {},
 ) {
-  const controls: FakeNativeReportControl[] = [];
+  const controls: FakeEventBackendControl[] = [];
   const launches: BackendLaunchRequest[] = [];
   const agentMessaging: Array<BackendAgentMessaging | undefined> = [];
   const driver: BackendDriver = {
-    runtime: "claude",
     capabilities: options.capabilities ?? ["steer"],
     supportsContext: (context) => context === "fresh",
     preflight: () => Effect.void,
@@ -750,19 +738,25 @@ export function fakeNativeReportBackendLayer(
             : [];
           let releaseCount = 0;
           let assignmentEpoch = 0;
-          const offer: FakeNativeReportControl["offer"] = (event) => {
-            Queue.offerUnsafe(
-              events,
-              event.type === "report" ? { assignmentEpoch, ...event } : event,
-            );
+          const offer: FakeEventBackendControl["offer"] = (event) => {
+            Queue.offerUnsafe(events, event);
           };
-          const control: FakeNativeReportControl = {
+          const control: FakeEventBackendControl = {
             prompts,
             assignmentEpochs,
             terminations,
             offer,
-            report: (runId, sequence, deliveryId, text, extra) =>
-              offer({ type: "report", runId, sequence, deliveryId, text, ...extra }),
+            complete: (text) => {
+              const terminal = { stopReason: "stop" as const, text };
+              offer({
+                type: "assistant_message",
+                assignmentEpoch,
+                text,
+                usage: emptyUsage(),
+                terminal,
+              });
+              offer({ type: "run_settled", assignmentEpoch, terminal });
+            },
             released: () => releaseCount,
           };
           controls.push(control);
@@ -775,7 +769,7 @@ export function fakeNativeReportBackendLayer(
               awaitExit: Effect.never,
               controls: {
                 initialize: Effect.succeed({
-                  model: "claude-native",
+                  model: launch.model,
                   effort: "high" as const,
                   sessionId: "native-session",
                 }),
@@ -817,7 +811,7 @@ export function fakeNativeReportBackendLayer(
     controls,
     launches,
     agentMessaging,
-    layer: Layer.succeed(SubagentBackendRegistry, backendRegistryFor([driver])),
+    layer: Layer.succeed(SubagentBackendRegistry, backendRegistryFor(driver)),
   };
 }
 
@@ -840,17 +834,14 @@ export function localServiceFixture(
   fake = fakeChildLayer(),
   profiles = profileLayerFor({}),
   writerLeases = fakeWriterLeaseLayer(),
-  otherDrivers: ReadonlyArray<BackendDriver> = [],
 ) {
   const { projections, notifications, options: captured } = capturing(options);
-  const layer = serviceLayer(captured, profiles, writerLeases, otherDrivers).pipe(
-    Layer.provide(fake.layer),
-  );
+  const layer = serviceLayer(captured, profiles, writerLeases).pipe(Layer.provide(fake.layer));
   return { fake, projections, notifications, layer };
 }
 
-export function nativeReportServiceFixture(
-  backend = fakeNativeReportBackendLayer(),
+export function eventBackendServiceFixture(
+  backend = fakeEventBackendLayer(),
   options: SubagentServiceOptions = {},
   profiles = profileLayerFor({}),
 ) {
@@ -859,20 +850,17 @@ export function nativeReportServiceFixture(
   return { backend, projections, notifications, layer };
 }
 
-export const nativeReportFrame = (
-  runId: string,
-  assignmentEpoch: number,
-  sequence: number,
-  deliveryId: string,
-  text: string,
-): Extract<BackendEvent, { readonly type: "report" }> => ({
-  type: "report",
-  runId,
-  assignmentEpoch,
-  sequence,
-  deliveryId,
-  text,
-});
+/** A service whose only backend is `driver`, for drivers the fake Pi child can't stand in for. */
+export function driverServiceFixture(
+  driver: BackendDriver,
+  options: SubagentServiceOptions = {},
+  profiles = profileLayerFor({}),
+) {
+  const { projections, notifications, options: captured } = capturing(options);
+  const registry = Layer.succeed(SubagentBackendRegistry, backendRegistryFor(driver));
+  const layer = layerOver(registry, captured, profiles);
+  return { projections, notifications, layer };
+}
 
 export const assistantMessageEndFrame = (text: string) =>
   ({
@@ -883,12 +871,6 @@ export const assistantMessageEndFrame = (text: string) =>
       content: [{ type: "text", text }],
     },
   }) as const;
-
-export const inputDeliveryFrame = (
-  assignmentEpoch: number,
-  sequence: number,
-  state: SteeringDeliveryState,
-): BackendEvent => ({ type: "input_delivery", assignmentEpoch, sequence, state });
 
 export const contactParentFrame = (
   requestId: string,
@@ -908,7 +890,6 @@ export const askParent = (
   });
 
 export const request = (overrides: Partial<StartSubagentRequest> = {}): StartSubagentRequest => ({
-  runtime: "pi",
   task: "Inspect authentication",
   cwd: "/project",
   context: "fresh",
@@ -925,8 +906,8 @@ export const request = (overrides: Partial<StartSubagentRequest> = {}): StartSub
   ...overrides,
 });
 
-export const nativeReportRequest = (overrides: Partial<StartSubagentRequest> = {}) =>
-  request({ runtime: "claude", model: "claude-native", effortWasExplicit: false, ...overrides });
+export const eventBackendRequest = (overrides: Partial<StartSubagentRequest> = {}) =>
+  request({ model: "fake/event-backend", effortWasExplicit: false, ...overrides });
 
 export const reviewerContinuation = (selectedCandidateIndex: number): ProfileRouteContinuation => ({
   candidates: [profileCandidate("openai-codex/gpt-5.6-sol"), profileCandidate("parent")],

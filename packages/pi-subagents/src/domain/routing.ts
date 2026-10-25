@@ -7,7 +7,6 @@ import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 
 export type SubagentContextMode = "fresh" | "fork";
 export type SubagentWriteIntent = "writer" | "read-only";
-export type SubagentRuntime = "pi" | "claude";
 
 export const SUBAGENT_EFFORTS = [
   "off",
@@ -19,19 +18,6 @@ export const SUBAGENT_EFFORTS = [
   "max",
 ] as const;
 export type SubagentEffort = (typeof SUBAGENT_EFFORTS)[number];
-
-const SUBAGENT_RUNTIME_EFFORTS = {
-  pi: SUBAGENT_EFFORTS,
-  claude: ["low", "medium", "high", "xhigh", "max"],
-} as const satisfies Readonly<Record<SubagentRuntime, ReadonlyArray<SubagentEffort>>>;
-
-export const subagentRuntimeEfforts = (runtime: SubagentRuntime): ReadonlyArray<SubagentEffort> =>
-  SUBAGENT_RUNTIME_EFFORTS[runtime];
-
-export const subagentRuntimeSupportsEffort = (
-  runtime: SubagentRuntime,
-  effort: SubagentEffort,
-): boolean => subagentRuntimeEfforts(runtime).includes(effort);
 
 /**
  * The supported effort nearest to `effort`, the way Pi clamps thinking levels: the next higher

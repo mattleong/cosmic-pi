@@ -21,7 +21,6 @@ import {
   MAX_PROFILE_CANDIDATES,
   PROFILE_CANDIDATE_CONTEXTS,
   PROFILE_CANDIDATE_EFFORTS,
-  PROFILE_CANDIDATE_RUNTIMES,
   PROFILE_CANDIDATE_WRITE_INTENTS,
   PROFILE_IDS,
   profileCandidateValidationIssues,
@@ -220,7 +219,6 @@ const hasValidCandidatePolicy = Schema.makeFilter((candidate: ProfileCandidate) 
 );
 
 const ProfileCandidateSchema = Schema.Struct({
-  runtime: Schema.Literals(PROFILE_CANDIDATE_RUNTIMES),
   model: Schema.String,
   effort: Schema.Literals(PROFILE_CANDIDATE_EFFORTS),
   context: Schema.Literals(PROFILE_CANDIDATE_CONTEXTS),

@@ -4,7 +4,6 @@ import type { SubagentError } from "./errors.ts";
 import type {
   SubagentContextMode,
   SubagentEffort,
-  SubagentRuntime,
   SubagentWriteIntent,
 } from "../domain/routing.ts";
 import type { SubagentNestingPolicy, WriterWorkspaceMode } from "../config/schema.ts";
@@ -49,7 +48,7 @@ export interface SubagentUsage {
   readonly cacheWrite: number;
   readonly totalTokens: number;
   readonly cost?: number | undefined;
-  /** Latest share of the child's context window in use, when the runtime reports it. */
+  /** Latest share of the child's context window in use, when the child reports it. */
   readonly contextPercent?: number | undefined;
 }
 
@@ -91,42 +90,11 @@ interface PendingParentQuestion {
   readonly message: string;
 }
 
-interface SubagentNativeActivity {
-  readonly active: number;
-  readonly total: number;
-  readonly latest?:
-    | {
-        readonly id?: string | undefined;
-        readonly kind: string;
-        readonly state: "running" | "activity" | "completed" | "failed" | "stopped";
-        readonly updatedAt: number;
-      }
-    | undefined;
-}
-
-export const STEERING_DELIVERY_STATES = [
-  "pending",
-  "confirmed",
-  "not-sent",
-  "report-unconfirmed",
-  "unresolved",
-] as const;
-export type SteeringDeliveryState = (typeof STEERING_DELIVERY_STATES)[number];
-
-export const hasUnresolvedSteeringDelivery = (run: {
-  readonly steeringDelivery?: SteeringDeliveryState | undefined;
-}): boolean => run.steeringDelivery === "pending" || run.steeringDelivery === "unresolved";
-
-/**
- * The candidate to suggest once a run failed: only the root's start takes a model, and unresolved
- * guidance leaves it unclear whether the run acted on that guidance.
- */
+/** The candidate to suggest once a run failed: only the root's start takes a model. */
 export const failedRunNextCandidate = (
-  run: Pick<SubagentRunView, "nextCandidate" | "parentRunId" | "steeringDelivery">,
+  run: Pick<SubagentRunView, "nextCandidate" | "parentRunId">,
 ): SubagentNextCandidate | undefined =>
-  run.parentRunId === SUBAGENT_ROOT_RUN_ID && !hasUnresolvedSteeringDelivery(run)
-    ? run.nextCandidate
-    : undefined;
+  run.parentRunId === SUBAGENT_ROOT_RUN_ID ? run.nextCandidate : undefined;
 
 export interface SubagentCleanupDiagnostic {
   readonly phase:
@@ -187,14 +155,14 @@ export interface SubagentReportTruncation {
  * The frozen launch route's candidate after the one a run used, which a failed run's parent may
  * start a new run on, or `none` when the route has no other.
  */
-export type SubagentNextCandidate = Pick<ProfileCandidate, "runtime" | "model" | "effort"> | "none";
+export type SubagentNextCandidate = Pick<ProfileCandidate, "model" | "effort"> | "none";
 
 export const nextRouteCandidate = ({
   candidates,
   selectedCandidateIndex,
 }: ProfileRouteContinuation): SubagentNextCandidate => {
   const next = candidates[selectedCandidateIndex + 1];
-  return next ? { runtime: next.runtime, model: next.model, effort: next.effort } : "none";
+  return next ? { model: next.model, effort: next.effort } : "none";
 };
 
 /** The candidate a frozen route selected, as a next-candidate hint names it. */
@@ -220,7 +188,6 @@ export interface SubagentReportArchive {
 export interface SubagentRunView {
   readonly cleanup?: SubagentCleanup | undefined;
   readonly writerCleanupQuarantined?: boolean | undefined;
-  readonly steeringDelivery?: SteeringDeliveryState | undefined;
   readonly id: string;
   readonly name: string;
   readonly task: string;
@@ -233,7 +200,6 @@ export interface SubagentRunView {
   readonly depth?: number | undefined;
   readonly directChildCount?: number | undefined;
   readonly descendantCount?: number | undefined;
-  readonly nativeActivity?: SubagentNativeActivity | undefined;
   /** The frozen launch route's next candidate; absent for a run launched without a route. */
   readonly nextCandidate?: SubagentNextCandidate | undefined;
   readonly cwd: string;
@@ -245,7 +211,6 @@ export interface SubagentRunView {
   readonly context: SubagentContextMode;
   readonly writeIntent: SubagentWriteIntent;
   readonly openaiFastMode: boolean;
-  readonly runtime: SubagentRuntime;
   readonly reportGeneration: number;
   readonly assignmentEpoch: number;
   readonly capabilities: ReadonlyArray<SubagentCapability>;
@@ -344,7 +309,6 @@ export interface StartSubagentRequest {
   readonly name?: string | undefined;
   readonly parentRunId?: string | undefined;
   readonly nestingPolicy?: SubagentNestingPolicy | undefined;
-  readonly runtime: SubagentRuntime;
   readonly task: string;
   readonly profile?: ProfileId | undefined;
   /** A custom agent's name; its instructions arrive as `profileGuidance`. */
@@ -371,14 +335,11 @@ export interface StartSubagentRequest {
   readonly parentSessionId: string;
   readonly parentSessionFile?: string | undefined;
   readonly parentLeafId?: string | undefined;
-  /** A same-model fork whose requests can reuse the parent's cached prompt prefix. */
-  readonly sharesParentPromptCache?: boolean | undefined;
 }
 
 /** The launch facts that change with the route candidate a start runs on. */
 export type StartCandidate = Pick<
   StartSubagentRequest,
-  | "runtime"
   | "model"
   | "effort"
   | "effortWasExplicit"
@@ -387,7 +348,6 @@ export type StartCandidate = Pick<
   | "openaiFastMode"
   | "runtimeApiKey"
   | "activeTools"
-  | "sharesParentPromptCache"
 > & {
   readonly selection: SubagentSelectionProvenance;
   readonly routeContinuation: ProfileRouteContinuation;
@@ -398,7 +358,7 @@ export const onStartCandidate = (
   request: StartSubagentRequest,
   candidate: StartCandidate,
 ): StartSubagentRequest => {
-  const { runtimeApiKey: _runtimeApiKey, sharesParentPromptCache: _shared, ...shared } = request;
+  const { runtimeApiKey: _runtimeApiKey, ...shared } = request;
   return { ...shared, ...candidate };
 };
 
@@ -407,17 +367,6 @@ export interface RouteFallbackRequest {
   readonly selection: SubagentSelectionProvenance;
   /** That candidate, as the launch passed it over. */
   readonly failed: SkippedProfileCandidate;
-  /**
-   * Runtimes whose own startup failed during this launch, each with the failure that showed it;
-   * their remaining candidates are skipped without a probe.
-   */
-  readonly failedRuntimes: ReadonlyMap<SubagentRuntime, SkippedProfileCandidate>;
-}
-
-/** A candidate whose readiness probe couldn't confirm its cleanup or its outcome. */
-export interface UnsafeCandidateProbe {
-  readonly candidate: SkippedProfileCandidate;
-  readonly error: SubagentError;
 }
 
 export interface RouteFallbackStep {
@@ -425,8 +374,6 @@ export interface RouteFallbackStep {
   readonly skippedCandidates: ReadonlyArray<SkippedProfileCandidate>;
   /** The next candidate that passed planning and preflight; absent once the route is exhausted. */
   readonly next?: StartCandidate | undefined;
-  /** Ends the route at a candidate whose probe may have left a process behind. */
-  readonly unsafe?: UnsafeCandidateProbe | undefined;
 }
 
 /**

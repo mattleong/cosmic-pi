@@ -87,8 +87,8 @@ const formatProfileDiscovery = (
     [
       "Profile routes · static preflight",
       `Profile omitted → ${fallbackProfile}`,
-      "Each candidate lists runtime/model, effort, context, write intent, and fast mode.",
-      "Static eligibility only · executable, authentication, integration, and private-harness checks run at launch.",
+      "Each candidate lists model, effort, context, write intent, and fast mode.",
+      "Static eligibility only · executable and authentication checks run at launch.",
       "",
       ...Arr.flatMap(profiles, (profile) => [
         `${profile.id}${profile.isDefault ? " · when omitted" : ""} — ${profile.description}`,
@@ -117,21 +117,18 @@ const candidateDiscovery = (
     return Object.assign({}, candidate, {
       status: attempt ? ("eligible" as const) : ("skipped" as const),
       reason: attempt
-        ? "Candidate adapter is statically eligible before native authentication/integration/harness readiness."
+        ? "Candidate is statically eligible before model authentication and readiness checks."
         : (omitted?.reason ?? "Candidate was not eligible."),
     });
   });
 };
 
-// An agent's candidates show its overrides; one its overrides don't fit stays as declared.
+// An agent's candidates show its overrides.
 const agentCandidates = (
   candidates: ReadonlyArray<ProfileCandidate>,
   agent: CustomAgent,
 ): ReadonlyArray<ProfileCandidate> =>
-  Arr.map(candidates, (candidate) => {
-    const applied = customAgentCandidate(candidate, agent);
-    return applied.kind === "eligible" ? applied.candidate : candidate;
-  });
+  Arr.map(candidates, (candidate) => customAgentCandidate(candidate, agent));
 
 const agentView = (
   {

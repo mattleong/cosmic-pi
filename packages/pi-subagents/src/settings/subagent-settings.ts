@@ -37,7 +37,7 @@ import {
   type SubagentNestingOverrides,
 } from "../config/schema.ts";
 import type { WriterWorkspaceInspection } from "../run/workspace-control.ts";
-import type { FleetManagerActions } from "./controller.ts";
+import type { SubagentCommandActions } from "./controller.ts";
 import {
   SCOPE_LABELS,
   type ProfileSettingsInspection,
@@ -148,14 +148,14 @@ const scopedSettingItem = (
   };
 };
 
-export function subagentSettingsSubcommand(actions: FleetManagerActions): ExtensionSubcommand {
+export function subagentSettingsSubcommand(actions: SubagentCommandActions): ExtensionSubcommand {
   return withInvocationAuthority(actions.captureAuthority, (isCurrent, owner) =>
     subagentSettingsCommand(actions, isCurrent, owner),
   );
 }
 
 function subagentSettingsCommand(
-  actions: FleetManagerActions,
+  actions: SubagentCommandActions,
   isCurrent: () => boolean,
   saveOwner: SettingsCommandOwner,
 ): ExtensionSubcommand {

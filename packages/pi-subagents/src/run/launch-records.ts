@@ -74,7 +74,6 @@ export const initialRunView = (
   context: request.context,
   writeIntent: request.writeIntent,
   openaiFastMode: request.openaiFastMode,
-  runtime: request.runtime,
   reportGeneration: 0,
   capabilities,
   model: request.model,
@@ -103,7 +102,6 @@ export const backendLaunchRequest = (
   parentSessionId: request.parentSessionId,
   ...(request.parentSessionFile && { parentSessionFile: request.parentSessionFile }),
   ...(request.parentLeafId && { parentLeafId: request.parentLeafId }),
-  ...(request.sharesParentPromptCache && { sharesParentPromptCache: true }),
   systemPrompt: childSystemPrompt(request),
 });
 

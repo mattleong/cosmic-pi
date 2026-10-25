@@ -44,7 +44,6 @@ const rawRestore = (
 const candidatesKey = (draft: ProfileRouteDraft): string =>
   JSON.stringify(
     Arr.map(draft.candidates, (c) => [
-      c.runtime,
       c.model,
       c.effort,
       c.context,

@@ -17,11 +17,7 @@ import {
   type ProfileCandidateValidationIssueCode,
   type ProfileId,
 } from "../profiles/model.ts";
-import {
-  subagentRuntimeEfforts,
-  type SubagentEffort,
-  type SubagentRuntime,
-} from "../domain/routing.ts";
+import { SUBAGENT_EFFORTS, type SubagentEffort } from "../domain/routing.ts";
 
 export type ProfileSettingsScope = "session" | SubagentConfigScope;
 
@@ -57,25 +53,16 @@ export interface ProfileRouteDraft {
   readonly candidates: ReadonlyArray<ProfileCandidate>;
 }
 
-interface CandidateControlDefaults {
-  readonly nativeModel?: string | undefined;
-}
-
 export interface CandidateUpdate {
   readonly candidate?: ProfileCandidate | undefined;
   readonly notices: ReadonlyArray<string>;
   readonly error?: string | undefined;
 }
 
-export const runtimeEfforts = (
-  runtime: SubagentRuntime,
+/** The model's reasoning levels when the catalog knows them, otherwise every level. */
+export const candidateEfforts = (
   supportedModelEfforts?: ReadonlyArray<SubagentEffort>,
-): ReadonlyArray<SubagentEffort> => {
-  const supportedByRuntime = subagentRuntimeEfforts(runtime);
-  return supportedModelEfforts
-    ? Arr.filter(supportedModelEfforts, (effort) => supportedByRuntime.includes(effort))
-    : supportedByRuntime;
-};
+): ReadonlyArray<SubagentEffort> => supportedModelEfforts ?? SUBAGENT_EFFORTS;
 
 const profileSetAt = (inspection: ProfileSettingsInspection, set: PersistentProfileSetRef) => {
   const profileSets = inspection[set.scope]?.file.profileSets;
@@ -207,13 +194,6 @@ export const duplicateRouteCandidate = (
 export const defaultRouteCandidate = (profile: ProfileId): ProfileCandidate =>
   cloneCandidate(builtinProfileCandidate(profile));
 
-const RUNTIME_LABELS = {
-  pi: "Pi",
-  claude: "Claude",
-} as const satisfies Record<SubagentRuntime, string>;
-
-export const runtimeLabel = (runtime: SubagentRuntime): string => RUNTIME_LABELS[runtime];
-
 export const profileRouteOptionLabel = (index: number): string =>
   index <= 0 ? "Primary" : `Fallback ${index}`;
 
@@ -226,15 +206,9 @@ const candidateIssueMessage = (
 ): string => {
   switch (code) {
     case "model_selector_invalid":
-      return `Model is not a valid ${runtimeLabel(candidate.runtime)} model name.`;
-    case "parent_requires_local_pi":
-      return "The parent model is available only with Local Pi.";
-    case "fork_requires_local_pi":
-      return "Fork is available only with Local Pi.";
+      return "Model is not a valid Pi model name.";
     case "fast_mode_unsupported":
-      return `Fast mode is not available with ${runtimeLabel(candidate.runtime)}/${candidate.model}.`;
-    case "effort_unsupported":
-      return `${runtimeLabel(candidate.runtime)} does not support the ${candidate.effort} reasoning level.`;
+      return `Fast mode is not available with ${candidate.model}.`;
   }
   return Fn.absurd(code);
 };
@@ -246,60 +220,32 @@ const candidateValidationError = (candidate: ProfileCandidate): string | undefin
 
 export function updateCandidateControls(
   candidate: ProfileCandidate,
-  patch: Partial<Pick<ProfileCandidate, "runtime" | "writeIntent">>,
-  defaults: CandidateControlDefaults,
+  patch: Partial<Pick<ProfileCandidate, "writeIntent">>,
 ): CandidateUpdate {
-  const notices: string[] = [];
-  let next: ProfileCandidate = { ...candidate, ...patch };
-
-  if (patch.runtime !== undefined && patch.runtime !== candidate.runtime) {
-    const model = patch.runtime === "pi" ? "parent" : defaults.nativeModel;
-    if (!model)
-      return {
-        notices,
-        error: `Choose a ${runtimeLabel(patch.runtime)} model.`,
-      };
-    next = { ...next, model };
-    notices.push(`Model changed to ${model} for ${runtimeLabel(patch.runtime)}.`);
-  }
-
-  for (;;) {
-    const issue = profileCandidateValidationIssues(next)[0];
-    if (!issue) return { candidate: next, notices };
-    switch (issue.code) {
-      case "model_selector_invalid":
-      case "parent_requires_local_pi":
-        return { notices, error: candidateIssueMessage(next, issue.code) };
-      case "fork_requires_local_pi":
-        next = { ...next, context: "fresh" };
-        notices.push("Fork works only with Local Pi. Context changed to Fresh.");
-        break;
-      case "fast_mode_unsupported":
-        next = { ...next, openaiFastMode: false };
-        notices.push("The selected model does not support fast mode. Fast mode turned off.");
-        break;
-      case "effort_unsupported":
-        notices.push(
-          `${runtimeLabel(next.runtime)} does not support the ${next.effort} reasoning level. Reasoning changed to the profile default.`,
-        );
-        next = { ...next, effort: "default" };
-        break;
-    }
-  }
+  const next: ProfileCandidate = { ...candidate, ...patch };
+  const issues = new Set(Arr.map(profileCandidateValidationIssues(next), (issue) => issue.code));
+  if (issues.has("model_selector_invalid"))
+    return { notices: [], error: candidateIssueMessage(next, "model_selector_invalid") };
+  return issues.has("fast_mode_unsupported")
+    ? {
+        candidate: { ...next, openaiFastMode: false },
+        notices: ["The selected model does not support fast mode. Fast mode turned off."],
+      }
+    : { candidate: next, notices: [] };
 }
 
 export function updateCandidateModel(
   candidate: ProfileCandidate,
   model: string,
   supportedEfforts?: ReadonlyArray<SubagentEffort>,
-  fastModeAvailable = model === "parent" || supportsSubagentFastMode(candidate.runtime, model),
+  fastModeAvailable = supportsSubagentFastMode(model),
 ): CandidateUpdate {
   let next = { ...candidate, model };
   const notices: string[] = [];
   if (
     next.effort !== "default" &&
     supportedEfforts !== undefined &&
-    !runtimeEfforts(candidate.runtime, supportedEfforts).includes(next.effort)
+    !supportedEfforts.includes(next.effort)
   ) {
     next = { ...next, effort: "default" };
     notices.push(

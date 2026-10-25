@@ -40,7 +40,6 @@ describe("subagent detail evidence", () => {
         ...run.selection,
         skippedCandidates: Array.from({ length: 8 }, () => ({
           candidate: {
-            runtime: "pi" as const,
             model: Fn.pipe("c", Str.repeat(1_000)),
             effort: "high" as const,
           },
@@ -70,14 +69,14 @@ describe("subagent detail evidence", () => {
 
   it("marks unconfirmed and failed targets as tool failures", () => {
     for (const failure of [
-      { id: "unconfirmed", code: "steer_outcome_uncertain", message: "May have applied." },
+      { id: "unconfirmed", code: "guidance_outcome_uncertain", message: "May have applied." },
       { id: "definite", code: "not_running", message: "Not running" },
     ]) {
       const details = compactToolDetails({ action: "stop", runs: [], actionFailures: [failure] });
       expect(decodeCompactToolDetails(details)).toEqual(details);
       expect(hasSubagentToolFailure(details)).toBe(true);
     }
-    expect(actionFailureDisposition({ code: "steer_outcome_uncertain" })).toBe("unconfirmed");
+    expect(actionFailureDisposition({ code: "guidance_outcome_uncertain" })).toBe("unconfirmed");
     expect(actionFailureDisposition({ code: "not_running" })).toBe("failed");
   });
 });

@@ -102,8 +102,7 @@ describe("discovery contracts", () => {
           defaultWriteIntent: "read-only",
           candidates: [
             {
-              runtime: "claude",
-              model: "sonnet",
+              model: "claude-bridge/claude-sonnet-5-5",
               effort: "high",
               context: "fresh",
               writeIntent: "read-only",

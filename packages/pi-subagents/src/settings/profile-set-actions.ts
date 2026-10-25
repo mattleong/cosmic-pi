@@ -1,6 +1,6 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
-import type { FleetManagerActions } from "./controller.ts";
+import type { SubagentCommandActions } from "./controller.ts";
 import { PROFILE_IDS } from "../profiles/model.ts";
 import {
   resolvedSet,
@@ -15,7 +15,7 @@ export interface ProfileSetSaveDestination {
   readonly name: string;
 }
 export interface ProfileSetActionHost {
-  readonly actions: FleetManagerActions;
+  readonly actions: SubagentCommandActions;
   readonly inspection: () => ProfileSettingsInspection;
   readonly isCurrent: () => boolean;
   readonly trusted: () => boolean;
@@ -124,7 +124,7 @@ const useSet = (
               resolved.profiles[profile].candidates,
               Arr.map(
                 (candidate) =>
-                  `local/${candidate.runtime} ${candidate.model}${candidate.openaiFastMode ? " ⚡" : ""} · ${candidate.effort}`,
+                  `${candidate.model}${candidate.openaiFastMode ? " ⚡" : ""} · ${candidate.effort}`,
               ),
               Arr.join(" → "),
             ) || "disabled"

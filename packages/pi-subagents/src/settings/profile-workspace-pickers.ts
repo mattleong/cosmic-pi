@@ -3,11 +3,10 @@ import * as Option from "effect/Option";
 import type { SearchableSelectPage } from "pi-cosmic-ui/manager/searchable-select";
 import { PROFILE_IDS, type ProfileCandidate } from "../profiles/model.ts";
 import type { SubagentEffort } from "../domain/routing.ts";
-import { updateCandidateControls, updateCandidateModel } from "./profile-route-editor.ts";
+import { updateCandidateModel } from "./profile-route-editor.ts";
 import { profileModelPickerPage } from "./ui/model-picker.ts";
 import {
   candidateFastModeAvailable,
-  runWithChoice,
   type SelectableCandidateField,
 } from "./ui/profile-workspace-model.ts";
 import {
@@ -17,7 +16,6 @@ import {
   shortTargetLabel,
 } from "./ui/profile-workspace-selectors.ts";
 import { ProfileWorkspaceSave } from "./profile-workspace-save.ts";
-import type { ModelPickerOpening } from "./profile-workspace-state.ts";
 export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
   protected beginCatalogLoad(message: string): AbortController {
     const controller = new AbortController();
@@ -78,21 +76,9 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
         supportedEfforts,
         fastModeAvailable,
         notice,
-        select: (update, value) => {
+        select: (update) => {
           this.selectPage = undefined;
           this.candidateIndex = candidateIndex;
-          const runWith = field === "runWith" ? runWithChoice(value) : undefined;
-          if (runWith && runWith.runtime !== candidate.runtime && runWith.runtime !== "pi") {
-            this.openModelPicker(candidate, { nativeSwitch: runWith });
-            return;
-          }
-          if (runWith && update.candidate && update.candidate.runtime !== candidate.runtime) {
-            this.openModelPicker(update.candidate, {
-              preferAdvertisedDefault: true,
-              priorNotices: update.notices,
-            });
-            return;
-          }
           this.applyCandidateUpdate(update);
         },
         cancel: () => this.closeSelectPage(),
@@ -100,15 +86,9 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
     );
   }
 
-  protected openCapabilityPicker(
-    candidate: ProfileCandidate,
-    field: "openaiFastMode" | "effort",
-  ): void {
+  protected openFastModePicker(candidate: ProfileCandidate): void {
     const candidateIndex = this.candidateIndex;
-    const fastMode = field === "openaiFastMode";
-    const controller = this.beginCatalogLoad(
-      fastMode ? "Checking fast mode…" : "Loading reasoning levels…",
-    );
+    const controller = this.beginCatalogLoad("Checking fast mode…");
     void this.options
       .loadModelPicker(this.profile(), candidateIndex, candidate, controller.signal)
       .then((picker) => {
@@ -119,31 +99,21 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
         this.candidateIndex = candidateIndex;
         this.showFieldPicker(
           candidate,
-          field,
-          fastMode ? undefined : current?.supportedEfforts,
-          fastMode
-            ? (current?.fastModeAvailable ??
-                candidateFastModeAvailable(candidate, this.options.parentModel))
-            : undefined,
+          "openaiFastMode",
+          undefined,
+          current?.fastModeAvailable ??
+            candidateFastModeAvailable(candidate, this.options.parentModel),
           picker.warning,
         );
         return undefined;
       })
       .catch((cause: unknown) => {
         if (!this.finishCatalogLoad(controller)) return;
-        this.notice(
-          "error",
-          cause instanceof Error
-            ? cause.message
-            : fastMode
-              ? "Could not check fast mode."
-              : "Could not load reasoning levels.",
-        );
+        this.notice("error", cause instanceof Error ? cause.message : "Could not check fast mode.");
       });
   }
 
-  protected openModelPicker(candidate: ProfileCandidate, opening: ModelPickerOpening = {}): void {
-    const { nativeSwitch, priorNotices = [] } = opening;
+  protected openModelPicker(candidate: ProfileCandidate): void {
     const candidateIndex = this.addingCandidate
       ? this.draft().candidates.length
       : this.candidateIndex;
@@ -151,13 +121,7 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
       this.addingCandidate ? "Choose a model for the new fallback…" : "Loading models…",
     );
     void this.options
-      .loadModelPicker(
-        this.profile(),
-        candidateIndex,
-        nativeSwitch ? { ...candidate, ...nativeSwitch } : candidate,
-        controller.signal,
-        nativeSwitch !== undefined,
-      )
+      .loadModelPicker(this.profile(), candidateIndex, candidate, controller.signal)
       .then((picker) => {
         if (!this.finishCatalogLoad(controller)) return undefined;
         if (picker.choices.length === 0) {
@@ -169,35 +133,20 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
           ...selectHost(this.options),
           choices: picker.choices,
           scopedChoices: picker.scopedChoices,
-          initialSelection:
-            opening.preferAdvertisedDefault || nativeSwitch
-              ? (picker.defaultSelector ?? picker.current)
-              : picker.current,
+          initialSelection: picker.current,
           context: picker.context,
           targetLabel: shortTargetLabel(this.options.target),
           notice: picker.warning,
           select: (option) => {
             this.modelPicker = undefined;
             if (!this.addingCandidate) this.candidateIndex = candidateIndex;
-            const switched = nativeSwitch
-              ? updateCandidateControls(candidate, nativeSwitch, {
-                  nativeModel: option.selector,
-                })
-              : { candidate, notices: [] };
-            if (!switched.candidate) {
-              this.applyCandidateUpdate(switched);
-              return;
-            }
             const update = updateCandidateModel(
-              switched.candidate,
+              candidate,
               option.selector,
               option.supportedEfforts,
               option.fastModeAvailable,
             );
-            this.applyCandidateUpdate({
-              ...update,
-              notices: [...priorNotices, ...switched.notices, ...update.notices],
-            });
+            this.applyCandidateUpdate(update);
           },
           cancel: () => {
             this.modelPicker = undefined;

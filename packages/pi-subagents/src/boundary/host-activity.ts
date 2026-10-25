@@ -71,7 +71,6 @@ export const runSubagentActivityAction = (
   id: string,
   request: SubagentActivityRequest,
   expected: SubagentControlExpectation,
-  onPendingGuidance: () => void,
 ): Effect.Effect<void, SubagentError> => {
   switch (request.action) {
     case "stop":
@@ -83,11 +82,7 @@ export const runSubagentActivityAction = (
       return service.rename(id, request.input, expected).pipe(Effect.asVoid);
     case "message":
     case "reply":
-      return service
-        .send(id, request.input, expected)
-        .pipe(
-          Effect.flatMap((sent) => (sent.confirmed ? Effect.void : Effect.sync(onPendingGuidance))),
-        );
+      return service.send(id, request.input, expected).pipe(Effect.asVoid);
   }
   return Fn.absurd(request);
 };

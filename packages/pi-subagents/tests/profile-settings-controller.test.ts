@@ -9,11 +9,9 @@ import {
   plainTheme,
   recordingExtensionHost,
 } from "pi-cosmic-core/testing";
-import { subagentProjectionBridge } from "../src/boundary/host-ui.ts";
 import {
-  fleetManagerActionsFixture,
+  subagentCommandActionsFixture,
   profileSettingsInspection,
-  openRegisteredFleet,
 } from "./fixtures/profile-settings-inspection.ts";
 import { SubagentConfigConflictError, SubagentConfigStoreError } from "../src/config/store.ts";
 import {
@@ -21,15 +19,10 @@ import {
   SessionProfileConflictError,
   SessionProfileInvalidError,
 } from "../src/profiles/session-overrides.ts";
-import type { SubagentRunView } from "../src/run/model.ts";
-import {
-  registerSubagentManagerCommand,
-  type FleetManagerActions,
-} from "../src/settings/controller.ts";
+import { registerSubagentManagerCommand } from "../src/settings/controller.ts";
 import { ProfileDashboardComponent } from "../src/settings/profile-dashboard-component.ts";
 import type { ProfileSettingsInspection } from "../src/settings/profile-route-editor.ts";
 import { mountingCustomUi } from "./fixtures/pi-host.ts";
-import { projectionOf, view } from "./fixtures/run-view.ts";
 import { effectTest, step } from "./support/effect-test.ts";
 import * as Arr from "effect/Array";
 
@@ -58,7 +51,7 @@ const atSessionRevision = (
 });
 
 const actions = (value: ProfileSettingsInspection) =>
-  fleetManagerActionsFixture({
+  subagentCommandActionsFixture({
     inspectProfiles: vi.fn(() => Promise.resolve(value)),
     patchProfile: vi.fn(() => Promise.resolve(value.projectDocument ?? {})),
     restoreProfileDeclaration: vi.fn(() => Promise.resolve(value.projectDocument ?? {})),
@@ -75,7 +68,6 @@ const actions = (value: ProfileSettingsInspection) =>
     replaceSessionProfiles: vi.fn(() => Promise.resolve(value.session)),
     patchSessionNesting: vi.fn(() => Promise.resolve()),
     patchSessionDelegation: vi.fn(() => Promise.resolve()),
-    listNativeModels: () => Promise.resolve([]),
   });
 
 const setup = (
@@ -92,7 +84,7 @@ const setup = (
     rows: 30,
   });
   const managerActions = actions(options.value ?? inspection());
-  registerSubagentManagerCommand(pi, subagentProjectionBridge(), managerActions);
+  registerSubagentManagerCommand(pi, managerActions);
   let customImplementation: ExtensionUIContext["custom"] = custom;
   let customCalls = 0;
   const countedCustom: ExtensionUIContext["custom"] = (factory, customOptions) => {
@@ -469,63 +461,4 @@ describe("profile settings controller", () => {
     expect(fixture.managerActions.patchDelegation).not.toHaveBeenCalled();
     expect(fixture.ui.notify).toHaveBeenCalledWith(expect.stringMatching(/trust/iu), "error");
   });
-});
-
-const openFleet = (run: SubagentRunView, overrides: Partial<FleetManagerActions>) => {
-  const bridge = subagentProjectionBridge();
-  bridge.publish(projectionOf([run]));
-  return openRegisteredFleet((pi) =>
-    registerSubagentManagerCommand(pi, bridge, fleetManagerActionsFixture(overrides)),
-  );
-};
-
-const topLevel = (overrides: Partial<SubagentRunView> = {}) =>
-  view({ id: "child", name: "child", parentRunId: "root", depth: 1, ...overrides });
-
-describe("root /subagents fleet actions", () => {
-  effectTest("closes an idle fleet when its command is cancelled", function* () {
-    const { pi, commands } = recordingExtensionHost();
-    // An empty fleet has no refresh ticker or projection change to notice the cancellation.
-    registerSubagentManagerCommand(pi, subagentProjectionBridge(), fleetManagerActionsFixture({}));
-    const host = fakeCustomSurfaceHost({ theme: plainTheme, columns: 120, rows: 30 });
-    const command = new AbortController();
-    const ctx = extensionContextFixture({
-      hasUI: true,
-      mode: "tui",
-      ui: host.ctx.ui,
-      signal: command.signal,
-    });
-    const running = commands.get("subagents")?.handler("", ctx) ?? Promise.resolve();
-    yield* step(() =>
-      vi.waitFor(() => {
-        host.mount();
-        expect(host.overlays).toHaveLength(1);
-      }),
-    );
-    command.abort();
-    yield* step(() => running);
-    expect(host.overlays).toEqual([]);
-    expect(host.doneCalls).toBe(1);
-  });
-
-  effectTest(
-    "does not dispatch a retained fleet control into a replacement activation",
-    function* () {
-      let current = true;
-      const stop = vi.fn(() => Promise.resolve());
-      const fixture = yield* openFleet(topLevel(), {
-        stop,
-        captureModelRefresh: () => ({
-          isCurrent: () => current,
-          run: (effect, signal) => Effect.runPromise(effect, { signal }),
-        }),
-      });
-      fixture.press("x");
-      current = false;
-      fixture.press("\r");
-      expect(stop).not.toHaveBeenCalled();
-      expect(fixture.fleet.render(120)).toEqual([]);
-      yield* fixture.close();
-    },
-  );
 });

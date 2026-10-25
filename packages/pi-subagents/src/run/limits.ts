@@ -20,8 +20,8 @@ export const MAX_COMPLETION_DELIVERY_BATCH = 12;
 export const COMPLETION_RETRY_INITIAL_MILLIS = 100;
 export const COMPLETION_RETRY_MAX_MILLIS = 30_000;
 /**
- * The retained text of a child's progress, warning, or question. Every runtime accepts contact
- * messages up to `MAX_PARENT_MESSAGE_CHARS` and keeps a longer one's start with a marker naming
+ * The retained text of a child's progress, warning, or question. The root accepts contact
+ * messages of up to `MAX_PARENT_MESSAGE_CHARS` and keeps a longer one's start with a marker naming
  * its size. A question notice delivers the retained question whole, and agent_read returns a
  * question or warning whole; progress shows only as a bounded card field.
  */

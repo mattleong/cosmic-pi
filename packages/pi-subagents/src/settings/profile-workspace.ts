@@ -67,7 +67,6 @@ export interface ProfileWorkspaceOptions extends SearchableSelectHostOptions {
     candidateIndex: number,
     candidate: ProfileCandidate,
     signal?: AbortSignal,
-    modelPending?: boolean,
   ) => Promise<CandidateModelPickerData>;
   readonly supportedPiEfforts: (
     candidate: ProfileCandidate,
@@ -144,15 +143,8 @@ export class ProfileWorkspaceComponent
     field: Exclude<ProfileWorkspaceField, "reset" | "add" | "actions" | "advanced">,
   ): void {
     if (field === "model") this.openModelPicker(candidate);
-    else if (field === "effort" && candidate.runtime !== "pi")
-      this.openCapabilityPicker(candidate, "effort");
-    else if (field === "openaiFastMode") this.openCapabilityPicker(candidate, "openaiFastMode");
-    else
-      this.showFieldPicker(
-        candidate,
-        field,
-        candidate.runtime === "pi" ? this.options.supportedPiEfforts(candidate) : undefined,
-      );
+    else if (field === "openaiFastMode") this.openFastModePicker(candidate);
+    else this.showFieldPicker(candidate, field, this.options.supportedPiEfforts(candidate));
   }
 
   protected back(): void {
@@ -189,13 +181,12 @@ export class ProfileWorkspaceComponent
       this.saveSession();
       return true;
     }
-    if (key === "m" || key === "e" || key === "r") {
+    if (key === "m" || key === "e") {
       this.saveFocused = false;
       this.selectField(
         Match.value(key).pipe(
           Match.when("m", () => "model" as const),
           Match.when("e", () => "effort" as const),
-          Match.when("r", () => "runWith" as const),
           Match.exhaustive,
         ),
       );

@@ -130,7 +130,6 @@ const projectSelection = (
       selection.skippedCandidates.slice(0, MAX_CARD_SKIPS),
       (candidate) => ({
         candidate: {
-          runtime: candidate.candidate.runtime,
           model: requiredText(
             candidate.candidate.model,
             Math.min(MAX_CARD_PROVENANCE_CHARS, MAX_CARD_MODEL_CHARS),
@@ -156,7 +155,6 @@ export const projectModelOverride = (
     ? {}
     : {
         modelOverride: {
-          runtime: override.runtime,
           model: requiredText(override.model, MAX_CARD_MODEL_CHARS, "unknown-model"),
           ...(override.effort !== undefined && { effort: override.effort }),
         },
@@ -271,28 +269,8 @@ const projectOptionalCardFields = (run: SubagentRunView): Partial<SubagentRunCar
       warningSource: run.warningSource,
     }),
     ...(systemWarning !== undefined && { systemWarning }),
-    ...(run.steeringDelivery !== undefined && { steeringDelivery: run.steeringDelivery }),
     ...(endedAt !== undefined && { endedAt }),
     ...(question !== undefined && { question: { message: question } }),
-  };
-};
-
-const projectNativeActivity = (
-  activity: SubagentRunView["nativeActivity"],
-): SubagentRunCard["nativeActivity"] => {
-  if (!activity) return undefined;
-  const latestId = optionalText(activity.latest?.id, 256);
-  return {
-    active: nonNegativeInteger(activity.active),
-    total: nonNegativeInteger(activity.total),
-    ...(activity.latest !== undefined && {
-      latest: {
-        kind: requiredText(activity.latest.kind, 128, "native-agent"),
-        state: activity.latest.state,
-        updatedAt: nonNegative(activity.latest.updatedAt),
-        ...(latestId !== undefined && { id: latestId }),
-      },
-    }),
   };
 };
 
@@ -352,12 +330,10 @@ export const projectSubagentRunCard = (run: SubagentRunView): SubagentRunCard =>
   const profile = run.profile && PROFILE_IDS.includes(run.profile) ? run.profile : undefined;
   const agent = optionalText(run.agent, MAX_CUSTOM_AGENT_NAME_CHARS);
   const parentRunId = optionalText(run.parentRunId, MAX_PROTOCOL_ID_CHARS);
-  const nativeActivity = projectNativeActivity(run.nativeActivity);
   return {
     id: requiredText(run.id, MAX_PROTOCOL_ID_CHARS, "unknown-run"),
     name: sanitizeName(run.name) || "subagent",
     state: run.state,
-    runtime: run.runtime,
     reportGeneration: nonNegativeInteger(run.reportGeneration),
     ...(run.reportStatus !== undefined && { reportStatus: run.reportStatus }),
     model: requiredText(run.model, MAX_CARD_MODEL_CHARS, "unknown-model"),
@@ -379,7 +355,6 @@ export const projectSubagentRunCard = (run: SubagentRunView): SubagentRunCard =>
       directChildCount: nonNegativeInteger(run.directChildCount ?? 0),
       descendantCount: nonNegativeInteger(run.descendantCount ?? 0),
     }),
-    ...(nativeActivity !== undefined && { nativeActivity }),
     ...(profile !== undefined && { profile }),
     ...(agent !== undefined && { agent }),
     ...projectReportCardFields(run),
@@ -459,7 +434,6 @@ export const projectFailure = (failure: SubagentCardFailure): SubagentCardFailur
             next === "none"
               ? next
               : {
-                  runtime: next.runtime,
                   model: requiredText(next.model, MAX_CARD_MODEL_CHARS, "unknown-model"),
                   effort: next.effort,
                 },
@@ -501,7 +475,6 @@ export const projectStartEntry = (entry: SubagentStartEntry): SubagentStartEntry
   const selectedFields = {
     ...projectWorkspaceFields(entry),
     routeStatus: "selected" as const,
-    runtime: entry.runtime,
     model: requiredText(entry.model, MAX_CARD_MODEL_CHARS, "unknown-model"),
     effort: entry.effort,
     openaiFastMode: entry.openaiFastMode,
@@ -528,7 +501,6 @@ export const condenseStartEntry = (entry: SubagentStartEntry): SubagentStartEntr
 
 const projectCandidateCards = (candidates: ReadonlyArray<ProfileCandidateDiscovery>) =>
   Arr.map(candidates.slice(0, MAX_PROFILE_CANDIDATES), (candidate) => ({
-    runtime: candidate.runtime,
     model: requiredText(candidate.model, MAX_PROFILE_MODEL_SELECTOR_CHARS, "omitted-model"),
     effort: candidate.effort,
     context: candidate.context,

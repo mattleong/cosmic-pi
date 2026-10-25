@@ -57,7 +57,6 @@ export function sessionStartOperations(dependencies: RunSessionStartDependencies
               "The parent Pi session is no longer active.",
             );
           if (
-            view.runtime !== "pi" ||
             nativeContext.sessionId !== view.sessionId ||
             (nativeContext.sessionFile !== undefined &&
               nativeContext.sessionFile !== view.sessionFile)
@@ -71,7 +70,6 @@ export function sessionStartOperations(dependencies: RunSessionStartDependencies
         const current = record.view;
         const captured = record.parentContext;
         const sameSession =
-          current.runtime === "pi" &&
           captured !== undefined &&
           captured.sessionId === current.sessionId &&
           (captured.sessionFile === undefined || captured.sessionFile === current.sessionFile);

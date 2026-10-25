@@ -14,8 +14,7 @@ import {
   yieldUntil,
   provideBuiltLayer,
 } from "pi-cosmic-core/testing";
-import type { LocalCliWireEvent } from "../src/boundary/local-cli-transport.ts";
-import { backendLaunch } from "./fixtures/backend-supervisor.ts";
+import { backendLaunch } from "./fixtures/backend-launch.ts";
 import {
   localCliEventIngress,
   makeLocalCliRawEventOwnership,
@@ -24,7 +23,7 @@ import {
 import { localPiBackendDriver } from "../src/backend/local-pi.ts";
 import type { RpcCommand } from "../src/backend/local-pi-protocol.ts";
 import type { ChildProcessHandle, ChildWireEvent } from "../src/boundary/child-process.ts";
-import type { ProcessExit } from "../src/boundary/process-transport.ts";
+import type { ProcessExit, ProcessWireEvent } from "../src/boundary/process-transport.ts";
 import type { BackendEvent } from "../src/backend/model.ts";
 
 const sessionStats = (tokens: number | undefined, cost: number | undefined) =>
@@ -254,7 +253,9 @@ for (const failure of ["malformed", "rejected", "timeout"] as const)
     }),
   );
 
-const rawEvent = (id: number): LocalCliWireEvent => ({
+type RawEvent = ProcessWireEvent<never>;
+
+const rawEvent = (id: number): RawEvent => ({
   type: "protocol_error",
   message: `raw-${id}`,
 });
@@ -262,8 +263,7 @@ const backendEvent = (epoch: number): BackendEvent => ({
   type: "activity",
   assignmentEpoch: epoch,
 });
-const rawId = (raw: LocalCliWireEvent): string =>
-  raw.type === "protocol_error" ? raw.message : "";
+const rawId = (raw: RawEvent): string => (raw.type === "protocol_error" ? raw.message : "");
 
 it.effect("Pi keeps RPC and IPC byte owners until normalized consumption or scope release", () =>
   Effect.gen(function* () {
@@ -308,7 +308,7 @@ const withOwnership = <A, E>(
   use: (harness: {
     readonly events: Queue.Queue<BackendEvent, Cause.Done>;
     readonly acknowledged: ReadonlyArray<string>;
-    readonly ownership: LocalCliRawEventOwnership;
+    readonly ownership: LocalCliRawEventOwnership<RawEvent>;
     readonly warnings: () => string;
   }) => Effect.Effect<A, E>,
 ) =>
@@ -319,14 +319,15 @@ const withOwnership = <A, E>(
       const acknowledged: string[] = [];
       const ownership = makeLocalCliRawEventOwnership(
         events,
-        (raw) => void acknowledged.push(rawId(raw)),
+        (raw: RawEvent) => void acknowledged.push(rawId(raw)),
+        "fixture",
       );
       const warnings = () => capturedTelemetrySnapshot({ entries: captured.entries });
       return yield* use({ events, acknowledged, ownership, warnings });
     }).pipe(provideBuiltLayer(captured.layer));
   });
 
-describe("local CLI raw event ownership", () => {
+describe("raw event ownership", () => {
   it.effect("keeps raw ownership across a delivered offer until acknowledgement", () =>
     withOwnership(4, ({ events, acknowledged, ownership, warnings }) =>
       Effect.gen(function* () {
@@ -359,7 +360,10 @@ describe("local CLI raw event ownership", () => {
   it.effect("coalesces an activity burst behind a stalled consumer without reordering", () =>
     Effect.gen(function* () {
       const acknowledged: string[] = [];
-      const ingress = yield* localCliEventIngress((raw) => void acknowledged.push(rawId(raw)));
+      const ingress = yield* localCliEventIngress(
+        (raw: RawEvent) => void acknowledged.push(rawId(raw)),
+        "fixture",
+      );
       let offered = false;
       yield* Effect.forEach(
         Array.from({ length: 10_000 }, (_, id) => id),

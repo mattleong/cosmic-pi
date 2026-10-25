@@ -87,12 +87,11 @@ const technical = (run: SubagentRunView): string =>
   Fn.pipe(
     [
       `ID: ${run.id} · assignment/report: ${run.reportGeneration} · report: ${run.reportStatus ?? "unknown"}`,
-      `Route: local/${run.runtime} · ${run.model}`,
+      `Route: ${run.model}`,
       `Cwd: ${run.cwd} · PID: ${run.pid ?? "none"}`,
-      `Capabilities: ${Arr.join(run.capabilities, ", ")} · steering: ${run.steeringDelivery ?? "none"}`,
+      `Capabilities: ${Arr.join(run.capabilities, ", ")}`,
       `Writes: ${run.writeIntent}`,
       `Workspace: ${run.writerWorkspaceMode ?? "shared-checkout"} · ${run.workspaceId ?? "none"}`,
-      `Native agents: ${run.nativeActivity?.active ?? 0} active / ${run.nativeActivity?.total ?? 0} total`,
       run.sessionFile ? `Session: ${run.sessionFile}` : "",
     ],
     Arr.filter(Boolean),

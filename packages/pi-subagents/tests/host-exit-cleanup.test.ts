@@ -8,7 +8,7 @@ import * as Scope from "effect/Scope";
 import { vi } from "vitest";
 import { signalProcessGroup } from "pi-cosmic-core";
 import { spawnIpcChild, temporaryDirectory } from "pi-cosmic-core/testing";
-import { acquireLocalCliTransport } from "../src/boundary/local-cli-transport.ts";
+import { acquireJsonlTransport } from "./support/jsonl-transport.ts";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
@@ -43,7 +43,7 @@ const openShell = (script: string) =>
   Effect.gen(function* () {
     const scope = yield* Scope.make();
     yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
-    const handle = yield* acquireLocalCliTransport({
+    const handle = yield* acquireJsonlTransport({
       executable: "/bin/sh",
       args: ["-c", script],
       env: { PATH: "/usr/bin:/bin" },

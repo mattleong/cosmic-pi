@@ -48,7 +48,6 @@ export function proxyExecutionHandler(dependencies: RunProxyExecutionDependencie
           .pipe(Effect.ignore);
       if (
         (event.tool === "ask_user" ? !executeQuestionnaire : !executeProxy) ||
-        record.view.runtime !== "pi" ||
         record.stoppedByParent ||
         !isActiveRunState(record.view.state)
       )

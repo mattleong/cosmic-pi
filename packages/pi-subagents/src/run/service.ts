@@ -190,8 +190,8 @@ export interface SubagentServiceContract extends WorkspaceCoordinatorContract {
     receipts: ReadonlyArray<SubagentCompletionReceipt>,
   ) => Effect.Effect<void>;
   /**
-   * The user's message from Activity or the fleet, through the agent-message delivery: it answers
-   * the target's pending question or steers its running turn as bare text, and never resumes it.
+   * The user's message from Activity, through the agent-message delivery: it answers the target's
+   * pending question or steers its running turn as bare text, and never resumes it.
    */
   readonly send: (
     id: string,

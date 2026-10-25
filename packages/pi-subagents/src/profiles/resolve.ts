@@ -6,16 +6,14 @@ import * as Rec from "effect/Record";
 import { resolvePiModelSelector, type PiCatalogModel } from "../run/model-catalog.ts";
 import {
   clampSubagentEffort,
-  subagentRuntimeEfforts,
+  SUBAGENT_EFFORTS,
   type SubagentContextMode,
   type SubagentEffort,
-  type SubagentRuntime,
   type SubagentWriteIntent,
 } from "../domain/routing.ts";
 import { customAgentCandidate, type CustomAgent } from "./agents.ts";
 import { PROFILE_DEFINITIONS } from "./definitions.ts";
 import {
-  isLocalPiProfileCandidate,
   isProfileId,
   skippedCandidateRoute,
   supportsSubagentFastMode,
@@ -50,7 +48,6 @@ export interface ProfileCandidateAttempt {
   readonly source: SubagentSelectionSource;
   readonly routeSource: LaunchRouteSource;
   readonly candidateIndex: number;
-  readonly runtime: SubagentRuntime;
   readonly model: string;
   readonly effectiveContext: SubagentContextMode;
   readonly writeIntent: SubagentWriteIntent;
@@ -119,14 +116,11 @@ const resolveCandidate = (
     },
   });
   // Explicit efforts stay strict; soft defaults and the inherited parent level can name a level
-  // this runtime or model lacks, such as "off" for Claude, so they move to the nearest one.
+  // the model lacks, so they move to the nearest one.
   const softEffort = (modelEfforts: ReadonlyArray<SubagentEffort> | undefined) =>
     clampSubagentEffort(
       profileDefaultEffort ?? environment.parentEffort ?? environment.parentModel?.effort ?? "high",
-      Arr.filter(
-        subagentRuntimeEfforts(candidate.runtime),
-        (effort) => modelEfforts === undefined || modelEfforts.includes(effort),
-      ),
+      modelEfforts ?? SUBAGENT_EFFORTS,
     );
   const accept = (
     model = candidate.model,
@@ -135,7 +129,6 @@ const resolveCandidate = (
     attempt: {
       source: candidate.model === "parent" ? "profile-parent-candidate" : "profile-candidate",
       candidateIndex,
-      runtime: candidate.runtime,
       model,
       effectiveContext: candidate.context,
       writeIntent: candidate.writeIntent,
@@ -181,7 +174,7 @@ const resolveCandidate = (
         "pi_effort_unsupported",
         `Pi model ${resolvedModel} does not support required effort ${hardEffort}; supported efforts: ${Arr.join(supportedEfforts, ", ") || "none"}.`,
       );
-    if (candidate.openaiFastMode && !supportsSubagentFastMode("pi", resolvedModel))
+    if (candidate.openaiFastMode && !supportsSubagentFastMode(resolvedModel))
       return skipCandidate(
         "fast_mode_unsupported",
         `Pi model ${resolvedModel} does not support fast mode.`,
@@ -195,8 +188,6 @@ const resolveCandidate = (
       "Forked context requires a persisted parent session with a stable leaf.",
     );
 
-  if (!isLocalPiProfileCandidate(candidate)) return accept();
-
   if (candidate.model === "parent") {
     const parent = environment.parentModel;
     if (!parent)
@@ -206,7 +197,7 @@ const resolveCandidate = (
   return resolvePiModel(candidate.model, LOCAL_PI_MODEL_SKIPS);
 };
 
-/** An agent's overrides apply to each candidate before planning; a misfit skips it. */
+/** An agent's overrides apply to each candidate before planning. */
 const resolveRouteCandidate = (
   candidate: ProfileCandidate,
   candidateIndex: number,
@@ -214,18 +205,12 @@ const resolveRouteCandidate = (
   profileDefaultEffort: SubagentEffort | undefined,
   agent: CustomAgent | undefined,
 ): CandidateResult => {
-  if (!agent) return resolveCandidate(candidate, candidateIndex, environment, profileDefaultEffort);
-  const applied = customAgentCandidate(candidate, agent);
-  if (applied.kind === "skipped")
-    return {
-      skipped: {
-        candidateIndex,
-        candidate: skippedCandidateRoute(candidate),
-        code: applied.code,
-        reason: applied.reason,
-      },
-    };
-  return resolveCandidate(applied.candidate, candidateIndex, environment, profileDefaultEffort);
+  return resolveCandidate(
+    agent ? customAgentCandidate(candidate, agent) : candidate,
+    candidateIndex,
+    environment,
+    profileDefaultEffort,
+  );
 };
 
 const resolveKnownProfileRoute = (
@@ -257,7 +242,7 @@ const resolveKnownProfileRoute = (
     if (result.attempt) {
       attempts.push({
         ...result.attempt,
-        reason: `${subject} selected ${routeLabel} candidate ${result.attempt.candidateIndex + 1} (local/${result.attempt.runtime}).`,
+        reason: `${subject} selected ${routeLabel} candidate ${result.attempt.candidateIndex + 1}.`,
         routeSource,
         skippedBefore: pendingSkipped,
       });

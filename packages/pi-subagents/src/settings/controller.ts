@@ -10,11 +10,7 @@ import { withCapturedHostSignal } from "pi-cosmic-core/host-invocation";
 import { captureHostSignal, notifyAtHostBoundary } from "pi-cosmic-core/host-session";
 import { registerExtensionCommand, type ExtensionSubcommand } from "pi-cosmic-core/host-command";
 import { type JsonObject } from "pi-cosmic-core/platform/json-document";
-import type { SubagentProjectionBridge } from "../boundary/host-ui.ts";
-import type { SubagentControlExpectation } from "../run/model.ts";
 import type { WriterWorkspaceInspection } from "../run/workspace-control.ts";
-import type { LocalCliRuntime } from "../boundary/local-cli-process.ts";
-import type { NativeRuntimeModel } from "../boundary/native-model-catalog.ts";
 import type { WriterWorkspaceMode } from "../config/schema.ts";
 import type {
   SubagentCopyProfileSetPatch,
@@ -35,7 +31,6 @@ import type {
   SessionProfileSetPatch,
   SessionProfileSnapshot,
 } from "../profiles/session-overrides.ts";
-import type { FleetMessageDelivery } from "../ui/fleet.ts";
 import type { ProfileSettingsInspection } from "./profile-route-editor.ts";
 import { SUBAGENT_SETTINGS_COMMAND } from "./subagent-settings-options.ts";
 
@@ -46,31 +41,14 @@ interface SessionProfileSetSnapshotWrite extends Omit<
   readonly expectedRevision: number;
 }
 
-export interface FleetManagerActions {
+export interface SubagentCommandActions {
   readonly captureAuthority: () => () => boolean;
-  readonly openActivity?: (signal?: AbortSignal) => Promise<boolean>;
+  readonly openActivity: (signal?: AbortSignal) => Promise<boolean>;
   readonly isAvailable: () => boolean;
   readonly captureModelRefresh: () => {
     readonly isCurrent: () => boolean;
     readonly run: <A>(effect: Effect.Effect<A>, signal: AbortSignal) => Promise<A>;
   };
-  readonly stop: (id: string, expected: SubagentControlExpectation) => Promise<void>;
-  readonly interrupt: (id: string, expected: SubagentControlExpectation) => Promise<void>;
-  readonly resume: (
-    id: string,
-    message: string | undefined,
-    expected: SubagentControlExpectation,
-  ) => Promise<void>;
-  readonly send: (
-    id: string,
-    message: string,
-    expected: SubagentControlExpectation,
-  ) => Promise<FleetMessageDelivery>;
-  readonly rename: (
-    id: string,
-    name: string,
-    expected: SubagentControlExpectation,
-  ) => Promise<void>;
   readonly inspectProfiles: (projectTrusted: boolean) => Promise<ProfileSettingsInspection>;
   readonly patchProfile: (patch: SubagentProfilePatch) => Promise<JsonObject>;
   readonly restoreProfileDeclaration: (patch: SubagentProfileRestorePatch) => Promise<JsonObject>;
@@ -90,14 +68,9 @@ export interface FleetManagerActions {
   ) => Promise<SessionProfileSnapshot>;
   readonly patchSessionNesting: (patch: SessionNestingPatch) => Promise<void>;
   readonly patchSessionDelegation: (patch: SessionDelegationPatch) => Promise<void>;
-  readonly listNativeModels: (
-    runtime: LocalCliRuntime,
-    signal?: AbortSignal,
-  ) => Promise<ReadonlyArray<NativeRuntimeModel>>;
 }
 
 interface SubagentCommandModules {
-  readonly fleet: () => Promise<typeof import("./fleet-manager.ts")>;
   readonly profiles: () => Promise<typeof import("./profile-dashboard.ts")>;
   readonly settings: () => Promise<typeof import("./subagent-settings.ts")>;
   readonly doctor: () => Promise<
@@ -106,7 +79,6 @@ interface SubagentCommandModules {
 }
 
 const COMMAND_MODULES: SubagentCommandModules = {
-  fleet: () => import("./fleet-manager.ts"),
   profiles: () => import("./profile-dashboard.ts"),
   settings: () => import("./subagent-settings.ts"),
   doctor: () => import("../application/doctor.ts"),
@@ -114,8 +86,7 @@ const COMMAND_MODULES: SubagentCommandModules = {
 
 export function registerSubagentManagerCommand(
   pi: ExtensionAPI,
-  bridge: SubagentProjectionBridge,
-  actions: FleetManagerActions,
+  actions: SubagentCommandActions,
   modules: SubagentCommandModules = COMMAND_MODULES,
 ): void {
   // A single settings owner preserves write serialization after the first lazy load.
@@ -135,17 +106,9 @@ export function registerSubagentManagerCommand(
       if (isCurrent()) throw cause;
     });
   };
-  const openFleet = (ctx: ExtensionCommandContext, isCurrent: () => boolean): Promise<void> => {
-    if (!isCurrent()) return Promise.resolve();
-    return modules
-      .fleet()
-      .then(({ openFleetManager }) =>
-        isCurrent() ? openFleetManager(ctx, bridge, actions) : undefined,
-      );
-  };
   registerExtensionCommand(pi, {
     name: "subagents",
-    description: "Open the subagent fleet, or edit profiles and settings",
+    description: "Open subagents in Activity, or edit profiles and settings",
     bare: {
       handler: (_args, ctx) =>
         invoke(ctx, (invocation, isCurrent) => {
@@ -166,11 +129,17 @@ export function registerSubagentManagerCommand(
             );
             return Promise.resolve();
           }
-          return actions.openActivity
-            ? actions
-                .openActivity(invocation.signal)
-                .then((opened) => (opened ? undefined : openFleet(invocation, isCurrent)))
-            : openFleet(invocation, isCurrent);
+          return actions
+            .openActivity(invocation.signal)
+            .then((opened) =>
+              opened || !isCurrent()
+                ? undefined
+                : notifyAtHostBoundary(
+                    invocation,
+                    "/subagents needs Activity from pi-cosmic-ui; install or enable it, then run /reload",
+                    "warning",
+                  ),
+            );
         }),
     },
     subcommands: [

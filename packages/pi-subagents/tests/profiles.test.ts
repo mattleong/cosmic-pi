@@ -16,7 +16,7 @@ import {
 } from "../src/config/schema.ts";
 import { SubagentConfigStore, type SubagentConfigStoreContract } from "../src/config/store.ts";
 import { resolvePiModelSelector } from "../src/run/model-catalog.ts";
-import { isNativeProfileModelSelector, type ProfileCandidate } from "../src/profiles/model.ts";
+import { isProfileModelSelector, type ProfileCandidate } from "../src/profiles/model.ts";
 import { resolveProfilePlan } from "../src/profiles/resolve.ts";
 import {
   SubagentProfileService,
@@ -130,7 +130,7 @@ describe("subagent v6 profile configuration and resolution", () => {
     const scout = candidate();
     const worker = [
       candidate({ model: "openai/gpt-review", effort: "medium", writeIntent: "writer" }),
-      candidate({ runtime: "claude", model: "sonnet" }),
+      candidate({ model: "claude-bridge/claude-sonnet-5-5" }),
     ];
     const global = document({ profiles: { scout, worker, reviewer: "disabled" } });
     const decoded = subagentConfigDecoder("global")(global);
@@ -207,12 +207,14 @@ describe("subagent v6 profile configuration and resolution", () => {
   });
 
   it.each([
-    ["claude", "claude-opus-5", true],
-    ["claude", "-dangerous-option", false],
-    ["claude", "bad\u001bmodel", false],
-    ["claude", "model,(glob)*", false],
-  ] as const)("classifies %s native selector case %#", (runtime, selector, valid) => {
-    expect(isNativeProfileModelSelector(runtime, selector)).toBe(valid);
+    ["claude-bridge/claude-opus-5-5", true],
+    ["parent", true],
+    ["claude-opus-5-5", false],
+    ["-dangerous/option", false],
+    ["openai/bad\u001bmodel", false],
+    ["openai/model,(glob)*", false],
+  ] as const)("classifies selector case %#", (selector, valid) => {
+    expect(isProfileModelSelector(selector)).toBe(valid);
   });
 
   it("rejects unknown candidate keys and forbidden cross-field combinations as whole routes", () => {
@@ -221,7 +223,8 @@ describe("subagent v6 profile configuration and resolution", () => {
         profiles: {
           scout: { ...candidate(), execution: "background" },
           researcher: { ...candidate(), host: "local" },
-          planner: candidate({ runtime: "claude", model: "sonnet", context: "fork" }),
+          // Candidates no longer name a runtime; a saved one that does fails its route closed.
+          planner: { ...candidate({ model: "openai/gpt-review" }), runtime: "pi" },
           worker: { ...candidate({ writeIntent: "writer" }), closeOnReport: true },
         },
       }),
@@ -261,22 +264,24 @@ describe("subagent v6 profile configuration and resolution", () => {
     expect(untrusted.profiles.worker.candidates).toHaveLength(2);
   });
 
-  it("moves soft efforts to the nearest level the runtime and model support", () => {
+  it("moves soft efforts to the nearest level the model supports", () => {
     const routed = (parentEffort: "off" | "minimal" | "max") =>
       resolveProfilePlan(
         "generalist",
         resolveTestConfig(
           document({
-            profiles: { generalist: candidate({ runtime: "claude", model: "sonnet" }) },
+            profiles: {
+              generalist: candidate({ model: "openai/gpt-review", effort: "default" }),
+            },
           }),
         ),
         { ...environment, parentModel: { model: "openai/gpt-parent", effort: parentEffort } },
       );
     expect(routed("off")).toMatchObject({
-      attempts: [{ effort: "low", effortWasExplicit: false }],
+      attempts: [{ effort: "off", effortWasExplicit: false }],
     });
-    expect(routed("minimal")).toMatchObject({ attempts: [{ effort: "low" }] });
-    expect(routed("max")).toMatchObject({ attempts: [{ effort: "max" }] });
+    expect(routed("minimal")).toMatchObject({ attempts: [{ effort: "medium" }] });
+    expect(routed("max")).toMatchObject({ attempts: [{ effort: "high" }] });
     const planner = resolveTestConfig(
       document({ profiles: { planner: candidate({ model: "openai/gpt-review" }) } }),
     );

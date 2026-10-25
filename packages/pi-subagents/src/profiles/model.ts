@@ -7,10 +7,8 @@ import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import {
   SUBAGENT_EFFORTS,
-  subagentRuntimeSupportsEffort,
   type SubagentContextMode,
   type SubagentEffort,
-  type SubagentRuntime,
   type SubagentWriteIntent,
 } from "../domain/routing.ts";
 import type { CustomAgent } from "./agents.ts";
@@ -41,13 +39,12 @@ export const isProfileId = Schema.is(Schema.Literals(PROFILE_IDS));
 
 export const MAX_PROFILE_CANDIDATES = 32;
 export const MAX_PROFILE_MODEL_SELECTOR_CHARS = 256;
-export const PROFILE_CANDIDATE_RUNTIMES = ["pi", "claude"] as const;
 export const PROFILE_CANDIDATE_CONTEXTS = ["fresh", "fork"] as const;
 export const PROFILE_CANDIDATE_WRITE_INTENTS = ["read-only", "writer"] as const;
 export const PROFILE_CANDIDATE_EFFORTS = ["default", ...SUBAGENT_EFFORTS] as const;
 type ProfileCandidateEffort = (typeof PROFILE_CANDIDATE_EFFORTS)[number];
 
-const SAFE_NATIVE_MODEL_SELECTOR = /^[A-Za-z0-9][A-Za-z0-9._:/@-]*(?:\[[1-9][0-9]*[kKmM]\])?$/;
+const SAFE_NATIVE_MODEL_SELECTOR = /^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/;
 
 export const isSafeNativeModelSelector = (selector: string): boolean =>
   selector.length <= MAX_PROFILE_MODEL_SELECTOR_CHARS && SAFE_NATIVE_MODEL_SELECTOR.test(selector);
@@ -63,10 +60,10 @@ const splitPiModelSelector = (
   };
 };
 
-export const isNativeProfileModelSelector = (runtime: string, selector: string): boolean => {
+/** `parent`, or a safe `provider/model` selector. */
+export const isProfileModelSelector = (selector: string): boolean => {
   if (!isSafeNativeModelSelector(selector)) return false;
-  if (selector === "parent") return runtime === "pi";
-  if (runtime !== "pi") return true;
+  if (selector === "parent") return true;
   const split = splitPiModelSelector(selector);
   return (
     split !== undefined &&
@@ -81,7 +78,6 @@ export const isNativeProfileModelSelector = (runtime: string, selector: string):
 };
 
 export interface ProfileCandidate {
-  readonly runtime: SubagentRuntime;
   readonly model: string;
   readonly effort: ProfileCandidateEffort;
   readonly context: SubagentContextMode;
@@ -96,14 +92,12 @@ export interface ProfileRoute {
 export type DeclaredProfileRoute = ProfileCandidate | ReadonlyArray<ProfileCandidate> | "disabled";
 
 export const normalizeProfileCandidate = ({
-  runtime,
   model,
   effort,
   context,
   writeIntent,
   openaiFastMode,
 }: ProfileCandidate): ProfileCandidate => ({
-  runtime,
   model,
   effort,
   context,
@@ -124,11 +118,7 @@ export const normalizeDeclaredProfileRoute = (route: DeclaredProfileRoute): Prof
   return { candidates: cloneProfileCandidates(Arr.ensure(route)) };
 };
 
-export const isLocalPiProfileCandidate = (candidate: Pick<ProfileCandidate, "runtime">): boolean =>
-  candidate.runtime === "pi";
-
-export const supportsSubagentFastMode = (runtime: SubagentRuntime, model: string): boolean => {
-  if (runtime !== "pi") return false;
+export const supportsSubagentFastMode = (model: string): boolean => {
   if (model === "parent") return true;
   const selected = splitPiModelSelector(model);
   return selected ? supportsFastModel(selected.provider, selected.model) : false;
@@ -136,10 +126,7 @@ export const supportsSubagentFastMode = (runtime: SubagentRuntime, model: string
 
 const PROFILE_CANDIDATE_VALIDATION_ISSUE_CODES = [
   "model_selector_invalid",
-  "parent_requires_local_pi",
-  "fork_requires_local_pi",
   "fast_mode_unsupported",
-  "effort_unsupported",
 ] as const;
 export type ProfileCandidateValidationIssueCode =
   (typeof PROFILE_CANDIDATE_VALIDATION_ISSUE_CODES)[number];
@@ -151,29 +138,16 @@ export const profileCandidateValidationIssues = (
   candidate: ProfileCandidate,
 ): ReadonlyArray<ProfileCandidateValidationIssue> => {
   const issues: ProfileCandidateValidationIssue[] = [];
-  if (!isNativeProfileModelSelector(candidate.runtime, candidate.model))
-    issues.push({ code: "model_selector_invalid" });
-  if (candidate.model === "parent" && !isLocalPiProfileCandidate(candidate))
-    issues.push({ code: "parent_requires_local_pi" });
-  if (candidate.context === "fork" && !isLocalPiProfileCandidate(candidate))
-    issues.push({ code: "fork_requires_local_pi" });
-  if (
-    candidate.openaiFastMode === true &&
-    !supportsSubagentFastMode(candidate.runtime, candidate.model)
-  )
+  if (!isProfileModelSelector(candidate.model)) issues.push({ code: "model_selector_invalid" });
+  if (candidate.openaiFastMode === true && !supportsSubagentFastMode(candidate.model))
     issues.push({ code: "fast_mode_unsupported" });
-  if (
-    candidate.effort !== "default" &&
-    !subagentRuntimeSupportsEffort(candidate.runtime, candidate.effort)
-  )
-    issues.push({ code: "effort_unsupported" });
   return issues;
 };
 
 export const profileCandidateLabel = (candidate: ProfileCandidate): string =>
-  `${candidate.runtime}/${candidate.model}:${candidate.effort}:${candidate.context}:${candidate.writeIntent}:openaiFastMode=${candidate.openaiFastMode ?? false}`;
+  `${candidate.model}:${candidate.effort}:${candidate.context}:${candidate.writeIntent}:openaiFastMode=${candidate.openaiFastMode ?? false}`;
 
-const PROFILE_CANDIDATE_KEYS = ["runtime", "model", "effort", "context", "writeIntent"] as const;
+const PROFILE_CANDIDATE_KEYS = ["model", "effort", "context", "writeIntent"] as const;
 
 export const sameProfileCandidate = Equivalence.make<ProfileCandidate>(
   (left, right) =>
@@ -202,7 +176,6 @@ export type LaunchRouteSource = ProfileRouteSource | "override";
  * write intent still come from the profile, or the agent when one is launched; fast mode is off.
  */
 export interface SubagentModelOverride {
-  readonly runtime: SubagentRuntime;
   readonly model: string;
   readonly effort?: ProfileCandidateEffort | undefined;
 }
@@ -212,7 +185,6 @@ export const modelOverrideCandidate = (
   definition: Pick<ProfileDefinition, "defaultContext" | "defaultWriteIntent">,
   agent?: Pick<CustomAgent, "effort" | "context" | "writeIntent">,
 ): ProfileCandidate => ({
-  runtime: override.runtime,
   model: override.model,
   effort: override.effort ?? agent?.effort ?? "default",
   context: agent?.context ?? definition.defaultContext,
@@ -229,16 +201,15 @@ export interface ProfileDefinition {
 }
 
 /** The route fields that identify a skipped candidate; effort may already be resolved. */
-type SkippedCandidateRoute = Pick<ProfileCandidate, "runtime" | "model" | "effort">;
+type SkippedCandidateRoute = Pick<ProfileCandidate, "model" | "effort">;
 
 export const skippedCandidateRoute = ({
-  runtime,
   model,
   effort,
-}: SkippedCandidateRoute): SkippedCandidateRoute => ({ runtime, model, effort });
+}: SkippedCandidateRoute): SkippedCandidateRoute => ({ model, effort });
 
-export const skippedCandidateLabel = ({ runtime, model, effort }: SkippedCandidateRoute): string =>
-  `local/${runtime} · ${model}:${effort}`;
+export const skippedCandidateLabel = ({ model, effort }: SkippedCandidateRoute): string =>
+  `${model}:${effort}`;
 
 export interface SkippedProfileCandidate {
   readonly candidateIndex?: number | undefined;

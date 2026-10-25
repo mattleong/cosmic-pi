@@ -24,7 +24,7 @@ import {
   piRootActiveToolSnapshot,
 } from "../src/run/tool-policy.ts";
 import { sweepAbandonedPrivateState } from "../src/boundary/private-state.ts";
-import { backendLaunch } from "./fixtures/backend-supervisor.ts";
+import { backendLaunch } from "./fixtures/backend-launch.ts";
 import { nodeFsPromises, nodePath } from "./support/node-builtins.ts";
 import * as Str from "effect/String";
 
@@ -82,8 +82,6 @@ describe("subagent child process boundary", () => {
         "edit",
         "read",
         "agent_start",
-        "herdr_agent_start",
-        "herdr_agent_future",
         "workflow",
         "workflow_control",
         "workflow_future",
@@ -104,13 +102,6 @@ describe("subagent child process boundary", () => {
         ...AGENT_TOOL_NAMES,
       ]);
       expect(Str.split(policy.excluded, ",")).toEqual([
-        "herdr_agent_start",
-        "herdr_agent_list",
-        "herdr_agent_status",
-        "herdr_agent_await",
-        "herdr_agent_read",
-        "herdr_agent_send",
-        "herdr_agent_stop",
         "workflow",
         "workflow_control",
         "session_list",
@@ -246,9 +237,7 @@ describe("subagent child process boundary", () => {
         yield* Deferred.await(lateCleanup).pipe(Effect.timeout("5 seconds"));
         expect(yield* isMissing(runDirectory)).toBe(true);
         // The shared session directory is left to the startup sweep, which removes it once empty.
-        yield* sweepAbandonedPrivateState(agentDirectory, {
-          claudeTemporaryParent: yield* temporaryDirectory("pi-subagents-child-late-claude-"),
-        });
+        yield* sweepAbandonedPrivateState(agentDirectory);
         expect(yield* isMissing(sessionDirectory)).toBe(true);
       }).pipe(Effect.scoped),
   );

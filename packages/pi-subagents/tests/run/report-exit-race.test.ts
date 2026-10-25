@@ -7,9 +7,11 @@ import type { BackendEvent } from "../../src/backend/model.ts";
 import { assignmentOperations } from "../../src/run/assignment.ts";
 import { SubagentProcessError } from "../../src/run/errors.ts";
 import { backendEventHandler } from "../../src/run/events.ts";
-import type { RunRecord } from "../../src/run/internal.ts";
 import { notificationDelivery } from "../../src/run/notification-delivery.ts";
 import { settlementOperations } from "../../src/run/settlement.ts";
+import type { ReportArchive } from "../../src/boundary/report-archive.ts";
+import type { WithRunLock } from "../../src/run/internal.ts";
+import { yieldUntil } from "pi-cosmic-core/testing";
 import { view } from "../fixtures/run-view.ts";
 import {
   backendHandleFixture,
@@ -25,185 +27,49 @@ const yieldTurns = Effect.gen(function* () {
 });
 const lateEvents: ReadonlyArray<BackendEvent> = [
   { type: "exit", exitCode: 0, diagnostic: "Process exited after reporting." },
-  {
-    type: "backend_failure",
-    error: SubagentProcessError.make({ operation: "run", message: "Transport closed." }),
-  },
+  { type: "protocol_error", message: "Transport closed." },
 ];
 
-describe("report ownership at assignment activation", () => {
-  for (const operation of ["start", "resume", "uncertain-resume"] as const) {
-    for (const lateEvent of lateEvents) {
-      it.effect(`keeps a buffered ${operation} report ahead of post-lock ${lateEvent.type}`, () =>
-        Effect.gen(function* () {
-          const noticesStarted = yield* Deferred.make<void>();
-          const noticesGate = yield* Deferred.make<void>();
-          const context = yield* makeRunContext({
-            sendPeerNotices: () =>
-              Deferred.succeed(noticesStarted, undefined).pipe(
-                Effect.andThen(Deferred.await(noticesGate)),
-                Effect.asVoid,
-              ),
-          });
-          const record = yield* runRecordFixture({
-            view: view({ state: "starting" }),
-            process: yield* backendHandleFixture(),
-            assignment: {
-              ...runningAssignment(1),
-              phase: "issuing",
-              startedObserved: operation === "uncertain-resume",
-            },
-          });
-          const completionGate = yield* Semaphore.make(1);
-          const delivery = yield* notificationDelivery({
-            ...context,
-            withCompletionGate: completionGate.withPermits(1),
-            notify: () => Effect.succeed({ deliveredCompletionKeys: [] }),
-          });
-          const cleanupStarted = yield* Deferred.make<void>();
-          const cleanupGate = yield* Deferred.make<void>();
-          const cleanupDone = yield* Deferred.make<void>();
-          const settlement = settlementOperations({
-            ...context,
-            delivery,
-            closeRecordScope: () =>
-              Deferred.succeed(cleanupStarted, undefined).pipe(
-                Effect.andThen(Deferred.await(cleanupGate)),
-                Effect.andThen(
-                  context.withLock(
-                    Effect.sync(() => {
-                      record.process = undefined;
-                      record.cleanupDisposition = "confirmed";
-                    }),
-                  ),
-                ),
-                Effect.andThen(Deferred.succeed(cleanupDone, undefined)),
-                Effect.asVoid,
-              ),
-            claimTurnInputDrain: (_record, drained) => Deferred.doneUnsafe(drained, Effect.void),
-          });
-          const activated = yield* Deferred.make<void>();
-          const postLockGate = yield* Deferred.make<void>();
-          const assignments = assignmentOperations({
-            ...context,
-            // Pause the actual prompt-confirmation caller immediately after releasing the lock.
-            // Backend exit/failure and cancellation can then run before its post-lock continuation.
-            withLock: (effect) =>
-              context.withLock(effect).pipe(
-                Effect.tap(() => Deferred.succeed(activated, undefined)),
-                Effect.tap(() => Deferred.await(postLockGate)),
-              ),
-            startPrompt: () => Effect.void,
-            activateAssignmentLocked: settlement.activateAssignmentLocked,
-            replayAssignmentActivation: settlement.replayAssignmentActivation,
-          });
-          const handleEvent = backendEventHandler({
-            settlement,
-            queueQuestionLocked: () => undefined,
-            onProxyEvent: () => Effect.void,
-          });
-          yield* settlement.acceptBackendReport(record, {
-            runId: record.view.id,
-            assignmentEpoch: 1,
-            sequence: 1,
-            deliveryId: "accepted",
-            text: REPORT,
-          });
-          yield* settlement.runSettledFromBackend(record, 1, { stopReason: "error" });
-          const confirmation =
-            operation === "uncertain-resume"
-              ? assignments.retainUncertainAssignment(
-                  record,
-                  record.assignment.attemptToken,
-                  "Resume outcome remains uncertain.",
-                )
-              : assignments
-                  .submitPrompt(record, "Task", operation, record.assignment.attemptToken)
-                  .pipe(Effect.asVoid);
-          const confirming = yield* confirmation.pipe(Effect.forkScoped);
-          yield* Effect.gen(function* () {
-            yield* Deferred.await(activated);
-            yield* handleEvent(record, lateEvent);
-            expect(record.view).toMatchObject({
-              state: "completed",
-              finalText: REPORT,
-              reportGeneration: 1,
-            });
-            expect([...record.completionGenerations.values()]).toMatchObject([
-              { generation: 1, outcome: "completed", finalText: REPORT },
-            ]);
-            expect(record.lastBackendReport?.deliveryId).toBe("accepted");
-            expect(record.cleanupDisposition).toBe("pending");
-            yield* Deferred.await(noticesStarted);
-            expect(yield* Deferred.isDone(cleanupStarted)).toBe(false);
-
-            // Cancellation cannot abandon either peer notices or the following backend cleanup.
-            yield* Fiber.interrupt(confirming);
-            yield* Deferred.succeed(noticesGate, undefined);
-            yield* Deferred.await(cleanupStarted);
-            yield* Deferred.succeed(cleanupGate, undefined);
-            yield* Deferred.await(cleanupDone);
-            expect(record.cleanupDisposition).toBe("confirmed");
-            expect(record.view.state).toBe("completed");
-            expect(record.completionGenerations.size).toBe(1);
-          }).pipe(
-            Effect.ensuring(
-              Deferred.succeed(noticesGate, undefined).pipe(
-                Effect.andThen(Deferred.succeed(cleanupGate, undefined)),
-              ),
-            ),
-          );
-        }),
-      );
-    }
-  }
-});
+const settlementFixture = (phase: "issuing" | "running", archiveReport?: ReportArchive) =>
+  Effect.gen(function* () {
+    const context = yield* makeRunContext();
+    const record = yield* runRecordFixture({
+      view: view({ state: phase === "issuing" ? "starting" : "running" }),
+      process: yield* backendHandleFixture(),
+      assignment: { ...runningAssignment(1), phase },
+    });
+    const completionGate = yield* Semaphore.make(1);
+    const delivery = yield* notificationDelivery({
+      ...context,
+      withCompletionGate: completionGate.withPermits(1),
+      notify: () => Effect.succeed({ deliveredCompletionKeys: [] }),
+    });
+    const settlement = settlementOperations({
+      ...context,
+      delivery,
+      closeRecordScope: () => Effect.void,
+      claimTurnInputDrain: (_record, drained) => Deferred.doneUnsafe(drained, Effect.void),
+      ...(archiveReport && { archiveReport }),
+    });
+    const handleEvent = backendEventHandler({
+      settlement,
+      queueQuestionLocked: () => undefined,
+      onProxyEvent: () => Effect.void,
+    });
+    return { context, record, settlement, handleEvent };
+  });
 
 describe("report ownership while its file is saved", () => {
   for (const lateEvent of lateEvents) {
-    it.effect(`keeps a buffered report ahead of ${lateEvent.type} during its file save`, () =>
+    it.effect(`keeps a settled report ahead of ${lateEvent.type} during its file save`, () =>
       Effect.gen(function* () {
         const gate = yield* gatedReportArchive;
-        const context = yield* makeRunContext();
-        const record = yield* runRecordFixture({
-          view: view({ state: "starting" }),
-          process: yield* backendHandleFixture(),
-          assignment: { ...runningAssignment(1), phase: "issuing" },
-        });
-        const completionGate = yield* Semaphore.make(1);
-        const delivery = yield* notificationDelivery({
-          ...context,
-          withCompletionGate: completionGate.withPermits(1),
-          notify: () => Effect.succeed({ deliveredCompletionKeys: [] }),
-        });
-        const settlement = settlementOperations({
-          ...context,
-          delivery,
-          closeRecordScope: () => Effect.void,
-          claimTurnInputDrain: (_record, drained) => Deferred.doneUnsafe(drained, Effect.void),
-          archiveReport: gate.archive,
-        });
-        const assignments = assignmentOperations({
-          ...context,
-          startPrompt: () => Effect.void,
-          activateAssignmentLocked: settlement.activateAssignmentLocked,
-          replayAssignmentActivation: settlement.replayAssignmentActivation,
-        });
-        const handleEvent = backendEventHandler({
-          settlement,
-          queueQuestionLocked: () => undefined,
-          onProxyEvent: () => Effect.void,
-        });
-        yield* settlement.acceptBackendReport(record, {
-          runId: record.view.id,
-          assignmentEpoch: 1,
-          sequence: 1,
-          deliveryId: "accepted",
-          text: REPORT,
-        });
-
-        const confirming = yield* assignments
-          .submitPrompt(record, "Task", "start", record.assignment.attemptToken)
+        const { record, settlement, handleEvent } = yield* settlementFixture(
+          "running",
+          gate.archive,
+        );
+        const settling = yield* settlement
+          .runSettledFromBackend(record, 1, { stopReason: "stop", text: REPORT })
           .pipe(Effect.forkScoped);
         yield* Deferred.await(gate.entered);
         const handling = yield* handleEvent(record, lateEvent).pipe(Effect.forkScoped);
@@ -212,7 +78,7 @@ describe("report ownership while its file is saved", () => {
         expect(record.view.state).not.toBe("failed");
         expect(record.completionGenerations.size).toBe(0);
         yield* Deferred.succeed(gate.release, undefined);
-        yield* Fiber.join(confirming);
+        yield* Fiber.join(settling);
         yield* Fiber.join(handling);
 
         expect(record.view).toMatchObject({
@@ -230,102 +96,167 @@ describe("report ownership while its file is saved", () => {
   }
 });
 
-describe("report ownership before assignment activation", () => {
-  const issuingFixture = (startPrompt: () => Effect.Effect<void, SubagentProcessError>) =>
+describe("report ownership at assignment activation", () => {
+  for (const operation of ["start", "resume", "uncertain-resume"] as const)
+    it.effect(`sends peer notices before ${operation} cleanup, whatever its caller does`, () =>
+      Effect.gen(function* () {
+        const steps = { noticesStarted: false, noticesFinished: false, cleanupStarted: false };
+        const noticesGate = yield* Deferred.make<void>();
+        const cleanupGate = yield* Deferred.make<void>();
+        const cleanupDone = yield* Deferred.make<void>();
+        const context = yield* makeRunContext({
+          sendPeerNotices: () =>
+            Effect.sync(() => void (steps.noticesStarted = true)).pipe(
+              Effect.andThen(Deferred.await(noticesGate)),
+              Effect.andThen(Effect.sync(() => void (steps.noticesFinished = true))),
+            ),
+        });
+        const record = yield* runRecordFixture({
+          view: view({ state: "starting" }),
+          process: yield* backendHandleFixture(),
+          assignment: {
+            ...runningAssignment(1),
+            phase: "issuing",
+            startedObserved: operation === "uncertain-resume",
+          },
+        });
+        const completionGate = yield* Semaphore.make(1);
+        const delivery = yield* notificationDelivery({
+          ...context,
+          withCompletionGate: completionGate.withPermits(1),
+          notify: () => Effect.succeed({ deliveredCompletionKeys: [] }),
+        });
+        // The caller that commits the completion pauses once it releases the lock, so the test
+        // can interrupt it while the work it handed over is still running.
+        const committed = yield* Deferred.make<void>();
+        const callerGate = yield* Deferred.make<void>();
+        let paused = false;
+        const pauseAfterCommit: WithRunLock = (effect) =>
+          context.withLock(effect).pipe(
+            Effect.tap(() => {
+              if (paused || record.view.state !== "completed") return Effect.void;
+              paused = true;
+              return Deferred.succeed(committed, undefined).pipe(
+                Effect.andThen(Deferred.await(callerGate)),
+              );
+            }),
+          );
+        const settlement = settlementOperations({
+          ...context,
+          withLock: pauseAfterCommit,
+          delivery,
+          closeRecordScope: () =>
+            Effect.sync(() => void (steps.cleanupStarted = true)).pipe(
+              Effect.andThen(Deferred.await(cleanupGate)),
+              Effect.andThen(
+                context.withLock(
+                  Effect.sync(() => {
+                    record.process = undefined;
+                    record.cleanupDisposition = "confirmed";
+                  }),
+                ),
+              ),
+              Effect.andThen(Deferred.succeed(cleanupDone, undefined)),
+              Effect.asVoid,
+            ),
+          claimTurnInputDrain: (_record, drained) => Deferred.doneUnsafe(drained, Effect.void),
+        });
+        const assignments = assignmentOperations({
+          ...context,
+          startPrompt: () => Effect.void,
+          activateAssignmentLocked: settlement.activateAssignmentLocked,
+          replayAssignmentActivation: settlement.replayAssignmentActivation,
+        });
+        // The child settled before its start was confirmed, so the settlement is held.
+        yield* settlement.runSettledFromBackend(record, 1, { stopReason: "stop", text: REPORT });
+        expect(record.view.state).toBe("starting");
+        const confirmation =
+          operation === "uncertain-resume"
+            ? assignments.retainUncertainAssignment(
+                record,
+                record.assignment.attemptToken,
+                "Resume outcome remains uncertain.",
+              )
+            : assignments
+                .submitPrompt(record, "Task", operation, record.assignment.attemptToken)
+                .pipe(Effect.asVoid);
+        const confirming = yield* confirmation.pipe(Effect.forkScoped);
+        yield* Effect.gen(function* () {
+          yield* Deferred.await(committed);
+          expect(record.view).toMatchObject({
+            state: "completed",
+            finalText: REPORT,
+            reportGeneration: 1,
+          });
+          expect([...record.completionGenerations.values()]).toMatchObject([
+            { generation: 1, outcome: "completed", finalText: REPORT },
+          ]);
+          expect(record.cleanupDisposition).toBe("pending");
+          yield* yieldUntil(() => steps.noticesStarted);
+          yield* yieldTurns;
+          expect(steps.cleanupStarted).toBe(false);
+
+          // Interrupting the caller abandons neither the peer notices nor the cleanup after them.
+          yield* Fiber.interrupt(confirming);
+          yield* yieldTurns;
+          expect(steps.cleanupStarted).toBe(false);
+          yield* Deferred.succeed(noticesGate, undefined);
+          yield* yieldUntil(() => steps.cleanupStarted);
+          expect(steps.noticesFinished).toBe(true);
+          yield* Deferred.succeed(cleanupGate, undefined);
+          yield* Deferred.await(cleanupDone);
+          expect(record.cleanupDisposition).toBe("confirmed");
+          expect(record.view.state).toBe("completed");
+          expect(record.completionGenerations.size).toBe(1);
+        }).pipe(
+          Effect.ensuring(
+            Effect.all([
+              Deferred.succeed(callerGate, undefined),
+              Deferred.succeed(noticesGate, undefined),
+              Deferred.succeed(cleanupGate, undefined),
+            ]),
+          ),
+        );
+      }),
+    );
+
+  it.effect("answers an uncertain start that its own events settled first", () =>
     Effect.gen(function* () {
-      const context = yield* makeRunContext();
-      const record = yield* runRecordFixture({
-        view: view({ state: "starting" }),
-        process: yield* backendHandleFixture(),
-        assignment: { ...runningAssignment(1), phase: "issuing" },
-      });
-      const completionGate = yield* Semaphore.make(1);
-      const delivery = yield* notificationDelivery({
-        ...context,
-        withCompletionGate: completionGate.withPermits(1),
-        notify: () => Effect.succeed({ deliveredCompletionKeys: [] }),
-      });
-      const settlement = settlementOperations({
-        ...context,
-        delivery,
-        closeRecordScope: () => Effect.void,
-        claimTurnInputDrain: (_record, drained) => Deferred.doneUnsafe(drained, Effect.void),
-      });
+      const { context, record, settlement } = yield* settlementFixture("issuing");
+      // The child settled before the start's response, which was lost, so the settlement waits.
+      yield* settlement.runSettledFromBackend(record, 1, { stopReason: "stop", text: REPORT });
+      expect(record.view.state).toBe("starting");
+      let started = false;
       const assignments = assignmentOperations({
         ...context,
-        startPrompt,
+        // The child's start event arrives once the start is marked uncertain, activating the
+        // assignment and replaying its settlement before the failed start is answered.
+        withLock: (effect) =>
+          context.withLock(effect).pipe(
+            Effect.tap(() => {
+              if (started) return Effect.void;
+              started = true;
+              return settlement.runStartedFromBackend(record, 1);
+            }),
+          ),
+        startPrompt: () =>
+          Effect.fail(
+            SubagentProcessError.make({
+              operation: "start",
+              code: "prompt_outcome_uncertain",
+              message: "Prompt response lost.",
+            }),
+          ),
         activateAssignmentLocked: settlement.activateAssignmentLocked,
         replayAssignmentActivation: settlement.replayAssignmentActivation,
       });
-      const handleEvent = backendEventHandler({
-        settlement,
-        queueQuestionLocked: () => undefined,
-        onProxyEvent: () => Effect.void,
-      });
-      yield* settlement.acceptBackendReport(record, {
-        runId: record.view.id,
-        assignmentEpoch: 1,
-        sequence: 1,
-        deliveryId: "accepted",
-        text: REPORT,
-      });
-      expect(record.assignment.pendingReport?.deliveryId).toBe("accepted");
-      return { record, settlement, assignments, handleEvent };
-    });
-
-  const expectReportWon = (record: RunRecord) => {
-    expect(record.view).toMatchObject({
-      state: "completed",
-      finalText: REPORT,
-      reportGeneration: 1,
-    });
-    expect([...record.completionGenerations.values()]).toMatchObject([
-      { generation: 1, outcome: "completed", finalText: REPORT },
-    ]);
-    expect(record.lastBackendReport?.deliveryId).toBe("accepted");
-  };
-
-  for (const lateEvent of lateEvents) {
-    it.effect(`keeps a buffered report when ${lateEvent.type} arrives before start confirms`, () =>
-      Effect.gen(function* () {
-        const startGate = yield* Deferred.make<void, SubagentProcessError>();
-        const { record, assignments, handleEvent } = yield* issuingFixture(() =>
-          Deferred.await(startGate),
-        );
-        const confirming = yield* assignments
-          .submitPrompt(record, "Task", "start", record.assignment.attemptToken)
-          .pipe(Effect.forkScoped);
-        yield* yieldTurns;
-        yield* handleEvent(record, lateEvent);
-        expectReportWon(record);
-
-        // The exit or failure cancels the start request; the accepted report still answers it.
-        yield* Deferred.fail(
-          startGate,
-          SubagentProcessError.make({ operation: "start", message: "Transport closed." }),
-        );
-        expect(yield* Fiber.join(confirming)).toMatchObject({ state: "completed" });
-        expectReportWon(record);
-        expect(record.completionGenerations.size).toBe(1);
-      }),
-    );
-  }
-
-  it.effect("answers a failed start with the buffered report it already accepted", () =>
-    Effect.gen(function* () {
-      const { record, settlement, assignments } = yield* issuingFixture(() =>
-        Effect.fail(SubagentProcessError.make({ operation: "start", message: "Prompt refused." })),
-      );
       const issued = yield* assignments.submitPrompt(
         record,
         "Task",
-        "resume",
+        "start",
         record.assignment.attemptToken,
       );
-      expect(issued).toMatchObject({ state: "completed", finalText: REPORT });
-      // The caller's own failure path finds the outcome settled and changes nothing.
-      yield* settlement.failRun(record, "Prompt refused.");
-      expectReportWon(record);
+      expect(issued).toMatchObject({ state: "completed", finalText: REPORT, reportGeneration: 1 });
       expect(record.completionGenerations.size).toBe(1);
     }),
   );

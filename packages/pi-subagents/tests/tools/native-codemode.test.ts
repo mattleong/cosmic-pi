@@ -14,7 +14,7 @@ import {
   acknowledgeCompletions,
   contactParentFrame,
   localServiceFixture,
-  nativeReportServiceFixture,
+  eventBackendServiceFixture,
   request,
   runViews,
   withService,
@@ -141,7 +141,7 @@ describe("native scripted subagent workflows", () => {
     nativeTest(
       `carries native ${callId === undefined ? "generated" : "empty"} caller script provenance into authenticated delegation`,
       () => {
-        const fixture = nativeReportServiceFixture();
+        const fixture = eventBackendServiceFixture();
         return withService(fixture.layer, function* (service) {
           const h = yield* nativeCodemodeSession(service);
           const started = yield* h.run(

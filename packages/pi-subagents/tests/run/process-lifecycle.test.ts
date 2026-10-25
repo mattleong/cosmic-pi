@@ -77,7 +77,6 @@ const processFixture = () =>
             systemPrompt: "",
           },
           activeTools: new Map(),
-          nativeAgents: new Set(),
           cleanupSettlement: yield* Deferred.make<"confirmed" | "quarantined">(),
           cleanupDisposition: "none",
           pauseRequested: false,

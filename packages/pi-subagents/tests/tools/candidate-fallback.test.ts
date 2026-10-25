@@ -26,7 +26,6 @@ import {
   SubagentBackendRegistry,
   type SubagentBackendRegistryContract,
 } from "../../src/backend/service.ts";
-import type { SubagentRuntime } from "../../src/domain/routing.ts";
 import { InvalidSubagentRequestError, SubagentProcessError } from "../../src/run/errors.ts";
 import type { SubagentNotification } from "../../src/boundary/host-notifier.ts";
 import type { SubagentProfileServiceContract } from "../../src/profiles/service.ts";
@@ -39,6 +38,7 @@ import type { SubagentStartSpec } from "../../src/tools/schema.ts";
 import { declaredCandidate } from "../fixtures/profiles.ts";
 import {
   acknowledgeCompletions,
+  driverServiceFixture,
   fakeChildLayer,
   fakeWriterLeaseLayer,
   leaseCounts,
@@ -48,11 +48,7 @@ import {
   withService,
   type FakeChildControl,
 } from "../run/fixtures/service-harness.ts";
-import {
-  profileServiceFor,
-  testBackendDriver,
-  testBackendRegistry,
-} from "./fixtures/tool-harness.ts";
+import { profileServiceFor, testBackendRegistry } from "./fixtures/tool-harness.ts";
 
 // The fake Pi child always reports this model, so a route candidate naming another one fails
 // its startup with a model mismatch before the task is issued.
@@ -119,13 +115,7 @@ const start = (
     Effect.provideService(SubagentBackendRegistry, hostBackends),
   );
 
-const resolveAnyRuntime: SubagentBackendRegistryContract["resolve"] = ({ runtime }) =>
-  Effect.succeed({ ...testBackendDriver, runtime });
-
-/**
- * The host's readiness probes for every runtime. Each probe is recorded by model, then may wait on
- * a gate or fail with a code.
- */
+/** The host's readiness probes. Each is recorded by model, then may wait on a gate or fail. */
 const hostBackends = (
   options: {
     readonly gates?: Readonly<Record<string, Deferred.Deferred<void>>>;
@@ -134,7 +124,7 @@ const hostBackends = (
 ) => {
   const probed: string[] = [];
   const registry: SubagentBackendRegistryContract = {
-    resolve: resolveAnyRuntime,
+    resolve: testBackendRegistry.resolve,
     preflight: (selection, probe) =>
       Effect.gen(function* () {
         probed.push(probe.model);
@@ -146,31 +136,25 @@ const hostBackends = (
             code,
             message: `Fixture probe for ${probe.model} failed.`,
           });
-        return yield* resolveAnyRuntime(selection);
+        return yield* testBackendRegistry.resolve(selection);
       }),
   };
   return { registry, probed };
 };
 
-const NATIVE_CAPABILITIES = ["steer", "interrupt", "parent-contact"] as const;
-
 /**
- * A Claude driver whose initialization fails with a code for some models, and whose
- * service-side preflight may fail too. Each spawn records its model and how many run-state reclaims
- * preceded it.
+ * A driver whose initialization fails with a code for some models, and whose service-side
+ * preflight may fail too. Each spawn records its model.
  */
-const fakeNativeDriver = (
-  runtime: Exclude<SubagentRuntime, "pi">,
+const fakeDriver = (
   options: {
     readonly initializeFailures?: Readonly<Record<string, string>>;
     readonly preflightFailures?: Readonly<Record<string, string>>;
-    readonly reclaimed?: () => number;
   } = {},
 ) => {
-  const spawns: Array<{ readonly model: string; readonly reclaimedBefore: number }> = [];
+  const spawns: string[] = [];
   const driver: BackendDriver = {
-    runtime,
-    capabilities: NATIVE_CAPABILITIES,
+    capabilities: [],
     supportsContext: (context) => context === "fresh",
     preflight: ({ model }) => {
       const code = options.preflightFailures?.[model];
@@ -178,7 +162,7 @@ const fakeNativeDriver = (
         ? Effect.fail(
             InvalidSubagentRequestError.make({
               code,
-              message: `Fixture ${runtime} preflight failed for ${model}.`,
+              message: `Fixture preflight failed for ${model}.`,
             }),
           )
         : Effect.void;
@@ -186,7 +170,7 @@ const fakeNativeDriver = (
     spawn: (launch) =>
       Effect.acquireRelease(
         Effect.gen(function* () {
-          spawns.push({ model: launch.model, reclaimedBefore: options.reclaimed?.() ?? 0 });
+          spawns.push(launch.model);
           const events = yield* Queue.unbounded<BackendEvent, Cause.Done>();
           const failure = options.initializeFailures?.[launch.model];
           const handle: BackendHandle = {
@@ -198,13 +182,13 @@ const fakeNativeDriver = (
                     SubagentProcessError.make({
                       operation: "initialize",
                       code: failure,
-                      message: `Fixture ${runtime} failed to start ${launch.model}.`,
+                      message: `Fixture failed to start ${launch.model}.`,
                     }),
                   )
                 : Effect.succeed({
                     model: launch.model,
                     effort: launch.effort,
-                    sessionId: `${runtime}-session`,
+                    sessionId: "fixture-session",
                   }),
               start: () => Effect.void,
               steer: () => Effect.void,
@@ -223,9 +207,6 @@ const fakeNativeDriver = (
   };
   return { driver, spawns };
 };
-
-const nativeCandidate = (runtime: Exclude<SubagentRuntime, "pi">, model: string) =>
-  declaredCandidate(model, { runtime, effort: "default" });
 
 const mixedProfiles = (candidates: ReadonlyArray<ReturnType<typeof declaredCandidate>>) =>
   profileServiceFor({ profiles: { generalist: [...candidates] } });
@@ -253,7 +234,7 @@ const noticedRuns = (notifications: ReadonlyArray<SubagentNotification>) =>
     notification.type === "completed" ? notification.runs : [],
   );
 
-const override = (model: string) => ({ runtime: "pi", model }) as const;
+const override = (model: string) => ({ model }) as const;
 
 describe("automatic candidate fallback before the task is issued", () => {
   it.effect("moves a failed startup to the next candidate in the same run, with a warning", () => {
@@ -435,8 +416,8 @@ describe("model override continuation", () => {
         return decodeStartDetails(result.details).startFailures?.[0]?.admittedRun?.nextCandidate;
       });
     return Effect.gen(function* () {
-      expect(yield* nextAfter(LUNA)).toMatchObject({ runtime: "pi", model: NOVA });
-      expect(yield* nextAfter(NOVA)).toMatchObject({ runtime: "pi", model: REPORTED });
+      expect(yield* nextAfter(LUNA)).toMatchObject({ model: NOVA });
+      expect(yield* nextAfter(NOVA)).toMatchObject({ model: REPORTED });
       // An override outside the route keeps a route of itself alone.
       expect(yield* nextAfter(TERRA)).toBe("none");
       // An override never falls back: each launch spawned only its own candidate.
@@ -446,175 +427,88 @@ describe("model override continuation", () => {
 });
 
 describe("startup failure scope", () => {
-  it.effect("moves a Claude candidate failure to the next Claude candidate", () => {
-    const claude = fakeNativeDriver("claude", {
-      initializeFailures: { opus: "claude_model_mismatch" },
-    });
-    const { layer } = localServiceFixture(
-      { notify: acknowledgeCompletions },
-      fakeChildLayer(),
-      profileLayerFor({}),
-      fakeWriterLeaseLayer(),
-      [claude.driver],
-    );
-    return withService(layer, function* (service) {
-      const host = hostBackends();
-      const result = yield* start(
-        service,
-        mixedProfiles([nativeCandidate("claude", "opus"), nativeCandidate("claude", "sonnet")]),
-        [{ task: "Map the auth flow" }],
-        host.registry,
-      );
-      expect(result.structuredContent).toMatchObject({ outcome: "started" });
-      expect(Arr.map(claude.spawns, ({ model }) => model)).toEqual(["opus", "sonnet"]);
-      const [run] = yield* runViews(service);
-      expect(run).toMatchObject({ state: "running", runtime: "claude", model: "sonnet" });
-      expect(run?.selection.skippedCandidates).toMatchObject([
-        { candidate: { model: "opus" }, code: "claude_model_mismatch" },
-      ]);
-    });
-  });
-
-  it.effect("passes over a failed runtime's other candidates without probing them", () => {
-    const claude = fakeNativeDriver("claude", {
-      initializeFailures: { opus: "claude_native_init_missing" },
-    });
-    const { layer, fake } = localServiceFixture(
-      { notify: acknowledgeCompletions },
-      fakeChildLayer(),
-      profileLayerFor({}),
-      fakeWriterLeaseLayer(),
-      [claude.driver],
-    );
-    return withService(layer, function* (service) {
-      const host = hostBackends();
-      const result = yield* start(
-        service,
-        mixedProfiles([
-          nativeCandidate("claude", "opus"),
-          nativeCandidate("claude", "sonnet"),
-          nativeCandidate("claude", "haiku"),
-          declaredCandidate(REPORTED, { effort: "default" }),
-        ]),
-        [{ task: "Map the auth flow" }],
-        host.registry,
-      );
-      expect(result.structuredContent).toMatchObject({ outcome: "started" });
-      expect(Arr.map(claude.spawns, ({ model }) => model)).toEqual(["opus"]);
-      expect(host.probed).not.toContain("sonnet");
-      expect(host.probed).not.toContain("haiku");
-      expect(fake.controls).toHaveLength(1);
-      const [run] = yield* runViews(service);
-      expect(run).toMatchObject({ state: "running", runtime: "pi", model: REPORTED });
-      expect(run?.selection.skippedCandidates).toMatchObject([
-        { candidate: { model: "opus" }, code: "claude_native_init_missing" },
-        { candidate: { model: "sonnet" }, code: "runtime_startup_failed" },
-        { candidate: { model: "haiku" }, code: "runtime_startup_failed" },
-      ]);
-    });
-  });
-
   it.effect("never moves past an attempt whose outcome is uncertain", () => {
-    const claude = fakeNativeDriver("claude", {
-      initializeFailures: { opus: "initialize_outcome_uncertain" },
-    });
-    const { layer } = localServiceFixture(
-      { notify: acknowledgeCompletions },
-      fakeChildLayer(),
-      profileLayerFor({}),
-      fakeWriterLeaseLayer(),
-      [claude.driver],
-    );
+    const fixture = fakeDriver({ initializeFailures: { [LUNA]: "initialize_outcome_uncertain" } });
+    const { layer } = driverServiceFixture(fixture.driver, { notify: acknowledgeCompletions });
     return withService(layer, function* (service) {
-      const result = yield* start(
-        service,
-        mixedProfiles([nativeCandidate("claude", "opus"), nativeCandidate("claude", "sonnet")]),
-        [{ task: "Map the auth flow" }],
-        hostBackends().registry,
-      );
+      const result = yield* start(service, routeProfiles([LUNA, NOVA]), [
+        { task: "Map the auth flow" },
+      ]);
       expect(result.structuredContent).toMatchObject({ outcome: "failed" });
-      expect(Arr.map(claude.spawns, ({ model }) => model)).toEqual(["opus"]);
+      expect(fixture.spawns).toEqual([LUNA]);
       expect(decodeStartDetails(result.details).startFailures?.[0]).toMatchObject({
         code: "initialize_outcome_uncertain",
       });
     });
   });
+
+  it.effect("reclaims the failed candidate's run state before the next one spawns", () => {
+    const reclaimedBeforeSpawn: number[] = [];
+    let reclaimedRunIds: ReadonlyArray<string> = [];
+    const fake = fakeChildLayer(
+      Effect.sync(() => void reclaimedBeforeSpawn.push(reclaimedRunIds.length)),
+    );
+    reclaimedRunIds = fake.reclaimedRunIds;
+    const { layer } = localServiceFixture({ notify: acknowledgeCompletions }, fake);
+    return withService(layer, function* (service) {
+      const result = yield* start(service, routeProfiles([LUNA, REPORTED]), [
+        { task: "Map the auth flow" },
+      ]);
+      expect(result.structuredContent).toMatchObject({ outcome: "started" });
+      const [run] = yield* runViews(service);
+      assert(run !== undefined);
+      expect(run).toMatchObject({ state: "running", model: REPORTED });
+      expect(fake.reclaimedRunIds).toEqual([run.id]);
+      expect(reclaimedBeforeSpawn).toEqual([0, 1]);
+    });
+  });
+});
+
+describe("readiness probes between candidates", () => {
+  it.effect("skips a later candidate whose host probe fails", () => {
+    const { layer, fake } = localServiceFixture({ notify: acknowledgeCompletions });
+    return withService(layer, function* (service) {
+      const host = hostBackends({ failures: { [NOVA]: "pi_model_unauthenticated" } });
+      const result = yield* start(
+        service,
+        routeProfiles([LUNA, NOVA, REPORTED]),
+        [{ task: "Map the auth flow" }],
+        host.registry,
+      );
+      expect(result.structuredContent).toMatchObject({ outcome: "started" });
+      expect(fake.controls).toHaveLength(2);
+      const [run] = yield* runViews(service);
+      assert(run !== undefined);
+      expect(run).toMatchObject({ state: "running", model: REPORTED });
+      expect(
+        Arr.map(run.selection.skippedCandidates, ({ candidate, code }) => [candidate.model, code]),
+      ).toContainEqual([NOVA, "pi_model_unauthenticated"]);
+    });
+  });
+
+  it.effect("skips a later candidate whose service preflight fails", () => {
+    const fixture = fakeDriver({
+      initializeFailures: { [LUNA]: "pi_model_mismatch" },
+      preflightFailures: { [NOVA]: "node_executable_missing" },
+    });
+    const { layer } = driverServiceFixture(fixture.driver, { notify: acknowledgeCompletions });
+    return withService(layer, function* (service) {
+      const result = yield* start(service, routeProfiles([LUNA, NOVA, REPORTED]), [
+        { task: "Map the auth flow" },
+      ]);
+      expect(result.structuredContent).toMatchObject({ outcome: "started" });
+      expect(fixture.spawns).toEqual([LUNA, REPORTED]);
+      const [run] = yield* runViews(service);
+      assert(run !== undefined);
+      expect(run).toMatchObject({ state: "running", model: REPORTED });
+      expect(
+        Arr.map(run.selection.skippedCandidates, ({ candidate, code }) => [candidate.model, code]),
+      ).toContainEqual([NOVA, "node_executable_missing"]);
+    });
+  });
 });
 
 describe("startup fallback stops", () => {
-  it.effect("ends the chain at a host probe whose cleanup is unconfirmed", () => {
-    const claude = fakeNativeDriver("claude");
-    const { layer, fake } = localServiceFixture(
-      { notify: acknowledgeCompletions },
-      fakeChildLayer(),
-      profileLayerFor({}),
-      fakeWriterLeaseLayer(),
-      [claude.driver],
-    );
-    return withService(layer, function* (service) {
-      const host = hostBackends({ failures: { sonnet: "claude_preflight_cleanup_unconfirmed" } });
-      const result = yield* start(
-        service,
-        mixedProfiles([
-          declaredCandidate(LUNA, { effort: "default" }),
-          nativeCandidate("claude", "sonnet"),
-          declaredCandidate(REPORTED, { effort: "default" }),
-        ]),
-        [{ task: "Map the auth flow" }],
-        host.registry,
-      );
-      // No later candidate is probed or started.
-      expect(host.probed).not.toContain(REPORTED);
-      expect(claude.spawns).toEqual([]);
-      expect(fake.controls).toHaveLength(1);
-      const [failure] = decodeStartDetails(result.details).startFailures ?? [];
-      expect(failure).toMatchObject({ code: "claude_preflight_cleanup_unconfirmed" });
-      expect(failure?.message).toContain(LUNA);
-      // The failed run suggests no candidate, since its route stopped at an unsafe probe.
-      expect(failure?.admittedRun?.nextCandidate).toBeUndefined();
-      const [run] = yield* runViews(service);
-      assert(run !== undefined);
-      expect(run.state).toBe("failed");
-      expect(run.nextCandidate).toBeUndefined();
-      expect(
-        Arr.map(run.selection.skippedCandidates, ({ candidate, code }) => [candidate.model, code]),
-      ).toContainEqual(["sonnet", "claude_preflight_cleanup_unconfirmed"]);
-      expect(run.systemWarning).toContain("claude_preflight_cleanup_unconfirmed");
-    });
-  });
-
-  it.effect("ends the chain at a service preflight whose cleanup is unconfirmed", () => {
-    const claude = fakeNativeDriver("claude", {
-      preflightFailures: { sonnet: "claude_preflight_cleanup_unconfirmed" },
-    });
-    const { layer } = localServiceFixture(
-      { notify: acknowledgeCompletions },
-      fakeChildLayer(),
-      profileLayerFor({}),
-      fakeWriterLeaseLayer(),
-      [claude.driver],
-    );
-    return withService(layer, function* (service) {
-      const host = hostBackends();
-      const result = yield* start(
-        service,
-        mixedProfiles([
-          declaredCandidate(LUNA, { effort: "default" }),
-          nativeCandidate("claude", "sonnet"),
-          declaredCandidate(REPORTED, { effort: "default" }),
-        ]),
-        [{ task: "Map the auth flow" }],
-        host.registry,
-      );
-      expect(claude.spawns).toEqual([]);
-      expect(host.probed).not.toContain(REPORTED);
-      const [failure] = decodeStartDetails(result.details).startFailures ?? [];
-      expect(failure).toMatchObject({ code: "claude_preflight_cleanup_unconfirmed" });
-      expect(failure?.admittedRun?.nextCandidate).toBeUndefined();
-      expect((yield* runViews(service))[0]?.state).toBe("failed");
-    });
-  });
-
   it.effect("names its reason when the next candidate has another write intent", () => {
     const { layer, fake } = localServiceFixture({ notify: acknowledgeCompletions });
     return withService(layer, function* (service) {
@@ -632,7 +526,7 @@ describe("startup fallback stops", () => {
       const [failure] = decodeStartDetails(result.details).startFailures ?? [];
       expect(failure).toMatchObject({
         code: "pi_model_mismatch",
-        admittedRun: { nextCandidate: { runtime: "pi", model: REPORTED } },
+        admittedRun: { nextCandidate: { model: REPORTED } },
       });
       expect(failure?.message).toContain("fallback_write_intent_changed");
       const [run] = yield* runViews(service);
@@ -738,38 +632,5 @@ describe("startup fallback stops", () => {
       ).not.toMatchObject({ outcome: "started" });
       expect(fake.controls).toHaveLength(1);
     }).pipe(Effect.scoped);
-  });
-});
-
-describe("cross-runtime fallback", () => {
-  it.effect("reclaims the Pi run state before Claude takes the run", () => {
-    const fake = fakeChildLayer();
-    const claude = fakeNativeDriver("claude", { reclaimed: () => fake.reclaimedRunIds.length });
-    const { layer } = localServiceFixture(
-      { notify: acknowledgeCompletions },
-      fake,
-      profileLayerFor({}),
-      fakeWriterLeaseLayer(),
-      [claude.driver],
-    );
-    return withService(layer, function* (service) {
-      const result = yield* start(
-        service,
-        mixedProfiles([
-          declaredCandidate(LUNA, { effort: "default" }),
-          nativeCandidate("claude", "sonnet"),
-        ]),
-        [{ task: "Map the auth flow" }],
-        hostBackends().registry,
-      );
-      expect(result.structuredContent).toMatchObject({ outcome: "started" });
-      const [run] = yield* runViews(service);
-      assert(run !== undefined);
-      expect(run).toMatchObject({ state: "running", runtime: "claude", model: "sonnet" });
-      expect(run.capabilities).toEqual(NATIVE_CAPABILITIES);
-      // The Pi candidate's private directory was reclaimed before Claude spawned.
-      expect(fake.reclaimedRunIds).toEqual([run.id]);
-      expect(claude.spawns).toEqual([{ model: "sonnet", reclaimedBefore: 1 }]);
-    });
   });
 });

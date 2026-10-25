@@ -12,7 +12,7 @@ import type { RpcCommand } from "../src/backend/local-pi-protocol.ts";
 import type { BackendHandle } from "../src/backend/model.ts";
 import type { ChildWireEvent } from "../src/boundary/child-process.ts";
 import { isOutcomeUncertain } from "../src/run/errors.ts";
-import { backendLaunch, takeBackendEvent } from "./fixtures/backend-supervisor.ts";
+import { backendLaunch, takeBackendEvent } from "./fixtures/backend-launch.ts";
 
 type Prompt = Extract<RpcCommand, { readonly type: "prompt" }>;
 

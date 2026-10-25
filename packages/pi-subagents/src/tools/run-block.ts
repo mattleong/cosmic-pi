@@ -26,7 +26,6 @@ import {
 import { failureFileText, reportFileText, reportTruncationText } from "../run/state.ts";
 import { runStateLabel } from "../ui/run-state.ts";
 import { nextCandidateText, proposalGuidance, runProfileLabel } from "./format.ts";
-import { steeringDeliveryEvidence } from "./outcome.ts";
 
 /**
  * Multi-run model-facing output (await, lifecycle, and completion notices) gives each run one
@@ -49,7 +48,7 @@ const MAX_PREVIEW_LINE_CHARS =
 /** A label, an archived path, and the file's size. */
 const MAX_FILE_LINE_CHARS = MAX_OUTCOME_FILE_PATH_CHARS + 112;
 
-const ACTION_KINDS = ["attention", "candidate", "steering", "workspace", "warning"] as const;
+const ACTION_KINDS = ["attention", "candidate", "workspace", "warning"] as const;
 
 /** The one-line action items a block may carry, at most one of each kind. */
 export type RunBlockActions = Partial<Record<(typeof ACTION_KINDS)[number], string | undefined>>;
@@ -355,9 +354,6 @@ export const nextCandidateAction = (next: SubagentNextCandidate | undefined): st
 const runViewActions = (run: SubagentRunView): RunBlockActions => ({
   attention: attentionAction(run),
   candidate: nextCandidateAction(run.state === "failed" ? failedRunNextCandidate(run) : undefined),
-  steering: run.steeringDelivery
-    ? `Steering: ${steeringDeliveryEvidence[run.steeringDelivery].message} (steeringDelivery=${run.steeringDelivery}); agent_read has the detail.`
-    : undefined,
   workspace:
     run.workspaceId && (run.workspaceOutcome || isTerminalRunState(run.state))
       ? `Workspace: ${proposalGuidance(run.workspaceId, run.workspaceOutcome)}`

@@ -26,7 +26,6 @@ export const captureProfilePatchRoute = (
 };
 
 export const candidateJson = (value: ProfileCandidate): JsonObject => ({
-  runtime: value.runtime,
   model: value.model,
   effort: value.effort,
   context: value.context,

@@ -2,17 +2,14 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import * as Effect from "effect/Effect";
 import { isProjectTrusted } from "pi-cosmic-core/host-session";
 import { discoverActivityView } from "pi-cosmic-ui/activity/view";
-import type { SubagentProjectionBridge } from "../boundary/host-ui.ts";
-import { NativeModelCatalog } from "../boundary/native-model-catalog.ts";
 import { SubagentConfigStore, type SubagentConfigStoreContract } from "../config/store.ts";
 import type { SubagentApplication } from "../layer.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
-import { SubagentService, type SubagentServiceContract } from "../run/service.ts";
+import { SubagentService } from "../run/service.ts";
 import {
   registerSubagentManagerCommand,
-  type FleetManagerActions,
+  type SubagentCommandActions,
 } from "../settings/controller.ts";
-import type { FleetMessageDelivery } from "../ui/fleet.ts";
 
 interface CommandActivation {
   readonly ctx: ExtensionContext;
@@ -22,7 +19,6 @@ interface CommandActivation {
 }
 
 interface ApplicationCommandHost {
-  readonly bridge: SubagentProjectionBridge;
   readonly run: <A, E>(
     effect: Effect.Effect<A, E, SubagentApplication>,
     signal?: AbortSignal,
@@ -33,7 +29,7 @@ interface ApplicationCommandHost {
 }
 
 export function registerApplicationCommands(pi: ExtensionAPI, host: ApplicationCommandHost): void {
-  const { bridge, run, current, isActive } = host;
+  const { run, current, isActive } = host;
   const withCurrentActivation = <A>(
     operation: (activation: CommandActivation) => Promise<A>,
   ): Promise<A> => {
@@ -48,9 +44,6 @@ export function registerApplicationCommands(pi: ExtensionAPI, host: ApplicationC
 
   const runCurrent = <A, E>(effect: Effect.Effect<A, E, SubagentApplication>): Promise<A> =>
     withCurrentActivation(() => run(effect));
-  const runAction = <E>(
-    act: (service: SubagentServiceContract) => Effect.Effect<unknown, E>,
-  ): Promise<void> => run(SubagentService.use(act).pipe(Effect.asVoid));
 
   const withConfigStore =
     <Patch, A, E>(
@@ -67,7 +60,7 @@ export function registerApplicationCommands(pi: ExtensionAPI, host: ApplicationC
         ),
       );
 
-  const managerActions: FleetManagerActions = {
+  const managerActions: SubagentCommandActions = {
     captureAuthority: host.captureAuthority,
     openActivity: (signal) => {
       const activation = current();
@@ -96,23 +89,6 @@ export function registerApplicationCommands(pi: ExtensionAPI, host: ApplicationC
             : Promise.reject(new Error("Subagents session was replaced.")),
       };
     },
-    stop: (id, expected) => runAction((service) => service.stop(id, expected)),
-    interrupt: (id, expected) => runAction((service) => service.interrupt(id, expected)),
-    resume: (id, message, expected) =>
-      runAction((service) => service.resume(id, message, expected)),
-    send: (id, message, expected) =>
-      run(
-        SubagentService.use((service) =>
-          service
-            .send(id, message, expected)
-            .pipe(
-              Effect.map(
-                (sent): FleetMessageDelivery => (sent.confirmed ? "delivered" : "pending"),
-              ),
-            ),
-        ),
-      ),
-    rename: (id, name, expected) => runAction((service) => service.rename(id, name, expected)),
     inspectProfiles: (projectTrusted) =>
       withCurrentActivation((activation) =>
         run(
@@ -221,13 +197,6 @@ export function registerApplicationCommands(pi: ExtensionAPI, host: ApplicationC
       run(SubagentProfileService.use((profiles) => profiles.patchSessionDelegation(patch))).then(
         () => undefined,
       ),
-    listNativeModels: (runtime, signal) =>
-      withCurrentActivation((activation) =>
-        run(
-          NativeModelCatalog.use((catalog) => catalog.list(runtime, activation.cwd)),
-          signal,
-        ),
-      ),
   };
-  registerSubagentManagerCommand(pi, bridge, managerActions);
+  registerSubagentManagerCommand(pi, managerActions);
 }

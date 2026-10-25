@@ -6,7 +6,6 @@ import type { SubagentError, SubagentProcessError } from "../run/errors.ts";
 import type {
   SubagentContextMode,
   SubagentEffort,
-  SubagentRuntime,
   SubagentWriteIntent,
 } from "../domain/routing.ts";
 import type {
@@ -21,25 +20,9 @@ import type {
   AgentReadResult,
   AgentSendResult,
 } from "../run/agent-messaging.ts";
-import type { LocalCliVersion } from "./local-cli-version.ts";
 import type { OriginalTextSize } from "../run/state.ts";
-import { MAX_SUPERVISOR_MCP_REPORT_CHARS } from "../supervisor/mcp-contract.ts";
 
 export type BackendResumeToken = object;
-
-export const MAX_BACKEND_REPORT_ID_CHARS = 256;
-export const MAX_BACKEND_REPORT_EVIDENCE_CHARS = 2_048;
-/** A submitted report is archived whole; the run keeps only its in-memory cap of it. */
-export const MAX_BACKEND_REPORT_TEXT_CHARS = MAX_SUPERVISOR_MCP_REPORT_CHARS;
-
-export interface BackendReport {
-  readonly runId: string;
-  readonly assignmentEpoch: number;
-  readonly sequence: number;
-  readonly deliveryId: string;
-  readonly text?: string | undefined;
-  readonly evidence?: string | undefined;
-}
 
 export interface BackendLaunchRequest {
   readonly runId: string;
@@ -56,7 +39,6 @@ export interface BackendLaunchRequest {
   readonly parentSessionId: string;
   readonly parentSessionFile?: string | undefined;
   readonly parentLeafId?: string | undefined;
-  readonly sharesParentPromptCache?: boolean | undefined;
   readonly resumeToken?: BackendResumeToken | undefined;
   readonly systemPrompt: string;
 }
@@ -102,29 +84,14 @@ export interface BackendAssistantTerminal {
 }
 
 export type BackendEvent =
-  | {
-      readonly type: "input_delivery";
-      readonly assignmentEpoch: number;
-      readonly sequence: number;
-      readonly state: import("../run/model.ts").SteeringDeliveryState;
-    }
-  | { readonly type: "backend_failure"; readonly error: SubagentProcessError }
   | { readonly type: "run_started"; readonly assignmentEpoch: number }
   | {
       readonly type: "run_settled";
       readonly assignmentEpoch: number;
       readonly terminal?: BackendAssistantTerminal | undefined;
     }
-  | ({ readonly type: "report" } & BackendReport)
   | { readonly type: "activity"; readonly assignmentEpoch: number }
   | { readonly type: "usage"; readonly usage: SubagentUsage }
-  | {
-      readonly type: "native_agent_activity";
-      readonly assignmentEpoch: number;
-      readonly activityId: string;
-      readonly kind: string;
-      readonly state: "running" | "activity" | "completed" | "failed" | "stopped";
-    }
   | {
       readonly type: "assistant_message";
       readonly assignmentEpoch: number;
@@ -132,7 +99,7 @@ export type BackendEvent =
       readonly text?: string | undefined;
       /** The text's size before the archive cap cut it. */
       readonly originalSize?: OriginalTextSize | undefined;
-      /** The model that produced the reply, when the runtime reports one per message. */
+      /** The model that produced the reply, when the child reports one per message. */
       readonly model?: string | undefined;
       readonly usage: SubagentUsage;
       readonly terminal?: BackendAssistantTerminal | undefined;
@@ -191,7 +158,7 @@ export const toBackendExit = (exit: {
   readonly stderr: string;
 }): BackendExit => ({ type: "exit", exitCode: exit.exitCode, diagnostic: exit.stderr });
 
-export interface BackendControls {
+interface BackendControls {
   readonly initialize: Effect.Effect<BackendStartupState, SubagentError>;
   readonly start: (message: string, assignmentEpoch: number) => Effect.Effect<void, SubagentError>;
   readonly steer: (message: string) => Effect.Effect<void, SubagentError>;
@@ -233,14 +200,11 @@ export interface BackendPreflightRequest {
 }
 
 export interface BackendDriver {
-  readonly runtime: SubagentRuntime;
   readonly capabilities: ReadonlyArray<SubagentCapability>;
   readonly supportsContext: (context: SubagentContextMode) => boolean;
   readonly preflight: (
     request: BackendPreflightRequest,
   ) => Effect.Effect<void, import("../run/errors.ts").InvalidSubagentRequestError>;
-  /** The external CLI release this driver launches, for diagnostics. */
-  readonly cliVersion?: Effect.Effect<LocalCliVersion> | undefined;
   readonly spawn: (
     request: BackendLaunchRequest,
     agents?: BackendAgentMessaging,

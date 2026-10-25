@@ -15,7 +15,6 @@ import {
 import {
   candidateFieldChoices,
   candidateFieldRows,
-  runWithValue,
   selectCandidateField,
   targetProfilePrimarySummary,
   type SelectableCandidateField,
@@ -89,7 +88,6 @@ const currentFieldValue = (
   candidate: ProfileCandidate,
   field: SelectableCandidateField,
 ): string => {
-  if (field === "runWith") return runWithValue(candidate);
   return field === "openaiFastMode" ? String(candidate[field]) : candidate[field];
 };
 
@@ -121,9 +119,8 @@ export const candidateFieldSelector = (
     breadcrumb: `${shortTargetLabel(options.target)} · ${options.profile} · ${profileRouteOptionLabel(options.candidateIndex)} · ${label}`,
     title: `Choose ${Str.toLowerCase(label)}`,
     subtitle: `${targetLabel(options.target)} · current: ${row?.value ?? current}`,
-    choices: Arr.map(
-      candidateFieldChoices(options.candidate, options.field, changeOptions),
-      (choice) => selectChoice(choice.value, choice.label, choice.description, choice.value),
+    choices: Arr.map(candidateFieldChoices(options.field, changeOptions), (choice) =>
+      selectChoice(choice.value, choice.label, choice.description, choice.value),
     ),
     current,
     notice: options.notice,

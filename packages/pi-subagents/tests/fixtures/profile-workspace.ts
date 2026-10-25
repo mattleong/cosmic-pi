@@ -61,7 +61,7 @@ export const workspaceHarness = (
           fastModeAvailable: false,
         })),
         current: candidate.model,
-        context: { profile, candidateIndex, runtime: candidate.runtime },
+        context: { profile, candidateIndex },
       }),
   );
   const component = new ProfileWorkspaceComponent({

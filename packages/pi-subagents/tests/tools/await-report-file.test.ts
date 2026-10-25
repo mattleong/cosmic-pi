@@ -20,9 +20,9 @@ import { decodeSubagentContract } from "../../src/tools/contract-schema.ts";
 import { proposalGuidance } from "../../src/tools/format.ts";
 import { registerSubagentTools } from "../../src/tools/subagent.ts";
 import {
-  fakeNativeReportBackendLayer,
-  nativeReportRequest,
-  nativeReportServiceFixture,
+  fakeEventBackendLayer,
+  eventBackendRequest,
+  eventBackendServiceFixture,
   runView,
 } from "../run/fixtures/service-harness.ts";
 import { effectTest, step } from "../support/effect-test.ts";
@@ -286,7 +286,7 @@ describe("await outcomes", () => {
 it.live("delivers every report file of a full await even when warnings fill the result", () =>
   Effect.gen(function* () {
     const agentDirectory = yield* temporaryDirectory("await-report-file-");
-    const fixture = nativeReportServiceFixture(fakeNativeReportBackendLayer(), {
+    const fixture = eventBackendServiceFixture(fakeEventBackendLayer(), {
       archiveReport: sessionReportArchive(agentDirectory, "session-1"),
     });
     const { pi, tools } = recordingExtensionHost();
@@ -303,7 +303,7 @@ it.live("delivers every report file of a full await even when warnings fill the 
     const service = yield* step(() => runtime.run(SubagentService));
     const runs = yield* Effect.forEach(Array.from({ length: 12 }), (_, index) =>
       step(() =>
-        runtime.run(service.startSessionOwned(nativeReportRequest({ name: `worker-${index}` }))),
+        runtime.run(service.startSessionOwned(eventBackendRequest({ name: `worker-${index}` }))),
       ),
     );
     const runIds = Arr.map(runs, (run) => run.id);
@@ -328,7 +328,7 @@ it.live("delivers every report file of a full await even when warnings fill the 
         kind: "warning",
         message: Fn.pipe(warning, Str.slice(0, 6_000)),
       });
-      control.report(runIds[index]!, 1, `delivery-${index}`, `Report ${index}.`);
+      control.complete(`Report ${index}.`);
     });
     const result = yield* step(() => pending);
 

@@ -1,4 +1,3 @@
-import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -8,12 +7,7 @@ import type { OversizedLine } from "../boundary/bounded-line-parser.ts";
 import { jsonPrefixScalars } from "../boundary/json-prefix.ts";
 import { MAX_PROCESS_LINE_BYTES } from "../boundary/process-transport.ts";
 import type { BackendEvent } from "./model.ts";
-import {
-  processError,
-  SubagentProtocolError,
-  type SubagentError,
-  type SubagentProcessError,
-} from "../run/errors.ts";
+import { SubagentProtocolError, type SubagentError } from "../run/errors.ts";
 
 export const protocolError = (message: string): SubagentProtocolError =>
   SubagentProtocolError.make({ message });
@@ -31,28 +25,6 @@ export const oversizedLineError = (source: string, line: OversizedLine): Backend
   };
 };
 
-/**
- * Ends a background consumer without failing its scope. Its handlers have no typed failures, so a
- * non-interrupt cause is a defect that stops delivery; it is logged with a fixed message, never its
- * content, which may quote child output.
- */
-export const ignoreConsumerCause =
-  (consumer: string) =>
-  <A, E, R>(self: Effect.Effect<A, E, R>): Effect.Effect<void, never, R> =>
-    self.pipe(
-      Effect.tapCause((cause) =>
-        Cause.hasInterruptsOnly(cause)
-          ? Effect.void
-          : Effect.logError(`Subagent ${consumer} stopped unexpectedly.`),
-      ),
-      Effect.ignoreCause,
-    );
-
-export const supervisorError =
-  (operation: string) =>
-  ({ code, message }: { readonly code: string; readonly message: string }): SubagentProcessError =>
-    processError(operation, code, message);
-
 interface CorrelatedRequestOptions<Frame, Response> {
   readonly timeout: Duration.Input;
   readonly register: (deferred: Deferred.Deferred<Response, SubagentError>) => {
@@ -61,7 +33,6 @@ interface CorrelatedRequestOptions<Frame, Response> {
   };
   readonly send: (frame: Frame) => Effect.Effect<void, SubagentError>;
   readonly timeoutError: (frame: Frame) => SubagentError;
-  readonly awaitEarlyResponse?: boolean | undefined;
 }
 
 export const correlatedRequest = <Frame, Response>(
@@ -73,12 +44,9 @@ export const correlatedRequest = <Frame, Response>(
       return { deferred, ...options.register(deferred) };
     }),
     ({ deferred, frame }) => {
+      // A response can arrive before a send settles, so either one settles the request.
       const correlated = options.send(frame).pipe(Effect.andThen(Deferred.await(deferred)));
-      return (
-        options.awaitEarlyResponse
-          ? Effect.raceFirst(correlated, Deferred.await(deferred))
-          : correlated
-      ).pipe(
+      return Effect.raceFirst(correlated, Deferred.await(deferred)).pipe(
         Effect.timeoutOrElse({
           duration: options.timeout,
           orElse: () => Effect.fail(options.timeoutError(frame)),

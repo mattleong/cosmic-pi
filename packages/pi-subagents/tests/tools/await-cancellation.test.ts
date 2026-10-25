@@ -21,8 +21,8 @@ import { registerSubagentTools } from "../../src/tools/subagent.ts";
 import {
   awaitObservations,
   awaitRuns,
-  nativeReportRequest,
-  nativeReportServiceFixture,
+  eventBackendRequest,
+  eventBackendServiceFixture,
   runView,
 } from "../run/fixtures/service-harness.ts";
 import { recordingExtensionHost } from "pi-cosmic-core/testing";
@@ -31,7 +31,7 @@ import { executeTool } from "./fixtures/tool-harness.ts";
 import { stringContaining } from "../support/matchers.ts";
 
 const managedTools = Effect.gen(function* () {
-  const fixture = nativeReportServiceFixture();
+  const fixture = eventBackendServiceFixture();
   const { pi, tools } = recordingExtensionHost();
   const runtime = yield* Effect.acquireRelease(
     Effect.sync(() => makePiManagedRuntime(pi, Layer.merge(fixture.layer, fixture.backend.layer))),
@@ -48,7 +48,7 @@ it.live("returns a question's preview in the await result while its notice deliv
       environment: { cwd: "/project", projectTrusted: true },
       run: (effect, signal) => runtime.run(effect, signal),
     });
-    const child = yield* step(() => runtime.run(service.startSessionOwned(nativeReportRequest())));
+    const child = yield* step(() => runtime.run(service.startSessionOwned(eventBackendRequest())));
     const progress = Deferred.makeUnsafe<void>();
     const pending = executeTool(
       tools.get("agent_await")!,
@@ -101,7 +101,7 @@ it.live("keeps late-abort delivery uncertain and recoverable after consumption",
       run: (effect, signal) =>
         runtime.run(effect.pipe(Effect.provideService(SubagentService, intercepted)), signal),
     });
-    const child = yield* step(() => runtime.run(service.startSessionOwned(nativeReportRequest())));
+    const child = yield* step(() => runtime.run(service.startSessionOwned(eventBackendRequest())));
     const progress = yield* Deferred.make<void>();
     const controller = new AbortController();
     const pending = executeTool(
@@ -114,13 +114,7 @@ it.live("keeps late-abort delivery uncertain and recoverable after consumption",
       },
     );
     yield* Deferred.await(progress);
-    fixture.backend.controls[0]!.offer({
-      type: "report",
-      runId: child.id,
-      sequence: 1,
-      deliveryId: "late-report",
-      text: "Recover after late abort",
-    });
+    fixture.backend.controls[0]!.complete("Recover after late abort");
     yield* Deferred.await(entered);
     controller.abort();
     yield* Deferred.succeed(release, undefined);
@@ -176,7 +170,7 @@ it.live(
         },
       });
       const child = yield* step(() =>
-        runtime.run(service.startSessionOwned(nativeReportRequest())),
+        runtime.run(service.startSessionOwned(eventBackendRequest())),
       );
       expect(child.state).toBe("running");
       const tool = tools.get("agent_await")!;
@@ -231,13 +225,7 @@ it.live(
         },
       );
       yield* Deferred.await(replacementProgress);
-      fixture.backend.controls[0]!.offer({
-        type: "report",
-        runId: child.id,
-        sequence: 1,
-        deliveryId: "after-cancel",
-        text: "Child finished normally.",
-      });
+      fixture.backend.controls[0]!.complete("Child finished normally.");
       const completed = yield* step(() => replacement);
       expect(completed.details).toMatchObject({
         action: "await",
@@ -262,7 +250,7 @@ it.effect("ends a wait at its timeout without stopping the child", () =>
       run: (effect, signal) =>
         runtime.run(effect.pipe(Effect.provideService(Clock.Clock, clock)), signal),
     });
-    const child = yield* step(() => runtime.run(service.startSessionOwned(nativeReportRequest())));
+    const child = yield* step(() => runtime.run(service.startSessionOwned(eventBackendRequest())));
     const progress = Deferred.makeUnsafe<void>();
     let settled = false;
     const pending = executeTool(
@@ -294,7 +282,7 @@ it.effect("waits for every run by default and clamps an out-of-range timeout", (
       run: (effect, signal) =>
         runtime.run(effect.pipe(Effect.provideService(Clock.Clock, clock)), signal),
     });
-    const child = yield* step(() => runtime.run(service.startSessionOwned(nativeReportRequest())));
+    const child = yield* step(() => runtime.run(service.startSessionOwned(eventBackendRequest())));
     for (const [timeoutSeconds, clamped] of [
       [0.25, 1],
       [86_400, 3_600],
@@ -332,7 +320,7 @@ it.live("ends a wait for the user's next message without stopping the child", ()
       run: (effect, signal) => runtime.run(effect, signal),
       userInput: () => userInput.signal,
     });
-    const child = yield* step(() => runtime.run(service.startSessionOwned(nativeReportRequest())));
+    const child = yield* step(() => runtime.run(service.startSessionOwned(eventBackendRequest())));
     const progress = Deferred.makeUnsafe<void>();
     const pending = executeTool(
       tools.get("agent_await")!,

@@ -9,7 +9,6 @@ import type {
   BackendDriver,
   BackendHandle,
   BackendLaunchRequest,
-  BackendReport,
   BackendStartupState,
 } from "../backend/model.ts";
 import type { CanonicalWriterCwd, WriterLeaseContract } from "../boundary/writer-lease.ts";
@@ -80,14 +79,7 @@ interface AssignmentState {
   readonly attemptToken: string;
   startedObserved: boolean;
   outcomeUncertain: boolean;
-  pendingReport?: BackendReport | undefined;
   pendingRunSettled: false | { readonly terminal?: BackendAssistantTerminal | undefined };
-}
-
-interface BackendReportWatermark {
-  readonly assignmentEpoch: number;
-  readonly sequence: number;
-  readonly deliveryId: string;
 }
 
 /** View fields a snapshot derives from the record, so each is written once. */
@@ -123,7 +115,6 @@ export interface RunRecord {
     | { readonly scope: Scope.Closeable; readonly settled: Deferred.Deferred<void> }
     | undefined;
   readonly activeTools: Map<string, string>;
-  readonly nativeAgents: Set<string>;
   cleanupSettlement: Deferred.Deferred<"confirmed" | "quarantined">;
   /** The view's `cleanup` publishes this, with its evidence, once closing starts. */
   cleanupDisposition: RunCleanupDisposition;
@@ -167,8 +158,6 @@ export interface RunRecord {
   readonly completionClaims: Map<number, string>;
   assignment: AssignmentState;
   nextAssignmentEpoch: number;
-  lastBackendReport?: BackendReportWatermark | undefined;
-  steeringDeliveryOwner?: { readonly epoch: number; readonly sequence: number } | undefined;
   backendFailure?: SubagentError | undefined;
 }
 
@@ -184,16 +173,8 @@ export const recordLatestAssistantText = (
 
 export const clearRunActivity = (record: RunRecord): void => {
   record.activeTools.clear();
-  record.nativeAgents.clear();
   const sessionEvents = closeOpenToolSessionEvents(record.view.sessionEvents);
-  if (record.view.nativeActivity?.active || sessionEvents !== record.view.sessionEvents)
-    record.view = {
-      ...record.view,
-      sessionEvents,
-      ...(record.view.nativeActivity?.active && {
-        nativeActivity: { ...record.view.nativeActivity, active: 0 },
-      }),
-    };
+  if (sessionEvents !== record.view.sessionEvents) record.view = { ...record.view, sessionEvents };
 };
 
 /** Cleanup has begun and isn't confirmed: it is running, being reverified, or quarantined. */
@@ -279,22 +260,18 @@ export const commitRunInitialization = (record: RunRecord, state: BackendStartup
   return pending;
 };
 
-const unsupportedCapabilityMessage = (
-  backend: string,
-  capability: SubagentCapability,
-  id: string,
-): string => {
+const unsupportedCapabilityMessage = (capability: SubagentCapability, id: string): string => {
   switch (capability) {
     case "steer":
-      return `${backend} subagents do not support mid-turn guidance. Await with agent_await({ runIds: ["${id}"], until: "all_finished" }), inspect with agent_read({ agentIds: ["${id}"] }), or stop with agent_lifecycle({ action: "stop", runIds: ["${id}"] }).`;
+      return `Subagent ${id} does not support mid-turn guidance. Await with agent_await({ runIds: ["${id}"], until: "all_finished" }), inspect with agent_read({ agentIds: ["${id}"] }), or stop with agent_lifecycle({ action: "stop", runIds: ["${id}"] }).`;
     case "interrupt":
-      return `${backend} subagents do not support interruption. Stop with agent_lifecycle({ action: "stop", runIds: ["${id}"] }) or wait with agent_await.`;
+      return `Subagent ${id} does not support interruption. Stop with agent_lifecycle({ action: "stop", runIds: ["${id}"] }) or wait with agent_await.`;
     case "parent-contact":
-      return `${backend} subagents do not support parent questions; use agent_await or agent_read instead.`;
+      return `Subagent ${id} does not support parent questions; use agent_await or agent_read instead.`;
     case "native-fork":
     case "peer-notice":
     case "resume":
-      return `${backend} subagents do not support ${capability}. Inspect supported operations with agent_read({ agentIds: ["${id}"] }).`;
+      return `Subagent ${id} does not support ${capability}. Inspect supported operations with agent_read({ agentIds: ["${id}"] }).`;
   }
   return Fn.absurd(capability);
 };
@@ -304,12 +281,10 @@ export const requireCapability = (
   capability: SubagentCapability,
 ): Effect.Effect<void, UnsupportedSubagentCapabilityError> => {
   if (hasSubagentCapability(record.view, capability)) return Effect.void;
-  const backend = `local/${record.view.runtime}`;
   return Effect.fail(
     UnsupportedSubagentCapabilityError.make({
-      backend,
       capability,
-      message: unsupportedCapabilityMessage(backend, capability, record.view.id),
+      message: unsupportedCapabilityMessage(capability, record.view.id),
     }),
   );
 };

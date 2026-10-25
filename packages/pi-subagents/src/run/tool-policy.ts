@@ -65,18 +65,7 @@ const CROSS_SESSION_TOOL_NAMES: ReadonlySet<string> = new Set([
 
 /** Tools a Pi child never loads: competing orchestrators and cross-session messaging. */
 export const PI_CHILD_EXCLUDED_TOOL_ARGUMENT = Arr.join(
-  [
-    "herdr_agent_start",
-    "herdr_agent_list",
-    "herdr_agent_status",
-    "herdr_agent_await",
-    "herdr_agent_read",
-    "herdr_agent_send",
-    "herdr_agent_stop",
-    "workflow",
-    "workflow_control",
-    ...CROSS_SESSION_TOOL_NAMES,
-  ],
+  ["workflow", "workflow_control", ...CROSS_SESSION_TOOL_NAMES],
   ",",
 );
 
@@ -86,7 +75,6 @@ const MAX_INHERITED_PI_TOOL_ARGUMENT_BYTES = 32_768;
 const toolNameEncoder = new TextEncoder();
 
 const isChildExcludedTool = (name: string): boolean =>
-  Fn.pipe(name, Str.startsWith("herdr_agent_")) ||
   name === "workflow" ||
   Fn.pipe(name, Str.startsWith("workflow_")) ||
   CROSS_SESSION_TOOL_NAMES.has(name);
@@ -164,6 +152,10 @@ export const piChildToolSnapshot = (
   ),
 });
 
+// Inherited extension and MCP tools may still change files, so the guidance never says otherwise.
+const READ_ONLY_GUIDANCE =
+  "You are read-only, so you don't have Pi's edit and write tools. Bash and your other tools may still be able to change files: use them only to inspect and validate, never to edit, write, generate, or otherwise change project files. If the task needs changes, say what should change in your report or ask the parent.";
+
 export const childSystemPrompt = (request: StartSubagentRequest): string =>
   Arr.join(
     [
@@ -199,22 +191,9 @@ export const childSystemPrompt = (request: StartSubagentRequest): string =>
               ],
               "\n\n",
             )
-        : readOnlyGuidance(request.runtime),
+        : READ_ONLY_GUIDANCE,
     ],
     "\n\n",
-  );
-
-// Only a Pi child's guidance names tools it loses for being read-only; inherited extension and MCP
-// tools may still change files, so the guidance never says otherwise.
-const readOnlyGuidance = (runtime: StartSubagentRequest["runtime"]): string =>
-  Arr.join(
-    [
-      runtime === "pi"
-        ? "You are read-only, so you don't have Pi's edit and write tools. Bash and your other tools may still be able to change files: use them only to inspect and validate, never to edit, write, generate, or otherwise change project files."
-        : "You are read-only. Use your tools only to inspect and validate, never to edit, write, generate, or otherwise change project files, even where a tool or the sandbox would allow it.",
-      "If the task needs changes, say what should change in your report or ask the parent.",
-    ],
-    " ",
   );
 
 // Shown to a forked child before its task so it doesn't continue the inherited conversation.

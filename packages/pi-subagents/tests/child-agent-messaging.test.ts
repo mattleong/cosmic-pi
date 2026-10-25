@@ -54,7 +54,6 @@ const backendFixture = () => {
     readonly offer: (event: BackendEvent) => void;
   }> = [];
   const driver: BackendDriver = {
-    runtime: "pi",
     capabilities: PI_SUBAGENT_CAPABILITIES,
     supportsContext: () => true,
     preflight: () => Effect.void,
@@ -95,7 +94,7 @@ const backendFixture = () => {
   };
   return {
     controls,
-    layer: Layer.succeed(SubagentBackendRegistry, backendRegistryFor([driver])),
+    layer: Layer.succeed(SubagentBackendRegistry, backendRegistryFor(driver)),
   };
 };
 

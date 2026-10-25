@@ -14,7 +14,6 @@ import type {
 
 const contractCandidates = (candidates: ReadonlyArray<ProfileCandidateDiscovery>) =>
   Arr.map(candidates, (candidate) => ({
-    runtime: candidate.runtime,
     model: metadata(candidate.model, MAX_PROFILE_MODEL_SELECTOR_CHARS) ?? "[redacted]",
     effort: candidate.effort,
     context: candidate.context,

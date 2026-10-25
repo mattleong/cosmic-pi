@@ -50,7 +50,6 @@ export const questionnaireLifetimes = (isClosed: () => boolean) => {
     return Effect.gen(function* () {
       const current = () =>
         !isClosed() &&
-        record.view.runtime === "pi" &&
         !record.stoppedByParent &&
         !isCleanupOwed(record) &&
         !record.pauseRequested &&

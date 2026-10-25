@@ -45,7 +45,6 @@ const loadPicker = (
       profile: "reviewer",
       candidateIndex: 0,
       candidate,
-      listNativeModels: () => Promise.resolve([]),
       piCatalog: catalog.capture(),
       ...overrides,
     }),
@@ -138,7 +137,7 @@ describe("profile model catalog", () => {
     }),
   );
 
-  it.effect("sanitizes Pi and native display text without changing selector identity", () =>
+  it.effect("sanitizes Pi display text without changing selector identity", () =>
     Effect.gen(function* () {
       const catalog = staticCatalog([
         piModel("openai", "gpt-old", "Parent\u001b[2J\nrenamed"),
@@ -164,28 +163,6 @@ describe("profile model catalog", () => {
       expect(renamed?.payload.selector).toBe("openai/gpt-old");
       expect(renamed?.item.description).toContain("renamed");
       expect(Arr.some(pi, (choice) => choice.payload.selector === "parent")).toBe(true);
-
-      const native = Option.getOrUndefined(
-        Arr.findFirst(
-          displayed(
-            yield* loadPicker(catalog, profileCandidate("claude-safe", { runtime: "claude" }), {
-              listNativeModels: () =>
-                Promise.resolve([
-                  {
-                    selector: "claude-safe",
-                    label: "Claude\u001b[2J\nSafe",
-                    description: "Native\u0007 description",
-                    supportedEfforts: ["high"],
-                    isDefault: true,
-                  },
-                ]),
-            }),
-          ),
-          (choice) => choice.value === "claude-safe",
-        ),
-      );
-      expect(native?.payload.selector).toBe("claude-safe");
-      expect(native?.item.description).toContain("Safe");
     }),
   );
 });

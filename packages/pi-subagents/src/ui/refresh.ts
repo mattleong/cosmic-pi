@@ -6,7 +6,6 @@ export type SubagentUiRefreshCadence = typeof SPINNER_FRAME_MS | 1_000;
 
 interface SubagentUiRefreshOptions {
   readonly includePausedElapsed?: boolean;
-  readonly includeTerminalAges?: boolean;
 }
 
 export const subagentUiRefreshCadence = (
@@ -21,8 +20,7 @@ export const subagentUiRefreshCadence = (
       (run) =>
         run.state === "waiting_for_parent" ||
         run.state === "stopping" ||
-        (options.includePausedElapsed === true && run.state === "paused") ||
-        (options.includeTerminalAges === true && run.state === "completed"),
+        (options.includePausedElapsed === true && run.state === "paused"),
     )
   )
     return 1_000;

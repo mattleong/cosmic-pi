@@ -16,7 +16,6 @@ export const profileCandidate = (
   model = "parent",
   overrides: Partial<ProfileCandidate> = {},
 ): ProfileCandidate => ({
-  runtime: "pi",
   model,
   effort: "high",
   context: "fresh",
@@ -26,7 +25,6 @@ export const profileCandidate = (
 });
 
 export const declaredCandidate = (model: string, overrides: JsonObject = {}): JsonObject => ({
-  runtime: "pi",
   model,
   effort: "high",
   context: "fresh",

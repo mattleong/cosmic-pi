@@ -5,7 +5,7 @@ import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import { type AgentCaller, MAIN_AGENT_ID } from "../../src/run/agent-messaging.ts";
-import { PENDING_STEER_DELIVERY_CODE, SubagentProcessError } from "../../src/run/errors.ts";
+import { SubagentProcessError } from "../../src/run/errors.ts";
 import {
   captureSubagentControlExpectation,
   type SubagentProjection,
@@ -20,10 +20,10 @@ import {
   contactParentFrame,
   type FakeChildControl,
   fakeChildLayer,
-  fakeNativeReportBackendLayer,
+  fakeEventBackendLayer,
   localServiceFixture,
-  nativeReportRequest,
-  nativeReportServiceFixture,
+  eventBackendRequest,
+  eventBackendServiceFixture,
   request,
   runView,
   withService,
@@ -138,7 +138,7 @@ describe("agent messaging", () => {
 
       // The sibling's guidance waits behind the question until an ancestor answers it.
       const fromSibling = yield* service.agentSend(asRun(sibling), child.id, "Prefer v1.");
-      expect(fromSibling).toMatchObject({ disposition: "guided", confirmed: true, parked: true });
+      expect(fromSibling).toMatchObject({ disposition: "guided", parked: true });
       expect(childControl.sentIpc("parent_reply")).toBe(false);
       expect(latest(projections, child.id)?.state).toBe("waiting_for_parent");
 
@@ -246,12 +246,12 @@ describe("agent messaging", () => {
   );
 
   it.effect("refuses finished native runs and runs being removed from the session", () => {
-    const { backend, projections, layer } = nativeReportServiceFixture();
+    const { backend, projections, layer } = eventBackendServiceFixture();
     return withService(layer, function* (service) {
-      const native = yield* service.start(nativeReportRequest({ name: "native" }));
+      const native = yield* service.start(eventBackendRequest({ name: "native" }));
       expect((yield* service.agentSend(MAIN, native.id, "Keep going.")).disposition).toBe("guided");
       expect(backend.controls[0]?.prompts.at(-1)).toContain("Keep going.");
-      backend.controls[0]?.report(native.id, 1, "native-report", "Native report.");
+      backend.controls[0]?.complete("Native report.");
       yield* yieldUntil(() => latest(projections, native.id)?.state === "completed");
       expect(
         yield* service.agentSend(MAIN, native.id, "One more thing.").pipe(Effect.flip),
@@ -263,10 +263,10 @@ describe("agent messaging", () => {
   });
 
   it.effect("binds each native backend's agent messaging to its own run as the caller", () => {
-    const { backend, layer } = nativeReportServiceFixture();
+    const { backend, layer } = eventBackendServiceFixture();
     return withService(layer, function* (service) {
-      const first = yield* service.start(nativeReportRequest({ name: "first" }));
-      const second = yield* service.start(nativeReportRequest({ name: "second" }));
+      const first = yield* service.start(eventBackendRequest({ name: "first" }));
+      const second = yield* service.start(eventBackendRequest({ name: "second" }));
       const messaging = backend.agentMessaging[0]!;
       expect(
         Option.getOrUndefined(
@@ -507,45 +507,17 @@ describe("agent messaging", () => {
     });
   });
 
-  it.effect("records guidance still awaiting confirmation on both sender and receiver", () => {
-    const backend = fakeNativeReportBackendLayer({
-      steer: () =>
-        Effect.fail(
-          SubagentProcessError.make({
-            operation: "steer",
-            code: PENDING_STEER_DELIVERY_CODE,
-            pendingDelivery: true,
-            message: "Guidance delivery is still being confirmed.",
-          }),
-        ),
-    });
-    const { projections, layer } = nativeReportServiceFixture(backend);
-    return withService(layer, function* (service) {
-      const sender = yield* service.start(nativeReportRequest({ name: "sender" }));
-      const receiver = yield* service.start(nativeReportRequest({ name: "receiver" }));
-      expect(
-        yield* service.agentSend(asRun(sender), receiver.id, "Check the schema."),
-      ).toMatchObject({ disposition: "guided", confirmed: false });
-      expect(messageNotices(latest(projections, receiver.id))).toEqual([
-        { direction: "in", peer: sender.id, text: "Check the schema." },
-      ]);
-      expect(messageNotices(latest(projections, sender.id))).toEqual([
-        { direction: "out", peer: receiver.id, text: "Check the schema." },
-      ]);
-    });
-  });
-
-  it.effect("fails a send whose guidance delivery failed without a pending confirmation", () => {
+  it.effect("fails a send whose guidance wasn't delivered", () => {
     const failure = SubagentProcessError.make({
       operation: "steer",
-      code: PENDING_STEER_DELIVERY_CODE,
+      code: "guidance_not_delivered",
       message: "Guidance delivery failed.",
     });
-    const backend = fakeNativeReportBackendLayer({ steer: () => Effect.fail(failure) });
-    const { projections, layer } = nativeReportServiceFixture(backend);
+    const backend = fakeEventBackendLayer({ steer: () => Effect.fail(failure) });
+    const { projections, layer } = eventBackendServiceFixture(backend);
     return withService(layer, function* (service) {
-      const sender = yield* service.start(nativeReportRequest({ name: "sender" }));
-      const receiver = yield* service.start(nativeReportRequest({ name: "receiver" }));
+      const sender = yield* service.start(eventBackendRequest({ name: "sender" }));
+      const receiver = yield* service.start(eventBackendRequest({ name: "receiver" }));
       const sent = yield* service
         .agentSend(asRun(sender), receiver.id, "Check the schema.")
         .pipe(Effect.flip);
@@ -771,12 +743,12 @@ describe("message bounds", () => {
 describe("messages to a starting run", () => {
   it.effect("wait for it to start, then deliver", () => {
     const initialStartGate = Deferred.makeUnsafe<void>();
-    const { backend, projections, layer } = nativeReportServiceFixture(
-      fakeNativeReportBackendLayer({ initialStartGate }),
+    const { backend, projections, layer } = eventBackendServiceFixture(
+      fakeEventBackendLayer({ initialStartGate }),
     );
     return withService(layer, function* (service) {
       yield* service
-        .startSessionOwned(nativeReportRequest({ name: "slow-start" }))
+        .startSessionOwned(eventBackendRequest({ name: "slow-start" }))
         .pipe(Effect.forkScoped);
       yield* yieldUntil(() => backend.controls[0]?.assignmentEpochs[0] === 1);
       const id = projections.at(-1)?.runs[0]?.id ?? "";
@@ -801,12 +773,12 @@ describe("messages to a starting run", () => {
 
   it.effect("refuse a message that can't be delivered without waiting", () => {
     const initialStartGate = Deferred.makeUnsafe<void>();
-    const { backend, projections, layer } = nativeReportServiceFixture(
-      fakeNativeReportBackendLayer({ initialStartGate }),
+    const { backend, projections, layer } = eventBackendServiceFixture(
+      fakeEventBackendLayer({ initialStartGate }),
     );
     return withService(layer, function* (service) {
       yield* service
-        .startSessionOwned(nativeReportRequest({ name: "slow-start" }))
+        .startSessionOwned(eventBackendRequest({ name: "slow-start" }))
         .pipe(Effect.forkScoped);
       yield* yieldUntil(() => backend.controls[0]?.assignmentEpochs[0] === 1);
       const id = projections.at(-1)?.runs[0]?.id ?? "";
@@ -821,12 +793,12 @@ describe("messages to a starting run", () => {
 
   it.effect("refuse once it is still starting after the wait", () => {
     const initialStartGate = Deferred.makeUnsafe<void>();
-    const { backend, projections, layer } = nativeReportServiceFixture(
-      fakeNativeReportBackendLayer({ initialStartGate }),
+    const { backend, projections, layer } = eventBackendServiceFixture(
+      fakeEventBackendLayer({ initialStartGate }),
     );
     return withService(layer, function* (service) {
       yield* service
-        .startSessionOwned(nativeReportRequest({ name: "stuck-start" }))
+        .startSessionOwned(eventBackendRequest({ name: "stuck-start" }))
         .pipe(Effect.forkScoped);
       yield* yieldUntil(() => backend.controls[0]?.assignmentEpochs[0] === 1);
       const id = projections.at(-1)?.runs[0]?.id ?? "";

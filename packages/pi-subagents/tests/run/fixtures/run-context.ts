@@ -77,7 +77,6 @@ export const makeTestSettlement = (overrides: Partial<RunContext> = {}) =>
   );
 
 const inertDriver: BackendDriver = {
-  runtime: "pi",
   capabilities: [],
   supportsContext: () => true,
   preflight: () => Effect.void,
@@ -142,7 +141,6 @@ export const runRecordFixture = (
       driver: inertDriver,
       launch: { ...launchFixture, name },
       activeTools: new Map(),
-      nativeAgents: new Set(),
       cleanupSettlement: yield* Deferred.make<"confirmed" | "quarantined">(),
       cleanupDisposition: "none",
       pauseRequested: false,

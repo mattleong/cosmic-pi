@@ -155,7 +155,7 @@ const event = (
   isError: false,
   ...response,
 });
-const failure = (code = "claude_steering_outcome_uncertain", id = "uncertain") => ({
+const failure = (code = "guidance_outcome_uncertain", id = "uncertain") => ({
   id,
   code,
   message: "Input may already have been sent. Do not resend this guidance.",

@@ -38,7 +38,6 @@ describe("SubagentService", () => {
       const counts = leaseCounts();
       const projections: SubagentProjection[] = [];
       const driver: BackendDriver = {
-        runtime: "pi",
         capabilities: ["steer"],
         supportsContext: (context) => context === "fresh",
         preflight: () => Effect.void,
@@ -60,7 +59,7 @@ describe("SubagentService", () => {
             });
           }),
       };
-      const registry = Layer.succeed(SubagentBackendRegistry, backendRegistryFor([driver]));
+      const registry = Layer.succeed(SubagentBackendRegistry, backendRegistryFor(driver));
       const leases = fakeWriterLeaseLayer({ counts });
       const layer = SubagentService["layer"]({
         writerWorkspaceMode: "shared-checkout",
@@ -73,7 +72,6 @@ describe("SubagentService", () => {
         const failure = yield* service
           .start(
             request({
-              runtime: "pi",
               writeIntent: "writer",
               name: "uncertain-local-writer",
             }),
@@ -93,7 +91,6 @@ describe("SubagentService", () => {
         const conflict = yield* service
           .start(
             request({
-              runtime: "pi",
               name: "replacement",
               writeIntent: "writer",
             }),

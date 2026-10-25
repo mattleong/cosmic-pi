@@ -3,11 +3,7 @@ import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import { freezeSnapshot } from "pi-cosmic-core/projection";
-import {
-  PROFILE_CANDIDATE_RUNTIMES,
-  PROFILE_CANDIDATE_WRITE_INTENTS,
-  PROFILE_IDS,
-} from "../profiles/model.ts";
+import { PROFILE_CANDIDATE_WRITE_INTENTS, PROFILE_IDS } from "../profiles/model.ts";
 import {
   MAX_AGENT_TARGETS,
   MAX_MAIN_READ_CHARS,
@@ -266,8 +262,7 @@ const AgentListContractSchema = Schema.Struct({
       state: Schema.Union([StateSchema, MainStateSchema, Schema.Literal("unavailable")]),
       parentId: Schema.optionalKey(RunIdSchema),
       depth: Schema.optionalKey(count),
-      runtime: Schema.optionalKey(Schema.Literals(PROFILE_CANDIDATE_RUNTIMES)),
-      /** The run's runtime, model, and effort, such as `pi/provider/model:high`. */
+      /** The run's model and effort, such as `provider/model:high`. */
       model: Schema.optionalKey(NonEmptyText(MAX_CONTRACT_MODEL_CHARS)),
       profile: Schema.optionalKey(ProfileSchema),
       agent: Schema.optionalKey(AgentNameSchema),

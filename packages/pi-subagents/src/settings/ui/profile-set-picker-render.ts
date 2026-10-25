@@ -137,16 +137,8 @@ const previewRows = (
               "muted",
               candidate.effort === "default" ? "profile default" : candidate.effort,
             ),
-            theme.fg("muted", `local/${candidate.runtime}`),
           ])
-        : [
-            [
-              theme.fg(profile.status === "invalid" ? "error" : "muted", profile.status),
-              "",
-              "",
-              "",
-            ],
-          ],
+        : [[theme.fg(profile.status === "invalid" ? "error" : "muted", profile.status), "", ""]],
   }));
   const table = managerTable(
     Arr.flatMap(profiles, (profile) =>
@@ -157,7 +149,6 @@ const previewRows = (
       { minWidth: 7, priority: 2 },
       { minWidth: 16, priority: 4 },
       { minWidth: 7, priority: 3 },
-      { minWidth: 8, priority: 1 },
     ],
     width,
   );

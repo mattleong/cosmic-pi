@@ -5,7 +5,6 @@ import { profileSettingsInspection } from "./fixtures/profile-settings-inspectio
 import {
   chooseFromPage,
   settleTurn,
-  workspaceHarness,
   workspaceInspection as makeInspection,
 } from "./fixtures/profile-workspace.ts";
 import { declaredCandidate, profileCandidate } from "./fixtures/profiles.ts";
@@ -16,7 +15,6 @@ import {
   type ProfileWorkspaceOptions,
   type ProfileWorkspaceSaveResult,
 } from "../src/settings/profile-workspace.ts";
-import * as Arr from "effect/Array";
 
 const baseOptions = (
   overrides: Partial<ProfileWorkspaceOptions> = {},
@@ -37,7 +35,6 @@ const baseOptions = (
       context: {
         profile: "generalist",
         candidateIndex,
-        runtime: candidate.runtime,
       },
     }),
   supportedPiEfforts: () => undefined,
@@ -52,37 +49,6 @@ const openUndo = (component: ProfileWorkspaceComponent): void => {
   component.handleInput("G");
   component.handleInput("\r");
 };
-
-const liveCatalogEditor = () => {
-  const loadModelPicker = vi.fn<ProfileWorkspaceOptions["loadModelPicker"]>(
-    (profile, candidateIndex, candidate) =>
-      Promise.resolve({
-        choices: Arr.map(["live-older", "live-default"], (selector) => ({
-          provider: candidate.runtime,
-          id: selector,
-          selector,
-          fastModeAvailable: false,
-        })),
-        current: candidate.model,
-        defaultSelector: "live-default",
-        context: { profile, candidateIndex, runtime: candidate.runtime },
-      }),
-  );
-  const editor = workspaceHarness({ loadModelPicker }, [profileCandidate("test/first")]);
-  const chooseRunWith = (value: string) => chooseFromPage(editor.component, "r", value);
-  return { ...editor, loadModelPicker, chooseRunWith };
-};
-
-describe("runtime switches", () => {
-  effectTest("keeps native runtime and model unchanged after failed discovery", function* () {
-    const editor = liveCatalogEditor();
-    editor.loadModelPicker.mockRejectedValueOnce(new Error("Discovery failed"));
-    editor.chooseRunWith("local/claude");
-    yield* step(settleTurn);
-    expect(editor.saveDraft).not.toHaveBeenCalled();
-    expect(editor.candidates()).toEqual([profileCandidate("test/first")]);
-  });
-});
 
 describe("editing visit integration", () => {
   effectTest(
@@ -188,7 +154,7 @@ describe("profile workspace disposal", () => {
           revision: 1,
           overrides: {
             generalist: {
-              candidates: [profileCandidate("opus", { runtime: "claude" })],
+              candidates: [profileCandidate("parent")],
             },
           },
         }),
@@ -207,7 +173,7 @@ describe("profile workspace disposal", () => {
     pickerCell.resolve({
       choices: [],
       current: "parent",
-      context: { profile: "generalist", candidateIndex: 0, runtime: "pi" },
+      context: { profile: "generalist", candidateIndex: 0 },
     });
     return settleTurn().then(() => {
       expect(requestRender).toHaveBeenCalledTimes(rendersAtDispose);

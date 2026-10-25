@@ -6,11 +6,6 @@ import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import type { SafeFile } from "pi-cosmic-core";
-import {
-  LOCAL_CLI_LABELS,
-  LOCAL_CLI_MINIMUM_VERSIONS,
-  type LocalCliVersion,
-} from "../backend/local-cli-version.ts";
 import { SubagentBackendRegistry } from "../backend/service.ts";
 import { hostProfileEnvironment } from "../boundary/host-profile-resolution.ts";
 import { nodeExecutableProblem } from "../boundary/node-executable.ts";
@@ -67,13 +62,7 @@ const check = (label: string, status: DoctorStatus, detail: string): DoctorCheck
 });
 
 const attemptKey = (attempt: ProfileCandidateAttempt): string =>
-  Arr.join(
-    [attempt.runtime, attempt.model, attempt.effectiveContext, attempt.writeIntent, attempt.effort],
-    "|",
-  );
-
-const routeLabel = (attempt: ProfileCandidateAttempt): string =>
-  `local/${attempt.runtime} · ${attempt.model}`;
+  Arr.join([attempt.model, attempt.effectiveContext, attempt.writeIntent, attempt.effort], "|");
 
 const ROUTE_PROBE_CONCURRENCY = 4;
 
@@ -96,19 +85,19 @@ const routeOutcome = (
     ? check(
         label,
         "ok",
-        `${prefix}${routeLabel(first)}${fallbacks > 0 ? ` (+${fallbacks} fallback${fallbacks === 1 ? "" : "s"})` : ""}`,
+        `${prefix}${first.model}${fallbacks > 0 ? ` (+${fallbacks} fallback${fallbacks === 1 ? "" : "s"})` : ""}`,
       )
     : check(
         label,
         fallbacks > 0 ? "warning" : "failed",
-        `${prefix}${routeLabel(first)}: ${failure}${fallbacks > 0 ? "; a fallback will be tried" : ""}`,
+        `${prefix}${first.model}: ${failure}${fallbacks > 0 ? "; a fallback will be tried" : ""}`,
       );
 };
 
 /**
  * Checks what a subagent launch depends on, each check independently: Pi's version, saved
- * configuration, the readiness of every profile's first eligible route (including CLI sign-in),
- * private state, and optional companions. It launches nothing. A retired session fails the
+ * configuration, the readiness of every profile's first eligible route, private state, and
+ * optional companions. It launches nothing. A retired session fails the
  * whole report.
  */
 export const runSubagentDoctor = Effect.fn("SubagentDoctor.run")(function* (
@@ -171,11 +160,8 @@ export const runSubagentDoctor = Effect.fn("SubagentDoctor.run")(function* (
   ];
   // Profiles often share a route; each distinct first route is probed once.
   const probes = new Map<string, ProfileCandidateAttempt>();
-  const cliRuntimes = new Set<LocalCliRuntime>();
   for (const { plan } of routes) {
     if (plan.kind === "failed") continue;
-    for (const attempt of plan.attempts)
-      if (attempt.runtime !== "pi") cliRuntimes.add(attempt.runtime);
     const [first] = plan.attempts;
     if (first && !probes.has(attemptKey(first))) probes.set(attemptKey(first), first);
   }
@@ -204,11 +190,6 @@ export const runSubagentDoctor = Effect.fn("SubagentDoctor.run")(function* (
             `invalid ${invalid.scope} entry; it fails closed until repaired`,
           ),
     );
-
-  for (const runtime of cliRuntimes) {
-    const version = yield* cliVersionCheck(backends, runtime);
-    if (version) checks.push(version);
-  }
 
   const writable = yield* fileSystem.access(input.agentDirectory, { writable: true }).pipe(
     Effect.as(true),
@@ -248,7 +229,11 @@ export const runSubagentDoctor = Effect.fn("SubagentDoctor.run")(function* (
     checks.push(
       input.activityViewAvailable
         ? check("Activity view", "ok", "shared Activity manager available")
-        : check("Activity view", "warning", "install pi-cosmic-ui for the shared Activity view"),
+        : check(
+            "Activity view",
+            "warning",
+            "/subagents requires the Activity view from pi-cosmic-ui; install it",
+          ),
     );
   return checks;
 });
@@ -300,7 +285,7 @@ const gitCheck: Effect.Effect<DoctorCheck> = gitInstallation.pipe(
   ),
 );
 
-// Readiness runs the same preflight a launch does, bounded so a hung CLI can't stall the report.
+// Readiness runs the same preflight a launch does, bounded so a hung check can't stall the report.
 const readinessFailure = (
   backends: SubagentBackendRegistry["Service"],
   attempt: ProfileCandidateAttempt,
@@ -308,7 +293,7 @@ const readinessFailure = (
 ): Effect.Effect<string | undefined> =>
   backends
     .preflight(
-      { runtime: attempt.runtime, context: attempt.effectiveContext },
+      { context: attempt.effectiveContext },
       {
         context: attempt.effectiveContext,
         writeIntent: attempt.writeIntent,
@@ -325,43 +310,6 @@ const readinessFailure = (
       Effect.timeoutOption(PREFLIGHT_TIMEOUT),
       Effect.map(Option.getOrElse(() => "readiness check timed out")),
     );
-
-type LocalCliRuntime = keyof typeof LOCAL_CLI_LABELS;
-
-const versionCheck = (runtime: LocalCliRuntime, version: LocalCliVersion): DoctorCheck => {
-  const label = `${LOCAL_CLI_LABELS[runtime]} CLI`;
-  const minimum = LOCAL_CLI_MINIMUM_VERSIONS[runtime];
-  switch (version.status) {
-    case "supported":
-      return check(label, "ok", `version ${version.version}`);
-    case "unsupported":
-      return check(
-        label,
-        "failed",
-        `version ${version.version}; subagents need ${minimum} or later, so its routes are skipped`,
-      );
-    case "unrecognized":
-      return check(
-        label,
-        "warning",
-        `version output "${version.output}" isn't recognized; can't confirm ${minimum} or later`,
-      );
-    case "unavailable":
-      return check(label, "warning", "not found, or it didn't report a version");
-  }
-  return Fn.absurd(version);
-};
-
-// The version a launch's preflight checks, cached for the session by the CLI boundary.
-const cliVersionCheck = (
-  backends: SubagentBackendRegistry["Service"],
-  runtime: LocalCliRuntime,
-): Effect.Effect<DoctorCheck | undefined> =>
-  backends.resolve({ runtime, context: "fresh" }).pipe(
-    Effect.flatMap((driver) => driver.cliVersion ?? Effect.undefined),
-    Effect.map((version) => version && versionCheck(runtime, version)),
-    Effect.orElseSucceed(() => undefined),
-  );
 
 const STATUS_GLYPHS = { ok: "✓", warning: "!", failed: "✗" } as const;
 

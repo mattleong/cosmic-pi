@@ -10,7 +10,7 @@ import {
   type ProfileWorkspaceOptions,
 } from "../src/settings/profile-workspace.ts";
 import {
-  fleetManagerActionsFixture,
+  subagentCommandActionsFixture,
   profileSettingsInspection,
 } from "./fixtures/profile-settings-inspection.ts";
 import { deferredPromise, extensionContextFixture, plainTheme } from "pi-cosmic-core/testing";
@@ -33,7 +33,7 @@ const fixture = () => {
     renameProfileSet: vi.fn(() => Promise.resolve()),
     deleteProfileSet: vi.fn(() => Promise.resolve()),
   };
-  const actions = fleetManagerActionsFixture(calls);
+  const actions = subagentCommandActionsFixture(calls);
   let current = true;
   let trusted = true;
   const host: ProfileSetActionHost = {
@@ -72,9 +72,10 @@ describe("profile dashboard actions", () => {
         profileSets: {
           common: {
             profiles: {
+              // An unknown candidate key, such as `runtime`, fails the route closed.
               worker: {
-                runtime: "herdr",
-                model: "native",
+                runtime: "pi",
+                model: "openai/native",
                 effort: "default",
                 context: "fresh",
                 writeIntent: "writer",

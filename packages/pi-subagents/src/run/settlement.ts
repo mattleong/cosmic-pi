@@ -5,23 +5,9 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
-import * as Predicate from "effect/Predicate";
-import * as Str from "effect/String";
-import {
-  MAX_BACKEND_REPORT_EVIDENCE_CHARS,
-  MAX_BACKEND_REPORT_ID_CHARS,
-  MAX_BACKEND_REPORT_TEXT_CHARS,
-  type BackendAssistantTerminal,
-  type BackendHandle,
-  type BackendReport,
-} from "../backend/model.ts";
+import type { BackendAssistantTerminal, BackendHandle } from "../backend/model.ts";
 import type { ReportArchive, ReportArchiveEntry } from "../boundary/report-archive.ts";
-import {
-  PENDING_STEER_DELIVERY_CODE,
-  processError,
-  type SubagentError,
-  SubagentProcessError,
-} from "./errors.ts";
+import { type SubagentError, SubagentProcessError } from "./errors.ts";
 import {
   beginCleanup,
   clearRunActivity,
@@ -41,13 +27,7 @@ import {
 } from "./limits.ts";
 import type { RunNotificationDelivery } from "./notification-delivery.ts";
 import type { RunRecordCleanup } from "./record-cleanup.ts";
-import {
-  addUsage,
-  captureOutputText,
-  MAX_ERROR_CHARS,
-  sanitizeDiagnosticText,
-  sanitizeOutputText,
-} from "./state.ts";
+import { addUsage, captureOutputText, MAX_ERROR_CHARS, sanitizeDiagnosticText } from "./state.ts";
 import {
   settledAssignmentLocked,
   settledFailureMessage,
@@ -57,7 +37,7 @@ import {
   type SettlementState,
 } from "./settlement-outcome.ts";
 import { isScopeClosed } from "./session-owned.ts";
-import { foldRunWarnings, recordRunWarning } from "./warnings.ts";
+import { foldRunWarnings } from "./warnings.ts";
 
 interface RunSettlementDependencies extends Pick<
   RunContext,
@@ -80,27 +60,10 @@ interface RunSettlementDependencies extends Pick<
 type AssignmentActivationReplay =
   | { readonly kind: "running"; readonly view: SubagentRunView }
   | {
-      readonly kind: "committed-report";
-      readonly view: SubagentRunView;
-      readonly notifyPeers: boolean;
-    }
-  | {
       readonly kind: "settlement";
       readonly assignmentEpoch: number;
       readonly terminal?: BackendAssistantTerminal | undefined;
     };
-
-const reportPairStatus = (record: RunRecord, report: BackendReport) => {
-  const watermark = record.lastBackendReport;
-  if (!watermark) return "new";
-  if (
-    report.assignmentEpoch === watermark.assignmentEpoch &&
-    report.sequence === watermark.sequence &&
-    report.deliveryId === watermark.deliveryId
-  )
-    return "exact-retry";
-  return report.sequence <= watermark.sequence ? "invalid" : "new";
-};
 
 interface SettlementCommit {
   /** Whether the caller sends peer notices; a completed run's backend closure sends its own. */
@@ -400,17 +363,6 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
       record.initialization.pendingSettlement = { state, ...(error && { error }) };
       return { notifyPeers: false, view: snapshotRun(record) };
     }
-    const acceptedReport =
-      state === "failed" && record.assignment.phase === "issuing"
-        ? record.assignment.pendingReport
-        : undefined;
-    if (acceptedReport) {
-      // An accepted report proves the assignment ran, so an exit or failure before its start
-      // confirmed never replaces it with a retryable failure. Only an explicit stop does.
-      record.assignment.pendingReport = undefined;
-      record.assignment.pendingRunSettled = false;
-      return yield* commitReportLocked(record, acceptedReport);
-    }
     const finalText = state === "completed" ? record.latestAssistantText : undefined;
     const generation = allocateCompletionLocked(record, state);
     const reportArchive = finalText
@@ -461,12 +413,6 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
           pendingError ?? SubagentProcessError.make({ operation: "run", message: diagnostic });
         beginCleanup(record);
         record.backendFailure ??= failure;
-        if (
-          Predicate.isTagged(pendingError, "SubagentProcessError") &&
-          pendingError.code === PENDING_STEER_DELIVERY_CODE &&
-          !pendingError.pendingDelivery
-        )
-          record.view = { ...record.view, steeringDelivery: "unresolved" };
         record.process?.cancelPending(failure);
         return true;
       }),
@@ -486,98 +432,15 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
     );
   };
 
-  const rejectReportAndPublishLocked = Effect.fn("SubagentSettlement.rejectReportAndPublishLocked")(
-    function* (record: RunRecord, reason: string, now: number) {
-      const warning = sanitizeDiagnosticText(
-        `Rejected protocol-invalid backend report: ${reason}`,
-        MAX_ERROR_CHARS,
-      );
-      record.view = {
-        ...record.view,
-        ...recordRunWarning(record, record.view.sessionEvents, "system", warning, now),
-      };
-      const view = snapshotRun(record);
-      yield* publish;
-      return { kind: "unchanged" as const, view };
-    },
-  );
-
-  const commitReportLocked = Effect.fn("SubagentSettlement.commitReportLocked")(function* (
-    record: RunRecord,
-    report: BackendReport,
-  ) {
-    recordLatestAssistantText(record, captureOutputText({ text: report.text ?? "" }));
-    record.lastBackendReport = {
-      assignmentEpoch: report.assignmentEpoch,
-      sequence: report.sequence,
-      deliveryId: report.deliveryId,
-    };
-    return yield* settleLocked(record, "completed", undefined, report.assignmentEpoch);
-  }, Effect.uninterruptible);
-
-  const acceptValidatedBackendReport = Effect.fn("SubagentSettlement.acceptValidatedBackendReport")(
-    function* (record: RunRecord, report: BackendReport) {
-      const now = yield* Clock.currentTimeMillis;
-      const decision = yield* withLock(
-        Effect.gen(function* () {
-          if (isInactiveRunRecord(record) || record.assignment.epoch !== report.assignmentEpoch)
-            return { kind: "unchanged" as const, view: snapshotRun(record) };
-          const pair = reportPairStatus(record, report);
-          if (pair === "exact-retry")
-            return { kind: "unchanged" as const, view: snapshotRun(record) };
-          if (pair === "invalid")
-            return yield* rejectReportAndPublishLocked(
-              record,
-              `sequence ${report.sequence} reused delivery identity ${report.deliveryId}.`,
-              now,
-            );
-          if (record.assignment.phase === "issuing") {
-            const pending = record.assignment.pendingReport;
-            if (
-              pending &&
-              (pending.sequence !== report.sequence || pending.deliveryId !== report.deliveryId)
-            )
-              return yield* rejectReportAndPublishLocked(
-                record,
-                `assignment ${report.assignmentEpoch} produced more than one in-flight report.`,
-                now,
-              );
-            if (!pending) record.assignment.pendingReport = report;
-            return { kind: "buffered" as const, view: snapshotRun(record) };
-          }
-          if (record.assignment.phase !== "running")
-            return yield* rejectReportAndPublishLocked(
-              record,
-              `sequence ${report.sequence} arrived while assignment ${report.assignmentEpoch} was ${record.assignment.phase}.`,
-              now,
-            );
-          const committed = yield* commitReportLocked(record, report);
-          return { kind: "committed" as const, ...committed };
-        }),
-      );
-      if (decision.kind === "committed" && decision.notifyPeers)
-        yield* sendPeerNotices(record.view.id);
-      return decision.view;
-    },
-  );
-
   const activateAssignmentLocked = Effect.fn("SubagentSettlement.activateAssignmentLocked")(
     function* (
       record: RunRecord,
       runningView: StoredRunView,
     ): Effect.fn.Return<AssignmentActivationReplay> {
-      const pendingReport = record.assignment.pendingReport;
       const pendingRunSettled = record.assignment.pendingRunSettled;
       record.assignment.phase = "running";
-      record.assignment.pendingReport = undefined;
       record.assignment.pendingRunSettled = false;
       record.view = runningView;
-      if (pendingReport) {
-        // The buffered report owns this activation. No running projection or post-lock replay may
-        // let process exit/failure overtake its completion payload and retry eligibility.
-        const committed = yield* commitReportLocked(record, pendingReport);
-        return { kind: "committed-report" as const, ...committed };
-      }
       const replay: AssignmentActivationReplay = pendingRunSettled
         ? {
             kind: "settlement",
@@ -596,10 +459,6 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
     replay: AssignmentActivationReplay,
   ): Effect.Effect<SubagentRunView> => {
     switch (replay.kind) {
-      case "committed-report":
-        return replay.notifyPeers
-          ? sendPeerNotices(record.view.id).pipe(Effect.as(replay.view))
-          : Effect.succeed(replay.view);
       case "settlement":
         return runSettledFromBackend(record, replay.assignmentEpoch, replay.terminal).pipe(
           Effect.map(() => snapshotRun(record)),
@@ -609,61 +468,6 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
     }
     return Fn.absurd(replay);
   };
-
-  const acceptBackendReport = Effect.fn("SubagentSettlement.acceptBackendReport")(
-    function* (record: RunRecord, rawReport: BackendReport) {
-      const current = yield* withLock(
-        Effect.sync(
-          () =>
-            !isInactiveRunRecord(record) && record.assignment.epoch === rawReport.assignmentEpoch,
-        ),
-      );
-      if (!current) return snapshotRun(record);
-      if (
-        rawReport.runId !== record.view.id ||
-        !Number.isSafeInteger(rawReport.assignmentEpoch) ||
-        rawReport.assignmentEpoch <= 0 ||
-        !Number.isSafeInteger(rawReport.sequence) ||
-        rawReport.sequence <= 0 ||
-        !Str.trim(rawReport.deliveryId) ||
-        rawReport.deliveryId.length > MAX_BACKEND_REPORT_ID_CHARS ||
-        (rawReport.evidence !== undefined &&
-          rawReport.evidence.length > MAX_BACKEND_REPORT_EVIDENCE_CHARS) ||
-        rawReport.text === undefined ||
-        !Str.trim(rawReport.text) ||
-        rawReport.text.length > MAX_BACKEND_REPORT_TEXT_CHARS
-      )
-        return yield* processError(
-          "accept report from",
-          "backend_report_invalid",
-          `Subagent ${record.view.id} emitted an invalid bounded report event.`,
-        );
-      const text = Str.trim(sanitizeOutputText(rawReport.text, MAX_BACKEND_REPORT_TEXT_CHARS));
-      if (!text)
-        return yield* processError(
-          "accept report from",
-          "backend_report_empty",
-          `Subagent ${record.view.id} submitted an empty report.`,
-        );
-      return yield* acceptValidatedBackendReport(record, {
-        ...rawReport,
-        deliveryId: Str.trim(rawReport.deliveryId),
-        text,
-      });
-    },
-    (effect, record, rawReport) =>
-      effect.pipe(
-        Effect.catch((error) =>
-          withLock(
-            Effect.suspend(() =>
-              isInactiveRunRecord(record) || record.assignment.epoch !== rawReport.assignmentEpoch
-                ? Effect.succeed(snapshotRun(record))
-                : Effect.fail(error),
-            ),
-          ),
-        ),
-      ),
-  );
 
   const runStartedFromBackend = Effect.fn("SubagentSettlement.runStartedFromBackend")(function* (
     record: RunRecord,
@@ -750,7 +554,6 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
     failRun,
     activateAssignmentLocked,
     replayAssignmentActivation,
-    acceptBackendReport,
     runStartedFromBackend,
     runSettledFromBackend,
   };

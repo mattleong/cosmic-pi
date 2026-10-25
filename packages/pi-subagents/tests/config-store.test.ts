@@ -91,29 +91,25 @@ describe("SubagentConfigStore activation", () => {
     () =>
       Effect.gen(function* () {
         const local = declaredCandidate("openai/local");
+        const invalid = declaredCandidate("openai/invalid", { host: "local" });
         for (const scope of ["global", "project"] as const)
-          for (const runtime of ["pi", "claude"])
-            for (const invalidFirst of [true, false]) {
-              const invalid = declaredCandidate(runtime === "pi" ? "openai/invalid" : "native", {
-                host: "local",
-                runtime,
-              });
-              const raw = v6({
-                worker: invalidFirst ? [invalid, local] : [local, invalid],
-                scout: local,
-              });
-              const { memory, store } = yield* setup(
-                scope === "global"
-                  ? { [GLOBAL]: raw }
-                  : { [GLOBAL]: v6({ worker: local }), [PROJECT]: raw },
-              );
-              const config = yield* store.load(CWD, AGENT, scope === "project");
-              expect(config.profiles.worker.candidates).toEqual([]);
-              expect(config.profileSources.worker).toBe(`${scope}-invalid`);
-              expect(config.profiles.scout.candidates[0]?.model).toBe("openai/local");
-              expect(config.profileSources.scout).toBe(scope);
-              expect(writes(memory)).toEqual([]);
-            }
+          for (const invalidFirst of [true, false]) {
+            const raw = v6({
+              worker: invalidFirst ? [invalid, local] : [local, invalid],
+              scout: local,
+            });
+            const { memory, store } = yield* setup(
+              scope === "global"
+                ? { [GLOBAL]: raw }
+                : { [GLOBAL]: v6({ worker: local }), [PROJECT]: raw },
+            );
+            const config = yield* store.load(CWD, AGENT, scope === "project");
+            expect(config.profiles.worker.candidates).toEqual([]);
+            expect(config.profileSources.worker).toBe(`${scope}-invalid`);
+            expect(config.profiles.scout.candidates[0]?.model).toBe("openai/local");
+            expect(config.profileSources.scout).toBe(scope);
+            expect(writes(memory)).toEqual([]);
+          }
       }),
   );
 
@@ -128,7 +124,6 @@ describe("SubagentConfigStore activation", () => {
       expect(config.profiles.worker).toEqual({
         candidates: [
           {
-            runtime: "pi",
             model: "openai/worker",
             effort: "high",
             context: "fresh",
@@ -438,7 +433,6 @@ describe("SubagentConfigStore profile sets", () => {
           profiles: objectContaining({
             scout: [
               {
-                runtime: "pi",
                 model: "parent",
                 effort: "default",
                 context: "fresh",
@@ -500,7 +494,6 @@ const savedWorker = (document: JsonObject | undefined): JsonObject[string] | und
 
 describe("profile declaration visit restore", () => {
   const candidate = {
-    runtime: "pi",
     model: "openai/worker",
     effort: "high",
     context: "fresh",
@@ -532,7 +525,6 @@ describe("profile declaration visit restore", () => {
     writeIntent: "writer",
     model: "openai/worker",
     effort: "high",
-    runtime: "pi",
     context: "fresh",
   } as const;
   for (const declaration of [candidate, [reordered, candidate]])

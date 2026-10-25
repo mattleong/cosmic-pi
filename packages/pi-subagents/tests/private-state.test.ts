@@ -73,29 +73,20 @@ const exitedProcessId = Effect.callback<number>((resume) => {
 const reusedPid = reusedProcessIdentity();
 
 describe("private state sweep", () => {
-  it.live("removes state as soon as its owner is gone, harness settings included", () =>
+  it.live("removes state as soon as its owner is gone", () =>
     Effect.gen(function* () {
       const agent = yield* temporaryAgent;
-      const root = path.join(agent, "subagents");
-      const session = path.join(root, SESSION);
-      const run = path.join(session, "agent-0000000001-0a1b2c3d4e5f");
-      const harness = path.join(root, "local-cli-v1", "claude-agent-0000000002-0123456789ab");
-      const channel = path.join(root, "supervisor-channels-v3", "agent-0000000002-0123456789ab");
-      yield* entry(run, { "session.jsonl": "{}\n", "system-prompt.md": "prompt" }, reusedPid);
-      yield* entry(
-        harness,
-        { "settings.json": "{}\n", "mcp.json": "{}\n", "system-prompt.md": "prompt" },
-        { pid: yield* exitedProcessId },
-      );
-      yield* entry(channel, { "connection.json": "{}" }, reusedPid);
+      const session = path.join(agent, "subagents", SESSION);
+      const reused = path.join(session, "agent-0000000001-0a1b2c3d4e5f");
+      const exited = path.join(session, "agent-0000000002-0123456789ab");
+      yield* entry(reused, { "session.jsonl": "{}\n", "system-prompt.md": "prompt" }, reusedPid);
+      yield* entry(exited, { "session.jsonl": "{}\n" }, { pid: yield* exitedProcessId });
 
       yield* sweepAbandonedPrivateState(agent);
 
-      expect(yield* exists(run)).toBe(false);
+      expect(yield* exists(reused)).toBe(false);
+      expect(yield* exists(exited)).toBe(false);
       expect(yield* exists(session)).toBe(false);
-      expect(yield* exists(harness)).toBe(false);
-      expect(yield* exists(channel)).toBe(false);
-      expect(yield* io(() => fs.readdir(path.join(root, "local-cli-v1")))).toEqual([]);
     }).pipe(Effect.scoped),
   );
 
@@ -131,57 +122,16 @@ describe("private state sweep", () => {
     }).pipe(Effect.scoped),
   );
 
-  it.live("removes only this package's abandoned Claude temp roots from the shared parent", () =>
-    Effect.gen(function* () {
-      const agent = yield* temporaryAgent;
-      const parent = path.join(agent, "tmp");
-      const elsewhere = path.join(agent, "elsewhere");
-      const deadOwner = { pid: yield* exitedProcessId };
-      const abandoned = path.join(parent, "pi-claude-Ab3dE9");
-      const live = path.join(parent, "pi-claude-Fg5hI7");
-      const tombstone = path.join(parent, ".swept-pi-claude-Jk1lM2-0123456789ab");
-      const linked = path.join(parent, "pi-claude-No4pQ6");
-      const kept = [
-        live,
-        linked,
-        elsewhere,
-        path.join(parent, "pi-claude-tool-results"),
-        path.join(parent, "pi-subagents-tool-results-tests"),
-        path.join(parent, ".swept-something-else"),
-      ];
-      yield* entry(abandoned, { "claude-501/tasks/output.txt": "x" }, deadOwner);
-      yield* entry(live, { "claude-501/file.txt": "x" });
-      yield* Effect.orDie(recordPrivateStateOwner(live));
-      yield* entry(tombstone, { "claude-501/file.txt": "x" });
-      yield* entry(elsewhere, { "file.txt": "x" }, deadOwner);
-      yield* io(() => fs.symlink(elsewhere, linked));
-      for (const directory of kept.slice(3))
-        yield* entry(directory, { "file.txt": "x" }, deadOwner);
-
-      yield* sweepAbandonedPrivateState(agent, { claudeTemporaryParent: parent });
-
-      expect(yield* exists(abandoned)).toBe(false);
-      expect(yield* exists(tombstone)).toBe(false);
-      for (const directory of kept) expect(yield* exists(directory)).toBe(true);
-      expect(yield* exists(path.join(elsewhere, "file.txt"))).toBe(true);
-      expect(
-        Arr.filter(yield* io(() => fs.readdir(parent)), (name) =>
-          Fn.pipe(name, Str.startsWith(".swept-pi-claude-")),
-        ),
-      ).toEqual([]);
-    }).pipe(Effect.scoped),
-  );
-
   it.live("removes state without an owner record only after a week untouched", () =>
     Effect.gen(function* () {
       const agent = yield* temporaryAgent;
       const root = path.join(agent, "subagents");
       const fresh = path.join(root, SESSION, "agent-0000000001");
       const stale = path.join(root, SESSION, "agent-0000000002");
-      const malformed = path.join(root, "supervisor-channels-v3", "agent-0000000004-0123456789ab");
+      const malformed = path.join(root, SESSION, "agent-0000000004");
       yield* entry(fresh, { "system-prompt.md": "prompt" });
       yield* entry(stale, { "system-prompt.md": "prompt" });
-      yield* entry(malformed, { "connection.json": "{}", "owner.json": "not json" });
+      yield* entry(malformed, { "session.jsonl": "{}\n", "owner.json": "not json" });
       yield* age(stale, 8);
       yield* age(malformed, 8);
 
@@ -217,14 +167,13 @@ describe("private state sweep", () => {
     }).pipe(Effect.scoped),
   );
 
-  it.live("leaves reports, leases, debug ledgers, and unrelated directories alone", () =>
+  it.live("leaves reports, leases, and unrelated directories alone", () =>
     Effect.gen(function* () {
       const agent = yield* temporaryAgent;
       const root = path.join(agent, "subagents");
       const kept = [
         path.join(root, "reports", SESSION),
         path.join(root, "writer-leases-v3", Fn.pipe("a", Str.repeat(64))),
-        path.join(root, "local-claude-debug-v1", "claude-0123-4567"),
         path.join(root, "workflow-runs", "wf-1"),
         path.join(root, SESSION, "notes"),
         path.join(agent, "subagent-worktrees", "workspace-1"),

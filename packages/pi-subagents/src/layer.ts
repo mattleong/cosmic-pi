@@ -3,15 +3,11 @@ import * as Layer from "effect/Layer";
 import { CodePreviewSchedulerService } from "pi-code-previews";
 import { nodeFilePlatformLayer } from "pi-cosmic-core/platform/node-file";
 import { SafeFile } from "pi-cosmic-core/platform/safe-file";
-import { localClaudeBackendDriver } from "./backend/local-claude.ts";
 import { localPiBackendDriver } from "./backend/local-pi.ts";
 import { backendRegistryFor, SubagentBackendRegistry } from "./backend/service.ts";
 import { ChildProcess } from "./boundary/child-process.ts";
-import { LocalCliProcess } from "./boundary/local-cli-process.ts";
-import { NativeModelCatalog } from "./boundary/native-model-catalog.ts";
 import { sweepAbandonedPrivateState } from "./boundary/private-state.ts";
 import { pruneReportArchive, sessionReportArchive } from "./boundary/report-archive.ts";
-import { SupervisorChannel } from "./boundary/supervisor-channel.ts";
 import { WriterLeaseService } from "./boundary/writer-lease.ts";
 import { WorkspaceService } from "./workspace/service.ts";
 import type { SubagentNotifier } from "./boundary/host-notifier.ts";
@@ -26,15 +22,9 @@ import { SubagentService, type SubagentServiceOptions } from "./run/service.ts";
 
 const subagentBackendRegistryLayer = Layer.effect(
   SubagentBackendRegistry,
-  Effect.gen(function* () {
-    const children = yield* ChildProcess;
-    const localCli = yield* LocalCliProcess;
-    const supervisor = yield* SupervisorChannel;
-    return backendRegistryFor([
-      localPiBackendDriver(children),
-      localClaudeBackendDriver(localCli, supervisor),
-    ]);
-  }),
+  ChildProcess.use((children) =>
+    Effect.succeed(backendRegistryFor(localPiBackendDriver(children))),
+  ),
 );
 
 /** Startup housekeeping runs in the background for the runtime's lifetime and never blocks it. */
@@ -64,12 +54,7 @@ export const subagentApplicationLayer = (options: SubagentLayerOptions) => {
   const configStore = subagentConfigStoreLayer.pipe(Layer.provide(nodeFilePlatformLayer));
   const profiles = subagentProfileServiceLayer(options).pipe(Layer.provide(configStore));
   const directory = { agentDirectory: options.agentDirectory };
-  const backendBoundaries = Layer.mergeAll(
-    ChildProcess.layer(directory),
-    LocalCliProcess.layer(directory),
-    SupervisorChannel.layer(directory),
-  );
-  const backend = subagentBackendRegistryLayer.pipe(Layer.provide(backendBoundaries));
+  const backend = subagentBackendRegistryLayer.pipe(Layer.provide(ChildProcess.layer(directory)));
   const writerLeases = WriterLeaseService.layer(directory);
   const service = Layer.unwrap(
     Effect.gen(function* () {
@@ -106,7 +91,6 @@ export const subagentApplicationLayer = (options: SubagentLayerOptions) => {
     profiles,
     configStore,
     backend,
-    NativeModelCatalog.layer(),
     CodePreviewSchedulerService.layer,
     // Doctor reads the checkout's .worktreeinclude the way workspace creation does, and checks
     // that private state is writable.

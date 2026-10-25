@@ -99,7 +99,6 @@ const agentService = () =>
               state: "running",
               parentId: MAIN_AGENT_ID,
               depth: 1,
-              runtime: "pi",
               profile: "scout",
               task: "Map the API",
               self: false,
@@ -121,14 +120,6 @@ const agentService = () =>
         };
       }),
     agentSend: (caller, to) => {
-      if (to === "agent-slow")
-        return Effect.succeed({
-          messageId: "message-2",
-          to,
-          name: scout.name,
-          disposition: "guided" as const,
-          confirmed: false,
-        });
       if (to === "agent-busy")
         return Effect.fail(
           agentMessageRefusal(
@@ -143,7 +134,6 @@ const agentService = () =>
           to,
           name: scout.name,
           disposition: "guided" as const,
-          confirmed: true,
         };
       });
     },
@@ -194,7 +184,7 @@ describe("agent tools", () => {
             parentId: "main",
             profile: "scout",
             task: "Map the API",
-            model: "pi/openai-codex/gpt-5.6-sol:high",
+            model: "openai-codex/gpt-5.6-sol:high",
             writeIntent: "writer",
             worktree: { workspaceId: "ws-1", status: "open" },
             attention: { kind: "question", message: "Which API?" },
@@ -208,15 +198,6 @@ describe("agent tools", () => {
         executeTool(tools.get("agent_send")!, { to: "agent-1", message: "Check the schema." }),
       );
       expect(sent.details).toMatchObject({ action: "agent_send", disposition: "guided" });
-
-      const pending = yield* Effect.promise(() =>
-        executeTool(tools.get("agent_send")!, { to: "agent-slow", message: "Check again." }),
-      );
-      expect(pending.details).toMatchObject({
-        action: "agent_send",
-        disposition: "guided",
-        confirmed: false,
-      });
 
       const read = yield* Effect.promise(() =>
         executeTool(tools.get("agent_read")!, { agentIds: ["main", "agent-1", "agent-gone"] }),

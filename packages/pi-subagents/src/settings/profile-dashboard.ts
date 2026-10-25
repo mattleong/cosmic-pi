@@ -26,14 +26,14 @@ import type { ProfileWorkspaceOptions, ProfileWorkspaceSaveResult } from "./prof
 import { profileSetPatchBase } from "./profile-write-context.ts";
 import { ProfileDashboardComponent } from "./profile-dashboard-component.ts";
 import type { ProfileEditRestore, ProfileEditCommitReceipt } from "./profile-edit-visit.ts";
-import type { FleetManagerActions } from "./controller.ts";
+import type { SubagentCommandActions } from "./controller.ts";
 
 type ProfileEditorPosition = Pick<ProfileWorkspaceOptions, "initialProfile" | "initialFocus">;
 
 export function openProfileDashboard(
   pi: ExtensionAPI,
   ctx: ExtensionCommandContext,
-  actions: FleetManagerActions,
+  actions: SubagentCommandActions,
   position: ProfileEditorPosition,
 ): Promise<void> {
   if (!ctx.hasUI || !hasCustomSurface(ctx)) {
@@ -187,16 +187,13 @@ export function openProfileDashboard(
             ...fullScreenKeybindingOptions(keybindings),
             close: () => finish(undefined),
             saveDraft,
-            loadModelPicker: (profile, candidateIndex, candidate, signal, modelPending) =>
+            loadModelPicker: (profile, candidateIndex, candidate) =>
               loadCandidateModelPicker({
                 profile,
                 candidateIndex,
                 candidate,
-                listNativeModels: actions.listNativeModels,
                 piCatalog: modelCatalog.capture(),
                 parentSelector: parentModel,
-                signal,
-                modelPending,
               }),
             supportedPiEfforts: (candidate) =>
               supportedPiEfforts({

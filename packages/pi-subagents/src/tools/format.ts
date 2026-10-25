@@ -41,7 +41,6 @@ import {
   actionFailureDisposition,
   NO_ELIGIBLE_ROUTE_CODES,
   noEligibleRouteRecovery,
-  steeringDeliveryEvidence,
   unconfirmedActionRecovery,
   type ActionFailureDisposition,
 } from "./outcome.ts";
@@ -240,11 +239,9 @@ export interface RunFormatOptions {
   readonly readerIsParent?: boolean | undefined;
 }
 
-/** `local/pi · provider/model:effort` as `pi/provider/model:effort`. */
-export const formatRunModel = (run: SubagentRunView): string => {
-  const { hostRuntime, model } = projectRunRoutePresentation(run);
-  return `${Fn.pipe(hostRuntime, Str.replace(/^local\//u, ""))}/${model}`;
-};
+/** `provider/model:effort`, with fast mode and an override marked. */
+export const formatRunModel = (run: SubagentRunView): string =>
+  projectRunRoutePresentation(run).model;
 
 export const runProfileLabel = (run: Pick<SubagentRunView, "agent" | "profile">): string =>
   run.agent
@@ -258,7 +255,7 @@ const runWorkspaceLabel = (run: SubagentRunView): string | undefined =>
       ? "writer"
       : undefined;
 
-/** One line per run: `id name · profile · runtime/model:effort [· worktree <wsId>]`. */
+/** One line per run: `id name · profile · provider/model:effort [· worktree <wsId>]`. */
 export const formatStartedRun = (run: SubagentRunView): string =>
   Fn.pipe(
     [
@@ -281,19 +278,18 @@ const formatRunHeader = (run: SubagentRunView): string =>
       runWorkspaceLabel(run),
       run.depth && run.depth > 1 ? `depth ${run.depth}` : undefined,
       run.descendantCount ? countLabel(run.descendantCount, "descendant") : undefined,
-      run.steeringDelivery ? `steeringDelivery=${run.steeringDelivery}` : undefined,
     ],
     Arr.filter(isTextFragment),
     Arr.join(" · "),
   );
 
-/** A route candidate as `runtime/model:effort`, without a default effort. */
-const candidateLabel = ({ runtime, model, effort }: Exclude<SubagentNextCandidate, "none">) =>
-  sanitizeTerminalLine(`${runtime}/${model}${effort === "default" ? "" : `:${effort}`}`);
+/** A route candidate as `model:effort`, without a default effort. */
+const candidateLabel = ({ model, effort }: Exclude<SubagentNextCandidate, "none">) =>
+  sanitizeTerminalLine(`${model}${effort === "default" ? "" : `:${effort}`}`);
 
 /**
  * Where a failed run's frozen route goes next, such as
- * `pi/openai/gpt-5.5:high; start a new run with that model`.
+ * `openai/gpt-5.5:high; start a new run with that model`.
  */
 export const nextCandidateText = (next: SubagentNextCandidate): string =>
   next === "none"
@@ -309,12 +305,6 @@ const nextCandidateField = (run: SubagentRunView): string | undefined => {
 const actionFields = (run: SubagentRunView): ReadonlyArray<string | undefined> => [
   optionalStatusField("Parent", run.parentRunId),
   nextCandidateField(run),
-  run.steeringDelivery
-    ? statusField(
-        "Steering",
-        `steeringDelivery=${run.steeringDelivery}. ${steeringDeliveryEvidence[run.steeringDelivery].detail}`,
-      )
-    : undefined,
   run.workspaceId && (run.workspaceOutcome || isTerminalRunState(run.state))
     ? statusField("Workspace", proposalGuidance(run.workspaceId, run.workspaceOutcome))
     : undefined,
@@ -341,7 +331,6 @@ const compactStatusFields = (
 
 const verboseStatusFields = (run: SubagentRunView): ReadonlyArray<string | undefined> => {
   const now = synchronousNow();
-  const native = run.nativeActivity;
   return [
     run.depth === undefined
       ? undefined
@@ -358,7 +347,7 @@ const verboseStatusFields = (run: SubagentRunView): ReadonlyArray<string | undef
     run.modelOverride
       ? statusField(
           "Model override",
-          `${run.modelOverride.runtime}/${run.modelOverride.model}:${run.modelOverride.effort ?? "profile default"}; no fallback candidate`,
+          `${run.modelOverride.model}:${run.modelOverride.effort ?? "profile default"}; no fallback candidate`,
         )
       : undefined,
     statusField("Reason", run.selection.reason),
@@ -381,12 +370,6 @@ const verboseStatusFields = (run: SubagentRunView): ReadonlyArray<string | undef
     optionalStatusField("Elapsed", formatSessionAge(run.endedAt ?? now, run.startedAt)),
     optionalStatusField("Activity", formatSessionActivity(now, run.lastActivityAt)),
     optionalStatusField("Usage", aggregateUsage([run])),
-    native
-      ? statusField(
-          "Native",
-          `${native.active} active · ${native.total} total${native.latest ? ` · latest ${native.latest.kind} ${native.latest.state}` : ""}`,
-        )
-      : undefined,
   ];
 };
 

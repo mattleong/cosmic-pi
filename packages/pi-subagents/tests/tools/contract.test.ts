@@ -69,8 +69,7 @@ describe("start contract", () => {
             },
             resolvedRoute: {
               profile: "reviewer",
-              runtime: "claude",
-              model: "opus",
+              model: "claude-bridge/claude-opus-5-5",
               effort: "high",
               openaiFastMode: false,
             },

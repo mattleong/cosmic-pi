@@ -32,7 +32,6 @@ import {
 } from "../profile-route-editor.ts";
 import {
   candidateEffortLabel,
-  runWithLabel,
   candidateFastModeApplied,
   profileWorkspaceRows,
   type ProfileWorkspacePane,
@@ -132,7 +131,6 @@ const profileTableLines = (
       effort: first
         ? `${theme.fg("muted", candidateEffortLabel(profile, first, state.parentEffort))}${candidateFastModeApplied(first, state.parentModel) ? theme.fg("warning", " ⚡") : ""}`
         : "",
-      runtime: first ? runWithLabel(first) : "",
       fallbacks:
         draft.candidates.length > 1
           ? `+${draft.candidates.length - 1} fallback${draft.candidates.length === 2 ? "" : "s"}`
@@ -140,12 +138,11 @@ const profileTableLines = (
     };
   });
   const table = managerTable(
-    Arr.map(rows, (row) => [row.profile + " ●", row.model, row.effort, row.runtime, row.fallbacks]),
+    Arr.map(rows, (row) => [row.profile + " ●", row.model, row.effort, row.fallbacks]),
     [
       { minWidth: 12, priority: 5 },
       { minWidth: 8, priority: 3 },
       { minWidth: 7, priority: 4 },
-      { minWidth: 8, priority: 2 },
       { minWidth: 11, priority: 1 },
     ],
     width - 2,
@@ -160,7 +157,6 @@ const profileTableLines = (
       identity + marker,
       row.model,
       row.effort,
-      theme.fg("muted", row.runtime),
       theme.fg("muted", row.fallbacks),
     ])}`;
   });
@@ -351,7 +347,7 @@ export const profileWorkspaceHelpLines = (
       "",
       "Editing",
       `${keys.confirm} Open the selected field or Actions`,
-      "m Model · e Reasoning · r Run with",
+      "m Model · e Reasoning",
       "a Manage selected candidate · + Add fallback",
       "/ Search profiles",
       "",

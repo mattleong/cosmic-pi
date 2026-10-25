@@ -40,12 +40,6 @@ type WorkspaceMessage = {
   readonly text: string;
 };
 
-export interface ModelPickerOpening {
-  readonly preferAdvertisedDefault?: boolean | undefined;
-  readonly priorNotices?: ReadonlyArray<string> | undefined;
-  readonly nativeSwitch?: Pick<ProfileCandidate, "runtime"> | undefined;
-}
-
 export abstract class ProfileWorkspaceState {
   protected inspection: ProfileSettingsInspection;
   protected readonly scope: ProfileSettingsScope;
@@ -316,8 +310,5 @@ export abstract class ProfileWorkspaceState {
     old.fields = fields;
     old.expanded = expanded;
   }
-  protected abstract openModelPicker(
-    candidate: ProfileCandidate,
-    opening?: ModelPickerOpening,
-  ): void;
+  protected abstract openModelPicker(candidate: ProfileCandidate): void;
 }

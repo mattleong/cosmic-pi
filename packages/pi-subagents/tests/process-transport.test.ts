@@ -14,16 +14,15 @@ import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import { signalProcessGroup } from "pi-cosmic-core";
 import { temporaryDirectory, yieldUntil } from "pi-cosmic-core/testing";
-import { claudeUserFrame } from "../src/backend/local-claude-protocol.ts";
 import { localPiBackendDriver } from "../src/backend/local-pi.ts";
 import { ChildProcess } from "../src/boundary/child-process.ts";
 import { SubagentProcessError } from "../src/run/errors.ts";
-import { acquireLocalCliTransport } from "../src/boundary/local-cli-transport.ts";
 import {
   MAX_PROCESS_LINE_BYTES,
   type ProcessTransportRuntime,
 } from "../src/boundary/process-transport.ts";
-import { backendLaunch } from "./fixtures/backend-supervisor.ts";
+import { backendLaunch } from "./fixtures/backend-launch.ts";
+import { acquireJsonlTransport } from "./support/jsonl-transport.ts";
 import { scriptedChildProcess } from "./fixtures/scripted-child-process.ts";
 import { stringMatching } from "./support/matchers.ts";
 import { processAlive } from "./support/process-liveness.ts";
@@ -47,8 +46,8 @@ const nativeRequest = {
   writer: false,
 };
 const acquireNative = (writer = false) =>
-  acquireLocalCliTransport({ ...nativeRequest, writer }, boundary);
-const notification = claudeUserFrame("fixture");
+  acquireJsonlTransport({ ...nativeRequest, writer }, boundary);
+const notification = { type: "user", message: "fixture" };
 
 const foreignListener = () => {};
 const fixture = () => {
@@ -117,7 +116,7 @@ describe("shared process transport", () => {
       const pending = yield* Effect.forkChild(acquireNative().pipe(Effect.flip, Effect.scoped));
       yield* spawnListenerReady(f.child);
       f.child.emit("error", new Error("spawn failed"));
-      expect((yield* Fiber.join(pending)).code).toBe("local_cli_spawn_failed");
+      expect((yield* Fiber.join(pending)).code).toBe("fixture_spawn_failed");
       expect(f.child.listeners("error")).toEqual([foreignListener]);
       expect(f.stdout.listeners("error")).toEqual([foreignListener]);
       expect(f.child.listenerCount("spawn")).toBe(0);
@@ -144,8 +143,9 @@ describe("shared process transport", () => {
         vi.spyOn(f.stdin, "write").mockImplementationOnce(() => {
           throw new Error("write");
         });
-        const thrown = yield* Effect.exit(handle.send(notification));
-        expect(Exit.isFailure(thrown) && Cause.hasDies(thrown.cause)).toBe(true);
+        expect((yield* handle.send(notification).pipe(Effect.flip)).code).toBe(
+          "transport_not_sent",
+        );
         f.stall();
         const failedWrite = yield* Effect.forkChild(handle.send(notification).pipe(Effect.flip));
         yield* yieldUntil(() => f.writes.length === 1);
@@ -470,7 +470,7 @@ process.stderr.write(String(command.pid));`;
     () =>
       Effect.gen(function* () {
         const scope = yield* Scope.make();
-        const handle = yield* acquireLocalCliTransport({
+        const handle = yield* acquireJsonlTransport({
           executable: process.execPath,
           args: ["-e", detachThenExit],
           env: { PATH: "/usr/bin:/bin" },

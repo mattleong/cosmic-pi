@@ -48,7 +48,6 @@ const RequestedStart = Schema.Struct({
   isolation: lenient(Schema.String),
   model: lenient(
     Schema.Struct({
-      runtime: Schema.String,
       model: Schema.String,
       effort: lenient(Schema.String),
     }),
@@ -94,7 +93,7 @@ export const renderSubagentStartCall = (
   }
   for (const [index, agent] of agents.entries()) {
     const route = agent.model
-      ? `model override ${sanitizeTerminalLine(`${agent.model.runtime}/${agent.model.model}${agent.model.effort === undefined ? "" : `:${agent.model.effort}`}`)}`
+      ? `model override ${sanitizeTerminalLine(`${agent.model.model}${agent.model.effort === undefined ? "" : `:${agent.model.effort}`}`)}`
       : "route/model selected at launch";
     const request = `${requestedName(agent, index)} · ${requestedProfile(agent)} · ${route}`;
     container.addChild(new Text(theme.fg("toolOutput", request), 0, 0));

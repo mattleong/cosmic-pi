@@ -7,7 +7,6 @@ import { managerNoticeGlyph } from "pi-cosmic-ui/manager";
 import { PROFILE_DEFINITIONS } from "../../profiles/definitions.ts";
 import {
   MAX_PROFILE_CANDIDATES,
-  isLocalPiProfileCandidate,
   supportsSubagentFastMode,
   type ProfileCandidate,
   type ProfileId,
@@ -15,11 +14,10 @@ import {
 import type { SubagentEffort } from "../../domain/routing.ts";
 import {
   CANDIDATE_LIMIT_REACHED,
+  candidateEfforts,
   loadProfileRouteDraft,
   profileRouteOptionLabel,
   profileWorkspaceScope,
-  runtimeEfforts,
-  runtimeLabel,
   updateCandidateControls,
   type CandidateUpdate,
   type ProfileRouteDraft,
@@ -33,7 +31,6 @@ export type ProfileWorkspaceField =
   | "model"
   | "effort"
   | "writeIntent"
-  | "runWith"
   | "advanced"
   | "context"
   | "openaiFastMode"
@@ -96,9 +93,8 @@ export const candidateFastModeAvailable = (
   candidate: ProfileCandidate,
   parentModel: string | undefined,
 ): boolean => {
-  const model =
-    candidate.runtime === "pi" && candidate.model === "parent" ? parentModel : candidate.model;
-  return model !== undefined && supportsSubagentFastMode(candidate.runtime, model);
+  const model = candidate.model === "parent" ? parentModel : candidate.model;
+  return model !== undefined && supportsSubagentFastMode(model);
 };
 
 export const candidateFastModeApplied = (
@@ -106,11 +102,6 @@ export const candidateFastModeApplied = (
   parentModel?: string,
 ): boolean =>
   candidate.openaiFastMode === true && candidateFastModeAvailable(candidate, parentModel);
-
-export const runWithValue = (candidate: ProfileCandidate): string => `local/${candidate.runtime}`;
-
-export const runWithLabel = (candidate: Pick<ProfileCandidate, "runtime">): string =>
-  `Local ${runtimeLabel(candidate.runtime)}`;
 
 export const targetProfilePrimarySummary = (
   inspection: ProfileSettingsInspection,
@@ -130,9 +121,7 @@ const advancedSummaryValues = (
 ): ReadonlyArray<string> =>
   Arr.filter(
     [
-      isLocalPiProfileCandidate(candidate) && candidate.context === "fork"
-        ? "forked context"
-        : undefined,
+      candidate.context === "fork" ? "forked context" : undefined,
       candidateFastModeApplied(candidate, parentModel) ? "fast mode" : undefined,
     ],
     Predicate.isNotUndefined,
@@ -142,7 +131,6 @@ const advancedCandidateRows = (
   candidate: ProfileCandidate,
   parentModel: string | undefined,
 ): ReadonlyArray<ProfileWorkspaceFieldRow> => {
-  const localPi = isLocalPiProfileCandidate(candidate);
   const fastAvailable = candidateFastModeAvailable(candidate, parentModel);
   const fastFixed = !fastAvailable && !candidate.openaiFastMode;
   return [
@@ -150,8 +138,7 @@ const advancedCandidateRows = (
       field: "context",
       label: "  Context",
       value: candidate.context,
-      fixed: !localPi,
-      ...(!localPi && { fixedReason: "Fork is available only with Local Pi." }),
+      fixed: false,
     },
     {
       field: "openaiFastMode",
@@ -187,7 +174,6 @@ export const candidateFieldRows = (
       fixed: false,
     },
     { field: "writeIntent", label: "File access", value: candidate.writeIntent, fixed: false },
-    { field: "runWith", label: "Run with", value: runWithLabel(candidate), fixed: false },
     {
       field: "advanced",
       label: advancedExpanded ? "Advanced ▾" : "Advanced ▸",
@@ -270,28 +256,10 @@ export type SelectableCandidateField = Exclude<
   "model" | "advanced" | "actions" | "add" | "reset"
 >;
 
-const RUN_WITH_PRODUCTS = { pi: "Pi", claude: "Claude Code" } as const;
-
-const RUN_WITH_CHOICES = Arr.map(["pi", "claude"] as const, (runtime) => ({
-  value: `local/${runtime}`,
-  label: runWithLabel({ runtime }),
-  description: `Run ${RUN_WITH_PRODUCTS[runtime]} locally on this computer`,
-  runtime,
-}));
-
-export const runWithChoice = (value: string): Pick<ProfileCandidate, "runtime"> | undefined => {
-  const choice = Option.getOrUndefined(
-    Arr.findFirst(RUN_WITH_CHOICES, (entry) => entry.value === value),
-  );
-  return choice && { runtime: choice.runtime };
-};
-
 export const candidateFieldChoices = (
-  candidate: ProfileCandidate,
   field: SelectableCandidateField,
   options: CandidateFieldChangeOptions,
 ): ReadonlyArray<CandidateFieldChoice> => {
-  if (field === "runWith") return RUN_WITH_CHOICES;
   if (field === "effort") {
     const effectiveDefault =
       (options.profile ? profileDefaultEffort(options.profile) : undefined) ?? options.parentEffort;
@@ -301,7 +269,7 @@ export const candidateFieldChoices = (
         label: effectiveDefault ? `${effectiveDefault} (profile default)` : "Profile default",
         description: "Follow the profile's default reasoning level instead of pinning an override.",
       },
-      ...Arr.map(runtimeEfforts(candidate.runtime, options.supportedEfforts), (effort) => ({
+      ...Arr.map(candidateEfforts(options.supportedEfforts), (effort) => ({
         value: effort,
         label: effort,
         description: `Use the ${effort} reasoning level`,
@@ -311,9 +279,7 @@ export const candidateFieldChoices = (
   if (field === "context")
     return [
       { value: "fresh", label: "Fresh", description: "Start without earlier context" },
-      ...(isLocalPiProfileCandidate(candidate)
-        ? [{ value: "fork", label: "Fork", description: "Copy the current Pi context" }]
-        : []),
+      { value: "fork", label: "Fork", description: "Copy the current Pi context" },
     ];
   if (field === "writeIntent")
     return [
@@ -356,10 +322,7 @@ const selectEffort = (
 ): CandidateUpdate => {
   if (value === "default") return { candidate: { ...candidate, effort: "default" }, notices: [] };
   const effort = Option.getOrUndefined(
-    Arr.findFirst(
-      runtimeEfforts(candidate.runtime, options.supportedEfforts),
-      (entry) => entry === value,
-    ),
+    Arr.findFirst(candidateEfforts(options.supportedEfforts), (entry) => entry === value),
   );
   return effort ? { candidate: { ...candidate, effort }, notices: [] } : invalidSelection("effort");
 };
@@ -370,17 +333,9 @@ export function selectCandidateField(
   value: string,
   options: CandidateFieldChangeOptions,
 ): CandidateUpdate {
-  if (
-    !Arr.some(candidateFieldChoices(candidate, field, options), (choice) => choice.value === value)
-  )
+  if (!Arr.some(candidateFieldChoices(field, options), (choice) => choice.value === value))
     return invalidSelection(field);
   switch (field) {
-    case "runWith": {
-      const choice = runWithChoice(value);
-      return choice
-        ? updateCandidateControls(candidate, choice, {})
-        : { error: "Invalid Run with selection.", notices: [] };
-    }
     case "effort":
       return selectEffort(candidate, value, options);
     case "context":
@@ -389,7 +344,7 @@ export function selectCandidateField(
         : invalidSelection(field);
     case "writeIntent":
       return value === "read-only" || value === "writer"
-        ? updateCandidateControls(candidate, { writeIntent: value }, {})
+        ? updateCandidateControls(candidate, { writeIntent: value })
         : invalidSelection(field);
     case "openaiFastMode":
       return value === "true" || value === "false"

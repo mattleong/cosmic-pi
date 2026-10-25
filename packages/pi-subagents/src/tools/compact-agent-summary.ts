@@ -17,7 +17,6 @@ import { SUBAGENT_RUN_STATES } from "../run/model.ts";
 import { AGENT_TOOL_NAME, type AgentToolName } from "../run/tool-policy.ts";
 import { runStateLabel } from "../ui/run-state.ts";
 import { agentFailureIssues } from "./compact-action-failures.ts";
-import { pendingDeliveryEvidence } from "./outcome.ts";
 import { AgentToolDetailsSchema, type AgentToolDetails } from "./details-schema.ts";
 
 export const decodeAgentToolDetails = decodeUnknownOrUndefined(AgentToolDetailsSchema, {
@@ -106,35 +105,23 @@ const sendCounter = (details: SendDetails): string => {
       return "resumed";
     case "guided":
       if (details.mainState !== undefined) return MAIN_DELIVERIES[details.mainState];
-      if (!details.confirmed) return "awaiting delivery confirmation";
       return details.parked ? "waiting behind its question" : "delivered as guidance";
   }
   return Fn.absurd(details.disposition);
 };
 
-const sendIssues = (details: SendDetails): CompactIssue[] => [
-  ...(details.confirmed
-    ? []
-    : [
-        {
-          severity: "warning" as const,
-          code: "agent-message-pending",
-          message: pendingDeliveryEvidence.message,
-          detail: pendingDeliveryEvidence.detail,
-        },
-      ]),
-  ...(details.mainState === "held"
+const sendIssues = (details: SendDetails): CompactIssue[] =>
+  details.mainState === "held"
     ? [
         {
-          severity: "info" as const,
+          severity: "info",
           code: "agent-message-held",
           message: "The main agent is waiting on the user",
           detail:
             "The message is in the main agent's conversation. It reaches the model when an open dialog closes, or after an interrupt, on the user's next prompt.",
         },
       ]
-    : []),
-];
+    : [];
 
 const summarizeSend = (details: SendDetails): CompactSummary =>
   settled(

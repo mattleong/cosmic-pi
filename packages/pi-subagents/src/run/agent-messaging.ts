@@ -6,7 +6,6 @@ import {
   type AgentMessageRecipientState,
 } from "pi-cosmic-core/host-agent-messages";
 import { safeTextPrefix } from "pi-cosmic-core/text";
-import type { SubagentRuntime } from "../domain/routing.ts";
 import {
   agentMessageRefusal,
   type AgentMessageRefusalCode,
@@ -90,7 +89,6 @@ export interface AgentListEntry {
   /** The parent's run ID, or `main` for top-level runs. */
   readonly parentId?: string | undefined;
   readonly depth?: number | undefined;
-  readonly runtime?: SubagentRuntime | undefined;
   readonly profile?: string | undefined;
   readonly agent?: string | undefined;
   readonly task?: string | undefined;
@@ -143,8 +141,6 @@ export interface AgentSendResult {
   readonly to: string;
   readonly name: string;
   readonly disposition: AgentMessageDisposition;
-  /** False while guidance's native delivery is still being confirmed; it may already have arrived. */
-  readonly confirmed: boolean;
   /** The main agent's state when guidance reached it. */
   readonly mainState?: AgentMessageRecipientState | undefined;
   /**
@@ -173,7 +169,7 @@ export const MAIN_AGENT_SENDER: AgentSender = {
 };
 
 export const runSender = (view: SubagentRunView): AgentSender => {
-  const role = view.agent ?? view.profile ?? `${view.runtime} agent`;
+  const role = view.agent ?? view.profile ?? "subagent";
   return {
     id: view.id,
     name: view.name,
@@ -280,10 +276,7 @@ export const planRunMessage = (
     case "failed":
     case "stopped":
       if (!hasSubagentCapability(record.view, "resume"))
-        return refuse(
-          "agent_resume_unsupported",
-          `Agent ${id} on local/${record.view.runtime} is ${state} and cannot be resumed.`,
-        );
+        return refuse("agent_resume_unsupported", `Agent ${id} is ${state} and cannot be resumed.`);
       return fromAncestor
         ? { kind: "resume" }
         : refuse(
@@ -295,8 +288,8 @@ export const planRunMessage = (
 };
 
 /**
- * The user's messages from Activity and the fleet carry main's authority to answer, but never
- * resume a run; the user resumes one with its resume action instead.
+ * The user's messages from Activity carry main's authority to answer, but never resume a run; the
+ * user resumes one with its resume action instead.
  */
 export const planUserMessage = (
   records: ReadonlyMap<string, RunRecord>,
@@ -318,7 +311,6 @@ export const runListEntry = (view: SubagentRunView, callerId: string): AgentList
   state: view.state,
   parentId: parentIdOf(view),
   ...(view.depth !== undefined && { depth: view.depth }),
-  runtime: view.runtime,
   ...(view.profile && { profile: view.profile }),
   ...(view.agent && { agent: view.agent }),
   task: safeTextPrefix(view.task, MAX_LIST_TASK_CHARS),

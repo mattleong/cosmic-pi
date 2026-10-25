@@ -156,21 +156,7 @@
             }
           },
           {
-            "include": [
-              "**/packages/pi-subagents/src/boundary/supervisor-mcp-helper.mjs",
-              "**/packages/pi-subagents/tests/fixtures/hanging-probe-fixture.mjs"
-            ],
-            "options": {
-              "diagnosticSeverity": {
-                "processEnv": "off"
-              }
-            }
-          },
-          {
-            "include": [
-              "**/packages/pi-subagents/tests/fixtures/hanging-probe-fixture.mjs",
-              "**/packages/pi-better-openai/tests/fixtures/sharp-decoder-fixture.mjs"
-            ],
+            "include": ["**/packages/pi-better-openai/tests/fixtures/sharp-decoder-fixture.mjs"],
             "options": {
               "diagnosticSeverity": {
                 "globalTimers": "off",

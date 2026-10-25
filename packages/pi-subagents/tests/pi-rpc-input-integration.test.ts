@@ -12,7 +12,7 @@ import { localPiBackendDriver } from "../src/backend/local-pi.ts";
 import type { ChildWireEvent } from "../src/boundary/child-process.ts";
 import type { ProcessExit } from "../src/boundary/process-transport.ts";
 import { SubagentProcessError } from "../src/run/errors.ts";
-import { backendLaunch } from "./fixtures/backend-supervisor.ts";
+import { backendLaunch } from "./fixtures/backend-launch.ts";
 import { describe, expect, it } from "@effect/vitest";
 import { indexOfFrom } from "pi-cosmic-core";
 import { temporaryDirectory } from "pi-cosmic-core/testing";

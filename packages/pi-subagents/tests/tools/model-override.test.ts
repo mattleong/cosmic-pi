@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { describe, expect, vi } from "vitest";
 import { effectTest } from "../support/effect-test.ts";
+import { InvalidSubagentRequestError } from "../../src/run/errors.ts";
 import type { StartSubagentRequest } from "../../src/run/model.ts";
 import { createSubagentCompactSummary } from "../../src/tools/compact-summary.ts";
 import {
@@ -38,8 +39,20 @@ const startIssueStyleProblems = (args: SubagentStartInput, details: SubagentStar
     (issue) => issueMessageStyleProblems(issue.message),
   );
 
+// The parent's model is the only one the session offers, so the override's readiness probe fails.
+const SIGNED_OUT = "openai-codex/gpt-5.6-sol";
+
 const countingRegistry = () => {
-  const preflight = vi.fn(testBackendRegistry.preflight);
+  const preflight = vi.fn<typeof testBackendRegistry.preflight>((selection, request) =>
+    request.model === SIGNED_OUT
+      ? Effect.fail(
+          InvalidSubagentRequestError.make({
+            code: "provider_unauthenticated",
+            message: "The provider is not signed in.",
+          }),
+        )
+      : testBackendRegistry.preflight(selection, request),
+  );
   return { preflight, registry: { ...testBackendRegistry, preflight } };
 };
 
@@ -49,7 +62,6 @@ describe("per-launch model override", () => {
     function* () {
       const requests: StartSubagentRequest[] = [];
       const modelOverride = {
-        runtime: "pi",
         model: "openai-codex/gpt-5.6-sol",
         effort: "medium",
       } as const;
@@ -59,7 +71,6 @@ describe("per-launch model override", () => {
 
       expect(requests).toHaveLength(1);
       expect(requests[0]).toMatchObject({
-        runtime: "pi",
         model: "openai-codex/gpt-5.6-sol",
         effort: "medium",
         effortWasExplicit: true,
@@ -72,7 +83,6 @@ describe("per-launch model override", () => {
           selectedCandidateIndex: 0,
           candidates: [
             {
-              runtime: "pi",
               model: "openai-codex/gpt-5.6-sol",
               effort: "medium",
               context: "fresh",
@@ -94,7 +104,7 @@ describe("per-launch model override", () => {
   effectTest("an omitted override effort takes the profile default", function* () {
     const requests: StartSubagentRequest[] = [];
     yield* invokeOptionalTool(startWith(requests), {
-      agents: [{ task: "Map auth", profile: "scout", model: { runtime: "pi", model: "parent" } }],
+      agents: [{ task: "Map auth", profile: "scout", model: { model: "parent" } }],
     });
     expect(requests[0]).toMatchObject({ effort: "low", effortWasExplicit: false });
   });
@@ -109,19 +119,19 @@ describe("per-launch model override", () => {
           {
             task: "Review auth",
             profile: "reviewer",
-            model: { runtime: "claude", model: "opus" },
+            model: { model: SIGNED_OUT },
           },
           {
             task: "Review docs",
             profile: "reviewer",
-            model: { runtime: "pi", model: "nobody/unknown-model" },
+            model: { model: "nobody/unknown-model" },
           },
         ],
       };
       const result = yield* invokeOptionalTool(startWith(requests, { registry }), args);
 
       expect(requests).toEqual([]);
-      expect(Arr.map(preflight.mock.calls, ([selection]) => selection.runtime)).toEqual(["claude"]);
+      expect(Arr.map(preflight.mock.calls, ([, request]) => request.model)).toEqual([SIGNED_OUT]);
       expect(result?.details).toMatchObject({
         startFailures: [
           { index: 0, code: "model_override_unavailable" },
@@ -132,14 +142,12 @@ describe("per-launch model override", () => {
     },
   );
 
-  effectTest("rejects malformed or runtime-incompatible overrides before readiness", function* () {
+  effectTest("rejects malformed overrides before readiness", function* () {
     const invalid: ReadonlyArray<Pick<SubagentStartSpec, "profile" | "model">> = [
-      { profile: "reviewer", model: { runtime: "pi", model: "../escape" } },
-      { profile: "reviewer", model: { runtime: "claude", model: "opus;rm" } },
-      { profile: "reviewer", model: { runtime: "claude", model: "parent" } },
-      // The oracle profile forks its parent's context, which only local Pi can do.
-      { profile: "oracle", model: { runtime: "claude", model: "opus" } },
-      { profile: "reviewer", model: { runtime: "claude", model: "opus", effort: "minimal" } },
+      { profile: "reviewer", model: { model: "../escape" } },
+      { profile: "reviewer", model: { model: "openai/opus;rm" } },
+      // A bare model name needs its provider.
+      { profile: "oracle", model: { model: "opus" } },
     ];
     const requests: StartSubagentRequest[] = [];
     const { preflight, registry } = countingRegistry();
@@ -167,17 +175,16 @@ describe("per-launch model override", () => {
   });
 
   effectTest("status cards and contract targets report the override", function* () {
-    const modelOverride = { runtime: "claude", model: "sonnet" } as const;
+    const modelOverride = { model: "claude-bridge/claude-sonnet-5-5" } as const;
     const run = view({
       id: "agent-7",
-      runtime: "claude",
-      model: "sonnet",
+      model: "claude-bridge/claude-sonnet-5-5",
       modelOverride,
       selection: {
         source: "profile-candidate",
         routeSource: "override",
         candidateIndex: 0,
-        reason: "Profile reviewer selected model override candidate 1 (local/claude).",
+        reason: "Profile reviewer selected model override candidate 1.",
         skippedCandidates: [],
       },
     });
@@ -203,7 +210,7 @@ describe("per-launch model override", () => {
       agentIds: [run.id],
       verbose: true,
     });
-    expect(result?.content[0]?.text).toContain("claude/sonnet");
+    expect(result?.content[0]?.text).toContain("claude-bridge/claude-sonnet-5-5");
     expect(result?.structuredContent).toMatchObject({
       agents: [{ id: run.id, status: { runId: run.id, modelOverride } }],
     });
