@@ -12,6 +12,7 @@ Background subagents for Pi on macOS and Linux. The main agent delegates work to
 - **Agent messaging:** any agent in the session can list, message, and read any other, including the main agent.
 - **Nesting:** children can launch their own subagents, up to depth 3 with 12 direct children each by default.
 - **Safe parallel writes:** per writer, either share the checkout with other writers on disjoint task scopes, or work in an isolated worktree whose proposal the parent applies in one step, or reviews and tests before applying. Proposals can also be revised onto the parent's current files.
+- **Workflow templates:** `/parallel-review`, `/review-loop`, and `/gather-context` prompt templates for common delegation patterns.
 - **Live view:** a run tree above the editor and the shared Activity manager, where you can also rename runs.
 
 ## Install
@@ -56,6 +57,16 @@ Read-only subagents don't get Pi's `edit` and `write` tools and are told not to 
 | `/subagents profiles` | Choose models and fallbacks for each profile                |
 | `/subagents settings` | Delegation, nesting limits, writer workspace                |
 | `/subagents doctor`   | Check Pi, configuration, and each profile's route readiness |
+
+### Prompt templates
+
+The package ships three Pi prompt templates that guide the main agent through common subagent workflows:
+
+| Template                    | Workflow                                                                                                              |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `/parallel-review [target]` | 2-3 `reviewer`s on distinct angles, then triage into fix now, optional, and rejected. Defaults to uncommitted changes |
+| `/review-loop [change]`     | Implement or take a change, review it with a fresh `reviewer`, apply approved fixes, up to 3 rounds                   |
+| `/gather-context [task]`    | `scout`s, plus a `researcher` when external facts matter, then only the questions that remain, before implementing    |
 
 ### Delegation
 

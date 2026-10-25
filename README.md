@@ -13,7 +13,7 @@ A pnpm workspace for Pi extensions.
 - [`pi-herdr-btw`](packages/pi-herdr-btw) — deterministic reusable blank Pi side sessions in user-owned panes in the current Herdr tab.
 - [`pi-intercom`](packages/pi-intercom) — discovery of, and messaging between, your live Pi sessions on this machine.
 - [`pi-cosmic-ui`](packages/pi-cosmic-ui) — composable, responsive shared UI elements: the footer and information area, and the Activity view for subagents and tasks.
-- [`pi-subagents`](packages/pi-subagents) — session-scoped background subagents running as local Pi processes, with supervisor communication and messaging among a session's agents; `/subagents` opens them in the shared Activity view.
+- [`pi-subagents`](packages/pi-subagents) — session-scoped background subagents running as local Pi processes, with supervisor communication and messaging among a session's agents, and workflow prompt templates such as `/parallel-review`; `/subagents` opens them in the shared Activity view.
 
 ## Requirements
 

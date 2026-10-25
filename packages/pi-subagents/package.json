@@ -24,6 +24,7 @@
     "index.ts",
     "src/",
     "docs/",
+    "prompts/",
     "README.md",
     "ARCHITECTURE.md",
     "LICENSE"
@@ -86,6 +87,11 @@
     "extensions": [
       "./index.ts"
     ],
-    "skills": []
+    "skills": [],
+    "prompts": [
+      "./prompts/gather-context.md",
+      "./prompts/parallel-review.md",
+      "./prompts/review-loop.md"
+    ]
   }
 }
