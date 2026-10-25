@@ -83,7 +83,7 @@ no generated build.
 | -------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
 | `host-environment`                                                                                                                     | Dependency-free `isSubagentChildProcess` admission guard                |
 | `text`, `text-scan`, `display`, `message-text`                                                                                         | Text scans, bounded text, formatting, and message summaries             |
-| `security`, `security/terminal-styled`, `security/sha256`                                                                              | Redaction, terminal safety, and hashing                                 |
+| `security`, `security/sha256`                                                                                                          | Redaction, terminal safety, and hashing                                 |
 | `schema/decode`, `schema/foreign-callable`, `schema/tool-output`                                                                       | Unknown input, foreign callbacks, and tool output schemas               |
 | `host-session`, `host-command`, `host-wake`, `host-transcript`, `host-agent-messages`                                                  | Host callbacks, commands, delivery, and transcript helpers              |
 | `session-capability`, `settings-completion`, `settings-dispatch`                                                                       | Capability exchange and settings routing                                |

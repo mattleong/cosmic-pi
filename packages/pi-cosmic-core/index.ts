@@ -209,7 +209,6 @@ export {
   stripAnsi,
   stripTerminalControls,
 } from "./src/security.ts";
-export { sanitizeTerminalStyledFragments } from "./src/security/terminal-styled.ts";
 export {
   BooleanFromJsonSchema,
   completeSettingsArguments,

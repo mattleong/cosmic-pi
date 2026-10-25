@@ -10,14 +10,11 @@ import * as Str from "effect/String";
 import { clipText } from "./display.ts";
 import { decodeUnknownOrUndefined } from "./schema/decode.ts";
 import { codeUnitAt } from "./text-scan.ts";
-import {
-  ESCAPE_STRING_INTRODUCERS,
-  printableRunEnd,
-  TERMINAL_STRING_INTRODUCERS,
-} from "./security/terminal-styled.ts";
 
 // Bound once because the terminal scans below call it per code unit.
 const codeAt = codeUnitAt;
+const TERMINAL_STRING_INTRODUCERS = new Set([0x90, 0x98, 0x9d, 0x9e, 0x9f]);
+const ESCAPE_STRING_INTRODUCERS = new Set(["]", "P", "X", "^", "_"]);
 const ANSI_ESCAPE_PATTERN = String.raw`\u001B\[[0-?]*[ -/]*[@-~]`;
 const ANSI_ESCAPE_REGEXP = new RegExp(ANSI_ESCAPE_PATTERN, "g");
 const CONTROL_CHARACTER_REGEXP = /\p{Cc}/u;
@@ -56,6 +53,15 @@ const replaceContentControlCharacters = (value: string): string =>
 
 export const stripAnsi = (value: string): string =>
   Fn.pipe(value, Str.replace(ANSI_ESCAPE_REGEXP, ""));
+
+const isPrintableCode = (code: number): boolean =>
+  code >= 32 && code !== 127 && !(code >= 0x80 && code <= 0x9f);
+
+const printableRunEnd = (value: string, start: number): number => {
+  let end = start;
+  while (end < value.length && isPrintableCode(codeAt(value, end))) end += 1;
+  return end;
+};
 
 const skipControlSequence = (value: string, start: number): number => {
   for (let index = start; index < value.length; index += 1) {

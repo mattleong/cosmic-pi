@@ -87,7 +87,6 @@
     "./platform/token-verifier": "./src/platform/token-verifier.ts",
     "./platform/bounded-ndjson-rpc": "./src/platform/bounded-ndjson-rpc.ts",
     "./security": "./src/security.ts",
-    "./security/terminal-styled": "./src/security/terminal-styled.ts",
     "./settings-completion": "./src/settings-completion.ts",
     "./settings-dispatch": "./src/settings-dispatch.ts",
     "./platform/node-file": "./src/platform/node-file.ts",
