@@ -19,9 +19,9 @@ type ContextMessage = BoundaryContextPreview["contextMessages"][number];
 const NOTICE_TYPE = "test-notice";
 const WAKE_TYPE = "test-wake";
 
-const notice = (): ContextMessage => ({
+const notice = (customType = NOTICE_TYPE): ContextMessage => ({
   role: "custom",
-  customType: NOTICE_TYPE,
+  customType,
   content: "A notice.",
   display: true,
   timestamp: 0,
@@ -92,6 +92,7 @@ const harness = (options: Partial<SessionWakeOptions> = {}) => {
     Arr.filter(sendMessage.mock.calls, ([message]) => message.customType === WAKE_TYPE);
   return {
     ...host,
+    sendMessage,
     wake,
     ctx,
     turns,
@@ -240,6 +241,172 @@ describe("session wake", () => {
       expect(test.wakes()).toHaveLength(1);
     }),
   );
+
+  it.effect("keeps waiting for a long compaction to end before it wakes", () =>
+    Effect.gen(function* () {
+      const test = harness();
+      test.setIdle(false);
+      test.deliver();
+      yield* Effect.promise(() =>
+        test.emit("session_compact_failed", test.ctx, {
+          type: "session_compact_failed",
+          reason: "manual",
+          aborted: false,
+          willRetry: false,
+          fromExtension: false,
+        }),
+      );
+      for (let check = 0; check < 200; check += 1) test.runChecks();
+      expect(test.wakes()).toHaveLength(0);
+
+      test.setIdle(true);
+      test.runChecks();
+      expect(test.wakes()).toHaveLength(1);
+    }),
+  );
+
+  // The harness's owner settles first and starts a turn that shows both owners' notices.
+  const twoOwners = () => {
+    const test = harness();
+    let idle = false;
+    const checks: Array<() => void> = [];
+    const other = registerSessionWake(test.pi, {
+      noticeTypes: new Set(["other-notice"]),
+      wakeMessage: { customType: "other-wake", content: "Act on the other notices." },
+      isIdle: () => idle,
+      later: (check) => checks.push(check),
+    });
+    test.setIdle(false);
+    test.deliver();
+    other.deliver(() => true);
+    const otherWakes = () =>
+      Arr.filter(test.sendMessage.mock.calls, ([message]) => message.customType === "other-wake");
+    const runOtherChecks = () => {
+      for (const check of checks.splice(0)) check();
+    };
+    return {
+      test,
+      otherWakes,
+      runOtherChecks,
+      setOtherIdle: (next: boolean) => {
+        idle = next;
+      },
+    };
+  };
+
+  it.effect(
+    "leaves a notice owed at settle to another owner's turn, waking if it never starts",
+    () =>
+      Effect.gen(function* () {
+        const { test, otherWakes, runOtherChecks, setOtherIdle } = twoOwners();
+        yield* Effect.promise(() => test.emit("agent_settled", test.ctx));
+        expect(test.wakes()).toHaveLength(1);
+        expect(otherWakes()).toHaveLength(0);
+
+        setOtherIdle(true);
+        runOtherChecks();
+        expect(otherWakes()).toHaveLength(1);
+      }),
+  );
+
+  it.effect("appends a notice to another owner's coming turn, waking if that turn fails", () =>
+    Effect.sync(() => {
+      const test = harness();
+      const turns: Array<boolean> = [];
+      let otherIdle = true;
+      const checks: Array<() => void> = [];
+      const other = registerSessionWake(test.pi, {
+        noticeTypes: new Set(["other-notice"]),
+        wakeMessage: { customType: "other-wake", content: "Act on the other notices." },
+        isIdle: () => otherIdle,
+        later: (check) => checks.push(check),
+      });
+      const deliverOther = () =>
+        other.deliver((startTurn) => {
+          turns.push(startTurn);
+          return true;
+        });
+      const otherWakes = () =>
+        Arr.filter(test.sendMessage.mock.calls, ([message]) => message.customType === "other-wake");
+
+      // Pi still emits agent_settled, so the turn this owner started has not begun.
+      expect(test.deliver()).toBe("woken");
+      expect(deliverOther()).toBe("queued");
+      expect(turns).toEqual([false]);
+      otherIdle = false;
+      for (const check of checks.splice(0)) check();
+      expect(otherWakes()).toHaveLength(0);
+
+      // That turn failed before it began, leaving the session idle.
+      otherIdle = true;
+      for (const check of checks.splice(0)) check();
+      expect(otherWakes()).toHaveLength(1);
+      expect(deliverOther()).toBe("woken");
+      expect(turns).toEqual([false, true]);
+    }),
+  );
+
+  it.effect("lets the turn another owner started at settle answer its notice", () =>
+    Effect.gen(function* () {
+      const { test, otherWakes, runOtherChecks, setOtherIdle } = twoOwners();
+      yield* Effect.promise(() => test.emit("agent_settled", test.ctx));
+      runOtherChecks();
+      yield* Effect.promise(() => test.emit("agent_start", test.ctx));
+      runOtherChecks();
+      yield* Effect.promise(() =>
+        test.emit(
+          "agent_before_settle",
+          test.ctx,
+          settleEvent([notice(), notice("other-notice"), reply()]),
+        ),
+      );
+      yield* Effect.promise(() => test.emit("agent_settled", test.ctx));
+      setOtherIdle(true);
+      runOtherChecks();
+      expect(test.wakes()).toHaveLength(1);
+      expect(otherWakes()).toHaveLength(0);
+    }),
+  );
+
+  it.effect("treats a run as busy until this owner's settle handler runs", () =>
+    Effect.gen(function* () {
+      const test = harness();
+      yield* Effect.promise(() => test.emit("agent_start", test.ctx));
+      expect(test.deliver()).toBe("queued");
+      yield* Effect.promise(() =>
+        test.emit("agent_settled", test.ctx, { type: "agent_settled", aborted: true }),
+      );
+      expect(test.turns).toEqual([false]);
+      expect(test.wakes()).toHaveLength(0);
+    }),
+  );
+
+  for (const event of [
+    { type: "session_before_switch", reason: "new" },
+    { type: "session_before_fork", entryId: "entry", position: "before" },
+    { type: "session_shutdown", reason: "new" },
+  ] as const) {
+    it.effect(`holds wakes from ${event.type} until the user's next prompt`, () =>
+      Effect.gen(function* () {
+        const test = harness();
+        test.setIdle(false);
+        test.deliver();
+        yield* Effect.promise(() => test.emit(event.type, test.ctx, event));
+        expect(test.wake.closing()).toBe(true);
+        yield* Effect.promise(() => test.emit("agent_settled", test.ctx));
+        test.setIdle(true);
+        expect(test.deliver()).toBe("held");
+        yield* Effect.promise(() => test.emit("agent_settled", test.ctx));
+        expect(test.wakes()).toHaveLength(0);
+
+        // Pi reports no cancelled or failed switch; the session is still open when its user prompts again.
+        yield* Effect.promise(() => test.emit("input", test.ctx, inputEvent("interactive")));
+        expect(test.wake.closing()).toBe(false);
+        expect(test.deliver()).toBe("woken");
+        expect(test.turns).toEqual([false, false, true]);
+      }),
+    );
+  }
 
   it.effect("lets the owner decide the settle boundary with the landed notice", () =>
     Effect.gen(function* () {

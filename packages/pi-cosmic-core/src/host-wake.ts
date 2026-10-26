@@ -36,14 +36,14 @@ export const hasUnansweredNotice = (
   );
 };
 
-// After a compaction the session becomes idle once the host finishes its own handlers.
-const IDLE_CHECK_LIMIT = 40;
+// Every owner in a session hears on Pi's shared event bus when another starts a turn.
+const TURN_CHANNEL = "pi-cosmic-core:session-wake-turn";
 
 /** What the wake owner knows at a completed run's settle boundary. */
 export interface SessionWakeSettle {
   /** A notice arrived after the model's latest reply and wakes are not held or deferred by a dialog. */
   readonly landed: boolean;
-  /** Whether wakes are held after an interrupt or during shutdown. */
+  /** Whether wakes are held after an interrupt or while the session closes. */
   readonly held: () => boolean;
   /**
    * Whether a notice was appended since this boundary began and still needs a turn; clears it. A
@@ -85,7 +85,8 @@ export interface SessionWakeOptions {
 /**
  * How a delivered notice reached the session: `woken` started a turn; `queued` was appended to a
  * busy session, whose settling run continues; `held` was appended without a turn while wakes are
- * held after an interrupt or during a dialog; `refused` was not accepted by Pi.
+ * held after an interrupt, during a dialog, or while the session closes; `refused` was not accepted
+ * by Pi.
  */
 export type SessionWakeDelivery = "woken" | "queued" | "held" | "refused";
 
@@ -97,6 +98,13 @@ export interface SessionWake {
   readonly deliver: (send: (startTurn: boolean) => boolean) => SessionWakeDelivery;
   /** Holds wakes until the user's next prompt or a new session, as the session shuts down. */
   readonly hold: () => void;
+  /**
+   * Whether the session is being replaced or shut down: from `session_before_switch`,
+   * `session_before_fork`, `session_shutdown`, or `hold`, until the user's next prompt or a new
+   * session. Pi reports no cancelled or failed switch or fork, so one keeps this until the user
+   * prompts again.
+   */
+  readonly closing: () => boolean;
 }
 
 /**
@@ -104,14 +112,35 @@ export interface SessionWake {
  * While it is busy Pi appends the notice at the end of the current turn, outside the steering queue
  * that Esc, dequeue, and tree navigation clear, and this owner continues the settling run so the
  * model sees it. A user interrupt holds wakes until the user's next prompt; notices still append.
- * Every extension that registers one gets its own handlers; Pi chains their settle results.
+ * Wakes are also held while the session is being replaced or shut down. Every extension that
+ * registers one gets its own handlers; Pi chains their settle results, and the owners at one settle
+ * start at most one turn between them.
  */
 export function registerSessionWake(pi: ExtensionAPI, options: SessionWakeOptions): SessionWake {
+  // Wakes wait for the user's next prompt after an interrupt.
   let held = false;
+  // The session is being replaced or shut down; wakes wait for a new session or the user's prompt.
+  let closing = false;
   let dialogs = 0;
   // A notice was appended without a turn since the last turn began or settle boundary showed it.
   let owed = false;
-  const blocked = (): boolean => held || dialogs > 0;
+  // From a run's start until this owner's agent_settled handler. Pi marks the session idle before
+  // it awaits each extension's handler, and a turn started then would follow an interrupt.
+  let running = false;
+  // Another owner started a turn that has not begun yet, which shows the model this owner's notices.
+  let turnComing = false;
+  const self = Symbol("session-wake");
+  const holding = (): boolean => held || closing;
+  const blocked = (): boolean => holding() || dialogs > 0;
+
+  // Pi defers a turn started while it emits agent_settled and runs each deferred turn in full, so
+  // the other owners at that settle leave their notices to this one.
+  const announceTurn = (): void => {
+    invokeHostCallback(() => pi.events.emit(TURN_CHANNEL, self), undefined);
+  };
+  pi.events.on(TURN_CHANNEL, (sender) => {
+    if (sender !== self) turnComing = true;
+  });
 
   const wake = (): void => {
     owed = false;
@@ -125,37 +154,68 @@ export function registerSessionWake(pi: ExtensionAPI, options: SessionWakeOption
         { triggerTurn: true },
       );
     }, undefined);
+    announceTurn();
   };
-  const wakeWhenIdle = (checks = 0): void => {
-    if (!owed || blocked()) return;
-    if (invokeHostCallback(options.isIdle, false)) {
-      wake();
+  // Polls while the session is busy without a run, as during a compaction or a run's start, or while
+  // another owner's turn has not begun; a run that begins meanwhile continues for the notice or wakes
+  // for it as it settles. An idle session means that turn failed before it began, as Pi then emits
+  // neither agent_start nor agent_settled.
+  const wakeWhenIdle = (): void => {
+    if (!owed || blocked() || running) return;
+    if (!invokeHostCallback(options.isIdle, false)) {
+      options.later(wakeWhenIdle);
       return;
     }
-    if (checks < IDLE_CHECK_LIMIT) options.later(() => wakeWhenIdle(checks + 1));
+    turnComing = false;
+    wake();
+  };
+  const close = (): void => {
+    closing = true;
+    owed = false;
   };
 
+  pi.on("agent_start", () => {
+    running = true;
+    turnComing = false;
+  });
+
   pi.on("agent_settled", (event, ctx) => {
-    if (!event.aborted) {
-      // A notice that arrived after the last settle boundary still needs a turn.
-      if (owed && !blocked()) wake();
+    running = false;
+    const coming = turnComing;
+    turnComing = false;
+    if (event.aborted) {
+      held = true;
+      owed = false;
+      options.onInterrupt?.(ctx);
       return;
     }
-    held = true;
-    owed = false;
-    options.onInterrupt?.(ctx);
+    // A notice that arrived after the last settle boundary still needs a turn. Another owner's turn
+    // at this settle shows it to the model; wake once idle in case that turn never starts.
+    if (!owed || blocked()) return;
+    if (coming) options.later(wakeWhenIdle);
+    else wake();
   });
 
   pi.on("input", (event) => {
-    if (event.source !== "extension") held = false;
+    if (event.source === "extension") return;
+    held = false;
+    closing = false;
   });
 
   pi.on("session_start", () => {
     held = false;
+    closing = false;
     dialogs = 0;
     owed = false;
+    running = false;
+    turnComing = false;
   });
 
+  // Pi aborts the run and then emits session_shutdown to extensions in load order, so an earlier
+  // extension's slow handler would otherwise leave this session idle and able to wake.
+  pi.on("session_before_switch", close);
+  pi.on("session_before_fork", close);
+  pi.on("session_shutdown", close);
   // Notices owed a turn belong to the branch the user left.
   pi.on("session_tree", () => {
     owed = false;
@@ -179,7 +239,7 @@ export function registerSessionWake(pi: ExtensionAPI, options: SessionWakeOption
     if (event.outcome !== "completed") return undefined;
     const unanswered = hasUnansweredNotice(event.context, options.noticeTypes);
     let landed = false;
-    if (!unanswered || held) owed = false;
+    if (!unanswered || holding()) owed = false;
     // An open dialog defers the turn; the notice stays owed until it closes.
     else if (dialogs > 0) owed = true;
     else {
@@ -188,9 +248,9 @@ export function registerSessionWake(pi: ExtensionAPI, options: SessionWakeOption
     }
     const settle: SessionWakeSettle = {
       landed,
-      held: () => held,
+      held: holding,
       takeOwed: () => {
-        if (held) owed = false;
+        if (holding()) owed = false;
         if (!owed || dialogs > 0) return false;
         owed = false;
         return true;
@@ -204,17 +264,22 @@ export function registerSessionWake(pi: ExtensionAPI, options: SessionWakeOption
     deliver: (send) => {
       if (blocked()) {
         if (!send(false)) return "refused";
-        if (!held) owed = true;
+        // A dialog defers the turn until it closes; a hold leaves the notice for the next prompt.
+        if (!holding()) owed = true;
         return "held";
       }
-      const idle = invokeHostCallback(options.isIdle, false);
+      // Another owner's turn, still deferred while Pi emits agent_settled, will show this notice.
+      const coming = !running && turnComing;
+      const idle = !running && !coming && invokeHostCallback(options.isIdle, false);
       if (!send(idle)) return "refused";
       // A started turn shows the model every notice appended before it.
       owed = !idle;
-      return idle ? "woken" : "queued";
+      if (coming) options.later(wakeWhenIdle);
+      if (!idle) return "queued";
+      announceTurn();
+      return "woken";
     },
-    hold: () => {
-      held = true;
-    },
+    hold: close,
+    closing: () => closing,
   };
 }

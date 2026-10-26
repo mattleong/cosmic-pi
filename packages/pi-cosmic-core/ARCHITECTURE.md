@@ -101,13 +101,32 @@ notice starts a turn only while the session is idle. While it is busy the notice
 turn, so Pi appends it at turn end outside the steering queue Esc clears, and the settling run
 continues while such a notice (`hasUnansweredNotice`) follows the model's latest reply. A notice
 appended after the last settle boundary, or during a compaction, gets one hidden wake message once
-the session is idle. After an interrupt, and after `hold` at shutdown, notices only append until the
-user's next non-extension input. With `holdDuringDialogs`, an open extension dialog also defers the
-wake until it closes, and a run settling under an open dialog leaves its notice owed until then. Pi
-chains `agent_before_settle` results across handlers, keeping the last
-defined `entries` and `continue`, so each owner returns `undefined` when it has nothing to add and
-keeps earlier handlers' entries otherwise; [two owners in one session](tests/host-wake-session.test.ts)
-each get their notices continued.
+the session is idle. A run counts as busy from `agent_start` until the owner's own `agent_settled`
+handler, because Pi marks the session idle before it awaits each extension's handler; a notice in
+that window is owed, and the handler then wakes or, after an interrupt, holds it. After an interrupt
+notices only append until the user's next non-extension input. With `holdDuringDialogs`, an open
+extension dialog also defers the wake until it closes, and a run settling under an open dialog leaves
+its notice owed until then. The poll for idleness has no limit; it ends once a run starts, whose
+settle continues for the notice or wakes for it.
+
+Pi defers a turn started while it emits `agent_settled` and runs each deferred turn in full, which
+also keeps a headless prompt open until the wake's turn ends. The first owner to start a turn there
+announces it on Pi's shared event bus, and the other owners leave their notices to that turn instead
+of starting another, both at their own settle and for notices delivered before it begins. Each still
+polls for idleness: a turn that fails before it begins emits neither `agent_start` nor
+`agent_settled`, so an idle session means it never started.
+
+Wakes are held, and `closing` reports true, from `session_before_switch`, `session_before_fork`, or
+`session_shutdown` (and from `hold`), because Pi aborts the run and then emits `session_shutdown` in
+load order: an earlier extension's slow handler would otherwise leave an idle session that a notice
+could wake. Pi reports no cancelled or failed switch or fork, such as `/fork` of an unsaved session,
+so the hold then lasts until the user's next non-extension input or a new session. `/reload` and quit emit only `session_shutdown`, so until an owner's own
+handler runs, a notice can still start a turn the session's disposal then aborts.
+
+Pi chains `agent_before_settle` results across handlers, keeping the last defined `entries` and
+`continue`, so each owner returns `undefined` when it has nothing to add and keeps earlier handlers'
+entries otherwise. [Real Pi sessions](tests/host-wake-session.test.ts) pin two owners continuing
+their notices, one turn for both at a settle, the interrupt window, and replacement.
 
 ## Message origins
 
