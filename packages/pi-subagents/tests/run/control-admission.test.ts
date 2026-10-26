@@ -52,6 +52,7 @@ const fixture = Effect.gen(function* () {
     closeRecordScope: () => Effect.sync(() => void deliveries.push("stop")),
     verifyCleanup: () => Effect.void,
     settle: () => Effect.die("Unexpected settlement"),
+    requeueQuestionsTakenByLocked: () => undefined,
   });
   return { context, controls, deliveries, record, waiting, withLock };
 });

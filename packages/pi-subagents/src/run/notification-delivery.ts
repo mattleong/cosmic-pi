@@ -16,6 +16,7 @@ import {
 } from "./completion.ts";
 import type { CompletionGenerationRecord, RunContext, RunRecord, WithRunLock } from "./internal.ts";
 import { COMPLETION_RETRY_INITIAL_MILLIS, COMPLETION_RETRY_MAX_MILLIS } from "./limits.ts";
+import { keepsTakingNotifications } from "./notification-routing.ts";
 
 type SubagentQuestionNotification = Extract<SubagentNotification, { readonly type: "question" }>;
 
@@ -45,6 +46,12 @@ export const notificationDelivery = Effect.fn("RunNotificationDelivery.acquire")
   // Each question reaches the model whole only through its notice, even while an await shows
   // its preview, so nothing claims or acknowledges it elsewhere.
   const pendingActionNotifications = new Map<string, SubagentQuestionNotification>();
+  // Question notices an ancestor run took, by asking run. A run that stops taking notices before
+  // its descendant's question is answered hands that question on to the next recipient.
+  const takenQuestions = new Map<
+    string,
+    { readonly notification: SubagentQuestionNotification; readonly recipientRunId: string }
+  >();
   const completionWake = yield* Latch.make();
   const actionWake = yield* Latch.make();
   // Completions leave the outbox, or become claimed, without a new projection revision. Each such
@@ -116,6 +123,18 @@ export const notificationDelivery = Effect.fn("RunNotificationDelivery.acquire")
     );
   };
 
+  const takeQuestionLocked = (
+    notification: SubagentQuestionNotification,
+    recipientRunId: string,
+  ): void => {
+    const recipient = records.get(recipientRunId);
+    // The recipient may have stopped taking notices while the notice was in flight.
+    if (!recipient || !keepsTakingNotifications(recipient))
+      requeueTakenQuestionLocked(notification);
+    else if (actionRelevant(notification))
+      takenQuestions.set(notification.id, { notification, recipientRunId });
+  };
+
   const flushPendingActions: Effect.Effect<ActionDeliveryState> = withCompletionGate(
     withLock(
       Effect.sync(() => {
@@ -143,6 +162,7 @@ export const notificationDelivery = Effect.fn("RunNotificationDelivery.acquire")
                   Effect.map((delivery) => ({
                     notification,
                     accepted: delivery?.actionAccepted ?? true,
+                    recipientRunId: delivery?.recipientRunId,
                   })),
                 ),
               { concurrency: 4 },
@@ -154,11 +174,13 @@ export const notificationDelivery = Effect.fn("RunNotificationDelivery.acquire")
                     const attempted = new Set(
                       Arr.map(deliveries, ({ notification }) => notification),
                     );
-                    for (const { notification, accepted } of deliveries) {
+                    for (const { notification, accepted, recipientRunId } of deliveries) {
                       if (!accepted) continue;
                       if (pendingActionNotifications.get(notification.id) === notification)
                         pendingActionNotifications.delete(notification.id);
                       acknowledged += 1;
+                      if (recipientRunId !== undefined)
+                        takeQuestionLocked(notification, recipientRunId);
                     }
                     actionRetryDelayMillis = nextRetryDelay(
                       actionRetryDelayMillis,
@@ -214,8 +236,18 @@ export const notificationDelivery = Effect.fn("RunNotificationDelivery.acquire")
       ...notification,
       generation: ++record.notificationGeneration,
     };
+    takenQuestions.delete(record.view.id);
     pendingActionNotifications.set(record.view.id, queued);
     Latch.openUnsafe(actionWake);
+  };
+
+  // Queues a taken question again under a new generation, so the next recipient's key differs.
+  // A run being stopped needs no answer.
+  const requeueTakenQuestionLocked = (notification: SubagentQuestionNotification): void => {
+    takenQuestions.delete(notification.id);
+    const record = records.get(notification.id);
+    if (record && !record.stoppedByParent && actionRelevant(notification))
+      queueActionNotificationLocked(record, notification);
   };
   return {
     deliverPendingCompletions,
@@ -230,7 +262,18 @@ export const notificationDelivery = Effect.fn("RunNotificationDelivery.acquire")
     /** Completes once a completion is consumed, acknowledged, or claimed after this call. */
     outboxChangedLocked: (): Deferred.Deferred<void> => outboxChanged,
     signalOutboxChangedLocked,
-    discardQuestionLocked: (id: string): void => void pendingActionNotifications.delete(id),
+    discardQuestionLocked: (id: string): void => {
+      pendingActionNotifications.delete(id);
+      takenQuestions.delete(id);
+    },
+    /**
+     * Hands on the questions `runId` took and hasn't seen answered; called in the same transition
+     * that stops it taking notices.
+     */
+    requeueQuestionsTakenByLocked: (runId: string): void => {
+      for (const { notification, recipientRunId } of takenQuestions.values())
+        if (recipientRunId === runId) requeueTakenQuestionLocked(notification);
+    },
   };
 });
 

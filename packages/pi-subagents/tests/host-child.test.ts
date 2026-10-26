@@ -18,6 +18,7 @@ import type { LocalPiChildIpcHandlers, ParentContactError } from "../src/boundar
 import { NESTED_START_GUIDELINE } from "../src/delegation/prompt.ts";
 import { AGENT_TOOL_NAMES, SUBAGENT_TOOL_NAME } from "../src/run/tool-policy.ts";
 import { cancelledAwaitContract, lifecycleContract } from "../src/tools/contract.ts";
+import { beforeAgentStartEvent } from "./fixtures/pi-host.ts";
 import { view } from "./fixtures/run-view.ts";
 import { describeActivationLifecycle } from "./support/activation-lifecycle.ts";
 import { effectTest, eventLoopTurn, settle, step } from "./support/effect-test.ts";
@@ -39,11 +40,12 @@ interface HarnessOptions {
   readonly throwAtRegistration?: number;
 }
 
-const childContext = (cwd = "/child") =>
+const childContext = (cwd = "/child", isIdle = () => true) =>
   extensionContextFixture({
     cwd,
     sessionManager: { getSessionId: () => cwd },
     signal: undefined,
+    isIdle,
     isProjectTrusted: () => true,
     hasUI: false,
     mode: "rpc" as const,
@@ -56,6 +58,7 @@ const makeHarness = (options: HarnessOptions = {}) => {
   const listeners: ListenerRecord[] = [];
   let active = ["read"];
   let registration = 0;
+  let idle = true;
   const sendMessage = vi.fn();
   const ipc = {
     sendContact: (contact: LocalPiContact) =>
@@ -97,7 +100,16 @@ const makeHarness = (options: HarnessOptions = {}) => {
     loadSettings: options.loadSettings ?? (() => Promise.resolve()),
     openIpc: () => ipc,
   });
-  const start = (cwd?: string) => host.emit("session_start", childContext(cwd));
+  const start = (cwd?: string) =>
+    host.emit(
+      "session_start",
+      childContext(cwd, () => idle),
+    );
+  // The parent's prompt opens a run, the only time the child takes descendant notices.
+  const openRun = () => {
+    idle = false;
+    return host.emit("before_agent_start", childContext(), beforeAgentStartEvent("Task"));
+  };
   const shutdown = () => host.emit("session_shutdown", childContext());
   const latestTool = (name: string): CapturedTool => {
     const tool = Option.getOrUndefined(Arr.findLast(tools, (candidate) => candidate.name === name));
@@ -137,6 +149,7 @@ const makeHarness = (options: HarnessOptions = {}) => {
     currentListener,
     latestTool,
     listeners,
+    openRun,
     sendMessage,
     start,
     shutdown,
@@ -538,6 +551,20 @@ describe("local Pi child bridge", () => {
       const harness = makeHarness();
       yield* settle(() => harness.start("/repo"));
       const { handlers } = harness.currentListener();
+      // No run is open, so the notice is refused and goes to another recipient.
+      handlers.onControl({
+        channel: "pi-subagents",
+        type: "proxy_notification",
+        requestId: "notice-early",
+        key: "agent-1:1",
+        message: "Descendant reported.",
+      });
+      yield* harness.awaitContact("proxy_notification_ack", {
+        requestId: "notice-early",
+        ok: false,
+      });
+      expect(harness.sendMessage).not.toHaveBeenCalled();
+      yield* settle(harness.openRun);
       for (const requestId of ["notice-1", "notice-retry"]) {
         handlers.onControl({
           channel: "pi-subagents",

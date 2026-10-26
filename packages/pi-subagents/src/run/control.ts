@@ -28,6 +28,7 @@ import {
 } from "./errors.ts";
 import type { RunProcessControls } from "./process-lifecycle.ts";
 import type { RunRecordCleanup } from "./record-cleanup.ts";
+import type { RunNotificationDelivery } from "./notification-delivery.ts";
 import type { RunSettlement } from "./settlement.ts";
 import { commitSessionOwned, runSessionOwned } from "./session-owned.ts";
 import { MAX_ERROR_CHARS, sanitizeDiagnosticText, sanitizeName } from "./state.ts";
@@ -45,6 +46,7 @@ interface RunControlDependencies extends Pick<
   readonly closeRecordScope: RunRecordCleanup["closeRecordScope"];
   readonly verifyCleanup: RunRecordCleanup["verifyCleanup"];
   readonly settle: RunSettlement["settle"];
+  readonly requeueQuestionsTakenByLocked: RunNotificationDelivery["requeueQuestionsTakenByLocked"];
 }
 
 /** A message for a run, decided under the run lock as an answer or as guidance. */
@@ -75,6 +77,7 @@ export function controlOperations(dependencies: RunControlDependencies) {
     closeRecordScope,
     verifyCleanup,
     settle,
+    requeueQuestionsTakenByLocked,
   } = dependencies;
 
   const retainControlWarning = Effect.fn("SubagentControl.retainControlWarning")(function* (
@@ -389,6 +392,7 @@ export function controlOperations(dependencies: RunControlDependencies) {
                 );
               if (record.pauseOutcome === pauseOutcome) record.pauseOutcome = undefined;
               const view = commitRunPauseLocked(record, now);
+              requeueQuestionsTakenByLocked(record.view.id);
               yield* publish;
               return view;
             }),
@@ -439,6 +443,7 @@ export function controlOperations(dependencies: RunControlDependencies) {
           if (selected.view.state === "stopping")
             return { record: selected, cleanupRequired: true as const };
           selected.stoppedByParent = true;
+          requeueQuestionsTakenByLocked(selected.view.id);
           beginCleanup(selected);
           clearRunActivity(selected);
           selected.view = {

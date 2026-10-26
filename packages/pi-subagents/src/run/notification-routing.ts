@@ -46,13 +46,16 @@ const ancestorMessage = (notification: SubagentNotification): string => {
   );
 };
 
-const canAcceptNotification = (record: RunRecord): boolean =>
+/** Whether the run can take notices once any pending pause request is refused. */
+export const keepsTakingNotifications = (record: RunRecord): boolean =>
   isActiveRunState(record.view.state) &&
   record.view.state !== "paused" &&
   record.view.state !== "stopping" &&
   !record.stoppedByParent &&
-  !record.pauseRequested &&
   record.process?.controls.deliverNotification !== undefined;
+
+const canAcceptNotification = (record: RunRecord): boolean =>
+  !record.pauseRequested && keepsTakingNotifications(record);
 
 /** Ancestors that can take a notification about `sourceRunId`, nearest first. */
 const notifiableAncestors = (
@@ -90,14 +93,15 @@ export function notificationRouter(dependencies: RunNotificationRoutingDependenc
     );
     return hasObjectRuntimeType(delivered) && delivered !== null ? delivered : undefined;
   };
+  // The ancestor that took the notice, false when none did, or "uncertain".
   const deliverToNearestAncestor = (
     sourceRunId: string,
     message: string,
     key: string,
-  ): Effect.Effect<boolean | "uncertain"> =>
+  ): Effect.Effect<RunRecord | false | "uncertain"> =>
     Effect.suspend(() => {
       const candidates = notifiableAncestors(records, sourceRunId);
-      const attempt = (index: number): Effect.Effect<boolean | "uncertain"> => {
+      const attempt = (index: number): Effect.Effect<RunRecord | false | "uncertain"> => {
         const candidate = candidates[index];
         if (!candidate) return Effect.succeed(false);
         return Effect.acquireUseRelease(
@@ -117,7 +121,9 @@ export function notificationRouter(dependencies: RunNotificationRoutingDependenc
               : Effect.succeed(false),
           (admission) => (admission ? releaseTurnInput(admission.record) : Effect.void),
         ).pipe(
-          Effect.flatMap((delivered) => (delivered ? Effect.succeed(true) : attempt(index + 1))),
+          Effect.flatMap((delivered) =>
+            delivered ? Effect.succeed(candidate) : attempt(index + 1),
+          ),
           Effect.catchTag("SubagentProcessError", (error) =>
             isOutcomeUncertain(error) ? Effect.succeed("uncertain" as const) : attempt(index + 1),
           ),
@@ -149,7 +155,7 @@ export function notificationRouter(dependencies: RunNotificationRoutingDependenc
           delivered === "uncertain"
             ? { actionAccepted: false }
             : delivered
-              ? { actionAccepted: true }
+              ? { actionAccepted: true, recipientRunId: delivered.view.id }
               : notifyRoot(notification),
         ),
       );
@@ -163,7 +169,7 @@ export function notificationRouter(dependencies: RunNotificationRoutingDependenc
         ).pipe(
           Effect.map((delivered) => {
             const key = completionNotificationKey(run.id, run.generation);
-            // An uncertain send stays unacknowledged for retry, never falling through to the root.
+            // An uncertain send stays unacknowledged for retry, while that ancestor still takes it.
             if (delivered === "uncertain") return undefined;
             if (delivered) return key;
             const runs = [run];

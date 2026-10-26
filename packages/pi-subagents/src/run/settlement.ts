@@ -177,6 +177,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
         )
           return undefined;
         const view = commitRunPauseLocked(record, now);
+        delivery.requeueQuestionsTakenByLocked(record.view.id);
         const outcome = record.pauseOutcome;
         record.pauseOutcome = undefined;
         yield* publish;
@@ -323,6 +324,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
     );
     record.notificationGeneration += 1;
     delivery.discardQuestionLocked(record.view.id);
+    delivery.requeueQuestionsTakenByLocked(record.view.id);
     record.replyPendingRequestId = undefined;
     if (state === "completed") record.assignment.phase = "reported";
     record.view = viewForSettlement(record, state, now, finalText, settledError, report);
@@ -513,37 +515,50 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
       Effect.sync(() => settledAssignmentLocked(record, assignmentEpoch, terminal)),
     );
     if (phase !== "running") return;
-    // Guidance or a descendant notice admitted before this settlement may restart the child.
-    const turnInputsDrained = yield* Deferred.make<void>();
-    yield* withLock(Effect.sync(() => claimTurnInputDrain(record, turnInputsDrained)));
-    yield* Deferred.await(turnInputsDrained);
-    if (!isCurrent()) return;
-    if (record.pauseRequested) {
-      const now = yield* Clock.currentTimeMillis;
-      if (yield* pauseFromEvent(record, now, assignmentEpoch)) return;
-    }
-    if (record.stoppedByParent) return;
     const finalText =
       terminal?.stopReason === "stop" && terminal.text
         ? captureOutputText({ text: terminal.text, originalSize: terminal.originalSize })
         : undefined;
-    const outcome = yield* withLock(
-      Effect.sync(() => {
-        if (
-          isInactiveRunRecord(record) ||
-          record.assignment.epoch !== assignmentEpoch ||
-          record.assignment.phase !== "running"
-        )
-          return "ignored";
-        if (!finalText) return "failed";
-        recordLatestAssistantText(record, finalText);
-        record.pausedAssignmentEpoch = undefined;
-        return "completed";
-      }),
-    );
-    if (outcome === "completed") yield* settle(record, "completed", undefined, assignmentEpoch);
-    if (outcome === "failed")
-      yield* failRun(record, settledFailureMessage(terminal), undefined, assignmentEpoch);
+    // Guidance or a descendant notice admitted before this settlement may restart the child, and
+    // one admitted while it waited must be waited for too, so the commit claims the drain again.
+    let turnInputsDrained = yield* Deferred.make<void>();
+    yield* withLock(Effect.sync(() => claimTurnInputDrain(record, turnInputsDrained)));
+    while (true) {
+      yield* Deferred.await(turnInputsDrained);
+      if (!isCurrent()) return;
+      if (record.pauseRequested) {
+        const now = yield* Clock.currentTimeMillis;
+        if (yield* pauseFromEvent(record, now, assignmentEpoch)) return;
+      }
+      if (record.stoppedByParent) return;
+      const nextDrain = Deferred.makeUnsafe<void>();
+      const outcome = yield* withLock(
+        Effect.gen(function* () {
+          if (
+            isInactiveRunRecord(record) ||
+            record.assignment.epoch !== assignmentEpoch ||
+            record.assignment.phase !== "running" ||
+            !isCurrent()
+          )
+            return "ignored" as const;
+          claimTurnInputDrain(record, nextDrain);
+          if (!Deferred.isDoneUnsafe(nextDrain)) return "draining" as const;
+          if (!finalText) return "failed" as const;
+          recordLatestAssistantText(record, finalText);
+          record.pausedAssignmentEpoch = undefined;
+          // Committed in this lock hold, so no notice is admitted between the check and the outcome.
+          return yield* settleLocked(record, "completed", undefined, assignmentEpoch);
+        }),
+      );
+      if (outcome === "draining") {
+        turnInputsDrained = nextDrain;
+        continue;
+      }
+      if (outcome === "failed")
+        yield* failRun(record, settledFailureMessage(terminal), undefined, assignmentEpoch);
+      else if (outcome !== "ignored" && outcome.notifyPeers) yield* sendPeerNotices(record.view.id);
+      return;
+    }
   });
 
   return {

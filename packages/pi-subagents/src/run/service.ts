@@ -420,6 +420,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     closeRecordScope,
     verifyCleanup: cleanup.verifyCleanup,
     settle: settlement.settle,
+    requeueQuestionsTakenByLocked: delivery.requeueQuestionsTakenByLocked,
   });
 
   const stop = subtreeStopper({ ...runContext, stopRun: controls.stop });

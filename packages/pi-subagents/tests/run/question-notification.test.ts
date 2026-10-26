@@ -12,6 +12,7 @@ import { hostNotifier, type SubagentNotification } from "../../src/boundary/host
 import { executeAgentActionEffect } from "../../src/tools/execute-agents.ts";
 import { formatRunBlock, runViewBlock, runViewOutcome } from "../../src/tools/run-block.ts";
 import {
+  acknowledgeCompletions,
   contactParentFrame,
   localServiceFixture,
   request,
@@ -21,6 +22,10 @@ import {
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
+
+const yieldTurns = Effect.gen(function* () {
+  for (let turn = 0; turn < 50; turn += 1) yield* Effect.yieldNow;
+});
 
 const questions = (items: ReadonlyArray<SubagentNotification>) =>
   Arr.filter(items, (item) => item.type === "question");
@@ -179,6 +184,81 @@ describe("question notification ownership", () => {
       ).toEqual(expect.arrayContaining([["old", 2, "New question?"]]));
       const generations = Arr.map(questions(delivered), (item) => item.generation);
       expect(new Set(generations).size).toBe(generations.length);
+    });
+  });
+
+  for (const ending of ["completes", "pauses"] as const)
+    it.effect(`hands a taken question on when the ancestor that took it ${ending}`, () => {
+      const { fake, notifications, layer } = localServiceFixture({
+        notify: acknowledgeCompletions,
+      });
+      return withService(layer, function* (service) {
+        const parent = yield* service.start(request({ name: "parent" }));
+        const child = yield* service.startSessionOwnedFrom(parent.id, request({ name: "child" }));
+        fake.controls[1]?.offerIpc(contactParentFrame("q-1", "question", "Which way?"));
+        yield* yieldUntil(() => fake.controls[0]?.sentIpc("proxy_notification") === true);
+        yield* yieldTurns;
+        expect(questions(notifications)).toEqual([]);
+
+        // The parent took the notice but ends without answering.
+        if (ending === "completes") fake.controls[0]?.settle("Parent report without an answer.");
+        else expect((yield* service.interrupt(parent.id)).state).toBe("paused");
+        yield* yieldUntil(() => questions(notifications).length === 1);
+        yield* TestClock.adjust("30 seconds");
+        expect(
+          Arr.map(questions(notifications), (item) => [item.id, item.requestId, item.message]),
+        ).toEqual([[child.id, "q-1", "Which way?"]]);
+        expect((yield* runView(service, child.id)).state).toBe("waiting_for_parent");
+      });
+    });
+
+  it.effect("hands a taken question on to the next ancestor under a new key", () => {
+    const { fake, notifications, layer } = localServiceFixture({ notify: acknowledgeCompletions });
+    return withService(layer, function* (service) {
+      const top = yield* service.start(request({ name: "top" }));
+      const middle = yield* service.startSessionOwnedFrom(top.id, request({ name: "middle" }));
+      const leaf = yield* service.startSessionOwnedFrom(middle.id, request({ name: "leaf" }));
+      const questionKeys = (index: number) =>
+        Arr.flatMap(fake.controls[index]?.ipc ?? [], (message) =>
+          message.type === "proxy_notification" &&
+          Str.startsWith(`${leaf.id}:question:`)(message.key)
+            ? [message.key]
+            : [],
+        );
+      fake.controls[2]?.offerIpc(contactParentFrame("q-1", "question", "Which way?"));
+      yield* yieldUntil(() => questionKeys(1).length === 1);
+      fake.controls[1]?.settle("Middle report without an answer.");
+      yield* yieldUntil(() => questionKeys(0).length === 1);
+      yield* TestClock.adjust("30 seconds");
+      expect(questionKeys(0)).not.toEqual(questionKeys(1));
+      expect(questionKeys(1)).toHaveLength(1);
+      expect(questions(notifications)).toEqual([]);
+    });
+  });
+
+  it.effect("doesn't hand on a question that ended before its taker did", () => {
+    const { fake, projections, notifications, layer } = localServiceFixture({
+      notify: acknowledgeCompletions,
+    });
+    return withService(layer, function* (service) {
+      const parent = yield* service.start(request({ name: "parent" }));
+      const child = yield* service.startSessionOwnedFrom(parent.id, request({ name: "child" }));
+      fake.controls[1]?.offerIpc(contactParentFrame("q-1", "question", "Which way?"));
+      yield* yieldUntil(() => fake.controls[0]?.sentIpc("proxy_notification") === true);
+      fake.controls[1]?.offerIpc({
+        channel: "pi-subagents",
+        type: "contact_cancel",
+        requestId: "q-1",
+      });
+      yield* yieldUntil(() =>
+        Option.exists(Arr.last(projections), (projection) =>
+          Arr.some(projection.runs, (view) => view.id === child.id && view.state === "running"),
+        ),
+      );
+      fake.controls[0]?.settle("Parent report.");
+      yield* TestClock.adjust("30 seconds");
+      yield* yieldTurns;
+      expect(questions(notifications)).toEqual([]);
     });
   });
 

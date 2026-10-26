@@ -52,7 +52,7 @@ Guidance is an RPC `prompt` with `streamingBehavior: "steer"`, because a bare `s
 - `handled` fails with `guidance_not_delivered`, or `prompt_not_delivered` for assignment-start and resume prompts, restoring prior assignment evidence.
 - An unreadable response keeps the attempted epoch as outcome-uncertain. Nothing replays the task automatically.
 
-Natural settlement first waits for admitted guidance, parent replies, and descendant notifications to drain, then drops a settlement that guidance made stale.
+Natural settlement first waits for admitted guidance, parent replies, and descendant notifications to drain, then drops a settlement that guidance made stale. It commits the report in the same lock hold that finds no input still admitted, and waits again otherwise.
 
 Pi's `abort` leaves the steering and follow-up queues in place, so resumable interruption:
 
@@ -61,7 +61,7 @@ Pi's `abort` leaves the steering and follow-up queues in place, so resumable int
 3. sends and confirms an IPC barrier, proving the child processed every earlier input;
 4. issues correlated `clear_queue`, discards the returned text, and sends `abort`.
 
-Parent replies are acknowledged after the waiting tool resumes, or rejected if the question is gone. Notifications are acknowledged after the child synchronously admits `pi.sendMessage`. The child (`boundary/host-child-settle.ts`) starts a turn for a notification only while idle; while working it sends with `triggerTurn: false`, so Pi appends it at turn end or abort, and `clear_queue` never removes an acknowledged notification. An acknowledgement-uncertain notification stays owned by that ancestor rather than falling through.
+Parent replies are acknowledged after the waiting tool resumes, or rejected if the question is gone. Notifications are acknowledged after the child synchronously admits `pi.sendMessage`. The child (`boundary/host-child-settle.ts`) takes a notification only while the run the parent's prompt opened (`before_agent_start` with `messageType: "user"`) is working and hasn't reached its own `agent_before_settle`, or a continuation's `turn_start` has reopened it. It sends with `triggerTurn: false`, so Pi appends it at turn end or abort, `clear_queue` never removes it, and the settle check continues the run so the child reacts. At any other time, idle, settling, or in a run another extension started, it refuses, and the notification falls through to the next ancestor or the root. A nested parent that has already written its final report therefore never folds a late descendant report into it; the root gets that report directly. An acknowledgement-uncertain notification is retried while that ancestor stays eligible, and falls through once it isn't ([delivery](completion-delivery.md#delivery)).
 
 After `pauseRequested`, new guidance, replies, and ancestor notifications are rejected and paused ancestors are skipped. Barrier, clear, or transport failure suppresses later interruption commands and releases the pause claim. `clear_queue_outcome_uncertain` is distinct from post-abort `interrupt_outcome_uncertain`; only the latter keeps a pending pause that late settlement may confirm.
 

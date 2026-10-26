@@ -5,6 +5,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import { yieldUntil } from "pi-cosmic-core/testing";
+import type { SubagentNotification } from "../../src/boundary/host-notifier.ts";
 import type { SubagentServiceContract } from "../../src/run/service.ts";
 import {
   acknowledgeCompletions,
@@ -23,6 +24,15 @@ import {
 import { objectContaining } from "../support/matchers.ts";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
+
+const yieldTurns = Effect.gen(function* () {
+  for (let turn = 0; turn < 50; turn += 1) yield* Effect.yieldNow;
+});
+
+const reportsAtRoot = (notifications: ReadonlyArray<SubagentNotification>) =>
+  Arr.flatMap(notifications, (notification) =>
+    notification.type === "completed" ? Arr.map(notification.runs, (run) => run.finalText) : [],
+  );
 
 const policy = (maxDirectChildren: number, maxDepth: number) => ({
   maxDirectChildren,
@@ -212,6 +222,71 @@ describe("root-owned subagent run tree", () => {
       ).toHaveLength(1);
     });
   });
+
+  // A Pi parent refuses a notice once its run reaches the settle check, so the root takes it.
+  for (const order of ["settlement", "refusal"] as const)
+    it.effect(
+      `sends a report to the root when its settling parent refuses it (${order} first)`,
+      () => {
+        const { fake, notifications, layer } = localServiceFixture({
+          notify: acknowledgeCompletions,
+        });
+        return withService(layer, function* (service) {
+          const parent = yield* service.start(request({ name: "parent" }));
+          const child = yield* service.startSessionOwnedFrom(parent.id, request({ name: "child" }));
+          const gate = yield* Deferred.make<void>();
+          fake.controls[0]?.gateNextIpcType("proxy_notification", gate);
+          fake.controls[0]?.refuseNextNotification();
+          fake.controls[1]?.settle("Child report.");
+          yield* waitForCompleted(service, child.id);
+          yield* TestClock.adjust("100 millis");
+          yield* yieldUntil(() => fake.controls[0]?.sentIpc("proxy_notification") === true);
+          if (order === "refusal") {
+            yield* Deferred.succeed(gate, undefined);
+            yield* yieldTurns;
+          }
+          fake.controls[0]?.settle("Parent report.");
+          yield* yieldTurns;
+          if (order === "settlement") yield* Deferred.succeed(gate, undefined);
+          yield* waitForCompleted(service, parent.id);
+          expect((yield* runView(service, parent.id)).finalText).toBe("Parent report.");
+          yield* TestClock.adjust("100 millis");
+          yield* yieldUntil(() => reportsAtRoot(notifications).length === 2);
+          expect(reportsAtRoot(notifications)).toEqual(
+            expect.arrayContaining(["Child report.", "Parent report."]),
+          );
+        });
+      },
+    );
+
+  it.effect(
+    "sends a report to the root when the settled parent runs another extension's turn",
+    () => {
+      const { fake, notifications, layer } = localServiceFixture({
+        notify: acknowledgeCompletions,
+      });
+      return withService(layer, function* (service) {
+        const parent = yield* service.start(request({ name: "parent" }));
+        const child = yield* service.startSessionOwnedFrom(parent.id, request({ name: "child" }));
+        const gate = yield* Deferred.make<void>();
+        fake.controls[0]?.gateNextIpcType("proxy_notification", gate);
+        fake.controls[0]?.refuseNextNotification();
+        fake.controls[1]?.settle("Child report.");
+        yield* waitForCompleted(service, child.id);
+        yield* TestClock.adjust("100 millis");
+        yield* yieldUntil(() => fake.controls[0]?.sentIpc("proxy_notification") === true);
+        // Pi runs a turn another extension deferred while the parent's run settled.
+        fake.controls[0]?.settle("Parent report.");
+        fake.controls[0]?.offer({ type: "agent_start" });
+        fake.controls[0]?.settle("Parent reacted to a task exit.");
+        yield* Deferred.succeed(gate, undefined);
+        yield* waitForCompleted(service, parent.id);
+        yield* TestClock.adjust("100 millis");
+        yield* yieldUntil(() => reportsAtRoot(notifications).includes("Child report."));
+        expect(reportsAtRoot(notifications)).toHaveLength(2);
+      });
+    },
+  );
 
   it.effect("finishes the complete leaf-first stop after its waiter is cancelled", () => {
     const releaseOrder: number[] = [];

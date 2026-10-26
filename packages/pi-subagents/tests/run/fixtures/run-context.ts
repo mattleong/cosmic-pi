@@ -60,6 +60,7 @@ const inertDelivery: RunNotificationDelivery = {
   insertCompletionLocked: unexpectedDelivery,
   wakeCompletionLocked: unexpectedDelivery,
   discardQuestionLocked: unexpectedDelivery,
+  requeueQuestionsTakenByLocked: unexpectedDelivery,
   outboxChangedLocked: unexpectedDelivery,
   signalOutboxChangedLocked: unexpectedDelivery,
 };

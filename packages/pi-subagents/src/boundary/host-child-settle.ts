@@ -33,22 +33,41 @@ const endsWithEmptyReport = (context: BoundaryContextPreview): boolean => {
 };
 
 /**
- * Owns how a nested Pi child takes descendant notices and finishes its turn. A notice starts a turn
- * only while the child is idle; while it works, Pi appends the notice at turn end, outside the
- * steering queue an interrupt clears, and the settling run continues so the child reacts. A final
- * message without text gets one reminder per prompt before the parent records the run as failed.
+ * Owns how a nested Pi child takes descendant notices and finishes its turn. A notice is taken only
+ * while the run the parent opened is working and hasn't reached this extension's settle check: Pi
+ * appends it at turn end, outside the steering queue an interrupt clears, and the settling run
+ * continues so the child reacts. Any other time the child refuses it, so it goes to the next
+ * ancestor or the root instead of arriving after the parent took this run's report. A final message
+ * without text gets one reminder per prompt before the parent records the run as failed.
  */
 export function registerChildSettle(
   pi: ExtensionAPI,
   isIdle: () => boolean,
 ): (message: string) => boolean {
   let reminded = false;
+  // The parent opens a run with its prompt, the child's only user input, and the run's settled
+  // event closes it. A continuation after the settle check starts a turn and reopens it.
+  let open = false;
+  let settling = false;
 
   pi.on("before_agent_start", (event) => {
-    if (event.messageType === "user") reminded = false;
+    if (event.messageType !== "user") return;
+    reminded = false;
+    open = true;
+    settling = false;
+  });
+
+  pi.on("turn_start", () => {
+    if (open) settling = false;
+  });
+
+  pi.on("agent_settled", () => {
+    open = false;
   });
 
   pi.on("agent_before_settle", (event): AgentBeforeSettleEventResult | undefined => {
+    // Pending notices are in this context, so any taken from here on would get no reaction.
+    settling = true;
     if (event.outcome !== "completed") return undefined;
     const landed = hasUnansweredNotice(event.context, PROXY_NOTICE_TYPES);
     const remind = !reminded && endsWithEmptyReport(event.context);
@@ -61,10 +80,13 @@ export function registerChildSettle(
   });
 
   return (message) =>
+    open &&
+    !settling &&
+    !invokeHostCallback(isIdle, true) &&
     invokeHostCallback(() => {
       pi.sendMessage(
         { customType: PROXY_NOTIFICATION_MESSAGE_TYPE, content: message, display: true },
-        { deliverAs: "steer", triggerTurn: invokeHostCallback(isIdle, false) },
+        { triggerTurn: false },
       );
       return true;
     }, false);

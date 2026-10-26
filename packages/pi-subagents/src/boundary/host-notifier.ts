@@ -63,6 +63,8 @@ export type SubagentNotification =
 export interface SubagentNotificationDelivery {
   readonly deliveredCompletionKeys?: ReadonlyArray<string> | undefined;
   readonly actionAccepted?: boolean | undefined;
+  /** The ancestor run that took a question notice; absent when the root session took it. */
+  readonly recipientRunId?: string | undefined;
 }
 
 export type SubagentNotifier = (
