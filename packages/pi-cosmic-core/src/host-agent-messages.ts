@@ -56,24 +56,30 @@ export const deliverAgentMessage = <Details>(
 
 /**
  * The recipient's state when a message reached it: an idle session started a turn, a busy one
- * reads it before its turn ends, and a held one waits for its user, behind an open dialog or after
- * an interrupt.
+ * reads it when its turn ends, or on its user's next prompt if they interrupted that turn, and a
+ * held one waits for its user, behind an open dialog or after an interrupt. A closing session isn't
+ * a recipient: its senders refuse the message before it is sent.
  */
 export type AgentMessageRecipientState = "idle" | "busy" | "held";
+
+/** A delivery that reached a recipient that will read it. */
+type AgentMessageDelivered = Exclude<SessionWakeDelivery, "refused" | "closing">;
 
 const RECIPIENT_STATES = {
   woken: "idle",
   queued: "busy",
   held: "held",
-} as const satisfies Record<Exclude<SessionWakeDelivery, "refused">, AgentMessageRecipientState>;
+} as const satisfies Record<AgentMessageDelivered, AgentMessageRecipientState>;
 
 export const agentMessageRecipientState = (
-  delivery: Exclude<SessionWakeDelivery, "refused">,
+  delivery: AgentMessageDelivered,
 ): AgentMessageRecipientState => RECIPIENT_STATES[delivery];
 
+// Pi reveals an interrupt only once the run has settled, so a busy recipient may already be held.
 const DELIVERY_TEXT: Record<AgentMessageRecipientState, (recipient: string) => string> = {
   idle: (recipient) => `${recipient} was idle; your message started its turn.`,
-  busy: (recipient) => `${recipient} is busy; it sees your message before its current turn ends.`,
+  busy: (recipient) =>
+    `${recipient} is busy; it sees your message when its current turn ends, or after its user's next prompt if they interrupted that turn.`,
   held: (recipient) =>
     `${recipient} is waiting on its user, behind an open dialog or after an interrupt; your message waits in its conversation and wakes it when the dialog closes or on the user's next prompt.`,
 };

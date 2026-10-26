@@ -116,10 +116,18 @@ of starting another, both at their own settle and for notices delivered before i
 polls for idleness: a turn that fails before it begins emits neither `agent_start` nor
 `agent_settled`, so an idle session means it never started.
 
+`deliver` reports `woken`, `queued` for a busy session, `held` after an interrupt or behind a
+dialog, `closing` while the session is being replaced or shut down, or `refused`. Pi reveals an
+interrupt to an owner only in its own `agent_settled` handler: `ctx.signal` is gone once the agent
+loop ends, and an abort during a settle boundary, compaction, or tool call leaves no aborted
+assistant message. A notice in that window is therefore reported `queued` although it then waits for
+the user's next prompt, so the shared busy wording says both.
+
 Wakes are held, and `closing` reports true, from `session_before_switch`, `session_before_fork`, or
 `session_shutdown` (and from `hold`), because Pi aborts the run and then emits `session_shutdown` in
 load order: an earlier extension's slow handler would otherwise leave an idle session that a notice
-could wake. Pi reports no cancelled or failed switch or fork, such as `/fork` of an unsaved session,
+could wake. A notice delivered then is appended without a turn and reported `closing`; agent-message
+senders check `closing` first and refuse instead, since the session may never read it. Pi reports no cancelled or failed switch or fork, such as `/fork` of an unsaved session,
 so the hold then lasts until the user's next non-extension input or a new session. `/reload` and quit emit only `session_shutdown`, so until an owner's own
 handler runs, a notice can still start a turn the session's disposal then aborts.
 

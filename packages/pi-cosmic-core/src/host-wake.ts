@@ -84,11 +84,12 @@ export interface SessionWakeOptions {
 
 /**
  * How a delivered notice reached the session: `woken` started a turn; `queued` was appended to a
- * busy session, whose settling run continues; `held` was appended without a turn while wakes are
- * held after an interrupt, during a dialog, or while the session closes; `refused` was not accepted
- * by Pi.
+ * busy session, whose settling run continues unless the user interrupts it first, which Pi reveals
+ * only at `agent_settled`; `held` was appended without a turn while wakes are held after an
+ * interrupt or during a dialog; `closing` was appended without a turn while the session is being
+ * replaced or shut down; `refused` was not accepted by Pi.
  */
-export type SessionWakeDelivery = "woken" | "queued" | "held" | "refused";
+export type SessionWakeDelivery = "woken" | "queued" | "held" | "closing" | "refused";
 
 export interface SessionWake {
   /**
@@ -262,10 +263,11 @@ export function registerSessionWake(pi: ExtensionAPI, options: SessionWakeOption
 
   return {
     deliver: (send) => {
+      if (closing) return send(false) ? "closing" : "refused";
       if (blocked()) {
         if (!send(false)) return "refused";
         // A dialog defers the turn until it closes; a hold leaves the notice for the next prompt.
-        if (!holding()) owed = true;
+        if (!held) owed = true;
         return "held";
       }
       // Another owner's turn, still deferred while Pi emits agent_settled, will show this notice.

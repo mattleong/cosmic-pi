@@ -395,7 +395,7 @@ describe("session wake", () => {
         expect(test.wake.closing()).toBe(true);
         yield* Effect.promise(() => test.emit("agent_settled", test.ctx));
         test.setIdle(true);
-        expect(test.deliver()).toBe("held");
+        expect(test.deliver()).toBe("closing");
         yield* Effect.promise(() => test.emit("agent_settled", test.ctx));
         expect(test.wakes()).toHaveLength(0);
 

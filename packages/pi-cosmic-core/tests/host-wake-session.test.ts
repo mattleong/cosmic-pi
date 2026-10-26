@@ -321,7 +321,7 @@ describe("session wake while Pi replaces the session", () => {
       yield* step(() => runtime.newSession());
       yield* settleTurns;
 
-      expect(dispositions).toEqual(["held"]);
+      expect(dispositions).toEqual(["closing"]);
       expect(fake.getPendingResponseCount()).toBe(1);
     }),
   );
