@@ -27,6 +27,8 @@ import {
 
 /** Requests one session runtime handles at once, across all connected peers. */
 const MAX_ACTIVE_REQUESTS = 64;
+/** How long disposal waits for requests in flight to answer and their answers to be written. */
+const SHUTDOWN_DRAIN = "250 millis";
 
 export interface IntercomInboundContract {
   readonly describe: Effect.Effect<Description, IntercomRefused>;
@@ -55,8 +57,10 @@ export interface IntercomServerOptions {
 /**
  * Listens on the runtime's Unix socket for the scope's lifetime and serves the intercom RPCs to
  * callers that complete the handshake for the record's token. The socket is restricted to this
- * user as soon as it is bound. The scope closes the listener, then removes the socket file it
- * bound; a path that is already bound fails the listen and is left untouched.
+ * user as soon as it is bound. Closing the scope first stops admitting connections and gives
+ * requests in flight a short time to answer and their answers to reach the peer, then stops the
+ * server, closes the listener, and removes the socket file it bound; a path that is already bound
+ * fails the listen and is left untouched.
  */
 export const serveIntercom = Effect.fn("IntercomServer.serve")(function* (
   options: IntercomServerOptions,
@@ -84,7 +88,7 @@ export const serveIntercom = Effect.fn("IntercomServer.serve")(function* (
     Effect.mapError(() => IntercomServerError.make({ operation: "listen" })),
   );
 
-  const { protocol, connection } = yield* guardedRpcProtocol(
+  const { protocol, connection, drain } = yield* guardedRpcProtocol(
     server,
     options.limits ?? DEFAULT_CONNECTION_LIMITS,
   ).pipe(
@@ -149,5 +153,10 @@ export const serveIntercom = Effect.fn("IntercomServer.serve")(function* (
     Effect.provide(handlers),
     Effect.provideService(RpcServer.Protocol, protocol),
     Effect.forkScoped,
+  );
+  // Added last, so disposal drains before the server is interrupted: a refusal already decided
+  // still reaches its caller, who would otherwise see only the connection end.
+  yield* Effect.addFinalizer(() =>
+    drain.pipe(Effect.timeoutOrElse({ duration: SHUTDOWN_DRAIN, orElse: () => Effect.void })),
   );
 });

@@ -1,7 +1,11 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { expect, layer } from "@effect/vitest";
 import * as Arr from "effect/Array";
+import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import type * as Layer from "effect/Layer";
 import * as Fn from "effect/Function";
@@ -9,6 +13,7 @@ import * as Option from "effect/Option";
 import * as Order from "effect/Order";
 import * as Path from "effect/Path";
 import * as Result from "effect/Result";
+import * as Scope from "effect/Scope";
 import * as Str from "effect/String";
 import * as TestClock from "effect/testing/TestClock";
 import { issueMessageStyleProblems } from "pi-code-previews/testing";
@@ -30,6 +35,7 @@ import { IntercomInbound, serveIntercom } from "../src/transport/server.ts";
 import {
   listSessions,
   readSession,
+  RELOAD_RETRY_DELAY,
   sendToSession,
   SessionToolRefusal,
 } from "../src/tools/sessions.ts";
@@ -92,6 +98,27 @@ const droppingRelay = (socket: string, target: string) =>
   );
 
 const unnamedSession = (sessionId: string) => ({ sessionId, name: undefined, cwd: "/project" });
+
+/**
+ * A clock whose retry wait reports that it began and lasts until `release` is done; every other
+ * sleep, such as a call's deadline, passes through to `base`.
+ */
+const heldRetryClock = (
+  base: Clock.Clock,
+  waiting: Deferred.Deferred<void>,
+  release: Deferred.Deferred<void>,
+): Clock.Clock => ({
+  currentTimeMillisUnsafe: () => base.currentTimeMillisUnsafe(),
+  currentTimeMillis: base.currentTimeMillis,
+  currentTimeNanosUnsafe: () => base.currentTimeNanosUnsafe(),
+  currentTimeNanos: base.currentTimeNanos,
+  monotonicTimeNanosUnsafe: () => base.monotonicTimeNanosUnsafe(),
+  monotonicTimeNanos: base.monotonicTimeNanos,
+  sleep: (duration) =>
+    Duration.equals(duration, Duration.fromInputUnsafe(RELOAD_RETRY_DELAY))
+      ? Effect.andThen(Deferred.succeed(waiting, undefined), Deferred.await(release))
+      : base.sleep(duration),
+});
 
 layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
   it.effect("lists other live sessions, marking silent ones and duplicate ids", () =>
@@ -250,10 +277,86 @@ layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
       expect(yield* fromA(readSession("session-b"))).toMatchObject({ text: "From b." });
       expect(asked).toEqual([]);
 
-      const refusal = yield* Effect.flip(fromA(sendToSession("dead", "Hello.")));
+      // A session that seems gone is tried once more after a short wait on the live clock.
+      const refusal = yield* fromA(sendToSession("dead", "Hello.")).pipe(
+        TestClock.withLive,
+        Effect.flip,
+      );
       expect(refusal).toBeInstanceOf(SessionToolRefusal);
       expect(refusal).toMatchObject({ code: "session_not_found" });
-      expect(asked).toEqual([deadPid]);
+      expect(Arr.dedupe(asked)).toEqual([deadPid]);
+    }),
+  );
+
+  it.effect("delivers to and reads from a session that reloads under its id meanwhile", () =>
+    Effect.gen(function* () {
+      const paths = yield* Path.Path;
+      const shared = yield* sharedAgentDirectory();
+      yield* Effect.sync(() => vi.stubEnv("PI_CODING_AGENT_DIR", shared.agentDirectory));
+      const a = yield* sessionRuntime(unnamedSession("session-a"), "From a.", shared.fallbackRoot);
+      const start = (sessionId: string, replyText: string) =>
+        sessionRuntime(unnamedSession(sessionId), replyText, shared.fallbackRoot);
+
+      /**
+       * Runs `operation` from `a` while its target reloads: nothing answers for the target until
+       * the first attempt has been refused, and `reload` then brings the replacement up.
+       */
+      const duringReload = <X, E, Y, F>(
+        operation: Effect.Effect<X, E, Layer.Success<ReturnType<typeof intercomLayer>>>,
+        reload: Effect.Effect<Y, F, Scope.Scope>,
+      ) =>
+        Effect.gen(function* () {
+          const waiting = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          const clock = heldRetryClock(yield* Clock.Clock, waiting, release);
+          const fiber = yield* operation.pipe(
+            Effect.provideService(OwnerLiveness, () => Effect.succeed("alive")),
+            Effect.provide(a.context),
+            Effect.provideService(Clock.Clock, clock),
+            Effect.result,
+            Effect.forkChild,
+          );
+          // An operation that never waits to retry ends with its first attempt's refusal.
+          yield* Effect.raceFirst(Deferred.await(waiting), Fiber.await(fiber));
+          const replacement = yield* reload;
+          yield* Deferred.succeed(release, undefined);
+          return { result: Result.getOrThrow(yield* Fiber.join(fiber)), replacement };
+        });
+
+      // The old runtime has removed its record and its replacement hasn't written one yet.
+      const replaced = yield* Scope.make();
+      const old = yield* start("session-b", "From the old b.").pipe(Scope.provide(replaced));
+      yield* Scope.close(replaced, Exit.void);
+      const sent = yield* duringReload(
+        sendToSession("session-b", "Hello."),
+        start("session-b", "From the new b."),
+      );
+      expect(sent.result).toMatchObject({ outcome: "delivered" });
+      expect(old.sendMessage).not.toHaveBeenCalled();
+      expect(sent.replacement.sendMessage).toHaveBeenCalledOnce();
+
+      // A record whose listener has already closed, as the old one is during a reload.
+      yield* writeForeignRecord(
+        { base: shared.base, sessions: paths.join(shared.agentDirectory, "intercom", "sessions") },
+        "session-c",
+      );
+      const read = yield* duringReload(
+        readSession("session-c"),
+        start("session-c", "From the new c."),
+      );
+      expect(read.result).toMatchObject({ text: "From the new c." });
+
+      // The old runtime is still listening but closing, so it refuses before it is replaced.
+      const closing = yield* Scope.make();
+      const leaving = yield* start("session-d", "From the old d.").pipe(Scope.provide(closing));
+      yield* leaving.close;
+      const resent = yield* duringReload(
+        sendToSession("session-d", "Hello again."),
+        Scope.close(closing, Exit.void).pipe(Effect.andThen(start("session-d", "From the new d."))),
+      );
+      expect(resent.result).toMatchObject({ outcome: "delivered" });
+      expect(leaving.sendMessage).not.toHaveBeenCalled();
+      expect(resent.replacement.sendMessage).toHaveBeenCalledOnce();
     }),
   );
 
@@ -339,9 +442,14 @@ layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
       const socket = paths.join(a.shared.base, "reloading.sock");
       const token = synchronousRandomHex(32);
       const unavailable = Effect.fail(IntercomRefused.make({ code: "session_unavailable" }));
+      // Among records sharing an id, each attempt first describes every one of them.
+      let described = 0;
       yield* serveIntercom({ socket, token }).pipe(
         Effect.provideService(IntercomInbound, {
-          describe: unavailable,
+          describe: Effect.andThen(
+            Effect.sync(() => (described += 1)),
+            unavailable,
+          ),
           deliver: () => unavailable,
           readLast: unavailable,
         }),
@@ -352,6 +460,7 @@ layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
       for (let index = 0; index < 3; index += 1) yield* writeForeignRecord(a, "reloading");
 
       const listed = detailsOf(yield* a.callTool(SESSION_TOOL.list, {}));
+      const listedDescribes = described;
       const sent = detailsOf(
         yield* a.callTool(SESSION_TOOL.send, { to: "reloading", message: "Hi." }),
       );
@@ -367,8 +476,10 @@ layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
           Order.String,
         ),
       ).toEqual(["unavailable", ...Array.from({ length: 6 }, () => "unreachable")]);
+      // A session that keeps refusing is tried once more, then reported.
       expect(sent).toMatchObject({ outcome: "refused", code: "session_unavailable" });
       expect(read).toMatchObject({ outcome: "refused", code: "session_unavailable" });
+      expect(described - listedDescribes).toBe(4);
     }),
   );
 

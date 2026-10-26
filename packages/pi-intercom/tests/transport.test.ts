@@ -528,6 +528,42 @@ layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom transport"
     }),
   );
 
+  it.effect("answers a request in flight with its refusal while the scope closes", () =>
+    Effect.gen(function* () {
+      const socket = yield* socketPath;
+      const started = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const scope = yield* startServer(
+        socket,
+        fakeInbound({
+          // A runtime retired as disposal begins refuses what it no longer delivers.
+          deliver: () =>
+            Deferred.succeed(started, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.andThen(Effect.fail(IntercomRefused.make({ code: "session_unavailable" }))),
+            ),
+        }),
+      );
+      const pending = yield* Effect.forkChild(deliverMessage({ socket, token: TOKEN }, message));
+      yield* Deferred.await(started);
+
+      const closing = yield* Effect.forkChild(Scope.close(scope, Exit.void));
+      yield* Effect.sleep("50 millis");
+      // A connection arriving meanwhile is turned away before it can send anything.
+      expect(yield* failureOf(describeSession({ socket, token: TOKEN }))).toMatchObject({
+        reason: "unreachable",
+      });
+      yield* Deferred.succeed(release, undefined);
+
+      const refusal = yield* failureOf(Fiber.join(pending));
+      expect(refusal).toBeInstanceOf(IntercomRefused);
+      expect(refusal).toMatchObject({ code: "session_unavailable" });
+      yield* Fiber.join(closing).pipe(
+        Effect.timeoutOrElse({ duration: "5 seconds", orElse: () => Effect.die("close hung") }),
+      );
+    }),
+  );
+
   it.effect("bounds each call by its deadline", () =>
     Effect.gen(function* () {
       const socket = yield* socketPath;

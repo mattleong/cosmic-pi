@@ -3,6 +3,7 @@ import type * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
@@ -16,6 +17,7 @@ import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as RpcServer from "effect/rpc/RpcServer";
 import type * as Socket from "effect/socket/Socket";
 import type * as SocketServer from "effect/socket/SocketServer";
+import type { Socket as NetSocket } from "node:net";
 import { HANDSHAKE_REQUESTS } from "./protocol.ts";
 
 /** Requests one connection may have in flight; a client makes one at a time. */
@@ -65,6 +67,10 @@ interface ConnectionTransport {
   readonly output: Queue.Queue<Uint8Array | string, Cause.Done>;
   readonly encode: (response: RpcMessage.FromServerEncoded) => Uint8Array | string | undefined;
   lastActivity: number;
+  /** Ends the output once every answer queued so far has reached the peer's socket. */
+  flush: Effect.Effect<void>;
+  /** Called, while draining, once nothing is in flight or the connection closed. */
+  settled: (() => void) | undefined;
 }
 
 const RequestIdEncoded = Schema.Union([Schema.String, Schema.Finite]);
@@ -140,13 +146,55 @@ const queueResponse = (
   if (RpcMessage.isTerminalResponse(response)) {
     const requestId = responseRequestId(response);
     if (requestId !== undefined) transport.activeRequests.delete(requestId);
+    if (transport.activeRequests.size === 0) transport.settled?.();
   }
 };
+
+/** Half-closes `socket` and waits until everything written to it has been handed to the OS. */
+const endSocket = (socket: NetSocket): Effect.Effect<void> =>
+  Effect.callback<void>((resume) => {
+    if (socket.destroyed || socket.writableFinished) return resume(Effect.void);
+    const detach = () => {
+      socket.off("finish", done);
+      socket.off("close", done);
+    };
+    function done() {
+      detach();
+      resume(Effect.void);
+    }
+    socket.on("finish", done);
+    socket.on("close", done);
+    socket.end();
+    return Effect.sync(detach);
+  });
+
+/** Waits until nothing is in flight on the connection, or it closed, then flushes its answers. */
+const drainConnection = (transport: ConnectionTransport): Effect.Effect<void> =>
+  Effect.suspend(() => {
+    const answered =
+      transport.activeRequests.size === 0
+        ? Effect.void
+        : Effect.callback<void>((resume) => {
+            transport.settled = () => resume(Effect.void);
+            return Effect.sync(() => {
+              transport.settled = undefined;
+            });
+          });
+    return Effect.andThen(
+      answered,
+      Effect.suspend(() => transport.flush),
+    );
+  });
 
 export interface GuardedProtocol {
   readonly protocol: RpcServer.Protocol["Service"];
   /** The connection a request arrived on, while it is open. */
   readonly connection: (clientId: number) => IntercomConnection | undefined;
+  /**
+   * Closes connections as they arrive from now on, then waits until each open one has nothing in
+   * flight and its answers have reached the peer. The caller bounds the wait.
+   */
+  readonly drain: Effect.Effect<void>;
 }
 
 /**
@@ -162,6 +210,7 @@ export const guardedRpcProtocol = Effect.fn("IntercomConnections.guardedRpcProto
   const serialization = yield* RpcSerialization.RpcSerialization;
   const disconnects = yield* Queue.unbounded<number>();
   const transports = new Map<number, ConnectionTransport>();
+  let draining = false;
   const idleMillis = Duration.toMillis(Duration.fromInputUnsafe(limits.idleDeadline));
   let nextClientId = 0;
   let writeRequest: (
@@ -203,7 +252,7 @@ export const guardedRpcProtocol = Effect.fn("IntercomConnections.guardedRpcProto
         const arrived = yield* Clock.currentTimeMillis;
         // From the bound check to taking the slot nothing yields, so concurrent connections can't
         // both take the last one.
-        if (transports.size >= limits.maxConnections) {
+        if (draining || transports.size >= limits.maxConnections) {
           netSocket.value.destroy();
           return;
         }
@@ -233,6 +282,8 @@ export const guardedRpcProtocol = Effect.fn("IntercomConnections.guardedRpcProto
           output,
           encode: (response) => parser.encode(response),
           lastActivity: arrived,
+          flush: Effect.sync(() => void Queue.endUnsafe(output)),
+          settled: undefined,
         };
         transports.set(clientId, transport);
         yield* Effect.addFinalizer(() =>
@@ -241,14 +292,19 @@ export const guardedRpcProtocol = Effect.fn("IntercomConnections.guardedRpcProto
             transports.delete(clientId);
             Queue.endUnsafe(output);
             Queue.offerUnsafe(disconnects, clientId);
+            transport.settled?.();
           }),
         );
 
         const writer = yield* socket.writer;
-        yield* Stream.fromQueue(output).pipe(
+        const writing = yield* Stream.fromQueue(output).pipe(
           Stream.runForEach(writer.write),
           Effect.catchCause(() => Effect.sync(connection.close)),
           Effect.forkScoped,
+        );
+        transport.flush = Effect.sync(() => void Queue.endUnsafe(output)).pipe(
+          Effect.andThen(Fiber.await(writing)),
+          Effect.andThen(endSocket(netSocket.value)),
         );
         yield* Effect.sleep(limits.authenticationDeadline).pipe(
           Effect.andThen(
@@ -311,5 +367,12 @@ export const guardedRpcProtocol = Effect.fn("IntercomConnections.guardedRpcProto
   return {
     protocol,
     connection: (clientId: number) => transports.get(clientId)?.connection,
+    drain: Effect.suspend(() => {
+      draining = true;
+      return Effect.forEach([...transports.values()], drainConnection, {
+        concurrency: "unbounded",
+        discard: true,
+      });
+    }),
   } satisfies GuardedProtocol;
 });

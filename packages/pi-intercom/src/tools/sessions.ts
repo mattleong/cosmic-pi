@@ -22,6 +22,7 @@ import {
   MAX_IDENTITY_CHARS,
   MAX_MESSAGE_CHARS,
   type Description,
+  type InboundMessage,
   type IntercomRefused,
 } from "../transport/protocol.ts";
 import {
@@ -48,6 +49,8 @@ export class SessionToolRefusal extends Schema.TaggedError<
   code: ToolRefusalCodeSchema,
   session: Schema.optionalKey(SessionViewSchema),
 }) {}
+
+const isRefusal = Schema.is(SessionToolRefusal);
 
 const viewOf = (record: Pick<SessionRecord, "sessionId" | "name" | "cwd">): SessionView => ({
   sessionId: safeTextPrefix(record.sessionId, MAX_IDENTITY_CHARS),
@@ -195,22 +198,36 @@ export const listSessions = Effect.fn("IntercomTools.list")(function* () {
   } satisfies SessionListContract;
 });
 
+/** How long a send or read waits before trying a session that seemed gone once more. */
+export const RELOAD_RETRY_DELAY = "250 millis";
+
 /**
- * Delivers `text` to the session with id `to`. A timeout or a connection lost after the request
- * went out leaves the outcome uncertain: the recipient may have taken it.
+ * A session reloading under its id refuses while it closes, then is briefly unregistered or not yet
+ * listening, which looks like one that exited. Each of these refusals proves nothing was handled,
+ * so the call resolves the id again and retries once; the wait ends with the caller's
+ * interruption. A session that keeps refusing, or is gone for good, is reported after the retry.
  */
-export const sendToSession = Effect.fn("IntercomTools.send")(function* (to: string, text: string) {
-  if (text.length > MAX_MESSAGE_CHARS)
-    return yield* SessionToolRefusal.make({ code: "session_message_too_long" });
+const RETRIED: ReadonlySet<ToolRefusalCode> = new Set([
+  "session_not_found",
+  "session_unreachable",
+  "session_unavailable",
+]);
+
+const retryingWhileReloading = <A, E, R>(attempt: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+  attempt.pipe(
+    Effect.catchIf(
+      (error) => isRefusal(error) && RETRIED.has(error.code),
+      () => Effect.andThen(Effect.sleep(RELOAD_RETRY_DELAY), attempt),
+    ),
+  );
+
+const deliverTo = Effect.fn("IntercomTools.deliverTo")(function* (
+  to: string,
+  message: InboundMessage,
+) {
   const record = yield* resolvePeer(to);
-  const self = yield* IntercomSession.use((session) => session.record);
   const session = viewOf(record);
-  const messageId = yield* Effect.sync(() => synchronousRandomHex(MESSAGE_ID_BYTES));
-  const delivered = yield* deliverMessage(record, {
-    from: viewOf(self),
-    messageId,
-    text,
-  }).pipe(Effect.result);
+  const delivered = yield* deliverMessage(record, message).pipe(Effect.result);
   if (Result.isSuccess(delivered))
     return {
       ...contractEnvelope,
@@ -237,8 +254,20 @@ export const sendToSession = Effect.fn("IntercomTools.send")(function* (to: stri
   return yield* unanswered(record, failure);
 });
 
-/** The latest assistant text of the session with id `to`; reading never changes the session. */
-export const readSession = Effect.fn("IntercomTools.read")(function* (to: string) {
+/**
+ * Delivers `text` to the session with id `to`, trying once more when it seemed gone. A timeout or a
+ * connection lost after the request went out leaves the outcome uncertain: the recipient may have
+ * taken it, so it is never retried.
+ */
+export const sendToSession = Effect.fn("IntercomTools.send")(function* (to: string, text: string) {
+  if (text.length > MAX_MESSAGE_CHARS)
+    return yield* SessionToolRefusal.make({ code: "session_message_too_long" });
+  const self = yield* IntercomSession.use((session) => session.record);
+  const messageId = yield* Effect.sync(() => synchronousRandomHex(MESSAGE_ID_BYTES));
+  return yield* retryingWhileReloading(deliverTo(to, { from: viewOf(self), messageId, text }));
+});
+
+const readFrom = Effect.fn("IntercomTools.readFrom")(function* (to: string) {
   const record = yield* resolvePeer(to);
   const last = yield* readLastMessage(record).pipe(
     Effect.catch((error) => unanswered(record, error)),
@@ -249,4 +278,9 @@ export const readSession = Effect.fn("IntercomTools.read")(function* (to: string
     session: viewOf(record),
     ...last,
   } satisfies SessionReadContract;
+});
+
+/** The latest assistant text of the session with id `to`; reading never changes the session. */
+export const readSession = Effect.fn("IntercomTools.read")(function* (to: string) {
+  return yield* retryingWhileReloading(readFrom(to));
 });

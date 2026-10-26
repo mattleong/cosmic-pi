@@ -295,7 +295,9 @@ export const startSessionRuntime = (
       ),
     );
     const { record, swept } = yield* Effect.provide(Effect.service(IntercomSession), context);
-    return { context, delivery, sendMessage, record: yield* record, swept };
+    /** Starts closing the session, as Pi's shutdown of a replaced session does. */
+    const close = Effect.promise(() => host.emit("session_shutdown", ctx));
+    return { context, delivery, sendMessage, record: yield* record, swept, close };
   });
 
 /**

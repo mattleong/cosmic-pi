@@ -126,7 +126,12 @@ identity means.
 The server bounds what peers can hold: at most 32 connections, a 2-second deadline to
 authenticate, a 10-second idle deadline, four requests in flight per connection, and a bounded
 write backlog; it handles at most 64 requests at once across all peers. A request out of
-handshake order, over a bound, or malformed closes its connection.
+handshake order, over a bound, or malformed closes its connection. Disposal first turns away
+connections as they arrive, then waits at most 250 ms in all for requests in flight to answer and
+each connection's answers to reach its peer, and only then stops the server and the connections.
+A refusal already decided, such as a retired runtime's `session_unavailable`, therefore reaches
+its caller instead of a `disconnected` that would leave the outcome uncertain; a request still
+unanswered at the bound is cut off as before.
 
 A listen never takes over a bound path. Each client call opens its own connection under a
 deadline and fails with a typed reason: unreachable (no listener, or the connection failed before
@@ -151,7 +156,9 @@ sent as a displayed `pi-intercom-message` custom message whose details name the 
 id, with the slot rechecked beside `sendMessage`. Core's `registerSessionWake` decides the
 disposition: an idle session is `woken`, a busy one `queued` and continued at settle, and a session
 with a dialog open or interrupted by its user `held`, appended without a turn until the dialog
-closes or the user prompts again. Nothing limits how many messages arrive or how many turns they
+closes or the user prompts again. Pi reveals an interrupt only once the run has settled, so a
+message reaching a run the user just interrupted is reported `queued` and then waits for the next
+prompt; the sender's text names both outcomes. Nothing limits how many messages arrive or how many turns they
 start, as with Claude Code's cross-session messages; a loop between sessions runs until the user
 interrupts it or turns receiving off. Receiving resets to on with each session start; nothing is
 persisted.
@@ -179,7 +186,12 @@ silence, is reported regardless of listing order. Listing describes every record
 past the deadline unresponsive, and one nothing answered for unreachable, and counts duplicates
 only among answering sessions. Owner liveness can spawn `ps`, so it is checked only for a record that
 didn't answer, at most eight at once, and a silent record whose owner is dead is skipped. A send that times out or loses its connection reports an uncertain
-outcome and tells the model not to resend. `session_send` is model-only; list and read return
+outcome and tells the model not to resend. A session reloading under its id refuses as
+`session_unavailable` while it closes, then is briefly unregistered or not yet listening, which
+looks like `session_not_found` or `session_unreachable`; each proves nothing was handled, so a send
+or read resolves the id again and retries once after 250 ms, a wait the caller's abort ends, before
+reporting it. A session that keeps refusing, or whose replacement took another id, is reported
+after that one retry. Nothing else is retried. `session_send` is model-only; list and read return
 `pi-intercom/session` structured results to codemode scripts. Arguments go through core's
 `toolArgumentPreparer`; the message length cap is stated in the tool description rather than the
 schema, so an overlong message reaches the tool and is refused as `session_message_too_long`,
@@ -193,11 +205,13 @@ compact issue; the agent's procedure stays in the expanded detail. Replay is anc
 [Registry tests](tests/registry.test.ts) cover private atomic writes, refused links and unsafe
 records, listing diagnostics, the evidence-based sweep, and socket path reservation.
 [Transport tests](tests/transport.test.ts) cover the handshake against rogue listeners, connection
-bounds, stale sockets, oversized frames, deadlines, shutdown, and telemetry over real sockets. [Application tests](tests/application.test.ts) cover registration modes, the child
+bounds, stale sockets, oversized frames, deadlines, shutdown with answers still owed, and
+telemetry over real sockets. [Application tests](tests/application.test.ts) cover registration modes, the child
 marker, rewrites, replacement, removal, a startup that doesn't wait for its sweep, and peers
 reaching live sessions. [Message tests](tests/message.test.ts) cover the collapsed inbound message.
 [Delivery tests](tests/delivery.test.ts) cover dispositions, holds, retirement, and the
 receive switch. [Tool tests](tests/tools.test.ts) cover listing, sends
-between two runtimes, reads, refusals, uncertainty, and issue wording;
+between two runtimes, a recipient reloading meanwhile, reads, refusals, uncertainty, and issue
+wording;
 [telemetry tests](tests/telemetry.test.ts) keep content out of logs and spans. User-facing
 behavior is in the [README](README.md).

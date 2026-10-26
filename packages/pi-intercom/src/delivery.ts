@@ -125,7 +125,9 @@ export function registerIntercomDelivery(
         { customType: INTERCOM_MESSAGE_TYPE, content: frameMessage(message), details },
         isCurrent,
       );
-      if (disposition === "refused") return Result.fail("session_unavailable");
+      // Closing was refused above, in the same synchronous callback.
+      if (disposition === "refused" || disposition === "closing")
+        return Result.fail("session_unavailable");
       return Result.succeed(disposition);
     },
     receiving: () => receiving,

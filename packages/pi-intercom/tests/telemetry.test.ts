@@ -6,6 +6,7 @@ import * as Logger from "effect/Logger";
 import * as References from "effect/References";
 import * as Schema from "effect/Schema";
 import * as Tracer from "effect/Tracer";
+import * as TestClock from "effect/testing/TestClock";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { afterEach, vi } from "vitest";
 import type { intercomLayer } from "../src/layer.ts";
@@ -60,7 +61,7 @@ layer(nodeFilePlatformLayer)("intercom telemetry", (it) => {
       yield* fromA(listSessions());
       yield* fromA(sendToSession(b.record.sessionId, secretText));
       yield* fromA(readSession(b.record.sessionId));
-      yield* fromA(sendToSession("secret-missing-id", secretText));
+      yield* TestClock.withLive(fromA(sendToSession("secret-missing-id", secretText)));
       b.delivery.setReceiving(false);
       yield* fromA(sendToSession(b.record.sessionId, secretText));
 
