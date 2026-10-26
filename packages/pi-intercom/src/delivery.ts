@@ -91,8 +91,9 @@ export interface IntercomDelivery {
 /**
  * Owns how messages from other sessions reach this one, on the shared session wake: an idle session
  * starts a turn, a busy one continues at settle, and a held one only appends the message. Wakes are
- * held during dialogs and after an interrupt until the user's next prompt. Nothing limits how many
- * messages arrive; receiving starts on with every session and the user can turn it off.
+ * held during dialogs and after an interrupt until the user's next prompt. A session being replaced
+ * or shut down refuses messages as unavailable. Nothing limits how many messages arrive; receiving
+ * starts on with every session and the user can turn it off.
  */
 export function registerIntercomDelivery(
   pi: ExtensionAPI,
@@ -114,7 +115,8 @@ export function registerIntercomDelivery(
 
   return {
     deliver: (message, isCurrent) => {
-      if (!isCurrent()) return Result.fail("session_unavailable");
+      // A session being replaced or shut down never reads it, so the sender must not be told it did.
+      if (!isCurrent() || wake.closing()) return Result.fail("session_unavailable");
       if (!receiving) return Result.fail("session_receive_disabled");
       const details: IntercomMessageDetails = { from: message.from, messageId: message.messageId };
       const disposition = deliverAgentMessage(

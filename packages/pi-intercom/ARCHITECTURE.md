@@ -141,7 +141,12 @@ tracing is off on both ends, and delivery logs carry only the disposition or ref
 ## Delivery
 
 An inbound message passes, in one synchronous host callback: the runtime still holds the session
-slot (else `session_unavailable`) and receiving is on (`session_receive_disabled`). It is then
+slot and the session is not closing (else `session_unavailable`), and receiving is on
+(`session_receive_disabled`). Closing starts at `session_before_switch`, `session_before_fork`, or
+`session_shutdown`, as core's wake reports, so a session that an earlier extension's slow shutdown
+keeps open never tells a sender it started a turn; Pi reports no cancelled or failed switch or fork,
+so after one the session refuses until the user prompts again. `/reload` and quit emit only `session_shutdown`, so a
+message that arrives before intercom's own handler can still be taken. It is then
 sent as a displayed `pi-intercom-message` custom message whose details name the advisory sender and message
 id, with the slot rechecked beside `sendMessage`. Core's `registerSessionWake` decides the
 disposition: an idle session is `woken`, a busy one `queued` and continued at settle, and a session

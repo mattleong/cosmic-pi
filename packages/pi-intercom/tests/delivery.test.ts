@@ -159,6 +159,26 @@ describe("intercom delivery", () => {
     }),
   );
 
+  for (const event of [
+    { type: "session_before_switch", reason: "new" },
+    { type: "session_before_fork", entryId: "entry", position: "before" },
+    { type: "session_shutdown", reason: "new" },
+  ] as const) {
+    it.effect(`refuses messages from ${event.type} until the user prompts again`, () =>
+      Effect.gen(function* () {
+        const test = harness();
+        yield* Effect.promise(() => test.host.emit(event.type, test.ctx, event));
+
+        expect(disposition(test.deliver())).toBe("refused:session_unavailable");
+        expect(test.delivered()).toHaveLength(0);
+
+        // Pi reports no cancelled or failed switch; a session its user prompts again is open.
+        yield* Effect.promise(() => test.host.emit("input", test.ctx, userInput("interactive")));
+        expect(disposition(test.deliver())).toBe("woken");
+      }),
+    );
+  }
+
   it.effect("delivers every message, however many arrive and from whomever", () =>
     Effect.sync(() => {
       const test = harness();
