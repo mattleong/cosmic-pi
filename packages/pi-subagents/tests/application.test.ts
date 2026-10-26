@@ -260,7 +260,7 @@ describe("subagent Pi registration", () => {
                 SubagentService,
                 subagentServiceDouble({
                   projection: Effect.succeed({ revision: 0, runs: [] }),
-                  deliverPendingCompletions: Effect.sync(() => {
+                  retireDelivery: Effect.sync(() => {
                     order.push("flush");
                     options.notify({
                       type: "completed",
@@ -324,7 +324,7 @@ describe("subagent Pi registration", () => {
                 SubagentService,
                 subagentServiceDouble({
                   projection: Effect.succeed({ revision: 0, runs: [] }),
-                  deliverPendingCompletions: Effect.sync(() => {
+                  retireDelivery: Effect.sync(() => {
                     flushes.push("flush");
                     options.notify({
                       type: "completed",
@@ -914,7 +914,7 @@ describe("orphaned workspace sweep notice", () => {
                 SubagentService,
                 subagentServiceDouble({
                   projection: Effect.succeed({ revision: 0, runs: [] }),
-                  deliverPendingCompletions: Effect.void,
+                  retireDelivery: Effect.void,
                   sweepOrphanedWorkspaces: Effect.sync(() => {
                     sweeps += 1;
                     return swept;
@@ -966,7 +966,7 @@ const withServiceDouble = (service: Parameters<typeof subagentServiceDouble>[0])
             SubagentService,
             subagentServiceDouble({
               projection: Effect.succeed({ revision: 0, runs: [] }),
-              deliverPendingCompletions: Effect.void,
+              retireDelivery: Effect.void,
               ...service,
             }),
           ),

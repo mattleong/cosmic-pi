@@ -16,6 +16,7 @@ import {
 } from "./completion.ts";
 import type { CompletionGenerationRecord, RunContext, RunRecord, WithRunLock } from "./internal.ts";
 import { COMPLETION_RETRY_INITIAL_MILLIS, COMPLETION_RETRY_MAX_MILLIS } from "./limits.ts";
+import type { NotificationHandoff } from "./notification-handoff.ts";
 import { keepsTakingNotifications } from "./notification-routing.ts";
 
 type SubagentQuestionNotification = Extract<SubagentNotification, { readonly type: "question" }>;
@@ -25,6 +26,7 @@ interface RunNotificationDeliveryDependencies extends Pick<
   "ownerScope" | "records" | "withLock"
 > {
   readonly withCompletionGate: WithRunLock;
+  readonly handoff: NotificationHandoff;
   readonly notify: (
     notification: SubagentNotification,
   ) => Effect.Effect<SubagentNotificationDelivery | undefined>;
@@ -42,7 +44,7 @@ const ActionDeliveryState = Data.taggedEnum<ActionDeliveryState>();
 export const notificationDelivery = Effect.fn("RunNotificationDelivery.acquire")(function* (
   dependencies: RunNotificationDeliveryDependencies,
 ) {
-  const { ownerScope, records, withLock, withCompletionGate, notify } = dependencies;
+  const { ownerScope, records, withLock, withCompletionGate, handoff, notify } = dependencies;
   // Each question reaches the model whole only through its notice, even while an await shows
   // its preview, so nothing claims or acknowledges it elsewhere.
   const pendingActionNotifications = new Map<string, SubagentQuestionNotification>();
@@ -108,6 +110,13 @@ export const notificationDelivery = Effect.fn("RunNotificationDelivery.acquire")
   const deliverPendingCompletions: Effect.Effect<void> = deliverCompletionBatch.pipe(
     Effect.flatMap((more) => (more ? deliverPendingCompletions : Effect.void)),
   );
+
+  // Retiring first abandons any ancestor send the worker is waiting on, so the gate frees at once.
+  const retireDelivery: Effect.Effect<void> = withLock(
+    Effect.sync(() => {
+      if (handoff.retireLocked()) Latch.openUnsafe(completionWake);
+    }),
+  ).pipe(Effect.andThen(deliverPendingCompletions));
 
   const completionWorker = Effect.forever(
     Latch.await(completionWake).pipe(Effect.andThen(flushPendingCompletions)),
@@ -250,7 +259,7 @@ export const notificationDelivery = Effect.fn("RunNotificationDelivery.acquire")
       queueActionNotificationLocked(record, notification);
   };
   return {
-    deliverPendingCompletions,
+    retireDelivery,
     queueActionNotificationLocked,
     insertCompletionLocked: (record: RunRecord, completion: CompletionGenerationRecord): void => {
       record.completionGenerations.set(completion.generation, completion);
@@ -262,17 +271,21 @@ export const notificationDelivery = Effect.fn("RunNotificationDelivery.acquire")
     /** Completes once a completion is consumed, acknowledged, or claimed after this call. */
     outboxChangedLocked: (): Deferred.Deferred<void> => outboxChanged,
     signalOutboxChangedLocked,
+    /** Called wherever an await or start result consumes a report. */
+    forgetTakenReportLocked: handoff.forgetReportLocked,
     discardQuestionLocked: (id: string): void => {
       pendingActionNotifications.delete(id);
       takenQuestions.delete(id);
     },
     /**
-     * Hands on the questions `runId` took and hasn't seen answered; called in the same transition
-     * that stops it taking notices.
+     * Ends what `runId` took during its assignment, in the same transition that stops it taking
+     * notices: questions it hasn't seen answered are handed on, and so are the reports it took
+     * unless that assignment completed.
      */
-    requeueQuestionsTakenByLocked: (runId: string): void => {
+    handOnTakenByLocked: (runId: string, completed = false): void => {
       for (const { notification, recipientRunId } of takenQuestions.values())
         if (recipientRunId === runId) requeueTakenQuestionLocked(notification);
+      if (handoff.endAssignmentLocked(runId, completed)) Latch.openUnsafe(completionWake);
     },
   };
 });

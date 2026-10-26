@@ -11,14 +11,20 @@ import {
 } from "../boundary/host-notifier.ts";
 import { indentQuestionLines } from "../tools/format.ts";
 import { formatRunBlock, withInlineReports } from "../tools/run-block.ts";
-import { completionNotificationKey, deliveredCompletionKeys } from "./completion.ts";
+import {
+  ancestorCompletionKey,
+  completionNotificationKey,
+  deliveredCompletionKeys,
+} from "./completion.ts";
 import { isOutcomeUncertain } from "./errors.ts";
 import type { RunContext, RunRecord } from "./internal.ts";
 import { MAX_PARENT_MESSAGE_CHARS } from "./limits.ts";
+import type { NotificationHandoff } from "./notification-handoff.ts";
 import { isActiveRunState, SUBAGENT_ROOT_RUN_ID } from "./model.ts";
 import { sanitizeOutputText } from "./state.ts";
 
 interface RunNotificationRoutingDependencies extends Pick<RunContext, "records" | "withLock"> {
+  readonly handoff: NotificationHandoff;
   readonly admitTurnInput: (record: RunRecord) => void;
   readonly releaseTurnInput: (record: RunRecord) => Effect.Effect<void>;
   readonly notifyHost: (
@@ -80,7 +86,7 @@ export const questionRecipientRunId = (
 ): string | undefined => notifiableAncestors(records, sourceRunId)[0]?.view.id;
 
 export function notificationRouter(dependencies: RunNotificationRoutingDependencies) {
-  const { records, withLock, admitTurnInput, releaseTurnInput, notifyHost } = dependencies;
+  const { records, withLock, handoff, admitTurnInput, releaseTurnInput, notifyHost } = dependencies;
 
   const notifyRoot = (
     notification: SubagentNotification,
@@ -93,17 +99,20 @@ export function notificationRouter(dependencies: RunNotificationRoutingDependenc
     );
     return hasObjectRuntimeType(delivered) && delivered !== null ? delivered : undefined;
   };
-  // The ancestor that took the notice, false when none did, or "uncertain".
+  // The ancestor that took the notice, false when none did, or "uncertain". Once the root retires,
+  // every ancestor is about to stop, so none is tried; a send still waiting for its acknowledgement
+  // is abandoned and, like an uncertain one, falls through to the root.
   const deliverToNearestAncestor = (
     sourceRunId: string,
     message: string,
     key: string,
+    takeLocked?: (recipient: RunRecord) => void,
   ): Effect.Effect<RunRecord | false | "uncertain"> =>
     Effect.suspend(() => {
-      const candidates = notifiableAncestors(records, sourceRunId);
+      const candidates = handoff.isRetiring() ? [] : notifiableAncestors(records, sourceRunId);
       const attempt = (index: number): Effect.Effect<RunRecord | false | "uncertain"> => {
         const candidate = candidates[index];
-        if (!candidate) return Effect.succeed(false);
+        if (!candidate || handoff.isRetiring()) return Effect.succeed(false);
         return Effect.acquireUseRelease(
           withLock(
             Effect.sync(() => {
@@ -117,7 +126,19 @@ export function notificationRouter(dependencies: RunNotificationRoutingDependenc
           ),
           (admission) =>
             admission
-              ? admission.deliverNotification(message, key).pipe(Effect.as(true))
+              ? Effect.raceFirst(
+                  admission.deliverNotification(message, key).pipe(
+                    // Recorded while its turn input is still admitted, so it precedes the
+                    // recipient's settlement.
+                    Effect.tap(() =>
+                      takeLocked
+                        ? withLock(Effect.sync(() => takeLocked(admission.record)))
+                        : Effect.void,
+                    ),
+                    Effect.as(true),
+                  ),
+                  handoff.retired.pipe(Effect.as(false)),
+                )
               : Effect.succeed(false),
           (admission) => (admission ? releaseTurnInput(admission.record) : Effect.void),
         ).pipe(
@@ -125,7 +146,9 @@ export function notificationRouter(dependencies: RunNotificationRoutingDependenc
             delivered ? Effect.succeed(candidate) : attempt(index + 1),
           ),
           Effect.catchTag("SubagentProcessError", (error) =>
-            isOutcomeUncertain(error) ? Effect.succeed("uncertain" as const) : attempt(index + 1),
+            isOutcomeUncertain(error) && !handoff.isRetiring()
+              ? Effect.succeed("uncertain" as const)
+              : attempt(index + 1),
           ),
           // `attempt` cannot fail, so this only sees the remaining delivery errors.
           Effect.catch(() => attempt(index + 1)),
@@ -156,7 +179,11 @@ export function notificationRouter(dependencies: RunNotificationRoutingDependenc
             ? { actionAccepted: false }
             : delivered
               ? { actionAccepted: true, recipientRunId: delivered.view.id }
-              : notifyRoot(notification),
+              : // A retiring root stops the asking run next and names it in the stopped-runs
+                // notice, so asking the root to answer it would be misleading.
+                handoff.isRetiring()
+                ? { actionAccepted: true }
+                : notifyRoot(notification),
         ),
       );
     return Effect.forEach(
@@ -165,7 +192,8 @@ export function notificationRouter(dependencies: RunNotificationRoutingDependenc
         deliverToNearestAncestor(
           run.id,
           ancestorMessage({ type: "completed", runs: [run] }),
-          completionNotificationKey(run.id, run.generation),
+          ancestorCompletionKey(run),
+          (recipient) => handoff.takeReportLocked(recipient, run.id, run.generation),
         ).pipe(
           Effect.map((delivered) => {
             const key = completionNotificationKey(run.id, run.generation);

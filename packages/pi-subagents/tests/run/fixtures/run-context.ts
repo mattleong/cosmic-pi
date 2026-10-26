@@ -55,14 +55,15 @@ const unexpectedDelivery = (): never => {
 };
 
 const inertDelivery: RunNotificationDelivery = {
-  deliverPendingCompletions: Effect.sync(unexpectedDelivery),
+  retireDelivery: Effect.sync(unexpectedDelivery),
   queueActionNotificationLocked: unexpectedDelivery,
   insertCompletionLocked: unexpectedDelivery,
   wakeCompletionLocked: unexpectedDelivery,
   discardQuestionLocked: unexpectedDelivery,
-  requeueQuestionsTakenByLocked: unexpectedDelivery,
+  handOnTakenByLocked: unexpectedDelivery,
   outboxChangedLocked: unexpectedDelivery,
   signalOutboxChangedLocked: unexpectedDelivery,
+  forgetTakenReportLocked: unexpectedDelivery,
 };
 
 export const makeTestSettlement = (overrides: Partial<RunContext> = {}) =>

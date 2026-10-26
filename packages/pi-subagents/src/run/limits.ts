@@ -17,6 +17,8 @@ export const MAX_PARENT_MESSAGE_CHARS = 64 * 1024;
 export const MAX_PROTOCOL_ID_CHARS = 1_024;
 export const MAX_UNRESOLVED_REPORT_GENERATIONS = 64;
 export const MAX_COMPLETION_DELIVERY_BATCH = 12;
+/** Reports one ancestor run may take and still hand on if its assignment fails or stops. */
+export const MAX_TAKEN_REPORTS_PER_RUN = 64;
 export const COMPLETION_RETRY_INITIAL_MILLIS = 100;
 export const COMPLETION_RETRY_MAX_MILLIS = 30_000;
 /**

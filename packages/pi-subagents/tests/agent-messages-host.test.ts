@@ -140,6 +140,34 @@ describe("agent messages to the main agent", () => {
     });
   });
 
+  it.effect("refuses a message to a main agent whose session is being replaced", () => {
+    const root = rootSession();
+    const { layer } = localServiceFixture({ agentMain: root.main });
+    return withService(layer, function* (service) {
+      const scout = yield* service.start(request({ name: "api-scout" }));
+      yield* Effect.promise(() =>
+        root.host.emit("session_before_switch", root.ctx, {
+          type: "session_before_switch",
+          reason: "new",
+        }),
+      );
+
+      const refused = yield* service
+        .agentSend(asRun(scout.id), MAIN_AGENT_ID, "Schema found.")
+        .pipe(Effect.flip);
+      expect(refused).toMatchObject({ code: "agent_unavailable" });
+      expect(root.messages()).toHaveLength(0);
+
+      // Pi reports no cancelled switch; the session is still open when its user prompts again.
+      yield* Effect.promise(() =>
+        root.host.emit("input", root.ctx, { type: "input", text: "Go on.", source: "interactive" }),
+      );
+      yield* TestClock.adjust("5 seconds");
+      const woken = yield* service.agentSend(asRun(scout.id), MAIN_AGENT_ID, "Schema found.");
+      expect(woken.mainState).toBe("idle");
+    });
+  });
+
   it.effect("reads the main agent's latest assistant text on the current branch", () => {
     const root = rootSession();
     const { layer } = localServiceFixture({ agentMain: root.main });

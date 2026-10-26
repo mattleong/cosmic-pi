@@ -64,6 +64,8 @@ export interface CompletionGenerationRecord {
   readonly error?: string | undefined;
   readonly errorArchive?: SubagentReportArchive | undefined;
   readonly warning?: string | undefined;
+  /** Times an ancestor run took this report and then failed, paused, or stopped. */
+  readonly handOns?: number | undefined;
 }
 
 interface AssignmentState {

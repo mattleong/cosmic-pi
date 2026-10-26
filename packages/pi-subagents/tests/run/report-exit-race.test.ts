@@ -8,6 +8,7 @@ import { assignmentOperations } from "../../src/run/assignment.ts";
 import { SubagentProcessError } from "../../src/run/errors.ts";
 import { backendEventHandler } from "../../src/run/events.ts";
 import { notificationDelivery } from "../../src/run/notification-delivery.ts";
+import { notificationHandoff } from "../../src/run/notification-handoff.ts";
 import { settlementOperations } from "../../src/run/settlement.ts";
 import type { ReportArchive } from "../../src/boundary/report-archive.ts";
 import type { WithRunLock } from "../../src/run/internal.ts";
@@ -42,6 +43,7 @@ const settlementFixture = (phase: "issuing" | "running", archiveReport?: ReportA
     const delivery = yield* notificationDelivery({
       ...context,
       withCompletionGate: completionGate.withPermits(1),
+      handoff: notificationHandoff(context.records),
       notify: () => Effect.succeed({ deliveredCompletionKeys: [] }),
     });
     const settlement = settlementOperations({
@@ -124,6 +126,7 @@ describe("report ownership at assignment activation", () => {
         const delivery = yield* notificationDelivery({
           ...context,
           withCompletionGate: completionGate.withPermits(1),
+          handoff: notificationHandoff(context.records),
           notify: () => Effect.succeed({ deliveredCompletionKeys: [] }),
         });
         // The caller that commits the completion pauses once it releases the lock, so the test

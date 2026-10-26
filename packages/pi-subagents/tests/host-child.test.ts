@@ -370,6 +370,47 @@ describe("local Pi child bridge", () => {
     },
   );
 
+  // The root may have delivered reports in an answer the cancellation cut off.
+  effectTest("points a cancelled nested wait or start at agent_read", function* () {
+    const harness = makeHarness();
+    yield* settle(harness.start);
+    const waitAbort = new AbortController();
+    const wait = execute(
+      harness.latestTool(SUBAGENT_TOOL_NAME.await),
+      { runIds: ["a"], until: "all_finished" },
+      waitAbort.signal,
+    );
+    yield* harness.awaitContact("proxy_request");
+    waitAbort.abort();
+    const cancelled = yield* step(() => wait);
+    expect(cancelled.structuredContent).toMatchObject({
+      outcome: "cancelled",
+      cleanup: "unconfirmed",
+    });
+    expect(JSON.stringify(cancelled.content)).toContain("agent_read");
+
+    const startAbort = new AbortController();
+    const start = rejection(
+      execute(
+        harness.latestTool(SUBAGENT_TOOL_NAME.start),
+        { agents: [{ task: "Inspect" }] },
+        startAbort.signal,
+      ),
+    );
+    yield* step(() =>
+      vi.waitFor(() =>
+        expect(
+          Arr.filter(harness.contacts, (contact) => contact.type === "proxy_request"),
+        ).toHaveLength(2),
+      ),
+    );
+    startAbort.abort();
+    const failure = yield* step(() => start);
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure instanceof Error ? failure.message : "").toContain("agent_read");
+    yield* settle(harness.shutdown);
+  });
+
   effectTest("re-registers on reload and rejects stale tool definitions", function* () {
     const harness = makeHarness();
     yield* settle(() => harness.start("/first"));

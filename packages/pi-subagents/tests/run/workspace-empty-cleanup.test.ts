@@ -209,7 +209,7 @@ describe("empty worktree proposal cleanup", () => {
       f.hooks.before.inspectWorkerChanges = gate.pause;
       const writer = yield* completedWriter(service, f);
       yield* Deferred.await(gate.entered);
-      yield* service.deliverPendingCompletions;
+      yield* service.retireDelivery;
       expect(delivered).toMatchObject([{ type: "completed", runs: [{ id: writer.id }] }]);
       expect(yield* awaitRuns(service, [writer.id])).toMatchObject([{ state: "completed" }]);
       expect(f.entries.get(writer.workspaceId!)?.status).toBe("active");
@@ -232,7 +232,7 @@ describe("empty worktree proposal cleanup", () => {
     return withService(f.layer, function* (service) {
       const writer = yield* completedWriter(service, f);
       yield* settledOutcome(service, writer.id);
-      yield* service.deliverPendingCompletions;
+      yield* service.retireDelivery;
       expect(delivered).toMatchObject([
         {
           type: "completed",

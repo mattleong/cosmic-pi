@@ -379,8 +379,9 @@ const NESTED_AWAIT_BACKSTOP_GRACE_SECONDS = 30;
 /**
  * A nested wait runs in the root, which applies its timeout and answers with either the delivered
  * outcomes or a timeout whose claims it released. Here only the abort signal or the backstop ends
- * it, cancelling it at the root without consuming anything; the root's completion-claim cleanup
- * after that cancellation is unconfirmed.
+ * it, cancelling it at the root; the root's completion-claim cleanup after that cancellation is
+ * unconfirmed. The root may already have delivered reports in an answer that never arrived, so
+ * every requested run's report may have been delivered, and `agent_read` returns it.
  */
 const executeProxiedAwait = (
   proxyCall: NonNullable<SubagentToolRuntime["proxyCall"]>,
@@ -410,6 +411,7 @@ const executeProxiedAwait = (
   const interrupted = () => state.markInterrupted();
   return proxyCall(forwarded, signal, interrupted, backstop).catch((cause: unknown) => {
     if (!state.wasInterrupted()) throw cause;
+    state.markDeliveryAttempt(state.requestedIds);
     const result = state.cancelled(
       undefined,
       true,
@@ -419,6 +421,9 @@ const executeProxiedAwait = (
     return result;
   });
 };
+
+const NESTED_START_CANCELLED =
+  "agent_start was cancelled. Runs it already started keep running, and a launch's failure may already have been delivered in the result that was lost. agent_list shows the runs, and agent_read returns each outcome.";
 
 export const executeSubagentAction = (
   pi: ExtensionAPI,
@@ -433,6 +438,13 @@ export const executeSubagentAction = (
     return runtime.proxyCall
       ? executeProxiedAwait(runtime.proxyCall, input, signal, onUpdate)
       : executeRootAwait(pi, runtime, input, signal, onUpdate, ctx, scripted);
+  if (input.tool === SUBAGENT_TOOL_NAME.start && runtime.proxyCall)
+    return runtime.proxyCall(input, signal).catch((cause: unknown) => {
+      // The root may have composed the start's result, consuming the failures it held, before
+      // the cancellation reached it.
+      if (signal?.aborted !== true) throw cause;
+      throw new Error(NESTED_START_CANCELLED);
+    });
   return runtime.proxyCall
     ? runtime.proxyCall(input, signal)
     : runtime.run(

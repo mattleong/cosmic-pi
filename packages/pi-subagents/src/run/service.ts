@@ -45,6 +45,7 @@ import { launchOperations } from "./launch.ts";
 import { agentMessageWatches, type AgentMessageArrivals } from "./message-watches.ts";
 import type { RunContext, RunRecord, WithRunLock } from "./internal.ts";
 import { notificationDelivery } from "./notification-delivery.ts";
+import { notificationHandoff } from "./notification-handoff.ts";
 import { processControlOperations, processInitializer } from "./process-lifecycle.ts";
 import { recordCleanup, type RunRecordCleanup } from "./record-cleanup.ts";
 import { resumeOperations } from "./resume.ts";
@@ -236,8 +237,11 @@ export interface SubagentServiceContract extends WorkspaceCoordinatorContract {
     ids: ReadonlyArray<string>,
   ) => Effect.Effect<AgentReadResult, SubagentError>;
   readonly projection: Effect.Effect<SubagentProjection>;
-  /** Hands every eligible completion to its notifier now, as a session ends. */
-  readonly deliverPendingCompletions: Effect.Effect<void>;
+  /**
+   * As the root session ends, sends every notice to it from now on, hands it the reports runs
+   * took, and delivers every eligible completion now.
+   */
+  readonly retireDelivery: Effect.Effect<void>;
   /** Resolves when headless parent work has drained; see `parentDrainAwaiter`. */
   readonly awaitParentDrain: Effect.Effect<void, SubagentRuntimeClosedError>;
 }
@@ -359,11 +363,14 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     isClosed: () => closed,
   });
 
+  const handoff = notificationHandoff(records);
   const delivery = yield* notificationDelivery({
     ...runContext,
     withCompletionGate,
+    handoff,
     notify: notificationRouter({
       ...runContext,
+      handoff,
       admitTurnInput,
       releaseTurnInput,
       notifyHost: (notification) => options.notify?.(notification),
@@ -420,7 +427,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     closeRecordScope,
     verifyCleanup: cleanup.verifyCleanup,
     settle: settlement.settle,
-    requeueQuestionsTakenByLocked: delivery.requeueQuestionsTakenByLocked,
+    handOnTakenByLocked: delivery.handOnTakenByLocked,
   });
 
   const stop = subtreeStopper({ ...runContext, stopRun: controls.stop });
@@ -575,7 +582,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     agentSend: Effect.fn("SubagentService.agentSend")(agentMessages.send),
     agentRead: Effect.fn("SubagentService.agentRead")(agentMessages.read),
     projection,
-    deliverPendingCompletions: delivery.deliverPendingCompletions,
+    retireDelivery: delivery.retireDelivery,
     awaitParentDrain: parentDrainAwaiter({
       records,
       withLock,

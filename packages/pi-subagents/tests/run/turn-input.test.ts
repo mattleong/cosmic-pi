@@ -10,14 +10,15 @@ import { view } from "../fixtures/run-view.ts";
 import { makeRunContext, runningAssignment, runRecordFixture } from "./fixtures/run-context.ts";
 
 const quietDelivery: RunNotificationDelivery = {
-  deliverPendingCompletions: Effect.void,
+  retireDelivery: Effect.void,
   queueActionNotificationLocked: () => undefined,
   insertCompletionLocked: () => undefined,
   wakeCompletionLocked: () => undefined,
   discardQuestionLocked: () => undefined,
-  requeueQuestionsTakenByLocked: () => undefined,
+  handOnTakenByLocked: () => undefined,
   outboxChangedLocked: () => Deferred.makeUnsafe<void>(),
   signalOutboxChangedLocked: () => undefined,
+  forgetTakenReportLocked: () => undefined,
 };
 
 const yieldTurns = Effect.gen(function* () {

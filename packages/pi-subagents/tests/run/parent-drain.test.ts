@@ -29,7 +29,7 @@ describe("session-end completion flush", () => {
       const run = yield* service.start(request());
       yield* completeLocalRun(service, fake.controls[0]!, run.id, "Done.");
       expect(delivered).toEqual([]);
-      yield* service.deliverPendingCompletions;
+      yield* service.retireDelivery;
       expect(Arr.map(delivered, (notification) => notification.type)).toEqual(["completed"]);
     });
   });
@@ -93,7 +93,7 @@ describe("headless parent drain", () => {
       // The acknowledgement publishes no revision, so only its signal can end the drain once the
       // clock stops advancing.
       acknowledging = true;
-      yield* service.deliverPendingCompletions;
+      yield* service.retireDelivery;
       yield* yieldUntil(() => drain.pollUnsafe() !== undefined);
       yield* Fiber.join(drain);
     });

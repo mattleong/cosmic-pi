@@ -556,7 +556,7 @@ export function registerSubagentApplication(
     return slot
       .run(
         SubagentService.use((service) =>
-          service.deliverPendingCompletions.pipe(Effect.timeoutOption("2 seconds")),
+          service.retireDelivery.pipe(Effect.timeoutOption("2 seconds")),
         ),
       )
       .catch(() => undefined)

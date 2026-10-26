@@ -35,14 +35,15 @@ const messageEnd = (text: string) => ({
 });
 
 const quietDelivery: RunNotificationDelivery = {
-  deliverPendingCompletions: Effect.void,
+  retireDelivery: Effect.void,
   queueActionNotificationLocked: () => undefined,
   insertCompletionLocked: () => undefined,
   wakeCompletionLocked: () => undefined,
   discardQuestionLocked: () => undefined,
-  requeueQuestionsTakenByLocked: () => undefined,
+  handOnTakenByLocked: () => undefined,
   outboxChangedLocked: () => Deferred.makeUnsafe<void>(),
   signalOutboxChangedLocked: () => undefined,
+  forgetTakenReportLocked: () => undefined,
 };
 
 describe("report capture", () => {

@@ -11,6 +11,15 @@ import { MAX_COMPLETION_DELIVERY_BATCH, MAX_UNRESOLVED_REPORT_GENERATIONS } from
 export const completionNotificationKey = (id: string, generation: number): string =>
   `${id}:${generation}`;
 
+/**
+ * The key an ancestor Pi process deduplicates a report notice by. A handed-on report gets a new
+ * one, so a process that saw an earlier hand-off still shows it.
+ */
+export const ancestorCompletionKey = (run: SubagentCompletionNotification): string =>
+  run.handOns
+    ? `${completionNotificationKey(run.id, run.generation)}:${run.handOns}`
+    : completionNotificationKey(run.id, run.generation);
+
 export const completionClaimOwner = (record: RunRecord, generation: number): string | undefined =>
   record.completionClaims.get(generation);
 
@@ -107,6 +116,7 @@ const completionNotification = (
     ...(nextCandidate && { nextCandidate }),
     ...(record.view.workspaceId !== undefined && { workspaceId: record.view.workspaceId }),
     ...(record.view.workspaceOutcome && { workspaceOutcome: record.view.workspaceOutcome }),
+    ...(completion.handOns && { handOns: completion.handOns }),
   };
 };
 

@@ -38,7 +38,7 @@ const unexpectedService: SubagentServiceContract = {
   setWriterWorkspaceMode: () => unexpected("setWriterWorkspaceMode"),
   projection: unexpected("projection"),
   awaitParentDrain: unexpected("awaitParentDrain"),
-  deliverPendingCompletions: unexpected("deliverPendingCompletions"),
+  retireDelivery: unexpected("retireDelivery"),
 };
 
 /** The double's own starts, which hold nothing: its failures never reach a notice anyway. */

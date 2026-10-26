@@ -40,6 +40,7 @@ describe("completion admission", () => {
         delivery: {
           wakeCompletionLocked: () => undefined,
           signalOutboxChangedLocked: () => undefined,
+          forgetTakenReportLocked: () => undefined,
         },
         messageWatches: agentMessageWatches(),
       });

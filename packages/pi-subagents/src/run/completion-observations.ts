@@ -42,7 +42,7 @@ interface RunCompletionObservationDependencies extends Pick<RunContext, "records
   readonly allocateClaimToken: () => string;
   readonly delivery: Pick<
     RunNotificationDelivery,
-    "wakeCompletionLocked" | "signalOutboxChangedLocked"
+    "wakeCompletionLocked" | "signalOutboxChangedLocked" | "forgetTakenReportLocked"
   >;
   readonly messageWatches: Pick<AgentMessageWatches, "watchLocked">;
 }
@@ -193,6 +193,7 @@ export function completionObservationOperations(
             continue;
           record.completionGenerations.delete(receipt.generation);
           record.completionClaims.delete(receipt.generation);
+          delivery.forgetTakenReportLocked(receipt.id, receipt.generation);
           delivery.signalOutboxChangedLocked();
         }
       }),
@@ -215,6 +216,7 @@ export function completionObservationOperations(
             continue;
           }
           record.completionGenerations.delete(generation);
+          delivery.forgetTakenReportLocked(id, generation);
           delivery.signalOutboxChangedLocked();
         }
         hold.held.clear();

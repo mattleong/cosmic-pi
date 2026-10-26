@@ -177,7 +177,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
         )
           return undefined;
         const view = commitRunPauseLocked(record, now);
-        delivery.requeueQuestionsTakenByLocked(record.view.id);
+        delivery.handOnTakenByLocked(record.view.id);
         const outcome = record.pauseOutcome;
         record.pauseOutcome = undefined;
         yield* publish;
@@ -324,7 +324,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
     );
     record.notificationGeneration += 1;
     delivery.discardQuestionLocked(record.view.id);
-    delivery.requeueQuestionsTakenByLocked(record.view.id);
+    delivery.handOnTakenByLocked(record.view.id, state === "completed");
     record.replyPendingRequestId = undefined;
     if (state === "completed") record.assignment.phase = "reported";
     record.view = viewForSettlement(record, state, now, finalText, settledError, report);

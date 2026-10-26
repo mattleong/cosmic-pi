@@ -19,7 +19,7 @@ interface AgentMessageHost {
 /**
  * Reaches the root session's main agent for `agent_*` messages. A message starts a turn only when
  * the session is idle and not held; a busy session continues its settling run for it. Otherwise the
- * message is only appended.
+ * message is only appended. A session being replaced or shut down refuses it as unavailable.
  */
 export function agentMainCapabilities(
   pi: ExtensionAPI,
@@ -28,7 +28,7 @@ export function agentMainCapabilities(
   const current = () => host.session() !== undefined;
   return {
     deliver: (frame) => {
-      if (!current()) return "unavailable";
+      if (!current() || host.wake.closing()) return "unavailable";
       const delivery = deliverAgentMessage(
         pi,
         host.wake,
@@ -44,7 +44,10 @@ export function agentMainCapabilities(
         },
         current,
       );
-      return delivery === "refused" ? "unavailable" : agentMessageRecipientState(delivery);
+      // Closing was refused above, in the same synchronous callback.
+      return delivery === "refused" || delivery === "closing"
+        ? "unavailable"
+        : agentMessageRecipientState(delivery);
     },
     read: () => {
       const ctx = host.session();

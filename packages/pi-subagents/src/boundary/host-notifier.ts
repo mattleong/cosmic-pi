@@ -44,6 +44,8 @@ export interface SubagentCompletionNotification {
   /** A worktree writer's workspace; its outcome is known once the writer's cleanup settled. */
   readonly workspaceId?: string | undefined;
   readonly workspaceOutcome?: SubagentWorkspaceOutcome | undefined;
+  /** Times the report was handed on by an ancestor run that took it; see `CompletionGenerationRecord`. */
+  readonly handOns?: number | undefined;
 }
 
 export type SubagentNotification =
