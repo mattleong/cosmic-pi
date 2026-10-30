@@ -43,7 +43,7 @@ export const presentAgentMessage: CodePreviewMessagePresenter = (input, options,
     outcome: "returned",
     messageIcon: "received",
   } as const;
-  const presentation = { name: "agent message", label: "Agent message", summary };
+  const presentation = { name: "agent_message", label: "Agent message", summary };
   if (words === undefined)
     return {
       ...presentation,
