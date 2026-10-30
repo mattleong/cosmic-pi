@@ -1,4 +1,5 @@
 import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import * as Fn from "effect/Function";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
@@ -18,7 +19,7 @@ import {
   type SubagentError,
 } from "../run/errors.ts";
 import { getFailedStartRecovery } from "../run/launch.ts";
-import { failureFileText } from "../run/state.ts";
+import { failureFileText, MAX_NAME_CHARS } from "../run/state.ts";
 import { SubagentService, type SubagentServiceContract } from "../run/service.ts";
 import { SUBAGENT_ROOT_RUN_ID } from "../run/model.ts";
 import type { WorkspaceReviseOptions } from "../run/workspace-launch.ts";
@@ -414,6 +415,19 @@ const successorStartFailure = (error: SubagentError): Effect.Effect<never, Subag
  * `resolveLaunch` resolves an adopted workspace's recorded launch for its first revision; the
  * host supplies it with its profiles and parent context.
  */
+// The newest run on the workspace names it: a revision's successor replaces its predecessor.
+const workspaceWriterName = (service: SubagentServiceContract, workspaceId: string) =>
+  service.projection.pipe(
+    Effect.map((projection) =>
+      Option.getOrUndefined(
+        Option.map(
+          Arr.findLast(projection.runs, (run) => run.workspaceId === workspaceId),
+          (run) => clipText(sanitizeTerminalLine(run.name), MAX_NAME_CHARS),
+        ),
+      ),
+    ),
+  );
+
 export const executeWorkspaceAction = Effect.fn("SubagentTools.workspace")(function* (
   operation: SubagentWorkspaceInput,
   callerRunId: string = SUBAGENT_ROOT_RUN_ID,
@@ -425,7 +439,12 @@ export const executeWorkspaceAction = Effect.fn("SubagentTools.workspace")(funct
   if (error !== undefined) return yield* invalidRequest("workspace_input_invalid", error);
   const service = yield* SubagentService;
   const workspaceId = operation.workspaceId ?? "";
-  const receipt = { operation: operation.action, ...(workspaceId && { workspaceId }) };
+  const writerName = workspaceId ? yield* workspaceWriterName(service, workspaceId) : undefined;
+  const receipt = {
+    operation: operation.action,
+    ...(workspaceId && { workspaceId }),
+    ...(writerName && { writerName }),
+  };
   switch (operation.action) {
     case "list":
       return yield* executeWorkspaceList(service, callerRunId);

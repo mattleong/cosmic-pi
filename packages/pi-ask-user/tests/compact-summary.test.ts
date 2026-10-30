@@ -81,6 +81,12 @@ describe("questionnaire compact outcome projection", () => {
     ).toBe("error");
     expect(summarize(asyncAskUserCompactSummary, row())?.outcome).toBe("success");
   });
+  it("names a control call's questions by their stored titles, falling back without them", () => {
+    const args = { action: "await", requestId: "request-1" };
+    const titled = row({ titles: [{ key: "library", title: "Library" }] });
+    expect(summarize(asyncAskUserCompactSummary, titled, { args })?.subject).toBe("Library");
+    expect(summarize(asyncAskUserCompactSummary, row(), { args })?.subject).toBe("questionnaire");
+  });
   it("declines missing, malformed, inconsistent, and error-marked replies", () => {
     for (const details of [undefined, {}, { outcome: "submitted" }, { ...submitted, answers: [] }])
       expect(summarize(askUserCompactSummary, details)).toBeUndefined();

@@ -360,6 +360,8 @@ function aggregateCounters(tasks: ReadonlyArray<BackgroundTaskSnapshot>): string
   return [...new Set([Arr.join(counts, ", ") || total, brief, total])];
 }
 
+const LISTED_PROBLEMS: ReadonlyArray<CompactOutcome> = ["error", "warning", "uncertain"];
+
 function aggregateSummary(
   details: DetailsFor<"list" | "stop_all">,
   action: string,
@@ -380,6 +382,18 @@ function aggregateSummary(
   const ordered = Arr.flatMap(SEVERITY_ORDER, (severity) =>
     Arr.filter(issues, (entry) => entry.severity === severity),
   );
+  // A listing is neutral even when listed tasks failed: its counts say so, and each task's issue
+  // is expanded-only information rather than a failure of the call.
+  if (details.action === "list")
+    return {
+      action,
+      subject,
+      counters: aggregateCounters(details.tasks),
+      issues: Arr.map(ordered, (entry) => ({ ...entry, severity: "info" as const })),
+      outcome: Arr.contains(LISTED_PROBLEMS, aggregateOutcome(outcomes))
+        ? "returned"
+        : aggregateOutcome(outcomes),
+    };
   return {
     action,
     subject,

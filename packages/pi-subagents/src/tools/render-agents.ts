@@ -54,25 +54,33 @@ export const agentStatePresentation = (state: AgentState): AgentStatePresentatio
   return { glyph: "•", tone: "muted", label: state };
 };
 
-const SEND_STATUS: Record<NonNullable<SendDetails["mainState"]>, string | undefined> = {
+// Short words for the heading; expansion explains them.
+const SEND_STATUS: Record<
+  NonNullable<SendDetails["mainState"]>,
+  readonly [word: string, explanation: string] | undefined
+> = {
   idle: undefined,
-  busy: "queued until its current turn ends",
-  held: "waiting for the user",
+  busy: ["queued", "It reads the message when its current turn ends."],
+  held: ["held", "It reads the message once its user answers or sends the next prompt."],
 };
 
-/** A send's outcome in a few words, only when it departs from a plain delivery. */
-export const sendStatus = (details: SendDetails): string | undefined => {
+const sendOutcome = (details: SendDetails): readonly [string, string] | undefined => {
   switch (details.disposition) {
     case "answered":
-      return "answered its question";
+      return ["answered", "Answered its pending question."];
     case "resumed":
-      return "resumed it with this message";
+      return ["resumed", "Resumed the finished run with this message as its next assignment."];
     case "guided":
       if (details.mainState !== undefined) return SEND_STATUS[details.mainState];
-      return details.parked ? "waits until its own question is answered" : undefined;
+      return details.parked
+        ? ["queued", "It reads the message once its own question is answered."]
+        : undefined;
   }
   return Fn.absurd(details.disposition);
 };
+
+/** A send's outcome in a word, only when it departs from a plain delivery. */
+export const sendStatus = (details: SendDetails): string | undefined => sendOutcome(details)?.[0];
 
 export const renderSendResult = (
   details: SendDetails,
@@ -81,12 +89,15 @@ export const renderSendResult = (
 ): Component =>
   composeToolComponent((width) => {
     const safeWidth = Math.max(1, width);
-    const status = sendStatus(details);
+    const outcome = sendOutcome(details);
     return [
-      ...(status ? [clipToWidth(theme.fg("muted", status), safeWidth)] : []),
+      ...(outcome && !expanded ? [clipToWidth(theme.fg("muted", outcome[0]), safeWidth)] : []),
       ...(expanded
         ? detailsSectionLines(
-            [`To ${sanitizeTerminalLine(details.name)} (${sanitizeTerminalLine(details.to)})`],
+            [
+              ...(outcome ? [outcome[1]] : []),
+              `To ${sanitizeTerminalLine(details.name)} (${sanitizeTerminalLine(details.to)})`,
+            ],
             safeWidth,
             theme,
           )

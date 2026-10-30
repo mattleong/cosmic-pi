@@ -36,7 +36,8 @@ const unexpectedService: SubagentServiceContract = {
   sweepOrphanedWorkspaces: Effect.succeed([]),
   inspectWriterWorkspace: unexpected("inspectWriterWorkspace"),
   setWriterWorkspaceMode: () => unexpected("setWriterWorkspaceMode"),
-  projection: unexpected("projection"),
+  // Read-only lookups such as a worktree heading's writer name find no runs by default.
+  projection: Effect.succeed({ revision: 0, runs: [] }),
   awaitParentDrain: unexpected("awaitParentDrain"),
   retireDelivery: unexpected("retireDelivery"),
 };

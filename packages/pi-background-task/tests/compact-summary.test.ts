@@ -206,7 +206,8 @@ describe("background task row outcomes", () => {
     ["a list of running tasks", { action: "list", tasks: [snapshot] }, "list", "returned"],
     ["a list of finished tasks", { action: "list", tasks: [exited] }, "list", "success"],
     ["an empty list", { action: "list", tasks: [] }, "list", "returned"],
-    ["a list with a failure", { action: "list", tasks: [snapshot, failed] }, "list", "error"],
+    // A listing returned fine; its counts and expanded issues report the failed task.
+    ["a list with a failure", { action: "list", tasks: [snapshot, failed] }, "list", "returned"],
     ["matched output", wait("matched", snapshot, { matchCursor: 4 }), "wait", "success"],
     ["a timed-out wait", wait("timeout", snapshot), "wait", "warning"],
     ["a running task's logs", logs("running"), "logs", "returned"],

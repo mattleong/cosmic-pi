@@ -38,7 +38,8 @@ const contentText = (content: string | ReadonlyArray<unknown> | undefined): stri
         "\n",
       );
 
-const UNKNOWN_NOTICE: CompactSummary = { subject: "finished", outcome: "returned" };
+// Without readable details nothing says how the task ended; expansion shows the stored text.
+const UNKNOWN_NOTICE: CompactSummary = { subject: "task notice", outcome: "returned" };
 
 /**
  * What expansion adds below a notice's row: the command, the task's newest output, and its id and

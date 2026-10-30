@@ -285,7 +285,7 @@ export function compactWorkspaceSummary(
   const issues = operationIssues(details);
   return {
     action: operation === "list" ? "inspect" : operation,
-    subject: "Proposed changes",
+    subject: details.writerName ?? "",
     counters:
       details.operation === "apply" ? applyCounters(details) : line === undefined ? [] : [line],
     metadata: details.operation === "list" && line === undefined ? ["worktree metadata"] : [],

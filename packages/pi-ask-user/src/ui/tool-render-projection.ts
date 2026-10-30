@@ -52,6 +52,8 @@ const asyncSnapshotFields = {
   presentation: Schema.optional(
     Schema.Literals(["queued", "opening", "open", "hidden", "settled"]),
   ),
+  // Decoded on its own by titlesOf, so a malformed label never hides the row.
+  titles: Schema.optional(Schema.Unknown),
 };
 
 const compactIdentity = Schema.String.check(Schema.isBetweenLength(1, 256));
@@ -64,8 +66,6 @@ const expandedAsyncSnapshot = Schema.Struct({
   ...asyncSnapshotFields,
   independentWork: Schema.optional(Schema.String),
   blockedWork: Schema.optional(Schema.String),
-  // Decoded on its own by titlesOf, so a malformed label never hides the row.
-  titles: Schema.optional(Schema.Unknown),
 });
 export type ReplayedSnapshot = typeof expandedAsyncSnapshot.Type;
 
@@ -124,6 +124,15 @@ const decodeTitles = decodeUnknownOrUndefined(
     }),
   ).check(Schema.isMaxLength(MAX_QUESTIONS)),
 );
+
+/** Stored async question titles as one heading subject, or undefined when they don't decode. */
+export const storedTitlesLabel = Fn.flow(decodeTitles, (titles): string | undefined => {
+  const label = Arr.join(
+    Arr.map(titles ?? [], ({ title }) => titleLabel(title)),
+    ", ",
+  );
+  return label === "" ? undefined : label;
+});
 
 /** Question titles by answer key from stored async details; none when they don't decode. */
 export const titlesOf = Fn.flow(

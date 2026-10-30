@@ -432,7 +432,8 @@ describe("shared background task command", () => {
         Arr.map(
           Arr.filter(
             summarize(args, { details })?.issues ?? [],
-            (issue) => issue.severity === "error",
+            // A listing reports each task's failure as expanded-only information.
+            (issue) => issue.severity === (args.action === "list" ? "info" : "error"),
           ),
           (issue) => issue.message,
         );

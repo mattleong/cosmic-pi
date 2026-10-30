@@ -19,6 +19,7 @@ import {
   decodeOutcome,
   isPendingState,
   isStatusList,
+  storedTitlesLabel,
   questionnaireState,
   stateCounts,
   stateWords,
@@ -34,11 +35,15 @@ import type {
   AskUserRequest,
 } from "../questionnaire/schema.ts";
 
-function identity(args: QuestionnaireArgs): CompactSummary {
+// Control calls name only a request id, so their questions' titles come from the result.
+function identity(args: QuestionnaireArgs, storedTitles?: string): CompactSummary {
   const control = decodeAsyncControl(args);
   if (control)
-    return { action: control.action, subject: isStatusList(args) ? "all" : "Questionnaire" };
-  return { subject: callTitles(args) ?? "Questionnaire" };
+    return {
+      action: control.action,
+      subject: isStatusList(args) ? "all" : (storedTitles ?? "questionnaire"),
+    };
+  return { subject: callTitles(args) ?? "questionnaire" };
 }
 
 function liveSummary(args: QuestionnaireArgs): CompactSummary | undefined {
@@ -161,7 +166,7 @@ function deliveryFailed(failed: readonly QuestionnaireState[]): CompactIssue | u
   };
 }
 
-type ClassifiedRow = Pick<ReplayedSnapshot, "delivery" | "outcome"> & {
+type ClassifiedRow = Pick<ReplayedSnapshot, "delivery" | "outcome" | "titles"> & {
   readonly state: QuestionnaireState;
 };
 
@@ -203,7 +208,7 @@ function rowsSummary(args: QuestionnaireArgs, rows: readonly ClassifiedRow[]): C
           ? []
           : stateWords(only.state);
   return {
-    ...identity(args),
+    ...identity(args, rows.length === 1 ? storedTitlesLabel(only?.titles) : undefined),
     outcome,
     ...(counters.length > 0 && { counters }),
     ...(issues.length > 0 && { issues }),

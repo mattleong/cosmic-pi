@@ -42,19 +42,27 @@ import { profileRow } from "./render-management.ts";
 import { cardShowsError } from "./render-run-cards.ts";
 import { formatRunRoute } from "../ui/run-presentation.ts";
 
-function cardCounters(cards: readonly SubagentRunCard[], singleTarget = false): string[] {
+function cardCounters(
+  cards: readonly SubagentRunCard[],
+  singleTarget = false,
+  action = "",
+): string[] {
+  // A stop found a finished run already ended; plain "finished" reads as the stop's result.
+  const label = (card: SubagentRunCard) =>
+    action === "stop" && (card.state === "completed" || card.state === "failed")
+      ? `already ${runStateLabel(card.state)}`
+      : runStateLabel(card.state);
   const [only] = cards;
-  if (cards.length === 1 && singleTarget && only) return [runStateLabel(only.state)];
+  if (cards.length === 1 && singleTarget && only) return [label(only)];
   const counts = new Map<string, number>();
   for (const card of cards) {
-    const label = runStateLabel(card.state);
-    counts.set(label, (counts.get(label) ?? 0) + 1);
+    counts.set(label(card), (counts.get(label(card)) ?? 0) + 1);
   }
   return Arr.filter(
     [
       Fn.pipe(
         [...counts],
-        Arr.map(([label, count]) => `${count} ${label}`),
+        Arr.map(([state, count]) => `${count} ${state}`),
         Arr.join(", "),
       ),
     ],
@@ -425,7 +433,11 @@ function summarizeDetails(
             (card.question !== undefined || runCleanupAttention(card) !== undefined),
         )
       : [];
-  summary.counters = cardCounters(cards, isSingleRequestedRun(details, cards, requested));
+  summary.counters = cardCounters(
+    cards,
+    isSingleRequestedRun(details, cards, requested),
+    details.action,
+  );
   if (summary.outcome === "success") summary.outcome = cardOutcome(details.action, cards);
   if (details.action === "await")
     awaitIssues(details, summary, issues, cards, targets ?? [], asking);

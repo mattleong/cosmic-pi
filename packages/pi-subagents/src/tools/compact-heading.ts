@@ -63,9 +63,7 @@ export function argumentSummary(
       ? startSubject(input)
       : action === "models" && Predicate.isString(input.profile)
         ? input.profile
-        : action === "workspace"
-          ? "Proposed changes"
-          : "";
+        : "";
   const counters = Arr.isArray(input.agents)
     ? [`${input.agents.length} requested`]
     : ids && ids.length > 1

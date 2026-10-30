@@ -16,6 +16,7 @@ import {
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
+import { view } from "../fixtures/run-view.ts";
 
 const run = (
   operation: Parameters<typeof executeWorkspaceAction>[0],
@@ -69,6 +70,28 @@ const applied = (overrides: Partial<WorkspaceApplyResult> = {}): WorkspaceApplyR
   ...integrated,
   testing: "untested",
   ...overrides,
+});
+
+describe("workspace heading", () => {
+  effectTest("names the newest writer on the workspace, not a placeholder", function* () {
+    const operation = { action: "discard", workspaceId: "ws-1" } as const;
+    const result = yield* run(operation, undefined, {
+      workspaceDiscard: () => Effect.void,
+      projection: Effect.succeed({
+        revision: 1,
+        runs: [
+          view({ id: "agent-1", name: "first-pass", workspaceId: "ws-1" }),
+          view({ id: "agent-2", name: "unrelated", workspaceId: "ws-2" }),
+          view({ id: "agent-3", name: "refresh-fix", workspaceId: "ws-1" }),
+        ],
+      }),
+    }).pipe(Effect.orDie);
+    expect(summarize(operation, result)?.subject).toBe("refresh-fix");
+    const unnamed = yield* run(operation, undefined, {
+      workspaceDiscard: () => Effect.void,
+    }).pipe(Effect.orDie);
+    expect(summarize(operation, unnamed)?.subject).toBe("");
+  });
 });
 
 describe("workspace apply", () => {

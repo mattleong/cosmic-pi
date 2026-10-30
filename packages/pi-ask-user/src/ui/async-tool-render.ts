@@ -37,10 +37,10 @@ import {
   questionnaireState,
   stateCounts,
   stateWords,
+  storedTitlesLabel,
   titlesOf,
   type QuestionnaireState,
   type ReplayedAnswer,
-  type ReplayedOutcome,
   type ReplayedSnapshot,
 } from "./tool-render-projection.ts";
 
@@ -161,11 +161,6 @@ function collapsedRows(
   return state && isPendingState(state) ? waitingState(stateWords(state), theme) : emptyBody();
 }
 
-function messageSubject(outcome: ReplayedOutcome | undefined): string {
-  if (!outcome) return "Questionnaire update";
-  return outcome.outcome === "cancelled" ? "Questionnaire cancelled" : "Answers submitted";
-}
-
 /**
  * An async questionnaire's answer message: what happened as its heading, then the answers. A
  * message whose details don't decode keeps its stored text.
@@ -190,11 +185,13 @@ export const presentAsyncMessage: CodePreviewMessagePresenter = (input, options,
       },
       theme,
     );
-  const presentation = { name: "ask_user_async", label: "Ask user", expanded };
+  // The icon says whether it was answered or cancelled; the heading names the questions.
+  const subject = storedTitlesLabel(delivered?.titles) ?? "questionnaire";
+  const presentation = { name: "ask_user_answers", label: "Answers", expanded };
   if (!outcome)
     return {
       ...presentation,
-      summary: { subject: messageSubject(outcome) },
+      summary: { subject },
       ...(preview && { collapsed: () => new Text(raw, 0, 0) }),
     };
   const cancelled = outcome.outcome === "cancelled";
@@ -203,7 +200,7 @@ export const presentAsyncMessage: CodePreviewMessagePresenter = (input, options,
   return {
     ...presentation,
     summary: {
-      subject: messageSubject(outcome),
+      subject,
       outcome: cancelled ? "cancelled" : "success",
       counters: answers?.length ? [countLabel(answers.length, "answer")] : [],
     },

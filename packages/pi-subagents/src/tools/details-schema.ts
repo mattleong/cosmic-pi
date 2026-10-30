@@ -95,6 +95,8 @@ export const WorkspaceToolDetailsSchema = Schema.Struct({
   action: Schema.Literal("workspace"),
   operation: Schema.Literals(["list", "review", "prepare", "apply", "discard", "revise"]),
   workspaceId: Schema.optionalKey(NonEmptyText(MAX_PROTOCOL_ID_CHARS)),
+  /** The display name of the latest writer run that owns the workspace, for the heading. */
+  writerName: Schema.optionalKey(NonEmptyText(MAX_NAME_CHARS)),
   revisionId: Schema.optionalKey(NonEmptyText(MAX_PROTOCOL_ID_CHARS)),
   preparationId: Schema.optionalKey(NonEmptyText(MAX_PROTOCOL_ID_CHARS)),
   offset: Schema.optionalKey(nonNegativeInteger),
