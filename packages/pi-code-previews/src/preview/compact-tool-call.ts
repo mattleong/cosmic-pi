@@ -2,6 +2,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { renderCompactRow, type CompactRowInput } from "./compact-row";
 import { renderCompactChildren } from "./compact-children";
 import { renderCompactIssues } from "./compact-issues";
+import { renderCompactQuote } from "./compact-quote";
 
 export function renderCompactToolCall(
   input: CompactRowInput,
@@ -12,6 +13,7 @@ export function renderCompactToolCall(
   return [
     renderCompactRow(input, theme, width),
     ...renderCompactIssues(input.summary.issues, theme, width),
+    ...renderCompactQuote(input.summary.quote, theme, width),
     ...renderCompactChildren(input.summary.children, theme, width, {
       animationFrame: input.animationFrame,
       timingEnabled: input.timingEnabled,

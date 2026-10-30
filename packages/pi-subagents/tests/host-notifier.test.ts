@@ -42,7 +42,8 @@ describe("subagent host notifier", () => {
     expect(message).toMatchObject({ customType: "pi-subagents-completed", display: true });
     expect(content()).toContain("agent-1");
     expect(content()).toContain("Read report");
-    expect(JSON.stringify(message?.details)).not.toContain("Read report");
+    // The details carry a display copy of the report for the user's view.
+    expect(message?.details).toMatchObject({ runs: [{ name: "reader", text: finalText }] });
     expect(options).toEqual(steer);
   });
 

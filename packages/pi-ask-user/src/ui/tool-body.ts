@@ -36,14 +36,27 @@ export function stacked(parts: readonly Component[]): Component {
 export const cancelledLine = (theme: Pick<Theme, "fg">): Component =>
   new Text(toolStatusLine(theme, "stopped", "Cancelled"), 0, 0);
 
-export const mutedState = (alternatives: readonly string[], theme: Pick<Theme, "fg">): Component =>
+const stateLine = (
+  alternatives: readonly string[],
+  draw: (text: string) => string,
+  inset: number,
+): Component =>
   composeToolComponent((width) => {
     const text = Option.getOrElse(
-      Arr.findFirst(alternatives, (entry) => visibleWidth(entry) <= width),
+      Arr.findFirst(alternatives, (entry) => visibleWidth(entry) <= width - inset),
       () => alternatives.at(-1) ?? "",
     );
-    return text ? [clipToWidth(theme.fg("muted", Str.capitalize(text)), width)] : [];
+    return text ? [clipToWidth(draw(Str.capitalize(text)), width)] : [];
   });
+
+export const mutedState = (alternatives: readonly string[], theme: Pick<Theme, "fg">): Component =>
+  stateLine(alternatives, (text) => theme.fg("muted", text), 0);
+
+/** Questionnaires still waiting on the user's answers. */
+export const waitingState = (
+  alternatives: readonly string[],
+  theme: Pick<Theme, "fg">,
+): Component => stateLine(alternatives, (text) => toolStatusLine(theme, "waiting", text), 2);
 
 interface AnswerEntry {
   readonly label: string;
@@ -150,13 +163,30 @@ export function callBody(
   return stacked([heading, previewIssuesSlot(context), expandedArguments(theme, args)]);
 }
 
-export function expandedResult(
-  raw: string,
-  isError: boolean,
-  answers: readonly ReplayedAnswer[] | undefined,
-  titles: ReadonlyMap<string, string>,
-  theme: Theme,
-): Component {
-  if (raw) return rawResultSection(theme, raw, isError);
-  return answers ? answersBody(answers, titles, theme, false) : emptyBody();
+export interface ExpandedResultInput {
+  /** The model-facing text, shown only when the details don't decode. */
+  readonly raw: string;
+  readonly isError: boolean;
+  readonly decoded: boolean;
+  readonly answers?: readonly ReplayedAnswer[] | undefined;
+  readonly titles?: ReadonlyMap<string, string>;
+  /** Technical facts, such as request and delivery IDs, for the dim details section. */
+  readonly facts?: readonly string[];
+}
+
+const detailsSection = (theme: Theme, facts: readonly string[]): Component =>
+  expandedSection(
+    theme,
+    "Details",
+    new Text(theme.fg("dim", Arr.join(Arr.map(facts, stripTerminalControls), "\n")), 0, 0),
+  );
+
+export function expandedResult(input: ExpandedResultInput, theme: Theme): Component {
+  if (!input.decoded)
+    return input.raw ? rawResultSection(theme, input.raw, input.isError) : emptyBody();
+  const facts = input.facts ?? [];
+  return stacked([
+    ...(input.answers ? [answersBody(input.answers, input.titles ?? new Map(), theme, false)] : []),
+    ...(facts.length > 0 ? [detailsSection(theme, facts)] : []),
+  ]);
 }

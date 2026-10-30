@@ -16,6 +16,8 @@ import {
   isOutcomeUncertain,
   processError,
   SubagentProcessError,
+  withGuidance,
+  withGuidanceClause,
   type SubagentError,
 } from "../run/errors.ts";
 import { localPiUsage } from "./local-pi-usage.ts";
@@ -329,7 +331,10 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
                     processError(
                       "start",
                       "prompt_outcome_uncertain",
-                      "Subagent did not confirm task admission.\nThe task may already have started; inspect the run with agent_read before retrying.",
+                      withGuidanceClause(
+                        "Subagent did not confirm task admission.\nThe task may already have started",
+                        "inspect the run with agent_read before retrying.",
+                      ),
                     ),
                   ),
                 ),
@@ -371,7 +376,10 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
                 processError(
                   "deliver guidance to",
                   "guidance_outcome_uncertain",
-                  "Subagent returned an unreadable guidance disposition; the guidance may already have applied. Inspect the run with agent_read before retrying.",
+                  withGuidance(
+                    "Subagent returned an unreadable guidance disposition; the guidance may already have applied.",
+                    "Inspect the run with agent_read before retrying.",
+                  ),
                 ),
               ),
             ),
@@ -431,10 +439,15 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
             }),
         ),
       ),
-    notifyPeers: (message: string) =>
-      child.sendContactControl({ channel: "pi-subagents", type: "peer_notice", message }),
+    notifyPeers: (message: string, details?: Schema.Json) =>
+      child.sendContactControl({
+        channel: "pi-subagents",
+        type: "peer_notice",
+        message,
+        ...(details !== undefined && { details }),
+      }),
     isSettlementCurrent: (event: BackendEvent) => event === offeredSettlement?.deref(),
-    deliverNotification: (message: string, key: string) =>
+    deliverNotification: (message: string, key: string, details?: Schema.Json) =>
       withTurnControl(
         ipcAck(
           "notification",
@@ -444,6 +457,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
             requestId,
             key,
             message,
+            ...(details !== undefined && { details }),
           }),
           () =>
             SubagentProcessError.make({

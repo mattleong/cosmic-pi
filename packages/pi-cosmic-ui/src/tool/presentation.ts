@@ -33,7 +33,7 @@ export const renderToolHeader = (header: ToolHeader, theme: Pick<Theme, "bold" |
 
 type ToolStatusKind = ManagerActivityKind | ManagerNoticeKind;
 
-const isNotice = Schema.is(Schema.Literals(["info", "success", "warning", "error"]));
+const isNotice = Schema.is(Schema.Literals(["info", "success", "warning", "error", "attention"]));
 
 export const toolStatusLine = (
   theme: Pick<Theme, "fg">,

@@ -7,7 +7,8 @@ import { MESSAGE_TEXT_LIMIT } from "pi-cosmic-core/message-text";
 export const COMPACT_ISSUE_MESSAGE_LIMIT = MESSAGE_TEXT_LIMIT;
 
 export const CompactIssueSchema = Schema.Struct({
-  severity: Schema.Literals(["error", "warning", "info"]),
+  // `attention`: someone is waiting on a reply or decision. It shows like a warning but is no problem.
+  severity: Schema.Literals(["error", "warning", "attention", "info"]),
   code: Schema.String.check(Schema.isMinLength(1)),
   message: Schema.String,
   detail: Schema.optionalKey(Schema.String),
@@ -40,9 +41,17 @@ export function mergeCompactIssues(
   return merged;
 }
 
+/** The issue severities shown collapsed, strongest first. */
+export const COMPACT_SIGNAL_SEVERITIES = ["error", "warning", "attention"] as const;
+export type CompactSignalSeverity = (typeof COMPACT_SIGNAL_SEVERITIES)[number];
+
+/** The strongest collapsed severity among `issues`; information never signals. */
 export function compactIssueSeverity(
   issues: readonly CompactIssue[] | undefined,
-): "error" | "warning" | undefined {
-  if (Arr.some(issues ?? [], (issue) => issue.severity === "error")) return "error";
-  return Arr.some(issues ?? [], (issue) => issue.severity === "warning") ? "warning" : undefined;
+): CompactSignalSeverity | undefined {
+  return Option.getOrUndefined(
+    Arr.findFirst(COMPACT_SIGNAL_SEVERITIES, (severity) =>
+      Arr.some(issues ?? [], (issue) => issue.severity === severity),
+    ),
+  );
 }

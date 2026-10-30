@@ -12,7 +12,13 @@ import {
   type StartFailureHold,
 } from "./completion.ts";
 import { MAIN_AGENT_ID } from "./agent-messaging.ts";
-import { invalidRequest, type SubagentError, type SubagentRuntimeClosedError } from "./errors.ts";
+import {
+  invalidRequest,
+  type SubagentError,
+  type SubagentRuntimeClosedError,
+  withGuidance,
+  withGuidanceClause,
+} from "./errors.ts";
 import { snapshotRun, type RunContext, type RunRecord, type WithRunLock } from "./internal.ts";
 import {
   isTerminalRunState,
@@ -257,7 +263,10 @@ export function completionObservationOperations(
             if (missingIds.length > 0)
               return yield* invalidRequest(
                 "subagent_runs_not_found",
-                `Subagent runs not found: ${Arr.join(missingIds, ", ")}. Call agent_list for current run IDs.`,
+                withGuidance(
+                  `Subagent runs not found: ${Arr.join(missingIds, ", ")}.`,
+                  "Call agent_list for current run IDs.",
+                ),
               );
             const claimToken = allocateClaimToken();
             const desired = Arr.flatMap(selected, (record) => {
@@ -276,7 +285,10 @@ export function completionObservationOperations(
             if (conflict)
               return yield* invalidRequest(
                 "completion_claim_conflict",
-                `Completion report ${conflict.record.view.id} generation ${conflict.generation} is already owned by another operation; wait for that operation to finish or cancel before retrying.`,
+                withGuidanceClause(
+                  `Completion report ${conflict.record.view.id} generation ${conflict.generation} is already owned by another operation`,
+                  "wait for that operation to finish or cancel before retrying.",
+                ),
               );
             const claimed = Arr.filter(desired, ({ record, generation }) =>
               claimCompletion(record, generation, claimToken),

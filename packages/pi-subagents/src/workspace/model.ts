@@ -19,6 +19,11 @@ export class WorkspaceError extends Schema.TaggedError<
   code: Schema.optional(Schema.Literals(WORKSPACE_ERROR_CODES)),
   /** The path, rule, and remedy behind a refusal, shown beneath the message. */
   detail: Schema.optional(Schema.String),
+  /**
+   * The parent agent's next step, such as revising or preparing again. Model text adds it after
+   * the detail as a `Remedy:` line; the user's view leaves it out.
+   */
+  remedy: Schema.optional(Schema.String),
   cleanupUnconfirmed: Schema.optional(Schema.Boolean),
 }) {}
 

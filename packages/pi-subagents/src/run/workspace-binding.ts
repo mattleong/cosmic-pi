@@ -7,7 +7,13 @@ import * as Str from "effect/String";
 import type { WorktreeCreateSetup, WriterWorkspaceMode } from "../config/schema.ts";
 import type { WorkspaceHandle, WorkspaceLaunch } from "../workspace/model.ts";
 import type { WorkspaceServiceContract } from "../workspace/service.ts";
-import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
+import {
+  guidedText,
+  type GuidedText,
+  invalidRequest as invalid,
+  type SubagentError,
+  withGuidance,
+} from "./errors.ts";
 import { isCleanupOwed, type RunContext, type RunRecord, type StoredRunView } from "./internal.ts";
 import {
   isActiveRunState,
@@ -262,15 +268,24 @@ export interface WorkspaceControlContext extends WorkspaceControlDependencies {
 
 const WRITER_CLEANUP_WAIT = "30 seconds";
 
+/** A workspace error's text: its message and detail, then, for the model only, its remedy. */
+export const workspaceErrorText = (error: {
+  readonly message: string;
+  readonly detail?: string | undefined;
+  readonly remedy?: string | undefined;
+}): GuidedText => {
+  const facts = error.detail === undefined ? error.message : `${error.message}\n${error.detail}`;
+  return error.remedy === undefined
+    ? guidedText(facts)
+    : withGuidance(facts, `Remedy: ${error.remedy}`, "\n");
+};
+
 export const mapWorkspaceError = (error: {
   readonly message: string;
   readonly detail?: string | undefined;
+  readonly remedy?: string | undefined;
   readonly code?: string | undefined;
-}) =>
-  invalid(
-    error.code ?? "workspace_operation_failed",
-    error.detail === undefined ? error.message : `${error.message}\n${error.detail}`,
-  );
+}) => invalid(error.code ?? "workspace_operation_failed", workspaceErrorText(error));
 
 export const isWithin = (cwd: string, root: string) =>
   cwd === root || Fn.pipe(cwd, Str.startsWith(`${Fn.pipe(root, Str.replace(/\/$/, ""))}/`));
@@ -347,7 +362,10 @@ export const recordWorkspaceOutcomeLocked = (
 export const workspaceBusyError = () =>
   invalid(
     "workspace_operation_in_progress",
-    "Another operation on this workspace is still running. Retry once it finishes.",
+    withGuidance(
+      "Another operation on this workspace is still running.",
+      "Retry once it finishes.",
+    ),
   );
 
 export const workspaceControlContext = Effect.fn("SubagentWorkspace.controlContext")(function* (
@@ -396,7 +414,10 @@ export const workspaceControlContext = Effect.fn("SubagentWorkspace.controlConte
     if (writer?.cleanupDisposition === "quarantined")
       return yield* invalid(
         "workspace_process_unsettled",
-        "The workspace writer's process cleanup is quarantined. Inspect it with agent_read and recover it first.",
+        withGuidance(
+          "The workspace writer's process cleanup is quarantined.",
+          "Inspect it with agent_read and recover it first.",
+        ),
       );
     if (
       writer &&
@@ -446,7 +467,10 @@ export const workspaceControlContext = Effect.fn("SubagentWorkspace.controlConte
                     Effect.fail(
                       invalid(
                         "workspace_process_unsettled",
-                        "The workspace writer's process cleanup is still settling. Retry shortly.",
+                        withGuidance(
+                          "The workspace writer's process cleanup is still settling.",
+                          "Retry shortly.",
+                        ),
                       ),
                     ),
                 }),

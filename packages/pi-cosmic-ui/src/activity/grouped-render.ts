@@ -6,6 +6,7 @@ import { focusedField } from "../manager/style.ts";
 import {
   renderResponsiveManagerFooter,
   clipToWidth,
+  managerNoticeColor,
   type ManagerFooterGroup,
 } from "../manager/chrome.ts";
 import { configuredKeyLabels } from "../manager/key-labels.ts";
@@ -132,7 +133,7 @@ function needsYouLine(
 ): string {
   const more = urgent.length > 1 ? ` +${urgent.length - 1}` : "";
   return options.theme.fg(
-    "warning",
+    managerNoticeColor("attention"),
     `Needs you [w]: ${activityOwnerLabel(rows, first, Math.max(0, listWidth - 15 - more.length))}${more}`,
   );
 }

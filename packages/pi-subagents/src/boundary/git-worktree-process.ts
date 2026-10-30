@@ -22,6 +22,8 @@ interface WorkspaceRefusalReason {
   readonly path?: string;
   readonly rule: string;
   readonly remedy: string;
+  /** The remedy is a step for the parent agent, which the user's view leaves out. */
+  readonly agentRemedy?: boolean;
 }
 
 /** A refusal whose detail names the path, the rule that fired, and how to resolve it. */
@@ -37,10 +39,11 @@ export const workspaceRefusal = (
       [
         ...(reason.path === undefined ? [] : [`Path: ${JSON.stringify(reason.path)}`]),
         `Rule: ${reason.rule}`,
-        `Remedy: ${reason.remedy}`,
+        ...(reason.agentRemedy === true ? [] : [`Remedy: ${reason.remedy}`]),
       ],
       "\n",
     ),
+    ...(reason.agentRemedy === true && { remedy: reason.remedy }),
   });
 export const workspaceIO = <A>(operation: string, run: () => PromiseLike<A>) =>
   Effect.tryPromise({
@@ -232,10 +235,11 @@ export const applyConflict = (result: GitResult, changedPaths: ReadonlyArray<str
         ...(paths.length > 0 ? [`Conflicting: ${listedPaths(paths)}`] : []),
         ...(stderr.length > 0 ? [`Git reported:\n${Arr.join(stderr, "\n")}`] : []),
         "Nothing was changed, and the preparation tree was removed.",
-        "Remedy: reconcile the conflicting parent files and prepare again, or discard this workspace and start a writer from the current checkout.",
       ],
       "\n",
     ),
+    remedy:
+      "reconcile the conflicting parent files and prepare again, or discard this workspace and start a writer from the current checkout.",
   });
 };
 

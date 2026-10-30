@@ -4,7 +4,12 @@ import * as Order from "effect/Order";
 import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import type { CompactChild, CompactSummary } from "../tools/compact-summary";
+import {
+  compactSettledStatus,
+  type CompactChild,
+  type CompactOutcome,
+  type CompactSummary,
+} from "../tools/compact-summary";
 import { layoutCompactRow, type CompactRowInput } from "./compact-row";
 import { compactIssueLabel, renderCompactIssues, wrapHanging } from "./compact-issues";
 import { formatDuration } from "pi-cosmic-core/display";
@@ -13,12 +18,24 @@ import { clipToWidth } from "pi-cosmic-ui/manager";
 const MAX_CHILDREN = 5;
 
 type IndexedChild = { entry: CompactChild; index: number };
+
+// Active calls lead, then problems, then calls awaiting a reply or decision, then routine ones.
+const SETTLED_PRIORITY: Readonly<Record<CompactOutcome, number>> = {
+  error: 1,
+  warning: 1,
+  uncertain: 1,
+  cancelled: 1,
+  attention: 2,
+  success: 3,
+  returned: 3,
+};
+
 const priority = (child: CompactChild): number =>
   child.status === "pending" || child.status === "running"
     ? 0
-    : child.status === "success" || child.status === "returned"
-      ? 2
-      : 1;
+    : SETTLED_PRIORITY[
+        compactSettledStatus({ subject: "", outcome: child.status, issues: child.issues ?? [] })
+      ];
 
 export function selectCompactChildren(
   children: NonNullable<CompactSummary["children"]>,

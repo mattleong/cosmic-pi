@@ -52,3 +52,23 @@ test("untrusted issue text renders as inert single-line messages", () => {
   expect(Arr.join(rows, "")).not.toContain("\u001b[2J");
   expect(stripAnsi(rows[0]!)).toMatch(/first second.*third/u);
 });
+
+test("attention issues show collapsed with the same message as expanded", () => {
+  const asks: CompactIssue[] = [
+    {
+      severity: "attention",
+      code: "question",
+      message: "worker asks: Which seed file?",
+      detail: "The whole question",
+    },
+    { severity: "info", code: "hint", message: "Page 1 of 2" },
+  ];
+  const collapsed = squash(render(asks));
+  const expanded = squash(render(asks, 100, true));
+  const message = Fn.pipe(asks[0]!.message, Str.replace(/\s/gu, ""));
+  expect(collapsed).toContain(message);
+  expect(expanded).toContain(message);
+  expect(Fn.pipe(collapsed, Str.includes("Thewholequestion"))).toBe(false);
+  expect(expanded).toContain("Thewholequestion");
+  expect(Fn.pipe(collapsed, Str.includes("Page1"))).toBe(false);
+});

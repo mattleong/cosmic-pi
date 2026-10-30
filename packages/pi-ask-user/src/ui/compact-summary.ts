@@ -17,6 +17,7 @@ import {
   decodeCompactAsyncRows,
   decodeCompactChoices,
   decodeOutcome,
+  isPendingState,
   isStatusList,
   questionnaireState,
   stateCounts,
@@ -106,11 +107,8 @@ export const askUserCompactSummary: CompactSummaryProvider<AskUserRequest> = ({
   return decoded && settledSummary(args, decoded);
 };
 
-const AWAIT_ANSWERS =
-  "Continue only independent work; use ask_user_async_control await when it is exhausted.";
 const QUEUED_ORDER = "Queued questionnaires open automatically in order.";
-const RETRIEVE_DELIVERY =
-  "Retrieve the retained result with ask_user_async_control status or await; delivery IDs identify the same result.";
+const DELIVERY_RETAINED = "The saved result stays available to the agent.";
 
 function answersPending(
   states: readonly QuestionnaireState[],
@@ -132,7 +130,7 @@ function answersPending(
     severity: "info",
     code: queued === pending ? "questionnaire-queued" : "answers-pending",
     message,
-    detail: queued ? `${QUEUED_ORDER} ${AWAIT_ANSWERS}` : AWAIT_ANSWERS,
+    ...(queued > 0 && { detail: QUEUED_ORDER }),
   };
 }
 
@@ -159,7 +157,7 @@ function deliveryFailed(failed: readonly QuestionnaireState[]): CompactIssue | u
         : failed[0] === "answered"
           ? "Answers were saved, but automatic delivery failed"
           : "The cancellation was saved, but automatic delivery failed",
-    detail: RETRIEVE_DELIVERY,
+    detail: DELIVERY_RETAINED,
   };
 }
 
@@ -192,7 +190,9 @@ function rowsSummary(args: QuestionnaireArgs, rows: readonly ClassifiedRow[]): C
     ? "error"
     : states.length > 0 && Arr.every(states, (state) => state === "cancelled")
       ? "cancelled"
-      : "success";
+      : Arr.some(states, isPendingState)
+        ? "attention"
+        : "success";
   const [only] = rows;
   const counters =
     list || !only

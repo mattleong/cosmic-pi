@@ -1,7 +1,14 @@
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
-import { isOutcomeUncertain, SubagentProcessError } from "./errors.ts";
+import {
+  failureFields,
+  type GuidedText,
+  isOutcomeUncertain,
+  SubagentProcessError,
+  withCause,
+  withGuidance,
+} from "./errors.ts";
 import {
   isInactiveRunRecord,
   recordLatestAssistantText,
@@ -12,7 +19,7 @@ import {
 } from "./internal.ts";
 import type { RunProcessControls } from "./process-lifecycle.ts";
 import type { RunSettlement } from "./settlement.ts";
-import { MAX_ERROR_CHARS, sanitizeDiagnosticText } from "./state.ts";
+import { sanitizeGuidedDiagnostic } from "./state.ts";
 import { recordRunWarning } from "./warnings.ts";
 
 interface RunAssignmentDependencies extends Pick<RunContext, "withLock" | "publish"> {
@@ -113,13 +120,29 @@ export function assignmentOperations(dependencies: RunAssignmentDependencies) {
             ? SubagentProcessError.make({
                 operation,
                 code: "resume_outcome_uncertain",
-                message: `The resume prompt may already have applied. Inspect the run with agent_read before retrying. (${error.message})`,
+                ...failureFields(
+                  withCause(
+                    withGuidance(
+                      "The resume prompt may already have applied.",
+                      "Inspect the run with agent_read before retrying.",
+                    ),
+                    error,
+                  ),
+                ),
               })
             : record.view.writeIntent === "writer"
               ? SubagentProcessError.make({
                   operation,
                   code: "start_outcome_uncertain",
-                  message: `The writer task may have been accepted, but startup could not confirm the outcome. Inspect the workspace and the run with agent_read before starting another writer. (${error.message})`,
+                  ...failureFields(
+                    withCause(
+                      withGuidance(
+                        "The writer task may have been accepted, but startup could not confirm the outcome.",
+                        "Inspect the workspace and the run with agent_read before starting another writer.",
+                      ),
+                      error,
+                    ),
+                  ),
                 })
               : error;
         return withLock(
@@ -138,13 +161,13 @@ export function assignmentOperations(dependencies: RunAssignmentDependencies) {
     );
 
   const retainUncertainAssignment = Effect.fn("SubagentAssignment.retainUncertainAssignment")(
-    function* (record: RunRecord, attemptToken: string, warning: string) {
+    function* (record: RunRecord, attemptToken: string, warning: string | GuidedText) {
       const replay = yield* withLock(
         Effect.gen(function* () {
           if (!isCurrentIssuingAssignment(record, attemptToken)) return undefined;
           const now = yield* Clock.currentTimeMillis;
           record.assignment.outcomeUncertain = true;
-          const diagnostic = sanitizeDiagnosticText(warning, MAX_ERROR_CHARS);
+          const diagnostic = sanitizeGuidedDiagnostic(warning);
           record.view = {
             ...record.view,
             ...recordRunWarning(record, record.view.sessionEvents, "system", diagnostic, now),

@@ -11,7 +11,7 @@ import type {
   BackendStartupState,
 } from "../backend/model.ts";
 import type { CanonicalWriterCwd, WriterLeaseContract } from "../boundary/writer-lease.ts";
-import type { SubagentError, SubagentNotFoundError } from "./errors.ts";
+import type { GuidedText, SubagentError, SubagentNotFoundError } from "./errors.ts";
 import {
   isTerminalRunState,
   type SubagentParentContext,
@@ -41,7 +41,7 @@ export interface RunContext {
 
 export interface PendingInitializationSettlement {
   readonly state: "completed" | "failed" | "stopped";
-  readonly error?: string | undefined;
+  readonly error?: string | GuidedText | undefined;
 }
 
 /** A backend initialization in progress; settlements that arrive meanwhile wait for it. */
@@ -62,8 +62,11 @@ export interface CompletionGenerationRecord {
   readonly finalTextTruncation?: SubagentReportTruncation | undefined;
   readonly reportArchive?: SubagentReportArchive | undefined;
   readonly error?: string | undefined;
+  /** `error` and `warning` without the agent procedures they carry; absent when they match. */
+  readonly userError?: string | undefined;
   readonly errorArchive?: SubagentReportArchive | undefined;
   readonly warning?: string | undefined;
+  readonly userWarning?: string | undefined;
   /** Times an ancestor run took this report and then failed, paused, or stopped. */
   readonly handOns?: number | undefined;
 }
@@ -84,7 +87,8 @@ type DerivedViewField =
   | "warning"
   | "warningSource"
   | "childWarning"
-  | "systemWarning";
+  | "systemWarning"
+  | "userSystemWarning";
 
 /** The view a record stores; `snapshotRun` adds the derived fields. */
 export type StoredRunView = Omit<SubagentRunView, DerivedViewField>;

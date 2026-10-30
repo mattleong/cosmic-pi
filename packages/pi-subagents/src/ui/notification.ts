@@ -1,56 +1,56 @@
-import type { MessageRenderer, Theme } from "@earendil-works/pi-coding-agent";
-import { Text, type Component } from "@earendil-works/pi-tui";
+import type { Theme } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import * as Option from "effect/Option";
 import * as Match from "effect/Match";
 import { countLabel } from "pi-cosmic-core/display";
-import { stripTerminalControls } from "pi-cosmic-core/security";
-import { clipToWidth } from "pi-cosmic-ui/manager";
-import { composeToolComponent, renderExpansionAffordance } from "pi-cosmic-ui/tool";
-import { renderCompactRow, type CompactStatus, type CompactSummary } from "pi-code-previews";
+import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core/security";
+import { clipToWidth, managerActivityGlyph, managerActivityColor } from "pi-cosmic-ui/manager";
+import { composeToolComponent } from "pi-cosmic-ui/tool";
+import type { CodePreviewMessagePresenter, CompactSummary } from "pi-code-previews";
+import {
+  agentTextBlockLines,
+  agentTextLines,
+  bodyIndent,
+  detailsSectionLines,
+  indentedLines,
+} from "./agent-text.ts";
 import { decodeMessageEnvelope, messageContentText } from "./message-envelope.ts";
+import { NoticeDetailsSchema, type NoticeDetails, type NoticeRun } from "./notice-details.ts";
 
-const Count = Schema.Natural.check(Schema.isLessThanOrEqualTo(100_000));
-const Name = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(120));
-const Details = Schema.Union([
-  Schema.Struct({
-    version: Schema.Literal(1),
-    kind: Schema.Literal("question"),
-    name: Schema.optional(Name),
-  }),
-  Schema.Struct({
-    version: Schema.Literal(1),
-    kind: Schema.Literal("completed"),
-    total: Count,
-    failed: Count,
-    warnings: Count,
-    name: Schema.optional(Name),
-  }),
-  Schema.Struct({
-    version: Schema.Literal(1),
-    kind: Schema.Literal("stopped"),
-    total: Count,
-    name: Schema.optional(Name),
-  }),
-]);
-type NotificationDetails = typeof Details.Type;
-const decodeDetails = Schema.decodeUnknownOption(Details, { onExcessProperty: "ignore" });
-
-interface NotificationRow {
-  readonly summary: CompactSummary;
-  readonly status?: CompactStatus;
-}
+const decodeDetails = Schema.decodeUnknownOption(NoticeDetailsSchema, {
+  onExcessProperty: "ignore",
+});
 
 const UNTYPED_SUBJECTS = new Map([
   ["pi-subagents-proxy-notification", "Update about a nested subagent"],
   ["pi-subagents-peer-notice", "Working directory shared with other subagents"],
 ]);
 
-const completedRow = (
-  details: Extract<NotificationDetails, { readonly kind: "completed" }>,
-): NotificationRow => {
+const STOP_CAUSES = { reload: "Reloading Pi stopped", session: "Leaving the session stopped" };
+
+type CompletedDetails = Extract<NoticeDetails, { readonly kind: "completed" }>;
+type StoppedDetails = Extract<NoticeDetails, { readonly kind: "stopped" }>;
+type PeerDetails = Extract<NoticeDetails, { readonly kind: "peers" }>;
+
+const namesOrCount = (names: ReadonlyArray<string>, total: number, noun: string): string =>
+  names.length === total && total > 0 && total <= 3
+    ? Arr.join(names, ", ")
+    : countLabel(total, noun);
+
+const peerSubject = (details: PeerDetails): string =>
+  details.total === 0
+    ? "No other subagents share this directory"
+    : `Sharing this directory with ${namesOrCount(
+        Arr.map(details.peers, (peer) => peer.name),
+        details.total,
+        "other subagent",
+      )}`;
+
+const completedSummary = (details: CompletedDetails): CompactSummary => {
   const finished = details.total - details.failed;
   const outcome = details.failed ? "error" : details.warnings ? "warning" : "success";
   const single = details.total === 1 && details.name;
@@ -65,45 +65,46 @@ const completedRow = (
         Arr.filter(Boolean),
         Arr.join(", "),
       );
-  return { summary: { subject, outcome } };
+  return { subject, outcome };
 };
 
-const notificationRow = (
+const stoppedSubject = (details: StoppedDetails): string => {
+  const names = Arr.map(details.runs ?? [], (run) => run.name);
+  const named =
+    names.length === 0 && details.total === 1 && details.name
+      ? details.name
+      : namesOrCount(names, details.total, "subagent");
+  return details.cause ? `${STOP_CAUSES[details.cause]} ${named}` : `Stopped ${named}`;
+};
+
+const notificationSummary = (
   customType: string | undefined,
-  details: NotificationDetails | undefined,
-): NotificationRow => {
+  details: NoticeDetails | undefined,
+): CompactSummary => {
   if (details?.kind === "question")
-    return {
-      summary: { subject: `${details.name ?? "A subagent"} needs a reply`, outcome: "warning" },
-    };
+    return { subject: `${details.name ?? "A subagent"} asks`, outcome: "attention" };
   if (details?.kind === "stopped" && details.total > 0)
-    return {
-      summary: {
-        subject:
-          details.total === 1 && details.name
-            ? `${details.name} stopped`
-            : `${countLabel(details.total, "subagent")} stopped`,
-        outcome: "warning",
-      },
-    };
+    return { subject: stoppedSubject(details), outcome: "warning" };
+  if (details?.kind === "peers") return { subject: peerSubject(details), outcome: "returned" };
   if (
     details?.kind === "completed" &&
     details.total > 0 &&
     details.failed <= details.total &&
     details.warnings <= details.total
   )
-    return completedRow(details);
+    return completedSummary(details);
   return {
-    summary: { subject: UNTYPED_SUBJECTS.get(customType ?? "") ?? "Subagent update" },
-    status: "returned",
+    subject: UNTYPED_SUBJECTS.get(customType ?? "") ?? "Subagent update",
+    outcome: "returned",
   };
 };
 
-const expansionLabel = (details: NotificationDetails | undefined): string => {
+const expansionLabel = (details: NoticeDetails | undefined): string => {
   if (details === undefined) return "message";
   return Match.value(details).pipe(
     Match.when({ kind: "question" }, () => "question"),
     Match.when({ kind: "stopped" }, () => "list"),
+    Match.when({ kind: "peers" }, () => "peers"),
     Match.when({ kind: "completed" }, (completed) =>
       completed.failed === completed.total
         ? countLabel(completed.total, "failure detail")
@@ -113,40 +114,143 @@ const expansionLabel = (details: NotificationDetails | undefined): string => {
   );
 };
 
-export function renderSubagentNotification(
-  input: Parameters<MessageRenderer>[0],
-  options: { expanded: boolean; outputPad: number },
-  compact: boolean,
+const runNotes = (run: NoticeRun): ReadonlyArray<string> => [
+  ...(run.textCut ? ["The rest of this report is in its saved file"] : []),
+  ...(run.notes ?? []),
+];
+
+/** Details saved before display copies existed carry only counts for the heading. */
+const hasDisplayCopy = (details: NoticeDetails | undefined): boolean => {
+  if (details === undefined) return false;
+  return Match.value(details).pipe(
+    Match.when({ kind: "completed" }, (completed) => (completed.runs?.length ?? 0) > 0),
+    Match.when({ kind: "question" }, (question) => question.question !== undefined),
+    Match.when({ kind: "stopped" }, (stopped) => stopped.runs !== undefined),
+    Match.when({ kind: "peers" }, () => true),
+    Match.exhaustive,
+  );
+};
+
+/** The body a notice shows below its heading; undefined when its details carry no display copy. */
+const noticeBody = (
+  details: NoticeDetails | undefined,
+  width: number,
   theme: Theme,
-): Component {
+  expanded: boolean,
+  indent = 2,
+): string[] | undefined => {
+  if (details?.kind === "completed" && details.runs !== undefined && details.runs.length > 0) {
+    const [only] = details.runs;
+    const words =
+      details.runs.length === 1 && only !== undefined
+        ? [
+            ...agentTextLines(only.text, width, theme, { expanded, indent }),
+            ...Arr.flatMap(runNotes(only), (note) =>
+              indentedLines(theme.fg("muted", sanitizeTerminalLine(note)), width, indent),
+            ),
+          ]
+        : agentTextBlockLines(
+            Arr.map(details.runs, (run) => {
+              const kind = run.outcome === "failed" ? "failed" : "done";
+              return {
+                glyph: managerActivityGlyph(kind),
+                tone: managerActivityColor(kind),
+                name: run.name,
+                text: run.text,
+                notes: runNotes(run),
+              };
+            }),
+            width,
+            theme,
+            expanded,
+          );
+    if (!expanded) return words;
+    return [
+      ...words,
+      ...detailsSectionLines(
+        Arr.flatMap(details.runs, (run) => [
+          `${run.name}: ${Arr.join(run.facts ?? [`ID ${run.id}`], " · ")}`,
+        ]),
+        width,
+        theme,
+      ),
+    ];
+  }
+  if (details?.kind === "question" && details.question !== undefined)
+    return [
+      ...agentTextLines(details.question, width, theme, { expanded, indent }),
+      ...(expanded && details.id ? detailsSectionLines([`ID ${details.id}`], width, theme) : []),
+    ];
+  if (details?.kind === "stopped" && details.runs !== undefined) {
+    const stopped = details.runs;
+    const hidden = details.total - stopped.length;
+    const note = indentedLines(
+      theme.fg("muted", "They won't report; partial work they left in the checkout remains."),
+      width,
+      indent,
+    );
+    if (!expanded) return note;
+    return [
+      ...Arr.map(stopped, (run) =>
+        clipToWidth(
+          `  ${theme.fg("muted", managerActivityGlyph("stopped"))} ${sanitizeTerminalLine(run.name)} ${theme.fg("muted", `· was ${sanitizeTerminalLine(run.state)}`)}`,
+          width,
+        ),
+      ),
+      ...(hidden > 0
+        ? [clipToWidth(theme.fg("dim", `  … ${countLabel(hidden, "more")}`), width)]
+        : []),
+      ...note,
+      ...detailsSectionLines(
+        Arr.map(stopped, (run) => `${run.name}: ID ${run.id}`),
+        width,
+        theme,
+      ),
+    ];
+  }
+  if (details?.kind === "peers") {
+    const rows = Arr.map(details.peers, (peer) =>
+      clipToWidth(
+        `${Str.repeat(indent)(" ")}${theme.fg("toolTitle", sanitizeTerminalLine(peer.name))}${theme.fg("muted", ` · ${sanitizeTerminalLine(peer.ownership)} · ${sanitizeTerminalLine(peer.state)}${peer.task ? ` · ${sanitizeTerminalLine(peer.task)}` : ""}`)}`,
+        width,
+      ),
+    );
+    if (!expanded) return rows.length > 0 ? rows.slice(0, 3) : [];
+    return [
+      ...rows,
+      ...detailsSectionLines(
+        [
+          ...(details.ownership ? [`This agent: ${details.ownership}`] : []),
+          ...Arr.map(details.peers, (peer) => `${peer.name}: ID ${peer.id}`),
+        ],
+        width,
+        theme,
+      ),
+    ];
+  }
+  return undefined;
+};
+
+/** A subagent notice: what happened as its heading, then the words agents wrote. */
+export const presentSubagentNotification: CodePreviewMessagePresenter = (input, options, theme) => {
   const envelope = Option.getOrUndefined(decodeMessageEnvelope(input));
-  if (options.expanded)
-    return new Text(
-      stripTerminalControls(messageContentText(envelope?.content)),
-      options.outputPad,
-      0,
-    );
   const details = Option.getOrUndefined(decodeDetails(envelope?.details));
-  const { summary, status } = notificationRow(envelope?.customType, details);
-  const hint = compact
-    ? undefined
-    : renderExpansionAffordance(expansionLabel(details), false, theme);
-  return composeToolComponent((width) => {
-    const inner = Math.max(1, width - options.outputPad * 2);
-    const row = renderCompactRow(
-      {
-        name: "subagents",
-        phase: "settled",
-        summary,
-        ...(status && { status }),
-      },
-      theme,
-      inner,
+  const presentation = {
+    name: "subagents",
+    label: "Subagents",
+    summary: notificationSummary(envelope?.customType, details),
+  };
+  // Without a display copy, expansion keeps the notice as the agent received it.
+  if (!hasDisplayCopy(details))
+    return {
+      ...presentation,
+      expandLabel: expansionLabel(details),
+      expanded: () => new Text(stripTerminalControls(messageContentText(envelope?.content)), 0, 0),
+    };
+  const body = (expanded: boolean) => () =>
+    composeToolComponent(
+      (width) =>
+        noticeBody(details, width, theme, expanded, bodyIndent({ ...options, expanded })) ?? [],
     );
-    return new Text(
-      hint ? `${row}\n${clipToWidth(hint, inner)}` : row,
-      options.outputPad,
-      0,
-    ).render(width);
-  });
-}
+  return { ...presentation, collapsed: body(false), expanded: body(true) };
+};

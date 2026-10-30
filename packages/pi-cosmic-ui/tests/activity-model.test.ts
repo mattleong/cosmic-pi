@@ -4,6 +4,7 @@ import * as Option from "effect/Option";
 import { activityPath, retainActivity, type ActivityRow } from "../src/activity/model.ts";
 import { groupedActivityTree, type GroupedActivityRow } from "../src/activity/grouped-tree.ts";
 import { needsYou } from "../src/activity/attention.ts";
+import { summarizeGroup } from "../src/activity/group-summary.ts";
 import { activityRow as row } from "./support/activity.ts";
 
 const members = (tree: readonly GroupedActivityRow[]) =>
@@ -16,6 +17,15 @@ describe("activity ownership", () => {
     expect(tree).toHaveLength(1);
     expect(tree[0]?.history).toBe(false);
     expect(Arr.map(needsYou(values), (entry) => entry.id)).toEqual(["question"]);
+  });
+  it("keeps a paused row live and held, without counting it as blocked or needing input", () => {
+    const values = [row("root", "done"), row("paused", "paused", "root")];
+    const tree = members(groupedActivityTree(values, { collapsed: new Set([values[0]!.key]) }));
+    expect(tree[0]?.history).toBe(false);
+    expect(needsYou(values)).toEqual([]);
+    const summary = summarizeGroup(values);
+    expect(summary.paused).toBe(1);
+    expect(summary.attention).toEqual({ user: 0, parent: 0, blocked: 0, failed: 0 });
   });
   it("bounds completed descendants without dropping live rows or their ancestors", () => {
     const root = row("root");

@@ -224,7 +224,7 @@ export function registerSubagentChildBridge(
     }
     if (message.type === "proxy_notification") {
       // A repeat is a retry after an uncertain acknowledgement; it was already shown.
-      const ok = shownNotices.has(message.key) || deliverNotice(message.message);
+      const ok = shownNotices.has(message.key) || deliverNotice(message.message, message.details);
       if (ok) shownNotices.add(message.key);
       forkContact(input, {
         channel: "pi-subagents",
@@ -258,6 +258,7 @@ export function registerSubagentChildBridge(
             customType: PEER_NOTICE_MESSAGE_TYPE,
             content: message.message,
             display: true,
+            ...(message.details !== undefined && { details: message.details }),
           },
           { deliverAs: "nextTurn", triggerTurn: false },
         ),

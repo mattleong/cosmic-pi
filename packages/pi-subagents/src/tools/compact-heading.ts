@@ -1,4 +1,4 @@
-import { getTextContent, type CompactPhase, type CompactSummary } from "pi-code-previews";
+import type { CompactPhase, CompactSummary, getTextContent } from "pi-code-previews";
 import * as Arr from "effect/Array";
 import * as Predicate from "effect/Predicate";
 import * as Fn from "effect/Function";
@@ -15,6 +15,7 @@ import {
 import { decodeOutcomeDetails } from "./details-decode.ts";
 import { decodeWorkspaceToolDetails } from "./compact-workspace-summary.ts";
 import { codedActionFailureIssue, rejectedCallIssue } from "./compact-action-failures.ts";
+import { rejectedFailure } from "./failure-details.ts";
 
 export interface SummaryArguments {
   action?: unknown;
@@ -124,17 +125,17 @@ export function rejectedCall(
   result: { readonly content: Parameters<typeof getTextContent>[0]; readonly details?: unknown },
 ): CompactSummary | undefined {
   if (isTypedReceipt(result)) return undefined;
-  const text = getTextContent(result.content);
+  const failure = rejectedFailure(result);
   const target = rejectedTarget(input, action);
-  // Await and lifecycle failures lead with their code; other actions' text is classified as is.
+  // Await and lifecycle failures are phrased from their code; other actions' text is classified.
   const coded =
     action === "await" || action === "lifecycle"
-      ? codedActionFailureIssue(text, operation, { oneOfMany: target === "the subagents" })
+      ? codedActionFailureIssue(failure, operation, { oneOfMany: target === "the subagents" })
       : undefined;
   return {
     ...lanes,
     counters: [],
     outcome: coded?.severity === "warning" ? "uncertain" : "error",
-    issues: [coded ?? rejectedCallIssue(operation, text, target)],
+    issues: [coded ?? rejectedCallIssue(operation, failure.message, target)],
   };
 }

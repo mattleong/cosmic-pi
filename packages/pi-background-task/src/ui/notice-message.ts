@@ -1,19 +1,21 @@
-import type { MessageRenderer } from "@earendil-works/pi-coding-agent";
+import type { MessageRenderer, Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import {
-  captureCodePreviewPresentationPolicy,
-  renderCompactIssues,
-  renderCompactRow,
+  withCodePreviewMessageShell,
+  type CodePreviewMessagePresenter,
   type CompactSummary,
 } from "pi-code-previews";
-import { stripTerminalControls } from "pi-cosmic-core/security";
-import { clipToWidth } from "pi-cosmic-ui/manager";
-import { composeToolComponent, renderExpansionAffordance } from "pi-cosmic-ui/tool";
-import { TaskNoticeDetailsSchema } from "../task/notice.ts";
+import {
+  sanitizeDiagnosticContent,
+  sanitizeTerminalLine,
+  stripTerminalControls,
+} from "pi-cosmic-core/security";
+import { TaskNoticeDetailsSchema, type TaskNoticeDetails } from "../task/notice.ts";
 import { taskNoticeSummary } from "./compact-summary.ts";
 
 const Envelope = Schema.Struct({
@@ -36,44 +38,54 @@ const contentText = (content: string | ReadonlyArray<unknown> | undefined): stri
         "\n",
       );
 
-const UNKNOWN_NOTICE: CompactSummary = { subject: "finished" };
+const UNKNOWN_NOTICE: CompactSummary = { subject: "finished", outcome: "returned" };
+
+/**
+ * What expansion adds below a notice's row: the command, the task's newest output, and its id and
+ * directory. A notice stored without display output shows the text the agent read instead.
+ */
+const expandedLines = (details: TaskNoticeDetails | undefined, stored: string, theme: Theme) => {
+  if (details?.tail === undefined) return stored ? ["", stored] : [];
+  const { task, tail } = details;
+  const output = stripTerminalControls(tail);
+  return [
+    // The agent's notice redacts the command too.
+    theme.fg("dim", sanitizeTerminalLine(sanitizeDiagnosticContent(task.command))),
+    ...(output
+      ? Arr.map(Str.split(output, "\n"), (line) => theme.fg("toolOutput", line))
+      : [theme.fg("muted", "No output")]),
+    theme.fg("dim", Arr.join([task.id, sanitizeTerminalLine(task.cwd)], " · ")),
+  ];
+};
+
+const expansionLabel = (details: TaskNoticeDetails | undefined): string => {
+  if (details?.tail === undefined) return "notice";
+  return details.tail ? "output" : "details";
+};
 
 /**
  * Shows a finished task's notice like a status row: the task, how it ended, and its issues
- * collapsed; the notice the agent read, with issue details, expanded. Undecodable details fall
- * back to a neutral row. Pi renders every frame, so rows are kept for the width they fit.
+ * collapsed; its command, newest output, and id expanded. Undecodable details fall back to a
+ * neutral row.
  */
-export const renderTaskNotice: MessageRenderer = (message, options, theme) => {
+export const presentTaskNotice: CodePreviewMessagePresenter = (message, _options, theme) => {
   const envelope = Option.getOrUndefined(decodeEnvelope(message));
   const details = Option.getOrUndefined(decodeDetails(envelope?.details));
-  const summary = details ? taskNoticeSummary(details.task) : UNKNOWN_NOTICE;
-  const text = options.expanded ? stripTerminalControls(contentText(envelope?.content)) : "";
-  const compact = captureCodePreviewPresentationPolicy().toolCallCollapsedStyle === "compact";
-  const hint =
-    options.expanded || compact ? undefined : renderExpansionAffordance("notice", false, theme);
-  let rendered: { readonly width: number; readonly rows: string[] } | undefined;
-  return composeToolComponent((width) => {
-    if (rendered?.width === width) return rendered.rows;
-    const inner = Math.max(1, width - options.outputPad * 2);
-    const row = renderCompactRow(
-      {
-        name: "background task",
-        phase: "settled",
-        summary,
-        ...(details === undefined && { status: "returned" as const }),
-        expanded: options.expanded,
-      },
-      theme,
-      inner,
-    );
-    const lines = [
-      row,
-      ...renderCompactIssues(summary.issues, theme, inner, options.expanded),
-      ...(hint ? [clipToWidth(hint, inner)] : []),
-      ...(text ? ["", text] : []),
-    ];
-    const rows = new Text(Arr.join(lines, "\n"), options.outputPad, 0).render(width);
-    rendered = { width, rows };
-    return rows;
-  });
+  return {
+    name: "background task",
+    label: "Background task",
+    summary: details ? taskNoticeSummary(details.task) : UNKNOWN_NOTICE,
+    expandLabel: expansionLabel(details),
+    expanded: () =>
+      new Text(
+        Arr.join(
+          expandedLines(details, stripTerminalControls(contentText(envelope?.content)), theme),
+          "\n",
+        ),
+        0,
+        0,
+      ),
+  };
 };
+
+export const renderTaskNotice: MessageRenderer = withCodePreviewMessageShell(presentTaskNotice);

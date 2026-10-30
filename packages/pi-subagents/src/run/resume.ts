@@ -17,6 +17,8 @@ import { hasCompletionGenerationCapacity } from "./completion.ts";
 import { validateMessageText } from "./agent-messaging.ts";
 import {
   agentMessageRefusal,
+  errorText,
+  withGuidanceClause,
   invalidRequest,
   type InvalidSubagentRequestError,
   processError,
@@ -72,7 +74,10 @@ const resumeStateError = (record: RunRecord): InvalidSubagentRequestError | unde
   )
     return invalidRequest(
       "resume_cleanup_unsettled",
-      `Subagent ${id} cleanup is not confirmed; inspect it with agent_read before resuming.`,
+      withGuidanceClause(
+        `Subagent ${id} cleanup is not confirmed`,
+        "inspect it with agent_read before resuming.",
+      ),
     );
   if (!hasCompletionGenerationCapacity(record))
     return invalidRequest(
@@ -174,7 +179,10 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
             processError(
               "resume",
               "cleanup_timeout",
-              `Subagent ${id} cleanup did not finish within 10 seconds; inspect it with agent_read before retrying resume.`,
+              withGuidanceClause(
+                `Subagent ${id} cleanup did not finish within 10 seconds`,
+                "inspect it with agent_read before retrying resume.",
+              ),
             ),
           ),
       }),
@@ -288,14 +296,14 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
               error.code !== "resume_outcome_uncertain"
             )
               return settlement
-                .failRun(claimed.record, error.message)
+                .failRun(claimed.record, errorText(error))
                 .pipe(Effect.andThen(closeRecordScope(claimed.record)));
             return pending
               ? settlePendingInitialization(claimed.record, pending)
               : assignment.retainUncertainAssignment(
                   claimed.record,
                   claimed.attemptToken,
-                  error.message,
+                  errorText(error),
                 );
           }),
           Effect.asVoid,
@@ -396,7 +404,10 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
             if (agentMessage && isStopInProgress(records, selected))
               return yield* agentMessageRefusal(
                 "agent_unavailable",
-                `Agent ${id} is being stopped with its subtree; send again once the stop finishes.`,
+                withGuidanceClause(
+                  `Agent ${id} is being stopped with its subtree`,
+                  "send again once the stop finishes.",
+                ),
               );
             const needsRespawn = selected.process === undefined;
             if (needsRespawn && !selected.launch.resumeToken)

@@ -2,13 +2,17 @@ import {
   galleryDirectory,
   galleryFrames,
   galleryMessageFrames,
+  galleryTranscriptFrames,
   withPresentationSettings,
   writeGallerySection,
   type GalleryMessageScenario,
   type GalleryScenario,
 } from "pi-code-previews/testing";
-import { describe, it } from "@effect/vitest";
+import { beforeAll, describe, it } from "@effect/vitest";
+import { initTheme } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import { imageResultText } from "../src/image/result-text.ts";
 import type { CodexImageDetails } from "../src/image/types.ts";
 import { registerImagePresentation, textPart } from "./image-fixtures.ts";
@@ -102,6 +106,8 @@ const messageScenarios: ReadonlyArray<GalleryMessageScenario> = [
 const directory = galleryDirectory(process.env) ?? "";
 
 describe.skipIf(!directory)("presentation gallery", () => {
+  beforeAll(() => initTheme("dark", false));
+
   it.effect("renders image tool calls and messages in both collapsed styles", () =>
     Effect.gen(function* () {
       const lines: string[] = [];
@@ -119,6 +125,27 @@ describe.skipIf(!directory)("presentation gallery", () => {
                 title: `${style} · ${scenario.title}`,
               }),
             );
+          for (const background of ["border", "on", "off"] as const)
+            withPresentationSettings({ toolCallBackground: background }, () => {
+              const framed = registerImagePresentation();
+              const completed = Option.getOrThrow(
+                Arr.findFirst(toolScenarios, (entry) => entry.title === "completed with an image"),
+              );
+              lines.push(
+                ...galleryTranscriptFrames(
+                  `${style} · ${background} · transcript: an image tool call beside an image message`,
+                  [
+                    {
+                      name: framed.tool.name,
+                      tool: framed.tool,
+                      args: completed.args,
+                      result: completed.result!,
+                    },
+                    { render: framed.message, message: message("completed") },
+                  ],
+                ),
+              );
+            });
         });
       yield* writeGallerySection(directory, "pi-better-openai", lines);
     }),

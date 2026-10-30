@@ -1,10 +1,12 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
 import type { CompactIssue, CompactSummary, CompactSummaryProvider } from "pi-code-previews";
 import { clipText, countLabel } from "pi-cosmic-core/display";
-import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core/security";
+import { sanitizeTerminalLine } from "pi-cosmic-core/security";
+import { MAX_MESSAGE_CHARS } from "../transport/protocol.ts";
 import {
   decodeSessionToolDetails,
   SESSION_TOOL,
@@ -14,7 +16,6 @@ import {
   type SessionView,
   type ToolRefusalCode,
 } from "./contract.ts";
-import { refusalText, sendText } from "./text.ts";
 
 const MAX_SUBJECT_CHARS = 60;
 
@@ -34,13 +35,48 @@ const REFUSAL_MESSAGES: Record<ToolRefusalCode, string> = {
   session_message_too_long: "The message is too long",
 };
 
-/** The issue a refusal shows; the agent's procedure stays in the expanded detail. */
-export const refusalIssue = (refusal: SessionRefusal): CompactIssue => ({
-  severity: "error",
-  code: `${refusal.tool}:${refusal.code}`,
-  message: REFUSAL_MESSAGES[refusal.code],
-  detail: refusalText(refusal),
-});
+/** What the user learns from expanding a refusal; the agent's procedure stays in the result. */
+const REFUSAL_DETAILS: Record<ToolRefusalCode, (id: string) => string> = {
+  session_not_found: (id) =>
+    `No other live session has id ${JSON.stringify(id)}; it may have exited.`,
+  session_ambiguous: (id) =>
+    `More than one live session has id ${JSON.stringify(id)}, so neither can be addressed until one closes.`,
+  session_unreachable: () => "Nothing answered at its socket; it may have exited.",
+  session_unresponsive: () => "It may be busy or stuck.",
+  session_unavailable: () => "It is shutting down or being replaced.",
+  session_receive_disabled: () =>
+    "Its user turned off messages from other sessions with /intercom receive off.",
+  session_message_too_long: () =>
+    `Messages are limited to ${MAX_MESSAGE_CHARS.toLocaleString("en-US")} characters.`,
+};
+
+const NOTHING_SENT: ReadonlySet<ToolRefusalCode> = new Set([
+  "session_unreachable",
+  "session_unresponsive",
+  "session_unavailable",
+  "session_receive_disabled",
+  "session_message_too_long",
+]);
+
+/** The issue a refusal shows; its detail explains it to the user, without the agent's procedure. */
+export const refusalIssue = (refusal: SessionRefusal): CompactIssue => {
+  const nothingSent = refusal.tool === SESSION_TOOL.send && NOTHING_SENT.has(refusal.code);
+  return {
+    severity: "error",
+    code: `${refusal.tool}:${refusal.code}`,
+    message: REFUSAL_MESSAGES[refusal.code],
+    detail: `${REFUSAL_DETAILS[refusal.code](sanitizeTerminalLine(refusal.to))}${nothingSent ? " Nothing was sent." : ""}`,
+  };
+};
+
+const UNCERTAIN_DETAILS: Record<
+  Extract<SessionToolDetails, { readonly outcome: "uncertain" }>["reason"],
+  string
+> = {
+  timeout: "The session didn't answer in time",
+  disconnected: "The connection ended before the session answered",
+  protocol: "The session's answer couldn't be read",
+};
 
 export const uncertainIssue = (
   details: Extract<SessionToolDetails, { readonly outcome: "uncertain" }>,
@@ -48,10 +84,11 @@ export const uncertainIssue = (
   severity: "warning",
   code: `${details.tool}:delivery_uncertain`,
   message: "The message may not have arrived",
-  detail: sendText(details),
+  detail: `${UNCERTAIN_DETAILS[details.reason]}, so it may or may not have received the message.`,
 });
 
-const DISPOSITION_LABELS = { woken: "woke it", queued: "queued", held: "held" } as const;
+/** Delivery worth a word: a woken session reading the message at once is the plain case. */
+export const DISPOSITION_WORDS = { woken: "", queued: "queued", held: "holding" } as const;
 
 const targetSubject = (to: string | undefined): string =>
   clipText(sanitizeTerminalLine(to ?? ""), MAX_SUBJECT_CHARS);
@@ -97,7 +134,7 @@ const settled = (details: SessionToolDetails): CompactSummary => {
       action: "Read",
       subject: `${sessionSubject(details.session)}'s last message`,
       metadata: [
-        details.state,
+        ...(details.state === "busy" ? ["busy"] : []),
         ...(details.text === undefined ? ["no reply yet"] : []),
         ...(details.truncated ? ["truncated"] : []),
       ],
@@ -108,44 +145,16 @@ const settled = (details: SessionToolDetails): CompactSummary => {
       action: "Sent message to",
       subject: sessionSubject(details.session),
       outcome: "uncertain",
+      messageIcon: "sent",
       issues: [uncertainIssue(details)],
     };
   return {
     action: "Sent message to",
     subject: sessionSubject(details.session),
-    metadata: [DISPOSITION_LABELS[details.disposition]],
+    metadata: Arr.filter([DISPOSITION_WORDS[details.disposition]], Str.isNonEmpty),
     outcome: "success",
+    messageIcon: "sent",
   };
-};
-
-const DISPOSITION_SENTENCES = {
-  woken: "it started a turn to read it",
-  queued: "it reads it when its current turn ends",
-  held: "it's holding messages until its user's next prompt",
-} as const;
-
-const MAX_COLLAPSED_LINES = 6;
-
-/** The user-facing body of a collapsed preview row; empty when the issues say it all. */
-export const collapsedResultText = (details: SessionToolDetails): string => {
-  if (details.tool === SESSION_TOOL.list)
-    return Arr.join(
-      Arr.map(
-        details.sessions.slice(0, MAX_COLLAPSED_LINES),
-        (session) =>
-          `${sessionSubject(session)} · ${sanitizeTerminalLine(session.cwd)} · ${session.state}`,
-      ),
-      "\n",
-    );
-  if ("outcome" in details && details.outcome !== "delivered") return "";
-  if (details.tool === SESSION_TOOL.read)
-    return details.text === undefined
-      ? "No reply yet"
-      : Arr.join(
-          Str.split(stripTerminalControls(details.text), "\n").slice(0, MAX_COLLAPSED_LINES),
-          "\n",
-        );
-  return `Delivered to ${sessionSubject(details.session)}; ${DISPOSITION_SENTENCES[details.disposition]}`;
 };
 
 /** Decodes a result's details when they belong to `tool`. */
@@ -162,7 +171,14 @@ export const sessionToolDetails = (
 export const sessionToolCompactSummary =
   (tool: string): CompactSummaryProvider<SessionToolArgs> =>
   ({ phase, args, result }) => {
-    if (phase !== "settled") return pending(tool, args.to);
+    // The words a send carries, shown beneath its collapsed compact row.
+    const words =
+      tool === SESSION_TOOL.send &&
+      Predicate.isString(args.message) &&
+      Str.isNonEmpty(Str.trim(args.message))
+        ? { quote: args.message }
+        : {};
+    if (phase !== "settled") return { ...pending(tool, args.to), ...words };
     const details = sessionToolDetails(tool, result);
-    return details ? settled(details) : undefined;
+    return details ? { ...settled(details), ...words } : undefined;
   };

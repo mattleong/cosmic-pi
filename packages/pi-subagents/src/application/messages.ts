@@ -1,6 +1,6 @@
 import * as Arr from "effect/Array";
 import type { ExtensionAPI, MessageRenderer } from "@earendil-works/pi-coding-agent";
-import { captureCodePreviewPresentationPolicy } from "pi-code-previews";
+import { withCodePreviewMessageShell } from "pi-code-previews";
 import * as Schema from "effect/Schema";
 import { countLabel } from "pi-cosmic-core/display";
 import {
@@ -18,25 +18,16 @@ import {
 import { COMPLETION_MESSAGE_TYPE, QUESTION_MESSAGE_TYPE } from "../boundary/host-notifier.ts";
 import { QUESTION_REMINDER_MESSAGE_TYPE, WAKE_MESSAGE_TYPE } from "../boundary/host-parent-wake.ts";
 import { STOPPED_RUNS_MESSAGE_TYPE } from "../boundary/host-stopped-runs.ts";
-import { renderAgentMessage } from "../ui/agent-message.ts";
-import { renderSubagentNotification } from "../ui/notification.ts";
+import { presentAgentMessage } from "../ui/agent-message.ts";
+import { presentSubagentNotification } from "../ui/notification.ts";
 import type { WorkspaceSwept } from "../workspace/model.ts";
 
-export const renderSubagentMessage: MessageRenderer = (message, options, theme) =>
-  renderSubagentNotification(
-    message,
-    options,
-    captureCodePreviewPresentationPolicy().toolCallCollapsedStyle === "compact",
-    theme,
-  );
+export const renderSubagentMessage: MessageRenderer = withCodePreviewMessageShell(
+  presentSubagentNotification,
+);
 
-export const renderAgentMessageEntry: MessageRenderer = (message, options, theme) =>
-  renderAgentMessage(
-    message,
-    options,
-    captureCodePreviewPresentationPolicy().toolCallCollapsedStyle === "compact",
-    theme,
-  );
+export const renderAgentMessageEntry: MessageRenderer =
+  withCodePreviewMessageShell(presentAgentMessage);
 
 export function registerSubagentMessageRenderers(pi: ExtensionAPI): void {
   pi.registerMessageRenderer(AGENT_MESSAGE_TYPE, renderAgentMessageEntry);

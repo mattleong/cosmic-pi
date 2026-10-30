@@ -6,10 +6,8 @@ import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Order from "effect/Order";
 import * as Str from "effect/String";
-import type { CompactIssue } from "pi-code-previews";
 import { agentMessageDeliveryText } from "pi-cosmic-core/host-agent-messages";
 import { clipText } from "pi-cosmic-core/display";
-import { MESSAGE_TEXT_LIMIT } from "pi-cosmic-core/message-text";
 import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core/security";
 import { isCustomAgentName } from "../profiles/agents.ts";
 import { PROFILE_IDS } from "../profiles/model.ts";
@@ -22,12 +20,14 @@ import {
   type AgentReadResult,
   type AgentSendResult,
 } from "../run/agent-messaging.ts";
+import { userRunText } from "../run/warnings.ts";
 import {
   codedFailure,
   codedRefusal,
   invalidRequest,
   type InvalidSubagentRequestError,
   type SubagentError,
+  withGuidance,
 } from "../run/errors.ts";
 import {
   isTerminalRunState,
@@ -54,14 +54,8 @@ import {
   projectStall,
   readStatusTarget,
 } from "./contract.ts";
-import { compactRunIssues } from "./compact-run-issues.ts";
-import { projectReportFile, projectSubagentRunCard } from "./details-projection.ts";
-import {
-  AGENT_DETAILS_VERSION,
-  MAX_AGENT_READ_ISSUE_TEXT_CHARS,
-  MAX_AGENT_READ_ISSUES,
-  type AgentToolDetails,
-} from "./details-schema.ts";
+import { listDetails, readDetails, sendDetails } from "./agent-details.ts";
+import { projectReportFile } from "./details-projection.ts";
 import {
   boundToolOutput,
   formatRunCard,
@@ -192,20 +186,6 @@ const listContract = (result: AgentListResult, now: number): AgentListContract =
   missingIds: [...result.missingIds],
 });
 
-const listDetails = (result: AgentListResult): AgentToolDetails => {
-  const counts = new Map<AgentListEntry["state"], number>();
-  for (const entry of result.agents) counts.set(entry.state, (counts.get(entry.state) ?? 0) + 1);
-  const [only] = result.agents;
-  return {
-    version: AGENT_DETAILS_VERSION,
-    action: AGENT_TOOL_NAME.list,
-    agentCount: result.agents.length,
-    states: Arr.map([...counts], ([state, count]) => ({ state, count })),
-    ...(result.agents.length === 1 && only && { only: { id: only.id, name: agentName(only) } }),
-    missingIds: [...result.missingIds],
-  };
-};
-
 const guidedText = (result: AgentSendResult, label: string): string => {
   if (result.mainState !== undefined)
     return agentMessageDeliveryText(result.mainState, "The main agent");
@@ -228,20 +208,16 @@ const sendText = (result: AgentSendResult): string => {
   return Fn.absurd(result.disposition);
 };
 
-const sendDetails = (result: AgentSendResult): AgentToolDetails => ({
-  version: AGENT_DETAILS_VERSION,
-  action: AGENT_TOOL_NAME.send,
-  to: result.to,
-  name: agentName(result),
-  disposition: result.disposition,
-  ...(result.mainState !== undefined && { mainState: result.mainState }),
-  ...(result.parked && { parked: true }),
-});
-
 const readText = (text: string | undefined): string | undefined => {
   const cleaned = text === undefined ? "" : stripTerminalControls(text);
   return Str.trim(cleaned) ? cleaned : undefined;
 };
+
+/** What the user sees of a readout: a failure without the agent procedure the model reads. */
+const readoutDisplayText = (readout: AgentReadout): string | undefined =>
+  readout.kind === "run" && readout.source === "error"
+    ? userRunText(readout.run).error
+    : readout.text;
 
 const READ_SOURCES = {
   assistant: "Latest assistant message",
@@ -377,50 +353,15 @@ const readContract = (result: AgentReadResult, now: number): AgentReadContract =
   missingIds: [...result.missingIds],
 });
 
-/**
- * The issues a run's status card raises, bounded for persisted details. A failed worker is the
- * reader's attention, not a failed read, so failures become warnings.
- */
-const boundedReadIssue = ({ severity, code, message, detail }: CompactIssue): CompactIssue => ({
-  severity: severity === "error" ? "warning" : severity,
-  code: clipText(code, MAX_AGENT_READ_ISSUE_TEXT_CHARS),
-  message: clipText(message, MESSAGE_TEXT_LIMIT),
-  ...(detail !== undefined && { detail: clipText(detail, MAX_AGENT_READ_ISSUE_TEXT_CHARS) }),
-});
-
-const readIssues = (run: SubagentRunView): ReadonlyArray<CompactIssue> => {
-  const { finalText: _finalText, ...card } = projectSubagentRunCard(run);
-  return Arr.map(compactRunIssues([card]).slice(0, MAX_AGENT_READ_ISSUES), boundedReadIssue);
-};
-
-const readDetails = (result: AgentReadResult): AgentToolDetails => ({
-  version: AGENT_DETAILS_VERSION,
-  action: AGENT_TOOL_NAME.read,
-  agents: Arr.map(result.agents, (readout) => {
-    const hasText = readText(readout.text) !== undefined;
-    const hasReportFile = readout.kind === "run" && readout.reportFile !== undefined;
-    const issues = readout.kind === "run" ? readIssues(readout.run) : [];
-    return {
-      id: readout.id,
-      name: agentName(readout),
-      state: readout.state,
-      textStatus: hasText ? "text" : "none",
-      truncated: readout.truncated,
-      ...(readout.kind === "run" &&
-        (hasText || hasReportFile) &&
-        readout.source !== undefined && { source: readout.source }),
-      ...(issues.length > 0 && { issues: [...issues] }),
-    };
-  }),
-  missingIds: [...result.missingIds],
-});
-
 /** Scripts can't send agent messages; each agent refuses its own scripted sends. */
 export const scriptedAgentSendRefusal = (): InvalidSubagentRequestError =>
   codedRefusal(
     invalidRequest(
       "scripted_agent_send_not_supported",
-      "Codemode scripts can't send agent messages. End the script and send the message with agent_send directly.",
+      withGuidance(
+        "Codemode scripts can't send agent messages.",
+        "End the script and send the message with agent_send directly.",
+      ),
     ),
   );
 
@@ -442,7 +383,7 @@ export const executeAgentActionEffect = Effect.fn("SubagentTools.agents")(functi
       const now = yield* Clock.currentTimeMillis;
       return {
         content: [{ type: "text", text: boundToolOutput(listText(result, now)) }],
-        details: listDetails(result),
+        details: listDetails(result, now),
         structuredContent: encodeSubagentContract(listContract(result, now)),
       } satisfies AgentToolResult<unknown>;
     }
@@ -460,7 +401,7 @@ export const executeAgentActionEffect = Effect.fn("SubagentTools.agents")(functi
       const options = { caller, parentCwd: callerCwd, verbose: input.args.verbose === true, now };
       return {
         content: [{ type: "text", text: boundToolOutput(readBody(result, options)) }],
-        details: readDetails(result),
+        details: readDetails(result, (readout) => readText(readoutDisplayText(readout)), now),
         structuredContent: encodeSubagentContract(readContract(result, now)),
       } satisfies AgentToolResult<unknown>;
     }

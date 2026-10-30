@@ -1,6 +1,7 @@
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import type { BackendAssistantTerminal } from "../backend/model.ts";
+import { appendShared, withGuidanceClause, type GuidedText } from "./errors.ts";
 import {
   isInactiveRunRecord,
   type PendingInitializationSettlement,
@@ -68,8 +69,14 @@ const partialOutput = (finalText: string | undefined): string => {
   return ` Partial output before the failure: ${shown}`;
 };
 
-export const settledFailureMessage = (terminal: BackendAssistantTerminal | undefined): string =>
-  `${terminalFailureMessage(terminal)} Work and writes may already exist; inspect them before an explicit retry.${partialOutput(terminal?.text)}`;
+export const settledFailureMessage = (terminal: BackendAssistantTerminal | undefined): GuidedText =>
+  appendShared(
+    withGuidanceClause(
+      `${terminalFailureMessage(terminal)} Work and writes may already exist`,
+      "inspect them before an explicit retry.",
+    ),
+    partialOutput(terminal?.text),
+  );
 
 export const settlementBlocked = (record: RunRecord, state: SettlementState): boolean =>
   isTerminalRunState(record.view.state) ||
@@ -80,7 +87,7 @@ export const viewForSettlement = (
   state: SettlementState,
   now: number,
   finalText: string | undefined,
-  error: string | undefined,
+  error: GuidedText | undefined,
   { errorArchive, ...report }: SettledReport,
 ): StoredRunView => ({
   ...record.view,
@@ -91,5 +98,9 @@ export const viewForSettlement = (
   question: undefined,
   ...(state === "completed" && { reportGeneration: record.completionGeneration }),
   ...(finalText && { finalText, ...report }),
-  ...(error !== undefined && { error, ...(errorArchive && { errorArchive }) }),
+  ...(error !== undefined && {
+    error: error.message,
+    ...(error.userMessage !== error.message && { userError: error.userMessage }),
+    ...(errorArchive && { errorArchive }),
+  }),
 });

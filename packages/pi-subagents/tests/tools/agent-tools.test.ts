@@ -14,6 +14,7 @@ import {
 } from "../../src/run/agent-messaging.ts";
 import { AGENT_MESSAGE_REFUSAL_CODES, agentMessageRefusal } from "../../src/run/errors.ts";
 import { agentFailureIssues } from "../../src/tools/compact-action-failures.ts";
+import { textFailure } from "../../src/tools/failure-details.ts";
 import { createAgentCompactSummary } from "../../src/tools/compact-agent-summary.ts";
 import { stringContaining } from "../support/matchers.ts";
 import { decodeSubagentContract } from "../../src/tools/contract-schema.ts";
@@ -84,6 +85,27 @@ const readout = (run: SubagentRunView) => ({
 });
 
 const callers: AgentCaller[] = [];
+const listing = (state: "waiting_for_parent" | "running") =>
+  subagentServiceDouble({
+    agentList: () =>
+      Effect.succeed({
+        agents: [
+          { id: MAIN_AGENT_ID, name: MAIN_AGENT_ID, kind: "main", state: "busy", self: true },
+          {
+            id: "agent-1",
+            name: "db-migration",
+            kind: "run",
+            state,
+            parentId: MAIN_AGENT_ID,
+            depth: 1,
+            self: false,
+            run: view({ id: "agent-1", name: "db-migration", state }),
+          },
+        ],
+        missingIds: [],
+      }),
+  });
+
 const agentService = () =>
   subagentServiceDouble({
     agentList: (caller, ids) =>
@@ -243,7 +265,7 @@ describe("agent tools", () => {
       const text = error instanceof Error ? error.message : "";
       expect(text).toMatch(/^\[agent_unavailable\] /u);
 
-      const [issue] = agentFailureIssues(text, "send", "The agent");
+      const [issue] = agentFailureIssues(textFailure(text), "send", "The agent");
       expect(issue?.code).toBe("agent:agent_unavailable");
       const harness = createToolPresentationHarness(registeredTool("agent_send"));
       for (const expanded of [false, true]) {
@@ -254,15 +276,14 @@ describe("agent tools", () => {
         );
         const rendered = Arr.join(harness.render(100), "\n");
         expect(rendered).toContain(issue?.message);
-        // The refusal's procedure belongs to expansion.
-        expect(Fn.pipe(rendered, Str.includes("Check the agent's state with agent_list"))).toBe(
-          expanded,
-        );
+        // The refusal itself is expanded-only evidence; no recovery procedure is added for the user.
+        expect(Fn.pipe(rendered, Str.includes("is starting; try again"))).toBe(expanded);
+        expect(rendered).not.toMatch(/agent_\w+\(|with agent_\w+/u);
       }
     }),
   );
 
-  it("presents every refusal code as a short issue with its recovery expanded", () => {
+  it("presents every refusal code as a short issue with the refusal expanded", () => {
     const codes = [
       ...AGENT_MESSAGE_REFUSAL_CODES,
       "too_many_targets",
@@ -271,7 +292,7 @@ describe("agent tools", () => {
     ];
     for (const code of codes) {
       const [issue] = agentFailureIssues(
-        `[${code}] Agent agent-0000000007 refused.`,
+        textFailure(`[${code}] Agent agent-0000000007 refused.`),
         "send",
         "The agent",
       );
@@ -283,6 +304,27 @@ describe("agent tools", () => {
       ).toEqual([]);
     }
   });
+
+  it.effect("marks a listing for attention while an agent waits on its parent's reply", () =>
+    Effect.gen(function* () {
+      const outcomeFor = (state: "waiting_for_parent" | "running") =>
+        Effect.gen(function* () {
+          const tools = captureSubagentTools(listing(state));
+          const listed = yield* Effect.promise(() => executeTool(tools.get("agent_list")!, {}));
+          return createAgentCompactSummary("agent_list")({
+            phase: "settled",
+            args: {},
+            result: {
+              content: [{ type: "text", text: listed.content[0]?.text ?? "" }],
+              details: listed.details,
+            },
+            context: renderContextFixture({}),
+          })?.outcome;
+        });
+      expect(yield* outcomeFor("waiting_for_parent")).toBe("attention");
+      expect(yield* outcomeFor("running")).toBe("success");
+    }),
+  );
 
   it.effect("raises each read run's status issues without failing the read", () =>
     Effect.gen(function* () {

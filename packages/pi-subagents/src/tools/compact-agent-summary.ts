@@ -1,7 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import {
-  getTextContent,
+  compactIssueSeverity,
   type CompactIssue,
   type CompactSummary,
   type CompactSummaryProvider,
@@ -17,6 +17,8 @@ import { SUBAGENT_RUN_STATES } from "../run/model.ts";
 import { AGENT_TOOL_NAME, type AgentToolName } from "../run/tool-policy.ts";
 import { runStateLabel } from "../ui/run-state.ts";
 import { agentFailureIssues } from "./compact-action-failures.ts";
+import { rejectedFailure } from "./failure-details.ts";
+import { sendStatus } from "./render-agents.ts";
 import { AgentToolDetailsSchema, type AgentToolDetails } from "./details-schema.ts";
 
 export const decodeAgentToolDetails = decodeUnknownOrUndefined(AgentToolDetailsSchema, {
@@ -63,15 +65,18 @@ const missingIssue = (missingIds: ReadonlyArray<string>): CompactIssue[] =>
             missingIds.length === 1
               ? "A requested agent isn't in this session"
               : `${missingIds.length} requested agents aren't in this session`,
-          detail: `Not found: ${Arr.join(missingIds, ", ")}. Refresh agent IDs with agent_list.`,
+          detail: `Not found: ${Arr.join(missingIds, ", ")}`,
         },
       ];
 
-const settled = (summary: CompactSummary, issues: CompactIssue[]): CompactSummary => ({
-  ...summary,
-  outcome: Arr.some(issues, (issue) => issue.severity === "warning") ? "warning" : "success",
-  issues,
-});
+const settled = (summary: CompactSummary, issues: CompactIssue[]): CompactSummary => {
+  const severity = compactIssueSeverity(issues);
+  return {
+    ...summary,
+    outcome: severity === "warning" || severity === "attention" ? severity : "success",
+    issues,
+  };
+};
 
 const summarizeList = (
   details: Extract<AgentToolDetails, { readonly action: "agent_list" }>,
@@ -79,36 +84,33 @@ const summarizeList = (
   const states = Arr.map(details.states, ({ state, count }) =>
     details.agentCount === 1 ? stateLabel(state) : `${count} ${stateLabel(state)}`,
   );
-  return settled(
+  // Agents waiting on their parent's reply lead the heading; the list rows show who.
+  const waiting = Arr.reduce(details.states, 0, (total, { state, count }) =>
+    state === "waiting_for_parent" ? total + count : total,
+  );
+  const summary = settled(
     {
       subject: details.only ? displayName(details.only.name) : "",
-      counters: details.only ? states : [countLabel(details.agentCount, "agent")],
+      counters: details.only
+        ? states
+        : [
+            ...(waiting > 0
+              ? [
+                  `${countLabel(details.agentCount, "agent")}, ${waiting} ${stateLabel("waiting_for_parent")}`,
+                ]
+              : []),
+            countLabel(details.agentCount, "agent"),
+          ],
       metadata: details.only ? [] : Arr.filter([Arr.join(states, ", ")], Boolean),
     },
     missingIssue(details.missingIds),
   );
+  return waiting > 0 && summary.outcome === "success"
+    ? { ...summary, outcome: "attention" }
+    : summary;
 };
 
 type SendDetails = Extract<AgentToolDetails, { readonly action: "agent_send" }>;
-
-const MAIN_DELIVERIES: Record<NonNullable<SendDetails["mainState"]>, string> = {
-  idle: "woke the main agent",
-  busy: "queued for the main agent",
-  held: "held for the user",
-};
-
-const sendCounter = (details: SendDetails): string => {
-  switch (details.disposition) {
-    case "answered":
-      return "answered";
-    case "resumed":
-      return "resumed";
-    case "guided":
-      if (details.mainState !== undefined) return MAIN_DELIVERIES[details.mainState];
-      return details.parked ? "waiting behind its question" : "delivered as guidance";
-  }
-  return Fn.absurd(details.disposition);
-};
 
 const sendIssues = (details: SendDetails): CompactIssue[] =>
   details.mainState === "held"
@@ -123,14 +125,17 @@ const sendIssues = (details: SendDetails): CompactIssue[] =>
       ]
     : [];
 
-const summarizeSend = (details: SendDetails): CompactSummary =>
-  settled(
+const summarizeSend = (details: SendDetails): CompactSummary => {
+  const status = sendStatus(details);
+  return settled(
     {
       subject: details.to === MAIN_AGENT_ID ? "main" : displayName(details.name),
-      counters: [sendCounter(details)],
+      counters: status === undefined ? [] : [status],
+      messageIcon: "sent",
     },
     sendIssues(details),
   );
+};
 
 const summarizeRead = (
   details: Extract<AgentToolDetails, { readonly action: "agent_read" }>,
@@ -174,9 +179,15 @@ const failureSubject = (tool: AgentToolName, args: AgentCallEvidence): string =>
   return "The agents";
 };
 
+// The words a send carries, shown beneath its collapsed compact row.
+const sentWords = (args: AgentCallEvidence): Pick<CompactSummary, "quote"> =>
+  args.message !== undefined && Str.isNonEmpty(Str.trim(args.message))
+    ? { quote: args.message }
+    : {};
+
 const argumentLanes = (tool: AgentToolName, args: AgentCallEvidence): CompactSummary => {
   if (tool === AGENT_TOOL_NAME.send)
-    return { subject: isMain(args.to) ? "main" : "", counters: [] };
+    return { subject: isMain(args.to) ? "main" : "", counters: [], ...sentWords(args) };
   const ids = requestedIds(args);
   return {
     subject: ids.length === 1 && ids[0] === MAIN_AGENT_ID ? "main" : "",
@@ -192,23 +203,22 @@ export const createAgentCompactSummary =
     if (!input) return undefined;
     const lanes = argumentLanes(tool, input);
     if (!result) return context.isError || phase === "settled" ? undefined : lanes;
-    if (context.isError)
-      return phase === "settled"
-        ? {
-            ...lanes,
-            outcome: "error",
-            issues: agentFailureIssues(
-              getTextContent(result.content),
-              tool === AGENT_TOOL_NAME.send
-                ? "send"
-                : tool === AGENT_TOOL_NAME.read
-                  ? "read"
-                  : "list",
-              failureSubject(tool, input),
-            ),
-          }
-        : undefined;
+    if (context.isError) {
+      if (phase !== "settled") return undefined;
+      const issues = agentFailureIssues(
+        rejectedFailure(result),
+        tool === AGENT_TOOL_NAME.send ? "send" : tool === AGENT_TOOL_NAME.read ? "read" : "list",
+        failureSubject(tool, input),
+      );
+      // A delivery that may have applied is uncertain, not failed.
+      return {
+        ...lanes,
+        outcome: compactIssueSeverity(issues) === "error" ? "error" : "uncertain",
+        issues,
+      };
+    }
     const details = decodeAgentToolDetails(result.details);
     if (details?.action !== tool) return undefined;
-    return summarizeDetails(details);
+    const summary = summarizeDetails(details);
+    return tool === AGENT_TOOL_NAME.send ? { ...summary, ...sentWords(input) } : summary;
   };

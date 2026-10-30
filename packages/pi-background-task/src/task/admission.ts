@@ -9,7 +9,11 @@ import { BACKGROUND_TASK_FIELD_BOUNDS } from "./bounds.ts";
 import { InvalidBackgroundCommandError, InvalidBackgroundCwdError } from "./errors.ts";
 import type { StartBackgroundTask, WaitForBackgroundTask } from "./model.ts";
 
-const invalidCommand = (message: string) => InvalidBackgroundCommandError.make({ message });
+const invalidCommand = (
+  message: string,
+  field: string,
+  problem: InvalidBackgroundCommandError["problem"] = "invalid",
+) => InvalidBackgroundCommandError.make({ message, problem, fields: [field] });
 
 const validTimeout = (timeoutSeconds: number | undefined) =>
   timeoutSeconds === undefined || (Number.isFinite(timeoutSeconds) && timeoutSeconds > 0);
@@ -19,19 +23,23 @@ export const normalizeStartRequest = Effect.fn("BackgroundTaskAdmission.normaliz
     // Whitespace can be shell syntax, such as an escaped trailing space, so the command runs as
     // submitted; trimming only detects a blank one.
     const command = request.command;
-    if (!Str.trim(command)) return yield* invalidCommand("Background command must not be empty.");
+    if (!Str.trim(command))
+      return yield* invalidCommand("Background command must not be empty.", "command");
     if (utf8ByteLength(command) > BACKGROUND_TASK_FIELD_BOUNDS.maxCommandBytes)
       return yield* invalidCommand(
         `Background command must not exceed ${formatBytes(BACKGROUND_TASK_FIELD_BOUNDS.maxCommandBytes)} of UTF-8; write a longer script to a file and run that.`,
+        "command",
       );
     const name = request.name && Str.trim(request.name);
     if ((name?.length ?? 0) > BACKGROUND_TASK_FIELD_BOUNDS.maxNameChars)
       return yield* invalidCommand(
         `Background task name must not exceed ${BACKGROUND_TASK_FIELD_BOUNDS.maxNameChars} characters.`,
+        "name",
       );
     if (!validTimeout(request.timeoutSeconds))
       return yield* invalidCommand(
         "Background timeout must be a positive finite number of seconds; omit it for no timeout.",
+        "timeoutSeconds",
       );
     const cwd = path.resolve(request.cwd);
     if (cwd.length > BACKGROUND_TASK_FIELD_BOUNDS.maxCwdChars) {
@@ -70,19 +78,26 @@ export const validateWaitRequest = Effect.fn("BackgroundTaskAdmission.validateWa
     if (!Number.isFinite(waitSeconds) || waitSeconds < 0)
       return yield* invalidCommand(
         "Background task wait must be a non-negative finite number of seconds.",
+        "waitSeconds",
       );
     if (!validCursor(request.afterCursor))
-      return yield* invalidCommand("Background task wait cursor must be a non-negative integer.");
+      return yield* invalidCommand(
+        "Background task wait cursor must be a non-negative integer.",
+        "afterCursor",
+      );
     if (
       request.until === "exit" &&
       (request.contains !== undefined || request.afterCursor !== undefined)
     )
       return yield* invalidCommand(
         "contains and afterCursor are valid only when waiting for output.",
+        request.contains === undefined ? "afterCursor" : "contains",
+        "unexpected",
       );
     if (request.until === "output" && !validContains(request.contains))
       return yield* invalidCommand(
         `Output waits require contains: one text or up to ${BACKGROUND_TASK_FIELD_BOUNDS.maxContainsAlternatives} alternatives, each non-empty, at most ${BACKGROUND_TASK_FIELD_BOUNDS.maxContainsChars} characters, and with no NUL byte.`,
+        "contains",
       );
     return undefined;
   },

@@ -11,6 +11,7 @@ import {
   stripTerminalControls,
 } from "pi-cosmic-core/security";
 import { indexOfFrom } from "pi-cosmic-core/text-scan";
+import { guidedText, type GuidedText } from "./errors.ts";
 import type {
   SubagentReportArchive,
   SubagentReportTruncation,
@@ -66,6 +67,18 @@ export const snapshotView = (view: SubagentRunView): SubagentRunView => {
 export const sanitizeDiagnosticText = (value: string, limit: number): string => {
   const sanitized = sanitizeDiagnosticError(value, { maximumLength: limit + 2 });
   return clipText(sanitized, limit);
+};
+
+/** Both copies of guided text, each sanitized and bounded like a diagnostic. */
+export const sanitizeGuidedDiagnostic = (
+  text: string | GuidedText,
+  limit = MAX_ERROR_CHARS,
+): GuidedText => {
+  const { message, userMessage } = guidedText(text);
+  return {
+    message: sanitizeDiagnosticText(message, limit),
+    userMessage: sanitizeDiagnosticText(userMessage, limit),
+  };
 };
 
 export const sanitizeStreamDiagnostic = (value: string, limit: number): string => {

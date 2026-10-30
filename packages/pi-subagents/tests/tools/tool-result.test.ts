@@ -20,7 +20,12 @@ import {
 import { expect } from "vitest";
 import { effectTest, step } from "../support/effect-test.ts";
 import { registerSubagentErrorReceipts } from "../../src/boundary/host-tool-result.ts";
-import { InvalidSubagentRequestError } from "../../src/run/errors.ts";
+import {
+  invalidRequest,
+  InvalidSubagentRequestError,
+  withGuidanceClause,
+} from "../../src/run/errors.ts";
+import { workspaceBusyError } from "../../src/run/workspace-binding.ts";
 import { SubagentService } from "../../src/run/service.ts";
 import { SubagentProfileService } from "../../src/profiles/service.ts";
 import { SubagentBackendRegistry } from "../../src/backend/service.ts";
@@ -276,6 +281,75 @@ effectTest(
       expect(patched.details).toBe(response.details);
       expect(patched.content).toBe(patchedContent);
       expect(yield* h.result(original)).toEqual(original);
+    }
+  },
+);
+
+effectTest(
+  "gives a rejected call's error result the failure without the agent's procedure",
+  function* () {
+    const refusal = withGuidanceClause(
+      "Subagent agent-6 already has a parent reply in flight",
+      "inspect it with agent_read before sending again.",
+    );
+    const h = ownedTools(
+      subagentServiceDouble({
+        agentSend: () => Effect.fail(invalidRequest("reply_in_flight", refusal)),
+        workspaceDiscard: () => Effect.fail(workspaceBusyError()),
+      }),
+    );
+    const busy = workspaceBusyError();
+    const calls = [
+      [
+        "agent_send",
+        { to: "agent-6", message: "Yes." },
+        "[reply_in_flight] Subagent agent-6 already has a parent reply in flight; inspect it with agent_read before sending again.",
+        refusal,
+      ],
+      [
+        "agent_worktree",
+        { action: "discard", workspaceId: "ws-1" },
+        "Another operation on this workspace is still running. Retry once it finishes.",
+        { message: busy.message, userMessage: busy.userMessage },
+      ],
+    ] as const;
+    for (const [name, args, modelText, expected] of calls) {
+      // The model calls the tool directly, not from a script.
+      yield* h.dispatch("tool_execution_start", {
+        type: "tool_execution_start",
+        toolCallId: name,
+        toolName: name,
+        args,
+      });
+      yield* h.dispatch("tool_call", {
+        type: "tool_call",
+        toolCallId: name,
+        toolName: name,
+        input: args,
+      });
+      const rejection: unknown = yield* step(() =>
+        executeTool(h.tools.get(name)!, args, { callID: name }).then(
+          () => undefined,
+          (cause: unknown) => cause,
+        ),
+      );
+      // The model's copy is unchanged, procedure included.
+      const text = rejection instanceof Error ? rejection.message : "";
+      expect(text).toBe(modelText);
+      const thrown = {
+        type: "tool_result" as const,
+        toolName: name,
+        toolCallId: name,
+        input: args,
+        isError: true,
+        content: [{ type: "text" as const, text }],
+        details: {},
+      };
+      const patched = yield* h.result(thrown);
+      expect(patched.content).toEqual(thrown.content);
+      expect(patched.details).toMatchObject({ action: "failure", message: expected.userMessage });
+      // Each record applies once, to its own call's error result.
+      expect((yield* h.result(thrown)).details).toEqual({});
     }
   },
 );

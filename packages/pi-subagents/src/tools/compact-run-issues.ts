@@ -4,9 +4,10 @@ import * as Str from "effect/String";
 import { type CompactIssue } from "pi-code-previews";
 import { skippedCandidateLabel } from "../profiles/model.ts";
 import { runAttention, runCleanupAttention } from "../run/attention.ts";
-import { reportFileText, reportTruncationText } from "../run/state.ts";
+import { reportTruncationText } from "../run/state.ts";
+import { savedFileFact, workspaceFact } from "../ui/notice-facts.ts";
 import type { SubagentRunCard } from "./details-schema.ts";
-import { cleanupRecoveryText, proposalDiffStatLines, proposalGuidance } from "./format.ts";
+import { cleanupEvidenceText, proposalDiffStatLines } from "./format.ts";
 import { countLabel } from "pi-cosmic-core/display";
 import { failureMessage, firstLineMessage, quoteText } from "pi-cosmic-core/message-text";
 import { isTextFragment } from "./text-fragments.ts";
@@ -47,8 +48,16 @@ const cardIssueAdder =
 
 interface RunIssueOptions {
   readonly quietHistory?: boolean | undefined;
-  readonly requestedPause?: boolean | undefined;
+  /** Whether the surface already draws the card's failure text, which its issue then omits. */
+  readonly showsError?: ((card: SubagentRunCard) => boolean) | undefined;
+  /**
+   * Questions arrive in their own notice: the heading already says the run waits for a reply, so
+   * the call doesn't repeat the question.
+   */
+  readonly questionsNoticed?: boolean | undefined;
 }
+
+type QuestionStyle = "quoted" | "named" | "omitted";
 
 const skippedOptionsDetail = (card: SubagentRunCard): string =>
   Fn.pipe(
@@ -84,11 +93,15 @@ function selectionIssues(
 }
 
 /** Only the attention issues of `cards`, for runs a call reports without targeting them. */
-export function compactAttentionIssues(cards: readonly SubagentRunCard[]): CompactIssue[] {
+/** Attention from runs a call didn't target; a noticed question is named, not repeated. */
+export function compactAttentionIssues(
+  cards: readonly SubagentRunCard[],
+  options: Pick<RunIssueOptions, "questionsNoticed"> = {},
+): CompactIssue[] {
   const issues: CompactIssue[] = [];
   for (const card of cards) {
     const add = cardIssueAdder(issues, card);
-    attentionIssues(card, cardLabel(card), add, false);
+    attentionIssues(card, cardLabel(card), add, options.questionsNoticed ? "named" : "quoted");
     cleanupIssues(card, cardLabel(card), add);
   }
   return issues;
@@ -103,9 +116,9 @@ export function compactRunIssues(
     const issueStart = issues.length;
     const label = cardLabel(card);
     const add = cardIssueAdder(issues, card);
-    attentionIssues(card, label, add, options.requestedPause === true);
+    attentionIssues(card, label, add, options.questionsNoticed ? "omitted" : "quoted");
     cleanupIssues(card, label, add);
-    evidenceIssues(card, label, add);
+    evidenceIssues(card, label, add, options.showsError?.(card) === true);
     const quiet =
       options.quietHistory === true &&
       card.state === "completed" &&
@@ -137,36 +150,38 @@ function attentionIssues(
   card: SubagentRunCard,
   label: string,
   add: AddIssue,
-  requestedPause: boolean,
+  questions: QuestionStyle,
 ): void {
-  const id = JSON.stringify(card.id);
   const attention = runAttention(card);
   switch (attention?.kind) {
     case undefined:
       return;
     case "paused":
+      // A held state, not a problem: the heading already says the run is paused.
       if (runCleanupAttention(card) !== undefined) return;
-      add(
-        requestedPause ? "info" : "warning",
-        "paused-recovery",
-        `${label} is paused`,
-        `Paused. Review it with agent_read, then resume it with agent_send({ to: ${id}, message: "Continue with reviewed guidance." }), then agent_await again.`,
-      );
+      add("info", "paused-recovery", `${label} is paused`);
       return;
-    case "question":
+    case "question": {
+      if (questions === "omitted") return;
+      if (questions === "named") {
+        add("attention", "parent-question", `${label} asks a question`, attention.message);
+        return;
+      }
+      // The whole question is detail only when the message can't show all of it.
+      const { line, detail } = quoteText(attention.message, { limit: QUOTED_TEXT_LIMIT });
       add(
-        "warning",
+        "attention",
         "parent-question",
-        `${label} asks: ${firstLineMessage(attention.message, "a question", QUOTED_TEXT_LIMIT)}`,
-        `Question: ${attention.message}\nRead the full question in expanded details if omitted. Answer with agent_send({ to: ${id}, message: "..." }), then agent_await again.`,
+        `${label} asks: ${line ?? firstLineMessage(attention.message, "a question", QUOTED_TEXT_LIMIT)}`,
+        detail,
       );
       return;
+    }
     case "question-unavailable":
       add(
-        "warning",
+        "attention",
         "question-unavailable",
         `${label} is waiting for a reply, but its question is unavailable`,
-        "Waiting for parent, but no question is projected. Inspect the run with agent_read before choosing recovery; do not invent a reply.",
       );
   }
 }
@@ -182,28 +197,26 @@ function cleanupIssues(card: SubagentRunCard, label: string, add: AddIssue): voi
     "warning",
     `cleanup-${attention}`,
     `${label}: ${messages[attention]}`,
-    Arr.join(cleanupRecoveryText(card), "\n"),
+    cleanupEvidenceText(card),
   );
 }
 
-function evidenceIssues(card: SubagentRunCard, label: string, add: AddIssue): void {
-  const retryGuidance =
-    "The run's agent_read card names its next route candidate; don't start a replacement while its outcome is uncertain.";
+function evidenceIssues(
+  card: SubagentRunCard,
+  label: string,
+  add: AddIssue,
+  errorShown: boolean,
+): void {
   if (card.error) {
     const { line, detail } = quoteText(card.error, { limit: QUOTED_TEXT_LIMIT, failure: true });
+    // The run's own block shows the whole failure, so the issue only names it.
     add(
       "error",
       "error",
       line ? `${label}: ${line}` : `${label} reported an error`,
-      Fn.pipe([detail, retryGuidance], Arr.filter(isTextFragment), Arr.join("\n")),
+      errorShown ? undefined : detail,
     );
-  } else if (card.state === "failed")
-    add(
-      "error",
-      "run-failed",
-      `${label} failed`,
-      `Run failed; inspect full status.\n${retryGuidance}`,
-    );
+  } else if (card.state === "failed") add("error", "run-failed", `${label} failed`);
   const systemSourced = card.warningSource === "system";
   const fallback = systemSourced ? "reported a system warning" : "reported a warning";
   if (card.warning) quote(add, label, "warning", card.warning, fallback);
@@ -246,9 +259,7 @@ function workspaceOutcomeIssue(card: SubagentRunCard, label: string, add: AddIss
     Arr.join(
       [
         ...(outcome ? proposalDiffStatLines(outcome) : []),
-        card.workspaceId
-          ? proposalGuidance(card.workspaceId, outcome)
-          : "Apply it with agent_worktree apply and its workspaceId from agent_list.",
+        ...(card.workspaceId ? [workspaceFact(card.workspaceId, outcome)] : []),
         ...(outcome?.uncapturedFileCount
           ? [
               "Credential files the writer created, such as .env, are not part of the proposal and stay in the worker tree.",
@@ -266,7 +277,10 @@ function reportEvidenceIssues(card: SubagentRunCard, label: string, add: AddIssu
   const archive = card.reportArchive;
   const savedDetail = (saved: NonNullable<SubagentRunCard["reportArchive"]>): string =>
     Fn.pipe(
-      [card.reportTruncation && reportTruncationText(card.reportTruncation), reportFileText(saved)],
+      [
+        card.reportTruncation && reportTruncationText(card.reportTruncation),
+        savedFileFact("Report file", saved),
+      ],
       Arr.filter(isTextFragment),
       Arr.join(". "),
     );
@@ -283,6 +297,6 @@ function reportEvidenceIssues(card: SubagentRunCard, label: string, add: AddIssu
       "warning",
       "evidence-omitted",
       `${label}: some details are unavailable in this view`,
-      "Details are bounded; inspect the run with agent_read for omitted evidence.",
+      "Details are bounded in this view.",
     );
 }

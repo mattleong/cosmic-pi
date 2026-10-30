@@ -11,11 +11,11 @@ import { clipToWidth, spinnerFrameAt, SPINNER_FRAME_MS } from "pi-cosmic-ui/mana
 import { isTerminalRunState } from "../run/model.ts";
 import type { SubagentAwaitUntil } from "../run/service.ts";
 import { aggregateUsage } from "../ui/metrics.ts";
-import { runStateGlyph, runStateLabel } from "../ui/run-state.ts";
+import { runStateColor, runStateGlyph, runStateLabel } from "../ui/run-state.ts";
 import { projectRunCardTree, runTreeBranch } from "../ui/run-tree-rows.ts";
 import type { SubagentRunCard, SubagentStartAwaitCardDetails } from "./details-schema.ts";
 import { composeToolComponent as renderComponent } from "pi-cosmic-ui/tool";
-import { renderResponsiveRunRows, runTiming, type RunHierarchy } from "./render-run-rows.ts";
+import { runTiming, type RunHierarchy } from "./render-run-rows.ts";
 import { isTextFragment } from "./text-fragments.ts";
 
 interface AwaitProgressRun {
@@ -193,6 +193,10 @@ export const syncAwaitProgressTicker = (
 
 export const DESCENDANTS_OMITTED = "Some descendants are not shown";
 
+/**
+ * A wait in progress: the muted totals, then one row per run of the awaited tree with its state,
+ * current tool, and timing. Routes and usage per run stay in the settled result's expansion.
+ */
 export const renderAwaitProgressComponent = (
   cards: ReadonlyArray<SubagentRunCard>,
   until: SubagentAwaitUntil,
@@ -208,6 +212,19 @@ export const renderAwaitProgressComponent = (
       ...(hierarchy.contextOmitted
         ? [clipToWidth(theme.fg("dim", DESCENDANTS_OMITTED), safeWidth)]
         : []),
-      ...renderResponsiveRunRows(cards, safeWidth, theme, { frame, hierarchy }),
+      ...Arr.map(projectRunCardTree(cards), (row) => {
+        const run = row.run;
+        const awaited = hierarchy.awaitedRunIds.has(run.id) ? "" : theme.fg("dim", " · descendant");
+        const status = Fn.pipe(
+          [run.currentTool, runTiming(run)],
+          Arr.filter(isTextFragment),
+          Arr.map(sanitizeTerminalLine),
+          Arr.join(" · "),
+        );
+        return clipToWidth(
+          `${theme.fg("dim", runTreeBranch(row))}${theme.fg(runStateColor(run.state), runStateGlyph(run.state, frame))} ${theme.fg("toolTitle", sanitizeTerminalLine(run.name))}${status ? theme.fg("muted", ` · ${status}`) : ""}${awaited}`,
+          safeWidth,
+        );
+      }),
     ];
   });

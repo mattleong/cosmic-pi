@@ -7,7 +7,14 @@ import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import type { BackendAssistantTerminal, BackendHandle } from "../backend/model.ts";
 import type { ReportArchive, ReportArchiveEntry } from "../boundary/report-archive.ts";
-import { type SubagentError, SubagentProcessError } from "./errors.ts";
+import {
+  errorText,
+  failureFields,
+  guidedText,
+  type GuidedText,
+  type SubagentError,
+  SubagentProcessError,
+} from "./errors.ts";
 import {
   beginCleanup,
   clearRunActivity,
@@ -27,7 +34,7 @@ import {
 } from "./limits.ts";
 import type { RunNotificationDelivery } from "./notification-delivery.ts";
 import type { RunRecordCleanup } from "./record-cleanup.ts";
-import { addUsage, captureOutputText, MAX_ERROR_CHARS, sanitizeDiagnosticText } from "./state.ts";
+import { addUsage, captureOutputText, sanitizeGuidedDiagnostic } from "./state.ts";
 import {
   settledAssignmentLocked,
   settledFailureMessage,
@@ -37,7 +44,7 @@ import {
   type SettlementState,
 } from "./settlement-outcome.ts";
 import { isScopeClosed } from "./session-owned.ts";
-import { foldRunWarnings } from "./warnings.ts";
+import { foldRunWarnings, foldUserRunWarnings } from "./warnings.ts";
 
 interface RunSettlementDependencies extends Pick<
   RunContext,
@@ -276,20 +283,26 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
     state: SettlementState,
     generation: number | undefined,
     finalText: string | undefined,
-    settledError: string | undefined,
+    settledError: GuidedText | undefined,
     report: SettledReport,
   ) => {
     if (generation === undefined || state === "stopped") return;
     const warning = foldRunWarnings(record.warningSlots);
+    const userWarning = foldUserRunWarnings(record.warningSlots);
     delivery.insertCompletionLocked(record, {
       outcome: state,
       ...(finalText && { finalText, ...report }),
-      ...(state === "failed" && {
-        error: settledError,
-        ...(report.errorArchive && { errorArchive: report.errorArchive }),
-      }),
+      ...(state === "failed" &&
+        settledError && {
+          error: settledError.message,
+          ...(settledError.userMessage !== settledError.message && {
+            userError: settledError.userMessage,
+          }),
+          ...(report.errorArchive && { errorArchive: report.errorArchive }),
+        }),
       generation,
       ...(warning && { warning }),
+      ...(userWarning && userWarning !== warning && { userWarning }),
     });
   };
 
@@ -298,7 +311,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
     state: SettlementState,
     generation: number | undefined,
     finalText: string | undefined,
-    settledError: string | undefined,
+    settledError: GuidedText | undefined,
     report: SettledReport,
   ) {
     const now = yield* Clock.currentTimeMillis;
@@ -350,7 +363,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
   const settleLocked = Effect.fn("SubagentSettlement.settleLocked")(function* (
     record: RunRecord,
     state: SettlementState,
-    error?: string,
+    error?: string | GuidedText,
     assignmentEpoch?: number,
   ): Effect.fn.Return<SettlementCommit> {
     if (
@@ -370,10 +383,16 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
     const reportArchive = finalText
       ? yield* archiveReportLocked(record, finalText, generation)
       : {};
-    const settledError = state === "failed" ? (error ?? "Run failed.") : error;
+    const settledError =
+      state === "failed"
+        ? guidedText(error ?? "Run failed.")
+        : error === undefined
+          ? undefined
+          : guidedText(error);
+    // The saved failure is the model's copy, which the parent reads.
     const errorArchive =
       state === "failed" && settledError !== undefined
-        ? yield* archiveFailureLocked(record, settledError, generation)
+        ? yield* archiveFailureLocked(record, settledError.message, generation)
         : undefined;
     const report: SettledReport = { ...reportArchive, ...(errorArchive && { errorArchive }) };
     return yield* commitSettlementLocked(
@@ -389,7 +408,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
   const settle = Effect.fn("SubagentSettlement.settle")(function* (
     record: RunRecord,
     state: SettlementState,
-    error?: string,
+    error?: string | GuidedText,
     assignmentEpoch?: number,
   ) {
     const result = yield* withLock(settleLocked(record, state, error, assignmentEpoch));
@@ -399,11 +418,11 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
 
   const failRun = (
     record: RunRecord,
-    message: string,
+    message: string | GuidedText,
     pendingError?: SubagentError,
     assignmentEpoch?: number,
   ) => {
-    const diagnostic = sanitizeDiagnosticText(message, MAX_ERROR_CHARS);
+    const diagnostic = sanitizeGuidedDiagnostic(message);
     return withLock(
       Effect.sync(() => {
         if (
@@ -412,7 +431,8 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
         )
           return false;
         const failure =
-          pendingError ?? SubagentProcessError.make({ operation: "run", message: diagnostic });
+          pendingError ??
+          SubagentProcessError.make({ operation: "run", ...failureFields(diagnostic) });
         beginCleanup(record);
         record.backendFailure ??= failure;
         record.process?.cancelPending(failure);
@@ -421,9 +441,8 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
     ).pipe(
       Effect.flatMap((shouldFail) => {
         if (!shouldFail) return Effect.succeed(snapshotRun(record));
-        const primaryDiagnostic = sanitizeDiagnosticText(
-          record.backendFailure?.message ?? diagnostic,
-          MAX_ERROR_CHARS,
+        const primaryDiagnostic = sanitizeGuidedDiagnostic(
+          record.backendFailure ? errorText(record.backendFailure) : diagnostic,
         );
         if (record.initialization)
           return settle(record, "failed", primaryDiagnostic, assignmentEpoch);

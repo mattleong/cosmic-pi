@@ -24,8 +24,9 @@ import {
   type BackgroundTaskSnapshot,
 } from "../task/model.ts";
 import { BACKGROUND_TASK_STATES, BackgroundTaskDetailsSchema } from "../task/schema.ts";
-import type { BackgroundTaskToolDetails } from "../tools/command.ts";
+import type { BackgroundTaskFailureDetails, BackgroundTaskToolDetails } from "../tools/command.ts";
 import type { BackgroundTaskToolInput } from "../tools/schema.ts";
+import { decodeBackgroundTaskFailure, failureIssue } from "./result-facts.ts";
 import { taskDisplayName, taskStateLabel } from "./task-state.ts";
 
 export const decodeBackgroundTaskDetails = Schema.decodeUnknownOption(BackgroundTaskDetailsSchema);
@@ -34,7 +35,12 @@ const MAX_TASK_LABEL_CHARS = 40;
 const MAX_QUOTED_CHARS = 40;
 const MAX_CAUSE_CHARS = 60;
 
-const SEVERITY_ORDER: ReadonlyArray<CompactIssue["severity"]> = ["error", "warning", "info"];
+const SEVERITY_ORDER: ReadonlyArray<CompactIssue["severity"]> = [
+  "error",
+  "warning",
+  "attention",
+  "info",
+];
 
 export const backgroundTaskActionLabel = (action: string): string =>
   action === "stop_all" ? "stop all" : sanitizeTerminalLine(action);
@@ -93,9 +99,7 @@ export function backgroundTaskCallSubject(args: Partial<BackgroundTaskToolInput>
   return "";
 }
 
-export function resultSnapshot(
-  details: BackgroundTaskToolDetails,
-): BackgroundTaskSnapshot | undefined {
+function resultSnapshot(details: BackgroundTaskToolDetails): BackgroundTaskSnapshot | undefined {
   if (details.action === "start" || details.action === "status" || details.action === "stop")
     return details.snapshot;
   return details.action === "wait" ? details.wait.snapshot : undefined;
@@ -129,21 +133,20 @@ const outputSkippedIssue = (
     "warning",
     `${id}:log-loss`,
     `${Str.capitalize(skippedAmountText(skipped))} of output was discarded before this ${reader}`,
-    `Discarded output cannot be recovered. ${detail}`,
+    `Discarded output can't be recovered. ${detail}`,
   );
 const cleanupUnconfirmedIssue = (id: string) =>
   issue(
     "warning",
     `${id}:cleanup-unconfirmed`,
     "Some task processes may still be running",
-    "Process-tree cleanup is not confirmed; inspect status before retrying work.",
+    "Cleanup of the task's process tree isn't confirmed yet.",
   );
-const runtimeTimeoutIssue = (id: string, ranMs: number | undefined, detail?: string) =>
+const runtimeTimeoutIssue = (id: string, ranMs: number | undefined) =>
   issue(
     "error",
     `${id}:runtime-timeout`,
     ranMs === undefined ? "Timed out" : `Timed out after ${formatDuration(ranMs)}`,
-    detail,
   );
 
 function taskErrorIssue(id: string, error: string): CompactIssue {
@@ -234,7 +237,7 @@ function taskIssues(value: BackgroundTaskSnapshot, outcome: CompactOutcome): Com
         "warning",
         `${value.id}:exit-unknown`,
         "Exited, but its outcome is unknown",
-        "Process exited, but its exit code is unknown; inspect task status.",
+        "The process exited without reporting an exit code.",
       ),
     );
   return issues;
@@ -244,7 +247,8 @@ function taskSummary(value: BackgroundTaskSnapshot): TaskSummary {
   const outcome = taskOutcome(value);
   return {
     subject: taskDisplayName(value),
-    metadata: [stateDetail(value)],
+    // A failing exit code is already the issue's message.
+    metadata: [taskStateLabel(value.state)],
     outcome,
     issues: taskIssues(value, outcome),
   };
@@ -305,7 +309,7 @@ function waitTimeoutIssue(
     awaited
       ? `${waited} for ${awaited}; the task is still ${state}`
       : `${waited} for the task to exit; it is still ${state}`,
-    `Wait timed out; this does not stop the background task. Call wait again to keep waiting.${capped}`,
+    `Waiting doesn't stop the task.${capped}`,
   );
 }
 
@@ -427,7 +431,7 @@ function waitSummary(
         wait.id,
         wait.skipped,
         "wait",
-        `The wait could not search it. Retained output is readable from afterCursor ${wait.earliestAvailableCursor}.`,
+        `The wait couldn't search it. Retained output starts at cursor ${wait.earliestAvailableCursor}.`,
       ),
     );
   const texts = waitTexts(args);
@@ -442,7 +446,7 @@ function waitSummary(
         "warning",
         `${wait.id}:output-missing`,
         `Finished without printing ${awaited}`,
-        "The task ended before the awaited output appeared; its recent output is in the result.",
+        "The task ended before the awaited output appeared.",
       ),
     );
   const state = task.metadata?.[0] ?? taskStateLabel(wait.snapshot.state);
@@ -458,17 +462,8 @@ function waitSummary(
 function logsIssues(details: DetailsFor<"logs">): CompactIssue[] {
   const logs = details.logs;
   const issues: CompactIssue[] = [];
-  if (logs.state === "failed")
-    issues.push(
-      issue(
-        "error",
-        `${logs.id}:failed`,
-        "Failed",
-        "Read task status for the exit code and failure cause.",
-      ),
-    );
-  if (logs.state === "timed_out")
-    issues.push(runtimeTimeoutIssue(logs.id, undefined, "Read task status for how long it ran."));
+  if (logs.state === "failed") issues.push(issue("error", `${logs.id}:failed`, "Failed"));
+  if (logs.state === "timed_out") issues.push(runtimeTimeoutIssue(logs.id, undefined));
   if (logs.state === "stopping") issues.push(cleanupUnconfirmedIssue(logs.id));
   if (logs.skipped)
     issues.push(
@@ -476,7 +471,7 @@ function logsIssues(details: DetailsFor<"logs">): CompactIssue[] {
         logs.id,
         logs.skipped,
         "read",
-        `Retained output is readable from afterCursor ${logs.earliestAvailableCursor}; the next read continues after cursor ${logs.nextCursor}.`,
+        `Retained output starts at cursor ${logs.earliestAvailableCursor}; the next read continues after cursor ${logs.nextCursor}.`,
       ),
     );
   const page = details.truncation;
@@ -496,13 +491,13 @@ function logsIssues(details: DetailsFor<"logs">): CompactIssue[] {
             "info",
             `${logs.id}:slice-truncated`,
             `More output follows, ${formatBytes(page.omittedBytes)} retained`,
-            `Continue reading with afterCursor ${page.resumeAfterCursor}; each read returns the next page.`,
+            `It starts after cursor ${page.resumeAfterCursor}.`,
           )
         : issue(
             "info",
             `${logs.id}:slice-truncated`,
             `Showing the newest output; ${formatBytes(page.omittedBytes)} earlier is retained`,
-            `Reading with afterCursor ${page.resumeAfterCursor} returns retained output from its start.`,
+            `Retained output starts after cursor ${page.resumeAfterCursor}.`,
           ),
     );
   return issues;
@@ -539,11 +534,31 @@ export const projectBackgroundTaskCompactSummary = ({
   const action = args.action ?? "task";
   const subject = backgroundTaskCallSubject(args);
   if (phase !== "settled") return { action, subject };
-  if (isError) return { action, subject, outcome: "error", issues: [] };
+  if (isError) return failureSummary(decodeBackgroundTaskFailure(result?.details), action, subject);
   const decoded = decodeBackgroundTaskDetails(result?.details);
   if (Option.isNone(decoded) || decoded.value.action !== args.action) return undefined;
   return settledSummary(decoded.value, args, action, subject);
 };
+
+// An expected failure names itself; any other error leaves the shell to show the host's text.
+function failureSummary(
+  failure: Option.Option<BackgroundTaskFailureDetails>,
+  action: string,
+  subject: string,
+): CompactSummary {
+  return Option.match(failure, {
+    onNone: () => ({ action, subject, outcome: "error", issues: [] }),
+    onSome: (details) => {
+      const reported = failureIssue(details.failure);
+      return {
+        action,
+        subject,
+        outcome: reported.severity === "error" ? "error" : "uncertain",
+        issues: [reported],
+      };
+    },
+  });
+}
 
 function settledSummary(
   details: DecodedTaskDetails,

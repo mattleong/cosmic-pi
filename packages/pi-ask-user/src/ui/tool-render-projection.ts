@@ -7,7 +7,12 @@ import { countLabel } from "pi-cosmic-core/display";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import { stripTerminalControls } from "pi-cosmic-core/security";
 import { MAX_RETAINED_REQUESTS } from "../questionnaire/async-model.ts";
-import { MAX_CHOICES, MAX_QUESTIONS } from "../questionnaire/schema.ts";
+import {
+  MAX_CHOICES,
+  MAX_KEY_LENGTH,
+  MAX_QUESTIONS,
+  MAX_TITLE_LENGTH,
+} from "../questionnaire/schema.ts";
 import { titleLabel } from "./layout.ts";
 
 const note = { note: Schema.optional(Schema.String) };
@@ -59,6 +64,8 @@ const expandedAsyncSnapshot = Schema.Struct({
   ...asyncSnapshotFields,
   independentWork: Schema.optional(Schema.String),
   blockedWork: Schema.optional(Schema.String),
+  // Decoded on its own by titlesOf, so a malformed label never hides the row.
+  titles: Schema.optional(Schema.Unknown),
 });
 export type ReplayedSnapshot = typeof expandedAsyncSnapshot.Type;
 
@@ -109,6 +116,22 @@ export const callTitles = Fn.flow(decodeCallQuestions, (decoded): string | undef
   return titles === "" ? undefined : titles;
 });
 
+const decodeTitles = decodeUnknownOrUndefined(
+  Schema.Array(
+    Schema.Struct({
+      key: Schema.String.check(Schema.isMaxLength(MAX_KEY_LENGTH)),
+      title: Schema.String.check(Schema.isMaxLength(MAX_TITLE_LENGTH)),
+    }),
+  ).check(Schema.isMaxLength(MAX_QUESTIONS)),
+);
+
+/** Question titles by answer key from stored async details; none when they don't decode. */
+export const titlesOf = Fn.flow(
+  decodeTitles,
+  (titles): ReadonlyMap<string, string> =>
+    new Map(Arr.map(titles ?? [], ({ key, title }) => [key, title] as const)),
+);
+
 export const titlesByKey = Fn.flow(
   decodeCallQuestions,
   (decoded): ReadonlyMap<string, string> =>
@@ -158,6 +181,10 @@ export const contentText = Fn.flow(replayContent, (decoded) =>
 );
 
 export type QuestionnaireState = "waiting" | "queued" | "answered" | "cancelled" | "failed";
+
+/** Waiting and queued questionnaires still need the user's answers. */
+export const isPendingState = (state: QuestionnaireState): boolean =>
+  state === "waiting" || state === "queued";
 
 type StateRow = Pick<ReplayedSnapshot, "status" | "delivery" | "presentation" | "outcome">;
 
@@ -220,3 +247,34 @@ export function stateCounts(states: readonly QuestionnaireState[]): readonly str
     );
   return [...new Set([wording(0), wording(1), countLabel(states.length, "questionnaire")])];
 }
+
+const DELIVERY_WORDS = {
+  pending: "not delivered yet",
+  sending: "delivering",
+  sent: "delivered automatically",
+  failed: "automatic delivery failed",
+  waiter: "returned to an await",
+  none: undefined,
+} as const satisfies Readonly<Record<ReplayedSnapshot["delivery"], string | undefined>>;
+
+const factLine = (segments: ReadonlyArray<string | undefined>): string =>
+  Arr.join(
+    Arr.filter(segments, (segment): segment is string => segment !== undefined && segment !== ""),
+    " · ",
+  );
+
+/** IDs and delivery of async requests, for expanded details; a list also names each state. */
+export function requestFacts(rows: readonly ReplayedSnapshot[], list: boolean): string[] {
+  return Arr.map(rows, (row) => {
+    const state = questionnaireState(row);
+    return factLine([
+      list && state !== undefined ? `${row.requestId}: ${STATE_WORDS[state][0]}` : row.requestId,
+      `delivery ID ${row.deliveryId}`,
+      DELIVERY_WORDS[row.delivery],
+    ]);
+  });
+}
+
+export const deliveryFacts = (requestId: string, deliveryId: string): string[] => [
+  factLine([requestId, `delivery ID ${deliveryId}`]),
+];

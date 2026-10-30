@@ -35,6 +35,7 @@ import {
   type InvalidSubagentRequestError,
   type SubagentError,
   type SubagentRuntimeClosedError,
+  withGuidanceClause,
 } from "./errors.ts";
 import { snapshotRun, type RunContext, type RunRecord } from "./internal.ts";
 import type { RunControlMessage } from "./control.ts";
@@ -243,7 +244,10 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
       : Effect.fail(
           agentMessageRefusal(
             "agent_not_found",
-            `Agent ${to} is not in this session; call agent_list for current agent IDs.`,
+            withGuidanceClause(
+              `Agent ${to} is not in this session`,
+              "call agent_list for current agent IDs.",
+            ),
           ),
         );
   };
@@ -271,7 +275,10 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
         if (to === sender.id)
           return yield* agentMessageRefusal(
             "agent_self_target",
-            "An agent cannot message itself; name another agent from agent_list.",
+            withGuidanceClause(
+              "An agent cannot message itself",
+              "name another agent from agent_list.",
+            ),
           );
         if (to === MAIN_AGENT_ID) {
           if (!main)
@@ -373,6 +380,7 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
           fromName: sender.name,
           to,
           content: agentMessageContent(sender, text),
+          text,
         })),
       };
     } else if (claimed.kind === "resume") {

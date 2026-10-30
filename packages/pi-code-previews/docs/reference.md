@@ -77,7 +77,7 @@ Preview writes retain Pi's direct-write semantics so symlinks, hard links, open 
 
 In `preview` style, when content/result/diff previews are disabled, collapsed successful output or code previews are hidden while the tool call stays visible; use pi's expand shortcut to view them on demand. `writeContentPreview: false` hides collapsed write content and write diffs, and `editDiffPreview: false` hides collapsed proposed/applied edit diffs. `bashResultPreview: false` applies to all successful `bash` output, while grep/find/ls result toggles also hide matching `bash` commands that start with `grep`, `find`, or `ls`.
 
-For expanded calls and noncompact fallbacks, `toolCallBackground: "off"` removes the colored background from Code Previews presentations. `toolCallBackground: "border"` replaces the background with a border-only frame.
+For expanded calls and noncompact fallbacks, `toolCallBackground: "off"` removes the colored background from Code Previews presentations. `toolCallBackground: "border"` replaces the background with a border-only frame. Messages from cooperating extensions, such as subagent reports and session messages, use the same frame as a settled tool row.
 
 `toolCallTiming: false` hides tool durations, including measured durations in nested compact call trees. Measured durations appear inline in compact summaries. Detailed rendering uses the result footer unless `toolCallBackground` is `border`; in border mode durations appear in the top-right border corner.
 

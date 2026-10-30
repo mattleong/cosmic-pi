@@ -109,10 +109,13 @@ function expandedContent<Details>(
 ): Component {
   const details = decodeOutcome(result.details);
   return expandedResult(
-    fallbackText(result.content),
-    context.isError,
-    details?.outcome === "submitted" ? details.answers : undefined,
-    titlesByKey(context.args),
+    {
+      raw: fallbackText(result.content),
+      isError: context.isError,
+      decoded: details !== undefined,
+      answers: details?.outcome === "submitted" ? details.answers : undefined,
+      titles: titlesByKey(context.args),
+    },
     theme,
   );
 }

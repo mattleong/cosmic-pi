@@ -2,10 +2,25 @@ import type {
   AgentToolResult,
   ExtensionAPI,
   ToolResultEvent,
+  ToolResultEventResult,
 } from "@earendil-works/pi-coding-agent";
 import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
-import { ROOT_TOOL_NAMES, type SubagentToolName } from "../run/tool-policy.ts";
+import { ROOT_TOOL_NAMES, type AgentToolName, type SubagentToolName } from "../run/tool-policy.ts";
+import type { ToolFailureDetails } from "../tools/details-schema.ts";
+import { toolFailureDetails } from "../tools/failure-details.ts";
 import { decodeSubagentOutcomeDetails, hasSubagentToolFailure } from "../tools/outcome.ts";
+
+const MAX_RETAINED_RESULTS = 256;
+
+/** Keeps at most `MAX_RETAINED_RESULTS` entries, dropping the oldest first. */
+const setBounded = <V>(map: Map<string, V>, key: string, value: V): void => {
+  map.delete(key);
+  if (map.size >= MAX_RETAINED_RESULTS) {
+    const oldest = map.keys().next().value;
+    if (oldest !== undefined) map.delete(oldest);
+  }
+  map.set(key, value);
+};
 
 export const registerSubagentErrorReceipts = (pi: ExtensionAPI) => {
   let activation: symbol | undefined;
@@ -13,10 +28,16 @@ export const registerSubagentErrorReceipts = (pi: ExtensionAPI) => {
     string,
     { readonly tool: SubagentToolName; readonly details: unknown }
   >();
+  // Pi keeps only a thrown error's text; its user copy reaches the result as details.
+  const failures = new Map<
+    string,
+    { readonly tool: SubagentToolName | AgentToolName; readonly details: ToolFailureDetails }
+  >();
   const calls = new Map<string, "pending" | "model" | "script">();
   const ownedNames = new Set<string>(ROOT_TOOL_NAMES);
   const clear = (): void => {
     receipts.clear();
+    failures.clear();
     calls.clear();
   };
   pi.on("tool_execution_start", (event) => {
@@ -37,8 +58,12 @@ export const registerSubagentErrorReceipts = (pi: ExtensionAPI) => {
     );
     return undefined;
   });
-  const apply = (event: ToolResultEvent): { readonly isError: true } | undefined => {
+  const apply = (event: ToolResultEvent): ToolResultEventResult | undefined => {
     calls.delete(event.toolCallId);
+    const failure = failures.get(event.toolCallId);
+    failures.delete(event.toolCallId);
+    if (failure && event.isError && event.toolName === failure.tool)
+      return { details: failure.details };
     const receipt = receipts.get(event.toolCallId);
     if (!receipt || event.toolName !== receipt.tool || event.details !== receipt.details)
       return undefined;
@@ -78,12 +103,18 @@ export const registerSubagentErrorReceipts = (pi: ExtensionAPI) => {
       } catch {
         return;
       }
-      receipts.delete(callId);
-      if (receipts.size >= 256) {
-        const oldest = receipts.keys().next().value;
-        if (oldest !== undefined) receipts.delete(oldest);
-      }
-      receipts.set(callId, { tool, details });
+      setBounded(receipts, callId, { tool, details });
+    },
+    /** Records a rejected call's failure, which its error result then carries as details. */
+    retainFailure: (
+      owner: symbol,
+      tool: SubagentToolName | AgentToolName,
+      callId: string,
+      cause: unknown,
+    ): void => {
+      if (owner !== activation || callId.length > 1_024) return;
+      const details = toolFailureDetails(cause);
+      if (details) setBounded(failures, callId, { tool, details });
     },
   };
 };

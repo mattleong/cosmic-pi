@@ -57,7 +57,9 @@ Cooperating extensions retain their own executable registrations. They install
 `registerCodePreviewReplay` at factory time, wrap through its `shell` after settings load, publish
 only after successful registration, finish pending startup on settlement, and retire on shutdown.
 `withCodePreviewShell` preserves an owned execution definition; `withCodePreviewRenderers` handles
-renderer-only composition. Shell mode and collapsed style are captured when wrapping.
+renderer-only composition. Shell mode and collapsed style are captured when wrapping. Their custom
+messages render through the [message shell](src/preview/message-shell.ts), which reuses the tool-row
+frames under the owner's loaded settings and never executes anything or acquires resources.
 
 Third-party support stays behind the isolated registry, with exact package/source/name admission.
 Adapters never import providers, inspect executions, change activation, or read stored artifacts.

@@ -23,6 +23,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   registerSubagentTaskNoticeDelivery,
   taskNoticeContent,
+  taskNoticeMessage,
 } from "../src/boundary/host-notice.ts";
 import type { BackgroundTaskNotice, BackgroundTaskStatus } from "../src/task/model.ts";
 import {
@@ -127,9 +128,32 @@ describe("background task notice rendering", () => {
         expect(collapsed).not.toContain("rejects expired tokens");
         expect(renderNotice(details, true, content)).toContain("rejects expired tokens");
       }
-      expect(renderNotice(taskNoticeDetails(failed), false, content)).toContain("tests");
+      expect(renderNotice(taskNoticeDetails(failed, ""), false, content)).toContain("tests");
     },
   );
+
+  it.each(["compact", "preview"] as const)(
+    "expands a %s notice to its output and task, never the agent's next step or credentials",
+    (style) => {
+      restore = applyPresentationSettings({ toolCallCollapsedStyle: style });
+      const message = taskNoticeMessage(failedNotice);
+      // The agent reads exactly the notice text; display output rides in details.
+      expect(message.content).toBe(taskNoticeContent(failedNotice));
+      expect(message.details.tail).toContain("rejects expired tokens");
+      expect(message.details.tail).not.toContain("FAKE_SECRET");
+      const expanded = renderNotice(message.details, true, message.content);
+      for (const fact of ["rejects expired tokens", failed.id, failed.cwd])
+        expect(expanded).toContain(fact);
+      expect(expanded).not.toContain("background_task");
+      expect(expanded).not.toContain("FAKE_SECRET");
+    },
+  );
+
+  it("expands a notice stored without display output to the text the agent read", () => {
+    const content = taskNoticeContent(failedNotice);
+    const { tail: _tail, ...stored } = taskNoticeMessage(failedNotice).details;
+    expect(renderNotice(stored, true, content)).toContain("Cause: FAIL");
+  });
 });
 
 const contextNotice = (): ContextMessage => ({

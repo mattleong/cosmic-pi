@@ -16,6 +16,7 @@ import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
 import { SUBAGENT_ROOT_RUN_ID } from "./model.ts";
 import {
   mapWorkspaceError,
+  workspaceErrorText,
   UNREVIEWED,
   type WorkspaceBinding,
   type WorkspaceControlContext,
@@ -53,10 +54,7 @@ const orphanError = (error: WorkspaceError) => {
     case "authorization":
       return invalid("workspace_owner_unavailable", `${error.message}\n${ORPHAN_UNAVAILABLE}`);
     case "adopt":
-      return invalid(
-        "workspace_orphan_discard_only",
-        error.detail === undefined ? error.message : `${error.message}\n${error.detail}`,
-      );
+      return invalid("workspace_orphan_discard_only", workspaceErrorText(error));
     case "revision":
       return invalid("workspace_revision_stale", error.message);
     default:

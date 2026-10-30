@@ -3,7 +3,6 @@ import { issueMessageStyleProblems, renderContextFixture } from "pi-code-preview
 import * as Fn from "effect/Function";
 import type * as Schema from "effect/Schema";
 import { assert, describe, expect, it } from "vitest";
-import { failureRecovery } from "../../src/tools/compact-action-failures.ts";
 import { createSubagentCompactSummary } from "../../src/tools/compact-summary.ts";
 import { SUBAGENT_TOOL_NAME } from "../../src/run/tool-policy.ts";
 import { compactToolDetails } from "../../src/tools/details.ts";
@@ -268,7 +267,8 @@ describe("await outcomes", () => {
     expect(endedNote).toBeDefined();
     expect(noted).not.toBe(endedNote);
 
-    // A pause that arrived with the message ended the wait, so the message is only noted.
+    // A pause that arrived with the message ended the wait, so the message is only noted. The
+    // pause is a held state, so the wait returned rather than warned.
     const paused = view({ id: "agent-1", state: "paused" });
     const attention = summarize(
       "await",
@@ -280,7 +280,7 @@ describe("await outcomes", () => {
       "settled",
       { runIds: [paused.id] },
     );
-    expect(attention?.outcome).toBe("warning");
+    expect(attention?.outcome).toBe("returned");
     expect(agentMessageNote(attention?.issues)).toBe(noted);
 
     // The only projected target finished, but a requested one without a card hadn't.
@@ -291,6 +291,91 @@ describe("await outcomes", () => {
       { runIds: [done.id, "agent-2"] },
     );
     expect(agentMessageNote(partial?.issues)).toBe(endedNote);
+  });
+});
+
+const severities = (issues: readonly CompactIssue[] | undefined) =>
+  Arr.map(issues ?? [], (issue) => issue.severity);
+
+describe("waiting and held runs", () => {
+  const asking = view({
+    id: "agent-1",
+    state: "waiting_for_parent",
+    question: { requestId: "q-1", message: "Should I update db/0007.sql?" },
+  });
+  const unavailable = view({ id: "agent-2", state: "waiting_for_parent" });
+  const paused = view({ id: "agent-3", state: "paused" });
+  const awaitOf = (run: SubagentRunView) =>
+    summarize(
+      "await",
+      awaitReceipt([run], { awaitedRunIds: [run.id], attentionRequired: true }),
+      "settled",
+      { runIds: [run.id] },
+    );
+
+  it("asks for attention, not a warning, while a run waits for a reply", () => {
+    for (const run of [asking, unavailable]) {
+      const summary = awaitOf(run);
+      expect(summary?.outcome).toBe("attention");
+      expect(severities(summary?.issues)).not.toContain("warning");
+    }
+    // The question arrives in its own notice, so the awaited run's heading doesn't repeat it.
+    const question = asking.question?.message ?? "";
+    expect(
+      Arr.some(awaitOf(asking)?.issues ?? [], (issue) =>
+        Str.includes(question)(`${issue.message}\n${issue.detail ?? ""}`),
+      ),
+    ).toBe(false);
+    // A question from a run the wait didn't target still reaches the caller as attention.
+    const target = view({ id: "target", state: "running" });
+    const beside = summarize(
+      "await",
+      awaitReceipt([target, asking], { awaitedRunIds: ["target"], attentionRequired: true }),
+      "settled",
+      { runIds: ["target"] },
+    );
+    expect(beside?.outcome).toBe("attention");
+    expect(severities(beside?.issues)).toEqual(["attention"]);
+  });
+
+  it("shows a paused run as a held state without a problem", () => {
+    const awaited = awaitOf(paused);
+    expect(awaited?.outcome).toBe("returned");
+    expect(severities(awaited?.issues)).not.toContain("warning");
+    expect(severities(awaited?.issues)).not.toContain("attention");
+    const interrupted = summarize(
+      "lifecycle",
+      compactToolDetails({ action: "interrupt", runs: [paused] }),
+      "settled",
+      { action: "interrupt", runIds: [paused.id] },
+    );
+    expect(interrupted?.outcome).toBe("success");
+    expect(severities(interrupted?.issues)).not.toContain("warning");
+  });
+
+  it("keeps real problems as warnings beside a question", () => {
+    const warned = view({
+      id: "agent-4",
+      state: "waiting_for_parent",
+      question: { requestId: "q-2", message: "Which seed file?" },
+      warning: "Could not run the integration tests: docker is not available",
+    });
+    const summary = awaitOf(warned);
+    expect(summary?.outcome).toBe("warning");
+    expect(severities(summary?.issues)).toContain("warning");
+    const quarantined = awaitOf(
+      view({
+        id: "agent-5",
+        state: "waiting_for_parent",
+        question: { requestId: "q-3", message: "Keep going?" },
+        cleanup: {
+          disposition: "quarantined",
+          recovery: "stop",
+          diagnostic: { phase: "process-group", code: "group_live", message: "Live" },
+        },
+      }),
+    );
+    expect(quarantined?.outcome).toBe("warning");
   });
 });
 
@@ -428,13 +513,5 @@ describe("subagent compact semantic policy", () => {
         }),
         issue.message,
       ).toEqual([]);
-  });
-});
-
-describe("failure recovery routing", () => {
-  it("routes a start failure by its exact code before broader code fragments", () => {
-    expect(failureRecovery("workspace_nested_writer_unsupported", "Refused.", "start")).toContain(
-      "root",
-    );
   });
 });

@@ -5,6 +5,7 @@ import { ACTIVITY_LIMITS } from "pi-cosmic-ui/activity";
 import { countLabel, formatCost, formatTokens } from "pi-cosmic-core/display";
 import { sanitizeDiagnosticContent } from "pi-cosmic-core/security";
 import type { SubagentRunView } from "../run/model.ts";
+import { userRunText } from "../run/warnings.ts";
 import {
   cleanupEvidenceText,
   cleanupRecoveryText,
@@ -23,16 +24,17 @@ const section = (title: string, body: string, maximumLength: number): string =>
 const workspaceOutcome = (run: SubagentRunView): string =>
   run.workspaceOutcome ? Str.capitalize(workspaceOutcomeLabel(run.workspaceOutcome)) : "";
 
-const outcome = (run: SubagentRunView): string =>
-  Fn.pipe(
+const outcome = (run: SubagentRunView): string => {
+  const shown = userRunText(run);
+  return Fn.pipe(
     [
       workspaceOutcome(run),
       bounded(
         Fn.pipe(
           [
-            run.error && `Error: ${run.error}`,
-            run.warning && `Warning: ${run.warning}`,
-            run.systemWarning && `Warning: ${run.systemWarning}`,
+            shown.error && `Error: ${shown.error}`,
+            shown.warning && `Warning: ${shown.warning}`,
+            shown.systemWarning && `Warning: ${shown.systemWarning}`,
           ],
           Arr.filter(isTextFragment),
           Arr.join("\n"),
@@ -44,6 +46,7 @@ const outcome = (run: SubagentRunView): string =>
     Arr.filter(isTextFragment),
     Arr.join("\n\n"),
   );
+};
 
 const recentActivity = (run: SubagentRunView): string =>
   Fn.pipe(

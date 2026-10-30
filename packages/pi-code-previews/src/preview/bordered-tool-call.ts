@@ -11,6 +11,7 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import { indexOfFrom } from "pi-cosmic-core/text-scan";
+import type { CompactStatus } from "../tools/compact-summary";
 import type { RendererState } from "../tools/renderers/shared/types";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { renderExpansionAffordance, toolExpandHint } from "pi-cosmic-ui/tool";
@@ -29,7 +30,7 @@ interface BorderState {
   codePreviewBorderLastCallPartial?: boolean;
 }
 
-type BorderColorKey = "borderMuted" | "warning" | "success" | "error";
+type BorderColorKey = "borderMuted" | "accent" | "warning" | "success" | "error";
 
 const borderStates = new WeakMap<object, BorderState>();
 
@@ -70,6 +71,14 @@ export function borderColorKey(context: { isError: boolean; isPartial: boolean }
   if (context.isError) return "error";
   if (context.isPartial) return "warning";
   return "success";
+}
+
+/** The border tone of a settled or live row from its strongest status. */
+export function statusBorderColor(status: CompactStatus, isPartial: boolean): BorderColorKey {
+  if (status === "cancelled") return "borderMuted";
+  if (status === "warning" || status === "uncertain") return "warning";
+  if (status === "attention") return "accent";
+  return borderColorKey({ isError: status === "error", isPartial });
 }
 
 export function frameBorderShell(

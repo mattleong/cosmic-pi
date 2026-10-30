@@ -16,7 +16,11 @@ import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import { hasUnansweredNotice, registerSessionWake } from "pi-cosmic-core/host-wake";
 import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core/security";
 import type { BackgroundTaskNotice, BackgroundTaskSnapshot } from "../task/model.ts";
-import { TASK_NOTICE_MESSAGE_TYPE, taskNoticeDetails } from "../task/notice.ts";
+import {
+  MAX_NOTICE_TAIL_CHARS,
+  TASK_NOTICE_MESSAGE_TYPE,
+  taskNoticeDetails,
+} from "../task/notice.ts";
 import { recentOutput } from "../tools/log-page.ts";
 
 const NOTICE_TYPES: ReadonlySet<string> = new Set([TASK_NOTICE_MESSAGE_TYPE]);
@@ -106,10 +110,16 @@ export const taskNoticeContent = ({ task, recent, retained }: BackgroundTaskNoti
   return sanitizeDiagnosticContent(content, { maximumLength: MAX_NOTICE_CHARS });
 };
 
-const noticeMessage = (notice: BackgroundTaskNotice) => ({
+/** The stored notice: the text the agent reads and redacted details for its renderer. */
+export const taskNoticeMessage = (notice: BackgroundTaskNotice) => ({
   customType: TASK_NOTICE_MESSAGE_TYPE,
   content: taskNoticeContent(notice),
-  details: taskNoticeDetails(notice.task),
+  details: taskNoticeDetails(
+    notice.task,
+    sanitizeDiagnosticContent(Str.trimEnd(recentOutput(notice.recent)), {
+      maximumLength: MAX_NOTICE_TAIL_CHARS,
+    }),
+  ),
 });
 
 export interface TaskNoticeHost {
@@ -142,7 +152,7 @@ export function registerTaskNoticeDelivery(
     holdDuringDialogs: true,
   });
   return (notice, isCurrent) => {
-    deliverAgentMessage(pi, wake, noticeMessage(notice), isCurrent);
+    deliverAgentMessage(pi, wake, taskNoticeMessage(notice), isCurrent);
   };
 }
 
@@ -211,7 +221,7 @@ export function registerSubagentTaskNoticeDelivery(
       if (!isCurrent()) return;
       // Pi holds a busy session's notice until its turn ends, outside the steering queue.
       pi.sendMessage(
-        { ...noticeMessage(notice), display: true },
+        { ...taskNoticeMessage(notice), display: true },
         { deliverAs: "steer", triggerTurn: false },
       );
     }, undefined);

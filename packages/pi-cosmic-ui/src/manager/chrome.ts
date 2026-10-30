@@ -1,5 +1,6 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
+import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
@@ -22,29 +23,35 @@ export type ManagerLayoutTier = "narrow" | "stacked" | "wide";
 export const managerLayoutTier = (width: number): ManagerLayoutTier =>
   width >= 100 ? "wide" : width >= 60 ? "stacked" : "narrow";
 
-export type ManagerNoticeKind = "info" | "success" | "warning" | "error";
+/** `attention` marks work waiting on a person's or agent's reply or decision; it is not a problem. */
+export type ManagerNoticeKind = "info" | "success" | "warning" | "error" | "attention";
 
 const MANAGER_NOTICE_GLYPHS = {
   info: "ℹ",
   success: "✓",
   warning: "⚠",
   error: "✗",
+  attention: "?",
 } satisfies Readonly<Record<ManagerNoticeKind, string>>;
 
 export const managerNoticeGlyph = (kind: ManagerNoticeKind): string => MANAGER_NOTICE_GLYPHS[kind];
 
-export const managerNoticeColor = (kind: ManagerNoticeKind) => (kind === "info" ? "muted" : kind);
+const MANAGER_NOTICE_COLORS = {
+  info: "muted",
+  success: "success",
+  warning: "warning",
+  error: "error",
+  attention: "accent",
+} as const satisfies Readonly<Record<ManagerNoticeKind, string>>;
 
-type ManagerStateGlyphKind = "done" | "failed" | "stopped" | "stopping";
-type ManagerAttentionKind = "waiting" | "paused";
-export type ManagerActivityKind =
-  | "pending"
-  | "running"
-  | ManagerAttentionKind
-  | ManagerStateGlyphKind;
+export const managerNoticeColor = (kind: ManagerNoticeKind) => MANAGER_NOTICE_COLORS[kind];
+
+type ManagerStateGlyphKind = "paused" | "done" | "failed" | "stopped" | "stopping";
+export type ManagerActivityKind = "pending" | "running" | "waiting" | ManagerStateGlyphKind;
 export type ManagerStatusColor = "accent" | "success" | "warning" | "error" | "muted" | "dim";
 
 const MANAGER_STATE_GLYPHS = {
+  paused: "‖",
   done: "✓",
   failed: "✗",
   stopped: "⊘",
@@ -55,19 +62,19 @@ export const managerStateGlyph = (kind: ManagerStateGlyphKind): string =>
   MANAGER_STATE_GLYPHS[kind];
 
 export const managerActivityGlyph = (kind: ManagerActivityKind, frame = 0): string =>
-  kind === "pending"
-    ? startingSpinnerFrame(frame)
-    : kind === "running"
-      ? frameAt(BRAILLE_SPINNER_FRAMES, frame, "⠋")
-      : kind === "waiting" || kind === "paused"
-        ? managerNoticeGlyph("warning")
-        : managerStateGlyph(kind);
+  Match.value(kind).pipe(
+    Match.when("pending", () => startingSpinnerFrame(frame)),
+    Match.when("running", () => frameAt(BRAILLE_SPINNER_FRAMES, frame, "⠋")),
+    Match.when("waiting", () => managerNoticeGlyph("attention")),
+    Match.orElse(managerStateGlyph),
+  );
 
 export const managerActivityColor = (kind: ManagerActivityKind): ManagerStatusColor => {
   if (kind === "pending" || kind === "running") return "accent";
+  if (kind === "waiting") return managerNoticeColor("attention");
   if (kind === "done") return "success";
   if (kind === "failed") return "error";
-  if (kind === "stopped") return "muted";
+  if (kind === "stopped" || kind === "paused") return "muted";
   return "warning";
 };
 

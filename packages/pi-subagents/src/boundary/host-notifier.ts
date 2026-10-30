@@ -14,6 +14,8 @@ import type {
   SubagentWorkspaceOutcome,
 } from "../run/model.ts";
 import { indentQuestionLines, proposalGuidance } from "../tools/format.ts";
+import { completionNoticeRuns } from "../ui/notice-facts.ts";
+import { noticeName, noticeText, type NoticeDetails } from "../ui/notice-details.ts";
 import {
   formatRunBlocks,
   nextCandidateAction,
@@ -35,9 +37,12 @@ export interface SubagentCompletionNotification {
   /** The report's file, saved at settlement; absent when it couldn't be written. */
   readonly reportArchive?: SubagentReportArchive | undefined;
   readonly error?: string | undefined;
+  /** `error` and `warning` without the agent procedures they carry; absent when they match. */
+  readonly userError?: string | undefined;
   /** The failure's file, saved at settlement when the error is longer than its preview. */
   readonly errorArchive?: SubagentReportArchive | undefined;
   readonly warning?: string | undefined;
+  readonly userWarning?: string | undefined;
   readonly profile?: string | undefined;
   /** A failure's next frozen route candidate. */
   readonly nextCandidate?: SubagentNextCandidate | undefined;
@@ -168,6 +173,35 @@ const questionContent = (
 
 const displayName = (name: string): string => clipText(sanitizeTerminalLine(name), 60);
 
+/** A completion notice's display receipt: counts for its heading, and each run's words. */
+export const completionNoticeDetails = (
+  runs: ReadonlyArray<SubagentCompletionNotification>,
+): NoticeDetails => ({
+  version: 1,
+  kind: "completed",
+  ids: Arr.map(runs, (run) => run.id),
+  total: runs.length,
+  failed: Arr.filter(runs, (run) => run.outcome === "failed").length,
+  warnings: Arr.filter(runs, (run) => Boolean(Str.trim(run.warning ?? ""))).length,
+  ...(runs.length === 1 && runs[0] !== undefined && { name: displayName(runs[0].name) }),
+  runs: completionNoticeRuns(runs),
+});
+
+/** A question notice's display receipt: who asks, and a bounded copy of the question. */
+export const questionNoticeDetails = (
+  notification: Extract<SubagentNotification, { readonly type: "question" }>,
+): NoticeDetails => {
+  const question = noticeText(sanitizeNotificationContent(notification.message));
+  return {
+    version: 1,
+    kind: "question",
+    id: notification.id,
+    name: noticeName(notification.name),
+    ...(question && { question: question.text }),
+    ...(question?.cut && { questionCut: true }),
+  };
+};
+
 export const COMPLETION_MESSAGE_TYPE = "pi-subagents-completed";
 export const QUESTION_MESSAGE_TYPE = "pi-subagents-question";
 
@@ -211,16 +245,7 @@ export function hostNotifier(
           {
             customType: COMPLETION_MESSAGE_TYPE,
             content: completionContent(runs),
-            details: {
-              version: 1,
-              kind: "completed",
-              ids: Arr.map(runs, (run) => run.id),
-              total: runs.length,
-              failed: Arr.filter(runs, (run) => run.outcome === "failed").length,
-              warnings: Arr.filter(runs, (run) => Boolean(Str.trim(run.warning ?? ""))).length,
-              ...(runs.length === 1 &&
-                runs[0] !== undefined && { name: displayName(runs[0].name) }),
-            },
+            details: completionNoticeDetails(runs),
           },
           startTurn,
         );
@@ -239,12 +264,7 @@ export function hostNotifier(
             pi,
             {
               customType: QUESTION_MESSAGE_TYPE,
-              details: {
-                version: 1,
-                kind: "question",
-                id: notification.id,
-                name: displayName(notification.name),
-              },
+              details: questionNoticeDetails(notification),
               content: clip(questionContent(notification)),
             },
             startTurn,

@@ -1,11 +1,22 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
-import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+  CustomMessageComponent,
+  type AgentToolResult,
+  type ExtensionAPI,
+  type ToolRenderers,
+} from "@earendil-works/pi-coding-agent";
 import { stripTerminalControls } from "pi-cosmic-core";
 import { plainTheme } from "pi-cosmic-core/testing";
 import type { CodePreviewRenderers } from "../tools/renderers/shared/types";
-import { createToolPresentationHarness } from "./tool-presentation";
+import { hostObject } from "../shared/untrusted-value";
+import type { ToolCallBackgroundMode } from "../config/schema";
+import {
+  createToolPresentationHarness,
+  hostToolRow,
+  withPresentationSettings,
+} from "./tool-presentation";
 
 type GalleryPhase = "pending" | "running" | "settled";
 
@@ -67,21 +78,74 @@ export interface GalleryMessageScenario {
   readonly message: Parameters<MessageRenderer>[0];
 }
 
+const MESSAGE_BACKGROUNDS: readonly ToolCallBackgroundMode[] = ["border", "on", "off"];
+
+/** A custom message in every background mode, as its renderer draws it inside Pi's spacer. */
 export function galleryMessageFrames(
   render: MessageRenderer,
   scenario: GalleryMessageScenario,
 ): string[] {
-  return Arr.flatMap(GALLERY_VIEWS, ({ expanded, width }) => {
-    const component = render(scenario.message, { expanded, outputPad: 0 }, plainTheme);
-    const content = scenario.message.content;
-    const fallback = [
-      `[${scenario.message.customType}] (Pi default rendering)`,
-      ...(Arr.isArray(content)
-        ? Arr.map(content, (part) => (part.type === "text" ? part.text : `[${part.type}]`))
-        : [content]),
-    ];
-    return frame(scenario.title, expanded, width, component?.render(width) ?? fallback);
-  });
+  return Arr.flatMap(MESSAGE_BACKGROUNDS, (background) =>
+    withPresentationSettings({ toolCallBackground: background }, () =>
+      Arr.flatMap(GALLERY_VIEWS, ({ expanded, width }) => {
+        const component = render(scenario.message, { expanded, outputPad: 1 }, plainTheme);
+        const content = scenario.message.content;
+        const fallback = [
+          `[${scenario.message.customType}] (Pi default rendering)`,
+          ...(Arr.isArray(content)
+            ? Arr.map(content, (part) => (part.type === "text" ? part.text : `[${part.type}]`))
+            : [content]),
+        ];
+        return frame(
+          `${scenario.title} · ${background}`,
+          expanded,
+          width,
+          component?.render(width) ?? fallback,
+        );
+      }),
+    ),
+  );
+}
+
+/** A transcript entry: a settled tool row or a custom message, drawn by Pi's own components. */
+export type GalleryTranscriptEntry =
+  | {
+      readonly name: string;
+      readonly tool: ToolRenderers;
+      readonly args: unknown;
+      readonly result: AgentToolResult<unknown> & { readonly isError?: boolean };
+    }
+  | { readonly render: MessageRenderer; readonly message: GalleryMessageScenario["message"] };
+
+/**
+ * Settled tool rows and custom messages in sequence, as Pi's transcript draws them with its own
+ * spacing and shells, so messages can be reviewed beside the tool rows they should resemble.
+ * Pi's components use its global theme, so callers initialize it first.
+ */
+export function galleryTranscriptFrames(
+  title: string,
+  entries: ReadonlyArray<GalleryTranscriptEntry>,
+): string[] {
+  return Arr.flatMap(GALLERY_VIEWS, ({ expanded, width }) =>
+    frame(
+      title,
+      expanded,
+      width,
+      Arr.flatMap(entries, (entry) => {
+        if ("render" in entry) {
+          const row = new CustomMessageComponent(entry.message, entry.render, undefined, 1);
+          row.setExpanded(expanded);
+          return row.render(width);
+        }
+        const { isError = false, ...result } = entry.result;
+        const row = hostToolRow(entry.name, hostObject(entry.args) ?? {}, entry.tool, {
+          result: { ...result, isError },
+        });
+        row.setExpanded(expanded);
+        return row.render(width);
+      }),
+    ),
+  );
 }
 
 const frame = (title: string, expanded: boolean, width: number, lines: readonly string[]) => [

@@ -21,16 +21,16 @@ import {
 } from "../tools/compact-summary";
 import {
   BorderedToolCall,
-  borderColorKey,
   borderState,
   renderWithBorderSlot,
+  statusBorderColor,
 } from "./bordered-tool-call";
 import { renderCompactIssues } from "./compact-issues";
 import { renderCompactRow } from "./compact-row";
 import { renderCompactToolCall } from "./compact-tool-call";
 import { planCompactPresentation } from "../tools/compact-presentation";
 import { compactPhase, compactPresentationInput } from "./preview-issues";
-import { resultStandIn, rowPerState } from "./self-background";
+import { resultStandIn, rowPerState, statusBackground } from "./self-background";
 import {
   getCodePreviewAnimationFrame,
   updateToolCallTiming,
@@ -281,12 +281,7 @@ class CompactShell<TArgs, TDetails, TState> implements Component {
     status: CompactStatus,
   ): Component {
     const shell = new BorderedToolCall(this.theme);
-    const color =
-      status === "cancelled"
-        ? "borderMuted"
-        : status === "warning" || status === "uncertain"
-          ? "warning"
-          : borderColorKey({ isError: status === "error", isPartial: this.context.isPartial });
+    const color = statusBorderColor(status, this.context.isPartial);
     shell.setContent(callSection, details, borderState(this.context), color, this.timing?.label);
     return shell;
   }
@@ -298,12 +293,7 @@ class CompactShell<TArgs, TDetails, TState> implements Component {
     content: boolean,
   ): Component {
     const { context, theme, timing } = this;
-    const background =
-      status === "error"
-        ? "toolErrorBg"
-        : context.isPartial || status === "cancelled" || status === "uncertain"
-          ? "toolPendingBg"
-          : "toolSuccessBg";
+    const background = statusBackground(status, context.isPartial);
     const shell =
       this.mode === "on" ? new Box(1, 1, (text) => theme.bg(background, text)) : new Container();
     shell.addChild(callSection);

@@ -32,7 +32,7 @@ import { imageFailureIssue, imageRecord } from "./compact-summary.ts";
 import { imageResultText } from "./result-text.ts";
 import type { CodexImageDetails, ToolParams } from "./types.ts";
 
-const TITLE = "OpenAI image";
+export const IMAGE_TITLE = "OpenAI image";
 
 export interface ImageView {
   readonly record: CodexImageDetails | undefined;
@@ -72,12 +72,15 @@ export const imageViewOf = <Details>(result: AgentToolResult<Details>, cwd: stri
 const HEADING_PROMPT_LIMIT = 160;
 
 const promptRoom = (width: number): number =>
-  Math.max(1, Math.min(HEADING_PROMPT_LIMIT, width - visibleWidth(TITLE) - 1));
+  Math.max(1, Math.min(HEADING_PROMPT_LIMIT, width - visibleWidth(IMAGE_TITLE) - 1));
 
 export const renderImageHeading = (prompt: string, theme: Theme, width: number): string =>
   clipToWidth(
     renderToolHeader(
-      { title: TITLE, subtitle: clipToWidth(sanitizeTerminalLine(prompt), promptRoom(width)) },
+      {
+        title: IMAGE_TITLE,
+        subtitle: clipToWidth(sanitizeTerminalLine(prompt), promptRoom(width)),
+      },
       theme,
     ),
     width,

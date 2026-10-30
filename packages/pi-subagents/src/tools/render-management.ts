@@ -1,36 +1,35 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
-import { expandedSection } from "pi-code-previews";
+import type { Component } from "@earendil-works/pi-tui";
+import { countLabel } from "pi-cosmic-core/display";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { formatRunRoute } from "../ui/run-presentation.ts";
-import { composeToolComponent as renderComponent } from "pi-cosmic-ui/tool";
-import { failureRecovery } from "./compact-action-failures.ts";
+import {
+  composeToolComponent as renderComponent,
+  renderExpansionAffordance,
+} from "pi-cosmic-ui/tool";
 import type {
   CompactSubagentToolDetails,
-  CompactToolActionFailure,
   SubagentProfileCandidateCard,
   SubagentProfileRouteCard,
 } from "./details-schema.ts";
-import { ACTION_FAILURE_SECTIONS } from "./format.ts";
-import {
-  actionFailureDisposition,
-  countActionFailures,
-  type ActionFailureCounts,
-} from "./outcome.ts";
-import { renderExpandedRunsResult, runOverviewComponent } from "./render-run-overview.ts";
+import { COLLAPSED_AGENT_TEXT_ROWS, detailsSectionLines } from "../ui/agent-text.ts";
+import { cardFactLines, stateGroupLines } from "./render-run-cards.ts";
 
 type ModelsToolDetails = Extract<CompactSubagentToolDetails, { readonly action: "models" }>;
 type RunToolDetails = Exclude<CompactSubagentToolDetails, ModelsToolDetails>;
+type AgentRouteCard = NonNullable<ModelsToolDetails["agents"]>[number];
 
-const formattedCandidateRoute = (candidate: SubagentProfileCandidateCard): string =>
-  `${formatRunRoute({
+const candidateRoute = (candidate: SubagentProfileCandidateCard): string =>
+  formatRunRoute({
     ...candidate,
     openaiFastMode: candidate.openaiFastMode && candidate.status === "eligible",
-  })} · ${candidate.context} · ${candidate.writeIntent}`;
+  });
 
 const PROFILE_SOURCE_LABELS = {
   session: "session override",
@@ -38,168 +37,181 @@ const PROFILE_SOURCE_LABELS = {
   "project-invalid": "invalid project override",
   global: "global override",
   "global-invalid": "invalid global override",
-  builtin: "built-in",
-} as const satisfies Record<SubagentProfileRouteCard["source"], string>;
+  builtin: undefined,
+} as const satisfies Record<SubagentProfileRouteCard["source"], string | undefined>;
 
-const profileRouteSummary = (profile: SubagentProfileRouteCard, theme: Theme): string => {
-  const eligible = Arr.filter(
-    profile.candidates,
-    (candidate) => candidate.status === "eligible",
-  ).length;
+interface RouteRow {
+  readonly name: string;
+  /** The model a launch would take, or why none would run. */
+  readonly route: string;
+  readonly writeIntent: string;
+  readonly source?: string | undefined;
+  readonly attention: boolean;
+}
+
+/** The first eligible candidate's model, `disabled` without candidates, or `unavailable`. */
+const effectiveRoute = (
+  candidates: ReadonlyArray<SubagentProfileCandidateCard>,
+  invalid: boolean,
+): Pick<RouteRow, "route" | "attention"> & { readonly writeIntent?: string } => {
+  if (invalid) return { route: "invalid settings", attention: true };
+  const eligible = Arr.findFirst(candidates, (candidate) => candidate.status === "eligible");
+  if (Option.isSome(eligible))
+    return {
+      route: candidateRoute(eligible.value),
+      writeIntent: eligible.value.writeIntent,
+      attention: false,
+    };
+  return candidates.length === 0
+    ? { route: "disabled", attention: false }
+    : { route: "unavailable", attention: true };
+};
+
+export const profileRow = (profile: SubagentProfileRouteCard): RouteRow => {
   const invalid = Fn.pipe(profile.source, Str.endsWith("-invalid"));
-  const color = invalid || eligible === 0 ? "warning" : "success";
-  const firstCandidate = profile.candidates[0];
-  const first = firstCandidate ? formattedCandidateRoute(firstCandidate) : undefined;
-  return theme.fg(
-    color,
-    `• ${profile.id}${profile.isDefault ? " · fallback" : ""} · ${PROFILE_SOURCE_LABELS[profile.source]} · ${eligible}/${profile.candidates.length} eligible${first ? ` · ${first}` : " · disabled"}`,
+  const { writeIntent, ...effective } = effectiveRoute(profile.candidates, invalid);
+  return {
+    name: profile.id,
+    ...effective,
+    writeIntent: writeIntent ?? profile.defaultWriteIntent,
+    source: PROFILE_SOURCE_LABELS[profile.source],
+  };
+};
+
+const agentRow = (agent: AgentRouteCard): RouteRow => {
+  const { writeIntent, ...effective } = effectiveRoute(agent.candidates, false);
+  return {
+    name: agent.name,
+    ...effective,
+    writeIntent: agent.writeIntent ?? writeIntent ?? "read-only",
+    source: `${agent.source} agent`,
+  };
+};
+
+const routeRowLine = (row: RouteRow, width: number, theme: Theme): string =>
+  clipToWidth(
+    `${theme.fg(row.attention ? "warning" : "muted", "•")} ${theme.fg("toolTitle", sanitizeTerminalLine(row.name))}${theme.fg(
+      row.attention ? "warning" : "muted",
+      ` · ${sanitizeTerminalLine(row.route)}`,
+    )}${theme.fg("muted", ` · ${row.writeIntent}${row.source ? ` · ${row.source}` : ""}`)}`,
+    width,
   );
-};
 
-const profileRouteLines = (
-  profile: SubagentProfileRouteCard,
-  expanded: boolean,
-  theme: Theme,
-): string[] => {
-  const summary = profileRouteSummary(profile, theme);
-  if (!expanded) return [summary];
-  return [
-    summary,
-    theme.fg("dim", `  ${profile.description}`),
-    theme.fg(
-      "dim",
-      `  Defaults · ${profile.defaultContext} · ${profile.defaultWriteIntent} · ${profile.defaultEffort ?? "inherit effort"}`,
-    ),
-    ...Arr.flatMap(profile.candidates, (candidate, index) => [
-      theme.fg(
-        candidate.status === "eligible" ? "success" : "warning",
-        `  ${candidate.status === "eligible" ? "✓" : "–"} ${index + 1}. ${formattedCandidateRoute(candidate)}`,
+const eligibleCount = (candidates: ReadonlyArray<SubagentProfileCandidateCard>): string =>
+  `${Arr.filter(candidates, (candidate) => candidate.status === "eligible").length}/${candidates.length} eligible`;
+
+/** Each candidate in route order; a skipped one gives its reason. */
+const candidateFacts = (
+  candidates: ReadonlyArray<SubagentProfileCandidateCard>,
+): ReadonlyArray<string> =>
+  Arr.map(
+    candidates,
+    (candidate, index) =>
+      `  ${index + 1}. ${candidateRoute(candidate)} · ${candidate.context} · ${candidate.writeIntent}${candidate.status === "skipped" ? ` · skipped: ${candidate.reason}` : ""}`,
+  );
+
+const profileFacts = (profile: SubagentProfileRouteCard): ReadonlyArray<string> => [
+  `${profile.id}: ${eligibleCount(profile.candidates)} · defaults ${profile.defaultContext} · ${profile.defaultWriteIntent} · ${profile.defaultEffort ?? "inherited"} effort`,
+  ...candidateFacts(profile.candidates),
+];
+
+const agentFacts = (agent: AgentRouteCard): ReadonlyArray<string> => [
+  `${agent.name}: profile ${agent.profile} · ${eligibleCount(agent.candidates)}${Arr.join(
+    Arr.map(
+      Arr.filter(
+        [
+          agent.context,
+          agent.effort && `${agent.effort} effort`,
+          agent.isolation && `isolation ${agent.isolation}`,
+          agent.allowedToolCount !== undefined &&
+            countLabel(agent.allowedToolCount, "allowed tool"),
+          agent.deniedToolCount !== undefined && countLabel(agent.deniedToolCount, "denied tool"),
+        ],
+        Predicate.isString,
       ),
-      theme.fg("dim", `     ${candidate.reason}`),
-    ]),
-  ];
-};
+      (fact) => ` · ${fact}`,
+    ),
+    "",
+  )}`,
+  ...candidateFacts(agent.candidates),
+];
 
+/**
+ * Profile routes as the user reads them: one line per profile and custom agent with the model a
+ * launch would take, whether it writes, and where a non-built-in route comes from. Expansion adds
+ * eligibility, context, effort, and each candidate among the details.
+ */
 export const renderProfileRoutesComponent = (
   details: ModelsToolDetails,
   expanded: boolean,
   theme: Theme,
-  contentOnly = false,
 ): Component =>
   renderComponent((width) => {
     const safeWidth = Math.max(1, width);
-    const profiles = details.profiles;
-    const lines: string[] = contentOnly
-      ? []
-      : [
-          theme.fg(
-            "accent",
-            `Profile routes · static eligibility only${details.fallbackProfile ? ` · fallback ${details.fallbackProfile}` : ""}`,
-          ),
-        ];
-    if (contentOnly && details.fallbackProfile)
-      lines.push(theme.fg("dim", `Fallback profile: ${details.fallbackProfile}`));
-    for (const profile of profiles) lines.push(...profileRouteLines(profile, expanded, theme));
-    if (profiles.length === 0)
-      lines.push(theme.fg("muted", "No profile route details were persisted."));
-    if (details.contentOmitted && !contentOnly)
-      lines.push(theme.fg("dim", "Long model or route-detail text was omitted."));
-    lines.push(
-      theme.fg(
-        "dim",
-        "Launch checks pending · executable and authentication are checked at launch.",
-      ),
-    );
-    return Arr.flatMap(lines, (line) =>
-      expanded ? wrapTextWithAnsi(line, safeWidth) : [clipToWidth(line, safeWidth)],
-    );
-  });
-
-const failureCounts = (failures: ActionFailureCounts): ReadonlyArray<string> => [
-  ...(failures.unconfirmed > 0 ? [`${failures.unconfirmed} unconfirmed`] : []),
-  ...(failures.failed > 0 ? [`${failures.failed} failed`] : []),
-];
-
-const primaryCount = (details: RunToolDetails, count: number): string => {
-  switch (details.action) {
-    case "interrupt":
-      return `${count} paused`;
-    case "stop":
-      return `${count} updated`;
-  }
-  return Fn.absurd(details.action);
-};
-
-const countersText = (details: RunToolDetails, count: number, failures: ActionFailureCounts) => {
-  const exceptional = failureCounts(failures);
-  return Arr.join(
-    [
-      ...(count > 0 || exceptional.length === 0 ? [primaryCount(details, count)] : []),
-      ...exceptional,
-    ],
-    " · ",
-  );
-};
-
-const failedTargetLines = (
-  failures: ReadonlyArray<CompactToolActionFailure>,
-  width: number,
-  theme: Theme,
-): string[] =>
-  Arr.flatMap(failures, (failure) => {
-    const code = failure.code ? ` [${sanitizeTerminalLine(failure.code)}]` : "";
+    const agents = details.agents ?? [];
+    const rows = [...Arr.map(details.profiles, profileRow), ...Arr.map(agents, agentRow)];
+    const shown =
+      expanded || rows.length <= COLLAPSED_AGENT_TEXT_ROWS + 1
+        ? rows
+        : rows.slice(0, COLLAPSED_AGENT_TEXT_ROWS);
+    const hidden = rows.length - shown.length;
     return [
-      ...wrapTextWithAnsi(
-        theme.fg(
-          "toolOutput",
-          `${sanitizeTerminalLine(failure.id)}${code} · ${sanitizeTerminalLine(failure.message)}`,
-        ),
-        width,
-      ),
-      ...wrapTextWithAnsi(
-        theme.fg("dim", `  Next: ${failureRecovery(failure.code, failure.message)}`),
-        width,
-      ),
+      ...(rows.length === 0 ? [theme.fg("muted", "No profile routes were recorded")] : []),
+      ...Arr.map(shown, (row) => routeRowLine(row, safeWidth, theme)),
+      ...(hidden > 0
+        ? [
+            clipToWidth(
+              renderExpansionAffordance(countLabel(hidden, "more route"), false, theme),
+              safeWidth,
+            ),
+          ]
+        : []),
+      ...(details.contentOmitted
+        ? [clipToWidth(theme.fg("dim", "Some route details were too long to keep"), safeWidth)]
+        : []),
+      ...(expanded
+        ? detailsSectionLines(
+            [
+              `Fallback profile: ${details.fallbackProfile}`,
+              ...Arr.flatMap(details.profiles, profileFacts),
+              ...Arr.flatMap(agents, agentFacts),
+              ...Arr.map(
+                details.invalidAgents ?? [],
+                (agent) => `Invalid ${agent.scope} agent${agent.name ? `: ${agent.name}` : ""}`,
+              ),
+            ],
+            safeWidth,
+            theme,
+          )
+        : []),
     ];
   });
 
-const failureSections = (details: RunToolDetails, theme: Theme): ReadonlyArray<Component> =>
-  Arr.flatMap(ACTION_FAILURE_SECTIONS, ([disposition, title]) => {
-    const failures = Arr.filter(
-      details.actionFailures ?? [],
-      (failure) => actionFailureDisposition(failure) === disposition,
-    );
-    return failures.length === 0
-      ? []
-      : [
-          expandedSection(
-            theme,
-            title,
-            renderComponent((width) => failedTargetLines(failures, Math.max(1, width), theme)),
-          ),
-        ];
-  });
-
+/**
+ * A stop or interrupt: its targets grouped by the state they reached, then, expanded, each run's
+ * technical facts and the raw failures of targets it couldn't act on.
+ */
 export const renderCompactResultComponent = (
   details: RunToolDetails,
   expanded: boolean,
   theme: Theme,
-): Component => {
-  const counters = countersText(
-    details,
-    details.runCount,
-    countActionFailures(details.actionFailures),
-  );
-  const failures = expanded ? failureSections(details, theme) : [];
-  return renderComponent((width) => {
+): Component =>
+  renderComponent((width) => {
     const safeWidth = Math.max(1, width);
-    const runs = expanded
-      ? renderExpandedRunsResult(details.cards, theme, counters)
-      : runOverviewComponent(details.cards, theme, {
-          expanded: false,
-          reportSections: [],
-          counters,
-        });
-    return Arr.flatMap([runs, ...failures], (component) => component.render(safeWidth));
+    // Each failure's message is its issue's detail; the details name the target and code.
+    const failures = Arr.map(
+      details.actionFailures ?? [],
+      (failure) =>
+        `${sanitizeTerminalLine(failure.id)}: not ${details.action === "stop" ? "stopped" : "interrupted"}${failure.code ? ` · ${sanitizeTerminalLine(failure.code)}` : ""}`,
+    );
+    return [
+      ...stateGroupLines(details.cards, safeWidth, theme),
+      ...(expanded
+        ? detailsSectionLines(
+            [...Arr.flatMap(details.cards, cardFactLines), ...failures],
+            safeWidth,
+            theme,
+          )
+        : []),
+    ];
   });
-};

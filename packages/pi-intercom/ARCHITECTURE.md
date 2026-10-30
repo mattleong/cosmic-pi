@@ -153,7 +153,7 @@ keeps open never tells a sender it started a turn; Pi reports no cancelled or fa
 so after one the session refuses until the user prompts again. `/reload` and quit emit only `session_shutdown`, so a
 message that arrives before intercom's own handler can still be taken. It is then
 sent as a displayed `pi-intercom-message` custom message whose details name the advisory sender and message
-id, with the slot rechecked beside `sendMessage`. Core's `registerSessionWake` decides the
+id and carry the sender's text for display, with the slot rechecked beside `sendMessage`. Core's `registerSessionWake` decides the
 disposition: an idle session is `woken`, a busy one `queued` and continued at settle, and a session
 with a dialog open or interrupted by its user `held`, appended without a turn until the dialog
 closes or the user prompts again. Pi reveals an interrupt only once the run has settled, so a
@@ -169,7 +169,8 @@ its main agent too; a message sent the moment the session starts streaming arriv
 model requests the frame is the body of core's [message-origin
 marker](../../docs/architecture/pi-boundaries.md#model-visible-extension-messages), its one
 delimiter, which names the sending session from the stored details, so a sender's text can neither
-pose as the user nor close the marker; the stored message and chat view keep the bare frame.
+pose as the user nor close the marker; the stored message keeps the bare frame. The chat view shows
+the sender's text from the details instead, never the frame's reply instructions.
 
 ## Tools and command
 
@@ -196,7 +197,9 @@ after that one retry. Nothing else is retried. `session_send` is model-only; lis
 `toolArgumentPreparer`; the message length cap is stated in the tool description rather than the
 schema, so an overlong message reaches the tool and is refused as `session_message_too_long`,
 never cut. Refusals are error results with a
-compact issue; the agent's procedure stays in the expanded detail. Replay is anchored to
+compact issue. [Renderers](src/tools/render.ts) show sessions by name and a send's message or a
+read's reply as written; ids and directories appear only expanded, and the agent's procedures only
+in the result the model reads. Replay is anchored to
 `/intercom`, whose `receive on|off` flips the per-session receive switch.
 
 ## Tests
@@ -208,7 +211,8 @@ records, listing diagnostics, the evidence-based sweep, and socket path reservat
 bounds, stale sockets, oversized frames, deadlines, shutdown with answers still owed, and
 telemetry over real sockets. [Application tests](tests/application.test.ts) cover registration modes, the child
 marker, rewrites, replacement, removal, a startup that doesn't wait for its sweep, and peers
-reaching live sessions. [Message tests](tests/message.test.ts) cover the collapsed inbound message.
+reaching live sessions. [Message tests](tests/message.test.ts) cover the inbound message and
+[presentation tests](tests/presentation.test.ts) the tool rows.
 [Delivery tests](tests/delivery.test.ts) cover dispositions, holds, retirement, and the
 receive switch. [Tool tests](tests/tools.test.ts) cover listing, sends
 between two runtimes, a recipient reloading meanwhile, reads, refusals, uncertainty, and issue

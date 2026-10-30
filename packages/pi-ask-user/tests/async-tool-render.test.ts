@@ -142,4 +142,17 @@ describe("async questionnaire replay rendering", () => {
     expect(Arr.every(narrow, (line) => visibleWidth(line) <= 12)).toBe(true);
     expect(answers.render(240)).toEqual(wide);
   });
+
+  it("labels answers with stored question titles and falls back to keys without them", () => {
+    const titles = [{ key: "route", title: "Route" }];
+    const titled = { ...snapshot, titles };
+    expect(result(titled)).toContain("Route:");
+    expect(result({ ...snapshot, titles: "not titles" })).toContain("route:");
+    const delivered = { generation: "g", deliveryId: "d", requestId: "r", outcome, titles };
+    expect(
+      output(
+        renderAsyncMessage(asyncMessage("", delivered), { expanded: false, outputPad: 0 }, theme),
+      ),
+    ).toContain("Route:");
+  });
 });

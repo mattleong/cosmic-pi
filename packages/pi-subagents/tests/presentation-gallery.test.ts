@@ -4,8 +4,11 @@ import {
   galleryDirectory,
   galleryFrames,
   galleryMessageFrames,
+  galleryTranscriptFrames,
+  withPresentationSettings,
   writeGallerySection,
   type GalleryMessageScenario,
+  type GalleryTranscriptEntry,
   type GalleryScenario,
 } from "pi-code-previews/testing";
 import { withCodePreviewShell } from "pi-code-previews";
@@ -14,6 +17,7 @@ import {
   defineTool,
   initTheme,
   type AgentToolUpdateCallback,
+  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { beforeAll, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -23,7 +27,7 @@ import { Type } from "typebox";
 import type { ActivityItem } from "pi-cosmic-ui/activity";
 import { activityGalleryFrames } from "pi-cosmic-ui/activity/testing";
 import { renderAgentMessageEntry, renderSubagentMessage } from "../src/application/messages.ts";
-import { AGENT_MESSAGE_TYPE } from "../src/boundary/host-agent-messages.ts";
+import { AGENT_MESSAGE_TYPE, agentMessageDetails } from "../src/boundary/host-agent-messages.ts";
 import {
   agentMessageContent,
   MAIN_AGENT_SENDER,
@@ -47,6 +51,7 @@ import {
 import {
   STOPPED_RUNS_MESSAGE_TYPE,
   stoppedRunsContent,
+  stoppedRunsDetails,
 } from "../src/boundary/host-stopped-runs.ts";
 import type { ProfileCandidate } from "../src/profiles/model.ts";
 import {
@@ -55,13 +60,20 @@ import {
 } from "../src/profiles/service.ts";
 import {
   agentMessageRefusal,
+  failureFields,
+  invalidRequest,
   InvalidSubagentRequestError,
+  withCause,
+  withGuidance,
+  withGuidanceClause,
   SubagentNotFoundError,
   SubagentProcessError,
 } from "../src/run/errors.ts";
 import type { StartSubagentRequest, SubagentRunView } from "../src/run/model.ts";
 import { scriptedWriterAdmissionError } from "../src/run/launch-policy.ts";
 import { SubagentService } from "../src/run/service.ts";
+import { mapWorkspaceError } from "../src/run/workspace-binding.ts";
+import { WorkspaceError } from "../src/workspace/model.ts";
 import { awaitDetails, compactToolDetails, startDetails } from "../src/tools/details.ts";
 import {
   CONTACT_PARENT_LABEL,
@@ -72,6 +84,7 @@ import {
 import { executeSubagentActionEffect, type SubagentToolRuntime } from "../src/tools/execute.ts";
 import { awaitExecutionFor } from "../src/tools/execute-await.ts";
 import { decodeSubagentOutcomeDetails, hasSubagentToolFailure } from "../src/tools/outcome.ts";
+import { toolFailureDetails } from "../src/tools/failure-details.ts";
 import {
   SUBAGENT_TOOL_SCHEMAS,
   subagentToolAction,
@@ -246,6 +259,12 @@ const textResult = (text: string) => ({
   details: {},
 });
 
+/** A rejected call's result as Pi stores it: the error's text, with the details the host adds. */
+const rejectedResult = (error: { readonly message: string }) => ({
+  content: [{ type: "text" as const, text: error.message }],
+  details: toolFailureDetails(error) ?? {},
+});
+
 const execute = (input: SubagentToolInput, options: Execution = {}) =>
   executeSubagentActionEffect(
     hostApi,
@@ -261,7 +280,7 @@ const execute = (input: SubagentToolInput, options: Execution = {}) =>
       const details = decodeSubagentOutcomeDetails(subagentToolAction(input), result);
       return { result, isError: details !== undefined && hasSubagentToolFailure(details) };
     }),
-    Effect.catch((error) => Effect.succeed({ result: textResult(error.message), isError: true })),
+    Effect.catch((error) => Effect.succeed({ result: rejectedResult(error), isError: true })),
     Effect.provideService(SubagentService, subagentServiceDouble(options.service ?? {})),
     Effect.provideService(SubagentProfileService, options.profiles ?? fallbackProfileService),
     Effect.provideService(SubagentBackendRegistry, testBackendRegistry),
@@ -404,9 +423,14 @@ const startScenarios = Effect.gen(function* () {
                 SubagentProcessError.make({
                   operation: "start",
                   code: uncertain ? "prompt_outcome_uncertain" : "prompt_not_delivered",
-                  message: uncertain
-                    ? "Subagent did not confirm task admission.\nThe task may already have started; inspect the run with agent_read before retrying."
-                    : "Subagent did not admit the task.\nAn input hook or slash command handled it before it reached the model.",
+                  ...failureFields(
+                    uncertain
+                      ? withGuidanceClause(
+                          "Subagent did not confirm task admission.\nThe task may already have started",
+                          "inspect the run with agent_read before retrying.",
+                        )
+                      : "Subagent did not admit the task.\nAn input hook or slash command handled it before it reached the model.",
+                  ),
                 }),
               ),
           },
@@ -602,7 +626,7 @@ const modelScenarios = Effect.all([
 const agentScenario = (title: string, input: AgentToolInput, service: SubagentServiceDoubleInput) =>
   executeAgentActionEffect(input, { kind: "main" }, false, runtime.environment.cwd).pipe(
     Effect.map((result) => ({ result, isError: false })),
-    Effect.catch((error) => Effect.succeed({ result: textResult(error.message), isError: true })),
+    Effect.catch((error) => Effect.succeed({ result: rejectedResult(error), isError: true })),
     Effect.provideService(SubagentService, subagentServiceDouble(service)),
     Effect.map(
       (executed): ToolScenario => ({ tool: input.tool, title, args: input.args, ...executed }),
@@ -628,7 +652,11 @@ const runReadout = (run: SubagentRunView, text?: string): AgentReadout => ({
   state: run.state,
   ...(text === undefined
     ? { textStatus: "none" }
-    : { textStatus: "text", text, source: run.finalText === text ? "report" : "assistant" }),
+    : {
+        textStatus: "text",
+        text,
+        source: run.finalText === text ? "report" : run.error === text ? "error" : "assistant",
+      }),
   truncated: false,
   reportGeneration: run.reportGeneration,
   run,
@@ -657,7 +685,7 @@ const agentScenarios = Effect.all([
     { agentList: () => Effect.succeed({ agents: sessionAgents, missingIds: [] }) },
   ),
   agentScenario(
-    "fleet with a nested worker, a question, and a proposal",
+    "fleet with a nested worker, a question, a pause, and a proposal",
     { tool: "agent_list", args: {} },
     {
       agentList: () =>
@@ -665,6 +693,7 @@ const agentScenarios = Effect.all([
           agents: [
             { id: "main", name: "main", kind: "main", state: "busy", self: true },
             ...Arr.map([authReview, schemaCheck, dbMigration, migrationReview], listEntry),
+            listEntry({ ...docsSweep, state: "paused" }),
             listEntry({ ...worktreeProposal, workspaceOutcome: proposalOutcome }),
           ],
           missingIds: [],
@@ -716,7 +745,12 @@ const agentScenarios = Effect.all([
         Effect.fail(
           InvalidSubagentRequestError.make({
             code: "reply_in_flight",
-            message: `Subagent ${to} already has a parent reply in flight; inspect it with agent_read before sending again.`,
+            ...failureFields(
+              withGuidanceClause(
+                `Subagent ${to} already has a parent reply in flight`,
+                "inspect it with agent_read before sending again.",
+              ),
+            ),
           }),
         ),
     },
@@ -730,7 +764,15 @@ const agentScenarios = Effect.all([
           SubagentProcessError.make({
             operation: "reply",
             code: "reply_outcome_uncertain",
-            message: `The reply to subagent ${to} may already have applied. Inspect it with agent_read before retrying. (Transport closed before acknowledgement.)`,
+            ...failureFields(
+              withCause(
+                withGuidance(
+                  `The reply to subagent ${to} may already have applied.`,
+                  "Inspect it with agent_read before retrying.",
+                ),
+                { message: "Transport closed before acknowledgement." },
+              ),
+            ),
           }),
         ),
     },
@@ -825,28 +867,51 @@ const agentScenarios = Effect.all([
   ),
 ]);
 
-const agentMessage = (title: string, from: SubagentRunView | undefined, text: string) => ({
-  title,
-  message: {
-    role: "custom" as const,
-    timestamp: 0,
-    customType: AGENT_MESSAGE_TYPE,
-    display: true,
-    content: agentMessageContent(from ? runSender(from) : MAIN_AGENT_SENDER, text),
-    details: {
-      from: from?.id ?? "main",
-      fromName: from?.name ?? "main",
-      to: "main",
-      messageId: "message-1",
+const agentMessage = (
+  title: string,
+  from: SubagentRunView | undefined,
+  text: string,
+  saved: "current" | "without display copy" = "current",
+) => {
+  const details = agentMessageDetails({
+    from: from?.id ?? "main",
+    fromName: from?.name ?? "main",
+    to: "main",
+    messageId: "message-1",
+    content: "",
+    text,
+  });
+  const { text: _text, ...historical } = details;
+  return {
+    title,
+    message: {
+      role: "custom" as const,
+      timestamp: 0,
+      customType: AGENT_MESSAGE_TYPE,
+      display: true,
+      content: agentMessageContent(from ? runSender(from) : MAIN_AGENT_SENDER, text),
+      details: saved === "current" ? details : historical,
     },
-  },
-});
+  };
+};
 const agentMessageScenarios: ReadonlyArray<GalleryMessageScenario> = [
   agentMessage(
     "peer reports a finding",
     schemaCheck,
     `${peerNote}\nI kept the old paths as re-exports.`,
   ),
+  agentMessage(
+    "a long message is bounded collapsed",
+    dbMigration,
+    Arr.join(
+      Arr.map(
+        Arr.range(1, 14),
+        (line) => `Step ${line}: migrated table_${line} and verified its indexes.`,
+      ),
+      "\n",
+    ),
+  ),
+  agentMessage("saved before display copies", schemaCheck, peerNote, "without display copy"),
 ];
 
 const lifecycleScenarios = Effect.all([
@@ -1135,11 +1200,17 @@ const workspaceScenarios = Effect.all([
       service: {
         workspaceRevise: () =>
           Effect.fail(
-            InvalidSubagentRequestError.make({
-              code: "workspace_rebase_refused",
-              message:
-                "The previous changes can't be reapplied to the parent's current files.\nUnmergeable: \"src/db/legacy.ts\"\nNothing was changed; the workspace keeps its worker tree and revision.\nRemedy: revise without rebase, or apply the proposal and start a new writer from the current checkout.",
-            }),
+            mapWorkspaceError(
+              WorkspaceError.make({
+                operation: "rebase",
+                code: "workspace_rebase_refused",
+                message: "The previous changes can't be reapplied to the parent's current files.",
+                detail:
+                  'Unmergeable: "src/db/legacy.ts"\nNothing was changed; the workspace keeps its worker tree and revision.',
+                remedy:
+                  "revise without rebase, or apply the proposal and start a new writer from the current checkout.",
+              }),
+            ),
           ),
       },
     },
@@ -1156,11 +1227,13 @@ const workspaceScenarios = Effect.all([
       service: {
         workspaceDiscard: () =>
           Effect.fail(
-            InvalidSubagentRequestError.make({
-              code: "workspace_process_unsettled",
-              message:
-                "A run still uses this workspace. Stop it and confirm cleanup before discard.",
-            }),
+            invalidRequest(
+              "workspace_process_unsettled",
+              withGuidance(
+                "A run still uses this workspace.",
+                "Stop it and confirm cleanup before discard.",
+              ),
+            ),
           ),
       },
     },
@@ -1631,11 +1704,15 @@ const messageScenarios: ReadonlyArray<GalleryMessageScenario> = [
       display: true,
       timestamp: 0,
       content: stoppedRunsContent([authReview, dbMigration], "reload"),
-      details: { version: 1, kind: "stopped", total: 2 },
+      details: stoppedRunsDetails([authReview, dbMigration], "reload"),
     },
   },
   ...Arr.map(completedReports, ({ message }) => ({
     title: "forwarded to a nested worker",
+    message: { ...message, customType: "pi-subagents-proxy-notification" },
+  })),
+  ...Arr.map(completedReports, ({ message }) => ({
+    title: "forwarded before display copies",
     message: { ...message, customType: "pi-subagents-proxy-notification", details: undefined },
   })),
   {
@@ -1657,6 +1734,21 @@ const messageScenarios: ReadonlyArray<GalleryMessageScenario> = [
         ],
         "\n",
       ),
+      details: {
+        version: 1,
+        kind: "peers",
+        ownership: "read-only",
+        peers: [
+          {
+            id: dbMigration.id,
+            name: dbMigration.name,
+            ownership: "shared-checkout writer",
+            state: "running",
+            task: dbMigration.task,
+          },
+        ],
+        total: 1,
+      },
     },
   },
 ];
@@ -1756,6 +1848,11 @@ const activityScenarios: ReadonlyArray<ActivityScenario> = [
       }),
     ],
     details: ["agent-30"],
+  },
+  {
+    title: "a paused reviewer beside a writer question",
+    runs: [{ ...authReview, state: "paused" }, dbMigration],
+    details: [authReview.id, dbMigration.id],
   },
   {
     title: "a subtree being stopped",
@@ -1907,7 +2004,41 @@ const widgetFrames = (
 const widgetLines = (): ReadonlyArray<string> => [
   ...widgetFrames("stalled children (tool open, silent, failing tools)", stalledRuns),
   ...widgetFrames("agent messages (recent message, counts, expired message)", messagingRuns),
+  ...widgetFrames("a question and a paused run", [{ ...authReview, state: "paused" }, dbMigration]),
 ];
+
+const BACKGROUNDS = ["border", "on", "off"] as const;
+
+const titled = <A extends { readonly title: string }>(entries: ReadonlyArray<A>, title: string) =>
+  Option.getOrThrow(Arr.findFirst(entries, (entry) => entry.title === title));
+
+/** A short turn: a launch, its report, a message sent and received, and a question. */
+const transcriptEntries = (
+  tools: ReadonlyArray<ToolDefinition>,
+  scenarios: ReadonlyArray<ToolScenario>,
+): ReadonlyArray<GalleryTranscriptEntry> => {
+  const toolRow = (title: string): GalleryTranscriptEntry => {
+    const entry = titled(scenarios, title);
+    return {
+      name: entry.tool,
+      tool: Option.getOrThrow(Arr.findFirst(tools, (tool) => tool.name === entry.tool)),
+      args: entry.args,
+      result: { ...entry.result!, isError: entry.isError ?? false },
+    };
+  };
+  const message = (
+    render: typeof renderSubagentMessage,
+    entries: ReadonlyArray<GalleryMessageScenario>,
+    title: string,
+  ): GalleryTranscriptEntry => ({ render, message: titled(entries, title).message });
+  return [
+    toolRow("two launches start"),
+    message(renderSubagentMessage, messageScenarios, "one worker reports"),
+    toolRow("guidance to a running peer"),
+    message(renderAgentMessageEntry, agentMessageScenarios, "peer reports a finding"),
+    message(renderSubagentMessage, messageScenarios, "worker needs a reply"),
+  ];
+};
 
 const directory = galleryDirectory(process.env) ?? "";
 
@@ -1962,6 +2093,18 @@ describe.skipIf(!directory)("presentation gallery", () => {
                 title: `${style} · ${entry.message.customType} · ${entry.title}`,
               }),
             );
+          for (const background of BACKGROUNDS)
+            withPresentationSettings({ toolCallBackground: background }, () => {
+              const transcript = captureRegistrations((pi) => {
+                registerSubagentTools(pi, runtime);
+              }).tools;
+              lines.push(
+                ...galleryTranscriptFrames(
+                  `${style} · ${background} · transcript: tool rows beside messages`,
+                  transcriptEntries(transcript, scenarios),
+                ),
+              );
+            });
         } finally {
           restore();
         }

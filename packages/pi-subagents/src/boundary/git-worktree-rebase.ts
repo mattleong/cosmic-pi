@@ -78,10 +78,11 @@ const rebaseRefusal = (result: GitResult, changedPaths: ReadonlyArray<string>) =
         ...(stderr.length > 0 ? [`Git reported:\n${Arr.join(stderr, "\n")}`] : []),
         "Rule: a rebase reapplies every change with a three-way merge, which can't resolve a file the parent deleted, added, or turned binary, or overwrite an untracked or ignored worker file",
         "Nothing was changed; the workspace keeps its worker tree and revision.",
-        "Remedy: revise without rebase, or apply the proposal and start a new writer from the current checkout.",
       ],
       "\n",
     ),
+    remedy:
+      "revise without rebase, or apply the proposal and start a new writer from the current checkout.",
   });
 };
 
@@ -254,6 +255,7 @@ export const rebaseWorkspace = Effect.fn("GitWorktreeRebase.rebaseWorkspace")(fu
         path: relative,
         rule: "the rebuilt worker must still hold the session directory",
         remedy: "Revise without rebase, or discard this workspace.",
+        agentRemedy: true,
       },
     );
   const after = yield* sourceIdentity(sourceRoot);

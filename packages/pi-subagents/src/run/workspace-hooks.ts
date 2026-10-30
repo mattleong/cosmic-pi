@@ -4,7 +4,7 @@ import type { WorktreeCreateSetup } from "../config/schema.ts";
 import type { WorkspaceHandle } from "../workspace/model.ts";
 import type { WorkspaceServiceContract } from "../workspace/service.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
-import { mapWorkspaceError } from "./workspace-binding.ts";
+import { mapWorkspaceError, workspaceErrorText } from "./workspace-binding.ts";
 
 const MAX_LISTED_CHANGES = 5;
 
@@ -35,12 +35,7 @@ export const runWorktreeCreateHooks = Effect.fn("SubagentWorkspace.runWorktreeCr
     yield* service
       .runCreateHooks({ ...target, hooks, runId: tree.runId })
       .pipe(
-        Effect.mapError((error) =>
-          invalid(
-            "workspace_hook_failed",
-            error.detail === undefined ? error.message : `${error.message}\n${error.detail}`,
-          ),
-        ),
+        Effect.mapError((error) => invalid("workspace_hook_failed", workspaceErrorText(error))),
       );
     const changed = yield* service.hookChanges(target).pipe(Effect.mapError(mapWorkspaceError));
     if (changed.length === 0) return undefined;

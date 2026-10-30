@@ -14,6 +14,7 @@ import type {
 } from "pi-code-previews";
 import {
   type AwaitAgentMessagesCard,
+  type SubagentProfileCandidateCard,
   type SubagentRunCard,
   type SubagentStartDetails,
   type SubagentAwaitDetails,
@@ -37,6 +38,9 @@ import {
 } from "./compact-run-issues.ts";
 import { compactWorkspaceSummary } from "./compact-workspace-summary.ts";
 import { summarizeStart } from "./compact-start-summary.ts";
+import { profileRow } from "./render-management.ts";
+import { cardShowsError } from "./render-run-cards.ts";
+import { formatRunRoute } from "../ui/run-presentation.ts";
 
 function cardCounters(cards: readonly SubagentRunCard[], singleTarget = false): string[] {
   const [only] = cards;
@@ -153,7 +157,7 @@ function agentMessageIssue(
       : one
         ? `A message from ${senderLabel(only)} arrived with these results`
         : `${countLabel(messages.count, "agent message")} arrived with these results`,
-    detail: `${waitEnded ? "Await returned early for" : "This result also notes"} ${arrived}; child runs were NOT stopped. Each message follows this result: read it, reply with agent_send if the work needs it, then await any unfinished targets again.`,
+    detail: `${waitEnded ? "The wait ended for" : "These results also note"} ${arrived}.`,
   };
 }
 
@@ -171,8 +175,6 @@ function awaitIssues(
       severity: "warning",
       code: "targets-omitted",
       message: "Some requested subagents have no available status",
-      detail:
-        "Some requested targets have no projected state; inspect them with agent_read before acting.",
     });
     if (summary.outcome === "success") summary.outcome = "uncertain";
   }
@@ -181,8 +183,7 @@ function awaitIssues(
       severity: "info",
       code: "descendant-context",
       message: "Descendant subagents are shown for context only",
-      detail:
-        "Descendants are context only; this await summarizes requested targets. Inspect descendants with agent_read.",
+      detail: "This wait summarizes the subagents it was asked about.",
     });
   if (details.cancelled && details.endedByUserInput) {
     // The wait ended for the user, not because the targets succeeded.
@@ -191,8 +192,6 @@ function awaitIssues(
       severity: "info",
       code: "await-user-input",
       message: "Stopped waiting to read your message; subagents keep running",
-      detail:
-        "Await ended for new user input; child runs were NOT stopped. Await the requested targets again when their results are needed.",
     });
   } else if (details.cancelled && details.timedOutSeconds !== undefined) {
     summary.outcome = "warning";
@@ -200,8 +199,6 @@ function awaitIssues(
       severity: "warning",
       code: "await-timed-out",
       message: `Stopped waiting after ${details.timedOutSeconds}s; subagents keep running`,
-      detail:
-        "Await timed out; child runs were NOT stopped. Await the requested targets again or inspect them with agent_read.",
     });
   } else if (details.agentMessages) {
     issues.push(agentMessageIssue(details.agentMessages, summary));
@@ -214,9 +211,10 @@ function awaitIssues(
       message: unconfirmed
         ? "Waiting was cancelled; subagents were not stopped and wait cleanup is unconfirmed"
         : "Waiting was cancelled; subagents were not stopped",
-      detail: unconfirmed
-        ? "Local await cancelled; child runs were NOT stopped. Root completion-claim cleanup is unconfirmed; claims may remain and an immediate replacement await may fail with completion_claim_conflict."
-        : "Await cancelled; child runs were NOT stopped. Await the requested targets again when needed.",
+      ...(unconfirmed && {
+        detail:
+          "The wait's claims on completions may remain until their cleanup is confirmed, so a new wait may briefly conflict with them.",
+      }),
     });
   }
   if (
@@ -225,20 +223,20 @@ function awaitIssues(
     !Arr.some(
       cards,
       (card) =>
-        card.question !== undefined ||
-        runCleanupAttention(card) !== undefined ||
-        card.state === "paused" ||
-        card.state === "waiting_for_parent",
+        isAsking(card) || runCleanupAttention(card) !== undefined || card.state === "paused",
     )
   )
     issues.push({
       severity: "warning",
       code: "parent-action",
       message: "A subagent needs attention before it can continue",
-      detail:
-        "Parent action required; inspect the targets with agent_read for the question or pause before acting.",
     });
-  if (details.attentionRequired && !details.cancelled) summary.outcome = "warning";
+  if (details.attentionRequired && !details.cancelled) {
+    // A problem outranks every outcome; a question or a held run outranks only routine ones.
+    const outcome = parentActionOutcome([...cards, ...asking]);
+    if (outcome === "warning" || summary.outcome === "success" || summary.outcome === "returned")
+      summary.outcome = outcome;
+  }
 }
 
 function runIssues(
@@ -256,12 +254,21 @@ function runIssues(
       severity: "warning",
       code: "runs-omitted",
       message: "Only some subagents are shown",
-      detail:
-        "Bounded projection, not complete fleet counts. Use agent_list and agent_read for omitted runs and their recovery.",
+      detail: "This view is bounded, so its counts cover only the subagents it shows.",
     });
   }
   actionFailureIssues(details.action, details.actionFailures ?? [], details.cards, summary, issues);
 }
+
+/** A skipped candidate per line with its reason, as a route issue's detail. */
+const skippedReasons = (candidates: ReadonlyArray<SubagentProfileCandidateCard>): string =>
+  Arr.join(
+    Arr.map(
+      Arr.filter(candidates, (candidate) => candidate.status === "skipped"),
+      (candidate) => `${formatRunRoute(candidate)}: ${candidate.reason}`,
+    ),
+    "\n",
+  );
 
 function summarizeModels(
   details: Extract<CompactSubagentToolDetails, { action: "models" }>,
@@ -270,47 +277,54 @@ function summarizeModels(
 ): CompactSummary {
   let disabled = 0;
   let unavailable = 0;
-  let eligibleOptions = 0;
 
   for (const profile of details.profiles) {
     const invalid = profile.source === "global-invalid" || profile.source === "project-invalid";
     const options = invalid
       ? 0
       : Arr.filter(profile.candidates, (candidate) => candidate.status === "eligible").length;
-    eligibleOptions += options;
 
     if (invalid || (profile.candidates.length > 0 && options === 0)) {
       unavailable++;
+      const detail = invalid
+        ? "Its configuration is invalid, so it fails closed. /subagents doctor lists the invalid fields."
+        : skippedReasons(profile.candidates);
       issues.push({
         severity: "warning",
         code: `profile:${profile.id}:unavailable`,
         message: `${profile.id} profile has ${invalid ? "invalid settings" : "no eligible options"}`,
-        detail: `${invalid ? "Invalid profile configuration" : "No statically eligible candidates"}; inspect expanded discovery.`,
+        ...(detail && { detail }),
       });
     } else if (profile.candidates.length === 0) disabled++;
   }
   const agents = details.agents ?? [];
   for (const agent of agents)
-    if (Arr.every(agent.candidates, (candidate) => candidate.status !== "eligible"))
+    if (Arr.every(agent.candidates, (candidate) => candidate.status !== "eligible")) {
+      const detail = skippedReasons(agent.candidates);
       issues.push({
         severity: "warning",
         code: `agent:${agent.name}:unavailable`,
         message: `${agent.name} agent has no eligible options`,
-        detail:
-          "No statically eligible candidates after the agent's overrides; inspect expanded discovery.",
+        ...(detail && { detail }),
       });
+    }
   const invalidAgents = details.invalidAgents ?? [];
   if (invalidAgents.length > 0)
     issues.push({
       severity: "warning",
       code: "agents:invalid",
       message: "Some custom agents are invalid",
-      detail: `${countLabel(invalidAgents.length, "invalid agent entry", "invalid agent entries")} fail closed; /subagents doctor lists the invalid fields.`,
+      detail: `${countLabel(invalidAgents.length, "invalid agent entry", "invalid agent entries")} ${invalidAgents.length === 1 ? "fails" : "fail"} closed; /subagents doctor lists the invalid fields.`,
     });
-  const counters = [`${eligibleOptions} statically eligible`];
-
-  if (disabled) counters.push(countLabel(disabled, "disabled profile"));
-  if (unavailable) counters.push(countLabel(unavailable, "unavailable profile"));
+  const [only] = details.profiles;
+  // One requested profile reads as the model its launch would take.
+  const counters = [
+    only && details.profiles.length === 1
+      ? profileRow(only).route
+      : countLabel(details.profiles.length, "profile"),
+  ];
+  if (disabled) counters.push(`${disabled} disabled`);
+  if (unavailable) counters.push(`${unavailable} unavailable`);
   if (agents.length > 0) counters.push(countLabel(agents.length, "agent"));
   summary.counters = [Arr.join(counters, ", ")];
   if (summary.outcome === "success" && compactIssueSeverity(issues) === "warning")
@@ -337,25 +351,36 @@ function labelChangesToReview(summary: CompactSummary, cards: readonly SubagentR
   else summary.counters = [`${counter} · ${label}`, counter, ...fallbacks];
 }
 
+const ROUTINE_OR_WAITING: ReadonlyArray<CompactSummary["outcome"]> = [
+  "success",
+  "returned",
+  "attention",
+];
+
+const isAsking = (card: SubagentRunCard): boolean =>
+  card.question !== undefined || card.state === "waiting_for_parent";
+
 function cardOutcome(
   action: string,
   cards: readonly SubagentRunCard[],
 ): NonNullable<CompactSummary["outcome"]> {
   if (Arr.some(cards, (card) => card.state === "stopping")) return "uncertain";
-  if (
-    Arr.some(
-      cards,
-      (card) =>
-        runCleanupAttention(card) !== undefined ||
-        card.question !== undefined ||
-        (card.state === "paused" && action !== "interrupt") ||
-        card.state === "waiting_for_parent",
-    )
-  )
-    return "warning";
-  return action !== "stop" && Arr.some(cards, (card) => card.state === "stopped")
-    ? "cancelled"
+  if (Arr.some(cards, (card) => runCleanupAttention(card) !== undefined)) return "warning";
+  if (Arr.some(cards, isAsking)) return "attention";
+  if (action !== "stop" && Arr.some(cards, (card) => card.state === "stopped")) return "cancelled";
+  // A pause the caller didn't request is a held state: the call returned, nothing went wrong.
+  return action !== "interrupt" && Arr.some(cards, (card) => card.state === "paused")
+    ? "returned"
     : "success";
+}
+
+/** Why an await returned for its parent: a problem, a question, or only a held run. */
+function parentActionOutcome(
+  cards: readonly SubagentRunCard[],
+): NonNullable<CompactSummary["outcome"]> {
+  if (Arr.some(cards, (card) => runCleanupAttention(card) !== undefined)) return "warning";
+  if (Arr.some(cards, isAsking)) return "attention";
+  return Arr.some(cards, (card) => card.state === "paused") ? "returned" : "warning";
 }
 
 function omissionIssue(
@@ -369,8 +394,7 @@ function omissionIssue(
     severity: "warning",
     code: "evidence-omitted",
     message: "Some subagent details are unavailable in this view",
-    detail:
-      "Bounded projection: details were omitted. Inspect expanded details and agent_read for full target state, attention, and recovery before acting.",
+    detail: "This view is bounded, so some details were left out.",
   });
   summary.outcome = "uncertain";
 }
@@ -402,17 +426,25 @@ function summarizeDetails(
         )
       : [];
   summary.counters = cardCounters(cards, isSingleRequestedRun(details, cards, requested));
-  const requestedPause = details.action === "interrupt";
   if (summary.outcome === "success") summary.outcome = cardOutcome(details.action, cards);
   if (details.action === "await")
     awaitIssues(details, summary, issues, cards, targets ?? [], asking);
   else runIssues(details, summary, issues, cards);
   const quietHistory = phase === "settled" && summary.outcome === "success" && issues.length === 0;
-  issues.push(...compactRunIssues(cards, { quietHistory, requestedPause }));
-  issues.push(...compactAttentionIssues(asking));
+  issues.push(
+    ...compactRunIssues(cards, {
+      quietHistory,
+      // An await draws each target's words: its report, failure, or question.
+      ...(details.action === "await" && { showsError: cardShowsError, questionsNoticed: true }),
+    }),
+  );
+  issues.push(...compactAttentionIssues(asking, { questionsNoticed: true }));
   labelChangesToReview(summary, cards);
   const severity = compactIssueSeverity(issues);
   if (severity === "error") summary.outcome = "error";
-  else if (summary.outcome === "success" && severity === "warning") summary.outcome = "warning";
+  // A problem outranks a question or a held run, which outrank only success.
+  else if (severity === "warning" && Arr.contains(ROUTINE_OR_WAITING, summary.outcome))
+    summary.outcome = "warning";
+  else if (severity === "attention" && summary.outcome === "success") summary.outcome = "attention";
   return summary;
 }

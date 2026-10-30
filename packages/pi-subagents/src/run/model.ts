@@ -219,6 +219,8 @@ export interface SubagentRunView {
   /** The latest child warning and the latest system warning, each kept for this assignment. */
   readonly childWarning?: string | undefined;
   readonly systemWarning?: string | undefined;
+  /** `systemWarning` without the agent procedure it carries; absent when they match. */
+  readonly userSystemWarning?: string | undefined;
   readonly question?: PendingParentQuestion | undefined;
   readonly sessionEvents: ReadonlyArray<SubagentSessionEvent>;
   readonly finalText?: string | undefined;
@@ -226,6 +228,8 @@ export interface SubagentRunView {
   readonly reportArchive?: SubagentReportArchive | undefined;
   readonly reportStatus?: "available" | "claimed" | "delivered" | "missing" | undefined;
   readonly error?: string | undefined;
+  /** `error` without the agent procedure it carries, for the user's view; absent when they match. */
+  readonly userError?: string | undefined;
   /** The saved failure, when `error` is longer than the model-facing preview. */
   readonly errorArchive?: SubagentReportArchive | undefined;
   readonly usage: SubagentUsage;
@@ -277,6 +281,8 @@ export interface FailedStartRecovery {
   readonly failureFile?: SubagentReportArchive;
   /** The run's latest child and system warnings, folded as its notice would carry them. */
   readonly warning?: string;
+  /** `warning` without the agent procedure it carries; absent when they match. */
+  readonly userWarning?: string;
 }
 
 /** Native facts captured by the immediate Pi parent, never launch authority or credentials. */

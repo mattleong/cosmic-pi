@@ -42,27 +42,36 @@ const registeredTool = (
   ).tools[0]!;
 };
 
-it.each(["compact", "preview"] as const)("preserves exact expanded input in %s style", (style) => {
-  const args = {
-    action: "start",
-    command: "printf 'original input'",
-    cwd: "./relative",
-    timeoutSeconds: 123.456,
-  };
-  const result = {
-    content: [{ type: "text" as const, text: "Original result and recovery text" }],
-    details: { action: "start", snapshot },
-  };
-  const harness = createToolPresentationHarness(registeredTool("on", style));
-  for (const { expanded, text } of harness.cycle(args, result, {
-    states: [false, true, false, true],
-  })) {
-    if (!expanded) continue;
-    for (const line of Str.split(JSON.stringify(args, null, 2), "\n"))
-      expect(text).toContain(Str.trim(line));
-    expect(text).toContain(result.content[0]!.text);
-  }
-});
+it.each(["compact", "preview"] as const)(
+  "preserves exact expanded input and shows model text only without details in %s style",
+  (style) => {
+    const args = {
+      action: "start",
+      command: "printf 'original input'",
+      cwd: "./relative",
+      timeoutSeconds: 123.456,
+    };
+    const text = "Original result and recovery text";
+    const expandedText = (decodes: boolean) => {
+      const details = decodes ? { action: "start", snapshot } : { action: "start" };
+      const harness = createToolPresentationHarness(registeredTool("on", style));
+      const result = { content: [{ type: "text" as const, text }], details };
+      const frames = harness.cycle(args, result, { states: [false, true, false, true] });
+      return Arr.map(
+        Arr.filter(frames, (frame) => frame.expanded),
+        (frame) => frame.text,
+      );
+    };
+    for (const expanded of expandedText(true)) {
+      for (const line of Str.split(JSON.stringify(args, null, 2), "\n"))
+        expect(expanded).toContain(Str.trim(line));
+      expect(expanded).not.toContain(text);
+      expect(expanded).toContain(snapshot.id);
+      expect(expanded).toContain(snapshot.cwd);
+    }
+    for (const expanded of expandedText(false)) expect(expanded).toContain(text);
+  },
+);
 
 it.each(["compact", "preview"] as const)(
   "never hides expanded input behind a control character in %s style",
@@ -135,3 +144,29 @@ it.each(["compact", "preview"] as const)(
     expect(collapsed?.text).toContain("dev server");
   },
 );
+
+const occurrences = (text: string, part: string) => Str.split(text, part).length - 1;
+
+it("names a task once and leaves a failing exit code to its issue until expanded", () => {
+  const failed = {
+    ...snapshot,
+    name: "server",
+    command: "pnpm dev",
+    state: "failed",
+    exitCode: 3,
+    endedAt: 2,
+  };
+  const harness = createToolPresentationHarness(registeredTool("on", "preview"));
+  const [collapsed, expanded] = harness.cycle(
+    { action: "status", id: snapshot.id },
+    {
+      content: [{ type: "text" as const, text: "status text" }],
+      details: { action: "status", snapshot: failed },
+    },
+    { states: [false, true] },
+  );
+  expect(occurrences(collapsed?.text ?? "", "server")).toBe(1);
+  expect(collapsed?.text).toContain("pnpm dev");
+  expect(occurrences(collapsed?.text ?? "", "code 3")).toBe(1);
+  expect(expanded?.text).toContain("exit 3");
+});

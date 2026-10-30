@@ -1,5 +1,9 @@
 import { describe, expect, test } from "vitest";
-import { mergeCompactIssues, type CompactIssue } from "../../src/tools/compact-issues";
+import {
+  compactIssueSeverity,
+  mergeCompactIssues,
+  type CompactIssue,
+} from "../../src/tools/compact-issues";
 import { issueMessageStyleProblems } from "../../src/testing/issue-messages";
 import {
   compactStatus,
@@ -17,6 +21,11 @@ const issue = (overrides: Partial<CompactIssue> = {}): CompactIssue => ({
 });
 const info = issue({ severity: "info", code: "hint", message: "Page 1 of 2" });
 const warning = issue({ severity: "warning", code: "cleanup", message: "Cleanup is unconfirmed" });
+const attention = issue({
+  severity: "attention",
+  code: "question",
+  message: "worker asks: Which API?",
+});
 
 describe("issue merging", () => {
   test("coalesces equal evidence in first-seen order and keeps every distinct detail line", () => {
@@ -67,7 +76,7 @@ describe("summary resolution", () => {
   test("a Pi error overrides claimed success and explains itself with its first line", () => {
     for (const outcome of ["success", "returned", "warning", "error"] as const) {
       const resolved = resolveCompactSummary(
-        { ...base, outcome, issues: [warning, info] },
+        { ...base, outcome, issues: [info] },
         "settled",
         true,
         "\nRejected by host\nInternal stack",
@@ -77,10 +86,21 @@ describe("summary resolution", () => {
         severity: "error",
         message: "Rejected by host",
       });
-      expect(resolved.issues?.slice(1)).toEqual([warning, info]);
+      expect(resolved.issues?.slice(1)).toEqual([info]);
       expect(JSON.stringify(resolved)).not.toContain("Internal stack");
       expect(compactStatus("settled", resolved)).toBe("error");
     }
+    // A question awaiting a reply never explains or hides the failure.
+    const asking = resolveCompactSummary(
+      { ...base, issues: [attention] },
+      "settled",
+      true,
+      "Rejected by host",
+    )!;
+    expect(asking.outcome).toBe("error");
+    expect(asking.issues?.[0]).toMatchObject({ severity: "error", message: "Rejected by host" });
+    expect(asking.issues).toContainEqual(attention);
+    expect(compactStatus("settled", asking)).toBe("error");
     const unexplained = resolveCompactSummary(base, "settled", true, "")!;
     expect(unexplained.issues).toHaveLength(1);
     expect(unexplained.issues?.[0]?.severity).toBe("error");
@@ -109,5 +129,25 @@ describe("status precedence", () => {
     expect(status("returned", [info])).toBe("returned");
     expect(status("returned", [warning])).toBe("warning");
     expect(status(undefined)).toBe("uncertain");
+  });
+
+  test("attention outranks routine outcomes but never becomes a warning or hides a problem", () => {
+    expect(compactIssueSeverity([attention, info])).toBe("attention");
+    expect(compactIssueSeverity([attention, warning])).toBe("warning");
+    expect(status("success", [attention])).toBe("attention");
+    expect(status("returned", [attention])).toBe("attention");
+    expect(status("attention")).toBe("attention");
+    expect(status("success", [attention, warning])).toBe("warning");
+    expect(status("warning", [attention])).toBe("warning");
+    expect(status("attention", [warning])).toBe("warning");
+    expect(status("success", [attention, issue()])).toBe("error");
+    expect(status("uncertain", [attention])).toBe("uncertain");
+    expect(status("cancelled", [attention])).toBe("cancelled");
+    const resolved = resolveCompactSummary(
+      { subject: "work", outcome: "success", issues: [attention] },
+      "settled",
+      false,
+    );
+    expect(resolved?.outcome).toBe("success");
   });
 });

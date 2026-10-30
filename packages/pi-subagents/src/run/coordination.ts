@@ -4,7 +4,15 @@ import * as Option from "effect/Option";
 import type { RunRecord } from "./internal.ts";
 import { isActiveRunState } from "./model.ts";
 import { countLabel } from "pi-cosmic-core/display";
+import * as Str from "effect/String";
 import { safeTextPrefix } from "pi-cosmic-core/text";
+import {
+  MAX_NOTICE_PEERS,
+  noticeFact,
+  noticeName,
+  type PeerNoticeDetails,
+} from "../ui/notice-details.ts";
+import { runStateLabel } from "../ui/run-state.ts";
 
 const ownershipSummary = (record: RunRecord): string =>
   record.view.writeIntent === "writer"
@@ -48,6 +56,39 @@ export const peerNoticeText = (source: Iterable<RunRecord>, selfId: string): str
   );
 };
 
+/** The peer notice's display receipt: the run's own role and each peer sharing its directory. */
+export const peerNoticeDetails = (
+  source: Iterable<RunRecord>,
+  selfId: string,
+): PeerNoticeDetails => {
+  const records = [...source];
+  const self = Option.getOrUndefined(Arr.findFirst(records, (record) => record.view.id === selfId));
+  const peers = self
+    ? Arr.filter(
+        records,
+        (record) =>
+          record.view.cwd === self.view.cwd &&
+          record.view.id !== selfId &&
+          isActiveRunState(record.view.state),
+      )
+    : [];
+  return {
+    version: 1,
+    kind: "peers",
+    ...(self && { ownership: ownershipSummary(self) }),
+    peers: Arr.map(peers.slice(0, MAX_NOTICE_PEERS), (record) => ({
+      id: record.view.id,
+      name: noticeName(record.launch.name),
+      ownership: ownershipSummary(record),
+      state: runStateLabel(record.view.state),
+      ...(Str.trim(record.view.task) && {
+        task: noticeFact(safeTextPrefix(record.view.task, 160)),
+      }),
+    })),
+    total: peers.length,
+  };
+};
+
 export const peerNotifier =
   (records: ReadonlyMap<string, RunRecord>) =>
   (changedRunId: string): Effect.Effect<void> =>
@@ -59,7 +100,10 @@ export const peerNotifier =
         }),
         ({ record, process }) =>
           process.controls
-            .notifyPeers(peerNoticeText(records.values(), record.view.id))
+            .notifyPeers(
+              peerNoticeText(records.values(), record.view.id),
+              peerNoticeDetails(records.values(), record.view.id),
+            )
             .pipe(Effect.timeout("1 second"), Effect.ignore),
         { concurrency: 8, discard: true },
       ),

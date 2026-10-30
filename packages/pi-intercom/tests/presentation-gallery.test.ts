@@ -1,5 +1,5 @@
-import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
-import { describe, it } from "@effect/vitest";
+import { initTheme, type AgentToolResult } from "@earendil-works/pi-coding-agent";
+import { beforeAll, describe, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -9,6 +9,8 @@ import {
   galleryDirectory,
   galleryFrames,
   galleryMessageFrames,
+  galleryTranscriptFrames,
+  withPresentationSettings,
   writeGallerySection,
 } from "pi-code-previews/testing";
 import { frameMessage, INTERCOM_MESSAGE_TYPE } from "../src/delivery.ts";
@@ -105,6 +107,29 @@ const refused = (tool: SessionRefusal["tool"], code: SessionRefusal["code"], to:
 
 const message =
   "Can you rerun the web tests after my API change?\nThe endpoint moved to /v2/items.";
+const longMessage = Arr.join(
+  [
+    "The API change is in. Before you rerun the web tests, please:",
+    "",
+    "1. Pull main; the client in src/api/client.ts now reads /v2/items.",
+    "2. Regenerate the fixtures with pnpm fixtures:update.",
+    "3. Delete the cached responses under tests/.cache.",
+    "4. Run pnpm test --filter web and send me any failures.",
+    "",
+    "The header snapshot may change because the item count label moved into the toolbar, which is expected and fine to update.",
+    "If the login flow fails, it is the old token format; rerun pnpm auth:reset first.",
+    "Thanks!",
+  ],
+  "\n",
+);
+
+const busyRead: SessionReadContract = {
+  ...contractEnvelope,
+  tool: SESSION_TOOL.read,
+  session: web,
+  truncated: false,
+  state: "busy",
+};
 const scenarios = [
   {
     title: "listed sessions",
@@ -123,6 +148,18 @@ const scenarios = [
     tool: SESSION_TOOL.send,
     args: { to: web.sessionId, message },
     result: result(sendText(sent("held")), sent("held")),
+  },
+  {
+    title: "sent to a busy session",
+    tool: SESSION_TOOL.send,
+    args: { to: web.sessionId, message },
+    result: result(sendText(sent("queued")), sent("queued")),
+  },
+  {
+    title: "sent a long message",
+    tool: SESSION_TOOL.send,
+    args: { to: web.sessionId, message: longMessage },
+    result: result(sendText(sent("woken")), sent("woken")),
   },
   {
     title: "send timed out",
@@ -161,6 +198,12 @@ const scenarios = [
     result: result(readText(read), read),
   },
   {
+    title: "read a busy session with no reply yet",
+    tool: SESSION_TOOL.read,
+    args: { to: web.sessionId },
+    result: result(readText(busyRead), busyRead),
+  },
+  {
     title: "read a duplicate id",
     tool: SESSION_TOOL.read,
     args: { to: "019a2f6e-twin" },
@@ -174,9 +217,20 @@ const inbound = {
   text: message,
 };
 
+const inboundMessage = (text: string) => ({
+  role: "custom" as const,
+  customType: INTERCOM_MESSAGE_TYPE,
+  content: frameMessage({ ...inbound, text }),
+  display: true,
+  details: { from: inbound.from, messageId: inbound.messageId, text },
+  timestamp: 0,
+});
+
 const directory = galleryDirectory(process.env) ?? "";
 
 describe.skipIf(!directory)("presentation gallery", () => {
+  beforeAll(() => initTheme("dark", false));
+
   it.effect("renders session tools and inbound messages in both collapsed styles", () =>
     Effect.gen(function* () {
       const lines: string[] = [];
@@ -211,16 +265,46 @@ describe.skipIf(!directory)("presentation gallery", () => {
             }),
             ...galleryMessageFrames(renderIntercomMessage, {
               title: `${style} · message from another session`,
+              message: inboundMessage(inbound.text),
+            }),
+            ...galleryMessageFrames(renderIntercomMessage, {
+              title: `${style} · long message from another session`,
+              message: inboundMessage(longMessage),
+            }),
+            ...galleryMessageFrames(renderIntercomMessage, {
+              title: `${style} · stored message without display text`,
               message: {
-                role: "custom",
-                customType: INTERCOM_MESSAGE_TYPE,
-                content: frameMessage(inbound),
-                display: true,
+                ...inboundMessage(inbound.text),
                 details: { from: inbound.from, messageId: inbound.messageId },
-                timestamp: 0,
               },
             }),
           );
+          const sentScenario = Option.getOrThrow(
+            Arr.findFirst(scenarios, (entry) => entry.title === "sent to an idle session"),
+          );
+          for (const background of ["border", "on", "off"] as const)
+            withPresentationSettings({ toolCallBackground: background }, () => {
+              const { tools: framed } = captureRegistrations((pi) =>
+                registerSessionTools(pi, { run: () => Promise.reject(new Error("not executed")) }),
+              );
+              lines.push(
+                ...galleryTranscriptFrames(
+                  `${style} · ${background} · transcript: a sent message beside replies`,
+                  [
+                    {
+                      name: SESSION_TOOL.send,
+                      tool: Option.getOrThrow(
+                        Arr.findFirst(framed, ({ name }) => name === SESSION_TOOL.send),
+                      ),
+                      args: sentScenario.args,
+                      result: sentScenario.result,
+                    },
+                    { render: renderIntercomMessage, message: inboundMessage(inbound.text) },
+                    { render: renderIntercomMessage, message: inboundMessage(longMessage) },
+                  ],
+                ),
+              );
+            });
         } finally {
           restore();
         }

@@ -1,70 +1,78 @@
-import type { MessageRenderer, Theme } from "@earendil-works/pi-coding-agent";
-import { Text, type Component } from "@earendil-works/pi-tui";
-import * as Arr from "effect/Array";
+import { Text } from "@earendil-works/pi-tui";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import * as Str from "effect/String";
-import { renderCompactRow } from "pi-code-previews";
+import type { CodePreviewMessagePresenter } from "pi-code-previews";
 import { clipText } from "pi-cosmic-core/display";
-import { firstLineMessage } from "pi-cosmic-core/message-text";
 import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core/security";
-import { clipToWidth } from "pi-cosmic-ui/manager";
-import { composeToolComponent, renderExpansionAffordance } from "pi-cosmic-ui/tool";
+import { composeToolComponent } from "pi-cosmic-ui/tool";
+import { agentTextLines, bodyIndent, detailsSectionLines } from "./agent-text.ts";
 import { decodeMessageEnvelope, messageContentText } from "./message-envelope.ts";
+import { MAX_NOTICE_TEXT_CHARS } from "./notice-details.ts";
 
 const Id = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1_024));
-const Details = Schema.Struct({
+const AgentMessageDetailsSchema = Schema.Struct({
   from: Id,
-  fromName: Schema.optional(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1_024))),
+  fromName: Schema.optionalKey(Id),
   to: Id,
   messageId: Id,
+  /** A bounded display copy of the sender's words, without the frame the recipient reads. */
+  text: Schema.optionalKey(
+    Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(MAX_NOTICE_TEXT_CHARS)),
+  ),
+  textCut: Schema.optionalKey(Schema.Literal(true)),
 });
-const decodeDetails = Schema.decodeUnknownOption(Details, { onExcessProperty: "ignore" });
+export type AgentMessageDetails = typeof AgentMessageDetailsSchema.Type;
+const decodeDetails = Schema.decodeUnknownOption(AgentMessageDetailsSchema, {
+  onExcessProperty: "ignore",
+});
 
-// The root frames each message as a sender line, the text, then a reply hint.
-const FRAME_HEADER = /^Message from .*:$/u;
+const displayName = (name: string): string => clipText(sanitizeTerminalLine(name), 60);
 
-const messageLine = (text: string): string => {
-  const lines = Str.split(text, "\n");
-  const body = FRAME_HEADER.test(lines[0] ?? "") ? Arr.join(lines.slice(1, -1), "\n") : text;
-  return firstLineMessage(body, "");
-};
-
-/** An agent message to the main agent: sender and first line collapsed, the full frame expanded. */
-export function renderAgentMessage(
-  input: Parameters<MessageRenderer>[0],
-  options: { expanded: boolean; outputPad: number },
-  compact: boolean,
-  theme: Theme,
-): Component {
+/**
+ * An agent message to the main agent: who sent it, then its words. Details without a display copy
+ * show the sender collapsed and the message as the main agent received it expanded.
+ */
+export const presentAgentMessage: CodePreviewMessagePresenter = (input, options, theme) => {
   const envelope = Option.getOrUndefined(decodeMessageEnvelope(input));
-  const text = messageContentText(envelope?.content);
-  if (options.expanded) return new Text(stripTerminalControls(text), options.outputPad, 0);
   const details = Option.getOrUndefined(decodeDetails(envelope?.details));
-  const sender = details
-    ? clipText(sanitizeTerminalLine(details.fromName ?? details.from), 60)
-    : "";
-  const line = messageLine(text);
-  const hint = compact ? undefined : renderExpansionAffordance("message", false, theme);
-  return composeToolComponent((width) => {
-    const inner = Math.max(1, width - options.outputPad * 2);
-    const row = renderCompactRow(
-      {
-        name: "agent message",
-        phase: "settled",
-        summary: {
-          ...(sender && { action: `from ${sender}` }),
-          subject: line || "Message from another agent",
-        },
-        status: "returned",
-      },
-      theme,
-      inner,
-    );
-    return new Text(
-      hint ? `${row}\n${clipToWidth(hint, inner)}` : row,
-      options.outputPad,
-      0,
-    ).render(width);
-  });
-}
+  const words = details?.text;
+  const sender = details ? displayName(details.fromName ?? details.from) : "";
+  const recipient = details?.to === "main" ? "main" : details ? displayName(details.to) : "";
+  const summary = {
+    subject: sender ? `${sender} → ${recipient || "main"}` : "Message from another agent",
+    outcome: "returned",
+    messageIcon: "received",
+  } as const;
+  const presentation = { name: "agent message", label: "Agent message", summary };
+  if (words === undefined)
+    return {
+      ...presentation,
+      expandLabel: "message",
+      expanded: () => new Text(stripTerminalControls(messageContentText(envelope?.content)), 0, 0),
+    };
+  const facts = (width: number) =>
+    details
+      ? detailsSectionLines(
+          [
+            `From ${sanitizeTerminalLine(details.from)} · message ${sanitizeTerminalLine(details.messageId)}`,
+            ...(details.textCut
+              ? ["Shown up to its display limit; the agent received all of it"]
+              : []),
+          ],
+          width,
+          theme,
+        )
+      : [];
+  return {
+    ...presentation,
+    collapsed: () =>
+      composeToolComponent((width) =>
+        agentTextLines(words, width, theme, { expanded: false, indent: bodyIndent(options) }),
+      ),
+    expanded: () =>
+      composeToolComponent((width) => [
+        ...agentTextLines(words, width, theme, { expanded: true }),
+        ...facts(width),
+      ]),
+  };
+};

@@ -5,6 +5,7 @@ export const MAX_QUESTIONS = 6;
 export const MAX_CHOICES = 6;
 // Titles only label tabs and review rows, which shorten them; this bounds memory, not display.
 export const MAX_TITLE_LENGTH = 120;
+export const MAX_KEY_LENGTH = 32;
 export const MAX_CUSTOM_ANSWER_LENGTH = 4_000;
 export const MAX_NOTE_LENGTH = 2_000;
 
@@ -35,7 +36,7 @@ const AskUserChoiceSchema = Type.Object({
 const questionFields = {
   key: Type.String({
     minLength: 1,
-    maxLength: 32,
+    maxLength: MAX_KEY_LENGTH,
     description:
       "Unique stable identifier used to associate the returned answer with this question.",
   }),

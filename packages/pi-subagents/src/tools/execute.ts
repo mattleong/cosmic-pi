@@ -104,6 +104,7 @@ const forEachOutcome = <R>(
               failure: {
                 id,
                 message: error.message,
+                ...(error.userMessage !== undefined && { userMessage: error.userMessage }),
                 code: subagentErrorCode(error),
               } satisfies SubagentActionFailure,
             }) as const,

@@ -45,6 +45,7 @@ import {
   BackgroundTaskNotFoundError,
   BackgroundTasksDisabledError,
   BackgroundTerminationError,
+  BackgroundCursorAheadError,
   InvalidBackgroundCommandError,
   InvalidBackgroundCwdError,
 } from "../src/task/errors.ts";
@@ -720,7 +721,7 @@ describe("BackgroundTaskService", () => {
         yield* service.logs({ id: started.id, afterCursor: 5 }).pipe(Effect.flip),
         yield* service.wait(outputWait(started.id, { afterCursor: 5 })).pipe(Effect.flip),
       ]) {
-        expect(failure).toBeInstanceOf(InvalidBackgroundCommandError);
+        expect(failure).toBeInstanceOf(BackgroundCursorAheadError);
         // A short headline; the task and the latest usable cursor follow as detail.
         const [headline, ...detail] = Str.split(failure.message, "\n");
         expect(issueMessageStyleProblems(headline, { forbidden: [started.id, "5"] })).toEqual([]);

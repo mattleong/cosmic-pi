@@ -230,6 +230,7 @@ export const acquireAsyncQuestionnaires = Effect.fn("AskUserService.acquireAsync
             delivery: "pending",
             independentWork: Str.trim(request.independentWork),
             blockedWork: Str.trim(request.blockedWork),
+            titles: Arr.map(normalized.questions, ({ key, title }) => ({ key, title })),
           };
           const entry: Entry = {
             snapshot,

@@ -8,7 +8,15 @@ import * as Str from "effect/String";
 import { clipText, countLabel } from "pi-cosmic-core/display";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { Check } from "typebox/value";
-import { invalidRequest, subagentErrorCode, type SubagentError } from "../run/errors.ts";
+import {
+  invalidRequest,
+  subagentErrorCode,
+  userFailureText,
+  withGuidance,
+  withGuidanceClause,
+  type GuidedText,
+  type SubagentError,
+} from "../run/errors.ts";
 import { getFailedStartRecovery } from "../run/launch.ts";
 import { failureFileText } from "../run/state.ts";
 import { SubagentService, type SubagentServiceContract } from "../run/service.ts";
@@ -16,7 +24,13 @@ import { SUBAGENT_ROOT_RUN_ID } from "../run/model.ts";
 import type { WorkspaceReviseOptions } from "../run/workspace-launch.ts";
 import type { WorkspaceIntegrationOutcome } from "../run/workspace-integration.ts";
 import { UnavailableWorkspaceArtifactSchema, WorkspaceRecordSchema } from "../workspace/model.ts";
-import type { WorkspaceToolDetails, WorkspaceWarning } from "./details-schema.ts";
+import {
+  MAX_WORKSPACE_CWD_CHARS,
+  MAX_WORKSPACE_LIST_ENTRIES,
+  type WorkspaceToolDetails,
+  type WorkspaceWarning,
+} from "./details-schema.ts";
+import { MAX_PROTOCOL_ID_CHARS } from "../run/limits.ts";
 import { failedStartRecoveryAction } from "./format.ts";
 import {
   WorkspaceParameters,
@@ -61,8 +75,19 @@ const listedPaths = (paths: ReadonlyArray<string>) => {
   return `${listed}${more}`;
 };
 
-function integrationWarnings(outcome: WorkspaceIntegrationOutcome): WorkspaceWarning[] {
-  const warnings: WorkspaceWarning[] = [];
+/** A warning whose model copy adds the agent's next step; its details keep the user copy. */
+interface GuidedWarning extends Omit<WorkspaceWarning, "detail"> {
+  readonly detail: GuidedText;
+}
+
+const warningDetails = (warnings: ReadonlyArray<GuidedWarning>): WorkspaceWarning[] =>
+  Arr.map(warnings, ({ detail, ...warning }) => ({ ...warning, detail: detail.userMessage }));
+
+const warningLines = (warnings: ReadonlyArray<GuidedWarning>): string[] =>
+  Arr.map(warnings, (warning) => `Warning: ${warning.detail.message}`);
+
+function integrationWarnings(outcome: WorkspaceIntegrationOutcome): GuidedWarning[] {
+  const warnings: GuidedWarning[] = [];
   const worker = JSON.stringify(outcome.workerRoot);
   const drifted = outcome.untouchedDriftPaths;
   if (drifted.length > 0) {
@@ -73,26 +98,34 @@ function integrationWarnings(outcome: WorkspaceIntegrationOutcome): WorkspaceWar
         onlyPath !== undefined
           ? `${fileName(onlyPath)} changed in the parent after testing`
           : `${countLabel(drifted.length, "parent file")} changed after testing`,
-      detail: `The integration published only the proposal's own changes and kept these parent edits, which it doesn't touch, as they are: ${listedPaths(drifted)}. They changed after the combined tree was prepared, so tests run there didn't include them; rerun relevant tests in the parent checkout.`,
+      detail: withGuidanceClause(
+        `The integration published only the proposal's own changes and kept these parent edits, which it doesn't touch, as they are: ${listedPaths(drifted)}. They changed after the combined tree was prepared, so tests run there didn't include them`,
+        "rerun relevant tests in the parent checkout.",
+      ),
     });
   }
   if (outcome.treeRemovalFailed)
     warnings.push({
       code: "workspace-trees-remain",
       message: "The proposal's working copies couldn't be deleted",
-      detail: `The integration committed, but removing the worktree's worker and test trees failed; the worker tree at ${worker} and any test trees beside it remain on disk. Discard this worktree to retry the removal.`,
+      detail: withGuidance(
+        `The integration committed, but removing the worktree's worker and test trees failed; the worker tree at ${worker} and any test trees beside it remain on disk.`,
+        "Discard this worktree to retry the removal.",
+      ),
     });
   if (outcome.leaseReleaseUnconfirmed)
     warnings.push({
       code: "integration-lease-unconfirmed",
       message: "The source checkout lock wasn't released; new writers are blocked",
-      detail:
-        "The integration committed, but releasing its source writer lease could not be confirmed. This session refuses writer starts and further integrations (workspace_integration_quarantined) until Pi restarts. After a restart the source lease may report recovery-required; recover it only after confirming no Pi session or writer still uses this checkout.",
+      detail: withGuidanceClause(
+        "The integration committed, but releasing its source writer lease could not be confirmed. This session refuses writer starts and further integrations (workspace_integration_quarantined) until Pi restarts. After a restart the source lease may report recovery-required",
+        "recover it only after confirming no Pi session or writer still uses this checkout.",
+      ),
     });
   return warnings;
 }
 
-function leftOutWarnings(credentials: ReadonlyArray<string>): WorkspaceWarning[] {
+function leftOutWarnings(credentials: ReadonlyArray<string>): GuidedWarning[] {
   if (credentials.length === 0) return [];
   return [
     {
@@ -101,7 +134,10 @@ function leftOutWarnings(credentials: ReadonlyArray<string>): WorkspaceWarning[]
         credentials.length === 1
           ? "A credential file the worker created was left out"
           : `${countLabel(credentials.length, "credential file")} the worker created were left out`,
-      detail: `Proposals leave out worker-created files with credential names that aren't source code (such as .env, .npmrc, keys, and credentials or secrets files), so local secrets never reach the parent checkout: ${listedPaths(credentials)}. Create them in the parent checkout yourself if the change needs them.`,
+      detail: withGuidance(
+        `Proposals leave out worker-created files with credential names that aren't source code (such as .env, .npmrc, keys, and credentials or secrets files), so local secrets never reach the parent checkout: ${listedPaths(credentials)}.`,
+        "Create them in the parent checkout yourself if the change needs them.",
+      ),
     },
   ];
 }
@@ -180,6 +216,19 @@ const executeWorkspaceList = Effect.fn("SubagentTools.workspaceList")(function* 
     [...(listing.orphans?.values() ?? [])],
     (disposition) => disposition === "adoptable",
   ).length;
+  // The expansion's details list what the model's output listed, up to their own bound.
+  const shown = entries.slice(0, Math.min(lines.length, MAX_WORKSPACE_LIST_ENTRIES));
+  const listed = Arr.map(shown, (entry) => ({
+    workspaceId: clipText(entry.workspaceId, MAX_PROTOCOL_ID_CHARS),
+    status: entry.status,
+    ...("revisionId" in entry &&
+      entry.revisionId !== undefined && {
+        revisionId: clipText(entry.revisionId, MAX_PROTOCOL_ID_CHARS),
+      }),
+    ...("sourceCwd" in entry &&
+      entry.sourceCwd.length <= MAX_WORKSPACE_CWD_CHARS && { sourceCwd: entry.sourceCwd }),
+    ...("orphan" in entry && entry.orphan !== undefined && { orphan: entry.orphan }),
+  }));
   return result(
     Arr.join(
       [
@@ -202,7 +251,7 @@ const executeWorkspaceList = Effect.fn("SubagentTools.workspaceList")(function* 
       ...(adoptableCount > 0 && { adoptableCount }),
       unavailableCount: listing.unavailable.length,
       listedCount: lines.length,
-      displayContent: { offset: 0, length: Arr.join(lines, "\n").length },
+      ...(listed.length > 0 && { entries: listed }),
     },
   );
 });
@@ -265,7 +314,7 @@ const executeWorkspacePrepare = Effect.fn("SubagentTools.workspacePrepare")(func
         prefix,
         cwdLine,
         `Run relevant tests in this cwd, which combines the proposal with your current edits; don't edit it. Then apply workspaceId=${operation.workspaceId ?? ""}, which integrates this preparation.`,
-        ...Arr.map(warnings, (warning) => `Warning: ${warning.detail}`),
+        ...warningLines(warnings),
       ],
       "\n",
     ),
@@ -273,7 +322,7 @@ const executeWorkspacePrepare = Effect.fn("SubagentTools.workspacePrepare")(func
       ...receipt,
       revisionId: preparation.revisionId,
       preparationId: preparation.preparationId,
-      ...(warnings.length > 0 && { warnings }),
+      ...(warnings.length > 0 && { warnings: warningDetails(warnings) }),
       ...preparedCwdMetadata(preparation.cwd, {
         offset: prefix.length + 1,
         length: cwdLine.length,
@@ -320,17 +369,11 @@ const executeWorkspaceApply = Effect.fn("SubagentTools.workspaceApply")(function
     "\n",
   );
   const body = changed;
-  return result(
-    Arr.join(
-      [heading, body, ...Arr.map(warnings, (warning) => `Warning: ${warning.detail}`)],
-      "\n",
-    ),
-    {
-      ...metadata,
-      ...(warnings.length > 0 && { warnings }),
-      displayContent: { offset: heading.length + 1, length: body.length },
-    },
-  );
+  return result(Arr.join([heading, body, ...warningLines(warnings)], "\n"), {
+    ...metadata,
+    ...(warnings.length > 0 && { warnings: warningDetails(warnings) }),
+    displayContent: { offset: heading.length + 1, length: body.length },
+  });
 });
 
 /**
@@ -346,21 +389,25 @@ const successorStartFailure = (error: SubagentError): Effect.Effect<never, Subag
     admitted.cleanupDisposition === "quarantined"
       ? failedStartRecoveryAction(admitted)
       : `Review the failure with agent_read ${runId}, then revise again, or apply or discard the worktree.`;
-  return Effect.fail(
-    invalidRequest(
-      subagentErrorCode(error),
-      Arr.join(
-        [
-          `The revision's writer failed during startup: ${error.message}`,
-          `Successor runId=${runId} was admitted before it failed.`,
-          ...(admitted.failureFile ? [failureFileText(admitted.failureFile)] : []),
-          ...(admitted.warning ? [`Warning: ${admitted.warning}`] : []),
-          `Next: ${next}`,
-        ],
-        "\n",
-      ),
-    ),
+  const lines = (failure: string, warning: string | undefined) =>
+    Arr.join(
+      [
+        `The revision's writer failed during startup: ${failure}`,
+        `Successor runId=${runId} was admitted before it failed.`,
+        ...(admitted.failureFile ? [failureFileText(admitted.failureFile)] : []),
+        ...(warning ? [`Warning: ${warning}`] : []),
+      ],
+      "\n",
+    );
+  const text = withGuidance(
+    {
+      message: lines(error.message, admitted.warning),
+      userMessage: lines(userFailureText(error), admitted.userWarning ?? admitted.warning),
+    },
+    `Next: ${next}`,
+    "\n",
   );
+  return Effect.fail(invalidRequest(subagentErrorCode(error), text));
 };
 
 /**

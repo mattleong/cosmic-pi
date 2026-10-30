@@ -20,7 +20,7 @@ import { issueMessageStyleProblems } from "pi-code-previews/testing";
 import { nodeFilePlatformLayer, synchronousRandomHex } from "pi-cosmic-core";
 import { connect, createServer } from "node:net";
 import { afterEach, vi } from "vitest";
-import { INTERCOM_MESSAGE_TYPE } from "../src/delivery.ts";
+import { frameMessage, INTERCOM_MESSAGE_TYPE } from "../src/delivery.ts";
 import type { intercomLayer } from "../src/layer.ts";
 import {
   decodeSessionToolDetails,
@@ -375,9 +375,19 @@ layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
       expect(sent).toMatchObject({
         customType: INTERCOM_MESSAGE_TYPE,
         display: true,
-        details: { from: { sessionId: "session-a", name: "api work", cwd: a.base } },
+        details: {
+          from: { sessionId: "session-a", name: "api work", cwd: a.base },
+          text: "Can you rerun the web tests?",
+        },
       });
-      expect(sent?.content).toContain("Can you rerun the web tests?");
+      // The model reads the frame alone; the display text rides in details.
+      expect(sent?.content).toBe(
+        frameMessage({
+          from: { sessionId: "session-a", name: "api work", cwd: a.base },
+          messageId: "unused",
+          text: "Can you rerun the web tests?",
+        }),
+      );
 
       b.setIdle(false);
       const queued = yield* a.callTool(SESSION_TOOL.send, {

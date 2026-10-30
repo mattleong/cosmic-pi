@@ -8,7 +8,7 @@ import type * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import {
-  captureCodePreviewPresentationPolicy,
+  withCodePreviewMessageShell,
   withCodePreviewShell,
   type CompactAnimationScheduler,
 } from "pi-code-previews";
@@ -18,7 +18,7 @@ import { registerMessageOrigins } from "pi-cosmic-core/host-message-origin";
 import { type ExtensionCommand } from "pi-cosmic-core/host-command";
 import { containCommandFailure, safeHostSignal } from "../boundary/host-ui.ts";
 import { imageCompactSummary, isSignInFailure } from "./compact-summary.ts";
-import { renderImageMessage } from "./message.ts";
+import { presentImageMessage } from "./message.ts";
 import {
   renderImageCall,
   renderImageContent,
@@ -44,16 +44,7 @@ export interface OpenAIImageMessageRenderer {
 export function createOpenAIImageMessageRenderer(): OpenAIImageMessageRenderer {
   let cwd = "";
   return {
-    render: (message, options, theme) =>
-      renderImageMessage(
-        message,
-        {
-          expanded: options.expanded,
-          compact: captureCodePreviewPresentationPolicy().toolCallCollapsedStyle === "compact",
-          cwd,
-        },
-        theme,
-      ),
+    render: withCodePreviewMessageShell(presentImageMessage(() => cwd)),
     noteCwd: (source) => {
       cwd = invokeHostCallback(() => source.cwd, cwd);
     },

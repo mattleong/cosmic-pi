@@ -9,10 +9,8 @@ import { projectRunCardTree } from "../ui/run-tree-rows.ts";
 import {
   SUBAGENT_CARD_DETAILS_VERSION,
   type CompactSubagentToolDetails,
-  type CompactToolActionFailure,
   type RunDetailsAction,
   type SubagentAwaitDetails,
-  type SubagentCardFailure,
   type SubagentRunCard,
   type SubagentStartDetails,
   type SubagentStartEntry,
@@ -34,11 +32,17 @@ import {
   projectSubagentProfileRoutes,
   projectSubagentRunCard,
 } from "./details-projection.ts";
-import type { SubagentAgentView, SubagentInvalidAgentView, SubagentProfileView } from "./model.ts";
+import type {
+  SubagentActionFailure,
+  SubagentAgentView,
+  SubagentInvalidAgentView,
+  SubagentProfileView,
+  SubagentStartFailure,
+} from "./model.ts";
 
 interface StartDetailsInput {
   readonly startEntries: ReadonlyArray<SubagentStartEntry>;
-  readonly startFailures?: ReadonlyArray<SubagentCardFailure> | undefined;
+  readonly startFailures?: ReadonlyArray<SubagentStartFailure> | undefined;
 }
 
 interface AwaitDetailsInput {
@@ -67,7 +71,7 @@ interface ModelDetailsInput {
 interface RunDetailsInput {
   readonly action: RunDetailsAction;
   readonly runs: ReadonlyArray<SubagentRunView>;
-  readonly actionFailures?: ReadonlyArray<CompactToolActionFailure> | undefined;
+  readonly actionFailures?: ReadonlyArray<SubagentActionFailure> | undefined;
 }
 
 type ModelDetails = Extract<CompactSubagentToolDetails, { readonly action: "models" }>;

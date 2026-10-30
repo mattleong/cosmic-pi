@@ -8,15 +8,16 @@ import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
+import * as Match from "effect/Match";
 import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
-import { countLabel, formatBytes } from "pi-cosmic-core/display";
+import { clipText, countLabel, formatBytes } from "pi-cosmic-core/display";
 import { utf8ByteLength } from "pi-cosmic-core/text";
-import { InvalidBackgroundCommandError } from "../task/errors.ts";
+import { InvalidBackgroundCommandError, type BackgroundTaskError } from "../task/errors.ts";
 import { skippedWithin } from "../task/log-buffer.ts";
 import {
   isActiveTaskState,
@@ -32,7 +33,13 @@ import {
   type WaitForBackgroundTask,
 } from "../task/model.ts";
 import { detailsSnapshot } from "../task/redaction.ts";
-import { BACKGROUND_TASK_ACTIONS, type BackgroundTaskDetailsSchema } from "../task/schema.ts";
+import { BACKGROUND_TASK_FIELD_BOUNDS as BOUNDS } from "../task/bounds.ts";
+import {
+  BACKGROUND_TASK_ACTIONS,
+  type BackgroundTaskDetailsSchema,
+  type BackgroundTaskFailureCode,
+  type BackgroundTaskFailureDetailsSchema,
+} from "../task/schema.ts";
 import { BackgroundTaskService, type BackgroundTaskFilter } from "../task/service.ts";
 import {
   clearContract,
@@ -47,6 +54,7 @@ import { pageLogSlice, pageOmission, recentOutput, type LogPageOmission } from "
 import type { BackgroundTaskToolInput } from "./schema.ts";
 
 export type BackgroundTaskToolDetails = typeof BackgroundTaskDetailsSchema.Type;
+export type BackgroundTaskFailureDetails = typeof BackgroundTaskFailureDetailsSchema.Type;
 
 export interface BackgroundTaskContractResult {
   readonly text: string;
@@ -65,7 +73,11 @@ const present = (
 ): Effect.Effect<string, InvalidBackgroundCommandError> =>
   value && Str.trim(value)
     ? Effect.succeed(value)
-    : InvalidBackgroundCommandError.make({ message: `The ${action} action requires ${field}.` });
+    : InvalidBackgroundCommandError.make({
+        message: `The ${action} action requires ${field}.`,
+        problem: "missing",
+        fields: [field],
+      });
 
 const required = (value: string | undefined, field: string, action: BackgroundTaskAction) =>
   Effect.map(present(value, field, action), (text) => Str.trim(text));
@@ -96,8 +108,11 @@ const fieldList = (fields: ReadonlyArray<string>): string =>
     ? Arr.join(fields, " or ")
     : `${Arr.join(fields.slice(0, -1), ", ")}, or ${fields.at(-1) ?? ""}`;
 
-const invalidCommand = (message: string) =>
-  Effect.fail(InvalidBackgroundCommandError.make({ message }));
+const invalidCommand = (
+  message: string,
+  problem: InvalidBackgroundCommandError["problem"],
+  fields: ReadonlyArray<string>,
+) => Effect.fail(InvalidBackgroundCommandError.make({ message, problem, fields }));
 
 const isBlank = (value: string): boolean => Str.trim(value) === "";
 
@@ -114,7 +129,8 @@ const validateFields = (
   input: BackgroundTaskToolInput,
 ): Effect.Effect<void, InvalidBackgroundCommandError> => {
   const { action } = input;
-  if (!Arr.contains(BACKGROUND_TASK_ACTIONS, action)) return invalidCommand(UNKNOWN_ACTION);
+  if (!Arr.contains(BACKGROUND_TASK_ACTIONS, action))
+    return invalidCommand(UNKNOWN_ACTION, "invalid", ["action"]);
   const rejected = Arr.filter(
     Rec.keys(FIELD_ACTIONS),
     (field) =>
@@ -122,9 +138,17 @@ const validateFields = (
       !Arr.some(FIELD_ACTIONS[field], (accepted) => accepted === action),
   );
   if (rejected.length > 0)
-    return invalidCommand(`The ${action} action does not accept ${fieldList(rejected)}.`);
+    return invalidCommand(
+      `The ${action} action does not accept ${fieldList(rejected)}.`,
+      "unexpected",
+      rejected,
+    );
   if (action === "logs" && input.afterCursor !== undefined && !isPlaceholder(input.tailLines))
-    return invalidCommand("The logs action accepts afterCursor or tailLines, not both.");
+    return invalidCommand(
+      "The logs action accepts afterCursor or tailLines, not both.",
+      "conflicting",
+      ["afterCursor", "tailLines"],
+    );
   return Effect.void;
 };
 
@@ -365,6 +389,8 @@ const containsAlternatives = (contains: NonNullable<BackgroundTaskToolInput["con
       Effect.fail(
         InvalidBackgroundCommandError.make({
           message: "contains must be one text or a list of texts.",
+          problem: "invalid",
+          fields: ["contains"],
         }),
       ),
     onSome: (decoded) =>
@@ -378,6 +404,8 @@ const waitRequest = Effect.fn("BackgroundTaskCommand.waitRequest")(function* (
   if (until === undefined) {
     return yield* InvalidBackgroundCommandError.make({
       message: "The wait action requires until.",
+      problem: "missing",
+      fields: ["until"],
     });
   }
   // An exit wait does not use contains or afterCursor, so it ignores their placeholders.
@@ -524,5 +552,63 @@ export const executeBackgroundTaskCommand = Effect.fn("BackgroundTaskCommand.exe
       );
     }
   }
-  return yield* InvalidBackgroundCommandError.make({ message: UNKNOWN_ACTION });
+  return yield* InvalidBackgroundCommandError.make({
+    message: UNKNOWN_ACTION,
+    problem: "invalid",
+    fields: ["action"],
+  });
+});
+
+export interface BackgroundTaskFailureResult {
+  readonly text: string;
+  readonly details: BackgroundTaskFailureDetails;
+}
+
+// Requested IDs and paths are display facts here, so they are sanitized and bounded.
+const displayFact = (text: string, maximum: number): string =>
+  clipText(sanitizeTerminalLine(text), maximum);
+
+const ARGUMENT_FAILURE_CODES = {
+  missing: "missing_argument",
+  unexpected: "unexpected_argument",
+  conflicting: "conflicting_arguments",
+  invalid: "invalid_argument",
+} as const satisfies Record<InvalidBackgroundCommandError["problem"], BackgroundTaskFailureCode>;
+
+const failureFacts = (error: BackgroundTaskError): BackgroundTaskFailureDetails["failure"] =>
+  Match.valueTags(error, {
+    InvalidBackgroundCommandError: ({ problem, fields }) => ({
+      code: ARGUMENT_FAILURE_CODES[problem],
+      fields: Arr.map(fields.slice(0, BOUNDS.maxFailureFields), (field) =>
+        displayFact(field, BOUNDS.maxFieldNameChars),
+      ),
+    }),
+    InvalidBackgroundCwdError: ({ cwd }) => ({
+      code: "invalid_cwd" as const,
+      cwd: displayFact(cwd, BOUNDS.maxCwdChars),
+    }),
+    BackgroundTaskNotFoundError: ({ id }) => ({
+      code: "not_found" as const,
+      taskId: displayFact(id, BOUNDS.maxIdChars),
+    }),
+    BackgroundCursorAheadError: ({ id, afterCursor, latestCursor }) => ({
+      code: "cursor_ahead" as const,
+      taskId: displayFact(id, BOUNDS.maxIdChars),
+      afterCursor,
+      latestCursor,
+    }),
+    BackgroundTaskCapacityError: ({ limit }) => ({ code: "capacity" as const, limit }),
+    BackgroundTasksDisabledError: () => ({ code: "disabled" as const }),
+    BackgroundSpawnError: () => ({ code: "spawn_failed" as const }),
+    BackgroundTerminationError: ({ id }) => ({
+      code: "stop_unconfirmed" as const,
+      taskId: displayFact(id, BOUNDS.maxIdChars),
+    }),
+    BackgroundRuntimeClosedError: () => ({ code: "closed" as const }),
+  });
+
+/** An expected failure as a result: the error's own text for the model, its facts in details. */
+export const backgroundTaskFailure = (error: BackgroundTaskError): BackgroundTaskFailureResult => ({
+  text: error.message,
+  details: { failure: failureFacts(error) },
 });

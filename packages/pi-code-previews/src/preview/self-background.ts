@@ -1,7 +1,19 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { ToolRenderContext } from "../tools/renderers/shared/types";
 import { Box, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import type { CompactStatus } from "../tools/compact-summary";
 import type { CodePreviewToolShell } from "./tool-shell";
+
+/** Pi's tool-row background for a row's strongest status. */
+export function statusBackground(
+  status: CompactStatus,
+  isPartial: boolean,
+): "toolErrorBg" | "toolPendingBg" | "toolSuccessBg" {
+  if (status === "error") return "toolErrorBg";
+  return isPartial || status === "cancelled" || status === "uncertain" || status === "attention"
+    ? "toolPendingBg"
+    : "toolSuccessBg";
+}
 
 export function rowPerState<TArgs, TState extends object, Row>(
   create: (context: ToolRenderContext<TState, TArgs>, theme: Theme) => Row,

@@ -27,13 +27,13 @@ Native source previews retain an eight-wrapped-row bound, including theme fallba
 
 ## Issues
 
-`CompactIssue` is `{ severity, code, message, detail? }`. Errors and warnings show the same short human-facing `message` collapsed and expanded. Agent procedures, retry instructions, tool-call syntax, internal IDs, and raw diagnostics belong in expanded-only `detail`. Routine information, including pagination and usable saved-output locations, appears only when expanded. Equal code/severity/message entries merge while retaining distinct detail lines.
+`CompactIssue` is `{ severity: error | warning | attention | info, code, message, detail? }`. Errors, warnings, and attention show the same short human-facing `message` collapsed and expanded. Attention marks work waiting on a person's or agent's reply or decision: it ranks below warnings, never escalates an outcome to warning, and never explains or hides a host error. Agent procedures, retry instructions, tool-call syntax, internal IDs, and raw diagnostics belong in expanded-only `detail`. Routine information, including pagination and usable saved-output locations, appears only when expanded. Equal code/severity/message entries merge while retaining distinct detail lines.
 
 Producers own classification and wording:
 
 - Name the subject and specific event, avoiding repeated category labels, error-class prefixes, internal type names, and trailing periods.
 - Prefer the actual warning or question over saying one exists, unless the quoted text is an instruction to the agent.
-- Use severity for attention the user needs; routine stops and changes awaiting ordinary review are metadata or information.
+- Use `error` and `warning` for problems and `attention` for a question or decision someone is waiting on; routine stops, held work, and changes awaiting ordinary review are metadata or information.
 - Add at most one short, redacted cause when status alone does not explain failure. Aim for about 70 characters; messages wrap rather than disappear through clipping.
 
 Use `failureMessage(text, fallback)` for unclassified failures and `firstLineMessage(text, fallback)` for other text. They sanitize and bound the first nonblank line; `isAgentGuidance` detects leading procedures. Full raw evidence remains in agent-facing results and expansion. `compactSubject` changes compact labels only.
@@ -46,9 +46,23 @@ Output clipping is informational only when bounded native metadata supplies a us
 
 `expandedContent.renderCall` and `expandedContent.renderResult` use the original signatures and return unique content without a second heading or issue list. An empty `Container` intentionally contributes no content; an omitted callback preserves the original slot.
 
-For valid summaries, compact expansion composes the shared heading, issues with details, unique call content, then unique result content. Missing or malformed summaries retain original renderers. Preserve complete arguments, source, commands, proposed edits, output, and recovery instructions, including after failure. Do not subtract evidence merely because an issue repeats it; label raw content or agent notes instead. Input that the heading cannot show exactly remains available in full.
+For valid summaries, compact expansion composes the shared heading, issues with details, unique call content, then unique result content. Conversational surfaces follow the [conversation rules](#conversation-surfaces) instead of showing model-facing frames. Missing or malformed summaries retain original renderers. Preserve complete arguments, source, commands, proposed edits, output, and recovery instructions, including after failure. Do not subtract evidence merely because an issue repeats it; label raw content or agent notes instead. Input that the heading cannot show exactly remains available in full.
 
 Original and content-only callbacks keep independent call/result `lastComponent` caches. Retained components capture needed values and renderer state, not the render context whose prior component would chain history. Preserve existing invalidation, mouse routing, live panels, and owner-scoped animation. Construction or drawing failure restores safe raw-result fallback without replaying the failing renderer. External adapters preserve opaque downstream components and append complete arguments/raw evidence when the provider's expansion may clip them. Pi retains native images and transcript separators.
+
+## Conversation surfaces
+
+Agent and session messaging, questions, reports, and agent status are read by the user, not the model. Their presentation shows what was said and only the status the user needs:
+
+- Text an agent or session wrote appears collapsed with its line breaks, bounded to about ten wrapped lines with an expansion affordance, and in full when expanded.
+- Display names identify agents and sessions. Run and session IDs appear only in expanded details.
+- Ordinary delivery or completion adds no explanation. Queued, held, resumed, or answered delivery is a short muted status; failures and uncertainty are issues.
+- Model routes, usage, cost, timing, ancestry, selection reasons, workspace identifiers, and saved-file paths appear only in a compact expanded details section. Collapsed aggregates may show one muted usage total.
+- Agent procedures, tool-call syntax, authority reminders, and coordination rules remain in model-facing content and are never drawn.
+
+The emitting boundary records bounded, sanitized display fields in `details`; renderers never parse model-facing content. Entries saved without those fields fall back to a generic heading collapsed and their raw content expanded.
+
+Workspace custom messages render through the Code Previews message shell, `withCodePreviewMessageShell`, so they share the settled tool row's frame, heading, and outcome tone in every background mode and collapsed style, without timing. Collapsed compact messages are bare compact rows like collapsed compact tool rows, with their words indented beneath like issues; other views keep the words inside the frame. Native images follow the message as Pi draws a tool result's images.
 
 ## Preview style
 
@@ -58,7 +72,7 @@ Tool renderers provide a human heading via `renderToolHeader`, bounded collapsed
 
 ## Shared vocabulary
 
-Use Cosmic Core's duration, count, size, cost, timestamp, path, and text formatting helpers and Cosmic UI's `clipToWidth` and `managerActivity*` helpers. Their implementations own glyphs, tones, clipping, and spinner cadence. Preserve the distinction between a cancelled request and stopped running work; green denotes success, while waiting/paused work needs attention.
+Use Cosmic Core's duration, count, size, cost, timestamp, path, and text formatting helpers and Cosmic UI's `clipToWidth` and `managerActivity*` helpers. Their implementations own glyphs, tones, clipping, and spinner cadence. Preserve the distinction between a cancelled request and stopped running work; green denotes success. Attention (`?`, accent) marks work waiting on a person's or agent's decision and is not a warning; paused work is a muted held state (`‖`). An outcome that could not be confirmed uses `≈`, and a delivered message someone wrote uses `→` when sent and `←` when received (`CompactSummary.messageIcon`), in place of the success check or neutral dot. Warnings and errors are reserved for problems.
 
 ## Messages outside tool rows
 

@@ -56,14 +56,9 @@ export const touchedParentDrift = (paths: ReadonlyArray<string>) =>
       paths.length === 1
         ? "A parent file the proposal changes no longer matches the tested one."
         : `${paths.length} parent files the proposal changes no longer match the tested ones.`,
-    detail: Arr.join(
-      [
-        `Changed: ${listedPaths(paths)}`,
-        "Nothing was changed.",
-        "Remedy: prepare again so the proposal is tested against the current files, then integrate the new preparation. A parent file captures skip, such as an ignored or untracked credential file, never matches: move it aside, or revise the workspace so the writer leaves that path alone.",
-      ],
-      "\n",
-    ),
+    detail: Arr.join([`Changed: ${listedPaths(paths)}`, "Nothing was changed."], "\n"),
+    remedy:
+      "prepare again so the proposal is tested against the current files, then integrate the new preparation. A parent file captures skip, such as an ignored or untracked credential file, never matches: move it aside, or revise the workspace so the writer leaves that path alone.",
   });
 
 // Git's forced checkout replaces a symlink or file where it needs a directory, so every existing

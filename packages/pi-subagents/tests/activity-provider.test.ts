@@ -197,6 +197,22 @@ describe("subagent activity provider", () => {
     });
   }
 
+  it("shows a waiting run as awaiting its parent and a paused run as held, not blocked", () => {
+    const items = subagentActivityItems({
+      revision: 1,
+      runs: [
+        view({ id: "asking", state: "waiting_for_parent", question }),
+        view({ id: "waiting", state: "waiting_for_parent" }),
+        view({ id: "paused", state: "paused" }),
+      ],
+    });
+    const status = (id: string) =>
+      Option.getOrUndefined(Arr.findFirst(items, (item) => item.id === id));
+    expect(status("asking")).toMatchObject({ status: "needs-input", inputTarget: "parent" });
+    expect(status("waiting")).toMatchObject({ status: "needs-input", inputTarget: "parent" });
+    expect(status("paused")?.status).toBe("paused");
+  });
+
   it("keeps terminal transitions discoverable and redacts producer payloads", () => {
     const secret = "sk-abcdefgh12345678";
     const run = view({

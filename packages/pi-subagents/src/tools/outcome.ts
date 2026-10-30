@@ -35,15 +35,6 @@ export const actionFailureDisposition = (failure: {
   readonly code?: string | undefined;
 }): ActionFailureDisposition => (isUncertainToolFailure(failure) ? "unconfirmed" : "failed");
 
-export const countActionFailures = (
-  failures: ReadonlyArray<Parameters<typeof actionFailureDisposition>[0]> = [],
-) => {
-  const counts = { unconfirmed: 0, failed: 0 } satisfies Record<ActionFailureDisposition, number>;
-  for (const failure of failures) counts[actionFailureDisposition(failure)] += 1;
-  return counts;
-};
-export type ActionFailureCounts = Readonly<ReturnType<typeof countActionFailures>>;
-
 /** Start failures where no configured route candidate can run at all. */
 export const NO_ELIGIBLE_ROUTE_CODES: ReadonlyArray<string> = ["profile_no_eligible_model"];
 

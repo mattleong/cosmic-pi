@@ -1,6 +1,7 @@
 import type * as Cause from "effect/Cause";
 import type * as Effect from "effect/Effect";
 import type * as Queue from "effect/Queue";
+import type * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import type { SubagentError, SubagentProcessError } from "../run/errors.ts";
 import type {
@@ -159,10 +160,14 @@ interface BackendControls {
   readonly steer: (message: string) => Effect.Effect<void, SubagentError>;
   readonly interrupt: Effect.Effect<void, SubagentError>;
   readonly reply: (requestId: string, message: string) => Effect.Effect<void, SubagentError>;
-  readonly notifyPeers: (message: string) => Effect.Effect<void, SubagentError>;
+  /** `details` is the notice's display receipt, which the child shows without changing `message`. */
+  readonly notifyPeers: (
+    message: string,
+    details?: Schema.Json,
+  ) => Effect.Effect<void, SubagentError>;
   /** `key` is the notice's stable identity; the receiving parent shows each key once. */
   readonly deliverNotification?:
-    | ((message: string, key: string) => Effect.Effect<void, SubagentError>)
+    | ((message: string, key: string, details?: Schema.Json) => Effect.Effect<void, SubagentError>)
     | undefined;
   /** False once turn input restarted the child after it emitted this `run_settled` event. */
   readonly isSettlementCurrent?: ((event: BackendEvent) => boolean) | undefined;

@@ -502,10 +502,10 @@ describe("background-task settings in a session", () => {
         const shown = () => Arr.filter(setStatus.mock.calls, ([, text]) => text !== undefined);
         yield* Effect.gen(function* () {
           yield* Effect.promise(() => app.emit("session_start", ctx));
-          const started = yield* Effect.exit(
-            Effect.tryPromise(() => app.execute({ action: "start", command: "sleep 30" }, ctx)),
+          const started = yield* Effect.promise(() =>
+            app.execute({ action: "start", command: "sleep 30" }, ctx),
           );
-          expect(Exit.isSuccess(started)).toBe(admits);
+          expect(started.isError === true).toBe(!admits);
           expect(shown().length > 0).toBe(footer);
 
           yield* Effect.promise(() => app.execute({ action: "stop_all" }, ctx));

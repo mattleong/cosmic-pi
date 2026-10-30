@@ -73,6 +73,17 @@ const WorkspaceWarningSchema = Schema.Struct({
 });
 export type WorkspaceWarning = typeof WorkspaceWarningSchema.Type;
 
+export const MAX_WORKSPACE_LIST_ENTRIES = 32;
+export const MAX_WORKSPACE_CWD_CHARS = 1_024;
+/** A listed worktree's identity and state, shown among a list's expanded details. */
+const WorkspaceListEntrySchema = Schema.Struct({
+  workspaceId: NonEmptyText(MAX_PROTOCOL_ID_CHARS),
+  status: NonEmptyText(32),
+  revisionId: Schema.optionalKey(NonEmptyText(MAX_PROTOCOL_ID_CHARS)),
+  sourceCwd: Schema.optionalKey(NonEmptyText(MAX_WORKSPACE_CWD_CHARS)),
+  orphan: Schema.optionalKey(Schema.Literals(["adoptable", "discard-only"])),
+});
+
 /**
  * `parent-tested`: apply integrated the parent's own prepared pair. `untested`: apply prepared and
  * integrated in one call, testing nothing.
@@ -94,6 +105,7 @@ export const WorkspaceToolDetailsSchema = Schema.Struct({
   listedCount: Schema.optionalKey(nonNegativeInteger),
   /** Listed workspaces of sessions that have ended which the root may adopt. */
   adoptableCount: Schema.optionalKey(nonNegativeInteger),
+  entries: Schema.optionalKey(boundedArray(WorkspaceListEntrySchema, MAX_WORKSPACE_LIST_ENTRIES)),
   changedPathCount: Schema.optionalKey(nonNegativeInteger),
   testing: Schema.optionalKey(Schema.Literals(WORKSPACE_APPLY_TESTING)),
   preparedCwd: Schema.optionalKey(NonEmptyText(1_024)),
@@ -502,12 +514,22 @@ const AgentDetailsIdsSchema = boundedArray(AgentIdSchema, MAX_TARGET_RUNS);
 const AgentDetailsNameSchema = NonEmptyText(MAX_NAME_CHARS);
 export const MAX_AGENT_READ_ISSUES = 6;
 export const MAX_AGENT_READ_ISSUE_TEXT_CHARS = 400;
+export const MAX_AGENT_LIST_ENTRIES = 64;
+export const MAX_AGENT_LIST_TASK_CHARS = 200;
+export const MAX_AGENT_STATUS_CHARS = 120;
+export const MAX_AGENT_DETAIL_FACTS = 10;
+export const MAX_AGENT_DETAIL_NOTES = 3;
+export const MAX_AGENT_DETAIL_FACT_CHARS = 512;
+/** Bounds one agent's display copy of its words; the tool result's content keeps its own. */
+export const MAX_AGENT_DISPLAY_TEXT_CHARS = 16 * 1024;
+const AgentFactSchema = NonEmptyText(MAX_AGENT_DETAIL_FACT_CHARS);
+const AgentStatusSchema = NonEmptyText(MAX_AGENT_STATUS_CHARS);
 const AgentReadIssuesSchema = createBoundedCompactIssuesSchema({
   maxTextLength: MAX_AGENT_READ_ISSUE_TEXT_CHARS,
   maxEntries: MAX_AGENT_READ_ISSUES,
 });
 
-/** Presentation receipts of `agent_list`, `agent_send`, and `agent_read`; text stays in content. */
+/** Presentation receipts of `agent_list`, `agent_send`, and `agent_read`, with bounded display copies. */
 export const AgentToolDetailsSchema = Schema.Union([
   Schema.Struct({
     version: Schema.Literal(AGENT_DETAILS_VERSION),
@@ -519,6 +541,24 @@ export const AgentToolDetailsSchema = Schema.Union([
     ),
     /** The only listed agent, when exactly one was listed. */
     only: Schema.optionalKey(Schema.Struct({ id: AgentIdSchema, name: AgentDetailsNameSchema })),
+    /** Each listed agent as the user sees it, parents before children. */
+    entries: Schema.optionalKey(
+      boundedArray(
+        Schema.Struct({
+          id: AgentIdSchema,
+          name: AgentDetailsNameSchema,
+          kind: Schema.Literals(["main", "run"]),
+          state: AgentDetailsStateSchema,
+          depth: Schema.optionalKey(nonNegativeInteger),
+          task: Schema.optionalKey(NonEmptyText(MAX_AGENT_LIST_TASK_CHARS)),
+          /** A short status that departs from the state's expected course, such as a question. */
+          status: Schema.optionalKey(AgentStatusSchema),
+          /** One technical line for the expanded view: ID, route, workspace, and parent. */
+          facts: Schema.optionalKey(AgentFactSchema),
+        }),
+        MAX_AGENT_LIST_ENTRIES,
+      ),
+    ),
     missingIds: AgentDetailsIdsSchema,
   }),
   Schema.Struct({
@@ -545,6 +585,13 @@ export const AgentToolDetailsSchema = Schema.Union([
         source: Schema.optionalKey(Schema.Literals(["assistant", "report", "error"])),
         /** A run's status card issues: attention, warnings, failure, cleanup, and its worktree. */
         issues: Schema.optionalKey(AgentReadIssuesSchema),
+        /** A bounded display copy of the latest message, report, or failure. */
+        text: Schema.optionalKey(NonEmptyText(MAX_AGENT_DISPLAY_TEXT_CHARS)),
+        textCut: Schema.optionalKey(Schema.Literal(true)),
+        /** Short human notes, such as a running agent's latest progress. */
+        notes: Schema.optionalKey(boundedArray(AgentFactSchema, MAX_AGENT_DETAIL_NOTES)),
+        /** Technical facts for the expanded view: ID, route, parent, files, usage. */
+        facts: Schema.optionalKey(boundedArray(AgentFactSchema, MAX_AGENT_DETAIL_FACTS)),
       }),
       MAX_TARGET_RUNS,
     ),
@@ -552,3 +599,17 @@ export const AgentToolDetailsSchema = Schema.Union([
   }),
 ]);
 export type AgentToolDetails = typeof AgentToolDetailsSchema.Type;
+
+export const MAX_TOOL_FAILURE_MESSAGE_CHARS = 2_048;
+
+/**
+ * A rejected call's failure as the user reads it. Pi keeps only the text of a thrown error, so the
+ * host attaches these details to its error result; the text stays the model's copy.
+ */
+export const ToolFailureDetailsSchema = Schema.Struct({
+  version: Schema.Literal(SUBAGENT_CARD_DETAILS_VERSION),
+  action: Schema.Literal("failure"),
+  code: Schema.optionalKey(NonEmptyText(MAX_FAILURE_CODE_CHARS)),
+  message: NonEmptyText(MAX_TOOL_FAILURE_MESSAGE_CHARS),
+});
+export type ToolFailureDetails = typeof ToolFailureDetailsSchema.Type;

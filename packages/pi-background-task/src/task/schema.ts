@@ -133,3 +133,38 @@ export const BackgroundTaskDetailsSchema = Schema.Union([
   }),
   Schema.Struct({ action: Schema.Literal("clear"), removed: Schema.Natural }),
 ]);
+
+export const BACKGROUND_TASK_FAILURE_CODES = [
+  "missing_argument",
+  "unexpected_argument",
+  "conflicting_arguments",
+  "invalid_argument",
+  "invalid_cwd",
+  "not_found",
+  "cursor_ahead",
+  "capacity",
+  "disabled",
+  "spawn_failed",
+  "stop_unconfirmed",
+  "closed",
+] as const;
+export type BackgroundTaskFailureCode = (typeof BACKGROUND_TASK_FAILURE_CODES)[number];
+
+// An expected failure's display facts; its model-facing text stays in the result content.
+export const BackgroundTaskFailureDetailsSchema = Schema.Struct({
+  failure: Schema.Struct({
+    code: Schema.Literals(BACKGROUND_TASK_FAILURE_CODES),
+    // The arguments a rejected request got wrong.
+    fields: Schema.optionalKey(
+      Schema.Array(MaxChars(BOUNDS.maxFieldNameChars)).check(
+        Schema.isMaxLength(BOUNDS.maxFailureFields),
+      ),
+    ),
+    // The task, or the comma-separated tasks, the failure is about, as requested.
+    taskId: Schema.optionalKey(MaxChars(BOUNDS.maxIdChars)),
+    cwd: Schema.optionalKey(MaxChars(BOUNDS.maxCwdChars)),
+    afterCursor: Schema.optionalKey(Schema.Finite),
+    latestCursor: Schema.optionalKey(Schema.Natural),
+    limit: Schema.optionalKey(Schema.Natural),
+  }),
+});

@@ -28,3 +28,29 @@ test("compact subjects are single-line, inert and width bounded without losing t
     if (width >= 16) assert.match(rows[0]!, /read/u);
   }
 });
+
+const renderQuoted = (quote: string, width = 80) =>
+  renderCompactToolCall(
+    {
+      name: "agent_send",
+      phase: "settled",
+      summary: { subject: "x", outcome: "success", quote },
+    },
+    theme,
+    width,
+  );
+
+test("quoted words show beneath a collapsed row with their line breaks, bounded and inert", () => {
+  const lines = Arr.map(Arr.range(1, 30), (line) => `line ${line} of the message`);
+  const short = Arr.map(renderQuoted("first line\nsecond line"), stripAnsi);
+  assert.ok(Arr.some(short, (row) => Str.includes("first line")(row)));
+  assert.ok(Arr.some(short, (row) => Str.includes("second line")(row)));
+  const long = Arr.map(renderQuoted(Arr.join(lines, "\n")), stripAnsi);
+  assert.ok(Arr.some(long, (row) => Str.includes("line 1 of")(row)));
+  const lastShown = Arr.some(long, (row) => Str.includes("line 30 of")(row));
+  assert.equal(lastShown, false);
+  assert.ok(long.length < lines.length);
+  const hostile = renderQuoted("safe\u001b[2Jtext", 20);
+  assert.ok(Arr.every(hostile, (row) => visibleWidth(row) <= 20));
+  assert.equal(Fn.pipe(Arr.join(hostile, ""), Str.includes("\u001b[2J")), false);
+});

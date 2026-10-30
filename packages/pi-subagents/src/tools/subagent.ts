@@ -1,4 +1,5 @@
 import * as Arr from "effect/Array";
+import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
 import {
   defineTool,
@@ -18,17 +19,20 @@ import {
   SUBAGENT_TOOL_NAMES,
   type SubagentToolName,
 } from "../run/tool-policy.ts";
-import { decodeStartAwaitCardDetails } from "./details-decode.ts";
+import { decodeCompactToolDetails, decodeStartAwaitCardDetails } from "./details-decode.ts";
 import { executeSubagentAction, type SubagentToolRuntime } from "./execute.ts";
 import { hasReturnedFailureEvidence } from "./outcome.ts";
 import { syncAwaitProgressTicker, type SubagentToolRenderContext } from "./render-await.ts";
 import { rejectionAwareCall } from "./render-preview.ts";
+import { hasRecordedFailure } from "./failure-details.ts";
 import {
   renderSubagentCall,
   renderSubagentResult,
   renderSubagentExpandedContent,
   decodeCallArguments,
   renderSubagentInputContent,
+  renderWorkspaceCallArguments,
+  renderRequestedRuns,
 } from "./render.ts";
 import { renderSubagentStartCall } from "./render-start.ts";
 import { registerAgentTools, ROOT_SCRIPT_NAMESPACE } from "./agent.ts";
@@ -244,6 +248,17 @@ export function registerSubagentTools(
     const { lease, renderCall, ...spec }: SubagentToolSpec<N> = TOOL_SPECS[name];
     // Root contract tools are the script-callable ones.
     const scriptable = !nested && isSubagentContractTool(name);
+    const project = createSubagentCompactSummary(name);
+    /** A recorded failure's issue carries all of it, so its result repeats nothing. */
+    const issueCarriesFailure = (
+      result: NonNullable<Parameters<typeof project>[0]["result"]>,
+      isPartial: boolean,
+      context: Parameters<typeof project>[0]["context"] & { readonly args: unknown },
+    ): boolean =>
+      context.isError &&
+      !isPartial &&
+      hasRecordedFailure(result) &&
+      (project({ phase: "settled", args: context.args, result, context })?.issues?.length ?? 0) > 0;
     const tool = defineTool<SubagentToolParameters<N>>({
       ...spec,
       ...(name === SUBAGENT_TOOL_NAME.start && {
@@ -285,31 +300,63 @@ export function registerSubagentTools(
               ...rest,
               receiptOwner?.receipts.isNested(receiptOwner.owner, id) ?? false,
             ),
-        ).then((result) => {
-          receiptOwner?.receipts.retain(
-            receiptOwner.owner,
-            name,
-            id,
-            subagentToolAction(input),
-            result,
-          );
-          return result;
-        });
+        ).then(
+          (result) => {
+            receiptOwner?.receipts.retain(
+              receiptOwner.owner,
+              name,
+              id,
+              subagentToolAction(input),
+              result,
+            );
+            return result;
+          },
+          (cause: unknown) => {
+            receiptOwner?.receipts.retainFailure(receiptOwner.owner, name, id, cause);
+            throw cause;
+          },
+        );
       },
       renderResult: (result, options, theme, context) =>
-        renderSubagentResult(result, options.isPartial, options.expanded, theme, {
-          panelOwnsLiveHierarchy: panelOwnsHierarchy(result, options.isPartial, context),
-          isError: context.isError,
-        }),
+        issueCarriesFailure(result, options.isPartial, context)
+          ? new Container()
+          : renderSubagentResult(result, options.isPartial, options.expanded, theme, {
+              panelOwnsLiveHierarchy: panelOwnsHierarchy(result, options.isPartial, context),
+              isError: context.isError,
+            }),
     });
-    const project = createSubagentCompactSummary(name);
     const wrapped = shell(tool, {
       ...(runtime.scheduleAnimation && { scheduleAnimation: runtime.scheduleAnimation }),
       expandedContent: {
-        renderCall: (args, theme) =>
-          tool.name === SUBAGENT_TOOL_NAME.start && "agents" in args && Arr.isArray(args.agents)
-            ? renderSubagentStartCall(args.agents, theme, true, true)
-            : renderSubagentInputContent(decodeCallArguments(args), theme),
+        renderCall: (args, theme) => {
+          if (
+            tool.name === SUBAGENT_TOOL_NAME.start &&
+            "agents" in args &&
+            Arr.isArray(args.agents)
+          )
+            return renderSubagentStartCall(args.agents, theme, true, true);
+          // Run IDs are opaque; the result names each run and lists its ID among its details.
+          const ids = requestedRunIds(args);
+          if (
+            ids &&
+            (tool.name === SUBAGENT_TOOL_NAME.await || tool.name === SUBAGENT_TOOL_NAME.lifecycle)
+          )
+            return renderRequestedRuns(
+              ids,
+              {
+                until: awaitUntil(args),
+                ...("timeoutSeconds" in args &&
+                  Predicate.isNumber(args.timeoutSeconds) && {
+                    timeoutSeconds: args.timeoutSeconds,
+                  }),
+              },
+              tool.name,
+              theme,
+            );
+          if (tool.name === SUBAGENT_TOOL_NAME.workspace)
+            return renderWorkspaceCallArguments(decodeCallArguments(args), theme);
+          return renderSubagentInputContent(decodeCallArguments(args), theme);
+        },
         renderResult: (result, options, theme, context) => {
           const panelOwnsLiveHierarchy = panelOwnsHierarchy(result, options.isPartial, context);
           const summary = project({
@@ -325,11 +372,18 @@ export function registerSubagentTools(
               true,
               theme,
             );
+          if (issueCarriesFailure(result, options.isPartial, context)) return new Container();
           const content = renderSubagentExpandedContent(result, options.isPartial, theme, {
             panelOwnsLiveHierarchy,
             isError: context.isError,
           });
           if (!isTypedReceipt(result)) return content;
+          // A decoded receipt's issues carry each failure; its text is the agent's own copy.
+          if (
+            decodeStartAwaitCardDetails(result.details) !== undefined ||
+            decodeCompactToolDetails(result.details) !== undefined
+          )
+            return content;
           if (!context.isError && !hasReturnedFailureEvidence(result.details)) return content;
           const container = new Container();
           container.addChild(content);
@@ -364,6 +418,8 @@ export function registerSubagentTools(
             signal,
           ),
         isScripted: (id) => receiptOwner?.receipts.isNested(receiptOwner.owner, id) ?? false,
+        retainFailure: (tool, id, cause) =>
+          receiptOwner?.receipts.retainFailure(receiptOwner.owner, tool, id, cause),
         ...(runtime.scheduleAnimation && { scheduleAnimation: runtime.scheduleAnimation }),
       },
       shell,

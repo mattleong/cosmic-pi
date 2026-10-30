@@ -64,7 +64,15 @@ const ActivityItemSchema = Schema.Union([
   }),
   Schema.Struct({
     ...ActivityFields,
-    status: Schema.Literals(["pending", "running", "stopping", "done", "failed", "cancelled"]),
+    status: Schema.Literals([
+      "pending",
+      "running",
+      "paused",
+      "stopping",
+      "done",
+      "failed",
+      "cancelled",
+    ]),
     inputTarget: Schema.optional(Schema.Never),
     blockedReason: Schema.optional(Schema.Never),
   }),

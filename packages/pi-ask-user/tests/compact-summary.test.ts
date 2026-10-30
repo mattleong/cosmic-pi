@@ -66,6 +66,21 @@ describe("questionnaire compact outcome projection", () => {
       expect(summary?.issues).toEqual([expect.objectContaining({ severity: "error" })]);
     }
   });
+  it("marks questionnaires awaiting answers for attention without overriding failures", () => {
+    const pending = row({ status: "pending", outcome: undefined, delivery: "pending" });
+    const failed = row({ status: "failed", outcome: undefined, delivery: "none" });
+    const status = { action: "status" };
+    expect(summarize(asyncAskUserCompactSummary, pending)?.outcome).toBe("attention");
+    expect(
+      summarize(asyncAskUserCompactSummary, { requests: [row(), pending] }, { args: status })
+        ?.outcome,
+    ).toBe("attention");
+    expect(
+      summarize(asyncAskUserCompactSummary, { requests: [pending, failed] }, { args: status })
+        ?.outcome,
+    ).toBe("error");
+    expect(summarize(asyncAskUserCompactSummary, row())?.outcome).toBe("success");
+  });
   it("declines missing, malformed, inconsistent, and error-marked replies", () => {
     for (const details of [undefined, {}, { outcome: "submitted" }, { ...submitted, answers: [] }])
       expect(summarize(askUserCompactSummary, details)).toBeUndefined();

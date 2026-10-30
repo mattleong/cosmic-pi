@@ -3,7 +3,12 @@ import * as Schema from "effect/Schema";
 export class InvalidBackgroundCommandError extends Schema.TaggedError<
   InvalidBackgroundCommandError,
   { readonly brand: unique symbol }
->()("InvalidBackgroundCommandError", { message: Schema.String }) {}
+>()("InvalidBackgroundCommandError", {
+  message: Schema.String,
+  // What the request got wrong, and the arguments it names.
+  problem: Schema.Literals(["missing", "unexpected", "conflicting", "invalid"]),
+  fields: Schema.Array(Schema.String),
+}) {}
 
 export class InvalidBackgroundCwdError extends Schema.TaggedError<
   InvalidBackgroundCwdError,
@@ -11,8 +16,21 @@ export class InvalidBackgroundCwdError extends Schema.TaggedError<
 >()("InvalidBackgroundCwdError", { cwd: Schema.String, message: Schema.String }) {}
 
 /** An afterCursor beyond a task's output, such as one kept from an earlier task with its ID. */
+export class BackgroundCursorAheadError extends Schema.TaggedError<
+  BackgroundCursorAheadError,
+  { readonly brand: unique symbol }
+>()("BackgroundCursorAheadError", {
+  id: Schema.String,
+  afterCursor: Schema.Finite,
+  latestCursor: Schema.Finite,
+  message: Schema.String,
+}) {}
+
 export const afterCursorAhead = (id: string, afterCursor: number, latest: number) =>
-  InvalidBackgroundCommandError.make({
+  BackgroundCursorAheadError.make({
+    id,
+    afterCursor,
+    latestCursor: latest,
     message: `afterCursor is ahead of this task's output\nafterCursor ${afterCursor} is ahead of ${id}'s latest cursor ${latest}; it may come from an earlier task with the same ID. Use ${latest} or less.`,
   });
 
@@ -54,6 +72,7 @@ export class BackgroundTasksDisabledError extends Schema.TaggedError<
 
 export type BackgroundTaskError =
   | InvalidBackgroundCommandError
+  | BackgroundCursorAheadError
   | InvalidBackgroundCwdError
   | BackgroundTaskNotFoundError
   | BackgroundTaskCapacityError

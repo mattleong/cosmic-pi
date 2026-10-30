@@ -5,7 +5,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
-import type * as Effect from "effect/Effect";
+import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import type * as Path from "effect/Path";
@@ -28,15 +28,18 @@ import {
   backgroundTaskCompactSummary,
   backgroundTaskResultSubject,
   decodeBackgroundTaskDetails,
-  resultSnapshot,
 } from "../ui/compact-summary.ts";
+import { decodeBackgroundTaskFailure } from "../ui/result-facts.ts";
 import {
+  backgroundTaskFailure,
   executeBackgroundTaskCommand,
   type BackgroundTaskContractResult,
+  type BackgroundTaskFailureResult,
+  type BackgroundTaskFailureDetails,
   type BackgroundTaskToolDetails,
 } from "./command.ts";
 import { BackgroundTaskContractSchema, encodeBackgroundTaskContract } from "./contract-schema.ts";
-import { renderBackgroundTaskPreview, taskProcessLine } from "./preview.ts";
+import { renderBackgroundTaskPreview, type BackgroundTaskPreviewInput } from "./preview.ts";
 import {
   BackgroundTaskParameters,
   prepareBackgroundTaskArguments,
@@ -89,9 +92,11 @@ const OUTPUT_SCHEMA = toPiToolOutputSchema(BackgroundTaskContractSchema);
 const CONTRACT_UNAVAILABLE =
   "Background task result is unavailable; the action may have taken effect";
 
+type BackgroundTaskResultDetails = BackgroundTaskToolDetails | BackgroundTaskFailureDetails;
+
 const backgroundTaskToolResult = (
   result: BackgroundTaskContractResult,
-): AgentToolResult<BackgroundTaskToolDetails> => {
+): AgentToolResult<BackgroundTaskResultDetails> => {
   const structuredContent = encodeBackgroundTaskContract(result.contract);
   return structuredContent === undefined
     ? {
@@ -106,6 +111,32 @@ const backgroundTaskToolResult = (
       };
 };
 
+// An expected failure keeps the text a thrown error gave the model, with display facts beside it.
+const failedToolResult = ({
+  text,
+  details,
+}: BackgroundTaskFailureResult): AgentToolResult<BackgroundTaskResultDetails> => ({
+  content: [{ type: "text", text }],
+  details,
+  isError: true,
+});
+
+const previewInput = (
+  result: AgentToolResult<unknown>,
+  args: Partial<BackgroundTaskToolInput>,
+  expanded: boolean,
+  isError: boolean,
+): BackgroundTaskPreviewInput => ({
+  details: decodeBackgroundTaskDetails(result.details).pipe(
+    Option.filter((decoded) => decoded.action === args.action),
+  ),
+  failure: isError ? decodeBackgroundTaskFailure(result.details) : Option.none(),
+  text: resultText(result.content),
+  args,
+  expanded,
+  isError,
+});
+
 export function registerBackgroundTaskTool(
   pi: ExtensionAPI,
   runner: BackgroundTaskToolRunner,
@@ -113,7 +144,7 @@ export function registerBackgroundTaskTool(
 ): void {
   const tool = defineTool<
     typeof BackgroundTaskParameters,
-    BackgroundTaskToolDetails,
+    BackgroundTaskResultDetails,
     BackgroundTaskRenderState
   >({
     name: "background_task",
@@ -135,9 +166,13 @@ export function registerBackgroundTaskTool(
     prepareArguments: prepareBackgroundTaskArguments,
     outputSchema: OUTPUT_SCHEMA,
     execute(_toolCallId, input, signal, _onUpdate, ctx) {
-      return runner
-        .run(executeBackgroundTaskCommand(input, ctx.cwd), signal)
-        .then(backgroundTaskToolResult);
+      return runner.run(
+        executeBackgroundTaskCommand(input, ctx.cwd).pipe(
+          Effect.map(backgroundTaskToolResult),
+          Effect.catch(Fn.flow(backgroundTaskFailure, failedToolResult, Effect.succeed)),
+        ),
+        signal,
+      );
     },
     renderCall(args, theme, context) {
       const { state, executionStarted, isPartial } = context;
@@ -159,23 +194,12 @@ export function registerBackgroundTaskTool(
     },
     renderResult(result, { isPartial, expanded }, theme, context) {
       if (isPartial) return new Container();
-      const details = decodeBackgroundTaskDetails(result.details).pipe(
-        Option.filter((decoded) => decoded.action === context.args.action),
-      );
-      context.state.backgroundTaskSubject = Option.match(details, {
+      const input = previewInput(result, context.args, expanded, context.isError);
+      context.state.backgroundTaskSubject = Option.match(input.details, {
         onNone: () => "",
         onSome: (decoded) => backgroundTaskResultSubject(decoded, context.args),
       });
-      return renderBackgroundTaskPreview(
-        {
-          details,
-          text: resultText(result.content),
-          args: context.args,
-          expanded,
-          isError: context.isError,
-        },
-        theme,
-      );
+      return renderBackgroundTaskPreview(input, theme);
     },
   });
   pi.registerTool(
@@ -183,24 +207,17 @@ export function registerBackgroundTaskTool(
       compactSummary: backgroundTaskCompactSummary,
       expandedContent: {
         renderCall: (args, theme) => expandedArguments(theme, args),
-        renderResult(result, _options, theme) {
-          const text = Fn.pipe(resultText(result.content), Str.replace(/\n+$/u, ""));
-          const snapshot = Option.getOrUndefined(
-            Option.map(decodeBackgroundTaskDetails(result.details), resultSnapshot),
+        renderResult(result, _options, theme, context) {
+          const input = previewInput(result, context.args, true, context.isError);
+          if (Option.isSome(input.details) || Option.isSome(input.failure))
+            return renderBackgroundTaskPreview({ ...input, headingShowsState: true }, theme);
+          // Without decodable details, the raw result is the only evidence left to show.
+          const text = Fn.pipe(input.text, Str.replace(/\n+$/u, ""));
+          return expandedSection(
+            theme,
+            "Raw result",
+            new Text(theme.fg("toolOutput", text || "(empty)"), 0, 0),
           );
-          const container = new Container();
-          if (snapshot)
-            container.addChild(
-              expandedSection(theme, undefined, new Text(taskProcessLine(snapshot, theme), 0, 0)),
-            );
-          container.addChild(
-            expandedSection(
-              theme,
-              "Raw result",
-              new Text(theme.fg("toolOutput", text || "(empty)"), 0, 0),
-            ),
-          );
-          return container;
         },
       },
       scheduleAnimation: runner.scheduleAnimation,

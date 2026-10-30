@@ -93,6 +93,7 @@ export const hostAsyncDelivery =
               deliveryId: snapshot.deliveryId,
               requestId: snapshot.requestId,
               outcome: snapshot.outcome,
+              ...(snapshot.titles !== undefined && { titles: snapshot.titles }),
             },
           },
           { deliverAs: "steer", triggerTurn: true },

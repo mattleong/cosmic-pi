@@ -5,7 +5,9 @@ import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import {
   completionBlock,
+  completionNoticeDetails,
   inlineCompletionReport,
+  questionNoticeDetails,
   type SubagentNotification,
   type SubagentNotificationDelivery,
 } from "../boundary/host-notifier.ts";
@@ -51,6 +53,12 @@ const ancestorMessage = (notification: SubagentNotification): string => {
     MAX_PARENT_MESSAGE_CHARS,
   );
 };
+
+/** The display receipt a nested parent shows for the notice; the message stays what it reads. */
+const ancestorDetails = (notification: SubagentNotification) =>
+  notification.type === "question"
+    ? questionNoticeDetails(notification)
+    : completionNoticeDetails(notification.runs);
 
 /** Whether the run can take notices once any pending pause request is refused. */
 export const keepsTakingNotifications = (record: RunRecord): boolean =>
@@ -106,6 +114,7 @@ export function notificationRouter(dependencies: RunNotificationRoutingDependenc
     sourceRunId: string,
     message: string,
     key: string,
+    details: ReturnType<typeof ancestorDetails>,
     takeLocked?: (recipient: RunRecord) => void,
   ): Effect.Effect<RunRecord | false | "uncertain"> =>
     Effect.suspend(() => {
@@ -127,7 +136,7 @@ export function notificationRouter(dependencies: RunNotificationRoutingDependenc
           (admission) =>
             admission
               ? Effect.raceFirst(
-                  admission.deliverNotification(message, key).pipe(
+                  admission.deliverNotification(message, key, details).pipe(
                     // Recorded while its turn input is still admitted, so it precedes the
                     // recipient's settlement.
                     Effect.tap(() =>
@@ -173,6 +182,7 @@ export function notificationRouter(dependencies: RunNotificationRoutingDependenc
         notification.id,
         ancestorMessage(notification),
         `${notification.id}:question:${notification.generation}`,
+        ancestorDetails(notification),
       ).pipe(
         Effect.map((delivered) =>
           delivered === "uncertain"
@@ -193,6 +203,7 @@ export function notificationRouter(dependencies: RunNotificationRoutingDependenc
           run.id,
           ancestorMessage({ type: "completed", runs: [run] }),
           ancestorCompletionKey(run),
+          ancestorDetails({ type: "completed", runs: [run] }),
           (recipient) => handoff.takeReportLocked(recipient, run.id, run.generation),
         ).pipe(
           Effect.map((delivered) => {

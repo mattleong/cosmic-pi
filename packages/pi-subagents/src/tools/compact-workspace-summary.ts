@@ -39,7 +39,7 @@ export function workspaceReceiptLine(details: WorkspaceToolDetails): string | un
       const listed =
         details.listedCount < details.workspaceCount
           ? `${details.listedCount} of ${countLabel(details.workspaceCount, "worktree")}`
-          : countLabel(details.listedCount, "workspace");
+          : countLabel(details.listedCount, "worktree");
       const unreadable = details.unavailableCount ?? 0;
       const adoptable = details.adoptableCount ?? 0;
       return Arr.join(
@@ -172,7 +172,7 @@ function listIssues(details: WorkspaceToolDetails): CompactIssue[] {
         adoptable === 1
           ? "A worktree from an ended session can be adopted"
           : `${adoptable} worktrees from ended sessions can be adopted`,
-        "Entries marked orphan=adoptable belong to sessions that have ended. Review, prepare, apply, or revise takes one over for this session; discard deletes it.",
+        "They belong to sessions that have ended; this session can take one over or discard it.",
       ),
     );
   return issues;
@@ -185,7 +185,7 @@ function reviewIssues(details: WorkspaceReviewReceipt): CompactIssue[] {
         step(
           "read-revision",
           "More review pages to read",
-          `Next: review workspaceId=${details.workspaceId} offset=${details.nextOffset}.`,
+          `This page ends at character ${details.nextOffset}${details.totalChars === undefined ? "" : ` of ${details.totalChars}`}.`,
         ),
       ];
 }
@@ -195,14 +195,14 @@ function testingStep(details: WorkspaceApplyReceipt): CompactIssue {
     case "parent-tested":
       return step(
         "applied-parent-tested",
-        "Applied the preparation you tested",
-        "Apply integrated the preparation you prepared; the tests you ran in its cwd are the evidence.",
+        "Applied the tested preparation",
+        "The combined tree was prepared and tested before it was applied.",
       );
     case "untested":
       return step(
         "applied-untested",
         "The change wasn't tested",
-        "Run relevant tests in the parent checkout before relying on this change.",
+        "It was prepared and applied in one step, without running tests.",
       );
   }
   return Fn.absurd(details.testing);
@@ -217,8 +217,8 @@ function reviseIssues(details: WorkspaceToolDetails): CompactIssue[] {
   return [
     step(
       "await-successor",
-      "Await the revising writer",
-      `Await successor ${details.successorRunId ?? "shown in expanded details"}, then apply or review its new revision; earlier review and preparation no longer apply.`,
+      "The writer is revising its proposal",
+      "A new run makes the next revision; earlier reviews and preparations no longer apply.",
     ),
     ...(details.rebased && conflicts > 0
       ? [
@@ -230,7 +230,7 @@ function reviseIssues(details: WorkspaceToolDetails): CompactIssue[] {
                 ? "One file has merge conflicts for the writer to resolve"
                 : `${conflicts} files have merge conflicts for the writer to resolve`,
             detail:
-              "The rebase rebuilt the writer's tree from current parent files and reapplied its changes; these files kept conflict markers. The successor's task lists them and asks it to resolve them first. Review its new revision for leftover markers.",
+              "The rebase rebuilt the writer's tree from current parent files and reapplied its changes; these files kept conflict markers. The writer was asked to resolve them first.",
           },
         ]
       : []),
@@ -247,8 +247,8 @@ function operationIssues(details: WorkspaceOperationReceipt): CompactIssue[] {
       return [
         step(
           "test-preparation",
-          "Test the prepared tree, then apply",
-          `Combined test cwd: ${details.preparedCwd ?? "see expanded details"}. Run relevant tests there without editing it, then apply workspaceId=${details.workspaceId}.`,
+          "Prepared a combined tree for testing",
+          "It combines the proposal with the current edits.",
         ),
         ...asWarnings(details),
       ];

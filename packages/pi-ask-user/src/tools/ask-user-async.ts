@@ -1,7 +1,6 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import {
-  captureCodePreviewPresentationPolicy,
   expandedArguments,
   withCodePreviewShell,
   type CompactAnimationScheduler,
@@ -47,13 +46,7 @@ import {
 // Converted on first registration; only the TUI root registers the async tools.
 const outputSchema = Fn.memoize(toPiToolOutputSchema);
 
-export const renderAskUserAsyncMessage: MessageRenderer = (message, options, theme) =>
-  renderAsyncMessage(
-    message,
-    options,
-    theme,
-    captureCodePreviewPresentationPolicy().toolCallCollapsedStyle === "compact",
-  );
+export const renderAskUserAsyncMessage: MessageRenderer = renderAsyncMessage;
 
 export function registerAsyncAskUserMessageRenderer(pi: ExtensionAPI): void {
   pi.registerMessageRenderer(ASYNC_MESSAGE_TYPE, renderAskUserAsyncMessage);

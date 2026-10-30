@@ -17,6 +17,8 @@ export interface SubagentStartFailure {
   readonly index: number;
   readonly name?: string;
   readonly message: string;
+  /** `message` without the agent procedure it carries; absent when they match. */
+  readonly userMessage?: string;
   readonly code?: string;
   readonly admittedRun?: FailedStartRecovery;
 }
@@ -46,6 +48,8 @@ export type SubagentStartOutcome =
 export interface SubagentActionFailure {
   readonly id: string;
   readonly message: string;
+  /** `message` without the agent procedure it carries; absent when they match. */
+  readonly userMessage?: string;
   readonly code?: string;
 }
 

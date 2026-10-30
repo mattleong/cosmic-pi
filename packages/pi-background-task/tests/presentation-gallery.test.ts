@@ -1,6 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import {
   applyPresentationSettings,
@@ -8,23 +9,28 @@ import {
   galleryDirectory,
   galleryFrames,
   galleryMessageFrames,
+  galleryTranscriptFrames,
+  withPresentationSettings,
   writeGallerySection,
   type GalleryMessageScenario,
   type GalleryScenario,
 } from "pi-code-previews/testing";
 import { extensionContextFixture } from "pi-cosmic-core/testing";
-import { describe, it } from "@effect/vitest";
+import { beforeAll, describe, it } from "@effect/vitest";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import {
   afterCursorAhead,
+  BackgroundTaskCapacityError,
+  BackgroundTerminationError,
   backgroundTaskNotFound,
   InvalidBackgroundCwdError,
 } from "../src/task/errors.ts";
 import type { BackgroundLogEvent, BackgroundTaskStatus } from "../src/task/model.ts";
 import type { BackgroundTaskServiceContract } from "../src/task/service.ts";
-import { taskNoticeContent } from "../src/boundary/host-notice.ts";
-import { TASK_NOTICE_MESSAGE_TYPE, taskNoticeDetails } from "../src/task/notice.ts";
+import { taskNoticeMessage } from "../src/boundary/host-notice.ts";
+import { TASK_NOTICE_MESSAGE_TYPE } from "../src/task/notice.ts";
 import { registerBackgroundTaskTool } from "../src/tools/background-task.ts";
-import { executeBackgroundTaskCommand } from "../src/tools/command.ts";
+import { backgroundTaskFailure, executeBackgroundTaskCommand } from "../src/tools/command.ts";
 import { renderTaskNotice } from "../src/ui/notice-message.ts";
 import type { BackgroundTaskToolInput } from "../src/tools/schema.ts";
 import {
@@ -500,6 +506,36 @@ const scenarios: ReadonlyArray<Scenario> = [
     service: { stop: () => Effect.succeed(taskStop(stopping)) },
   },
   {
+    title: "stop whose exit was never confirmed",
+    input: { action: "stop", id: "task-0000000004", force: true },
+    service: {
+      stop: (id) =>
+        Effect.fail(
+          BackgroundTerminationError.make({
+            id,
+            message: "Background process did not confirm exit after forced termination.",
+          }),
+        ),
+    },
+  },
+  {
+    title: "start with every task slot in use",
+    input: { action: "start", command: "pnpm dev", name: "dev" },
+    service: {
+      start: () =>
+        Effect.fail(
+          BackgroundTaskCapacityError.make({
+            limit: 4,
+            message: "Background task capacity reached (4).",
+          }),
+        ),
+    },
+  },
+  {
+    title: "logs with both a cursor and a line count",
+    input: { action: "logs", id: "task-0000000003", afterCursor: 4, tailLines: 20 },
+  },
+  {
     title: "empty list",
     input: { action: "list", state: "active" },
     service: { list: () => Effect.succeed([]) },
@@ -517,11 +553,14 @@ const settle = (scenario: Scenario): Effect.Effect<GalleryScenario> => {
   return executeBackgroundTaskCommand(scenario.input, "/project").pipe(
     provideTaskService(taskServiceDouble({ ...service, ...scenario.service })),
     Effect.match({
-      onFailure: (error) => ({
-        ...call,
-        isError: true,
-        result: { content: [{ type: "text" as const, text: error.message }], details: {} },
-      }),
+      onFailure: (error) => {
+        const { text, details } = backgroundTaskFailure(error);
+        return {
+          ...call,
+          isError: true,
+          result: { content: [{ type: "text" as const, text }], details },
+        };
+      },
       onSuccess: (result) => ({
         ...call,
         result: {
@@ -583,14 +622,12 @@ const notice = (
     message: {
       role: "custom",
       timestamp: 0,
-      customType: TASK_NOTICE_MESSAGE_TYPE,
       display: true,
-      content: taskNoticeContent({
+      ...taskNoticeMessage({
         task: value,
         recent: slice(value.id, value.state, lines, { from: 1 }),
         retained: true,
       }),
-      details: taskNoticeDetails(value),
     },
   };
 };
@@ -616,7 +653,12 @@ const noticeScenarios: ReadonlyArray<GalleryMessageScenario> = [
 
 const directory = galleryDirectory(process.env) ?? "";
 
+const titled = <A extends { readonly title: string }>(entries: ReadonlyArray<A>, title: string) =>
+  Option.getOrThrow(Arr.findFirst(entries, (entry) => entry.title === title));
+
 describe.skipIf(!directory)("presentation gallery", () => {
+  beforeAll(() => initTheme("dark", false));
+
   it.effect("renders background task outcomes in both collapsed styles", () =>
     Effect.gen(function* () {
       const results = [
@@ -646,6 +688,36 @@ describe.skipIf(!directory)("presentation gallery", () => {
                 title: `${style} · notice · ${scenario.title}`,
               }),
             );
+          const startedTask = titled(results, "started a task that reports when it finishes");
+          for (const background of ["border", "on", "off"] as const)
+            withPresentationSettings({ toolCallBackground: background }, () => {
+              const framed = captureRegistrations((pi) =>
+                registerBackgroundTaskTool(pi, {
+                  run: () => Promise.reject(new Error("not executed")),
+                }),
+              ).tools[0]!;
+              lines.push(
+                ...galleryTranscriptFrames(
+                  `${style} · ${background} · transcript: a task start beside its exit notices`,
+                  [
+                    {
+                      name: framed.name,
+                      tool: framed,
+                      args: startedTask.args,
+                      result: { ...startedTask.result!, isError: startedTask.isError ?? false },
+                    },
+                    {
+                      render: renderTaskNotice,
+                      message: titled(noticeScenarios, "task exited").message,
+                    },
+                    {
+                      render: renderTaskNotice,
+                      message: titled(noticeScenarios, "task failed with a cause").message,
+                    },
+                  ],
+                ),
+              );
+            });
         } finally {
           restore();
         }

@@ -5,9 +5,10 @@ import {
   defineTool,
   type AgentToolResult,
   type ExtensionAPI,
+  type Theme,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { Container, Text } from "@earendil-works/pi-tui";
+import { Container, Text, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import {
   escapeControlChars,
   getTextContent,
@@ -17,14 +18,25 @@ import {
 import { countLabel } from "pi-cosmic-core/display";
 import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core/security";
 import { toPiToolOutputSchema } from "pi-cosmic-core/schema/tool-output";
-import { MAX_AGENT_MESSAGE_CHARS, MAX_RESUME_MESSAGE_CHARS } from "../run/agent-messaging.ts";
+import { clipToWidth } from "pi-cosmic-ui/manager";
+import { composeToolComponent, renderToolHeader, toolRunningLine } from "pi-cosmic-ui/tool";
+import {
+  MAIN_AGENT_ID,
+  MAX_AGENT_MESSAGE_CHARS,
+  MAX_RESUME_MESSAGE_CHARS,
+} from "../run/agent-messaging.ts";
+import { agentTextLines } from "../ui/agent-text.ts";
 import { AGENT_TOOL_NAME, type AgentToolName } from "../run/tool-policy.ts";
 import {
   createAgentCompactSummary,
   decodeAgentCall,
+  decodeAgentToolDetails,
   type AgentCallEvidence,
 } from "./compact-agent-summary.ts";
 import { CONTRACT_SCHEMAS } from "./contract-schema.ts";
+import type { AgentToolDetails } from "./details-schema.ts";
+import { hasRecordedFailure, rejectedFailureText } from "./failure-details.ts";
+import { renderListResult, renderReadResult, renderSendResult } from "./render-agents.ts";
 import { errorSection, previewCall, rejectionAwareCall, textResultBody } from "./render-preview.ts";
 import {
   AGENT_TOOL_SCHEMAS,
@@ -32,6 +44,7 @@ import {
   type AgentToolInput,
   type AgentToolParameters,
 } from "./schema.ts";
+import { isTextFragment } from "./text-fragments.ts";
 
 export interface AgentToolRuntime {
   /** Runs one call for this session's authenticated caller; `scripted` calls came from a script. */
@@ -42,6 +55,10 @@ export interface AgentToolRuntime {
   ) => Promise<AgentToolResult<unknown>>;
   /** Whether the call with this ID came from a script or another tool rather than the model. */
   readonly isScripted?: ((toolCallId: string) => boolean) | undefined;
+  /** Records a rejected call's failure for its error result, whose text Pi keeps alone. */
+  readonly retainFailure?:
+    | ((tool: AgentToolName, toolCallId: string, cause: unknown) => void)
+    | undefined;
   readonly scheduleAnimation?: CompactAnimationScheduler | undefined;
   /** The tools serve a subagent in its own session rather than the root session's main agent. */
   readonly nested?: boolean | undefined;
@@ -61,9 +78,12 @@ const SEND_GUIDELINES = [
 const quoted = (message: string | undefined): string =>
   message !== undefined && Str.trim(message) ? `“${Str.trim(message)}”` : "";
 
+// Requested IDs are opaque, so a heading counts them; the result names each agent.
 const idsLabel = (ids: ReadonlyArray<string> | undefined): string => {
   const [only] = ids ?? [];
-  return ids?.length === 1 && only !== undefined ? only : countLabel(ids?.length ?? 0, "agent");
+  if (ids?.length === 1 && only !== undefined)
+    return Str.trim(only) === MAIN_AGENT_ID ? MAIN_AGENT_ID : "agent";
+  return countLabel(ids?.length ?? 0, "agent");
 };
 
 type AgentToolSpec<N extends AgentToolName> = Pick<
@@ -142,22 +162,63 @@ const NESTED_NAMESPACE = {
 
 const COLLAPSED_RESULT_LINES = 8;
 
-const expandedArguments = (call: AgentCallEvidence): ReadonlyArray<string> => [
-  ...(call.to === undefined ? [] : [`to: ${escapeControlChars(call.to)}`]),
-  ...(call.agentIds === undefined
-    ? []
-    : [
-        `agentIds: ${Fn.pipe(
-          call.agentIds,
-          Arr.map((id) => escapeControlChars(id)),
-          Arr.join(", "),
-        )}`,
-      ]),
-  ...(call.message === undefined ? [] : [escapeControlChars(call.message)]),
-];
+/** Requested agents as typed, which expansion keeps beside the names the result resolves. */
+const requestedLine = (call: AgentCallEvidence): string | undefined =>
+  call.agentIds === undefined || call.agentIds.length === 0
+    ? undefined
+    : `Requested ${Fn.pipe(
+        call.agentIds,
+        Arr.map((id) => sanitizeTerminalLine(id)),
+        Arr.join(", "),
+      )}`;
 
-const fitsHeading = (message: string): boolean =>
-  message.length <= 120 && sanitizeTerminalLine(message) === message;
+/** A tool row's shared renderer state, where a send's result leaves the name it resolved. */
+interface SendRowState extends Record<string, unknown> {
+  piSubagentsRecipient?: string | undefined;
+}
+
+interface SendRenderContext {
+  readonly state: SendRowState;
+}
+
+const rememberRecipient = (
+  context: SendRenderContext,
+  details: AgentToolDetails | undefined,
+): void => {
+  if (details?.action === AGENT_TOOL_NAME.send)
+    context.state.piSubagentsRecipient =
+      details.to === MAIN_AGENT_ID ? "main" : sanitizeTerminalLine(details.name);
+};
+
+// The result names the recipient; until it arrives the heading shows what was typed.
+const recipientLabel = (context: SendRenderContext, to: string | undefined): string =>
+  context.state.piSubagentsRecipient ??
+  (to !== undefined && Str.trim(to) ? sanitizeTerminalLine(to) : "agent");
+
+const plainText = (result: { readonly content: ReadonlyArray<{ readonly type: string }> }) =>
+  stripTerminalControls(getTextContent(result.content));
+
+type AgentRenderResult = Parameters<NonNullable<ToolDefinition["renderResult"]>>[0];
+
+/** A result's body from its display details, or undefined for details without display copies. */
+const detailsBody = (
+  name: AgentToolName,
+  result: AgentRenderResult,
+  expanded: boolean,
+  theme: Theme,
+): Component | undefined => {
+  const details = decodeAgentToolDetails(result.details);
+  if (details?.action !== name) return undefined;
+  switch (details.action) {
+    case AGENT_TOOL_NAME.list:
+      return renderListResult(details, expanded, theme);
+    case AGENT_TOOL_NAME.read:
+      return renderReadResult(details, expanded, theme);
+    case AGENT_TOOL_NAME.send:
+      return renderSendResult(details, expanded, theme);
+  }
+  return undefined;
+};
 
 /**
  * Registers `agent_list`, `agent_send`, and `agent_read`. List and read are script-callable with
@@ -171,6 +232,15 @@ export function registerAgentTools(
   const buildTool = <N extends AgentToolName>(name: N) => {
     const { title, ...spec }: AgentToolSpec<N> = TOOL_SPECS[name];
     const scriptable = name !== AGENT_TOOL_NAME.send;
+    const summarize = createAgentCompactSummary(name);
+    /** A recorded failure's issue carries all of it, so its result repeats nothing. */
+    const issueCarriesFailure = (
+      result: NonNullable<Parameters<typeof summarize>[0]["result"]>,
+      context: Parameters<typeof summarize>[0]["context"] & { readonly args: unknown },
+    ): boolean =>
+      hasRecordedFailure(result) &&
+      (summarize({ phase: "settled", args: context.args, result, context })?.issues?.length ?? 0) >
+        0;
     const tool = defineTool<AgentToolParameters<N>>({
       ...spec,
       ...(name === AGENT_TOOL_NAME.list && {
@@ -188,44 +258,84 @@ export function registerAgentTools(
       parameters: AGENT_TOOL_SCHEMAS[name],
       prepareArguments: ARGUMENT_PREPARERS[name],
       execute: (id, args, signal) =>
-        runtime.execute(TOOL_INPUTS[name](args), runtime.isScripted?.(id) ?? false, signal),
+        runtime
+          .execute(TOOL_INPUTS[name](args), runtime.isScripted?.(id) ?? false, signal)
+          .catch((cause: unknown) => {
+            runtime.retainFailure?.(name, id, cause);
+            throw cause;
+          }),
       renderCall: rejectionAwareCall(spec.label, (args, theme, context) => {
         const call = decodeAgentCall(args) ?? {};
-        const [heading, subtitle] = title(call);
-        // The heading shows one line of a message; expansion shows all of it.
-        const whole =
-          context.expanded && call.message !== undefined && !fitsHeading(call.message)
-            ? new Text(theme.fg("toolOutput", escapeControlChars(call.message)), 0, 0)
-            : undefined;
-        return previewCall(theme, context, { title: heading, subtitle }, whole);
+        if (name !== AGENT_TOOL_NAME.send) {
+          const [heading, subtitle] = title(call);
+          return previewCall(theme, context, { title: heading, subtitle });
+        }
+        const { expanded } = context;
+        const running = context.executionStarted && context.isPartial;
+        return composeToolComponent((width) => [
+          clipToWidth(
+            renderToolHeader({ title: `Message → ${recipientLabel(context, call.to)}` }, theme),
+            width,
+          ),
+          ...agentTextLines(call.message, width, theme, { expanded }),
+          ...(running ? [toolRunningLine(theme)] : []),
+        ]);
       }),
-      renderResult: (result, options, theme, context) =>
-        textResultBody(
-          theme,
-          stripTerminalControls(getTextContent(result.content)),
-          { expanded: options.expanded, isError: context.isError },
-          COLLAPSED_RESULT_LINES,
-        ),
+      renderResult: (result, options, theme, context) => {
+        rememberRecipient(context, decodeAgentToolDetails(result.details));
+        // A failure shows its recorded user copy, or the text of one saved without it, unless its
+        // issue already carries the whole failure.
+        if (context.isError)
+          return issueCarriesFailure(result, context)
+            ? new Container()
+            : textResultBody(
+                theme,
+                stripTerminalControls(rejectedFailureText(result)),
+                { expanded: options.expanded, isError: true },
+                COLLAPSED_RESULT_LINES,
+              );
+        return (
+          detailsBody(name, result, options.expanded, theme) ??
+          textResultBody(
+            theme,
+            plainText(result),
+            { expanded: options.expanded, isError: false },
+            COLLAPSED_RESULT_LINES,
+          )
+        );
+      },
     });
     return shell(tool, {
       ...(runtime.scheduleAnimation && { scheduleAnimation: runtime.scheduleAnimation }),
-      compactSummary: createAgentCompactSummary(name),
+      compactSummary: summarize,
       expandedContent: {
-        // The heading summarizes the call, so expansion keeps every argument.
+        // The heading names the call; expansion keeps the whole message and every requested ID.
         renderCall: (args, theme) => {
-          const lines = expandedArguments(decodeAgentCall(args) ?? {});
-          return new Text(
-            lines.length === 0 ? "" : theme.fg("toolOutput", Arr.join(lines, "\n")),
-            0,
-            0,
+          const call = decodeAgentCall(args) ?? {};
+          const requested = Arr.filter(
+            [
+              requestedLine(call),
+              call.to === undefined ? undefined : `To ${sanitizeTerminalLine(call.to)}`,
+            ],
+            isTextFragment,
           );
+          return composeToolComponent((width) => [
+            ...agentTextLines(call.message, width, theme, { expanded: true, indent: 0 }),
+            ...Arr.flatMap(requested, (line) => wrapTextWithAnsi(theme.fg("dim", line), width)),
+          ]);
         },
         renderResult: (result, _options, theme, context) => {
+          if (context.isError) {
+            const failure = escapeControlChars(rejectedFailureText(result));
+            return failure && !issueCarriesFailure(result, context)
+              ? errorSection(theme, failure)
+              : new Container();
+          }
           const text = escapeControlChars(getTextContent(result.content));
-          if (!text) return new Container();
-          return context.isError
-            ? errorSection(theme, text)
-            : new Text(theme.fg("toolOutput", text), 0, 0);
+          return (
+            detailsBody(name, result, true, theme) ??
+            (text ? new Text(theme.fg("toolOutput", text), 0, 0) : new Container())
+          );
         },
       },
     });

@@ -19,19 +19,24 @@ import {
   type RunRecord,
 } from "./internal.ts";
 import {
+  errorText,
   invalidRequest,
+  type GuidedText,
   type InvalidSubagentRequestError,
   isOutcomeUncertain,
   processError,
   type SubagentError,
   SubagentProcessError,
+  withCause,
+  withGuidance,
+  withGuidanceClause,
 } from "./errors.ts";
 import type { RunProcessControls } from "./process-lifecycle.ts";
 import type { RunRecordCleanup } from "./record-cleanup.ts";
 import type { RunNotificationDelivery } from "./notification-delivery.ts";
 import type { RunSettlement } from "./settlement.ts";
 import { commitSessionOwned, runSessionOwned } from "./session-owned.ts";
-import { MAX_ERROR_CHARS, sanitizeDiagnosticText, sanitizeName } from "./state.ts";
+import { sanitizeGuidedDiagnostic, sanitizeName } from "./state.ts";
 import { recordRunWarning } from "./warnings.ts";
 import { requireControlExpectation } from "./control-admission.ts";
 
@@ -82,10 +87,10 @@ export function controlOperations(dependencies: RunControlDependencies) {
 
   const retainControlWarning = Effect.fn("SubagentControl.retainControlWarning")(function* (
     record: RunRecord,
-    warning: string,
+    warning: GuidedText,
   ) {
     const now = yield* Clock.currentTimeMillis;
-    const diagnostic = sanitizeDiagnosticText(warning, MAX_ERROR_CHARS);
+    const diagnostic = sanitizeGuidedDiagnostic(warning);
     yield* withLock(
       Effect.gen(function* () {
         if (isTerminalRunState(record.view.state) || record.view.state === "stopping") return;
@@ -111,12 +116,18 @@ export function controlOperations(dependencies: RunControlDependencies) {
         if (!steerable)
           return yield* invalidRequest(
             "guidance_outcome_uncertain",
-            `Subagent ${record.view.id} changed state after guidance was sent, so delivery may already have applied. Inspect it with agent_read before retrying.`,
+            withGuidance(
+              `Subagent ${record.view.id} changed state after guidance was sent, so delivery may already have applied.`,
+              "Inspect it with agent_read before retrying.",
+            ),
           );
         if (record.replyPendingRequestId)
           return yield* invalidRequest(
             "guidance_outcome_uncertain",
-            `Subagent ${record.view.id} claimed a parent reply after guidance was sent, so delivery may already have applied. Inspect it with agent_read before retrying.`,
+            withGuidance(
+              `Subagent ${record.view.id} claimed a parent reply after guidance was sent, so delivery may already have applied.`,
+              "Inspect it with agent_read before retrying.",
+            ),
           );
         message.recordNoticeLocked(record, "guided", now);
         yield* publish;
@@ -171,17 +182,26 @@ export function controlOperations(dependencies: RunControlDependencies) {
     if (record.view.state === "paused" || record.view.state === "completed")
       return yield* invalidRequest(
         "run_not_running",
-        `Subagent ${id} is ${record.view.state}; send the message with agent_send({ to: "${id}", message: "..." }) to resume it.`,
+        withGuidanceClause(
+          `Subagent ${id} is ${record.view.state}`,
+          `send the message with agent_send({ to: "${id}", message: "..." }) to resume it.`,
+        ),
       );
     if (record.view.state === "starting")
       return yield* invalidRequest(
         "run_starting",
-        `Subagent ${id} is still starting; wait for it to start before sending again.`,
+        withGuidanceClause(
+          `Subagent ${id} is still starting`,
+          "wait for it to start before sending again.",
+        ),
       );
     if (record.view.state !== "running")
       return yield* invalidRequest(
         "run_not_running",
-        `Subagent ${id} is ${record.view.state} and cannot receive guidance; inspect it with agent_read or start a replacement run.`,
+        withGuidanceClause(
+          `Subagent ${id} is ${record.view.state} and cannot receive guidance`,
+          "inspect it with agent_read or start a replacement run.",
+        ),
       );
     if (record.pauseRequested)
       return yield* invalidRequest(
@@ -204,7 +224,10 @@ export function controlOperations(dependencies: RunControlDependencies) {
         if (record.replyPendingRequestId)
           return yield* invalidRequest(
             "reply_in_flight",
-            `Subagent ${id} already has a parent reply in flight; inspect it with agent_read before sending again.`,
+            withGuidanceClause(
+              `Subagent ${id} already has a parent reply in flight`,
+              "inspect it with agent_read before sending again.",
+            ),
           );
         return mayAnswer && record.view.state === "waiting_for_parent"
           ? yield* claimAnswerLocked(record)
@@ -219,7 +242,7 @@ export function controlOperations(dependencies: RunControlDependencies) {
     processControls.steer(record, message.guidance).pipe(
       Effect.tapError((error) =>
         Predicate.isTagged(error, "SubagentProcessError") && isOutcomeUncertain(error)
-          ? retainControlWarning(record, error.message)
+          ? retainControlWarning(record, errorText(error))
           : Effect.void,
       ),
       Effect.andThen(finalizeGuidance(record, message)),
@@ -246,7 +269,13 @@ export function controlOperations(dependencies: RunControlDependencies) {
             ? processError(
                 "reply",
                 "reply_outcome_uncertain",
-                `The reply to subagent ${id} may already have applied. Inspect it with agent_read before retrying. (${error.message})`,
+                withCause(
+                  withGuidance(
+                    `The reply to subagent ${id} may already have applied.`,
+                    "Inspect it with agent_read before retrying.",
+                  ),
+                  error,
+                ),
               )
             : error,
         );
@@ -268,7 +297,7 @@ export function controlOperations(dependencies: RunControlDependencies) {
           Predicate.isTagged(error, "SubagentProcessError") &&
           error.code === "reply_outcome_uncertain"
         )
-          return retainControlWarning(claimed.record, error.message);
+          return retainControlWarning(claimed.record, errorText(error));
         const questionClosed =
           Predicate.isTagged(error, "SubagentProcessError") &&
           (error.code === "question_transport_closed" ||
@@ -374,7 +403,10 @@ export function controlOperations(dependencies: RunControlDependencies) {
                     return yield* processError(
                       "interrupt",
                       "interrupt_outcome_uncertain",
-                      `Subagent ${id} did not confirm interruption in time, but the pause request remains pending and may still apply. Inspect it with agent_read before retrying.`,
+                      withGuidance(
+                        `Subagent ${id} did not confirm interruption in time, but the pause request remains pending and may still apply.`,
+                        "Inspect it with agent_read before retrying.",
+                      ),
                     );
                   return yield* error;
                 }),

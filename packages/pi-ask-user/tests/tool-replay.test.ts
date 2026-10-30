@@ -103,10 +103,12 @@ layer(nodeFilePlatformLayer)("ask-user history replay", (it) => {
       Arr.forEach(rows, ({ name, row }, index) => {
         expect(drawToolRow(row)).not.toBe(cold[index]);
         expect(toolRowFrames(row)).toEqual(toolRowFrames(h.row(name)));
+        // The registered renderer draws decoded details, not the model-facing text.
         const expanded = drawToolRow(row, true);
-        for (const line of Str.split(history[name].text, "\n")) expect(expanded).toContain(line);
+        expect(expanded).not.toContain(Str.split(history[name].text, "\n")[1]);
       });
       expect(drawToolRow(rows[0].row, true)).toContain(defaultQuestion.prompt);
+      expect(drawToolRow(rows[1]!.row, true)).toContain("request-1");
       expect(drawToolRow(rows[2]!.row, true)).toContain("request-1");
       yield* Effect.promise(() => h.emit("session_shutdown", context("tui")));
     }),

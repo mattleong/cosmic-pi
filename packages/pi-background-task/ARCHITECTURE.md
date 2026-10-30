@@ -33,7 +33,8 @@ task's start opted in with `notify`; otherwise completion sends nothing.
   runtime is available, and shows a notice when the runtime or Activity is not; the [settings
   subcommand](src/settings/task-settings.ts) adapts the shared settings command and picker.
 - [Tool execution](src/tools/command.ts) produces text, presentation details, and a separate
-  [native result contract](src/tools/contract.ts) from service facts. Renderers do not infer task
+  [native result contract](src/tools/contract.ts) from service facts. An expected failure becomes
+  an error result with its error's text and a failure code in details. Renderers do not infer task
   state from log text or own processes.
 - [Host UI](src/boundary/host-ui.ts) and [Activity integration](src/boundary/host-activity.ts)
   consume projections; service state remains authoritative.

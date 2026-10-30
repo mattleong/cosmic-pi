@@ -2,7 +2,15 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Effect from "effect/Effect";
 import type { CanonicalWriterCwd, WriterLeaseContract } from "../boundary/writer-lease.ts";
-import { invalidRequest, SubagentCapacityError, SubagentWriterConflictError } from "./errors.ts";
+import {
+  failureFields,
+  type GuidedText,
+  invalidRequest,
+  SubagentCapacityError,
+  SubagentWriterConflictError,
+  withGuidance,
+  withGuidanceClause,
+} from "./errors.ts";
 import { isCleanupOwed, type RunRecord } from "./internal.ts";
 import { SUBAGENT_ROOT_RUN_ID } from "./model.ts";
 import type { WriterPoolView, WriterPoolLookup } from "./writer-pool.ts";
@@ -45,7 +53,12 @@ export const processCapacityError = (
   return SubagentCapacityError.make({
     limit,
     code: "direct_child_capacity",
-    message: `Direct-child capacity reached for ${parentRunId} (${limit}). Stop an active run among this parent's direct children first.`,
+    ...failureFields(
+      withGuidance(
+        `Direct-child capacity reached for ${parentRunId} (${limit}).`,
+        "Stop an active run among this parent's direct children first.",
+      ),
+    ),
   });
 };
 
@@ -64,7 +77,12 @@ export const treeCapacityError = (
   return SubagentCapacityError.make({
     limit,
     code: "tree_capacity",
-    message: `Active subagent limit reached (${limit}). Wait for a run to finish or stop one first; nesting.maxActiveRuns sets the limit.`,
+    ...failureFields(
+      withGuidance(
+        `Active subagent limit reached (${limit}).`,
+        "Wait for a run to finish or stop one first; nesting.maxActiveRuns sets the limit.",
+      ),
+    ),
   });
 };
 
@@ -82,7 +100,8 @@ export const writerConflictError = (
     return SubagentWriterConflictError.make({
       activeId: active?.view.id ?? "shared-writer-pool",
       activeName: active?.launch.name ?? "shared writer pool",
-      ...unavailable,
+      ...failureFields(unavailable.message),
+      transient: unavailable.transient,
     });
   }
 
@@ -93,7 +112,8 @@ export const writerConflictError = (
     return SubagentWriterConflictError.make({
       activeId: record.view.id,
       activeName: record.launch.name,
-      ...conflict,
+      ...failureFields(conflict.message),
+      transient: conflict.transient,
     });
   }
   return undefined;
@@ -109,13 +129,18 @@ const writerPoolUnavailableConflict = (pool: WriterPoolView): WriterConflict | u
       };
     case "failed":
       return {
-        message:
-          "Shared-cwd writer-pool preparation failed and existing members are still cleaning up; retry shortly.",
+        message: withGuidanceClause(
+          "Shared-cwd writer-pool preparation failed and existing members are still cleaning up",
+          "retry shortly.",
+        ),
         transient: true,
       };
     case "releasing":
       return {
-        message: "Shared-cwd writer ownership is still being released; retry shortly.",
+        message: withGuidanceClause(
+          "Shared-cwd writer ownership is still being released",
+          "retry shortly.",
+        ),
         transient: true,
       };
     case "held":
@@ -127,7 +152,7 @@ const writerPoolUnavailableConflict = (pool: WriterPoolView): WriterConflict | u
 };
 
 interface WriterConflict {
-  readonly message: string;
+  readonly message: string | GuidedText;
   readonly transient: boolean;
 }
 
@@ -145,5 +170,8 @@ const writerConflict = (
         message: `${writer} remains quarantined because cleanup could not be confirmed.`,
         transient: false,
       }
-    : { message: `${writer} is still cleaning up; retry shortly.`, transient: true };
+    : {
+        message: withGuidanceClause(`${writer} is still cleaning up`, "retry shortly."),
+        transient: true,
+      };
 };

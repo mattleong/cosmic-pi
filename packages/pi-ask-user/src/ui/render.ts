@@ -13,7 +13,7 @@ import {
 import type { PreviewPane } from "./preview-pane.ts";
 import { appendWrapped, borderLine, joinColumns, titleLabel } from "./layout.ts";
 import { SELECTION_MARKER } from "./viewport.ts";
-import { clipToWidth, managerNoticeGlyph } from "pi-cosmic-ui/manager";
+import { clipToWidth, managerNoticeColor, managerNoticeGlyph } from "pi-cosmic-ui/manager";
 
 export interface DialogInputMode {
   readonly kind: "custom" | "text" | "note";
@@ -171,9 +171,12 @@ function renderReview(model: QuestionnaireRenderModel, width: number): string[] 
         : answer?.kind === "custom" || answer?.kind === "text"
           ? answer.text
           : "Unanswered";
+    // An unanswered question awaits the user's decision; it is not a problem.
+    const mark = answer ? "success" : "attention";
+    const tone = managerNoticeColor(mark);
     append(
       " ",
-      `${model.theme.fg(answer ? "success" : "warning", answer ? `${managerNoticeGlyph("success")} ` : `${managerNoticeGlyph("warning")} `)}${model.theme.fg(answer ? "muted" : "warning", `${titleLabel(question.title)}: `)}${model.theme.fg(answer ? "text" : "warning", stripTerminalControls(value))}`,
+      `${model.theme.fg(tone, `${managerNoticeGlyph(mark)} `)}${model.theme.fg(answer ? "muted" : tone, `${titleLabel(question.title)}: `)}${model.theme.fg(answer ? "text" : tone, stripTerminalControls(value))}`,
     );
     if (draft?.note)
       append("   ", model.theme.fg("dim", `Note: ${stripTerminalControls(draft.note)}`));

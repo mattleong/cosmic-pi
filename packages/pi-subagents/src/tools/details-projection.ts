@@ -32,6 +32,7 @@ import {
   MAX_TARGET_RUNS,
 } from "../run/limits.ts";
 import { agentMessageSenders, type AgentMessageArrivals } from "../run/message-watches.ts";
+import { userRunText } from "../run/warnings.ts";
 import {
   MAX_ERROR_CHARS,
   MAX_FINAL_TEXT_CHARS,
@@ -72,9 +73,11 @@ import {
 } from "./details-schema.ts";
 import type {
   ProfileCandidateDiscovery,
+  SubagentActionFailure,
   SubagentAgentView,
   SubagentInvalidAgentView,
   SubagentProfileView,
+  SubagentStartFailure,
 } from "./model.ts";
 
 // Collapsed issue messages quote at most 120 characters, so condensed text keeps them complete.
@@ -257,8 +260,10 @@ const projectWriteCardFields = (run: SubagentRunView): Partial<SubagentRunCard> 
 const projectOptionalCardFields = (run: SubagentRunView): Partial<SubagentRunCard> => {
   const currentTool = optionalText(run.currentTool, MAX_CURRENT_TOOL_CHARS);
   const progress = optionalText(run.progress, MAX_PROGRESS_CHARS);
-  const warning = optionalText(run.warning, MAX_WARNING_CHARS);
-  const systemWarning = optionalText(run.systemWarning, MAX_WARNING_CHARS);
+  // Cards are the user's view, so warnings show their user copies.
+  const shown = userRunText(run);
+  const warning = optionalText(shown.warning, MAX_WARNING_CHARS);
+  const systemWarning = optionalText(shown.systemWarning, MAX_WARNING_CHARS);
   const endedAt = run.endedAt === undefined ? undefined : nonNegative(run.endedAt);
   const question = optionalText(run.question?.message, MAX_CARD_QUESTION_CHARS);
   return {
@@ -309,14 +314,16 @@ const projectReportRetention = (
 
 const projectReportCardFields = (run: SubagentRunView): Partial<SubagentRunCard> => {
   const finalText = optionalText(run.finalText, MAX_FINAL_TEXT_CHARS);
-  const error = optionalText(run.error, MAX_ERROR_CHARS);
+  // The card shows the failure as the user reads it, without the agent's procedure.
+  const shownError = userRunText(run).error;
+  const error = optionalText(shownError, MAX_ERROR_CHARS);
   // Capture may already have cut the report before this projection bounds it again.
   const finalTextTruncated =
     run.finalText !== undefined &&
     (run.finalTextTruncation !== undefined ||
       finalText?.length !== stripTerminalControls(run.finalText).length);
   const errorTruncated =
-    run.error !== undefined && error?.length !== stripTerminalControls(run.error).length;
+    shownError !== undefined && error?.length !== stripTerminalControls(shownError).length;
   return {
     ...(finalText !== undefined && { finalText }),
     ...(error !== undefined && { error }),
@@ -416,14 +423,19 @@ const projectFailureFile = (
   return file && file.path.length <= MAX_OUTCOME_FILE_PATH_CHARS ? file : undefined;
 };
 
-export const projectFailure = (failure: SubagentCardFailure): SubagentCardFailure => {
+/** A failed launch as the user reads it: its failure and warning without agent procedures. */
+export const projectFailure = (failure: SubagentStartFailure): SubagentCardFailure => {
   const name = optionalText(failure.name, MAX_NAME_CHARS);
   const code = optionalText(failure.code, MAX_FAILURE_CODE_CHARS);
-  const message = requiredText(failure.message, MAX_FAILURE_MESSAGE_CHARS, "Launch failed.");
+  const message = requiredText(
+    failure.userMessage ?? failure.message,
+    MAX_FAILURE_MESSAGE_CHARS,
+    "Launch failed.",
+  );
   const recovery = failure.admittedRun;
   const next = recovery?.nextCandidate;
   const failureFile = recovery && projectFailureFile(recovery.failureFile);
-  const warning = optionalText(recovery?.warning, MAX_WARNING_CHARS);
+  const warning = optionalText(recovery?.userWarning ?? recovery?.warning, MAX_WARNING_CHARS);
   const admittedRun = recovery
     ? {
         runId: requiredText(recovery.runId, MAX_PROTOCOL_ID_CHARS, "unknown-run"),
@@ -576,17 +588,22 @@ export const condenseProfileRoute = (
   })),
 });
 
-const projectActionFailure = (failure: CompactToolActionFailure): CompactToolActionFailure => {
+/** A target the call couldn't act on, with its failure as the user reads it. */
+const projectActionFailure = (failure: SubagentActionFailure): CompactToolActionFailure => {
   const code = optionalText(failure.code, MAX_ACTION_FAILURE_CODE_CHARS);
   return {
     id: requiredText(failure.id, MAX_ACTION_FAILURE_ID_CHARS, "unknown-run"),
     ...(code !== undefined && { code }),
-    message: requiredText(failure.message, MAX_ACTION_FAILURE_MESSAGE_CHARS, "Action failed."),
+    message: requiredText(
+      failure.userMessage ?? failure.message,
+      MAX_ACTION_FAILURE_MESSAGE_CHARS,
+      "Action failed.",
+    ),
   };
 };
 
 export const projectActionFailures = (
-  failures: ReadonlyArray<CompactToolActionFailure> | undefined,
+  failures: ReadonlyArray<SubagentActionFailure> | undefined,
 ): ReadonlyArray<CompactToolActionFailure> | undefined => {
   if (!failures || failures.length === 0) return undefined;
   return Arr.map(failures.slice(0, MAX_TARGET_RUNS), projectActionFailure);

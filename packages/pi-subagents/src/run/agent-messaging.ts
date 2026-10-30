@@ -9,8 +9,10 @@ import { safeTextPrefix } from "pi-cosmic-core/text";
 import {
   agentMessageRefusal,
   type AgentMessageRefusalCode,
+  type GuidedText,
   invalidRequest,
   type InvalidSubagentRequestError,
+  withGuidanceClause,
 } from "./errors.ts";
 import type { RunRecord } from "./internal.ts";
 import {
@@ -64,6 +66,8 @@ export interface AgentMessageFrame {
   readonly to: string;
   /** The message as the recipient sees it, with the root-written sender label. */
   readonly content: string;
+  /** The sender's own words, for display without the frame. */
+  readonly text: string;
 }
 
 export interface AgentMainReadout {
@@ -221,7 +225,7 @@ export const messageSizeError = (
 interface AgentMessageRefusalPlan {
   readonly kind: "refuse";
   readonly code: AgentMessageRefusalCode;
-  readonly message: string;
+  readonly message: string | GuidedText;
 }
 
 export type AgentRunMessagePlan =
@@ -235,10 +239,16 @@ export type AgentRunMessagePlan =
 export const startingTargetRefusal = (id: string) =>
   agentMessageRefusal(
     "agent_unavailable",
-    `Agent ${id} is still starting after a few seconds; check it with agent_list and send once it runs.`,
+    withGuidanceClause(
+      `Agent ${id} is still starting after a few seconds`,
+      "check it with agent_list and send once it runs.",
+    ),
   );
 
-const refuse = (code: AgentMessageRefusalCode, message: string): AgentMessageRefusalPlan => ({
+const refuse = (
+  code: AgentMessageRefusalCode,
+  message: string | GuidedText,
+): AgentMessageRefusalPlan => ({
   kind: "refuse",
   code,
   message,
@@ -278,7 +288,10 @@ export const planRunMessage = (
         ? { kind: "resume" }
         : refuse(
             "agent_unavailable",
-            `Agent ${id} is ${state}, and only its ancestors and main can resume it; message its parent ${parentIdOf(record.view)} if the work needs it.`,
+            withGuidanceClause(
+              `Agent ${id} is ${state}, and only its ancestors and main can resume it`,
+              `message its parent ${parentIdOf(record.view)} if the work needs it.`,
+            ),
           );
   }
   return Fn.absurd(state);

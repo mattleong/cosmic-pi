@@ -116,6 +116,8 @@ const ParentReplyAckSchema = piSubagentsMessage("parent_reply_ack", {
 });
 const PeerNoticeSchema = piSubagentsMessage("peer_notice", {
   message: Schema.String.check(Schema.isMaxLength(MAX_PARENT_MESSAGE_CHARS)),
+  /** The notice's display receipt, which the child's renderer decodes. */
+  details: Schema.optionalKey(Schema.Json),
 });
 const ProxyResponseSchema = piSubagentsMessage("proxy_response", {
   requestId: ProtocolIdSchema,
@@ -130,6 +132,8 @@ const ProxyNotificationSchema = piSubagentsMessage("proxy_notification", {
    */
   key: ProtocolIdSchema,
   message: Schema.String.check(Schema.isMaxLength(MAX_PARENT_MESSAGE_CHARS)),
+  /** The notice's display receipt, which the child's renderer decodes. */
+  details: Schema.optionalKey(Schema.Json),
 });
 const TurnInputBarrierSchema = piSubagentsMessage("turn_input_barrier", {
   requestId: ProtocolIdSchema,

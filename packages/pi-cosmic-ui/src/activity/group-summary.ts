@@ -15,6 +15,7 @@ export interface GroupSummary {
   readonly pending: number;
   readonly queued: number;
   readonly stopping: number;
+  readonly paused: number;
   readonly terminal: number;
   readonly stopped: number;
   readonly awaited: number;
@@ -28,6 +29,7 @@ export const emptyGroupSummary: GroupSummary = {
   pending: 0,
   queued: 0,
   stopping: 0,
+  paused: 0,
   terminal: 0,
   stopped: 0,
   awaited: 0,
@@ -40,6 +42,7 @@ export const addGroupSummaries = (left: GroupSummary, right: GroupSummary): Grou
   pending: left.pending + right.pending,
   queued: left.queued + right.queued,
   stopping: left.stopping + right.stopping,
+  paused: left.paused + right.paused,
   terminal: left.terminal + right.terminal,
   stopped: left.stopped + right.stopped,
   awaited: left.awaited + right.awaited,
@@ -52,6 +55,7 @@ const rowSummary = (row: ActivityRow): GroupSummary => ({
   pending: Number(row.status === "pending"),
   queued: Number(activityQueued(row) || (row.kind === "question" && row.status === "pending")),
   stopping: Number(row.status === "stopping"),
+  paused: Number(row.status === "paused"),
   terminal: Number(isFinished(row)),
   stopped: Number(row.status === "cancelled"),
   awaited: Number(row.awaited === true),
@@ -66,6 +70,7 @@ export const activeWorkLabels = (summary: GroupSummary): string[] => [
   ...(summary.pending > summary.queued ? [`${summary.pending - summary.queued} starting`] : []),
   ...(summary.queued ? [`${summary.queued} queued`] : []),
   ...(summary.stopping ? [`${summary.stopping} stopping`] : []),
+  ...(summary.paused ? [`${summary.paused} paused`] : []),
 ];
 
 export const endedWorkLabels = (summary: Pick<GroupSummary, "stopped">): string[] =>

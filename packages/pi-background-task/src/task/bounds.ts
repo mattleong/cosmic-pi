@@ -18,6 +18,9 @@ export const BACKGROUND_TASK_FIELD_BOUNDS = Object.freeze({
   maxSignalChars: 256,
   maxErrorChars: 2_048,
   maxSnapshots: 600,
+  // The argument names a rejected request's details keep.
+  maxFailureFields: 16,
+  maxFieldNameChars: 32,
 });
 
 export const BACKGROUND_LOG_BOUNDS = Object.freeze({

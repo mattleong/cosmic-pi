@@ -60,3 +60,10 @@ export { compactPlainText, renderCompactRow } from "./src/preview/compact-row";
 export { expandedArguments, expandedSection } from "./src/preview/expanded-section";
 export { escapeControlChars } from "./src/shared/terminal-text";
 export { captureCodePreviewPresentationPolicy } from "./src/preview/presentation-policy";
+export {
+  withCodePreviewMessageShell,
+  type CodePreviewMessage,
+  type CodePreviewMessageOptions,
+  type CodePreviewMessagePresenter,
+  type CodePreviewMessageRenderer,
+} from "./src/preview/message-shell";

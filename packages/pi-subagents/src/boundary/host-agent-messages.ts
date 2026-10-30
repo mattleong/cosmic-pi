@@ -5,9 +5,28 @@ import {
   readLatestReply,
 } from "pi-cosmic-core/host-agent-messages";
 import { type SessionWake } from "pi-cosmic-core/host-wake";
-import { MAX_MAIN_READ_CHARS, type AgentMainCapabilities } from "../run/agent-messaging.ts";
+import {
+  MAX_MAIN_READ_CHARS,
+  type AgentMainCapabilities,
+  type AgentMessageFrame,
+} from "../run/agent-messaging.ts";
+import type { AgentMessageDetails } from "../ui/agent-message.ts";
+import { noticeText } from "../ui/notice-details.ts";
 
 export const AGENT_MESSAGE_TYPE = "pi-subagents-agent-message";
+
+/** The message's display receipt: who sent it, and a bounded copy of its words without the frame. */
+export const agentMessageDetails = (frame: AgentMessageFrame): AgentMessageDetails => {
+  const words = noticeText(frame.text);
+  return {
+    from: frame.from,
+    fromName: frame.fromName,
+    to: frame.to,
+    messageId: frame.messageId,
+    ...(words && { text: words.text }),
+    ...(words?.cut && { textCut: true }),
+  };
+};
 
 interface AgentMessageHost {
   /** The shared root wake, which decides whether a message starts a turn. */
@@ -35,12 +54,7 @@ export function agentMainCapabilities(
         {
           customType: AGENT_MESSAGE_TYPE,
           content: frame.content,
-          details: {
-            from: frame.from,
-            fromName: frame.fromName,
-            to: frame.to,
-            messageId: frame.messageId,
-          },
+          details: agentMessageDetails(frame),
         },
         current,
       );

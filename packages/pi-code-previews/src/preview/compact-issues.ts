@@ -5,7 +5,7 @@ import * as Option from "effect/Option";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { clipToWidth, managerNoticeColor, managerNoticeGlyph } from "pi-cosmic-ui/manager";
-import type { CompactIssue } from "../tools/compact-issues";
+import { compactIssueSeverity, type CompactIssue } from "../tools/compact-issues";
 import { compactPlainText, compactSingleLine } from "./compact-row";
 
 export function wrapHanging(
@@ -22,9 +22,10 @@ export function wrapHanging(
 }
 
 export function compactIssueLabel(issues: readonly CompactIssue[], theme: Theme): string {
-  const primary =
-    Option.getOrUndefined(Arr.findFirst(issues, (issue) => issue.severity === "error")) ??
-    Option.getOrUndefined(Arr.findFirst(issues, (issue) => issue.severity === "warning"));
+  const severity = compactIssueSeverity(issues);
+  const primary = Option.getOrUndefined(
+    Arr.findFirst(issues, (issue) => issue.severity === severity),
+  );
   if (!primary) return "";
   const others = Arr.filter(issues, (issue) => issue.severity !== "info").length - 1;
   return theme.fg(

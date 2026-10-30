@@ -1,4 +1,6 @@
 import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import { argumentFailureIssue } from "./argument-failure";
 import { compactIssueSeverity, type CompactIssue } from "./compact-issues";
 import { isSafeCompactSummary, type CompactOutcomeSchema } from "./compact-summary-schema";
@@ -39,6 +41,13 @@ export interface CompactSummary {
   showTiming?: true;
   showShortTiming?: true;
   outcome?: CompactOutcome;
+  /**
+   * A delivered message someone wrote: a successful or neutral heading shows which way it went
+   * instead of its check or dot. Problems and attention keep their own icons.
+   */
+  messageIcon?: "sent" | "received";
+  /** Words someone wrote, such as a sent message: a collapsed compact row shows them beneath it. */
+  quote?: string;
   issues?: readonly CompactIssue[];
   children?: { entries: readonly CompactChild[]; total: number };
 }
@@ -70,13 +79,35 @@ export function resolveCompactSummary(
       summary.children?.entries ?? [],
       (child) => compactIssueSeverity(child.issues) === "error",
     );
-  if (compactIssueSeverity(summary.issues) === "error" || explainedByChild)
-    return { ...summary, outcome: "error" };
+  const severity = compactIssueSeverity(summary.issues);
+  if (severity === "error" || explainedByChild) return { ...summary, outcome: "error" };
+  // The summary's own warning already explains the failure; a host issue would only repeat it.
+  if (severity === "warning" && summary.issues)
+    return { ...summary, outcome: "error", issues: withHostErrorDetail(summary.issues, errorText) };
   return {
     ...summary,
     outcome: "error",
     issues: [toolErrorIssue(errorText), ...(summary.issues ?? [])],
   };
+}
+
+// Keeps the host's error text in expansion once, on the first issue that explains the failure.
+function withHostErrorDetail(
+  issues: readonly CompactIssue[],
+  errorText: string,
+): readonly CompactIssue[] {
+  const text = Str.trim(errorText);
+  if (
+    text === "" ||
+    Arr.some(issues, (issue) => issue.detail !== undefined && Str.includes(text)(issue.detail))
+  )
+    return issues;
+  const index = Arr.findFirstIndex(issues, (issue) => issue.severity === "warning");
+  return Arr.map(issues, (issue, at) =>
+    Option.contains(index, at)
+      ? { ...issue, detail: issue.detail === undefined ? text : `${issue.detail}\n${text}` }
+      : issue,
+  );
 }
 
 export function toolErrorIssue(errorText: string): CompactIssue {
@@ -90,11 +121,16 @@ export function toolErrorIssue(errorText: string): CompactIssue {
 }
 
 export function compactStatus(phase: CompactPhase, summary: CompactSummary): CompactStatus {
-  if (phase !== "settled") return phase;
+  return phase === "settled" ? compactSettledStatus(summary) : phase;
+}
+
+/** A settled summary's strongest signal from its outcome and issues. */
+export function compactSettledStatus(summary: CompactSummary): CompactOutcome {
   const severity = compactIssueSeverity(summary.issues);
   const outcome = summary.outcome ?? "uncertain";
   if (outcome === "cancelled" || outcome === "error") return outcome;
   if (severity === "error") return "error";
-  if (outcome === "uncertain") return outcome;
+  if (outcome === "uncertain" || outcome === "warning") return outcome;
+  // Attention never outranks a warning, and outranks only routine outcomes.
   return severity ?? outcome;
 }

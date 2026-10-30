@@ -11,6 +11,7 @@ import { runStall, runStallLabel } from "../run/stall.ts";
 import {
   managerLayoutTier,
   type ManagerLayoutTier,
+  type ManagerStatusColor,
   clipToWidth,
   spinnerFrameAt,
 } from "pi-cosmic-ui/manager";
@@ -197,10 +198,8 @@ const runActivity = (run: SubagentRunView): string => {
   return sanitizeTerminalLine(run.currentTool ?? run.progress ?? "");
 };
 
-type HeaderColor = "accent" | "success" | "warning" | "muted" | "dim";
-
 interface HeaderPart {
-  readonly color: HeaderColor;
+  readonly color: ManagerStatusColor;
   readonly text: string;
 }
 
@@ -287,8 +286,12 @@ const panelHeader = (
       }),
       startCount > 0 && { color: "accent", text: `launching ${startCount}`, priority: 1 },
       active > 0 && { color: "muted", text: `${active} active`, priority: 2 },
-      waiting > 0 && { color: "warning", text: `${waiting} waiting`, priority: 0 },
-      paused > 0 && { color: "warning", text: `${paused} paused`, priority: 0 },
+      waiting > 0 && {
+        color: runStateColor("waiting_for_parent"),
+        text: `${waiting} waiting`,
+        priority: 0,
+      },
+      paused > 0 && { color: runStateColor("paused"), text: `${paused} paused`, priority: 0 },
       usage !== "" && { color: "muted", text: usage, priority: 4 },
     ],
     width,
@@ -336,7 +339,7 @@ const activityIdentity = (
     : "";
   const messageCount = runMessageCount(panel, run.id);
   const messages =
-    messageCount > 0 ? theme.fg(ancestorOnly ? "dim" : "muted", ` ✉ ${messageCount}`) : "";
+    messageCount > 0 ? theme.fg(ancestorOnly ? "dim" : "muted", ` ← ${messageCount}`) : "";
   return `${theme.fg("success", branch)}${theme.fg(identityColor, stateIdentity)}${id}${messages}`;
 };
 
@@ -366,10 +369,13 @@ const activityMetadataVariants = (
       : ancestorOnly
         ? ""
         : runActivity(run);
-  const attention =
-    stall !== undefined ||
-    (message === undefined && (run.state === "waiting_for_parent" || run.state === "paused"));
-  const themedActivity = activity ? theme.fg(attention ? "warning" : "accent", activity) : "";
+  const tone =
+    stall !== undefined
+      ? "warning"
+      : message === undefined && (run.state === "waiting_for_parent" || run.state === "paused")
+        ? runStateColor(run.state)
+        : "accent";
+  const themedActivity = activity ? theme.fg(tone, activity) : "";
   const elapsed = ancestorOnly ? "" : runElapsed(run, now);
   const themedElapsed = elapsed ? theme.fg("dim", elapsed) : "";
   const variants: ActivityMetadataVariant[] = [

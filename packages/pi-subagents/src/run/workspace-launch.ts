@@ -10,7 +10,12 @@ import {
 } from "../config/schema.ts";
 import type { WorkspaceHandle, WorkspaceLaunch, WorkspaceRebase } from "../workspace/model.ts";
 import { processCapacityError, treeCapacityError } from "./admission.ts";
-import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
+import {
+  invalidRequest as invalid,
+  type SubagentError,
+  withGuidance,
+  withGuidanceClause,
+} from "./errors.ts";
 import type { RunRecord } from "./internal.ts";
 import { SUBAGENT_ROOT_RUN_ID, type StartSubagentRequest, type SubagentRunView } from "./model.ts";
 import { runSessionOwned } from "./session-owned.ts";
@@ -140,13 +145,19 @@ const rebasedSuccessor = (
 const workspaceOwnerChanged = () =>
   invalid(
     "workspace_owner_unavailable",
-    "Workspace ownership changed while its revision was being prepared. Retry the revision.",
+    withGuidance(
+      "Workspace ownership changed while its revision was being prepared.",
+      "Retry the revision.",
+    ),
   );
 
 const excludedResumeError = () =>
   invalid(
     "workspace_operation_in_progress",
-    "A workspace operation is removing or writing this run's directory. Retry once it finishes.",
+    withGuidance(
+      "A workspace operation is removing or writing this run's directory.",
+      "Retry once it finishes.",
+    ),
   );
 
 const integrationQuarantinedError = () =>
@@ -394,7 +405,10 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
         if (isTreeInUse(records, state.launchReservations, binding.handle.artifactRoot))
           return yield* invalid(
             "workspace_process_unsettled",
-            "A run still uses this workspace's tree. Stop it and confirm cleanup before a rebase rebuilds the tree.",
+            withGuidance(
+              "A run still uses this workspace's tree.",
+              "Stop it and confirm cleanup before a rebase rebuilds the tree.",
+            ),
           );
         return undefined;
       }),
@@ -506,7 +520,10 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
         if (!resolveLaunch)
           return yield* invalid(
             "workspace_launch_unavailable",
-            "This adopted workspace has no writer request to extend; revise it through agent_worktree.",
+            withGuidanceClause(
+              "This adopted workspace has no writer request to extend",
+              "revise it through agent_worktree.",
+            ),
           );
         const resolved = yield* resolveLaunch(launch, task);
         if (resolved.writeIntent !== "writer")

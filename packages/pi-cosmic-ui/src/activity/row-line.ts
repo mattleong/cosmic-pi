@@ -6,6 +6,7 @@ import { managerTone } from "../manager/style.ts";
 import {
   managerActivityColor,
   managerActivityGlyph,
+  managerNoticeColor,
   managerNoticeGlyph,
   clipToWidth,
   spinnerFrameAt,
@@ -13,6 +14,7 @@ import {
 } from "../manager/chrome.ts";
 import {
   activityAttention,
+  activityAttentionColor,
   activityAttentionLabels,
   activityAttentionCounts,
   activityQueued,
@@ -31,8 +33,9 @@ export interface ActivityMark {
   readonly color: ManagerStatusColor;
 }
 export const activityMark = (row: ActivityRow, now = 0): ActivityMark => {
-  if (row.status === "needs-input" || row.status === "blocked")
-    return { glyph: managerNoticeGlyph("warning"), color: "warning" };
+  if (row.status === "needs-input")
+    return { glyph: managerNoticeGlyph("attention"), color: managerNoticeColor("attention") };
+  if (row.status === "blocked") return { glyph: managerNoticeGlyph("warning"), color: "warning" };
   if (activityQueued(row)) return { glyph: "○", color: "muted" };
   const kind = row.status === "cancelled" ? "stopped" : row.status;
   return {
@@ -62,12 +65,12 @@ export const activityType = (row: ActivityRow): string => activityTypes[row.kind
 const widgetTypeColors = {
   command: "syntaxKeyword",
   agent: "thinkingHigh",
-  question: "warning",
+  question: "accent",
 } as const;
 const managerTypeColors = {
   command: "muted",
   agent: managerTone.identity,
-  question: "warning",
+  question: "accent",
 } as const;
 
 export interface RowPaint {
@@ -83,7 +86,10 @@ const memberReason = (row: ActivityRow, widget: boolean): string | undefined =>
     : undefined;
 
 const memberAttention = (row: ActivityRow): string =>
-  activityAttention(row) !== undefined || row.status === "failed" || activityQueued(row)
+  activityAttention(row) !== undefined ||
+  row.status === "failed" ||
+  row.status === "paused" ||
+  activityQueued(row)
     ? activityStatus(row)
     : "";
 
@@ -114,14 +120,8 @@ export function groupedMemberLine(
 ): string {
   const { row } = entry;
   const interactive = presentation === "manager";
-  const warnings = entry.expanded
-    ? ""
-    : Arr.join(
-        activityAttentionLabels(
-          addAttention(entry.summary.attention, activityAttentionCounts(row), -1),
-        ),
-        " · ",
-      );
+  const descendants = addAttention(entry.summary.attention, activityAttentionCounts(row), -1);
+  const warnings = entry.expanded ? "" : Arr.join(activityAttentionLabels(descendants), " · ");
   const attention = memberAttention(row);
   const ended = memberReason(row, !interactive);
   const reason = ended
@@ -141,7 +141,11 @@ export function groupedMemberLine(
       typeColor: (interactive ? managerTypeColors : widgetTypeColors)[row.kind],
       status,
       statusSeparator: reason ? " · " : " ",
-      statusColor: warnings ? "warning" : !interactive && !attention ? "muted" : color,
+      statusColor: warnings
+        ? activityAttentionColor(descendants)
+        : !interactive && !attention
+          ? "muted"
+          : color,
       compactStatus: warnings.length > 0,
       ...(entry.history && { history: true }),
       ...(row.kind === "agent" && row.profile && { profile: row.profile }),

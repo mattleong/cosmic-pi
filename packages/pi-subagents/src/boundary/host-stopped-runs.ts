@@ -6,6 +6,8 @@ import { clipText, countLabel } from "pi-cosmic-core/display";
 import { invokeHostCallback, notifyAtHostBoundary } from "pi-cosmic-core/host-session";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { isActiveRunState, type SubagentRunView } from "../run/model.ts";
+import { runStateLabel } from "../ui/run-state.ts";
+import { MAX_STOPPED_NOTICE_RUNS, noticeName, type NoticeDetails } from "../ui/notice-details.ts";
 
 export const STOPPED_RUNS_MESSAGE_TYPE = "pi-subagents-stopped";
 
@@ -43,6 +45,24 @@ export const stoppedRunsContent = (
   );
 };
 
+/** The notice's display receipt: why the runs stopped, and their names and states. */
+export const stoppedRunsDetails = (
+  runs: ReadonlyArray<SubagentRunView>,
+  cause: RuntimeRetirement,
+): NoticeDetails => ({
+  version: 1,
+  kind: "stopped",
+  total: runs.length,
+  ...(runs.length === 1 &&
+    runs[0] !== undefined && { name: clipText(sanitizeTerminalLine(runs[0].name), 60) }),
+  cause,
+  runs: Arr.map(runs.slice(0, MAX_STOPPED_NOTICE_RUNS), (run) => ({
+    id: run.id,
+    name: noticeName(run.name),
+    state: runStateLabel(run.state),
+  })),
+});
+
 /** Active runs that replacing the runtime is about to stop. */
 export const runsStoppedByReplacement = (
   runs: ReadonlyArray<SubagentRunView>,
@@ -65,13 +85,7 @@ export function reportStoppedRuns(
         customType: STOPPED_RUNS_MESSAGE_TYPE,
         content: stoppedRunsContent(runs, cause),
         display: true,
-        details: {
-          version: 1,
-          kind: "stopped",
-          total: runs.length,
-          ...(runs.length === 1 &&
-            runs[0] !== undefined && { name: clipText(sanitizeTerminalLine(runs[0].name), 60) }),
-        },
+        details: stoppedRunsDetails(runs, cause),
       },
       { triggerTurn: false },
     );

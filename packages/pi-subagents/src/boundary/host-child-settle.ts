@@ -1,4 +1,5 @@
 import * as Arr from "effect/Array";
+import type * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import type {
   AgentBeforeSettleEventResult,
@@ -43,7 +44,7 @@ const endsWithEmptyReport = (context: BoundaryContextPreview): boolean => {
 export function registerChildSettle(
   pi: ExtensionAPI,
   isIdle: () => boolean,
-): (message: string) => boolean {
+): (message: string, details?: Schema.Json) => boolean {
   let reminded = false;
   // The parent opens a run with its prompt, the child's only user input, and the run's settled
   // event closes it. A continuation after the settle check starts a turn and reopens it.
@@ -79,13 +80,18 @@ export function registerChildSettle(
     };
   });
 
-  return (message) =>
+  return (message, details) =>
     open &&
     !settling &&
     !invokeHostCallback(isIdle, true) &&
     invokeHostCallback(() => {
       pi.sendMessage(
-        { customType: PROXY_NOTIFICATION_MESSAGE_TYPE, content: message, display: true },
+        {
+          customType: PROXY_NOTIFICATION_MESSAGE_TYPE,
+          content: message,
+          display: true,
+          ...(details !== undefined && { details }),
+        },
         { triggerTurn: false },
       );
       return true;

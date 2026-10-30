@@ -186,7 +186,7 @@ it.live("summarizes a question that arrived beside a message as the reason the w
 
     const withQuestion = yield* awaitWith([asking]);
     expect(withQuestion.result.structuredContent).toMatchObject({ outcome: "attention" });
-    expect(withQuestion.summary?.outcome).toBe("warning");
+    expect(withQuestion.summary?.outcome).toBe("attention");
     expect(withQuestion.note).toBeDefined();
     expect(withQuestion.note?.message).not.toBe(messageOnly.note?.message);
   }),

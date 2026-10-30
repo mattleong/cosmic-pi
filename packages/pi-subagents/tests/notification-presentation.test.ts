@@ -14,8 +14,8 @@ import * as Str from "effect/String";
 let restore = () => {};
 afterEach(() => restore());
 
-test.each(["compact"] as const)(
-  "registered %s notifications hide agent procedures without changing their delivered content",
+test.each(["compact", "preview"] as const)(
+  "registered %s notifications show agents' words and hide agent procedures without changing their delivered content",
   (style) => {
     restore = applyPresentationSettings({ toolCallCollapsedStyle: style });
     const renderers = captureRegistrations(registerSubagentMessageRenderers).messageRenderers;
@@ -63,6 +63,7 @@ test.each(["compact"] as const)(
         );
         const text = Arr.join(component!.render(180), "\n");
         expect(Fn.pipe(text, Str.includes("PRIVATE_RUN_ID"))).toBe(expanded);
+        // What agents wrote stays readable collapsed, as tool rows keep their output.
         expect(
           Fn.pipe(
             text,
@@ -72,7 +73,7 @@ test.each(["compact"] as const)(
                 : "AGENT_QUESTION",
             ),
           ),
-        ).toBe(expanded);
+        ).toBe(true);
         if (!expanded) expect(text).not.toMatch(/agent_send|agent_lifecycle|agent_worktree/);
         expect(JSON.stringify(message)).toBe(before);
       }

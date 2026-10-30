@@ -90,7 +90,7 @@ describe("cut report presentation", () => {
     expect(card?.reportTruncation?.originalChars).toBe(MAX_FINAL_TEXT_CHARS * 3);
   });
 
-  it("points the compact issue at the saved file, and at agent_read only without one", () => {
+  it("points the compact issue at the saved file without naming agent procedures", () => {
     for (const complete of [true, false, undefined]) {
       const issues = summarize(cutRun(complete))?.issues ?? [];
       expect(Arr.flatMap(issues, (issue) => issueMessageStyleProblems(issue.message))).toEqual([]);
@@ -104,7 +104,7 @@ describe("cut report presentation", () => {
       );
       expect(messages).not.toContain(ARCHIVE_PATH);
       expect(Fn.pipe(details, Str.includes(ARCHIVE_PATH))).toBe(complete !== undefined);
-      expect(Fn.pipe(details, Str.includes("agent_read"))).toBe(complete === undefined);
+      expect(details).not.toMatch(/\bagent_[a-z]+\b/u);
       // A whole saved copy is a usable recovery path, not a warning.
       expect(Arr.some(issues, (issue) => issue.severity === "warning")).toBe(complete !== true);
     }

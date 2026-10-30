@@ -5,10 +5,9 @@ import { compactIssueSeverity } from "pi-code-previews";
 import type { CompactIssue, CompactPhase, CompactSummary } from "pi-code-previews";
 import { QUOTED_TEXT_LIMIT, quoted } from "./compact-run-issues.ts";
 import type { SubagentCardFailure, SubagentStartDetails } from "./details-schema.ts";
-import { failedStartRecoveryAction, formatFailedStartRecovery } from "./format.ts";
 import { isUncertainToolFailure } from "./outcome.ts";
 import { failureMessage } from "pi-cosmic-core/message-text";
-import { failureFileText } from "../run/state.ts";
+import { nextCandidateFact, savedFileFact } from "../ui/notice-facts.ts";
 
 type AdmittedRun = NonNullable<
   NonNullable<SubagentStartDetails["startFailures"]>[number]["admittedRun"]
@@ -33,17 +32,7 @@ const launchFailureIssue = (
   message: uncertain
     ? `${label} may have started`
     : `${label} couldn't start: ${failureMessage(failure.message, "startup failed", QUOTED_TEXT_LIMIT)}`,
-  detail: Arr.join(
-    [
-      `${failure.code ? `[${failure.code}] ` : ""}${failure.message}`,
-      ...(uncertain && !failure.admittedRun
-        ? [
-            "List runs with agent_list and inspect them with agent_read before retrying or launching a replacement.",
-          ]
-        : []),
-    ],
-    "\n",
-  ),
+  detail: `${failure.code ? `[${failure.code}] ` : ""}${failure.message}`,
 });
 
 const startedCounter = (started: number, total: number, subject: string): string =>
@@ -80,9 +69,9 @@ export function summarizeStart(
       message: `${label}: ${admittedRunMessage(recovery)}`,
       detail: Arr.join(
         [
-          formatFailedStartRecovery(recovery),
-          ...(recovery.failureFile ? [failureFileText(recovery.failureFile)] : []),
-          failedStartRecoveryAction(recovery),
+          `Admitted as ${recovery.runId}${recovery.cleanupDisposition === "quarantined" ? "; its cleanup is unconfirmed" : ""}`,
+          ...(recovery.nextCandidate ? [nextCandidateFact(recovery.nextCandidate)] : []),
+          ...(recovery.failureFile ? [savedFileFact("Failure file", recovery.failureFile)] : []),
         ],
         "\n",
       ),

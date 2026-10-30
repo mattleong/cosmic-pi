@@ -1,16 +1,18 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { initTheme, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   applyPresentationSettings,
   captureRegistrations,
   galleryDirectory,
   galleryFrames,
   galleryMessageFrames,
+  galleryTranscriptFrames,
+  withPresentationSettings,
   writeGallerySection,
   type GalleryMessageScenario,
   type GalleryScenario,
 } from "pi-code-previews/testing";
 import { extensionContextFixture } from "pi-cosmic-core/testing";
-import { describe, expect, it } from "@effect/vitest";
+import { beforeAll, describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -132,6 +134,7 @@ const snapshot = (requestId: string, fields: SnapshotFields): AsyncQuestionnaire
   deliveryId: `${requestId}-answer`,
   independentWork: asyncRequest.independentWork,
   blockedWork: asyncRequest.blockedWork,
+  titles: Arr.map(asyncRequest.questions, ({ key, title }) => ({ key, title })),
   ...fields,
 });
 const open = snapshot("ask-1", { status: "pending", presentation: "open", delivery: "pending" });
@@ -208,7 +211,13 @@ const message = (
       customType: ASYNC_MESSAGE_TYPE,
       content: formatAsyncSnapshot(delivered),
       display: true,
-      details: { generation, deliveryId: delivered.deliveryId, requestId, outcome },
+      details: {
+        generation,
+        deliveryId: delivered.deliveryId,
+        requestId,
+        outcome,
+        titles: delivered.titles,
+      },
       timestamp: 0,
     },
   };
@@ -226,7 +235,12 @@ const registerAll = (pi: ExtensionAPI) => {
 
 const directory = galleryDirectory(process.env) ?? "";
 
+const titled = <A extends { readonly title: string }>(entries: ReadonlyArray<A>, title: string) =>
+  Option.getOrThrow(Arr.findFirst(entries, (entry) => entry.title === title));
+
 describe.skipIf(!directory)("presentation gallery", () => {
+  beforeAll(() => initTheme("dark", false));
+
   it.effect("renders questionnaire states in both collapsed styles", () =>
     Effect.gen(function* () {
       const scenarios = yield* Effect.all([
@@ -248,6 +262,17 @@ describe.skipIf(!directory)("presentation gallery", () => {
           { questions: [environment] },
           "Couldn't open the questionnaire.",
         ),
+        Effect.succeed<ToolScenario>({
+          tool: "ask_user",
+          title: "answers whose details could not be read",
+          args: { questions: [environment] },
+          result: {
+            content: text(
+              "The user submitted these answers:\n- environment: staging (Staging (Recommended))",
+            ),
+            details: { outcome: "submitted" },
+          },
+        }),
         live("ask_user_async", "opening the questionnaire", asyncRequest),
         started("questionnaire open", open),
         started("questionnaire queued behind another", queued),
@@ -319,6 +344,26 @@ describe.skipIf(!directory)("presentation gallery", () => {
                 title: `${style} · answer message · ${scenario.title}`,
               }),
             );
+          const opened = titled(scenarios, "questionnaire open");
+          for (const background of ["border", "on", "off"] as const)
+            withPresentationSettings({ toolCallBackground: background }, () => {
+              const tool = Option.getOrThrow(
+                Arr.findFirst(
+                  captureRegistrations(registerAll).tools,
+                  (entry) => entry.name === "ask_user_async",
+                ),
+              );
+              lines.push(
+                ...galleryTranscriptFrames(
+                  `${style} · ${background} · transcript: an async questionnaire beside its answers`,
+                  [
+                    { name: tool.name, tool, args: opened.args, result: opened.result! },
+                    { render, message: titled(messages, "answers submitted").message },
+                    { render, message: titled(messages, "questionnaire cancelled").message },
+                  ],
+                ),
+              );
+            });
         } finally {
           restore();
         }

@@ -87,8 +87,7 @@ it("renders a launch whose optional fields arrive as null", () => {
     );
     const text = Arr.join(harness.render(), "\n");
     expect(text).toContain("launch 1");
-    if (expanded) expect(text).toContain("NULL_FIELDS_TASK");
-    else expect(text).not.toContain("NULL_FIELDS_TASK");
+    expect(text).toContain("NULL_FIELDS_TASK");
   }
 });
 
@@ -176,7 +175,7 @@ it("names only the tool for a call Pi rejected as malformed JSON, not for one th
   }
 });
 
-it("preserves host-flagged uncertainty, exact input and full output through compact expansion", () => {
+it("preserves host-flagged uncertainty and exact input through compact expansion", () => {
   const tool = Option.getOrUndefined(
     Arr.findFirst(registered(), (entry) => entry.name === "agent_lifecycle"),
   )!;
@@ -209,9 +208,8 @@ it("preserves host-flagged uncertainty, exact input and full output through comp
     expect(Fn.pipe(text, Str.includes("interrupt_outcome_uncertain"))).toBe(expanded);
     expect(Fn.pipe(text, Str.includes("Do not resend"))).toBe(expanded);
     expect(Fn.pipe(text, Str.includes("exact-unique-target-input"))).toBe(expanded);
-    expect(
-      Fn.pipe(text, Str.includes("full output beyond bounded projection; middleware evidence")),
-    ).toBe(expanded);
+    // A decoded receipt's issues carry each failure; the agent's own text isn't drawn.
+    expect(text).not.toContain("full output beyond bounded projection; middleware evidence");
   }
   expect(result).toEqual(original);
 });

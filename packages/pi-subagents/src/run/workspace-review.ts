@@ -11,7 +11,7 @@ import type {
   WorkspaceSettledTarget,
 } from "../workspace/model.ts";
 import type { WorkspaceServiceContract } from "../workspace/service.ts";
-import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
+import { invalidRequest as invalid, type SubagentError, withGuidance } from "./errors.ts";
 import { SUBAGENT_ROOT_RUN_ID } from "./model.ts";
 import {
   type HeldBinding,
@@ -253,7 +253,10 @@ export function workspaceReviewOperations(
         if (isTreeInUse(records, state.launchReservations, artifactRoot))
           return yield* invalid(
             "workspace_process_unsettled",
-            "A run still uses this workspace. Stop it and confirm cleanup before discard.",
+            withGuidance(
+              "A run still uses this workspace.",
+              "Stop it and confirm cleanup before discard.",
+            ),
           );
         if (integrating) yield* checkout.requireIdleLocked(sourceRoot);
         return { exclusion: { artifactRoot, target: integrating ? sourceRoot : undefined } };

@@ -17,7 +17,7 @@ import {
   disallowedLaunchOverrideMessage,
   firstDisallowedLaunchOverride,
 } from "../run/launch-validation.ts";
-import { InvalidSubagentRequestError } from "../run/errors.ts";
+import { failureFields, InvalidSubagentRequestError, withGuidance } from "../run/errors.ts";
 import { resolvePiModelSelector } from "../run/model-catalog.ts";
 import { sanitizeName } from "../run/state.ts";
 import type { WriterWorkspaceMode } from "../config/schema.ts";
@@ -283,9 +283,14 @@ const readOnlyIsolation = (
     ? Effect.fail(
         InvalidSubagentRequestError.make({
           code: "isolation_requires_writer",
-          message: isolationFromAgent(input)
-            ? `${planSubject(input.definition, input.agent)} sets worktree isolation but resolved read-only.\n\nA read-only run can't be isolated in a worktree. Set the agent's writeIntent to writer, or remove its isolation.`
-            : `${planSubject(input.definition, input.agent)} resolved read-only, so it can't run in a worktree.\n\nA read-only run can't be isolated in a worktree. Use profile worker or a writer agent, or omit isolation.`,
+          ...failureFields(
+            isolationFromAgent(input)
+              ? `${planSubject(input.definition, input.agent)} sets worktree isolation but resolved read-only.\n\nA read-only run can't be isolated in a worktree. Set the agent's writeIntent to writer, or remove its isolation.`
+              : withGuidance(
+                  `${planSubject(input.definition, input.agent)} resolved read-only, so it can't run in a worktree.\n\nA read-only run can't be isolated in a worktree.`,
+                  "Use profile worker or a writer agent, or omit isolation.",
+                ),
+          ),
         }),
       )
     : Effect.succeed(
@@ -302,10 +307,15 @@ const modelOverrideUnavailable = (
 ): InvalidSubagentRequestError =>
   InvalidSubagentRequestError.make({
     code: "model_override_unavailable",
-    message: `Model override ${modelOverrideLabel(override)} is unavailable\n\nAn override never falls back to the profile route.${Arr.join(
-      Arr.map(skipped, (skip) => ` [${skip.code}] ${skip.reason}`),
-      "",
-    )} Fix the override, or omit it to use ${routeSubject(definition, agent)}'s route.`,
+    ...failureFields(
+      withGuidance(
+        `Model override ${modelOverrideLabel(override)} is unavailable\n\nAn override never falls back to the profile route.${Arr.join(
+          Arr.map(skipped, (skip) => ` [${skip.code}] ${skip.reason}`),
+          "",
+        )}`,
+        `Fix the override, or omit it to use ${routeSubject(definition, agent)}'s route.`,
+      ),
+    ),
   });
 
 /**
@@ -323,7 +333,12 @@ const validatedModelOverride = (
   return Effect.fail(
     InvalidSubagentRequestError.make({
       code: "model_override_invalid",
-      message: `Model override ${modelOverrideLabel(override)} is invalid for ${routeSubject(definition, agent)}\n\nViolations: ${Arr.join(issues, ", ")}. Use a provider/model selector or parent.`,
+      ...failureFields(
+        withGuidance(
+          `Model override ${modelOverrideLabel(override)} is invalid for ${routeSubject(definition, agent)}\n\nViolations: ${Arr.join(issues, ", ")}.`,
+          "Use a provider/model selector or parent.",
+        ),
+      ),
     }),
   );
 };
@@ -561,7 +576,12 @@ const launchedAgent = (
     return Effect.fail(
       InvalidSubagentRequestError.make({
         code: "agent_profile_conflict",
-        message: `Agent ${name} can't be combined with a profile\n\nAn agent already routes through its configured profile. Set either agent or profile on the start item, not both.`,
+        ...failureFields(
+          withGuidance(
+            `Agent ${name} can't be combined with a profile\n\nAn agent already routes through its configured profile.`,
+            "Set either agent or profile on the start item, not both.",
+          ),
+        ),
       }),
     );
   const config = profileSnapshot.effectiveConfig;
@@ -580,7 +600,12 @@ const launchedAgent = (
         })
       : InvalidSubagentRequestError.make({
           code: "agent_unknown",
-          message: `Unknown agent ${name}\n\nConfigured agents: ${available}. Call agent_profiles to list them, or launch a profile instead.`,
+          ...failureFields(
+            withGuidance(
+              `Unknown agent ${name}\n\nConfigured agents: ${available}.`,
+              "Call agent_profiles to list them, or launch a profile instead.",
+            ),
+          ),
         }),
   );
 };

@@ -35,6 +35,28 @@ describe("compact child selection", () => {
   });
 });
 
+const pick = (entries: readonly CompactChild[], limit: number) =>
+  selectCompactChildren({ entries, total: entries.length }, limit).entries;
+
+describe("compact child priority", () => {
+  it("ranks a call awaiting a reply below problems but above routine completions", () => {
+    const asks: CompactIssue = { severity: "attention", code: "question", message: "worker asks" };
+    const routine = Array.from(
+      { length: 6 },
+      (_, index): CompactChild => ({ label: `done-${index}`, status: "success" }),
+    );
+    const failed: CompactChild = { label: "failed", status: "error" };
+    const warned: CompactChild = { label: "warned", status: "warning" };
+    const asking: CompactChild = { label: "asking", status: "attention" };
+    const askingIssue: CompactChild = { label: "issue", status: "success", issues: [asks] };
+    const problems = [asking, ...routine, failed, warned];
+    expect(pick(problems, 2)).toEqual([failed, warned]);
+    expect(pick(problems, 3)).toEqual([asking, failed, warned]);
+    expect(pick([askingIssue, ...routine], 1)).toEqual([askingIssue]);
+    expect(pick([asking, ...routine, failed], 1)).toEqual([failed]);
+  });
+});
+
 describe("compact child issues", () => {
   it("moves a tree row's reason beneath the row rather than dropping it on narrow widths", () => {
     const issue: CompactIssue = {

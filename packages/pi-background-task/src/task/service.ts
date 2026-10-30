@@ -35,6 +35,7 @@ import {
   BackgroundSpawnError,
   BackgroundTasksDisabledError,
   BackgroundTerminationError,
+  type BackgroundCursorAheadError,
   type InvalidBackgroundCommandError,
   InvalidBackgroundCwdError,
   type BackgroundTaskError,
@@ -94,13 +95,13 @@ export interface BackgroundTaskServiceContract {
     request: ReadBackgroundLogs,
   ) => Effect.Effect<
     BackgroundTaskLogs,
-    BackgroundTaskNotFoundError | InvalidBackgroundCommandError
+    BackgroundTaskNotFoundError | InvalidBackgroundCommandError | BackgroundCursorAheadError
   >;
   readonly wait: (
     request: WaitForBackgroundTask,
   ) => Effect.Effect<
     BackgroundTaskStatusWait,
-    BackgroundTaskNotFoundError | InvalidBackgroundCommandError
+    BackgroundTaskNotFoundError | InvalidBackgroundCommandError | BackgroundCursorAheadError
   >;
   /** An explicit stop, by the user unless stated; repeating it while stopping escalates to force. */
   readonly stop: (

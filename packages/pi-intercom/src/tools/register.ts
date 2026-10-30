@@ -2,24 +2,10 @@ import {
   defineTool,
   type AgentToolResult,
   type ExtensionAPI,
-  type Theme,
-  type ToolDefinition,
-  type ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
-import { Container, Text } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
-import * as Fn from "effect/Function";
-import * as Str from "effect/String";
-import {
-  expandedArguments,
-  expandedSection,
-  getTextContent,
-  previewIssuesSlot,
-  withCodePreviewShell,
-} from "pi-code-previews";
-import { stripTerminalControls } from "pi-cosmic-core/security";
+import { withCodePreviewShell } from "pi-code-previews";
 import { toPiToolOutputSchema } from "pi-cosmic-core/schema/tool-output";
-import { renderToolHeader, toolRunningLine } from "pi-cosmic-ui/tool";
 import type { IntercomRegistry, IntercomRegistryError } from "../registry/store.ts";
 import type { IntercomSession } from "../session/service.ts";
 import { MAX_MESSAGE_CHARS } from "../transport/protocol.ts";
@@ -29,9 +15,7 @@ import {
   SessionListContractSchema,
   SessionReadContractSchema,
   type SessionRefusal,
-  type SessionToolArgs,
   type SessionToolDetails,
-  type SessionToolName,
 } from "./contract.ts";
 import {
   prepareSessionListArguments,
@@ -42,7 +26,8 @@ import {
   SessionSendParameters,
 } from "./schema.ts";
 import { listSessions, readSession, sendToSession, type SessionToolRefusal } from "./sessions.ts";
-import { collapsedResultText, sessionToolCompactSummary, sessionToolDetails } from "./summary.ts";
+import { renderSessionCall, renderSessionResult, sessionExpandedContent } from "./render.ts";
+import { sessionToolCompactSummary } from "./summary.ts";
 import { listText, readText, refusalText, sendText } from "./text.ts";
 
 export interface SessionToolRunner {
@@ -57,15 +42,6 @@ const GUIDELINES = [
   "Make each session_send message self-contained. After an uncertain send, don't resend; replies arrive as messages, so don't poll session_read in a loop. Don't reply to another session only to acknowledge or thank.",
   "Native codemode can call session_list and session_read, which return pi-intercom/session version-1 structured results; only you can call session_send, directly.",
 ];
-
-const TITLES = {
-  [SESSION_TOOL.list]: "Session list",
-  [SESSION_TOOL.send]: "Session send",
-  [SESSION_TOOL.read]: "Session read",
-} satisfies Record<SessionToolName, string>;
-
-const resultText = (result: AgentToolResult<unknown>): string =>
-  Fn.pipe(stripTerminalControls(getTextContent(result.content)), Str.replace(/\n+$/u, ""));
 
 const refusedResult = (
   tool: SessionRefusal["tool"],
@@ -103,48 +79,6 @@ const settle = <A extends SessionToolDetails>(
     signal,
   );
 
-const renderCall =
-  (tool: SessionToolName) =>
-  (
-    args: SessionToolArgs,
-    theme: Theme,
-    context: Parameters<NonNullable<ToolDefinition["renderCall"]>>[2],
-  ) => {
-    const header = renderToolHeader({ title: TITLES[tool], subtitle: args.to }, theme);
-    const running = context.executionStarted && context.isPartial;
-    const heading = new Text(running ? `${header}\n${toolRunningLine(theme)}` : header, 0, 0);
-    if (!context.expanded) return heading;
-    const body = new Container();
-    body.addChild(heading);
-    body.addChild(previewIssuesSlot(context));
-    body.addChild(expandedArguments(theme, args));
-    return body;
-  };
-
-const renderResult =
-  (tool: SessionToolName) =>
-  (
-    result: AgentToolResult<unknown>,
-    options: { readonly expanded: boolean; readonly isPartial: boolean },
-    theme: Theme,
-  ) => {
-    if (options.isPartial) return new Container();
-    const details = sessionToolDetails(tool, result);
-    // Collapsed, a known result shows only what the user needs; issues explain refusals.
-    const shown = options.expanded || !details ? resultText(result) : collapsedResultText(details);
-    return shown ? new Text(theme.fg("toolOutput", shown), 0, 0) : new Container();
-  };
-
-const expandedContent = {
-  renderCall: (args: SessionToolArgs, theme: Theme) => expandedArguments(theme, args),
-  renderResult: (
-    result: AgentToolResult<unknown>,
-    _options: ToolRenderResultOptions,
-    theme: Theme,
-  ) =>
-    expandedSection(theme, undefined, new Text(theme.fg("toolOutput", resultText(result)), 0, 0)),
-};
-
 /**
  * Registers the cross-session tools for a main agent. `session_send` is model-only: a codemode
  * script can't message another session. List and read return structured results to scripts.
@@ -179,10 +113,13 @@ export function registerSessionTools(
             ),
             signal,
           ),
-        renderCall: renderCall(SESSION_TOOL.list),
-        renderResult: renderResult(SESSION_TOOL.list),
+        renderCall: renderSessionCall(SESSION_TOOL.list),
+        renderResult: renderSessionResult(SESSION_TOOL.list),
       }),
-      { compactSummary: sessionToolCompactSummary(SESSION_TOOL.list), expandedContent },
+      {
+        compactSummary: sessionToolCompactSummary(SESSION_TOOL.list),
+        expandedContent: sessionExpandedContent(SESSION_TOOL.list),
+      },
     ),
   );
   pi.registerTool(
@@ -204,10 +141,13 @@ export function registerSessionTools(
             (details) => ({ content: [{ type: "text", text: sendText(details) }], details }),
             (refusal) => refusedResult(SESSION_TOOL.send, args.to, refusal),
           ),
-        renderCall: renderCall(SESSION_TOOL.send),
-        renderResult: renderResult(SESSION_TOOL.send),
+        renderCall: renderSessionCall(SESSION_TOOL.send),
+        renderResult: renderSessionResult(SESSION_TOOL.send),
       }),
-      { compactSummary: sessionToolCompactSummary(SESSION_TOOL.send), expandedContent },
+      {
+        compactSummary: sessionToolCompactSummary(SESSION_TOOL.send),
+        expandedContent: sessionExpandedContent(SESSION_TOOL.send),
+      },
     ),
   );
   pi.registerTool(
@@ -234,10 +174,13 @@ export function registerSessionTools(
             }),
             (refusal) => refusedResult(SESSION_TOOL.read, args.to, refusal),
           ),
-        renderCall: renderCall(SESSION_TOOL.read),
-        renderResult: renderResult(SESSION_TOOL.read),
+        renderCall: renderSessionCall(SESSION_TOOL.read),
+        renderResult: renderSessionResult(SESSION_TOOL.read),
       }),
-      { compactSummary: sessionToolCompactSummary(SESSION_TOOL.read), expandedContent },
+      {
+        compactSummary: sessionToolCompactSummary(SESSION_TOOL.read),
+        expandedContent: sessionExpandedContent(SESSION_TOOL.read),
+      },
     ),
   );
 }

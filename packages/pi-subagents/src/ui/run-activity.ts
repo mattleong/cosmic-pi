@@ -4,6 +4,7 @@ import * as Str from "effect/String";
 import { ACTIVITY_LIMITS, type ActivityItem } from "pi-cosmic-ui/activity";
 import { sanitizeDiagnosticContent } from "pi-cosmic-core/security";
 import { runCleanupAttention } from "../run/attention.ts";
+import { userRunText } from "../run/warnings.ts";
 import {
   isActiveRunState,
   type SubagentProjection,
@@ -31,8 +32,8 @@ export const SUBAGENT_ACTIVITY_PROVIDER = "pi-subagents";
 const RUN_STATUS = {
   starting: "pending",
   running: "running",
-  waiting_for_parent: "blocked",
-  paused: "blocked",
+  waiting_for_parent: "needs-input",
+  paused: "paused",
   completed: "done",
   failed: "failed",
   stopping: "stopping",
@@ -42,10 +43,8 @@ const RUN_STATUS = {
 function activityAttention(run: SubagentRunView) {
   const cleanup = runCleanupAttention(run);
   if (cleanup !== undefined) return { status: "blocked", blockedReason: "parent-review" } as const;
-  if (run.state === "waiting_for_parent" && run.question !== undefined)
+  if (run.state === "waiting_for_parent")
     return { status: "needs-input", inputTarget: "parent" } as const;
-  if (run.state === "paused" || run.state === "waiting_for_parent")
-    return { status: "blocked", blockedReason: "parent-review" } as const;
   return { status: RUN_STATUS[run.state] } as const;
 }
 
@@ -98,7 +97,7 @@ const runIdentity = (run: SubagentRunView): string =>
   ]);
 
 const runSummary = (run: SubagentRunView): Pick<ActivityItem, "summary"> => {
-  const reason = run.state === "failed" ? run.error : undefined;
+  const reason = run.state === "failed" ? userRunText(run).error : undefined;
   const cleanup = runCleanupAttention(run);
   const summary =
     cleanup === "quarantined"

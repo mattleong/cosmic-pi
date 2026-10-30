@@ -5,6 +5,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
   managerActivityColor,
   managerActivityGlyph,
+  managerNoticeColor,
   managerNoticeGlyph,
   type ManagerActivityKind,
 } from "pi-cosmic-ui/manager";
@@ -36,6 +37,11 @@ export type CompactRowInput = {
   expanded?: boolean;
 };
 
+// Which way a delivered message went; failures and attention keep their own icons.
+const MESSAGE_GLYPHS = { sent: "→", received: "←" } as const;
+// An outcome that couldn't be confirmed; `?` belongs to questions awaiting a reply.
+const UNCERTAIN_GLYPH = "≈";
+
 const ACTIVITY_KINDS = {
   pending: "pending",
   running: "running",
@@ -49,11 +55,15 @@ function compactStatusIcon(
   theme: Theme,
   animationFrame = 0,
   returnedCheckmark = false,
+  messageIcon?: CompactSummary["messageIcon"],
 ): string {
+  if (messageIcon && (status === "success" || status === "returned"))
+    return theme.fg(status === "success" ? "success" : "muted", MESSAGE_GLYPHS[messageIcon]);
   if (status === "returned")
     return theme.fg("muted", returnedCheckmark ? managerActivityGlyph("done") : "•");
-  if (status === "uncertain") return theme.fg("warning", "?");
-  if (status === "warning") return theme.fg("warning", managerNoticeGlyph("warning"));
+  if (status === "uncertain") return theme.fg("warning", UNCERTAIN_GLYPH);
+  if (status === "warning" || status === "attention")
+    return theme.fg(managerNoticeColor(status), managerNoticeGlyph(status));
   const kind = ACTIVITY_KINDS[status];
   return theme.fg(managerActivityColor(kind), managerActivityGlyph(kind, animationFrame));
 }
@@ -76,7 +86,13 @@ function compactRowDuration(input: CompactRowInput): string | undefined {
 
 function compactRowPrefix(input: CompactRowInput, theme: Theme): string {
   const status = input.status ?? compactStatus(input.phase, input.summary);
-  const icon = compactStatusIcon(status, theme, input.animationFrame, input.returnedCheckmark);
+  const icon = compactStatusIcon(
+    status,
+    theme,
+    input.animationFrame,
+    input.returnedCheckmark,
+    input.summary.messageIcon,
+  );
   const action = compactSingleLine(input.summary.action ?? "");
   return `${icon} ${theme.fg("accent", compactSingleLine(input.name))}${action ? ` ${action}` : ""}`;
 }

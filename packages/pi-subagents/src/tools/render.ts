@@ -5,10 +5,14 @@ import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { Container, Text, type Component } from "@earendil-works/pi-tui";
+import { Text, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import { escapeControlChars, expandedSection, getTextContent } from "pi-code-previews";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
-import { stripTerminalControls as sanitizeTerminalText } from "pi-cosmic-core/security";
+import {
+  sanitizeTerminalLine,
+  stripTerminalControls as sanitizeTerminalText,
+} from "pi-cosmic-core/security";
+import type { SubagentAwaitUntil } from "../run/service.ts";
 import {
   composeToolComponent as renderComponent,
   renderExpansionAffordance,
@@ -25,16 +29,13 @@ import {
   type WorkspaceToolDetails,
 } from "./details-schema.ts";
 import { decodeCompactToolDetails, decodeStartAwaitCardDetails } from "./details-decode.ts";
+import { rejectedFailureText } from "./failure-details.ts";
 import { boundToolOutput } from "./format.ts";
 import { renderCompactResultComponent, renderProfileRoutesComponent } from "./render-management.ts";
 import { formatAwaitCounters, renderAwaitProgressComponent } from "./render-await.ts";
 import { textResultBody } from "./render-preview.ts";
-import {
-  appendReportSections,
-  expandedRunReportSections,
-  renderExpandedAwaitResult,
-  runOverviewComponent,
-} from "./render-run-overview.ts";
+import { cardBlockLines, cardFactLines } from "./render-run-cards.ts";
+import { agentTextLines, detailsSectionLines } from "../ui/agent-text.ts";
 import { renderStartReceiptComponent } from "./render-start.ts";
 import { isTextFragment } from "./text-fragments.ts";
 
@@ -67,6 +68,74 @@ export const renderSubagentInputContent = (
   return new Text(theme.fg("toolOutput", escapeControlChars(Arr.join(lines, "\n"))), 0, 0);
 };
 
+const WORKSPACE_ARGUMENT_LABELS = new Map([
+  ["workspaceId", "worktree"],
+  ["revisionId", "revision"],
+  ["preparationId", "preparation"],
+]);
+
+/**
+ * A worktree call expanded: a revise's message to the writer as written, then its other arguments
+ * on one dim line. The heading already names the action.
+ */
+export const renderWorkspaceCallArguments = (
+  args: typeof CallArgumentsSchema.Type | undefined,
+  theme: Theme,
+): Component =>
+  renderComponent((width) => {
+    const safeWidth = Math.max(1, width);
+    const message = args?.message;
+    const rest = Arr.filter(
+      Rec.toEntries(args ?? {}),
+      ([key, value]) => key !== "action" && key !== "message" && value !== false,
+    );
+    const facts = Arr.map(rest, ([key, value]) =>
+      value === true
+        ? key
+        : `${WORKSPACE_ARGUMENT_LABELS.get(key) ?? key} ${Predicate.isString(value) ? value : JSON.stringify(value)}`,
+    );
+    return [
+      ...agentTextLines(Predicate.isString(message) ? message : undefined, safeWidth, theme, {
+        expanded: true,
+        indent: 0,
+      }),
+      ...(facts.length > 0
+        ? wrapTextWithAnsi(
+            theme.fg("dim", sanitizeTerminalLine(`Requested ${Arr.join(facts, " · ")}`)),
+            safeWidth,
+          )
+        : []),
+    ];
+  });
+
+/** The run IDs an await or lifecycle call names, which expansion keeps beside the run names. */
+export const renderRequestedRuns = (
+  ids: ReadonlyArray<string>,
+  wait: { readonly until: SubagentAwaitUntil; readonly timeoutSeconds?: number },
+  tool: string,
+  theme: Theme,
+): Component =>
+  renderComponent((width) =>
+    wrapTextWithAnsi(
+      theme.fg(
+        "dim",
+        Arr.join(
+          [
+            `Requested ${Arr.join(Arr.map(ids, sanitizeTerminalLine), ", ")}`,
+            ...(tool === "agent_await" && wait.until === "any_finished"
+              ? ["until the first finishes"]
+              : []),
+            ...(tool === "agent_await" && wait.timeoutSeconds !== undefined
+              ? [`timeout ${wait.timeoutSeconds}s`]
+              : []),
+          ],
+          " · ",
+        ),
+      ),
+      Math.max(1, width),
+    ),
+  );
+
 const awaitScope = (details: SubagentAwaitDetails) => {
   const awaitedRunIds = new Set(details.awaitedRunIds ?? Arr.map(details.cards, (card) => card.id));
   return {
@@ -93,49 +162,69 @@ const renderPartialStartAwait = (
   return renderAwaitProgressComponent(details.cards, details.awaitUntil, theme, hierarchy);
 };
 
-const renderSettledStartAwait = (
-  content: ToolTextContent,
-  details: SubagentStartAwaitCardDetails,
+/**
+ * A settled wait: one muted totals line, then each awaited run's words: its report, failure, or
+ * question. Expansion keeps them whole and adds every run's technical facts.
+ */
+const OMITTED_NOTE = "Some of this result was too long to keep for display";
+
+const renderAwaitResult = (
+  details: SubagentAwaitDetails,
   expanded: boolean,
   theme: Theme,
 ): Component => {
-  if (details.action === "start") return renderStartReceiptComponent(details, expanded, theme);
   const { hierarchy, targets } = awaitScope(details);
   const counters = formatAwaitCounters(details.cards, hierarchy, details.awaitUntil, true);
-  if (!expanded)
-    return runOverviewComponent(details.cards, theme, {
-      expanded: false,
-      reportSections: expandedRunReportSections(targets),
-      counters,
-      hierarchy,
-      showRunRows: false,
-    });
-  const rendered = renderExpandedAwaitResult(details.cards, targets, theme, counters, hierarchy);
-  return details.contentOmitted ? (rawResultSection(content, theme) ?? rendered) : rendered;
+  return renderComponent((width) => {
+    const safeWidth = Math.max(1, width);
+    return [
+      clipToWidth(theme.fg("muted", counters), safeWidth),
+      ...cardBlockLines(targets, safeWidth, theme, expanded),
+      // Details too large for their reports keep the rest; the agent still received every report.
+      ...(details.contentOmitted ? [clipToWidth(theme.fg("dim", OMITTED_NOTE), safeWidth)] : []),
+      ...(expanded
+        ? detailsSectionLines(Arr.flatMap(details.cards, cardFactLines), safeWidth, theme)
+        : []),
+    ];
+  });
 };
 
+const renderSettledStartAwait = (
+  details: SubagentStartAwaitCardDetails,
+  expanded: boolean,
+  theme: Theme,
+): Component =>
+  details.action === "start"
+    ? renderStartReceiptComponent(details, expanded, theme)
+    : renderAwaitResult(details, expanded, theme);
+
 const renderCompactDetails = (
-  content: ToolTextContent,
   compact: CompactSubagentToolDetails,
   expanded: boolean,
   theme: Theme,
 ): Component => {
   if (compact.action === "models") return renderProfileRoutesComponent(compact, expanded, theme);
   const rendered = renderCompactResultComponent(compact, expanded, theme);
-  if (!expanded || !compact.contentOmitted) return rendered;
-  return rawResultSection(content, theme) ?? rendered;
+  if (!compact.contentOmitted) return rendered;
+  return renderComponent((width) => [
+    ...rendered.render(width),
+    clipToWidth(theme.fg("dim", OMITTED_NOTE), Math.max(1, width)),
+  ]);
 };
 
 const COLLAPSED_TEXT_LINES = 11;
 
+/** A result's text; a failure shows its recorded user copy, or the text of one saved without it. */
 const renderTextFallback = (
-  content: ToolTextContent,
+  result: { readonly content: ToolTextContent; readonly details?: unknown },
   isPartial: boolean,
   expanded: boolean,
   theme: Theme,
   isError = false,
 ): Component => {
-  const text = boundToolOutput(sanitizeTerminalText(getTextContent(content)));
+  const text = boundToolOutput(
+    sanitizeTerminalText(isError ? rejectedFailureText(result) : getTextContent(result.content)),
+  );
   if (!text && isPartial) return new Text(toolRunningLine(theme), 0, 0);
   return textResultBody(theme, text, { expanded, isError }, COLLAPSED_TEXT_LINES);
 };
@@ -144,31 +233,88 @@ const decodeWorkspaceDisplay = decodeUnknownOrUndefined(WorkspaceToolDetailsSche
   onExcessProperty: "error",
 });
 
-const workspaceDisplayText = (
+/** The text a receipt's producer marked for display, or undefined when its span doesn't fit. */
+const workspaceSpanText = (
   receipt: WorkspaceToolDetails,
   content: ToolTextContent,
 ): string | undefined => {
   const span = receipt.displayContent;
   const raw = getTextContent(content);
-  const missingPreparationPath =
-    receipt.operation === "prepare" && !receipt.preparedCwd && !span?.length;
-  if (
-    missingPreparationPath ||
-    !span ||
-    span.offset > raw.length ||
-    span.length > raw.length - span.offset
-  )
-    return undefined;
-  return Fn.pipe(
-    [
-      receipt.workspaceId,
-      receipt.revisionId,
-      receipt.preparationId,
-      Fn.pipe(raw, Str.slice(span.offset, span.offset + span.length)),
-    ],
-    Arr.filter(isTextFragment),
-    Arr.join("\n"),
+  if (!span || span.offset > raw.length || span.length > raw.length - span.offset) return undefined;
+  return Fn.pipe(raw, Str.slice(span.offset, span.offset + span.length));
+};
+
+interface WorkspaceView {
+  /** A review's diff page or an apply's changed files: what the user reads. */
+  readonly body?: string | undefined;
+  /** IDs, paths, and listed worktrees for the expanded details. */
+  readonly facts: ReadonlyArray<string>;
+}
+
+const ORPHAN_LABELS = { adoptable: "adoptable", "discard-only": "discard only" } as const;
+
+const listEntryFact = (entry: NonNullable<WorkspaceToolDetails["entries"]>[number]): string =>
+  Arr.join(
+    Arr.filter(
+      [
+        `${entry.workspaceId}: ${entry.status}`,
+        entry.orphan && ORPHAN_LABELS[entry.orphan],
+        entry.revisionId && `revision ${entry.revisionId}`,
+        entry.sourceCwd,
+      ],
+      isTextFragment,
+    ),
+    " · ",
   );
+
+/**
+ * A worktree receipt as the user reads it. Undefined when the receipt can't be shown that way: a
+ * span outside its text, or a preparation with no recorded test cwd.
+ */
+const workspaceView = (
+  receipt: WorkspaceToolDetails,
+  content: ToolTextContent,
+): WorkspaceView | undefined => {
+  const span = workspaceSpanText(receipt, content);
+  if (span === undefined) return undefined;
+  const marked = Str.trim(span) ? span : undefined;
+  if (receipt.operation === "prepare" && !receipt.preparedCwd && !marked) return undefined;
+  const shownBody = receipt.operation === "review" || receipt.operation === "apply";
+  return {
+    ...(shownBody && marked && { body: marked }),
+    facts: Arr.filter(
+      [
+        receipt.workspaceId && `Worktree ${receipt.workspaceId}`,
+        receipt.revisionId && `Revision ${receipt.revisionId}`,
+        receipt.preparationId && `Preparation ${receipt.preparationId}`,
+        receipt.preparedCwd
+          ? `Test cwd: ${receipt.preparedCwd}`
+          : receipt.operation === "prepare"
+            ? marked
+            : undefined,
+        receipt.successorRunId && `Revised by run ${receipt.successorRunId}`,
+        ...Arr.map(receipt.entries ?? [], listEntryFact),
+        // A list saved before its entries were recorded marked its raw lines instead.
+        ...(receipt.operation === "list" && !receipt.entries && marked
+          ? Str.split(marked, "\n")
+          : []),
+      ],
+      isTextFragment,
+    ),
+  };
+};
+
+const workspaceBodyLines = (
+  receipt: WorkspaceToolDetails,
+  body: string | undefined,
+  width: number,
+  theme: Theme,
+): string[] => {
+  if (body === undefined) return [];
+  const text = new Text(theme.fg("toolOutput", escapeControlChars(body)), 0, 0);
+  return receipt.operation === "review"
+    ? expandedSection(theme, "Diff", text).render(width)
+    : text.render(width);
 };
 
 const renderWorkspaceContent = (
@@ -177,9 +323,15 @@ const renderWorkspaceContent = (
 ): Component | undefined => {
   const receipt = decodeWorkspaceDisplay(result.details);
   if (!receipt) return undefined;
-  const text = workspaceDisplayText(receipt, result.content);
-  if (text !== undefined) return new Text(theme.fg("toolOutput", escapeControlChars(text)), 0, 0);
-  return rawResultSection(result.content, theme) ?? renderComponent(() => []);
+  const view = workspaceView(receipt, result.content);
+  if (!view) return rawResultSection(result.content, theme) ?? renderComponent(() => []);
+  return renderComponent((width) => {
+    const safeWidth = Math.max(1, width);
+    return [
+      ...workspaceBodyLines(receipt, view.body, safeWidth, theme),
+      ...detailsSectionLines(view.facts, safeWidth, theme),
+    ];
+  });
 };
 
 const renderWorkspacePreview = (
@@ -190,54 +342,27 @@ const renderWorkspacePreview = (
   const receipt = decodeWorkspaceDisplay(result.details);
   if (!receipt) return undefined;
   const line = workspaceReceiptLine(receipt);
-  const raw = rawResultSection(
-    result.content,
-    theme,
-    receipt.operation === "review" ? "Diff" : "Raw result",
-  );
+  // The producer's display span; only a receipt without one falls back to the agent's text.
+  const view = workspaceView(receipt, result.content);
+  const raw = view ? undefined : rawResultSection(result.content, theme);
+  const expandable = view ? view.body !== undefined || view.facts.length > 0 : raw !== undefined;
   return renderComponent((width) => {
     const safeWidth = Math.max(1, width);
+    const label = receipt.operation === "review" && view?.body ? "diff page" : "details";
     return [
       ...(line ? [clipToWidth(theme.fg("muted", line), safeWidth)] : []),
-      ...(!raw
+      ...(!expandable
         ? []
-        : expanded
-          ? raw.render(safeWidth)
-          : [
-              clipToWidth(
-                renderExpansionAffordance(
-                  receipt.operation === "review" ? "diff page" : "details",
-                  false,
-                  theme,
-                ),
-                safeWidth,
-              ),
-            ]),
+        : !expanded
+          ? [clipToWidth(renderExpansionAffordance(label, false, theme), safeWidth)]
+          : view
+            ? [
+                ...workspaceBodyLines(receipt, view.body, safeWidth, theme),
+                ...detailsSectionLines(view.facts, safeWidth, theme),
+              ]
+            : (raw?.render(safeWidth) ?? [])),
     ];
   });
-};
-
-const renderExpandedRunCards = (
-  projection: SubagentAwaitDetails | Exclude<CompactSubagentToolDetails, { action: "models" }>,
-  theme: Theme,
-): Component => {
-  const scope = projection.action === "await" ? awaitScope(projection) : undefined;
-  const sections = Arr.filter(
-    expandedRunReportSections(scope?.targets ?? projection.cards),
-    (section) => section.kind === "report",
-  );
-  const container = new Container();
-  appendReportSections(container, sections, theme);
-  container.addChild(
-    runOverviewComponent(projection.cards, theme, {
-      expanded: true,
-      reportSections: [],
-      showContextOmission: false,
-      contentOnly: true,
-      hierarchy: scope?.hierarchy,
-    }),
-  );
-  return container;
 };
 
 export const renderSubagentExpandedContent = (
@@ -251,15 +376,15 @@ export const renderSubagentExpandedContent = (
   const details = decodeStartAwaitCardDetails(result.details);
   if (details && isPartial && options.panelOwnsLiveHierarchy) return renderComponent(() => []);
   if (details?.action === "start")
-    return renderStartReceiptComponent(details, true, theme, isPartial, true);
-  const compact = details ? undefined : decodeCompactToolDetails(result.details);
-  if (compact?.action === "models") return renderProfileRoutesComponent(compact, true, theme, true);
-  const projection = details ?? compact;
-  if (!projection)
-    return renderTextFallback(result.content, isPartial, true, theme, options.isError);
-  if (projection.contentOmitted)
-    return rawResultSection(result.content, theme) ?? renderComponent(() => []);
-  return renderExpandedRunCards(projection, theme);
+    return renderStartReceiptComponent(details, true, theme, isPartial);
+  if (details?.action === "await")
+    return isPartial
+      ? renderPartialStartAwait(details, true, theme, options)
+      : renderAwaitResult(details, true, theme);
+  const compact = decodeCompactToolDetails(result.details);
+  if (compact?.action === "models") return renderProfileRoutesComponent(compact, true, theme);
+  if (!compact) return renderTextFallback(result, isPartial, true, theme, options.isError);
+  return renderCompactDetails(compact, true, theme);
 };
 
 export const renderSubagentResult = (
@@ -273,10 +398,10 @@ export const renderSubagentResult = (
   if (details)
     return isPartial
       ? renderPartialStartAwait(details, expanded, theme, options)
-      : renderSettledStartAwait(result.content, details, expanded, theme);
+      : renderSettledStartAwait(details, expanded, theme);
   const compact = decodeCompactToolDetails(result.details);
-  if (compact) return renderCompactDetails(result.content, compact, expanded, theme);
+  if (compact) return renderCompactDetails(compact, expanded, theme);
   const workspace = options.isError ? undefined : renderWorkspacePreview(result, expanded, theme);
   if (workspace) return workspace;
-  return renderTextFallback(result.content, isPartial, expanded, theme, options.isError);
+  return renderTextFallback(result, isPartial, expanded, theme, options.isError);
 };

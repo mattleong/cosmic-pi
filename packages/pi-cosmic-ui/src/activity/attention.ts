@@ -1,6 +1,6 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import { managerActivityLabel } from "../manager/chrome.ts";
+import { managerActivityLabel, managerNoticeColor } from "../manager/chrome.ts";
 import type { ActivityRow } from "./model.ts";
 import type { ActivityItem } from "./protocol.ts";
 
@@ -72,6 +72,10 @@ export const addAttention = (
   blocked: left.blocked + sign * right.blocked,
   failed: left.failed + sign * right.failed,
 });
+
+/** Blocked or failed work is a problem; input and parent waits only await a decision. */
+export const activityAttentionColor = (counts: ActivityAttentionCounts) =>
+  counts.blocked > 0 || counts.failed > 0 ? "warning" : managerNoticeColor("attention");
 
 export const activityAttentionLabels = (counts: ActivityAttentionCounts): string[] =>
   Arr.filter(

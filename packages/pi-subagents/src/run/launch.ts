@@ -33,12 +33,14 @@ import {
 import { peerNoticeText } from "./coordination.ts";
 import { taskPrompt } from "./tool-policy.ts";
 import {
+  failureFields,
   invalidRequest,
   processError,
   subagentErrorCode,
   type SubagentError,
   SubagentHistoryCapacityError,
   SubagentRuntimeClosedError,
+  withGuidanceClause,
 } from "./errors.ts";
 import {
   candidateFallbackFailure,
@@ -78,7 +80,7 @@ import type { RunRecordCleanup } from "./record-cleanup.ts";
 import { cleanupFailureDiagnostic } from "./cleanup-diagnostic.ts";
 import type { RunSettlement } from "./settlement.ts";
 import { MAX_ERROR_CHARS, sanitizeDiagnosticText, sanitizeName } from "./state.ts";
-import { foldRunWarnings } from "./warnings.ts";
+import { foldRunWarnings, foldUserRunWarnings } from "./warnings.ts";
 import { scriptOriginForStart, scriptedWriterAdmissionError } from "./launch-policy.ts";
 import type { RunWorkspaceControl } from "./workspace-control.ts";
 import {
@@ -411,8 +413,12 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
                 return yield* SubagentHistoryCapacityError.make({
                   limit: MAX_RETAINED_RUNS,
                   code: "history_outbox_capacity",
-                  message:
-                    "Subagent history eviction ownership changed before admission completed; retry the start after inspecting current run state.",
+                  ...failureFields(
+                    withGuidanceClause(
+                      "Subagent history eviction ownership changed before admission completed",
+                      "retry the start after inspecting current run state.",
+                    ),
+                  ),
                 });
               return yield* admitLocked(candidate, yield* checkAdmissionLocked(candidate));
             }),
@@ -735,6 +741,7 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
                 const nextCandidate = failedRunNextCandidate(reserved.view);
                 const failureFile = reserved.view.errorArchive;
                 const warning = foldRunWarnings(reserved.warningSlots);
+                const userWarning = foldUserRunWarnings(reserved.warningSlots);
                 const { model, effort, openaiFastMode, selection } = reserved.view;
                 failedStartRoutes.set(error, { model, effort, openaiFastMode, selection });
                 failedStartRecoveries.set(error, {
@@ -745,7 +752,11 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
                       : reserved.cleanupDisposition,
                   ...(nextCandidate && { nextCandidate }),
                   ...(failureFile && { failureFile }),
-                  ...(warning && warning !== reserved.view.error && { warning }),
+                  ...(warning &&
+                    warning !== reserved.view.error && {
+                      warning,
+                      ...(userWarning !== warning && userWarning && { userWarning }),
+                    }),
                 });
               }),
             ),

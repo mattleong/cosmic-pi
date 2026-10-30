@@ -6,6 +6,7 @@ export const CompactOutcomeSchema = Schema.Literals([
   "success",
   "returned",
   "warning",
+  "attention",
   "error",
   "cancelled",
   "uncertain",
@@ -24,6 +25,8 @@ const Summary = Schema.Struct({
   ...Fields,
   subject: Schema.String,
   outcome: Schema.optionalKey(CompactOutcomeSchema),
+  messageIcon: Schema.optionalKey(Schema.Literals(["sent", "received"])),
+  quote: Schema.optionalKey(Schema.String),
   children: Schema.optionalKey(
     Schema.Struct({
       total: Schema.Natural,

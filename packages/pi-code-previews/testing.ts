@@ -16,6 +16,8 @@ export { galleryDirectory, writeGallerySection } from "pi-cosmic-core/testing";
 export {
   galleryFrames,
   galleryMessageFrames,
+  galleryTranscriptFrames,
   type GalleryMessageScenario,
+  type GalleryTranscriptEntry,
   type GalleryScenario,
 } from "./src/testing/gallery";
