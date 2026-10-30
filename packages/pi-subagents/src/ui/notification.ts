@@ -25,12 +25,33 @@ const decodeDetails = Schema.decodeUnknownOption(NoticeDetailsSchema, {
   onExcessProperty: "ignore",
 });
 
-const UNTYPED_SUBJECTS = new Map([
-  ["pi-subagents-proxy-notification", "Update about a nested subagent"],
-  ["pi-subagents-peer-notice", "Working directory shared with other subagents"],
+// Notices saved before display copies: which notice it was, from its message type.
+const UNTYPED_NOTICES = new Map<string, NoticeHeading>([
+  [
+    "pi-subagents-proxy-notification",
+    {
+      name: "agent_update",
+      label: "Agent update",
+      summary: { subject: "a nested subagent", outcome: "returned" },
+    },
+  ],
+  [
+    "pi-subagents-peer-notice",
+    {
+      name: "agent_peers",
+      label: "Agent peers",
+      summary: { subject: "shared directory", outcome: "returned" },
+    },
+  ],
 ]);
 
-const STOP_CAUSES = { reload: "Reloading Pi stopped", session: "Leaving the session stopped" };
+const STOP_CAUSES = { reload: "on reload", session: "on leaving the session" };
+
+interface NoticeHeading {
+  readonly name: string;
+  readonly label: string;
+  readonly summary: CompactSummary;
+}
 
 type CompletedDetails = Extract<NoticeDetails, { readonly kind: "completed" }>;
 type StoppedDetails = Extract<NoticeDetails, { readonly kind: "stopped" }>;
@@ -41,62 +62,79 @@ const namesOrCount = (names: ReadonlyArray<string>, total: number, noun: string)
     ? Arr.join(names, ", ")
     : countLabel(total, noun);
 
-const peerSubject = (details: PeerDetails): string =>
+const peerSummary = (details: PeerDetails): CompactSummary =>
   details.total === 0
-    ? "No other subagents share this directory"
-    : `Sharing this directory with ${namesOrCount(
-        Arr.map(details.peers, (peer) => peer.name),
-        details.total,
-        "other subagent",
-      )}`;
+    ? { subject: "none", counters: ["no shared directory"], outcome: "returned" }
+    : {
+        subject: namesOrCount(
+          Arr.map(details.peers, (peer) => peer.name),
+          details.total,
+          "other subagent",
+        ),
+        counters: ["share this directory"],
+        outcome: "returned",
+      };
 
 const completedSummary = (details: CompletedDetails): CompactSummary => {
   const finished = details.total - details.failed;
   const outcome = details.failed ? "error" : details.warnings ? "warning" : "success";
-  const single = details.total === 1 && details.name;
-  const subject = single
-    ? `${details.name} ${details.failed ? "failed" : details.warnings ? "finished with a warning" : "finished"}`
-    : Fn.pipe(
-        [
-          finished ? `${finished} finished` : "",
-          details.failed ? `${details.failed} failed` : "",
-          details.warnings ? `${details.warnings} with warnings` : "",
-        ],
-        Arr.filter(Boolean),
-        Arr.join(", "),
-      );
+  // A single report's icon says how it ended; several get counts.
+  const subject =
+    details.total === 1 && details.name
+      ? details.name
+      : Fn.pipe(
+          [
+            finished ? `${finished} finished` : "",
+            details.failed ? `${details.failed} failed` : "",
+            details.warnings ? `${details.warnings} with warnings` : "",
+          ],
+          Arr.filter(Boolean),
+          Arr.join(", "),
+        );
   return { subject, outcome };
 };
 
-const stoppedSubject = (details: StoppedDetails): string => {
+const stoppedSummary = (details: StoppedDetails): CompactSummary => {
   const names = Arr.map(details.runs ?? [], (run) => run.name);
-  const named =
+  const subject =
     names.length === 0 && details.total === 1 && details.name
       ? details.name
       : namesOrCount(names, details.total, "subagent");
-  return details.cause ? `${STOP_CAUSES[details.cause]} ${named}` : `Stopped ${named}`;
+  return {
+    subject,
+    ...(details.cause && { counters: [STOP_CAUSES[details.cause]] }),
+    outcome: "warning",
+  };
 };
 
-const notificationSummary = (
+const notificationHeading = (
   customType: string | undefined,
   details: NoticeDetails | undefined,
-): CompactSummary => {
+): NoticeHeading => {
   if (details?.kind === "question")
-    return { subject: `${details.name ?? "A subagent"} asks`, outcome: "attention" };
+    return {
+      name: "agent_question",
+      label: "Agent question",
+      summary: { subject: details.name ?? "a subagent", outcome: "attention" },
+    };
   if (details?.kind === "stopped" && details.total > 0)
-    return { subject: stoppedSubject(details), outcome: "warning" };
-  if (details?.kind === "peers") return { subject: peerSubject(details), outcome: "returned" };
+    return { name: "agent_stopped", label: "Agents stopped", summary: stoppedSummary(details) };
+  if (details?.kind === "peers")
+    return { name: "agent_peers", label: "Agent peers", summary: peerSummary(details) };
   if (
     details?.kind === "completed" &&
     details.total > 0 &&
     details.failed <= details.total &&
     details.warnings <= details.total
   )
-    return completedSummary(details);
-  return {
-    subject: UNTYPED_SUBJECTS.get(customType ?? "") ?? "Subagent update",
-    outcome: "returned",
-  };
+    return { name: "agent_report", label: "Agent report", summary: completedSummary(details) };
+  return (
+    UNTYPED_NOTICES.get(customType ?? "") ?? {
+      name: "agent_update",
+      label: "Agent update",
+      summary: { subject: "a subagent", outcome: "returned" },
+    }
+  );
 };
 
 const expansionLabel = (details: NoticeDetails | undefined): string => {
@@ -235,11 +273,7 @@ const noticeBody = (
 export const presentSubagentNotification: CodePreviewMessagePresenter = (input, options, theme) => {
   const envelope = Option.getOrUndefined(decodeMessageEnvelope(input));
   const details = Option.getOrUndefined(decodeDetails(envelope?.details));
-  const presentation = {
-    name: "subagents",
-    label: "Subagents",
-    summary: notificationSummary(envelope?.customType, details),
-  };
+  const presentation = notificationHeading(envelope?.customType, details);
   // Without a display copy, expansion keeps the notice as the agent received it.
   if (!hasDisplayCopy(details))
     return {

@@ -144,7 +144,8 @@ describe("background task notice rendering", () => {
       const expanded = renderNotice(message.details, true, message.content);
       for (const fact of ["rejects expired tokens", failed.id, failed.cwd])
         expect(expanded).toContain(fact);
-      expect(expanded).not.toContain("background_task");
+      // The notice tells the agent how to read more output; the user never sees that step.
+      expect(expanded).not.toContain(`action "logs"`);
       expect(expanded).not.toContain("FAKE_SECRET");
     },
   );

@@ -56,9 +56,9 @@ export const presentIntercomMessage: CodePreviewMessagePresenter = (message, _op
   const sender = from ? sessionSubject(from) : "another session";
   const details = () => (from ? [detailsLine([`Session ${from.sessionId}`, from.cwd], theme)] : []);
   const presentation = {
-    name: "intercom",
-    label: "Intercom",
-    summary: { subject: `${sender} → you`, outcome: "returned", messageIcon: "received" },
+    name: "session_message",
+    label: "Session message",
+    summary: { subject: sender, outcome: "returned", messageIcon: "received" },
   } as const;
   if (text === undefined)
     return {

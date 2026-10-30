@@ -37,9 +37,10 @@ export const presentAgentMessage: CodePreviewMessagePresenter = (input, options,
   const details = Option.getOrUndefined(decodeDetails(envelope?.details));
   const words = details?.text;
   const sender = details ? displayName(details.fromName ?? details.from) : "";
-  const recipient = details?.to === "main" ? "main" : details ? displayName(details.to) : "";
+  // The arrow icon already says the message came in; a recipient shows only when it isn't main.
+  const recipient = details && details.to !== "main" ? ` → ${displayName(details.to)}` : "";
   const summary = {
-    subject: sender ? `${sender} → ${recipient || "main"}` : "Message from another agent",
+    subject: sender ? `${sender}${recipient}` : "another agent",
     outcome: "returned",
     messageIcon: "received",
   } as const;

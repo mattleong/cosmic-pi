@@ -27,6 +27,13 @@ const RUN_STATE_KINDS = {
 export const runStateGlyph = (state: SubagentRunState, frame?: number): string =>
   managerActivityGlyph(RUN_STATE_KINDS[state], frame);
 
+/** Marks running work in a row that never redraws, where a spinner would freeze on one frame. */
+export const SNAPSHOT_RUNNING_GLYPH = "▸";
+
+/** A run's glyph in a saved snapshot: running work is marked, not drawn as a stopped spinner. */
+export const runStateSnapshotGlyph = (state: SubagentRunState): string =>
+  state === "running" ? SNAPSHOT_RUNNING_GLYPH : runStateGlyph(state);
+
 export const runStateLabel = (state: SubagentRunState): string =>
   state === "waiting_for_parent"
     ? "waiting for reply"

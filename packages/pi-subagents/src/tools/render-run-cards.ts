@@ -10,7 +10,7 @@ import { agentTextBlockLines, type AgentTextBlock } from "../ui/agent-text.ts";
 import { aggregateUsage } from "../ui/metrics.ts";
 import { savedFileFact, workspaceNote } from "../ui/notice-facts.ts";
 import { formatRunRouteLine } from "../ui/run-presentation.ts";
-import { runStateColor, runStateGlyph, runStateLabel } from "../ui/run-state.ts";
+import { runStateColor, runStateLabel, runStateSnapshotGlyph } from "../ui/run-state.ts";
 import type { SubagentRunCard } from "./details-schema.ts";
 import { workspaceOutcomeLabel } from "./format.ts";
 import { runTiming } from "./render-run-rows.ts";
@@ -67,7 +67,7 @@ const cardBlock = (card: SubagentRunCard): AgentTextBlock => {
   const words = cardWords(card);
   const asking = runAttention(card)?.kind === "question";
   return {
-    glyph: runStateGlyph(card.state),
+    glyph: runStateSnapshotGlyph(card.state),
     tone: runStateColor(card.state),
     name: card.name,
     ...(card.state !== "completed" && { status: asking ? "asks" : runStateLabel(card.state) }),
@@ -149,7 +149,7 @@ export const stateGroupLines = (
     groups.set(card.state, [...(groups.get(card.state) ?? []), sanitizeTerminalLine(card.name)]);
   return Arr.map([...groups], ([state, names]) =>
     clipToWidth(
-      `${theme.fg(runStateColor(state), runStateGlyph(state))} ${GROUP_VERBS[state]} ${theme.fg("toolTitle", Arr.join(names, ", "))}`,
+      `${theme.fg(runStateColor(state), runStateSnapshotGlyph(state))} ${GROUP_VERBS[state]} ${theme.fg("toolTitle", Arr.join(names, ", "))}`,
       width,
     ),
   );

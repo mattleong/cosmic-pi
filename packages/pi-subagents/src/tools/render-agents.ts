@@ -6,12 +6,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { countLabel } from "pi-cosmic-core/display";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
-import {
-  clipToWidth,
-  managerActivityColor,
-  managerActivityGlyph,
-  type ManagerStatusColor,
-} from "pi-cosmic-ui/manager";
+import { clipToWidth, managerActivityColor, type ManagerStatusColor } from "pi-cosmic-ui/manager";
 import { composeToolComponent, renderExpansionAffordance } from "pi-cosmic-ui/tool";
 import { SUBAGENT_RUN_STATES } from "../run/model.ts";
 import {
@@ -19,7 +14,12 @@ import {
   COLLAPSED_AGENT_TEXT_ROWS,
   detailsSectionLines,
 } from "../ui/agent-text.ts";
-import { runStateColor, runStateGlyph, runStateLabel } from "../ui/run-state.ts";
+import {
+  runStateColor,
+  runStateLabel,
+  runStateSnapshotGlyph,
+  SNAPSHOT_RUNNING_GLYPH,
+} from "../ui/run-state.ts";
 import type { AgentToolDetails } from "./details-schema.ts";
 
 type ListDetails = Extract<AgentToolDetails, { readonly action: "agent_list" }>;
@@ -40,10 +40,14 @@ interface AgentStatePresentation {
 export const agentStatePresentation = (state: AgentState): AgentStatePresentation => {
   const run = runState(state);
   if (run !== undefined)
-    return { glyph: runStateGlyph(run), tone: runStateColor(run), label: runStateLabel(run) };
+    return {
+      glyph: runStateSnapshotGlyph(run),
+      tone: runStateColor(run),
+      label: runStateLabel(run),
+    };
   if (state === "busy")
     return {
-      glyph: managerActivityGlyph("running"),
+      glyph: SNAPSHOT_RUNNING_GLYPH,
       tone: managerActivityColor("running"),
       label: "busy",
     };

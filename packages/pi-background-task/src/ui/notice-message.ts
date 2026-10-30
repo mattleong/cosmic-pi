@@ -72,7 +72,7 @@ export const presentTaskNotice: CodePreviewMessagePresenter = (message, _options
   const envelope = Option.getOrUndefined(decodeEnvelope(message));
   const details = Option.getOrUndefined(decodeDetails(envelope?.details));
   return {
-    name: "background task",
+    name: "background_task",
     label: "Background task",
     summary: details ? taskNoticeSummary(details.task) : UNKNOWN_NOTICE,
     expandLabel: expansionLabel(details),

@@ -94,10 +94,8 @@ const targetSubject = (to: string | undefined): string =>
   clipText(sanitizeTerminalLine(to ?? ""), MAX_SUBJECT_CHARS);
 
 const pending = (tool: string, to: string | undefined): CompactSummary => {
-  if (tool === SESSION_TOOL.list) return { action: "Listing", subject: "sessions" };
-  if (tool === SESSION_TOOL.send)
-    return { action: "Sending message to", subject: targetSubject(to) };
-  return { action: "Reading", subject: `${targetSubject(to)}'s last message` };
+  if (tool === SESSION_TOOL.list) return { subject: "sessions" };
+  return { subject: targetSubject(to) };
 };
 
 const listSummary = (
@@ -110,7 +108,6 @@ const listSummary = (
   };
   const duplicates = Arr.filter(details.sessions, ({ duplicate }) => duplicate).length;
   return {
-    action: "Listed",
     subject: countLabel(total, "session"),
     counters: [...counted("unavailable"), ...counted("unresponsive"), ...counted("unreachable")],
     metadata: duplicates > 0 ? [countLabel(duplicates, "duplicate id")] : [],
@@ -121,9 +118,7 @@ const listSummary = (
 const refusedSummary = (details: SessionRefusal): CompactSummary => {
   const subject = details.session ? sessionSubject(details.session) : targetSubject(details.to);
   const issues = [refusalIssue(details)];
-  return details.tool === SESSION_TOOL.send
-    ? { action: "Couldn't send message to", subject, outcome: "error", issues }
-    : { action: "Couldn't read", subject: `${subject}'s last message`, outcome: "error", issues };
+  return { subject, outcome: "error", issues };
 };
 
 const settled = (details: SessionToolDetails): CompactSummary => {
@@ -131,8 +126,7 @@ const settled = (details: SessionToolDetails): CompactSummary => {
   if ("outcome" in details && details.outcome === "refused") return refusedSummary(details);
   if (details.tool === SESSION_TOOL.read)
     return {
-      action: "Read",
-      subject: `${sessionSubject(details.session)}'s last message`,
+      subject: sessionSubject(details.session),
       metadata: [
         ...(details.state === "busy" ? ["busy"] : []),
         ...(details.text === undefined ? ["no reply yet"] : []),
@@ -142,14 +136,12 @@ const settled = (details: SessionToolDetails): CompactSummary => {
     };
   if (details.outcome === "uncertain")
     return {
-      action: "Sent message to",
       subject: sessionSubject(details.session),
       outcome: "uncertain",
       messageIcon: "sent",
       issues: [uncertainIssue(details)],
     };
   return {
-    action: "Sent message to",
     subject: sessionSubject(details.session),
     metadata: Arr.filter([DISPOSITION_WORDS[details.disposition]], Str.isNonEmpty),
     outcome: "success",
