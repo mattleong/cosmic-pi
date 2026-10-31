@@ -66,7 +66,7 @@ Use core's scoped platform mechanisms for ordinary I/O. Specialized adapters may
 
 Processes and native libraries require observed cleanup, not merely a timeout or successful kill request. Fixed packaged helpers use bounded input/output, controlled arguments and environment, and scoped process ownership. Better OpenAI's decoder keeps admission until exit is confirmed; uncertain cleanup disables further decoding. Its byte/pixel/deadline bounds are work limits, not an OS sandbox.
 
-Subagents owns authenticated supervision, writer leases, workspace proposals, and integration journals. A backend process ending does not delete its durable proposal or authorize adoption after reload. Integration revalidates source state and exact reviewed revisions; partial multi-file publication retains recovery evidence. Cooperative claims and worktrees do not restrict the local user's filesystem authority. Herdr BTW similarly retains uncertain pane outcomes rather than retrying an operation that may already have succeeded.
+Subagents owns authenticated supervision, writer leases, workspace proposals, and integration journals. A backend process ending does not delete its durable proposal or authorize adoption after reload. Integration revalidates source state and exact reviewed revisions; partial multi-file publication retains recovery evidence. Cooperative claims and worktrees do not restrict the local user's filesystem authority. Rex BTW similarly reports an uncertain pane split rather than retrying an operation that may already have succeeded.
 
 Core supplies synchronous entropy/UUID and text-identity helpers where an asynchronous gap would break a native ownership commit. Native asynchronous authentication still runs under Effect and rechecks revocation before publishing its result. Narrow unsafe calls belong at synchronous ingress or shared admission boundaries with explicit ownership, not in ordinary services.
 
@@ -84,7 +84,7 @@ Detailed integration constraints live with their owners:
 | [Subagents](../../packages/pi-subagents/ARCHITECTURE.md)               | Run coordination, in-session agent messaging, child/native transports, and workspace ownership                              |
 | [Better OpenAI](../../packages/pi-better-openai/ARCHITECTURE.md)       | Provider schemas/configuration, usage refresh, request policy, and image decoding/output                                    |
 | [Directory Models](../../packages/pi-directory-models/ARCHITECTURE.md) | Directory preferences and host model selection                                                                              |
-| [Herdr BTW](../../packages/pi-herdr-btw/ARCHITECTURE.md)               | Parent-session identity, child-session links, and fixed Herdr CLI interaction                                               |
 | [Intercom](../../packages/pi-intercom/ARCHITECTURE.md)                 | Cross-session registry records, session sockets, inbound message delivery, and the sweep of dead owners                     |
+| [Rex BTW](../../packages/pi-rex-btw/ARCHITECTURE.md)                   | Fixed Rex CLI interaction, BTW pane placement, and the child's parent-transcript reference                                  |
 
 Change these boundaries when it removes coupling or clarifies authority. Preserve cancellation and security guarantees, and update the owning document alongside the change.

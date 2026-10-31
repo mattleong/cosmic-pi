@@ -1,6 +1,6 @@
 # Releasing cosmic-pi
 
-All workspace packages use the synchronized version `0.2.0`. The public `pi-ask-user`, `pi-background-task`, `pi-better-openai`, `pi-code-previews`, `pi-cosmic-core`, `pi-cosmic-ui`, `pi-directory-models`, `pi-intercom`, and `pi-subagents` packages are published together; private `pi-herdr-btw` remains local-only. A published GitHub Release triggers [the release workflow](.github/workflows/release.yml), which validates the entire workspace, skips private packages, and publishes each public package to npm — shared runtime dependencies (`pi-cosmic-core`, `pi-cosmic-ui`, `pi-code-previews`) first, then the remaining public packages.
+All workspace packages use the synchronized version `0.2.0`. The public `pi-ask-user`, `pi-background-task`, `pi-better-openai`, `pi-code-previews`, `pi-cosmic-core`, `pi-cosmic-ui`, `pi-directory-models`, `pi-intercom`, and `pi-subagents` packages are published together; private `pi-rex-btw` remains local-only. A published GitHub Release triggers [the release workflow](.github/workflows/release.yml), which validates the entire workspace, skips private packages, and publishes each public package to npm — shared runtime dependencies (`pi-cosmic-core`, `pi-cosmic-ui`, `pi-code-previews`) first, then the remaining public packages.
 
 ## One-time setup
 
@@ -112,7 +112,7 @@ Do not create a new version solely because one package published before another 
 ## Important constraints
 
 - Keep the root and every package version synchronized.
-- Keep `pi-herdr-btw` private and local-only; do not publish it to npm. The retired `pi-mcp`, `pi-code-mode`, and standalone `pi-mcp-previews` packages are no longer release targets; native MCP presentation ships in `pi-code-previews`.
+- Keep `pi-rex-btw` private and local-only; do not publish it to npm. The retired `pi-mcp`, `pi-code-mode`, and standalone `pi-mcp-previews` packages are no longer release targets; native MCP presentation ships in `pi-code-previews`.
 - Use stable `vMAJOR.MINOR.PATCH` release tags, such as `v0.2.1`.
 - Publish through the GitHub Release workflow rather than running `npm publish` locally.
 - Never reuse or move a tag after npm publication.

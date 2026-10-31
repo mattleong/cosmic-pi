@@ -13,8 +13,8 @@ The workspace supports macOS and Linux. Use POSIX paths and process-group lifecy
 - `packages/pi-cosmic-core/`: shared Effect runtime and platform code.
 - `packages/pi-cosmic-ui/`: shared UI components and responsive footer.
 - `packages/pi-directory-models/`: per-directory model and thinking-level preferences.
-- `packages/pi-herdr-btw/`: reusable Herdr BTW side sessions.
 - `packages/pi-intercom/`: cross-session registry and messaging between live Pi sessions.
+- `packages/pi-rex-btw/`: `/btw` side conversations in new Rex panes.
 - `packages/pi-subagents/`: session-scoped background subagents.
 
 Pi/Jiti loads packages directly from TypeScript source. Do not add generated `dist/` runtime dependencies or package build prerequisites. Native `codemode` and MCP execution belong to Pi; the retired `pi-code-mode`, `pi-mcp`, and standalone `pi-mcp-previews` packages have no compatibility layer. All packages require Pi 1.4.0 or later and are tested with 1.4.0. Previously installed standalone MCP Previews must be removed manually; never edit user configuration automatically.

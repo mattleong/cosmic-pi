@@ -10,8 +10,8 @@ A pnpm workspace for Pi extensions.
 - [`pi-code-previews`](packages/pi-code-previews) — syntax-highlighted builtin previews, native codemode/MCP presentation, and a reusable tool shell.
 - [`pi-cosmic-core`](packages/pi-cosmic-core) — shared Effect-first runtime foundations for the extension packages.
 - [`pi-directory-models`](packages/pi-directory-models) — per-directory model and thinking-level preferences for fresh Pi sessions.
-- [`pi-herdr-btw`](packages/pi-herdr-btw) — deterministic reusable blank Pi side sessions in user-owned panes in the current Herdr tab.
 - [`pi-intercom`](packages/pi-intercom) — discovery of, and messaging between, your live Pi sessions on this machine.
+- [`pi-rex-btw`](packages/pi-rex-btw) — `/btw` opens a clean-context Pi side conversation in a new Rex pane that can read the live parent transcript.
 - [`pi-cosmic-ui`](packages/pi-cosmic-ui) — composable, responsive shared UI elements: the footer and information area, and the Activity view for subagents and tasks.
 - [`pi-subagents`](packages/pi-subagents) — session-scoped background subagents running as local Pi processes, with supervisor communication and messaging among a session's agents, and workflow prompt templates such as `/parallel-review`; `/subagents` opens them in the shared Activity view.
 
@@ -36,8 +36,8 @@ pi install "$PWD/packages/pi-better-openai"
 pi install "$PWD/packages/pi-code-previews"
 pi install "$PWD/packages/pi-cosmic-ui"
 pi install "$PWD/packages/pi-directory-models"
-pi install "$PWD/packages/pi-herdr-btw"
 pi install "$PWD/packages/pi-intercom"
+pi install "$PWD/packages/pi-rex-btw"
 pi install "$PWD/packages/pi-subagents"
 ```
 
@@ -66,8 +66,8 @@ pnpm --filter pi-better-openai test
 pnpm --filter pi-code-previews test
 pnpm --filter pi-cosmic-ui test
 pnpm --filter pi-directory-models test
-pnpm --filter pi-herdr-btw test
 pnpm --filter pi-intercom test
+pnpm --filter pi-rex-btw test
 pnpm --filter pi-subagents test
 ```
 
@@ -82,8 +82,8 @@ pi -e ./packages/pi-better-openai
 pi -e ./packages/pi-code-previews
 pi -e ./packages/pi-cosmic-ui
 pi -e ./packages/pi-directory-models
-pi -e ./packages/pi-herdr-btw
 pi -e ./packages/pi-intercom
+pi -e ./packages/pi-rex-btw
 pi -e ./packages/pi-subagents
 ```
 
@@ -91,7 +91,7 @@ To add a package to project-local Pi settings, use `pi install -l` with its loca
 
 ## Releases
 
-All workspace packages use the synchronized version `0.2.0`. Nothing is published yet; once releases start, the public packages publish together and private `pi-herdr-btw` stays local-only. Set the next version from the repository root:
+All workspace packages use the synchronized version `0.2.0`. Nothing is published yet; once releases start, the public packages publish together and private `pi-rex-btw` stays local-only. Set the next version from the repository root:
 
 ```bash
 pnpm version:set 0.2.1
