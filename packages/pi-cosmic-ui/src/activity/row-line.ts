@@ -2,7 +2,6 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { formatElapsed } from "pi-cosmic-core/display";
-import { managerTone } from "../manager/style.ts";
 import {
   managerActivityColor,
   managerActivityGlyph,
@@ -55,23 +54,9 @@ export const elapsedLabel = (elapsed: number, compact: boolean): string => {
   const text = formatElapsed(elapsed);
   return compact ? Str.split(text, " ")[0] : text;
 };
-const activityTypes = {
-  agent: "SUBAGENT",
-  command: "TASK",
-  question: "QUESTION",
-} as const;
-export const activityType = (row: ActivityRow): string => activityTypes[row.kind];
-
-const widgetTypeColors = {
-  command: "syntaxKeyword",
-  agent: "thinkingHigh",
-  question: "accent",
-} as const;
-const managerTypeColors = {
-  command: "muted",
-  agent: managerTone.identity,
-  question: "accent",
-} as const;
+// Agents name their profile instead; a question's glyph and status already say what it is.
+const activityTypes = { agent: "subagent", command: "task", question: "" } as const;
+const activityType = (row: ActivityRow): string => activityTypes[row.kind];
 
 export interface RowPaint {
   readonly now?: number | undefined;
@@ -138,7 +123,6 @@ export function groupedMemberLine(
       expanded: entry.expanded,
       glyph,
       color,
-      typeColor: (interactive ? managerTypeColors : widgetTypeColors)[row.kind],
       status,
       statusSeparator: reason ? " · " : " ",
       statusColor: warnings
@@ -149,7 +133,6 @@ export function groupedMemberLine(
       compactStatus: warnings.length > 0,
       ...(entry.history && { history: true }),
       ...(row.kind === "agent" && row.profile && { profile: row.profile }),
-      ...(row.route && { route: row.route }),
       ...(row.awaited && { awaited: true }),
       ...(row.omittedChildren && { omittedChildren: row.omittedChildren }),
     },

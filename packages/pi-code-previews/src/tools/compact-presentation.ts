@@ -27,7 +27,8 @@ export function planCompactPresentation(input: {
     : {
         ...heading,
         outcome: "uncertain",
-        ...(!input.expanded && { metadata: ["details on expand"] }),
+        // Without a usable summary nothing classifies the result; expansion shows it whole.
+        ...(!input.expanded && { metadata: ["outcome unknown"] }),
       };
   return { summary, collapsedSummary };
 }

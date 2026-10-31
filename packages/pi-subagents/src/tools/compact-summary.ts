@@ -333,7 +333,7 @@ function summarizeModels(
   ];
   if (disabled) counters.push(`${disabled} disabled`);
   if (unavailable) counters.push(`${unavailable} unavailable`);
-  if (agents.length > 0) counters.push(countLabel(agents.length, "agent"));
+  if (agents.length > 0) counters.push(countLabel(agents.length, "custom agent"));
   summary.counters = [Arr.join(counters, ", ")];
   if (summary.outcome === "success" && compactIssueSeverity(issues) === "warning")
     summary.outcome = "warning";

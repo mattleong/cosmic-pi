@@ -19,6 +19,7 @@ const MINIMUM_TITLE_WIDTH = 14;
 const PROFILE_RESERVE_WIDTH = 12;
 
 export interface ActivityRowVisual {
+  /** A quiet word after the title saying what the row is, when its profile doesn't. */
   readonly kind: string;
   readonly title: string;
   readonly continuations: readonly boolean[];
@@ -26,13 +27,11 @@ export interface ActivityRowVisual {
   readonly expanded: boolean;
   readonly glyph: string;
   readonly color: Tone;
-  readonly typeColor: Tone;
   readonly status: readonly ActivityStatusPart[];
   readonly statusSeparator?: string;
   readonly statusColor: Tone;
   readonly compactStatus?: boolean;
   readonly profile?: string;
-  readonly route?: string;
   readonly awaited?: boolean;
   readonly omittedChildren?: number;
   readonly history?: boolean;
@@ -108,17 +107,19 @@ const rowMarkers = (row: ActivityRowVisual, interactive: boolean): RowMarkers =>
   };
 };
 
+// The profile, or the row's kind when it has none, follows the title quietly.
+const rowSuffix = (row: ActivityRowVisual): string => row.profile ?? row.kind;
+
 const minimumLeftWidth = (
   row: ActivityRowVisual,
   { continuations, awaited, fold, omitted }: RowMarkers,
-  profileName: string,
+  suffix: string,
 ): number =>
   visibleWidth(treeGuide(continuations, Math.min(12, continuations.length))) +
   visibleWidth(fold) +
   visibleWidth(awaited) +
   2 +
-  (row.kind ? visibleWidth(row.kind) + 1 : 0) +
-  (profileName ? Math.min(PROFILE_RESERVE_WIDTH, visibleWidth(profileName) + 3) : 0) +
+  (suffix ? Math.min(PROFILE_RESERVE_WIDTH, visibleWidth(suffix) + 3) : 0) +
   Math.min(MINIMUM_TITLE_WIDTH, visibleWidth(`${row.title}${omitted}`));
 
 const statusColumnWidth = (
@@ -132,29 +133,18 @@ const statusColumnWidth = (
   return Math.min(visibleWidth(status), rightBudget);
 };
 
-const rowRoute = (
-  row: ActivityRowVisual,
-  interactive: boolean,
-  width: number,
-  leftWidth: number,
-  paint: Paint,
-): string =>
-  !interactive && width >= 100 && row.route
-    ? paint("muted", clipToWidth(row.route, Math.floor(leftWidth / 2), "…"))
-    : "";
-
 const rowName = (
   row: ActivityRowVisual,
   interactive: boolean,
-  profile: string,
+  suffix: string,
   paint: Paint,
   focusedStyle: ((text: string) => string) | undefined,
 ): string => {
-  const kind = row.kind ? `${row.kind} ` : "";
-  if (focusedStyle) return focusedStyle(`${kind}${profile}${row.title}`);
+  const quiet = suffix ? ` · ${suffix}` : "";
+  if (focusedStyle) return focusedStyle(`${row.title}${quiet}`);
   const recede = row.history && interactive ? "muted" : undefined;
-  const identityTone = recede ?? (interactive ? managerTone.identity : undefined);
-  return `${paint(recede ?? row.typeColor, kind)}${paint(identityTone ?? "muted", profile)}${paint(identityTone ?? "text", row.title)}`;
+  const identityTone = recede ?? (interactive ? managerTone.identity : "text");
+  return `${paint(identityTone, row.title)}${paint(recede ?? "muted", quiet)}`;
 };
 
 export function renderActivityRow(
@@ -169,12 +159,12 @@ export function renderActivityRow(
   const markers = rowMarkers(row, interactive);
   const { continuations, awaited, fold, omitted } = markers;
   const markerWidth = visibleWidth(awaited);
-  const profileName = row.profile ?? "";
-  const identityWidth = visibleWidth(row.kind) + (profileName ? visibleWidth(profileName) + 1 : 0);
+  const suffix = rowSuffix(row);
+  const identityWidth = suffix ? visibleWidth(suffix) + 3 : 0;
   const status = fitStatus(
     row.status,
     row.statusSeparator ?? " · ",
-    width - minimumLeftWidth(row, markers, profileName) - 2,
+    width - minimumLeftWidth(row, markers, suffix) - 2,
   );
   const rightWidth = statusColumnWidth(
     row,
@@ -190,16 +180,12 @@ export function renderActivityRow(
     clipToWidth(`${treeGuide(continuations, levels)}${fold}`, guideBudget, ""),
   );
   const glyph = paint(row.color, row.glyph);
-  const profile = profileName ? `${profileName} · ` : "";
-  const route = rowRoute(row, interactive, width, leftWidth, paint);
-  const routeWidth = route ? visibleWidth(route) + 2 : 0;
-  const name = rowName(row, interactive, profile, paint, focusedStyle);
-  const identity = clipToWidth(
+  const name = rowName(row, interactive, suffix, paint, focusedStyle);
+  const left = clipToWidth(
     `${guide}${paint("accent", awaited)}${glyph} ${name}${paint("dim", omitted)}`,
-    Math.max(0, leftWidth - routeWidth),
+    Math.max(0, leftWidth),
     "…",
   );
-  const left = route ? `${identity}  ${route}` : identity;
   return rightWidth === undefined
     ? left
     : `${left}${Fn.pipe(" ", Str.repeat(Math.max(1, width - visibleWidth(left) - rightWidth)))}${paint(row.statusColor, clipToWidth(status, rightWidth, "…"))}`;

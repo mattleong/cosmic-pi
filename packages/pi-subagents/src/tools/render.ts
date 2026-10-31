@@ -28,7 +28,11 @@ import {
   type SubagentStartAwaitCardDetails,
   type WorkspaceToolDetails,
 } from "./details-schema.ts";
-import { decodeCompactToolDetails, decodeStartAwaitCardDetails } from "./details-decode.ts";
+import {
+  decodeCompactToolDetails,
+  decodeStartAwaitCardDetails,
+  type decodeOutcomeDetails,
+} from "./details-decode.ts";
 import { rejectedFailureText } from "./failure-details.ts";
 import { boundToolOutput } from "./format.ts";
 import { renderCompactResultComponent, renderProfileRoutesComponent } from "./render-management.ts";
@@ -108,12 +112,38 @@ export const renderWorkspaceCallArguments = (
     ];
   });
 
-/** The run IDs an await or lifecycle call names, which expansion keeps beside the run names. */
+// Run names an await or lifecycle result resolved, by tool call. Only recent rows redraw their
+// requested line, so the oldest entries go first once the bound is reached.
+const MAX_REMEMBERED_ROWS = 256;
+const runNamesByCall = new Map<string, ReadonlyMap<string, string>>();
+
+/** Records the names a result resolved for its runs, for the requested line drawn beside it. */
+export const rememberRunNames = (
+  toolCallId: string,
+  details: ReturnType<typeof decodeOutcomeDetails>,
+): void => {
+  if (details === undefined || !("cards" in details)) return;
+  runNamesByCall.delete(toolCallId);
+  runNamesByCall.set(
+    toolCallId,
+    new Map(Arr.map(details.cards, (card) => [card.id, sanitizeTerminalLine(card.name)] as const)),
+  );
+  for (const oldest of runNamesByCall.keys()) {
+    if (runNamesByCall.size <= MAX_REMEMBERED_ROWS) break;
+    runNamesByCall.delete(oldest);
+  }
+};
+
+/**
+ * The runs an await or lifecycle call names: by name once its result resolved them, by ID before
+ * that or when a run is unknown. The result's Details keep every ID beside its name.
+ */
 export const renderRequestedRuns = (
   ids: ReadonlyArray<string>,
   wait: { readonly until: SubagentAwaitUntil; readonly timeoutSeconds?: number },
   tool: string,
   theme: Theme,
+  toolCallId?: string,
 ): Component =>
   renderComponent((width) =>
     wrapTextWithAnsi(
@@ -121,7 +151,16 @@ export const renderRequestedRuns = (
         "dim",
         Arr.join(
           [
-            `Requested ${Arr.join(Arr.map(ids, sanitizeTerminalLine), ", ")}`,
+            `Requested ${Arr.join(
+              Arr.map(
+                ids,
+                (id) =>
+                  (toolCallId === undefined
+                    ? undefined
+                    : runNamesByCall.get(toolCallId)?.get(id)) ?? sanitizeTerminalLine(id),
+              ),
+              ", ",
+            )}`,
             ...(tool === "agent_await" && wait.until === "any_finished"
               ? ["until the first finishes"]
               : []),

@@ -33,7 +33,7 @@ export const activityQueued = (item: ActivityItem): boolean =>
 
 export function activityStatus(item: ActivityItem): string {
   if (item.status === "needs-input")
-    return item.inputTarget === "user" ? "waiting for you" : "waiting for parent";
+    return item.inputTarget === "user" ? "waiting for you" : "waiting for reply";
   if (item.status === "blocked")
     return item.blockedReason ? blockedLabels[item.blockedReason] : "blocked";
   if (item.status === "cancelled")
@@ -81,7 +81,7 @@ export const activityAttentionLabels = (counts: ActivityAttentionCounts): string
   Arr.filter(
     [
       counts.user ? `${counts.user} ${counts.user === 1 ? "needs" : "need"} your input` : "",
-      counts.parent ? `${counts.parent} waiting for parent` : "",
+      counts.parent ? `${counts.parent} waiting for reply` : "",
       counts.blocked ? `${counts.blocked} blocked` : "",
       counts.failed ? `${counts.failed} failed` : "",
     ],

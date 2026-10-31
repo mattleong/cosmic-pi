@@ -15,7 +15,7 @@ import { activityStatus } from "./attention.ts";
 import type { GroupedActivityRow } from "./grouped-tree.ts";
 import { workStateLabels, type GroupSummary } from "./group-summary.ts";
 import type { ActivityRow } from "./model.ts";
-import { activityElapsed, activityType } from "./row-line.ts";
+import { activityElapsed } from "./row-line.ts";
 
 const optionalField = (label: string, values: readonly string[]): ListDetailField[] =>
   values.length ? [{ label, value: Arr.join(values, " · ") }] : [];
@@ -76,7 +76,7 @@ function sourceDetail(
           value: Arr.join(
             Arr.filter(
               [
-                activityType(row),
+                // The breadcrumb names the group; only an agent's profile adds anything.
                 row.kind === "agent" ? row.profile : undefined,
                 activityStatus(row),
                 activityElapsed(row, options.now),
@@ -120,8 +120,9 @@ function actionLines(row: ActivityRow, page: number): string[] {
   return [
     ...Arr.map(
       actions.slice(page * ACTIVITY_ACTION_PAGE_SIZE, (page + 1) * ACTIVITY_ACTION_PAGE_SIZE),
-      (action, index) => `${index + 1} ${action.label}`,
+      // Bracketed keys, so a lone "1" never reads as a count of actions.
+      (action, index) => `[${index + 1}] ${action.label}`,
     ),
-    ...(pages > 1 ? [`a More actions · page ${page + 1} of ${pages}`] : []),
+    ...(pages > 1 ? [`[a] More actions · page ${page + 1} of ${pages}`] : []),
   ];
 }

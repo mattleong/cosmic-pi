@@ -162,19 +162,26 @@ const NESTED_NAMESPACE = {
 
 const COLLAPSED_RESULT_LINES = 8;
 
-/** Requested agents as typed, which expansion keeps beside the names the result resolves. */
-const requestedLine = (call: AgentCallEvidence): string | undefined =>
+/**
+ * Requested agents by the names the result resolved, or as typed before it arrives and for agents
+ * it didn't find. The result's Details keep every ID beside its name.
+ */
+const requestedLine = (
+  call: AgentCallEvidence,
+  names: ReadonlyMap<string, string> | undefined,
+): string | undefined =>
   call.agentIds === undefined || call.agentIds.length === 0
     ? undefined
     : `Requested ${Fn.pipe(
         call.agentIds,
-        Arr.map((id) => sanitizeTerminalLine(id)),
+        Arr.map((id) => names?.get(Str.trim(id)) ?? sanitizeTerminalLine(id)),
         Arr.join(", "),
       )}`;
 
-/** A tool row's shared renderer state, where a send's result leaves the name it resolved. */
+/** A tool row's shared renderer state, where a result leaves the names it resolved. */
 interface SendRowState extends Record<string, unknown> {
   piSubagentsRecipient?: string | undefined;
+  piSubagentsAgentNames?: ReadonlyMap<string, string> | undefined;
 }
 
 interface SendRenderContext {
@@ -188,6 +195,16 @@ const rememberRecipient = (
   if (details?.action === AGENT_TOOL_NAME.send)
     context.state.piSubagentsRecipient =
       details.to === MAIN_AGENT_ID ? "main" : sanitizeTerminalLine(details.name);
+  const named =
+    details?.action === AGENT_TOOL_NAME.read
+      ? details.agents
+      : details?.action === AGENT_TOOL_NAME.list
+        ? (details.entries ?? [])
+        : [];
+  if (named.length > 0)
+    context.state.piSubagentsAgentNames = new Map(
+      Arr.map(named, (agent) => [agent.id, sanitizeTerminalLine(agent.name)] as const),
+    );
 };
 
 // The result names the recipient; until it arrives the heading shows what was typed.
@@ -241,7 +258,7 @@ export function registerAgentTools(
       hasRecordedFailure(result) &&
       (summarize({ phase: "settled", args: context.args, result, context })?.issues?.length ?? 0) >
         0;
-    const tool = defineTool<AgentToolParameters<N>>({
+    const tool = defineTool<AgentToolParameters<N>, unknown, SendRowState>({
       ...spec,
       ...(name === AGENT_TOOL_NAME.list && {
         promptGuidelines: coordinationGuidelines(runtime.nested !== true),
@@ -305,26 +322,30 @@ export function registerAgentTools(
         );
       },
     });
-    return shell(tool, {
+    return shell<AgentToolParameters<N>, unknown, SendRowState, typeof tool>(tool, {
       ...(runtime.scheduleAnimation && { scheduleAnimation: runtime.scheduleAnimation }),
       compactSummary: summarize,
       expandedContent: {
-        // The heading names the call; expansion keeps the whole message and every requested ID.
-        renderCall: (args, theme) => {
+        // The heading names the call; expansion keeps the whole message and every requested agent,
+        // named once the result resolved them.
+        renderCall: (args, theme, { state }) => {
           const call = decodeAgentCall(args) ?? {};
-          const requested = Arr.filter(
-            [
-              requestedLine(call),
-              call.to === undefined ? undefined : `To ${sanitizeTerminalLine(call.to)}`,
-            ],
-            isTextFragment,
-          );
-          return composeToolComponent((width) => [
-            ...agentTextLines(call.message, width, theme, { expanded: true, indent: 0 }),
-            ...Arr.flatMap(requested, (line) => wrapTextWithAnsi(theme.fg("dim", line), width)),
-          ]);
+          return composeToolComponent((width) => {
+            const requested = Arr.filter(
+              [
+                requestedLine(call, state.piSubagentsAgentNames),
+                call.to === undefined ? undefined : `To ${recipientLabel({ state }, call.to)}`,
+              ],
+              isTextFragment,
+            );
+            return [
+              ...agentTextLines(call.message, width, theme, { expanded: true, indent: 0 }),
+              ...Arr.flatMap(requested, (line) => wrapTextWithAnsi(theme.fg("dim", line), width)),
+            ];
+          });
         },
         renderResult: (result, _options, theme, context) => {
+          rememberRecipient(context, decodeAgentToolDetails(result.details));
           if (context.isError) {
             const failure = escapeControlChars(rejectedFailureText(result));
             return failure && !issueCarriesFailure(result, context)

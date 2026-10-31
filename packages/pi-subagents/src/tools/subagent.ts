@@ -19,7 +19,11 @@ import {
   SUBAGENT_TOOL_NAMES,
   type SubagentToolName,
 } from "../run/tool-policy.ts";
-import { decodeCompactToolDetails, decodeStartAwaitCardDetails } from "./details-decode.ts";
+import {
+  decodeCompactToolDetails,
+  decodeOutcomeDetails,
+  decodeStartAwaitCardDetails,
+} from "./details-decode.ts";
 import { executeSubagentAction, type SubagentToolRuntime } from "./execute.ts";
 import { hasReturnedFailureEvidence } from "./outcome.ts";
 import { syncAwaitProgressTicker, type SubagentToolRenderContext } from "./render-await.ts";
@@ -32,6 +36,7 @@ import {
   decodeCallArguments,
   renderSubagentInputContent,
   renderWorkspaceCallArguments,
+  rememberRunNames,
   renderRequestedRuns,
 } from "./render.ts";
 import { renderSubagentStartCall } from "./render-start.ts";
@@ -328,7 +333,7 @@ export function registerSubagentTools(
     const wrapped = shell(tool, {
       ...(runtime.scheduleAnimation && { scheduleAnimation: runtime.scheduleAnimation }),
       expandedContent: {
-        renderCall: (args, theme) => {
+        renderCall: (args, theme, context) => {
           if (
             tool.name === SUBAGENT_TOOL_NAME.start &&
             "agents" in args &&
@@ -352,12 +357,15 @@ export function registerSubagentTools(
               },
               tool.name,
               theme,
+              context.toolCallId,
             );
           if (tool.name === SUBAGENT_TOOL_NAME.workspace)
             return renderWorkspaceCallArguments(decodeCallArguments(args), theme);
           return renderSubagentInputContent(decodeCallArguments(args), theme);
         },
         renderResult: (result, options, theme, context) => {
+          // The requested line beside this result draws later and names its runs from here.
+          rememberRunNames(context.toolCallId, decodeOutcomeDetails(result.details));
           const panelOwnsLiveHierarchy = panelOwnsHierarchy(result, options.isPartial, context);
           const summary = project({
             phase: options.isPartial ? "running" : "settled",
