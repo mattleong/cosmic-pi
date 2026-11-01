@@ -15,7 +15,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { pngPart as image, registerImagePresentation, textPart as text } from "./image-fixtures.ts";
 
 const styles = ["compact", "preview"] as const;
-const backgrounds = ["on"] as const;
 const details = {
   id: "image-identity",
   status: "completed",
@@ -27,14 +26,10 @@ const details = {
   action: "generate" as const,
   outputFormat: "png" as const,
 };
-function register(
-  style: (typeof styles)[number],
-  background: (typeof backgrounds)[number] = "on",
-  scheduleAnimation?: CompactAnimationScheduler,
-) {
+function register(style: (typeof styles)[number], scheduleAnimation?: CompactAnimationScheduler) {
   applyPresentationSettings({
     toolCallCollapsedStyle: style,
-    toolCallBackground: background,
+    toolCallBackground: "on",
     toolCallTiming: false,
   });
   return registerImagePresentation(scheduleAnimation);
@@ -46,49 +41,41 @@ const anonymous = (rows: ReadonlyArray<string>) =>
   Arr.map(rows, (row) => Str.replace(/\bi=\d+/gu, "i=*")(row));
 
 describe("registered image presentation", () => {
-  it.each(
-    Arr.flatMap(styles, (style) => Arr.map(backgrounds, (background) => ({ style, background }))),
-  )(
-    "leaves image-only and text/image attachments with Pi in $style/$background mode",
-    ({ style, background }) => {
-      const { tool } = register(style, background);
-      for (const content of [[image], [text("Original output"), image]]) {
-        const result = { details, content };
-        const before = structuredClone(result);
-        const harness = createToolPresentationHarness(tool, { theme, width: 180 });
-        for (const { expanded, text: rendered } of harness.cycle(
-          { prompt: details.prompt },
-          result,
-        )) {
-          if (expanded) {
-            expect(rendered).toContain("PROMPT_END");
-            expect(rendered).toContain(details.revisedPrompt);
-            expect(rendered).toContain("saved image.png");
-          }
-          expect(rendered).not.toContain(image.data);
-          expect(
-            Option.getOrUndefined(Arr.findFirst(result.content, (part) => part.type === "image")),
-          ).toBe(image);
+  it.each(styles)("leaves image-only and text/image attachments with Pi in %s mode", (style) => {
+    const { tool } = register(style);
+    for (const content of [[image], [text("Original output"), image]]) {
+      const result = { details, content };
+      const before = structuredClone(result);
+      const harness = createToolPresentationHarness(tool, { theme, width: 180 });
+      for (const { expanded, text: rendered } of harness.cycle(
+        { prompt: details.prompt },
+        result,
+      )) {
+        if (expanded) {
+          expect(rendered).toContain("PROMPT_END");
+          expect(rendered).toContain(details.revisedPrompt);
+          expect(rendered).toContain("saved image.png");
         }
-        expect(result).toEqual(before);
+        expect(rendered).not.toContain(image.data);
+        expect(
+          Option.getOrUndefined(Arr.findFirst(result.content, (part) => part.type === "image")),
+        ).toBe(image);
       }
-    },
-  );
+      expect(result).toEqual(before);
+    }
+  });
 
-  it.each(backgrounds)(
-    "uses the registering owner's scheduler and releases it after settlement in %s mode",
-    (background) => {
-      const scheduler = animationSchedulerProbe();
-      const { tool } = register("compact", background, scheduler.schedule);
-      const [report] = probeAnimationOwnership([tool], scheduler, {
-        args: () => ({ prompt: details.prompt }),
-        result: () => ({ details, content: [image] }),
-      });
-      expect(report?.scheduled).toBeGreaterThan(0);
-      expect(report?.invalidated).toBe(true);
-      expect(report?.stops).toBeGreaterThan(0);
-    },
-  );
+  it("uses the registering owner's scheduler and releases it after settlement", () => {
+    const scheduler = animationSchedulerProbe();
+    const { tool } = register("compact", scheduler.schedule);
+    const [report] = probeAnimationOwnership([tool], scheduler, {
+      args: () => ({ prompt: details.prompt }),
+      result: () => ({ details, content: [image] }),
+    });
+    expect(report?.scheduled).toBeGreaterThan(0);
+    expect(report?.invalidated).toBe(true);
+    expect(report?.stops).toBeGreaterThan(0);
+  });
 
   it.each(
     Arr.flatMap(styles, (style) =>
@@ -97,7 +84,7 @@ describe("registered image presentation", () => {
   )(
     "frames image messages like tool rows and keeps Pi's native image in $style/$background mode",
     ({ style, background }) => {
-      const { message: render } = register(style, "on");
+      const { message: render } = register(style);
       applyPresentationSettings({ toolCallCollapsedStyle: style, toolCallBackground: background });
       const message = {
         role: "custom" as const,

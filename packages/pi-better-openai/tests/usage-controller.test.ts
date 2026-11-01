@@ -6,7 +6,7 @@ import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
 import * as TestClock from "effect/testing/TestClock";
-import { AgentDirectory, JsonHttpClient } from "pi-cosmic-core";
+import { AgentDirectory } from "pi-cosmic-core";
 import {
   capturedTelemetrySnapshot,
   extensionContextFixture,
@@ -22,6 +22,7 @@ import {
   type UsageControllerConfig,
   type UsageRefreshControllerOptions,
 } from "../src/usage/controller.ts";
+import { unusedHttpLayer } from "./helpers.ts";
 
 type Projection = UsageProjectionBase<UsageControllerConfig, number>;
 type Options = UsageRefreshControllerOptions<Projection, UsageControllerConfig, number>;
@@ -29,15 +30,7 @@ type Options = UsageRefreshControllerOptions<Projection, UsageControllerConfig, 
 const config: UsageControllerConfig = {
   usage: { refreshIntervalMs: 60_000, showOnlyOnSubscriptionModels: true },
 };
-const unusedHttp = JsonHttpClient.of({
-  request: () => Effect.die("unexpected HTTP"),
-  requestJson: () => Effect.die("unexpected HTTP"),
-});
-const testLayer = Layer.mergeAll(
-  Path.layer,
-  AgentDirectory.layer("/agent"),
-  Layer.succeed(JsonHttpClient, unusedHttp),
-);
+const testLayer = Layer.mergeAll(Path.layer, AgentDirectory.layer("/agent"), unusedHttpLayer);
 
 const fixture = (overrides: Partial<Options>) =>
   Effect.gen(function* () {

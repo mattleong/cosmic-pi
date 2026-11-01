@@ -14,6 +14,7 @@ import {
   reviewAndPrepare,
   stoppedWriter,
   workspaceFixture,
+  completedWriter,
 } from "./fixtures/workspace-engine.ts";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
@@ -35,13 +36,6 @@ const failedWriter = (service: SubagentServiceContract, f: Fixture) =>
     const control = f.children.controls.at(-1)!;
     control.exit(1);
     yield* yieldUntil(() => control.released() === 1);
-    return run;
-  });
-
-const completedWriter = (service: SubagentServiceContract, f: Fixture) =>
-  Effect.gen(function* () {
-    const run = yield* service.start(repoWriter());
-    yield* completeLocalRun(service, f.children.controls.at(-1)!, run.id, "Done.");
     return run;
   });
 

@@ -1,5 +1,7 @@
 import type {
+  AgentBeforeSettleEvent,
   BeforeAgentStartEvent,
+  BoundaryContextPreview,
   ExtensionUIContext,
   NormalizedBuildSystemPromptOptions,
   Theme,
@@ -50,6 +52,26 @@ export const beforeAgentStartEvent = (
     contextFiles: [],
     skills: [],
     ...options,
+  },
+});
+
+type ContextMessage = BoundaryContextPreview["contextMessages"][number];
+
+export const settleEvent = (
+  outcome: AgentBeforeSettleEvent["outcome"] = "completed",
+  contextMessages: ReadonlyArray<ContextMessage> = [],
+  pendingMessages: ReadonlyArray<ContextMessage> = [],
+): AgentBeforeSettleEvent => ({
+  type: "agent_before_settle",
+  outcome,
+  entries: [],
+  continue: false,
+  context: {
+    contextEntries: [],
+    contextMessages: [...contextMessages],
+    llmMessages: [],
+    pendingMessages: [...pendingMessages],
+    canContinue: true,
   },
 });
 

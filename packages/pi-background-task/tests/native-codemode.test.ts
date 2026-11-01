@@ -6,15 +6,12 @@ import * as Fiber from "effect/Fiber";
 import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
-import { LocalProcess } from "../src/boundary/local-process.ts";
-import { normalizeConfig } from "../src/config/options.ts";
-import { BackgroundTaskConfigStore } from "../src/config/store.ts";
 import { BackgroundTaskService } from "../src/task/service.ts";
 import { nativeCodemodeSession } from "./support/native-codemode-session.ts";
+import { realServiceLayer } from "./support/real-service.ts";
 import { taskServiceDouble, taskStatus, taskWait } from "./support/task-service-double.ts";
 
 const decodeOutput = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
@@ -107,16 +104,6 @@ describe("native scripted background task workflows", () => {
   );
 });
 
-const realServiceLayer = BackgroundTaskService.layer().pipe(
-  Layer.provide(
-    Layer.mergeAll(
-      LocalProcess.layer,
-      Layer.succeed(BackgroundTaskConfigStore, normalizeConfig()),
-      Path.layer,
-    ),
-  ),
-);
-
 describe("native scripted background task smoke", () => {
   it.live(
     "runs a real short command through start, exit wait, and logs",
@@ -150,7 +137,7 @@ describe("native scripted background task smoke", () => {
             droppedBytes: 0,
           },
         });
-      }).pipe(Effect.provide(Layer.merge(realServiceLayer, nodeFilePlatformLayer))),
+      }).pipe(Effect.provide(Layer.merge(realServiceLayer(), nodeFilePlatformLayer))),
     30_000,
   );
 
@@ -179,7 +166,7 @@ describe("native scripted background task smoke", () => {
         expect(lines.at(0)).toBe("501");
         expect(lines.at(-1)).toBe("2500");
         expect(truncated).toBe(true);
-      }).pipe(Effect.provide(Layer.merge(realServiceLayer, nodeFilePlatformLayer))),
+      }).pipe(Effect.provide(Layer.merge(realServiceLayer(), nodeFilePlatformLayer))),
     30_000,
   );
 });

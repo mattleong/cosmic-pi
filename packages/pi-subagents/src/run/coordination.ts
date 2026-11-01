@@ -21,34 +21,41 @@ const ownershipSummary = (record: RunRecord): string =>
       : "shared-checkout writer"
     : "read-only";
 
-const activePeerLines = (records: ReadonlyArray<RunRecord>, selfId?: string): string[] =>
-  Arr.flatMap(records, (record) =>
-    record.view.id !== selfId && isActiveRunState(record.view.state)
-      ? [
-          `- ${record.launch.name} (${record.view.id}): ${ownershipSummary(record)}; ${record.view.state}; task: ${safeTextPrefix(record.view.task, 160)}`,
-        ]
-      : [],
-  );
-
-export const peerNoticeText = (source: Iterable<RunRecord>, selfId: string): string => {
+/** The run itself and the other active runs sharing its working directory, in record order. */
+const workspacePeers = (source: Iterable<RunRecord>, selfId: string) => {
   const records = [...source];
   const self = Option.getOrUndefined(Arr.findFirst(records, (record) => record.view.id === selfId));
+  const peers = self
+    ? Arr.filter(
+        records,
+        (record) =>
+          record.view.cwd === self.view.cwd &&
+          record.view.id !== selfId &&
+          isActiveRunState(record.view.state),
+      )
+    : [];
+  return { self, peers };
+};
+
+export const peerNoticeText = (source: Iterable<RunRecord>, selfId: string): string => {
+  const { self, peers } = workspacePeers(source, selfId);
   const selfLine = self
     ? `Your current ownership summary: ${ownershipSummary(self)}.`
     : "Your current ownership record is unavailable; contact the parent before modifying files.";
-  const workspacePeers = self
-    ? Arr.filter(records, (record) => record.view.cwd === self.view.cwd)
-    : [];
-  const peers = activePeerLines(workspacePeers, selfId);
-  if (peers.length === 0)
+  const peerLines = Arr.map(
+    peers,
+    (record) =>
+      `- ${record.launch.name} (${record.view.id}): ${ownershipSummary(record)}; ${record.view.state}; task: ${safeTextPrefix(record.view.task, 160)}`,
+  );
+  if (peerLines.length === 0)
     return `${selfLine}\n\nYou are currently the only active subagent in this workspace.`;
   return Arr.join(
     [
       selfLine,
       "",
-      `You share this working directory with ${countLabel(peers.length, "other active subagent")}:`,
+      `You share this working directory with ${countLabel(peerLines.length, "other active subagent")}:`,
       "",
-      ...peers,
+      ...peerLines,
       "",
       "Shared-checkout writers coordinate by task scope: never edit files that belong to a peer's task. Before work that could overlap a running peer's task, agree on it with that peer through agent_send, and tell peers about changes they depend on. Ask the parent if you can't agree.",
     ],
@@ -61,17 +68,7 @@ export const peerNoticeDetails = (
   source: Iterable<RunRecord>,
   selfId: string,
 ): PeerNoticeDetails => {
-  const records = [...source];
-  const self = Option.getOrUndefined(Arr.findFirst(records, (record) => record.view.id === selfId));
-  const peers = self
-    ? Arr.filter(
-        records,
-        (record) =>
-          record.view.cwd === self.view.cwd &&
-          record.view.id !== selfId &&
-          isActiveRunState(record.view.state),
-      )
-    : [];
+  const { self, peers } = workspacePeers(source, selfId);
   return {
     version: 1,
     kind: "peers",

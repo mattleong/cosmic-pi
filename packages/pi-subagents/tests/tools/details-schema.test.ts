@@ -1,15 +1,14 @@
-import { captureRegistrations, createToolPresentationHarness } from "pi-code-previews/testing";
+import { createToolPresentationHarness } from "pi-code-previews/testing";
 import { assert, describe, expect, it } from "vitest";
-import { registerSubagentTools } from "../../src/tools/subagent.ts";
 import { compactToolDetails } from "../../src/tools/details.ts";
 import { decodeCompactToolDetails } from "../../src/tools/details-decode.ts";
 import type { CompactSubagentToolDetails } from "../../src/tools/details-schema.ts";
 import { actionFailureDisposition, hasSubagentToolFailure } from "../../src/tools/outcome.ts";
-import { view } from "./fixtures/tool-harness.ts";
+import { captureSubagentTools, view } from "./fixtures/tool-harness.ts";
+import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
 
 describe("subagent detail evidence", () => {
   it("retains redacted cleanup evidence when fitted without inferring historical cleanup", () => {
@@ -82,23 +81,9 @@ describe("subagent detail evidence", () => {
 });
 
 const lifecycleTool = () =>
-  Option.getOrUndefined(
-    Arr.findFirst(
-      captureRegistrations((pi) =>
-        registerSubagentTools(pi, {
-          environment: { cwd: "/project", projectTrusted: false },
-          run: () => Promise.reject(new Error("render-only fixture")),
-          startUiTicker: () => () => undefined,
-          toolPresentation: {
-            beginStart: () => () => undefined,
-            beginAwait: () => () => undefined,
-            isLiveHierarchyAvailable: () => false,
-          },
-        }),
-      ).tools,
-      (tool) => tool.name === "agent_lifecycle",
-    ),
-  )!;
+  captureSubagentTools(subagentServiceDouble({}), {
+    environment: { cwd: "/project", projectTrusted: false },
+  }).get("agent_lifecycle")!;
 
 type RunDetails = Exclude<CompactSubagentToolDetails, { readonly action: "models" }>;
 /** Run details as session history stored them, under any action string. */

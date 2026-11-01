@@ -122,15 +122,7 @@ const store = makeScopedConfigStore({
   resolve: resolveConfigFiles,
 });
 
-export const {
-  configPaths,
-  modifyConfig,
-  readConfig,
-  readRawConfig,
-  resolveCommittedConfig,
-  resolveConfig,
-  writeConfig,
-} = store;
+export const { configPaths, readConfig, readRawConfig, resolveConfig, writeConfig } = store;
 
 interface ConfigChange {
   readonly previous: ResolvedConfig;

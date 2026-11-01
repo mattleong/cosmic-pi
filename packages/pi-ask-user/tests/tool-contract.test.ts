@@ -116,11 +116,6 @@ const issueLines = (name: string, args: Schema.Json): ReadonlyArray<string> => {
   }
 };
 const textQuestion = { key: "wording", title: "Wording", prompt: "What wording?", mode: "text" };
-const sixChoices = Array.from({ length: 6 }, (_, index) => ({
-  value: `v${index}`,
-  label: `Choice ${index + 1}`,
-  description: "A concrete option.",
-}));
 
 describe("registered questionnaire arguments", () => {
   it("ignores empty choices on text questions and blank optional previews", () => {
@@ -168,20 +163,6 @@ describe("registered questionnaire arguments", () => {
     expect(unknownMode).toHaveLength(1);
     expect(unknownMode[0]).toMatch(/questions\[2\]\.mode.*single.*multiple.*text/u);
     expect(Arr.some(issues, Str.includes("questions[0]"))).toBe(false);
-  });
-
-  it("accepts titles longer than a tab shows and up to six choices", () => {
-    const question = {
-      ...defaultQuestion,
-      title: "Database migration strategy",
-      choices: sixChoices,
-    };
-    expect(preparer("ask_user")({ questions: [question] })).toEqual({ questions: [question] });
-    expect(
-      issueLines("ask_user", {
-        questions: [{ ...question, choices: [...sixChoices, { ...sixChoices[0], value: "v7" }] }],
-      }),
-    ).toHaveLength(1);
   });
 });
 

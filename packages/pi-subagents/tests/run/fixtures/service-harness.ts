@@ -102,6 +102,13 @@ export const runView = (service: SubagentServiceContract, id: string) =>
     }),
   );
 
+/** One run in the most recent recorded projection, read afresh on every call. */
+export const latestProjectedRun = (projections: ReadonlyArray<SubagentProjection>, id: string) =>
+  Arr.last(projections).pipe(
+    Option.flatMap((projection) => Arr.findFirst(projection.runs, (run) => run.id === id)),
+    Option.getOrUndefined,
+  );
+
 export const waitForCompleted = (service: SubagentServiceContract, id: string) =>
   Effect.gen(function* () {
     for (let attempt = 0; attempt < 200; attempt++) {
@@ -130,6 +137,18 @@ export const acknowledgeCompletions = (notification: SubagentNotification) =>
         deliveredCompletionKeys: Arr.map(notification.runs, (run) => `${run.id}:${run.generation}`),
       }
     : undefined;
+
+/** Yields `turns` times so forked fibers can reach their next suspension. */
+export const yieldTurns = (turns: number) =>
+  Effect.gen(function* () {
+    for (let turn = 0; turn < turns; turn += 1) yield* Effect.yieldNow;
+  });
+
+/** The final texts of every completion delivered to the root, in delivery order. */
+export const reportsAtRoot = (notifications: ReadonlyArray<SubagentNotification>) =>
+  Arr.flatMap(notifications, (notification) =>
+    notification.type === "completed" ? Arr.map(notification.runs, (run) => run.finalText) : [],
+  );
 
 export const useProbe = () => {
   const probe = {

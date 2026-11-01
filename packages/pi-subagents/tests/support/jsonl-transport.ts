@@ -3,12 +3,10 @@ import type * as Schema from "effect/Schema";
 import {
   acquireProcessTransport,
   type ProcessTransportRuntime,
-  type ProcessWireEvent,
 } from "../../src/boundary/process-transport.ts";
 import { processCauseError } from "../../src/run/errors.ts";
 
 type JsonlMessage = { readonly type: "message"; readonly value: Schema.Json };
-export type JsonlWireEvent = ProcessWireEvent<JsonlMessage>;
 
 interface JsonlTransportRequest {
   readonly executable: string;

@@ -2,12 +2,11 @@ import { Text } from "@earendil-works/pi-tui";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type { CodePreviewMessagePresenter } from "pi-code-previews";
-import { clipText } from "pi-cosmic-core/display";
 import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core/security";
 import { composeToolComponent } from "pi-cosmic-ui/tool";
 import { agentTextLines, bodyIndent, detailsSectionLines } from "./agent-text.ts";
 import { decodeMessageEnvelope, messageContentText } from "./message-envelope.ts";
-import { MAX_NOTICE_TEXT_CHARS } from "./notice-details.ts";
+import { displayName, MAX_NOTICE_TEXT_CHARS } from "./notice-details.ts";
 
 const Id = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1_024));
 const AgentMessageDetailsSchema = Schema.Struct({
@@ -25,8 +24,6 @@ export type AgentMessageDetails = typeof AgentMessageDetailsSchema.Type;
 const decodeDetails = Schema.decodeUnknownOption(AgentMessageDetailsSchema, {
   onExcessProperty: "ignore",
 });
-
-const displayName = (name: string): string => clipText(sanitizeTerminalLine(name), 60);
 
 /**
  * An agent message to the main agent: who sent it, then its words. Details without a display copy

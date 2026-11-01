@@ -239,9 +239,7 @@ export function workspaceReviewOperations(
     outcome: "discarded" | "auto-discarded" = "discarded",
   ): Effect.fn.Return<void, SubagentError> {
     const { workspaceId, ownerId } = binding.handle;
-    const artifact = yield* service
-      .inspect({ workspaceId, ownerId })
-      .pipe(Effect.mapError(mapWorkspaceError));
+    const artifact = yield* engineRecord(service, binding);
     const { artifactRoot, sourceRoot } = artifact.handle;
     const integrating = artifact.status === "integrating";
     const discard = service

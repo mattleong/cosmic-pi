@@ -22,138 +22,123 @@ import * as Str from "effect/String";
 import * as Option from "effect/Option";
 
 beforeAll(() => initTheme("dark", false));
-for (const foreign of [false])
-  it.live(
-    `reload reconstructs owned history before startup without changing tool authority (foreign=${foreign})`,
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "owned-replay-sdk-" });
-        const settings = quietSettings();
-        const models = yield* offlineModels(directory);
-        let executions = 0;
-        const tool: ToolDefinition = {
-          name: "owned_replay",
-          label: "Owned replay",
-          description: "SDK fixture",
-          parameters: { type: "object", properties: {} },
-          exposure: "model-only",
-          execute: () => {
-            executions += 1;
-            return Promise.resolve({ content: [], details: undefined });
-          },
-          renderCall: (args) => new Text(`OWNED_INPUT ${JSON.stringify(args)}`, 0, 0),
-          renderResult: (value) => new Text(resultText(value.content), 0, 0),
-        };
-        const loader = yield* quietLoader({
-          cwd: directory,
-          agentDir: directory,
-          settingsManager: settings,
-          extensionFactories: [
-            ...(foreign
-              ? [
-                  {
-                    name: "foreign",
-                    factory: (pi: Parameters<typeof registerCodePreviewReplay>[0]) => {
-                      pi.registerTool({
-                        ...tool,
-                        renderCall: () => new Text("FOREIGN_RENDERER", 0, 0),
-                      });
-                    },
-                  },
-                ]
-              : []),
-            {
-              name: "code-previews",
-              factory: (pi) => {
-                const owner = new CodePreviewPresentationOwner();
-                pi.registerToolRenderer(
-                  createCodePreviewRendererResolver(pi, () => owner, new Set()),
-                );
-                pi.on("session_shutdown", () => owner.retire());
-              },
-            },
-            {
-              name: "fixture-owner",
-              factory: (pi) => {
-                pi.registerCommand("fixture-owner", {
-                  description: "Ownership anchor",
-                  handler: () => Promise.resolve(),
-                });
-                const replay = registerCodePreviewReplay(pi, {
-                  command: "fixture-owner",
-                  tools: [tool.name],
-                });
-                pi.on("session_start", () => {
-                  try {
-                    pi.registerTool(
-                      replay.shell(tool, {
-                        compactSummary: () => ({ subject: "OWNED_SUMMARY", outcome: "returned" }),
-                      }),
-                    );
-                    replay.publish();
-                  } finally {
-                    replay.finishStartup();
-                  }
-                });
-                pi.on("session_shutdown", () => replay.retire());
-              },
-            },
-          ],
-        });
-        const session = yield* scopedSession({ cwd: directory, models, settings, loader });
-        setPlainPreviewSettings({ toolCallCollapsedStyle: "compact" });
-        const historyRow = () => {
-          const renderers = session.extensionRunner.resolveToolRenderers(tool.name, () =>
-            session.getToolDefinition(tool.name),
-          );
-          return hostToolRow(tool.name, { input: "FULL_INPUT" }, renderers, {
-            cwd: directory,
-            result: {
-              content: [{ type: "text", text: "FULL_OUTPUT recovery /tmp/receipt.txt" }],
-              isError: false,
-            },
-          });
-        };
-        let retained = historyRow();
-        assert.ok(!Fn.pipe(Arr.join(retained.render(160), "\n"), Str.includes("OWNED_SUMMARY")));
-        const errors: string[] = [];
-        yield* step(() =>
-          session.bindExtensions({ mode: "print", onError: (error) => errors.push(error.error) }),
-        );
-        const expected = foreign ? "FOREIGN_RENDERER" : "OWNED_SUMMARY";
-        assert.ok(Fn.pipe(Arr.join(retained.render(160), "\n"), Str.includes(expected)));
-        const active = session.getActiveToolNames();
-        const callable = session.getCallableToolNames();
-        const originalSource = Option.getOrUndefined(
-          Arr.findFirst(session.getAllTools(), (entry) => entry.name === tool.name),
-        )?.sourceInfo;
-        yield* step(() =>
-          session.reload({
-            beforeSessionStart: () => {
-              retained = historyRow();
-              assert.ok(
-                !Fn.pipe(Arr.join(retained.render(160), "\n"), Str.includes("OWNED_SUMMARY")),
+it.live(
+  "reload reconstructs owned history before startup without changing tool authority",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "owned-replay-sdk-" });
+      const settings = quietSettings();
+      const models = yield* offlineModels(directory);
+      let executions = 0;
+      const tool: ToolDefinition = {
+        name: "owned_replay",
+        label: "Owned replay",
+        description: "SDK fixture",
+        parameters: { type: "object", properties: {} },
+        exposure: "model-only",
+        execute: () => {
+          executions += 1;
+          return Promise.resolve({ content: [], details: undefined });
+        },
+        renderCall: (args) => new Text(`OWNED_INPUT ${JSON.stringify(args)}`, 0, 0),
+        renderResult: (value) => new Text(resultText(value.content), 0, 0),
+      };
+      const loader = yield* quietLoader({
+        cwd: directory,
+        agentDir: directory,
+        settingsManager: settings,
+        extensionFactories: [
+          {
+            name: "code-previews",
+            factory: (pi) => {
+              const owner = new CodePreviewPresentationOwner();
+              pi.registerToolRenderer(
+                createCodePreviewRendererResolver(pi, () => owner, new Set()),
               );
+              pi.on("session_shutdown", () => owner.retire());
             },
-          }),
+          },
+          {
+            name: "fixture-owner",
+            factory: (pi) => {
+              pi.registerCommand("fixture-owner", {
+                description: "Ownership anchor",
+                handler: () => Promise.resolve(),
+              });
+              const replay = registerCodePreviewReplay(pi, {
+                command: "fixture-owner",
+                tools: [tool.name],
+              });
+              pi.on("session_start", () => {
+                try {
+                  pi.registerTool(
+                    replay.shell(tool, {
+                      compactSummary: () => ({ subject: "OWNED_SUMMARY", outcome: "returned" }),
+                    }),
+                  );
+                  replay.publish();
+                } finally {
+                  replay.finishStartup();
+                }
+              });
+              pi.on("session_shutdown", () => replay.retire());
+            },
+          },
+        ],
+      });
+      const session = yield* scopedSession({ cwd: directory, models, settings, loader });
+      setPlainPreviewSettings({ toolCallCollapsedStyle: "compact" });
+      const historyRow = () => {
+        const renderers = session.extensionRunner.resolveToolRenderers(tool.name, () =>
+          session.getToolDefinition(tool.name),
         );
-        assert.ok(Fn.pipe(Arr.join(retained.render(160), "\n"), Str.includes(expected)));
-        const [expanded, , reexpanded] = Arr.map([true, false, true], (state) =>
-          drawToolRow(retained, state, 160),
-        );
-        for (const text of [expanded!, reexpanded!]) {
-          assert.ok(Fn.pipe(text, Str.includes("FULL_OUTPUT recovery /tmp/receipt.txt")));
-          if (!foreign) assert.ok(Fn.pipe(text, Str.includes("FULL_INPUT")));
-        }
-        assert.deepEqual(session.getActiveToolNames(), active);
-        assert.deepEqual(session.getCallableToolNames(), callable);
-        const registered = Arr.filter(session.getAllTools(), (entry) => entry.name === tool.name);
-        assert.equal(registered.length, 1);
-        assert.deepEqual(registered[0]?.sourceInfo, originalSource);
-        assert.equal(registered[0]?.exposure, "model-only");
-        assert.equal(executions, 0);
-        assert.deepEqual(errors, []);
-      }).pipe(Effect.provide(nodeFilePlatformLayer)),
-    15_000,
-  );
+        return hostToolRow(tool.name, { input: "FULL_INPUT" }, renderers, {
+          cwd: directory,
+          result: {
+            content: [{ type: "text", text: "FULL_OUTPUT recovery /tmp/receipt.txt" }],
+            isError: false,
+          },
+        });
+      };
+      let retained = historyRow();
+      assert.ok(!Fn.pipe(Arr.join(retained.render(160), "\n"), Str.includes("OWNED_SUMMARY")));
+      const errors: string[] = [];
+      yield* step(() =>
+        session.bindExtensions({ mode: "print", onError: (error) => errors.push(error.error) }),
+      );
+      assert.ok(Fn.pipe(Arr.join(retained.render(160), "\n"), Str.includes("OWNED_SUMMARY")));
+      const active = session.getActiveToolNames();
+      const callable = session.getCallableToolNames();
+      const originalSource = Option.getOrUndefined(
+        Arr.findFirst(session.getAllTools(), (entry) => entry.name === tool.name),
+      )?.sourceInfo;
+      yield* step(() =>
+        session.reload({
+          beforeSessionStart: () => {
+            retained = historyRow();
+            assert.ok(
+              !Fn.pipe(Arr.join(retained.render(160), "\n"), Str.includes("OWNED_SUMMARY")),
+            );
+          },
+        }),
+      );
+      assert.ok(Fn.pipe(Arr.join(retained.render(160), "\n"), Str.includes("OWNED_SUMMARY")));
+      const [expanded, , reexpanded] = Arr.map([true, false, true], (state) =>
+        drawToolRow(retained, state, 160),
+      );
+      for (const text of [expanded!, reexpanded!]) {
+        assert.ok(Fn.pipe(text, Str.includes("FULL_OUTPUT recovery /tmp/receipt.txt")));
+        assert.ok(Fn.pipe(text, Str.includes("FULL_INPUT")));
+      }
+      assert.deepEqual(session.getActiveToolNames(), active);
+      assert.deepEqual(session.getCallableToolNames(), callable);
+      const registered = Arr.filter(session.getAllTools(), (entry) => entry.name === tool.name);
+      assert.equal(registered.length, 1);
+      assert.deepEqual(registered[0]?.sourceInfo, originalSource);
+      assert.equal(registered[0]?.exposure, "model-only");
+      assert.equal(executions, 0);
+      assert.deepEqual(errors, []);
+    }).pipe(Effect.provide(nodeFilePlatformLayer)),
+  15_000,
+);

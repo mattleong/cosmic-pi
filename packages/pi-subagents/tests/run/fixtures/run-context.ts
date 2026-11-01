@@ -66,6 +66,19 @@ const inertDelivery: RunNotificationDelivery = {
   forgetTakenReportLocked: unexpectedDelivery,
 };
 
+/** Accepts every delivery without effect, for settlement paths that must not throw. */
+export const quietDelivery: RunNotificationDelivery = {
+  retireDelivery: Effect.void,
+  queueActionNotificationLocked: () => undefined,
+  insertCompletionLocked: () => undefined,
+  wakeCompletionLocked: () => undefined,
+  discardQuestionLocked: () => undefined,
+  handOnTakenByLocked: () => undefined,
+  outboxChangedLocked: () => Deferred.makeUnsafe<void>(),
+  signalOutboxChangedLocked: () => undefined,
+  forgetTakenReportLocked: () => undefined,
+};
+
 export const makeTestSettlement = (overrides: Partial<RunContext> = {}) =>
   makeRunContext(overrides).pipe(
     Effect.map((context) =>

@@ -39,9 +39,7 @@ export const SenderSchema = Schema.Struct({
 export type Sender = typeof SenderSchema.Type;
 
 export const DescriptionSchema = Schema.Struct({
-  sessionId: boundedString(1, MAX_IDENTITY_CHARS),
-  name: Schema.optionalKey(boundedString(0, MAX_IDENTITY_CHARS)),
-  cwd: boundedString(0, MAX_CWD_CHARS),
+  ...SenderSchema.fields,
   state: SessionStateSchema,
 });
 export type Description = typeof DescriptionSchema.Type;

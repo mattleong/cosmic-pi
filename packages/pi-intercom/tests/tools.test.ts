@@ -188,15 +188,11 @@ layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
       const shared = yield* sharedAgentDirectory();
       yield* Effect.sync(() => vi.stubEnv("PI_CODING_AGENT_DIR", shared.agentDirectory));
       const a = yield* sessionRuntime(unnamedSession("session-a"), "From a.", shared.fallbackRoot);
-      const registry = {
-        base: shared.base,
-        sessions: paths.join(shared.agentDirectory, "intercom", "sessions"),
-      };
       const socket = paths.join(shared.base, "stuck.sock");
       const stuck = yield* hangingListener(socket);
-      yield* writeForeignRecord(registry, "stuck", { socket });
-      yield* writeForeignRecord(registry, "stuck", { socket });
-      yield* writeForeignRecord(registry, "gone");
+      yield* writeForeignRecord(shared, "stuck", { socket });
+      yield* writeForeignRecord(shared, "stuck", { socket });
+      yield* writeForeignRecord(shared, "gone");
       // Each call's deadline runs on the test clock, moved once every describe has connected.
       const pastDeadline = <X, E>(
         effect: Effect.Effect<X, E, Layer.Success<ReturnType<typeof intercomLayer>>>,
@@ -236,19 +232,14 @@ layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
 
   it.effect("asks whether an owner runs only for sessions that don't answer", () =>
     Effect.gen(function* () {
-      const paths = yield* Path.Path;
       const shared = yield* sharedAgentDirectory();
       yield* Effect.sync(() => vi.stubEnv("PI_CODING_AGENT_DIR", shared.agentDirectory));
       const a = yield* sessionRuntime(unnamedSession("session-a"), "From a.", shared.fallbackRoot);
       yield* sessionRuntime(unnamedSession("session-b"), "From b.", shared.fallbackRoot);
-      const registry = {
-        base: shared.base,
-        sessions: paths.join(shared.agentDirectory, "intercom", "sessions"),
-      };
       const silentPid = 99_999_998;
       const deadPid = 99_999_999;
-      yield* writeForeignRecord(registry, "silent", { pid: silentPid });
-      yield* writeForeignRecord(registry, "dead", { pid: deadPid });
+      yield* writeForeignRecord(shared, "silent", { pid: silentPid });
+      yield* writeForeignRecord(shared, "dead", { pid: deadPid });
       const asked: Array<number> = [];
       const fromA = <X, E>(
         effect: Effect.Effect<X, E, Layer.Success<ReturnType<typeof intercomLayer>>>,
@@ -290,7 +281,6 @@ layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
 
   it.effect("delivers to and reads from a session that reloads under its id meanwhile", () =>
     Effect.gen(function* () {
-      const paths = yield* Path.Path;
       const shared = yield* sharedAgentDirectory();
       yield* Effect.sync(() => vi.stubEnv("PI_CODING_AGENT_DIR", shared.agentDirectory));
       const a = yield* sessionRuntime(unnamedSession("session-a"), "From a.", shared.fallbackRoot);
@@ -336,10 +326,7 @@ layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
       expect(sent.replacement.sendMessage).toHaveBeenCalledOnce();
 
       // A record whose listener has already closed, as the old one is during a reload.
-      yield* writeForeignRecord(
-        { base: shared.base, sessions: paths.join(shared.agentDirectory, "intercom", "sessions") },
-        "session-c",
-      );
+      yield* writeForeignRecord(shared, "session-c");
       const read = yield* duringReload(
         readSession("session-c"),
         start("session-c", "From the new c."),

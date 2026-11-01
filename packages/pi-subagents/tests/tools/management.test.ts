@@ -1,8 +1,8 @@
-import { initTheme, type AgentToolResult } from "@earendil-works/pi-coding-agent";
+import { initTheme } from "@earendil-works/pi-coding-agent";
+import { getTextContent } from "pi-code-previews";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
-import * as Result from "effect/Result";
 import * as Deferred from "effect/Deferred";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import { beforeAll, describe, expect } from "vitest";
@@ -16,19 +16,10 @@ import {
   invokeOptionalTool,
   view,
 } from "./fixtures/tool-harness.ts";
+import { readoutOf } from "../fixtures/run-view.ts";
 import * as Order from "effect/Order";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
-
-const resultText = (result: {
-  readonly content: ReadonlyArray<AgentToolResult<unknown>["content"][number]>;
-}): string =>
-  Arr.join(
-    Arr.filterMap(result.content, (part) =>
-      part.type === "text" ? Result.succeed(part.text) : Result.failVoid,
-    ),
-    "\n",
-  );
 
 describe("subagent tool", () => {
   beforeAll(() => initTheme("dark", false));
@@ -43,18 +34,7 @@ describe("subagent tool", () => {
       subagentServiceDouble({
         agentRead: () =>
           Effect.succeed({
-            agents: [
-              {
-                kind: "run",
-                id: run.id,
-                name: run.name,
-                state: run.state,
-                textStatus: "none",
-                truncated: false,
-                reportGeneration: 0,
-                run,
-              },
-            ],
+            agents: [readoutOf(run)],
             missingIds: [],
           }),
         withAwaitTerminalObservations: (_ids, _until, _onUpdate, use) => use([{ run }]),
@@ -65,7 +45,7 @@ describe("subagent tool", () => {
       ["agent_await", { runIds: [run.id], until: "all_finished" }],
     ] as const) {
       const response = yield* step(() => executeTool(tools.get(toolName)!, args));
-      expect(resultText(response)).toContain("openai/next-model:high");
+      expect(getTextContent(response.content)).toContain("openai/next-model:high");
     }
   });
 
@@ -115,7 +95,7 @@ describe("subagent tool", () => {
         cancelled: true,
         awaitedRunIds: ["agent-one"],
       });
-      expect(resultText(result)).toContain("Children continue");
+      expect(getTextContent(result.content)).toContain("Children continue");
     },
   );
 

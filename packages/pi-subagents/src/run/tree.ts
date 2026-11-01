@@ -11,14 +11,14 @@ const runDepth = (view: Pick<SubagentRunView, "depth">): number => {
   return depth !== undefined && Number.isSafeInteger(depth) && depth >= 1 ? depth : 1;
 };
 
-export const isRunInSubtree = (
+const someSelfOrAncestor = (
   records: ReadonlyMap<string, RunRecord>,
-  rootRunId: string,
-  candidateRunId: string,
+  start: RunRecord | undefined,
+  predicate: (record: RunRecord) => boolean,
 ): boolean => {
-  let current = records.get(candidateRunId);
+  let current = start;
   while (current) {
-    if (current.view.id === rootRunId) return true;
+    if (predicate(current)) return true;
     const parentRunId = parentIdOf(current.view);
     if (parentRunId === SUBAGENT_ROOT_RUN_ID) return false;
     current = records.get(parentRunId);
@@ -26,20 +26,27 @@ export const isRunInSubtree = (
   return false;
 };
 
+export const isRunInSubtree = (
+  records: ReadonlyMap<string, RunRecord>,
+  rootRunId: string,
+  candidateRunId: string,
+): boolean =>
+  someSelfOrAncestor(
+    records,
+    records.get(candidateRunId),
+    (record) => record.view.id === rootRunId,
+  );
+
 /** Whether an explicit stop of the run or one of its ancestors is still closing it. */
 export const isStopInProgress = (
   records: ReadonlyMap<string, RunRecord>,
   record: RunRecord,
-): boolean => {
-  let current: RunRecord | undefined = record;
-  while (current) {
-    if (current.stoppedByParent && !isTerminalRunState(current.view.state)) return true;
-    const parentRunId = parentIdOf(current.view);
-    if (parentRunId === SUBAGENT_ROOT_RUN_ID) return false;
-    current = records.get(parentRunId);
-  }
-  return false;
-};
+): boolean =>
+  someSelfOrAncestor(
+    records,
+    record,
+    (current) => current.stoppedByParent && !isTerminalRunState(current.view.state),
+  );
 
 export const leafFirst = (records: Iterable<RunRecord>): ReadonlyArray<RunRecord> =>
   Arr.sort(

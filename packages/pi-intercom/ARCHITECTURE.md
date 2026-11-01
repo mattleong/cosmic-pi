@@ -8,7 +8,7 @@ among the agents of one session belongs to pi-subagents' `agent_*` tools.
 
 ## Ownership and boundaries
 
-- [Entrypoint](src/extension.ts) checks the child marker through core\'s dependency-free environment subpath before loading the application. Root loading still awaits factory registration, including replay. The application retains its defensive child check.
+- [Entrypoint](src/extension.ts) checks the child marker through core\'s dependency-free environment subpath before loading the application. Root loading still awaits factory registration, including replay.
 - [Application](src/application.ts) registers Pi events, the inbound message renderer, the
   `/intercom` command, and replay at factory time, owns the session-runtime slot, and registers
   the tools once a runtime is active. [Layer composition](src/layer.ts) supplies the registry and
@@ -209,8 +209,8 @@ in the result the model reads. Replay is anchored to
 records, listing diagnostics, the evidence-based sweep, and socket path reservation.
 [Transport tests](tests/transport.test.ts) cover the handshake against rogue listeners, connection
 bounds, stale sockets, oversized frames, deadlines, shutdown with answers still owed, and
-telemetry over real sockets. [Application tests](tests/application.test.ts) cover registration modes, the child
-marker, rewrites, replacement, removal, a startup that doesn't wait for its sweep, and peers
+telemetry over real sockets. [Application tests](tests/application.test.ts) cover registration modes,
+rewrites, replacement, removal, a startup that doesn't wait for its sweep, and peers
 reaching live sessions. [Message tests](tests/message.test.ts) cover the inbound message and
 [presentation tests](tests/presentation.test.ts) the tool rows.
 [Delivery tests](tests/delivery.test.ts) cover dispositions, holds, retirement, and the

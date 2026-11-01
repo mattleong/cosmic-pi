@@ -56,79 +56,73 @@ function presentationFactory(
   );
 }
 
-for (const builtinFirst of [false])
-  it.live(
-    `public loader keeps the independent native MCP manager in either order: builtin first=${builtinFirst}`,
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "code-previews-mcp-sdk-" });
-        const agentDir = `${cwd}/agent`;
-        yield* fs.makeDirectory(agentDir, { recursive: true });
-        yield* fs.writeFileString(
-          `${agentDir}/mcp.json`,
-          serializeJson({
-            mcpServers: { disabled: { command: "must-not-execute", enabled: false } },
-          }),
-        );
-        vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
-        yield* Effect.addFinalizer(() => Effect.sync(() => vi.unstubAllEnvs()));
-        const settings = quietSettings();
-        const models = yield* offlineModels(cwd);
-        const report: PresentationRegistrations = { tools: [], resolvers: 0 };
-        const loader = yield* quietLoader({
-          cwd,
-          agentDir,
-          settingsManager: settings,
-          extensionsOverride: (base) => ({
-            ...base,
-            extensions: Arr.sort(
-              base.extensions,
-              Order.mapInput(Order.Number, ({ path }: { readonly path: string }) =>
-                path === "builtin:mcp" ? (builtinFirst ? 0 : 1) : builtinFirst ? 1 : 0,
-              ),
+it.live(
+  "public loader keeps the independent native MCP manager when it loads after presentation",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "code-previews-mcp-sdk-" });
+      const agentDir = `${cwd}/agent`;
+      yield* fs.makeDirectory(agentDir, { recursive: true });
+      yield* fs.writeFileString(
+        `${agentDir}/mcp.json`,
+        serializeJson({
+          mcpServers: { disabled: { command: "must-not-execute", enabled: false } },
+        }),
+      );
+      vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
+      yield* Effect.addFinalizer(() => Effect.sync(() => vi.unstubAllEnvs()));
+      const settings = quietSettings();
+      const models = yield* offlineModels(cwd);
+      const report: PresentationRegistrations = { tools: [], resolvers: 0 };
+      const loader = yield* quietLoader({
+        cwd,
+        agentDir,
+        settingsManager: settings,
+        extensionsOverride: (base) => ({
+          ...base,
+          extensions: Arr.sort(
+            base.extensions,
+            Order.mapInput(Order.Number, ({ path }: { readonly path: string }) =>
+              path === "builtin:mcp" ? 1 : 0,
             ),
-          }),
-          extensionFactories: [
-            { name: "code-previews", factory: presentationFactory(agentDir, report) },
-            { name: "mcp", builtin: true, replaceable: true, factory: createMcpExtension() },
-          ],
-        });
-        const order = Arr.map(loader.getExtensions().extensions, (extension) => extension.path);
-        assert.deepEqual(
-          order,
-          builtinFirst
-            ? ["builtin:mcp", "<inline:code-previews>"]
-            : ["<inline:code-previews>", "builtin:mcp"],
-        );
-        const session = yield* scopedSession({ cwd, agentDir, models, settings, loader });
-        const errors: string[] = [];
-        yield* step(() =>
-          session.bindExtensions({ mode: "print", onError: (error) => errors.push(error.error) }),
-        );
-        const managers = Arr.filter(
-          session.extensionRunner.getRegisteredCommands(),
-          (command) => command.name === "mcp",
-        );
-        assert.equal(managers.length, 1);
-        assert.equal(managers[0]?.sourceInfo.path, "builtin:mcp");
-        assert.deepEqual(report.tools, []);
-        assert.equal(report.resolvers, 1);
-        assert.deepEqual(errors, []);
-        assert.equal(yield* fs.exists(`${agentDir}/mcp-auth.json`), false);
-        const historical = session.extensionRunner.resolveToolRenderers(
-          "mcp__docs__lookup",
-          () => undefined,
-        );
-        assert.ok(historical);
-        const h = createToolPresentationHarness(historical);
-        h.call({ query: "historical input" });
-        assert.ok(Fn.pipe(Arr.join(h.render(200), "\n"), Str.includes("mcp__docs__lookup")));
-        yield* step(() => session.reload());
-        assert.deepEqual(report.tools, []);
-        assert.deepEqual(errors, []);
-      }).pipe(Effect.scoped, Effect.provide(nodeFilePlatformLayer)),
-  );
+          ),
+        }),
+        extensionFactories: [
+          { name: "code-previews", factory: presentationFactory(agentDir, report) },
+          { name: "mcp", builtin: true, replaceable: true, factory: createMcpExtension() },
+        ],
+      });
+      const order = Arr.map(loader.getExtensions().extensions, (extension) => extension.path);
+      assert.deepEqual(order, ["<inline:code-previews>", "builtin:mcp"]);
+      const session = yield* scopedSession({ cwd, agentDir, models, settings, loader });
+      const errors: string[] = [];
+      yield* step(() =>
+        session.bindExtensions({ mode: "print", onError: (error) => errors.push(error.error) }),
+      );
+      const managers = Arr.filter(
+        session.extensionRunner.getRegisteredCommands(),
+        (command) => command.name === "mcp",
+      );
+      assert.equal(managers.length, 1);
+      assert.equal(managers[0]?.sourceInfo.path, "builtin:mcp");
+      assert.deepEqual(report.tools, []);
+      assert.equal(report.resolvers, 1);
+      assert.deepEqual(errors, []);
+      assert.equal(yield* fs.exists(`${agentDir}/mcp-auth.json`), false);
+      const historical = session.extensionRunner.resolveToolRenderers(
+        "mcp__docs__lookup",
+        () => undefined,
+      );
+      assert.ok(historical);
+      const h = createToolPresentationHarness(historical);
+      h.call({ query: "historical input" });
+      assert.ok(Fn.pipe(Arr.join(h.render(200), "\n"), Str.includes("mcp__docs__lookup")));
+      yield* step(() => session.reload());
+      assert.deepEqual(report.tools, []);
+      assert.deepEqual(errors, []);
+    }).pipe(Effect.scoped, Effect.provide(nodeFilePlatformLayer)),
+);
 
 it.live(
   "independent native execution retains permissions, images, cancellation, catalog withdrawal and cleanup",

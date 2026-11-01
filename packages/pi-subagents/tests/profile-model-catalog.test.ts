@@ -2,15 +2,12 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import type { Api, Model } from "@earendil-works/pi-ai";
 import { codeUnitAt } from "pi-cosmic-core";
 import { deferredPromise, modelFixture } from "pi-cosmic-core/testing";
 import { createModelPickerChoices } from "pi-cosmic-ui/manager/model-picker";
-import type { ProfileCandidate } from "../src/profiles/model.ts";
 import {
   loadCandidateModelPicker,
   type CandidateModelPickerData,
-  type CandidateModelPickerInput,
   ProfileModelCatalog,
   type ProfileModelRegistry,
   type ProfileModelRegistryRefreshResult,
@@ -27,28 +24,6 @@ const piModel = (provider: string, id: string, name = id) =>
     reasoning: true,
     thinkingLevelMap: { low: "low", high: "high" },
   });
-
-const staticCatalog = (models: ReadonlyArray<Model<Api>>): ProfileModelCatalog =>
-  new ProfileModelCatalog({
-    getAvailable: () => models,
-    getError: () => undefined,
-    refresh: () => Promise.resolve({ aborted: false }),
-  });
-
-const loadPicker = (
-  catalog: ProfileModelCatalog,
-  candidate: ProfileCandidate,
-  overrides: Partial<CandidateModelPickerInput> = {},
-) =>
-  Effect.promise(() =>
-    loadCandidateModelPicker({
-      profile: "reviewer",
-      candidateIndex: 0,
-      candidate,
-      piCatalog: catalog.capture(),
-      ...overrides,
-    }),
-  );
 
 const hasTerminalControls = (value: string): boolean => {
   for (let index = 0; index < value.length; index += 1) {
@@ -139,10 +114,15 @@ describe("profile model catalog", () => {
 
   it.effect("sanitizes Pi display text without changing selector identity", () =>
     Effect.gen(function* () {
-      const catalog = staticCatalog([
+      const models = [
         piModel("openai", "gpt-old", "Parent\u001b[2J\nrenamed"),
         piModel("openai", "gpt-next", "Next\u0007\tmodel"),
-      ]);
+      ];
+      const catalog = new ProfileModelCatalog({
+        getAvailable: () => models,
+        getError: () => undefined,
+        refresh: () => Promise.resolve({ aborted: false }),
+      });
       const displayed = (picker: CandidateModelPickerData) => {
         const choices = createModelPickerChoices(picker.choices, picker.current);
         for (const choice of choices) {
@@ -153,9 +133,15 @@ describe("profile model catalog", () => {
         return choices;
       };
       const pi = displayed(
-        yield* loadPicker(catalog, profileCandidate("openai/gpt-old"), {
-          parentSelector: "openai/gpt-old",
-        }),
+        yield* Effect.promise(() =>
+          loadCandidateModelPicker({
+            profile: "reviewer",
+            candidateIndex: 0,
+            candidate: profileCandidate("openai/gpt-old"),
+            piCatalog: catalog.capture(),
+            parentSelector: "openai/gpt-old",
+          }),
+        ),
       );
       const renamed = Option.getOrUndefined(
         Arr.findFirst(pi, (choice) => choice.value === "openai/gpt-old"),

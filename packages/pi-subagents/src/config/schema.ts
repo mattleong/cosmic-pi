@@ -71,7 +71,7 @@ export interface WorktreeHook {
 /** Claude Code-style worktree hooks, which run after the engine creates or before it removes a tree. */
 type WorktreeHooks = Partial<Readonly<Record<WorktreeHookEvent, ReadonlyArray<WorktreeHook>>>>;
 /** WorktreeCreate setup that can't run as declared; every tree's setup fails instead of skipping it. */
-export interface InvalidWorktreeCreate {
+interface InvalidWorktreeCreate {
   /** Diagnostics naming the invalid declarations. */
   readonly invalid: ReadonlyArray<string>;
 }
@@ -133,11 +133,7 @@ const NESTING_BOUNDS = {
   maxActiveRuns: { minimum: MIN_ACTIVE_RUNS, maximum: MAX_ACTIVE_RUNS },
 } as const;
 type NestingField = keyof typeof NESTING_BOUNDS;
-const NESTING_FIELDS: ReadonlyArray<NestingField> = [
-  "maxDirectChildren",
-  "maxDepth",
-  "maxActiveRuns",
-];
+const NESTING_FIELDS = Rec.keys(NESTING_BOUNDS);
 
 const boundedInteger = ({ minimum, maximum }: { minimum: number; maximum: number }) =>
   Schema.optionalKey(
@@ -149,11 +145,9 @@ const boundedInteger = ({ minimum, maximum }: { minimum: number; maximum: number
   );
 
 /** One scope's nesting limits; each omitted field inherits from the next scope. */
-export const SubagentNestingOverridesSchema = Schema.Struct({
-  maxDirectChildren: boundedInteger(NESTING_BOUNDS.maxDirectChildren),
-  maxDepth: boundedInteger(NESTING_BOUNDS.maxDepth),
-  maxActiveRuns: boundedInteger(NESTING_BOUNDS.maxActiveRuns),
-});
+export const SubagentNestingOverridesSchema = Schema.Struct(
+  Rec.map(NESTING_BOUNDS, boundedInteger),
+);
 export type SubagentNestingOverrides = typeof SubagentNestingOverridesSchema.Type;
 
 export interface SubagentNestingPolicy {
@@ -308,15 +302,7 @@ const ProfileSetInputSchema = Schema.Struct({ profiles: UnknownRecordSchema });
 const decodeProfileSetInput = decodeUnknownOrUndefined(ProfileSetInputSchema, EXACT_FIELDS);
 const SET_KEYS: ReadonlySet<string> = new Set(["profiles"]);
 
-interface DecodedBody {
-  readonly file: SubagentConfigFile;
-  readonly invalidProfileSetRoutes: Readonly<Record<string, ReadonlyArray<ProfileId>>>;
-  readonly invalidProfileSets: ReadonlyArray<string>;
-  readonly invalidDefaultProfileSet: boolean;
-  readonly invalidAgents: ReadonlyArray<string>;
-  readonly invalidAgentsContainer: boolean;
-  readonly invalidWorktreeCreate: ReadonlyArray<string>;
-}
+type DecodedBody = Omit<DecodedSubagentConfig, "diagnostics" | "unsupportedVersion">;
 
 const EMPTY_BODY: DecodedBody = Object.freeze({
   file: Object.freeze({}),
@@ -474,27 +460,12 @@ const ROOT_KEYS: ReadonlySet<string> = new Set([
   "agents",
 ]);
 
-const decodeRootField = <S extends Schema.ConstraintDecoder<unknown>>(
-  root: UnknownRecord,
-  key: string,
-  scope: string,
-  diagnostics: string[],
-  schema: S,
-): S["Type"] | undefined => {
-  if (!Rec.has(root, key)) return undefined;
-  const decoded = decodeUnknownOrUndefined(schema)(root[key]);
-  if (decoded === undefined) diagnostics.push(`${scope}.${key}`);
-  return decoded;
-};
-
 const NESTING_KEYS: ReadonlySet<string> = new Set(NESTING_FIELDS);
 
 /** Nesting limits are safety controls, so a value that isn't a number takes its most restrictive bound. */
-const MOST_RESTRICTIVE_NESTING: SubagentNestingOverrides = Object.freeze({
-  maxDirectChildren: NESTING_BOUNDS.maxDirectChildren.minimum,
-  maxDepth: NESTING_BOUNDS.maxDepth.minimum,
-  maxActiveRuns: NESTING_BOUNDS.maxActiveRuns.minimum,
-});
+const MOST_RESTRICTIVE_NESTING: SubagentNestingOverrides = Object.freeze(
+  Rec.map(NESTING_BOUNDS, ({ minimum }) => minimum),
+);
 
 /** Decodes saved nesting limits per field; documents and the reload handoff both use it. */
 export const decodeDocumentNesting = (
@@ -639,7 +610,9 @@ const decodeCurrentBody = (
   diagnostics: string[],
 ): DecodedBody => {
   const writerWorkspaceMode = decodeWriterWorkspaceMode(root, scope, diagnostics);
-  const delegation = decodeRootField(root, "delegation", scope, diagnostics, DelegationModeSchema);
+  const delegation = isDelegationMode(root.delegation) ? root.delegation : undefined;
+  if (delegation === undefined && Rec.has(root, "delegation"))
+    diagnostics.push(`${scope}.delegation`);
   const hooks = Rec.has(root, "hooks")
     ? decodeWorktreeHooks(root.hooks, `${scope}.hooks`, diagnostics)
     : undefined;
@@ -703,17 +676,14 @@ const decodeConfigRoot = (
   if (unsupportedVersion) diagnostics.push(`${scope}.version`);
 
   return {
+    ...body,
     file,
     diagnostics: [...new Set(diagnostics)],
     invalidProfileSetRoutes: Object.assign(
       nullPrototypeRecord<ReadonlyArray<ProfileId>>(),
       body.invalidProfileSetRoutes,
     ),
-    invalidProfileSets: body.invalidProfileSets,
     invalidDefaultProfileSet: body.invalidDefaultProfileSet || missingDefault,
-    invalidAgents: body.invalidAgents,
-    invalidAgentsContainer: body.invalidAgentsContainer,
-    invalidWorktreeCreate: body.invalidWorktreeCreate,
     unsupportedVersion,
   };
 };

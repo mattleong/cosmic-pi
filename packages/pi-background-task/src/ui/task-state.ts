@@ -1,7 +1,6 @@
 import * as Str from "effect/String";
 import {
   managerActivityColor,
-  managerActivityGlyph,
   managerActivityLabel,
   type ManagerActivityKind,
 } from "pi-cosmic-ui/manager";
@@ -26,11 +25,7 @@ const STATE_KINDS = {
 export const taskStateLabel = (state: BackgroundTaskView["state"]): string =>
   state === "timed_out" ? "timed out" : managerActivityLabel(STATE_KINDS[state]);
 
-export const taskStatePresentation = (state: BackgroundTaskView["state"], frame: number) => {
-  const kind = STATE_KINDS[state];
-  return {
-    glyph: managerActivityGlyph(kind, frame),
-    color: managerActivityColor(kind),
-    label: taskStateLabel(state),
-  };
-};
+export const taskStatePresentation = (state: BackgroundTaskView["state"]) => ({
+  color: managerActivityColor(STATE_KINDS[state]),
+  label: taskStateLabel(state),
+});

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, test } from "vitest";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { applyPresentationSettings, createToolPresentationHarness } from "../../testing";
 import type { BuiltinCompactTool } from "../../src/tools/builtin-subject";
-import { builtinRenderers, stripAnsi } from "../support/render";
+import { builtinRenderers, stripAnsi, textResult } from "../support/render";
 import * as Arr from "effect/Array";
 
 type Style = "compact" | "preview";
@@ -14,11 +14,6 @@ beforeEach(() =>
     pathListCollapsedLines: 8,
   }),
 );
-
-const text = (value: string): AgentToolResult<unknown> => ({
-  content: [{ type: "text", text: value }],
-  details: {},
-});
 
 function harness(name: BuiltinCompactTool, style: Style) {
   applyPresentationSettings({ toolCallCollapsedStyle: style });
@@ -60,8 +55,9 @@ describe("read results", () => {
 
   test("numeric-string ranges render like the numbers Pi coerces them to", () => {
     applyPresentationSettings({ readLineNumbers: true });
-    const value = text(
+    const value = textResult(
       "line 120\nline 121\nline 122\n\n[37 more lines in file. Use offset=123 to continue.]",
+      {},
     );
     const path = "/project/a.ts";
     const cases = [
@@ -90,7 +86,7 @@ describe("read results", () => {
 
 describe("grep calls", () => {
   test("a numeric-string limit is shown like the number Pi coerces it to", () => {
-    const value = text("a.ts:3: // TODO fix the retry");
+    const value = textResult("a.ts:3: // TODO fix the retry", {});
     const args = { pattern: "TODO", path: "/project/src" };
     for (const style of ["preview", "compact"] as const)
       for (const expanded of [false, true])

@@ -8,10 +8,9 @@ import * as Fiber from "effect/Fiber";
 import { JsonDocumentError, JsonDocumentStore, nodeFilePlatformLayer } from "pi-cosmic-core";
 import { deferredPromise } from "pi-cosmic-core/testing";
 import { afterEach, vi } from "vitest";
-import { OPENAI_COMPACTION_DETAILS_TYPE } from "../src/compaction/protocol.ts";
 import * as configStore from "../src/config/store.ts";
 import { extensionHarness } from "./extension-harness.ts";
-import { waitUntil } from "./helpers.ts";
+import { ownedCheckpointDetails, waitUntil } from "./helpers.ts";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -71,46 +70,40 @@ const gateConfigCommits = Effect.gen(function* () {
 });
 
 layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
-  for (const setting of ["fast.enabled"] as const) {
-    it.effect(
-      `shutdown revokes publication and notifications from an admitted ${setting} commit`,
-      () =>
-        Effect.gen(function* () {
-          const h = yield* extensionHarness({ config: { persistState: true } });
-          const gate = yield* gateConfigCommits;
-          yield* h.emit("session_start");
-          gate.arm(true);
-          const pending = h.commands.get("openai")?.handler(`settings ${setting} true`, h.ctx);
-          yield* Deferred.await(gate.committed);
-          h.notify.mockClear();
-          const shutdown = yield* h
-            .emit("session_shutdown")
-            .pipe(Effect.forkScoped({ startImmediately: true }));
-          yield* Effect.yieldNow;
-          yield* Deferred.succeed(gate.release, undefined);
-          yield* invoke(pending);
-          yield* Fiber.join(shutdown);
-          expect(h.notify).not.toHaveBeenCalled();
-          h.setStatus.mockClear();
-          yield* h.emit("agent_start");
-          expect(h.setStatus).not.toHaveBeenCalled();
-          const requestHook = h.handlers.get("before_provider_request")?.[0];
-          const injection = () =>
-            Effect.promise(() =>
-              Promise.resolve(
-                requestHook?.({ type: "before_provider_request", payload: {} }, h.ctx),
-              ),
-            );
-          expect(yield* injection()).toBeUndefined();
-          gate.arm(false);
-          yield* h.emit("session_start");
-          if (setting === "fast.enabled") {
-            expect(yield* injection()).toBeDefined();
-          }
-          yield* h.emit("session_shutdown");
-        }),
-    );
-  }
+  it.effect(
+    "shutdown revokes publication and notifications from an admitted fast.enabled commit",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* extensionHarness({ config: { persistState: true } });
+        const gate = yield* gateConfigCommits;
+        yield* h.emit("session_start");
+        gate.arm(true);
+        const pending = h.commands.get("openai")?.handler("settings fast.enabled true", h.ctx);
+        yield* Deferred.await(gate.committed);
+        h.notify.mockClear();
+        const shutdown = yield* h
+          .emit("session_shutdown")
+          .pipe(Effect.forkScoped({ startImmediately: true }));
+        yield* Effect.yieldNow;
+        yield* Deferred.succeed(gate.release, undefined);
+        yield* invoke(pending);
+        yield* Fiber.join(shutdown);
+        expect(h.notify).not.toHaveBeenCalled();
+        h.setStatus.mockClear();
+        yield* h.emit("agent_start");
+        expect(h.setStatus).not.toHaveBeenCalled();
+        const requestHook = h.handlers.get("before_provider_request")?.[0];
+        const injection = () =>
+          Effect.promise(() =>
+            Promise.resolve(requestHook?.({ type: "before_provider_request", payload: {} }, h.ctx)),
+          );
+        expect(yield* injection()).toBeUndefined();
+        gate.arm(false);
+        yield* h.emit("session_start");
+        expect(yield* injection()).toBeDefined();
+        yield* h.emit("session_shutdown");
+      }),
+  );
 
   it.effect("a failed replacement cannot regain the retired session's publication authority", () =>
     Effect.gen(function* () {
@@ -148,24 +141,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
         });
         manager.appendMessage({ role: "user", content: "covered history", timestamp: 1 });
         const retained = manager.appendMessage({ role: "user", content: "retained", timestamp: 2 });
-        manager.appendCompaction(
-          "owned",
-          retained,
-          100,
-          {
-            type: OPENAI_COMPACTION_DETAILS_TYPE,
-            checkpoint: {
-              version: 1,
-              provider: "openai",
-              api: "openai-responses",
-              model: "gpt-5.5",
-              output: [{ type: "compaction", encrypted_content: "encrypted" }],
-              omittedEntryIds: [],
-              createdAt: 0,
-            },
-          },
-          true,
-        );
+        manager.appendCompaction("owned", retained, 100, ownedCheckpointDetails(), true);
         const ctx = { ...h.ctx, sessionManager: manager, abort: vi.fn() };
         yield* h.emit("session_start", ctx);
         const handler = h.handlers.get("context_with_system")[0]!;

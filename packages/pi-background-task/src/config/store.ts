@@ -7,7 +7,7 @@ import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import type * as Path from "effect/Path";
 import { AgentDirectory } from "pi-cosmic-core/platform/agent-directory";
-import { type JsonDocumentStore, type JsonObject } from "pi-cosmic-core/platform/json-document";
+import { type JsonDocumentStore } from "pi-cosmic-core/platform/json-document";
 import { decodeTolerantFields } from "pi-cosmic-core/config/tolerant-fields";
 import { makeScopedConfigStore } from "pi-cosmic-core/config/scoped-config-store";
 import { normalizeConfig } from "./options.ts";
@@ -32,16 +32,13 @@ const decodeConfigFields = decodeTolerantFields(BackgroundTaskConfigSchema.field
   path: "config",
 });
 
-const decodeConfig = (value: JsonObject): Partial<BackgroundTaskConfig> =>
-  decodeConfigFields(value).value;
-
 const store = makeScopedConfigStore({
   error: BackgroundTaskConfigError,
   label: "Background Tasks",
   spanPrefix: "BackgroundTaskConfig",
   projectConfigDirectory: CONFIG_DIR_NAME,
   basename: "pi-background-task.json",
-  decode: decodeConfig,
+  decode: (value) => decodeConfigFields(value).value,
   resolve: (metadata, project, global) => ({
     ...metadata,
     config: normalizeConfig({ ...global, ...project }),

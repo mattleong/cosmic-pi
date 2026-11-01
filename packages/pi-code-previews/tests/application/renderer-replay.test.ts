@@ -55,173 +55,165 @@ const downstream: ToolRenderers = {
 const hostRow = (renderers: ToolRenderers | undefined) =>
   hostToolRow("bash", { command: "echo EXACT_SOURCE" }, renderers, { result: output });
 
-for (const name of ["codemode"] as const)
-  for (const discovery of ["error"] as const)
-    for (const admission of ["native", "foreign", "missing", "error"] as const) {
-      it(`cold ${name} replay survives ${discovery} metadata then ${admission} readiness`, () => {
-        let metadata: ToolInfo[] = [];
-        let broken = discovery === "error";
-        const { owner, resolver } = presentationResolver({
-          getAllTools: () => {
-            if (broken) throw new Error("public metadata not bound");
-            return metadata;
-          },
-        });
-        const renderers = resolver(name, () => downstream);
-        assert.equal(renderers?.renderShell, "self");
-        const row = hostToolRow(name, { code: "text('EXACT_SOURCE');" }, renderers, {
-          result: output,
-        });
-        assert.match(Arr.join(row.render(100), "\n"), /NATIVE RESULT CONTENT/);
-        broken = admission === "error";
-        if (admission === "native") metadata = [info(name)];
-        if (admission === "foreign")
-          metadata = [
-            { ...info(name), sourceInfo: { ...info(name).sourceInfo, source: "foreign" } },
-          ];
-        setPlainPreviewSettings({
-          toolCallCollapsedStyle: "compact",
-          toolCallBackground: "border",
-          tools: [name],
-        });
-        owner.publish("/project", new Set([name]), scheduler);
-        const rendered = drawToolRow(row, true, 100);
-        if (admission === "native") {
-          assert.match(rendered, /EXACT_SOURCE/);
-          assert.match(rendered, /COMPLETE RETAINED OUTPUT/);
-          assert.doesNotMatch(rendered, /NATIVE RESULT CONTENT/);
-        } else {
-          assert.match(rendered, /NATIVE CALL CONTENT/);
-          assert.match(rendered, /NATIVE RESULT CONTENT/);
-        }
-        owner.retire();
-      });
-    }
-
-for (const style of ["preview"] as const)
-  for (const mode of ["border"] as const) {
-    it(`a real retained host row adopts first-ready ${style}/${mode} with complete call and result`, () => {
-      const { owner, resolver } = presentationResolver({ getAllTools: () => [info("bash")] });
-      const renderers = resolver("bash", () => downstream);
-      assert.equal(renderers?.renderShell, "self");
-      const row = hostRow(renderers);
-      assert.match(Arr.join(row.render(80), "\n"), /NATIVE CALL CONTENT/);
-      assert.match(Arr.join(row.render(80), "\n"), /NATIVE RESULT CONTENT/);
-      setPlainPreviewSettings({
-        toolCallCollapsedStyle: style,
-        toolCallBackground: mode,
-        tools: ["bash"],
-      });
-      owner.publish("/project", new Set(["bash"]), scheduler);
-      for (const expanded of [true, false, true]) {
-        const rendered = drawToolRow(row, expanded, 80);
-        assert.match(rendered, /EXACT_SOURCE/);
-        if (expanded || style === "preview") assert.match(rendered, /COMPLETE RETAINED OUTPUT/);
-        assert.doesNotMatch(rendered, /NATIVE RESULT CONTENT/);
-      }
-      row.setExpanded(false);
-      row.render(80);
-      const mouse = row.handleMouse({
-        type: "click",
-        button: "left",
-        x: 2,
-        y: 1,
-        screenX: 2,
-        screenY: 1,
-        width: 80,
-        height: 20,
-        shift: false,
-        alt: false,
-        ctrl: false,
-      });
-      assert.equal(mouse?.handled, true);
-      assert.match(Arr.join(row.render(80), "\n"), /COMPLETE RETAINED OUTPUT/);
-      owner.retire();
+for (const admission of ["native", "foreign", "missing", "error"] as const) {
+  it(`cold codemode replay survives error metadata then ${admission} readiness`, () => {
+    let metadata: ToolInfo[] = [];
+    let broken = true;
+    const { owner, resolver } = presentationResolver({
+      getAllTools: () => {
+        if (broken) throw new Error("public metadata not bound");
+        return metadata;
+      },
     });
-  }
-
-for (const style of ["preview"] as const)
-  for (const mode of ["on"] as const)
-    it(`retained tool search adopts ${style}/${mode} without borrowing replacement ownership`, () => {
-      let owner = new CodePreviewPresentationOwner();
-      const first = owner;
-      const pi = extensionApiFixture({
-        getAllTools: () => [info("tool_search")],
-        getCommands: () => [],
-      });
-      const resolver = createCodePreviewRendererResolver(pi, () => owner, new Set());
-      const renderers = resolver("tool_search", () => downstream);
-      assert.equal(renderers?.renderShell, "self");
-      const row = hostToolRow("tool_search", { query: "EXACT_QUERY", limit: 7 }, renderers, {
-        result: { ...output, details: { loaded: ["docs_lookup"] } },
-      });
-      assert.match(Arr.join(row.render(80), "\n"), /NATIVE RESULT CONTENT/);
-      setCodePreviewSettings({
-        ...defaultCodePreviewSettings,
-        toolCallTiming: false,
-        toolCallCollapsedStyle: style,
-        toolCallBackground: mode,
-      });
-      owner.publish("/first", new Set(["tool_search"]), scheduler);
-      for (const expanded of [false, true, false, true]) {
-        const rendered = drawToolRow(row, expanded, 80);
-        assert.match(rendered, /EXACT_QUERY/);
-        assert.doesNotMatch(rendered, /NATIVE RESULT CONTENT/);
-        assert.equal(Fn.pipe(rendered, Str.includes("COMPLETE RETAINED OUTPUT")), expanded);
-        if (expanded) assert.match(rendered, /"limit": 7/);
-      }
-      owner.retire();
-      owner = new CodePreviewPresentationOwner();
-      setCodePreviewSettings({
-        ...defaultCodePreviewSettings,
-        tools: [],
-        toolCallCollapsedStyle: style === "preview" ? "compact" : "preview",
-      });
-      let replacementSchedules = 0;
-      owner.publish("/replacement", new Set(), {
-        ...scheduler,
-        schedule: () => {
-          replacementSchedules++;
-          return () => {};
-        },
-      });
-      row.invalidate();
-      assert.match(Arr.join(row.render(80), "\n"), /COMPLETE RETAINED OUTPUT/);
-      assert.equal(first.session?.collapsedStyle, style);
-      assert.equal(first.session?.mode, mode);
-      assert.equal(replacementSchedules, 0);
-      assert.equal(resolver("tool_search", () => downstream)?.renderCall, downstream.renderCall);
-      owner.retire();
+    const renderers = resolver("codemode", () => downstream);
+    assert.equal(renderers?.renderShell, "self");
+    const row = hostToolRow("codemode", { code: "text('EXACT_SOURCE');" }, renderers, {
+      result: output,
     });
-
-for (const name of ["bash"] as const)
-  it(`lazy ${name} draw adoption refeeds stored result without host refresh or execution events`, () => {
-    const context = renderContextFixture({
-      args: name === "bash" ? { command: "echo EXACT_SOURCE" } : { query: "EXACT_SOURCE" },
-      expanded: true,
-      isPartial: false,
-      invalidate() {},
-    });
-    const { owner, resolver } = presentationResolver({ getAllTools: () => [info(name)] });
-    const renderers = resolver(name, () => downstream)!;
-    const call = renderers.renderCall!(context.args, plainTheme, context);
-    const result = renderers.renderResult!(
-      output,
-      { expanded: true, isPartial: false },
-      plainTheme,
-      context,
-    );
+    assert.match(Arr.join(row.render(100), "\n"), /NATIVE RESULT CONTENT/);
+    broken = admission === "error";
+    if (admission === "native") metadata = [info("codemode")];
+    if (admission === "foreign")
+      metadata = [
+        { ...info("codemode"), sourceInfo: { ...info("codemode").sourceInfo, source: "foreign" } },
+      ];
     setPlainPreviewSettings({
       toolCallCollapsedStyle: "compact",
       toolCallBackground: "border",
-      tools: [name],
+      tools: ["codemode"],
     });
-    owner.publish("/project", new Set([name]), scheduler);
-    const rendered = Arr.join([...call.render(80), ...result.render(80)], "\n");
-    assert.match(rendered, /EXACT_SOURCE/);
-    assert.match(rendered, /COMPLETE RETAINED OUTPUT/);
+    owner.publish("/project", new Set(["codemode"]), scheduler);
+    const rendered = drawToolRow(row, true, 100);
+    if (admission === "native") {
+      assert.match(rendered, /EXACT_SOURCE/);
+      assert.match(rendered, /COMPLETE RETAINED OUTPUT/);
+      assert.doesNotMatch(rendered, /NATIVE RESULT CONTENT/);
+    } else {
+      assert.match(rendered, /NATIVE CALL CONTENT/);
+      assert.match(rendered, /NATIVE RESULT CONTENT/);
+    }
     owner.retire();
   });
+}
+
+it("a real retained host row adopts first-ready preview/border with complete call and result", () => {
+  const { owner, resolver } = presentationResolver({ getAllTools: () => [info("bash")] });
+  const renderers = resolver("bash", () => downstream);
+  assert.equal(renderers?.renderShell, "self");
+  const row = hostRow(renderers);
+  assert.match(Arr.join(row.render(80), "\n"), /NATIVE CALL CONTENT/);
+  assert.match(Arr.join(row.render(80), "\n"), /NATIVE RESULT CONTENT/);
+  setPlainPreviewSettings({
+    toolCallCollapsedStyle: "preview",
+    toolCallBackground: "border",
+    tools: ["bash"],
+  });
+  owner.publish("/project", new Set(["bash"]), scheduler);
+  for (const expanded of [true, false, true]) {
+    const rendered = drawToolRow(row, expanded, 80);
+    assert.match(rendered, /EXACT_SOURCE/);
+    assert.match(rendered, /COMPLETE RETAINED OUTPUT/);
+    assert.doesNotMatch(rendered, /NATIVE RESULT CONTENT/);
+  }
+  row.setExpanded(false);
+  row.render(80);
+  const mouse = row.handleMouse({
+    type: "click",
+    button: "left",
+    x: 2,
+    y: 1,
+    screenX: 2,
+    screenY: 1,
+    width: 80,
+    height: 20,
+    shift: false,
+    alt: false,
+    ctrl: false,
+  });
+  assert.equal(mouse?.handled, true);
+  assert.match(Arr.join(row.render(80), "\n"), /COMPLETE RETAINED OUTPUT/);
+  owner.retire();
+});
+
+it("retained tool search adopts preview/on without borrowing replacement ownership", () => {
+  let owner = new CodePreviewPresentationOwner();
+  const first = owner;
+  const pi = extensionApiFixture({
+    getAllTools: () => [info("tool_search")],
+    getCommands: () => [],
+  });
+  const resolver = createCodePreviewRendererResolver(pi, () => owner, new Set());
+  const renderers = resolver("tool_search", () => downstream);
+  assert.equal(renderers?.renderShell, "self");
+  const row = hostToolRow("tool_search", { query: "EXACT_QUERY", limit: 7 }, renderers, {
+    result: { ...output, details: { loaded: ["docs_lookup"] } },
+  });
+  assert.match(Arr.join(row.render(80), "\n"), /NATIVE RESULT CONTENT/);
+  setCodePreviewSettings({
+    ...defaultCodePreviewSettings,
+    toolCallTiming: false,
+    toolCallCollapsedStyle: "preview",
+    toolCallBackground: "on",
+  });
+  owner.publish("/first", new Set(["tool_search"]), scheduler);
+  for (const expanded of [false, true, false, true]) {
+    const rendered = drawToolRow(row, expanded, 80);
+    assert.match(rendered, /EXACT_QUERY/);
+    assert.doesNotMatch(rendered, /NATIVE RESULT CONTENT/);
+    assert.equal(Fn.pipe(rendered, Str.includes("COMPLETE RETAINED OUTPUT")), expanded);
+    if (expanded) assert.match(rendered, /"limit": 7/);
+  }
+  owner.retire();
+  owner = new CodePreviewPresentationOwner();
+  setCodePreviewSettings({
+    ...defaultCodePreviewSettings,
+    tools: [],
+    toolCallCollapsedStyle: "compact",
+  });
+  let replacementSchedules = 0;
+  owner.publish("/replacement", new Set(), {
+    ...scheduler,
+    schedule: () => {
+      replacementSchedules++;
+      return () => {};
+    },
+  });
+  row.invalidate();
+  assert.match(Arr.join(row.render(80), "\n"), /COMPLETE RETAINED OUTPUT/);
+  assert.equal(first.session?.collapsedStyle, "preview");
+  assert.equal(first.session?.mode, "on");
+  assert.equal(replacementSchedules, 0);
+  assert.equal(resolver("tool_search", () => downstream)?.renderCall, downstream.renderCall);
+  owner.retire();
+});
+
+it("lazy bash draw adoption refeeds stored result without host refresh or execution events", () => {
+  const context = renderContextFixture({
+    args: { command: "echo EXACT_SOURCE" },
+    expanded: true,
+    isPartial: false,
+    invalidate() {},
+  });
+  const { owner, resolver } = presentationResolver({ getAllTools: () => [info("bash")] });
+  const renderers = resolver("bash", () => downstream)!;
+  const call = renderers.renderCall!(context.args, plainTheme, context);
+  const result = renderers.renderResult!(
+    output,
+    { expanded: true, isPartial: false },
+    plainTheme,
+    context,
+  );
+  setPlainPreviewSettings({
+    toolCallCollapsedStyle: "compact",
+    toolCallBackground: "border",
+    tools: ["bash"],
+  });
+  owner.publish("/project", new Set(["bash"]), scheduler);
+  const rendered = Arr.join([...call.render(80), ...result.render(80)], "\n");
+  assert.match(rendered, /EXACT_SOURCE/);
+  assert.match(rendered, /COMPLETE RETAINED OUTPUT/);
+  owner.retire();
+});
 
 interface PanelState {
   resultWasSeen?: boolean;

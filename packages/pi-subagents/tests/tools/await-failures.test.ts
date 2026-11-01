@@ -1,23 +1,20 @@
 import { it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import {
   applyPresentationSettings,
   createToolPresentationHarness,
   issueMessageStyleProblems,
   renderContextFixture,
 } from "pi-code-previews/testing";
-import { makePiManagedRuntime, stripAnsi } from "pi-cosmic-core";
-import { recordingExtensionHost } from "pi-cosmic-core/testing";
+import { stripAnsi } from "pi-cosmic-core";
 import { beforeEach, expect } from "vitest";
 import { callerNotRegistered, codedFailure, runNotFound } from "../../src/run/errors.ts";
 import { SUBAGENT_TOOL_NAME } from "../../src/run/tool-policy.ts";
 import { createSubagentCompactSummary } from "../../src/tools/compact-summary.ts";
 import { registerSubagentTools } from "../../src/tools/subagent.ts";
 import { eventBackendServiceFixture } from "../run/fixtures/service-harness.ts";
-import { step } from "../support/effect-test.ts";
-import { executeTool } from "./fixtures/tool-harness.ts";
+import { executeTool, managedToolHost } from "./fixtures/tool-harness.ts";
 
 beforeEach(() =>
   applyPresentationSettings({ toolCallCollapsedStyle: "compact", toolCallTiming: false }),
@@ -36,13 +33,7 @@ const settledIssue = (args: { readonly runIds: ReadonlyArray<string> }, text: st
 it.live("names an unknown awaited run without its ID until the call is expanded", () =>
   Effect.gen(function* () {
     const fixture = eventBackendServiceFixture();
-    const { pi, tools } = recordingExtensionHost();
-    const runtime = yield* Effect.acquireRelease(
-      Effect.sync(() =>
-        makePiManagedRuntime(pi, Layer.merge(fixture.layer, fixture.backend.layer)),
-      ),
-      (owned) => step(() => owned.dispose()),
-    );
+    const { pi, tools, runtime } = yield* managedToolHost(fixture);
     registerSubagentTools(pi, {
       environment: { cwd: "/project", projectTrusted: true },
       run: (effect, signal) => runtime.run(effect, signal),

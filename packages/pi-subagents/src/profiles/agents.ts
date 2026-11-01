@@ -45,7 +45,7 @@ export interface CustomAgentDefinition {
 }
 
 export const CUSTOM_AGENT_SCOPES = ["global", "project"] as const;
-export type CustomAgentScope = (typeof CUSTOM_AGENT_SCOPES)[number];
+type CustomAgentScope = (typeof CUSTOM_AGENT_SCOPES)[number];
 
 /** Distinct agents the global and project layers can resolve to, each layer holding its maximum. */
 export const MAX_RESOLVED_CUSTOM_AGENTS = CUSTOM_AGENT_SCOPES.length * MAX_CUSTOM_AGENTS;

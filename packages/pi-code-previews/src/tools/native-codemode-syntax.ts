@@ -18,76 +18,7 @@ export function unhandledSyntax(node: never): never {
 const present = <T>(value: T | null | undefined): T[] =>
   value === null || value === undefined ? [] : [value];
 
-const SEQUENCE_TYPES = [
-  "Program",
-  "BlockStatement",
-  "StaticBlock",
-  "ClassBody",
-  "ExpressionStatement",
-  "ChainExpression",
-  "ParenthesizedExpression",
-  "LabeledStatement",
-  "VariableDeclaration",
-  "VariableDeclarator",
-  "SequenceExpression",
-  "TemplateLiteral",
-] as const;
-const OPERATOR_TYPES = [
-  "ReturnStatement",
-  "ThrowStatement",
-  "UnaryExpression",
-  "UpdateExpression",
-  "AwaitExpression",
-  "YieldExpression",
-  "SpreadElement",
-  "RestElement",
-  "BinaryExpression",
-  "LogicalExpression",
-  "AssignmentExpression",
-  "AssignmentPattern",
-  "ConditionalExpression",
-] as const;
-const ACCESS_TYPES = [
-  "CallExpression",
-  "NewExpression",
-  "MemberExpression",
-  "TaggedTemplateExpression",
-  "ImportExpression",
-  "ArrayExpression",
-  "ArrayPattern",
-  "ObjectExpression",
-  "ObjectPattern",
-  "Property",
-] as const;
-const CONTROL_TYPES = [
-  "IfStatement",
-  "ForStatement",
-  "ForInStatement",
-  "ForOfStatement",
-  "WhileStatement",
-  "DoWhileStatement",
-  "SwitchStatement",
-  "SwitchCase",
-  "TryStatement",
-  "CatchClause",
-] as const;
-const DEFINITION_TYPES = [
-  "FunctionDeclaration",
-  "FunctionExpression",
-  "ArrowFunctionExpression",
-  "ClassDeclaration",
-  "ClassExpression",
-  "MethodDefinition",
-  "PropertyDefinition",
-] as const;
-
-const isSequenceNode = syntaxNodeGuard(SEQUENCE_TYPES);
-const isOperatorNode = syntaxNodeGuard(OPERATOR_TYPES);
-const isAccessNode = syntaxNodeGuard(ACCESS_TYPES);
-const isControlNode = syntaxNodeGuard(CONTROL_TYPES);
-const isDefinitionNode = syntaxNodeGuard(DEFINITION_TYPES);
-
-function sequenceChildren(node: SyntaxNode<(typeof SEQUENCE_TYPES)[number]>): readonly AnyNode[] {
+export function syntaxChildren(node: AnyNode): readonly AnyNode[] {
   switch (node.type) {
     case "Program":
     case "BlockStatement":
@@ -107,12 +38,6 @@ function sequenceChildren(node: SyntaxNode<(typeof SEQUENCE_TYPES)[number]>): re
     case "SequenceExpression":
     case "TemplateLiteral":
       return node.expressions;
-  }
-  return unhandledSyntax(node);
-}
-
-function operatorChildren(node: SyntaxNode<(typeof OPERATOR_TYPES)[number]>): readonly AnyNode[] {
-  switch (node.type) {
     case "ReturnStatement":
     case "ThrowStatement":
     case "UnaryExpression":
@@ -129,12 +54,6 @@ function operatorChildren(node: SyntaxNode<(typeof OPERATOR_TYPES)[number]>): re
       return [node.left, node.right];
     case "ConditionalExpression":
       return [node.test, node.consequent, node.alternate];
-  }
-  return unhandledSyntax(node);
-}
-
-function accessChildren(node: SyntaxNode<(typeof ACCESS_TYPES)[number]>): readonly AnyNode[] {
-  switch (node.type) {
     case "CallExpression":
     case "NewExpression":
       return [node.callee, ...node.arguments];
@@ -152,12 +71,6 @@ function accessChildren(node: SyntaxNode<(typeof ACCESS_TYPES)[number]>): readon
       return node.properties;
     case "Property":
       return node.computed ? [node.key, node.value] : [node.value];
-  }
-  return unhandledSyntax(node);
-}
-
-function controlChildren(node: SyntaxNode<(typeof CONTROL_TYPES)[number]>): readonly AnyNode[] {
-  switch (node.type) {
     case "IfStatement":
       return [node.test, node.consequent, ...present(node.alternate)];
     case "ForStatement":
@@ -176,14 +89,6 @@ function controlChildren(node: SyntaxNode<(typeof CONTROL_TYPES)[number]>): read
       return [node.block, ...present(node.handler), ...present(node.finalizer)];
     case "CatchClause":
       return [...present(node.param), node.body];
-  }
-  return unhandledSyntax(node);
-}
-
-function definitionChildren(
-  node: SyntaxNode<(typeof DEFINITION_TYPES)[number]>,
-): readonly AnyNode[] {
-  switch (node.type) {
     case "FunctionDeclaration":
     case "FunctionExpression":
     case "ArrowFunctionExpression":
@@ -194,15 +99,28 @@ function definitionChildren(
     case "MethodDefinition":
     case "PropertyDefinition":
       return [...(node.computed ? [node.key] : []), ...present(node.value)];
+    case "BreakStatement":
+    case "ContinueStatement":
+    case "DebuggerStatement":
+    case "EmptyStatement":
+    case "ExportAllDeclaration":
+    case "ExportDefaultDeclaration":
+    case "ExportNamedDeclaration":
+    case "ExportSpecifier":
+    case "Identifier":
+    case "ImportAttribute":
+    case "ImportDeclaration":
+    case "ImportDefaultSpecifier":
+    case "ImportNamespaceSpecifier":
+    case "ImportSpecifier":
+    case "Literal":
+    case "MetaProperty":
+    case "PrivateIdentifier":
+    case "Super":
+    case "TemplateElement":
+    case "ThisExpression":
+    case "WithStatement":
+      return [];
   }
-  return unhandledSyntax(node);
-}
-
-export function syntaxChildren(node: AnyNode): readonly AnyNode[] {
-  if (isSequenceNode(node)) return sequenceChildren(node);
-  if (isOperatorNode(node)) return operatorChildren(node);
-  if (isAccessNode(node)) return accessChildren(node);
-  if (isControlNode(node)) return controlChildren(node);
-  if (isDefinitionNode(node)) return definitionChildren(node);
   return [];
 }

@@ -4,12 +4,10 @@ import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import { resolveNamedProfileSet } from "../config/options.ts";
 import type { SubagentConfigInspection, SubagentConfigScope } from "../config/store.ts";
-import { builtinProfileCandidate } from "../profiles/definitions.ts";
 import type { SessionProfileSnapshot } from "../profiles/session-overrides.ts";
 import {
   cloneProfileCandidates as cloneCandidates,
   MAX_PROFILE_CANDIDATES,
-  normalizeProfileCandidate as cloneCandidate,
   profileCandidateValidationIssues,
   supportsSubagentFastMode,
   type DeclaredProfileRoute,
@@ -190,9 +188,6 @@ export const duplicateRouteCandidate = (
     ...draft.candidates.slice(index + 1),
   ]);
 };
-
-export const defaultRouteCandidate = (profile: ProfileId): ProfileCandidate =>
-  cloneCandidate(builtinProfileCandidate(profile));
 
 export const profileRouteOptionLabel = (index: number): string =>
   index <= 0 ? "Primary" : `Fallback ${index}`;

@@ -15,7 +15,6 @@ import {
   isProjectTrusted,
   notifyAtHostBoundary,
 } from "pi-cosmic-core/host-session";
-import { isSubagentChildProcess } from "pi-cosmic-core/host-environment";
 import { makePiManagedRuntime } from "pi-cosmic-core/runtime";
 import {
   makePiSessionRuntimeSlot,
@@ -67,7 +66,6 @@ export function registerIntercomApplication(
   pi: ExtensionAPI,
   boundaries: Partial<IntercomApplicationBoundaries> = {},
 ): void {
-  if (isSubagentChildProcess()) return;
   const { fallbackSocketRoot, loadSettings } = { ...DEFAULT_BOUNDARIES, ...boundaries };
 
   registerIntercomMessageRenderer(pi);

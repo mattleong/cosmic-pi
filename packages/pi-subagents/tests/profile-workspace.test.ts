@@ -1,48 +1,21 @@
 import { describe, expect, it, vi } from "@effect/vitest";
-import { deferredPromise, plainTheme } from "pi-cosmic-core/testing";
+import { deferredPromise } from "pi-cosmic-core/testing";
 import { effectTest, step } from "./support/effect-test.ts";
 import { profileSettingsInspection } from "./fixtures/profile-settings-inspection.ts";
 import {
   chooseFromPage,
   settleTurn,
+  workspaceHarness,
   workspaceInspection as makeInspection,
 } from "./fixtures/profile-workspace.ts";
 import { declaredCandidate, profileCandidate } from "./fixtures/profiles.ts";
 import { ProfileEditVisit } from "../src/settings/profile-edit-visit.ts";
 import type { JsonObject } from "pi-cosmic-core";
-import {
+import type {
   ProfileWorkspaceComponent,
-  type ProfileWorkspaceOptions,
-  type ProfileWorkspaceSaveResult,
+  ProfileWorkspaceOptions,
+  ProfileWorkspaceSaveResult,
 } from "../src/settings/profile-workspace.ts";
-
-const baseOptions = (
-  overrides: Partial<ProfileWorkspaceOptions> = {},
-): ProfileWorkspaceOptions => ({
-  theme: plainTheme,
-  inspection: makeInspection(),
-  target: { kind: "session" },
-  initialProfile: "generalist",
-  parentEffort: "high",
-  getHeight: () => 30,
-  requestRender: () => {},
-  close: () => {},
-  saveDraft: () => Promise.resolve({ inspection: makeInspection() }),
-  loadModelPicker: (_profile, candidateIndex, candidate) =>
-    Promise.resolve({
-      choices: [],
-      current: candidate.model,
-      context: {
-        profile: "generalist",
-        candidateIndex,
-      },
-    }),
-  supportedPiEfforts: () => undefined,
-  ...overrides,
-});
-
-const chooseDelete = (component: ProfileWorkspaceComponent): void =>
-  chooseFromPage(component, "a", "remove");
 
 const openUndo = (component: ProfileWorkspaceComponent): void => {
   component.handleInput("l");
@@ -84,10 +57,8 @@ describe("editing visit integration", () => {
               : { inspection: disabled, receipt: { kind: "saved", document: disabledDocument } },
           ),
       );
-      const component = new ProfileWorkspaceComponent(
-        baseOptions({ target, inspection: initial, editVisit, saveDraft }),
-      );
-      chooseDelete(component);
+      const { component } = workspaceHarness({ target, inspection: initial, editVisit, saveDraft });
+      chooseFromPage(component, "a", "remove");
       component.handleInput("\r");
       yield* step(settleTurn);
       openUndo(component);
@@ -112,11 +83,9 @@ describe("profile workspace disposal", () => {
       const requestRender = vi.fn();
       const close = vi.fn();
       const saveDraft = vi.fn(() => save);
-      const component = new ProfileWorkspaceComponent(
-        baseOptions({ requestRender, close, saveDraft }),
-      );
+      const { component } = workspaceHarness({ requestRender, close, saveDraft });
 
-      chooseDelete(component);
+      chooseFromPage(component, "a", "remove");
       component.handleInput("\r");
       yield* step(settleTurn);
       expect(saveDraft).toHaveBeenCalledTimes(1);
@@ -129,41 +98,37 @@ describe("profile workspace disposal", () => {
 
       saveCell.resolve({ inspection: makeInspection() });
       yield* step(settleTurn);
-      {
-        expect(persistenceSettled).toBe(true);
-        expect(requestRender).toHaveBeenCalledTimes(rendersAtDispose);
-        expect(close).not.toHaveBeenCalled();
-      }
+      expect(persistenceSettled).toBe(true);
+      expect(requestRender).toHaveBeenCalledTimes(rendersAtDispose);
+      expect(close).not.toHaveBeenCalled();
     },
   );
 
-  it.each(["model"] as const)("aborts %s loading and ignores its late result", (field) => {
+  it("aborts model loading and ignores its late result", () => {
     type PickerData = Awaited<ReturnType<ProfileWorkspaceOptions["loadModelPicker"]>>;
     const pickerCell = deferredPromise<PickerData>();
     let capturedSignal: AbortSignal | undefined;
     const requestRender = vi.fn();
     const close = vi.fn();
-    const component = new ProfileWorkspaceComponent(
-      baseOptions({
-        requestRender,
-        close,
-        initialFocus: "fields",
-        initialField: field,
-        initialAdvancedExpanded: true,
-        inspection: makeInspection({
-          revision: 1,
-          overrides: {
-            generalist: {
-              candidates: [profileCandidate("parent")],
-            },
+    const { component } = workspaceHarness({
+      requestRender,
+      close,
+      initialFocus: "fields",
+      initialField: "model",
+      initialAdvancedExpanded: true,
+      inspection: makeInspection({
+        revision: 1,
+        overrides: {
+          generalist: {
+            candidates: [profileCandidate("parent")],
           },
-        }),
-        loadModelPicker: (_profile, _index, _candidate, signal) => {
-          capturedSignal = signal;
-          return pickerCell.promise;
         },
       }),
-    );
+      loadModelPicker: (_profile, _index, _candidate, signal) => {
+        capturedSignal = signal;
+        return pickerCell.promise;
+      },
+    });
 
     component.handleInput("\r");
     expect(capturedSignal).toBeDefined();

@@ -147,14 +147,11 @@ export abstract class ProfileWorkspaceState {
     const next = loadProfileRouteDraft(inspection, this.options.target, this.profile());
     this.remapSelection(previous, next);
     const moved = selected
-      ? Option.getOrElse(
-          Arr.findFirstIndex(next.candidates, (candidate) =>
-            sameProfileCandidate(candidate, selected),
-          ),
-          () => -1,
+      ? Arr.findFirstIndex(next.candidates, (candidate) =>
+          sameProfileCandidate(candidate, selected),
         )
-      : -1;
-    if (moved >= 0) this.candidateIndex = moved;
+      : Option.none();
+    if (Option.isSome(moved)) this.candidateIndex = moved.value;
     this.editVisit.reconcile(inspection);
     this.inspection = inspection;
     this.catalogLoad?.abort();
@@ -231,25 +228,18 @@ export abstract class ProfileWorkspaceState {
   protected selectField(field: ProfileWorkspaceField): void {
     if (["context", "openaiFastMode"].includes(field)) this.advancedExpanded = true;
     const rows = this.rows();
-    const index = Option.getOrElse(
-      Arr.findFirstIndex(
-        rows,
-        (row) =>
-          row.field === field &&
-          (row.scope !== "candidate" || row.candidateIndex === this.candidateIndex),
+    this.fieldIndex = Option.getOrElse(
+      Option.orElse(
+        Arr.findFirstIndex(
+          rows,
+          (row) =>
+            row.field === field &&
+            (row.scope !== "candidate" || row.candidateIndex === this.candidateIndex),
+        ),
+        () => Arr.findFirstIndex(rows, (row) => row.candidateIndex === this.candidateIndex),
       ),
-      () => -1,
+      () => 0,
     );
-    this.fieldIndex =
-      index >= 0
-        ? index
-        : Math.max(
-            0,
-            Option.getOrElse(
-              Arr.findFirstIndex(rows, (row) => row.candidateIndex === this.candidateIndex),
-              () => -1,
-            ),
-          );
   }
   protected selectCandidate(index: number): void {
     this.saveFocused = false;

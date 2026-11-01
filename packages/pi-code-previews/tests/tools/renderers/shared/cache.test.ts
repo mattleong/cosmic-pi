@@ -1,14 +1,12 @@
 import assert from "node:assert/strict";
 import { Text } from "@earendil-works/pi-tui";
-import { afterEach, beforeEach, test } from "vitest";
+import { beforeEach, test } from "vitest";
 import { renderContextFixture } from "../../../../testing";
 import { previewCacheKey } from "../../../../src/tools/renderers/shared/preview-cache-key";
 import { cachedPreview } from "../../../../src/tools/renderers/shared/cache";
 import type { RendererState } from "../../../../src/tools/renderers/shared/types";
 import { defaultCodePreviewSettings } from "../../../../src/config/defaults";
 import { codePreviewSettings, setCodePreviewSettings } from "../../../../src/config/state";
-import { acquireProjectionOwnership } from "../../../../src/shared/projection-ownership";
-import { clearSyntaxProjection } from "../../../../src/syntax/projection";
 import {
   builtinRenderers,
   plainTheme as theme,
@@ -16,13 +14,7 @@ import {
   stripAnsi,
 } from "../../../support/render";
 
-let syntaxOwner = acquireProjectionOwnership("preview-cache-key-test");
-
-beforeEach(() => {
-  syntaxOwner = acquireProjectionOwnership("preview-cache-key-test");
-  setCodePreviewSettings(defaultCodePreviewSettings);
-});
-afterEach(() => clearSyntaxProjection(syntaxOwner));
+beforeEach(() => setCodePreviewSettings(defaultCodePreviewSettings));
 
 test("slots are independent and exact source, path, expansion and theme replace previews", () => {
   const state = {};

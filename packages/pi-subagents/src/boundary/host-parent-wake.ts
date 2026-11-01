@@ -6,14 +6,14 @@ import type {
   ExtensionContext,
   SessionBoundaryDraft,
 } from "@earendil-works/pi-coding-agent";
-import { clipText, countLabel } from "pi-cosmic-core/display";
+import { countLabel } from "pi-cosmic-core/display";
 import { invokeHostCallback, notifyAtHostBoundary } from "pi-cosmic-core/host-session";
 import { registerSessionWake, type SessionWake } from "pi-cosmic-core/host-wake";
-import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import type { SubagentProjection, SubagentRunView } from "../run/model.ts";
 import { isActiveRunState, SUBAGENT_ROOT_RUN_ID } from "../run/model.ts";
 import { AGENT_MESSAGE_TYPE } from "./host-agent-messages.ts";
 import { COMPLETION_MESSAGE_TYPE, QUESTION_MESSAGE_TYPE } from "./host-notifier.ts";
+import { displayName } from "../ui/notice-details.ts";
 
 export const QUESTION_REMINDER_MESSAGE_TYPE = "pi-subagents-question-reminder";
 export const WAKE_MESSAGE_TYPE = "pi-subagents-wake";
@@ -51,8 +51,6 @@ const pendingQuestions = (projection: SubagentProjection): ReadonlyArray<Pending
   );
 
 const questionKey = (run: PendingQuestion): string => `${run.id}:${run.question.requestId}`;
-
-const label = (run: SubagentRunView): string => clipText(sanitizeTerminalLine(run.name), 60);
 
 const reminderText = (runs: ReadonlyArray<PendingQuestion>): string =>
   Arr.join(
@@ -141,7 +139,7 @@ export function registerParentWake(pi: ExtensionAPI, host: ParentWakeHost): Sess
           notifyAtHostBoundary(
             ctx,
             ignored.length === 1 && ignored[0]
-              ? `Subagent ${label(ignored[0])} is waiting for a reply`
+              ? `Subagent ${displayName(ignored[0].name)} is waiting for a reply`
               : `${ignored.length} subagents are waiting for replies`,
             "warning",
           );

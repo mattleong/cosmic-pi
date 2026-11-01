@@ -21,10 +21,6 @@ type ToolTimingRenderContext = ToolTimingUpdateContext & {
   lastComponent: Component | undefined;
 };
 
-interface TimingOwner {
-  readonly state: unknown;
-}
-
 /**
  * How often a running row's timer redraws it: every spinner frame for rows that draw time-based
  * frames, or only when the elapsed label changes.
@@ -37,11 +33,6 @@ interface TimingHandles {
   resultComponent: Component | undefined;
 }
 
-interface TimingState {
-  readonly owner: TimingOwner;
-  readonly handles: TimingHandles;
-}
-
 const TIMING_FIELDS = {
   startedAt: "codePreviewTimingStartedAt",
   endedAt: "codePreviewTimingEndedAt",
@@ -49,6 +40,17 @@ const TIMING_FIELDS = {
 } as const;
 
 type TimingField = keyof typeof TIMING_FIELDS;
+
+interface TimingHost {
+  codePreviewTimingStartedAt?: unknown;
+  codePreviewTimingEndedAt?: unknown;
+  codePreviewAnimationFrame?: unknown;
+}
+
+interface TimingState {
+  readonly host: TimingHost;
+  readonly handles: TimingHandles;
+}
 
 const timingHandles = new WeakMap<object, TimingHandles>();
 
@@ -99,8 +101,8 @@ export function updateToolCallTiming(
     return undefined;
   }
   if (context.executionStarted && startedAt(state) === undefined && context.isPartial) {
-    writeTiming(state.owner, "startedAt", synchronousNow());
-    writeTiming(state.owner, "endedAt", undefined);
+    writeTiming(state, "startedAt", synchronousNow());
+    writeTiming(state, "endedAt", undefined);
   }
 
   const started = startedAt(state);
@@ -143,23 +145,20 @@ function formatTiming(
   return { label: `${running ? "Elapsed" : "Took"} ${duration}`, duration, elapsedMs };
 }
 
-function readTiming(owner: TimingOwner, field: TimingField): number | undefined {
-  const state = owner.state;
-  if (!Predicate.isObject(state)) return undefined;
-  const value = state[TIMING_FIELDS[field]];
+function readTiming(state: TimingState, field: TimingField): number | undefined {
+  const value = state.host[TIMING_FIELDS[field]];
   return Predicate.isNumber(value) ? value : undefined;
 }
 
-function writeTiming(owner: TimingOwner, field: TimingField, value: number | undefined): void {
-  const state = owner.state;
-  if (Predicate.isObject(state)) state[TIMING_FIELDS[field]] = value;
+function writeTiming(state: TimingState, field: TimingField, value: number | undefined): void {
+  state.host[TIMING_FIELDS[field]] = value;
 }
 
-const startedAt = (state: TimingState) => readTiming(state.owner, "startedAt");
-const endedAt = (state: TimingState) => readTiming(state.owner, "endedAt");
+const startedAt = (state: TimingState) => readTiming(state, "startedAt");
+const endedAt = (state: TimingState) => readTiming(state, "endedAt");
 
 function settleEndedAt(state: TimingState): void {
-  if (endedAt(state) === undefined) writeTiming(state.owner, "endedAt", synchronousNow());
+  if (endedAt(state) === undefined) writeTiming(state, "endedAt", synchronousNow());
 }
 
 export function getCodePreviewAnimationFrame(context: { readonly state: unknown }): number {
@@ -180,7 +179,7 @@ function timingState(context: { readonly state: unknown }): TimingState | undefi
     handles = { cancel: undefined, cadence: undefined, resultComponent: undefined };
     timingHandles.set(host, handles);
   }
-  return { owner: { state: host }, handles };
+  return { host, handles };
 }
 
 export function withLastComponent<TContext extends ToolTimingRenderContext>(
@@ -207,8 +206,8 @@ function ensureToolCallAnimation(
     return;
   }
   handles.cancel = schedule(SPINNER_FRAME_MS, () => {
-    const frame = readTiming(state.owner, "animationFrame") ?? 0;
-    writeTiming(state.owner, "animationFrame", frame + 1);
+    const frame = readTiming(state, "animationFrame") ?? 0;
+    writeTiming(state, "animationFrame", frame + 1);
     invalidate();
   });
   if (handles.cancel) handles.cadence = cadence;

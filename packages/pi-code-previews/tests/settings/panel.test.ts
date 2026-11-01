@@ -144,34 +144,37 @@ for (const operation of ["save", "reset", "failure"] as const)
     setCodePreviewSettings(defaultCodePreviewSettings);
   });
 
+const latestOnlyModel = (queueSave: (next: CodePreviewSettings) => Promise<void>) => {
+  const warnings: string[] = [];
+  const model = createCodePreviewSettingsModel({
+    notify: (message, level) => {
+      if (level === "warning") warnings.push(message);
+    },
+    done: () => undefined,
+    loadOptions: {},
+    effects: {
+      queueSave,
+      queueReset: () => Promise.resolve(),
+      initializeSyntax: () => Promise.resolve(),
+    },
+  });
+  return { model, list: listFor(model), warnings };
+};
+
 effectTest(
   "only the latest failed edit rolls the panel back to the published settings",
   function* () {
     setCodePreviewSettings(defaultCodePreviewSettings);
     const pending: Array<{ next: CodePreviewSettings; fail: () => void; pass: () => void }> = [];
-    const warnings: string[] = [];
-    const model = createCodePreviewSettingsModel({
-      notify: (message, level) => {
-        if (level === "warning") warnings.push(message);
-      },
-      done: () => undefined,
-      loadOptions: {},
-      effects: {
-        queueSave: (next) => {
-          const save = Deferred.makeUnsafe<void, DiskFull>();
-          pending.push({
-            next,
-            pass: () => Deferred.doneUnsafe(save, Effect.void),
-            fail: () =>
-              Deferred.doneUnsafe(save, Effect.fail(DiskFull.make({ message: "disk full" }))),
-          });
-          return Effect.runPromise(Deferred.await(save));
-        },
-        queueReset: () => Promise.resolve(),
-        initializeSyntax: () => Promise.resolve(),
-      },
+    const { model, list, warnings } = latestOnlyModel((next) => {
+      const save = Deferred.makeUnsafe<void, DiskFull>();
+      pending.push({
+        next,
+        pass: () => Deferred.doneUnsafe(save, Effect.void),
+        fail: () => Deferred.doneUnsafe(save, Effect.fail(DiskFull.make({ message: "disk full" }))),
+      });
+      return Effect.runPromise(Deferred.await(save));
     });
-    const list = listFor(model);
     model.onChange("readCollapsedLines", "20", list);
     model.onChange("readCollapsedLines", "40", list);
     pending[0]!.fail();
@@ -194,29 +197,16 @@ effectTest(
 effectTest("only the latest superseded panel edit reports that it was not saved", function* () {
   setCodePreviewSettings(defaultCodePreviewSettings);
   const pending: Array<() => void> = [];
-  const warnings: string[] = [];
-  const model = createCodePreviewSettingsModel({
-    notify: (message, level) => {
-      if (level === "warning") warnings.push(message);
-    },
-    done: () => undefined,
-    loadOptions: {},
-    effects: {
-      queueSave: () => {
-        const save = Deferred.makeUnsafe<void, CodePreviewSettingsSuperseded>();
-        pending.push(() =>
-          Deferred.doneUnsafe(
-            save,
-            Effect.fail(CodePreviewSettingsSuperseded.make({ message: "superseded" })),
-          ),
-        );
-        return Effect.runPromise(Deferred.await(save));
-      },
-      queueReset: () => Promise.resolve(),
-      initializeSyntax: () => Promise.resolve(),
-    },
+  const { model, list, warnings } = latestOnlyModel(() => {
+    const save = Deferred.makeUnsafe<void, CodePreviewSettingsSuperseded>();
+    pending.push(() =>
+      Deferred.doneUnsafe(
+        save,
+        Effect.fail(CodePreviewSettingsSuperseded.make({ message: "superseded" })),
+      ),
+    );
+    return Effect.runPromise(Deferred.await(save));
   });
-  const list = listFor(model);
   model.onChange("readCollapsedLines", "20", list);
   model.onChange("readCollapsedLines", "40", list);
   pending[0]!();

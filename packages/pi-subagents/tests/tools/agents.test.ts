@@ -30,6 +30,7 @@ import {
   view,
   type CaptureOptions,
 } from "./fixtures/tool-harness.ts";
+import { readoutOf } from "../fixtures/run-view.ts";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
@@ -348,18 +349,7 @@ describe("custom agent status", () => {
       const service = subagentServiceDouble({
         agentRead: () =>
           Effect.succeed({
-            agents: [
-              {
-                kind: "run",
-                id: run.id,
-                name: run.name,
-                state: run.state,
-                textStatus: "none",
-                truncated: false,
-                reportGeneration: 0,
-                run,
-              },
-            ],
+            agents: [readoutOf(run)],
             missingIds: [],
           }),
       });

@@ -1,4 +1,3 @@
-import * as Predicate from "effect/Predicate";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 
@@ -10,7 +9,7 @@ import { metadata, previewFooter, trimSingleTrailingNewline } from "../../previe
 import { codePreviewSettings } from "../../config/state";
 import { escapeControlChars } from "../../shared/terminal-text";
 import { shouldSkipHighlight } from "../../syntax/render";
-import { numericArg } from "../data/args";
+import { numericArg, stringArg } from "../data/args";
 import { getTextContent } from "../data/results";
 import { renderCodePreviewToolTitle } from "../presentation";
 import { splitListingNotice, withAgentNotes } from "./shared/output-notice";
@@ -20,18 +19,15 @@ import { renderSelectedOutputLines } from "./shared/preview-text";
 import { renderResultPrelude } from "./shared/result-prelude";
 import type { PreviewRenderers } from "./shared/types";
 import { renderHiddenPreviewExpandHint } from "../../preview/bordered-tool-call";
-import { hostObject, ownField } from "../../shared/untrusted-value";
+import { hostObject } from "../../shared/untrusted-value";
 
 export function grepPreviewRenderers(cwd: string): PreviewRenderers {
   return {
     renderCall(args, theme) {
       const input = hostObject(args);
-      const patternArg = ownField(input, "pattern");
-      const pathArg = ownField(input, "path");
-      const globArg = ownField(input, "glob");
-      const pattern = Predicate.isString(patternArg) ? patternArg : "";
-      const path = Predicate.isString(pathArg) && pathArg ? pathArg : ".";
-      const glob = Predicate.isString(globArg) && globArg ? globArg : undefined;
+      const pattern = stringArg(input, "pattern");
+      const path = stringArg(input, "path") || ".";
+      const glob = stringArg(input, "glob") || undefined;
       const limit = numericArg(input, "limit");
       let text = `${renderCodePreviewToolTitle("grep", theme)} ${theme.fg("accent", `/${escapeControlChars(pattern)}/`)} ${theme.fg("muted", "in")} ${renderDisplayPath(path, cwd, theme)}`;
       text += metadata(theme, [

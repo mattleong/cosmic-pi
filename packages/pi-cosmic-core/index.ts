@@ -61,7 +61,6 @@ export {
   formatDisplayPath,
   isStrictlyInsidePathWith,
 } from "./src/platform/paths.ts";
-export { isInteractiveShellProcessName } from "./src/platform/shell-process-names.ts";
 export { JsonHttpClient, JsonHttpResponse } from "./src/platform/json-http.ts";
 export {
   CrossProcessLock,
@@ -205,7 +204,6 @@ export {
   synchronousRandomUuid,
 } from "./src/platform/native-crypto.ts";
 export { sha256Text } from "./src/security/sha256.ts";
-export { makeTokenVerifier, type TokenVerifier } from "./src/platform/token-verifier.ts";
 export { boundedNdjsonRpcSerialization } from "./src/platform/bounded-ndjson-rpc.ts";
 export {
   extractJwtClaim,

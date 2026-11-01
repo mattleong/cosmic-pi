@@ -28,8 +28,6 @@ const outputFormats = {
   { readonly extension: string; readonly mimeType: string; readonly sharpFormat: string }
 >;
 
-export const imageOutputMetadata = (format: ImageOutputFormat) => outputFormats[format];
-
 // Grouped repetition exhausts V8's regexp stack on ordinary multi-megabyte images.
 const decodeStrictBase64 = (value: string): Buffer | undefined => {
   if (
@@ -79,7 +77,7 @@ export const imageOutput = (dependencies: {
     return {
       ...parsed,
       data: bytes.toString("base64"),
-      mimeType: imageOutputMetadata(actualFormat).mimeType,
+      mimeType: outputFormats[actualFormat].mimeType,
       bytes,
       outputFormat: actualFormat,
       ...(actualFormat !== outputFormat && {
@@ -144,7 +142,7 @@ export const imageOutput = (dependencies: {
       ),
       "",
     );
-    const format = imageOutputMetadata(outputFormat);
+    const format = outputFormats[outputFormat];
     const destination = path.join(
       canonicalDirectory,
       `openai-image-${stamp}-${safeId}-${nonce}.${format.extension}`,

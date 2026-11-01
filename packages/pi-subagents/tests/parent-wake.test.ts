@@ -20,6 +20,7 @@ import { vi } from "vitest";
 import { hostNotifier } from "../src/boundary/host-notifier.ts";
 import { registerParentWake, WAKE_MESSAGE_TYPE } from "../src/boundary/host-parent-wake.ts";
 import type { SubagentProjection } from "../src/run/model.ts";
+import { settleEvent } from "./fixtures/pi-host.ts";
 import { projectionOf, view } from "./fixtures/run-view.ts";
 import {
   contactParentFrame,
@@ -32,24 +33,6 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 
 type ContextMessage = BoundaryContextPreview["contextMessages"][number];
-
-const settleEvent = (
-  outcome: AgentBeforeSettleEvent["outcome"] = "completed",
-  contextMessages: ReadonlyArray<ContextMessage> = [],
-  pendingMessages: ReadonlyArray<ContextMessage> = [],
-): AgentBeforeSettleEvent => ({
-  type: "agent_before_settle",
-  outcome,
-  entries: [],
-  continue: false,
-  context: {
-    contextEntries: [],
-    contextMessages: [...contextMessages],
-    llmMessages: [],
-    pendingMessages: [...pendingMessages],
-    canContinue: true,
-  },
-});
 
 const notice = (customType = "pi-subagents-completed"): ContextMessage => ({
   role: "custom",

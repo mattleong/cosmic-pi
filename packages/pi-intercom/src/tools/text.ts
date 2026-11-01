@@ -52,7 +52,7 @@ export const listText = (result: SessionListContract): string => {
   );
 };
 
-const UNCERTAIN_TEXT: Record<
+export const UNCERTAIN_TEXT: Record<
   Extract<SessionSendDetails, { readonly outcome: "uncertain" }>["reason"],
   string
 > = {

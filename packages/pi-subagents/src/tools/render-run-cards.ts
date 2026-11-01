@@ -40,10 +40,7 @@ const reportNotes = (card: SubagentRunCard): ReadonlyArray<string> =>
           ? "Its report isn't part of this result"
           : REPORT_STATUS_NOTES[card.reportStatus]
         : undefined,
-      card.writeIntent === "writer" &&
-      card.workspaceId !== undefined &&
-      isTerminalRunState(card.state) &&
-      card.state === "completed"
+      card.writeIntent === "writer" && card.workspaceId !== undefined && card.state === "completed"
         ? workspaceNote(card.workspaceOutcome)
         : undefined,
     ],
@@ -86,13 +83,7 @@ export const cardBlockLines = (
   width: number,
   theme: Theme,
   expanded: boolean,
-): string[] =>
-  agentTextBlockLines(
-    Arr.map(cards, (card) => cardBlock(card)),
-    width,
-    theme,
-    expanded,
-  );
+): string[] => agentTextBlockLines(Arr.map(cards, cardBlock), width, theme, expanded);
 
 /** One Details line per run: ID, route, writer, usage, and timing, then exceptional evidence. */
 export const cardFactLines = (card: SubagentRunCard): ReadonlyArray<string> => {

@@ -4,8 +4,6 @@ import * as Effect from "effect/Effect";
 export const provideBuiltLayer = Effect.provide;
 export {
   capturedTelemetrySnapshot,
-  jsonHttpRawResponse,
-  jsonHttpTestLayer,
   makeCapturedLogger,
   makeCapturedTracer,
   makeLifecycleProbe,
@@ -13,7 +11,6 @@ export {
   streamingHttpResponse,
   streamingHttpTestLayer,
   type InMemoryDocuments,
-  type JsonHttpTestResponse,
   type StreamingHttpTestRequest,
 } from "./src/testing/layers.ts";
 export {
@@ -22,41 +19,27 @@ export {
   type ExtensionContextOverrides,
   type ExtensionHostContext,
 } from "./src/testing/host.ts";
-export { extensionUiFixture } from "./src/testing/ui.ts";
-export { sessionManagerFixture, type HostSessionManager } from "./src/testing/session.ts";
 export {
   modelFixture,
   modelRegistryFixture,
   type HostModel,
   type HostModelRegistry,
 } from "./src/testing/model.ts";
-export { failingTheme, PlainTheme, plainTheme, themeFixture } from "./src/testing/theme.ts";
+export { failingTheme, plainTheme } from "./src/testing/theme.ts";
 export {
   footerDataFixture,
   keybindingsFixture,
-  overlayHandleFixture,
   terminalFixture,
   tuiFixture,
-  type HostComponent,
-  type HostFooterData,
-  type HostKeybindings,
-  type HostOverlayHandle,
-  type HostTerminal,
   type HostTui,
 } from "./src/testing/tui.ts";
 export { deferredPromise } from "./src/testing/deferred.ts";
 export { piKeybindingsFixture } from "./src/testing/pi-keybindings.ts";
-export {
-  recordingExtensionHost,
-  type RecordedEmit,
-  type RecordedHandlers,
-} from "./src/testing/extension-host.ts";
+export { recordingExtensionHost, type RecordedHandlers } from "./src/testing/extension-host.ts";
 export type {
   DefaultedEventName,
   ExtensionEventName,
   ExtensionEventNamed,
-  ExtensionEventResult,
-  RecordedHandler,
 } from "./src/testing/extension-events.ts";
 export { galleryDirectory, writeGallerySection } from "./src/testing/gallery.ts";
 export { spawnIpcChild, temporaryDirectory } from "./src/testing/ipc-child.ts";

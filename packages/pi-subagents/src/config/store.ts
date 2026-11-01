@@ -19,13 +19,13 @@ import {
 import { resolveSubagentConfig, type ResolvedSubagentConfig } from "./options.ts";
 import {
   candidateJson,
-  captureProfilePatchRoute,
   captureRestoreDeclaration,
   isRecord,
   routeJson,
   stableJson,
 } from "./profile-restore.ts";
 import {
+  decodeDeclaredProfileRoute,
   decodeProfileRoute,
   decodeSubagentNestingOverrides,
   isProfileSetName,
@@ -212,9 +212,9 @@ const applyProfilePatch: ApplyPatch<SubagentProfilePatch> = Effect.fnUntraced(
   function* (current, patch, path) {
     if (!isProfileSetName(patch.profileSet) || !isProfileId(patch.profile))
       return yield* mutationError(path, "Invalid profile target.");
-    const captured = captureProfilePatchRoute(patch.route);
-    if (!captured) return yield* mutationError(path, "Invalid profile route.");
-    const { route } = captured;
+    const route = patch.route === undefined ? undefined : decodeDeclaredProfileRoute(patch.route);
+    if (patch.route !== undefined && !route)
+      return yield* mutationError(path, "Invalid profile route.");
     const sets = { ...currentProfileSets(current) };
     const setValue = sets[patch.profileSet];
     if (!isRecord(setValue)) {

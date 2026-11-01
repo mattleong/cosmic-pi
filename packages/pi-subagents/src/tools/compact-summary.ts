@@ -58,16 +58,12 @@ function cardCounters(
   for (const card of cards) {
     counts.set(label(card), (counts.get(label(card)) ?? 0) + 1);
   }
-  return Arr.filter(
-    [
-      Fn.pipe(
-        [...counts],
-        Arr.map(([state, count]) => `${count} ${state}`),
-        Arr.join(", "),
-      ),
-    ],
-    Boolean,
+  const text = Fn.pipe(
+    [...counts],
+    Arr.map(([state, count]) => `${count} ${state}`),
+    Arr.join(", "),
   );
+  return text ? [text] : [];
 }
 
 const TOOL_ACTIONS: Readonly<Record<SubagentToolName, string>> = {

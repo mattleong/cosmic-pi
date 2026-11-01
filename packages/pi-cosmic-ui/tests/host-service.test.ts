@@ -12,13 +12,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import * as TestClock from "effect/testing/TestClock";
-import {
-  AgentDirectory,
-  decodeUnknownOrUndefined,
-  JsonDocumentStore,
-  type JsonDocumentStoreContract,
-  type JsonObject,
-} from "pi-cosmic-core";
+import { AgentDirectory, decodeUnknownOrUndefined, type JsonObject } from "pi-cosmic-core";
 import {
   deferredPromise,
   extensionContextFixture,
@@ -27,7 +21,13 @@ import {
   provideBuiltLayer,
   yieldUntil,
 } from "pi-cosmic-core/testing";
-import { abortablePendingExec, execOk, execResult, type ExecResult } from "./support/host.ts";
+import {
+  abortablePendingExec,
+  execOk,
+  execResult,
+  nativeUsage,
+  type ExecResult,
+} from "./support/host.ts";
 import { CosmicUiConfigStore } from "../src/config/store.ts";
 import { CosmicUiService, createProjection, resetProjection } from "../src/protocol/service.ts";
 import { PiExec } from "../src/boundary/host-exec.ts";
@@ -77,14 +77,6 @@ function serviceLayer(
 }
 
 type SessionEntries = ReturnType<ExtensionContext["sessionManager"]["getEntries"]>;
-const nativeUsage = (input: number) => ({
-  input,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: input,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-});
 const usageEntry = (input: number, usage = nativeUsage(input)): SessionEntries[number] => ({
   id: "entry",
   parentId: null,
@@ -273,25 +265,11 @@ describe("Cosmic UI host service", () => {
       const memory = makeInMemoryDocuments({
         [configPath]: { footer: { density: "comfortable" } },
       });
-      const modifyObject: JsonDocumentStoreContract["modifyObject"] = (path, modify) =>
-        memory.service.modifyObject(path, (document) =>
-          modify(document).pipe(
-            Effect.map((modification) => ({
-              ...modification,
-              afterCommit: Deferred.succeed(commitStarted, undefined).pipe(
-                Effect.andThen(Deferred.await(releaseCommit)),
-                Effect.andThen(modification.afterCommit ?? Effect.void),
-              ),
-            })),
-          ),
-        );
-      const gated = { ...memory.service, modifyObject } satisfies JsonDocumentStoreContract;
-      const { layer, projection } = serviceLayer({
-        store: { ...memory, layer: Layer.succeed(JsonDocumentStore, gated) },
-      });
+      const { layer, projection } = serviceLayer({ store: memory });
 
       yield* Effect.gen(function* () {
         const service = yield* CosmicUiService;
+        memory.blockNextUpdateAtCommit(commitStarted, releaseCommit);
         const update = yield* service
           .updateFooterConfig({ density: "compact" })
           .pipe(Effect.forkScoped);

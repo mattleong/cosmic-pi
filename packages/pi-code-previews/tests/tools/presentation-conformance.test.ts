@@ -1,11 +1,8 @@
 import { beforeEach, expect, test } from "vitest";
 import { createReadToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Text, type Component } from "@earendil-works/pi-tui";
+import { Text } from "@earendil-works/pi-tui";
 import { applyPresentationSettings, createToolPresentationHarness } from "../../testing";
-import {
-  withCodePreviewShell,
-  type CodePreviewShellOptions,
-} from "../../src/tools/cooperative-tools";
+import { withCodePreviewShell } from "../../src/tools/cooperative-tools";
 import type { CompactIssue } from "../../src/tools/compact-issues";
 import { failingRenderer, textResult } from "../support/render";
 import * as Str from "effect/String";
@@ -32,15 +29,6 @@ const inOrder = (text: string, phrases: readonly string[]) => {
   return Arr.every(positions, (position, index) => position >= (positions[index - 1] ?? 0));
 };
 const textRenderer = (label: string) => () => new Text(label, 0, 0);
-const readShell = (
-  renderCall: () => Component,
-  renderResult: () => Component,
-  options: CodePreviewShellOptions,
-) =>
-  withCodePreviewShell(
-    { ...createReadToolDefinition("/project"), renderCall, renderResult },
-    options,
-  );
 
 test.each(modes)(
   "content callbacks follow the heading and issues, with every issue once, in %s mode",
@@ -109,7 +97,12 @@ test.each(modes)(
 
 test("content construction or drawing failure falls back in that slot and keeps issues once", () => {
   for (const failure of ["none", "factory", "draw"] as const) {
-    const tool = readShell(textRenderer("ORIGINAL CALL"), textRenderer("ORIGINAL RESULT"), {
+    const definition = {
+      ...createReadToolDefinition("/project"),
+      renderCall: textRenderer("ORIGINAL CALL"),
+      renderResult: textRenderer("ORIGINAL RESULT"),
+    };
+    const tool = withCodePreviewShell(definition, {
       mode: "off",
       compactSummary: () => ({
         subject: "read result",

@@ -4,7 +4,7 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { clipText } from "pi-cosmic-core/display";
 import { invokeHostCallback } from "pi-cosmic-core/host-session";
-import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core/security";
+import { sanitizeDiagnosticContent } from "pi-cosmic-core/security";
 import { type SessionWakeDelivery } from "pi-cosmic-core/host-wake";
 import { MAX_NOTIFICATION_CHARS } from "../run/limits.ts";
 import type {
@@ -15,7 +15,7 @@ import type {
 } from "../run/model.ts";
 import { indentQuestionLines, proposalGuidance } from "../tools/format.ts";
 import { completionNoticeRuns } from "../ui/notice-facts.ts";
-import { noticeName, noticeText, type NoticeDetails } from "../ui/notice-details.ts";
+import { displayName, noticeName, noticeText, type NoticeDetails } from "../ui/notice-details.ts";
 import {
   formatRunBlocks,
   nextCandidateAction,
@@ -170,8 +170,6 @@ const questionContent = (
   const reply = `agent_send({ to: "${notification.id}", message: "..." })`;
   return `Subagent ${notification.name} (${notification.id}) is waiting for a parent reply.\n\nQuestion:\n${indentQuestionLines(notification.message, "  ")}\n\nIf it isn't answered yet, reply with ${reply}, then call agent_await again.`;
 };
-
-const displayName = (name: string): string => clipText(sanitizeTerminalLine(name), 60);
 
 /** A completion notice's display receipt: counts for its heading, and each run's words. */
 export const completionNoticeDetails = (

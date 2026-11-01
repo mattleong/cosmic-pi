@@ -11,6 +11,7 @@ import { decodeSubagentContract } from "../../src/tools/contract-schema.ts";
 import { eventLoopTurn, step } from "../support/effect-test.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import { captureSubagentTools, executeTool, view } from "./fixtures/tool-harness.ts";
+import { readoutOf } from "../fixtures/run-view.ts";
 
 const NOW = 60 * 60_000;
 const MINUTE = 60_000;
@@ -63,16 +64,7 @@ const service = subagentServiceDouble({
     }),
   agentRead: () =>
     Effect.succeed({
-      agents: Arr.map(RUNS, (run) => ({
-        kind: "run" as const,
-        id: run.id,
-        name: run.name,
-        state: run.state,
-        textStatus: "none" as const,
-        truncated: false,
-        reportGeneration: 0,
-        run,
-      })),
+      agents: Arr.map(RUNS, readoutOf),
       missingIds: [],
     }),
   withAwaitTerminalObservations: (_ids, _until, onUpdate) =>

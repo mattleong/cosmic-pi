@@ -9,14 +9,15 @@ import {
   workspaceLockDirectory,
 } from "../../src/boundary/git-worktree-store.ts";
 import { nodeFsPromises as fs, nodePath as path } from "../support/node-builtins.ts";
-import type { WorkspaceError, WorkspaceHandle } from "../../src/workspace/model.ts";
-import type { WorkspaceServiceContract } from "../../src/workspace/service.ts";
+import type { WorkspaceError } from "../../src/workspace/model.ts";
+import { processAlive } from "../support/process-liveness.ts";
 import { capturedWarnings, unconfirmedShellCleanup } from "../support/unconfirmed-hook-cleanup.ts";
 import {
   exists,
   failureOf,
   fails,
   io,
+  prepareIntegration,
   readText,
   registryOf as registryPath,
   temporaryDirectory,
@@ -67,15 +68,6 @@ const shellHook = (script: string, ...args: ReadonlyArray<string>) => ({
   command: ["/bin/sh", "-c", script, "sh", ...args],
 });
 
-const processAlive = (pid: number) => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-};
-
 // Starts a blocking hook, interrupts it once it runs, and returns the hook's process ID.
 const interruptBlocked = (
   run: (hook: ReturnType<typeof blockingHook>) => Effect.Effect<unknown, WorkspaceError>,
@@ -92,24 +84,6 @@ const interruptBlocked = (
     const exit = yield* Fiber.await(running);
     expect(Exit.hasInterrupts(exit)).toBe(true);
     return { pid };
-  });
-
-const freezeAndPrepare = (service: WorkspaceServiceContract, handle: WorkspaceHandle) =>
-  Effect.gen(function* () {
-    const revision = yield* service.freeze(workspaceTarget(handle));
-    const prepared = yield* service.prepare({
-      ...workspaceTarget(handle),
-      revisionId: revision.revisionId,
-    });
-    return {
-      revision,
-      prepared,
-      integration: {
-        ...workspaceTarget(handle),
-        revisionId: revision.revisionId,
-        preparationId: prepared.preparationId,
-      },
-    };
   });
 
 test("runs WorktreeCreate hooks in order in worker and prepared trees with the event on stdin", function* (service, root) {
@@ -130,7 +104,7 @@ test("runs WorktreeCreate hooks in order in worker and prepared trees with the e
   expect(yield* service.hookChanges(workspaceTarget(handle))).toEqual([]);
 
   yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
-  const { prepared, integration } = yield* freezeAndPrepare(service, handle);
+  const { prepared, integration } = yield* prepareIntegration(service, handle);
   yield* service.runCreateHooks({
     ...workspaceTarget(handle),
     preparationId: prepared.preparationId,
@@ -175,7 +149,7 @@ test("stops at the first failing WorktreeCreate hook and reports project files h
 test("keeps a preparation whose WorktreeCreate hook exited 0 with its cleanup unconfirmed", function* (service, root) {
   const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
   yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
-  const { prepared, integration } = yield* freezeAndPrepare(service, handle);
+  const { prepared, integration } = yield* prepareIntegration(service, handle);
   const { workspaceIds, layer } = capturedWarnings();
   const spy = unconfirmedShellCleanup();
   yield* service
@@ -226,7 +200,7 @@ test("kills interrupted WorktreeCreate hooks and leaves the workspace usable", f
   expect((yield* service.inspect(workspaceTarget(handle))).status).toBe("active");
   yield* service.runCreateHooks({ ...workspaceTarget(handle), hooks: [shellHook("true")] });
   yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
-  const { integration } = yield* freezeAndPrepare(service, handle);
+  const { integration } = yield* prepareIntegration(service, handle);
   yield* service.integrate(integration);
   expect(yield* readText(root, "src/main.ts")).toBe("worker\n");
 });
@@ -300,7 +274,7 @@ test("removes directories that deleting their last file left empty", function* (
   const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
   yield* io(() => fs.unlink(path.join(handle.cwd, "feature/deep/only.ts")));
   yield* io(() => fs.unlink(path.join(handle.cwd, "shared/drop.ts")));
-  const { integration } = yield* freezeAndPrepare(service, handle);
+  const { integration } = yield* prepareIntegration(service, handle);
   yield* service.integrate(integration);
   expect(yield* exists(path.join(root, "feature"))).toBe(false);
   expect(yield* io(() => fs.readdir(path.join(root, "shared")))).toEqual(["keep.ts"]);
@@ -310,7 +284,7 @@ test("removes directories that deleting their last file left empty", function* (
 test("refuses integration after a staged-only source change", function* (service, root) {
   const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
   yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
-  const { integration } = yield* freezeAndPrepare(service, handle);
+  const { integration } = yield* prepareIntegration(service, handle);
   // The working tree matches the tested parent again; only the index differs.
   yield* writeFile(path.join(root, "other.txt"), "staged\n");
   yield* git(root, ["add", "--", "other.txt"]);

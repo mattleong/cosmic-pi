@@ -3,12 +3,11 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Arr from "effect/Array";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { clipText } from "pi-cosmic-core/display";
 import { invokeHostCallback } from "pi-cosmic-core/host-session";
-import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import type { SubagentProjection, SubagentRunView } from "../run/model.ts";
 import { isActiveRunState, SUBAGENT_ROOT_RUN_ID } from "../run/model.ts";
 import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
+import { displayName } from "../ui/notice-details.ts";
 
 export const ACTIVE_RUNS_PROMPT_SECTION = "active_subagents";
 const MAX_LISTED_RUNS = 20;
@@ -53,7 +52,7 @@ const stateLabel = (run: SubagentRunView): string =>
   );
 
 const runIdentity = (run: SubagentRunView): string =>
-  `- ${run.id} · ${run.profile ?? "subagent"} · ${clipText(sanitizeTerminalLine(run.name), 60)}`;
+  `- ${run.id} · ${run.profile ?? "subagent"} · ${displayName(run.name)}`;
 
 const runsSection = (
   projection: SubagentProjection,

@@ -4,13 +4,8 @@ import type {
   ProfileRouteSource,
   SubagentModelOverride,
 } from "../profiles/model.ts";
-import type {
-  SubagentContextMode,
-  SubagentEffort,
-  SubagentWriteIntent,
-} from "../domain/routing.ts";
-import type { WriterWorkspaceMode } from "../config/schema.ts";
-import type { CustomAgentScope, CustomAgentTools, InvalidCustomAgent } from "../profiles/agents.ts";
+import type { SubagentEffort, SubagentWriteIntent } from "../domain/routing.ts";
+import type { CustomAgent, InvalidCustomAgent } from "../profiles/agents.ts";
 import type { FailedStartRecovery, SubagentRunView } from "../run/model.ts";
 
 export interface SubagentStartFailure {
@@ -70,16 +65,7 @@ export interface SubagentProfileView {
 }
 
 /** A custom agent's declaration and its routed profile's candidates after its overrides. */
-export interface SubagentAgentView {
-  readonly name: string;
-  readonly description: string;
-  readonly profile: ProfileId;
-  readonly source: CustomAgentScope;
-  readonly effort?: SubagentEffort | undefined;
-  readonly context?: SubagentContextMode | undefined;
-  readonly writeIntent?: SubagentWriteIntent | undefined;
-  readonly isolation?: WriterWorkspaceMode | undefined;
-  readonly tools?: CustomAgentTools | undefined;
+export interface SubagentAgentView extends Omit<CustomAgent, "instructions"> {
   readonly candidates: ReadonlyArray<ProfileCandidateDiscovery>;
 }
 

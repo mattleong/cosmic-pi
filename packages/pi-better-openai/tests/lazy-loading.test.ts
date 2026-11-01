@@ -1,4 +1,3 @@
-import type { SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
 import { expect, layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
@@ -6,28 +5,11 @@ import { afterEach, vi } from "vitest";
 import { OpenAIImageService } from "../src/image/service.ts";
 import type { ToolParams } from "../src/image/types.ts";
 import { extensionHarness } from "./extension-harness.ts";
-import { testModel, waitUntil } from "./helpers.ts";
+import { beforeCompactEvent, testModel, waitUntil } from "./helpers.ts";
 
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
-});
-
-const beforeCompactEvent = (): SessionBeforeCompactEvent => ({
-  type: "session_before_compact",
-  preparation: {
-    firstKeptEntryId: "retained",
-    messagesToSummarize: [],
-    turnPrefixMessages: [],
-    isSplitTurn: false,
-    tokensBefore: 100,
-    fileOps: { read: new Set(), written: new Set(), edited: new Set() },
-    settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
-  },
-  branchEntries: [],
-  reason: "manual",
-  willRetry: false,
-  signal: new AbortController().signal,
 });
 
 layer(nodeFilePlatformLayer)("optional implementation loading", (it) => {

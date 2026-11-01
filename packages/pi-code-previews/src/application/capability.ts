@@ -45,12 +45,6 @@ export function hasCodePreviewSessionCapability(): boolean {
   return activeCapability !== undefined;
 }
 
-const inactiveCancellation = (): void => undefined;
-
-export function deferCodePreview(task: () => void): () => void {
-  return activeCapability?.defer(task) ?? inactiveCancellation;
-}
-
 export function runCodePreviewSessionEffect<A, E>(
   effect: Effect.Effect<A, E, SessionRequirements>,
   signal?: AbortSignal,

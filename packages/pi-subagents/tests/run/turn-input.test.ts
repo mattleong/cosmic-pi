@@ -3,27 +3,16 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Semaphore from "effect/Semaphore";
-import type { RunNotificationDelivery } from "../../src/run/notification-delivery.ts";
 import { settlementOperations } from "../../src/run/settlement.ts";
 import { turnInputGates } from "../../src/run/turn-input.ts";
 import { view } from "../fixtures/run-view.ts";
-import { makeRunContext, runningAssignment, runRecordFixture } from "./fixtures/run-context.ts";
-
-const quietDelivery: RunNotificationDelivery = {
-  retireDelivery: Effect.void,
-  queueActionNotificationLocked: () => undefined,
-  insertCompletionLocked: () => undefined,
-  wakeCompletionLocked: () => undefined,
-  discardQuestionLocked: () => undefined,
-  handOnTakenByLocked: () => undefined,
-  outboxChangedLocked: () => Deferred.makeUnsafe<void>(),
-  signalOutboxChangedLocked: () => undefined,
-  forgetTakenReportLocked: () => undefined,
-};
-
-const yieldTurns = Effect.gen(function* () {
-  for (let turn = 0; turn < 25; turn += 1) yield* Effect.yieldNow;
-});
+import {
+  makeRunContext,
+  runningAssignment,
+  runRecordFixture,
+  quietDelivery,
+} from "./fixtures/run-context.ts";
+import { yieldTurns } from "./fixtures/service-harness.ts";
 
 describe("turn-input admission", () => {
   it.effect("releases every waiter, such as an interrupt and a settlement, once input drains", () =>
@@ -72,7 +61,7 @@ describe("turn-input admission", () => {
       const settling = yield* settlement
         .runSettledFromBackend(record, 1, { stopReason: "stop", text: "Report." })
         .pipe(Effect.forkChild({ startImmediately: true }));
-      yield* yieldTurns;
+      yield* yieldTurns(25);
       expect(record.view.state).toBe("running");
 
       yield* gates.releaseTurnInput(record);

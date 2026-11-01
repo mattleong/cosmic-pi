@@ -87,6 +87,7 @@ import {
   newWorkspaceId,
   readRevisionDiff,
   readWorkspaceRecord,
+  reopenedWorkspaceRecord,
   saveWorkspaceRecord,
   syncWorkspaceDirectory,
   validWorkspaceId,
@@ -655,17 +656,7 @@ export const gitWorkspaceEngine = Effect.fn("GitWorkspaceEngine.make")(function*
         "revise",
         "Workspace cannot be reopened in its current state.",
       );
-    const next: WorkspaceRecord = {
-      version: 2,
-      handle: record.handle,
-      repository: record.repository,
-      baseline: record.baseline,
-      ownerLease: record.ownerLease,
-      lastChangedAt: record.lastChangedAt,
-      status: "active",
-      ...(record.launch && { launch: record.launch }),
-      ...(record.includedPaths && { includedPaths: record.includedPaths }),
-    };
+    const next = reopenedWorkspaceRecord(record);
     yield* saveWorkspaceRecord(registry, next);
     return next.handle;
   }, locked);

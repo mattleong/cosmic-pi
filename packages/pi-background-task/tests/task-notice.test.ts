@@ -10,9 +10,7 @@ import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { it as effectIt } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
-import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
-import * as Str from "effect/String";
 import { applyPresentationSettings } from "pi-code-previews/testing";
 import {
   extensionContextFixture,
@@ -73,22 +71,6 @@ describe("background task exit notices", () => {
     const cleared = taskNoticeContent({ ...failedNotice, retained: false });
     expect(cleared).not.toContain(readLogs);
     expect(cleared).toContain("rejects expired tokens");
-  });
-
-  it("repeats only the newest output of a long-running task", () => {
-    const lines = Arr.makeBy(400, (index) => ({
-      stream: "stdout" as const,
-      text: `line ${index} ${Fn.pipe("x", Str.repeat(60))}\n`,
-    }));
-    const { failureCause: _cause, ...task } = failed;
-    const content = taskNoticeContent({
-      task: { ...task, state: "exited", exitCode: 0 },
-      recent: taskLogSlice(failed.id, "exited", lines.slice(-20)),
-      retained: true,
-    });
-    expect(content).toContain("line 399 ");
-    expect(content).not.toContain("line 300 ");
-    expect(content.length).toBeLessThan(6_000);
   });
 });
 

@@ -80,7 +80,6 @@ export const httpFailure = Effect.fn("OpenAIImage.httpFailure")(function* (
 
 export const parseImageSse = Effect.fn("OpenAIImage.parseSse")(function* (
   body: Stream.Stream<Uint8Array, StreamingHttpError>,
-  mimeType: string,
 ) {
   const fallbackId = `ig_${Fn.pipe((yield* Random.nextIntBetween(0, 0xffff_ffff)).toString(16), Str.padStart(8, "0"))}`;
   let totalBytes = 0;
@@ -107,7 +106,7 @@ export const parseImageSse = Effect.fn("OpenAIImage.parseSse")(function* (
     const rawEvent = yield* decodeSseJson(data).pipe(
       Effect.mapError(() => fail("stream", "Codex image response contained malformed JSON.")),
     );
-    const event = yield* decodeImageStreamEvent(rawEvent, mimeType, fallbackId).pipe(
+    const event = yield* decodeImageStreamEvent(rawEvent, fallbackId).pipe(
       Effect.mapError(() => fail("stream", "Codex image response contained a malformed event.")),
     );
     return Match.valueTags(event, {

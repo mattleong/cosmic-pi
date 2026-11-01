@@ -252,7 +252,6 @@ export function resolveSubagentConfig(input: ResolveSubagentConfigInput): Resolv
   const project = input.projectTrusted ? input.project : undefined;
   const global = resolveProfileSetLayer(input.global, "global", BUILTIN_PROFILE_LAYER);
   const effective = project ? resolveProfileSetLayer(project, "project", global) : global;
-  const policy = layeredPolicy(project, input.global);
   const agents = resolveCustomAgents([
     agentLayer("global", input.global),
     ...(project ? [agentLayer("project", project)] : []),
@@ -261,10 +260,7 @@ export function resolveSubagentConfig(input: ResolveSubagentConfigInput): Resolv
     globalConfigPath: input.globalConfigPath,
     projectConfigPath: input.projectConfigPath,
     fallbackProfile: "generalist",
-    currentProfileSet: policy.currentProfileSet,
-    nesting: policy.nesting,
-    writerWorkspaceMode: policy.writerWorkspaceMode,
-    delegation: policy.delegation,
+    ...layeredPolicy(project, input.global),
     hooks: worktreeHooks(input.global, project),
     profiles: effective.profiles,
     profileSources: effective.profileSources,

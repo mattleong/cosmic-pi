@@ -3,18 +3,13 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
-import { AgentDirectory, JsonHttpClient } from "pi-cosmic-core";
+import { AgentDirectory } from "pi-cosmic-core";
 import { makeInMemoryDocuments, provideBuiltLayer } from "pi-cosmic-core/testing";
 import type { ResolvedConfig } from "../src/config/schema.ts";
 import { OpenAIConfigService } from "../src/config/store.ts";
 import { OpenAIUsageService } from "../src/usage/controller.ts";
 import { usageProjectionRef } from "../src/usage/projection.ts";
-import { testContext } from "./helpers.ts";
-
-const unusedHttp = JsonHttpClient.of({
-  request: () => Effect.die("unexpected HTTP"),
-  requestJson: () => Effect.die("unexpected HTTP"),
-});
+import { testContext, unusedHttpLayer } from "./helpers.ts";
 
 it.effect("refetches or clears usage only when its Cosmic UI visibility changes", () => {
   let visible = true;
@@ -24,7 +19,7 @@ it.effect("refetches or clears usage only when its Cosmic UI visibility changes"
     makeInMemoryDocuments().layer,
     Path.layer,
     AgentDirectory.layer("/agent"),
-    Layer.succeed(JsonHttpClient, unusedHttp),
+    unusedHttpLayer,
   );
   const config = OpenAIConfigService.layer({
     cwd: "/project",

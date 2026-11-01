@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import type { AgentToolResult, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { beforeEach, test } from "vitest";
 import {
   animationSchedulerProbe,
@@ -13,7 +13,7 @@ import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 
-const styleNativeMcp = (definition: ToolDefinition) =>
+const styleNativeMcp = (definition: Pick<ToolInfo, "name" | "namespace">) =>
   createNativeMcpRenderers(definition.name, definition, undefined, {
     scheduleAnimation: animationSchedulerProbe().schedule,
   });
@@ -27,20 +27,14 @@ const value = (text = output, metadata: NativeMcpEvidence = details): AgentToolR
   content: [{ type: "text", text }],
   details: metadata,
 });
-const definition = (): ToolDefinition => ({
+const definition = (): Pick<ToolInfo, "name" | "namespace"> => ({
   name: "mcp__docs__lookup",
-  label: "docs/lookup",
   namespace: { name: "mcp__docs" },
-  description: "Owned MCP fixture",
-  parameters: { type: "object" },
-  execute: () => Promise.resolve(value()),
 });
-const settings = (style: "compact" | "preview", background: "off" | "on" | "border" = "off") =>
-  applyPresentationSettings({ toolCallCollapsedStyle: style, toolCallBackground: background });
 beforeEach(() => applyPresentationSettings({ syntaxHighlighting: false, toolCallTiming: false }));
 
 test("only a recognized owned recoverable MCP envelope is quietly suppressed", () => {
-  settings("preview");
+  applyPresentationSettings({ toolCallCollapsedStyle: "preview", toolCallBackground: "off" });
   let getterInvoked = false;
   const accessor = Object.defineProperty({ server: "docs", tool: "lookup" }, "fullOutputPath", {
     get() {

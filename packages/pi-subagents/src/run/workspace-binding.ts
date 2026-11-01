@@ -14,7 +14,7 @@ import {
   type SubagentError,
   withGuidance,
 } from "./errors.ts";
-import { isCleanupOwed, type RunContext, type RunRecord, type StoredRunView } from "./internal.ts";
+import { isCleanupOwed, type RunContext, type RunRecord } from "./internal.ts";
 import {
   isActiveRunState,
   type StartSubagentRequest,
@@ -305,17 +305,12 @@ export const runHoldsCwd = (record: RunRecord) =>
 
 export const runsWithin = (
   records: ReadonlyMap<string, RunRecord>,
-  trees: ReadonlyArray<string>,
+  tree: string,
   except?: RunRecord,
-): ReadonlyMap<RunRecord, StoredRunView> =>
-  new Map(
-    Arr.flatMap(
-      [...records.values()],
-      (record): ReadonlyArray<readonly [RunRecord, StoredRunView]> =>
-        record !== except && Arr.some(trees, (tree) => isWithin(record.view.cwd, tree))
-          ? [[record, record.view]]
-          : [],
-    ),
+): ReadonlyArray<RunRecord> =>
+  Arr.filter(
+    [...records.values()],
+    (record) => record !== except && isWithin(record.view.cwd, tree),
   );
 
 /** Whether a run holds, or a launch is about to take, a directory within `tree`. */
@@ -324,7 +319,7 @@ export const isTreeInUse = (
   reservations: ReadonlySet<LaunchReservation>,
   tree: string,
 ) =>
-  Arr.some([...runsWithin(records, [tree]).keys()], runHoldsCwd) ||
+  Arr.some(runsWithin(records, tree), runHoldsCwd) ||
   Arr.some([...reservations], (reservation) => isWithin(reservation.cwd, tree));
 
 const isAutoDiscarded = (binding: WorkspaceBinding | undefined) => {
@@ -366,6 +361,12 @@ export const workspaceBusyError = () =>
       "Another operation on this workspace is still running.",
       "Retry once it finishes.",
     ),
+  );
+
+export const integrationQuarantinedError = () =>
+  invalid(
+    "workspace_integration_quarantined",
+    "Integration ownership is quarantined; further integration is blocked pending manual recovery.",
   );
 
 export const workspaceControlContext = Effect.fn("SubagentWorkspace.controlContext")(function* (
@@ -432,7 +433,7 @@ export const workspaceControlContext = Effect.fn("SubagentWorkspace.controlConte
     // A shared-checkout writer its writer started may still be editing the worker tree; readers
     // there are fine, because integration keeps the trees they use.
     const sharedWriter = Arr.some(
-      [...runsWithin(records, [binding.handle.artifactRoot], binding.record).keys()],
+      runsWithin(records, binding.handle.artifactRoot, binding.record),
       (record) => record.view.writeIntent === "writer" && runHoldsCwd(record),
     );
     if (sharedWriter)

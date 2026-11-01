@@ -16,11 +16,17 @@ import {
   gitStderrLines,
   gitSucceeded,
   listedPaths,
+  nulTerminated,
   workspaceFailure,
   workspaceIO,
   workspaceRefusal,
 } from "./git-worktree-process.ts";
-import { newWorkspaceId, readWorkspaceRecord, saveWorkspaceRecord } from "./git-worktree-store.ts";
+import {
+  newWorkspaceId,
+  readWorkspaceRecord,
+  reopenedWorkspaceRecord,
+  saveWorkspaceRecord,
+} from "./git-worktree-store.ts";
 import { patchBytes } from "./git-worktree-patch.ts";
 import {
   captureTree,
@@ -105,12 +111,7 @@ const unstageIncluded = (root: string, included: ReadonlyArray<string>) =>
   included.length === 0
     ? Effect.void
     : git(root, ["update-index", "--force-remove", "-z", "--stdin"], {
-        stdin: new TextEncoder().encode(
-          Arr.join(
-            Arr.map(included, (name) => `${name}\0`),
-            "",
-          ),
-        ),
+        stdin: nulTerminated(included),
       }).pipe(Effect.asVoid);
 
 /**
@@ -261,17 +262,7 @@ export const rebaseWorkspace = Effect.fn("GitWorktreeRebase.rebaseWorkspace")(fu
   const after = yield* sourceIdentity(sourceRoot);
   if (after.head !== identity.head || after.index !== identity.index)
     return yield* workspaceFailure("rebase", "Source changed during snapshot acquisition.");
-  const rebuilt: WorkspaceRecord = {
-    version: 2,
-    handle: record.handle,
-    repository,
-    baseline: parent,
-    ownerLease: record.ownerLease,
-    lastChangedAt: record.lastChangedAt,
-    status: "active",
-    ...(record.launch && { launch: record.launch }),
-    ...(record.includedPaths && { includedPaths: record.includedPaths }),
-  };
+  const rebuilt = reopenedWorkspaceRecord(record, parent);
   // A refused merge puts the worker's files back; its index, staged entries included, is
   // restored from this copy.
   const index = yield* gitPath(worker, "index");

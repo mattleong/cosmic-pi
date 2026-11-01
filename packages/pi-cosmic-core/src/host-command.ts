@@ -1,6 +1,5 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
-import * as Data from "effect/Data";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
@@ -36,32 +35,6 @@ interface ExtensionCommandOptions {
 export interface ExtensionCommand {
   readonly add: (subcommand: ExtensionSubcommand) => void;
 }
-
-type ExtensionCommandRoute = Data.TaggedEnum<{
-  Bare: { readonly args: string };
-  Subcommand: { readonly subcommand: ExtensionSubcommand; readonly args: string };
-  Overview: Record<never, never>;
-  Unknown: { readonly name: string };
-}>;
-export const ExtensionCommandRoute = Data.taggedEnum<ExtensionCommandRoute>();
-
-export const routeExtensionCommand = (
-  args: string,
-  subcommands: ReadonlyArray<ExtensionSubcommand>,
-  bare?: ExtensionCommandBare,
-): ExtensionCommandRoute => {
-  const trimmed = Str.trim(args);
-  if (!trimmed)
-    return bare ? ExtensionCommandRoute.Bare({ args: "" }) : ExtensionCommandRoute.Overview();
-  const [head = "", rest = ""] = /^(\S+)\s*([\s\S]*)$/u.exec(trimmed)?.slice(1) ?? [];
-  const subcommand = Option.getOrUndefined(
-    Arr.findFirst(subcommands, (entry) => entry.name === head),
-  );
-  if (subcommand) return ExtensionCommandRoute.Subcommand({ subcommand, args: rest });
-  return bare?.text
-    ? ExtensionCommandRoute.Bare({ args: trimmed })
-    : ExtensionCommandRoute.Unknown({ name: head });
-};
 
 export const completeExtensionCommand = (
   prefix: string,
@@ -144,12 +117,17 @@ export function registerExtensionCommand(
         notifyAtHostBoundary(ctx, message, level);
         return Promise.resolve();
       };
-      return ExtensionCommandRoute.$match(routeExtensionCommand(args, list(), bare), {
-        Bare: (route) => settle(() => bare?.handler(route.args, ctx)),
-        Subcommand: (route) => settle(() => route.subcommand.handler(route.args, ctx)),
-        Overview: () => notify(extensionCommandOverview(name, description, list()), "info"),
-        Unknown: () => notify(extensionCommandUsage(name, list(), bare), "warning"),
-      });
+      const trimmed = Str.trim(args);
+      if (!trimmed)
+        return bare
+          ? settle(() => bare.handler("", ctx))
+          : notify(extensionCommandOverview(name, description, list()), "info");
+      const [head = "", rest = ""] = /^(\S+)\s*([\s\S]*)$/u.exec(trimmed)?.slice(1) ?? [];
+      const subcommand = subcommands.get(head);
+      if (subcommand) return settle(() => subcommand.handler(rest, ctx));
+      return bare?.text
+        ? settle(() => bare.handler(trimmed, ctx))
+        : notify(extensionCommandUsage(name, list(), bare), "warning");
     },
   });
   return { add: (subcommand) => void subcommands.set(subcommand.name, subcommand) };

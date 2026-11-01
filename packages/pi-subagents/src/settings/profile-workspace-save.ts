@@ -1,9 +1,9 @@
 import * as Arr from "effect/Array";
+import { builtinProfileCandidate } from "../profiles/definitions.ts";
 import { sameProfileCandidate, MAX_PROFILE_CANDIDATES } from "../profiles/model.ts";
 import {
   CANDIDATE_LIMIT_REACHED,
   declaredRouteForDraft,
-  defaultRouteCandidate,
   addRouteCandidate,
   replaceRouteCandidate,
   type CandidateUpdate,
@@ -30,7 +30,7 @@ export abstract class ProfileWorkspaceSave extends ProfileWorkspaceState {
       }
       this.addingCandidate = true;
       this.openModelPicker(
-        this.draft().candidates[this.candidateIndex] ?? defaultRouteCandidate(this.profile()),
+        this.draft().candidates[this.candidateIndex] ?? builtinProfileCandidate(this.profile()),
       );
       return;
     }

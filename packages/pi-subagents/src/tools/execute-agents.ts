@@ -3,14 +3,11 @@ import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
-import * as Option from "effect/Option";
 import * as Order from "effect/Order";
 import * as Str from "effect/String";
 import { agentMessageDeliveryText } from "pi-cosmic-core/host-agent-messages";
 import { clipText } from "pi-cosmic-core/display";
 import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core/security";
-import { isCustomAgentName } from "../profiles/agents.ts";
-import { PROFILE_IDS } from "../profiles/model.ts";
 import {
   MAIN_AGENT_ID,
   type AgentCaller,
@@ -48,13 +45,14 @@ import {
 } from "./contract-schema.ts";
 import {
   envelope,
+  knownAgent,
+  knownProfile,
   metadata,
   projectAttention,
-  projectName,
   projectStall,
   readStatusTarget,
 } from "./contract.ts";
-import { listDetails, readDetails, sendDetails } from "./agent-details.ts";
+import { agentName, listDetails, readDetails, sendDetails } from "./agent-details.ts";
 import { projectReportFile } from "./details-projection.ts";
 import {
   boundToolOutput,
@@ -66,8 +64,6 @@ import {
 } from "./format.ts";
 import type { AgentToolInput } from "./schema.ts";
 import { isTextFragment } from "./text-fragments.ts";
-
-const agentName = (entry: { readonly name: string }): string => projectName(entry.name) || "agent";
 
 const agentLabel = (entry: { readonly id: string; readonly name: string }): string =>
   entry.id === MAIN_AGENT_ID
@@ -139,9 +135,6 @@ const listText = (result: AgentListResult, now: number): string =>
     Arr.join("\n\n"),
   );
 
-const knownProfile = (profile: string | undefined) =>
-  Option.getOrUndefined(Arr.findFirst(PROFILE_IDS, (id) => id === profile));
-
 const WORKTREE_STATUS = {
   proposal: "proposal",
   integrated: "applied",
@@ -168,7 +161,7 @@ const listContract = (result: AgentListResult, now: number): AgentListContract =
       ...(entry.depth !== undefined && { depth: entry.depth }),
       ...(model !== undefined && { model }),
       ...(profile !== undefined && { profile }),
-      ...(entry.agent !== undefined && isCustomAgentName(entry.agent) && { agent: entry.agent }),
+      ...knownAgent(entry.agent),
       ...(run !== undefined && { writeIntent: run.writeIntent }),
       ...(run?.workspaceId !== undefined && {
         worktree: {

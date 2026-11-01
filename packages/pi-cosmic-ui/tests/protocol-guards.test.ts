@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { JsonObject } from "pi-cosmic-core";
 import {
   COSMIC_UI_PROTOCOL_VERSION,
   normalizeCosmicFooterRemoveEvent,
@@ -13,21 +14,24 @@ const hostile = (message: string) => () => {
 const proxyFailure = hostile("hostile protocol proxy");
 const hostileProxy = () =>
   new Proxy({}, { get: proxyFailure, has: proxyFailure, ownKeys: proxyFailure });
+const upsert = (contribution: JsonObject) =>
+  normalizeCosmicFooterUpsertEvent({
+    version: COSMIC_UI_PROTOCOL_VERSION,
+    owner: "owner",
+    contribution,
+  });
 
 describe("Cosmic UI protocol guards", () => {
-  it.each([["proxies", hostileProxy]])(
-    "contains hostile %s instead of throwing through the event boundary",
-    (_kind, input) => {
-      for (const normalize of [
-        normalizeCosmicUiHostQuery,
-        normalizeCosmicUiHostStateEvent,
-        normalizeCosmicFooterUpsertEvent,
-        normalizeCosmicFooterRemoveEvent,
-      ]) {
-        expect(normalize(input())).toBeUndefined();
-      }
-    },
-  );
+  it("contains hostile proxies instead of throwing through the event boundary", () => {
+    for (const normalize of [
+      normalizeCosmicUiHostQuery,
+      normalizeCosmicUiHostStateEvent,
+      normalizeCosmicFooterUpsertEvent,
+      normalizeCosmicFooterRemoveEvent,
+    ]) {
+      expect(normalize(hostileProxy())).toBeUndefined();
+    }
+  });
   it("answers a host query with a detached state and contains a hostile responder", () => {
     const received: Array<{ readonly hidden: readonly string[] }> = [];
     const hidden = ["usage"];
@@ -50,22 +54,18 @@ describe("Cosmic UI protocol guards", () => {
       ).not.toThrow();
   });
   it("keeps a contribution whose optional text, styling, or placement hints are invalid", () => {
-    const event = normalizeCosmicFooterUpsertEvent({
-      version: COSMIC_UI_PROTOCOL_VERSION,
-      owner: "owner",
-      contribution: {
-        kind: "text",
-        id: "usage",
-        region: "details",
-        text: "Usage",
-        compactText: 42,
-        tone: "loud",
-        color: "neon",
-        label: "\x1b[2J",
-        align: "center",
-        priority: Number.NaN,
-        decorates: "",
-      },
+    const event = upsert({
+      kind: "text",
+      id: "usage",
+      region: "details",
+      text: "Usage",
+      compactText: 42,
+      tone: "loud",
+      color: "neon",
+      label: "\x1b[2J",
+      align: "center",
+      priority: Number.NaN,
+      decorates: "",
     });
     expect(event?.contribution).toEqual({
       kind: "text",
@@ -76,28 +76,20 @@ describe("Cosmic UI protocol guards", () => {
   });
 
   it("accepts every foreground theme token as a contribution color", () => {
-    const event = normalizeCosmicFooterUpsertEvent({
-      version: COSMIC_UI_PROTOCOL_VERSION,
-      owner: "owner",
-      contribution: {
-        kind: "text",
-        id: "usage",
-        region: "details",
-        text: "Usage",
-        color: "scrollbarThumb",
-        tone: "accent",
-      },
+    const event = upsert({
+      kind: "text",
+      id: "usage",
+      region: "details",
+      text: "Usage",
+      color: "scrollbarThumb",
+      tone: "accent",
     });
     expect(event?.contribution).toMatchObject({ color: "scrollbarThumb", tone: "accent" });
   });
 
   it("still rejects contributions without a usable identity", () => {
     expect(
-      normalizeCosmicFooterUpsertEvent({
-        version: COSMIC_UI_PROTOCOL_VERSION,
-        owner: "owner",
-        contribution: { kind: "text", id: "usage", region: "elsewhere", text: "Usage" },
-      }),
+      upsert({ kind: "text", id: "usage", region: "elsewhere", text: "Usage" }),
     ).toBeUndefined();
   });
 });

@@ -272,29 +272,23 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
 
         const validateCapacityLocked = Effect.fn("SubagentLaunch.validateCapacityLocked")(
           function* (ownReservation: RunRecord | undefined) {
-            const capacityFailure = processCapacityError(
-              records,
-              parentRunId,
-              nestingPolicy.maxDirectChildren,
-              ownReservation,
-              workspaces.heldLaunchSlots(parentRunId, request),
-            );
-            if (capacityFailure) return yield* capacityFailure;
-            const treeFailure = treeCapacityError(
-              records,
-              nestingPolicy.maxActiveRuns ?? DEFAULT_MAX_ACTIVE_RUNS,
-              ownReservation,
-              workspaces.heldLaunchSlots(undefined, request),
-            );
-            if (treeFailure) return yield* treeFailure;
-            if (!canonicalWriterCwd) return undefined;
-            const writerFailure = writerConflictError(
-              records,
-              writerPools,
-              canonicalWriterCwd,
-              ownReservation,
-            );
-            if (writerFailure) return yield* writerFailure;
+            const failure =
+              processCapacityError(
+                records,
+                parentRunId,
+                nestingPolicy.maxDirectChildren,
+                ownReservation,
+                workspaces.heldLaunchSlots(parentRunId, request),
+              ) ??
+              treeCapacityError(
+                records,
+                nestingPolicy.maxActiveRuns ?? DEFAULT_MAX_ACTIVE_RUNS,
+                ownReservation,
+                workspaces.heldLaunchSlots(undefined, request),
+              ) ??
+              (canonicalWriterCwd &&
+                writerConflictError(records, writerPools, canonicalWriterCwd, ownReservation));
+            if (failure) return yield* failure;
             return undefined;
           },
         );
@@ -440,6 +434,11 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
                 ),
               );
         const peerNotice = peerNoticeText(records.values(), reserved.view.id);
+        const startCancelled = () =>
+          invalidRequest(
+            "start_cancelled",
+            `Subagent ${reserved.view.id} was stopped during startup.`,
+          );
         const initialize = Effect.fn("SubagentLaunch.initialize")(function* (
           candidate: StartSubagentRequest,
         ) {
@@ -479,11 +478,7 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
               };
             }),
           );
-          if (!activated)
-            return yield* invalidRequest(
-              "start_cancelled",
-              `Subagent ${reserved.view.id} was stopped during startup.`,
-            );
+          if (!activated) return yield* startCancelled();
           if (activated.pendingSettlement) {
             const pending = activated.pendingSettlement;
             if (pending.state === "failed")
@@ -534,10 +529,7 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
             reserved.view.state !== "starting" ||
             reserved.assignment.phase !== "preparing"
           )
-            return yield* invalidRequest(
-              "start_cancelled",
-              `Subagent ${reserved.view.id} was stopped during startup.`,
-            );
+            return yield* startCancelled();
           return undefined;
         });
         const stillPreparing = withLock(preparingLocked()).pipe(
@@ -674,11 +666,7 @@ export function launchOperations(dependencies: RunLaunchDependencies) {
             Effect.gen(function* () {
               yield* preparingLocked();
               // Another close of the failed candidate's scope ended its handover.
-              if (reserved.writerPoolHandover !== reserved.scope)
-                return yield* invalidRequest(
-                  "start_cancelled",
-                  `Subagent ${reserved.view.id} was stopped during startup.`,
-                );
+              if (reserved.writerPoolHandover !== reserved.scope) return yield* startCancelled();
               yield* checkAdmissionLocked(reserved);
               retargetRunLocked(reserved, {
                 plan: { request: next, parentRunId, cwd },

@@ -98,12 +98,9 @@ const libraryRows = (
     });
   }
   const listHeight = Math.max(1, height - header.length);
-  const selectedRow = Math.max(
-    0,
-    Option.getOrElse(
-      Arr.findFirstIndex(logical, (row) => row.entryIndex === state.selectedIndex),
-      () => -1,
-    ),
+  const selectedRow = Option.getOrElse(
+    Arr.findFirstIndex(logical, (row) => row.entryIndex === state.selectedIndex),
+    () => 0,
   );
   const start = listWindowStart(logical.length, selectedRow, listHeight);
   return [...header, ...Arr.map(logical.slice(start, start + listHeight), (row) => row.text)];

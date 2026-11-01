@@ -131,6 +131,12 @@ const press = (fixture: ReturnType<typeof setup>, ...keys: string[]) => {
     fixture.overlays[0]?.render(120);
   }
 };
+const changeEffort = function* (fixture: ReturnType<typeof setup>) {
+  press(fixture, "e");
+  yield* step(settleHostPromises);
+  press(fixture, "j", "\r");
+  yield* step(settleHostPromises);
+};
 const openDashboard = function* (fixture: ReturnType<typeof setup>, args = "profiles") {
   const running = fixture.command?.(args, fixture.ctx) ?? Promise.resolve();
   yield* step(() => vi.waitFor(() => expect(fixture.overlays).toHaveLength(1)));
@@ -275,20 +281,14 @@ describe("profile settings controller", () => {
             })
           : SessionProfileInvalidError.make({ message: reason }),
       );
-      const changeEffort = function* () {
-        press(fixture, "e");
-        yield* step(settleHostPromises);
-        press(fixture, "j", "\r");
-        yield* step(settleHostPromises);
-      };
-      yield* changeEffort();
+      yield* changeEffort(fixture);
       expect(patch).toHaveBeenCalledTimes(1);
       const overlay = fixture.overlays[0];
       const screen = overlay === undefined ? "" : Arr.join(overlay.render(120), "\n");
       if (outcome === "conflict") {
         // A conflict refreshes to the latest Session and lets the user retry the edit.
         expect(inspect).toHaveBeenCalledTimes(1);
-        yield* changeEffort();
+        yield* changeEffort(fixture);
         expect(patch).toHaveBeenCalledTimes(2);
       } else {
         expect(inspect).not.toHaveBeenCalled();
@@ -368,16 +368,10 @@ describe("profile settings controller", () => {
               message: "changed on disk",
             }),
       );
-      const changeEffort = function* () {
-        press(fixture, "e");
-        yield* step(settleHostPromises);
-        press(fixture, "j", "\r");
-        yield* step(settleHostPromises);
-      };
-      yield* changeEffort();
+      yield* changeEffort(fixture);
       expect(fixture.managerActions.patchProfile).toHaveBeenCalledTimes(1);
       expect(inspect).toHaveBeenCalledTimes(outcome === "other-error" ? 0 : 1);
-      yield* changeEffort();
+      yield* changeEffort(fixture);
       if (outcome !== "refresh")
         expect(fixture.managerActions.patchProfile).toHaveBeenCalledTimes(1);
       else {

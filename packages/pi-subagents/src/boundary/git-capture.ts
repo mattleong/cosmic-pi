@@ -10,6 +10,7 @@ import { nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core/platform/
 import {
   git,
   gitFields,
+  nulTerminated,
   oid,
   repositoryGit,
   repositoryGitFields,
@@ -107,12 +108,7 @@ export const captureTree = (
       if (omitted.size > 0)
         yield* git(root, ["update-index", "--force-remove", "-z", "--stdin"], {
           environment,
-          stdin: new TextEncoder().encode(
-            Arr.join(
-              Arr.map(included, (name) => `${name}\0`),
-              "",
-            ),
-          ),
+          stdin: nulTerminated(included),
         });
       yield* git(root, ["add", "--update"], { environment });
       const untracked = Arr.filter(
@@ -126,12 +122,7 @@ export const captureTree = (
       if (added.length > 0)
         yield* git(root, ["update-index", "--add", "-z", "--stdin"], {
           environment,
-          stdin: new TextEncoder().encode(
-            Arr.join(
-              Arr.map(added, (name) => `${name}\0`),
-              "",
-            ),
-          ),
+          stdin: nulTerminated(added),
         });
       const tree = yield* git(root, ["write-tree"], { environment }).pipe(Effect.flatMap(oid));
       return { tree, droppedPaths: Arr.sort(droppedPaths, Order.String) } satisfies TreeCapture;

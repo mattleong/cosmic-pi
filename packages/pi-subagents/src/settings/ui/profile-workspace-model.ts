@@ -158,8 +158,8 @@ const advancedCandidateRows = (
 
 export const candidateFieldRows = (
   candidate: ProfileCandidate,
-  profile?: ProfileId,
-  parentEffort: SubagentEffort = "high",
+  profile: ProfileId,
+  parentEffort: SubagentEffort,
   parentModel?: string,
   advancedExpanded = false,
   candidateIndex = 0,
@@ -170,7 +170,7 @@ export const candidateFieldRows = (
     {
       field: "effort",
       label: "Reasoning",
-      value: profile ? candidateEffortLabel(profile, candidate, parentEffort) : candidate.effort,
+      value: candidateEffortLabel(profile, candidate, parentEffort),
       fixed: false,
     },
     { field: "writeIntent", label: "File access", value: candidate.writeIntent, fixed: false },
@@ -218,15 +218,7 @@ export const profileWorkspaceRows = (
         expanded.has(candidateIndex),
         candidateIndex,
       ),
-      (row): ProfileWorkspaceRow => ({
-        field: row.field,
-        label: row.label,
-        value: row.value,
-        fixed: row.fixed,
-        fixedReason: row.fixedReason,
-        scope: "candidate",
-        candidateIndex,
-      }),
+      (row): ProfileWorkspaceRow => ({ ...row, scope: "candidate", candidateIndex }),
     ),
   ),
   {

@@ -21,11 +21,9 @@ import {
   runRecordFixture,
   runningAssignment,
 } from "./fixtures/run-context.ts";
+import { yieldTurns } from "./fixtures/service-harness.ts";
 
 const REPORT = "Accepted supervisor report.";
-const yieldTurns = Effect.gen(function* () {
-  for (let turn = 0; turn < 25; turn += 1) yield* Effect.yieldNow;
-});
 const lateEvents: ReadonlyArray<BackendEvent> = [
   { type: "exit", exitCode: 0, diagnostic: "Process exited after reporting." },
   { type: "protocol_error", message: "Transport closed." },
@@ -75,7 +73,7 @@ describe("report ownership while its file is saved", () => {
           .pipe(Effect.forkScoped);
         yield* Deferred.await(gate.entered);
         const handling = yield* handleEvent(record, lateEvent).pipe(Effect.forkScoped);
-        yield* yieldTurns;
+        yield* yieldTurns(25);
         // The late event waits for the report's settlement instead of failing the run.
         expect(record.view.state).not.toBe("failed");
         expect(record.completionGenerations.size).toBe(0);
@@ -196,12 +194,12 @@ describe("report ownership at assignment activation", () => {
           ]);
           expect(record.cleanupDisposition).toBe("pending");
           yield* yieldUntil(() => steps.noticesStarted);
-          yield* yieldTurns;
+          yield* yieldTurns(25);
           expect(steps.cleanupStarted).toBe(false);
 
           // Interrupting the caller abandons neither the peer notices nor the cleanup after them.
           yield* Fiber.interrupt(confirming);
-          yield* yieldTurns;
+          yield* yieldTurns(25);
           expect(steps.cleanupStarted).toBe(false);
           yield* Deferred.succeed(noticesGate, undefined);
           yield* yieldUntil(() => steps.cleanupStarted);

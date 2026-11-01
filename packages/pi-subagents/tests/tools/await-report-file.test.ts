@@ -1,14 +1,10 @@
-import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
+import { getTextContent } from "pi-code-previews";
 import { it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
-import * as Result from "effect/Result";
-import * as Layer from "effect/Layer";
-import { makePiManagedRuntime } from "pi-cosmic-core";
-import { recordingExtensionHost } from "pi-cosmic-core/testing";
 import { assert, describe, expect } from "vitest";
 import { sessionReportArchive } from "../../src/boundary/report-archive.ts";
 import type { SubagentRunView } from "../../src/run/model.ts";
@@ -28,19 +24,17 @@ import {
 import { effectTest, step } from "../support/effect-test.ts";
 import { temporaryDirectory } from "../workspace/fixtures/repository.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
-import { captureSubagentTools, executeTool, view } from "./fixtures/tool-harness.ts";
+import {
+  captureSubagentTools,
+  executeTool,
+  managedToolHost,
+  view,
+} from "./fixtures/tool-harness.ts";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
 
-const resultText = (result: {
-  readonly content: ReadonlyArray<AgentToolResult<unknown>["content"][number]>;
-}): string =>
-  Arr.join(
-    Arr.filterMap(result.content, (part) =>
-      part.type === "text" ? Result.succeed(part.text) : Result.failVoid,
-    ),
-    "\n",
-  );
+const resultText = (result: { readonly content: Parameters<typeof getTextContent>[0] }) =>
+  getTextContent(result.content);
 
 const ARCHIVE_PATH = `/home/user/.pi/agent/subagents/reports/session-1/agent-1-1-${Fn.pipe("a", Str.repeat(36))}.md`;
 const REPORT_FILE = { path: ARCHIVE_PATH, chars: 500_000, lines: 40_000, complete: true };
@@ -289,13 +283,7 @@ it.live("delivers every report file of a full await even when warnings fill the 
     const fixture = eventBackendServiceFixture(fakeEventBackendLayer(), {
       archiveReport: sessionReportArchive(agentDirectory, "session-1"),
     });
-    const { pi, tools } = recordingExtensionHost();
-    const runtime = yield* Effect.acquireRelease(
-      Effect.sync(() =>
-        makePiManagedRuntime(pi, Layer.merge(fixture.layer, fixture.backend.layer)),
-      ),
-      (owned) => step(() => owned.dispose()),
-    );
+    const { pi, tools, runtime } = yield* managedToolHost(fixture);
     registerSubagentTools(pi, {
       environment: { cwd: "/project", projectTrusted: true },
       run: (effect, signal) => runtime.run(effect, signal),

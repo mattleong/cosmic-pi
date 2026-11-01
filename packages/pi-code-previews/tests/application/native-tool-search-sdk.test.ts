@@ -25,181 +25,180 @@ import * as Str from "effect/String";
 beforeAll(() => initTheme("dark", false));
 
 for (const order of ["native-first", "previews-first"] as const)
-  for (const style of ["compact"] as const)
-    it.live(
-      `independently loaded tool search keeps native ownership and retained ${style} replay (${order})`,
-      () =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const directory = yield* fs.makeTempDirectoryScoped({
-            prefix: "preview-tool-search-sdk-",
-          });
-          const models = yield* offlineModels(directory);
-          const settings = quietSettings();
-          let rendererRegistrations = 0;
-          let fixtureExecutions = 0;
-          const previews: InlineExtension = {
-            name: "code-previews",
-            factory: codePreviewsUnderTest(
-              directory,
-              {
-                tools: ["tool_search"],
-                syntaxHighlighting: false,
-                toolCallTiming: false,
-                toolCallCollapsedStyle: style,
-                toolCallBackground: "off",
-              },
-              {
-                api: (pi) => ({
-                  registerTool() {
-                    throw new Error("presentation execution registration");
-                  },
-                  setActiveTools() {
-                    throw new Error("presentation activation");
-                  },
-                  registerToolRenderer(resolver) {
-                    rendererRegistrations++;
-                    pi.registerToolRenderer(resolver);
-                  },
-                }),
-              },
-            ),
-          };
-          const native: InlineExtension = {
-            name: "tool-search",
-            factory: createToolSearchExtension(),
-            replaceable: true,
-            builtin: true,
-          };
-          const loader = yield* quietLoader({
-            cwd: directory,
-            agentDir: directory,
-            settingsManager: settings,
-            extensionFactories: [
-              ...(order === "native-first" ? [native, previews] : [previews, native]),
-              {
-                name: "harmless-deferred-fixture",
-                factory(pi) {
-                  pi.registerTool({
-                    name: "nebula_fixture",
-                    label: "Harmless deferred fixture",
-                    description: "Find nebula fixture documentation",
-                    exposure: "deferred",
-                    parameters: { type: "object", properties: {} } as const,
-                    execute() {
-                      fixtureExecutions++;
-                      return Promise.resolve({
-                        content: [{ type: "text" as const, text: "must not run" }],
-                        details: undefined,
-                      });
-                    },
-                  });
+  it.live(
+    `independently loaded tool search keeps native ownership and retained compact replay (${order})`,
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const directory = yield* fs.makeTempDirectoryScoped({
+          prefix: "preview-tool-search-sdk-",
+        });
+        const models = yield* offlineModels(directory);
+        const settings = quietSettings();
+        let rendererRegistrations = 0;
+        let fixtureExecutions = 0;
+        const previews: InlineExtension = {
+          name: "code-previews",
+          factory: codePreviewsUnderTest(
+            directory,
+            {
+              tools: ["tool_search"],
+              syntaxHighlighting: false,
+              toolCallTiming: false,
+              toolCallCollapsedStyle: "compact",
+              toolCallBackground: "off",
+            },
+            {
+              api: (pi) => ({
+                registerTool() {
+                  throw new Error("presentation execution registration");
                 },
+                setActiveTools() {
+                  throw new Error("presentation activation");
+                },
+                registerToolRenderer(resolver) {
+                  rendererRegistrations++;
+                  pi.registerToolRenderer(resolver);
+                },
+              }),
+            },
+          ),
+        };
+        const native: InlineExtension = {
+          name: "tool-search",
+          factory: createToolSearchExtension(),
+          replaceable: true,
+          builtin: true,
+        };
+        const loader = yield* quietLoader({
+          cwd: directory,
+          agentDir: directory,
+          settingsManager: settings,
+          extensionFactories: [
+            ...(order === "native-first" ? [native, previews] : [previews, native]),
+            {
+              name: "harmless-deferred-fixture",
+              factory(pi) {
+                pi.registerTool({
+                  name: "nebula_fixture",
+                  label: "Harmless deferred fixture",
+                  description: "Find nebula fixture documentation",
+                  exposure: "deferred",
+                  parameters: { type: "object", properties: {} } as const,
+                  execute() {
+                    fixtureExecutions++;
+                    return Promise.resolve({
+                      content: [{ type: "text" as const, text: "must not run" }],
+                      details: undefined,
+                    });
+                  },
+                });
               },
-            ],
-          });
-          const session = yield* scopedSession({ cwd: directory, models, settings, loader });
-          const definition = session.getToolDefinition("tool_search");
-          assert.ok(definition);
-          const original = {
+            },
+          ],
+        });
+        const session = yield* scopedSession({ cwd: directory, models, settings, loader });
+        const definition = session.getToolDefinition("tool_search");
+        assert.ok(definition);
+        const original = {
+          execute: executeDescriptor(definition),
+          parameters: definition.parameters,
+          exposure: definition.exposure,
+          defaultActive: definition.defaultActive,
+        };
+        const active = session.getActiveToolNames();
+        const callable = session.getCallableToolNames();
+        assert.equal(active.includes("tool_search"), false);
+        assert.equal(active.includes("nebula_fixture"), false);
+        const metadata = Option.getOrUndefined(
+          Arr.findFirst(session.getAllTools(), (tool) => tool.name === "tool_search"),
+        );
+        assert.ok(metadata);
+        assert.deepEqual(metadata.sourceInfo, {
+          source: "builtin",
+          path: "builtin:tool-search",
+          scope: "temporary",
+          origin: "top-level",
+        });
+        assert.equal(metadata.exposure, "model-only");
+        assert.equal(definition.defaultActive, false);
+        assert.equal(callable.includes("tool_search"), false);
+        const args = { query: "HISTORICAL_QUERY", limit: 3, extra: "EXACT_EXTRA" };
+        const result = {
+          content: [
+            {
+              type: "text" as const,
+              text: "HISTORICAL_OUTPUT\nRead the complete tool instructions: RECOVERY_TEXT",
+            },
+          ],
+          details: { loaded: ["nebula_fixture"] },
+          isError: false,
+        };
+        const before = structuredClone(result);
+        const renderers = session.extensionRunner.resolveToolRenderers(
+          "tool_search",
+          () => definition,
+        );
+        assert.equal(renderers?.renderShell, "self");
+        const row = hostToolRow("tool_search", args, renderers, { cwd: directory, result });
+        row.render(100);
+        yield* step(() => session.bindExtensions({ mode: "print" }));
+        assert.equal(rendererRegistrations, 1);
+        assert.equal(getCodePreviewToolStatuses().get("tool_search")?.state, "installed");
+        assert.equal(session.getToolDefinition("tool_search"), definition);
+        assert.deepEqual(
+          {
             execute: executeDescriptor(definition),
             parameters: definition.parameters,
             exposure: definition.exposure,
             defaultActive: definition.defaultActive,
-          };
-          const active = session.getActiveToolNames();
-          const callable = session.getCallableToolNames();
-          assert.equal(active.includes("tool_search"), false);
-          assert.equal(active.includes("nebula_fixture"), false);
-          const metadata = Option.getOrUndefined(
-            Arr.findFirst(session.getAllTools(), (tool) => tool.name === "tool_search"),
-          );
-          assert.ok(metadata);
-          assert.deepEqual(metadata.sourceInfo, {
-            source: "builtin",
-            path: "builtin:tool-search",
-            scope: "temporary",
-            origin: "top-level",
-          });
-          assert.equal(metadata.exposure, "model-only");
-          assert.equal(definition.defaultActive, false);
-          assert.equal(callable.includes("tool_search"), false);
-          const args = { query: "HISTORICAL_QUERY", limit: 3, extra: "EXACT_EXTRA" };
-          const result = {
-            content: [
-              {
-                type: "text" as const,
-                text: "HISTORICAL_OUTPUT\nRead the complete tool instructions: RECOVERY_TEXT",
-              },
-            ],
-            details: { loaded: ["nebula_fixture"] },
-            isError: false,
-          };
-          const before = structuredClone(result);
-          const renderers = session.extensionRunner.resolveToolRenderers(
-            "tool_search",
-            () => definition,
-          );
-          assert.equal(renderers?.renderShell, "self");
-          const row = hostToolRow("tool_search", args, renderers, { cwd: directory, result });
-          row.render(100);
-          yield* step(() => session.bindExtensions({ mode: "print" }));
-          assert.equal(rendererRegistrations, 1);
-          assert.equal(getCodePreviewToolStatuses().get("tool_search")?.state, "installed");
-          assert.equal(session.getToolDefinition("tool_search"), definition);
-          assert.deepEqual(
-            {
-              execute: executeDescriptor(definition),
-              parameters: definition.parameters,
-              exposure: definition.exposure,
-              defaultActive: definition.defaultActive,
-            },
-            original,
-          );
-          assert.deepEqual(session.getActiveToolNames(), active);
-          assert.deepEqual(session.getCallableToolNames(), callable);
-          for (const expanded of [false, true, false, true]) {
-            const rendered = stripAnsi(drawToolRow(row, expanded, 100));
-            assert.match(rendered, /HISTORICAL_QUERY/);
-            if (expanded)
-              for (const marker of [
-                "EXACT_EXTRA",
-                "HISTORICAL_OUTPUT",
-                "RECOVERY_TEXT",
-                '"limit": 3',
-              ])
-                assert.ok(Fn.pipe(rendered, Str.includes(marker)), marker);
-            else {
-              assert.match(rendered, /\b1\b/);
-              assert.doesNotMatch(rendered, /HISTORICAL_OUTPUT|RECOVERY_TEXT/);
-            }
+          },
+          original,
+        );
+        assert.deepEqual(session.getActiveToolNames(), active);
+        assert.deepEqual(session.getCallableToolNames(), callable);
+        for (const expanded of [false, true, false, true]) {
+          const rendered = stripAnsi(drawToolRow(row, expanded, 100));
+          assert.match(rendered, /HISTORICAL_QUERY/);
+          if (expanded)
+            for (const marker of [
+              "EXACT_EXTRA",
+              "HISTORICAL_OUTPUT",
+              "RECOVERY_TEXT",
+              '"limit": 3',
+            ])
+              assert.ok(Fn.pipe(rendered, Str.includes(marker)), marker);
+          else {
+            assert.match(rendered, /\b1\b/);
+            assert.doesNotMatch(rendered, /HISTORICAL_OUTPUT|RECOVERY_TEXT/);
           }
-          assert.deepEqual(result, before);
-          assert.deepEqual(
-            session.getActiveToolNames(),
-            active,
-            "rendering a historical loaded receipt must not activate tools",
-          );
-          assert.equal(fixtureExecutions, 0);
+        }
+        assert.deepEqual(result, before);
+        assert.deepEqual(
+          session.getActiveToolNames(),
+          active,
+          "rendering a historical loaded receipt must not activate tools",
+        );
+        assert.equal(fixtureExecutions, 0);
 
-          session.setActiveToolsByName([...active, "tool_search"]);
-          assert.equal(session.getCallableToolNames().includes("tool_search"), false);
-          const search = Option.getOrUndefined(
-            Arr.findFirst(session.agent.state.tools, (tool) => tool.name === "tool_search"),
-          );
-          assert.ok(search);
-          const loaded = yield* step(() =>
-            search.execute("deliberate-native-search", { query: "nebula", limit: 1 }, undefined),
-          );
-          assert.deepEqual(nativeToolSearchReceipt(hostContainer(loaded.details)), {
-            loaded: ["nebula_fixture"],
-          });
-          assert.ok(session.getActiveToolNames().includes("nebula_fixture"));
-          const again = yield* step(() =>
-            search.execute("deliberate-native-repeat", { query: "nebula", limit: 1 }, undefined),
-          );
-          assert.deepEqual(nativeToolSearchReceipt(hostContainer(again.details)), { loaded: [] });
-          assert.equal(fixtureExecutions, 0);
-          assert.equal(session.getToolDefinition("tool_search"), definition);
-        }).pipe(Effect.scoped, Effect.provide(nodeFilePlatformLayer)),
-    );
+        session.setActiveToolsByName([...active, "tool_search"]);
+        assert.equal(session.getCallableToolNames().includes("tool_search"), false);
+        const search = Option.getOrUndefined(
+          Arr.findFirst(session.agent.state.tools, (tool) => tool.name === "tool_search"),
+        );
+        assert.ok(search);
+        const loaded = yield* step(() =>
+          search.execute("deliberate-native-search", { query: "nebula", limit: 1 }, undefined),
+        );
+        assert.deepEqual(nativeToolSearchReceipt(hostContainer(loaded.details)), {
+          loaded: ["nebula_fixture"],
+        });
+        assert.ok(session.getActiveToolNames().includes("nebula_fixture"));
+        const again = yield* step(() =>
+          search.execute("deliberate-native-repeat", { query: "nebula", limit: 1 }, undefined),
+        );
+        assert.deepEqual(nativeToolSearchReceipt(hostContainer(again.details)), { loaded: [] });
+        assert.equal(fixtureExecutions, 0);
+        assert.equal(session.getToolDefinition("tool_search"), definition);
+      }).pipe(Effect.scoped, Effect.provide(nodeFilePlatformLayer)),
+  );

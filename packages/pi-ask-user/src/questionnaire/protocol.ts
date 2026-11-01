@@ -40,13 +40,12 @@ export interface QuestionnaireRelay {
   readonly ask: (request: AskUserRequest, signal: AbortSignal) => Promise<AskUserOutcome>;
 }
 
+const questionFields = { key: text(32), title: text(MAX_TITLE_LENGTH), prompt: text(500) };
 export const QuestionnaireRequestSchema = Schema.Struct({
   questions: Schema.Array(
     Schema.Union([
       Schema.Struct({
-        key: text(32),
-        title: text(MAX_TITLE_LENGTH),
-        prompt: text(500),
+        ...questionFields,
         mode: Schema.Literals(["single", "multiple"]),
         choices: Schema.Array(
           Schema.Struct({
@@ -58,9 +57,7 @@ export const QuestionnaireRequestSchema = Schema.Struct({
         ).check(Schema.isMinLength(2), Schema.isMaxLength(MAX_CHOICES)),
       }),
       Schema.Struct({
-        key: text(32),
-        title: text(MAX_TITLE_LENGTH),
-        prompt: text(500),
+        ...questionFields,
         mode: Schema.Literal("text"),
         choices: Schema.optionalKey(Schema.Never),
       }),

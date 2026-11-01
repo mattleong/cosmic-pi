@@ -105,16 +105,17 @@ export const decodeCallQuestions = decodeUnknownOrUndefined(
   }),
 );
 
-export const callTitles = Fn.flow(decodeCallQuestions, (decoded): string | undefined => {
-  const titles =
-    decoded === undefined
-      ? undefined
-      : Arr.join(
-          Arr.map(decoded.questions, (question) => titleLabel(question.title)),
-          ", ",
-        );
-  return titles === "" ? undefined : titles;
-});
+const titlesLabel = (titles: ReadonlyArray<{ readonly title: string }>): string | undefined => {
+  const label = Arr.join(
+    Arr.map(titles, ({ title }) => titleLabel(title)),
+    ", ",
+  );
+  return label === "" ? undefined : label;
+};
+
+export const callTitles = Fn.flow(decodeCallQuestions, (decoded) =>
+  titlesLabel(decoded?.questions ?? []),
+);
 
 const decodeTitles = decodeUnknownOrUndefined(
   Schema.Array(
@@ -126,13 +127,7 @@ const decodeTitles = decodeUnknownOrUndefined(
 );
 
 /** Stored async question titles as one heading subject, or undefined when they don't decode. */
-export const storedTitlesLabel = Fn.flow(decodeTitles, (titles): string | undefined => {
-  const label = Arr.join(
-    Arr.map(titles ?? [], ({ title }) => titleLabel(title)),
-    ", ",
-  );
-  return label === "" ? undefined : label;
-});
+export const storedTitlesLabel = Fn.flow(decodeTitles, (titles) => titlesLabel(titles ?? []));
 
 /** Question titles by answer key from stored async details; none when they don't decode. */
 export const titlesOf = Fn.flow(

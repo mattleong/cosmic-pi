@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test } from "vitest";
 import {
   applyPresentationSettings,
   issueMessageStyleProblems,
@@ -16,7 +16,6 @@ import { defaultCodePreviewSettings } from "../../../src/config/defaults";
 import {
   codePreviewPerformanceConfig,
   codePreviewSettings,
-  setCodePreviewPerformanceConfig,
   setCodePreviewSettings,
 } from "../../../src/config/state";
 import { createBuiltinCompactSummary } from "../../../src/tools/builtin-compact-summary";
@@ -30,14 +29,8 @@ import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 
-const originalPerformance = codePreviewPerformanceConfig;
 const secret = "-----BEGIN PRIVATE KEY-----";
-type Args = Partial<
-  ReadToolInput & BashToolInput & WriteToolInput & EditToolInput & GrepToolInput
-> & {
-  old_text?: string;
-  new_text?: string;
-};
+type Args = Partial<ReadToolInput & BashToolInput & WriteToolInput & EditToolInput & GrepToolInput>;
 
 beforeEach(() =>
   applyPresentationSettings({
@@ -50,7 +43,6 @@ beforeEach(() =>
     secretWarnings: true,
   }),
 );
-afterEach(() => setCodePreviewPerformanceConfig(originalPerformance));
 
 function summary(
   tool: BuiltinCompactTool,

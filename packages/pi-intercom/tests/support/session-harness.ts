@@ -132,6 +132,7 @@ export const hangingListener = (socket: string) =>
 export interface SharedAgentDirectory {
   readonly base: string;
   readonly agentDirectory: string;
+  readonly sessions: string;
   readonly fallbackRoot: string;
 }
 
@@ -142,9 +143,10 @@ export const sharedAgentDirectory = (options: { readonly long?: boolean } = {}) 
     // Short enough for a socket path under the agent directory unless asked otherwise.
     const base = yield* fs.makeTempDirectoryScoped({ directory: "/tmp", prefix: "intercom-app-" });
     const agentDirectory = paths.join(base, options.long ? Fn.pipe("a", Str.repeat(80)) : "agent");
+    const sessions = paths.join(agentDirectory, "intercom", "sessions");
     const fallbackRoot = paths.join(base, "tmp");
     yield* fs.makeDirectory(fallbackRoot, { recursive: true });
-    return { base, agentDirectory, fallbackRoot } satisfies SharedAgentDirectory;
+    return { base, agentDirectory, sessions, fallbackRoot } satisfies SharedAgentDirectory;
   });
 
 export interface HarnessOptions {
@@ -164,12 +166,11 @@ export const harness = (options: HarnessOptions = {}) =>
     const shared =
       options.shared ??
       (yield* sharedAgentDirectory(options.longAgentDirectory ? { long: true } : {}));
-    const { base, agentDirectory, fallbackRoot } = shared;
+    const { base, agentDirectory, sessions, fallbackRoot } = shared;
     yield* Effect.sync(() => {
       vi.stubEnv("PI_CODING_AGENT_DIR", agentDirectory);
       vi.stubEnv("PI_SUBAGENT_CHILD", undefined);
     });
-    const sessions = paths.join(agentDirectory, "intercom", "sessions");
 
     const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>();
     const host = recordingExtensionHost({}, { sendMessage });

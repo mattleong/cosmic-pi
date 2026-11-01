@@ -38,99 +38,96 @@ const content: AgentToolResult<unknown>["content"] = [
 ];
 Object.freeze(content);
 
-for (const style of ["preview"] as const)
-  for (const mode of ["on"] as const)
-    for (const known of [true, false])
-      it(`${style}/${mode}/${known ? "known" : "unknown"} preserves complete expansion and opaque downstream extras`, () => {
-        withPresentationSettings(
-          { toolCallCollapsedStyle: style, toolCallBackground: mode, toolCallTiming: false },
-          () => {
-            const details = Object.freeze(
-              known
-                ? { urlCount: 7, successful: 7, responseId: "private-reference" }
-                : { version: "future" },
-            );
-            const value: AgentToolResult<unknown> = { content, details };
-            const harness = createToolPresentationHarness(
-              createWebAccessRenderers("fetch_content", downstream, {
-                mode,
-                collapsedStyle: style,
-                selfShell: false,
-                scheduleAnimation: () => undefined,
-              }),
-            );
-            const frames = harness.cycle(args, value, {
-              invalidate: "before",
-              overrides: () => ({ showImages: false }),
-            });
-            for (const frame of Arr.filter(frames, (entry) => entry.expanded)) {
-              for (const marker of [
-                "DOWNSTREAM CALL EXTRAS",
-                "DOWNSTREAM RESULT EXTRAS",
-                "ARGUMENT_TAIL",
-                "OUTPUT_TAIL",
-                "RECOVERY_TAIL",
-                "https://example.test/6",
-                "browser-profile",
-                "private-reference",
-              ])
-                assert.ok(Fn.pipe(frame.text, Str.includes(marker)), marker);
-            }
-            assert.equal(value.content, content);
-            assert.equal(value.details, details);
-            assert.equal(value.content[2], image);
+for (const known of [true, false])
+  it(`preview/on/${known ? "known" : "unknown"} preserves complete expansion and opaque downstream extras`, () => {
+    withPresentationSettings(
+      { toolCallCollapsedStyle: "preview", toolCallBackground: "on", toolCallTiming: false },
+      () => {
+        const details = Object.freeze(
+          known
+            ? { urlCount: 7, successful: 7, responseId: "private-reference" }
+            : { version: "future" },
+        );
+        const value: AgentToolResult<unknown> = { content, details };
+        const harness = createToolPresentationHarness(
+          createWebAccessRenderers("fetch_content", downstream, {
+            mode: "on",
+            collapsedStyle: "preview",
+            selfShell: false,
+            scheduleAnimation: () => undefined,
+          }),
+        );
+        const frames = harness.cycle(args, value, {
+          invalidate: "before",
+          overrides: () => ({ showImages: false }),
+        });
+        for (const frame of Arr.filter(frames, (entry) => entry.expanded)) {
+          for (const marker of [
+            "DOWNSTREAM CALL EXTRAS",
+            "DOWNSTREAM RESULT EXTRAS",
+            "ARGUMENT_TAIL",
+            "OUTPUT_TAIL",
+            "RECOVERY_TAIL",
+            "https://example.test/6",
+            "browser-profile",
+            "private-reference",
+          ])
+            assert.ok(Fn.pipe(frame.text, Str.includes(marker)), marker);
+        }
+        assert.equal(value.content, content);
+        assert.equal(value.details, details);
+        assert.equal(value.content[2], image);
+      },
+    );
+  });
+
+for (const failure of ["construct", "draw"] as const)
+  it(`preview contains ${failure} failures without replaying the broken renderer or losing raw evidence`, () => {
+    withPresentationSettings(
+      { toolCallCollapsedStyle: "preview", toolCallBackground: "off", toolCallTiming: false },
+      () => {
+        let calls = 0;
+        let fail = true;
+        const renderers = createWebAccessRenderers(
+          "fetch_content",
+          {
+            renderCall: downstream.renderCall!,
+            renderResult: () => {
+              calls++;
+              if (fail && failure === "construct") throw new Error("broken construction");
+              return {
+                render() {
+                  if (fail) throw new Error("broken draw");
+                  return ["RECOVERED DOWNSTREAM"];
+                },
+                invalidate() {},
+              };
+            },
+          },
+          {
+            collapsedStyle: "preview",
+            mode: "off",
+            selfShell: false,
+            scheduleAnimation: () => undefined,
           },
         );
-      });
-
-for (const style of ["preview"] as const)
-  for (const failure of ["construct", "draw"] as const)
-    it(`${style} contains ${failure} failures without replaying the broken renderer or losing raw evidence`, () => {
-      withPresentationSettings(
-        { toolCallCollapsedStyle: style, toolCallBackground: "off", toolCallTiming: false },
-        () => {
-          let calls = 0;
-          let fail = true;
-          const renderers = createWebAccessRenderers(
-            "fetch_content",
-            {
-              renderCall: downstream.renderCall!,
-              renderResult: () => {
-                calls++;
-                if (fail && failure === "construct") throw new Error("broken construction");
-                return {
-                  render() {
-                    if (fail) throw new Error("broken draw");
-                    return ["RECOVERED DOWNSTREAM"];
-                  },
-                  invalidate() {},
-                };
-              },
-            },
-            {
-              collapsedStyle: style,
-              mode: "off",
-              selfShell: false,
-              scheduleAnimation: () => undefined,
-            },
-          );
-          const harness = createToolPresentationHarness(renderers);
-          const value = {
-            content: [{ type: "text" as const, text: "FULL FAILURE OUTPUT AND RECOVERY" }],
-            details: { urlCount: 1, successful: 1 },
-          };
-          harness.call(args, { expanded: true });
-          harness.result(value);
-          assert.match(Arr.join(harness.render(), "\n"), /FULL FAILURE OUTPUT AND RECOVERY/);
-          const failedCalls = calls;
-          harness.invalidate();
-          harness.call(args, { expanded: false });
-          harness.call(args, { expanded: true });
-          assert.match(Arr.join(harness.render(), "\n"), /FULL FAILURE OUTPUT AND RECOVERY/);
-          assert.equal(calls, failedCalls);
-          fail = false;
-          harness.result({ ...value, details: { urlCount: 2, successful: 2 } });
-          assert.match(Arr.join(harness.render(), "\n"), /RECOVERED DOWNSTREAM/);
-        },
-      );
-    });
+        const harness = createToolPresentationHarness(renderers);
+        const value = {
+          content: [{ type: "text" as const, text: "FULL FAILURE OUTPUT AND RECOVERY" }],
+          details: { urlCount: 1, successful: 1 },
+        };
+        harness.call(args, { expanded: true });
+        harness.result(value);
+        assert.match(Arr.join(harness.render(), "\n"), /FULL FAILURE OUTPUT AND RECOVERY/);
+        const failedCalls = calls;
+        harness.invalidate();
+        harness.call(args, { expanded: false });
+        harness.call(args, { expanded: true });
+        assert.match(Arr.join(harness.render(), "\n"), /FULL FAILURE OUTPUT AND RECOVERY/);
+        assert.equal(calls, failedCalls);
+        fail = false;
+        harness.result({ ...value, details: { urlCount: 2, successful: 2 } });
+        assert.match(Arr.join(harness.render(), "\n"), /RECOVERED DOWNSTREAM/);
+      },
+    );
+  });

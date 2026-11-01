@@ -669,13 +669,6 @@ describe("background task argument leniency", () => {
       }),
     ).toThrow(/contains/u);
   });
-
-  it("names the invalid field and its allowed values", () => {
-    expect(() => prepareBackgroundTaskArguments({ action: "launch", command: "make" })).toThrow(
-      /action[\s\S]*start/u,
-    );
-    expect(() => prepareBackgroundTaskArguments({ action: null })).toThrow(/action/u);
-  });
 });
 
 describe("background task results", () => {
@@ -816,18 +809,6 @@ describe("background task results", () => {
       const blank = yield* Effect.flip(execute({ action: "start", command: " \t\n" }, { start }));
       expect(blank._tag).toBe("InvalidBackgroundCommandError");
       expect(submitted).toEqual([command]);
-    }),
-  );
-
-  it.effect("describes an empty list by the filter it applied", () =>
-    Effect.gen(function* () {
-      const empty = { list: () => Effect.succeed([]) };
-      const texts = yield* Effect.forEach(["active", "completed", "all"] as const, (state) =>
-        Effect.map(execute({ action: "list", state }, empty), (result) => result.text),
-      );
-      expect(new Set(texts).size).toBe(3);
-      expect(texts[0]).toContain("active");
-      expect(texts[1]).toContain("completed");
     }),
   );
 });

@@ -35,9 +35,9 @@ import { renderTaskNotice } from "../src/ui/notice-message.ts";
 import type { BackgroundTaskToolInput } from "../src/tools/schema.ts";
 import {
   provideTaskService,
+  registeredTaskTool,
   taskLogSlice as slice,
   taskServiceDouble,
-  taskServiceRunner,
   taskStatus,
   taskStop,
   taskWait,
@@ -593,11 +593,7 @@ const registeredScenarios: ReadonlyArray<RegisteredScenario> = [
 ];
 
 const settleRegistered = (scenario: RegisteredScenario): Effect.Effect<GalleryScenario> => {
-  const tool = captureRegistrations((pi) =>
-    registerBackgroundTaskTool(pi, {
-      run: taskServiceRunner(taskServiceDouble({ ...service, ...scenario.service })),
-    }),
-  ).tools[0]!;
+  const tool = registeredTaskTool({ ...service, ...scenario.service });
   const ctx = extensionContextFixture({ cwd: "/project" });
   return Effect.promise(() =>
     tool.execute("gallery", scenario.input, undefined, undefined, ctx),

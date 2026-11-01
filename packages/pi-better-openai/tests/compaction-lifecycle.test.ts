@@ -1,4 +1,4 @@
-import { SessionManager, type SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { expect, layer } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
@@ -6,74 +6,32 @@ import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { registerMessageOrigins } from "pi-cosmic-core/host-message-origin";
 import { deferredPromise } from "pi-cosmic-core/testing";
 import { afterEach, vi } from "vitest";
-import { OPENAI_COMPACTION_DETAILS_TYPE } from "../src/compaction/protocol.ts";
 import { projectOpenAIResponseInput } from "../src/compaction/projection.ts";
 import { OpenAICompactionService } from "../src/compaction/service.ts";
 import { extensionHarness } from "./extension-harness.ts";
-import { serializedSnapshot, testModel } from "./helpers.ts";
+import {
+  beforeCompactEvent,
+  ownedCheckpointDetails,
+  serializedSnapshot,
+  testModel,
+} from "./helpers.ts";
 
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
 
-const checkpoint = {
-  type: OPENAI_COMPACTION_DETAILS_TYPE,
-  checkpoint: {
-    version: 1,
-    provider: "openai",
-    api: "openai-responses",
-    model: "gpt-5.5",
-    output: [{ type: "compaction", encrypted_content: "encrypted" }],
-    omittedEntryIds: [],
-    createdAt: 0,
-  },
-};
 const appendCheckpoint = (manager: SessionManager, retained: string) =>
-  manager.appendCompaction("owned", retained, 100, checkpoint, true);
+  manager.appendCompaction("owned", retained, 100, ownedCheckpointDetails(), true);
 
 const checkpointedSession = (cwd: string) => {
   const manager = SessionManager.inMemory(cwd);
   manager.appendMessage({ role: "system", content: "system", timestamp: 0 });
   manager.appendMessage({ role: "user", content: "covered history", timestamp: 1 });
   const retained = manager.appendMessage({ role: "user", content: "tail question", timestamp: 2 });
-  manager.appendCompaction(
-    "owned",
-    retained,
-    100,
-    {
-      type: OPENAI_COMPACTION_DETAILS_TYPE,
-      checkpoint: {
-        version: 1,
-        provider: "openai",
-        api: "openai-responses",
-        model: "gpt-5.5",
-        output: [{ type: "compaction", encrypted_content: "encrypted" }],
-        omittedEntryIds: [],
-        createdAt: 0,
-      },
-    },
-    true,
-  );
+  appendCheckpoint(manager, retained);
   return manager;
 };
-
-const beforeCompactEvent = (signal: AbortSignal): SessionBeforeCompactEvent => ({
-  type: "session_before_compact",
-  preparation: {
-    firstKeptEntryId: "retained",
-    messagesToSummarize: [],
-    turnPrefixMessages: [],
-    isSplitTurn: false,
-    tokensBefore: 100,
-    fileOps: { read: new Set(), written: new Set(), edited: new Set() },
-    settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
-  },
-  branchEntries: [],
-  reason: "manual",
-  willRetry: false,
-  signal,
-});
 
 layer(nodeFilePlatformLayer)("compaction session authority", (it) => {
   for (const model of [testModel(), testModel("other", "anthropic", "anthropic-messages")])
@@ -161,10 +119,7 @@ layer(nodeFilePlatformLayer)("compaction session authority", (it) => {
       );
       const h = yield* extensionHarness({ config: { compaction: { enabled: true } } });
       yield* h.emit("session_start");
-      const pending = h.handlers.get("session_before_compact")[0]!(
-        beforeCompactEvent(new AbortController().signal),
-        h.ctx,
-      );
+      const pending = h.handlers.get("session_before_compact")[0]!(beforeCompactEvent(), h.ctx);
       yield* Effect.promise(() => started.promise);
       h.notify.mockClear();
       yield* h.emit("session_shutdown");
@@ -329,10 +284,7 @@ layer(nodeFilePlatformLayer)("compaction session authority", (it) => {
         h.notify.mockClear();
         const result = yield* Effect.promise(() =>
           Promise.resolve(
-            h.handlers.get("session_before_compact")[0]!(
-              beforeCompactEvent(new AbortController().signal),
-              h.ctx,
-            ),
+            h.handlers.get("session_before_compact")[0]!(beforeCompactEvent(), h.ctx),
           ),
         );
         expect(result).toBeUndefined();

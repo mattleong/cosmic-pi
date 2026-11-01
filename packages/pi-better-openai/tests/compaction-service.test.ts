@@ -87,12 +87,10 @@ const compactEvent = (firstKeptEntryId = "kept"): SessionBeforeCompactEvent => {
 function fixture(options: {
   readonly enabled: boolean;
   readonly currentModel?: Model<Api>;
-  readonly branch?: SessionEntry[];
   readonly hostileBranch?: boolean;
   readonly manager?: SessionManager;
   readonly streamSimple?: ExtensionContext["modelRegistry"]["streamSimple"];
 }) {
-  const branch = options.branch ?? [];
   const base = extensionContextFixture({
     modelRegistry: options.streamSimple ? { streamSimple: options.streamSimple } : {},
     thinkingLevel: "high",
@@ -104,7 +102,7 @@ function fixture(options: {
     sessionManager: {
       getBranch: () => {
         if (options.hostileBranch) throw new Error("host-context-secret");
-        return branch;
+        return [];
       },
     },
   });
@@ -117,7 +115,7 @@ function fixture(options: {
     MutableRef.set(config, makeResolvedConfig({ compaction: { enabled } }));
   const setModel = (model: Model<Api>) =>
     MutableRef.update(context, (current) => ({ ...current, model }));
-  return { branch, context, config, fastProjection, setEnabled, setModel };
+  return { context, config, fastProjection, setEnabled, setModel };
 }
 
 function serviceLayer(
@@ -275,177 +273,167 @@ const appendRoundTail = (manager: SessionManager, round: number) => {
 };
 
 describe("OpenAICompactionService", () => {
-  for (const supportsMidConvoSystemMessages of [true]) {
-    it.effect(
-      `preserves native context across repeated compactions, mid-conversation=${supportsMidConvoSystemMessages}`,
-      () => {
-        const manager = SessionManager.inMemory("/virtual/compaction-test");
-        const requestModel = {
-          ...testModel(),
-          compat: { supportsMidConvoSystemMessages },
-          cost: {
-            input: 1,
-            output: 2,
-            cacheRead: 0.5,
-            cacheWrite: 0,
-            tiers: [{ inputTokensAbove: 10, input: 4, output: 8, cacheRead: 2, cacheWrite: 0 }],
-          },
-        };
-        manager.appendMessage({
-          role: "system",
-          content: "opaque initial content",
-          sections: { rules: "initial rules" },
-          toolsAdded: [{ name: "old", description: "old tool", parameters: { type: "object" } }],
-          timestamp: 1,
-        });
-        manager.appendMessage({ role: "user", content: "first question", timestamp: 2 });
-        const target = fixture({ enabled: true, currentModel: requestModel, manager });
-        const { requests, client } = recordingClient("checkpoint", {
-          inputTokens: 12,
-          cachedInputTokens: 5,
-          outputTokens: 3,
-          totalTokens: 15,
-        });
-        return Effect.gen(function* () {
-          const service = yield* OpenAICompactionService;
-          const compactRound = (round: number) =>
-            Effect.gen(function* () {
-              const firstId = manager.getBranch()[0]!.id;
-              const result = commit(manager, yield* service.compact(compactEvent(firstId)));
-              expect(result.usage).toMatchObject({
-                input: 7,
-                output: 3,
-                cacheRead: 5,
-                cacheWrite: 0,
-                totalTokens: 15,
-              });
-              expect(result.usage?.cost.total).toBeCloseTo(0.000062);
-              const compactedMessages = manager.buildSessionContext().messages;
-              const compactedPrompt = getCurrentSystemPrompt(convertToLlm(compactedMessages));
-              expect(Str.split(compactedPrompt, "opaque initial content")).toHaveLength(2);
-              expect(
-                Arr.map(getCurrentTools(convertToLlm(compactedMessages)), (tool) => tool.name),
-              ).toEqual([previousTool(round)]);
-              expect(compactedPrompt).toContain(
-                round === 0 ? "initial rules" : `updated rules ${round - 1}`,
-              );
-              const filteredCompacted = yield* service.filterContext(compactedMessages);
-              const compactedInput = responsesInput(
-                requestModel,
-                filteredCompacted ?? compactedMessages,
-              );
-              const compactedPayload = yield* service.inject({ input: compactedInput });
-              expect(compactedPayload?.input).toHaveLength(2);
-              expect(compactedPayload?.input[1]).toMatchObject({
-                encrypted_content: `checkpoint-${round + 1}`,
-              });
-              expect(
-                Arr.filter(manager.buildContextEntries(), (item) => item.type === "compaction"),
-              ).toHaveLength(1);
-              expect((yield* service.compact(compactEvent()).pipe(Effect.result))._tag).toBe(
-                "Failure",
-              );
-            });
-          const injectTail = (round: number) =>
-            Effect.gen(function* () {
-              const messages = manager.buildSessionContext().messages;
-              const filtered = yield* service.filterContext(messages);
-              const input = responsesInput(requestModel, filtered ?? messages);
-              const injected = yield* service.inject({ input });
-              expect(injected?.input).toHaveLength(supportsMidConvoSystemMessages ? 6 : 5);
-              expect(
-                Str.split(serializedSnapshot(injected?.input), `new question ${round}`),
-              ).toHaveLength(2);
-              expect(injected?.input.slice(-2)).toEqual(input.slice(-2));
-              expect(injected?.input[1]).toMatchObject({
-                encrypted_content: `checkpoint-${round + 1}`,
-              });
-            });
-          for (let round = 0; round < 4; round++) {
-            yield* compactRound(round);
-            appendRoundTail(manager, round);
-            yield* injectTail(round);
-          }
-          expect(requests[1]?.instructions).toContain("updated rules 0");
-          expect(requests[1]?.input).toHaveLength(supportsMidConvoSystemMessages ? 5 : 4);
-          expect(serializedSnapshot(requests[2]?.input)).not.toContain("new question 0");
-          expect(serializedSnapshot(requests[2]?.input)).not.toContain("updated rules 0");
-          expect(Arr.filter(manager.getEntries(), (entry) => entry.type === "usage")).toHaveLength(
-            0,
-          );
-          expect(
-            Arr.map(
-              Arr.filter(manager.getEntries(), (entry) => entry.type === "compaction"),
-              (entry) => entry.usage?.totalTokens,
-            ),
-          ).toEqual([15, 15, 15, 15]);
-          manager.appendCompaction("ordinary summary", manager.getLeafId(), 10);
-          expect(yield* service.inject({ input: [] })).toBeUndefined();
-          expect(
-            yield* service.filterContext(manager.buildSessionContext().messages),
-          ).toBeUndefined();
-        }).pipe(provideBuiltLayer(serviceLayer(target, client)));
-      },
-    );
-  }
-  for (const supportsMidConvoSystemMessages of [false]) {
-    for (const anchor of ["system", "custom", "usage", "assistant"] as const) {
-      it.effect(
-        `reuses checkpoints with a retained ${anchor} anchor, mid-conversation=${supportsMidConvoSystemMessages}`,
-        () => {
-          const manager = SessionManager.inMemory("/virtual/anchors");
-          const requestModel = { ...testModel(), compat: { supportsMidConvoSystemMessages } };
-          manager.appendMessage({ role: "system", content: "opaque anchor rules", timestamp: 0 });
-          const target = fixture({ enabled: true, currentModel: requestModel, manager });
-          const { requests, client } = recordingClient("anchor");
-          return Effect.gen(function* () {
-            const service = yield* OpenAICompactionService;
-            for (let round = 0; round < 3; round++) {
-              manager.appendMessage({
-                role: "user",
-                content: `question-${round}`,
-                timestamp: round + 1,
-              });
-              if (anchor === "system")
-                manager.appendMessage({
-                  role: "system",
-                  content: "",
-                  sections: { rules: `rule-${round}` },
-                  timestamp: round + 10,
-                });
-              if (anchor === "custom") manager.appendCustomEntry("anchor", { round });
-              if (anchor === "usage")
-                manager.appendUsage("test", "openai", requestModel.id, zeroUsage);
-              if (anchor === "assistant")
-                manager.appendMessage(
-                  assistantMessage([{ type: "text", text: `answer-${round}` }], {
-                    timestamp: round + 10,
-                  }),
-                );
-              commit(manager, yield* service.compact(compactEvent()));
-              const messages = manager.buildSessionContext().messages;
-              const filtered = yield* service.filterContext(messages);
-              const input = responsesInput(requestModel, filtered ?? messages);
-              const injected = yield* service.inject({ input });
-              expect(injected?.input).toHaveLength(2);
-              expect(injected?.input[1]).toMatchObject({
-                encrypted_content: `anchor-${round + 1}`,
-              });
-              expect(
-                Str.split(serializedSnapshot(injected?.input), "opaque anchor rules"),
-              ).toHaveLength(2);
-              const requestText = serializedSnapshot(requests[round]?.input);
-              expect(Str.split(requestText, `question-${round}`)).toHaveLength(2);
-              if (round > 0) {
-                expect(requestText).toContain(`anchor-${round}`);
-                expect(requestText).not.toContain(`question-${round - 1}`);
-                expect(requestText).not.toContain(`answer-${round - 1}`);
-              }
-            }
-          }).pipe(provideBuiltLayer(serviceLayer(target, client)));
+  it.effect(
+    "preserves native context across repeated compactions with mid-conversation system messages",
+    () => {
+      const manager = SessionManager.inMemory("/virtual/compaction-test");
+      const requestModel = {
+        ...testModel(),
+        compat: { supportsMidConvoSystemMessages: true },
+        cost: {
+          input: 1,
+          output: 2,
+          cacheRead: 0.5,
+          cacheWrite: 0,
+          tiers: [{ inputTokensAbove: 10, input: 4, output: 8, cacheRead: 2, cacheWrite: 0 }],
         },
-      );
-    }
+      };
+      manager.appendMessage({
+        role: "system",
+        content: "opaque initial content",
+        sections: { rules: "initial rules" },
+        toolsAdded: [{ name: "old", description: "old tool", parameters: { type: "object" } }],
+        timestamp: 1,
+      });
+      manager.appendMessage({ role: "user", content: "first question", timestamp: 2 });
+      const target = fixture({ enabled: true, currentModel: requestModel, manager });
+      const { requests, client } = recordingClient("checkpoint", {
+        inputTokens: 12,
+        cachedInputTokens: 5,
+        outputTokens: 3,
+        totalTokens: 15,
+      });
+      return Effect.gen(function* () {
+        const service = yield* OpenAICompactionService;
+        const compactRound = (round: number) =>
+          Effect.gen(function* () {
+            const firstId = manager.getBranch()[0]!.id;
+            const result = commit(manager, yield* service.compact(compactEvent(firstId)));
+            expect(result.usage).toMatchObject({
+              input: 7,
+              output: 3,
+              cacheRead: 5,
+              cacheWrite: 0,
+              totalTokens: 15,
+            });
+            expect(result.usage?.cost.total).toBeCloseTo(0.000062);
+            const compactedMessages = manager.buildSessionContext().messages;
+            const compactedPrompt = getCurrentSystemPrompt(convertToLlm(compactedMessages));
+            expect(Str.split(compactedPrompt, "opaque initial content")).toHaveLength(2);
+            expect(
+              Arr.map(getCurrentTools(convertToLlm(compactedMessages)), (tool) => tool.name),
+            ).toEqual([previousTool(round)]);
+            expect(compactedPrompt).toContain(
+              round === 0 ? "initial rules" : `updated rules ${round - 1}`,
+            );
+            const filteredCompacted = yield* service.filterContext(compactedMessages);
+            const compactedInput = responsesInput(
+              requestModel,
+              filteredCompacted ?? compactedMessages,
+            );
+            const compactedPayload = yield* service.inject({ input: compactedInput });
+            expect(compactedPayload?.input).toHaveLength(2);
+            expect(compactedPayload?.input[1]).toMatchObject({
+              encrypted_content: `checkpoint-${round + 1}`,
+            });
+            expect(
+              Arr.filter(manager.buildContextEntries(), (item) => item.type === "compaction"),
+            ).toHaveLength(1);
+            expect((yield* service.compact(compactEvent()).pipe(Effect.result))._tag).toBe(
+              "Failure",
+            );
+          });
+        const injectTail = (round: number) =>
+          Effect.gen(function* () {
+            const messages = manager.buildSessionContext().messages;
+            const filtered = yield* service.filterContext(messages);
+            const input = responsesInput(requestModel, filtered ?? messages);
+            const injected = yield* service.inject({ input });
+            expect(injected?.input).toHaveLength(6);
+            expect(
+              Str.split(serializedSnapshot(injected?.input), `new question ${round}`),
+            ).toHaveLength(2);
+            expect(injected?.input.slice(-2)).toEqual(input.slice(-2));
+            expect(injected?.input[1]).toMatchObject({
+              encrypted_content: `checkpoint-${round + 1}`,
+            });
+          });
+        for (let round = 0; round < 4; round++) {
+          yield* compactRound(round);
+          appendRoundTail(manager, round);
+          yield* injectTail(round);
+        }
+        expect(requests[1]?.instructions).toContain("updated rules 0");
+        expect(requests[1]?.input).toHaveLength(5);
+        expect(serializedSnapshot(requests[2]?.input)).not.toContain("new question 0");
+        expect(serializedSnapshot(requests[2]?.input)).not.toContain("updated rules 0");
+        expect(Arr.filter(manager.getEntries(), (entry) => entry.type === "usage")).toHaveLength(0);
+        expect(
+          Arr.map(
+            Arr.filter(manager.getEntries(), (entry) => entry.type === "compaction"),
+            (entry) => entry.usage?.totalTokens,
+          ),
+        ).toEqual([15, 15, 15, 15]);
+        manager.appendCompaction("ordinary summary", manager.getLeafId(), 10);
+        expect(yield* service.inject({ input: [] })).toBeUndefined();
+        expect(
+          yield* service.filterContext(manager.buildSessionContext().messages),
+        ).toBeUndefined();
+      }).pipe(provideBuiltLayer(serviceLayer(target, client)));
+    },
+  );
+  for (const anchor of ["system", "custom", "usage", "assistant"] as const) {
+    it.effect(`reuses checkpoints with a retained ${anchor} anchor`, () => {
+      const manager = SessionManager.inMemory("/virtual/anchors");
+      const requestModel = { ...testModel(), compat: { supportsMidConvoSystemMessages: false } };
+      manager.appendMessage({ role: "system", content: "opaque anchor rules", timestamp: 0 });
+      const target = fixture({ enabled: true, currentModel: requestModel, manager });
+      const { requests, client } = recordingClient("anchor");
+      return Effect.gen(function* () {
+        const service = yield* OpenAICompactionService;
+        for (let round = 0; round < 3; round++) {
+          manager.appendMessage({
+            role: "user",
+            content: `question-${round}`,
+            timestamp: round + 1,
+          });
+          if (anchor === "system")
+            manager.appendMessage({
+              role: "system",
+              content: "",
+              sections: { rules: `rule-${round}` },
+              timestamp: round + 10,
+            });
+          if (anchor === "custom") manager.appendCustomEntry("anchor", { round });
+          if (anchor === "usage") manager.appendUsage("test", "openai", requestModel.id, zeroUsage);
+          if (anchor === "assistant")
+            manager.appendMessage(
+              assistantMessage([{ type: "text", text: `answer-${round}` }], {
+                timestamp: round + 10,
+              }),
+            );
+          commit(manager, yield* service.compact(compactEvent()));
+          const messages = manager.buildSessionContext().messages;
+          const filtered = yield* service.filterContext(messages);
+          const input = responsesInput(requestModel, filtered ?? messages);
+          const injected = yield* service.inject({ input });
+          expect(injected?.input).toHaveLength(2);
+          expect(injected?.input[1]).toMatchObject({
+            encrypted_content: `anchor-${round + 1}`,
+          });
+          expect(
+            Str.split(serializedSnapshot(injected?.input), "opaque anchor rules"),
+          ).toHaveLength(2);
+          const requestText = serializedSnapshot(requests[round]?.input);
+          expect(Str.split(requestText, `question-${round}`)).toHaveLength(2);
+          if (round > 0) {
+            expect(requestText).toContain(`anchor-${round}`);
+            expect(requestText).not.toContain(`question-${round - 1}`);
+            expect(requestText).not.toContain(`answer-${round - 1}`);
+          }
+        }
+      }).pipe(provideBuiltLayer(serviceLayer(target, client)));
+    });
   }
 
   for (const { supportsMidConvoEffort, reasoning, configurationUpdates } of [
@@ -603,44 +591,41 @@ describe("OpenAICompactionService", () => {
     });
   });
 
-  for (const replacement of [{ content: "revised covered dialogue" }])
-    it.effect(
-      `does not encrypt obsolete context after a persisted ${replacement ? "replacement" : "omission"}`,
-      () => {
-        const manager = SessionManager.inMemory("/virtual/edited-checkpoints");
-        manager.appendMessage({ role: "system", content: "rules", timestamp: 0 });
-        const covered = manager.appendMessage({
-          role: "user",
-          content: "raw original dialogue",
-          timestamp: 1,
-        });
-        manager.appendContextEdit(covered, { content: "initial edited dialogue" });
-        const target = fixture({ enabled: true, manager });
-        const { requests, client } = recordingClient("edited-checkpoint");
-        return Effect.gen(function* () {
-          const service = yield* OpenAICompactionService;
-          commit(manager, yield* service.compact(compactEvent()));
-          expect(serializedSnapshot(requests[0]?.input)).toContain("initial edited dialogue");
-          expect(serializedSnapshot(requests[0]?.input)).not.toContain("raw original dialogue");
-          manager.appendContextEdit(covered, replacement);
-          const messages = yield* service.filterContext(manager.buildSessionContext().messages);
-          expect(serializedSnapshot(messages)).not.toContain("initial edited dialogue");
-          const input = responsesInput(testModel(), messages!);
-          expect(yield* service.inject({ input })).toBeUndefined();
-          manager.appendMessage({ role: "user", content: "new tail", timestamp: 2 });
-          commit(manager, yield* service.compact(compactEvent()));
-          const text = serializedSnapshot(requests[1]?.input);
-          expect(text).not.toContain("edited-checkpoint-1");
-          expect(text).not.toContain("initial edited dialogue");
-          expect(text).not.toContain("raw original dialogue");
-          expect(text).toContain("new tail");
-          if (replacement) expect(text).toContain(replacement.content);
-          const repaired = yield* service.filterContext(manager.buildSessionContext().messages);
-          const injected = yield* service.inject({ input: responsesInput(testModel(), repaired!) });
-          expect(serializedSnapshot(injected?.input)).toContain("edited-checkpoint-2");
-        }).pipe(provideBuiltLayer(serviceLayer(target, client)));
-      },
-    );
+  it.effect("does not encrypt obsolete context after a persisted replacement", () => {
+    const manager = SessionManager.inMemory("/virtual/edited-checkpoints");
+    manager.appendMessage({ role: "system", content: "rules", timestamp: 0 });
+    const covered = manager.appendMessage({
+      role: "user",
+      content: "raw original dialogue",
+      timestamp: 1,
+    });
+    manager.appendContextEdit(covered, { content: "initial edited dialogue" });
+    const target = fixture({ enabled: true, manager });
+    const replacement = { content: "revised covered dialogue" };
+    const { requests, client } = recordingClient("edited-checkpoint");
+    return Effect.gen(function* () {
+      const service = yield* OpenAICompactionService;
+      commit(manager, yield* service.compact(compactEvent()));
+      expect(serializedSnapshot(requests[0]?.input)).toContain("initial edited dialogue");
+      expect(serializedSnapshot(requests[0]?.input)).not.toContain("raw original dialogue");
+      manager.appendContextEdit(covered, replacement);
+      const messages = yield* service.filterContext(manager.buildSessionContext().messages);
+      expect(serializedSnapshot(messages)).not.toContain("initial edited dialogue");
+      const input = responsesInput(testModel(), messages!);
+      expect(yield* service.inject({ input })).toBeUndefined();
+      manager.appendMessage({ role: "user", content: "new tail", timestamp: 2 });
+      commit(manager, yield* service.compact(compactEvent()));
+      const text = serializedSnapshot(requests[1]?.input);
+      expect(text).not.toContain("edited-checkpoint-1");
+      expect(text).not.toContain("initial edited dialogue");
+      expect(text).not.toContain("raw original dialogue");
+      expect(text).toContain("new tail");
+      expect(text).toContain(replacement.content);
+      const repaired = yield* service.filterContext(manager.buildSessionContext().messages);
+      const injected = yield* service.inject({ input: responsesInput(testModel(), repaired!) });
+      expect(serializedSnapshot(injected?.input)).toContain("edited-checkpoint-2");
+    }).pipe(provideBuiltLayer(serviceLayer(target, client)));
+  });
 
   for (const mode of ["disabled", "model", "provider", "endpoint"] as const) {
     it.effect(`native fallback restores complete dialogue after ${mode}`, () => {
@@ -657,17 +642,7 @@ describe("OpenAICompactionService", () => {
           expect(options?.reasoning).toBe("high");
           expect(options?.sessionId).toBe(manager.getSessionId());
           expect(options?.signal?.aborted).toBe(false);
-          const stream = createAssistantMessageEventStream();
-          stream.push({
-            type: "done",
-            reason: "stop",
-            message: assistantMessage([{ type: "text", text: "native summary" }], {
-              api: requestModel.api,
-              provider: requestModel.provider,
-              model: requestModel.id,
-            }),
-          });
-          return stream;
+          return summaryStream(requestModel);
         },
       });
       const client: OpenAICompactionClientContract["compact"] = () =>
@@ -709,92 +684,88 @@ describe("OpenAICompactionService", () => {
     });
   }
 
-  for (const supportsMidConvoSystemMessages of [false]) {
-    it.effect(
-      `preserves native retry omissions across turns, compactions, and reload, mid-conversation=${supportsMidConvoSystemMessages}`,
-      () => {
-        const manager = SessionManager.inMemory("/virtual/retry-omissions");
-        const requestModel = { ...testModel(), compat: { supportsMidConvoSystemMessages } };
-        manager.appendMessage({ role: "system", content: "retry rules", timestamp: 0 });
-        manager.appendMessage({ role: "user", content: "original question", timestamp: 1 });
-        const target = fixture({ enabled: true, manager, currentModel: requestModel });
-        const omitted = new Set<string>();
-        const nativeMessages = () =>
-          Arr.flatMap(
-            Arr.filter(manager.buildContextEntries(), (entry) => !omitted.has(entry.id)),
-            sessionEntryToContextMessages,
-          );
-        const { requests, client } = recordingClient("retry-checkpoint");
-        return Effect.gen(function* () {
-          const service = yield* OpenAICompactionService;
-          commit(manager, yield* service.compact(compactEvent()));
-          manager.appendMessage({ role: "user", content: "retry question", timestamp: 2 });
-          const failedId = appendAssistant(manager, "error", "503 failed response", 3);
-          omitted.add(failedId);
-          const retryContext = yield* service.filterContext(nativeMessages());
-          expect(serializedSnapshot(retryContext)).toContain("original question");
-          expect(serializedSnapshot(retryContext)).not.toContain("503 failed response");
-          appendAssistant(manager, "stop", "successful retry", 4);
-          manager.appendMessage({ role: "user", content: "subsequent turn", timestamp: 5 });
-          const subsequent = yield* service.filterContext(nativeMessages());
-          expect(serializedSnapshot(subsequent)).toContain("successful retry");
-          expect(serializedSnapshot(subsequent)).not.toContain("503 failed response");
-          const second = commit(manager, yield* service.compact(compactEvent()));
-          expect(
-            decodeOpenAICompactionDetails(second.details)?.checkpoint.omittedEntryIds,
-          ).toContain(failedId);
-          manager.appendMessage({ role: "user", content: "overflow question", timestamp: 6 });
-          const truncatedId = appendAssistant(manager, "length", "TRUNCATED MUST NOT RESURRECT", 7);
-          const overflowEvent = { ...compactEvent(), reason: "overflow" as const, willRetry: true };
-          const overflow = commit(manager, yield* service.compact(overflowEvent));
-          expect(serializedSnapshot(requests.at(-1)?.input)).not.toContain(
-            "TRUNCATED MUST NOT RESURRECT",
-          );
-          expect(
-            decodeOpenAICompactionDetails(overflow.details)?.checkpoint.omittedEntryIds,
-          ).toEqual([failedId, truncatedId]);
-          omitted.add(truncatedId);
-          const continued = yield* service.filterContext(nativeMessages());
-          expect(serializedSnapshot(continued)).toContain("overflow question");
-          expect(serializedSnapshot(continued)).not.toContain("TRUNCATED MUST NOT RESURRECT");
-          const input = responsesInput(requestModel, continued!);
-          const injected = yield* service.inject({ input });
-          expect(
-            injected &&
-              Arr.filter(
-                injected.input,
-                (item: ReturnType<typeof responsesInput>[number]) => item.type === "compaction",
-              ),
-          ).toHaveLength(1);
-          manager.appendMessage({ role: "user", content: "after overflow", timestamp: 8 });
-          yield* service.filterContext(nativeMessages());
-          commit(manager, yield* service.compact(compactEvent()));
-          expect(serializedSnapshot(requests.at(-1)?.input)).not.toContain(
-            "TRUNCATED MUST NOT RESURRECT",
-          );
-          const reloaded = fixture({ enabled: true, manager, currentModel: requestModel });
-          yield* Effect.gen(function* () {
-            const fresh = yield* OpenAICompactionService;
-            const restored = yield* fresh.filterContext(manager.buildSessionContext().messages);
-            expect(serializedSnapshot(restored)).toContain("successful retry");
-            expect(serializedSnapshot(restored)).toContain("overflow question");
-            expect(serializedSnapshot(restored)).not.toContain("TRUNCATED MUST NOT RESURRECT");
-            expect(serializedSnapshot(restored)).not.toContain("503 failed response");
-            const optimized = yield* fresh.inject({
-              input: responsesInput(requestModel, restored!),
-            });
-            expect(
-              optimized &&
-                Arr.filter(
-                  optimized.input,
-                  (item: ReturnType<typeof responsesInput>[number]) => item.type === "compaction",
-                ),
-            ).toHaveLength(1);
-          }).pipe(provideBuiltLayer(serviceLayer(reloaded, client)));
-        }).pipe(provideBuiltLayer(serviceLayer(target, client)));
-      },
-    );
-  }
+  it.effect("preserves native retry omissions across turns, compactions, and reload", () => {
+    const manager = SessionManager.inMemory("/virtual/retry-omissions");
+    const requestModel = { ...testModel(), compat: { supportsMidConvoSystemMessages: false } };
+    manager.appendMessage({ role: "system", content: "retry rules", timestamp: 0 });
+    manager.appendMessage({ role: "user", content: "original question", timestamp: 1 });
+    const target = fixture({ enabled: true, manager, currentModel: requestModel });
+    const omitted = new Set<string>();
+    const nativeMessages = () =>
+      Arr.flatMap(
+        Arr.filter(manager.buildContextEntries(), (entry) => !omitted.has(entry.id)),
+        sessionEntryToContextMessages,
+      );
+    const { requests, client } = recordingClient("retry-checkpoint");
+    return Effect.gen(function* () {
+      const service = yield* OpenAICompactionService;
+      commit(manager, yield* service.compact(compactEvent()));
+      manager.appendMessage({ role: "user", content: "retry question", timestamp: 2 });
+      const failedId = appendAssistant(manager, "error", "503 failed response", 3);
+      omitted.add(failedId);
+      const retryContext = yield* service.filterContext(nativeMessages());
+      expect(serializedSnapshot(retryContext)).toContain("original question");
+      expect(serializedSnapshot(retryContext)).not.toContain("503 failed response");
+      appendAssistant(manager, "stop", "successful retry", 4);
+      manager.appendMessage({ role: "user", content: "subsequent turn", timestamp: 5 });
+      const subsequent = yield* service.filterContext(nativeMessages());
+      expect(serializedSnapshot(subsequent)).toContain("successful retry");
+      expect(serializedSnapshot(subsequent)).not.toContain("503 failed response");
+      const second = commit(manager, yield* service.compact(compactEvent()));
+      expect(decodeOpenAICompactionDetails(second.details)?.checkpoint.omittedEntryIds).toContain(
+        failedId,
+      );
+      manager.appendMessage({ role: "user", content: "overflow question", timestamp: 6 });
+      const truncatedId = appendAssistant(manager, "length", "TRUNCATED MUST NOT RESURRECT", 7);
+      const overflowEvent = { ...compactEvent(), reason: "overflow" as const, willRetry: true };
+      const overflow = commit(manager, yield* service.compact(overflowEvent));
+      expect(serializedSnapshot(requests.at(-1)?.input)).not.toContain(
+        "TRUNCATED MUST NOT RESURRECT",
+      );
+      expect(decodeOpenAICompactionDetails(overflow.details)?.checkpoint.omittedEntryIds).toEqual([
+        failedId,
+        truncatedId,
+      ]);
+      omitted.add(truncatedId);
+      const continued = yield* service.filterContext(nativeMessages());
+      expect(serializedSnapshot(continued)).toContain("overflow question");
+      expect(serializedSnapshot(continued)).not.toContain("TRUNCATED MUST NOT RESURRECT");
+      const input = responsesInput(requestModel, continued!);
+      const injected = yield* service.inject({ input });
+      expect(
+        injected &&
+          Arr.filter(
+            injected.input,
+            (item: ReturnType<typeof responsesInput>[number]) => item.type === "compaction",
+          ),
+      ).toHaveLength(1);
+      manager.appendMessage({ role: "user", content: "after overflow", timestamp: 8 });
+      yield* service.filterContext(nativeMessages());
+      commit(manager, yield* service.compact(compactEvent()));
+      expect(serializedSnapshot(requests.at(-1)?.input)).not.toContain(
+        "TRUNCATED MUST NOT RESURRECT",
+      );
+      const reloaded = fixture({ enabled: true, manager, currentModel: requestModel });
+      yield* Effect.gen(function* () {
+        const fresh = yield* OpenAICompactionService;
+        const restored = yield* fresh.filterContext(manager.buildSessionContext().messages);
+        expect(serializedSnapshot(restored)).toContain("successful retry");
+        expect(serializedSnapshot(restored)).toContain("overflow question");
+        expect(serializedSnapshot(restored)).not.toContain("TRUNCATED MUST NOT RESURRECT");
+        expect(serializedSnapshot(restored)).not.toContain("503 failed response");
+        const optimized = yield* fresh.inject({
+          input: responsesInput(requestModel, restored!),
+        });
+        expect(
+          optimized &&
+            Arr.filter(
+              optimized.input,
+              (item: ReturnType<typeof responsesInput>[number]) => item.type === "compaction",
+            ),
+        ).toHaveLength(1);
+      }).pipe(provideBuiltLayer(serviceLayer(reloaded, client)));
+    }).pipe(provideBuiltLayer(serviceLayer(target, client)));
+  });
 
   it.effect("injects existing checkpoints while Pi creates new compactions", () => {
     const manager = SessionManager.inMemory("/virtual/version-mismatch");

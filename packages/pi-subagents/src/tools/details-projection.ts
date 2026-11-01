@@ -66,6 +66,7 @@ import {
   type ModelOverrideCard,
   type SubagentAgentRouteCard,
   type SubagentCardFailure,
+  type SubagentProfileCandidateCard,
   type SubagentProfileRouteCard,
   type SubagentRunCard,
   type SubagentStartEntry,
@@ -563,26 +564,23 @@ export const projectInvalidAgents = (
     return name === undefined ? { scope: entry.scope } : { scope: entry.scope, name };
   });
 
-export const condenseAgentRoute = (agent: SubagentAgentRouteCard): SubagentAgentRouteCard => ({
-  ...agent,
-  description: condensed(agent.description),
-  candidates: Arr.map(agent.candidates, (candidate) => ({
-    ...candidate,
-    reason: condensed(candidate.reason),
-  })),
-});
-
 export const projectSubagentProfileRoutes = (
   profiles: ReadonlyArray<SubagentProfileView>,
 ): ReadonlyArray<SubagentProfileRouteCard> =>
   Arr.map(profiles.slice(0, PROFILE_IDS.length), projectProfileRouteCard);
 
-export const condenseProfileRoute = (
-  profile: SubagentProfileRouteCard,
-): SubagentProfileRouteCard => ({
-  ...profile,
-  description: condensed(profile.description),
-  candidates: Arr.map(profile.candidates, (candidate) => ({
+/** A profile or agent route with its description and candidate reasons condensed. */
+export const condenseRoute = <
+  Route extends {
+    readonly description: string;
+    readonly candidates: ReadonlyArray<SubagentProfileCandidateCard>;
+  },
+>(
+  route: Route,
+): Route => ({
+  ...route,
+  description: condensed(route.description),
+  candidates: Arr.map(route.candidates, (candidate) => ({
     ...candidate,
     reason: condensed(candidate.reason),
   })),

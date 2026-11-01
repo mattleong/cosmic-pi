@@ -7,6 +7,7 @@ import type * as Duration from "effect/Duration";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Fn from "effect/Function";
 import * as Logger from "effect/Logger";
 import * as Path from "effect/Path";
@@ -14,7 +15,6 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Str from "effect/String";
-import * as Tracer from "effect/Tracer";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as TestClock from "effect/testing/TestClock";
 import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer";
@@ -23,6 +23,7 @@ import {
   nodeFilePlatformLayer,
   runBoundedProcessNode,
 } from "pi-cosmic-core";
+import { makeCapturedTracer } from "pi-cosmic-core/testing";
 import { connect, createServer, type Socket } from "node:net";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
@@ -62,6 +63,7 @@ import {
   rogueListener,
   type RawPeer,
 } from "./support/raw-peer.ts";
+import { failureOf, hangingListener } from "./support/session-harness.ts";
 
 const TOKEN = Fn.pipe("a", Str.repeat(64));
 const OTHER_TOKEN = Fn.pipe("b", Str.repeat(64));
@@ -115,11 +117,6 @@ const startServer = (
     );
     return scope;
   });
-
-const failureOf = <A, E>(effect: Effect.Effect<A, E>) =>
-  Effect.map(Effect.result(effect), (result) =>
-    Result.isFailure(result) ? result.failure : undefined,
-  );
 
 /** Leaves a socket file behind with nothing listening, as a killed process does. */
 const abandonSocket = (socket: string) =>
@@ -195,27 +192,6 @@ const gatheringClock = (base: Clock.Clock, arrivals: number): Clock.Clock => {
 
 /** Text JSON escapes to six bytes a code unit, the most it spends on one. */
 const escaped = (length: number) => Fn.pipe("\u0001", Str.repeat(length));
-
-/** A listener at `socket` that takes connections and never answers them. */
-const hangingListener = (socket: string) =>
-  Effect.acquireRelease(
-    Effect.callback<{
-      readonly server: ReturnType<typeof createServer>;
-      readonly peers: Set<Socket>;
-    }>((resume) => {
-      const peers = new Set<Socket>();
-      const server = createServer((peer) => {
-        peer.on("error", () => undefined);
-        peers.add(peer);
-      });
-      server.listen(socket, () => resume(Effect.succeed({ server, peers })));
-    }),
-    ({ server, peers }) =>
-      Effect.callback<void>((resume) => {
-        server.close(() => resume(Effect.void));
-        for (const peer of peers) peer.destroy();
-      }),
-  );
 
 /** Forwards connections at `socket` to `target`, recording what clients send. */
 const recordingRelay = (socket: string, target: string) =>
@@ -650,21 +626,16 @@ layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom transport"
     Effect.gen(function* () {
       const socket = yield* socketPath;
       const logs: Array<unknown> = [];
-      const spans: Array<Tracer.NativeSpan> = [];
-      const tracer = Tracer.make({
-        span: (options) => {
-          const span = new Tracer.NativeSpan(options);
-          spans.push(span);
-          return span;
-        },
-      });
+      const tracer = makeCapturedTracer();
       const capture = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
         effect.pipe(
-          Effect.withTracer(tracer),
           Effect.provide(
-            Logger.layer([
-              Logger.make((options) => void logs.push(Logger.formatStructured.log(options))),
-            ]),
+            Layer.mergeAll(
+              tracer.layer,
+              Logger.layer([
+                Logger.make((options) => void logs.push(Logger.formatStructured.log(options))),
+              ]),
+            ),
           ),
         );
       const handled = yield* Deferred.make<void>();
@@ -689,7 +660,7 @@ layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom transport"
 
       const telemetry = yield* Schema.encodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))({
         logs,
-        spans: Arr.map(spans, (span) => ({
+        spans: Arr.map(tracer.spans, (span) => ({
           name: span.name,
           attributes: [...span.attributes],
           events: span.events,

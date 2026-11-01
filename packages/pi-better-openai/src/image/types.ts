@@ -126,7 +126,7 @@ export type CodexImageDetails = typeof CodexImageDetailsSchema.Type;
 
 export type ExtractedImageResult = Omit<
   CodexImageResult,
-  "prompt" | "savedPath" | "model" | "imageModel" | "action" | "outputFormat"
+  "prompt" | "mimeType" | "savedPath" | "model" | "imageModel" | "action" | "outputFormat"
 >;
 
 const OpenAIImageOperationSchema = Schema.Literals([

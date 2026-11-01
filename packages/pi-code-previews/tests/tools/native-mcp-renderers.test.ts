@@ -15,14 +15,7 @@ import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 
 const name = "mcp__team_docs__find_page";
-const metadata = (path = "builtin:mcp", exposure: ToolInfo["exposure"] = "direct"): ToolInfo => ({
-  name,
-  description: "Public native tool metadata, no label or execution",
-  parameters: { type: "object" },
-  namespace: { name: "mcp__team_docs" },
-  sourceInfo: { path, source: "builtin", scope: "temporary", origin: "top-level" },
-  exposure,
-});
+const metadata = (): Pick<ToolInfo, "namespace"> => ({ namespace: { name: "mcp__team_docs" } });
 const session = (
   scheduleAnimation = animationSchedulerProbe().schedule,
 ): CodePreviewRendererPresentation => ({

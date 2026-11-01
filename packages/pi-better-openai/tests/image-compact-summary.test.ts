@@ -4,9 +4,9 @@ import { issueMessageStyleProblems, renderContextFixture } from "pi-code-preview
 import { describe, expect, it } from "vitest";
 import { imageCompactSummary } from "../src/image/compact-summary.ts";
 import type { CodexImageDetails } from "../src/image/types.ts";
+import { pngPart } from "./image-fixtures.ts";
 
 type Input = Parameters<typeof imageCompactSummary>[0];
-const image = { type: "image" as const, data: "aW1hZ2U=", mimeType: "image/png" };
 const record = (status: string): CodexImageDetails => ({
   id: "image-1",
   status,
@@ -21,7 +21,10 @@ const input = (status = "completed", expanded = false): Input => ({
   phase: "settled",
   args: { prompt: "An otter", action: "generate" },
   context: renderContextFixture({ expanded }),
-  result: { content: [{ type: "text", text: "Generated image" }, image], details: record(status) },
+  result: {
+    content: [{ type: "text", text: "Generated image" }, pngPart],
+    details: record(status),
+  },
 });
 const styleProblems = (summary: ReturnType<typeof imageCompactSummary>) =>
   Arr.flatMap(summary?.issues ?? [], (issue) => issueMessageStyleProblems(issue.message));
@@ -39,7 +42,7 @@ describe("image compact summary", () => {
     expect(styleProblems(summary)).toEqual([]);
     expect(JSON.stringify(summary?.issues ?? [])).not.toContain("otter-image-1.png");
     expect(call.result).toEqual(before);
-    expect(call.result?.content[1]).toBe(image);
+    expect(call.result?.content[1]).toBe(pngPart);
   });
 });
 
@@ -49,7 +52,7 @@ describe("image result notes", () => {
     const note = "Codex returned webp instead of the requested png";
     const summary = imageCompactSummary({
       ...call,
-      result: { content: [image], details: { ...record("completed"), note } },
+      result: { content: [pngPart], details: { ...record("completed"), note } },
     });
     expect(summary?.outcome).toBe("success");
     expect(summary?.issues).toEqual([expect.objectContaining({ severity: "info" })]);

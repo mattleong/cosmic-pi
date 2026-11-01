@@ -253,7 +253,7 @@ const noticeBody = (
         width,
       ),
     );
-    if (!expanded) return rows.length > 0 ? rows.slice(0, 3) : [];
+    if (!expanded) return rows.slice(0, 3);
     return [
       ...rows,
       ...detailsSectionLines(

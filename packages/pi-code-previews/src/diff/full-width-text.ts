@@ -1,4 +1,3 @@
-import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
@@ -124,7 +123,8 @@ function deriveDiffBg(
   return `\x1b[48;2;${Math.round(base.r + (fgRgb.r - base.r) * intensity)};${Math.round(base.g + (fgRgb.g - base.g) * intensity)};${Math.round(base.b + (fgRgb.b - base.b) * intensity)}m`;
 }
 
-const DECIMAL_CHANNEL_RE = /^\d+$/;
+// Matches the text after the escape character's `[`, so the pattern holds no control character.
+const RGB_CHANNELS_RE = /^(?:38|48);2;(\d+);(\d+);(\d+)m/;
 
 function parseAnsiRgb(ansi: string): { r: number; g: number; b: number } | undefined {
   for (
@@ -132,17 +132,8 @@ function parseAnsiRgb(ansi: string): { r: number; g: number; b: number } | undef
     index >= 0;
     index = indexOfFrom(ansi, "\x1b[", index + 1)
   ) {
-    const kind = Fn.pipe(ansi, Str.slice(index + 2, index + 7));
-    if (kind !== "38;2;" && kind !== "48;2;") continue;
-    const end = indexOfFrom(ansi, "m", index + 7);
-    if (end < 0) continue;
-    const channels = Str.split(Fn.pipe(ansi, Str.slice(index + 7, end)), ";");
-    if (
-      channels.length !== 3 ||
-      !Arr.every(channels, (channel) => DECIMAL_CHANNEL_RE.test(channel))
-    )
-      continue;
-    return { r: Number(channels[0]), g: Number(channels[1]), b: Number(channels[2]) };
+    const channels = RGB_CHANNELS_RE.exec(Fn.pipe(ansi, Str.slice(index + 2)));
+    if (channels) return { r: Number(channels[1]), g: Number(channels[2]), b: Number(channels[3]) };
   }
   return undefined;
 }

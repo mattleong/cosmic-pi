@@ -1,6 +1,5 @@
 import {
   applyPresentationSettings,
-  captureRegistrations,
   createToolPresentationHarness,
   issueMessageStyleProblems,
   renderContextFixture,
@@ -13,12 +12,11 @@ import { SUBAGENT_TOOL_NAME } from "../../src/run/tool-policy.ts";
 import { createSubagentCompactSummary } from "../../src/tools/compact-summary.ts";
 import { decodeStartAwaitCardDetails } from "../../src/tools/details-decode.ts";
 import { awaitDetails } from "../../src/tools/details.ts";
-import { registerSubagentTools } from "../../src/tools/subagent.ts";
-import { view } from "./fixtures/tool-harness.ts";
+import { captureSubagentTools, view } from "./fixtures/tool-harness.ts";
+import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
 
 const ARCHIVE_PATH = "/agent/subagents/reports/session-1/agent-1-1-archive.md";
 
@@ -56,23 +54,9 @@ const summarize = (run: SubagentRunView) =>
   });
 
 const awaitTool = () =>
-  Option.getOrUndefined(
-    Arr.findFirst(
-      captureRegistrations((pi) =>
-        registerSubagentTools(pi, {
-          environment: { cwd: "/project", projectTrusted: false },
-          run: () => Promise.reject(new Error("render-only fixture")),
-          startUiTicker: () => () => undefined,
-          toolPresentation: {
-            beginStart: () => () => undefined,
-            beginAwait: () => () => undefined,
-            isLiveHierarchyAvailable: () => false,
-          },
-        }),
-      ).tools,
-      (tool) => tool.name === SUBAGENT_TOOL_NAME.await,
-    ),
-  )!;
+  captureSubagentTools(subagentServiceDouble({}), {
+    environment: { cwd: "/project", projectTrusted: false },
+  }).get(SUBAGENT_TOOL_NAME.await)!;
 
 const restoreSettings: Array<() => void> = [];
 

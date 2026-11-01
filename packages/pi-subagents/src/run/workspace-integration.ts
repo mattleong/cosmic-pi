@@ -11,6 +11,7 @@ import { isCleanupOwed } from "./internal.ts";
 import { isActiveRunState } from "./model.ts";
 import {
   type HeldBinding,
+  integrationQuarantinedError,
   isTreeInUse,
   mapWorkspaceError,
   overlaps,
@@ -175,11 +176,7 @@ export function workspaceIntegrationOperations(
       Effect.gen(function* () {
         yield* beforeLocked;
         yield* requireBinding(workspaceId, caller, token);
-        if (state.integrationQuarantined)
-          return yield* invalid(
-            "workspace_integration_quarantined",
-            "Integration ownership is quarantined; further integration is blocked pending manual recovery.",
-          );
+        if (state.integrationQuarantined) return yield* integrationQuarantinedError();
         yield* checkout.requireIdleLocked(sourceRoot);
         const knowledge = revisionKnowledge(binding);
         const recorded =

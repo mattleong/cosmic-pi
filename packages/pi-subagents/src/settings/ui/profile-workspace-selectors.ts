@@ -84,12 +84,8 @@ interface CandidateFieldSelectorOptions extends SharedSelectorOptions {
   readonly cancel: () => void;
 }
 
-const currentFieldValue = (
-  candidate: ProfileCandidate,
-  field: SelectableCandidateField,
-): string => {
-  return field === "openaiFastMode" ? String(candidate[field]) : candidate[field];
-};
+const currentFieldValue = (candidate: ProfileCandidate, field: SelectableCandidateField): string =>
+  field === "openaiFastMode" ? String(candidate[field]) : candidate[field];
 
 export const candidateFieldSelector = (
   options: CandidateFieldSelectorOptions,

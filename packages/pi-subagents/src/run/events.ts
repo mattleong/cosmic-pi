@@ -1,4 +1,3 @@
-import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
@@ -52,26 +51,6 @@ type HandledBackendEvent = Exclude<
   BackendEvent,
   { readonly type: "usage" | "proxy_request" | "proxy_cancel" }
 >;
-
-const DELEGATED_EVENT_TYPES = [
-  "run_started",
-  "run_settled",
-  "assistant_message",
-  "tool_started",
-  "supervisor_contact",
-  "protocol_error",
-  "exit",
-] as const;
-
-type DelegatedBackendEvent = Extract<
-  HandledBackendEvent,
-  { readonly type: (typeof DELEGATED_EVENT_TYPES)[number] }
->;
-
-type ViewBackendEvent = Exclude<HandledBackendEvent, DelegatedBackendEvent>;
-
-const isDelegatedEvent = (event: HandledBackendEvent): event is DelegatedBackendEvent =>
-  Arr.some(DELEGATED_EVENT_TYPES, (type) => type === event.type);
 
 export function backendEventHandler(dependencies: RunEventDependencies) {
   const { settlement, queueQuestionLocked, onProxyEvent } = dependencies;
@@ -215,10 +194,14 @@ export function backendEventHandler(dependencies: RunEventDependencies) {
           );
   };
 
-  const handleDelegatedEvent = (
+  const handleEvent = (
     record: RunRecord,
-    event: DelegatedBackendEvent,
+    event: HandledBackendEvent,
   ): Effect.Effect<unknown, SubagentError> => {
+    if (event.type !== "exit" && isInactiveRunRecord(record))
+      return event.type === "assistant_message"
+        ? settlement.mergeLateUsage(record, event.assignmentEpoch, event.usage)
+        : Effect.void;
     switch (event.type) {
       case "run_started":
         return settlement.runStartedFromBackend(record, event.assignmentEpoch);
@@ -241,15 +224,6 @@ export function backendEventHandler(dependencies: RunEventDependencies) {
       }
       case "exit":
         return handleExit(record, event);
-    }
-    return Fn.absurd(event);
-  };
-
-  const handleViewEvent = (
-    record: RunRecord,
-    event: ViewBackendEvent,
-  ): Effect.Effect<unknown, SubagentError> => {
-    switch (event.type) {
       case "activity":
         return mutateAt(record, event.assignmentEpoch, (current, now) =>
           now - current.lastActivityAt < ACTIVITY_PUBLISH_INTERVAL_MILLIS
@@ -302,19 +276,6 @@ export function backendEventHandler(dependencies: RunEventDependencies) {
       }
     }
     return Fn.absurd(event);
-  };
-
-  const handleEvent = (
-    record: RunRecord,
-    event: HandledBackendEvent,
-  ): Effect.Effect<unknown, SubagentError> => {
-    if (event.type !== "exit" && isInactiveRunRecord(record))
-      return event.type === "assistant_message"
-        ? settlement.mergeLateUsage(record, event.assignmentEpoch, event.usage)
-        : Effect.void;
-    return isDelegatedEvent(event)
-      ? handleDelegatedEvent(record, event)
-      : handleViewEvent(record, event);
   };
 
   return (record: RunRecord, event: BackendEvent, source?: BackendHandle) => {

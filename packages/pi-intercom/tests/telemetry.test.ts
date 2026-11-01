@@ -5,9 +5,9 @@ import type * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as References from "effect/References";
 import * as Schema from "effect/Schema";
-import * as Tracer from "effect/Tracer";
 import * as TestClock from "effect/testing/TestClock";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
+import { makeCapturedTracer } from "pi-cosmic-core/testing";
 import { afterEach, vi } from "vitest";
 import type { intercomLayer } from "../src/layer.ts";
 import { listSessions, readSession, sendToSession } from "../src/tools/sessions.ts";
@@ -27,17 +27,10 @@ layer(nodeFilePlatformLayer)("intercom telemetry", (it) => {
   it.effect("keeps message text, identities, paths, and tokens out of logs and spans", () =>
     Effect.gen(function* () {
       const logs: Array<unknown> = [];
-      const spans: Array<Tracer.NativeSpan> = [];
-      const tracer = Tracer.make({
-        span: (options) => {
-          const span = new Tracer.NativeSpan(options);
-          spans.push(span);
-          return span;
-        },
-      });
+      const tracer = makeCapturedTracer();
       const capture = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
         effect.pipe(
-          Effect.withTracer(tracer),
+          Effect.provide(tracer.layer),
           Effect.provideService(References.MinimumLogLevel, "All"),
           Effect.provide(
             Logger.layer([
@@ -68,7 +61,7 @@ layer(nodeFilePlatformLayer)("intercom telemetry", (it) => {
       expect(b.sendMessage).toHaveBeenCalledOnce();
       const telemetry = yield* Schema.encodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))({
         logs,
-        spans: Arr.map(spans, (span) => ({
+        spans: Arr.map(tracer.spans, (span) => ({
           name: span.name,
           attributes: [...span.attributes],
           events: span.events,

@@ -17,14 +17,6 @@ export const captureRestoreDeclaration = (
     : undefined;
 };
 
-export const captureProfilePatchRoute = (
-  declaration: DeclaredProfileRoute | undefined,
-): { readonly route: DeclaredProfileRoute | undefined } | undefined => {
-  if (declaration === undefined) return { route: undefined };
-  const route = decodeDeclaredProfileRoute(declaration);
-  return route && { route };
-};
-
 export const candidateJson = (value: ProfileCandidate): JsonObject => ({
   model: value.model,
   effort: value.effort,

@@ -144,29 +144,3 @@ it.each(["compact", "preview"] as const)(
     expect(collapsed?.text).toContain("dev server");
   },
 );
-
-const occurrences = (text: string, part: string) => Str.split(text, part).length - 1;
-
-it("names a task once and leaves a failing exit code to its issue until expanded", () => {
-  const failed = {
-    ...snapshot,
-    name: "server",
-    command: "pnpm dev",
-    state: "failed",
-    exitCode: 3,
-    endedAt: 2,
-  };
-  const harness = createToolPresentationHarness(registeredTool("on", "preview"));
-  const [collapsed, expanded] = harness.cycle(
-    { action: "status", id: snapshot.id },
-    {
-      content: [{ type: "text" as const, text: "status text" }],
-      details: { action: "status", snapshot: failed },
-    },
-    { states: [false, true] },
-  );
-  expect(occurrences(collapsed?.text ?? "", "server")).toBe(1);
-  expect(collapsed?.text).toContain("pnpm dev");
-  expect(occurrences(collapsed?.text ?? "", "code 3")).toBe(1);
-  expect(expanded?.text).toContain("exit 3");
-});

@@ -12,6 +12,7 @@ import {
   exists,
   failureOf,
   io,
+  prepareIntegration,
   readText,
   temporaryDirectory,
   workspaceTarget,
@@ -43,16 +44,9 @@ const test = workspaceTests([
 ]);
 
 const integrate = (service: WorkspaceServiceContract, handle: WorkspaceHandle) =>
-  Effect.gen(function* () {
-    const target = workspaceTarget(handle);
-    const revision = yield* service.freeze(target);
-    const preparation = yield* service.prepare({ ...target, revisionId: revision.revisionId });
-    return yield* service.integrate({
-      ...target,
-      revisionId: revision.revisionId,
-      preparationId: preparation.preparationId,
-    });
-  });
+  prepareIntegration(service, handle).pipe(
+    Effect.flatMap(({ integration }) => service.integrate(integration)),
+  );
 
 const worktrees = (root: string) =>
   git(root, ["worktree", "list", "--porcelain"]).pipe(
@@ -258,18 +252,10 @@ describe("local edits the parent index hides", () => {
     test(`refuses to integrate once a changed file is marked ${bit}`, function* (service, root) {
       const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
       yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
-      const target = workspaceTarget(handle);
-      const revision = yield* service.freeze(target);
-      const preparation = yield* service.prepare({ ...target, revisionId: revision.revisionId });
+      const { integration } = yield* prepareIntegration(service, handle);
       yield* git(root, ["update-index", flag, "--", "src/main.ts"]);
       yield* writeFile(path.join(root, "src/main.ts"), "local override\n");
-      const refused = yield* failureOf(
-        service.integrate({
-          ...target,
-          revisionId: revision.revisionId,
-          preparationId: preparation.preparationId,
-        }),
-      );
+      const refused = yield* failureOf(service.integrate(integration));
       expect(refused.code).toBe("workspace_local_override");
       expect(refused.detail).toContain("src/main.ts");
       expect(yield* readText(root, "src/main.ts")).toBe("local override\n");
@@ -405,18 +391,10 @@ describe("source index identity", () => {
   test("integrates after the parent's index is only refreshed", function* (service, root) {
     const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
     yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
-    const revision = yield* service.freeze(workspaceTarget(handle));
-    const prepared = yield* service.prepare({
-      ...workspaceTarget(handle),
-      revisionId: revision.revisionId,
-    });
+    const { integration } = yield* prepareIntegration(service, handle);
     yield* touchLater(path.join(root, "docs/guide.md"));
     yield* git(root, ["update-index", "--refresh"]);
-    yield* service.integrate({
-      ...workspaceTarget(handle),
-      revisionId: revision.revisionId,
-      preparationId: prepared.preparationId,
-    });
+    yield* service.integrate(integration);
     expect(yield* readText(root, "src/main.ts")).toBe("worker\n");
   });
 });

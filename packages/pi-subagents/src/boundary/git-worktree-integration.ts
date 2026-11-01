@@ -12,6 +12,7 @@ import {
   git,
   gitFields,
   listedPaths,
+  nulTerminated,
   workspaceFailure,
   workspaceIO,
 } from "./git-worktree-process.ts";
@@ -25,14 +26,6 @@ import {
 
 // Checking out large files runs every filter, such as Git LFS, so it may take a while.
 const CHECKOUT_TIMEOUT_MILLIS = 10 * 60 * 1000;
-
-const nulTerminated = (lines: ReadonlyArray<string>) =>
-  new TextEncoder().encode(
-    Arr.join(
-      Arr.map(lines, (line) => `${line}\0`),
-      "",
-    ),
-  );
 
 /** Whether anything is at `name` in the checkout at `root`; a final symlink isn't followed. */
 const present = (root: string, name: string) =>

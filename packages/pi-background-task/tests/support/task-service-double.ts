@@ -1,6 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
+import { captureRegistrations } from "pi-code-previews/testing";
 import { utf8ByteLength } from "pi-cosmic-core";
 import type {
   BackgroundLogEvent,
@@ -16,6 +17,7 @@ import {
   BackgroundTaskService,
   type BackgroundTaskServiceContract,
 } from "../../src/task/service.ts";
+import { registerBackgroundTaskTool } from "../../src/tools/background-task.ts";
 
 const unexpected = (method: keyof BackgroundTaskServiceContract): Effect.Effect<never> =>
   Effect.die(new Error(`Unexpected BackgroundTaskService.${method} call in test fixture.`));
@@ -38,10 +40,16 @@ export const provideTaskService =
   <A, E>(effect: Effect.Effect<A, E, BackgroundTaskService | Path.Path>) =>
     effect.pipe(Effect.provideService(BackgroundTaskService, service), Effect.provide(Path.layer));
 
-export const taskServiceRunner =
+const taskServiceRunner =
   (service: BackgroundTaskServiceContract) =>
   <A, E>(effect: Effect.Effect<A, E, BackgroundTaskService | Path.Path>, signal?: AbortSignal) =>
     Effect.runPromise(provideTaskService(service)(effect), signal ? { signal } : undefined);
+
+/** The registered `background_task` tool backed by a service double. */
+export const registeredTaskTool = (service: Partial<BackgroundTaskServiceContract>) =>
+  captureRegistrations((pi) =>
+    registerBackgroundTaskTool(pi, { run: taskServiceRunner(taskServiceDouble(service)) }),
+  ).tools[0]!;
 
 export const taskStatus = (
   task: Pick<BackgroundTaskStatus, "id" | "state"> & Partial<BackgroundTaskStatus>,

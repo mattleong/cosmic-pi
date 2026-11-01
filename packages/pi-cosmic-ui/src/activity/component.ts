@@ -159,7 +159,9 @@ export class ActivityComponent {
       this.presentation.collapsed.delete(entry.id);
       this.presentation.expandedHistory.add(entry.id);
     }
-    const entries = this.entries();
+    this.selectId(this.entries(), id);
+  }
+  private selectId(entries: readonly GroupedActivityRow[], id: string): void {
     this.shell.select(
       Option.getOrElse(
         Arr.findFirstIndex(entries, (entry) => entry.id === id),
@@ -371,13 +373,7 @@ export class ActivityComponent {
       !Arr.some(entries, (entry) => entry.id === selected.parentId)
     )
       return false;
-    this.shell.select(
-      Option.getOrElse(
-        Arr.findFirstIndex(entries, (entry) => entry.id === selected.parentId),
-        () => -1,
-      ),
-      Arr.map(entries, (entry) => entry.id),
-    );
+    this.selectId(entries, selected.parentId);
     this.selected();
     this.flushCancellation();
     this.options.requestRender();

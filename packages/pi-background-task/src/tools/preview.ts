@@ -50,7 +50,7 @@ function taskPreviewLine(
   theme: PreviewTheme,
   { inHeading, expanded }: TaskLineOptions,
 ): string {
-  const state = taskStatePresentation(task.state, 0);
+  const state = taskStatePresentation(task.state);
   const status = expanded ? exitStatus(task) : undefined;
   return Arr.join(
     [
@@ -119,9 +119,12 @@ const EMPTY_LISTS = {
 
 const COLLAPSED_TAIL_LINES = 4;
 
+const outputLines = (text: string): string[] =>
+  Str.split(Fn.pipe(text, Str.replace(/\n+$/u, "")), "\n");
+
 /** The last few lines of a finished task's output, collapsed; expansion shows the full result. */
 function tailRows(tail: string | undefined, theme: PreviewTheme): Row[] {
-  const lines = tail ? Str.split(Fn.pipe(tail, Str.replace(/\n+$/u, "")), "\n") : [];
+  const lines = tail ? outputLines(tail) : [];
   if (lines.length === 0) return [];
   const shown = lines.slice(-COLLAPSED_TAIL_LINES);
   return [
@@ -251,7 +254,7 @@ function expandedSections(
       return headingShowsState ? [] : [{ rows: collapsedRows(details, text, args, theme) }];
     case "wait": {
       const { wait } = details;
-      const tail = wait.tail ? Str.split(Fn.pipe(wait.tail, Str.replace(/\n+$/u, "")), "\n") : [];
+      const tail = wait.tail ? outputLines(wait.tail) : [];
       const found = foundRows(wait, theme);
       return [
         ...taskLine(wait.snapshot),
@@ -306,8 +309,7 @@ function previewSections(input: BackgroundTaskPreviewInput, theme: PreviewTheme)
   if (Option.isNone(input.details)) {
     if (expanded) return [{ rows: rawRows(text, theme) }];
     if (input.isError) return [];
-    const lines = Fn.pipe(text, Str.replace(/\n+$/u, ""), Str.split("\n"));
-    return [{ rows: boundedLines(lines, "lines", theme) }];
+    return [{ rows: boundedLines(outputLines(text), "lines", theme) }];
   }
   const details = input.details.value;
   if (!expanded) return [{ rows: collapsedRows(details, text, args, theme) }];

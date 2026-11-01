@@ -15,6 +15,7 @@ import { vi } from "vitest";
 import {
   deferredPromise,
   extensionContextFixture,
+  footerDataFixture,
   modelFixture,
   plainTheme,
   recordingExtensionHost,
@@ -38,10 +39,12 @@ import {
 import { ACTIVITY_VIEW_DISCOVER } from "../src/activity/view-protocol.ts";
 import {
   abortablePendingExec,
+  assistantMessage,
   capturedSignal,
   eventBus,
   execOk,
   execResult,
+  nativeUsage,
 } from "./support/host.ts";
 
 function harness(dependencies?: CosmicUiApplicationDependencies) {
@@ -133,23 +136,17 @@ const advanceTimers = (millis: number) => Effect.promise(() => vi.advanceTimersB
 type FooterFactory = NonNullable<Parameters<ExtensionUIContext["setFooter"]>[0]>;
 type FooterData = Parameters<FooterFactory>[2];
 
-function footerData(overrides: Partial<FooterData> = {}): FooterData {
-  return {
-    getGitBranch: () => null,
-    getExtensionStatuses: () => new Map(),
-    getAvailableProviderCount: () => 1,
-    onBranchChange: () => vi.fn(),
-    ...overrides,
-  };
-}
-
 function makeFooter(
   factory: FooterFactory | undefined,
   data: Partial<FooterData> = {},
   requestRender: () => void = vi.fn(),
 ) {
   if (!factory) throw new Error("Expected an installed footer factory.");
-  const component = factory(tuiFixture({ requestRender }), plainTheme, footerData(data));
+  const component = factory(
+    tuiFixture({ requestRender }),
+    plainTheme,
+    footerDataFixture({ getAvailableProviderCount: () => 1, ...data }),
+  );
   if (!component.dispose) throw new Error("Expected a disposable footer.");
   return {
     render: (width: number) => component.render(width),
@@ -184,47 +181,13 @@ const withSession = (
 
 type SessionEntries = ReturnType<ExtensionContext["sessionManager"]["getEntries"]>;
 const entryBase = { id: "entry", parentId: null, timestamp: "2026-01-01T00:00:00Z" };
-const nativeUsage = (input: number) => ({
-  input,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: input,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-});
-
 function assistantEntries(...inputs: number[]): SessionEntries {
   return Arr.map(inputs, (input) => ({
-    id: entryBase.id,
-    parentId: entryBase.parentId,
-    timestamp: entryBase.timestamp,
+    ...entryBase,
     type: "message",
-    message: {
-      role: "assistant",
-      content: [],
-      api: "test",
-      provider: "test",
-      model: "test",
-      usage: nativeUsage(input),
-      stopReason: "stop",
-      timestamp: 0,
-    },
+    message: assistantMessage(nativeUsage(input)),
   }));
 }
-type AssistantMessage = Extract<
-  ExtensionEventNamed<"message_end">["message"],
-  { readonly role: "assistant" }
->;
-const assistantMessage = (usage = nativeUsage(0)): AssistantMessage => ({
-  role: "assistant",
-  content: [],
-  api: "test",
-  provider: "test",
-  model: "test",
-  usage,
-  stopReason: "stop",
-  timestamp: 0,
-});
 const turnEnd = (message = assistantMessage()): ExtensionEventNamed<"turn_end"> => ({
   type: "turn_end",
   turnIndex: 0,

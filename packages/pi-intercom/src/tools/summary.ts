@@ -16,6 +16,7 @@ import {
   type SessionView,
   type ToolRefusalCode,
 } from "./contract.ts";
+import { UNCERTAIN_TEXT } from "./text.ts";
 
 const MAX_SUBJECT_CHARS = 60;
 
@@ -69,22 +70,13 @@ export const refusalIssue = (refusal: SessionRefusal): CompactIssue => {
   };
 };
 
-const UNCERTAIN_DETAILS: Record<
-  Extract<SessionToolDetails, { readonly outcome: "uncertain" }>["reason"],
-  string
-> = {
-  timeout: "The session didn't answer in time",
-  disconnected: "The connection ended before the session answered",
-  protocol: "The session's answer couldn't be read",
-};
-
 export const uncertainIssue = (
   details: Extract<SessionToolDetails, { readonly outcome: "uncertain" }>,
 ): CompactIssue => ({
   severity: "warning",
   code: `${details.tool}:delivery_uncertain`,
   message: "The message may not have arrived",
-  detail: `${UNCERTAIN_DETAILS[details.reason]}, so it may or may not have received the message.`,
+  detail: `${Str.capitalize(UNCERTAIN_TEXT[details.reason])}, so it may or may not have received the message.`,
 });
 
 /** Delivery worth a word: a woken session reading the message at once is the plain case. */

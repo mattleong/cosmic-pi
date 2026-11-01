@@ -5,7 +5,6 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import { yieldUntil } from "pi-cosmic-core/testing";
-import type { SubagentNotification } from "../../src/boundary/host-notifier.ts";
 import type { SubagentServiceContract } from "../../src/run/service.ts";
 import {
   acknowledgeCompletions,
@@ -15,6 +14,9 @@ import {
   runView,
   waitForCompleted,
   withService,
+  yieldTurns,
+  reportsAtRoot,
+  latestProjectedRun,
 } from "./fixtures/service-harness.ts";
 import {
   codedFailure,
@@ -24,15 +26,6 @@ import {
 import { objectContaining } from "../support/matchers.ts";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
-
-const yieldTurns = Effect.gen(function* () {
-  for (let turn = 0; turn < 50; turn += 1) yield* Effect.yieldNow;
-});
-
-const reportsAtRoot = (notifications: ReadonlyArray<SubagentNotification>) =>
-  Arr.flatMap(notifications, (notification) =>
-    notification.type === "completed" ? Arr.map(notification.runs, (run) => run.finalText) : [],
-  );
 
 const policy = (maxDirectChildren: number, maxDepth: number) => ({
   maxDirectChildren,
@@ -243,10 +236,10 @@ describe("root-owned subagent run tree", () => {
           yield* yieldUntil(() => fake.controls[0]?.sentIpc("proxy_notification") === true);
           if (order === "refusal") {
             yield* Deferred.succeed(gate, undefined);
-            yield* yieldTurns;
+            yield* yieldTurns(50);
           }
           fake.controls[0]?.settle("Parent report.");
-          yield* yieldTurns;
+          yield* yieldTurns(50);
           if (order === "settlement") yield* Deferred.succeed(gate, undefined);
           yield* waitForCompleted(service, parent.id);
           expect((yield* runView(service, parent.id)).finalText).toBe("Parent report.");
@@ -301,14 +294,7 @@ describe("root-owned subagent run tree", () => {
       const gate = yield* Deferred.make<void>();
       fake.controls[2]?.gateRelease(gate);
       const waiter = yield* service.stop(parent.id).pipe(Effect.forkScoped);
-      yield* yieldUntil(() =>
-        Arr.last(projections).pipe(
-          Option.flatMap((projection) =>
-            Arr.findFirst(projection.runs, (run) => run.id === leaf.id),
-          ),
-          Option.exists((run) => run.state === "stopping"),
-        ),
-      );
+      yield* yieldUntil(() => latestProjectedRun(projections, leaf.id)?.state === "stopping");
       yield* Fiber.interrupt(waiter);
       expect(releaseOrder).toEqual([]);
       yield* Deferred.succeed(gate, undefined);

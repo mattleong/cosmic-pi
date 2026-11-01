@@ -9,7 +9,6 @@ import {
   decodeFullScreenPrintable,
   FullScreenKeymap,
   pageSteps,
-  type FullScreenAction,
   type PageSteps,
 } from "pi-cosmic-ui/manager/keymap";
 import type { SubagentConfigScope } from "../config/store.ts";
@@ -139,29 +138,6 @@ const savedSetMenuPage = (
     emptyText: "No matching actions",
   });
 
-type NavigationEffect = "close" | "edit" | "actions" | "render";
-
-const NAVIGATION_EFFECTS = {
-  cancel: "close",
-  quit: "close",
-  back: "close",
-  confirm: "edit",
-  forward: "edit",
-  help: "actions",
-  "next-pane": "render",
-  "previous-pane": "render",
-  search: "render",
-  up: "render",
-  down: "render",
-  first: "render",
-  last: "render",
-  "pending-first": "render",
-  "half-page-up": "render",
-  "half-page-down": "render",
-  "full-page-up": "render",
-  "full-page-down": "render",
-} as const satisfies Readonly<Record<FullScreenAction, NavigationEffect>>;
-
 export class ProfileSetPickerComponent implements Component, Focusable {
   private allEntries: ReadonlyArray<ProfileSetPickerEntry>;
   private selectedIndex: number;
@@ -203,11 +179,10 @@ export class ProfileSetPickerComponent implements Component, Focusable {
     const selected = this.selected()?.key;
     this.options = { ...this.options, inspection, projectTrusted };
     this.allEntries = profileSetPickerEntries(inspection, projectTrusted);
-    const index = Option.getOrElse(
+    this.selectedIndex = Option.getOrElse(
       Arr.findFirstIndex(this.entries(), (entry) => entry.key === selected),
-      () => -1,
+      () => 0,
     );
-    this.selectedIndex = index < 0 ? 0 : index;
     this.menu = undefined;
   }
 
@@ -351,10 +326,11 @@ export class ProfileSetPickerComponent implements Component, Focusable {
       this.renderSoon();
       return;
     }
-    const effect = NAVIGATION_EFFECTS[resolution.action];
-    if (effect === "close") this.options.close(undefined);
-    else if (effect === "edit") this.activate("edit");
-    else if (effect === "actions") this.openActions();
+    const { action } = resolution;
+    if (action === "cancel" || action === "quit" || action === "back")
+      this.options.close(undefined);
+    else if (action === "confirm" || action === "forward") this.activate("edit");
+    else if (action === "help") this.openActions();
     else this.renderSoon();
   }
 

@@ -17,9 +17,8 @@ import {
 } from "./details-schema.ts";
 import { decodeCompactToolDetails, decodeStartAwaitCardDetails } from "./details-decode.ts";
 import {
-  condenseAgentRoute,
   condenseFailure,
-  condenseProfileRoute,
+  condenseRoute,
   condenseRunCard,
   condenseStartEntry,
   omitReports,
@@ -242,9 +241,9 @@ const modelDetailsCandidate = (input: ModelDetailsInput, stage: FitStage): Model
   const base: ModelDetails = {
     version: SUBAGENT_CARD_DETAILS_VERSION,
     action: "models",
-    profiles: stage === "condensed" ? Arr.map(profiles, condenseProfileRoute) : profiles,
+    profiles: stage === "condensed" ? Arr.map(profiles, condenseRoute) : profiles,
     ...(agents.length > 0 && {
-      agents: stage === "condensed" ? Arr.map(agents, condenseAgentRoute) : agents,
+      agents: stage === "condensed" ? Arr.map(agents, condenseRoute) : agents,
     }),
     ...(invalidAgents.length > 0 && { invalidAgents }),
     fallbackProfile: input.fallbackProfile,

@@ -18,17 +18,15 @@ import {
   temporaryDirectory,
 } from "pi-cosmic-core/testing";
 import { vi } from "vitest";
-import { registerSubagentApplication } from "../src/application/register.ts";
-import * as ApplicationLayers from "../src/layer.ts";
 import type { BackendDriver, BackendEvent } from "../src/backend/model.ts";
 import { backendRegistryFor, SubagentBackendRegistry } from "../src/backend/service.ts";
 import { registerSubagentChildBridge } from "../src/boundary/host-child.ts";
-import type { LocalPiChildIpcHandlers } from "../src/boundary/local-pi-ipc.ts";
 import { SubagentService } from "../src/run/service.ts";
 import { AGENT_TOOL_NAMES } from "../src/run/tool-policy.ts";
 import { decodeSubagentContract } from "../src/tools/contract-schema.ts";
 import { encodeSubagentProxyInput, withSubagentProxyParent } from "../src/tools/proxy-protocol.ts";
 import type { AgentToolInput } from "../src/tools/schema.ts";
+import { activateRoot, proxyIpcChannel } from "./fixtures/proxy-parent.ts";
 import { fakeWriterLeaseLayer, profileLayerFor, request } from "./run/fixtures/service-harness.ts";
 import { step } from "./support/effect-test.ts";
 import * as Arr from "effect/Array";
@@ -98,30 +96,9 @@ const backendFixture = () => {
 
 const openRoot = (ctx: ExtensionContext, directory: string) =>
   Effect.gen(function* () {
-    const captured: ApplicationLayers.SubagentLayerOptions[] = [];
-    const makeLayer = ApplicationLayers.subagentApplicationLayer;
-    const capture = vi
-      .spyOn(ApplicationLayers, "subagentApplicationLayer")
-      .mockImplementation((options) => {
-        captured.push(options);
-        return makeLayer(options);
-      });
     const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>();
     const host = recordingExtensionHost({}, { getActiveTools: () => ["read"], sendMessage });
-    registerSubagentApplication(host.pi, {
-      loadSettings: () => Promise.resolve(),
-      getAgentDirectory: () => directory,
-    });
-    yield* Effect.addFinalizer(() =>
-      Effect.tryPromise(() => Promise.resolve(host.emit("session_shutdown", ctx))).pipe(
-        Effect.ignore,
-        Effect.ensuring(Effect.sync(() => capture.mockRestore())),
-      ),
-    );
-    yield* Effect.tryPromise(() => Promise.resolve(host.emit("session_start", ctx)));
-    const activation = captured[0];
-    if (!activation) return yield* Effect.die("Root did not activate");
-    return { activation, sendMessage };
+    return { activation: yield* activateRoot(host, ctx, directory), sendMessage };
   });
 
 // A child bridge whose IPC requests reach the root through its run's authenticated channel.
@@ -134,7 +111,6 @@ const openChild = (
     const ctx = contextFor(session);
     const tools = new Map<string, ToolDefinition>();
     let active = [...activeTools];
-    let listener: LocalPiChildIpcHandlers | undefined;
     const host = recordingExtensionHost(
       {},
       {
@@ -147,31 +123,7 @@ const openChild = (
     );
     registerSubagentChildBridge(host.pi, {
       loadSettings: () => Promise.resolve(),
-      openIpc: () => ({
-        listen: (handlers) => {
-          listener = handlers;
-          return () => {
-            listener = undefined;
-          };
-        },
-        sendContact: (contact) =>
-          Effect.sync(() => {
-            if (contact.type !== "proxy_request") return;
-            control.offer({
-              ...contact,
-              respond: (ok, payloadJson) =>
-                Effect.sync(() =>
-                  listener?.onControl({
-                    channel: "pi-subagents",
-                    type: "proxy_response",
-                    requestId: contact.requestId,
-                    ok,
-                    payloadJson,
-                  }),
-                ),
-            });
-          }),
-      }),
+      openIpc: () => proxyIpcChannel(control.offer),
     });
     yield* Effect.addFinalizer(() =>
       Effect.tryPromise(() => Promise.resolve(host.emit("session_shutdown", ctx))).pipe(

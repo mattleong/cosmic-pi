@@ -44,7 +44,6 @@ interface NodeState {
   readonly children: Node[];
   section: Section;
   parentId: string | undefined;
-  visible: GroupSummary;
   total: GroupSummary;
   summary: GroupSummary;
   history: boolean;
@@ -64,7 +63,6 @@ const blankNode = (id: string, title: string): NodeState => ({
   children: [],
   section: "attention",
   parentId: undefined,
-  visible: emptyGroupSummary,
   total: emptyGroupSummary,
   summary: emptyGroupSummary,
   history: false,
@@ -134,7 +132,6 @@ function completeNode(node: Node, section: Section, hideHistory: boolean): void 
   for (const child of node.children) completeNode(child, section, hideHistory);
   const row = node.type === "member" ? node.row : undefined;
   const own = row ? summarizeGroup([row]) : emptyGroupSummary;
-  node.visible = sumSummaries(node.children, (child) => child.visible, own);
   node.total = sumSummaries(node.children, (child) => child.total, own);
   node.summary = hideHistory
     ? sumSummaries(
@@ -145,8 +142,8 @@ function completeNode(node: Node, section: Section, hideHistory: boolean): void 
     : node.total;
   node.history =
     row !== undefined &&
-    node.visible.terminal === node.visible.items &&
-    node.visible.awaited === 0 &&
+    node.total.terminal === node.total.items &&
+    node.total.awaited === 0 &&
     isFinished(row) &&
     !row.awaited;
 }

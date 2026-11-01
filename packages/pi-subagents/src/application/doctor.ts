@@ -238,6 +238,12 @@ export const runSubagentDoctor = Effect.fn("SubagentDoctor.run")(function* (
   return checks;
 });
 
+const errorLine = (error: { readonly message: string; readonly detail?: string | undefined }) =>
+  Arr.join(
+    [error.message, ...(error.detail === undefined ? [] : Str.split(error.detail, "\n"))],
+    " ",
+  );
+
 // Creation reads the same file, so a file it would refuse warns here.
 const worktreeIncludeCheck = (cwd: string): Effect.Effect<DoctorCheck, never, SafeFile> =>
   checkoutWorktreeInclude(cwd).pipe(
@@ -246,18 +252,7 @@ const worktreeIncludeCheck = (cwd: string): Effect.Effect<DoctorCheck, never, Sa
         ? check(".worktreeinclude", "ok", "none; isolated trees get no ignored or credential files")
         : check(".worktreeinclude", "ok", describeWorktreeInclude(patterns)),
     ),
-    Effect.catch((error) =>
-      Effect.succeed(
-        check(
-          ".worktreeinclude",
-          "warning",
-          Arr.join(
-            [error.message, ...(error.detail === undefined ? [] : Str.split(error.detail, "\n"))],
-            " ",
-          ),
-        ),
-      ),
-    ),
+    Effect.catch((error) => Effect.succeed(check(".worktreeinclude", "warning", errorLine(error)))),
   );
 
 // Isolated (worktree) writers need Git; shared-checkout writers don't, so problems are warnings.
@@ -271,18 +266,7 @@ const gitCheck: Effect.Effect<DoctorCheck> = gitInstallation.pipe(
           `${installation.version} at ${installation.executable}; isolated writers need ${Arr.join(Arr.map(MINIMUM_GIT_VERSION, String), ".")} or later`,
         ),
   ),
-  Effect.catch((error) =>
-    Effect.succeed(
-      check(
-        "Git",
-        "warning",
-        Arr.join(
-          [error.message, ...(error.detail === undefined ? [] : Str.split(error.detail, "\n"))],
-          " ",
-        ),
-      ),
-    ),
-  ),
+  Effect.catch((error) => Effect.succeed(check("Git", "warning", errorLine(error)))),
 );
 
 // Readiness runs the same preflight a launch does, bounded so a hung check can't stall the report.

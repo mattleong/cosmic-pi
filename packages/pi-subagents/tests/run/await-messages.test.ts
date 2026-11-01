@@ -14,6 +14,7 @@ import {
   localServiceFixture,
   request,
   withService,
+  yieldTurns,
 } from "./fixtures/service-harness.ts";
 
 const MAIN: AgentCaller = { kind: "main" };
@@ -38,10 +39,6 @@ const summarize = (
     },
   });
 
-const yieldTurns = Effect.gen(function* () {
-  for (let turn = 0; turn < 25; turn += 1) yield* Effect.yieldNow;
-});
-
 describe("await and agent messages to the waiting agent", () => {
   it.effect("ends a root wait when a descendant messages main, and a new wait starts fresh", () => {
     const main = fakeAgentMain({ state: "busy" });
@@ -55,7 +52,7 @@ describe("await and agent messages to the waiting agent", () => {
       const waiting = yield* service
         .withAwaitTerminalObservations([awaited.id], "all_finished", undefined, summarize)
         .pipe(Effect.forkScoped);
-      yield* yieldTurns;
+      yield* yieldTurns(25);
 
       yield* service.agentSend(asRun(deep), MAIN_AGENT_ID, "The schema moved.");
       expect(yield* Fiber.join(waiting)).toEqual({
@@ -68,7 +65,7 @@ describe("await and agent messages to the waiting agent", () => {
       const again = yield* service
         .withAwaitTerminalObservations([awaited.id], "all_finished", undefined, summarize)
         .pipe(Effect.forkScoped);
-      yield* yieldTurns;
+      yield* yieldTurns(25);
       expect(again.pollUnsafe()).toBeUndefined();
       yield* completeLocalRun(service, fake.controls[0]!, awaited.id, "Report.");
       expect(yield* Fiber.join(again)).toEqual({
@@ -89,7 +86,7 @@ describe("await and agent messages to the waiting agent", () => {
       const waiting = yield* service
         .withAwaitTerminalObservations([awaited.id], "all_finished", undefined, summarize)
         .pipe(Effect.forkScoped);
-      yield* yieldTurns;
+      yield* yieldTurns(25);
 
       for (const [caller, to] of [
         [asRun(peer), other.id],
@@ -98,7 +95,7 @@ describe("await and agent messages to the waiting agent", () => {
         [MAIN, awaited.id],
       ] as const)
         expect((yield* service.agentSend(caller, to, "Not for main.")).disposition).toBe("guided");
-      yield* yieldTurns;
+      yield* yieldTurns(25);
       expect(waiting.pollUnsafe()).toBeUndefined();
 
       yield* service.agentSend(asRun(other), MAIN_AGENT_ID, "For main.");
@@ -129,7 +126,7 @@ describe("await and agent messages to the waiting agent", () => {
       const nestedWait = yield* service
         .withAwaitTerminalObservations([child.id], "all_finished", undefined, summarize, parent.id)
         .pipe(Effect.forkScoped);
-      yield* yieldTurns;
+      yield* yieldTurns(25);
 
       yield* service.agentSend(asRun(grandchild), parent.id, "Found the race.");
       expect(yield* Fiber.join(nestedWait)).toEqual({
@@ -146,7 +143,7 @@ describe("await and agent messages to the waiting agent", () => {
             Fn.pipe(command.message, Str.includes("Found the race.")),
         ),
       ).toBe(true);
-      yield* yieldTurns;
+      yield* yieldTurns(25);
       expect(rootWait.pollUnsafe()).toBeUndefined();
     });
   });

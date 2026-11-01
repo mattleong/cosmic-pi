@@ -61,19 +61,10 @@ export const ImageStreamEvent = Data.taggedEnum<ImageStreamEvent>();
 
 const ignoredEvent = ImageStreamEvent.Ignored();
 
-const imageData = (value: string, expectedMimeType: string) => {
-  const match = /^data:[^;,]+;base64,(.*)$/s.exec(value);
-  return {
-    data: Str.trim(match?.[1] ?? value),
-    mimeType: expectedMimeType,
-  };
-};
+const imageData = (value: string) =>
+  Str.trim(/^data:[^;,]+;base64,(.*)$/s.exec(value)?.[1] ?? value);
 
-const normalizeImageItem = (
-  item: ImageGenerationItem,
-  fallbackMimeType: string,
-  fallbackId: string,
-): ImageStreamEvent => {
+const normalizeImageItem = (item: ImageGenerationItem, fallbackId: string): ImageStreamEvent => {
   if (item.status === "failed") return ImageStreamEvent.ImageFailed();
   const raw =
     Predicate.isString(item.result) && Str.trim(item.result) ? item.result : item.b64_json;
@@ -81,7 +72,7 @@ const normalizeImageItem = (
   const base = {
     id: item.id ?? fallbackId,
     status: item.status ?? "completed",
-    ...imageData(raw, fallbackMimeType),
+    data: imageData(raw),
   };
   return ImageStreamEvent.Image({
     image: Predicate.isNullish(item.revised_prompt)
@@ -92,7 +83,6 @@ const normalizeImageItem = (
 
 export const decodeImageStreamEvent = Effect.fn("OpenAIImageProtocol.decodeEvent")(function* (
   value: Schema.Json,
-  fallbackMimeType: string,
   fallbackId: string,
 ) {
   const discriminant = yield* Schema.decodeUnknownEffect(EventDiscriminantSchema)(value);
@@ -100,11 +90,11 @@ export const decodeImageStreamEvent = Effect.fn("OpenAIImageProtocol.decodeEvent
     const done = yield* Schema.decodeUnknownEffect(OutputItemDoneSchema)(value);
     if (done.item.type !== "image_generation_call") return ignoredEvent;
     const event = yield* Schema.decodeUnknownEffect(CompletedEventSchema)(value);
-    return normalizeImageItem(event.item, fallbackMimeType, fallbackId);
+    return normalizeImageItem(event.item, fallbackId);
   }
   if (discriminant.type === "image_generation_call") {
     const item = yield* Schema.decodeUnknownEffect(ImageGenerationItemSchema)(value);
-    return normalizeImageItem(item, fallbackMimeType, fallbackId);
+    return normalizeImageItem(item, fallbackId);
   }
   if (discriminant.type === "response.failed") {
     const event = yield* Schema.decodeUnknownEffect(FailedEventSchema)(value);

@@ -1,8 +1,7 @@
 import { afterEach, describe, expect, it } from "@effect/vitest";
-import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { getTextContent } from "pi-code-previews";
 import {
@@ -39,9 +38,9 @@ import type { SubagentRunView } from "../src/run/model.ts";
 import { awaitDetails } from "../src/tools/details.ts";
 import { executeAgentActionEffect, scriptedAgentSendRefusal } from "../src/tools/execute-agents.ts";
 import type { AgentToolInput } from "../src/tools/schema.ts";
-import { registerSubagentTools } from "../src/tools/subagent.ts";
 import { view } from "./fixtures/run-view.ts";
 import { subagentServiceDouble } from "./tools/fixtures/subagent-service-double.ts";
+import { captureSubagentTools } from "./tools/fixtures/tool-harness.ts";
 
 /** Instructions written for agents, which the user's view never draws. */
 const AGENT_PROCEDURES =
@@ -181,17 +180,11 @@ describe("conversation surfaces", () => {
   });
 });
 
-const tools = () =>
-  captureRegistrations((pi) =>
-    registerSubagentTools(pi, {
-      environment: { cwd: "/project", projectTrusted: false },
-      run: () => Promise.reject(new Error("render-only fixture")),
-      startUiTicker: () => () => undefined,
-    }),
-  ).tools;
-
-const toolNamed = (name: string): ToolDefinition =>
-  Option.getOrThrow(Arr.findFirst(tools(), (tool) => tool.name === name));
+const toolNamed = (name: string) =>
+  captureSubagentTools(subagentServiceDouble({}), {
+    environment: { cwd: "/project", projectTrusted: false },
+    startUiTicker: () => () => undefined,
+  }).get(name)!;
 
 const listEntry = (run: SubagentRunView): AgentListEntry => ({
   id: run.id,

@@ -5,6 +5,7 @@ import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
 import * as Str from "effect/String";
 import { invokeHostCallback } from "pi-cosmic-core/host-session";
+import { freezeSnapshot } from "pi-cosmic-core/projection";
 import {
   claimCompletion,
   completionClaimOwner,
@@ -38,7 +39,6 @@ import type {
   SubagentRunObservation,
   SubagentServiceContract,
 } from "./service.ts";
-import { snapshotView } from "./state.ts";
 import { runTreeView } from "./tree.ts";
 
 interface RunCompletionObservationDependencies extends Pick<RunContext, "records" | "withLock"> {
@@ -76,7 +76,7 @@ const withoutCompletionReport = (view: SubagentRunView) => {
 
 const redactCompletionReport = (view: SubagentRunView): SubagentRunView => {
   const withoutReport = withoutCompletionReport(view);
-  return snapshotView({
+  return freezeSnapshot({
     ...withoutReport,
     sessionEvents: Arr.map(withoutReport.sessionEvents, (event) =>
       event.type === "assistant" ? Object.assign({}, event, { text: REDACTED_REPORT_TEXT }) : event,

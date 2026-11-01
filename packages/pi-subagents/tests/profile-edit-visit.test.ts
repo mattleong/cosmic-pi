@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { JsonObject } from "pi-cosmic-core";
 import type { ProfileCandidate } from "../src/profiles/model.ts";
 import { ProfileEditVisit } from "../src/settings/profile-edit-visit.ts";
-import {
-  defaultRouteCandidate,
-  type ProfileRouteDraft,
-  type ProfileWorkspaceTarget,
+import { builtinProfileCandidate } from "../src/profiles/definitions.ts";
+import type {
+  ProfileRouteDraft,
+  ProfileWorkspaceTarget,
 } from "../src/settings/profile-route-editor.ts";
 import {
   jsonObject as json,
@@ -17,7 +17,7 @@ const saved = (name = "one", scope: "global" | "project" = "global"): ProfileWor
   kind: "profile-set",
   set: { scope, name },
 });
-const candidate = defaultRouteCandidate("worker");
+const candidate = builtinProfileCandidate("worker");
 const explicit: ProfileRouteDraft = { kind: "explicit", candidates: [candidate] };
 const disabled: ProfileRouteDraft = { kind: "disabled", candidates: [] };
 const inspect = (

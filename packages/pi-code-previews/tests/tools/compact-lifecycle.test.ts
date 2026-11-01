@@ -13,14 +13,10 @@ import {
   installCodePreviewSessionCapability,
 } from "../../src/application/capability";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
-import type { ToolCallBackgroundMode, ToolCallCollapsedStyle } from "../../src/config/schema";
+import type { ToolCallBackgroundMode } from "../../src/config/schema";
 import { setCodePreviewSettings } from "../../src/config/state";
 import { withCodePreviewShell } from "../../src/tools/cooperative-tools";
-import type {
-  CompactAnimationScheduler,
-  CompactSummary,
-  CompactSummaryProvider,
-} from "../../src/tools/compact-summary";
+import type { CompactSummary, CompactSummaryProvider } from "../../src/tools/compact-summary";
 import type { ToolRenderContext } from "../../src/tools/renderers/shared/types";
 import { plainTheme, textResult as result } from "../support/render";
 import { SPINNER_FRAME_MS } from "pi-cosmic-ui/manager";
@@ -33,7 +29,6 @@ type Result = Awaited<ReturnType<Definition["execute"]>>;
 interface State {
   codePreviewTimingStartedAt?: number;
   codePreviewTimingEndedAt?: number;
-  codePreviewTimingOnlyRenderToken?: number;
 }
 type Context = ToolRenderContext<State, ReadToolInput>;
 type Provider = CompactSummaryProvider<ReadToolInput, Result["details"], State>;
@@ -76,13 +71,11 @@ function harness(
     call?: NonNullable<Definition["renderCall"]>;
     result?: NonNullable<Definition["renderResult"]>;
     timing?: boolean;
-    style?: ToolCallCollapsedStyle;
-    scheduleAnimation?: CompactAnimationScheduler;
   } = {},
 ) {
   setCodePreviewSettings({
     ...defaultCodePreviewSettings,
-    toolCallCollapsedStyle: options.style ?? "compact",
+    toolCallCollapsedStyle: "compact",
     toolCallTiming: options.timing ?? false,
   });
   const definition = {
@@ -94,7 +87,6 @@ function harness(
   const tool = withCodePreviewShell(definition, {
     mode,
     compactSummary: provider,
-    ...(options.scheduleAnimation && { scheduleAnimation: options.scheduleAnimation }),
   });
   const state: State = {};
   let context: Context = renderContextFixture({

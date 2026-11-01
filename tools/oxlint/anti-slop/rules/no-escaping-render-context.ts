@@ -52,11 +52,6 @@ export const knownHelpers: readonly KnownHelper[] = [
     retained: [2, 3],
   },
   {
-    name: "deferCodePreview",
-    definition: "pi-code-previews/src/application/capability",
-    retained: [0],
-  },
-  {
     name: "unlessResultDiffShown",
     definition: "pi-code-previews/src/tools/renderers/shared/result-diff",
     retained: [1],

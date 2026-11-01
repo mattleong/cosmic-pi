@@ -23,11 +23,11 @@ const fileLayer = Layer.merge(
 );
 
 describe("OpenAI image protocol", () => {
-  it.effect.each(["b64_json"] as const)(
-    "keeps %s partials nonterminal and rejects malformed or partial-only streams",
-    (field) =>
+  it.effect(
+    "keeps b64_json partials nonterminal and rejects malformed or partial-only streams",
+    () =>
       Effect.gen(function* () {
-        const partial = dataEvent({ [field]: "cGFydGlhbA==" });
+        const partial = dataEvent({ b64_json: "cGFydGlhbA==" });
         const result = yield* parseImageSse(
           body(
             partial +
@@ -38,12 +38,11 @@ describe("OpenAI image protocol", () => {
                 result: "ZmluYWw=",
               }),
           ),
-          "image/png",
         );
         expect(result).toMatchObject({ id: "complete", data: "ZmluYWw=" });
 
-        for (const input of [partial, dataEvent({ [field]: 42 })]) {
-          const failure = yield* parseImageSse(body(input), "image/png").pipe(Effect.flip);
+        for (const input of [partial, dataEvent({ b64_json: 42 })]) {
+          const failure = yield* parseImageSse(body(input)).pipe(Effect.flip);
           expect(failure.operation).toBe("stream");
           expect(failure.message).toContain(
             input === partial ? "completed image" : "malformed event",
@@ -69,7 +68,6 @@ describe("OpenAI image protocol", () => {
               },
             }),
         ),
-        "image/png",
       );
       expect(result).toMatchObject({ id: "complete", data: "ZmluYWw=" });
       expect(result).not.toHaveProperty("revisedPrompt");
@@ -90,7 +88,6 @@ describe("OpenAI image protocol", () => {
               response: { error: { message: "content policy rejected the prompt" } },
             }),
         ),
-        "image/png",
       ).pipe(Effect.flip);
       expect(withReason.operation).toBe("response");
       expect(withReason.message).toContain("content policy rejected the prompt");
@@ -99,7 +96,7 @@ describe("OpenAI image protocol", () => {
         failedItem,
         dataEvent({ type: "response.failed", response: { error: null } }),
       ]) {
-        const failure = yield* parseImageSse(body(input), "image/png").pipe(Effect.flip);
+        const failure = yield* parseImageSse(body(input)).pipe(Effect.flip);
         expect(failure.operation).toBe("response");
         expect(failure.message).not.toContain("malformed");
       }
@@ -115,7 +112,6 @@ describe("OpenAI image protocol", () => {
             response: { error: { message: "Bearer provider-secret" } },
           }),
         ),
-        "image/png",
       ).pipe(Effect.flip);
 
       expect(failure.operation).toBe("response");
@@ -141,10 +137,7 @@ describe("OpenAI image byte and path validation", () => {
       for (const data of ["Y Q==", "AAA\n", "AAA\r", "AA\r\n", "A===", "AA=A", "===="])
         expect(
           yield* output
-            .validatedGeneratedImage(
-              { id: "image", status: "completed", data, mimeType: "image/png" },
-              "png",
-            )
+            .validatedGeneratedImage({ id: "image", status: "completed", data }, "png")
             .pipe(Effect.flip),
         ).toMatchObject({ operation: "response" });
       expect(decodeCount).toBe(0);

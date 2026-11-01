@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
+import { getTextContent } from "pi-code-previews";
 import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
 import * as Effect from "effect/Effect";
 import { assert, describe, expect, it } from "vitest";
@@ -37,12 +38,6 @@ const summarize = (
     result,
     context: renderContextFixture({ isError: false }),
   });
-
-const resultText = (result: AgentToolResult<WorkspaceToolDetails>) =>
-  Arr.join(
-    Arr.map(result.content, (part) => (part.type === "text" ? part.text : "")),
-    "\n",
-  );
 
 const expectStyledIssues = (summary: ReturnType<typeof summarize>) => {
   expect(summary?.issues?.length).toBeGreaterThan(0);
@@ -159,7 +154,7 @@ describe("workspace apply", () => {
     };
     for (const args of [applyArgs, prepareArgs]) {
       const result = yield* run(args, "parent", service).pipe(Effect.orDie);
-      for (const name of leftOut) expect(resultText(result)).toContain(name);
+      for (const name of leftOut) expect(getTextContent(result.content)).toContain(name);
       const summary = summarize(args, result);
       expect(summary?.outcome).toBe("warning");
       assert(summary?.issues !== undefined);
@@ -191,7 +186,7 @@ describe("workspace apply", () => {
         changedPathCount: 2,
         testing,
       });
-      expect(resultText(result)).toContain("src/b.ts");
+      expect(getTextContent(result.content)).toContain("src/b.ts");
       const summary = summarize(args, result);
       expect(summary?.outcome).toBe("success");
       expectStyledIssues(summary);
@@ -270,7 +265,7 @@ describe("workspace list", () => {
           ],
         }),
     }).pipe(Effect.orDie);
-    expect(resultText(result)).toContain("recovery-record-unavailable");
+    expect(getTextContent(result.content)).toContain("recovery-record-unavailable");
     expect(result.details).toMatchObject({ workspaceCount: 2, unavailableCount: 1 });
     const summary = summarize(args, result);
     expect(summary?.outcome).toBe("warning");
@@ -294,7 +289,7 @@ describe("workspace list", () => {
           ]),
         }),
     }).pipe(Effect.orDie);
-    const text = resultText(result);
+    const text = getTextContent(result.content);
     expect(text).toContain('"workspaceId":"ws-1"');
     expect(text).toContain('"orphan":"adoptable"');
     expect(text).toContain('"orphan":"discard-only"');

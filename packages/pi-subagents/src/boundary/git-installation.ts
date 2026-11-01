@@ -1,6 +1,5 @@
 import * as Effect from "effect/Effect";
 import * as Arr from "effect/Array";
-import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import { hasControlCharacter } from "pi-cosmic-core/security";
 import { runBoundedProcessNode } from "pi-cosmic-core/platform/process";
@@ -10,7 +9,7 @@ import {
   nodePath as path,
 } from "pi-cosmic-core/platform/node-builtins";
 import { WorkspaceError } from "../workspace/model.ts";
-import { isGitLocalEnvironmentKey } from "./git-local-environment.ts";
+import { withoutGitLocalEnvironment } from "./git-local-environment.ts";
 
 /** Oldest Git with every option isolated workspaces use (`rev-parse --path-format`). */
 export const MINIMUM_GIT_VERSION = [2, 31] as const;
@@ -57,19 +56,11 @@ const locateGit = Effect.fn("GitInstallation.locateGit")(function* (
   );
 });
 
-const userEnvironment = (environment: NodeJS.ProcessEnv) =>
-  Rec.fromEntries(
-    Arr.filter(
-      Rec.toEntries(environment),
-      ([key, value]) => value !== undefined && !isGitLocalEnvironmentKey(key),
-    ),
-  );
-
 const runGit = (executable: string, args: ReadonlyArray<string>, environment: NodeJS.ProcessEnv) =>
   runBoundedProcessNode({
     executable,
     args,
-    environment: userEnvironment(environment),
+    environment: withoutGitLocalEnvironment(environment),
     stdoutLimitBytes: 8192,
     stderrLimitBytes: 8192,
     timeoutMillis: 10_000,

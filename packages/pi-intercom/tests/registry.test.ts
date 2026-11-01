@@ -44,6 +44,7 @@ import {
   serveIntercom,
   type IntercomInboundContract,
 } from "../src/transport/server.ts";
+import { sharedAgentDirectory } from "./support/session-harness.ts";
 
 const hex = (seed: string, bytes: number) =>
   Fn.pipe(seed, Str.repeat(bytes * 2), Str.slice(0, bytes * 2));
@@ -60,23 +61,13 @@ const exitedPid = runBoundedProcessNode({
 const permissions = (fs: FileSystem.FileSystem, path: string) =>
   Effect.map(fs.stat(path), (info) => info.mode & 0o777);
 
-/** Keeps socket paths short: macOS temporary directories are too long for `sun_path`. */
-const shortTemporaryDirectory = (prefix: string) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    return yield* fs.makeTempDirectoryScoped({ directory: "/tmp", prefix });
-  });
-
 const registryHarness = (options: { readonly longAgentDirectory?: boolean } = {}) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const paths = yield* Path.Path;
-    const base = yield* shortTemporaryDirectory("intercom-test-");
-    const agentDirectory = options.longAgentDirectory
-      ? paths.join(base, Fn.pipe("a", Str.repeat(80)))
-      : paths.join(base, "agent");
-    const fallbackRoot = paths.join(base, "tmp");
-    yield* fs.makeDirectory(fallbackRoot, { recursive: true });
+    const { agentDirectory, fallbackRoot } = yield* sharedAgentDirectory(
+      options.longAgentDirectory ? { long: true } : {},
+    );
     const registry = yield* Effect.service(IntercomRegistry).pipe(
       Effect.provide(
         IntercomRegistry.layer({ fallbackRoot }).pipe(

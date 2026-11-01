@@ -22,13 +22,9 @@ import {
   secretIssues,
   writeDiffProjection,
 } from "./builtin-issues";
-import { editOperationInputs, getPathArg, hasReadLimit } from "./data/args";
+import { editOperationInputs, getPathArg, hasReadLimit, stringArg } from "./data/args";
 import { getBoundedTextContent, getEditDiff } from "./data/results";
-import {
-  describeBuiltinCompactSubject,
-  stringArg,
-  type BuiltinCompactTool,
-} from "./builtin-subject";
+import { describeBuiltinCompactSubject, type BuiltinCompactTool } from "./builtin-subject";
 
 export interface BuiltinCompactPolicy {
   secretWarnings: boolean;

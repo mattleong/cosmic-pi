@@ -1,32 +1,25 @@
 import assert from "node:assert/strict";
-import { afterEach, beforeEach, test, vi } from "vitest";
+import { beforeEach, test } from "vitest";
 import { applyPresentationSettings, createToolPresentationHarness } from "../../testing";
 import { codemodeRenderers, nativeCall, scriptResult } from "../support/native-codemode";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 
-const settings = (
-  style: "compact" | "preview",
-  timing = false,
-  background: "off" | "on" | "border" = "off",
-) =>
-  applyPresentationSettings({
-    toolCallCollapsedStyle: style,
-    toolCallTiming: timing,
-    toolCallBackground: background,
-  });
 const completed = scriptResult(
   "completed",
   { calls: [] },
   { type: "text", text: "OUTPUT_RETAINED" },
 );
 beforeEach(() => applyPresentationSettings({ syntaxHighlighting: false }));
-afterEach(() => vi.restoreAllMocks());
 
 for (const style of ["compact", "preview"] as const)
   test(`native ${style} expansion preserves bounded calls with oversized or unknown history`, () => {
-    settings(style);
+    applyPresentationSettings({
+      toolCallCollapsedStyle: style,
+      toolCallTiming: false,
+      toolCallBackground: "off",
+    });
     const records = Array.from({ length: 257 }, (_, index) =>
       nativeCall({ id: `private/${index}`, args: `{"path":"/project/record-${index}.ts"}` }),
     );

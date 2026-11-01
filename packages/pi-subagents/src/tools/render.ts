@@ -413,15 +413,11 @@ export const renderSubagentExpandedContent = (
   const workspace = renderWorkspaceContent(result, theme);
   if (workspace) return workspace;
   const details = decodeStartAwaitCardDetails(result.details);
-  if (details && isPartial && options.panelOwnsLiveHierarchy) return renderComponent(() => []);
-  if (details?.action === "start")
-    return renderStartReceiptComponent(details, true, theme, isPartial);
-  if (details?.action === "await")
+  if (details)
     return isPartial
       ? renderPartialStartAwait(details, true, theme, options)
-      : renderAwaitResult(details, true, theme);
+      : renderSettledStartAwait(details, true, theme);
   const compact = decodeCompactToolDetails(result.details);
-  if (compact?.action === "models") return renderProfileRoutesComponent(compact, true, theme);
   if (!compact) return renderTextFallback(result, isPartial, true, theme, options.isError);
   return renderCompactDetails(compact, true, theme);
 };

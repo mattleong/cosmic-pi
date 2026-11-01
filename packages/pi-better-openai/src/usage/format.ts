@@ -163,18 +163,24 @@ function remainingResetSeconds(
   return Number.isFinite(remaining) ? remaining : null;
 }
 
-type UsageWindowLine = {
-  readonly label: string;
-  readonly leftPercent: number | null;
-  readonly resetInSeconds: number | null;
-};
-
-function formatWindowedUsageLine(
-  windows: readonly UsageWindowLine[],
+export function formatUsageSnapshot(
+  snapshot: UsageSnapshot,
   options: { readonly showResetTimes: boolean },
   now: number,
-  capturedAt: number,
 ): string {
+  const windows = [
+    {
+      label: "5h",
+      leftPercent: snapshot.fiveHourLeftPercent,
+      resetInSeconds: snapshot.fiveHourResetInSeconds,
+    },
+    {
+      label: "7d",
+      leftPercent: snapshot.sevenDayLeftPercent,
+      resetInSeconds: snapshot.sevenDayResetInSeconds,
+    },
+  ];
+  const { capturedAt } = snapshot;
   const visible = Arr.filter(
     windows,
     (window) => window.leftPercent !== null || window.resetInSeconds !== null,
@@ -193,30 +199,6 @@ function formatWindowedUsageLine(
       )
     : [];
   return `Usage: ${labels.length ? Arr.join(labels, " | ") : "--"}${resets.length ? ` | ${Arr.join(resets, " | ")}` : ""}`;
-}
-
-export function formatUsageSnapshot(
-  snapshot: UsageSnapshot,
-  options: { readonly showResetTimes: boolean },
-  now: number,
-): string {
-  return formatWindowedUsageLine(
-    [
-      {
-        label: "5h",
-        leftPercent: snapshot.fiveHourLeftPercent,
-        resetInSeconds: snapshot.fiveHourResetInSeconds,
-      },
-      {
-        label: "7d",
-        leftPercent: snapshot.sevenDayLeftPercent,
-        resetInSeconds: snapshot.sevenDayResetInSeconds,
-      },
-    ],
-    options,
-    now,
-    snapshot.capturedAt,
-  );
 }
 
 export function formatUsageDetails(snapshot: UsageSnapshot, now: number): string {

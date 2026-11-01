@@ -91,7 +91,7 @@ export interface ProfileRoute {
 
 export type DeclaredProfileRoute = ProfileCandidate | ReadonlyArray<ProfileCandidate> | "disabled";
 
-export const normalizeProfileCandidate = ({
+const normalizeProfileCandidate = ({
   model,
   effort,
   context,
@@ -124,12 +124,9 @@ export const supportsSubagentFastMode = (model: string): boolean => {
   return selected ? supportsFastModel(selected.provider, selected.model) : false;
 };
 
-const PROFILE_CANDIDATE_VALIDATION_ISSUE_CODES = [
-  "model_selector_invalid",
-  "fast_mode_unsupported",
-] as const;
 export type ProfileCandidateValidationIssueCode =
-  (typeof PROFILE_CANDIDATE_VALIDATION_ISSUE_CODES)[number];
+  | "model_selector_invalid"
+  | "fast_mode_unsupported";
 interface ProfileCandidateValidationIssue {
   readonly code: ProfileCandidateValidationIssueCode;
 }

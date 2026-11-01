@@ -4,10 +4,7 @@ import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import { makePiManagedRuntime } from "pi-cosmic-core";
-import { recordingExtensionHost } from "pi-cosmic-core/testing";
 import { renderContextFixture } from "pi-code-previews/testing";
 import { expect } from "vitest";
 import { MAIN_AGENT_ID } from "../../src/run/agent-messaging.ts";
@@ -28,18 +25,19 @@ import {
 import { stringContaining } from "../support/matchers.ts";
 import { step } from "../support/effect-test.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
-import { captureSubagentTools, executeTool, view } from "./fixtures/tool-harness.ts";
+import {
+  captureSubagentTools,
+  executeTool,
+  managedToolHost,
+  view,
+} from "./fixtures/tool-harness.ts";
 
 const rootTools = Effect.gen(function* () {
   const main = fakeAgentMain({ state: "busy" });
   const fixture = eventBackendServiceFixture(fakeEventBackendLayer(), {
     agentMain: main.capabilities,
   });
-  const { pi, tools } = recordingExtensionHost();
-  const runtime = yield* Effect.acquireRelease(
-    Effect.sync(() => makePiManagedRuntime(pi, Layer.merge(fixture.layer, fixture.backend.layer))),
-    (owned) => step(() => owned.dispose()),
-  );
+  const { pi, tools, runtime } = yield* managedToolHost(fixture);
   const service = yield* step(() => runtime.run(SubagentService));
   registerSubagentTools(pi, {
     environment: { cwd: "/project", projectTrusted: true },

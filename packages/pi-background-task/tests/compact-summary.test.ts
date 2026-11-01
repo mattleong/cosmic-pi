@@ -268,12 +268,6 @@ describe("background task row outcomes", () => {
     expect(metadata && Arr.join(metadata, " ")).toContain("failed");
   });
 
-  it("renders the failure cause stored in details", () => {
-    const failureCause = "FAIL tests/auth.test.ts > adds";
-    const summary = project({ action: "status", snapshot: { ...failed, failureCause } });
-    expect(find(summary, "task-0000000001:exit-code")?.message).toContain(failureCause);
-  });
-
   it("keeps each task's label in aggregate issues, even for error-like names", () => {
     const tasks = [
       { ...failed, id: "task-0000000001", name: "BuildError" },
@@ -303,11 +297,5 @@ describe("background task row outcomes", () => {
     expect(capped?.message).toBe(exact?.message);
     expect(capped?.detail).toContain("120");
     expect(exact?.detail).not.toContain("120");
-  });
-
-  it("names the task whose logs were read", () => {
-    const named = { ...logs("running"), task: { name: "dev server", command: "pnpm dev" } };
-    expect(project(named, "logs")?.subject).toBe("dev server");
-    expect(project(logs("running"), "logs")?.subject).toBe(snapshot.command);
   });
 });

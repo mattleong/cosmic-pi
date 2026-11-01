@@ -6,13 +6,11 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
-import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Duration from "effect/Duration";
 import * as Clock from "effect/Clock";
 import * as TestClock from "effect/testing/TestClock";
-import { makePiManagedRuntime } from "pi-cosmic-core";
 import { describe, expect } from "vitest";
 import { SubagentService } from "../../src/run/service.ts";
 import type { SubagentToolRuntime } from "../../src/tools/execute.ts";
@@ -25,18 +23,13 @@ import {
   eventBackendServiceFixture,
   runView,
 } from "../run/fixtures/service-harness.ts";
-import { recordingExtensionHost } from "pi-cosmic-core/testing";
 import { eventLoopTurn, step } from "../support/effect-test.ts";
-import { executeTool } from "./fixtures/tool-harness.ts";
+import { executeTool, managedToolHost } from "./fixtures/tool-harness.ts";
 import { stringContaining } from "../support/matchers.ts";
 
 const managedTools = Effect.gen(function* () {
   const fixture = eventBackendServiceFixture();
-  const { pi, tools } = recordingExtensionHost();
-  const runtime = yield* Effect.acquireRelease(
-    Effect.sync(() => makePiManagedRuntime(pi, Layer.merge(fixture.layer, fixture.backend.layer))),
-    (owned) => step(() => owned.dispose()),
-  );
+  const { pi, tools, runtime } = yield* managedToolHost(fixture);
   const service = yield* step(() => runtime.run(SubagentService));
   return { fixture, tools, pi, runtime, service };
 });

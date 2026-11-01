@@ -129,6 +129,9 @@ describe("worktree hook configuration", () => {
       expect(decoded.invalidWorktreeCreate).toEqual([invalid]);
       expect(decoded.diagnostics).toEqual([invalid]);
     }
+    // An untrusted project's declarations never run, so they can't block setup.
+    const untrusted = { version: 6, hooks: { WorktreeCreate: ["pnpm install"] } };
+    expect(resolve({ version: 6 }, untrusted, false).hooks.invalidWorktreeCreate).toEqual([]);
   });
 
   it("ignores unknown events and an invalid WorktreeRemove list without blocking setup", () => {
@@ -141,26 +144,5 @@ describe("worktree hook configuration", () => {
       expect(decoded.invalidWorktreeCreate).toEqual([]);
       expect(decoded.diagnostics).toEqual([diagnostic]);
     }
-  });
-
-  it("floors a fractional hook timeout", () => {
-    const decoded = subagentConfigDecoder("global")({
-      version: 6,
-      hooks: { WorktreeCreate: [{ command: ["pnpm"], timeout: 299.9 }] },
-    });
-    expect(decoded.file.hooks).toEqual({ WorktreeCreate: [{ command: ["pnpm"], timeout: 299 }] });
-    expect(decoded.invalidWorktreeCreate).toEqual([]);
-    expect(decoded.diagnostics).toEqual(["global.hooks.WorktreeCreate[0].timeout"]);
-  });
-
-  it("reports the removed workspace command and include fields as unknown", () => {
-    for (const removed of [
-      { workspaceSetup: { command: ["pnpm", "install"] } },
-      { workspaceVerify: { command: ["pnpm", "test"] } },
-      { workspaceInclude: [".env"] },
-    ])
-      expect(subagentConfigDecoder("project")({ version: 6, ...removed }).diagnostics).toContain(
-        "project.<unknown>",
-      );
   });
 });

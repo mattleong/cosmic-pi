@@ -17,7 +17,7 @@ import { getEditPreviewOperations, getPathArg, type EditPreviewOperation } from 
 import { getEditDiff, getTextContent } from "../data/results";
 import { renderCodePreviewToolTitle } from "../presentation";
 import { cachedDeferredPreview } from "./shared/cache";
-import type { PreviewRenderers, RendererState } from "./shared/types";
+import type { EditProposedDiff, PreviewRenderers, RendererState } from "./shared/types";
 import { previewCacheKey } from "./shared/preview-cache-key";
 import { pathPreviewLanguage } from "./shared/preview-text";
 import {
@@ -34,10 +34,6 @@ import { previewIssuesSlot } from "../../preview/preview-issues";
 import { hostObject } from "../../shared/untrusted-value";
 
 const COLLAPSED_EDIT_BLOCKS = 3;
-
-type ProposedDiff =
-  | { readonly kind: "diff"; readonly diff: string; readonly summary: DiffSummary }
-  | { readonly kind: "skipped"; readonly guard: "size" | "complexity" };
 
 export function editPreviewRenderers(cwd: string): PreviewRenderers {
   return {
@@ -183,15 +179,15 @@ function editOperationsSource(operations: EditPreviewOperation[]): string {
   return JSON.stringify(Arr.map(operations, ({ oldText, newText }) => [oldText, newText]));
 }
 
-function proposedDiffs(state: RendererState, source: string): Array<ProposedDiff | undefined> {
+function proposedDiffs(state: RendererState, source: string): Array<EditProposedDiff | undefined> {
   const cached = state.editProposedDiffs;
   if (cached?.source === source && Arr.isArray(cached.diffs)) return cached.diffs;
-  const diffs: Array<ProposedDiff | undefined> = [];
+  const diffs: Array<EditProposedDiff | undefined> = [];
   state.editProposedDiffs = { source, diffs };
   return diffs;
 }
 
-function proposeDiff({ oldText, newText }: EditPreviewOperation): ProposedDiff {
+function proposeDiff({ oldText, newText }: EditPreviewOperation): EditProposedDiff {
   const guard = getWriteDiffGuard(oldText, newText);
   if (guard) return { kind: "skipped", guard };
   const diff = createSnippetDiff(oldText, newText);
@@ -200,7 +196,7 @@ function proposeDiff({ oldText, newText }: EditPreviewOperation): ProposedDiff {
 
 function renderEditCallPreview(
   operations: EditPreviewOperation[],
-  diffs: Array<ProposedDiff | undefined>,
+  diffs: Array<EditProposedDiff | undefined>,
   path: string,
   expanded: boolean,
   theme: Theme,

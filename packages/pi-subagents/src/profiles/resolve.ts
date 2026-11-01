@@ -197,22 +197,6 @@ const resolveCandidate = (
   return resolvePiModel(candidate.model, LOCAL_PI_MODEL_SKIPS);
 };
 
-/** An agent's overrides apply to each candidate before planning. */
-const resolveRouteCandidate = (
-  candidate: ProfileCandidate,
-  candidateIndex: number,
-  environment: ProfileResolutionEnvironment,
-  profileDefaultEffort: SubagentEffort | undefined,
-  agent: CustomAgent | undefined,
-): CandidateResult => {
-  return resolveCandidate(
-    agent ? customAgentCandidate(candidate, agent) : candidate,
-    candidateIndex,
-    environment,
-    profileDefaultEffort,
-  );
-};
-
 const resolveKnownProfileRoute = (
   profile: ProfileId,
   route: ProfileRoute,
@@ -232,12 +216,12 @@ const resolveKnownProfileRoute = (
   const skippedCandidates: SkippedProfileCandidate[] = [];
   let pendingSkipped: SkippedProfileCandidate[] = [];
   Arr.forEach(route.candidates, (candidate, candidateIndex) => {
-    const result = resolveRouteCandidate(
-      candidate,
+    // An agent's overrides apply to each candidate before planning.
+    const result = resolveCandidate(
+      agent ? customAgentCandidate(candidate, agent) : candidate,
       candidateIndex,
       environment,
       defaultEffort,
-      agent,
     );
     if (result.attempt) {
       attempts.push({

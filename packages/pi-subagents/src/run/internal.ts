@@ -185,6 +185,21 @@ export const beginCleanup = (record: RunRecord): void => {
   if (record.cleanupDisposition === "none") record.cleanupDisposition = "pending";
 };
 
+/** Gives a run a fresh scope and cleanup settlement, with no cleanup begun or recorded. */
+export const installRecordScope = (
+  record: RunRecord,
+  scope: Scope.Closeable,
+  cleanupSettlement: Deferred.Deferred<"confirmed" | "quarantined">,
+): void => {
+  record.scope = scope;
+  record.cleanupSettlement = cleanupSettlement;
+  record.cleanupDisposition = "none";
+  record.cleanupRecovery = undefined;
+  record.cleanupVerification = undefined;
+  record.closingScope = undefined;
+  record.closingScopeSettled = undefined;
+};
+
 interface RunSnapshot {
   readonly name: string;
   readonly epoch: number;

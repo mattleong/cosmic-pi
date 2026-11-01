@@ -179,19 +179,7 @@ export function createNativeCodemodeRenderers(
           label ? nativeDiscoveryNote : undefined,
         );
         const fallback = new Container();
-        fallback.addChild(
-          new Text(
-            Arr.join(
-              Arr.filter(
-                ["codemode", label],
-                (part): part is string => Predicate.isString(part) && Str.isNonEmpty(part),
-              ),
-              " ",
-            ),
-            0,
-            0,
-          ),
-        );
+        fallback.addChild(new Text(label ? `codemode ${label}` : "codemode", 0, 0));
         fallback.addChild(program);
         return safeContent(() => {
           const body = new Container();

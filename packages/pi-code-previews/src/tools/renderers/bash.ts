@@ -9,6 +9,7 @@ import { hostObject, ownField, type HostObject } from "../../shared/untrusted-va
 import { escapeControlChars } from "../../shared/terminal-text";
 import { getFirstShellCommandName } from "../../tools/shell-command";
 import { renderHighlightedText } from "../../syntax/render";
+import { stringArg } from "../data/args";
 import { getTextContent } from "../data/results";
 import { withoutShellStatus } from "../builtin-failure-shell";
 import { renderCodePreviewToolTitle } from "../presentation";
@@ -21,9 +22,8 @@ import { renderHiddenPreviewExpandHint } from "../../preview/bordered-tool-call"
 import { previewIssuesSlot } from "../../preview/preview-issues";
 
 function shouldHideBashResult(args: HostObject | undefined): boolean {
-  const command = ownField(args, "command");
   return shouldHideShellResultByCommand(
-    Predicate.isString(command) ? getFirstShellCommandName(command) : undefined,
+    getFirstShellCommandName(stringArg(args, "command")),
     codePreviewSettings,
   );
 }
@@ -32,9 +32,8 @@ export function bashPreviewRenderers(): PreviewRenderers {
   return {
     renderCall(args, theme, renderContext) {
       const input = hostObject(args);
-      const commandArg = ownField(input, "command");
+      const command = stringArg(input, "command");
       const timeoutArg = ownField(input, "timeout");
-      const command = Predicate.isString(commandArg) ? commandArg : "";
       const timeout = Predicate.isNumber(timeoutArg)
         ? theme.fg("muted", ` (timeout ${timeoutArg}s)`)
         : "";

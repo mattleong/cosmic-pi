@@ -12,6 +12,7 @@ import type { SessionRecord } from "../registry/schema.ts";
 import { IntercomRegistry, LIVENESS_CONCURRENCY, ownerIsDead } from "../registry/store.ts";
 import { IntercomSession } from "../session/service.ts";
 import {
+  sessionAnswered,
   deliverMessage,
   describeSessions,
   readLastMessage,
@@ -66,10 +67,6 @@ const peerRecords = Effect.gen(function* () {
   return Arr.filter(records, (record) => record.instance !== self.instance);
 });
 
-/** Only a listener that proved it holds the record's token can answer or refuse. */
-const answered = (result: Result.Result<unknown, IntercomClientError | IntercomRefused>) =>
-  Result.isSuccess(result) || Predicate.isTagged(result.failure, "IntercomRefused");
-
 /** Describes each record, dropping one that didn't answer when its owner is dead. */
 const describeLive = Effect.fn("IntercomTools.describeLive")(function* (
   records: ReadonlyArray<SessionRecord>,
@@ -78,7 +75,9 @@ const describeLive = Effect.fn("IntercomTools.describeLive")(function* (
   return yield* Effect.filter(
     described,
     ({ target, result }) =>
-      answered(result) ? Effect.succeed(true) : Effect.map(ownerIsDead(target), (dead) => !dead),
+      sessionAnswered(result)
+        ? Effect.succeed(true)
+        : Effect.map(ownerIsDead(target), (dead) => !dead),
     { concurrency: LIVENESS_CONCURRENCY },
   );
 });

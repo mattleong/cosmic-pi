@@ -11,17 +11,9 @@ import {
   TOOL_CALL_BACKGROUND_MODES,
   TOOL_CALL_COLLAPSED_STYLES,
   type CodePreviewSettings,
-  type ToolCallBackgroundMode,
-  type ToolCallCollapsedStyle,
 } from "./schema";
 
 export let codePreviewSettings: CodePreviewSettings = defaultCodePreviewSettings;
-
-/** The appearance every tool row and message in this Pi process shares. */
-export interface SharedPresentation {
-  readonly toolCallBackground: ToolCallBackgroundMode;
-  readonly toolCallCollapsedStyle: ToolCallCollapsedStyle;
-}
 
 // Pi loads each extension in its own module graph, and concurrent loads can mix copies of this
 // module, so a consumer's renderer may hold a copy no settings load reached. Every load publishes
@@ -36,6 +28,8 @@ const SharedPresentationSchema = Schema.Struct({
   toolCallBackground: Schema.Literals(TOOL_CALL_BACKGROUND_MODES),
   toolCallCollapsedStyle: Schema.Literals(TOOL_CALL_COLLAPSED_STYLES),
 });
+/** The appearance every tool row and message in this Pi process shares. */
+export type SharedPresentation = typeof SharedPresentationSchema.Type;
 const decodeSharedPresentation = Schema.decodeUnknownOption(SharedPresentationSchema, {
   onExcessProperty: "ignore",
 });

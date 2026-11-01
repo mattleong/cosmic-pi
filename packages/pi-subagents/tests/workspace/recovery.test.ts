@@ -24,6 +24,7 @@ import {
   failureOf,
   io,
   openWorkspaceService,
+  prepareIntegration,
   registryOf,
   temporaryDirectory,
   workspaceTarget,
@@ -104,12 +105,7 @@ it.live(
       yield* commitRepository(source, [["main.ts", "baseline\n"]]);
       const creator = yield* openWorkspaceService(agent);
       const handle = yield* creator.service.create({ sourceCwd: source, ownerId: "old/root" });
-      const target = workspaceTarget(handle);
-      const revision = yield* creator.service.freeze(target);
-      const preparation = yield* creator.service.prepare({
-        ...target,
-        revisionId: revision.revisionId,
-      });
+      const { prepared } = yield* prepareIntegration(creator.service, handle);
       yield* creator.close;
       const successor = yield* openWorkspaceService(agent);
       const registry = path.join(agent, "subagent-worktrees");
@@ -158,7 +154,7 @@ it.live(
       expect(outcome).toMatchObject({ failure: { code: "workspace_operation_failed" } });
       expect(yield* exists(path.join(renamed, "main.ts"))).toBe(true);
       expect(yield* exists(path.join(handle.cwd, "replacement.ts"))).toBe(true);
-      expect(yield* exists(path.join(preparation.cwd, "main.ts"))).toBe(true);
+      expect(yield* exists(path.join(prepared.cwd, "main.ts"))).toBe(true);
       expect((yield* successor.service.listAll).records[0]?.status).toBe("prepared");
       yield* successor.close;
     }),
@@ -186,15 +182,11 @@ it.live(
         "authorization",
       );
       expect(yield* exists(handle.cwd)).toBe(true);
-      const revision = yield* creator.service.freeze(workspaceTarget(handle));
-      const preparation = yield* creator.service.prepare({
-        ...workspaceTarget(handle),
-        revisionId: revision.revisionId,
-      });
+      const { prepared } = yield* prepareIntegration(creator.service, handle);
       yield* creator.close;
       yield* successor.service.discardOrphan(target);
       expect(yield* exists(handle.cwd)).toBe(false);
-      expect(yield* exists(preparation.cwd)).toBe(false);
+      expect(yield* exists(prepared.cwd)).toBe(false);
       expect(
         Arr.map((yield* successor.service.listAll).records, (record) => record.status),
       ).toEqual(["discarded"]);
@@ -265,18 +257,9 @@ test("collects week-old finished records but keeps unintegrated work", function*
   yield* service.discard(workspaceTarget(recent));
   const kept = yield* service.create({ sourceCwd: root, ownerId: "parent" });
   yield* writeFile(path.join(kept.cwd, "src/main.ts"), "integrated\n");
-  const revision = yield* service.freeze(workspaceTarget(kept));
-  const prepared = yield* service.prepare({
-    ...workspaceTarget(kept),
-    revisionId: revision.revisionId,
-  });
+  const { integration } = yield* prepareIntegration(service, kept);
   // A reader still using the worker tree keeps it after integration.
-  yield* service.integrate({
-    ...workspaceTarget(kept),
-    revisionId: revision.revisionId,
-    preparationId: prepared.preparationId,
-    retainTrees: true,
-  });
+  yield* service.integrate({ ...integration, retainTrees: true });
   expect(yield* exists(kept.cwd)).toBe(true);
   const active = yield* service.create({ sourceCwd: root, ownerId: "parent" });
   for (const handle of [expired, kept, active]) yield* age(agent, handle.workspaceId, 8);

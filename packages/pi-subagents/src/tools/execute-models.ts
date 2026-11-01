@@ -130,31 +130,11 @@ const agentCandidates = (
 ): ReadonlyArray<ProfileCandidate> =>
   Arr.map(candidates, (candidate) => customAgentCandidate(candidate, agent));
 
+// The agent's private instructions stay out of discovery.
 const agentView = (
-  {
-    name,
-    description,
-    profile,
-    source,
-    effort,
-    context,
-    writeIntent,
-    isolation,
-    tools,
-  }: CustomAgent,
+  { instructions: _instructions, ...agent }: CustomAgent,
   candidates: ReadonlyArray<ProfileCandidateDiscovery>,
-): SubagentAgentView => ({
-  name,
-  description,
-  profile,
-  source,
-  ...(effort !== undefined && { effort }),
-  ...(context !== undefined && { context }),
-  ...(writeIntent !== undefined && { writeIntent }),
-  ...(isolation !== undefined && { isolation }),
-  ...(tools !== undefined && { tools }),
-  candidates,
-});
+): SubagentAgentView => ({ ...agent, candidates });
 
 export const executeModelsAction = Effect.fn("SubagentTools.models")(function* (
   input: SubagentModelsInput,

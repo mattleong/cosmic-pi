@@ -11,7 +11,7 @@ import {
   type ExtensionEventNamed,
 } from "pi-cosmic-core/testing";
 import cosmicUi from "../index.ts";
-import { eventBus, execOk } from "./support/host.ts";
+import { assistantMessage, eventBus, execOk, type AssistantMessage } from "./support/host.ts";
 
 const workingHost = Effect.gen(function* () {
   let time = 0;
@@ -78,10 +78,6 @@ const workingHost = Effect.gen(function* () {
   };
 });
 
-type AssistantMessage = Extract<
-  ExtensionEventNamed<"message_end">["message"],
-  { readonly role: "assistant" }
->;
 type Usage = AssistantMessage["usage"];
 type StopReason = AssistantMessage["stopReason"];
 
@@ -94,34 +90,23 @@ const usageWith = (output: number): Usage => ({
   totalTokens: 50_000 + output,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 });
-const assistant = (usage: Usage = usageWith(0), stopReason: StopReason = "stop") =>
-  ({
-    role: "assistant",
-    content: [],
-    api: "test",
-    provider: "test",
-    model: "test",
-    usage,
-    stopReason,
-    timestamp: 0,
-  }) satisfies AssistantMessage;
 const messageEnd = (
   message: ExtensionEventNamed<"message_end">["message"],
 ): ExtensionEventNamed<"message_end"> => ({ type: "message_end", message });
 const completion = (output: number, stopReason: StopReason = "stop") =>
-  messageEnd(assistant(usageWith(output), stopReason));
+  messageEnd(assistantMessage(usageWith(output), stopReason));
 const delta = (
   type: "text_delta" | "thinking_delta" | "toolcall_delta",
   text: string,
 ): ExtensionEventNamed<"message_update"> => ({
   type: "message_update",
-  message: assistant(),
-  assistantMessageEvent: { type, contentIndex: 0, delta: text, partial: assistant() },
+  message: assistantMessage(),
+  assistantMessageEvent: { type, contentIndex: 0, delta: text, partial: assistantMessage() },
 });
 const textStart = (): ExtensionEventNamed<"message_update"> => ({
   type: "message_update",
-  message: assistant(),
-  assistantMessageEvent: { type: "text_start", contentIndex: 0, partial: assistant() },
+  message: assistantMessage(),
+  assistantMessageEvent: { type: "text_start", contentIndex: 0, partial: assistantMessage() },
 });
 
 describe("working throughput through registered Pi events", () => {
@@ -130,7 +115,7 @@ describe("working throughput through registered Pi events", () => {
       const h = yield* workingHost;
       yield* h.emit("context_with_system");
       h.at(10_000);
-      yield* h.emitEvent({ type: "message_start", message: assistant() });
+      yield* h.emitEvent({ type: "message_start", message: assistantMessage() });
       for (const type of ["text_delta", "thinking_delta", "toolcall_delta"] as const)
         yield* h.emitEvent(delta(type, Fn.pipe("a", Str.repeat(40))));
       yield* h.emitEvent(textStart());

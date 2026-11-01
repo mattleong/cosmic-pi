@@ -8,9 +8,31 @@ import { encodeSubagentContract, type SubagentContract } from "./contract-schema
 import { awaitDetails, compactToolDetails, startDetails } from "./details.ts";
 import type { SubagentStartEntry } from "./details-schema.ts";
 import { boundToolOutput, formatActionFailures, formatStartResult } from "./format.ts";
-import { managementAcknowledgement } from "./format-acknowledgement.ts";
 import type { SubagentActionFailure, SubagentStartFailure } from "./model.ts";
-import { awaitUntil, subagentToolAction, type SubagentToolInput } from "./schema.ts";
+import { formatRunBlocks, runViewBlock } from "./run-block.ts";
+import {
+  awaitUntil,
+  subagentToolAction,
+  type SubagentLifecycleInput,
+  type SubagentToolInput,
+} from "./schema.ts";
+
+const ACKNOWLEDGEMENT_HEADINGS = {
+  interrupt: "Interrupted; these runs are paused.",
+  stop: "Stop requested.",
+} as const satisfies Record<SubagentLifecycleInput["action"], string>;
+
+/** One block per target, without its report, which only an await or notice delivers. */
+const managementAcknowledgement = (
+  action: SubagentLifecycleInput["action"],
+  runs: ReadonlyArray<SubagentRunView>,
+): string =>
+  runs.length === 0
+    ? ""
+    : formatRunBlocks(
+        [ACKNOWLEDGEMENT_HEADINGS[action]],
+        Arr.map(runs, (run) => runViewBlock(run, undefined)),
+      );
 
 export interface SubagentExecutionResult {
   readonly runs: ReadonlyArray<SubagentRunView>;

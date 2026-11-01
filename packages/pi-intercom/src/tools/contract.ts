@@ -1,10 +1,10 @@
 import * as Schema from "effect/Schema";
 import {
   DispositionSchema,
-  MAX_CWD_CHARS,
+  LastMessageSchema,
   MAX_IDENTITY_CHARS,
-  MAX_READ_BYTES,
-  SessionStateSchema,
+  SenderSchema,
+  type Sender,
 } from "../transport/protocol.ts";
 
 export const SESSION_TOOL = {
@@ -39,12 +39,8 @@ const envelope = {
 const boundedString = (min: number, max: number) =>
   Schema.String.check(Schema.isMinLength(min), Schema.isMaxLength(max));
 
-export const SessionViewSchema = Schema.Struct({
-  sessionId: boundedString(1, MAX_IDENTITY_CHARS),
-  name: Schema.optionalKey(boundedString(0, MAX_IDENTITY_CHARS)),
-  cwd: boundedString(0, MAX_CWD_CHARS),
-});
-export type SessionView = typeof SessionViewSchema.Type;
+export const SessionViewSchema = SenderSchema;
+export type SessionView = Sender;
 
 export const ListedSessionSchema = Schema.Struct({
   ...SessionViewSchema.fields,
@@ -71,10 +67,7 @@ export const SessionReadContractSchema = Schema.Struct({
   ...envelope,
   tool: Schema.Literal(SESSION_TOOL.read),
   session: SessionViewSchema,
-  /** Absent when the session has no assistant message yet. */
-  text: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(MAX_READ_BYTES))),
-  truncated: Schema.Boolean,
-  state: SessionStateSchema,
+  ...LastMessageSchema.fields,
 });
 export type SessionReadContract = typeof SessionReadContractSchema.Type;
 

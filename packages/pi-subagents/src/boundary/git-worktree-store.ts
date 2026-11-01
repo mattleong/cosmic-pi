@@ -81,6 +81,22 @@ export const initializeWorkspaceStore = Effect.fn("GitWorktreeStore.initializeWo
   },
 );
 
+/** An open record as revise and rebase restart it: no revision, preparation, or integration state. */
+export const reopenedWorkspaceRecord = (
+  record: WorkspaceRecord,
+  baseline = record.baseline,
+): WorkspaceRecord => ({
+  version: 2,
+  handle: record.handle,
+  repository: record.repository,
+  baseline,
+  ownerLease: record.ownerLease,
+  lastChangedAt: record.lastChangedAt,
+  status: "active",
+  ...(record.launch && { launch: record.launch }),
+  ...(record.includedPaths && { includedPaths: record.includedPaths }),
+});
+
 export const saveWorkspaceRecord = Effect.fn("GitWorktreeStore.saveWorkspaceRecord")(function* (
   root: string,
   record: WorkspaceRecord,

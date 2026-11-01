@@ -1,4 +1,3 @@
-import * as Predicate from "effect/Predicate";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { Text } from "@earendil-works/pi-tui";
@@ -7,6 +6,7 @@ import { trimSingleTrailingNewline } from "../../preview/format";
 import { renderHiddenPreviewExpandHint } from "../../preview/bordered-tool-call";
 import { codePreviewSettings } from "../../config/state";
 import { escapeControlChars } from "../../shared/terminal-text";
+import { stringArg } from "../data/args";
 import { getTextContent } from "../data/results";
 import { createPathListRenderer } from "../path-list-render";
 import { renderCodePreviewToolTitle } from "../presentation";
@@ -14,7 +14,7 @@ import { splitListingNotice, withAgentNotes } from "./shared/output-notice";
 import { renderSelectedOutputLines } from "./shared/preview-text";
 import { renderResultPrelude } from "./shared/result-prelude";
 import type { PreviewRenderers } from "./shared/types";
-import { hostObject, ownField } from "../../shared/untrusted-value";
+import { hostObject } from "../../shared/untrusted-value";
 
 const PATH_LISTS = {
   find: {
@@ -38,10 +38,8 @@ export function pathListPreviewRenderers(tool: "find" | "ls", cwd: string): Prev
   return {
     renderCall(args, theme) {
       const input = hostObject(args);
-      const patternArg = ownField(input, "pattern");
-      const pathArg = ownField(input, "path");
-      const pattern = Predicate.isString(patternArg) ? patternArg : "";
-      const path = Predicate.isString(pathArg) && pathArg ? pathArg : ".";
+      const pattern = stringArg(input, "pattern");
+      const path = stringArg(input, "path") || ".";
       const search =
         tool === "find"
           ? `${theme.fg("accent", escapeControlChars(pattern || "*"))} ${theme.fg("muted", "in")} `

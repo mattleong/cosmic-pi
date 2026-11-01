@@ -5,11 +5,13 @@ import * as os from "node:os";
 import { nodeFs, nodeFsPromises as fs, nodePath as path } from "../support/node-builtins.ts";
 import type { WorkspaceHandle } from "../../src/workspace/model.ts";
 import type { WorkspaceServiceContract } from "../../src/workspace/service.ts";
+import { processAlive } from "../support/process-liveness.ts";
 import { unconfirmedShellCleanup } from "../support/unconfirmed-hook-cleanup.ts";
 import {
   exists,
   failureOf,
   io,
+  prepareIntegration,
   readText,
   workspaceTarget,
   workspaceTests,
@@ -66,12 +68,7 @@ const removals = (workspaceId: string) =>
 const prepareEdit = (service: WorkspaceServiceContract, handle: WorkspaceHandle) =>
   Effect.gen(function* () {
     yield* writeFile(path.join(handle.cwd, "src/main.ts"), "worker\n");
-    const revision = yield* service.freeze(workspaceTarget(handle));
-    const prepared = yield* service.prepare({
-      ...workspaceTarget(handle),
-      revisionId: revision.revisionId,
-    });
-    return { revision, prepared };
+    return yield* prepareIntegration(service, handle);
   });
 
 describe("WorktreeRemove hooks", () => {
@@ -101,12 +98,8 @@ describe("WorktreeRemove hooks", () => {
 
   test("run before integration cleans up its trees", function* (service, root) {
     const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-    const { revision, prepared } = yield* prepareEdit(service, handle);
-    yield* service.integrate({
-      ...workspaceTarget(handle),
-      revisionId: revision.revisionId,
-      preparationId: prepared.preparationId,
-    });
+    const { integration } = yield* prepareEdit(service, handle);
+    yield* service.integrate(integration);
     expect(Arr.map(yield* removals(handle.workspaceId), (input) => input.kind)).toEqual([
       "prepare",
       "worker",
@@ -196,15 +189,6 @@ const hung = workspaceTests([["src/main.ts", "baseline\n"]], [], {
     { command: ["/bin/sh", "-c", 'echo $$ > "$1"; exec sleep 30', "sh", hungPid], timeout: 1 },
   ],
 });
-
-const processAlive = (pid: number) => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-};
 
 describe("WorktreeRemove hooks that fail or hang", () => {
   hung("are killed at their timeout, and the tree is removed anyway", function* (service, root) {

@@ -53,25 +53,11 @@ const bodyEncodeError = jsonHttpError(
   "HTTP request body did not match the expected schema.",
 );
 const responseReadError = jsonHttpError("response", "Unable to read HTTP response.");
-export const responseDecodeError = jsonHttpError(
+const responseDecodeError = jsonHttpError(
   "decode",
   "HTTP response did not match the expected schema.",
 );
 const responseTooLarge = jsonHttpError("response", "HTTP response exceeded its byte limit.");
-
-type JsonHttpExecute = <A, R>(
-  input: JsonHttpRequestInput<A, R>,
-  jsonBody?: Schema.Json,
-) => Effect.Effect<JsonHttpResponse<A>, JsonHttpError, R>;
-
-export const jsonHttpClientFromExecute = (execute: JsonHttpExecute): JsonHttpClientContract => ({
-  request: (input) => execute(input),
-  requestJson: (input, bodySchema, body) =>
-    Schema.encodeEffect(Schema.encodeTo(Schema.Json)(bodySchema))(body).pipe(
-      Effect.mapError(bodyEncodeError),
-      Effect.flatMap((jsonBody) => execute(input, jsonBody)),
-    ),
-});
 
 export class JsonHttpClient extends Context.Service<JsonHttpClient, JsonHttpClientContract>()(
   "pi-cosmic-core/platform/json-http/JsonHttpClient",
@@ -120,7 +106,14 @@ export class JsonHttpClient extends Context.Service<JsonHttpClient, JsonHttpClie
         );
         return JsonHttpResponse.Accepted({ status: response.status, body });
       });
-      return JsonHttpClient.of(jsonHttpClientFromExecute(execute));
+      return JsonHttpClient.of({
+        request: (input) => execute(input),
+        requestJson: (input, bodySchema, body) =>
+          Schema.encodeEffect(Schema.encodeTo(Schema.Json)(bodySchema))(body).pipe(
+            Effect.mapError(bodyEncodeError),
+            Effect.flatMap((jsonBody) => execute(input, jsonBody)),
+          ),
+      });
     }),
   );
 }

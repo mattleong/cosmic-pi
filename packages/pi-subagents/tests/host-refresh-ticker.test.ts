@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { adaptiveHostRefreshTicker } from "../src/boundary/host-refresh-ticker.ts";
-import type { SubagentUiRefreshCadence } from "../src/ui/refresh.ts";
+import type { SubagentUiRefreshCadence } from "../src/ui/activity-panel.ts";
 
 describe("adaptive host refresh ticker", () => {
   it("replaces cadence stop-before-start and becomes idle when no repaint is needed", () => {

@@ -14,13 +14,13 @@ import type { SubagentStartInput, SubagentStartSpec } from "../../src/tools/sche
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import {
   captureSubagentTools,
-  executeTool,
   invokeOptionalTool,
   startCapturingService,
   testBackendRegistry,
   view,
   type CaptureOptions,
 } from "./fixtures/tool-harness.ts";
+import { readoutOf } from "../fixtures/run-view.ts";
 import * as Arr from "effect/Array";
 
 const decodeStartDetails = Schema.decodeUnknownSync(SubagentStartDetailsSchema);
@@ -164,16 +164,6 @@ describe("per-launch model override", () => {
     expect(startIssueStyleProblems(args, decodeStartDetails(result?.details))).toEqual([]);
   });
 
-  effectTest("still rejects a top-level effort override", function* () {
-    const requests: StartSubagentRequest[] = [];
-    yield* Effect.promise(() =>
-      expect(
-        executeTool(startWith(requests)!, { agents: [{ task: "Review", effort: "high" }] }),
-      ).rejects.toMatchObject({ code: "launch_override_not_allowed" }),
-    );
-    expect(requests).toEqual([]);
-  });
-
   effectTest("status cards and contract targets report the override", function* () {
     const modelOverride = { model: "claude-bridge/claude-sonnet-5-5" } as const;
     const run = view({
@@ -191,18 +181,7 @@ describe("per-launch model override", () => {
     const service = subagentServiceDouble({
       agentRead: () =>
         Effect.succeed({
-          agents: [
-            {
-              kind: "run",
-              id: run.id,
-              name: run.name,
-              state: run.state,
-              textStatus: "none",
-              truncated: false,
-              reportGeneration: 0,
-              run,
-            },
-          ],
+          agents: [readoutOf(run)],
           missingIds: [],
         }),
     });

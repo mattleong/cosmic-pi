@@ -21,9 +21,17 @@ import { WorkspaceService, type WorkspaceServiceContract } from "../../../src/wo
 import type { WorktreeCreateSetup } from "../../../src/config/schema.ts";
 import type { StartSubagentRequest } from "../../../src/run/model.ts";
 import type { SubagentServiceContract, SubagentServiceOptions } from "../../../src/run/service.ts";
-import { fakeChildLayer, fakeWriterLeaseLayer, request, serviceLayer } from "./service-harness.ts";
+import {
+  fakeChildLayer,
+  fakeWriterLeaseLayer,
+  request,
+  serviceLayer,
+  completeLocalRun,
+  runViews,
+} from "./service-harness.ts";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 
 export const repoWriter = (overrides: Partial<StartSubagentRequest> = {}) =>
   request({ cwd: "/repo", writeIntent: "writer", ...overrides });
@@ -446,3 +454,31 @@ export function workspaceFixture({
     statuses,
   };
 }
+
+export const completedWriter = (
+  service: SubagentServiceContract,
+  f: ReturnType<typeof workspaceFixture>,
+) =>
+  Effect.gen(function* () {
+    const run = yield* service.start(repoWriter());
+    yield* completeLocalRun(service, f.children.controls.at(-1)!, run.id, "Done.");
+    return run;
+  });
+
+export const outcomeOf = (service: SubagentServiceContract, id: string) =>
+  runViews(service).pipe(
+    Effect.map(
+      (runs) =>
+        Option.getOrUndefined(Arr.findFirst(runs, (run) => run.id === id))?.workspaceOutcome,
+    ),
+  );
+
+export const settledOutcome = (service: SubagentServiceContract, id: string) =>
+  Effect.gen(function* () {
+    for (let turn = 0; turn < 200; turn++) {
+      const outcome = yield* outcomeOf(service, id);
+      if (outcome) return outcome;
+      yield* Effect.yieldNow;
+    }
+    return yield* Effect.die(new Error(`Workspace outcome of ${id} never settled.`));
+  });

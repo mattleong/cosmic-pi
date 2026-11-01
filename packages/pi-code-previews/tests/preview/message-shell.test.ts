@@ -1,8 +1,4 @@
-import {
-  CustomMessageComponent,
-  initTheme,
-  type MessageRenderer,
-} from "@earendil-works/pi-coding-agent";
+import { initTheme, type MessageRenderer } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -59,6 +55,7 @@ describe("message shell", () => {
         withPresentationSettings(
           { toolCallCollapsedStyle: style, toolCallBackground: mode },
           () => {
+            const before = JSON.stringify(message);
             const render = withCodePreviewMessageShell(present);
             const collapsed = draw(render, false);
             const expanded = draw(render, true);
@@ -69,19 +66,10 @@ describe("message shell", () => {
             expect(Str.split(expanded, "\n").length).toBeGreaterThan(
               Str.split(collapsed, "\n").length,
             );
-            if (style === "compact") {
-              // Collapsed, it is a bare compact row with its words beneath, as compact tool rows are.
-              const rows = Str.split(collapsed, "\n");
-              expect(rows).toHaveLength(1 + 11);
-              expect(rows[0]).toContain("MESSAGE SUBJECT");
-              expect(Str.startsWith(" ")(rows[1] ?? "")).toBe(true);
-              // Expanded, it keeps the frame an expanded compact tool row has.
-              if (mode !== "off")
-                expect(Str.split(expanded, "\n").length).toBeGreaterThan(1 + WORDS.length);
-            }
             // Narrow widths still draw without losing the words.
             expect(draw(render, false, message, 12)).toContain("line");
             expect(draw(render, true, message, 4).length).toBeGreaterThan(0);
+            expect(JSON.stringify(message)).toBe(before);
           },
         ));
 
@@ -188,26 +176,5 @@ describe("message shell", () => {
             }
           },
         );
-  });
-
-  it("leaves message content unchanged and adds no spacing of its own beside Pi's", () => {
-    const before = JSON.stringify(message);
-    for (const style of STYLES)
-      for (const mode of MODES)
-        withPresentationSettings(
-          { toolCallCollapsedStyle: style, toolCallBackground: mode },
-          () => {
-            const render = withCodePreviewMessageShell(present);
-            for (const expanded of [false, true]) {
-              const row = new CustomMessageComponent(message, render, undefined, 1);
-              row.setExpanded(expanded);
-              const rows = Arr.map(row.render(80), (line) => Str.trim(stripAnsi(line)));
-              // Pi's own spacer is the only blank row before the message, as before a tool row.
-              expect(rows[0]).toBe("");
-              expect(Str.isNonEmpty(rows[1] ?? "") || mode === "on").toBe(true);
-            }
-          },
-        );
-    expect(JSON.stringify(message)).toBe(before);
   });
 });

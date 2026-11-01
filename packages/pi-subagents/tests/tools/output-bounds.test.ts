@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getTextContent } from "pi-code-previews";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
@@ -34,7 +35,7 @@ import type {
 import type { AgentMessageArrivals } from "../../src/run/message-watches.ts";
 import type { SubagentRunObservation } from "../../src/run/service.ts";
 import { MAX_ERROR_CHARS, MAX_FINAL_TEXT_CHARS, MAX_NAME_CHARS } from "../../src/run/state.ts";
-import { runIdFixture } from "../fixtures/run-view.ts";
+import { readoutOf, runIdFixture } from "../fixtures/run-view.ts";
 import { decodeSubagentContract } from "../../src/tools/contract-schema.ts";
 import {
   formatStartResult,
@@ -224,13 +225,8 @@ const worstObservations = (count: number): ReadonlyArray<SubagentRunObservation>
       : { run };
   });
 
-const resultText = (result: {
-  readonly content: ReadonlyArray<{ readonly type: string; readonly text?: string }>;
-}): string =>
-  Arr.join(
-    Arr.map(result.content, (part) => part.text ?? ""),
-    "\n",
-  );
+const resultText = (result: { readonly content: Parameters<typeof getTextContent>[0] }) =>
+  getTextContent(result.content);
 
 /** Whole retained reports from 2 KiB up to the retained cap, each saved to its file. */
 const wholeReportRuns = (count: number): ReadonlyArray<SubagentRunView> =>
@@ -512,18 +508,7 @@ describe("worst-case model-facing output", () => {
       subagentServiceDouble({
         agentRead: () =>
           Effect.succeed({
-            agents: [
-              {
-                kind: "run",
-                id: run.id,
-                name: run.name,
-                state: run.state,
-                textStatus: "none",
-                truncated: false,
-                reportGeneration: 0,
-                run,
-              },
-            ],
+            agents: [readoutOf(run)],
             missingIds: [],
           }),
         withAwaitTerminalObservations: (_ids, _until, _onUpdate, use) => use([{ run }]),

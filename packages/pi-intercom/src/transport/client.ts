@@ -4,7 +4,7 @@ import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Match from "effect/Match";
 import * as Predicate from "effect/Predicate";
-import type * as Result from "effect/Result";
+import * as Result from "effect/Result";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as RpcClient from "effect/rpc/RpcClient";
@@ -56,6 +56,11 @@ export class IntercomClientError extends Schema.TaggedError<
   IntercomClientError,
   { readonly brand: unique symbol }
 >()("IntercomClientError", { reason: IntercomClientFailureSchema }) {}
+
+/** Only a listener that proved it holds the record's token can answer or refuse. */
+export const sessionAnswered = (
+  result: Result.Result<unknown, IntercomClientError | IntercomRefused>,
+) => Result.isSuccess(result) || Predicate.isTagged(result.failure, "IntercomRefused");
 
 /** Where a session listens and the token it proves, as its registry record states. */
 export interface IntercomTarget {

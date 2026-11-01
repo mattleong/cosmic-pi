@@ -4,18 +4,14 @@ import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
 import { vi } from "vitest";
 import { signalProcessGroup } from "pi-cosmic-core";
 import { spawnIpcChild, provideBuiltLayer } from "pi-cosmic-core/testing";
-import { LocalProcess } from "../src/boundary/local-process.ts";
-import { normalizeConfig } from "../src/config/options.ts";
-import { BackgroundTaskConfigStore } from "../src/config/store.ts";
 import { BackgroundTaskService } from "../src/task/service.ts";
+import { realServiceLayer } from "./support/real-service.ts";
 
 vi.setConfig({ testTimeout: 60_000 });
 
@@ -66,18 +62,7 @@ describe("real process cleanup", () => {
   it.live("stops more than eight SIGTERM-ignoring tasks within one shared grace window", () => {
     const graceMillis = 2_000;
     const taskCount = 12;
-    const layer = BackgroundTaskService.layer().pipe(
-      Layer.provide(
-        Layer.mergeAll(
-          LocalProcess.layer,
-          Layer.succeed(
-            BackgroundTaskConfigStore,
-            normalizeConfig({ maxRunning: taskCount, stopGraceMs: graceMillis }),
-          ),
-          Path.layer,
-        ),
-      ),
-    );
+    const layer = realServiceLayer({ maxRunning: taskCount, stopGraceMs: graceMillis });
     return Effect.gen(function* () {
       const service = yield* BackgroundTaskService;
       // Each task reports SIGTERM and keeps running, so only the forced stop ends it.

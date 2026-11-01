@@ -10,7 +10,6 @@ import * as Predicate from "effect/Predicate";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
-import { indexOfFrom } from "pi-cosmic-core/text-scan";
 import type { CompactStatus } from "../tools/compact-summary";
 import type { RendererState } from "../tools/renderers/shared/types";
 import { clipToWidth } from "pi-cosmic-ui/manager";
@@ -195,11 +194,9 @@ function renderBorder(
 }
 
 function startsWithDiffBackground(line: string): boolean {
-  if (!Fn.pipe(line, Str.startsWith("\x1b[48;2;"))) return false;
-  const end = indexOfFrom(line, "m", 7);
-  if (end < 0) return false;
-  const channels = Str.split(Fn.pipe(line, Str.slice(7, end)), ";");
-  return channels.length === 3 && Arr.every(channels, (channel) => /^\d+$/.test(channel));
+  return (
+    Fn.pipe(line, Str.startsWith("\x1b[48;2;")) && /^\d+;\d+;\d+m/.test(Fn.pipe(line, Str.slice(7)))
+  );
 }
 
 export function hiddenPreviewExpandHintForShell(

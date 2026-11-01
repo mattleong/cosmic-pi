@@ -65,6 +65,12 @@ export interface BackgroundTaskContractResult {
 type BackgroundTaskAction = BackgroundTaskToolInput["action"];
 type BackgroundTaskField = Exclude<keyof BackgroundTaskToolInput, "action">;
 
+const invalidCommand = (
+  message: string,
+  problem: InvalidBackgroundCommandError["problem"],
+  fields: ReadonlyArray<string>,
+) => Effect.fail(InvalidBackgroundCommandError.make({ message, problem, fields }));
+
 /** A non-blank value, as submitted. */
 const present = (
   value: string | undefined,
@@ -73,11 +79,7 @@ const present = (
 ): Effect.Effect<string, InvalidBackgroundCommandError> =>
   value && Str.trim(value)
     ? Effect.succeed(value)
-    : InvalidBackgroundCommandError.make({
-        message: `The ${action} action requires ${field}.`,
-        problem: "missing",
-        fields: [field],
-      });
+    : invalidCommand(`The ${action} action requires ${field}.`, "missing", [field]);
 
 const required = (value: string | undefined, field: string, action: BackgroundTaskAction) =>
   Effect.map(present(value, field, action), (text) => Str.trim(text));
@@ -107,12 +109,6 @@ const fieldList = (fields: ReadonlyArray<string>): string =>
   fields.length < 3
     ? Arr.join(fields, " or ")
     : `${Arr.join(fields.slice(0, -1), ", ")}, or ${fields.at(-1) ?? ""}`;
-
-const invalidCommand = (
-  message: string,
-  problem: InvalidBackgroundCommandError["problem"],
-  fields: ReadonlyArray<string>,
-) => Effect.fail(InvalidBackgroundCommandError.make({ message, problem, fields }));
 
 const isBlank = (value: string): boolean => Str.trim(value) === "";
 
@@ -161,12 +157,13 @@ const NOTICE_PROMISES = {
   failure: "A message will tell you if it fails or times out; you don't need to poll for that.",
 } as const satisfies Record<BackgroundTaskNotifyFilter, string>;
 
+const exitFields = (task: BackgroundTaskSnapshot): string =>
+  `${task.exitCode === undefined ? "" : ` code=${task.exitCode ?? "null"}`}${task.signal ? ` signal=${task.signal}` : ""}`;
+
 const formatBackgroundTask = (task: BackgroundTaskSnapshot): string => {
-  const exit = task.exitCode === undefined ? "" : ` code=${task.exitCode ?? "null"}`;
-  const signal = task.signal ? ` signal=${task.signal}` : "";
   const line = truncateLine(
     sanitizeTerminalLine(
-      `${task.id}${task.name ? ` ${task.name}` : ""} ${task.state}${exit}${signal} — ${task.command}`,
+      `${task.id}${task.name ? ` ${task.name}` : ""} ${task.state}${exitFields(task)} — ${task.command}`,
     ),
     MAX_TASK_LINE_CHARS,
   ).text;
@@ -215,9 +212,6 @@ const formatTaskList = (
   }
   return Arr.join(lines, "\n");
 };
-
-const exitFields = (task: BackgroundTaskSnapshot): string =>
-  `${task.exitCode === undefined ? "" : ` code=${task.exitCode ?? "null"}`}${task.signal ? ` signal=${task.signal}` : ""}`;
 
 const waitHeader = (result: BackgroundTaskStatusWait, requestedSeconds?: number): string => {
   const cursor = result.matchCursor ?? result.nextCursor;
@@ -386,13 +380,7 @@ const decodeContains = Schema.decodeUnknownOption(
 const containsAlternatives = (contains: NonNullable<BackgroundTaskToolInput["contains"]>) =>
   Option.match(decodeContains(contains), {
     onNone: () =>
-      Effect.fail(
-        InvalidBackgroundCommandError.make({
-          message: "contains must be one text or a list of texts.",
-          problem: "invalid",
-          fields: ["contains"],
-        }),
-      ),
+      invalidCommand("contains must be one text or a list of texts.", "invalid", ["contains"]),
     onSome: (decoded) =>
       Effect.succeed(Arr.filter(Predicate.isString(decoded) ? [decoded] : decoded, Str.isNonEmpty)),
   });
@@ -401,13 +389,8 @@ const waitRequest = Effect.fn("BackgroundTaskCommand.waitRequest")(function* (
   input: BackgroundTaskToolInput,
 ) {
   const until = input.until;
-  if (until === undefined) {
-    return yield* InvalidBackgroundCommandError.make({
-      message: "The wait action requires until.",
-      problem: "missing",
-      fields: ["until"],
-    });
-  }
+  if (until === undefined)
+    return yield* invalidCommand("The wait action requires until.", "missing", ["until"]);
   // An exit wait does not use contains or afterCursor, so it ignores their placeholders.
   const exitPlaceholder = (value: BackgroundTaskToolInput["contains" | "afterCursor"]) =>
     until === "exit" && isPlaceholder(value);
@@ -552,11 +535,7 @@ export const executeBackgroundTaskCommand = Effect.fn("BackgroundTaskCommand.exe
       );
     }
   }
-  return yield* InvalidBackgroundCommandError.make({
-    message: UNKNOWN_ACTION,
-    problem: "invalid",
-    fields: ["action"],
-  });
+  return yield* invalidCommand(UNKNOWN_ACTION, "invalid", ["action"]);
 });
 
 export interface BackgroundTaskFailureResult {

@@ -15,7 +15,6 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-const styles = ["compact"] as const;
 const PROVIDER_TEXT = "PROVIDER_EVIDENCE recovery notes";
 const details = {
   id: "image-identity",
@@ -36,46 +35,44 @@ const harness = (
     toolSource,
   });
 
-const presentation = (style: (typeof styles)[number]) =>
-  Effect.acquireRelease(
-    Effect.sync(() =>
-      applyPresentationSettings({ toolCallCollapsedStyle: style, toolCallTiming: false }),
-    ),
-    (restore) => Effect.sync(restore),
-  );
+const presentation = Effect.acquireRelease(
+  Effect.sync(() =>
+    applyPresentationSettings({ toolCallCollapsedStyle: "compact", toolCallTiming: false }),
+  ),
+  (restore) => Effect.sync(restore),
+);
 
 layer(nodeFilePlatformLayer)("Better OpenAI history before session_start", (it) => {
-  for (const style of styles)
-    for (const owner of ["owned", "foreign"] as const)
-      it.effect(`the same cold ${style} image row adopts only its own tool (${owner})`, () =>
-        Effect.gen(function* () {
-          yield* presentation(style);
-          const h = yield* harness(
-            owner === "owned" ? ownerSource : { ...ownerSource, path: "/extensions/foreign.ts" },
-          );
-          const cold = h.resolve(OPENAI_IMAGE_TOOL);
-          expect(cold).toBeDefined();
-          const row = createToolPresentationHarness(cold!, { theme, width: 240 });
-          const args = { prompt: details.prompt };
-          const result = { details, content: [text(PROVIDER_TEXT), image] };
-          const before = structuredClone(result);
-          row.call(args);
-          row.result(result);
-          expect(Arr.join(row.render(), "\n")).toContain(PROVIDER_TEXT);
+  for (const owner of ["owned", "foreign"] as const)
+    it.effect(`the same cold compact image row adopts only its own tool (${owner})`, () =>
+      Effect.gen(function* () {
+        yield* presentation;
+        const h = yield* harness(
+          owner === "owned" ? ownerSource : { ...ownerSource, path: "/extensions/foreign.ts" },
+        );
+        const cold = h.resolve(OPENAI_IMAGE_TOOL);
+        expect(cold).toBeDefined();
+        const row = createToolPresentationHarness(cold!, { theme, width: 240 });
+        const args = { prompt: details.prompt };
+        const result = { details, content: [text(PROVIDER_TEXT), image] };
+        const before = structuredClone(result);
+        row.call(args);
+        row.result(result);
+        expect(Arr.join(row.render(), "\n")).toContain(PROVIDER_TEXT);
 
-          yield* h.emit("session_start");
-          expect(Arr.map(h.tools, (tool) => tool.name)).toEqual([OPENAI_IMAGE_TOOL]);
-          for (const { expanded, text: rendered } of row.cycle(args, result)) {
-            expect(rendered).not.toContain(image.data);
-            if (expanded) {
-              expect(rendered).toContain(PROVIDER_TEXT);
-              if (owner === "owned") expect(rendered).toContain(details.revisedPrompt);
-            } else {
-              expect(Fn.pipe(rendered, Str.includes(PROVIDER_TEXT))).toBe(owner === "foreign");
-            }
+        yield* h.emit("session_start");
+        expect(Arr.map(h.tools, (tool) => tool.name)).toEqual([OPENAI_IMAGE_TOOL]);
+        for (const { expanded, text: rendered } of row.cycle(args, result)) {
+          expect(rendered).not.toContain(image.data);
+          if (expanded) {
+            expect(rendered).toContain(PROVIDER_TEXT);
+            if (owner === "owned") expect(rendered).toContain(details.revisedPrompt);
+          } else {
+            expect(Fn.pipe(rendered, Str.includes(PROVIDER_TEXT))).toBe(owner === "foreign");
           }
-          expect(result).toEqual(before);
-          yield* h.emit("session_shutdown");
-        }),
-      );
+        }
+        expect(result).toEqual(before);
+        yield* h.emit("session_shutdown");
+      }),
+    );
 });

@@ -165,21 +165,12 @@ export const profileSetPickerEntries = (
   ];
 };
 
-export const initialProfileSetPickerIndex = (entries: ReadonlyArray<ProfileSetPickerEntry>) => {
-  const defaultEntry = Option.getOrElse(
+export const initialProfileSetPickerIndex = (entries: ReadonlyArray<ProfileSetPickerEntry>) =>
+  Fn.pipe(
     Arr.findFirstIndex(entries, (entry) => entry.kind !== "scope-note" && entry.scopeDefault),
-    () => -1,
+    Option.orElse(() => Arr.findFirstIndex(entries, (entry) => entry.kind !== "scope-note")),
+    Option.getOrElse(() => 0),
   );
-  return defaultEntry >= 0
-    ? defaultEntry
-    : Math.max(
-        0,
-        Option.getOrElse(
-          Arr.findFirstIndex(entries, (entry) => entry.kind !== "scope-note"),
-          () => -1,
-        ),
-      );
-};
 
 export const qualifiedProfileSetLabel = (ref: PersistentProfileSetRef): string =>
   `${SCOPE_LABELS[ref.scope]}/${ref.name}`;

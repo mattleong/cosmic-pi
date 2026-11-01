@@ -180,40 +180,36 @@ it("claims registered MCP definitions only from the exact builtin MCP source", (
   }
 });
 
-for (const style of ["compact"] as const)
-  for (const background of ["off"] as const)
-    it(`${style}/${background} ready rows keep output when each slot is resolved separately`, () => {
-      setPlainPreviewSettings({
-        toolCallCollapsedStyle: style,
-        toolCallBackground: background,
-        tools: ["bash"],
-      });
-      const { owner, resolver } = presentationResolver({ getAllTools: () => [info("bash")] }, [
-        "bash",
-      ]);
-      const args = { command: "echo exact" };
-      const state = {};
-      const call = resolver("bash", () => downstream)!.renderCall!(
-        args,
-        plainTheme,
-        renderContextFixture({ args, state, executionStarted: true }),
-      );
-      call.render(100);
-      const result = resolver("bash", () => downstream)!.renderResult!(
-        { content: [{ type: "text", text: "COMPLETE OUTPUT" }], details: {} },
-        { expanded: true, isPartial: false },
-        plainTheme,
-        renderContextFixture({
-          args,
-          state,
-          executionStarted: true,
-          expanded: true,
-          isPartial: false,
-        }),
-      );
-      assert.match(Arr.join(result.render(100), "\n"), /COMPLETE OUTPUT/);
-      owner.retire();
-    });
+it("compact/off ready rows keep output when each slot is resolved separately", () => {
+  setPlainPreviewSettings({
+    toolCallCollapsedStyle: "compact",
+    toolCallBackground: "off",
+    tools: ["bash"],
+  });
+  const { owner, resolver } = presentationResolver({ getAllTools: () => [info("bash")] }, ["bash"]);
+  const args = { command: "echo exact" };
+  const state = {};
+  const call = resolver("bash", () => downstream)!.renderCall!(
+    args,
+    plainTheme,
+    renderContextFixture({ args, state, executionStarted: true }),
+  );
+  call.render(100);
+  const result = resolver("bash", () => downstream)!.renderResult!(
+    { content: [{ type: "text", text: "COMPLETE OUTPUT" }], details: {} },
+    { expanded: true, isPartial: false },
+    plainTheme,
+    renderContextFixture({
+      args,
+      state,
+      executionStarted: true,
+      expanded: true,
+      isPartial: false,
+    }),
+  );
+  assert.match(Arr.join(result.render(100), "\n"), /COMPLETE OUTPUT/);
+  owner.retire();
+});
 
 it("new rows keep origin-owner appearance and tool selection until the next session", () => {
   setPlainPreviewSettings({

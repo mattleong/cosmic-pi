@@ -220,49 +220,29 @@ describe("session wake", () => {
     }),
   );
 
-  it.effect("wakes after a compaction ends once the session becomes idle", () =>
-    Effect.gen(function* () {
-      const test = harness();
-      test.setIdle(false);
-      test.deliver();
-      yield* Effect.promise(() =>
-        test.emit("session_compact_failed", test.ctx, {
-          type: "session_compact_failed",
-          reason: "manual",
-          aborted: true,
-          willRetry: false,
-          fromExtension: false,
-        }),
-      );
-      expect(test.wakes()).toHaveLength(0);
+  it.effect.each([true, false])(
+    "waits for a compaction that ended with aborted=%s and wakes once the session is idle",
+    (aborted) =>
+      Effect.gen(function* () {
+        const test = harness();
+        test.setIdle(false);
+        test.deliver();
+        yield* Effect.promise(() =>
+          test.emit("session_compact_failed", test.ctx, {
+            type: "session_compact_failed",
+            reason: "manual",
+            aborted,
+            willRetry: false,
+            fromExtension: false,
+          }),
+        );
+        for (let check = 0; check < 200; check += 1) test.runChecks();
+        expect(test.wakes()).toHaveLength(0);
 
-      test.setIdle(true);
-      test.runChecks();
-      expect(test.wakes()).toHaveLength(1);
-    }),
-  );
-
-  it.effect("keeps waiting for a long compaction to end before it wakes", () =>
-    Effect.gen(function* () {
-      const test = harness();
-      test.setIdle(false);
-      test.deliver();
-      yield* Effect.promise(() =>
-        test.emit("session_compact_failed", test.ctx, {
-          type: "session_compact_failed",
-          reason: "manual",
-          aborted: false,
-          willRetry: false,
-          fromExtension: false,
-        }),
-      );
-      for (let check = 0; check < 200; check += 1) test.runChecks();
-      expect(test.wakes()).toHaveLength(0);
-
-      test.setIdle(true);
-      test.runChecks();
-      expect(test.wakes()).toHaveLength(1);
-    }),
+        test.setIdle(true);
+        test.runChecks();
+        expect(test.wakes()).toHaveLength(1);
+      }),
   );
 
   // The harness's owner settles first and starts a turn that shows both owners' notices.

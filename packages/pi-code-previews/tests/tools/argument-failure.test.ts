@@ -18,7 +18,7 @@ import { resolveCompactSummary } from "../../src/tools/compact-summary";
 import { withCodePreviewShell } from "../../src/tools/cooperative-tools";
 import { nativeToolSearchSummary } from "../../src/tools/native-tool-search-summary";
 import { nativeCall, scriptResult, settledSummary } from "../support/native-codemode";
-import { builtinRenderers, stripAnsi } from "../support/render";
+import { builtinRenderers, stripAnsi, textResult } from "../support/render";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
@@ -53,11 +53,6 @@ const builtins: readonly BuiltinCompactTool[] = [
   "write",
 ];
 
-const text = (value: string): AgentToolResult<unknown> => ({
-  content: [{ type: "text", text: value }],
-  details: {},
-});
-
 const projection: BuiltinCompactProjectionInput = {
   phase: "settled",
   args: {},
@@ -72,7 +67,7 @@ const projection: BuiltinCompactProjectionInput = {
   maxWriteDiffChangedLineCells: 10000,
 };
 const rejected = (tool: BuiltinCompactTool, value: string, args: Record<string, string> = {}) =>
-  projectBuiltinCompactSummary(tool, { ...projection, args, result: text(value) });
+  projectBuiltinCompactSummary(tool, { ...projection, args, result: textResult(value, {}) });
 
 const renderedLs = (
   args: Record<string, string>,
@@ -119,7 +114,7 @@ describe("Pi argument rejections", () => {
       ...projection,
       args,
       isError: false,
-      result: text("No matches found"),
+      result: textResult("No matches found", {}),
     });
     expect(rejected("grep", mismatched("grep"), args)?.subject).toBe(settled?.subject);
   });
@@ -136,7 +131,7 @@ describe("Pi argument rejections", () => {
     const search = nativeToolSearchSummary({
       phase: "settled",
       args: {},
-      result: text(malformed("tool_search")),
+      result: textResult(malformed("tool_search"), {}),
       context: renderContextFixture({ isError: true, isPartial: false }),
     });
     expect(search?.outcome).toBe("error");
@@ -158,8 +153,8 @@ describe("Pi argument rejections", () => {
   });
 
   test("only a call Pi rejected before running loses the target its empty arguments imply", () => {
-    const notFound = text("Path not found: /project");
-    const rejection = text(malformed("ls"));
+    const notFound = textResult("Path not found: /project", {});
+    const rejection = textResult(malformed("ls"), {});
     for (const style of ["compact", "preview"] as const) {
       applyPresentationSettings({ toolCallCollapsedStyle: style });
       // Pi records a duration only for a call that ran.
@@ -177,7 +172,7 @@ describe("Pi argument rejections", () => {
         label: "owned",
         description: "Owned tool",
         parameters: { type: "object", properties: {} },
-        execute: () => Promise.resolve(text("unused")),
+        execute: () => Promise.resolve(textResult("unused", {})),
         renderCall: () => new Text("owned call", 0, 0),
         renderResult: (result, { expanded }) =>
           new Text(
@@ -202,7 +197,7 @@ describe("Pi argument rejections", () => {
         const value = malformed(name);
         const tool = createToolPresentationHarness(renderers, { width: 200 });
         const [collapsed, expanded] = Arr.map(
-          tool.cycle({}, text(value), {
+          tool.cycle({}, textResult(value, {}), {
             states: [false, true],
             overrides: () => ({ isError: true }),
           }),

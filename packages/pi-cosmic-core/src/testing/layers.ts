@@ -14,18 +14,7 @@ import {
   type JsonDocumentStoreContract,
   type JsonObject,
 } from "../platform/json-document.ts";
-import {
-  JsonHttpClient,
-  jsonHttpClientFromExecute,
-  JsonHttpResponse,
-  responseDecodeError,
-  type JsonHttpRequest,
-} from "../platform/json-http.ts";
-import {
-  JsonDocumentError,
-  type JsonHttpError,
-  type StreamingHttpError,
-} from "../platform/errors.ts";
+import { JsonDocumentError, type StreamingHttpError } from "../platform/errors.ts";
 import {
   StreamingHttpClient,
   type StreamingHttpRequest,
@@ -55,7 +44,6 @@ export interface InMemoryDocuments {
     started: Deferred.Deferred<void>,
     release: Deferred.Deferred<void>,
   ) => void;
-  readonly updateCount: number;
 }
 
 interface JsonDocumentUpdateGate {
@@ -100,7 +88,6 @@ export function makeInMemoryDocuments(
   const pathSemaphores = new Map<string, Semaphore.Semaphore>();
   let beforeNextUpdate: ((current: JsonObject) => JsonObject) | undefined;
   let nextUpdateGate: JsonDocumentUpdateGate | undefined;
-  let updateCount = 0;
   const operations: string[] = [];
   const record = (operation: string, path: string) =>
     Effect.sync(() => void operations.push(`${operation}:${path}`));
@@ -114,7 +101,6 @@ export function makeInMemoryDocuments(
   const modifyObject: JsonDocumentStoreContract["modifyObject"] = (path, modify) =>
     semaphoreFor(path).withPermit(
       Effect.gen(function* () {
-        updateCount++;
         const current = storedDocuments.get(path);
         const isolated: JsonObject =
           current === undefined ? {} : yield* cloneDocument("read", path, current);
@@ -177,58 +163,8 @@ export function makeInMemoryDocuments(
     blockNextUpdateAtCommit(started, release) {
       nextUpdateGate = { phase: "Committed", started, release };
     },
-    get updateCount() {
-      return updateCount;
-    },
   };
 }
-
-export type JsonHttpTestResponse =
-  | {
-      readonly status: number;
-      readonly body: Schema.Json;
-      readonly rawBody?: never;
-    }
-  | {
-      readonly status: number;
-      readonly rawBody: string;
-      readonly body?: never;
-    };
-
-type JsonHttpTestRequest = Omit<
-  JsonHttpRequest<Schema.ConstraintDecoder<unknown, unknown>>,
-  "responseSchema"
-> & {
-  readonly encodedJsonBody?: Schema.Json;
-};
-
-export const jsonHttpTestLayer = (
-  handle: (input: JsonHttpTestRequest) => Effect.Effect<JsonHttpTestResponse, JsonHttpError>,
-): Layer.Layer<JsonHttpClient> =>
-  Layer.succeed(
-    JsonHttpClient,
-    JsonHttpClient.of(
-      jsonHttpClientFromExecute((input, encodedJsonBody) =>
-        Effect.gen(function* () {
-          const requestInput: JsonHttpTestRequest =
-            encodedJsonBody === undefined ? input : { ...input, encodedJsonBody };
-          const response = yield* handle(requestInput);
-          if (response.status < 200 || response.status >= 300)
-            return JsonHttpResponse.Rejected({ status: response.status });
-          const rawBody =
-            "body" in response
-              ? response.body
-              : yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Json))(
-                  response.rawBody,
-                ).pipe(Effect.mapError(responseDecodeError));
-          const body = yield* Schema.decodeEffect(input.responseSchema)(rawBody).pipe(
-            Effect.mapError(responseDecodeError),
-          );
-          return JsonHttpResponse.Accepted({ status: response.status, body });
-        }),
-      ),
-    ),
-  );
 
 export interface StreamingHttpTestRequest extends StreamingHttpRequest {
   readonly encodedJsonBody?: Schema.Json;
@@ -244,11 +180,6 @@ export const streamingHttpTestLayer = (
   );
   return Layer.succeed(StreamingHttpClient, StreamingHttpClient.of({ requestJsonRawBytes }));
 };
-
-export const jsonHttpRawResponse = (status: number, rawBody: string): JsonHttpTestResponse => ({
-  status,
-  rawBody,
-});
 
 export const streamingHttpResponse = (
   status: number,

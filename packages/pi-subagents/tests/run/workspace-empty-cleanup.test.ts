@@ -3,53 +3,29 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import type { SubagentNotification } from "../../src/boundary/host-notifier.ts";
-import type { SubagentServiceContract } from "../../src/run/service.ts";
 import { WorkspaceError } from "../../src/workspace/model.ts";
 import {
   acknowledgeCompletions,
   awaitRuns,
   completeLocalRun,
   request,
-  runViews,
   withService,
+  yieldTurns,
 } from "./fixtures/service-harness.ts";
 import {
   pauseAt,
   repoWriter,
   stoppedWriter,
   workspaceFixture,
+  completedWriter,
+  outcomeOf,
+  settledOutcome,
 } from "./fixtures/workspace-engine.ts";
 import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
 
 type Fixture = ReturnType<typeof workspaceFixture>;
 
 const unchanged = { changedPaths: [], uncapturedPaths: [], diffStat: [] };
-
-const completedWriter = (service: SubagentServiceContract, f: Fixture) =>
-  Effect.gen(function* () {
-    const run = yield* service.start(repoWriter());
-    yield* completeLocalRun(service, f.children.controls.at(-1)!, run.id, "Done.");
-    return run;
-  });
-
-const outcomeOf = (service: SubagentServiceContract, id: string) =>
-  runViews(service).pipe(
-    Effect.map(
-      (runs) =>
-        Option.getOrUndefined(Arr.findFirst(runs, (run) => run.id === id))?.workspaceOutcome,
-    ),
-  );
-
-const settledOutcome = (service: SubagentServiceContract, id: string) =>
-  Effect.gen(function* () {
-    for (let turn = 0; turn < 200; turn++) {
-      const outcome = yield* outcomeOf(service, id);
-      if (outcome) return outcome;
-      yield* Effect.yieldNow;
-    }
-    return yield* Effect.die(new Error(`Workspace outcome of ${id} never settled.`));
-  });
 
 /** Counts inspections, so a test can tell the settlement probe ran or never started. */
 const countInspections = (f: Fixture) => {
@@ -59,10 +35,6 @@ const countInspections = (f: Fixture) => {
   });
   return counter;
 };
-
-const settleTurns = Effect.forEach(Array.from({ length: 50 }), () => Effect.yieldNow, {
-  discard: true,
-});
 
 describe("empty worktree proposal cleanup", () => {
   it.effect(
@@ -155,7 +127,7 @@ describe("empty worktree proposal cleanup", () => {
       control.exit(1);
       yield* yieldUntil(() => control.released() === 1);
       const stopped = yield* stoppedWriter(service);
-      yield* settleTurns;
+      yield* yieldTurns(50);
       expect(counter.inspected).toBe(0);
       expect(yield* outcomeOf(service, failed.id)).toBeUndefined();
       expect(yield* outcomeOf(service, stopped.id)).toBeUndefined();
@@ -172,7 +144,7 @@ describe("empty worktree proposal cleanup", () => {
       const reader = yield* service.startSessionOwnedFrom(writer.id, request({ cwd: "/repo" }));
       expect(reader.cwd).toBe(writer.cwd);
       yield* completeLocalRun(service, f.children.controls[0]!, writer.id, "Done.");
-      yield* settleTurns;
+      yield* yieldTurns(50);
       expect(counter.inspected).toBe(0);
       expect(yield* outcomeOf(service, writer.id)).toBeUndefined();
       expect(f.entries.get(writer.workspaceId!)?.status).toBe("active");
@@ -186,7 +158,7 @@ describe("empty worktree proposal cleanup", () => {
     return withService(f.layer, function* (service) {
       const writer = yield* completedWriter(service, f);
       yield* yieldUntil(() => counter.inspected === 1);
-      yield* settleTurns;
+      yield* yieldTurns(50);
       expect(yield* outcomeOf(service, writer.id)).toBeUndefined();
       expect(f.entries.get(writer.workspaceId!)?.status).toBe("active");
       expect((yield* service.workspaceReview(writer.workspaceId!)).revisionId).toBeDefined();

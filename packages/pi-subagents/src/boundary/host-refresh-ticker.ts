@@ -1,5 +1,5 @@
 import { invokeHostCallback } from "pi-cosmic-core/host-session";
-import type { SubagentUiRefreshCadence } from "../ui/refresh.ts";
+import type { SubagentUiRefreshCadence } from "../ui/activity-panel.ts";
 
 export interface AdaptiveHostRefreshTicker {
   readonly sync: () => void;

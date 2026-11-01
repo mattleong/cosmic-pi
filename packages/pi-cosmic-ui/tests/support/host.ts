@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
+import type { ExtensionEventNamed } from "pi-cosmic-core/testing";
 import { vi } from "vitest";
 import {
   COSMIC_UI_HOST_QUERY,
@@ -36,6 +37,34 @@ export function capturedSignal(
   };
   return { signal, addEventListener, removeEventListener };
 }
+
+export type AssistantMessage = Extract<
+  ExtensionEventNamed<"message_end">["message"],
+  { readonly role: "assistant" }
+>;
+
+export const nativeUsage = (input: number) => ({
+  input,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: input,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+});
+
+export const assistantMessage = (
+  usage: AssistantMessage["usage"] = nativeUsage(0),
+  stopReason: AssistantMessage["stopReason"] = "stop",
+): AssistantMessage => ({
+  role: "assistant",
+  content: [],
+  api: "test",
+  provider: "test",
+  model: "test",
+  usage,
+  stopReason,
+  timestamp: 0,
+});
 
 export type ExecResult = Awaited<ReturnType<ExtensionAPI["exec"]>>;
 export const execResult = (stdout = "", code = 0): ExecResult => ({

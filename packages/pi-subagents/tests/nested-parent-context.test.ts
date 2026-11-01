@@ -17,20 +17,17 @@ import {
   recordingExtensionHost,
   temporaryDirectory,
 } from "pi-cosmic-core/testing";
-import { vi } from "vitest";
-import { registerSubagentApplication } from "../src/application/register.ts";
-import * as ApplicationLayers from "../src/layer.ts";
 import type { BackendDriver, BackendEvent, BackendLaunchRequest } from "../src/backend/model.ts";
 import { backendRegistryFor, SubagentBackendRegistry } from "../src/backend/service.ts";
 import { createForkedSession } from "../src/boundary/child-process.ts";
 import { registerSubagentChildBridge } from "../src/boundary/host-child.ts";
 import { capturePiParentContext } from "../src/boundary/host-child-pi.ts";
-import type { LocalPiChildIpcHandlers } from "../src/boundary/local-pi-ipc.ts";
 import { resolveProfileStart } from "../src/boundary/host-profile-resolution.ts";
 import { SubagentService } from "../src/run/service.ts";
 import { executeSubagentActionEffect } from "../src/tools/execute.ts";
 import { encodeSubagentProxyInput, withSubagentProxyParent } from "../src/tools/proxy-protocol.ts";
 import type { SubagentToolInput } from "../src/tools/schema.ts";
+import { activateRoot, proxyIpcChannel } from "./fixtures/proxy-parent.ts";
 import {
   fakeWriterLeaseLayer,
   profileLayerFor,
@@ -152,14 +149,6 @@ const profiles = profileLayerFor({
 
 const openRoot = (ctx: ExtensionContext, directory: string) =>
   Effect.gen(function* () {
-    const captured: ApplicationLayers.SubagentLayerOptions[] = [];
-    const makeLayer = ApplicationLayers.subagentApplicationLayer;
-    const capture = vi
-      .spyOn(ApplicationLayers, "subagentApplicationLayer")
-      .mockImplementation((options) => {
-        captured.push(options);
-        return makeLayer(options);
-      });
     const host = recordingExtensionHost(
       {},
       {
@@ -167,20 +156,7 @@ const openRoot = (ctx: ExtensionContext, directory: string) =>
         getActiveTools: () => ["read", "bash"],
       },
     );
-    registerSubagentApplication(host.pi, {
-      loadSettings: () => Promise.resolve(),
-      getAgentDirectory: () => directory,
-    });
-    yield* Effect.addFinalizer(() =>
-      Effect.tryPromise(() => Promise.resolve(host.emit("session_shutdown", ctx))).pipe(
-        Effect.ignore,
-        Effect.ensuring(Effect.sync(() => capture.mockRestore())),
-      ),
-    );
-    yield* Effect.tryPromise(() => Promise.resolve(host.emit("session_start", ctx)));
-    const activation = captured[0];
-    if (!activation) return yield* Effect.die("Root did not activate");
-    return { host, activation };
+    return { host, activation: yield* activateRoot(host, ctx, directory) };
   });
 
 describe("authenticated immediate-parent context", () => {
@@ -217,7 +193,6 @@ describe("authenticated immediate-parent context", () => {
         );
         const parentControl = backend.controls[0];
         if (!parentControl) return yield* Effect.die("Parent did not launch");
-        let listener: LocalPiChildIpcHandlers | undefined;
         let selectedModel: ReturnType<typeof modelFixture> | undefined = childModel;
         let effort: "medium" | "minimal" = "medium";
         let tokens = 10;
@@ -244,31 +219,7 @@ describe("authenticated immediate-parent context", () => {
         );
         registerSubagentChildBridge(childHost.pi, {
           loadSettings: () => Promise.resolve(),
-          openIpc: () => ({
-            listen: (handlers) => {
-              listener = handlers;
-              return () => {
-                listener = undefined;
-              };
-            },
-            sendContact: (contact) =>
-              Effect.sync(() => {
-                if (contact.type !== "proxy_request") return;
-                parentControl.offer({
-                  ...contact,
-                  respond: (ok, payloadJson) =>
-                    Effect.sync(() => {
-                      listener?.onControl({
-                        channel: "pi-subagents",
-                        type: "proxy_response",
-                        requestId: contact.requestId,
-                        ok,
-                        payloadJson,
-                      });
-                    }),
-                });
-              }),
-          }),
+          openIpc: () => proxyIpcChannel(parentControl.offer),
         });
         yield* Effect.addFinalizer(() =>
           Effect.tryPromise(() =>

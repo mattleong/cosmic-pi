@@ -13,6 +13,7 @@ import { vi } from "vitest";
 import { AGENT_MESSAGE_TYPE, agentMainCapabilities } from "../src/boundary/host-agent-messages.ts";
 import { registerParentWake } from "../src/boundary/host-parent-wake.ts";
 import { MAIN_AGENT_ID, type AgentCaller } from "../src/run/agent-messaging.ts";
+import { settleEvent } from "./fixtures/pi-host.ts";
 import { projectionOf } from "./fixtures/run-view.ts";
 import { localServiceFixture, request, withService } from "./run/fixtures/service-harness.ts";
 import * as Arr from "effect/Array";
@@ -23,22 +24,6 @@ const assistantEntry = (id: string, text: string): SessionEntry => ({
   parentId: null,
   timestamp: "2026-01-01T00:00:00.000Z",
   message: fauxAssistantMessage(text),
-});
-
-const settleEvent = (
-  contextMessages: AgentBeforeSettleEvent["context"]["contextMessages"],
-): AgentBeforeSettleEvent => ({
-  type: "agent_before_settle",
-  outcome: "completed",
-  entries: [],
-  continue: false,
-  context: {
-    contextEntries: [],
-    contextMessages: [...contextMessages],
-    llmMessages: [],
-    pendingMessages: [],
-    canContinue: true,
-  },
 });
 
 /** A root session whose main agent receives agent messages through the shared parent wake. */
@@ -108,7 +93,7 @@ describe("agent messages to the main agent", () => {
       // The busy run continues at its settle boundary so the model sees the message.
       const settled = yield* Effect.promise(() =>
         root.settle(
-          settleEvent([
+          settleEvent("completed", [
             fauxAssistantMessage("Working."),
             {
               role: "custom",
@@ -215,7 +200,9 @@ describe("agent messages to the main agent", () => {
         const first = yield* service.agentSend(asRun(scout.id), MAIN_AGENT_ID, "Finding.");
         const second = yield* service.agentSend(asRun(reviewer.id), MAIN_AGENT_ID, "Review.");
         const settled = yield* Effect.promise(() =>
-          root.settle(settleEvent([fauxAssistantMessage("Working."), messageInContext])),
+          root.settle(
+            settleEvent("completed", [fauxAssistantMessage("Working."), messageInContext]),
+          ),
         );
         rounds.push({
           mainStates: [first.mainState, second.mainState],

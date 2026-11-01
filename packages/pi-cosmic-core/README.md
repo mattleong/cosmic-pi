@@ -74,32 +74,32 @@ Create the session runtime at `session_start` through the runtime slot, and keep
 
 ## Public entrypoints
 
-The root remains supported, with unchanged exports and service identities, but eagerly reaches every
+The root remains supported, with unchanged service identities, but eagerly reaches every
 platform implementation. Prefer the narrow module that owns the capability; the [package export
 map](package.json) lists the complete public surface. All paths load TypeScript source directly, with
 no generated build.
 
-| Entrypoint suffix                                                                                                                      | Use                                                                     |
-| -------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `host-environment`                                                                                                                     | Dependency-free `isSubagentChildProcess` admission guard                |
-| `text`, `text-scan`, `display`, `message-text`                                                                                         | Text scans, bounded text, formatting, and message summaries             |
-| `security`, `security/sha256`                                                                                                          | Redaction, terminal safety, and hashing                                 |
-| `schema/decode`, `schema/foreign-callable`, `schema/tool-output`                                                                       | Unknown input, foreign callbacks, and tool output schemas               |
-| `host-session`, `host-command`, `host-wake`, `host-transcript`, `host-agent-messages`, `host-message-origin`                           | Host callbacks, commands, delivery, message origins, and transcripts    |
-| `session-capability`, `settings-completion`, `settings-dispatch`                                                                       | Capability exchange and settings routing                                |
-| `runtime`                                                                                                                              | Managed runtime creation, abort forwarding, and quiet host logging      |
-| `runtime/pi-api`, `runtime/session-runtime`, `runtime/host-bootstrap`                                                                  | Pi API service, session authority, and best-effort startup              |
-| `runtime-values`, `projection`                                                                                                         | Runtime type descriptions and immutable snapshots                       |
-| `coordination/listeners`, `coordination/refresh-coordinator`, `coordination/subscription-refresh`, `coordination/synchronous-ingress`  | Publication and refresh coordination                                    |
-| `config/tolerant-fields`, `config/document-ops`, `config/scoped-config-store`                                                          | Configuration decoding and persistence                                  |
-| `platform/node-file`                                                                                                                   | `nodeFilePlatformLayer`: documents, filesystem, and paths, without HTTP |
-| `platform/json-document`, `platform/safe-file`, `platform/private-file`, `platform/paths`, `platform/agent-directory`                  | Individual file and path capabilities                                   |
-| `platform/node`                                                                                                                        | `nodePlatformLayer`: the file platform plus HTTP                        |
-| `http/headers`, `platform/json-http`, `platform/streaming-http`, `platform/errors`                                                     | HTTP helpers, clients, and typed platform errors                        |
-| `platform/process`, `platform/process-tree`, `platform/process-group-exit-guard`, `platform/process-start`                             | Explicit process execution, cleanup, and identity                       |
-| `platform/cross-process-lock`, `platform/bounded-ndjson-rpc`                                                                           | Same-host locking and bounded RPC framing                               |
-| `platform/native-clock`, `platform/native-crypto`, `platform/token-verifier`, `platform/node-builtins`, `platform/shell-process-names` | Native synchronous boundaries and process-name policy                   |
-| `tool-arguments`, `testing`, `testing/sdk`                                                                                             | Optional tool preparation and test integrations                         |
+| Entrypoint suffix                                                                                                                     | Use                                                                     |
+| ------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `host-environment`                                                                                                                    | Dependency-free `isSubagentChildProcess` admission guard                |
+| `text`, `text-scan`, `display`, `message-text`                                                                                        | Text scans, bounded text, formatting, and message summaries             |
+| `security`, `security/sha256`                                                                                                         | Redaction, terminal safety, and hashing                                 |
+| `schema/decode`, `schema/foreign-callable`, `schema/tool-output`                                                                      | Unknown input, foreign callbacks, and tool output schemas               |
+| `host-session`, `host-command`, `host-wake`, `host-transcript`, `host-agent-messages`, `host-message-origin`                          | Host callbacks, commands, delivery, message origins, and transcripts    |
+| `session-capability`, `settings-completion`, `settings-dispatch`                                                                      | Capability exchange and settings routing                                |
+| `runtime`                                                                                                                             | Managed runtime creation, abort forwarding, and quiet host logging      |
+| `runtime/pi-api`, `runtime/session-runtime`, `runtime/host-bootstrap`                                                                 | Pi API service, session authority, and best-effort startup              |
+| `runtime-values`, `projection`                                                                                                        | Runtime type descriptions and immutable snapshots                       |
+| `coordination/listeners`, `coordination/refresh-coordinator`, `coordination/subscription-refresh`, `coordination/synchronous-ingress` | Publication and refresh coordination                                    |
+| `config/tolerant-fields`, `config/document-ops`, `config/scoped-config-store`                                                         | Configuration decoding and persistence                                  |
+| `platform/node-file`                                                                                                                  | `nodeFilePlatformLayer`: documents, filesystem, and paths, without HTTP |
+| `platform/json-document`, `platform/safe-file`, `platform/private-file`, `platform/paths`, `platform/agent-directory`                 | Individual file and path capabilities                                   |
+| `platform/node`                                                                                                                       | `nodePlatformLayer`: the file platform plus HTTP                        |
+| `http/headers`, `platform/json-http`, `platform/streaming-http`, `platform/errors`                                                    | HTTP helpers, clients, and typed platform errors                        |
+| `platform/process`, `platform/process-tree`, `platform/process-group-exit-guard`, `platform/process-start`                            | Explicit process execution, cleanup, and identity                       |
+| `platform/cross-process-lock`, `platform/bounded-ndjson-rpc`                                                                          | Same-host locking and bounded RPC framing                               |
+| `platform/native-clock`, `platform/native-crypto`, `platform/node-builtins`                                                           | Native synchronous boundaries                                           |
+| `tool-arguments`, `testing`, `testing/sdk`                                                                                            | Optional tool preparation and test integrations                         |
 
 Subpaths export the existing modules directly, not copies of their services or wrapper Layers.
 File operations keep their cross-process safety checks; only an asynchronous macOS liveness probe

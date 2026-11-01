@@ -17,23 +17,9 @@ import {
   makeRunContext,
   runningAssignment,
   runRecordFixture,
+  quietDelivery,
 } from "./fixtures/run-context.ts";
-
-const quietDelivery: RunNotificationDelivery = {
-  retireDelivery: Effect.void,
-  queueActionNotificationLocked: () => undefined,
-  insertCompletionLocked: () => undefined,
-  wakeCompletionLocked: () => undefined,
-  discardQuestionLocked: () => undefined,
-  handOnTakenByLocked: () => undefined,
-  outboxChangedLocked: () => Deferred.makeUnsafe<void>(),
-  signalOutboxChangedLocked: () => undefined,
-  forgetTakenReportLocked: () => undefined,
-};
-
-const yieldTurns = Effect.gen(function* () {
-  for (let turn = 0; turn < 25; turn += 1) yield* Effect.yieldNow;
-});
+import { yieldTurns } from "./fixtures/service-harness.ts";
 
 const fixture = (
   archive: ReportArchive,
@@ -66,7 +52,7 @@ describe("report files saved during settlement", () => {
 
       const settling = yield* Effect.forkChild(settle("Final report."));
       yield* Deferred.await(gate.entered);
-      const progressed = yield* Effect.forkChild(yieldTurns.pipe(Effect.as("progressed")));
+      const progressed = yield* Effect.forkChild(yieldTurns(25).pipe(Effect.as("progressed")));
       expect(yield* Fiber.join(progressed)).toBe("progressed");
       expect(record.view.state).toBe("running");
       yield* Deferred.succeed(gate.release, undefined);
@@ -93,7 +79,7 @@ describe("report files saved during settlement", () => {
           }),
         ),
       );
-      yield* yieldTurns;
+      yield* yieldTurns(25);
       expect(record.stoppedByParent).toBe(false);
       yield* Deferred.succeed(gate.release, undefined);
       yield* Fiber.join(settling);

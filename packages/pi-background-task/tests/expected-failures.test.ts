@@ -5,7 +5,6 @@ import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import {
   applyPresentationSettings,
-  captureRegistrations,
   createToolPresentationHarness,
   issueMessageStyleProblems,
 } from "pi-code-previews/testing";
@@ -19,23 +18,19 @@ import {
   InvalidBackgroundCwdError,
 } from "../src/task/errors.ts";
 import type { BackgroundTaskServiceContract } from "../src/task/service.ts";
-import { registerBackgroundTaskTool } from "../src/tools/background-task.ts";
 import type { BackgroundTaskToolInput } from "../src/tools/schema.ts";
 import { decodeBackgroundTaskFailure, failureIssue } from "../src/ui/result-facts.ts";
-import { taskServiceDouble, taskServiceRunner, taskStatus } from "./support/task-service-double.ts";
+import { registeredTaskTool, taskStatus } from "./support/task-service-double.ts";
 
 const restoreSettings = applyPresentationSettings({});
 afterEach(restoreSettings);
 
 const ctx = extensionContextFixture({ cwd: "/project" });
 
-const registeredTool = (service: Partial<BackgroundTaskServiceContract>) =>
-  captureRegistrations((pi) =>
-    registerBackgroundTaskTool(pi, { run: taskServiceRunner(taskServiceDouble(service)) }),
-  ).tools[0]!;
-
 const call = (input: BackgroundTaskToolInput, service: Partial<BackgroundTaskServiceContract>) =>
-  Effect.promise(() => registeredTool(service).execute("call", input, undefined, undefined, ctx));
+  Effect.promise(() =>
+    registeredTaskTool(service).execute("call", input, undefined, undefined, ctx),
+  );
 
 interface Case {
   readonly name: string;
@@ -143,7 +138,7 @@ describe("expected background task failures", () => {
 
         for (const style of ["compact", "preview"] as const) {
           applyPresentationSettings({ toolCallCollapsedStyle: style, toolCallTiming: false });
-          const harness = createToolPresentationHarness(registeredTool({}));
+          const harness = createToolPresentationHarness(registeredTaskTool({}));
           const [collapsed, expanded] = harness.cycle(failure.input, result, {
             states: [false, true],
             overrides: () => ({ isError: true }),
@@ -194,7 +189,7 @@ describe("expected background task failures", () => {
       expect(Option.isSome(promise)).toBe(true);
       for (const style of ["compact", "preview"] as const) {
         applyPresentationSettings({ toolCallCollapsedStyle: style, toolCallTiming: false });
-        const harness = createToolPresentationHarness(registeredTool({}));
+        const harness = createToolPresentationHarness(registeredTaskTool({}));
         for (const frame of harness.cycle(input, result, { states: [false, true] }))
           expect(frame.text).not.toContain(Option.getOrElse(promise, () => ""));
       }

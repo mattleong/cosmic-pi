@@ -13,6 +13,7 @@ import {
   type ManagerLayoutTier,
   type ManagerStatusColor,
   clipToWidth,
+  SPINNER_FRAME_MS,
   spinnerFrameAt,
 } from "pi-cosmic-ui/manager";
 import {
@@ -22,7 +23,6 @@ import {
   type SubagentRunView,
 } from "../run/model.ts";
 import { aggregateUsage } from "./metrics.ts";
-import { subagentUiRefreshCadence, type SubagentUiRefreshCadence } from "./refresh.ts";
 import {
   duplicateRunNames,
   formatRunRouteLine,
@@ -182,12 +182,25 @@ export const hasSubagentActivityPanelContent = (
   presentation.starts.length > 0 ||
   presentation.awaits.length > 0;
 
+export type SubagentUiRefreshCadence = typeof SPINNER_FRAME_MS | 1_000;
+
 // Recent messages need no cadence of their own: only tracked runs show them, and every tracked
 // state refreshes at least once a second, so a message leaves its row within a second of expiring.
-export const subagentActivityPanelCadence = (
-  panel: SubagentActivityPanelProjection,
-): SubagentUiRefreshCadence | undefined =>
-  subagentUiRefreshCadence(panel.trackedRuns, { includePausedElapsed: true });
+export const subagentActivityPanelCadence = ({
+  trackedRuns,
+}: SubagentActivityPanelProjection): SubagentUiRefreshCadence | undefined => {
+  if (Arr.some(trackedRuns, (run) => run.state === "starting" || run.state === "running"))
+    return SPINNER_FRAME_MS;
+  if (
+    Arr.some(
+      trackedRuns,
+      (run) =>
+        run.state === "waiting_for_parent" || run.state === "stopping" || run.state === "paused",
+    )
+  )
+    return 1_000;
+  return undefined;
+};
 
 const runElapsed = (run: SubagentRunView, now: number): string =>
   formatSessionAge(run.endedAt ?? now, run.startedAt);

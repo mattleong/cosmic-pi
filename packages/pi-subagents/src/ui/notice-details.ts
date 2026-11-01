@@ -94,8 +94,10 @@ export const NoticeDetailsSchema = Schema.Union([
 export type NoticeDetails = typeof NoticeDetailsSchema.Type;
 
 /** A display name, one line and bounded. */
-export const noticeName = (name: string): string =>
-  clipText(sanitizeTerminalLine(name), 60) || "subagent";
+export const displayName = (name: string): string => clipText(sanitizeTerminalLine(name), 60);
+
+/** A display name, falling back to "subagent" when nothing printable remains. */
+export const noticeName = (name: string): string => displayName(name) || "subagent";
 
 /** A short display fact or note, one line and bounded. */
 export const noticeFact = (fact: string): string =>

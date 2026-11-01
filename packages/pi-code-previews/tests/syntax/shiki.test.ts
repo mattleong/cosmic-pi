@@ -33,14 +33,11 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 
-type TokenFixture = { readonly content: string; readonly color: string; readonly offset: number };
-
-const highlighter = (
-  dispose: () => void = () => undefined,
-  codeToTokensBase: (code: string) => TokenFixture[][] = (code) => [
-    [{ content: code, color: "#ffffff", offset: 0 }],
-  ],
-) => shikiHighlighterFixture({ dispose, codeToTokensBase });
+const highlighter = (dispose: () => void = () => undefined) =>
+  shikiHighlighterFixture({
+    dispose,
+    codeToTokensBase: (code) => [[{ content: code, color: "#ffffff", offset: 0 }]],
+  });
 
 const syntaxLayer = (
   create: ShikiAdapterContract["create"],

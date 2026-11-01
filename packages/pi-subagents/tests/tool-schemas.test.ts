@@ -4,7 +4,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
-import * as Result from "effect/Result";
+import { getTextContent } from "pi-code-previews";
 import { captureRegistrations } from "pi-code-previews/testing";
 import { temporaryDirectory, toolSchemaPortabilityProblems } from "pi-cosmic-core/testing";
 import {
@@ -135,12 +135,7 @@ describe("subagent argument preparation", () => {
         Arr.findFirst(session.messages, (message) => message.role === "toolResult"),
       );
       expect(result).toMatchObject({ toolName: "agent_start", isError: true });
-      const shown = Arr.join(
-        Arr.filterMap(result?.content ?? [], (part) =>
-          part.type === "text" ? Result.succeed(part.text) : Result.failVoid,
-        ),
-        "\n",
-      );
+      const shown = getTextContent(result?.content);
       expect(shown).toMatch(/\[invalid_arguments\][\s\S]*\bagents is required/u);
       expect(shown).toContain("malformed or truncated");
       expect(shown).not.toContain("must not execute");

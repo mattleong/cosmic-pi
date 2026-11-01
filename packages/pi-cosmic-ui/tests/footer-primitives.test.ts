@@ -23,6 +23,18 @@ import { createFooterComponent } from "../src/footer/component.ts";
 import { clipToWidth } from "../src/manager/chrome.ts";
 import type { CosmicFooterTextContribution } from "../src/protocol/protocol.ts";
 
+const footerContext = (reasoning: boolean, getContextUsage: ExtensionContext["getContextUsage"]) =>
+  extensionContextFixture({
+    model: modelFixture({ id: "model", provider: "provider", reasoning, contextWindow: 200_000 }),
+    modelRegistry: { isUsingOAuth: () => false },
+    sessionManager: {
+      getCwd: () => "/project",
+      getLeafId: () => null,
+      getSessionName: () => undefined,
+    },
+    getContextUsage,
+  });
+
 const footer = (options: {
   readonly contributions: readonly CosmicFooterTextContribution[];
   readonly config: Parameters<typeof createFooterComponent>[0]["config"];
@@ -30,21 +42,7 @@ const footer = (options: {
   readonly branch?: string;
   readonly pullRequest?: { readonly number: number; readonly url: string | undefined };
 }) => {
-  const ctx = extensionContextFixture({
-    model: modelFixture({
-      id: "model",
-      provider: "provider",
-      reasoning: false,
-      contextWindow: 200_000,
-    }),
-    modelRegistry: { isUsingOAuth: () => false },
-    sessionManager: {
-      getCwd: () => "/project",
-      getLeafId: () => null,
-      getSessionName: () => undefined,
-    },
-    getContextUsage: options.contextUsage,
-  });
+  const ctx = footerContext(false, options.contextUsage);
   return createFooterComponent({
     pi: extensionApiFixture({ getThinkingLevel: () => "off" }),
     ctx: () => ctx,
@@ -144,21 +142,7 @@ it("re-renders host changes behind unchanged identities, and the theme after inv
   let branch = "main";
   let statuses = new Map<string, string>();
   let marker = "";
-  const ctx = extensionContextFixture({
-    model: modelFixture({
-      id: "model",
-      provider: "provider",
-      reasoning: true,
-      contextWindow: 200_000,
-    }),
-    modelRegistry: { isUsingOAuth: () => false },
-    sessionManager: {
-      getCwd: () => "/project",
-      getLeafId: () => null,
-      getSessionName: () => undefined,
-    },
-    getContextUsage: () => undefined,
-  });
+  const ctx = footerContext(true, () => undefined);
   const config = defaultResolvedCosmicUiConfig();
   const snapshot = { contributions: [] };
   const projection = {

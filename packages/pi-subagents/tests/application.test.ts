@@ -895,7 +895,6 @@ describe("orphaned workspace sweep notice", () => {
   effectTest(
     "tells only the user which orphans a session start swept, and reload sweeps nothing",
     function* () {
-      const makeLayer = SubagentLayers.subagentApplicationLayer;
       let sweeps = 0;
       const swept = [
         {
@@ -905,26 +904,12 @@ describe("orphaned workspace sweep notice", () => {
           patchPath: "/agent/subagent-worktrees/swept-workspace/revision.diff",
         },
       ];
-      const capture = vi
-        .spyOn(SubagentLayers, "subagentApplicationLayer")
-        .mockImplementation((options) =>
-          makeLayer(options).pipe(
-            Layer.merge(
-              Layer.succeed(
-                SubagentService,
-                subagentServiceDouble({
-                  projection: Effect.succeed({ revision: 0, runs: [] }),
-                  retireDelivery: Effect.void,
-                  sweepOrphanedWorkspaces: Effect.sync(() => {
-                    sweeps += 1;
-                    return swept;
-                  }),
-                }),
-              ),
-            ),
-          ),
-        );
-      yield* Effect.addFinalizer(() => Effect.sync(() => capture.mockRestore()));
+      yield* withServiceDouble({
+        sweepOrphanedWorkspaces: Effect.sync(() => {
+          sweeps += 1;
+          return swept;
+        }),
+      });
       const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>();
       const notify = vi.fn();
       const ctx = sessionContext({ hasUI: true, mode: "tui", ui: { notify } }, "sweep-session");

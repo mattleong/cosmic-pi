@@ -239,41 +239,6 @@ describe("SubagentConfigStore activation", () => {
     }),
   );
 
-  it.effect("drops malformed WorktreeRemove hooks but blocks setup on a malformed create", () =>
-    Effect.gen(function* () {
-      const create = { command: ["pnpm", "install"] };
-      const remove = { command: ["./cleanup"], timeout: 30 };
-      const { store } = yield* setup({
-        [GLOBAL]: v6({}, { hooks: { WorktreeCreate: [create], Unknown: [create] } }),
-        [PROJECT]: {
-          version: 6,
-          hooks: {
-            WorktreeCreate: [create, { command: "./seed-db" }],
-            WorktreeRemove: [{ command: "./cleanup" }, remove, { ...remove, shell: true }],
-          },
-        },
-      });
-      const config = yield* store.load(CWD, AGENT, true);
-      expect(config.hooks).toEqual({
-        WorktreeCreate: [
-          { ...create, scope: "global" },
-          { ...create, scope: "project" },
-        ],
-        WorktreeRemove: [{ ...remove, scope: "project" }],
-        invalidWorktreeCreate: ["project.hooks.WorktreeCreate[1]"],
-      });
-      expect(config.diagnostics).toEqual([
-        "global.hooks.<unknown>",
-        "project.hooks.WorktreeCreate[1]",
-        "project.hooks.WorktreeRemove[0]",
-        "project.hooks.WorktreeRemove[2]",
-      ]);
-      const untrusted = (yield* store.load(CWD, AGENT, false)).hooks;
-      expect(untrusted.WorktreeRemove).toEqual([]);
-      expect(untrusted.invalidWorktreeCreate).toEqual([]);
-    }),
-  );
-
   it.effect("fails activation closed on an unreadable document", () =>
     Effect.gen(function* () {
       const unreadable = Layer.succeed(
@@ -532,8 +497,7 @@ describe("profile declaration visit restore", () => {
       Effect.gen(function* () {
         const { memory, result } = yield* restore(original, { declaration });
         expect(keyOrder(savedWorker(memory.documents.get(GLOBAL)))).toEqual(keyOrder(declaration));
-        const profiles: JsonObject = { scout: "disabled" };
-        if (declaration !== undefined) profiles.worker = declaration;
+        const profiles: JsonObject = { scout: "disabled", worker: declaration };
         const expected = {
           ...original,
           profileSets: { saved: { profiles }, other: { profiles: {} } },

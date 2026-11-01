@@ -14,18 +14,16 @@ import { formatRunBlock, runViewBlock, runViewOutcome } from "../../src/tools/ru
 import {
   acknowledgeCompletions,
   contactParentFrame,
+  latestProjectedRun,
   localServiceFixture,
   request,
   runView,
   withService,
+  yieldTurns,
 } from "./fixtures/service-harness.ts";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
-
-const yieldTurns = Effect.gen(function* () {
-  for (let turn = 0; turn < 50; turn += 1) yield* Effect.yieldNow;
-});
 
 const questions = (items: ReadonlyArray<SubagentNotification>) =>
   Arr.filter(items, (item) => item.type === "question");
@@ -157,22 +155,13 @@ describe("question notification ownership", () => {
         type: "contact_cancel",
         requestId: "old",
       });
-      yield* yieldUntil(() =>
-        Option.exists(Arr.last(projections), (projection) =>
-          Arr.some(projection.runs, (view) => view.id === run.id && view.state === "running"),
-        ),
-      );
+      yield* yieldUntil(() => latestProjectedRun(projections, run.id)?.state === "running");
       const beforeReplacement = projections.length;
       fake.controls[0]?.offerIpc(contactParentFrame("old", "question", "New question?"));
       yield* yieldUntil(
         () =>
           projections.length > beforeReplacement &&
-          Option.exists(Arr.last(projections), (projection) =>
-            Arr.some(
-              projection.runs,
-              (view) => view.id === run.id && view.state === "waiting_for_parent",
-            ),
-          ),
+          latestProjectedRun(projections, run.id)?.state === "waiting_for_parent",
       );
       yield* Deferred.succeed(release, undefined);
       yield* Fiber.join(waiter);
@@ -197,7 +186,7 @@ describe("question notification ownership", () => {
         const child = yield* service.startSessionOwnedFrom(parent.id, request({ name: "child" }));
         fake.controls[1]?.offerIpc(contactParentFrame("q-1", "question", "Which way?"));
         yield* yieldUntil(() => fake.controls[0]?.sentIpc("proxy_notification") === true);
-        yield* yieldTurns;
+        yield* yieldTurns(50);
         expect(questions(notifications)).toEqual([]);
 
         // The parent took the notice but ends without answering.
@@ -250,14 +239,10 @@ describe("question notification ownership", () => {
         type: "contact_cancel",
         requestId: "q-1",
       });
-      yield* yieldUntil(() =>
-        Option.exists(Arr.last(projections), (projection) =>
-          Arr.some(projection.runs, (view) => view.id === child.id && view.state === "running"),
-        ),
-      );
+      yield* yieldUntil(() => latestProjectedRun(projections, child.id)?.state === "running");
       fake.controls[0]?.settle("Parent report.");
       yield* TestClock.adjust("30 seconds");
-      yield* yieldTurns;
+      yield* yieldTurns(50);
       expect(questions(notifications)).toEqual([]);
     });
   });

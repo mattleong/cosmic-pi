@@ -1,5 +1,4 @@
 import * as Arr from "effect/Array";
-import * as Match from "effect/Match";
 import * as Predicate from "effect/Predicate";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { matchesKey, type Component, type Focusable } from "@earendil-works/pi-tui";
@@ -183,13 +182,7 @@ export class ProfileWorkspaceComponent
     }
     if (key === "m" || key === "e") {
       this.saveFocused = false;
-      this.selectField(
-        Match.value(key).pipe(
-          Match.when("m", () => "model" as const),
-          Match.when("e", () => "effort" as const),
-          Match.exhaustive,
-        ),
-      );
+      this.selectField(key === "m" ? "model" : "effort");
       this.pane = "fields";
       this.openSelectedField();
     } else if (key === "a") this.openActions();

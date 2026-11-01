@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
+import { getTextContent } from "pi-code-previews";
 import { assert, describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
@@ -35,12 +35,6 @@ const STACK_TRACE = /\n\s*at\s|node_modules|file:\/\//u;
 
 const rejectedPrompt = (spawnIndex: number, error = "Prompt was rejected.") =>
   ({ spawnIndex, type: "prompt", error }) as const;
-
-const resultText = (result: AgentToolResult<unknown>) =>
-  Arr.join(
-    Arr.map(result.content, (part) => (part.type === "text" ? part.text : "")),
-    "\n",
-  );
 
 const startTasks = (service: SubagentServiceContract, tasks: ReadonlyArray<string>) =>
   executeSubagentActionEffect(
@@ -116,7 +110,7 @@ describe("agent_start failures after admission", () => {
         assert(run !== undefined && file !== undefined);
         expect(yield* Effect.promise(() => fs.readFile(file.path, "utf8"))).toBe(run.error);
         // The notice it replaces pointed at the file; the start result does instead.
-        const text = resultText(result);
+        const text = getTextContent(result.content);
         expect(text).toContain(file.path);
         expect(text).toContain(`agent_read ${run.id}`);
         expect(text).not.toContain(detail);

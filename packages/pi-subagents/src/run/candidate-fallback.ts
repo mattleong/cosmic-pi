@@ -8,7 +8,12 @@ import { firstLineMessage } from "pi-cosmic-core/message-text";
 import type { BackendDriver } from "../backend/model.ts";
 import { skippedCandidateRoute, type SkippedProfileCandidate } from "../profiles/model.ts";
 import { SubagentProcessError, subagentErrorCode, type SubagentError } from "./errors.ts";
-import { clearRunActivity, type RunInitialization, type RunRecord } from "./internal.ts";
+import {
+  clearRunActivity,
+  installRecordScope,
+  type RunInitialization,
+  type RunRecord,
+} from "./internal.ts";
 import { backendLaunchRequest, type LaunchPlan } from "./launch-records.ts";
 import {
   nextRouteCandidate,
@@ -72,15 +77,17 @@ export const candidateStartupFailureLocked = (
 const candidateLabel = ({ model, effort }: SkippedProfileCandidate["candidate"]) =>
   `${model}${effort === "default" ? "" : `:${effort}`}`;
 
+const failedLabels = (failed: ReadonlyArray<SkippedProfileCandidate>): string =>
+  Arr.join(
+    Arr.map(failed, ({ candidate }) => candidateLabel(candidate)),
+    ", ",
+  );
+
 const failureReason = ({ code, reason }: SkippedProfileCandidate): string =>
   `[${code}] ${firstLineMessage(reason, "startup failed")}`;
 
 /** Names the candidates whose startup failed, then the one the run moved to, then why. */
 const fallbackWarning = (failed: ReadonlyArray<SkippedProfileCandidate>, next: string): string => {
-  const labels = Arr.join(
-    Arr.map(failed, ({ candidate }) => candidateLabel(candidate)),
-    ", ",
-  );
   const reasons = Arr.join(
     Arr.map(failed, (failure) =>
       failed.length === 1
@@ -89,7 +96,7 @@ const fallbackWarning = (failed: ReadonlyArray<SkippedProfileCandidate>, next: s
     ),
     "; ",
   );
-  return `Fell back from ${labels} to ${next} before the task was issued: ${reasons}`;
+  return `Fell back from ${failedLabels(failed)} to ${next} before the task was issued: ${reasons}`;
 };
 
 /** Why a launch stopped moving through its route before trying another candidate. */
@@ -154,13 +161,7 @@ export const retargetRunLocked = (record: RunRecord, retarget: CandidateRetarget
   // Its processes are confirmed gone, and its writer-pool membership passes to the next candidate.
   Deferred.doneUnsafe(record.cleanupSettlement, Effect.succeed("confirmed"));
   record.writerPoolHandover = undefined;
-  record.scope = retarget.scope;
-  record.cleanupSettlement = retarget.cleanupSettlement;
-  record.cleanupDisposition = "none";
-  record.cleanupRecovery = undefined;
-  record.cleanupVerification = undefined;
-  record.closingScope = undefined;
-  record.closingScopeSettled = undefined;
+  installRecordScope(record, retarget.scope, retarget.cleanupSettlement);
   record.driver = driver;
   record.launch = backendLaunchRequest(plan, {
     id: record.view.id,
@@ -246,12 +247,8 @@ interface FallbackStopRecord {
  */
 export const stopFallbackLocked = (record: RunRecord, stopped: FallbackStopRecord): void => {
   const { stop, failed, skippedCandidates, nextCandidate, now } = stopped;
-  const labels = Arr.join(
-    Arr.map(failed, ({ candidate }) => candidateLabel(candidate)),
-    ", ",
-  );
   const warning = sanitizeDiagnosticText(
-    `Stopped falling back after ${labels} failed to start: [${stop.code}] ${firstLineMessage(stop.reason, "no reason given")}`,
+    `Stopped falling back after ${failedLabels(failed)} failed to start: [${stop.code}] ${firstLineMessage(stop.reason, "no reason given")}`,
     MAX_ERROR_CHARS,
   );
   const { nextCandidate: previous, ...view } = record.view;

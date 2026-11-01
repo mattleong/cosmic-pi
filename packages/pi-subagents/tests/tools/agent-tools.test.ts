@@ -19,13 +19,12 @@ import { createAgentCompactSummary } from "../../src/tools/compact-agent-summary
 import { stringContaining } from "../support/matchers.ts";
 import { decodeSubagentContract } from "../../src/tools/contract-schema.ts";
 import { executeAgentActionEffect } from "../../src/tools/execute-agents.ts";
-import type { SubagentRunView } from "../../src/run/model.ts";
 import { SubagentService } from "../../src/run/service.ts";
 import { registerAgentTools } from "../../src/tools/agent.ts";
-import { registerSubagentTools } from "../../src/tools/subagent.ts";
 import { nativeCodemodeSession } from "../support/native-codemode-session.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import { captureSubagentTools, executeTool, view } from "./fixtures/tool-harness.ts";
+import { readoutOf } from "../fixtures/run-view.ts";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
@@ -72,17 +71,6 @@ const READ: AgentReadResult = {
   ],
   missingIds: ["agent-gone"],
 };
-
-const readout = (run: SubagentRunView) => ({
-  kind: "run" as const,
-  id: run.id,
-  name: run.name,
-  state: run.state,
-  textStatus: "none" as const,
-  truncated: false,
-  reportGeneration: 0,
-  run,
-});
 
 const callers: AgentCaller[] = [];
 const listing = (state: "waiting_for_parent" | "running") =>
@@ -162,16 +150,10 @@ const agentService = () =>
     agentRead: () => Effect.succeed(READ),
   });
 
-const registered = () =>
-  captureRegistrations((pi) =>
-    registerSubagentTools(pi, {
-      environment: { cwd: "/project", projectTrusted: false },
-      run: () => Promise.reject(new Error("render-only fixture")),
-    }),
-  ).tools;
-
 const registeredTool = (name: string) =>
-  Option.getOrUndefined(Arr.findFirst(registered(), (tool) => tool.name === name))!;
+  captureSubagentTools(subagentServiceDouble({}), {
+    environment: { cwd: "/project", projectTrusted: false },
+  }).get(name)!;
 
 const namespaceOf = (nested: boolean) =>
   Option.getOrUndefined(
@@ -344,7 +326,7 @@ describe("agent tools", () => {
       const tools = captureSubagentTools(
         subagentServiceDouble({
           agentRead: () =>
-            Effect.succeed({ agents: [readout(asking), readout(failed)], missingIds: [] }),
+            Effect.succeed({ agents: [readoutOf(asking), readoutOf(failed)], missingIds: [] }),
         }),
       );
       const args = { agentIds: [asking.id, failed.id] };
@@ -412,10 +394,7 @@ describe("agent tools", () => {
     const nested = namespaceOf(true);
     expect(nested?.name).toBe(root?.name);
     expect(nested?.description).not.toBe(root?.description);
-    expect(root?.description).toBe(
-      Option.getOrUndefined(Arr.findFirst(registered(), (tool) => tool.name === "agent_start"))
-        ?.namespace?.description,
-    );
+    expect(root?.description).toBe(registeredTool("agent_start").namespace?.description);
   });
 
   it("keeps the main agent's full read text for expansion", () => {

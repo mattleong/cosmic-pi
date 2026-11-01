@@ -9,6 +9,7 @@ import {
   completeLocalRun,
   fakeChildLayer,
   fakeWriterLeaseLayer,
+  latestProjectedRun,
   localServiceFixture,
   profileLayerFor,
   request,
@@ -17,8 +18,6 @@ import {
   withService,
 } from "./fixtures/service-harness.ts";
 import { stringContaining } from "../support/matchers.ts";
-import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
 
 describe("SubagentService", () => {
   it.effect("caps active runs across the whole tree, not only per parent", () => {
@@ -209,11 +208,7 @@ describe("SubagentService", () => {
         request({ name: "await-exit-failure", writeIntent: "writer" }),
       );
       fake.controls[0]?.failExit("Fixture awaitExit failure.");
-      yield* yieldUntil(() =>
-        Option.exists(Arr.last(projections), (projection) =>
-          Arr.some(projection.runs, (run) => run.id === failedRun.id && run.state === "failed"),
-        ),
-      );
+      yield* yieldUntil(() => latestProjectedRun(projections, failedRun.id)?.state === "failed");
       yield* yieldUntil(() => fake.controls[0]?.released() === 1);
       const failed = yield* runView(service, failedRun.id);
       expect(failed).toMatchObject({

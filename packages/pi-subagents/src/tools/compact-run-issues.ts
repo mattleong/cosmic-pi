@@ -92,7 +92,6 @@ function selectionIssues(
   );
 }
 
-/** Only the attention issues of `cards`, for runs a call reports without targeting them. */
 /** Attention from runs a call didn't target; a noticed question is named, not repeated. */
 export function compactAttentionIssues(
   cards: readonly SubagentRunCard[],

@@ -1,9 +1,19 @@
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import type { AskUserAnswer, AskUserOutcome } from "../../src/questionnaire/model.ts";
 import type {
   AskUserAsyncRequest,
   AskUserChoiceQuestion,
   AskUserRequest,
 } from "../../src/questionnaire/schema.ts";
+import { AskUserService } from "../../src/questionnaire/service.ts";
+
+export const acquireService = (...args: Parameters<typeof AskUserService.layer>) =>
+  Effect.gen(function* () {
+    const context = yield* Layer.buildWithScope(AskUserService.layer(...args), yield* Effect.scope);
+    return Context.get(context, AskUserService);
+  });
 
 export const defaultQuestion: AskUserChoiceQuestion = {
   key: "choice",

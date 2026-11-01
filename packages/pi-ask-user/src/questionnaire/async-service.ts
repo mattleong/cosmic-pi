@@ -41,6 +41,9 @@ interface Entry {
   readonly deliveryAttempts: number;
 }
 
+const findEntry = (entries: ReadonlyArray<Entry>, id: string): Entry | undefined =>
+  Option.getOrUndefined(Arr.findFirst(entries, (item) => item.snapshot.requestId === id));
+
 const notFound = () =>
   AskUserAsyncError.make({
     reason: "not-found",
@@ -83,9 +86,7 @@ export const acquireAsyncQuestionnaires = Effect.fn("AskUserService.acquireAsync
   const get = (id: string) =>
     Ref.get(state).pipe(
       Effect.flatMap((entries) => {
-        const entry = Option.getOrUndefined(
-          Arr.findFirst(entries, (item) => item.snapshot.requestId === id),
-        );
+        const entry = findEntry(entries, id);
         return entry ? Effect.succeed(entry) : Effect.fail(notFound());
       }),
     );
@@ -107,9 +108,7 @@ export const acquireAsyncQuestionnaires = Effect.fn("AskUserService.acquireAsync
   ): Effect.fn.Return<void> {
     if (!delivery || (yield* Ref.get(closed))) return;
     const claimed = yield* Ref.modify(state, (entries) => {
-      const entry = Option.getOrUndefined(
-        Arr.findFirst(entries, (item) => item.snapshot.requestId === id),
-      );
+      const entry = findEntry(entries, id);
       if (
         !entry ||
         entry.waiter ||
@@ -291,9 +290,7 @@ export const acquireAsyncQuestionnaires = Effect.fn("AskUserService.acquireAsync
           const claimed = yield* Ref.modify(
             state,
             (entries): readonly [Entry | "busy" | "missing", ReadonlyArray<Entry>] => {
-              const entry = Option.getOrUndefined(
-                Arr.findFirst(entries, (item) => item.snapshot.requestId === id),
-              );
+              const entry = findEntry(entries, id);
               if (!entry || entry.waiter) return [entry ? "busy" : "missing", entries] as const;
               return [
                 entry,

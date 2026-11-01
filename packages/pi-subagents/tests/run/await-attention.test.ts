@@ -9,9 +9,10 @@ import {
   localServiceFixture,
   request,
   withService,
+  yieldTurns,
+  latestProjectedRun,
 } from "./fixtures/service-harness.ts";
 import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
 
 const summarize = (
   observations: ReadonlyArray<SubagentRunObservation>,
@@ -22,10 +23,6 @@ const summarize = (
     questions: Arr.map(questions, (run) => run.id),
   });
 
-const yieldTurns = Effect.gen(function* () {
-  for (let turn = 0; turn < 25; turn += 1) yield* Effect.yieldNow;
-});
-
 describe("await and questions the caller is not awaiting", () => {
   it.effect("ends a root wait when another child asks the root a question", () => {
     const { fake, projections, layer } = localServiceFixture();
@@ -35,22 +32,14 @@ describe("await and questions the caller is not awaiting", () => {
       const waiting = yield* service
         .withAwaitTerminalObservations([awaited.id], "all_finished", undefined, summarize)
         .pipe(Effect.forkScoped);
-      yield* yieldTurns;
+      yield* yieldTurns(25);
 
       fake.controls[1]!.offerIpc(contactParentFrame("q-1", "question", "Which file?"));
       expect(yield* Fiber.join(waiting)).toEqual({
         targets: [awaited.id],
         questions: [asking.id],
       });
-      expect(
-        Arr.last(projections).pipe(
-          Option.flatMap((projection) =>
-            Arr.findFirst(projection.runs, (run) => run.id === awaited.id),
-          ),
-          Option.map((run) => run.state),
-          Option.getOrUndefined,
-        ),
-      ).toBe("running");
+      expect(latestProjectedRun(projections, awaited.id)?.state).toBe("running");
     });
   });
 
@@ -65,7 +54,7 @@ describe("await and questions the caller is not awaiting", () => {
 
       fake.controls[1]!.offerIpc(contactParentFrame("q-1", "question", "Which file?"));
       yield* yieldUntil(() => fake.controls[0]!.sentIpc("proxy_notification"));
-      yield* yieldTurns;
+      yield* yieldTurns(25);
       expect(waiting.pollUnsafe()).toBeUndefined();
 
       const sibling = yield* service.startSessionOwnedFrom(parent.id, request({ name: "peer" }));

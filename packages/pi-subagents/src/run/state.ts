@@ -3,7 +3,6 @@ import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { countLabel, clipText } from "pi-cosmic-core/display";
-import { freezeSnapshot } from "pi-cosmic-core/projection";
 import { safeTextPrefix, safeTextSuffix, utf8ByteLength, utf8Prefix } from "pi-cosmic-core/text";
 import {
   sanitizeDiagnosticError,
@@ -12,12 +11,7 @@ import {
 } from "pi-cosmic-core/security";
 import { indexOfFrom } from "pi-cosmic-core/text-scan";
 import { guidedText, type GuidedText } from "./errors.ts";
-import type {
-  SubagentReportArchive,
-  SubagentReportTruncation,
-  SubagentRunView,
-  SubagentUsage,
-} from "./model.ts";
+import type { SubagentReportArchive, SubagentReportTruncation, SubagentUsage } from "./model.ts";
 
 export const MAX_NAME_CHARS = 80;
 export const MAX_TASK_CHARS = 128 * 1024;
@@ -52,16 +46,6 @@ export const sanitizeName = (value: string): string => {
     sanitized += control ? " " : character;
   }
   return safeTextPrefix(Fn.pipe(sanitized, Str.replace(/\s+/g, " "), Str.trim), MAX_NAME_CHARS);
-};
-
-const frozenViewSnapshots = new WeakMap<SubagentRunView, SubagentRunView>();
-
-export const snapshotView = (view: SubagentRunView): SubagentRunView => {
-  const cached = frozenViewSnapshots.get(view);
-  if (cached) return cached;
-  const snapshot = freezeSnapshot(view);
-  frozenViewSnapshots.set(view, snapshot);
-  return snapshot;
 };
 
 export const sanitizeDiagnosticText = (value: string, limit: number): string => {

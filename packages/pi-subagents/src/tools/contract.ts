@@ -66,10 +66,10 @@ export const metadata = (value: string | undefined, maximum: number): string | u
 export const projectName = (value: string): string =>
   sanitizeName(metadata(value, MAX_NAME_CHARS) ?? "");
 
-const knownProfile = (profile: string | undefined): ProfileId | undefined =>
+export const knownProfile = (profile: string | undefined): ProfileId | undefined =>
   Option.getOrUndefined(Arr.findFirst(PROFILE_IDS, (id) => id === profile));
 
-const knownAgent = (agent: string | undefined): { readonly agent?: string } =>
+export const knownAgent = (agent: string | undefined): { readonly agent?: string } =>
   agent !== undefined && isCustomAgentName(agent) ? { agent } : {};
 
 const projectFailure = (

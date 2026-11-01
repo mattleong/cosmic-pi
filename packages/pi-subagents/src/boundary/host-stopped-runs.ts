@@ -2,12 +2,16 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { clipText, countLabel } from "pi-cosmic-core/display";
+import { countLabel } from "pi-cosmic-core/display";
 import { invokeHostCallback, notifyAtHostBoundary } from "pi-cosmic-core/host-session";
-import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { isActiveRunState, type SubagentRunView } from "../run/model.ts";
 import { runStateLabel } from "../ui/run-state.ts";
-import { MAX_STOPPED_NOTICE_RUNS, noticeName, type NoticeDetails } from "../ui/notice-details.ts";
+import {
+  displayName,
+  MAX_STOPPED_NOTICE_RUNS,
+  noticeName,
+  type NoticeDetails,
+} from "../ui/notice-details.ts";
 
 export const STOPPED_RUNS_MESSAGE_TYPE = "pi-subagents-stopped";
 
@@ -22,7 +26,7 @@ const CAUSE: Record<RuntimeRetirement, string> = {
 };
 
 const runLine = (run: SubagentRunView): string =>
-  `- ${clipText(sanitizeTerminalLine(run.name), 60)} (${run.id}): ${Fn.pipe(run.state, Str.replaceAll("_", " "))}`;
+  `- ${displayName(run.name)} (${run.id}): ${Fn.pipe(run.state, Str.replaceAll("_", " "))}`;
 
 export const stoppedRunsContent = (
   runs: ReadonlyArray<SubagentRunView>,
@@ -53,8 +57,7 @@ export const stoppedRunsDetails = (
   version: 1,
   kind: "stopped",
   total: runs.length,
-  ...(runs.length === 1 &&
-    runs[0] !== undefined && { name: clipText(sanitizeTerminalLine(runs[0].name), 60) }),
+  ...(runs.length === 1 && runs[0] !== undefined && { name: displayName(runs[0].name) }),
   cause,
   runs: Arr.map(runs.slice(0, MAX_STOPPED_NOTICE_RUNS), (run) => ({
     id: run.id,

@@ -353,14 +353,6 @@ const executeWorkspaceApply = Effect.fn("SubagentTools.workspaceApply")(function
   );
   const ids = `worktree ${workspaceId}, revision ${applied.revisionId}, preparationId=${applied.preparationId}`;
   const changed = `Changed files (${applied.changedPathCount}): ${applied.changedPaths.length > 0 ? listedPaths(applied.changedPaths) : "none listed"}${applied.changedPathCount > applied.changedPaths.length ? ` (${applied.changedPathCount - applied.changedPaths.length} not listed)` : ""}`;
-  const metadata = {
-    ...receipt,
-    revisionId: applied.revisionId,
-    preparationId: applied.preparationId,
-    changedPathCount: applied.changedPathCount,
-    testing: applied.testing,
-    ...(applied.preparedCwd.length <= 1_024 && { preparedCwd: applied.preparedCwd }),
-  };
   const warnings = [...integrationWarnings(applied), ...leftOutWarnings(applied.leftOutPaths)];
   const heading = Arr.join(
     [
@@ -369,11 +361,15 @@ const executeWorkspaceApply = Effect.fn("SubagentTools.workspaceApply")(function
     ],
     "\n",
   );
-  const body = changed;
-  return result(Arr.join([heading, body, ...warningLines(warnings)], "\n"), {
-    ...metadata,
+  return result(Arr.join([heading, changed, ...warningLines(warnings)], "\n"), {
+    ...receipt,
+    revisionId: applied.revisionId,
+    preparationId: applied.preparationId,
+    changedPathCount: applied.changedPathCount,
+    testing: applied.testing,
+    ...(applied.preparedCwd.length <= 1_024 && { preparedCwd: applied.preparedCwd }),
     ...(warnings.length > 0 && { warnings: warningDetails(warnings) }),
-    displayContent: { offset: heading.length + 1, length: body.length },
+    displayContent: { offset: heading.length + 1, length: changed.length },
   });
 });
 

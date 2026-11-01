@@ -488,15 +488,11 @@ export const replaceSessionProfileSnapshot = (
   patch: SessionProfileSetPatch,
 ): Effect.Effect<SessionProfileSnapshot, SessionProfileEditError> =>
   editSnapshot(snapshot, patch.expectedRevision, STALE_PROFILES, () => {
-    const baseline = decodeSessionProfileOverrideSeed({
-      revision: 0,
-      overrides: {},
-      baseline: {
-        origin: patch.origin,
-        profiles: patch.profiles,
-        profileSources: patch.profileSources,
-      },
-    })?.baseline;
+    const baseline = decodeBaseline({
+      origin: patch.origin,
+      profiles: patch.profiles,
+      profileSources: patch.profileSources,
+    });
     if (!baseline)
       return "The replacement profile baseline has invalid routes or provenance and was not applied.";
     const unchanged =

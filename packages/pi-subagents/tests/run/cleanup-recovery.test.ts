@@ -7,7 +7,7 @@ import * as Logger from "effect/Logger";
 import * as References from "effect/References";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import { SubagentWriterConflictError } from "../../src/run/errors.ts";
-import type { SubagentCleanupDiagnostic, SubagentProjection } from "../../src/run/model.ts";
+import type { SubagentCleanupDiagnostic } from "../../src/run/model.ts";
 import {
   fakeChildLayer,
   fakeWriterLeaseLayer,
@@ -15,6 +15,7 @@ import {
   localServiceFixture,
   request,
   withService,
+  latestProjectedRun as latest,
 } from "./fixtures/service-harness.ts";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -25,11 +26,6 @@ const originalFailure: SubagentCleanupDiagnostic = {
   code: "group_observation_failed",
   message: "The original process group could not be observed absent (EPERM).",
 };
-const latest = (projections: ReadonlyArray<SubagentProjection>, id: string) =>
-  Arr.last(projections).pipe(
-    Option.flatMap((projection) => Arr.findFirst(projection.runs, (run) => run.id === id)),
-    Option.getOrUndefined,
-  );
 const child = (fake: ReturnType<typeof fakeChildLayer>, index = 0) => {
   const control = fake.controls[index];
   if (!control) throw new Error("Expected acquired fake child.");

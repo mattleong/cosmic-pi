@@ -47,7 +47,8 @@ import {
 import { runStallFact } from "./format.ts";
 import { isTextFragment } from "./text-fragments.ts";
 
-const agentName = (entry: { readonly name: string }): string => projectName(entry.name) || "agent";
+export const agentName = (entry: { readonly name: string }): string =>
+  projectName(entry.name) || "agent";
 
 const fact = (text: string): string =>
   clipText(sanitizeTerminalLine(text), MAX_AGENT_DETAIL_FACT_CHARS);

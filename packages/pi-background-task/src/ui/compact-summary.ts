@@ -382,24 +382,18 @@ function aggregateSummary(
   const ordered = Arr.flatMap(SEVERITY_ORDER, (severity) =>
     Arr.filter(issues, (entry) => entry.severity === severity),
   );
+  const outcome = aggregateOutcome(outcomes);
   // A listing is neutral even when listed tasks failed: its counts say so, and each task's issue
   // is expanded-only information rather than a failure of the call.
-  if (details.action === "list")
-    return {
-      action,
-      subject,
-      counters: aggregateCounters(details.tasks),
-      issues: Arr.map(ordered, (entry) => ({ ...entry, severity: "info" as const })),
-      outcome: Arr.contains(LISTED_PROBLEMS, aggregateOutcome(outcomes))
-        ? "returned"
-        : aggregateOutcome(outcomes),
-    };
+  const listing = details.action === "list";
   return {
     action,
     subject,
     counters: aggregateCounters(details.tasks),
-    issues: ordered,
-    outcome: aggregateOutcome(outcomes),
+    issues: listing
+      ? Arr.map(ordered, (entry) => ({ ...entry, severity: "info" as const }))
+      : ordered,
+    outcome: listing && Arr.contains(LISTED_PROBLEMS, outcome) ? "returned" : outcome,
   };
 }
 
@@ -498,22 +492,19 @@ function logsIssues(details: DetailsFor<"logs">): CompactIssue[] {
         "The chunk is larger than a whole result, so paging cannot show that part.",
       ),
     );
-  if (page && page.omittedBytes > 0)
+  if (page && page.omittedBytes > 0) {
+    const later = page.omitted === "later";
     issues.push(
-      page.omitted === "later"
-        ? issue(
-            "info",
-            `${logs.id}:slice-truncated`,
-            `More output follows, ${formatBytes(page.omittedBytes)} retained`,
-            `It starts after cursor ${page.resumeAfterCursor}.`,
-          )
-        : issue(
-            "info",
-            `${logs.id}:slice-truncated`,
-            `Showing the newest output; ${formatBytes(page.omittedBytes)} earlier is retained`,
-            `Retained output starts after cursor ${page.resumeAfterCursor}.`,
-          ),
+      issue(
+        "info",
+        `${logs.id}:slice-truncated`,
+        later
+          ? `More output follows, ${formatBytes(page.omittedBytes)} retained`
+          : `Showing the newest output; ${formatBytes(page.omittedBytes)} earlier is retained`,
+        `${later ? "It starts" : "Retained output starts"} after cursor ${page.resumeAfterCursor}.`,
+      ),
     );
+  }
   return issues;
 }
 

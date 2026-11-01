@@ -30,6 +30,7 @@ import {
   clearRunActivity,
   commitRunInitialization,
   completeRunInitialization,
+  installRecordScope,
   type PendingInitializationSettlement,
   snapshotRun,
   type RunContext,
@@ -85,13 +86,6 @@ const resumeStateError = (record: RunRecord): InvalidSubagentRequestError | unde
       `Subagent ${id} has ${record.completionGenerations.size} unresolved outcome generations; wait for parent delivery or claim the latest outcome before resuming.`,
     );
   return undefined;
-};
-
-const resumeUnavailableError = (record: RunRecord): InvalidSubagentRequestError => {
-  return invalidRequest(
-    "backend_resume_unavailable",
-    `Subagent ${record.view.id} cannot resume because its backend did not provide continuation state. Start a new run instead.`,
-  );
 };
 
 /** An agent message that resumes a run; only its ancestors and main may send one. */
@@ -219,14 +213,8 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
             const writerPool = record.canonicalWriterCwd
               ? yield* writerPools.joinLocked(record.canonicalWriterCwd, record.view.id)
               : undefined;
-            record.scope = nextScope;
-            record.cleanupSettlement = nextCleanupSettlement;
-            record.cleanupDisposition = "none";
-            record.cleanupRecovery = undefined;
-            record.cleanupVerification = undefined;
+            installRecordScope(record, nextScope, nextCleanupSettlement);
             record.view = { ...record.view, cleanup: undefined };
-            record.closingScope = undefined;
-            record.closingScopeSettled = undefined;
             record.writerPool = writerPool;
             return true;
           }),
@@ -411,7 +399,10 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
               );
             const needsRespawn = selected.process === undefined;
             if (needsRespawn && !selected.launch.resumeToken)
-              return yield* resumeUnavailableError(selected);
+              return yield* invalidRequest(
+                "backend_resume_unavailable",
+                `Subagent ${selected.view.id} cannot resume because its backend did not provide continuation state. Start a new run instead.`,
+              );
             // Ownership first: a revision successor in this workspace would otherwise surface as a
             // transient writer conflict.
             const invalidateWorkspace = yield* workspaces.invalidateForResume(selected);

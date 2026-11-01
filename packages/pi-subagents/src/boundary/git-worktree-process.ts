@@ -1,7 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
-import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import {
   runBoundedProcessNode,
@@ -11,7 +10,7 @@ import {
 import { nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core/platform/node-builtins";
 import { WorkspaceError } from "../workspace/model.ts";
 import { gitInstallation } from "./git-installation.ts";
-import { isGitLocalEnvironmentKey } from "./git-local-environment.ts";
+import { withoutGitLocalEnvironment } from "./git-local-environment.ts";
 import { nodeErrorCode } from "./harness-shared.ts";
 
 export const workspaceFailure = (operation: string, message: string) =>
@@ -83,6 +82,15 @@ const gitSubcommand = (args: ReadonlyArray<string>) => {
   }
 };
 
+/** Paths as `-z --stdin` input: each one ends with NUL. */
+export const nulTerminated = (lines: ReadonlyArray<string>) =>
+  new TextEncoder().encode(
+    Arr.join(
+      Arr.map(lines, (line) => `${line}\0`),
+      "",
+    ),
+  );
+
 export type GitResult = BoundedProcessResult;
 
 interface GitOptions {
@@ -109,11 +117,7 @@ const HARDENED_CONFIG = [
 ];
 
 const gitEnvironment = (options: GitOptions | undefined) => ({
-  ...Rec.fromEntries(
-    Arr.flatMap(Rec.toEntries(process.env), ([key, value]) =>
-      value === undefined || isGitLocalEnvironmentKey(key) ? [] : [[key, value] as const],
-    ),
-  ),
+  ...withoutGitLocalEnvironment(process.env),
   LC_ALL: "C",
   GIT_TERMINAL_PROMPT: "0",
   GIT_OPTIONAL_LOCKS: "0",

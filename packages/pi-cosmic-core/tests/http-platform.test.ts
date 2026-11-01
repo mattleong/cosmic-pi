@@ -63,17 +63,15 @@ it.effect("captures stable HTTP spans without URLs, bodies, or credentials", () 
   }).pipe(provideBuiltLayer(captured.layer));
 });
 
-it.effect.each(['{"ok":"secret-value"}'])(
-  "maps malformed response %s to a decode failure with or without a byte limit",
-  (body) =>
-    Effect.gen(function* () {
-      const http = yield* JsonHttpClient;
-      for (const request of [okRequest, { ...okRequest, maxResponseBytes: 1024 }]) {
-        const failure = yield* Effect.flip(http.request(request));
-        expect(failure.operation).toBe("decode");
-        expect(String(failure)).not.toContain("secret");
-      }
-    }).pipe(json(body)),
+it.effect("maps a malformed response to a decode failure with or without a byte limit", () =>
+  Effect.gen(function* () {
+    const http = yield* JsonHttpClient;
+    for (const request of [okRequest, { ...okRequest, maxResponseBytes: 1024 }]) {
+      const failure = yield* Effect.flip(http.request(request));
+      expect(failure.operation).toBe("decode");
+      expect(String(failure)).not.toContain("secret");
+    }
+  }).pipe(json('{"ok":"secret-value"}')),
 );
 
 it.effect("maps transport failure without exposing its URL or cause", () =>

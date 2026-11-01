@@ -19,7 +19,7 @@ import { getCodexCredentials } from "../auth/codex-auth.ts";
 import { SharpAdapter } from "../boundary/sharp.ts";
 import { DEFAULT_IMAGE_CONFIG, type ImageSaveMode, type ResolvedConfig } from "../config/schema.ts";
 import { imageInputReader } from "./input.ts";
-import { imageOutputMetadata, imageOutput } from "./output.ts";
+import { imageOutput } from "./output.ts";
 import { buildImageRequest, ImageRequestSchema } from "./protocol.ts";
 import { httpFailure, parseImageSse } from "./stream.ts";
 import {
@@ -153,7 +153,6 @@ export class OpenAIImageService extends Context.Service<OpenAIImageService>()(
           catch: failWith("context", "Unable to read the Pi model registry."),
         });
         const { imageModel, action, outputFormat, save } = requestOptions(params, cfg);
-        const output = imageOutputMetadata(outputFormat);
         const saveTarget = resolveSaveTarget(path, save, {
           cwd,
           agentDir,
@@ -199,7 +198,7 @@ export class OpenAIImageService extends Context.Service<OpenAIImageService>()(
           );
         if (response.status < 200 || response.status >= 300)
           return yield* httpFailure(response.status, response.rawBody);
-        const parsed = yield* parseImageSse(response.rawBody, output.mimeType).pipe(
+        const parsed = yield* parseImageSse(response.rawBody).pipe(
           Effect.withSpan("pi-better-openai.image.stream"),
         );
         const validated = yield* validatedGeneratedImage(parsed, outputFormat).pipe(

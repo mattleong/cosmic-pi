@@ -1,9 +1,7 @@
-import { asyncRequest as request } from "./support/questionnaire.ts";
+import { acquireService, asyncRequest as request } from "./support/questionnaire.ts";
 import { it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
-import * as Context from "effect/Context";
-import * as Layer from "effect/Layer";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -16,7 +14,7 @@ import { issueMessageStyleProblems } from "pi-code-previews/testing";
 import { failureMessage } from "pi-cosmic-core";
 import { pausedScheduler } from "pi-cosmic-core/testing";
 import {
-  AskUserService,
+  type AskUserService,
   noQuestionnaireActivity,
   type AskUserHost,
   type QuestionnaireActivity,
@@ -38,12 +36,6 @@ const keyedRequest = (index: number) => ({
   ...request,
   questions: [{ ...request.questions[0]!, key: String(index) }],
 });
-
-const acquireService = (...args: Parameters<typeof AskUserService.layer>) =>
-  Effect.gen(function* () {
-    const context = yield* Layer.buildWithScope(AskUserService.layer(...args), yield* Effect.scope);
-    return Context.get(context, AskUserService);
-  });
 
 const control = (
   service: Effect.Success<ReturnType<typeof acquireService>>,

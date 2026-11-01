@@ -36,6 +36,7 @@ import type {
   RenderResult,
   ToolRenderContext,
 } from "./renderers/shared/types";
+import { stateHeading } from "./renderers/shared/state-heading";
 import {
   nativeMcpEvidence,
   nativeMcpHasRecoverableClipping,
@@ -192,26 +193,15 @@ export function createNativeMcpRenderers(
     theme: Theme,
     state: RendererState,
     args: HostContainer | undefined,
-  ): Component => {
-    const text = new Text("", 0, 0);
-    let shown: string | undefined;
-    return {
-      render(width) {
-        const current = subtitle(state, args);
-        let next: string;
-        try {
-          next = renderToolHeader({ title: DISPLAY_NAME, subtitle: current }, theme);
-        } catch {
-          next = escapeControlChars(`${DISPLAY_NAME} ${current}`);
-        }
-        if (next !== shown) text.setText((shown = next));
-        return text.render(width);
-      },
-      invalidate() {
-        text.invalidate();
-      },
-    };
-  };
+  ): Component =>
+    stateHeading(() => {
+      const current = subtitle(state, args);
+      try {
+        return renderToolHeader({ title: DISPLAY_NAME, subtitle: current }, theme);
+      } catch {
+        return escapeControlChars(`${DISPLAY_NAME} ${current}`);
+      }
+    });
   const renderCall: RenderCall<unknown, RendererState> = (args, theme, context) => {
     if (nativeCall && !context.expanded) {
       const lastComponent =

@@ -11,13 +11,12 @@ const plan = (
   options: {
     isError?: boolean;
     errorText?: string;
-    phase?: "pending" | "running" | "settled";
   } = {},
 ) =>
   planCompactPresentation({
     summary,
     heading,
-    phase: options.phase ?? "settled",
+    phase: "settled",
     isError: options.isError ?? false,
     ...(options.errorText !== undefined && { errorText: options.errorText }),
   });

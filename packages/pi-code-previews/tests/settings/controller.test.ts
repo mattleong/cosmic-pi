@@ -29,21 +29,41 @@ const inertCapability = (): CodePreviewSessionCapability => ({
   run: () => Promise.reject(new Error("unexpected settings runtime call")),
 });
 
+const isolatedSettings = Effect.gen(function* () {
+  const capability = inertCapability();
+  installCodePreviewSessionCapability(capability);
+  setCodePreviewSettings(defaultCodePreviewSettings);
+  yield* Effect.addFinalizer(() =>
+    Effect.sync(() => {
+      clearCodePreviewSessionCapability();
+      setCodePreviewSettings(defaultCodePreviewSettings);
+    }),
+  );
+  return capability;
+});
+
+const tuiContext = (
+  host: ReturnType<typeof fakeCustomSurfaceHost>,
+  notifications: string[],
+  signal?: AbortSignal,
+) =>
+  extensionContextFixture({
+    mode: "tui",
+    hasUI: true,
+    signal,
+    ui: {
+      custom: host.ctx.ui.custom.bind(host.ctx.ui),
+      notify: (message) => notifications.push(message),
+    },
+  });
+
 for (const action of ["", "readCollapsedLines 40"])
   for (const retirement of ["shutdown", "replacement"])
     it.effect(
       `pending settings ${action ? "assignment" : "panel"} cannot act after ${retirement}`,
       () =>
         Effect.gen(function* () {
-          const initial = inertCapability();
-          installCodePreviewSessionCapability(initial);
-          setCodePreviewSettings(defaultCodePreviewSettings);
-          yield* Effect.addFinalizer(() =>
-            Effect.sync(() => {
-              clearCodePreviewSessionCapability();
-              setCodePreviewSettings(defaultCodePreviewSettings);
-            }),
-          );
+          const initial = yield* isolatedSettings;
           const loading = deferredPromise<typeof import("../../src/settings/panel")>();
           const entered = yield* Deferred.make<void>();
           let saves = 0;
@@ -63,16 +83,7 @@ for (const action of ["", "readCollapsedLines 40"])
           });
           const notifications: string[] = [];
           const host = fakeCustomSurfaceHost();
-          const signal = yield* Effect.abortSignal;
-          const ctx = extensionContextFixture({
-            mode: "tui",
-            hasUI: true,
-            signal,
-            ui: {
-              custom: host.ctx.ui.custom.bind(host.ctx.ui),
-              notify: (message) => notifications.push(message),
-            },
-          });
+          const ctx = tuiContext(host, notifications, yield* Effect.abortSignal);
           const pending = Promise.resolve(command.handler(action, ctx));
           yield* Deferred.await(entered);
           if (retirement === "shutdown") clearCodePreviewSessionCapability(initial);
@@ -98,14 +109,7 @@ for (const action of ["", "readCollapsedLines 40"])
         `aborted settings ${action ? "assignment" : "panel"} stays silent when its ${liveSignal} signal's loader ${settlement}s`,
         () =>
           Effect.gen(function* () {
-            installCodePreviewSessionCapability(inertCapability());
-            setCodePreviewSettings(defaultCodePreviewSettings);
-            yield* Effect.addFinalizer(() =>
-              Effect.sync(() => {
-                clearCodePreviewSessionCapability();
-                setCodePreviewSettings(defaultCodePreviewSettings);
-              }),
-            );
+            yield* isolatedSettings;
             const loading = deferredPromise<typeof import("../../src/settings/panel")>();
             const entered = yield* Deferred.make<void>();
             let saves = 0;
@@ -128,14 +132,7 @@ for (const action of ["", "readCollapsedLines 40"])
             const host = fakeCustomSurfaceHost();
             const original = new AbortController();
             let signal: AbortSignal | undefined = original.signal;
-            const ctx = extensionContextFixture({
-              mode: "tui",
-              hasUI: true,
-              ui: {
-                custom: host.ctx.ui.custom.bind(host.ctx.ui),
-                notify: (message) => notifications.push(message),
-              },
-            });
+            const ctx = tuiContext(host, notifications);
             Object.defineProperty(ctx, "signal", { get: () => signal });
             const pending = Promise.resolve(command.handler(action, ctx));
             yield* Deferred.await(entered);
@@ -157,14 +154,7 @@ it.effect(
   "an admitted settings save can commit after abort without syntax follow-up or notification",
   () =>
     Effect.gen(function* () {
-      installCodePreviewSessionCapability(inertCapability());
-      setCodePreviewSettings(defaultCodePreviewSettings);
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => {
-          clearCodePreviewSessionCapability();
-          setCodePreviewSettings(defaultCodePreviewSettings);
-        }),
-      );
+      yield* isolatedSettings;
       const panel = yield* step(() => import("../../src/settings/panel"));
       const entered = yield* Deferred.make<void>();
       const commit = deferredPromise();
@@ -214,14 +204,7 @@ it.effect(
 
 it.effect("a rejected settings implementation load is reported safely and can be retried", () =>
   Effect.gen(function* () {
-    installCodePreviewSessionCapability(inertCapability());
-    setCodePreviewSettings(defaultCodePreviewSettings);
-    yield* Effect.addFinalizer(() =>
-      Effect.sync(() => {
-        clearCodePreviewSessionCapability();
-        setCodePreviewSettings(defaultCodePreviewSettings);
-      }),
-    );
+    yield* isolatedSettings;
     let failed = false;
     const command = codePreviewSettingsSubcommand(() => {
       if (!failed) {
@@ -240,16 +223,7 @@ it.effect("a rejected settings implementation load is reported safely and can be
     });
     const notifications: string[] = [];
     const host = fakeCustomSurfaceHost();
-    const signal = yield* Effect.abortSignal;
-    const ctx = extensionContextFixture({
-      mode: "tui",
-      hasUI: true,
-      signal,
-      ui: {
-        custom: host.ctx.ui.custom.bind(host.ctx.ui),
-        notify: (message) => notifications.push(message),
-      },
-    });
+    const ctx = tuiContext(host, notifications, yield* Effect.abortSignal);
     yield* step(() => Promise.resolve(command.handler("", ctx)));
     assert.equal(notifications.length, 1);
     assert.doesNotMatch(Arr.join(notifications, "\n"), /secret module path/);
@@ -337,14 +311,7 @@ it.effect("settings edits wait until a session has loaded the settings they chan
     const settings = codePreviewSettingsSubcommand();
     const host = fakeCustomSurfaceHost();
     const notifications: string[] = [];
-    const ctx = extensionContextFixture({
-      mode: "tui",
-      hasUI: true,
-      ui: {
-        custom: host.ctx.ui.custom.bind(host.ctx.ui),
-        notify: (message: string) => notifications.push(message),
-      },
-    });
+    const ctx = tuiContext(host, notifications);
 
     yield* step(() => Promise.resolve(settings.handler("readCollapsedLines 20", ctx)));
     const opening = Promise.resolve(settings.handler("", ctx));

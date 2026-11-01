@@ -9,7 +9,13 @@ import * as Scope from "effect/Scope";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import { SubagentRuntimeClosedError } from "../../src/run/errors.ts";
 import { SubagentService, type SubagentServiceContract } from "../../src/run/service.ts";
-import { completeLocalRun, request, runView, withService } from "./fixtures/service-harness.ts";
+import {
+  completeLocalRun,
+  request,
+  runView,
+  withService,
+  yieldTurns,
+} from "./fixtures/service-harness.ts";
 import {
   leasesWith,
   pauseAt,
@@ -50,10 +56,6 @@ const tracked = <A, E>(effect: Effect.Effect<A, E>) =>
     );
     return { fiber, state };
   });
-
-const settleTurns = Effect.forEach(Array.from({ length: 50 }), () => Effect.yieldNow, {
-  discard: true,
-});
 
 const sharedWriter = (cwd: string) =>
   repoWriter({ cwd, writerWorkspaceModeOverride: "shared-checkout" });
@@ -104,7 +106,7 @@ describe("workspace engine work outside the run lock", () => {
       // Shared-checkout writers elsewhere start; one in the target waits for the integration.
       const elsewhere = yield* completesPromptly(service.start(sharedWriter("/elsewhere")));
       const target = yield* tracked(service.start(sharedWriter("/repo/packages/a")));
-      yield* settleTurns;
+      yield* yieldTurns(50);
       expect(target.state.ended).toBe(false);
       expect(f.integrations).toEqual([]);
       yield* Deferred.succeed(gate.release, undefined);
@@ -132,7 +134,7 @@ describe("workspace engine work outside the run lock", () => {
       expect(yield* completesPromptly(service.resume(resident.id).pipe(Effect.flip))).toMatchObject(
         { code: "workspace_operation_in_progress" },
       );
-      yield* settleTurns;
+      yield* yieldTurns(50);
       expect(reader.state.ended).toBe(false);
       yield* Deferred.succeed(gate.release, undefined);
       yield* Fiber.join(applying);
@@ -153,7 +155,7 @@ describe("workspace engine work outside the run lock", () => {
         .pipe(Effect.forkChild);
       yield* Deferred.await(gate.entered);
       const reader = yield* tracked(service.start(request({ cwd: writer.cwd })));
-      yield* settleTurns;
+      yield* yieldTurns(50);
       expect(reader.state.ended).toBe(false);
       expect(f.entries.get(writer.workspaceId!)?.status).toBe("active");
       yield* Deferred.succeed(gate.release, undefined);
@@ -257,7 +259,7 @@ describe("workspace engine work outside the run lock", () => {
       );
       // A second discard queues behind the first instead of interleaving with its engine work.
       const second = yield* tracked(service.workspaceDiscard(id).pipe(Effect.exit));
-      yield* settleTurns;
+      yield* yieldTurns(50);
       expect(second.state.ended).toBe(false);
       yield* Deferred.succeed(gate.release, undefined);
       yield* Fiber.join(discarding);
@@ -313,7 +315,7 @@ describe("workspace engine work outside the run lock", () => {
       const applying = yield* service.workspaceApply(id).pipe(Effect.forkChild);
       yield* Deferred.await(gate.entered);
       const cancelling = yield* tracked(Fiber.interrupt(applying));
-      yield* settleTurns;
+      yield* yieldTurns(50);
       expect(cancelling.state.ended).toBe(false);
       yield* Deferred.succeed(gate.release, undefined);
       yield* Fiber.join(cancelling.fiber);
@@ -351,7 +353,7 @@ describe("workspace engine work outside the run lock", () => {
       const applying = yield* service.workspaceApply(id).pipe(Effect.exit, Effect.forkScoped);
       yield* Deferred.await(gate.entered);
       const closing = yield* tracked(Scope.close(serviceScope, Exit.void));
-      yield* settleTurns;
+      yield* yieldTurns(50);
       expect(closing.state.ended).toBe(false);
       yield* Deferred.succeed(gate.release, undefined);
       yield* Fiber.join(closing.fiber);

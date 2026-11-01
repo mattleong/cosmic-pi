@@ -10,9 +10,8 @@ import * as Result from "effect/Result";
 import * as Str from "effect/String";
 import * as TestClock from "effect/testing/TestClock";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
-import { extensionContextFixture, recordingExtensionHost } from "pi-cosmic-core/testing";
+import { extensionContextFixture } from "pi-cosmic-core/testing";
 import { afterEach, vi } from "vitest";
-import { registerIntercomApplication } from "../src/application.ts";
 import { hostIntercomInbound } from "../src/boundary/host-inbound.ts";
 import { INTERCOM_MESSAGE_TYPE } from "../src/delivery.ts";
 import { IntercomRegistry } from "../src/registry/store.ts";
@@ -204,11 +203,10 @@ layer(nodeFilePlatformLayer)("intercom application", (it) => {
       const paths = yield* Path.Path;
       const shared = yield* sharedAgentDirectory();
       yield* Effect.sync(() => vi.stubEnv("PI_CODING_AGENT_DIR", shared.agentDirectory));
-      const sessions = paths.join(shared.agentDirectory, "intercom", "sessions");
-      yield* fs.makeDirectory(sessions, { recursive: true, mode: 0o700 });
+      yield* fs.makeDirectory(shared.sessions, { recursive: true, mode: 0o700 });
       const socket = paths.join(shared.base, "stuck.sock");
       const stuck = yield* hangingListener(socket);
-      yield* writeForeignRecord({ base: shared.base, sessions }, "stuck", { socket });
+      yield* writeForeignRecord(shared, "stuck", { socket });
 
       // The stuck peer's describe ends only once the test clock passes its deadline, so a startup
       // that waited for the sweep would never finish.
@@ -244,21 +242,6 @@ layer(nodeFilePlatformLayer)("intercom application", (it) => {
         expect(h.host.tools.size).toBe(0);
         expect(h.notify).not.toHaveBeenCalled();
       }
-    }),
-  );
-
-  it.effect("registers nothing in a subagent child process", () =>
-    Effect.sync(() => {
-      vi.stubEnv("PI_SUBAGENT_CHILD", "1");
-      const host = recordingExtensionHost();
-      registerIntercomApplication(host.pi);
-      expect(host.messageRenderers.size).toBe(0);
-
-      expect(host.handlers.has("session_start")).toBe(false);
-      expect(host.handlers.has("session_info_changed")).toBe(false);
-      expect(host.handlers.has("session_shutdown")).toBe(false);
-      expect(host.tools.size).toBe(0);
-      expect(host.commands.size).toBe(0);
     }),
   );
 });

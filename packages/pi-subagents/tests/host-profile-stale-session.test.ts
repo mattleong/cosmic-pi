@@ -6,13 +6,13 @@ import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/tes
 import { runSubagentDoctor } from "../src/application/doctor.ts";
 import { SubagentBackendRegistry } from "../src/backend/service.ts";
 import { resolveProfileStart } from "../src/boundary/host-profile-resolution.ts";
-import type { ProfileCandidate } from "../src/profiles/model.ts";
 import { SubagentProfileService } from "../src/profiles/service.ts";
 import { InvalidSubagentRequestError } from "../src/run/errors.ts";
 import type { SubagentParentContext } from "../src/run/model.ts";
 import { SubagentService } from "../src/run/service.ts";
 import { executeSubagentActionEffect } from "../src/tools/execute.ts";
 import type { SubagentToolInput } from "../src/tools/schema.ts";
+import { profileCandidate } from "./fixtures/profiles.ts";
 import { subagentServiceDouble } from "./tools/fixtures/subagent-service-double.ts";
 import {
   context,
@@ -21,14 +21,6 @@ import {
   testBackendDriver,
   testBackendRegistry,
 } from "./tools/fixtures/tool-harness.ts";
-
-const route = (overrides: Partial<ProfileCandidate> = {}): ProfileCandidate => ({
-  model: "parent",
-  effort: "default",
-  context: "fresh",
-  writeIntent: "read-only",
-  ...overrides,
-});
 
 const parentContext: SubagentParentContext = {
   sessionId: "parent-session",
@@ -95,7 +87,12 @@ describe("profile start on a retired session", () => {
         Effect.provideService(
           SubagentProfileService,
           profileServiceFor({
-            profiles: { reviewer: [route({ model: "openai-codex/gpt-5.6-sol" }), route()] },
+            profiles: {
+              reviewer: [
+                profileCandidate("openai-codex/gpt-5.6-sol", { effort: "default" }),
+                profileCandidate("parent", { effort: "default" }),
+              ],
+            },
           }),
         ),
         Effect.provideService(SubagentBackendRegistry, registry),

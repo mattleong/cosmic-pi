@@ -155,7 +155,6 @@ try {
     executionStarted: true,
   };
   const firstTimingComponent = timingEdit.renderCall!(shellArgs, theme, timingContext);
-  Object.assign(timingState, { codePreviewTimingOnlyRenderToken: 1 });
   results.push(
     runBench("single edit shell adapter", "renderCall+component", "timing-only cached", () => {
       const component = timingEdit.renderCall!(shellArgs, theme, {

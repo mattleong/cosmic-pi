@@ -7,17 +7,12 @@ import * as Option from "effect/Option";
 import * as SchemaRepresentation from "effect/SchemaRepresentation";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
-import {
-  applyPresentationSettings,
-  captureRegistrations,
-  issueMessageStyleProblems,
-} from "pi-code-previews/testing";
+import { applyPresentationSettings, issueMessageStyleProblems } from "pi-code-previews/testing";
 import { extensionContextFixture, toolSchemaPortabilityProblems } from "pi-cosmic-core/testing";
 import { afterEach } from "vitest";
 import type { BackgroundLogEvent, BackgroundTaskStatus } from "../src/task/model.ts";
 import type { BackgroundTaskServiceContract } from "../src/task/service.ts";
 import { utf8ByteLength } from "pi-cosmic-core";
-import { registerBackgroundTaskTool } from "../src/tools/background-task.ts";
 import { executeBackgroundTaskCommand } from "../src/tools/command.ts";
 import {
   BackgroundTaskContractSchema,
@@ -27,9 +22,9 @@ import {
 import type { BackgroundTaskToolInput } from "../src/tools/schema.ts";
 import {
   provideTaskService,
+  registeredTaskTool,
   taskLogs,
   taskServiceDouble,
-  taskServiceRunner,
   taskStop,
   taskWait,
 } from "./support/task-service-double.ts";
@@ -74,15 +69,11 @@ const encoded = (contract: BackgroundTaskContract) => {
   return json;
 };
 
-const registeredTool = (overrides: ServiceOverrides) =>
-  captureRegistrations((pi) =>
-    registerBackgroundTaskTool(pi, { run: taskServiceRunner(taskServiceDouble(overrides)) }),
-  ).tools[0]!;
 const ctx = extensionContextFixture({ cwd: "/project" });
 
 describe("background_task parameters", () => {
   it("declare only provider-portable schema keywords", () => {
-    expect(toolSchemaPortabilityProblems(registeredTool({}).parameters)).toEqual([]);
+    expect(toolSchemaPortabilityProblems(registeredTaskTool({}).parameters)).toEqual([]);
   });
 });
 
@@ -235,7 +226,7 @@ describe("background_task contract", () => {
 });
 
 describe("registered background_task output", () => {
-  const call = (tool: ReturnType<typeof registeredTool>, input: BackgroundTaskToolInput) =>
+  const call = (tool: ReturnType<typeof registeredTaskTool>, input: BackgroundTaskToolInput) =>
     Effect.promise(() => tool.execute("call", input, undefined, undefined, ctx));
 
   it.effect("declares the contract output schema and returns it beside unchanged text", () =>
@@ -243,7 +234,7 @@ describe("registered background_task output", () => {
       const services: ServiceOverrides = {
         status: () => Effect.succeed(task({ state: "failed", exitCode: 2, failureCause: "error" })),
       };
-      const tool = registeredTool(services);
+      const tool = registeredTaskTool(services);
       const declared = Schema.is(
         SchemaRepresentation.fromJsonSchemaDocument(
           JsonSchema.fromSchemaDraft2020_12({ ...tool.outputSchema }),
@@ -269,7 +260,7 @@ describe("registered background_task output", () => {
         };
         const input = { action: "start", command: "pnpm dev" } as const;
         const direct = yield* execute(input, services);
-        const result = yield* call(registeredTool(services), input);
+        const result = yield* call(registeredTaskTool(services), input);
         expect(result.isError).toBe(true);
         expect(result).not.toHaveProperty("structuredContent");
         expect(result.details).toEqual(direct.details);

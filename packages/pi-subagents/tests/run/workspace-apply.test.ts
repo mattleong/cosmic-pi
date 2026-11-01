@@ -2,34 +2,20 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import type { SubagentServiceContract } from "../../src/run/service.ts";
 import { WorkspaceError } from "../../src/workspace/model.ts";
-import {
-  completeLocalRun,
-  runViews,
-  waitForCompleted,
-  withService,
-} from "./fixtures/service-harness.ts";
+import { completeLocalRun, waitForCompleted, withService } from "./fixtures/service-harness.ts";
 import {
   pauseAt,
   repoWriter,
   reviewAndPrepare,
   stoppedWriter,
   workspaceFixture,
+  completedWriter,
+  outcomeOf,
+  settledOutcome,
 } from "./fixtures/workspace-engine.ts";
-import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
-
-type Fixture = ReturnType<typeof workspaceFixture>;
 
 const hooked = () => workspaceFixture({ worktreeCreate: [{ command: ["pnpm", "install"] }] });
-
-const completedWriter = (service: SubagentServiceContract, f: Fixture) =>
-  Effect.gen(function* () {
-    const run = yield* service.start(repoWriter());
-    yield* completeLocalRun(service, f.children.controls.at(-1)!, run.id, "Done.");
-    return run;
-  });
 
 describe("one-step workspace apply", () => {
   it.effect("integrates an unreviewed revision and reports it as untested", () => {
@@ -251,23 +237,6 @@ describe("one-step workspace apply", () => {
     });
   });
 });
-
-const outcomeOf = (service: SubagentServiceContract, id: string) =>
-  runViews(service).pipe(
-    Effect.map(
-      (runs) =>
-        Option.getOrUndefined(Arr.findFirst(runs, (run) => run.id === id))?.workspaceOutcome,
-    ),
-  );
-const settledOutcome = (service: SubagentServiceContract, id: string) =>
-  Effect.gen(function* () {
-    for (let turn = 0; turn < 200; turn++) {
-      const outcome = yield* outcomeOf(service, id);
-      if (outcome) return outcome;
-      yield* Effect.yieldNow;
-    }
-    return yield* Effect.die(new Error(`Workspace outcome of ${id} never settled.`));
-  });
 
 describe("a worktree writer's workspace outcome", () => {
   it.effect("stops offering a proposal once it is applied or discarded", () => {

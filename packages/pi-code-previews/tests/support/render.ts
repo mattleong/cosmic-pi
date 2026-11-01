@@ -1,7 +1,6 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
-import * as Result from "effect/Result";
 import { plainTheme } from "pi-cosmic-core/testing";
 import type { CodePreviewSettings } from "../../src/config/schema";
 import { renderCompactChildren } from "../../src/preview/compact-children";
@@ -16,13 +15,7 @@ export function renderComponent(component: Component, width = 100): string {
   return Arr.join(component.render(width), "\n");
 }
 
-export const resultText = (content: AgentToolResult<unknown>["content"]): string =>
-  Arr.join(
-    Arr.filterMap(content, (part) =>
-      part.type === "text" ? Result.succeed(part.text) : Result.failVoid,
-    ),
-    "\n",
-  );
+export { getTextContent as resultText } from "../../src/tools/data/results";
 
 export const textResult = <Details = undefined>(
   text: string,

@@ -20,6 +20,11 @@ export function fallbackArguments(args: HostValue | undefined): string[] {
   }, []);
 }
 
+export function stringArg(args: HostObject | undefined, name: string): string {
+  const value = ownField(args, name);
+  return Predicate.isString(value) ? value : "";
+}
+
 export function getPathArg(args: HostObject | undefined): string {
   const path = ownField(args, "path") ?? ownField(args, "file_path");
   return Predicate.isString(path) ? path : "";

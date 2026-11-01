@@ -36,7 +36,6 @@ const ContextUsageSchema = Schema.Struct({
 
 export type FooterTotals = typeof FooterTotalsSchema.Type;
 export type DecodedAssistantUsage = typeof AssistantUsageSchema.Type;
-export type DecodedContextUsage = typeof ContextUsageSchema.Type;
 
 export const decodeAssistantUsage = decodeUnknownOrUndefined(AssistantUsageSchema);
 
@@ -125,7 +124,3 @@ export const createSessionUsageReader = (sessionManager: ExtensionContext["sessi
       return totals;
     }, undefined);
 };
-
-export const readSessionUsageTotals = (
-  sessionManager: ExtensionContext["sessionManager"],
-): FooterTotals | undefined => createSessionUsageReader(sessionManager)();

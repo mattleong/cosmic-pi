@@ -27,6 +27,7 @@ import {
   request,
   runView,
   withService,
+  latestProjectedRun as latest,
 } from "./fixtures/service-harness.ts";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
@@ -45,12 +46,6 @@ const steerMessages = (control: FakeChildControl | undefined): ReadonlyArray<str
 const promptMessages = (control: FakeChildControl | undefined): ReadonlyArray<string> =>
   Arr.flatMap(control?.commands ?? [], (command) =>
     command.type === "prompt" && command.streamingBehavior === undefined ? [command.message] : [],
-  );
-
-const latest = (projections: ReadonlyArray<SubagentProjection>, id: string) =>
-  Arr.last(projections).pipe(
-    Option.flatMap((projection) => Arr.findFirst(projection.runs, (run) => run.id === id)),
-    Option.getOrUndefined,
   );
 
 const messageNotices = (run: SubagentRunView | undefined) =>

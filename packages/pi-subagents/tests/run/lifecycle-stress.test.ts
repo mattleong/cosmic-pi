@@ -20,10 +20,10 @@ import {
   request,
   runView,
   withService,
+  latestProjectedRun,
 } from "./fixtures/service-harness.ts";
 import { SubagentRuntimeClosedError } from "../../src/run/errors.ts";
 import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
 
 const cycles = 4;
 
@@ -110,14 +110,7 @@ describe("SubagentService lifecycle stress", () => {
             ).pipe(Effect.forkScoped);
             yield* yieldUntil(() => cancelledUpdates > 0);
             const stoppingParent = yield* service.stop(parent.id).pipe(Effect.forkScoped);
-            yield* yieldUntil(() =>
-              Arr.last(projections).pipe(
-                Option.flatMap((projection) =>
-                  Arr.findFirst(projection.runs, (run) => run.id === leaf.id),
-                ),
-                Option.exists((run) => run.state === "stopping"),
-              ),
-            );
+            yield* yieldUntil(() => latestProjectedRun(projections, leaf.id)?.state === "stopping");
             const stoppingChild = yield* service
               .stop(child.id)
               .pipe(Effect.forkScoped({ startImmediately: true }));
@@ -148,13 +141,8 @@ describe("SubagentService lifecycle stress", () => {
             leafControl.offer({ type: "agent_settled" });
             yield* Deferred.succeed(release, undefined);
             expect((yield* Fiber.join(stoppingChild)).state).toBe("stopped");
-            yield* yieldUntil(() =>
-              Arr.last(projections).pipe(
-                Option.flatMap((projection) =>
-                  Arr.findFirst(projection.runs, (run) => run.id === parent.id),
-                ),
-                Option.exists((run) => run.state === "stopped"),
-              ),
+            yield* yieldUntil(
+              () => latestProjectedRun(projections, parent.id)?.state === "stopped",
             );
             for (const id of [parent.id, child.id, leaf.id]) {
               expect(yield* runView(service, id)).toMatchObject({
@@ -201,14 +189,7 @@ describe("SubagentService lifecycle stress", () => {
             const sibling = yield* service.start(request());
             fake.controls[2]!.gateRelease(release);
             const stopping = yield* service.stop(parent.id).pipe(Effect.forkScoped);
-            yield* yieldUntil(() =>
-              Arr.last(projections).pipe(
-                Option.flatMap((projection) =>
-                  Arr.findFirst(projection.runs, (run) => run.id === leaf.id),
-                ),
-                Option.exists((run) => run.state === "stopping"),
-              ),
-            );
+            yield* yieldUntil(() => latestProjectedRun(projections, leaf.id)?.state === "stopping");
             yield* Fiber.interrupt(stopping);
             let updates = 0;
             const waiting = yield* awaitRuns(

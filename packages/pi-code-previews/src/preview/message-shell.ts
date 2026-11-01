@@ -12,8 +12,8 @@ import {
   renderToolHeader,
   toolExpandHint,
 } from "pi-cosmic-ui/tool";
-import type { ToolCallBackgroundMode, ToolCallCollapsedStyle } from "../config/schema";
-import { sharedPresentation } from "../config/state";
+import type { ToolCallCollapsedStyle } from "../config/schema";
+import { sharedPresentation, type SharedPresentation } from "../config/state";
 import { escapeControlChars } from "../shared/terminal-text";
 import { planCompactPresentation } from "../tools/compact-presentation";
 import { compactStatus, type CompactSummary } from "../tools/compact-summary";
@@ -58,11 +58,6 @@ export type CodePreviewMessageRenderer<T = unknown> = (
   theme: Theme,
 ) => Component;
 
-interface MessagePolicy {
-  readonly mode: ToolCallBackgroundMode;
-  readonly style: ToolCallCollapsedStyle;
-}
-
 const decodeContent = Schema.decodeUnknownOption(
   Schema.Struct({ content: Schema.Union([Schema.String, Schema.Array(Schema.Unknown)]) }),
   { onExcessProperty: "ignore" },
@@ -95,14 +90,14 @@ export function withCodePreviewMessageShell<T = unknown>(
   present: CodePreviewMessagePresenter<T>,
 ): CodePreviewMessageRenderer<T> {
   return (message, options, theme) => {
-    const shared = sharedPresentation();
-    const policy: MessagePolicy = {
-      mode: shared.toolCallBackground,
-      style: shared.toolCallCollapsedStyle,
-    };
+    const policy = sharedPresentation();
     const fallback = () => fallbackText(message);
     try {
-      const presented = present(message, { ...options, collapsedStyle: policy.style }, theme);
+      const presented = present(
+        message,
+        { ...options, collapsedStyle: policy.toolCallCollapsedStyle },
+        theme,
+      );
       return new MessageShell(presented, policy, options, theme, fallback);
     } catch {
       return plainMessage(fallback(), options.outputPad);
@@ -114,14 +109,14 @@ class MessageShell implements Component {
   private drawn: Component | undefined;
   private cache: { readonly width: number; readonly rows: string[] } | undefined;
   private readonly message: CodePreviewMessage;
-  private readonly policy: MessagePolicy;
+  private readonly policy: SharedPresentation;
   private readonly options: MessageRenderOptions;
   private readonly theme: Theme;
   private readonly fallback: () => string;
 
   constructor(
     message: CodePreviewMessage,
-    policy: MessagePolicy,
+    policy: SharedPresentation,
     options: MessageRenderOptions,
     theme: Theme,
     fallback: () => string,
@@ -162,7 +157,7 @@ class MessageShell implements Component {
       expanded,
     });
     const status = compactStatus("settled", summary);
-    const compact = policy.style === "compact";
+    const compact = policy.toolCallCollapsedStyle === "compact";
     const heading = composeToolComponent((width) => [
       ...(compact
         ? [
@@ -196,7 +191,7 @@ class MessageShell implements Component {
   ): Component {
     const { message, theme, policy } = this;
     const hint = this.options.expanded ? undefined : message.expandLabel;
-    if (policy.mode === "border") {
+    if (policy.toolCallBackground === "border") {
       const rest = new Container();
       if (body) rest.addChild(body);
       const shell = new BorderedToolCall(theme);
@@ -210,7 +205,7 @@ class MessageShell implements Component {
       return shell;
     }
     const shell =
-      policy.mode === "on"
+      policy.toolCallBackground === "on"
         ? new Box(this.options.outputPad, 1, (text) =>
             theme.bg(statusBackground(status, false), text),
           )

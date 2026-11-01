@@ -280,57 +280,53 @@ it.effect("cancelled native startup cannot publish into a retained row after rep
   }),
 );
 
-for (const style of ["compact"] as const)
-  for (const expanded of [true])
-    for (const ending of ["disabled", "replacement", "shutdown", "failed-reload"] as const)
-      it.effect(
-        `native ${style}/${expanded}/${ending} retires animation without replacing execution`,
-        () =>
-          Effect.gen(function* () {
-            const h = fixture((attempt) =>
-              ending === "failed-reload" && attempt > 0
-                ? Effect.die("settings unavailable")
-                : Effect.succeed({
-                    ...preview,
-                    tools: ending === "disabled" && attempt > 0 ? [] : ["codemode"],
-                    toolCallCollapsedStyle: style,
-                  }),
-            );
-            yield* step(() => h.registered);
-            yield* Effect.addFinalizer(() => step(() => h.shutdown()));
-            yield* step(() => h.start());
-            const old = h.resolve();
-            const row = createToolPresentationHarness(old);
-            row.call({ code: "return 1;" }, { executionStarted: true, expanded });
-            row.result(running, { isPartial: true, expanded });
-            row.render();
-            const scheduled = h.probe.scheduled;
-            assert.ok(scheduled > 0);
-            if (ending === "shutdown") yield* step(() => h.shutdown());
-            else yield* step(() => h.start());
-            let invalidations = 0;
-            row.call(
-              { code: "return 2;" },
-              {
-                executionStarted: true,
-                expanded,
-                invalidate: () => {
-                  invalidations++;
-                },
-              },
-            );
-            row.render();
-            h.probe.tick();
-            assert.equal(h.probe.scheduled, scheduled);
-            assert.equal(invalidations, 0);
-            const retired = createToolPresentationHarness(old);
-            retired.call({ code: "return 3;" }, { executionStarted: true, expanded });
-            retired.result(running, { isPartial: true, expanded });
-            retired.render();
-            assert.equal(h.probe.scheduled, scheduled);
-            assert.deepEqual(h.activeNames(), ["codemode"]);
-            assert.equal(h.resolvers.length, 1);
-            if (ending === "disabled" || ending === "shutdown" || ending === "failed-reload")
-              assert.equal(h.resolve().renderCall, downstream.renderCall);
-          }),
+for (const ending of ["disabled", "replacement", "shutdown", "failed-reload"] as const)
+  it.effect(`native compact/true/${ending} retires animation without replacing execution`, () =>
+    Effect.gen(function* () {
+      const h = fixture((attempt) =>
+        ending === "failed-reload" && attempt > 0
+          ? Effect.die("settings unavailable")
+          : Effect.succeed({
+              ...preview,
+              tools: ending === "disabled" && attempt > 0 ? [] : ["codemode"],
+              toolCallCollapsedStyle: "compact",
+            }),
       );
+      yield* step(() => h.registered);
+      yield* Effect.addFinalizer(() => step(() => h.shutdown()));
+      yield* step(() => h.start());
+      const old = h.resolve();
+      const row = createToolPresentationHarness(old);
+      row.call({ code: "return 1;" }, { executionStarted: true, expanded: true });
+      row.result(running, { isPartial: true, expanded: true });
+      row.render();
+      const scheduled = h.probe.scheduled;
+      assert.ok(scheduled > 0);
+      if (ending === "shutdown") yield* step(() => h.shutdown());
+      else yield* step(() => h.start());
+      let invalidations = 0;
+      row.call(
+        { code: "return 2;" },
+        {
+          executionStarted: true,
+          expanded: true,
+          invalidate: () => {
+            invalidations++;
+          },
+        },
+      );
+      row.render();
+      h.probe.tick();
+      assert.equal(h.probe.scheduled, scheduled);
+      assert.equal(invalidations, 0);
+      const retired = createToolPresentationHarness(old);
+      retired.call({ code: "return 3;" }, { executionStarted: true, expanded: true });
+      retired.result(running, { isPartial: true, expanded: true });
+      retired.render();
+      assert.equal(h.probe.scheduled, scheduled);
+      assert.deepEqual(h.activeNames(), ["codemode"]);
+      assert.equal(h.resolvers.length, 1);
+      if (ending === "disabled" || ending === "shutdown" || ending === "failed-reload")
+        assert.equal(h.resolve().renderCall, downstream.renderCall);
+    }),
+  );

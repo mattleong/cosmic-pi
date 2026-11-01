@@ -99,28 +99,18 @@ export class ProfileModelCatalog {
   }
 
   refresh(): Effect.Effect<ProfileModelCatalogRefresh> {
-    // A registry that throws or reports an error leaves the previous snapshot in place.
-    const projectRefreshed = Effect.try(() =>
-      this.registry.getError() ? undefined : projectRegistry(this.registry, this.scopedSelectors),
-    );
-    return Effect.tryPromise((signal) => this.registry.refresh({ signal })).pipe(
-      Effect.flatMap((refreshResult) =>
-        refreshResult.aborted
-          ? Effect.succeed<ProfileModelCatalogRefresh>("aborted")
-          : refreshResult.errors && refreshResult.errors.size > 0
-            ? Effect.succeed<ProfileModelCatalogRefresh>("failed")
-            : projectRefreshed.pipe(
-                Effect.flatMap((projected) =>
-                  projected
-                    ? Effect.sync(() => {
-                        this.snapshot = projected;
-                      }).pipe(Effect.as<ProfileModelCatalogRefresh>("updated"))
-                    : Effect.succeed<ProfileModelCatalogRefresh>("failed"),
-                ),
-              ),
-      ),
-      Effect.orElseSucceed((): ProfileModelCatalogRefresh => "failed"),
-    );
+    return Effect.gen({ self: this }, function* () {
+      const refreshResult = yield* Effect.tryPromise((signal) => this.registry.refresh({ signal }));
+      if (refreshResult.aborted) return "aborted" as const;
+      if (refreshResult.errors && refreshResult.errors.size > 0) return "failed" as const;
+      // A registry that throws or reports an error leaves the previous snapshot in place.
+      const projected = yield* Effect.try(() =>
+        this.registry.getError() ? undefined : projectRegistry(this.registry, this.scopedSelectors),
+      );
+      if (!projected) return "failed" as const;
+      this.snapshot = projected;
+      return "updated" as const;
+    }).pipe(Effect.orElseSucceed((): ProfileModelCatalogRefresh => "failed"));
   }
 }
 
@@ -134,18 +124,13 @@ export interface CandidateModelPickerData {
   readonly warning?: string | undefined;
 }
 
-export interface CandidateModelPickerInput {
+interface CandidateModelPickerInput {
   readonly profile: ProfileId;
   readonly candidateIndex: number;
   readonly candidate: ProfileCandidate;
   readonly piCatalog: ProfileModelCatalogSnapshot;
   readonly parentSelector?: string | undefined;
 }
-
-const pickerContext = (input: CandidateModelPickerInput): ProfileModelPickerContext => ({
-  profile: input.profile,
-  candidateIndex: input.candidateIndex,
-});
 
 type PiModelOptionsInput = Pick<
   CandidateModelPickerInput,
@@ -198,7 +183,7 @@ export function loadCandidateModelPicker(
     choices,
     scopedChoices: optionsFor(snapshot.scopedPiModels),
     current: candidate.model,
-    context: pickerContext(input),
+    context: { profile: input.profile, candidateIndex: input.candidateIndex },
   };
   return Promise.resolve(
     warnings.length > 0 ? { ...base, warning: Arr.join(warnings, " ") } : base,

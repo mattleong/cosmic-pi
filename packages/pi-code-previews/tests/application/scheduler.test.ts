@@ -5,20 +5,9 @@ import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import { macrotask, provideBuiltLayer } from "pi-cosmic-core/testing";
 import {
-  clearCodePreviewSessionCapability,
-  deferCodePreview,
-} from "../../src/application/capability";
-import {
   CodePreviewSchedulerService,
   previewScheduleEffect,
 } from "../../src/application/scheduler.ts";
-
-it("no background work starts before acquisition or after shutdown", () => {
-  clearCodePreviewSessionCapability();
-  let calls = 0;
-  deferCodePreview(() => calls++)();
-  assert.equal(calls, 0);
-});
 
 it.effect("interrupts every scheduled callback before the scheduler scope closes", () =>
   Effect.gen(function* () {

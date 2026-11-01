@@ -8,6 +8,7 @@ import {
   acknowledgeCompletions,
   completeLocalRun,
   contactParentFrame,
+  latestProjectedRun,
   localServiceFixture,
   request,
   runViews,
@@ -49,11 +50,7 @@ describe("headless parent drain", () => {
       fake.controls[0]!.offerIpc(
         contactParentFrame("question-1", "question", "Which path should I take?"),
       );
-      yield* yieldUntil(() =>
-        Option.exists(Arr.last(projections), (projection) =>
-          Arr.some(projection.runs, (run) => run.id === asking.id && run.question !== undefined),
-        ),
-      );
+      yield* yieldUntil(() => latestProjectedRun(projections, asking.id)?.question !== undefined);
       yield* TestClock.adjust("1 second");
 
       expect(drain.pollUnsafe()).toBeDefined();

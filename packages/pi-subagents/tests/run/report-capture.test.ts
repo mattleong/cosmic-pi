@@ -7,7 +7,6 @@ import { backendEventHandler } from "../../src/run/events.ts";
 import type { CompletionGenerationRecord } from "../../src/run/internal.ts";
 import { MAX_UNRESOLVED_REPORT_GENERATIONS } from "../../src/run/limits.ts";
 import { emptyUsage } from "../../src/run/model.ts";
-import type { RunNotificationDelivery } from "../../src/run/notification-delivery.ts";
 import { settlementOperations } from "../../src/run/settlement.ts";
 import {
   boundOutputText,
@@ -20,6 +19,7 @@ import {
   makeTestSettlement,
   runningAssignment,
   runRecordFixture,
+  quietDelivery,
 } from "./fixtures/run-context.ts";
 import * as Arr from "effect/Array";
 
@@ -33,18 +33,6 @@ const messageEnd = (text: string) => ({
   type: "message_end" as const,
   message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text }] },
 });
-
-const quietDelivery: RunNotificationDelivery = {
-  retireDelivery: Effect.void,
-  queueActionNotificationLocked: () => undefined,
-  insertCompletionLocked: () => undefined,
-  wakeCompletionLocked: () => undefined,
-  discardQuestionLocked: () => undefined,
-  handOnTakenByLocked: () => undefined,
-  outboxChangedLocked: () => Deferred.makeUnsafe<void>(),
-  signalOutboxChangedLocked: () => undefined,
-  forgetTakenReportLocked: () => undefined,
-};
 
 describe("report capture", () => {
   it.effect("keeps a long Pi message past the in-memory cap, up to the archive cap", () =>

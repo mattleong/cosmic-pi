@@ -1,22 +1,10 @@
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
 import { provideBuiltLayer } from "pi-cosmic-core/testing";
-import { LocalProcess } from "../../src/boundary/local-process.ts";
-import { normalizeConfig } from "../../src/config/options.ts";
-import { BackgroundTaskConfigStore } from "../../src/config/store.ts";
 import { BackgroundTaskService } from "../../src/task/service.ts";
+import { realServiceLayer } from "../support/real-service.ts";
 
 // Starts a real task, then exits the way Pi's crash paths do: without session shutdown.
-const layer = BackgroundTaskService.layer().pipe(
-  Layer.provide(
-    Layer.mergeAll(
-      LocalProcess.layer,
-      Layer.succeed(BackgroundTaskConfigStore, normalizeConfig()),
-      Path.layer,
-    ),
-  ),
-);
+const layer = realServiceLayer();
 const exitRequested = Effect.callback<void>((resume) => {
   const receive = (message: string) => {
     if (message === "exit") resume(Effect.void);

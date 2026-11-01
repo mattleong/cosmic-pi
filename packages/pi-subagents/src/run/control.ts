@@ -170,39 +170,33 @@ export function controlOperations(dependencies: RunControlDependencies) {
     steerWaiting: boolean,
   ) {
     const id = record.view.id;
-    if (steerWaiting && record.view.state === "waiting_for_parent") {
-      if (record.pauseRequested)
+    // A steered question wait takes guidance without the running-state checks.
+    if (!(steerWaiting && record.view.state === "waiting_for_parent")) {
+      if (record.view.state === "paused" || record.view.state === "completed")
         return yield* invalidRequest(
-          "interrupt_in_flight",
-          `Subagent ${id} already has an interrupt pending and cannot receive new guidance.`,
+          "run_not_running",
+          withGuidanceClause(
+            `Subagent ${id} is ${record.view.state}`,
+            `send the message with agent_send({ to: "${id}", message: "..." }) to resume it.`,
+          ),
         );
-      admitTurnInput(record);
-      return { delivery: "guided" as const, record };
+      if (record.view.state === "starting")
+        return yield* invalidRequest(
+          "run_starting",
+          withGuidanceClause(
+            `Subagent ${id} is still starting`,
+            "wait for it to start before sending again.",
+          ),
+        );
+      if (record.view.state !== "running")
+        return yield* invalidRequest(
+          "run_not_running",
+          withGuidanceClause(
+            `Subagent ${id} is ${record.view.state} and cannot receive guidance`,
+            "inspect it with agent_read or start a replacement run.",
+          ),
+        );
     }
-    if (record.view.state === "paused" || record.view.state === "completed")
-      return yield* invalidRequest(
-        "run_not_running",
-        withGuidanceClause(
-          `Subagent ${id} is ${record.view.state}`,
-          `send the message with agent_send({ to: "${id}", message: "..." }) to resume it.`,
-        ),
-      );
-    if (record.view.state === "starting")
-      return yield* invalidRequest(
-        "run_starting",
-        withGuidanceClause(
-          `Subagent ${id} is still starting`,
-          "wait for it to start before sending again.",
-        ),
-      );
-    if (record.view.state !== "running")
-      return yield* invalidRequest(
-        "run_not_running",
-        withGuidanceClause(
-          `Subagent ${id} is ${record.view.state} and cannot receive guidance`,
-          "inspect it with agent_read or start a replacement run.",
-        ),
-      );
     if (record.pauseRequested)
       return yield* invalidRequest(
         "interrupt_in_flight",

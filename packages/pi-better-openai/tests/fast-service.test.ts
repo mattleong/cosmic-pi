@@ -7,18 +7,13 @@ import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
 import { AgentDirectory } from "pi-cosmic-core";
-import {
-  jsonHttpTestLayer,
-  makeInMemoryDocuments,
-  provideBuiltLayer,
-  yieldUntil,
-} from "pi-cosmic-core/testing";
+import { makeInMemoryDocuments, provideBuiltLayer, yieldUntil } from "pi-cosmic-core/testing";
 import { FastModeService } from "../src/fast/service.ts";
 import { initialFastSnapshot, type FastSnapshot } from "../src/fast/controller.ts";
 import { OpenAIUsageService } from "../src/usage/controller.ts";
 import { OpenAIConfigService } from "../src/config/store.ts";
 import { initialProjection, type OpenAIProjection } from "../src/usage/projection.ts";
-import { makeResolvedConfig, testContext, testModel } from "./helpers.ts";
+import { makeResolvedConfig, testContext, testModel, unusedHttpLayer } from "./helpers.ts";
 
 function makeContext(initialModel: string) {
   let currentModel = testModel(initialModel);
@@ -48,7 +43,6 @@ const persistedFastLayer = (
     readonly fast: MutableRef.MutableRef<FastSnapshot>;
     readonly usage?: MutableRef.MutableRef<OpenAIProjection>;
   },
-  http: Parameters<typeof jsonHttpTestLayer>[0] = () => Effect.die("unexpected HTTP request"),
 ) =>
   Layer.mergeAll(
     FastModeService.layer({ projection: projections.fast }),
@@ -67,12 +61,7 @@ const persistedFastLayer = (
       }),
     ),
     Layer.provide(
-      Layer.mergeAll(
-        documents.layer,
-        Path.layer,
-        AgentDirectory.layer("/agent"),
-        jsonHttpTestLayer(http),
-      ),
+      Layer.mergeAll(documents.layer, Path.layer, AgentDirectory.layer("/agent"), unusedHttpLayer),
     ),
   );
 

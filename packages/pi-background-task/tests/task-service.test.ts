@@ -52,6 +52,7 @@ import {
 import { skippedWithin } from "../src/task/log-buffer.ts";
 import { BackgroundTaskService, type BackgroundTaskServiceContract } from "../src/task/service.ts";
 import { combinedLogOutput } from "../src/tools/log-page.ts";
+import { realServiceLayer } from "./support/real-service.ts";
 
 interface FakeProcessControl {
   readonly handle: LocalProcessHandle;
@@ -198,17 +199,6 @@ function serviceHarness(
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   return { ...fake, layer, run, notices };
 }
-
-const realServiceLayer = (overrides: Partial<BackgroundTaskConfig> = {}) =>
-  BackgroundTaskService.layer().pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        LocalProcess.layer,
-        Layer.succeed(BackgroundTaskConfigStore, normalizeConfig(overrides)),
-        Path.layer,
-      ),
-    ),
-  );
 
 const taskInput = (overrides: Partial<StartBackgroundTask> = {}): StartBackgroundTask => ({
   command: "server",

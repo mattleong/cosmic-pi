@@ -7,7 +7,6 @@ import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import * as TestClock from "effect/testing/TestClock";
 import { yieldUntil } from "pi-cosmic-core/testing";
-import type { SubagentNotification } from "../../src/boundary/host-notifier.ts";
 import type { RunRecord } from "../../src/run/internal.ts";
 import { notificationHandoff } from "../../src/run/notification-handoff.ts";
 import { view } from "../fixtures/run-view.ts";
@@ -21,18 +20,11 @@ import {
   runView,
   waitForCompleted,
   withService,
+  yieldTurns,
+  reportsAtRoot,
 } from "./fixtures/service-harness.ts";
 
 const deliverNotification = () => Effect.void;
-
-const yieldTurns = Effect.gen(function* () {
-  for (let turn = 0; turn < 50; turn += 1) yield* Effect.yieldNow;
-});
-
-const reportsAtRoot = (notifications: ReadonlyArray<SubagentNotification>) =>
-  Arr.flatMap(notifications, (notification) =>
-    notification.type === "completed" ? Arr.map(notification.runs, (run) => run.finalText) : [],
-  );
 
 const reportKeys = (control: FakeChildControl | undefined, runId: string) =>
   Arr.flatMap(control?.ipc ?? [], (message) =>
@@ -62,7 +54,7 @@ describe("notice hand-off", () => {
         Effect.timeoutOption("2 seconds"),
         Effect.forkChild,
       );
-      yield* yieldTurns;
+      yield* yieldTurns(50);
       yield* TestClock.adjust("2 seconds");
       expect(Option.isSome(yield* Fiber.join(retiring))).toBe(true);
       expect(reportsAtRoot(notifications)).toEqual(
@@ -80,7 +72,7 @@ describe("notice hand-off", () => {
       yield* waitForCompleted(service, child.id);
       yield* TestClock.adjust("100 millis");
       yield* yieldUntil(() => reportKeys(fake.controls[0], child.id).length === 1);
-      yield* yieldTurns;
+      yield* yieldTurns(50);
       expect(reportsAtRoot(notifications)).toEqual([]);
 
       yield* service.retireDelivery;
@@ -101,7 +93,7 @@ describe("notice hand-off", () => {
         yield* waitForCompleted(service, leaf.id);
         yield* TestClock.adjust("100 millis");
         yield* yieldUntil(() => reportKeys(fake.controls[1], leaf.id).length === 1);
-        yield* yieldTurns;
+        yield* yieldTurns(50);
 
         if (ending === "fails") fake.controls[1]?.exit(1);
         else if (ending === "is stopped") yield* service.stop(middle.id);
@@ -130,7 +122,7 @@ describe("notice hand-off", () => {
       yield* waitForCompleted(service, leaf.id);
       yield* TestClock.adjust("100 millis");
       yield* yieldUntil(() => reportKeys(fake.controls[1], leaf.id).length === 1);
-      yield* yieldTurns;
+      yield* yieldTurns(50);
 
       fake.controls[1]?.settle("Middle report.");
       yield* waitForCompleted(service, middle.id);
@@ -155,9 +147,9 @@ describe("notice hand-off", () => {
       yield* yieldUntil(() => fake.controls[0]?.sentIpc("proxy_notification") === true);
 
       yield* service.retireDelivery;
-      yield* yieldTurns;
+      yield* yieldTurns(50);
       yield* TestClock.adjust("30 seconds");
-      yield* yieldTurns;
+      yield* yieldTurns(50);
       expect(Arr.filter(notifications, (notification) => notification.type === "question")).toEqual(
         [],
       );

@@ -9,6 +9,7 @@ import { yieldUntil } from "pi-cosmic-core/testing";
 import {
   completeLocalRun,
   fakeChildLayer,
+  latestProjectedRun,
   localServiceFixture,
   request,
   reviewerContinuation,
@@ -126,13 +127,8 @@ describe("SubagentService", () => {
         const cleanupGate = yield* Deferred.make<void>();
         fake.controls[0]?.gateRelease(cleanupGate);
         fake.controls[0]?.settle();
-        yield* yieldUntil(() =>
-          Option.exists(Arr.last(projections), (projection) =>
-            Arr.some(
-              projection.runs,
-              (candidate) => candidate.id === runs[0]?.id && candidate.state === "completed",
-            ),
-          ),
+        yield* yieldUntil(
+          () => latestProjectedRun(projections, runs[0]!.id)?.state === "completed",
         );
         const blockedDuringCleanup = yield* service
           .start(request({ name: "blocked-during-cleanup" }))

@@ -128,42 +128,40 @@ it("foreign, missing, duplicate, lookalike, renamed, and unsupported sources fal
   }
 });
 
-for (const style of ["compact"] as const)
-  for (const mode of ["off"] as const)
-    it(`verified cold replay adopts ${style}/${mode} while retaining exact input, output, and downstream extras`, () => {
-      const { owner, resolver } = setup(() => [info()], false);
-      const args = { queries: ["first query", "QUERY_TAIL"], domainFilter: ["example.test"] };
-      const row = hostToolRow(
-        "web_search",
-        args,
-        resolver("web_search", () => downstream),
-        {
-          result: {
-            content: [{ type: "text", text: "COMPLETE OUTPUT RECOVERY_TAIL" }],
-            details: { queryCount: 2, successfulQueries: 2, totalResults: 4 },
-            isError: false,
-          },
-        },
-      );
-      assert.match(Arr.join(row.render(100), "\n"), /ORIGINAL OUTPUT/);
-      setCodePreviewSettings({
-        ...defaultCodePreviewSettings,
-        toolCallCollapsedStyle: style,
-        toolCallBackground: mode,
-        toolCallTiming: false,
-      });
-      owner.publish("/project", new Set(), scheduler);
-      const expanded = drawToolRow(row, true, 100);
-      for (const marker of [
-        "QUERY_TAIL",
-        "example.test",
-        "RECOVERY_TAIL",
-        "ORIGINAL CALL",
-        "ORIGINAL OUTPUT",
-      ])
-        assert.ok(Fn.pipe(expanded, Str.includes(marker)), marker);
-      owner.retire();
-    });
+it("verified cold replay adopts compact/off while retaining exact input, output, and downstream extras", () => {
+  const { owner, resolver } = setup(() => [info()], false);
+  const args = { queries: ["first query", "QUERY_TAIL"], domainFilter: ["example.test"] };
+  const row = hostToolRow(
+    "web_search",
+    args,
+    resolver("web_search", () => downstream),
+    {
+      result: {
+        content: [{ type: "text", text: "COMPLETE OUTPUT RECOVERY_TAIL" }],
+        details: { queryCount: 2, successfulQueries: 2, totalResults: 4 },
+        isError: false,
+      },
+    },
+  );
+  assert.match(Arr.join(row.render(100), "\n"), /ORIGINAL OUTPUT/);
+  setCodePreviewSettings({
+    ...defaultCodePreviewSettings,
+    toolCallCollapsedStyle: "compact",
+    toolCallBackground: "off",
+    toolCallTiming: false,
+  });
+  owner.publish("/project", new Set(), scheduler);
+  const expanded = drawToolRow(row, true, 100);
+  for (const marker of [
+    "QUERY_TAIL",
+    "example.test",
+    "RECOVERY_TAIL",
+    "ORIGINAL CALL",
+    "ORIGINAL OUTPUT",
+  ])
+    assert.ok(Fn.pipe(expanded, Str.includes(marker)), marker);
+  owner.retire();
+});
 
 it("changed ownership before readiness leaves a retained external row downstream", () => {
   let tools = [info()];

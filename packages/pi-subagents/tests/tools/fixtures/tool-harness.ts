@@ -8,6 +8,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import type { BackendDriver } from "../../../src/backend/model.ts";
 import {
   backendRegistryFor,
@@ -28,10 +29,16 @@ import { SubagentService, type SubagentServiceContract } from "../../../src/run/
 import type { SubagentToolRuntime } from "../../../src/tools/execute.ts";
 import { registerSubagentTools } from "../../../src/tools/subagent.ts";
 import { subagentServiceDouble } from "./subagent-service-double.ts";
-import type { JsonValue } from "pi-cosmic-core";
-import { extensionApiFixture, extensionContextFixture, modelFixture } from "pi-cosmic-core/testing";
+import { makePiManagedRuntime, type JsonValue } from "pi-cosmic-core";
+import {
+  extensionApiFixture,
+  extensionContextFixture,
+  modelFixture,
+  recordingExtensionHost,
+} from "pi-cosmic-core/testing";
 import { view } from "../../fixtures/run-view.ts";
-import { maybe } from "../../support/effect-test.ts";
+import type { eventBackendServiceFixture } from "../../run/fixtures/service-harness.ts";
+import { maybe, step } from "../../support/effect-test.ts";
 import * as Arr from "effect/Array";
 
 export { view };
@@ -43,13 +50,7 @@ type CapturedToolResult = Omit<Awaited<ReturnType<NativeExecute>>, "content"> & 
 };
 
 type CapturedTool = Omit<RegisteredTool, "execute"> & {
-  readonly execute: (
-    id: Parameters<NativeExecute>[0],
-    params: Parameters<NativeExecute>[1],
-    signal: Parameters<NativeExecute>[2],
-    onUpdate: Parameters<NativeExecute>[3],
-    ctx: Parameters<NativeExecute>[4],
-  ) => Promise<CapturedToolResult>;
+  readonly execute: (...args: Parameters<NativeExecute>) => Promise<CapturedToolResult>;
 };
 
 interface ProfileDocumentInput {
@@ -165,6 +166,21 @@ export const captureSubagentTools = (
   return tools;
 };
 
+/** A recording host whose managed runtime runs `fixture`'s service and backend until scope close. */
+export const managedToolHost = (
+  fixture: Pick<ReturnType<typeof eventBackendServiceFixture>, "layer" | "backend">,
+) =>
+  Effect.gen(function* () {
+    const { pi, tools } = recordingExtensionHost();
+    const runtime = yield* Effect.acquireRelease(
+      Effect.sync(() =>
+        makePiManagedRuntime(pi, Layer.merge(fixture.layer, fixture.backend.layer)),
+      ),
+      (owned) => step(() => owned.dispose()),
+    );
+    return { pi, tools, runtime };
+  });
+
 const parentModel = modelFixture({
   provider: "openai-codex",
   id: "gpt-5.6-sol",
@@ -222,13 +238,7 @@ type InvocationOptions = {
 
 export const executeTool = <Result>(
   tool: {
-    readonly execute: (
-      id: Parameters<NativeExecute>[0],
-      params: Parameters<NativeExecute>[1],
-      signal: Parameters<NativeExecute>[2],
-      onUpdate: Parameters<NativeExecute>[3],
-      ctx: Parameters<NativeExecute>[4],
-    ) => Promise<Result>;
+    readonly execute: (...args: Parameters<NativeExecute>) => Promise<Result>;
   },
   params: Parameters<NativeExecute>[1],
   options: InvocationOptions = {},

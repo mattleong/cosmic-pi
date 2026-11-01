@@ -18,20 +18,18 @@ const png = Buffer.from(
 );
 const fixture = fileURLToPath(new URL("./fixtures/sharp-decoder-fixture.mjs", import.meta.url));
 
-for (const format of ["png"] as const) {
-  it.live(`fully decodes real ${format} bytes in the packaged subprocess`, () =>
-    Effect.gen(function* () {
-      const bytes = yield* Effect.tryPromise(() =>
-        sharp({ create: { width: 2, height: 2, channels: 4, background: "red" } })
-          .toFormat(format)
-          .toBuffer(),
-      );
-      expect(yield* makeSharpAdapter().decode(bytes)).toEqual({ format });
-      const damaged = bytes.subarray(0, Math.floor(bytes.length / 2));
-      yield* makeSharpAdapter().decode(damaged).pipe(Effect.flip);
-    }),
-  );
-}
+it.live("fully decodes real png bytes in the packaged subprocess", () =>
+  Effect.gen(function* () {
+    const bytes = yield* Effect.tryPromise(() =>
+      sharp({ create: { width: 2, height: 2, channels: 4, background: "red" } })
+        .toFormat("png")
+        .toBuffer(),
+    );
+    expect(yield* makeSharpAdapter().decode(bytes)).toEqual({ format: "png" });
+    const damaged = bytes.subarray(0, Math.floor(bytes.length / 2));
+    yield* makeSharpAdapter().decode(damaged).pipe(Effect.flip);
+  }),
+);
 
 it.live("rejects corrupt bytes without exposing native errors", () =>
   Effect.gen(function* () {

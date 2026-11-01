@@ -16,10 +16,10 @@ import type { SubagentCleanupDiagnostic } from "../run/model.ts";
 import { processCauseError, type SubagentProcessError } from "../run/errors.ts";
 import { attachBoundedLineParser, type OversizedLine } from "./bounded-line-parser.ts";
 import { detachedDescendantGroups, terminateProcessTree } from "./process-tree.ts";
-import { decodeUnknownJsonOption } from "./wire-shared.ts";
 
 export const MAX_PROCESS_LINE_BYTES = 4 * 1024 * 1024;
 const encodeFrame = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
+const decodeUnknownJsonOption = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json));
 const MAX_QUEUED_BYTES = 8 * 1024 * 1024;
 const MAX_STDERR_BYTES = 128 * 1024;
 // The byte budget bounds memory for ordinary output; the count only bounds per-event overhead

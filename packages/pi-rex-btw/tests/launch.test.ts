@@ -71,17 +71,6 @@ describe("child command", () => {
   });
 });
 
-describe("display name", () => {
-  it("names the pane after the branch and directory", () => {
-    const name = (branch?: string) => {
-      const args = piArgs(childCommand(launch({ branch })));
-      return args[args.indexOf("--name") + 1];
-    };
-    expect(name("feature/rex")).toBe("[BTW] - feature/rex - demo");
-    expect(name()).toBe("[BTW] - demo");
-  });
-});
-
 describe("input admission", () => {
   it("rejects prompts that can't be passed as an argument", () => {
     expect(promptProblem("fine")).toBeUndefined();

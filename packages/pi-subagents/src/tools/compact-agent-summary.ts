@@ -9,12 +9,12 @@ import {
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
-import { clipText, countLabel } from "pi-cosmic-core/display";
+import { countLabel } from "pi-cosmic-core/display";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
-import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { MAIN_AGENT_ID } from "../run/agent-messaging.ts";
 import { SUBAGENT_RUN_STATES } from "../run/model.ts";
 import { AGENT_TOOL_NAME, type AgentToolName } from "../run/tool-policy.ts";
+import { displayName } from "../ui/notice-details.ts";
 import { runStateLabel } from "../ui/run-state.ts";
 import { agentFailureIssues } from "./compact-action-failures.ts";
 import { rejectedFailure } from "./failure-details.ts";
@@ -33,8 +33,6 @@ const AgentCallSchema = Schema.Struct({
 });
 export type AgentCallEvidence = typeof AgentCallSchema.Type;
 export const decodeAgentCall = decodeUnknownOrUndefined(AgentCallSchema);
-
-const displayName = (name: string): string => clipText(sanitizeTerminalLine(name), 60);
 
 const stateLabel = (state: string): string => {
   const runState = Option.getOrUndefined(

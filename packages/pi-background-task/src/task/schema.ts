@@ -27,6 +27,10 @@ export const BACKGROUND_TASK_STATES = [
 ] as const;
 
 export const MaxChars = (maximum: number) => Schema.String.check(Schema.isMaxLength(maximum));
+export const isMaxUtf8Bytes = (maximum: number) =>
+  Schema.makeFilter((text: string) => utf8ByteLength(text) <= maximum, {
+    expected: `at most ${maximum} UTF-8 bytes`,
+  });
 const TaskId = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(BOUNDS.maxIdChars));
 
 export const BackgroundTaskStateSchema = Schema.Literals(BACKGROUND_TASK_STATES);
@@ -82,9 +86,7 @@ export const BackgroundTaskWaitResultSchema = Schema.Struct({
   tail: Schema.optionalKey(
     Schema.String.check(
       Schema.isMaxLength(LOG_BOUNDS.recentOutputBytes),
-      Schema.makeFilter((tail: string) => utf8ByteLength(tail) <= LOG_BOUNDS.recentOutputBytes, {
-        expected: `at most ${LOG_BOUNDS.recentOutputBytes} UTF-8 bytes`,
-      }),
+      isMaxUtf8Bytes(LOG_BOUNDS.recentOutputBytes),
     ),
   ),
 });

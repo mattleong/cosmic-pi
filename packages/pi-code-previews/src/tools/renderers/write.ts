@@ -18,7 +18,7 @@ import type { CodePreviewSettings } from "../../config/schema";
 import { hostContainer, hostObject, ownField } from "../../shared/untrusted-value";
 import { escapeControlChars } from "../../shared/terminal-text";
 import { normalizePreviewLanguageAlias } from "../../syntax/language";
-import { getPathArg } from "../data/args";
+import { getPathArg, stringArg } from "../data/args";
 import { getTextContent } from "../data/results";
 import { renderCodePreviewToolTitle } from "../presentation";
 import { executeWriteWithPreview, isKnownNewWrite } from "../../write/preview-execution";
@@ -67,8 +67,7 @@ export function writePreviewRenderers(cwd: string): PreviewRenderers {
       const { state, expanded, invalidate } = renderContext;
       const input = hostObject(args);
       const path = getPathArg(input);
-      const contentArg = ownField(input, "content");
-      const content = Predicate.isString(contentArg) ? contentArg : "";
+      const content = stringArg(input, "content");
       const lang = pathPreviewLanguage(path, content);
       const title = `${renderCodePreviewToolTitle("write", theme)} ${renderDisplayPath(path, cwd, theme)}`;
       const details = [

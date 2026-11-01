@@ -35,9 +35,9 @@ import {
   request,
   runView,
   withService,
+  latestProjectedRun,
 } from "./fixtures/service-harness.ts";
 import * as Str from "effect/String";
-import * as Option from "effect/Option";
 
 const findings = (lines: number) =>
   Arr.join(
@@ -244,14 +244,7 @@ describe("report retention", () => {
         const parent = yield* service.start(request({ name: "parent" }));
         const child = yield* service.startSessionOwnedFrom(parent.id, request({ name: "child" }));
         fake.controls[1]!.settle(report);
-        yield* untilSettled(() =>
-          Arr.last(projections).pipe(
-            Option.flatMap((projection) =>
-              Arr.findFirst(projection.runs, (run) => run.id === child.id),
-            ),
-            Option.exists((run) => run.state === "completed"),
-          ),
-        );
+        yield* untilSettled(() => latestProjectedRun(projections, child.id)?.state === "completed");
         yield* TestClock.adjust("100 millis");
         const notices = () =>
           Arr.flatMap(fake.controls[0]?.ipc ?? [], (message) =>

@@ -2,12 +2,11 @@ import { describe, expect } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { git, gitResult, gitSucceeded } from "../../src/boundary/git-worktree-process.ts";
 import { nodeFsPromises as fs, nodePath as path } from "../support/node-builtins.ts";
-import type { WorkspaceHandle } from "../../src/workspace/model.ts";
-import type { WorkspaceServiceContract } from "../../src/workspace/service.ts";
 import {
   exists,
   failureOf,
   io,
+  prepareIntegration,
   readText,
   workspaceTarget,
   workspaceTests,
@@ -39,14 +38,6 @@ const holdsBlob = (root: string, content: string) =>
     return gitSucceeded(yield* gitResult(root, ["cat-file", "-e", id]));
   });
 
-const prepareAndIntegrate = (service: WorkspaceServiceContract, handle: WorkspaceHandle) =>
-  Effect.gen(function* () {
-    const target = workspaceTarget(handle);
-    const revision = yield* service.freeze(target);
-    const preparation = yield* service.prepare({ ...target, revisionId: revision.revisionId });
-    return { revision, preparation };
-  });
-
 describe(".worktreeinclude", () => {
   test("copies matching ignored files with their mode into the worker and test trees", function* (service, root) {
     yield* writeFile(path.join(root, ".env"), "TOKEN=parent\n");
@@ -69,18 +60,14 @@ describe(".worktreeinclude", () => {
     ]);
 
     yield* writeFile(path.join(handle.cwd, "src/main.ts"), "edited\n");
-    const { revision, preparation } = yield* prepareAndIntegrate(service, handle);
+    const { revision, prepared, integration } = yield* prepareIntegration(service, handle);
     expect(revision.changedPaths).toEqual(["src/main.ts"]);
-    expect(yield* readText(preparation.cwd, ".env")).toBe("TOKEN=parent\n");
-    expect(yield* permissions(preparation.cwd, ".env")).toBe(0o640);
-    expect(yield* permissions(preparation.cwd, "config/db.local")).toBe(0o750);
+    expect(yield* readText(prepared.cwd, ".env")).toBe("TOKEN=parent\n");
+    expect(yield* permissions(prepared.cwd, ".env")).toBe(0o640);
+    expect(yield* permissions(prepared.cwd, "config/db.local")).toBe(0o750);
 
-    const integration = yield* service.integrate({
-      ...workspaceTarget(handle),
-      revisionId: revision.revisionId,
-      preparationId: preparation.preparationId,
-    });
-    expect(integration.record.status).toBe("integrated");
+    const integrated = yield* service.integrate(integration);
+    expect(integrated.record.status).toBe("integrated");
     expect(yield* readText(root, "src/main.ts")).toBe("edited\n");
     expect(yield* readText(root, ".env")).toBe("TOKEN=parent\n");
   });
@@ -115,13 +102,9 @@ describe(".worktreeinclude", () => {
     yield* writeFile(path.join(handle.cwd, ".env"), "TOKEN=writer\n");
     yield* writeFile(path.join(handle.cwd, ".gitignore"), "*.local\n");
     yield* writeFile(path.join(handle.cwd, "src/main.ts"), "edited\n");
-    const { revision, preparation } = yield* prepareAndIntegrate(service, handle);
+    const { revision, integration } = yield* prepareIntegration(service, handle);
     expect(revision.changedPaths).toEqual([".gitignore", "src/main.ts"]);
-    yield* service.integrate({
-      ...workspaceTarget(handle),
-      revisionId: revision.revisionId,
-      preparationId: preparation.preparationId,
-    });
+    yield* service.integrate(integration);
     expect(yield* readText(root, "src/main.ts")).toBe("edited\n");
     expect(yield* readText(root, ".gitignore")).toBe("*.local\n");
     expect(yield* readText(root, ".env")).toBe("TOKEN=parent\n");

@@ -1,9 +1,8 @@
 import { beforeEach, describe, expect, test } from "vitest";
-import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { applyPresentationSettings, createToolPresentationHarness } from "../../testing";
 import type { BuiltinCompactTool } from "../../src/tools/builtin-subject";
-import { builtinRenderers, previewBodiesDisabled, stripAnsi } from "../support/render";
+import { builtinRenderers, previewBodiesDisabled, stripAnsi, textResult } from "../support/render";
 import * as Match from "effect/Match";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
@@ -59,14 +58,10 @@ function builtin(
   name: BuiltinCompactTool,
   mode: "off" | "on" | "border" = "off",
   style: "compact" | "preview" = "compact",
-  options?: Parameters<typeof createToolPresentationHarness>[1],
 ) {
   applyPresentationSettings({ toolCallBackground: mode, toolCallCollapsedStyle: style });
   const renderers = builtinRenderers(name, true);
-  return createToolPresentationHarness(renderers!, options);
-}
-function result(...texts: string[]): AgentToolResult<unknown> {
-  return { content: Arr.map(texts, (text) => ({ type: "text" as const, text })), details: {} };
+  return createToolPresentationHarness(renderers!);
 }
 function plain(lines: string[]) {
   return stripAnsi(Arr.join(lines, "\n"));
@@ -87,12 +82,12 @@ describe("registered builtin presentation", () => {
       for (const mode of ["off", "on", "border"] as const) {
         const harness = builtin(fixture.name, mode);
         harness.call(fixture.args);
-        harness.result(result(fixture.output), { isPartial: true });
+        harness.result(textResult(fixture.output, {}), { isPartial: true });
         expect(Fn.pipe(plain(harness.render(100)), Str.includes(fixture.retained))).toBe(false);
-        harness.result(result(fixture.output));
+        harness.result(textResult(fixture.output, {}));
         for (const expanded of [true, false, true]) {
           harness.call(fixture.args, { expanded });
-          harness.result(result(fixture.output), { expanded });
+          harness.result(textResult(fixture.output, {}), { expanded });
           const text = plain(harness.render(100));
           expect(Fn.pipe(text, Str.includes(fixture.retained))).toBe(expanded);
           for (const marker of sourceMarkers(fixture.name))
@@ -108,7 +103,7 @@ describe("registered builtin presentation", () => {
     test(`${fixture.name} tolerates malformed arguments and cancellation`, () => {
       const harness = builtin(fixture.name);
       harness.call({ path: 17, command: false, edits: [null] }, { expanded: true });
-      harness.result(result("Operation aborted"), { expanded: true, isError: true });
+      harness.result(textResult("Operation aborted", {}), { expanded: true, isError: true });
       expect(() => harness.render(20)).not.toThrow();
     });
   }

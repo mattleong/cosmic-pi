@@ -110,7 +110,6 @@ export const makeRexClient = (
   /** Runs one command; `mutation` marks failures after spawn as possibly applied. */
   const run = (
     args: ReadonlyArray<string>,
-    action: string,
     blockId: string,
     mutation: boolean,
   ): Effect.Effect<string, RexBtwError> =>
@@ -126,15 +125,15 @@ export const makeRexClient = (
     }).pipe(
       Effect.mapError((error) =>
         mutation && error.operation !== "spawn"
-          ? failure("uncertain", `Rex may have opened ${action}, but couldn't confirm it`)
-          : failure("failed", `Couldn't run Rex to open ${action}`),
+          ? failure("uncertain", "Rex may have opened a BTW pane, but couldn't confirm it")
+          : failure("failed", "Couldn't run Rex to open a BTW pane"),
       ),
       Effect.flatMap((output) => {
         if (output.overflowed || output.timedOut || output.cleanupUnconfirmed)
           return Effect.fail(
             mutation
-              ? failure("uncertain", `Rex may have opened ${action}, but couldn't confirm it`)
-              : failure("failed", `Rex didn't answer while opening ${action}`),
+              ? failure("uncertain", "Rex may have opened a BTW pane, but couldn't confirm it")
+              : failure("failed", "Rex didn't answer while opening a BTW pane"),
           );
         if (output.code === 0) return Effect.succeed(output.stdout);
         if (isMissingBlock(output, blockId))
@@ -143,9 +142,9 @@ export const makeRexClient = (
           mutation
             ? failure(
                 "uncertain",
-                `Rex may have opened ${action}, but reported an error${exitDetail(output)}`,
+                `Rex may have opened a BTW pane, but reported an error${exitDetail(output)}`,
               )
-            : failure("failed", `Rex couldn't open ${action}${exitDetail(output)}`),
+            : failure("failed", `Rex couldn't open a BTW pane${exitDetail(output)}`),
         );
       }),
     );
@@ -154,7 +153,6 @@ export const makeRexClient = (
     paneColumns: Effect.fn("RexClient.paneColumns")(function* (location: RexLocation) {
       const stdout = yield* run(
         ["block", "call", "-s", location.sessionId, "-b", location.blockId, "size"],
-        "a BTW pane",
         location.blockId,
         false,
       );
@@ -184,7 +182,6 @@ export const makeRexClient = (
           "--",
           ...input.command.argv,
         ],
-        "a BTW pane",
         input.anchorBlockId,
         true,
       );

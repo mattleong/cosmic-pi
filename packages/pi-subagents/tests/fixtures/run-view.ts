@@ -31,6 +31,18 @@ export const view = (overrides: Partial<SubagentRunView> = {}): SubagentRunView 
   ...overrides,
 });
 
+/** An `agent_read` entry for `run` that holds no text. */
+export const readoutOf = (run: SubagentRunView) => ({
+  kind: "run" as const,
+  id: run.id,
+  name: run.name,
+  state: run.state,
+  textStatus: "none" as const,
+  truncated: false,
+  reportGeneration: 0,
+  run,
+});
+
 export const projectionOf = (runs: ReadonlyArray<SubagentRunView>): SubagentProjection => ({
   revision: 1,
   runs,

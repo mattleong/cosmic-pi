@@ -105,40 +105,35 @@ const fixture = () => {
   };
 };
 
-for (const style of ["compact"] as const)
-  for (const mode of ["off"] as const)
-    it(`the same cold row adopts complete owned presentation (${style}/${mode})`, () => {
-      withPresentationSettings(
-        { toolCallCollapsedStyle: style, toolCallBackground: mode, toolCallTiming: false },
-        () => {
-          const h = fixture();
-          const row = hostToolRow("owned", args, h.resolve(), { result });
-          expect(Arr.join(row.render(160), "\n")).not.toContain("OWNED_CALL");
-          const wrapped = h.stage();
-          expect(executeDescriptor(wrapped)).toEqual(executeDescriptor(h.tool));
-          h.replay.publish();
-          h.replay.finishStartup();
-          const frames = Arr.map([true, false, true], (expanded) => ({
-            expanded,
-            text: drawToolRow(row, expanded, 160),
-          }));
-          for (const { text } of Arr.filter(frames, (frame) => frame.expanded)) {
-            expect(text).toContain("OWNED_CALL");
-            expect(text).toContain("COMPLETE_INPUT");
-            expect(text).toContain("COMPLETE_OUTPUT recovery /tmp/evidence.txt");
-          }
-          for (const { text } of Arr.filter(
-            frames,
-            (frame) => !frame.expanded && style === "compact",
-          ))
-            expect(text).toContain("OWNED_SUMMARY");
-          expect(h.observed).toBe(result.content);
-          h.replay.retire();
-          row.setExpanded(true);
-          expect(Arr.join(row.render(160), "\n")).toContain("OWNED_CALL");
-        },
-      );
-    });
+it("the same cold row adopts complete owned presentation (compact/off)", () => {
+  withPresentationSettings(
+    { toolCallCollapsedStyle: "compact", toolCallBackground: "off", toolCallTiming: false },
+    () => {
+      const h = fixture();
+      const row = hostToolRow("owned", args, h.resolve(), { result });
+      expect(Arr.join(row.render(160), "\n")).not.toContain("OWNED_CALL");
+      const wrapped = h.stage();
+      expect(executeDescriptor(wrapped)).toEqual(executeDescriptor(h.tool));
+      h.replay.publish();
+      h.replay.finishStartup();
+      const frames = Arr.map([true, false, true], (expanded) => ({
+        expanded,
+        text: drawToolRow(row, expanded, 160),
+      }));
+      for (const { text } of Arr.filter(frames, (frame) => frame.expanded)) {
+        expect(text).toContain("OWNED_CALL");
+        expect(text).toContain("COMPLETE_INPUT");
+        expect(text).toContain("COMPLETE_OUTPUT recovery /tmp/evidence.txt");
+      }
+      for (const { text } of Arr.filter(frames, (frame) => !frame.expanded))
+        expect(text).toContain("OWNED_SUMMARY");
+      expect(h.observed).toBe(result.content);
+      h.replay.retire();
+      row.setExpanded(true);
+      expect(Arr.join(row.render(160), "\n")).toContain("OWNED_CALL");
+    },
+  );
+});
 
 for (const failure of ["foreign", "duplicateAnchor", "brokenMetadata"] as const)
   it(`does not adopt unverified ${failure} ownership`, () => {
@@ -195,17 +190,16 @@ it("a published facade can first draw after startup finishes without borrowing l
   });
 });
 
-for (const close of ["finishStartup"] as const)
-  it(`${close} before publication permanently leaves raw history`, () => {
-    const h = fixture();
-    const row = createToolPresentationHarness(h.resolve()!);
-    row.call(args);
-    row.result(result);
-    h.stage();
-    h.replay[close]();
-    h.replay.publish();
-    row.call(args, { expanded: true });
-    expect(Arr.join(row.render(), "\n")).not.toContain("OWNED_CALL");
-    expect(Arr.join(row.render(), "\n")).toContain("COMPLETE_OUTPUT");
-    expect(h.resolve()).toBeUndefined();
-  });
+it("finishStartup before publication permanently leaves raw history", () => {
+  const h = fixture();
+  const row = createToolPresentationHarness(h.resolve()!);
+  row.call(args);
+  row.result(result);
+  h.stage();
+  h.replay.finishStartup();
+  h.replay.publish();
+  row.call(args, { expanded: true });
+  expect(Arr.join(row.render(), "\n")).not.toContain("OWNED_CALL");
+  expect(Arr.join(row.render(), "\n")).toContain("COMPLETE_OUTPUT");
+  expect(h.resolve()).toBeUndefined();
+});

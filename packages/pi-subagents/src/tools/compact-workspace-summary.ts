@@ -2,9 +2,8 @@ import { compactIssueSeverity } from "pi-code-previews";
 import type { CompactIssue, CompactSummary } from "pi-code-previews";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
-import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
 import { countLabel } from "pi-cosmic-core/display";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import { WorkspaceToolDetailsSchema, type WorkspaceToolDetails } from "./details-schema.ts";
 
 function reviewPosition(details: WorkspaceToolDetails): string {
@@ -262,13 +261,7 @@ function operationIssues(details: WorkspaceOperationReceipt): CompactIssue[] {
   return Fn.absurd(details);
 }
 
-const decodeWorkspaceToolDetailsOption = Schema.decodeUnknownOption(WorkspaceToolDetailsSchema);
-
-export const decodeWorkspaceToolDetails = Fn.flow(
-  Option.liftThrowable(decodeWorkspaceToolDetailsOption),
-  Option.flatten,
-  Option.getOrUndefined,
-);
+export const decodeWorkspaceToolDetails = decodeUnknownOrUndefined(WorkspaceToolDetailsSchema);
 
 export function compactWorkspaceSummary(
   result: { readonly details?: unknown },

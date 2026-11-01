@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import type { AgentToolResult, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { beforeEach, test } from "vitest";
 import {
@@ -14,58 +14,34 @@ import { createNativeMcpRenderers } from "../../src/tools/native-mcp-render";
 import { nativeMcpSummary } from "../../src/tools/native-mcp-summary";
 import { nativeMcpIdentity } from "../../src/tools/native-mcp-identity";
 import { stripAnsi } from "pi-cosmic-core";
-import type { HostValue } from "../../src/shared/untrusted-value";
+import { textResult } from "../support/render";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 
+type NativeDefinition = Pick<ToolInfo, "name" | "namespace">;
+
 const styleNativeMcp = (
-  definition: ToolDefinition,
+  definition: NativeDefinition,
   schedule = animationSchedulerProbe().schedule,
 ) =>
   createNativeMcpRenderers(definition.name, definition, undefined, { scheduleAnimation: schedule });
 
-type NativeDefinition = ToolDefinition;
 type ResourceTool = "list_mcp_resources" | "list_mcp_resource_templates" | "read_mcp_resource";
 
 function dynamicTool(
   server = "docs",
   tool = "lookup",
   name = Fn.pipe(`mcp__${server}__${tool}`, Str.replaceAll(/[^A-Za-z0-9_]/g, "_")),
-) {
-  const definition: NativeDefinition = {
-    name,
-    label: `${server}/${tool}`,
-    description: `MCP tool ${tool} from server ${server}`,
-    parameters: { type: "object", properties: { query: { type: "string" } } },
-    outputSchema: { type: "object", required: ["content"] },
-    exposure: "direct",
-    namespace: { name: `mcp__${Fn.pipe(server, Str.replaceAll("-", "_"))}` },
-    annotations: { readOnlyHint: true, openWorldHint: true },
-    execute: () => Promise.resolve({ content: [], details: { server, tool } }),
-  };
-  return definition;
+): NativeDefinition {
+  return { name, namespace: { name: `mcp__${Fn.pipe(server, Str.replaceAll("-", "_"))}` } };
 }
 
-function resourceTool(name: ResourceTool) {
-  const definition: NativeDefinition = {
-    name,
-    label: name,
-    description: "MCP resources",
-    parameters: { type: "object", properties: { server: { type: "string" } } },
-    outputSchema: { type: "object" },
-    exposure: "codemode",
-    annotations: { readOnlyHint: true },
-    execute: () => Promise.resolve({ content: [], details: { server: "", tool: name } }),
-  };
-  return definition;
+function resourceTool(name: ResourceTool): NativeDefinition {
+  return { name };
 }
 
-const result = (text: string, details: HostValue | undefined): AgentToolResult<unknown> => ({
-  content: [{ type: "text", text }],
-  details,
-});
 const docs = { server: "docs", tool: "lookup" };
 
 const settings = (style: "compact" | "preview", background: "off" | "on" | "border" = "off") =>
@@ -123,16 +99,16 @@ test("malformed, foreign, or accessor details decline without invoking getters",
     { server: Fn.pipe("x", Str.repeat(5000)), tool: "lookup" },
     accessor,
   ])
-    assert.equal(summarize(dynamicTool(), result("done", details), {}), undefined);
+    assert.equal(summarize(dynamicTool(), textResult("done", details), {}), undefined);
   assert.equal(touched, false);
   assert.equal(
-    summarize(resourceTool("list_mcp_resources"), result("[]", docs), {}),
+    summarize(resourceTool("list_mcp_resources"), textResult("[]", docs), {}),
     undefined,
     "evidence from another tool is not this resource tool's",
   );
   const thrown = summarize(
     dynamicTool(),
-    result("connect ECONNREFUSED 127.0.0.1:3000", {}),
+    textResult("connect ECONNREFUSED 127.0.0.1:3000", {}),
     {},
     true,
   );
@@ -148,7 +124,7 @@ test("errors are short human issues while expansion keeps full native text and r
     'Validation failed for tool "mcp__docs__lookup":\n  - query: must be string\n\nReceived arguments:\n{\n  "query": 1\n}',
     "",
   ]) {
-    const summary = summarize(dynamicTool(), result(text, docs), {}, true);
+    const summary = summarize(dynamicTool(), textResult(text, docs), {}, true);
     assert.equal(status(summary), "error");
     const error = Option.getOrUndefined(
       Arr.findFirst(summary?.issues ?? [], (issue) => issue.severity === "error"),
@@ -164,7 +140,7 @@ test("errors are short human issues while expansion keeps full native text and r
     const h = createToolPresentationHarness(styleNativeMcp(dynamicTool()), { width: 200 });
     const frames = h.cycle(
       { query: "effect" },
-      result("MCP server docs requires sign-in. Run /mcp to sign in.", docs),
+      textResult("MCP server docs requires sign-in. Run /mcp to sign in.", docs),
       { overrides: () => ({ isError: true }) },
     );
     for (const frame of Arr.filter(frames, (entry) => entry.expanded))
@@ -217,7 +193,7 @@ for (const style of ["compact", "preview"] as const)
       );
       const uri = `docs://guide/${Fn.pipe("chapter/", Str.repeat(40))}end`;
       resource.call({ server: "docs", uri }, { expanded: true });
-      resource.result(result("Resource body", { server: "docs", tool: "read_mcp_resource" }), {
+      resource.result(textResult("Resource body", { server: "docs", tool: "read_mcp_resource" }), {
         expanded: true,
       });
       const text = stripAnsi(Arr.join(resource.render(), "\n"));
@@ -241,7 +217,7 @@ for (const style of ["compact", "preview"] as const)
       const h = createToolPresentationHarness(tool);
       h.call({ query: hostile }, { executionStarted: true });
       h.result(
-        result(partial ? `Indexing ${hostile}` : output, {
+        textResult(partial ? `Indexing ${hostile}` : output, {
           server: `docs${hostile}`,
           tool: `look${hostile}up`,
         }),
@@ -264,10 +240,10 @@ for (const style of ["compact", "preview"] as const)
     const probe = animationSchedulerProbe();
     const h = createToolPresentationHarness(styleNativeMcp(dynamicTool(), probe.schedule));
     h.call({ query: "effect" }, { executionStarted: true });
-    h.result(result("\u001b[2K\nIndexing 3/10", docs), { isPartial: true });
+    h.result(textResult("\u001b[2K\nIndexing 3/10", docs), { isPartial: true });
     assert.ok(Fn.pipe(stripAnsi(Arr.join(h.render(100), "\n")), Str.includes("Indexing 3/10")));
     assert.ok(probe.scheduled > 0);
-    h.result(result("done", docs));
+    h.result(textResult("done", docs));
     h.render(100);
     assert.ok(probe.stops > 0);
   });

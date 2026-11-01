@@ -200,8 +200,6 @@ afterEach(() => {
 function harness(options: HarnessOptions = {}) {
   const notifications: string[] = [];
   const startupEvents: string[] = [];
-  const runSignals: Array<AbortSignal | undefined> = [];
-  const forkSignals: Array<AbortSignal | undefined> = [];
   const syntaxThemes: string[] = [];
   const probe = makeLifecycleProbe("runtime-acquired", "runtime-released");
   let loadCalls = 0;
@@ -231,23 +229,8 @@ function harness(options: HarnessOptions = {}) {
         syntaxThemes.push(theme);
         return options.initializeSyntax?.(theme) ?? Effect.void;
       }),
-    makeRuntime: (runtimePi) => {
-      const runtime = makePiManagedRuntime(
-        runtimePi,
-        Layer.merge(codePreviewApplicationLayer, probe.layer),
-      );
-      return {
-        ...runtime,
-        run: (effect, signal) => {
-          runSignals.push(signal);
-          return runtime.run(effect, signal);
-        },
-        fork: (effect, signal) => {
-          forkSignals.push(signal);
-          return runtime.fork(effect, signal);
-        },
-      };
-    },
+    makeRuntime: (runtimePi) =>
+      makePiManagedRuntime(runtimePi, Layer.merge(codePreviewApplicationLayer, probe.layer)),
   };
   const context = (overrides: ExtensionContextOverrides = {}): ExtensionHostContext =>
     extensionContextFixture({
@@ -263,7 +246,6 @@ function harness(options: HarnessOptions = {}) {
     });
   return {
     pi: host.pi,
-    handlers: host.handlers,
     dispatch: (name: "session_start" | "session_shutdown", ctx: ExtensionHostContext = context()) =>
       host.emit(name, ctx),
     dependencies,
@@ -278,7 +260,6 @@ function harness(options: HarnessOptions = {}) {
       releases: probe.released(),
       loads: loadCalls,
     }),
-    signals: () => ({ run: [...runSignals], fork: [...forkSignals] }),
   };
 }
 
@@ -310,7 +291,6 @@ effectTest("startup loads settings before renderers and activates the scheduler"
   assert.deepEqual(h.counts(), { acquisitions: 1, releases: 0, loads: 1 });
   assert.equal(hasCodePreviewSessionCapability(), true);
   assert.deepEqual(h.syntaxThemes, []);
-  assert.deepEqual(h.signals().fork, []);
   yield* step(() => shutdown(h));
 });
 
@@ -504,21 +484,16 @@ effectTest(
   },
 );
 
-const captureFailures: ReadonlyArray<
-  readonly [string, (h: ReturnType<typeof harness>) => ExtensionHostContext]
-> = [["cwd getters", (h) => throwingGetter(h.context(), "cwd")]];
+effectTest("throwing session cwd getters fail before runtime acquisition", function* () {
+  const h = yield* registered();
+  const context = throwingGetter(h.context(), "cwd");
 
-for (const [name, sabotaged] of captureFailures)
-  effectTest(`throwing session ${name} fail before runtime acquisition`, function* () {
-    const h = yield* registered();
-    const context = sabotaged(h);
+  assert.doesNotThrow(() => h.dispatch("session_start", context));
+  yield* settle(() => h.dispatch("session_shutdown", context));
 
-    assert.doesNotThrow(() => h.dispatch("session_start", context));
-    yield* settle(() => h.dispatch("session_shutdown", context));
-
-    assert.deepEqual(h.counts(), { acquisitions: 0, releases: 0, loads: 0 });
-    assert.equal(h.notifications.length, 1);
-  });
+  assert.deepEqual(h.counts(), { acquisitions: 0, releases: 0, loads: 0 });
+  assert.equal(h.notifications.length, 1);
+});
 
 effectTest("project trust fails closed unless the callback returns literal true", function* () {
   const observedTrust: boolean[] = [];

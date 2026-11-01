@@ -1,19 +1,9 @@
-import { tmpdir } from "node:os";
-import * as Effect from "effect/Effect";
-import { recordingExtensionHost } from "pi-cosmic-core/testing";
+import { recordingExtensionHost, temporaryDirectory } from "pi-cosmic-core/testing";
 import { describe, expect, vi } from "vitest";
 import { registerSubagentApplication } from "../src/application/register.ts";
 import { sessionContextFixture } from "./fixtures/pi-host.ts";
 import { effectTest, settle, step } from "./support/effect-test.ts";
 import { nodeFsPromises, nodePath } from "./support/node-builtins.ts";
-
-const temporaryDirectory = function* (prefix: string) {
-  const directory = yield* step(() => nodeFsPromises.mkdtemp(nodePath.join(tmpdir(), prefix)));
-  yield* Effect.addFinalizer(() =>
-    Effect.promise(() => nodeFsPromises.rm(directory, { recursive: true, force: true })),
-  );
-  return directory;
-};
 
 describe("application settings commands", () => {
   effectTest(

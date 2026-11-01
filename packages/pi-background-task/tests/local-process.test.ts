@@ -46,17 +46,18 @@ const collectUntilExit = (handle: LocalProcessHandle) =>
     { concurrency: "unbounded" },
   );
 
+const outputText = (events: Iterable<LocalProcessOutput>) =>
+  Arr.join(
+    Arr.map([...events], (event) => event.text),
+    "",
+  );
+
 const firstOutput = (handle: LocalProcessHandle) =>
   handle.output.pipe(
     Stream.take(1),
     Stream.runCollect,
     Effect.timeout(processTimeout),
-    Effect.map((events) =>
-      Arr.join(
-        Arr.map([...events], (event) => event.text),
-        "",
-      ),
-    ),
+    Effect.map(outputText),
   );
 
 const processAlive = (pid: number) => signalProcess(pid, 0) === "present";
@@ -72,12 +73,6 @@ const pollUntil = (done: Effect.Effect<boolean>) =>
   });
 
 const awaitProcessDeath = (pid: number) => pollUntil(Effect.sync(() => !processAlive(pid)));
-
-const outputText = (events: Iterable<LocalProcessOutput>) =>
-  Arr.join(
-    Arr.map([...events], (event) => event.text),
-    "",
-  );
 
 /** A stand-in shell that prints the command it was asked to run instead of running it. */
 const echoingShell = Effect.gen(function* () {
@@ -269,11 +264,7 @@ describe("local process boundary", () => {
         );
         const result = yield* collectUntilExit(yield* spawnProcess(command));
         expect(result.exit.exitCode).toBe(0);
-        const output = Arr.join(
-          Arr.map([...result.events], (event) => event.text),
-          "",
-        );
-        expect(Number(Str.trim(output))).toBe(lines * lineBytes);
+        expect(Number(Str.trim(outputText(result.events)))).toBe(lines * lineBytes);
       }),
     ),
   );
@@ -370,12 +361,7 @@ describe("local process boundary", () => {
           yield* handle.terminate("graceful");
           const result = yield* collectUntilExit(handle).pipe(Effect.timeout(processTimeout));
           expect(result.exit).toEqual({ exitCode: null, signal: "SIGTERM" });
-          expect(
-            Arr.join(
-              Arr.map([...result.events], (event) => event.text),
-              "",
-            ),
-          ).toContain("cleaned");
+          expect(outputText(result.events)).toContain("cleaned");
         }),
       ),
   );

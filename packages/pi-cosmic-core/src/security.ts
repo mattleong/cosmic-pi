@@ -129,17 +129,12 @@ const redactSensitiveText = (message: string): string =>
 const clipDiagnostic = (text: string, maximumLength = DIAGNOSTIC_MAX_LENGTH): string =>
   text.length <= maximumLength ? text : maximumLength > 1 ? clipText(text, maximumLength) : "…";
 
-export function decodeJwtPayloadText(token: string): string | undefined {
-  const payload = Str.split(token, ".")[1];
-  return payload ? Result.getOrUndefined(Base64Url.decodeString(payload)) : undefined;
-}
-
 export const extractJwtClaim = <S extends Schema.ConstraintDecoder<unknown>>(
   token: string | undefined,
   payloadSchema: S,
 ): S["Type"] | undefined => {
-  if (token === undefined) return undefined;
-  const source = decodeJwtPayloadText(token);
+  const payload = token === undefined ? undefined : Str.split(token, ".")[1];
+  const source = payload ? Result.getOrUndefined(Base64Url.decodeString(payload)) : undefined;
   if (source === undefined) return undefined;
   return decodeUnknownOrUndefined(payloadSchema)(source);
 };

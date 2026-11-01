@@ -2,7 +2,6 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
-import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
 import { clipText } from "pi-cosmic-core/display";
@@ -13,7 +12,7 @@ import {
   type WorktreeHook,
   type WorktreeHookEvent,
 } from "../config/schema.ts";
-import { isGitLocalEnvironmentKey } from "./git-local-environment.ts";
+import { withoutGitLocalEnvironment } from "./git-local-environment.ts";
 
 export class WorktreeHookError extends Schema.TaggedError<
   WorktreeHookError,
@@ -43,14 +42,6 @@ const MESSAGE_LINE_CHARS = 400;
 // Redaction runs on a window far wider than the reported line, so a credential cut at the
 // window's start lies outside it.
 const REDACTION_WINDOW_CHARS = 16_000;
-
-const hookEnvironment = (source: NodeJS.ProcessEnv) =>
-  Rec.fromEntries(
-    Arr.filter(
-      Rec.toEntries(source),
-      ([key, value]) => value !== undefined && !isGitLocalEnvironmentKey(key),
-    ),
-  );
 
 const lastLine = (stdout: string, stderr: string) => {
   const text = Str.trim(stderr) || Str.trim(stdout);
@@ -114,7 +105,7 @@ export const runWorktreeHook = (
     executable,
     args,
     cwd: input.worktreePath,
-    environment: hookEnvironment(options.environment ?? process.env),
+    environment: withoutGitLocalEnvironment(options.environment ?? process.env),
     stdin: stdinPayload(input),
     stdoutLimitBytes: STDOUT_LIMIT_BYTES,
     stderrLimitBytes: STDERR_LIMIT_BYTES,

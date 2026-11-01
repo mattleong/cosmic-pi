@@ -4,19 +4,16 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import { yieldUntil } from "pi-cosmic-core/testing";
-import type { SubagentNotification } from "../../src/boundary/host-notifier.ts";
 import { gatedReportArchive } from "./fixtures/run-context.ts";
-import { localServiceFixture, request, runView, withService } from "./fixtures/service-harness.ts";
+import {
+  localServiceFixture,
+  request,
+  runView,
+  withService,
+  yieldTurns,
+  reportsAtRoot,
+} from "./fixtures/service-harness.ts";
 import * as Arr from "effect/Array";
-
-const yieldTurns = Effect.gen(function* () {
-  for (let turn = 0; turn < 25; turn += 1) yield* Effect.yieldNow;
-});
-
-const reportOf = (notifications: ReadonlyArray<SubagentNotification>) =>
-  Arr.flatMap(notifications, (notification) =>
-    notification.type === "completed" ? Arr.map(notification.runs, (run) => run.finalText) : [],
-  );
 
 describe("guidance that reaches a finishing local Pi child", () => {
   it.effect("starts a new child turn when guidance arrives while settlement is pending", () => {
@@ -40,7 +37,7 @@ describe("guidance that reaches a finishing local Pi child", () => {
         streamingBehavior: "steer",
       });
       yield* Deferred.succeed(statsGate, undefined);
-      yield* yieldTurns;
+      yield* yieldTurns(25);
       expect((yield* runView(service, run.id)).state).toBe("running");
 
       control.offer({ type: "agent_start" });
@@ -48,7 +45,7 @@ describe("guidance that reaches a finishing local Pi child", () => {
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
       yield* TestClock.adjust("100 millis");
       yield* yieldUntil(() => notifications.length === 1);
-      expect(reportOf(notifications)).toEqual(["New report."]);
+      expect(reportsAtRoot(notifications)).toEqual(["New report."]);
     });
   });
 
@@ -68,12 +65,12 @@ describe("guidance that reaches a finishing local Pi child", () => {
       const stats = control.commandTypes("get_session_stats").length;
       control.settle("Old report.");
       yield* yieldUntil(() => control.commandTypes("get_session_stats").length > stats);
-      yield* yieldTurns;
+      yield* yieldTurns(25);
       expect((yield* runView(service, run.id)).state).toBe("running");
 
       yield* Deferred.succeed(steerGate, undefined);
       expect(yield* Fiber.join(sending)).toMatchObject({ run: { state: "running" } });
-      yield* yieldTurns;
+      yield* yieldTurns(25);
       expect((yield* runView(service, run.id)).state).toBe("running");
 
       control.offer({ type: "agent_start" });
@@ -81,7 +78,7 @@ describe("guidance that reaches a finishing local Pi child", () => {
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
       yield* TestClock.adjust("100 millis");
       yield* yieldUntil(() => notifications.length === 1);
-      expect(reportOf(notifications)).toEqual(["New report."]);
+      expect(reportsAtRoot(notifications)).toEqual(["New report."]);
     });
   });
 
@@ -102,7 +99,7 @@ describe("guidance that reaches a finishing local Pi child", () => {
         const sending = yield* service
           .send(run.id, "Also check the lexer.")
           .pipe(Effect.flip, Effect.forkChild({ startImmediately: true }));
-        yield* yieldTurns;
+        yield* yieldTurns(25);
         yield* Deferred.succeed(gate.release, undefined);
 
         // No restarted turn exists for the old report to abandon.
@@ -116,7 +113,7 @@ describe("guidance that reaches a finishing local Pi child", () => {
         expect(gate.discarded).toEqual([]);
         yield* TestClock.adjust("100 millis");
         yield* yieldUntil(() => notifications.length === 1);
-        expect(reportOf(notifications)).toEqual(["Old report."]);
+        expect(reportsAtRoot(notifications)).toEqual(["Old report."]);
       });
     }),
   );
@@ -133,7 +130,7 @@ describe("guidance that reaches a finishing local Pi child", () => {
         const pausing = yield* service
           .interrupt(run.id)
           .pipe(Effect.flip, Effect.forkChild({ startImmediately: true }));
-        yield* yieldTurns;
+        yield* yieldTurns(25);
         yield* Deferred.succeed(gate.release, undefined);
 
         expect(yield* Fiber.join(pausing)).toMatchObject({ code: "interrupt_state_invalid" });
@@ -161,13 +158,13 @@ describe("guidance that reaches a finishing local Pi child", () => {
         const sending = yield* service
           .send(run.id, "/compact")
           .pipe(Effect.flip, Effect.forkChild({ startImmediately: true }));
-        yield* yieldTurns;
+        yield* yieldTurns(25);
         control.failExit("transport read failed");
-        yield* yieldTurns;
+        yield* yieldTurns(25);
         yield* Deferred.succeed(gate.release, undefined);
 
         expect(yield* Fiber.join(sending)).toMatchObject({ code: "agent_unavailable" });
-        yield* yieldTurns;
+        yield* yieldTurns(25);
         expect(yield* runView(service, run.id)).toMatchObject({
           state: "completed",
           finalText: "Old report.",
@@ -176,7 +173,7 @@ describe("guidance that reaches a finishing local Pi child", () => {
         expect(gate.discarded).toEqual([]);
         yield* TestClock.adjust("100 millis");
         yield* yieldUntil(() => notifications.length === 1);
-        expect(reportOf(notifications)).toEqual(["Old report."]);
+        expect(reportsAtRoot(notifications)).toEqual(["Old report."]);
       });
     }),
   );

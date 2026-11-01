@@ -1,7 +1,8 @@
 import * as Effect from "effect/Effect";
-import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
+import type { SubagentError } from "./errors.ts";
 import { SUBAGENT_ROOT_RUN_ID } from "./model.ts";
 import {
+  integrationQuarantinedError,
   isBindingFinished,
   revisionKnowledge,
   type WorkspaceControlContext,
@@ -82,11 +83,7 @@ export function workspaceApplyOperations(
         const prepared = yield* withLock(
           Effect.gen(function* () {
             if (isBindingFinished(binding)) return yield* workspaceFinishedError(binding);
-            if (state.integrationQuarantined)
-              return yield* invalid(
-                "workspace_integration_quarantined",
-                "Integration ownership is quarantined; further integration is blocked pending manual recovery.",
-              );
+            if (state.integrationQuarantined) return yield* integrationQuarantinedError();
             const knowledge = revisionKnowledge(binding);
             return knowledge?.kind === "prepared" &&
               knowledge.origin === "prepare" &&

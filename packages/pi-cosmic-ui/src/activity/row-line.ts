@@ -48,9 +48,6 @@ export const activityElapsed = (row: ActivityRow, now?: number, compact = false)
     0,
     (row.endedAt ?? now ?? row.updatedAt ?? row.startedAt) - row.startedAt,
   );
-  return elapsedLabel(elapsed, compact);
-};
-export const elapsedLabel = (elapsed: number, compact: boolean): string => {
   const text = formatElapsed(elapsed);
   return compact ? Str.split(text, " ")[0] : text;
 };

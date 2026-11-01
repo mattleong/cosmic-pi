@@ -226,6 +226,23 @@ export function recordCleanup(
     );
   });
 
+  const confirmAfterPoolDetach = (
+    record: RunRecord,
+    scope: Scope.Closeable,
+    expectedProcess?: BackendHandle,
+  ) =>
+    Effect.exit(detachWriterPoolAfterCleanup(record, scope, expectedProcess)).pipe(
+      Effect.flatMap((detached) =>
+        Exit.isFailure(detached)
+          ? retainCleanupQuarantine(
+              record,
+              scope,
+              failureDiagnostic("writer-lease", detached.cause),
+            )
+          : clearCleanupPending(record, scope),
+      ),
+    );
+
   const scopeFailure = (record: RunRecord, scope: Scope.Closeable, cause: Cause.Cause<unknown>) => {
     const process = record.process;
     const verifier = process?.cleanupVerifier;
@@ -264,15 +281,7 @@ export function recordCleanup(
         }),
       );
       if (!owned) return undefined;
-      const detached = yield* Effect.exit(detachWriterPoolAfterCleanup(record, scope));
-      if (Exit.isFailure(detached))
-        return yield* retainCleanupQuarantine(
-          record,
-          scope,
-          failureDiagnostic("writer-lease", detached.cause),
-        );
-      yield* clearCleanupPending(record, scope);
-      return undefined;
+      return yield* confirmAfterPoolDetach(record, scope);
     },
   );
 
@@ -350,15 +359,7 @@ export function recordCleanup(
           const closed = yield* Effect.exit(Scope.close(scope, Exit.void));
           if (Exit.isFailure(closed)) return yield* scopeFailure(record, scope, closed.cause);
           if (handOverWriterPool) return yield* holdWriterPoolHandover(record, scope);
-          const detached = yield* Effect.exit(detachWriterPoolAfterCleanup(record, scope));
-          if (Exit.isFailure(detached))
-            return yield* retainCleanupQuarantine(
-              record,
-              scope,
-              failureDiagnostic("writer-lease", detached.cause),
-            );
-          yield* clearCleanupPending(record, scope);
-          return undefined;
+          return yield* confirmAfterPoolDetach(record, scope);
         }).pipe(Effect.ensuring(Deferred.succeed(closeSettled, undefined)));
       }),
     );
@@ -448,15 +449,7 @@ export function recordCleanup(
               recoverable ? process : undefined,
             );
           }
-          const detached = yield* Effect.exit(detachWriterPoolAfterCleanup(record, scope, process));
-          if (Exit.isFailure(detached))
-            return yield* retainCleanupQuarantine(
-              record,
-              scope,
-              failureDiagnostic("writer-lease", detached.cause),
-            );
-          yield* clearCleanupPending(record, scope);
-          return undefined;
+          return yield* confirmAfterPoolDetach(record, scope, process);
         }).pipe(
           Effect.ensuring(
             withLock(

@@ -17,25 +17,6 @@ afterEach(() => {
 });
 
 describe("process liveness", () => {
-  it("treats the current process as alive", () => {
-    const identity = currentProcessIdentity();
-    expect(identity.pid).toBe(process.pid);
-    expect(processLiveness(identity)).toBe("alive");
-  });
-
-  it("treats an exited process as dead", () => {
-    const exited = nodeSpawnSync(process.execPath, ["-e", ""]);
-    expect(processLiveness({ pid: exited.pid, started: "whenever" })).toBe("dead");
-  });
-
-  it("treats a live PID with a different comparable start identity as reused, so dead", () => {
-    expect(processLiveness(reusedProcessIdentity())).toBe("dead");
-  });
-
-  it("cannot prove a live PID without a start identity is the same process", () => {
-    expect(processLiveness({ pid: process.pid })).toBe("unknown");
-  });
-
   it("never treats incomparable start evidence as death", () => {
     for (const started of [
       "an earlier process",
@@ -83,6 +64,7 @@ describe("non-blocking process liveness", () => {
       const started = processStartIdentity(pid);
       expect(started).toBeDefined();
       const exited = nodeSpawnSync(process.execPath, ["-e", ""]);
+      expect(currentProcessIdentity().pid).toBe(process.pid);
       const cases: ReadonlyArray<readonly [ProcessIdentity, string]> = [
         [currentProcessIdentity(), "alive"],
         [{ pid, started }, "alive"],
@@ -90,6 +72,7 @@ describe("non-blocking process liveness", () => {
         [{ pid: exited.pid, started: "whenever" }, "dead"],
         [reusedProcessIdentity(), "dead"],
         [{ pid }, "unknown"],
+        [{ pid: process.pid }, "unknown"],
         [{ pid, started: "an earlier process" }, "unknown"],
       ];
       for (const [identity, expected] of cases) {

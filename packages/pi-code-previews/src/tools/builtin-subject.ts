@@ -1,19 +1,13 @@
 import * as Fn from "effect/Function";
-import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
-import { ownField, type HostObject } from "../shared/untrusted-value";
+import type { HostObject } from "../shared/untrusted-value";
 import { escapeControlChars } from "../shared/terminal-text";
-import { getPathArg, getReadLineRange } from "./data/args";
+import { getPathArg, getReadLineRange, stringArg } from "./data/args";
 import type { CORE_CODE_PREVIEW_TOOLS } from "./names";
 import { normalizeShellCommandWhitespace } from "./shell-command";
 import { formatDisplayPath } from "pi-cosmic-core/platform/paths";
 
 export type BuiltinCompactTool = (typeof CORE_CODE_PREVIEW_TOOLS)[number];
-
-export function stringArg(args: HostObject | undefined, name: string): string {
-  const value = ownField(args, name);
-  return Predicate.isString(value) ? value : "";
-}
 
 export function describeBuiltinCompactSubject(
   tool: BuiltinCompactTool,

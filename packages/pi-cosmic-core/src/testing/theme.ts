@@ -70,7 +70,7 @@ const terminalDefaultBackgrounds = {
 
 const unstyled = (text: string): string => text;
 
-export class PlainTheme extends Theme {
+class PlainTheme extends Theme {
   constructor() {
     super(terminalDefaultForegrounds, terminalDefaultBackgrounds, "truecolor", { name: "plain" });
   }
@@ -126,9 +126,6 @@ export class PlainTheme extends Theme {
 
 export const plainTheme: Theme = new PlainTheme();
 
-export const themeFixture = (overrides: Partial<Theme> = {}): Theme =>
-  overlay<Theme>(new PlainTheme(), overrides);
-
 interface FailingThemeOptions {
   readonly message?: string;
   readonly when?: (token: string, text: string) => boolean;
@@ -143,7 +140,7 @@ export const failingTheme = ({
   const fail = (): never => {
     throw new Error(message);
   };
-  return themeFixture({
+  return overlay<Theme>(new PlainTheme(), {
     fg: (color, text) => (when(color, text) ? fail() : text),
     bold: (text) => (bold ? fail() : text),
   });

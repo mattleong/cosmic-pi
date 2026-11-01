@@ -17,24 +17,14 @@ import { describe, expect, it, vi } from "vitest";
 import { betterOpenAIWithDependencies } from "../src/application.ts";
 import { reconstructOpenAIContext, repairOpenAIContext } from "../src/compaction/context.ts";
 import { prepareOpenAIFallback } from "../src/compaction/fallback.ts";
+import { OPENAI_COMPACTION_SUMMARY } from "../src/compaction/protocol.ts";
 import {
-  OPENAI_COMPACTION_DETAILS_TYPE,
-  OPENAI_COMPACTION_SUMMARY,
-} from "../src/compaction/protocol.ts";
-import { appendAssistant, assistantMessage, serializedSnapshot } from "./helpers.ts";
+  appendAssistant,
+  assistantMessage,
+  ownedCheckpointDetails,
+  serializedSnapshot,
+} from "./helpers.ts";
 
-const details = {
-  type: OPENAI_COMPACTION_DETAILS_TYPE,
-  checkpoint: {
-    version: 1,
-    provider: "openai",
-    api: "openai-responses",
-    model: "gpt-5.5",
-    output: [{ type: "compaction", encrypted_content: "encrypted" }],
-    omittedEntryIds: [],
-    createdAt: 0,
-  },
-};
 const preparation = {
   firstKeptEntryId: "ignored",
   messagesToSummarize: [],
@@ -47,7 +37,13 @@ const preparation = {
 const appendUser = (manager: SessionManager, content: string) =>
   manager.appendMessage({ role: "user", content, timestamp: 1 });
 const appendCheckpoint = (manager: SessionManager, retained = manager.getLeafId()!) =>
-  manager.appendCompaction(OPENAI_COMPACTION_SUMMARY, retained, 100, details, true);
+  manager.appendCompaction(
+    OPENAI_COMPACTION_SUMMARY,
+    retained,
+    100,
+    ownedCheckpointDetails(),
+    true,
+  );
 
 // The same JSON values with different text, so every comparison takes the normalized fallback.
 const reorderedKeys = (messages: ContextWithSystemEvent["messages"]) =>
@@ -162,100 +158,92 @@ describe("owned checkpoint reconstruction", () => {
     ).toBeUndefined();
   });
 
-  for (const omitSnapshots of [false])
-    it(`rebuilds authoritative prompt and tools over stale checkpoint snapshots, absent=${omitSnapshots}`, () => {
-      const manager = SessionManager.inMemory("/virtual/old-snapshots");
-      const obsoleteSystem = {
-        role: "system" as const,
-        content: "opaque original",
-        sections: { rules: "old" },
-        toolsAdded: [{ name: "old", description: "old", parameters: { type: "object" } }],
-        timestamp: 0,
-      };
-      const first = manager.appendMessage(obsoleteSystem);
-      appendUser(manager, "first dialogue");
-      appendCheckpoint(manager, first);
-      manager.appendMessage({
-        role: "system",
-        content: "",
-        sections: { rules: "current" },
-        toolsRemoved: [{ name: "old" }],
-        toolsAdded: [{ name: "current", description: "current", parameters: { type: "object" } }],
-        timestamp: 1,
-      });
-      appendUser(manager, "second dialogue");
-      appendCheckpoint(manager, first);
-      appendUser(manager, "third dialogue");
-      appendCheckpoint(manager, first);
-      appendUser(manager, "otherwise safe fallback tail");
-      expect(prepareOpenAIFallback(manager.getBranch(), preparation)).toBeDefined();
-      const branch = Arr.map(manager.getBranch(), (entry) => {
-        if (entry.type !== "compaction") return entry;
-        const { systemMessage: _ignored, ...withoutSnapshot } = entry;
-        return omitSnapshots
-          ? withoutSnapshot
-          : Object.assign({}, withoutSnapshot, { systemMessage: obsoleteSystem });
-      });
-      const repaired = repairOpenAIContext(branch, buildSessionContext(branch).messages)!.messages!;
-      const prompt = getCurrentSystemPrompt(repaired);
-      expect(Str.split(prompt, "opaque original")).toHaveLength(2);
-      expect(prompt).toContain("current");
-      expect(prompt).not.toContain("old");
-      expect(Arr.map(getCurrentTools(repaired), (tool) => tool.name)).toEqual(["current"]);
-      expect(serializedSnapshot(repaired)).toContain("first dialogue");
-      expect(serializedSnapshot(repaired)).toContain("second dialogue");
-      expect(prepareOpenAIFallback(branch, preparation)).toBeUndefined();
+  it("rebuilds authoritative prompt and tools over stale checkpoint snapshots", () => {
+    const manager = SessionManager.inMemory("/virtual/old-snapshots");
+    const obsoleteSystem = {
+      role: "system" as const,
+      content: "opaque original",
+      sections: { rules: "old" },
+      toolsAdded: [{ name: "old", description: "old", parameters: { type: "object" } }],
+      timestamp: 0,
+    };
+    const first = manager.appendMessage(obsoleteSystem);
+    appendUser(manager, "first dialogue");
+    appendCheckpoint(manager, first);
+    manager.appendMessage({
+      role: "system",
+      content: "",
+      sections: { rules: "current" },
+      toolsRemoved: [{ name: "old" }],
+      toolsAdded: [{ name: "current", description: "current", parameters: { type: "object" } }],
+      timestamp: 1,
     });
+    appendUser(manager, "second dialogue");
+    appendCheckpoint(manager, first);
+    appendUser(manager, "third dialogue");
+    appendCheckpoint(manager, first);
+    appendUser(manager, "otherwise safe fallback tail");
+    expect(prepareOpenAIFallback(manager.getBranch(), preparation)).toBeDefined();
+    const branch = Arr.map(manager.getBranch(), (entry) => {
+      if (entry.type !== "compaction") return entry;
+      const { systemMessage: _ignored, ...withoutSnapshot } = entry;
+      return Object.assign({}, withoutSnapshot, { systemMessage: obsoleteSystem });
+    });
+    const repaired = repairOpenAIContext(branch, buildSessionContext(branch).messages)!.messages!;
+    const prompt = getCurrentSystemPrompt(repaired);
+    expect(Str.split(prompt, "opaque original")).toHaveLength(2);
+    expect(prompt).toContain("current");
+    expect(prompt).not.toContain("old");
+    expect(Arr.map(getCurrentTools(repaired), (tool) => tool.name)).toEqual(["current"]);
+    expect(serializedSnapshot(repaired)).toContain("first dialogue");
+    expect(serializedSnapshot(repaired)).toContain("second dialogue");
+    expect(prepareOpenAIFallback(branch, preparation)).toBeUndefined();
+  });
 
-  for (const editAfterCheckpoint of [true])
-    it(`honors persisted omissions and replacements without mutating history, edited after checkpoint=${editAfterCheckpoint}`, () => {
-      const manager = SessionManager.inMemory("/virtual/context-edits");
-      manager.appendMessage({ role: "system", content: "rules", timestamp: 0 });
-      const removed = appendUser(manager, "omitted user dialogue");
-      const replaced = manager.appendCustomMessageEntry(
-        "extension",
-        "obsolete custom content",
-        false,
-      );
-      const tool = manager.appendMessage({
-        role: "toolResult",
-        toolCallId: "call",
-        toolName: "read",
-        isError: false,
-        content: [{ type: "text", text: "obsolete tool content" }],
-        timestamp: 2,
-      });
-      if (editAfterCheckpoint) appendCheckpoint(manager, removed);
-      manager.appendContextEdit(removed, null);
-      manager.appendContextEdit(replaced, { content: "edited custom content" });
-      manager.appendContextEdit(tool, { content: "edited tool content" });
-      if (!editAfterCheckpoint) appendCheckpoint(manager, removed);
-      appendUser(manager, "safe retained tail");
-      const branch = manager.getBranch();
-      const before = serializedSnapshot(branch);
-      const repaired = repairOpenAIContext(
-        branch,
-        manager.buildSessionContext().messages,
-      )!.messages!;
-      expect(serializedSnapshot(repaired)).not.toContain("omitted user dialogue");
-      expect(serializedSnapshot(repaired)).not.toContain("obsolete");
-      expect(serializedSnapshot(repaired)).toContain("edited custom content");
-      expect(
-        Option.getOrUndefined(Arr.findFirst(repaired, (message) => message.role === "toolResult"))
-          ?.content,
-      ).toEqual([{ type: "text", text: "edited tool content" }]);
-      expect(reconstructOpenAIContext(branch)?.coverageChanged).toBe(editAfterCheckpoint);
-      const fallback = prepareOpenAIFallback(branch, preparation)!;
-      expect(serializedSnapshot(fallback.messagesToSummarize)).toContain("edited custom content");
-      expect(serializedSnapshot(fallback.messagesToSummarize)).not.toContain("obsolete");
-      expect(serializedSnapshot(branch)).toBe(before);
-      const tampered = Arr.map(manager.buildSessionContext().messages, (message) =>
-        message.role === "toolResult"
-          ? Object.assign({}, message, { content: [{ type: "text" as const, text: "foreign" }] })
-          : message,
-      );
-      expect(() => repairOpenAIContext(branch, tampered)).toThrow();
+  it("honors persisted omissions and replacements without mutating history when edited after the checkpoint", () => {
+    const manager = SessionManager.inMemory("/virtual/context-edits");
+    manager.appendMessage({ role: "system", content: "rules", timestamp: 0 });
+    const removed = appendUser(manager, "omitted user dialogue");
+    const replaced = manager.appendCustomMessageEntry(
+      "extension",
+      "obsolete custom content",
+      false,
+    );
+    const tool = manager.appendMessage({
+      role: "toolResult",
+      toolCallId: "call",
+      toolName: "read",
+      isError: false,
+      content: [{ type: "text", text: "obsolete tool content" }],
+      timestamp: 2,
     });
+    appendCheckpoint(manager, removed);
+    manager.appendContextEdit(removed, null);
+    manager.appendContextEdit(replaced, { content: "edited custom content" });
+    manager.appendContextEdit(tool, { content: "edited tool content" });
+    appendUser(manager, "safe retained tail");
+    const branch = manager.getBranch();
+    const before = serializedSnapshot(branch);
+    const repaired = repairOpenAIContext(branch, manager.buildSessionContext().messages)!.messages!;
+    expect(serializedSnapshot(repaired)).not.toContain("omitted user dialogue");
+    expect(serializedSnapshot(repaired)).not.toContain("obsolete");
+    expect(serializedSnapshot(repaired)).toContain("edited custom content");
+    expect(
+      Option.getOrUndefined(Arr.findFirst(repaired, (message) => message.role === "toolResult"))
+        ?.content,
+    ).toEqual([{ type: "text", text: "edited tool content" }]);
+    expect(reconstructOpenAIContext(branch)?.coverageChanged).toBe(true);
+    const fallback = prepareOpenAIFallback(branch, preparation)!;
+    expect(serializedSnapshot(fallback.messagesToSummarize)).toContain("edited custom content");
+    expect(serializedSnapshot(fallback.messagesToSummarize)).not.toContain("obsolete");
+    expect(serializedSnapshot(branch)).toBe(before);
+    const tampered = Arr.map(manager.buildSessionContext().messages, (message) =>
+      message.role === "toolResult"
+        ? Object.assign({}, message, { content: [{ type: "text" as const, text: "foreign" }] })
+        : message,
+    );
+    expect(() => repairOpenAIContext(branch, tampered)).toThrow();
+  });
 
   it("preserves complete tool results and images, and never retains an orphaned result", () => {
     const manager = history();
@@ -313,6 +301,7 @@ describe("owned checkpoint reconstruction", () => {
     const truncatedId = appendAssistant(manager, "length", "omitted length");
     appendCheckpoint(manager);
     const futureId = appendAssistant(manager, "length", "future length remains");
+    const details = ownedCheckpointDetails();
     const branch = Arr.map(manager.getBranch(), (entry) =>
       entry.type === "compaction"
         ? Object.assign({}, entry, {

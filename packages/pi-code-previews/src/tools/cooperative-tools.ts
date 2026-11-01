@@ -35,17 +35,8 @@ export interface CodePreviewShellOptions<TArgs = unknown, TDetails = unknown, TS
   compactSummary?: CompactSummaryProvider<TArgs, TDetails, TState>;
 
   expandedContent?: {
-    renderCall?: (
-      args: Partial<TArgs>,
-      theme: Theme,
-      context: ToolRenderContext<TState, Partial<TArgs>>,
-    ) => Component;
-    renderResult?: (
-      result: AgentToolResult<TDetails>,
-      options: ToolRenderResultOptions,
-      theme: Theme,
-      context: ToolRenderContext<TState, Partial<TArgs>>,
-    ) => Component;
+    renderCall?: RenderCall<Partial<TArgs>, TState>;
+    renderResult?: RenderResult<Partial<TArgs>, TDetails, TState>;
   };
 
   showShortTiming?: boolean;
