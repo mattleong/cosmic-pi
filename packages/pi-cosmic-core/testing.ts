@@ -34,7 +34,7 @@ export {
   type HostTui,
 } from "./src/testing/tui.ts";
 export { deferredPromise } from "./src/testing/deferred.ts";
-export { piKeybindingsFixture } from "./src/testing/pi-keybindings.ts";
+export { keybindingHintsFixture, piKeybindingsFixture } from "./src/testing/pi-keybindings.ts";
 export { recordingExtensionHost, type RecordedHandlers } from "./src/testing/extension-host.ts";
 export type {
   DefaultedEventName,

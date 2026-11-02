@@ -10,7 +10,7 @@ import {
   createToolPresentationHarness,
 } from "pi-code-previews/testing";
 import { stripAnsi } from "pi-cosmic-core";
-import { extensionApiFixture, plainTheme } from "pi-cosmic-core/testing";
+import { keybindingHintsFixture, extensionApiFixture, plainTheme } from "pi-cosmic-core/testing";
 import { vi } from "vitest";
 import {
   registerSubagentMessageRenderers,
@@ -81,7 +81,7 @@ const renderMessage = (message: SentMessage, expanded: boolean): string => {
     message.customType === AGENT_MESSAGE_TYPE ? renderAgentMessageEntry : renderSubagentMessage;
   const component = renderer(
     { ...message, role: "custom", timestamp: 0, display: true },
-    { expanded, outputPad: 0 },
+    { ...keybindingHintsFixture, expanded, outputPad: 0 },
     plainTheme,
   );
   return stripAnsi(Arr.join(component?.render(100) ?? [], "\n"));

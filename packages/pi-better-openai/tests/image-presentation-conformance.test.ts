@@ -10,7 +10,7 @@ import {
   probeAnimationOwnership,
 } from "pi-code-previews/testing";
 import { Image } from "@earendil-works/pi-tui";
-import { plainTheme as theme } from "pi-cosmic-core/testing";
+import { keybindingHintsFixture, plainTheme as theme } from "pi-cosmic-core/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { pngPart as image, registerImagePresentation, textPart as text } from "./image-fixtures.ts";
 
@@ -105,7 +105,9 @@ describe("registered image presentation", () => {
       );
       for (const expanded of [false, true]) {
         const rows = anonymous(
-          render(message, { expanded, outputPad: 1 }, theme)?.render(120) ?? [],
+          render(message, { ...keybindingHintsFixture, expanded, outputPad: 1 }, theme)?.render(
+            120,
+          ) ?? [],
         );
         const at = Option.getOrThrow(Arr.findFirstIndex(rows, (row) => row === native[0]));
         // The image follows the frame unchanged, as Pi draws a tool result's images.

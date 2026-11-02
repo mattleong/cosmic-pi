@@ -1,4 +1,4 @@
-import { StringEnum, validateToolArguments } from "@earendil-works/pi-ai";
+import { validateToolArguments } from "@earendil-works/pi-ai";
 import { Type, type Static } from "typebox";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
@@ -6,6 +6,7 @@ import type * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import { describe, expect, it } from "vitest";
 import {
+  checkToolArguments,
   omitBlankOptionalArguments,
   replacementField,
   toolArgumentPreparer,
@@ -134,7 +135,7 @@ const StartParameters = Type.Object(
         {
           task: Type.String({ minLength: 1 }),
           name: Type.Optional(Type.String()),
-          isolation: Type.Optional(StringEnum(["none", "worktree"] as const)),
+          isolation: Type.Optional(Type.Enum(["none", "worktree"] as const)),
         },
         { additionalProperties: false },
       ),
@@ -146,6 +147,22 @@ const StartParameters = Type.Object(
 type StartArgs = Static<typeof StartParameters>;
 const prepare = toolArgumentPreparer("agent_start", StartParameters, {
   aliases: { prompt: "task" },
+});
+
+describe("checkToolArguments", () => {
+  it("rejects unprepared proxy arguments without coercing or mutating them", () => {
+    const args = { agents: [{ task: "Map" }], limit: "3" };
+    const snapshot = structuredClone(args);
+    expect(checkToolArguments(StartParameters, args)).toBe(false);
+    expect(checkToolArguments(StartParameters, { agents: [{ task: "Map", name: null }] })).toBe(
+      false,
+    );
+    expect(checkToolArguments(StartParameters, { agents: [{ task: "Map", caller: "root" }] })).toBe(
+      false,
+    );
+    expect(args).toEqual(snapshot);
+    expect(checkToolArguments(StartParameters, prepare(args))).toBe(true);
+  });
 });
 
 describe("toolArgumentPreparer", () => {
@@ -247,7 +264,7 @@ describe("toolArgumentPreparer", () => {
 const ShapeParameters = Type.Object({
   shapes: Type.Array(
     Type.Union([
-      Type.Object({ kind: StringEnum(["circle"] as const), radius: Type.Number() }),
+      Type.Object({ kind: Type.Enum(["circle"] as const), radius: Type.Number() }),
       Type.Object(
         { kind: Type.Literal("square"), side: Type.Number() },
         { additionalProperties: false },
@@ -284,7 +301,7 @@ describe("toolArgumentPreparer with a union", () => {
   it("selects by a property only when every branch declares it as an enum or const", () => {
     const Leveled = Type.Object({
       entry: Type.Union([
-        Type.Object({ kind: Type.Literal("a"), level: StringEnum(["low", "high"] as const) }),
+        Type.Object({ kind: Type.Literal("a"), level: Type.Enum(["low", "high"] as const) }),
         Type.Object({ kind: Type.Literal("b"), size: Type.Number() }),
       ]),
     });
@@ -296,17 +313,17 @@ describe("toolArgumentPreparer with a union", () => {
     expect(Arr.join(reported, "\n")).not.toMatch(/entry\.kind|entry\.size/u);
   });
 
-  it("reports every branch's issues when the union has no common discriminant", () => {
+  it("reports the closest branch when the union has no common discriminant", () => {
     const Loose = Type.Object({
       entry: Type.Union([
-        Type.Object({ level: StringEnum(["low", "high"] as const) }),
+        Type.Object({ level: Type.Enum(["low", "high"] as const) }),
         Type.Object({ size: Type.Number() }),
       ]),
     });
     const loose = toolArgumentPreparer("loose", Loose);
     const reported = Arr.join(issuesOf(loose, { entry: { level: "mid" } }), "\n");
     expect(reported).toContain("entry.level");
-    expect(reported).toContain("entry.size");
+    expect(reported).not.toContain("entry.size");
   });
 });
 

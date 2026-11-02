@@ -1,7 +1,7 @@
 import { visibleWidth, type Component } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import { describe, expect, it } from "vitest";
-import { plainTheme as theme } from "pi-cosmic-core/testing";
+import { keybindingHintsFixture, plainTheme as theme } from "pi-cosmic-core/testing";
 import { ASYNC_MESSAGE_TYPE } from "../src/boundary/host-delivery.ts";
 import type { AskUserQuestion } from "../src/questionnaire/schema.ts";
 import {
@@ -91,7 +91,13 @@ describe("async questionnaire replay rendering", () => {
           renderAsyncResult({ details, content }, { expanded: false, isPartial: false }, theme),
         ),
       ),
-      output(renderAsyncMessage(asyncMessage(content), { expanded: false, outputPad: 0 }, theme)),
+      output(
+        renderAsyncMessage(
+          asyncMessage(content),
+          { ...keybindingHintsFixture, expanded: false, outputPad: 0 },
+          theme,
+        ),
+      ),
     ]) {
       expect(rendered).toContain("safe fallback");
       expect(rendered).toContain("after");
@@ -102,7 +108,11 @@ describe("async questionnaire replay rendering", () => {
       renderAsyncResult(hostileResult, { expanded: true, isPartial: false }, theme),
     ).not.toThrow();
     expect(() =>
-      renderAsyncMessage(hostileMessage, { expanded: true, outputPad: 0 }, theme),
+      renderAsyncMessage(
+        hostileMessage,
+        { ...keybindingHintsFixture, expanded: true, outputPad: 0 },
+        theme,
+      ),
     ).not.toThrow();
     expect(() => renderAsyncCall(hostileArgs, theme, callContext(true))).not.toThrow();
   });
@@ -120,7 +130,13 @@ describe("async questionnaire replay rendering", () => {
     };
     const rendered = [
       result(details, true),
-      output(renderAsyncMessage(asyncMessage(dirty), { expanded: false, outputPad: 0 }, theme)),
+      output(
+        renderAsyncMessage(
+          asyncMessage(dirty),
+          { ...keybindingHintsFixture, expanded: false, outputPad: 0 },
+          theme,
+        ),
+      ),
       output(renderAsyncCall({ questions: [question(dirty)] }, theme, callContext())),
     ];
     for (const text of rendered) {
@@ -151,7 +167,11 @@ describe("async questionnaire replay rendering", () => {
     const delivered = { generation: "g", deliveryId: "d", requestId: "r", outcome, titles };
     expect(
       output(
-        renderAsyncMessage(asyncMessage("", delivered), { expanded: false, outputPad: 0 }, theme),
+        renderAsyncMessage(
+          asyncMessage("", delivered),
+          { ...keybindingHintsFixture, expanded: false, outputPad: 0 },
+          theme,
+        ),
       ),
     ).toContain("Route:");
   });

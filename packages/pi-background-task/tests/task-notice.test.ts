@@ -14,6 +14,7 @@ import * as Predicate from "effect/Predicate";
 import { applyPresentationSettings } from "pi-code-previews/testing";
 import {
   extensionContextFixture,
+  keybindingHintsFixture,
   plainTheme,
   recordingExtensionHost,
 } from "pi-cosmic-core/testing";
@@ -92,7 +93,7 @@ const renderNotice = (details: StoredNoticeDetails, expanded: boolean, content: 
         content,
         details,
       },
-      { expanded, outputPad: 0 },
+      { ...keybindingHintsFixture, expanded, outputPad: 0 },
       plainTheme,
     )?.render(120) ?? [],
     "\n",

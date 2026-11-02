@@ -41,17 +41,21 @@ The [isolated source-loader test](tests/public-entrypoints.test.ts) exercises na
 and file behavior with unrelated platform imports forbidden, and verifies shared document ownership
 across the root and subpaths.
 
-`tool-arguments` is separate because it imports TypeBox and `pi-ai` values, both optional peers
-that only tool-owning consumers provide. Its preparer drops empty and whitespace-only optional
+`tool-arguments` is separate because it imports `pi-ai` values, an optional peer that only
+tool-owning consumers provide. Runtime checks and coercion use `pi-schema`; cached strict checks
+never coerce authenticated proxy payloads. Its preparer drops empty and whitespace-only optional
 fields, except whitespace in fields the tool names as literal text, and drops an optional null only
 where the field schema rejects null, as Pi does. It then runs Pi's own `validateToolArguments` so
 the result is exactly what Pi then accepts, rejects blank required text, and turns failures into
 bounded `[invalid_arguments]` errors that name paths, allowed values, and replacements for unknown
 fields. A union's issues narrow to the branches selected by a property that every branch declares
-as an enum or const. The result is checked with TypeBox against the same schema, so the hook
-returns its `Static` type. Pi substitutes `{}` for malformed tool-call JSON before the hook runs, so
+as an enum or const; untagged unions use pi-schema’s closest-branch diagnostics. The result is
+checked against the same JSON Schema while retaining the host’s parameter `Static` type. Pi substitutes `{}` for malformed tool-call JSON before the hook runs, so
 such a call is reported by its missing required fields rather than Pi's parse error. The
 [tool-argument tests](tests/tool-arguments.test.ts) anchor this behavior.
+
+Pi 1.5 still types extension declarations with TypeBox. Those declarations use native TypeBox
+builders, including `Type.Enum`; no validator imports TypeBox at runtime.
 
 [`ForeignCallable`](src/schema/foreign-callable.ts) is the only sanctioned way to admit a function
 received from another package. Its schema checks callability alone: parameter types are a

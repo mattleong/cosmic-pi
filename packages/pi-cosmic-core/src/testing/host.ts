@@ -125,6 +125,7 @@ export const extensionApiFixture = (overrides: Partial<ExtensionAPI> = {}): Exte
           stderr: "Commands are unavailable in this fixture.",
           code: 127,
           killed: false,
+          truncated: false,
         }),
       getActiveTools: () => [],
       getAllTools: () => [],

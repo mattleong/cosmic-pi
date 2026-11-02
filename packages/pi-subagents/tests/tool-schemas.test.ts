@@ -145,9 +145,8 @@ describe("subagent argument preparation", () => {
   it("rejects an unknown isolation value and names the allowed modes", () => {
     const rejected = () => prepareRootStart({ agents: [{ task: "Edit", isolation: "sandbox" }] });
     expect(rejected).toThrow(/\[invalid_arguments\]/u);
-    expect(rejected).toThrow(
-      new RegExp(`isolation[^\\n]*${Arr.join(WRITER_WORKSPACE_MODES, ", ")}`, "u"),
-    );
+    expect(rejected).toThrow(/isolation/u);
+    for (const mode of WRITER_WORKSPACE_MODES) expect(rejected).toThrow(mode);
   });
 
   it("rejects an unknown start-entry key and names it", () => {

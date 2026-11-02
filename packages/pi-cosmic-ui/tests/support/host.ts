@@ -72,6 +72,7 @@ export const execResult = (stdout = "", code = 0): ExecResult => ({
   stderr: "",
   code,
   killed: false,
+  truncated: false,
 });
 export const execOk = (stdout?: string) => Promise.resolve(execResult(stdout));
 

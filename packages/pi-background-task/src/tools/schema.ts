@@ -1,11 +1,10 @@
-import { StringEnum } from "@earendil-works/pi-ai";
 import { toolArgumentPreparer } from "pi-cosmic-core/tool-arguments";
 import { Type, type Static } from "typebox";
 import { BACKGROUND_TASK_FIELD_BOUNDS } from "../task/bounds.ts";
 import { BACKGROUND_TASK_ACTIONS, BACKGROUND_TASK_NOTIFY_FILTERS } from "../task/schema.ts";
 
 export const BackgroundTaskParameters = Type.Object({
-  action: StringEnum(BACKGROUND_TASK_ACTIONS, { description: "Background task operation" }),
+  action: Type.Enum(BACKGROUND_TASK_ACTIONS, { description: "Background task operation" }),
   command: Type.Optional(
     Type.String({
       maxLength: BACKGROUND_TASK_FIELD_BOUNDS.maxCommandBytes,
@@ -31,7 +30,7 @@ export const BackgroundTaskParameters = Type.Object({
     }),
   ),
   notify: Type.Optional(
-    StringEnum(BACKGROUND_TASK_NOTIFY_FILTERS, {
+    Type.Enum(BACKGROUND_TASK_NOTIFY_FILTERS, {
       description:
         'For start: message you when the task finishes ("exit") or only when it fails or times out ("failure"); omitted means no message',
     }),
@@ -43,10 +42,10 @@ export const BackgroundTaskParameters = Type.Object({
     }),
   ),
   state: Type.Optional(
-    StringEnum(["active", "completed", "all"] as const, { description: "Filter for list" }),
+    Type.Enum(["active", "completed", "all"] as const, { description: "Filter for list" }),
   ),
   until: Type.Optional(
-    StringEnum(["exit", "output"] as const, {
+    Type.Enum(["exit", "output"] as const, {
       description:
         'Required for wait. Use "exit" for process completion or "output" for a literal text match.',
     }),

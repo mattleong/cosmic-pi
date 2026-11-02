@@ -1,4 +1,3 @@
-import { StringEnum } from "@earendil-works/pi-ai";
 import { type Static, Type } from "typebox";
 
 export const MAX_QUESTIONS = 6;
@@ -54,7 +53,7 @@ const questionFields = {
 
 export const AskUserChoiceQuestionSchema = Type.Object({
   ...questionFields,
-  mode: StringEnum(["single", "multiple"] as const, {
+  mode: Type.Enum(["single", "multiple"] as const, {
     description: "Whether the user chooses one choice or any number of choices.",
   }),
   choices: Type.Array(AskUserChoiceSchema, {
@@ -67,7 +66,7 @@ export const AskUserChoiceQuestionSchema = Type.Object({
 const AskUserTextQuestionSchema = Type.Object(
   {
     ...questionFields,
-    mode: StringEnum(["text"] as const, {
+    mode: Type.Enum(["text"] as const, {
       description:
         "A required free-text answer, trimmed and limited to 4000 code units. Omit choices.",
     }),
@@ -103,7 +102,7 @@ export const AskUserAsyncParameters = Type.Object({
 });
 
 export const AskUserAsyncControlParameters = Type.Object({
-  action: StringEnum(["status", "await", "cancel"] as const),
+  action: Type.Enum(["status", "await", "cancel"] as const),
   requestId: Type.Optional(
     Type.String({
       minLength: 1,

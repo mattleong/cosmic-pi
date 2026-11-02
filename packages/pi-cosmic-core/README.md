@@ -38,7 +38,7 @@ import { registerExtensionCommand } from "pi-cosmic-core/host-command";
 import { extensionApiFixture } from "pi-cosmic-core/testing";
 ```
 
-Tool-owning packages, which already provide `typebox` and `@earendil-works/pi-ai`, prepare arguments through their own entrypoint:
+Tool-owning packages, which provide the optional `@earendil-works/pi-ai` peer, prepare arguments through their own entrypoint. Validation uses `@earendil-works/pi-schema`; TypeBox parameter types remain for Pi 1.5’s extension API. Use TypeBox’s native `Type.Enum` for enums in those declarations:
 
 ```ts
 import { toolArgumentPreparer } from "pi-cosmic-core/tool-arguments";

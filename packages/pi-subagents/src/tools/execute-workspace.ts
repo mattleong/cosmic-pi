@@ -8,7 +8,7 @@ import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import { clipText, countLabel } from "pi-cosmic-core/display";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
-import { Check } from "typebox/value";
+import { compile } from "@earendil-works/pi-schema";
 import {
   invalidRequest,
   subagentErrorCode,
@@ -38,6 +38,8 @@ import {
   workspaceOperationError,
   type SubagentWorkspaceInput,
 } from "./schema.ts";
+
+const isWorkspaceInput = compile(WorkspaceParameters).check;
 
 const preparedCwdMetadata = (
   cwd: string,
@@ -429,7 +431,7 @@ export const executeWorkspaceAction = Effect.fn("SubagentTools.workspace")(funct
   callerRunId: string = SUBAGENT_ROOT_RUN_ID,
   resolveLaunch?: WorkspaceReviseOptions["resolveLaunch"],
 ) {
-  const error = Check(WorkspaceParameters, operation)
+  const error = isWorkspaceInput(operation)
     ? workspaceOperationError(operation)
     : "Worktree arguments failed strict validation.";
   if (error !== undefined) return yield* invalidRequest("workspace_input_invalid", error);

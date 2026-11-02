@@ -7,7 +7,12 @@ import {
   type ToolRenderers,
 } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import { plainTheme, recordingExtensionHost, tuiFixture } from "pi-cosmic-core/testing";
+import {
+  keybindingHintsFixture,
+  plainTheme,
+  recordingExtensionHost,
+  tuiFixture,
+} from "pi-cosmic-core/testing";
 import type { CodePreviewSettings } from "../config/schema";
 import { codePreviewSettings, setCodePreviewSettings } from "../config/state";
 import type { CompactAnimationScheduler } from "../tools/compact-summary";
@@ -52,6 +57,7 @@ export function renderContextFixture(
     lastComponent: undefined,
     invalidate: () => undefined,
     durationMs: undefined,
+    ...keybindingHintsFixture,
     outputPad: 1,
     ...overrides,
   };

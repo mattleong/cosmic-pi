@@ -5,7 +5,6 @@ import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
-import { StringEnum } from "@earendil-works/pi-ai";
 import type { JsonObject, JsonValue } from "pi-cosmic-core";
 import {
   replacementField,
@@ -87,7 +86,7 @@ const ModelOverrideParameters = Type.Object(
       "Model selector: provider/model, or parent for the parent's current model.",
     ),
     effort: Type.Optional(
-      StringEnum(PROFILE_CANDIDATE_EFFORTS, {
+      Type.Enum(PROFILE_CANDIDATE_EFFORTS, {
         description: "Reasoning effort; omit for the profile default.",
       }),
     ),
@@ -134,12 +133,12 @@ const StartSpecBaseFields = {
       `Optional display name; one longer than ${MAX_NAME_CHARS} characters is cut.`,
     ),
   ),
-  profile: Type.Optional(StringEnum(PROFILE_IDS, { description: PROFILE_PARAMETER_DESCRIPTION })),
+  profile: Type.Optional(Type.Enum(PROFILE_IDS, { description: PROFILE_PARAMETER_DESCRIPTION })),
 } as const;
 
 const StartSpecOptionFields = {
   isolation: Type.Optional(
-    StringEnum(WRITER_WORKSPACE_MODES, {
+    Type.Enum(WRITER_WORKSPACE_MODES, {
       description:
         "Writers only (profile worker, or an agent or route with writer intent): shared-checkout edits your checkout; worktree edits a private copy whose proposal you apply. Omit to use the session's workspace setting; set it only when the user asks for one. A read-only run refuses worktree and ignores shared-checkout with a warning.",
     }),
@@ -177,7 +176,7 @@ const MessageParameters = nonblankString(
 const ModelsParameters = Type.Object(
   {
     profile: Type.Optional(
-      StringEnum(PROFILE_IDS, {
+      Type.Enum(PROFILE_IDS, {
         description: "Optional profile to show; omit for every profile.",
       }),
     ),
@@ -242,7 +241,7 @@ const AwaitParameters = Type.Object(
   {
     runIds: runIdsParameters(MAX_TARGET_RUNS),
     until: Type.Optional(
-      StringEnum(AWAIT_UNTIL, {
+      Type.Enum(AWAIT_UNTIL, {
         description:
           "Return when all selected runs are finished (the default), or when any selected run is finished. Finished includes completed, failed, and stopped.",
       }),
@@ -272,7 +271,7 @@ export const LIFECYCLE_ACTIONS = ["interrupt", "stop"] as const;
 
 const LifecycleParameters = Type.Object(
   {
-    action: StringEnum(LIFECYCLE_ACTIONS, {
+    action: Type.Enum(LIFECYCLE_ACTIONS, {
       description:
         "interrupt pauses a running run whose backend supports it; stop works on any active run.",
     }),
@@ -283,7 +282,7 @@ const LifecycleParameters = Type.Object(
 
 export const WorkspaceParameters = Type.Object(
   {
-    action: StringEnum(["list", "review", "prepare", "apply", "discard", "revise"] as const, {
+    action: Type.Enum(["list", "review", "prepare", "apply", "discard", "revise"] as const, {
       description:
         "Every action but list needs workspaceId. prepare needs revisionId; revise needs message.",
     }),
