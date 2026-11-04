@@ -18,7 +18,7 @@ import {
   type SubagentActivityPresentationSnapshot,
 } from "./activity-panel.ts";
 import { runActivityDetail } from "./run-activity-detail.ts";
-import { formatRunRoute } from "./run-presentation.ts";
+import { projectRunModel } from "./run-presentation.ts";
 import { isWaitingOnRuns, runLiveActivity, type RunNameLookup } from "./run-live-activity.ts";
 import {
   canInterruptRun,
@@ -124,6 +124,14 @@ const runSummary = (run: SubagentRunView, nameOf: RunNameLookup): Pick<ActivityI
     : {};
 };
 
+const cleanModelText = (text: string) =>
+  sanitizeDiagnosticContent(text, { maximumLength: ACTIVITY_LIMITS.model });
+
+const runModelFields = (run: SubagentRunView): Pick<ActivityItem, "model" | "modelDetail"> => {
+  const { model, detail } = projectRunModel(run);
+  return { model: cleanModelText(model), ...(detail && { modelDetail: cleanModelText(detail) }) };
+};
+
 const runActivityItem = (
   run: SubagentRunView,
   awaited: boolean,
@@ -141,9 +149,7 @@ const runActivityItem = (
       updatedAt: run.lastActivityAt,
       ...runSummary(run, nameOf),
       actions: Object.freeze(Arr.map(runActions(run, title), (action) => Object.freeze(action))),
-      route: sanitizeDiagnosticContent(formatRunRoute(run), {
-        maximumLength: ACTIVITY_LIMITS.route,
-      }),
+      ...runModelFields(run),
       ...(run.profile !== undefined && { profile: run.profile }),
       ...(run.endedAt !== undefined && { endedAt: run.endedAt }),
       ...(run.parentRunId &&

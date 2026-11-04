@@ -18,7 +18,10 @@ export const detachActivityItem = (
   title: cleanText(item.title, ACTIVITY_LIMITS.title),
   ...(item.parent && { parent: { ...item.parent } }),
   ...(item.profile !== undefined && { profile: cleanText(item.profile, ACTIVITY_LIMITS.profile) }),
-  ...(item.route !== undefined && { route: cleanText(item.route, ACTIVITY_LIMITS.route) }),
+  ...(item.model !== undefined && { model: cleanText(item.model, ACTIVITY_LIMITS.model) }),
+  ...(item.modelDetail !== undefined && {
+    modelDetail: cleanText(item.modelDetail, ACTIVITY_LIMITS.model),
+  }),
   ...(item.summary !== undefined && { summary: cleanText(item.summary, ACTIVITY_LIMITS.text) }),
   ...(item.detail !== undefined && { detail: detail(item.detail) }),
   ...(item.actions && {

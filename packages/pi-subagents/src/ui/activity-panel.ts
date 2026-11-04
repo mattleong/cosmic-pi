@@ -27,6 +27,7 @@ import { aggregateUsage } from "./metrics.ts";
 import {
   duplicateRunNames,
   formatSessionAge,
+  projectRunModel,
   projectRunRoutePresentation,
   shortRunId,
 } from "./run-presentation.ts";
@@ -326,12 +327,32 @@ const panelHeader = (
   );
 };
 
-/**
- * A run's profile, as the shared Activity widget names it; the model route belongs to the run's
- * details, not its live row.
- */
-const renderRunProfile = (run: SubagentRunView, theme: Theme, dimmed: boolean): string =>
-  theme.fg(dimmed ? "dim" : "muted", projectRunRoutePresentation(run).profile);
+interface RunIdentityForms {
+  /** `profile → provider/model:effort ⚡ (fallback)`. */
+  readonly full: string;
+  /** `profile → provider/model`, once the model's qualifiers no longer fit. */
+  readonly short: string;
+  /** `provider/model` alone, the last thing a narrow row gives up. */
+  readonly model: string;
+}
+
+/** A run's profile and the model it runs on, in the forms the shared Activity widget shows. */
+const renderRunIdentity = (
+  run: SubagentRunView,
+  theme: Theme,
+  dimmed: boolean,
+): RunIdentityForms => {
+  const tone = dimmed ? "dim" : "muted";
+  const { profile } = projectRunRoutePresentation(run);
+  const { model, detail } = projectRunModel(run);
+  const routed = (text: string) =>
+    `${theme.fg(tone, profile)}${theme.fg("dim", " → ")}${theme.fg(tone, text)}`;
+  return {
+    full: routed(detail ? `${model}:${detail}` : model),
+    short: routed(model),
+    model: theme.fg(tone, model),
+  };
+};
 
 const activityIdentity = (
   row: FleetTreeRow,
@@ -373,7 +394,7 @@ const ELAPSED_GAP = 2;
 const activityMetadataVariants = (
   run: FleetTreeRow["run"],
   panel: SubagentActivityPanelProjection,
-  route: string,
+  identity: RunIdentityForms,
   theme: Theme,
   now: number,
   ancestorOnly: boolean,
@@ -398,15 +419,16 @@ const activityMetadataVariants = (
   const themedElapsed = elapsed ? theme.fg("dim", elapsed) : undefined;
   const messageCount = ancestorOnly ? 0 : runMessageCount(panel, run.id);
   const messages = messageCount > 0 ? theme.fg("muted", countLabel(messageCount, "message")) : "";
-  // As in the shared Activity widget, the profile and elapsed time stay while the activity
-  // text clips with `…`.
+  // As in the shared Activity widget, the activity text clips with `…` first, then the model's
+  // qualifiers go, then the activity, then the profile; `provider/model` and elapsed time stay.
+  const { full, short, model } = identity;
   const variants: ActivityMetadataVariant[] = [
-    { parts: [route, themedActivity, messages], elapsed: themedElapsed },
-    {
+    { parts: [full, themedActivity, messages], elapsed: themedElapsed },
+    ...Arr.map([full, short], (route) => ({
       parts: [route, themedActivity],
       elapsed: themedElapsed,
       clipLastAt: MIN_CLIPPED_ACTIVITY_WIDTH,
-    },
+    })),
     // A stall warning or recent message outranks the route when the row is too narrow for both.
     ...(stall || message
       ? [
@@ -418,8 +440,8 @@ const activityMetadataVariants = (
           { parts: [themedActivity], clipLastAt: MIN_CLIPPED_MESSAGE_WIDTH },
         ]
       : []),
-    { parts: [route], elapsed: themedElapsed },
-    { parts: [route] },
+    ...Arr.map([full, short, model], (route) => ({ parts: [route], elapsed: themedElapsed })),
+    { parts: [model] },
   ];
   return Arr.flatMap(variants, (variant) => {
     const parts = Arr.filter(variant.parts, Boolean);
@@ -482,13 +504,13 @@ const renderActivityRow = (
   const { run } = row;
   const ancestorOnly = !panel.trackedRunIds.has(run.id);
   const identity = activityIdentity(row, panel, theme, now, duplicates, ancestorOnly);
-  const profile = renderRunProfile(run, theme, ancestorOnly);
+  const route = renderRunIdentity(run, theme, ancestorOnly);
   const separator = theme.fg("dim", " · ");
-  for (const variant of activityMetadataVariants(run, panel, profile, theme, now, ancestorOnly)) {
+  for (const variant of activityMetadataVariants(run, panel, route, theme, now, ancestorOnly)) {
     const fitted = fitActivityMetadata(identity, variant, width, separator);
     if (fitted !== undefined) return fitted;
   }
-  return clippedActivityRow(identity, profile, width, tier, separator);
+  return clippedActivityRow(identity, route.model, width, tier, separator);
 };
 
 export const renderProjectedSubagentActivityPanel = (

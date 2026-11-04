@@ -399,6 +399,28 @@ describe("subagent activity provider", () => {
     expect(subagentActivityItems({ revision: 1, runs: [run] })[0]?.summary).toBeTruthy();
   });
 
+  it("names the model a run actually uses and marks one that landed on a fallback", () => {
+    const primary = view({
+      id: "primary",
+      state: "running",
+      model: "openai-codex/gpt-6-luna",
+      effort: "high",
+    });
+    const fallback = view({
+      ...primary,
+      id: "fallback",
+      selection: { ...primary.selection, candidateIndex: 1 },
+    });
+    const [onPrimary, onFallback] = subagentActivityItems({
+      revision: 1,
+      runs: [primary, fallback],
+    });
+    expect(onPrimary?.model).toBe("openai-codex/gpt-6-luna");
+    expect(onFallback?.model).toBe("openai-codex/gpt-6-luna");
+    expect(onPrimary?.modelDetail).toContain("high");
+    expect(onFallback?.modelDetail).not.toBe(onPrimary?.modelDetail);
+  });
+
   it("keeps terminal transitions discoverable and redacts producer payloads", () => {
     const secret = "sk-abcdefgh12345678";
     const run = view({

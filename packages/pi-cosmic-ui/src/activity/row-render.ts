@@ -2,6 +2,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { clipToWidth } from "../manager/chrome.ts";
 import { managerTone } from "../manager/style.ts";
@@ -32,6 +33,8 @@ export interface ActivityRowVisual {
   readonly statusColor: Tone;
   readonly compactStatus?: boolean;
   readonly profile?: string;
+  /** An agent's model: `label` adds effort and qualifiers to `name` (`provider/model`). */
+  readonly model?: { readonly name: string; readonly label: string };
   readonly awaited?: boolean;
   readonly omittedChildren?: number;
   readonly history?: boolean;
@@ -125,8 +128,23 @@ const rowMarkers = (row: ActivityRowVisual, interactive: boolean): RowMarkers =>
   };
 };
 
-// The profile, or the row's kind when it has none, follows the title quietly.
-const rowSuffix = (row: ActivityRowVisual): string => row.profile ?? row.kind;
+const joinIdentity = (profile: string | undefined, model: string): string =>
+  profile ? `${profile} → ${model}` : model;
+
+/**
+ * What follows the title quietly, widest first: the profile, or the row's kind when it has none,
+ * then for an agent the model it runs on. As room runs out the model's qualifiers go first, then
+ * the profile; the `provider/model` itself stays. Variants that keep the profile come first.
+ */
+const rowSuffixes = (row: ActivityRowVisual): readonly string[] => {
+  const { model, profile } = row;
+  if (!model) return [profile ?? row.kind];
+  const withProfile = Arr.dedupe([
+    joinIdentity(profile, model.label),
+    joinIdentity(profile, model.name),
+  ]);
+  return profile ? [...withProfile, model.name] : withProfile;
+};
 
 const minimumLeftWidth = (
   row: ActivityRowVisual,
@@ -176,7 +194,9 @@ export function renderActivityRow(
   const markers = rowMarkers(row, interactive);
   const { continuations, awaited, fold, omitted } = markers;
   const markerWidth = visibleWidth(awaited);
-  const suffix = rowSuffix(row);
+  const suffixes = rowSuffixes(row);
+  // Budget for the narrowest identity so the status column survives; the lead widens into room.
+  const suffix = suffixes.at(-1) ?? "";
   const identityWidth = suffix ? visibleWidth(suffix) + 3 : 0;
   const status = fitStatus(
     row.status,
@@ -194,13 +214,26 @@ export function renderActivityRow(
   const levels = Math.min(12, Math.max(0, Math.floor((guideBudget - 2) / guideWidth(fold))));
   const guide = paint("dim", clipToWidth(treeGuide(continuations, levels, fold), guideBudget, ""));
   const glyph = paint(row.color, row.glyph);
-  const name = rowName(row, interactive, suffix, paint, focusedStyle);
-  const lead = `${guide}${paint("accent", awaited)}${glyph} ${name}${paint("dim", omitted)}`;
+  const leadWith = (text: string) =>
+    `${guide}${paint("accent", awaited)}${glyph} ${rowName(row, interactive, text, paint, focusedStyle)}${paint("dim", omitted)}`;
   // Keep one space before the status column so the activity never runs into it.
-  const room = leftWidth - visibleWidth(lead) - 3 - Number(rightWidth !== undefined);
+  const roomAfter = (lead: string) =>
+    leftWidth - visibleWidth(lead) - 3 - Number(rightWidth !== undefined);
+  const leads = Arr.map(suffixes, leadWith);
+  // Live activity outranks the model's qualifiers but not the profile.
+  const withProfile = row.model && row.profile ? leads.slice(0, -1) : leads;
+  const busy = row.activity
+    ? Arr.findFirst(withProfile, (lead) => roomAfter(lead) >= MINIMUM_ACTIVITY_WIDTH)
+    : Option.none();
+  const lead = Option.getOrElse(busy, () =>
+    Option.getOrElse(
+      Arr.findFirst(leads, (candidate) => visibleWidth(candidate) <= leftWidth),
+      () => leads.at(-1) ?? leadWith(suffix),
+    ),
+  );
   const activity =
-    row.activity && room >= MINIMUM_ACTIVITY_WIDTH
-      ? paint("muted", ` · ${clipToWidth(row.activity, room, "…")}`)
+    row.activity && Option.isSome(busy)
+      ? paint("muted", ` · ${clipToWidth(row.activity, roomAfter(lead), "…")}`)
       : "";
   const left = clipToWidth(`${lead}${activity}`, Math.max(0, leftWidth), "…");
   return rightWidth === undefined

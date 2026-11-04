@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
@@ -59,6 +60,38 @@ export const projectRunRoutePresentation = (run: RunRoutePresentationInput) => {
     profile,
     model: `${providerModel}:${effort}${fast}${override}`,
     narrowModel: `${modelName}:${effort}${fast}${override}`,
+  };
+};
+
+interface RunModelPresentationInput extends RunRoutePresentationInput {
+  readonly selection?: { readonly candidateIndex?: number | undefined } | undefined;
+}
+
+/**
+ * The model a run actually uses, split for live rows: `model` (`provider/model`) always shows,
+ * and `detail` (effort, fast mode, and whether a fallback or override chose it) follows when
+ * there is room.
+ */
+export const projectRunModel = (run: RunModelPresentationInput) => {
+  const fallback = (run.selection?.candidateIndex ?? 0) > 0;
+  const reasons = Arr.filter(
+    [run.modelOverride ? "override" : "", fallback ? "fallback" : ""],
+    Str.isNonEmpty,
+  );
+  const effort = sanitizeTerminalLine(run.effort);
+  return {
+    model: sanitizeTerminalLine(run.model),
+    detail: Arr.join(
+      Arr.filter(
+        [
+          effort,
+          run.openaiFastMode ? "⚡" : "",
+          reasons.length > 0 ? `(${Arr.join(reasons, ", ")})` : "",
+        ],
+        Str.isNonEmpty,
+      ),
+      " ",
+    ),
   };
 };
 

@@ -119,15 +119,10 @@ const recentActivity = (run: SubagentRunView, nameOf: RunNameLookup): ActivityDe
   );
 };
 
-const modelLabel = (run: SubagentRunView): string => {
-  const name = Str.split(run.model, "/").at(-1) ?? run.model;
-  return run.effort ? `${name} (${run.effort})` : name;
-};
-
+// The model leads the row's status line, so usage starts with what the run consumed.
 const usageLine = (run: SubagentRunView): string =>
   Fn.pipe(
     [
-      modelLabel(run),
       run.usage.totalTokens === 0
         ? ""
         : `${formatTokens(run.usage.totalTokens)} tokens (${formatTokens(run.usage.output)} output)`,

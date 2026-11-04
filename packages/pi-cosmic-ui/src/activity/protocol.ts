@@ -27,7 +27,10 @@ const ActivityFields = {
   kind: Schema.Literals(["agent", "command", "question"]),
   title: Schema.String.check(Schema.isMaxLength(ACTIVITY_LIMITS.title)),
   profile: Schema.optional(Schema.String.check(Schema.isMaxLength(ACTIVITY_LIMITS.profile))),
-  route: Schema.optional(Schema.String.check(Schema.isMaxLength(ACTIVITY_LIMITS.route))),
+  /** The model an agent runs on, as `provider/model`; live rows keep it beside the profile. */
+  model: Schema.optional(Schema.String.check(Schema.isMaxLength(ACTIVITY_LIMITS.model))),
+  /** What qualifies `model` when there is room, such as effort, fast mode, or a fallback. */
+  modelDetail: Schema.optional(Schema.String.check(Schema.isMaxLength(ACTIVITY_LIMITS.model))),
   awaited: Schema.optional(Schema.Boolean),
   revision: Id,
   startedAt: Schema.optional(Timestamp),

@@ -3,7 +3,7 @@ export const ACTIVITY_LIMITS = Object.freeze({
   actions: 16,
   id: 256,
   title: 512,
-  route: 512,
+  model: 512,
   profile: 80,
   text: 4096,
   detail: 16384,

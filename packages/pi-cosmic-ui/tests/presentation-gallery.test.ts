@@ -353,7 +353,8 @@ const flaky = activityRow("flaky", "failed", undefined, {
 const checker = activityRow("checker", "done", undefined, {
   title: "Check tests",
   profile: "scout",
-  route: "openai-codex/gpt-6-sol:low · override",
+  model: "openai-codex/gpt-6-sol",
+  modelDetail: "low (override)",
   startedAt: 0,
   endedAt: 33_000,
   actions: [{ id: "resume", label: "Resume" }],
@@ -499,21 +500,41 @@ const liveAgents = [
   activityRow("live-checker", "running", undefined, {
     title: "Check tests",
     profile: "scout",
+    model: "openai-codex/gpt-6-luna",
+    modelDetail: "high ⚡",
     startedAt: 80_000,
     summary: "running bash · sleep 25",
   }),
   activityRow("live-mapper", "running", undefined, {
     title: "Map cart module",
-    profile: "scout",
+    profile: "reviewer",
+    model: "claude-bridge/claude-opus-5-5",
+    modelDetail: "high",
     startedAt: 80_000,
     summary: "running read · src/cart.ts",
+  }),
+  activityRow("live-fallback", "running", undefined, {
+    title: "Read tests",
+    profile: "scout",
+    model: "openai-codex/gpt-6-sol",
+    modelDetail: "high (fallback)",
+    startedAt: 84_000,
+    summary: "thinking",
+  }),
+  activityRow("live-override", "running", undefined, {
+    title: "Fix login",
+    profile: "worker",
+    model: "opencode/gpt-6.1-sol",
+    modelDetail: "xhigh (override)",
+    startedAt: 86_000,
+    summary: "running edit · src/auth.ts",
   }),
 ];
 const liveRows: readonly ActivityRow[] = [...liveAgents, liveServer, liveTicker, flaky];
 
 const liveFrames = () => {
   const lines: string[] = [];
-  for (const width of [180, 100, 57])
+  for (const width of [180, 100, 72, 57, 40])
     lines.push(
       `── Live progress · widget · ${width} cols`,
       ...renderActivityWidget(liveRows, width, 8, { now: 90_000, theme: plainTheme }),

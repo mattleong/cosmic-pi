@@ -13,7 +13,7 @@ import type { GroupedActivityRow } from "./grouped-tree.ts";
 import { workStateLabels, type GroupSummary } from "./group-summary.ts";
 import { isFinished, type ActivityRow } from "./model.ts";
 import type { ActivityDetail, ActivityDetailField } from "./protocol.ts";
-import { activityElapsed } from "./row-line.ts";
+import { activityAgentIdentity, activityElapsed } from "./row-line.ts";
 
 /** Detail content before wrapping: verbatim text, or agent-authored Markdown. */
 export type ActivityDetailBlock =
@@ -76,7 +76,7 @@ const ageLabel = (row: ActivityRow, now: number | undefined): string => {
 const statusLine = (options: GroupedDetailOptions, row: ActivityRow): string => {
   const status = activityStatus(row);
   return joinInline([
-    row.kind === "agent" ? row.profile : undefined,
+    row.kind === "agent" ? activityAgentIdentity(row) : undefined,
     status,
     activityElapsed(row, options.now),
     ageLabel(row, options.now),
@@ -121,7 +121,6 @@ const shellTechnicalFields = (
   row: ActivityRow,
   context: readonly ActivityRow[],
 ): ListDetailField[] => [
-  ...(row.route ? [{ label: "Route", value: row.route, tone: managerTone.value }] : []),
   {
     label: "Source",
     value: `${technicalIdentity(row.providerId)} / ${technicalIdentity(row.id)}`,

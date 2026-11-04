@@ -176,7 +176,8 @@ A bare `/<command>` without its own handler shows one overview, built by `regist
 ## Identity
 
 - Show human names first. Add an ID only when two names collide, as a short suffix.
-- Full IDs, PIDs, cursors, session paths, and routes belong behind a Technical disclosure.
+- An agent names its profile and the model it actually runs on: `scout → openai-codex/gpt-6-luna:high ⚡`. The qualifiers after the colon are effort, `⚡` for fast mode, and `(fallback)` or `(override)` when the profile's first choice wasn't used. As a row narrows, live activity gives way first, then the qualifiers, then the profile; `provider/model` and the elapsed time stay.
+- Full IDs, PIDs, cursors, session paths, and raw routing internals belong behind a Technical disclosure.
 
 ## Errors and agent text
 

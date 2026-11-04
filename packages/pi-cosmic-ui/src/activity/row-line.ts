@@ -53,6 +53,20 @@ export const activityElapsed = (row: ActivityRow, now?: number, compact = false)
   const text = formatElapsed(elapsed);
   return compact ? Str.split(text, " ")[0] : text;
 };
+/** An agent's model with what qualifies it, as `provider/model:effort ⚡ (fallback)`. */
+export const activityModelLabel = (
+  row: Pick<ActivityRow, "model" | "modelDetail">,
+): string | undefined =>
+  row.model ? (row.modelDetail ? `${row.model}:${row.modelDetail}` : row.model) : undefined;
+
+/** An agent's profile and the model it runs on, joined as `scout → provider/model:effort`. */
+export const activityAgentIdentity = (
+  row: Pick<ActivityRow, "profile" | "model" | "modelDetail">,
+): string | undefined => {
+  const model = activityModelLabel(row);
+  return row.profile && model ? `${row.profile} → ${model}` : (row.profile ?? model);
+};
+
 // Agents name their profile instead; a question's glyph and status already say what it is.
 const activityTypes = { agent: "subagent", command: "task", question: "" } as const;
 const activityType = (row: ActivityRow): string => activityTypes[row.kind];
@@ -152,6 +166,10 @@ export function groupedMemberLine(
       compactStatus: warnings.length > 0,
       ...(entry.history && { history: true }),
       ...(row.kind === "agent" && row.profile && { profile: row.profile }),
+      ...(row.kind === "agent" &&
+        row.model && {
+          model: { name: row.model, label: activityModelLabel(row) ?? row.model },
+        }),
       ...(row.awaited && { awaited: true }),
       ...(row.omittedChildren && { omittedChildren: row.omittedChildren }),
       ...(!interactive && { activity: liveActivity(row) }),
