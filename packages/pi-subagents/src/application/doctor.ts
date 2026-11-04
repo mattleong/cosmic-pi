@@ -42,7 +42,7 @@ interface DoctorInput {
   readonly projectTrusted: boolean;
 }
 
-const MINIMUM_PI_VERSION = [1, 4, 0] as const;
+const MINIMUM_PI_VERSION = [1, 5, 0] as const;
 const PREFLIGHT_TIMEOUT = "20 seconds";
 
 const versionAtLeast = (version: string, minimum: ReadonlyArray<number>): boolean => {

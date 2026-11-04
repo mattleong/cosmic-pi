@@ -1,3 +1,4 @@
+import { keybindingHintsFixture } from "pi-cosmic-core/testing";
 import * as Arr from "effect/Array";
 import type {
   AgentToolResult,
@@ -195,6 +196,7 @@ function callContext(
     isError: false,
     isPartial: true,
     lastComponent: undefined,
+    ...keybindingHintsFixture,
     outputPad: 1,
     showImages: true,
     state,

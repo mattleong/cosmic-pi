@@ -161,7 +161,9 @@ const responsesInput = (
     requestModel,
     normalizeContext({ messages: convertToLlm(messages) }),
     new Set(["openai"]),
-    requestModel.compat,
+    {
+      supportsMidConvoSystemMessages: requestModel.compat?.supportsMidConvoSystemMessages ?? false,
+    },
   );
 
 const summaryStream = (requestModel: Model<Api>, message = "native summary") => {

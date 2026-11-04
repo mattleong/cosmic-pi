@@ -7,8 +7,7 @@ import {
   QuestionnaireRequestSchema,
   type AskUserRequest,
 } from "pi-ask-user/protocol";
-import { blankStringPath } from "pi-cosmic-core/tool-arguments";
-import { Check } from "typebox/value";
+import { blankStringPath, checkToolArguments } from "pi-cosmic-core/tool-arguments";
 import type { BackendProxyResult } from "../backend/model.ts";
 import { SUBAGENT_EFFORTS } from "../domain/routing.ts";
 import { isSafeNativeModelSelector } from "../profiles/model.ts";
@@ -181,7 +180,7 @@ const decodeToolArguments = <N extends SubagentToolName>(
   args: Schema.Json,
 ): SubagentToolInput<N> | undefined => {
   const { parameters, validate } = TOOL_SCHEMAS[tool];
-  return Check(parameters, args) &&
+  return checkToolArguments(parameters, args) &&
     blankStringPath(args) === undefined &&
     validate?.(args) === undefined
     ? { tool, args }
@@ -208,7 +207,7 @@ const decodeAgentToolArguments = <N extends AgentToolName>(
   tool: N,
   args: Schema.Json,
 ): AgentToolInput<N> | undefined =>
-  Check(AGENT_TOOL_SCHEMAS[tool], args) && blankStringPath(args) === undefined
+  checkToolArguments(AGENT_TOOL_SCHEMAS[tool], args) && blankStringPath(args) === undefined
     ? { tool, args }
     : undefined;
 

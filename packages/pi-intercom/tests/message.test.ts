@@ -2,7 +2,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import { applyPresentationSettings } from "pi-code-previews/testing";
-import { plainTheme } from "pi-cosmic-core/testing";
+import { keybindingHintsFixture, plainTheme } from "pi-cosmic-core/testing";
 import {
   frameMessage,
   INTERCOM_MESSAGE_TYPE,
@@ -29,7 +29,7 @@ const render = (
       details,
       timestamp: 0,
     },
-    { expanded, outputPad: 1 },
+    { ...keybindingHintsFixture, expanded, outputPad: 1 },
     plainTheme,
   );
   return (width: number) => component?.render(width) ?? [];

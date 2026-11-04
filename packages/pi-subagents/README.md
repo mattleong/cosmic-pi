@@ -24,7 +24,7 @@ pi install "$PWD/packages/pi-subagents"
 pi install "$PWD/packages/pi-cosmic-ui"   # required for /subagents: shared Activity view
 ```
 
-Requires Pi 1.4.0 or later. Subagents run on the installed Pi and its providers and need nothing extra.
+Requires Pi 1.5.0 or later. Subagents run on the installed Pi and its providers and need nothing extra.
 
 ## Usage
 

@@ -6,12 +6,26 @@ import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
+import { compile, type ValidationError, type Validator } from "@earendil-works/pi-schema";
 import type { Static, TSchema } from "typebox";
-import type { TLocalizedValidationError } from "typebox/error";
-import { Compile } from "typebox/compile";
-import { Check, Convert, Errors } from "typebox/value";
+import { formats } from "@earendil-works/pi-schema/formats";
 import { clipText } from "../display.ts";
 import { isJsonObject, type JsonObject, type JsonValue } from "../platform/json-document.ts";
+
+const validators = new WeakMap<object, Validator>();
+
+/** Check without coercion; retain the host's parameter inference for builders and literal schemas. */
+export const checkToolArguments = <S extends object>(
+  parameters: S,
+  value: unknown,
+): value is Static<S> => {
+  let validator = validators.get(parameters);
+  if (!validator) {
+    validator = compile(parameters, { formats, unresolvedRefs: "reject" });
+    validators.set(parameters, validator);
+  }
+  return validator.check(value);
+};
 
 const MAX_REPORTED_ISSUES = 8;
 const MAX_ECHO_CHARS = 600;
@@ -40,16 +54,18 @@ const fieldPath = (parent: string, key: string): string => (parent ? `${parent}.
 const isBlank = (value: JsonValue, keepsWhitespace: boolean): boolean =>
   Predicate.isString(value) && (keepsWhitespace ? value : Str.trim(value)).length === 0;
 
-// Pi compiles the property schema the same way and keeps the null when compilation fails.
-const compileSchema = Option.liftThrowable((schema: Schema.JsonObject) => Compile(schema));
+// Keep null when a standalone property schema cannot be compiled.
+const compileSchema = Option.liftThrowable((schema: Schema.JsonObject) =>
+  compile(schema, { formats }),
+);
 
 /**
- * Like Pi's `normalizeOptionalNulls`, a null is dropped only when the property schema rejects it
+ * Like Pi's coercion, a null is dropped only when the property schema rejects it
  * and is not a `$ref`, so a nullable field keeps its explicit null.
  */
 const rejectsNull = (schema: Schema.JsonObject): boolean =>
   !Predicate.isString(schema.$ref) &&
-  Option.exists(compileSchema(schema), (validator) => !validator.Check(null));
+  Option.exists(compileSchema(schema), (validator) => !validator.check(null));
 
 interface Omission {
   readonly keepWhitespace: ToolWhitespaceFields;
@@ -111,7 +127,7 @@ const withoutBlankOptionals = (
 };
 
 /**
- * Builds a pure normalizer of decoded tool arguments for a TypeBox or JSON Schema parameter
+ * Builds a pure normalizer of decoded tool arguments for a pi-schema or JSON Schema parameter
  * schema. It returns a copy without the declared optional properties whose value is empty or only
  * whitespace, unless `keepWhitespace` names them, or null where the property schema rejects null,
  * through nested object properties and array items, so models that send placeholders get the
@@ -256,151 +272,126 @@ interface IssueContext {
   readonly aliases: ToolFieldAliases;
 }
 
+const enumValues = (schema: Schema.Json | undefined): ReadonlyArray<Schema.Json> | undefined =>
+  !isJsonRecord(schema)
+    ? undefined
+    : isJsonArray(schema.enum)
+      ? schema.enum
+      : schema.const !== undefined
+        ? [schema.const]
+        : undefined;
+
+/**
+ * Only diagnostics use this projection. Select common enum/const discriminants before asking
+ * pi-schema for errors, so a stray field cannot make its closest-branch heuristic blame a
+ * different mode. Validation and coercion always use the original schema.
+ */
+const diagnosticSchema = (schema: Schema.Json, value: Schema.Json | undefined): Schema.Json => {
+  if (!isJsonRecord(schema)) return schema;
+  const fields = Rec.fromEntries(Rec.toEntries(schema));
+  const items = schema.items;
+  if (isJsonArray(schema.anyOf) && isJsonRecord(value)) {
+    const branches = schema.anyOf;
+    const keys = acceptedFields(branches[0]);
+    for (const key of keys) {
+      const tags = Arr.map(branches, (branch) =>
+        isJsonRecord(branch) && isJsonRecord(branch.properties)
+          ? enumValues(branch.properties[key])
+          : undefined,
+      );
+      if (!Arr.every(tags, (tag) => tag !== undefined) || value[key] === undefined) continue;
+      const tagValue = value[key];
+      const selected = Arr.filter(
+        branches,
+        (_, index) => tagValue !== undefined && tags[index]?.includes(tagValue) === true,
+      );
+      if (selected.length === 0)
+        return {
+          type: "object",
+          properties: { [key]: { enum: Arr.flatMap(tags, (tag) => tag ?? []) } },
+        };
+      if (selected.length < branches.length)
+        return diagnosticSchema({ ...fields, anyOf: selected }, value);
+    }
+  }
+  return {
+    ...fields,
+    ...(isJsonRecord(schema.properties) && {
+      properties: Rec.map(schema.properties, (property, key) =>
+        diagnosticSchema(property, isJsonRecord(value) ? value[key] : undefined),
+      ),
+    }),
+    ...(isJsonArray(schema.anyOf) && {
+      anyOf: Arr.map(schema.anyOf, (branch) => diagnosticSchema(branch, value)),
+    }),
+    ...(isJsonRecord(items) &&
+      isJsonArray(value) && {
+        prefixItems: Arr.map(value, (item) => diagnosticSchema(items, item)),
+        items: false,
+      }),
+  };
+};
+
+/** Candidate schemas at an instance pointer, including selected union branches. */
+const schemasAt = (
+  schema: Schema.Json,
+  segments: ReadonlyArray<string>,
+): ReadonlyArray<Schema.Json> => {
+  if (!isJsonRecord(schema)) return [];
+  const alternatives = isJsonArray(schema.anyOf)
+    ? Arr.flatMap(schema.anyOf, (branch) => schemasAt(branch, segments))
+    : [];
+  if (segments.length === 0) return [schema, ...alternatives];
+  const [key = "", ...rest] = segments;
+  const child = isJsonRecord(schema.properties)
+    ? schema.properties[key]
+    : isJsonArray(schema.prefixItems)
+      ? schema.prefixItems[Number(key)]
+      : schema.items;
+  return [...(child === undefined ? [] : schemasAt(child, rest)), ...alternatives];
+};
+
 const issueText = (
-  error: TLocalizedValidationError,
+  error: ValidationError,
   args: Schema.Json,
   { toolName, schema, aliases }: IssueContext,
 ): string => {
-  const subject = displayPath(error.instancePath, toolName);
-  if (error.keyword === "additionalProperties")
-    return unknownFieldsIssue(
-      subject,
-      error.params.additionalProperties,
-      acceptedFields(valueAt(schema, error.schemaPath)),
-      aliases,
-    );
-  if (error.keyword === "enum")
-    return `${subject} must be one of ${Arr.join(Arr.map(error.params.allowedValues, String), ", ")}; received ${reportedValue(valueAt(args, error.instancePath))}.`;
-  if (error.keyword === "required")
-    return `${Arr.join(
-      Arr.map(error.params.requiredProperties, (field) =>
-        displayPath(`${error.instancePath}/${field}`, toolName),
+  const subject = displayPath(error.path, toolName);
+  if (error.keyword === "additionalProperties") {
+    const segments = pathSegments(error.path);
+    const key = segments.at(-1) ?? "";
+    const parent = segments.slice(0, -1);
+    const accepted = [...new Set(Arr.flatMap(schemasAt(schema, parent), acceptedFields))];
+    const parentPath = Fn.pipe(
+      error.path,
+      Str.slice(
+        0,
+        Option.getOrElse(Fn.pipe(error.path, Str.lastIndexOf("/")), () => 0),
       ),
-      ", ",
-    )} is required.`;
+    );
+    return unknownFieldsIssue(displayPath(parentPath, toolName), [key], accepted, aliases);
+  }
+  if (error.keyword === "required") return `${subject} is required.`;
+  if (error.keyword === "enum" || error.keyword === "const" || error.keyword === "anyOf")
+    return `${subject} ${error.message}; received ${reportedValue(valueAt(args, error.path))}.`;
   return `${subject} ${error.message}.`;
 };
 
-const isWithin = (pointer: string, ancestor: string): boolean =>
-  pointer === ancestor || Fn.pipe(pointer, Str.startsWith(`${ancestor}/`));
-
-interface Discriminant {
-  readonly error: TLocalizedValidationError;
-  /** Instance pointer of the value the anyOf validates. */
-  readonly value: string;
-  /** Schema pointers of the anyOf and of the branch the error rules out. */
-  readonly union: string;
-  readonly branch: string;
-}
-
-// An enum or const that is a direct property of an anyOf branch, such as `.../anyOf/1/properties/mode`.
-const DISCRIMINANT_SCHEMA_PATH = /^((.*)\/anyOf\/\d+)\/properties\/([^/]+)$/u;
-
-const isEnumOrConst = (schema: Schema.Json | undefined): boolean =>
-  isJsonRecord(schema) &&
-  (Rec.has<string, Schema.Json>(schema, "enum") || Rec.has<string, Schema.Json>(schema, "const"));
-
-/** A property is a union's discriminant only when every branch declares it as an enum or const. */
-const isUnionDiscriminant = (schema: Schema.Json, union: string, property: string): boolean => {
-  const node = valueAt(schema, union);
-  return (
-    isJsonRecord(node) &&
-    isJsonArray(node.anyOf) &&
-    Arr.every(
-      node.anyOf,
-      (branch) =>
-        isJsonRecord(branch) &&
-        isJsonRecord(branch.properties) &&
-        Rec.has<string, Schema.Json>(branch.properties, property) &&
-        isEnumOrConst(branch.properties[property]),
-    )
-  );
-};
-
-const discriminant = (
-  error: TLocalizedValidationError,
-  schema: Schema.Json,
-): Discriminant | undefined => {
-  if (error.keyword !== "enum" && error.keyword !== "const") return undefined;
-  const [, branch, union, encodedProperty] = DISCRIMINANT_SCHEMA_PATH.exec(error.schemaPath) ?? [];
-  if (branch === undefined || union === undefined || encodedProperty === undefined)
-    return undefined;
-  const [property] = pathSegments(encodedProperty);
-  if (property === undefined || !isUnionDiscriminant(schema, union, property)) return undefined;
-  const value = Fn.pipe(
-    error.instancePath,
-    Str.slice(
-      0,
-      Option.getOrElse(Fn.pipe(error.instancePath, Str.lastIndexOf("/")), () => 0),
-    ),
-  );
-  return { error, value, union, branch };
-};
-
-const unionKey = ({ value, union }: Discriminant): string => `${value}#${union}`;
-
-const unionBranchCount = (schema: Schema.Json, union: string): number => {
-  const node = valueAt(schema, union);
-  return isJsonRecord(node) && isJsonArray(node.anyOf) ? node.anyOf.length : 0;
-};
-
-const allowedValues = (error: TLocalizedValidationError): ReadonlyArray<unknown> => {
-  if (error.keyword === "enum") return error.params.allowedValues;
-  return error.keyword === "const" ? [error.params.allowedValue] : [];
-};
-
-/**
- * An enum or const property that every anyOf branch declares, such as `mode`, selects the branches
- * its received value does not rule out, so only their issues are reported instead of every branch's mismatches.
- * When it rules out every branch, that property is reported once with all allowed values.
- */
-const selectedBranchErrors = (
-  errors: ReadonlyArray<TLocalizedValidationError>,
-  schema: Schema.Json,
-): ReadonlyArray<TLocalizedValidationError> => {
-  const discriminants = Arr.flatMap(errors, (error) =>
-    Arr.fromNullishOr(discriminant(error, schema)),
-  );
-  const ruledOut = new Map<string, Set<string>>();
-  for (const entry of discriminants)
-    ruledOut.set(unionKey(entry), (ruledOut.get(unionKey(entry)) ?? new Set()).add(entry.branch));
-  const rulesOutAll = (entry: Discriminant): boolean =>
-    (ruledOut.get(unionKey(entry))?.size ?? 0) >= unionBranchCount(schema, entry.union);
-  const unmatched = (error: TLocalizedValidationError): boolean =>
-    Arr.some(discriminants, (entry) => entry.error === error && rulesOutAll(entry));
-  const isUnselected = (error: TLocalizedValidationError): boolean =>
-    Arr.some(discriminants, (entry) => {
-      if (!isWithin(error.instancePath, entry.value)) return false;
-      if (error.keyword === "anyOf")
-        return error.instancePath === entry.value && error.schemaPath === entry.union;
-      if (!rulesOutAll(entry)) return isWithin(error.schemaPath, entry.branch);
-      return isWithin(error.schemaPath, `${entry.union}/anyOf`) && !unmatched(error);
-    });
-  const selected = Arr.filter(errors, (error) => !isUnselected(error));
-  const reported = new Set<string>();
-  return Arr.flatMap(selected, (error): ReadonlyArray<TLocalizedValidationError> => {
-    if (!unmatched(error)) return [error];
-    if (reported.has(error.instancePath)) return [];
-    reported.add(error.instancePath);
-    const allowed = Fn.pipe(
-      selected,
-      Arr.filter((other) => other.instancePath === error.instancePath && unmatched(other)),
-      Arr.flatMap(allowedValues),
-    );
-    return [{ ...error, keyword: "enum", params: { allowedValues: [...new Set(allowed)] } }];
-  });
-};
-
-// Mirrors Pi's TypeBox conversion before validation, so the reported issues are the ones Pi rejected.
 const validationIssues = (
   parameters: TSchema,
   args: JsonObject,
   context: IssueContext,
 ): ReadonlyArray<string> => {
-  const candidate = structuredClone(args);
-  Convert(parameters, candidate);
-  const errors = selectedBranchErrors([...Errors(parameters, candidate)], context.schema);
-  return [...new Set(Arr.map(errors, (error) => issueText(error, args, context)))];
+  const candidate = Option.getOrElse(
+    decodeJson(
+      compile(parameters, { formats, coerce: true, unresolvedRefs: "reject" }).coerce(args),
+    ),
+    () => args,
+  );
+  const schema = diagnosticSchema(context.schema, candidate);
+  if (!isJsonRecord(schema)) return [];
+  const errors = compile(schema, { formats, unresolvedRefs: "reject" }).errors(candidate);
+  return [...new Set(Arr.map(errors, (error) => issueText(error, args, { ...context, schema })))];
 };
 
 const clippedStrings = (value: Schema.Json): Schema.Json => {
@@ -452,11 +443,11 @@ export interface ToolArgumentPreparerOptions {
  * reject, then validates and coerces arguments with Pi's own validation, but reports allowed
  * values, unknown fields, and blank strings precisely and echoes only bounded arguments.
  * Model-facing schemas omit `pattern`, so nonblank required text is enforced here. The result is
- * checked against `parameters` with TypeBox, so it is the schema's `Static` type.
+ * checked against `parameters` with pi-schema, so it is the schema's `Static` type.
  * Pi parses malformed tool-call JSON as `{}` before this hook runs, so such a call fails here with
  * the schema's missing required fields rather than Pi's parse error, plus a hint to resend it.
  */
-export const toolArgumentPreparer = <const S extends TSchema>(
+export const toolArgumentPreparer = <const S extends object>(
   toolName: string,
   parameters: S,
   { aliases = {}, inspect, keepWhitespace = [] }: ToolArgumentPreparerOptions = {},
@@ -479,7 +470,7 @@ export const toolArgumentPreparer = <const S extends TSchema>(
     ),
   );
   // The schema's own check, so the hook's result is exactly what Pi declares for `parameters`.
-  const isArgs = (value: unknown): value is Static<S> => Check(parameters, value);
+  const isArgs = (value: unknown): value is Static<S> => checkToolArguments(parameters, value);
   const prepare = (received: JsonObject): JsonValue => {
     const args = omitBlankOptionals(received);
     inspect?.(args);

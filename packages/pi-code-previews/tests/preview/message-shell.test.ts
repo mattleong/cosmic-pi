@@ -3,7 +3,7 @@ import { Text, type Component } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { stripAnsi } from "pi-cosmic-core";
-import { plainTheme } from "pi-cosmic-core/testing";
+import { keybindingHintsFixture, plainTheme } from "pi-cosmic-core/testing";
 import { beforeAll, describe, expect, it } from "vitest";
 import { withCodePreviewMessageShell, type CodePreviewMessagePresenter } from "../../index";
 import { withPresentationSettings } from "../../testing";
@@ -40,7 +40,12 @@ const draw = (
   width = 80,
 ): string =>
   stripAnsi(
-    Arr.join(render(input, { expanded, outputPad: 1 }, plainTheme)?.render(width) ?? [], "\n"),
+    Arr.join(
+      render(input, { ...keybindingHintsFixture, expanded, outputPad: 1 }, plainTheme)?.render(
+        width,
+      ) ?? [],
+      "\n",
+    ),
   );
 
 const STYLES = ["compact", "preview"] as const;
@@ -170,7 +175,11 @@ describe("message shell", () => {
               attachments: [image],
             }));
             for (const expanded of [false, true]) {
-              const rows = render(message, { expanded, outputPad: 1 }, plainTheme).render(80);
+              const rows = render(
+                message,
+                { ...keybindingHintsFixture, expanded, outputPad: 1 },
+                plainTheme,
+              ).render(80);
               expect(rows).toContain("\u001b_Gnative-image-sequence\u001b\\");
               expect(widths.at(-1)).toBe(80);
             }

@@ -1,4 +1,3 @@
-import { StringEnum } from "@earendil-works/pi-ai";
 import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -109,7 +108,7 @@ const proxyFailure = (source: string): ParentContactError => {
 
 const ContactParentParameters = Type.Object(
   {
-    kind: StringEnum(["progress", "question", "warning"] as const),
+    kind: Type.Enum(["progress", "question", "warning"] as const),
     message: Type.String({ minLength: 1, maxLength: MAX_PARENT_MESSAGE_CHARS }),
   },
   { additionalProperties: false },

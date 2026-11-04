@@ -8,7 +8,7 @@ import {
   type ToolRenderers,
 } from "@earendil-works/pi-coding-agent";
 import { stripTerminalControls } from "pi-cosmic-core";
-import { plainTheme } from "pi-cosmic-core/testing";
+import { keybindingHintsFixture, plainTheme } from "pi-cosmic-core/testing";
 import type { CodePreviewRenderers } from "../tools/renderers/shared/types";
 import { hostObject } from "../shared/untrusted-value";
 import type { ToolCallBackgroundMode } from "../config/schema";
@@ -90,7 +90,11 @@ export function galleryMessageFrames(
   return Arr.flatMap(MESSAGE_BACKGROUNDS, (background) =>
     withPresentationSettings({ toolCallBackground: background }, () =>
       Arr.flatMap(GALLERY_VIEWS, ({ expanded, width }) => {
-        const component = render(scenario.message, { expanded, outputPad: 1 }, plainTheme);
+        const component = render(
+          scenario.message,
+          { ...keybindingHintsFixture, expanded, outputPad: 1 },
+          plainTheme,
+        );
         const content = scenario.message.content;
         const fallback = [
           `[${scenario.message.customType}] (Pi default rendering)`,

@@ -1,5 +1,5 @@
 import { applyPresentationSettings, captureRegistrations } from "pi-code-previews/testing";
-import { extensionApiFixture, plainTheme } from "pi-cosmic-core/testing";
+import { keybindingHintsFixture, extensionApiFixture, plainTheme } from "pi-cosmic-core/testing";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { afterEach, expect, test, vi } from "vitest";
 import {
@@ -58,7 +58,7 @@ test.each(["compact", "preview"] as const)(
       for (const expanded of [false, true, false, true]) {
         const component = render(
           { ...message, role: "custom", timestamp: 0 },
-          { expanded, outputPad: 0 },
+          { ...keybindingHintsFixture, expanded, outputPad: 0 },
           plainTheme,
         );
         const text = Arr.join(component!.render(180), "\n");
@@ -79,7 +79,7 @@ test.each(["compact", "preview"] as const)(
       }
       const history = render(
         { ...message, details: undefined, role: "custom", timestamp: 0 },
-        { expanded: true, outputPad: 0 },
+        { ...keybindingHintsFixture, expanded: true, outputPad: 0 },
         plainTheme,
       );
       expect(Arr.join(history!.render(180), "\n")).toContain("PRIVATE_RUN_ID");

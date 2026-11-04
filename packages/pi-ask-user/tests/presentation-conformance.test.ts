@@ -6,7 +6,7 @@ import {
   createToolPresentationHarness,
   probeAnimationOwnership,
 } from "pi-code-previews/testing";
-import { plainTheme as theme } from "pi-cosmic-core/testing";
+import { keybindingHintsFixture, plainTheme as theme } from "pi-cosmic-core/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { registerAskUserTool } from "../src/tools/ask-user.ts";
 import {
@@ -147,7 +147,11 @@ describe("registered questionnaire presentation", () => {
     };
     expect(
       Arr.join(
-        renderAskUserAsyncMessage(message, { expanded: true, outputPad: 0 }, theme)!.render(160),
+        renderAskUserAsyncMessage(
+          message,
+          { ...keybindingHintsFixture, expanded: true, outputPad: 0 },
+          theme,
+        )!.render(160),
         "\n",
       ),
     ).toContain("Display label");

@@ -17,7 +17,7 @@ The workspace supports macOS and Linux. Use POSIX paths and process-group lifecy
 - `packages/pi-rex-btw/`: `/btw` side conversations in new Rex panes.
 - `packages/pi-subagents/`: session-scoped background subagents.
 
-Pi/Jiti loads packages directly from TypeScript source. Do not add generated `dist/` runtime dependencies or package build prerequisites. Native `codemode` and MCP execution belong to Pi; the retired `pi-code-mode`, `pi-mcp`, and standalone `pi-mcp-previews` packages have no compatibility layer. All packages require Pi 1.4.0 or later and are tested with 1.4.0. Previously installed standalone MCP Previews must be removed manually; never edit user configuration automatically.
+Pi/Jiti loads packages directly from TypeScript source. Do not add generated `dist/` runtime dependencies or package build prerequisites. Native `codemode` and MCP execution belong to Pi; the retired `pi-code-mode`, `pi-mcp`, and standalone `pi-mcp-previews` packages have no compatibility layer. All packages require Pi 1.5.0 or later and are tested with 1.5.0. Previously installed standalone MCP Previews must be removed manually; never edit user configuration automatically.
 
 ## Architecture and organization
 
@@ -73,7 +73,7 @@ Mock owned domain boundaries, not external provider protocols. Test command hand
 - Keep Effect runners at named Pi host boundaries, scope every resource and background fiber, use Effect Schema at unknown boundaries, and model expected failures with typed tagged errors.
 - Effect diagnostics fail validation only at `error` severity, so enforced guards are errors in `tsconfig.effect.json`. Effect diagnostics require namespace imports from Effect subpaths (`Arr`, `Fn`, `Num`, `Rec`, and `Str` for `effect/Array`, `effect/Function`, `effect/Number`, `effect/Record`, and `effect/String`) and `Class.make(...)` over `new` for Schema classes. Lint enforces subpath Effect imports, the runner-boundary allowlist, `Effect.fn` for named `Effect.gen` wrappers, and `Match`/`Predicate.isTagged` over `_tag` comparisons. Grant exceptions only at genuine boundaries, and prefer exact-file overrides to inline directives.
 - The `preferEffectArray`, `preferEffectString`, and `preferEffectRecord` diagnostics require `Arr`/`Str`/`Rec` over native methods; follow the call style, filtering idiom, and `pi-cosmic-core` text-scan helpers (`indexOfFrom`, `lastIndexOfFrom`, `codeUnitAt`) described in [Effect v4 architecture](docs/architecture/effect-v4.md#services-and-boundaries).
-- Do not import Zod, define schemas with it, or declare it as a direct workspace dependency. Third-party packages may use Zod internally through transitive dependencies. TypeBox or literal JSON Schema is allowed only where Pi requires tool parameter schemas.
+- Do not import Zod, define schemas with it, or declare it as a direct workspace dependency. Third-party packages may use Zod internally through transitive dependencies. Pi tool validation uses `@earendil-works/pi-schema`. TypeBox builders/types or literal JSON Schema remain allowed for Pi 1.5’s extension parameter API.
 
 ## Verification
 

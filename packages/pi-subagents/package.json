@@ -54,6 +54,7 @@
     "pack:dry": "pnpm pack --dry-run"
   },
   "dependencies": {
+    "@earendil-works/pi-schema": "catalog:",
     "effect": "catalog:",
     "pi-ask-user": "workspace:*",
     "pi-better-openai": "workspace:*",
@@ -75,9 +76,9 @@
     "vitest": "catalog:"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": ">=1.4.0",
-    "@earendil-works/pi-coding-agent": ">=1.4.0",
-    "@earendil-works/pi-tui": ">=1.4.0",
+    "@earendil-works/pi-ai": ">=1.5.0",
+    "@earendil-works/pi-coding-agent": ">=1.5.0",
+    "@earendil-works/pi-tui": ">=1.5.0",
     "typebox": "*"
   },
   "engines": {
